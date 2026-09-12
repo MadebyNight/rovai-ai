@@ -1,5 +1,5 @@
 ---
-version: 11
+version: 12
 slug: "member-workspace"
 primary_target: "apps/desktop/src/renderer/src/MemberManagement.tsx"
 related_targets:
@@ -28,7 +28,9 @@ edit or remove a teammate without confusing identity with Runtime state.
 
 ## First view and layout
 
-Keep the shared 270px App rail visible on the teammate page. The roster shares the detail's workspace
+Use the shared App rail on the teammate page; its width and complete collapse follow the App Shell contract.
+All split boundaries, including the roster, highlight their full 1px line with `--resize-line` on hover or drag; never add a short thicker grip.
+The roster shares the detail's workspace
 surface (white in Day), with a 1px divider separating the two reading planes. Its default width is 256px;
 expanded widths range from 192px to 360px and protect 400px for the detail when space permits.
 Dragging below 176px snaps to the same 76px avatar rail as the explicit collapse button; dragging a

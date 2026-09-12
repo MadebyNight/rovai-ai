@@ -37,6 +37,7 @@ import { allNavigationCamps } from './ui-model'
 import { navigationCampSearch, startNavigationCampLookup, type NavigationCampLookup } from './camp-navigation-search'
 import { formatCampTitle } from './camp-title'
 import { ProjectRenameDialog } from './ProjectRenameDialog'
+import { useNavigationCollapsed } from './NavigationShell'
 import {
   NAVIGATION_INITIAL_VISIBLE_CAMPS,
   NAVIGATION_MORE_CAMPS_STEP,
@@ -174,6 +175,7 @@ export function CampNavigation({
   onDelete(camp: NavigationCampItem): Promise<void>
   onError(error: unknown): void
 }): JSX.Element {
+  const navigationCollapsed = useNavigationCollapsed()
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => new Set())
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(() => new Set())
   const [action, setAction] = useState<NavigationAction>(null)
@@ -324,7 +326,7 @@ export function CampNavigation({
 
   return (
     <>
-      <aside className={`unified-sidebar ${view === 'settings' ? 'settings-navigation-mode' : ''}`} inert={disabled} aria-label={view === 'settings' ? '设置分类' : '全局导航'}>
+      <aside id="global-navigation" className={`unified-sidebar ${view === 'settings' ? 'settings-navigation-mode' : ''}${navigationCollapsed ? ' is-collapsed' : ''}`} inert={disabled || navigationCollapsed} aria-label={view === 'settings' ? '设置分类' : '全局导航'}>
         <div className="unified-sidebar-drag" aria-hidden="true" />
         <div className="unified-brand">
           <span className="rail-logo" role="img" aria-label="Rovai AI">

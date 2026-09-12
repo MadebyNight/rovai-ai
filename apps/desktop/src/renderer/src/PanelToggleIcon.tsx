@@ -5,15 +5,14 @@ export function PanelToggleIcon({
   side: 'left' | 'right'
   visible: boolean
 }): React.JSX.Element {
-  const edgePath = side === 'left' ? 'M5 4v12' : 'M15 4v12'
-  const arrowPath = side === 'left'
-    ? visible ? 'm14.5 6-4 4 4 4' : 'm10.5 6 4 4-4 4'
-    : visible ? 'm5.5 6 4 4-4 4' : 'm9.5 6-4 4 4 4'
+  const divider = side === 'left'
+    ? visible ? 'M7.5 3.5v13' : 'M4.5 6.5v7'
+    : visible ? 'M12.5 3.5v13' : 'M15.5 6.5v7'
 
   return (
-    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-      <path d={edgePath} />
-      <path d={arrowPath} />
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+      <rect x="2" y="3.5" width="16" height="13" rx="3" />
+      <path d={divider} />
     </svg>
   )
 }

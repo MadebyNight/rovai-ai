@@ -67,6 +67,7 @@ Dark. `color-scheme: dark`.
 | `--muted` | `#abb5bc` |
 | `--faint` | `#919da6` |
 | `--line` | `#333e46` |
+| `--resize-line` | `#777777` |
 | `--line-strong` | `#53616b` |
 | `--control-line` | `#687b88` |
 | `--new-camp-picker-surface` | `#1b2227` |

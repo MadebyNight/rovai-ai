@@ -67,6 +67,7 @@ Light. `color-scheme: light`.
 | `--muted` | `#616a73` |
 | `--faint` | `#6e7382` |
 | `--line` | `#dfe4e8` |
+| `--resize-line` | `#777777` |
 | `--line-strong` | `#c7cfd6` |
 | `--control-line` | `#8b9389` |
 | `--new-camp-picker-surface` | `#ffffff` |
