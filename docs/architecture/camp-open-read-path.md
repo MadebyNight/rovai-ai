@@ -3,7 +3,7 @@ document_type: architecture
 architecture: camp-open-read-path
 authority: desktop-camp-enter-and-progressive-read-boundaries
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Camp Open Read Path 架构
@@ -97,7 +97,7 @@ receipt 执行无效 join/group。它和 Camp Open 共用 Core 数据库锁，�
 业务依赖。可见来源 acknowledge 的去重也不使用全局 cursor 或 Snapshot watermark 作为来源变化，见
 [Notification Episode v6](../contracts/notification-episode-v6.md)。
 
-缓存只保存最近的 Camp 业务投影；collection 保持有界，执行详情独立保留两页展示和一页预取。cache hit 可立即
+缓存只保存最近的 Camp 业务投影；collection 保持有界，执行详情将两页 DOM 窗口与按 cursor 保留的有界页面缓存分开。cache hit 可立即
 恢复阅读面，但仍由 high-water refresh 验证；cache miss 不把
 当前 Snapshot 清空，也不提前切换 route。普通请求在 400 ms 内不呈现 loading，超过预算只在目标导航行
 显示非阻塞进度。schema mismatch、Core restart、Camp mismatch 或 sequence regression 使缓存失效。
@@ -110,7 +110,9 @@ Renderer 不通过 event replay 补齐权威对象。
 较早但仍运行的操作由最新页补充，不影响历史 cursor。完整输出和文件 Diff 在单条展开后读取。
 
 Renderer 最多挂载两页，按阅读锚点替换窗口，组内关闭的工具行不创建 DOM。Camp 切换拒绝迟到响应，
-错误保留已有内容；阅读历史时暂停最新页刷新。具体字段和界限由 Camp Open v18 拥有。
+错误保留已有内容。向下滚动优先恢复已读缓存，回到最新不强制重读。运行中刷新继续更新最新页缓存，
+历史阅读保留原 cursor 链和锚点，返回最新时才采用新的链头。初始跟随意图等首个异步页面及完整正文到达后完成。
+具体缓存预算、字段和界限由 Camp Open v18 拥有。
 
 ## Complete conversation find flow
 

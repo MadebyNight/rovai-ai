@@ -11,6 +11,7 @@ use crate::{
     agent_run_image::{AgentRunImagesView, list_camp_images},
     camp_attachment::DIRECTORY_MEDIA_TYPE,
     camp_content::{StructuredCampMessageContent, normalize_content, render_current_plain_text},
+    camp_id::CampId,
     camp_message_publication::{
         public_camp_message_event_predicate, public_camp_message_publication_cte,
     },
@@ -46,6 +47,31 @@ const CAMP_OPEN_DELIVERY_LIMIT: i64 = 200;
 const CAMP_OPEN_TURN_LIMIT: i64 = 64;
 const CAMP_OPEN_AGENT_RUN_LIMIT: i64 = 96;
 const CAMP_OPEN_APPROVAL_LIMIT: i64 = 32;
+
+const FIND_NAVIGATION_CAMP_SQL: &str = r#"
+    SELECT camp.id, camp.title, camp.activation_state, camp.project_binding_kind, camp.project_path,
+           channel_conversation.provider, channel_conversation.conversation_kind
+    FROM camp
+    LEFT JOIN channel_conversation_binding AS channel_binding ON channel_binding.camp_id = camp.id
+    LEFT JOIN channel_conversation ON channel_conversation.id = channel_binding.channel_conversation_id
+    LEFT JOIN camp_composer_draft ON camp_composer_draft.camp_id = camp.id
+    WHERE camp.id = ?1
+      AND (camp.activation_state = 'active'
+        OR length(trim(COALESCE(camp_composer_draft.body, ''))) > 0
+        OR EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = camp.id))
+"#;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigationCampTarget {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_source: Option<CampChannelSource>,
+    pub activation_state: String,
+    pub project_binding_kind: String,
+    pub project_path: String,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -968,6 +994,27 @@ impl ReadModelService {
             next_offset,
             camps,
         })
+    }
+
+    pub fn find_navigation_camp(
+        &self,
+        database: &Database,
+        camp_id: &CampId,
+    ) -> Result<Option<NavigationCampTarget>> {
+        database
+            .connection()
+            .query_row(FIND_NAVIGATION_CAMP_SQL, [camp_id], |row| {
+                Ok(NavigationCampTarget {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    channel_source: camp_channel_source_from_row(row, 5)?,
+                    activation_state: row.get(2)?,
+                    project_binding_kind: row.get(3)?,
+                    project_path: row.get(4)?,
+                })
+            })
+            .optional()
+            .context("failed to find navigation Camp by ID")
     }
 
     pub fn acknowledge_camp_viewed(
@@ -5024,6 +5071,51 @@ mod slow_tests {
         assert_eq!(final_page.camps.len(), 1);
         assert_eq!(final_page.next_offset, None);
 
+        // Exact lookup must reach beyond the five recent Camps without reading history.
+        let older = &final_page.camps[0];
+        assert!(
+            snapshot
+                .quick_chat
+                .recent_camps
+                .iter()
+                .all(|camp| camp.id != older.id)
+        );
+        for camp in [older, &snapshot.projects[0].recent_camps[0]] {
+            let found = read_model
+                .find_navigation_camp(&database, &CampId::parse(&camp.id).unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(found.id, camp.id);
+            assert_eq!(found.title, camp.title);
+            assert_eq!(found.project_path, camp.project_path);
+            assert_eq!(found.activation_state, camp.activation_state);
+            assert_eq!(found.project_binding_kind, camp.project_binding_kind);
+        }
+        assert!(
+            read_model
+                .find_navigation_camp(&database, &CampId::new())
+                .unwrap()
+                .is_none()
+        );
+
+        let plan = database
+            .connection()
+            .prepare(&format!("EXPLAIN QUERY PLAN {FIND_NAVIGATION_CAMP_SQL}"))
+            .unwrap()
+            .query_map([&older.id], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH camp USING INDEX") && step.contains("id=?")),
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN ")),
+            "{plan:?}"
+        );
+
         // Existing transaction fixture owns default, independent group selection,
         // minimum and oversized prefix contracts; no parallel database fixture.
         for (quick_limit, project_limit, expected_quick, expected_project) in
@@ -5056,6 +5148,35 @@ mod slow_tests {
                 assert_eq!(actual.marker, expected.marker);
             }
         }
+
+        // Empty pending Camps remain outside navigation; a saved draft makes one discoverable.
+        let mut pending_command =
+            CreateCampCommand::for_test(project_root.to_string_lossy().to_string());
+        pending_command.activation_state = crate::collaboration::CampActivationState::Pending;
+        let pending = collaboration
+            .create_camp(
+                &mut database,
+                &user_envelope("navigation-pending", None, pending_command),
+            )
+            .unwrap();
+        let pending_id = CampId::parse(pending.result.payload["campId"].as_str().unwrap()).unwrap();
+        assert!(
+            read_model
+                .find_navigation_camp(&database, &pending_id)
+                .unwrap()
+                .is_none()
+        );
+        CampAttachmentStore::new(&directory)
+            .save_body(&mut database, pending_id.as_str(), "saved draft")
+            .unwrap();
+        assert_eq!(
+            read_model
+                .find_navigation_camp(&database, &pending_id)
+                .unwrap()
+                .unwrap()
+                .activation_state,
+            "pending"
+        );
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();

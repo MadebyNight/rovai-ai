@@ -12,6 +12,7 @@ import type {
   AppUpdateSnapshot,
   NavigationPin,
   NavigationCampItem,
+  NavigationCampTarget,
   NavigationSnapshot,
   ProjectNavigationGroup,
   SettingsSection
@@ -33,6 +34,7 @@ import {
   shouldHandlePrimaryShortcut
 } from './renderer-platform'
 import { allNavigationCamps } from './ui-model'
+import { navigationCampSearch, startNavigationCampLookup, type NavigationCampLookup } from './camp-navigation-search'
 import { formatCampTitle } from './camp-title'
 import { ProjectRenameDialog } from './ProjectRenameDialog'
 import { useNavigationCollapsed } from './NavigationShell'
@@ -164,7 +166,7 @@ export function CampNavigation({
   onOpenProject(): void
   onSelectProject?(project: ProjectNavigationGroup | null): void
   onCreateInProject?(project: ProjectNavigationGroup | null): void
-  onCamp(camp: NavigationCampItem): void
+  onCamp(camp: NavigationCampTarget): void
   onTogglePin?(kind: NavigationPin['kind'], targetKey: string, camp?: NavigationCampItem): void | Promise<void>
   onRenameProject?(project: ProjectNavigationGroup, name: string | null): Promise<void>
   onRemoveProject(project: ProjectNavigationGroup): Promise<void>
@@ -737,7 +739,7 @@ function CommandPalette({
   open: boolean
   onOpenChange(open: boolean): void
   navigation: NavigationSnapshot | null
-  onCamp(camp: NavigationCampItem): void
+  onCamp(camp: NavigationCampTarget): void
 }): JSX.Element {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -746,17 +748,23 @@ function CommandPalette({
     [navigation]
   )
   const camps = useMemo(() => navigation ? allNavigationCamps(navigation) : [], [navigation])
-  const trimmedQuery = query.trim().toLowerCase()
-  const visible = (trimmedQuery
-    ? camps.filter((camp) => {
-        const projectName = camp.projectBindingKind === 'directory'
-          ? projectNameByPath.get(camp.projectPath) ?? ''
-          : '快速对话'
-        return formatCampTitle(camp).toLowerCase().includes(trimmedQuery)
-          || projectName.toLowerCase().includes(trimmedQuery)
-      })
-    : camps
-  ).slice(0, 12)
+  const search = navigationCampSearch(query, camps, projectNameByPath)
+  const campId = search.kind === 'id' ? search.campId : null
+  const [lookup, setLookup] = useState<NavigationCampLookup | null>(null)
+  const currentLookup = lookup?.campId === campId ? lookup : null
+  const loading = campId !== null && currentLookup === null
+  const error = campId !== null ? currentLookup?.error : null
+  const visible = search.kind === 'text'
+    ? search.camps
+    : currentLookup?.camp ? [currentLookup.camp] : []
+
+  useEffect(() => {
+    setLookup(null)
+    if (!open || campId === null) return
+    return startNavigationCampLookup(campId, setLookup)
+  }, [open, campId])
+
+  const selectedIndex = Math.min(activeIndex, Math.max(visible.length - 1, 0))
 
   useEffect(() => {
     if (open) {
@@ -771,12 +779,12 @@ function CommandPalette({
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content className="command-palette" onCloseAutoFocus={(event) => event.preventDefault()}>
           <Dialog.Title className="command-palette-title">跳转到对话</Dialog.Title>
-          <Dialog.Description className="sr-only">输入关键字过滤对话，使用方向键选择，回车打开选中对话。</Dialog.Description>
+          <Dialog.Description className="sr-only">输入对话或项目关键字，或粘贴完整会话 ID 精确查找；方向键选择，回车打开。</Dialog.Description>
           <input
             className="command-palette-input"
             autoFocus
             value={query}
-            placeholder="搜索对话或项目…"
+            placeholder="搜索对话、项目或完整会话 ID…"
             aria-label="搜索对话"
             onChange={(event) => {
               setQuery(event.target.value)
@@ -790,16 +798,16 @@ function CommandPalette({
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault()
                 setActiveIndex((index) => Math.max(index - 1, 0))
-              } else if (event.key === 'Enter' && visible[activeIndex]) {
+              } else if (event.key === 'Enter' && visible[selectedIndex]) {
                 event.preventDefault()
-                onCamp(visible[activeIndex])
+                onCamp(visible[selectedIndex])
               }
             }}
           />
-          <div className="command-palette-list" aria-label="匹配的对话">
+          <div className="command-palette-list" aria-label="匹配的对话" aria-busy={loading}>
             {visible.map((camp, index) => (
               <button
-                className={`command-palette-item ${index === activeIndex ? 'active' : ''}`}
+                className={`command-palette-item ${index === selectedIndex ? 'active' : ''}`}
                 type="button"
                 key={camp.id}
                 onClick={() => onCamp(camp)}
@@ -809,7 +817,11 @@ function CommandPalette({
                 <small>{camp.projectBindingKind === 'directory' ? projectNameByPath.get(camp.projectPath) ?? '项目' : '快速对话'}</small>
               </button>
             ))}
-            {visible.length === 0 && <p className="command-palette-empty">没有匹配的对话。</p>}
+            {visible.length === 0 && (
+              <p className="command-palette-empty" role="status">
+                {loading ? '正在查找会话…' : error ?? '没有匹配的对话。'}
+              </p>
+            )}
           </div>
           <footer className="command-palette-footer"><span><kbd>↑ ↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>Esc</kbd> 关闭</span></footer>
         </Dialog.Content>
