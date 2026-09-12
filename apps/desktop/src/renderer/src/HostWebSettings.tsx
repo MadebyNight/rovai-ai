@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { HostWebApi, HostWebStatus } from '@contracts'
-import { AppDialogContent, AppDialogHeader, AppDialogBody, AppDialogFooter } from './AppDialog'
+import { AppDialogContent, AppDialogHeader, AppDialogBody } from './AppDialog'
 import { SettingsPageHeader } from './SettingsPageHeader'
 import { QRCodeSVG } from 'qrcode.react'
 import { CopyIcon } from './CopyIcon'
@@ -22,10 +22,8 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
   const [token, setToken] = useState('')
   const [visible, setVisible] = useState(false)
   const [feedback, setFeedback] = useState('')
-  const [confirm, setConfirm] = useState(false)
   const generation = useRef(0)
   const changing = useRef(false)
-  const cancelButton = useRef<HTMLButtonElement>(null)
   const enabled = status?.enabled === true
 
   useEffect(() => {
@@ -39,7 +37,7 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
           if (!active || current !== generation.current) return
           setStatus(next)
           onPortDraftChange(current => current ?? next.listen?.split(':').at(-1) ?? '4317')
-          const credential = next.enabled ? (await api.token()).administratorToken : ''
+          const credential = (await api.token()).administratorToken
           if (!active || current !== generation.current) return
           setToken(credential)
           setError('')
@@ -53,7 +51,7 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
     return () => { active = false; generation.current++; window.removeEventListener('focus', refresh) }
   }, [api, reload, onPortDraftChange])
 
-  async function change(operation: 'start' | 'stop' | 'rotate'): Promise<void> {
+  async function change(operation: 'start' | 'stop'): Promise<void> {
     if (changing.current) return
     if (operation === 'start' && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) {
       setError('请输入 1–65535 之间的端口。'); document.getElementById('remote-port')?.focus(); return
@@ -67,16 +65,17 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
         : await api[operation]()
       if (current !== generation.current) return
       setStatus(next)
-      setToken('administratorToken' in next ? next.administratorToken as string : '')
-      if (operation !== 'rotate') setAddress('')
-      setConfirm(false)
+      const credential = (await api.token()).administratorToken
+      if (current !== generation.current) return
+      setToken(credential)
+      setAddress('')
     } catch (failure) {
       if (current !== generation.current) return
       setError(readErrorMessage(failure))
       // Resolve an uncertain response by reading, never repeat the mutation.
       try {
         const next = await api.status()
-        const credential = next.enabled ? (await api.token()).administratorToken : ''
+        const credential = (await api.token()).administratorToken
         if (current === generation.current) { setStatus(next); setToken(credential) }
       } catch { if (current === generation.current) { setStatus(null); setToken('') } }
     } finally { changing.current = false; if (current === generation.current) setBusy(false) }
@@ -104,36 +103,30 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
           <input id="remote-port" className="remote-port" inputMode="numeric" aria-describedby="remote-port-note" value={port} disabled={busy} onChange={event => onPortDraftChange(event.target.value)} />
         </div>
         <p className="remote-footnote">HTTP 明文连接，请仅在可信网络开启。</p>
-        {enabled && <>
+        {enabled &&
           <div className="remote-addresses">
             <RemoteAddress label="本机地址" description="在这台电脑上访问" value={local} onCopy={() => copy(local, '连接地址')} />
             <RemoteAddress label="远程地址" description="在其他设备上访问" value={selected} onCopy={() => copy(selected, '连接地址')}>
               {remoteAddresses.length > 1 && <select id="remote-address" aria-label="选择远程地址" className="remote-address-select" value={selected} onChange={event => { setAddress(event.target.value); setFeedback('') }}>{remoteAddresses.map(item => <option key={item.origin} value={item.origin}>{item.origin} · {item.interface}</option>)}</select>}
             </RemoteAddress>
           </div>
-          <div className="remote-field">
-            <label htmlFor="remote-token">管理令牌</label>
-            <div className="remote-token">
-              <input id="remote-token" type={visible ? 'text' : 'password'} value={token} readOnly autoComplete="off" spellCheck={false} />
-              <div className="remote-token-actions">
-                <button type="button" className="message-copy-button" disabled={!token} onClick={() => setVisible(value => !value)} aria-pressed={visible} aria-label={visible ? '隐藏管理令牌' : '显示管理令牌'} title={visible ? '隐藏管理令牌' : '显示管理令牌'}>
-                  <svg viewBox="0 0 24 24" aria-hidden="true">{visible ? <><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.4A10 10 0 0 1 12 5c6 0 10 7 10 7a18 18 0 0 1-3 3.8M6 6.5A20 20 0 0 0 2 12s4 7 10 7a11 11 0 0 0 5-1.4" /></> : <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>}</svg>
-                </button>
-                <RemoteCopyButton key={token} label="复制管理令牌" value={token} onCopy={() => copy(token, '管理令牌')} />
-                <button type="button" className="message-copy-button" disabled={busy} onClick={() => setConfirm(true)} aria-label="重新生成管理令牌" title="重新生成管理令牌"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9" /></svg></button>
-              </div>
+        }
+        <div className="remote-field">
+          <label htmlFor="remote-token">管理令牌</label>
+          <div className="remote-token">
+            <input id="remote-token" type={visible ? 'text' : 'password'} value={token} readOnly autoComplete="off" spellCheck={false} />
+            <div className="remote-token-actions">
+              <button type="button" className="message-copy-button" disabled={!token} onClick={() => setVisible(value => !value)} aria-pressed={visible} aria-label={visible ? '隐藏管理令牌' : '显示管理令牌'} title={visible ? '隐藏管理令牌' : '显示管理令牌'}>
+                <svg viewBox="0 0 24 24" aria-hidden="true">{visible ? <><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.4A10 10 0 0 1 12 5c6 0 10 7 10 7a18 18 0 0 1-3 3.8M6 6.5A20 20 0 0 0 2 12s4 7 10 7a11 11 0 0 0 5-1.4" /></> : <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>}</svg>
+              </button>
+              <RemoteCopyButton key={token} label="复制管理令牌" value={token} onCopy={() => copy(token, '管理令牌')} />
             </div>
           </div>
-        </>}
+        </div>
       </section>
       {error && <div><p className="remote-error" role="alert">{error}</p><button type="button" className="quiet-button compact" disabled={busy} onClick={() => setReload(value => value + 1)}>重新读取</button></div>}
       {feedback && <p className="remote-feedback" role="status">{feedback}</p>}
     </div>
-    <Dialog.Root open={confirm} onOpenChange={open => { if (!open && !busy) setConfirm(false) }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><AppDialogContent onOpenAutoFocus={event => { event.preventDefault(); cancelButton.current?.focus() }} onEscapeKeyDown={event => { if (busy) event.preventDefault() }} onPointerDownOutside={event => { if (busy) event.preventDefault() }}>
-      <AppDialogHeader title="重新生成管理令牌？" description="所有浏览器会话将退出，Host 上的对话与执行仍会继续。" />
-      <AppDialogBody><p>旧令牌会立即失效，可用新令牌重新登录并保留编辑。</p></AppDialogBody>
-      <AppDialogFooter><button ref={cancelButton} type="button" className="quiet-button" disabled={busy} onClick={() => setConfirm(false)}>取消</button><button type="button" className="primary-button" disabled={busy} onClick={() => void change('rotate')}>{busy ? '正在更新…' : '确认'}</button></AppDialogFooter>
-    </AppDialogContent></Dialog.Portal></Dialog.Root>
   </div>
 }
 

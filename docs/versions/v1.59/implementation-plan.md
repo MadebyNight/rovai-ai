@@ -15,7 +15,22 @@ last_updated: 2026-09-13
 
 ## 当前收敛：阶段 1–3，单 Owner 的真实业务闭环
 
-最新交互调整：管理令牌的显示／隐藏、复制、重新生成改用同一尺寸的图标按钮；
+最新交互调整：管理令牌栏始终显示，关闭服务后仍能查看和复制；移除环形箭头入口，只保留显隐、复制两个图标。
+Rust Host 把管理令牌与监听实例分开保存；首次本机读取即可生成，同一 Host 进程内关闭、再次开启沿用同一令牌。
+关闭仍撤销全部浏览器会话；Host 进程退出后不保留令牌。底层显式轮换接口保留，独立更新 Host 保存的令牌。
+[关闭态](evidence/retained-token/remote-off.png)、[开启态](evidence/retained-token/remote-day.png)和
+[夜间](evidence/retained-token/remote-night.png)使用生产组件；
+[交互稿记录](evidence/retained-token/remote-connection-review.json)覆盖 14 个日夜状态以及关闭后显隐、切页读取。
+既有 Host pipe/HTTP owner 扩展验证首次读取、启动失败不换令牌、轮换后关闭/重启保留最新令牌、旧 Session 拒绝、新登录成功；
+原生设置 owner 继续验证迟到状态与未知启动结果，不新增 Rust 测试函数或 SQLite fixture。
+[真实 Desktop/双浏览器记录](evidence/retained-token/desktop-web-live.json)确认首次开启前和关闭后令牌可复制、重启监听不换令牌，
+并通过既有目录选择、共享编辑与重新认证回归。仅同机隔离实例，无模型、无第二实体设备。
+本次 TypeScript、Desktop/Web 构建、`pnpm test`（175 文件/1798 项 Vitest；Node 317 通过、2 既有平台跳过）、
+原生设置、交互稿、Host HTTP 和真实 Desktop/双浏览器均通过。staged Rust 选择 workspace default：
+Library 795 通过/6 既有忽略、CLI 35、Web 4 通过；Clippy workspace/all-targets 与 fmt 检查通过。
+不冒充 slow/all-features 或新平台验证。
+
+前次交互调整（`73ea01ba`）：管理令牌的显示／隐藏、复制、重新生成改用同一尺寸的图标按钮；
 地址与令牌复制成功只短暂变勾，不再在页面下方显示复制或重新生成成功提示。
 保留图标可访问名称、读屏反馈、失败时手动复制说明与重新生成确认。
 当前[日间](evidence/remote-token-actions/remote-day.png)、[夜间](evidence/remote-token-actions/remote-night.png)和

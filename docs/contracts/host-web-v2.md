@@ -38,11 +38,15 @@ In Desktop, the Remote Access switch is that explicit choice: it starts the IPv4
 local/LAN selector, and shows local and remote addresses separately. The always-visible port is pending launch-form state:
 editing it does not restart or reconfigure the running service; the next start uses it. Stopping needs no second confirmation.
 
-Trusted local `host.web.token` returns `{administratorToken}` repeatedly without rotation or session revocation.
-Start and rotate still return the new token. The Host retains the administrator token in private process memory solely
-for this readback, with no Debug/Serialize on the credential store; authentication continues to use a typed digest and
+Trusted local `host.web.token` returns `{administratorToken}` repeatedly without rotation or session revocation,
+including before the first listener start and after stop. The Host initializes a random token on the first local read
+or managed start; start reuses that token and returns it. Rotate returns a new token. The Host retains the administrator
+token in private process memory for local readback and subsequent listener starts, with no Debug/Serialize on the credential store; authentication continues to use a typed digest and
 constant-time comparison. Status, public HTTP operations, diagnostics and logs never include it. Rotation is a separate
-explicit operation that changes the token and revokes sessions; Web stop clears it. Standalone startup accepts the Owner's
+explicit local operation that changes the token and revokes sessions. Web stop closes the listener and revokes all
+browser sessions, but retains the administrator token for local viewing/copying and the next start in the same Host
+process. It is not persisted across Host process restarts. Desktop settings always shows the masked token field with
+visibility and copy actions; it has no refresh/regeneration button. Standalone startup accepts the Owner's
 token on stdin as before. Browser authentication still keeps only a short-lived session and editing proof in page memory.
 
 ## Authentication and editor ownership

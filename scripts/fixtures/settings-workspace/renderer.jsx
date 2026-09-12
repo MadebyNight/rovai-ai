@@ -19,7 +19,7 @@ const ignore = () => {}
 const clone = structuredClone
 const requests = []
 let releaseHostStatus
-let hostTokenGeneration = 0
+let hostTokenGeneration = 1
 const state = {
   hostWeb: { enabled: false }, holdHostStatus: false, loseHostStartReply: false,
   preferences: fixture.preferences(), notifications: fixture.notifications(),
@@ -70,7 +70,7 @@ Object.assign(window, { rovai: {
       await request('hostWeb.start', params)
       state.hostWeb = { enabled: true, listen: params.listen, origin: 'http://127.0.0.1:' + params.listen.split(':').at(-1), addresses: [{ origin: 'http://127.0.0.1:' + params.listen.split(':').at(-1), interface: 'lo0', recommended: false }], sessions: 0 }
       if (state.loseHostStartReply) { state.loseHostStartReply = false; throw new Error('启动结果未知') }
-      return { ...clone(state.hostWeb), administratorToken: `fixture-token-${++hostTokenGeneration}` }
+      return { ...clone(state.hostWeb), administratorToken: `fixture-token-${hostTokenGeneration}` }
     },
     rotate: async () => { await request('hostWeb.rotate'); return { ...clone(state.hostWeb), administratorToken: `fixture-token-${++hostTokenGeneration}` } },
     stop: async () => { await request('hostWeb.stop'); state.hostWeb = { enabled: false }; return clone(state.hostWeb) }

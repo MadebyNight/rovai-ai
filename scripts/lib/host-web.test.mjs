@@ -31,6 +31,9 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
   try {
     await within(host.ready)
     assert.equal((await host.request('host.web.status')).enabled, false)
+    const initialToken = (await host.request('host.web.token')).administratorToken
+    assert.match(initialToken, /^[0-9a-f]{64}$/)
+    assert.equal((await host.request('host.web.token')).administratorToken, initialToken, 'local token exists before the first start')
     assert.ok((await host.request('app.info')).dataDir)
     const occupied = createServer()
     await new Promise((resolve, reject) => { occupied.once('error', reject); occupied.listen(0, '127.0.0.1', resolve) })
@@ -45,6 +48,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(started.enabled, true)
     const origin = started.origin
     const administrator = started.administratorToken
+    assert.equal(administrator, initialToken, 'failed and successful starts retain the Host credential')
     const status = await host.request('host.web.status')
     assert.equal('administratorToken' in status, false)
     assert.equal(status.origin, origin)
@@ -200,7 +204,12 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       assert.equal((await within(reader.read())).done, true, 'rotation must close every client stream')
       reader.releaseLock()
     }
+    const rotatedLogin = await request('login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: rotated.administratorToken }) })
+    assert.equal(rotatedLogin.status, 200)
+    const beforeStop = await rotatedLogin.json()
     assert.equal((await host.request('host.web.stop')).enabled, false)
+    assert.equal((await host.request('host.web.token')).administratorToken, rotated.administratorToken, 'stopping the listener retains the latest local credential')
+    assert.equal('administratorToken' in await host.request('host.web.status'), false)
     assert.equal(host.child.exitCode, null, 'stopping Web must leave Core alive')
     assert.equal((await host.request('app.info')).name, info.name)
     await assert.rejects(fetch(origin, { signal: AbortSignal.timeout(2000) }))
@@ -208,6 +217,9 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal((await host.request('host.web.status')).enabled, false)
     const restarted = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory })
     assert.equal(restarted.enabled, true)
+    assert.equal(restarted.administratorToken, rotated.administratorToken, 'restart reuses the retained credential')
+    assert.equal((await fetch(`${restarted.origin}/api/v1/capabilities`, { headers: { Authorization: `Bearer ${beforeStop.token}` } })).status, 401, 'old browser sessions cannot resume after stop')
+    assert.equal((await fetch(`${restarted.origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: restarted.administratorToken }) })).status, 200, 'the retained credential permits a fresh login')
     const reply = await host.request('core.shutdown', { protocolVersion: 3, deadlineMs: 10_000 })
     assert.equal(reply.controlledShutdownCyclePersisted, true)
     assert.equal((await within(host.closed)).code, 0)

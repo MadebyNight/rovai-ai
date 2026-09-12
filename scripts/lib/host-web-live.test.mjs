@@ -67,21 +67,30 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     await desktop.click(`document.querySelector('.sidebar-settings-main')`)
     await desktop.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent.trim()==='远程连接')`)
     await desktop.wait(`document.querySelector('[aria-label="远程访问"]:not(:disabled)')!==null`)
+    await desktop.wait(`document.querySelector('#remote-token')?.value.length===64`)
+    const initialToken = await desktop.evaluate(`document.querySelector('#remote-token').value`)
     await desktop.click(`document.querySelector('#remote-port')`); await desktop.evaluate(`document.querySelector('#remote-port').select()`); await desktop.send('Input.insertText', { text: String(port) })
     await desktop.click(`document.querySelector('[aria-label="远程访问"]')`)
-    await desktop.wait(`document.querySelector('#remote-token')?.value.length===64`)
+    await desktop.wait(`document.querySelector('#remote-enabled').checked && !document.querySelector('#remote-enabled').disabled`)
     let started = { ...await desktop.evaluate(`window.rovai.hostWeb.status()`), ...await desktop.evaluate(`window.rovai.hostWeb.token()`) }
+    assert.equal(started.administratorToken, initialToken)
+    assert.equal(await desktop.evaluate(`document.querySelectorAll('.remote-token-actions button').length`), 2)
     const nextProbe = createServer(); await new Promise(resolve => nextProbe.listen(0, '127.0.0.1', resolve)); const nextPort = nextProbe.address().port; await new Promise(resolve => nextProbe.close(resolve))
     await desktop.click(`document.querySelector('#remote-port')`); await desktop.evaluate(`document.querySelector('#remote-port').select()`); await desktop.send('Input.insertText', { text: String(nextPort) })
     assert.equal((await desktop.evaluate(`window.rovai.hostWeb.status()`)).listen, started.listen, 'editing the port must not restart the listener')
     assert.equal((await desktop.evaluate(`window.rovai.hostWeb.token()`)).administratorToken, started.administratorToken)
     await desktop.click(`document.querySelector('#remote-enabled')`)
     assert.equal(await desktop.evaluate(`document.querySelector('[role=dialog]')===null`), true)
-    await desktop.wait(`document.querySelector('#remote-token')===null`)
+    await desktop.wait(`!document.querySelector('#remote-enabled').checked && !document.querySelector('#remote-enabled').disabled`)
+    assert.equal(await desktop.evaluate(`document.querySelector('#remote-token').value`), initialToken)
+    await desktop.click(`document.querySelector('button[aria-label="复制管理令牌"]')`)
+    await desktop.wait(`document.querySelector('button[aria-label="复制管理令牌"]').title==='已复制'`)
+    await desktop.capture(join(output, 'desktop-remote-stopped.png'))
     assert.ok((await request('app.info')).dataDir)
     await desktop.click(`document.querySelector('#remote-enabled')`)
-    await desktop.wait(`document.querySelector('#remote-token')?.value.length===64`)
+    await desktop.wait(`document.querySelector('#remote-enabled').checked && !document.querySelector('#remote-enabled').disabled`)
     started = { ...await desktop.evaluate(`window.rovai.hostWeb.status()`), ...await desktop.evaluate(`window.rovai.hostWeb.token()`) }
+    assert.equal(started.administratorToken, initialToken)
     assert.equal(started.listen, `0.0.0.0:${nextPort}`)
     assert.equal(await desktop.evaluate(`document.querySelector('#remote-port').value`), String(nextPort))
     assert.ok(started.addresses.length > 0)
@@ -217,7 +226,7 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     assert.deepEqual(desktop.errors, []); assert.deepEqual(web.errors, []); assert.deepEqual(second.errors, [])
     await web.capture(join(output, 'web-after-reauth.png'))
     const evidence = { stage: 'managed-desktop-web-passed', simulation: false, realRuntime: false, desktopFocusEmulated: true, campId, geometry: await geometry(web), draftOwners: rows.map(r => r.client_id === 'desktop' ? 'desktop' : 'web'), sameComposerAfterReauth: true, nativeBridgeInBrowser: false,
-      ownerModel: { desktopSettingsStart: true, pendingPortAppliesOnlyOnNextStart: true, stopWithoutConfirmation: true, copiedAddressAndToken: true, copyIconFeedbackWithoutPageNotice: true, actualInterfaceAddress: true, nonLoopbackOrigin: !started.origin.includes('127.0.0.1'), directoryPickerWithoutPreauthorization: true, sameMachineBrowsers: true, secondPhysicalDevice: false },
+      ownerModel: { desktopSettingsStart: true, pendingPortAppliesOnlyOnNextStart: true, stopWithoutConfirmation: true, copiedAddressAndToken: true, copyIconFeedbackWithoutPageNotice: true, tokenReadableBeforeStartAndAfterStop: true, tokenPreservedOnRestart: true, actualInterfaceAddress: true, nonLoopbackOrigin: !started.origin.includes('127.0.0.1'), directoryPickerWithoutPreauthorization: true, sameMachineBrowsers: true, secondPhysicalDevice: false },
       mainSync: { browserGeneralPreferences: true, nativeWindowControlsAbsent: true, browserZoomExplicit: true, previewSelectAllScoped: true, finalLineQuoteAccepted: true, pendingReturnScopedToCurrentClient: true, pendingAttachmentsAddedInComposer: true, pendingFixture: 'one needs_repair row in isolated database; no Runtime' } }
     await desktop.evaluate(`window.rovai.hostWeb.stop()`)
     assert.ok((await request('app.info')).dataDir)

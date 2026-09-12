@@ -8,29 +8,31 @@ use tokio::sync::Mutex;
 
 pub struct WebControl {
     core: CoreService,
-    server: Mutex<Option<WebServer>>,
+    state: Mutex<WebControlState>,
 }
 
 impl WebControl {
     pub fn new(core: CoreService) -> Arc<Self> {
         Arc::new(Self {
             core,
-            server: Mutex::new(None),
+            state: Mutex::new(WebControlState {
+                server: None,
+                administrator: None,
+            }),
         })
     }
 
     pub async fn start(&self, config: WebConfig, token: &str) -> anyhow::Result<Value> {
-        let mut server = self.server.lock().await;
-        anyhow::ensure!(server.is_none(), "Web service is already running");
-        let running = WebServer::start(self.core.clone(), config, token).await?;
-        let status = running.status();
-        *server = Some(running);
-        Ok(status)
+        self.state
+            .lock()
+            .await
+            .start(self.core.clone(), config, token)
+            .await
     }
 
     pub async fn stop(&self) {
-        let server = self.server.lock().await.take();
-        if let Some(server) = server {
+        let mut state = self.state.lock().await;
+        if let Some(server) = state.server.take() {
             server.stop().await;
         }
     }
@@ -45,28 +47,23 @@ impl HostControl for WebControl {
             };
             match operation {
                 HostWebOperation::Status => Ok(self
-                    .server
+                    .state
                     .lock()
                     .await
+                    .server
                     .as_ref()
                     .map(WebServer::status)
                     .unwrap_or_else(|| json!({"enabled":false,"sessions":0}))),
                 HostWebOperation::Token => {
-                    let server = self.server.lock().await;
-                    let server = server.as_ref().ok_or(HostControlError {
-                        code: "HOST_WEB_DISABLED",
-                        message: "请先开启远程连接。".into(),
-                    })?;
-                    Ok(json!({"administratorToken":server.administrator_token()}))
+                    let token = self.state.lock().await.token()?;
+                    Ok(json!({"administratorToken":token}))
                 }
                 HostWebOperation::Start => {
                     let config: WebConfig =
                         serde_json::from_value(params).map_err(|_| invalid())?;
-                    let token = new_token().map_err(|_| HostControlError {
-                        code: "HOST_RANDOM_UNAVAILABLE",
-                        message: "系统随机数暂不可用。".into(),
-                    })?;
-                    let mut status = self.start(config, &token).await.map_err(|_| HostControlError { code: "HOST_WEB_START_FAILED", message: "Web 服务未开启。请检查端口是否被占用、WebUI 是否已构建，以及局域网访问是否已明确开启。".into() })?;
+                    let mut state = self.state.lock().await;
+                    let token = state.token()?;
+                    let mut status = state.start(self.core.clone(), config, &token).await.map_err(|_| HostControlError { code: "HOST_WEB_START_FAILED", message: "Web 服务未开启。请检查端口是否被占用、WebUI 是否已构建，以及局域网访问是否已明确开启。".into() })?;
                     // The closed, parent-owned pipe returns this only to the
                     // local manager. It is absent from status and diagnostics.
                     status["administratorToken"] = json!(token);
@@ -77,17 +74,55 @@ impl HostControl for WebControl {
                     Ok(json!({"enabled":false,"sessions":0}))
                 }
                 HostWebOperation::Rotate => {
-                    let server = self.server.lock().await;
-                    let server = server.as_ref().ok_or(HostControlError {
+                    let mut state = self.state.lock().await;
+                    let server = state.server.as_ref().ok_or(HostControlError {
                         code: "HOST_WEB_DISABLED",
                         message: "请先开启 Web 服务。".into(),
                     })?;
                     let token = server.rotate().map_err(|_| invalid())?;
                     let mut status = server.status();
+                    state.administrator = Some(token.clone());
                     status["administratorToken"] = json!(token);
                     Ok(status)
                 }
             }
         })
+    }
+}
+
+// The local Host owns this credential across listener restarts. It is never
+// part of status, diagnostics, or remote HTTP; no Debug/Serialize is derived.
+struct WebControlState {
+    server: Option<WebServer>,
+    administrator: Option<String>,
+}
+
+impl WebControlState {
+    fn token(&mut self) -> Result<String, HostControlError> {
+        if self.administrator.is_none() {
+            self.administrator = Some(new_token().map_err(|_| HostControlError {
+                code: "HOST_RANDOM_UNAVAILABLE",
+                message: "系统随机数暂不可用。".into(),
+            })?);
+        }
+        Ok(self
+            .administrator
+            .as_ref()
+            .expect("administrator initialized")
+            .clone())
+    }
+
+    async fn start(
+        &mut self,
+        core: CoreService,
+        config: WebConfig,
+        token: &str,
+    ) -> anyhow::Result<Value> {
+        anyhow::ensure!(self.server.is_none(), "Web service is already running");
+        let running = WebServer::start(core, config, token).await?;
+        let status = running.status();
+        self.administrator = Some(token.to_owned());
+        self.server = Some(running);
+        Ok(status)
     }
 }
