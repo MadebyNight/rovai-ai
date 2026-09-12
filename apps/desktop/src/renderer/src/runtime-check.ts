@@ -15,6 +15,9 @@ export async function requestProductRuntimeCheck(runtimeKind: AdapterKind, reque
   return request<ProductRuntimeCheckResult>('runtime.product.check', { runtimeKind })
 }
 
-export function openRuntimeModelCatalog(runtimeKind: AdapterKind, request: RovaiApi['request'] = desktopCampClient.request): Promise<RuntimeModelCatalogView> {
-  return request<RuntimeModelCatalogView>('runtime.modelCatalog.open', { runtimeKind })
+export function openRuntimeModelCatalog(runtimeKind: AdapterKind, request: RovaiApi['request'] = desktopCampClient.request, waitForRefresh = false): Promise<RuntimeModelCatalogView> {
+  return request<RuntimeModelCatalogView>('runtime.modelCatalog.open', {
+    runtimeKind,
+    ...(waitForRefresh ? { waitForRefresh: true } : {})
+  })
 }

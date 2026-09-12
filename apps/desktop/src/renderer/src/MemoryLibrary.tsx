@@ -122,9 +122,12 @@ export function MemoryLibrary({
   onReady?(): void
   startupFeedbackVisible?: boolean
 }): React.JSX.Element {
+  const client = useCampClient()
+  const libraryGeneration = useRef(0)
+  const reviewGeneration = useRef(0)
+  useEffect(() => () => { libraryGeneration.current++; reviewGeneration.current++ }, [client])
   const [library, setLibrary] = useState<MemoryLibraryView | null>(null)
   const [reviewItems, setReviewItems] = useState<HearthReviewItem[]>([])
-  const client = useCampClient()
   const [scope, setScope] = useState<MemoryScopeKind>('hearth')
   const [governance, setGovernance] = useState<GovernanceFilter>('all')
   const [search, setSearch] = useState('')
@@ -141,19 +144,24 @@ export function MemoryLibrary({
   const startupContentVisible = startupFeedbackVisible || Boolean(error)
 
   const loadMemoryLibrary = useCallback(async (): Promise<MemoryLibraryView> => {
+    const request = ++libraryGeneration.current
     const nextLibrary = await client.request<MemoryLibraryView>('memory.list')
-    setLibrary(nextLibrary)
+    if (request === libraryGeneration.current) setLibrary(nextLibrary)
     return nextLibrary
   }, [client])
 
   const load = useCallback(async (): Promise<MemorySnapshot> => {
+    const libraryRequest = ++libraryGeneration.current
+    const reviewRequest = ++reviewGeneration.current
     const [nextLibrary, nextReviewItems] = await Promise.all([
       client.request<MemoryLibraryView>('memory.list'),
       client.request<HearthReviewItem[]>('memory.hearthReviewItems.list')
     ])
-    setLibrary(nextLibrary)
-    setReviewItems(nextReviewItems)
-    onPendingCountChange?.(nextReviewItems.filter((reviewItem) => reviewItem.status === 'pending').length)
+    if (libraryRequest === libraryGeneration.current) setLibrary(nextLibrary)
+    if (reviewRequest === reviewGeneration.current) {
+      setReviewItems(nextReviewItems)
+      onPendingCountChange?.(nextReviewItems.filter((reviewItem) => reviewItem.status === 'pending').length)
+    }
     return { library: nextLibrary, reviewItems: nextReviewItems }
   }, [client, onPendingCountChange])
 

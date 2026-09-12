@@ -22,13 +22,13 @@ Successful send/queue/discard clears only the Web client's content and advances 
 including at expiry, so an old revision cannot become valid again after clear/recreate. Desktop A and Web B/C neither
 consume nor overwrite one another's Drafts. Accepted source files keep Attachment v9's OS-controlled lifetime.
 
-Migration 152 accepts the exact v1.58/projection-101/receipt-151 source, preserves existing Desktop rows and Prepared
-references, creates composite ownership keys, and records v1.59/projection-102 atomically. Receipt failure rolls back
+Migration 153 accepts the exact v1.58/projection-102/receipt-152 source, preserves existing Desktop rows and Prepared
+references, creates composite ownership keys, and records v1.59/projection-103 atomically. Receipt failure rolls back
 DDL/data; partial or lookalike schemas are not current. Old binaries cannot admit the new marker.
 
 The earlier task-branch v1.59/projection-100/receipt-150 client schema is admitted only with its exact
-composite keys and editor proof schema. One transaction renumbers its receipt to 152, applies upstream
-DingTalk nullable-name and Runtime startup migrations 150/151, and seals the new marker. Editor proofs,
+composite keys and editor proof schema. One transaction renumbers its receipt to 153, applies upstream
+DingTalk nullable-name and Runtime startup and model-catalog migrations 150/151/152, and seals the new marker. Editor proofs,
 Draft IDs and content survive; failure rolls back schema, receipt and marker together.
 
 Within one page, reconnect and same-Owner reauthentication preserve the mounted editor and outstanding command IDs.

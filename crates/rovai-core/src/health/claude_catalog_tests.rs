@@ -47,7 +47,11 @@ while IFS= read -r request; do printf '%s\n' "$request" >> "$root/requests"; don
         // short, and require every other failure to reach its actual protocol
         // branch instead of accepting a timeout as an equivalent error.
         let deadline = Duration::from_secs(if case == "timeout" { 1 } else { 10 });
-        let result = claude_code_model_catalog(&executable, deadline).await;
+        let result = if case == "success" {
+            refresh_model_catalog(&executable, AdapterKind::ClaudeCodeCli).await
+        } else {
+            claude_code_model_catalog(&executable, deadline).await
+        };
         if case == "success" {
             let models = result.unwrap();
             assert_eq!(models.len(), 2);

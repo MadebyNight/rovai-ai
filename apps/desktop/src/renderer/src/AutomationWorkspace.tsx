@@ -42,6 +42,8 @@ export function AutomationWorkspace({
 }): React.JSX.Element {
   const client = useCampClient()
   const [automations, setAutomations] = useState<AutomationView[]>([])
+  const refreshGeneration = useRef(0)
+  useEffect(() => () => { refreshGeneration.current++ }, [client])
   const automationsRef = useRef<AutomationView[]>([])
   const [selectedId, setSelectedId] = useState<string | 'new' | null>(null)
   const selectedIdRef = useRef(selectedId)
@@ -110,6 +112,7 @@ export function AutomationWorkspace({
     : null
 
   const refresh = useCallback(async (quiet = false): Promise<boolean> => {
+    const request = ++refreshGeneration.current
     if (!quiet) setLoadState('loading')
     try {
       const loaded: AutomationView[] = []
@@ -127,6 +130,7 @@ export function AutomationWorkspace({
         seenCursors.add(page.nextCursor)
         cursor = page.nextCursor
       }
+      if (request !== refreshGeneration.current) return false
       setAutomations(loaded)
       automationsRef.current = loaded
 
@@ -162,7 +166,7 @@ export function AutomationWorkspace({
       setIssue((current) => current?.kind === 'load' ? null : current)
       return true
     } catch (nextError) {
-      if (!quiet) {
+      if (!quiet && request === refreshGeneration.current) {
         setLoadState('error')
         setIssue({ kind: 'load', message: readErrorMessage(nextError) })
       }

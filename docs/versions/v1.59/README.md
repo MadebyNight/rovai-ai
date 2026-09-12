@@ -40,7 +40,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | --- | --- | --- |
 | Version lifecycle | 已更新 | 前版生命周期冻结；本概览、实施计划与[版本索引](../README.md)建立唯一 current v1.59 |
 | Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host 与分阶段迁移 |
-| Contracts | 已更新 | [Host Lifecycle v1](../../contracts/host-lifecycle-v1.md)保留；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 152 保留旧 Desktop 数据，并原子升级旧任务分支的 150 客户端草稿 |
+| Contracts | 已更新 | [Host Lifecycle v1](../../contracts/host-lifecycle-v1.md)保留；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 153 保留旧 Desktop 数据，并原子升级旧任务分支的 150 客户端草稿 |
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 已替换独立 Workspace，挂载共享 BusinessApp/CampNavigation/CampWorkspace；[差异表](../../ui/host-web-parity.md)继续记录私聊和管理页等缺口；Mobile 稿保留并暂停新增 |
 | Runtime Activity | 确认无需更新 | Runtime Adapter 语义与活动分类保持不变 |

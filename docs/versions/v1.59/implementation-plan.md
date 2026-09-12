@@ -16,11 +16,11 @@ last_updated: 2026-09-13
 ## 当前收敛：阶段 1–3，单 Owner 的真实业务闭环
 
 2026-09-13 本轮继续：先同步最新 main，完成阶段 1–3，再推进阶段四可在 Mac 上完成的部署验收。
-Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当前同步点为 `2e1aa74a`；
+Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当前同步点为 `d53f8ca9`；
 保留共享业务入口，并接入上游导航窗口、执行历史和 Runtime 启动配置。
 合并基线通过 TypeScript 与 Rust workspace default：Core 799 通过/6 既有忽略、CLI 35、Web 4。
 随后 Task/Memory/Automation/Skills/MCP 页面与资源适配正在实现和验证，这些新改动不继承基线的通过结论。
-Migration 152 保留上游 150/151；旧任务分支的客户端草稿 150 通过精确 schema 检查和原子迁移升级，
+Migration 153 保留上游 150/151/152；旧任务分支的客户端草稿 150 通过精确 schema 检查和原子迁移升级，
 保留 editor proof、草稿及回执。私聊、无浏览器时钟与完整两入口执行矩阵仍待完成。
 
 

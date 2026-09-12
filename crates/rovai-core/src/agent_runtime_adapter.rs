@@ -1194,7 +1194,7 @@ impl AgentRuntimeAdapterRegistry {
     }
 }
 
-fn pi_models(catalog: Option<&Value>) -> Result<Vec<ModelDescriptor>> {
+pub fn pi_models(catalog: Option<&Value>) -> Result<Vec<ModelDescriptor>> {
     let mut models = vec![ModelDescriptor {
         description: None,
         runtime_metadata: None,
@@ -1320,7 +1320,7 @@ impl CodexCliAdapterPolicy {
     }
 }
 
-fn codex_models(catalog: &Value) -> Result<Vec<ModelDescriptor>> {
+pub fn codex_models(catalog: &Value) -> Result<Vec<ModelDescriptor>> {
     let values = catalog
         .get("data")
         .and_then(Value::as_array)
@@ -1753,34 +1753,11 @@ impl AntigravityAppAdapterPolicy {
         capabilities.sort();
         capabilities.dedup();
 
-        let mut models = Vec::new();
-        if ready {
-            models.push(ModelDescriptor {
-                description: None,
-                runtime_metadata: None,
-                id: ANTIGRAVITY_RUNTIME_DEFAULT_MODEL_ID.to_string(),
-                display_name: "Antigravity App runtime default".to_string(),
-                is_default: true,
-                hidden: false,
-                deprecated: false,
-                options: Vec::new(),
-            });
-            for model_id in observation.models {
-                if model_id.trim().is_empty() || model_id == ANTIGRAVITY_RUNTIME_DEFAULT_MODEL_ID {
-                    continue;
-                }
-                models.push(ModelDescriptor {
-                    description: None,
-                    runtime_metadata: None,
-                    display_name: model_id.clone(),
-                    id: model_id,
-                    is_default: false,
-                    hidden: false,
-                    deprecated: false,
-                    options: Vec::new(),
-                });
-            }
-        }
+        let models = if ready {
+            antigravity_models(observation.models)
+        } else {
+            Vec::new()
+        };
 
         let permission_options = ready
             .then(antigravity_permission_options)
@@ -1831,6 +1808,35 @@ pub fn trae_machine_ready_requirements() -> Vec<String> {
     .into_iter()
     .map(str::to_string)
     .collect()
+}
+
+pub fn antigravity_models(model_ids: Vec<String>) -> Vec<ModelDescriptor> {
+    let mut models = vec![ModelDescriptor {
+        description: None,
+        runtime_metadata: None,
+        id: ANTIGRAVITY_RUNTIME_DEFAULT_MODEL_ID.to_string(),
+        display_name: "Antigravity App runtime default".to_string(),
+        is_default: true,
+        hidden: false,
+        deprecated: false,
+        options: Vec::new(),
+    }];
+    for model_id in model_ids {
+        if model_id.trim().is_empty() || model_id == ANTIGRAVITY_RUNTIME_DEFAULT_MODEL_ID {
+            continue;
+        }
+        models.push(ModelDescriptor {
+            description: None,
+            runtime_metadata: None,
+            display_name: model_id.clone(),
+            id: model_id,
+            is_default: false,
+            hidden: false,
+            deprecated: false,
+            options: Vec::new(),
+        });
+    }
+    models
 }
 
 pub fn pi_machine_ready_requirements() -> Vec<String> {
