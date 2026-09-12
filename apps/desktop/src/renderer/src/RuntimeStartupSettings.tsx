@@ -56,6 +56,10 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
   }, [runtimeKind, loadAttempt])
 
   useEffect(() => {
+    return () => { sequence.current += 1 }
+  }, [runtimeKind])
+
+  useEffect(() => {
     const guard = (event: BeforeUnloadEvent): void => {
       if (state.current.dirty || state.current.busy === 'save') { event.preventDefault(); event.returnValue = '' }
     }
@@ -132,12 +136,15 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
     setError(null)
   }
 
-  const status = inspection?.status ?? (!dirty
+  const status = error ? null : inspection?.status ?? (!dirty
     ? item?.status === 'authentication_required' ? 'authentication_required'
       : initialPath ? 'recognized' : item?.discovery.discoveryStatus === 'missing' ? 'missing' : null
     : null)
   const statusLabel = busy === 'inspect' ? '正在验证程序…' : busy === 'check' ? '正在检查状态…' : status ? INSPECTION_LABELS[status] : null
   const locked = busy !== null || saved === null
+  const displayedPath = draft.programPath ?? (inspection ? inspection.executablePath :
+    !dirty && !error && busy !== 'inspect' && busy !== 'check' ? initialPath : null)
+  const environmentIncomplete = (inspection?.searchEnvironment?.diagnosticCodes?.length ?? 0) > 0
 
   return <section className="runtime-startup-page" aria-busy={busy === 'load' || busy === 'save'}>
     <button className="quiet-button runtime-startup-back" type="button" disabled={busy !== null}
@@ -153,7 +160,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
           <button className="quiet-button" type="button" disabled={locked || draft.programPath === null}
             onClick={() => { const next = { ...draft, programPath: null }; change(next); void inspect(next) }}>恢复自动</button></div>
         <div className="runtime-startup-path">
-          <input id={`${id}-path`} value={draft.programPath ?? (inspection ? inspection.executablePath ?? '' : initialPath ?? '')} placeholder="自动检测" readOnly title={draft.programPath ?? inspection?.executablePath ?? initialPath ?? undefined} />
+          <input id={`${id}-path`} value={displayedPath ?? ''} placeholder="自动检测" readOnly title={displayedPath ?? undefined} />
           <button className="quiet-button" type="button" disabled={locked} onClick={() => void choose()}>选择文件<DialogControlIcon name="folder" /></button>
         </div>
         <div className="runtime-startup-inspection">
@@ -162,6 +169,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
           </span>
           <button className="quiet-button" type="button" disabled={locked} onClick={() => void inspect(draft, true)}>检查状态<DialogControlIcon name="refresh" /></button>
         </div>
+        {environmentIncomplete && <p className="runtime-startup-result is-warning" role="status">部分查找来源不可用，本次结果使用已读取的可用环境。</p>}
       </section>
       <section className="runtime-startup-section">
         <div className="runtime-startup-section-heading"><h2>环境变量</h2><button className="quiet-button" type="button" disabled={locked || draft.environment.length >= 128}

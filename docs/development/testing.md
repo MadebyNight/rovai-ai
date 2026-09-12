@@ -448,6 +448,26 @@ Dialog 验收，专项结果不能替代默认全套结果。
 
 ## 隔离与副作用
 
+### 主动检查的环境刷新
+
+当前语义由 [Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md) 拥有。
+`runtime_check_refresh_tests` 是 macOS/Windows Check Manager、保存 CAS、正式状态与草稿隔离的集成 owner：使用可注入的
+基础环境读取器、UUID 临时目录、私有 SQLite 和合成程序，不读取真实 Runtime 安装或账号。
+它覆盖目录变化、原路径升级、指定路径失效不回退、进程 PATH 不参与主程序选择、草稿/恢复自动不发布、
+保存及新请求与旧探测交错、环境读取失败不沿用缓存。程序替换继续复用既有 identity-checked probe owner。
+这些跨 manager/数据库的断言不能降为单独的发现函数测试；不新增第二套协议模拟或真实模型 Smoke。
+
+```bash
+cargo test -p rovai-core --bin rovai-core --features slow-tests runtime_check_environment::tests
+pnpm exec vitest run apps/desktop/src/renderer/src/runtime-check.test.ts
+pnpm test:settings-workspace
+```
+
+Renderer 复用生产设置组件和既有隔离 Electron fixture，增加恢复自动、失败预览及离开后迟到结果检查。
+测试中的 `userData` 与 Skill Library 均属于临时夹具，不启动真实 Core 或 Runtime。
+
+### 通用隔离规则
+
 - Smoke 应使用临时 Core `data-dir`、临时工作区和独立配置投影；不得读写日常
   Rovai-ai SQLite。
 - Runtime Smoke 会继承当前进程可见的上游认证环境，但不应改写用户级 Runtime 配置。

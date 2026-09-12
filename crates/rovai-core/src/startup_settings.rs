@@ -1,9 +1,9 @@
 //! Owner-only startup editor. Draft probes do not publish product readiness.
 use crate::{
-    Core, RUNTIME_CHECK_TOTAL_DEADLINE, RuntimeCheckOutcome, RuntimeCheckRequest,
-    RuntimeCheckTrigger, RuntimeDiscoveryStatus, RuntimeLaunchPurpose,
+    Core, IdentityCheckedProbe, RUNTIME_CHECK_TOTAL_DEADLINE, RuntimeCheckOutcome,
+    RuntimeCheckRequest, RuntimeCheckTrigger, RuntimeDiscoveryStatus, RuntimeLaunchPurpose,
     current_runtime_platform_blocker, discover_runtime_path, discover_runtime_version,
-    with_runtime_configuration,
+    run_identity_checked_probe, with_runtime_configuration,
 };
 use anyhow::{Context, Result, ensure};
 use rovai_core::{
@@ -12,7 +12,7 @@ use rovai_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, oneshot};
 
 pub(crate) struct StartupPreview {
@@ -137,6 +137,7 @@ impl Core {
                 search.activate_for_runtime_commands();
                 *self.runtime_search_environment.write().await = Arc::new(search);
                 // No fleet invalidation: a live host retains its captured process environment.
+                drop(_update);
                 self.run_runtime_discovery().await;
                 Ok(serde_json::to_value(settings)?)
             }
@@ -155,49 +156,71 @@ impl Core {
             "当前平台不支持这个运行时。"
         );
         let search = self
-            .runtime_search_environment
-            .read()
-            .await
-            .as_ref()
-            .clone()
+            .read_runtime_check_environment(true)
+            .await?
             .with_startup_configuration(kind, configuration);
         let path_search = search.clone();
         let mut observation =
             tokio::task::spawn_blocking(move || discover_runtime_path(kind, &path_search)).await?;
         if observation.discovery_status != RuntimeDiscoveryStatus::Found {
             return Ok(
-                json!({"status": "missing", "executablePath": null, "reportedVersion": null}),
+                json!({"status": "missing", "executablePath": null, "reportedVersion": null,
+                    "searchEnvironment": search.summary()}),
             );
         }
-        discover_runtime_version(&mut observation, &search).await;
-        let mut status = if observation.version_probe_succeeded == Some(true) {
-            "recognized"
-        } else {
-            "version_unverified"
+        let path = PathBuf::from(
+            observation
+                .executable_path
+                .as_deref()
+                .context("Runtime path missing")?,
+        );
+        let expected_fingerprint = observation.executable_fingerprint.clone();
+        let locator = observation.entrypoint_locator_identity.clone();
+        let candidate_is_current = || {
+            rovai_core::agent_runtime_adapter::executable_fingerprint(&path).ok()
+                == expected_fingerprint
+                && search
+                    .candidates(kind, std::iter::empty())
+                    .iter()
+                    .any(|candidate| {
+                        candidate.entrypoint_locator_identity == locator
+                            && crate::canonical_runtime_path(&candidate.path)
+                                == crate::canonical_runtime_path(&path)
+                            && candidate.entrypoint_locator_identity_is_current()
+                    })
         };
-        if deep {
-            let path = Path::new(
-                observation
-                    .executable_path
-                    .as_deref()
-                    .context("Runtime path missing")?,
-            );
-            let before = rovai_core::agent_runtime_adapter::executable_fingerprint(path)?;
-            let probe = with_runtime_configuration(
-                kind,
-                &search,
-                self.deep_probe_candidate(kind, path, RuntimeLaunchPurpose::AvailabilityCheck),
+        ensure!(
+            candidate_is_current(),
+            "程序在检查期间发生变化，请重新检查。"
+        );
+        let status = if deep {
+            // The adapter's own version + protocol/auth check is one identity-fenced
+            // probe. Do not mix an earlier standalone --version with a later binary.
+            let checked = run_identity_checked_probe(
+                &path,
+                with_runtime_configuration(
+                    kind,
+                    &search,
+                    self.deep_probe_candidate(kind, &path, RuntimeLaunchPurpose::AvailabilityCheck),
+                ),
             )
             .await;
             ensure!(
-                rovai_core::agent_runtime_adapter::executable_fingerprint(path)
-                    .ok()
-                    .as_deref()
-                    == Some(&before),
+                candidate_is_current(),
                 "程序在检查期间发生变化，请重新检查。"
             );
+            let probe = match checked {
+                IdentityCheckedProbe::Stable(probe) => probe,
+                IdentityCheckedProbe::Superseded => {
+                    anyhow::bail!("程序在检查期间发生变化，请重新检查。")
+                }
+            };
             // Keep raw provider errors, credentials, catalog and configuration out of this response.
-            status = match probe {
+            observation.reported_version = probe
+                .as_ref()
+                .ok()
+                .and_then(|probe| probe.snapshot.reported_version.clone());
+            match probe {
                 Ok(probe)
                     if probe.snapshot.authentication_status == "authentication_required"
                         || probe.snapshot.probe_status == "authentication_required" =>
@@ -206,11 +229,22 @@ impl Core {
                 }
                 Ok(probe) if probe.snapshot.probe_status == "ready" => "ready",
                 _ => "check_failed",
-            };
-        }
+            }
+        } else {
+            discover_runtime_version(&mut observation, &search).await;
+            ensure!(
+                candidate_is_current(),
+                "程序在检查期间发生变化，请重新检查。"
+            );
+            if observation.version_probe_succeeded == Some(true) {
+                "recognized"
+            } else {
+                "version_unverified"
+            }
+        };
         Ok(
             json!({"status": status, "executablePath": observation.executable_path,
-            "reportedVersion": observation.reported_version}),
+            "reportedVersion": observation.reported_version, "searchEnvironment": search.summary()}),
         )
     }
 
@@ -227,6 +261,7 @@ impl Core {
         let (completed, completion) = oneshot::channel();
         self.runtime_check_requests
             .send(RuntimeCheckRequest {
+                search: self.runtime_search_environment.read().await.clone(),
                 fast_target: None,
                 startup_preview: Some(preview.clone()),
                 runtime_kind: kind,

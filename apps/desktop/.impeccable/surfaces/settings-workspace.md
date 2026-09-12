@@ -159,7 +159,9 @@ Code, Codex CLI and OpenCode show a primary official installation command, colla
 prerequisites, a launch/login step and a recheck action. Other products and other admitted platforms link
 to official instructions; Antigravity links to its download site. Commands are copied, never executed by
 the Renderer. Admission remains Core-owned; unqualified, unsupported and pending products gain no action.
-The post-install action refreshes interactive-shell discovery before checking the selected product.
+List and guide checks share one backend operation that captures fresh discovery inputs before checking
+the selected product. Do not issue a separate frontend rescan first. Failed and deferred responses remain
+failed/incomplete even when historical availability is retained.
 Pending checks preserve focus and the open guide; real status, public failures and retry feedback remain
 in the same row. Guide content and download clicks never imply successful installation or readiness.
 
@@ -299,4 +301,8 @@ when values change; save validates rather than requiring a prior manual check. S
 editable values. Discard, successful save and reverting to original values restore the clean state. Known
 unauthenticated installs read “已识别程序，需要登录” and remain savable. Switching settings categories retains
 the draft; returning to the catalog asks before discarding an unsaved draft. Behavior is owned by
-[Runtime Launch v40](../../../../docs/contracts/runtime-launch-and-verification-v40.md).
+[Runtime Launch v41](../../../../docs/contracts/runtime-launch-and-verification-v41.md).
+
+Draft checks and restore-auto previews read fresh private search inputs. Failed previews must not fall back
+to the saved program/version as though it had just been checked. Editing or leaving invalidates older
+preview responses. A fallback search source retains a local warning without exposing environment values.

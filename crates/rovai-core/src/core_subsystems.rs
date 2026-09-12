@@ -122,7 +122,7 @@ impl CoreSubsystems {
         }
     }
 
-    #[cfg(all(test, target_os = "macos", feature = "slow-tests"))]
+    #[cfg(all(test, feature = "slow-tests", any(target_os = "macos", windows)))]
     pub fn ready_for_test() -> Self {
         let states = Self::new();
         for entry in states.snapshot() {

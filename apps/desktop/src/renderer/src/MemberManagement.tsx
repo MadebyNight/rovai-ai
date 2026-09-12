@@ -1433,14 +1433,16 @@ export function RuntimeInstallationsPanel({
         runtimePlatformAdmissionAllowsUse(row)
     ) ?? false
 
-  const checkProduct = async (runtimeKind: AdapterKind, rediscover = false): Promise<void> => {
+  const checkProduct = async (runtimeKind: AdapterKind): Promise<void> => {
     if (busy !== null) return
     setBusy(`check-${runtimeKind}`)
     setError(null)
     setCheckFeedback(null)
     try {
       try {
-        await requestProductRuntimeCheck(runtimeKind, rediscover)
+        const result = await requestProductRuntimeCheck(runtimeKind)
+        if (result.outcome === 'deferred') throw new Error('检查未完成，程序或启动设置已变化，请重新检查。')
+        if (!result.ready) throw new Error('本次检查未通过，请查看当前状态；保留的历史结果不代表本次检查通过。')
       } finally {
         await onReload()
       }
@@ -1564,7 +1566,7 @@ export function RuntimeInstallationsPanel({
                 {isOpen && guide && expanded ? <RuntimeInstallationGuide
                   id={`${guideId}-${runtimeKind}`} label={adapterLabel(runtimeKind)} guide={guide}
                   mode={expanded.mode} busy={busy !== null} checking={checking} feedback={feedback}
-                  onCheck={() => void checkProduct(runtimeKind, expanded.mode === 'install')}
+                  onCheck={() => void checkProduct(runtimeKind)}
                 /> : feedback}
               </article>
             )
