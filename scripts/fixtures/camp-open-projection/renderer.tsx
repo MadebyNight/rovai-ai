@@ -48,6 +48,32 @@ const textRun: AgentRunView = {
   endingGitObservation: null, version: 1, createdAt: now, startedAt: now, endedAt: now, updatedAt: now
 }
 const attachmentReviewMode = new URLSearchParams(window.location.search).get('review') === 'attachments'
+const executionRequests: { beforeSequence: number | null; limit: number }[] = []
+const executionContentReads: string[] = []
+let executionReadFailure = false
+let runningExecutionScenario = false
+const executionRun = { ...textRun, id: 'window-run', executionEvidenceCount: 1000 }
+function windowEvidence(sequence: number): AgentRunExecutionEvidenceView {
+  const id = `window-${sequence}`
+  const narration = sequence % 8 === 0
+  const file = sequence === 999
+  return {
+    id, agentRunId: executionRun.id, executionEpoch: 1, sequence,
+    eventType: narration ? 'agent.text.block' : 'activity.completed',
+    kind: narration ? 'narration' : 'command', phase: 'completed',
+    payload: narration ? { blockId: id, itemId: id, text: `记录 ${sequence}：${'这一页的执行说明。'.repeat(30)}`, status: 'completed' }
+      : { item: { id, type: file ? 'fileChange' : 'commandExecution', status: 'completed', command: file ? undefined : `TOKEN=fixture-value echo ${sequence}` } },
+    canonical: narration ? null : {
+      operationId: id, classifierVersion: 'activity-v4', activityDomain: file ? 'file' : 'shell',
+      semanticKind: file ? 'file.write' : 'shell.execute', toolName: null,
+      presentationHint: file ? '编辑文件' : '执行命令', phase: 'terminal', outcome: 'succeeded',
+      credibility: 'runtime_structured', coverageLevel: 'fine_grained', sourceAuthority: 'runtime',
+      sourceEvidenceIds: [id], firstEvidenceSequence: sequence, lastEvidenceSequence: sequence, revision: 1,
+      diffProjection: file ? { schemaVersion: 1, source: 'runtime_reported', revision: 1, sourceEvidenceIds: [id],
+        status: 'available', semanticKind: 'unified_diff_snapshot', entries: [{ path: 'fixture.ts', changeKind: 'update', additions: 1, deletions: 1, diff: '' }] } : null
+    }, contentBlobId: null, contentByteCount: 100, isTruncated: !narration, occurredAt: now
+  }
+}
 const createAgent = (
   agentId: string,
   displayName: string,
@@ -81,7 +107,7 @@ const messages: CampOpenProjection['messages'] = Array.from({ length: 61 }, (_, 
 }))
 const coverage = (count: number) => ({ loadedCount: count, totalCount: count, omittedCount: 0, complete: true })
 const projection = (count: number): CampOpenProjection => ({
-  schemaVersion: 6, throughGlobalSequence: count,
+  schemaVersion: 7, throughGlobalSequence: count,
   camp: { id: campId, title: '仅业务投影的会话刷新', activationState: 'active', projectBindingKind: 'directory',
     projectPath: '/fixture/workspace', defaultLeadAgentId: agent.agentId, membershipGeneration: 1, version: 1,
     createdAt: now, updatedAt: now },
@@ -276,11 +302,40 @@ Object.assign(window, { rovai: {
     content?: CampComposerDraftView['content']
     evidenceId?: string
     replyToCampMessageId?: string
+    beforeSequence?: number | null
+    limit?: number
+
     command?: { pendingInputId: string; expectedRevision: number; action: { type: string; expectedDraftRevision: number } }
   }): Promise<unknown> => {
+    if (method === 'agentRunExecution.page') {
+      const beforeSequence = params?.beforeSequence ?? null
+      const limit = params?.limit ?? 24
+      executionRequests.push({ beforeSequence, limit })
+      if (runningExecutionScenario) await new Promise(resolve => setTimeout(resolve, 120))
+      if (executionReadFailure && beforeSequence !== null) throw new Error('Fixture page offline')
+      const end = (beforeSequence ?? 1001) - 1
+      const start = Math.max(1, end - limit + 1)
+      return { schemaVersion: 1, campId, agentRunId: executionRun.id, requestedBeforeSequence: beforeSequence,
+        nextBeforeSequence: start > 1 ? start : null, throughSequence: 1000, hasMore: start > 1,
+        evidence: Array.from({ length: end - start + 1 }, (_, offset) => {
+          const item = windowEvidence(start + offset)
+          return runningExecutionScenario && item.kind === 'narration'
+            ? { ...item, isTruncated: true, contentBlobId: `body-${item.id}`, payload: { ...item.payload, text: '正文预览' } } : item
+        }) }
+    }
     if (method === 'agentRunEvidence.list') return { schemaVersion: 1, agentRunId: 'text-run',
       requestedAfterSequence: 0, nextAfterSequence: 60, throughSequence: 60, hasMore: false, evidence: textEvidence }
     if (method === 'agentRunEvidence.getContent') {
+      if (params?.evidenceId?.startsWith('window-')) {
+        executionContentReads.push(params.evidenceId)
+        const evidence = windowEvidence(Number(params.evidenceId.slice(7)))
+        if (evidence.kind === 'narration') {
+          await new Promise(resolve => setTimeout(resolve, 180))
+          return { payload: evidence.payload }
+        }
+        if (evidence.canonical?.diffProjection?.entries) evidence.canonical.diffProjection.entries[0].diff = '@@ -1 +1 @@\n-old\n+TOKEN=fixture-value\n'
+        return { payload: { item: { aggregatedOutput: 'OUTPUT_TOKEN=fixture-value' } }, canonical: evidence.canonical }
+      }
       if (params?.evidenceId !== 'A') throw new Error('Unexpected full-content request')
       if (textReadFailures-- > 0) throw new Error('Transient Blob read error')
       return { payload: { text: fullNarration } }
@@ -369,7 +424,9 @@ const navigation: NavigationSnapshot = {
   }]
 }
 
-function Fixture(): React.JSX.Element {
+function Fixture({ executionPlacement = 'bottom', windowed = false }: {
+  executionPlacement?: 'bottom' | 'inspector'; windowed?: boolean
+}): React.JSX.Element {
   const [snapshot, setSnapshot] = useState(current)
   const [profile, setProfile] = useState(DEFAULT_CURRENT_USER_PROFILE)
   const [messageHistory, setMessageHistory] = useState<CampOpenMessageCoverage | null>(null)
@@ -405,7 +462,8 @@ function Fixture(): React.JSX.Element {
             oldestLoadedSequence: 1, newestLoadedSequence: 61, hasEarlier: false })
         }}
         onSend={async () => {}} onChangeLead={async () => {}} onTasksChanged={async () => {}}
-        onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement="bottom"
+        onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement={executionPlacement}
+        openCoverage={windowed ? projection(60).coverage : null}
         inspectorVisible={open} inspectorTab={tab} detailEntryHost={entryHost}
         onInspectorTabChange={setTab}
         onOpenInspector={next => { setTab(next); setOpen(true) }} onCloseInspector={() => setOpen(false)} />
@@ -546,6 +604,37 @@ Object.assign(window, { campOpenTest: {
     updateSnapshot(current)
   },
   showTextEvidence: () => reactRoot.render(<RunExecutionDisclosure run={textRun} campId={campId} />),
+  showExecutionWindow: (placement: 'bottom' | 'inspector' = 'bottom') => {
+    runningExecutionScenario = false
+    executionRequests.length = 0
+    executionContentReads.length = 0
+    reactRoot.render(<section key={placement} className={`execution-drawer placement-${placement}`} style={{ position: 'relative', width: placement === 'inspector' ? 440 : 'calc(100% - 48px)', height: 430, maxHeight: 430, margin: 24 }}>
+      <div className="execution-drawer-body" data-following-latest="false" style={{ height: 380, overflow: 'auto' }}>
+        <div data-window-spacer style={{ height: 600 }} />
+        <RunExecutionDisclosure key={placement} run={executionRun} campId={campId} windowedEvidence />
+      </div>
+    </section>)
+  },
+  showRunningExecution: (placement: 'bottom' | 'inspector', sample: number) => {
+    runningExecutionScenario = true
+    executionRequests.length = 0
+    executionContentReads.length = 0
+    const run = { ...executionRun, agentId: agent.agentId, campTurnId: 'stopped-turn', status: 'running' as const,
+      cancelRequestedAt: null, cancelAcknowledgedAt: null, cancelReasonCode: null, endedAt: null }
+    current = { ...campOpenProjectionAsSnapshot(projection(60)), tasks: [], messages: [],
+      agentRunFileChanges: [], agentRuns: [run], executionEvidence: [],
+      turns: [{ ...projection(60).turns[0], status: 'running', cancelRequestedAt: null, endedAt: null }] }
+    reactRoot.render(<Fixture key={`running-${placement}-${sample}`} executionPlacement={placement} windowed />)
+  },
+  executionWindowState: () => ({
+    requests: executionRequests, contentReads: executionContentReads,
+    dom: document.querySelectorAll('*').length,
+    toolRows: document.querySelectorAll('.tool-group-items > *').length,
+    diffLines: document.querySelectorAll('.modified-file-diff-line').length,
+    text: document.querySelector('.process-content')?.textContent ?? '',
+    overflow: document.documentElement.scrollWidth > innerWidth
+  }),
+  failExecutionRead: (fail: boolean) => { executionReadFailure = fail },
   settle: async () => { await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))) },
   openTask: () => element('.task-event-card').click(),
   closeTask: () => closeTask(),

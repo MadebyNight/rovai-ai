@@ -9,7 +9,7 @@ import type {
 } from '@contracts'
 import { safeMarkdownHasRenderableContent } from './safe-markdown-model'
 import { createExecutionPublicResultProjector } from './public-result'
-import { BUILTIN_CLI_NAMES, builtinInputText, builtinOperation, supportingBuiltinShells } from './builtin-tools'
+import { BUILTIN_CLI_NAMES, builtinInputText, builtinOperation, builtinShellAssociations } from './builtin-tools'
 
 export const RAIL_COLLAPSED_WIDTH = 52
 export const RAIL_EXPANDED_WIDTH = 176
@@ -103,16 +103,16 @@ export type ExecutionStep = {
    */
   currentInstruction?: string | null
   /**
-   * The complete command presentation that is safe to show outside raw
-   * Runtime evidence. It retains non-sensitive flags, arguments and paths,
-   * while applying the same redaction rules as the local execution console.
+   * Complete command presentation, retaining arguments and values without masking.
    */
   publicCommand: string | null
-  /** Redacted, bounded result-only preview. Never a fallback to tool input or local detail. */
+  /** Bounded result-only preview. Never a fallback to tool input or local detail. */
   publicResult: string | null
   detail: string
-  /** Core-owned built-in input presentation; never requests a result blob. */
+  /** Core-owned built-in identity, retained when a Shell supplies its presentation. */
   builtinOperation?: string
+  /** Existing, uniquely associated Shell evidence for local detail reads; not a new operation. */
+  detailOperationId?: string
   status: ActivityStatus
   activityDomain: string
   iconKind: ActivityIconKind
@@ -155,12 +155,14 @@ export type RuntimeCompactionDisplayItem = {
 }
 
 export function executionStepPublicTitle(step: ExecutionStep): string {
-  return (step.builtinOperation ? BUILTIN_CLI_NAMES[step.builtinOperation] : null)
+  return (step.detailOperationId ? step.publicCommand : null)
+    ?? (step.builtinOperation ? BUILTIN_CLI_NAMES[step.builtinOperation] : null)
     ?? step.shellReadSummary?.title ?? step.publicCommand ?? step.title
 }
 
 export function executionStepCurrentInstructionTitle(step: ExecutionStep): string {
-  return (step.builtinOperation ? BUILTIN_CLI_NAMES[step.builtinOperation] : null)
+  return (step.detailOperationId ? step.publicCommand : null)
+    ?? (step.builtinOperation ? BUILTIN_CLI_NAMES[step.builtinOperation] : null)
     ?? step.shellReadSummary?.title ?? step.publicCommand ?? step.currentInstruction ?? step.title
 }
 
@@ -510,7 +512,7 @@ function compactTokenCount(value: number): string {
 export function buildLiveExecutionProgress(
   events: LiveRuntimeEvent[],
   agentRunId: string,
-  options: { textMode?: 'live_tail' | 'complete' } = {}
+  options: { textMode?: 'live_tail' | 'complete'; includePublicResults?: boolean } = {}
 ): LiveExecutionProgress {
   const narrationByItem = new Map<string, string>()
   const settledNarration = new Set<string>()
@@ -716,7 +718,7 @@ export function buildLiveExecutionProgress(
         ? shellCommandDetailText(command)
         : null
       const publicCommand = command
-        ? shellCommandDetailText(command)
+        ? shellCommandPreview(command)
         : canonical?.activityDomain === 'shell'
           ? publicShellCommandPresentation(payload)
           : null
@@ -797,10 +799,25 @@ export function buildLiveExecutionProgress(
     // reliable terminal Runtime diff projection can produce modified-file rows.
   }
 
-  const publicResult = createExecutionPublicResultProjector(events, agentRunId)
-  const supportingShells = supportingBuiltinShells(events, agentRunId, pureBuiltinShellOperation, publicShellCommand)
-  const stepById = new Map(steps.filter(step => !supportingShells.has(step.id))
-    .map((step) => [step.id, { ...step, publicResult: publicResult(step) }]))
+  const publicResult = options.includePublicResults === false
+    ? () => null : createExecutionPublicResultProjector(events, agentRunId)
+  const associations = builtinShellAssociations(events, agentRunId, pureBuiltinShellOperation, publicShellCommand)
+  const sourceSteps = new Map(steps.map(step => [step.id, step]))
+  const stepById = new Map(steps.filter(step => !associations.hiddenShellIds.has(step.id))
+    .map((step) => {
+      const shellId = associations.shellIdByBuiltinId.get(step.id)
+      const shell = shellId ? sourceSteps.get(shellId) : undefined
+      return [step.id, {
+        ...step,
+        publicResult: publicResult(step),
+        ...(step.builtinOperation && shell ? {
+          publicCommand: shell.publicCommand,
+          currentInstruction: shell.currentInstruction,
+          detail: shell.detail,
+          detailOperationId: shell.id
+        } : {})
+      }]
+    }))
   const items = itemOrder.flatMap((key): ExecutionProgressItem[] => {
     if (key === 'plan') {
       const explanation = options.textMode === 'live_tail'
@@ -1381,20 +1398,7 @@ function shouldDeferUnresolvedShellActivity(
 }
 
 const SHELL_WRAPPER_EXECUTABLES = new Set(['bash', 'dash', 'fish', 'ksh', 'sh', 'zsh'])
-const REDACTED_COMMAND_VALUE = '[已隐藏]'
-const SENSITIVE_COMMAND_NAME = /(?:^|[-_])(token|password|passwd|authorization|api[-_]?key|secret|credential|cookie)(?:[-_]|$)/iu
-const ROVAI_SEND_VALUE_FLAGS = new Set([
-  '--camp-id',
-  '--file',
-  '--format',
-  '--idempotency-key',
-  '--input-file',
-  '--member',
-  '--reply-to',
-  '--task-id',
-  '--to'
-])
-
+const POWERSHELL_WRAPPER_EXECUTABLES = new Set(['powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'])
 type ShellPreviewToken = {
   raw: string
   value: string
@@ -1406,7 +1410,7 @@ function shellCommandPreview(command: string): string | null {
 }
 
 function shellCommandDetailText(command: string): string | null {
-  return normalizePublicShellCommand(command, false)
+  return unwrapShellCommand(stripAnsi(command).trim()) || null
 }
 
 function normalizePublicShellCommand(
@@ -1415,19 +1419,17 @@ function normalizePublicShellCommand(
 ): string | null {
   const unwrapped = unwrapShellCommand(stripAnsi(command).trim())
   if (!unwrapped) return null
-  const withoutInput = omitBuiltinStdin(unwrapped).command
-  const presentable = inlineNodeHeredoc ? unwrapNodeHeredoc(withoutInput) : withoutInput
+  const presentable = inlineNodeHeredoc ? unwrapNodeHeredoc(unwrapped) : unwrapped
   const tokens = tokenizeShellPreview(presentable)
   if (tokens.length === 0) return null
-  const redacted = redactShellPreviewTokens(tokens)
-  const normalized = redacted
+  const normalized = tokens
     .map((token) => token.raw.trim())
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/gu, ' ')
     .trim()
   if (!normalized) return null
-  return redactInlineSensitiveAssignments(normalized)
+  return normalized
 }
 
 function unwrapShellCommand(command: string): string {
@@ -1436,9 +1438,16 @@ function unwrapShellCommand(command: string): string {
     const tokens = tokenizeShellPreview(current)
     if (tokens.some((token) => token.operator) || tokens.length < 3) break
     const executable = shellExecutable(tokens[0].value)
-    if (!executable || !SHELL_WRAPPER_EXECUTABLES.has(executable)) break
+    // The POSIX tokenizer consumes single Windows backslashes; retain the raw path
+    // when recognizing a quoted PowerShell executable.
+    const rawExecutable = shellExecutable(tokens[0].raw.replace(/^(['"])(.*)\1$/u, '$2'))
+    const powershell = POWERSHELL_WRAPPER_EXECUTABLES.has(executable ?? '')
+      || POWERSHELL_WRAPPER_EXECUTABLES.has(rawExecutable ?? '')
+    if (!powershell && (!executable || !SHELL_WRAPPER_EXECUTABLES.has(executable))) break
     const commandIndex = tokens.findIndex((token, index) =>
-      index > 0 && (token.value === '-c' || token.value === '-lc')
+      index > 0 && (powershell
+        ? ['-c', '-command'].includes(token.value.toLowerCase())
+        : token.value === '-c' || token.value === '-lc')
     )
     if (commandIndex < 0 || commandIndex + 2 !== tokens.length) break
     current = tokens[commandIndex + 1].value.trim()
@@ -1652,139 +1661,6 @@ function tokenizeShellPreview(command: string): ShellPreviewToken[] {
   flush()
   if (tokens.at(-1)?.operator && tokens.at(-1)?.value === ';') tokens.pop()
   return tokens
-}
-
-function redactShellPreviewTokens(tokens: ShellPreviewToken[]): ShellPreviewToken[] {
-  const redacted = tokens.map((token) => ({ ...token }))
-  for (let index = 0; index < redacted.length; index += 1) {
-    const token = redacted[index]
-    if (token.operator) continue
-
-    const assignmentIndex = token.value.indexOf('=')
-    if (assignmentIndex > 0) {
-      const name = token.value.slice(0, assignmentIndex).replace(/^-+/u, '')
-      if (sensitiveCommandName(name)) {
-        const prefix = token.raw.slice(0, Math.max(0, token.raw.indexOf('=')))
-        redactToken(token, `${prefix}=${REDACTED_COMMAND_VALUE}`)
-        continue
-      }
-    }
-
-    const flag = token.value.match(/^(-{1,2}[^=]+)(?:=(.*))?$/u)
-    if (flag && sensitiveCommandName(flag[1].replace(/^-+/u, ''))) {
-      if (flag[2] !== undefined) {
-        redactToken(token, `${flag[1]}=${REDACTED_COMMAND_VALUE}`)
-      } else {
-        const valueIndex = nextShellValueIndex(redacted, index + 1)
-        if (valueIndex !== null) redactToken(redacted[valueIndex], REDACTED_COMMAND_VALUE)
-      }
-      continue
-    }
-
-    if (/^(authorization|cookie)\s*:/iu.test(token.value)) {
-      const header = token.value.match(/^([^:]+):/u)?.[1] ?? 'Authorization'
-      redactToken(token, `"${header}: ${REDACTED_COMMAND_VALUE}"`)
-      continue
-    }
-    if (/^--header=(authorization|cookie)\s*:/iu.test(token.value)) {
-      const header = token.value.match(/^--header=([^:]+):/u)?.[1] ?? 'Authorization'
-      redactToken(token, `--header="${header}: ${REDACTED_COMMAND_VALUE}"`)
-      continue
-    }
-    if (token.value === '-H' || token.value === '--header') {
-      const valueIndex = nextShellValueIndex(redacted, index + 1)
-      if (valueIndex !== null && /^(authorization|cookie)\s*:/iu.test(redacted[valueIndex].value)) {
-        const header = redacted[valueIndex].value.match(/^([^:]+):/u)?.[1] ?? 'Authorization'
-        redactToken(redacted[valueIndex], `"${header}: ${REDACTED_COMMAND_VALUE}"`)
-      }
-    }
-  }
-  redactRovaiSendBodies(redacted)
-  return redacted
-}
-
-function sensitiveCommandName(name: string): boolean {
-  return SENSITIVE_COMMAND_NAME.test(name.toLocaleLowerCase())
-}
-
-function nextShellValueIndex(tokens: ShellPreviewToken[], start: number): number | null {
-  for (let index = start; index < tokens.length; index += 1) {
-    if (tokens[index].operator) return null
-    return index
-  }
-  return null
-}
-
-function redactToken(token: ShellPreviewToken, replacement: string): void {
-  token.raw = replacement
-  token.value = replacement
-}
-
-function redactRovaiSendBodies(tokens: ShellPreviewToken[]): void {
-  let segmentStart = 0
-  for (let index = 0; index <= tokens.length; index += 1) {
-    if (index < tokens.length && !tokens[index].operator) continue
-    redactRovaiSendSegment(tokens, segmentStart, index)
-    segmentStart = index + 1
-  }
-}
-
-function redactRovaiSendSegment(
-  tokens: ShellPreviewToken[],
-  start: number,
-  end: number
-): void {
-  const relative = rovaiCommandCursor(tokens.slice(start, end))
-  if (relative === null) return
-  let cursor = start + relative
-  if (!['send', 'gather'].includes(tokens[cursor + 1]?.value)) return
-
-  cursor += 2
-  let positionalBodyRedacted = false
-  while (cursor < end) {
-    const token = tokens[cursor]
-    if (token.value === '--body') {
-      const valueIndex = cursor + 1 < end ? cursor + 1 : null
-      redactToken(token, '')
-      if (valueIndex !== null) redactToken(tokens[valueIndex], '')
-      cursor += 2
-      continue
-    }
-    if (token.value.startsWith('--body=')) {
-      redactToken(token, '')
-      cursor += 1
-      continue
-    }
-    const flagName = token.value.split('=', 1)[0]
-    if (ROVAI_SEND_VALUE_FLAGS.has(flagName) && !token.value.includes('=')) {
-      cursor += 2
-      continue
-    }
-    if (token.value === '--') {
-      cursor += 1
-      continue
-    }
-    if (token.value.startsWith('-')) {
-      cursor += 1
-      continue
-    }
-    if (!positionalBodyRedacted) {
-      redactToken(token, '')
-      positionalBodyRedacted = true
-    }
-    cursor += 1
-  }
-}
-
-function redactInlineSensitiveAssignments(command: string): string {
-  return command.replace(
-    /\b(token|password|passwd|authorization|api[-_]?key|secret|credential)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&|]+)/giu,
-    (match, name: string, separator: string, value: string) => {
-      if (value.includes(REDACTED_COMMAND_VALUE)) return match
-      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : ''
-      return `${name}${separator}${quote}${REDACTED_COMMAND_VALUE}${quote}`
-    }
-  )
 }
 
 function shellCommandDetail(command: string, output: string | null): string {

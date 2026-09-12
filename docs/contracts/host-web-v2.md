@@ -73,7 +73,11 @@ origin/Owner-scoped browser storage; business state, credentials and Drafts must
 
 The Rust `operations::Operation` enum remains a closed network allowlist. It now admits the existing Core operations for
 Camp creation/preflight/membership, member configuration, Runtime discovery/check/catalog, scoped Camp Draft mutations,
-pending editing, send, cancellation, approval, execution detail and read-only command reconciliation. It does not admit
+pending editing, send, cancellation, approval, execution detail and read-only command reconciliation.
+The management increment also admits Task create/update, Memory governance/export, Automation definition/run operations,
+Skill inspection/import/assignment/deletion, MCP config/assignment/import and Runtime startup settings. These call the
+existing Rust handlers; they do not admit the scheduler control/tick, platform recovery or arbitrary source binding.
+Task projections retain only Core-advertised `update` on Task objects; unknown actions remain filtered. It does not admit
 arbitrary internal RPC, local management, source binding or editor-resolution methods. Host workspace paths are admitted
 for browsing and existing Core workspace operations after Owner authentication.
 
@@ -141,3 +145,26 @@ Verification owners remain v1's auth/operation/client/real-Host tests, extended 
 revocation and protocol rejection. Real Runtime execution and real Desktop/browser UI evidence are separate from
 component fixtures and no-model HTTP tests. The removed S1 promise does not turn historical failures into passing evidence; release qualification still requires the
 remaining business, network and platform checks recorded in the version plan.
+
+## Shared management resources
+
+Management pages receive request, invalidation and resource adapters explicitly. An invalidation rereads the authorized
+list/detail while retaining local drafts and version conflict handling. Skill directory selection refers to the Host
+filesystem; Runtime startup on Web accepts a Host absolute program path. Browser keyboard conventions remain local,
+while installation and Runtime qualification use the Host health platform. Optional Desktop channel and system-file
+integration is represented as an absent capability, without dereferencing an Electron bridge in Web.
+
+`POST /api/v1/avatars` accepts a closed `read | save` action. Save carries bounded normalized PNG source/icon and crop,
+never an arbitrary path; the shared Rust member-avatar store verifies dimensions, crop, format and byte limits before
+atomic compound publication. Content identity makes repeated saves reuse one asset. Reads require a canonical managed
+avatar reference, fixed manifest file names and matching digest, and return PNG bytes. Desktop IPC uses the same Rust
+read/save handlers. The network body is limited to 24 MiB and shares the upload concurrency quota. Renderer avatar caches
+are scoped to the injected reader, so identical avatar IDs on different Hosts cannot share bytes or late responses.
+
+MCP config and mutation projections include only admitted editor fields. Rust masks stored credential headers/environment,
+URLs containing user information or query parameters, and credential-bearing argument lists; masked edits preserve their
+exact existing field/index under the original config digest. Explicit reveal is an ephemeral authenticated read requested
+by the editor control; it never enters list refreshes, SSE or command receipts. MCP configuration continues to use its
+existing config-digest CAS. A lost result requires rereading authority and resolving a conflict, without silently claiming
+success or automatically retrying a configuration change. SQLite-backed Task/Memory/Automation/Skill commands instead
+use their existing durable gateway receipts and the original command ID.

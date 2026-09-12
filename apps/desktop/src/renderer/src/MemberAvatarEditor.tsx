@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseControlledMemberAvatarRef } from '@contracts'
 import { MemberAvatar } from './MemberAvatar'
@@ -27,6 +28,7 @@ export function MemberAvatarEditor({
   onClose(): void
   onPendingChange(pending: boolean): void
 }): React.JSX.Element {
+  const client = useCampClient()
   const [source, setSource] = useState<PendingMemberAvatarSource | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -69,7 +71,7 @@ export function MemberAvatarEditor({
     const attempt = ++generation.current
     loaded.current = value
     setBusy(true)
-    void window.rovai.memberAvatars
+    void client.memberAvatars
       .read(value, 'portrait')
       .then((image) => {
         if (attempt !== generation.current) return
@@ -95,7 +97,7 @@ export function MemberAvatarEditor({
     setBusy(true)
     setError(null)
     try {
-      const selected = await window.rovai.memberAvatars.selectSource()
+      const selected = await client.memberAvatars.selectSource()
       if (!selected) return
       const normalized = await normalizeMemberAvatarSource(selected)
       if (attempt === generation.current)
@@ -117,7 +119,7 @@ export function MemberAvatarEditor({
     setError(null)
     try {
       const asset = await deriveMemberAvatarIcon(source, source.crop)
-      const persisted = await window.rovai.memberAvatars.save({
+      const persisted = await client.memberAvatars.save({
         sourcePng: asset.sourcePng,
         iconPng: asset.iconPng,
         sourceWidth: asset.width,

@@ -112,22 +112,22 @@ describe('Built-in input presentation', () => {
 
 describe('Rovai Shell carrier presentation', () => {
   it.each([
-    ["rovai send --public-only --body 'message with spaces'", 'rovai send --public-only'],
-    ['rovai send --body="message" --to agent-5', 'rovai send --to agent-5'],
-    ["env KEY=value npx --yes rovai gather --body 'message' --to agent-5", 'env KEY=value npx --yes rovai gather --to agent-5'],
-    ["rovai send 'message' --input-file /tmp/request.json", 'rovai send --input-file /tmp/request.json'],
-    ["rovai send --body 'line one\nline two' && git status", 'rovai send && git status'],
-    ["rovai send <<'JSON'\n{\"body\":\"message\",\"publicOnly\":true}\nJSON", 'rovai send'],
-    ["git status && rovai send <<'JSON'\n{\"body\":\"message\"}\nJSON\npwd", 'git status && rovai send ; pwd'],
-    ["rovai task get <<JSON && git status\n{\"taskId\":\"task-1\"}\nJSON", 'rovai task get && git status'],
-    ["rovai send <<-'JSON'\n\t{\"body\":\"message\"}\n\tJSON", 'rovai send'],
-    ["rovai send <<'JSON'\n{\"body\":\"unfinished\"}", 'rovai send'],
-    ["rovai send <<< '{\"body\":\"message\"}' && pwd", 'rovai send && pwd'],
-    ["printf '%s' 'independent' && rovai send --body 'message'", "printf '%s' 'independent' && rovai send"]
-  ])('omits the complete message/input carrier: %s', (command, expected) => {
+    ["rovai send --public-only --body 'message with spaces'", "rovai send --public-only --body 'message with spaces'"],
+    ['rovai send --body="message" --to agent-5', 'rovai send --body="message" --to agent-5'],
+    ["env KEY=value npx --yes rovai gather --body 'message' --to agent-5", "env KEY=value npx --yes rovai gather --body 'message' --to agent-5"],
+    ["rovai send 'message' --input-file /tmp/request.json", "rovai send 'message' --input-file /tmp/request.json"],
+    ["rovai send --body 'line one\nline two' && git status", "rovai send --body 'line one line two' && git status"],
+    ["rovai send <<'JSON'\n{\"body\":\"message\",\"publicOnly\":true}\nJSON", "rovai send <<'JSON' ; {\"body\":\"message\",\"publicOnly\":true} ; JSON"],
+    ["git status && rovai send <<'JSON'\n{\"body\":\"message\"}\nJSON\npwd", "git status && rovai send <<'JSON' ; {\"body\":\"message\"} ; JSON ; pwd"],
+    ["rovai task get <<JSON && git status\n{\"taskId\":\"task-1\"}\nJSON", "rovai task get <<JSON && git status ; {\"taskId\":\"task-1\"} ; JSON"],
+    ["rovai send <<-'JSON'\n\t{\"body\":\"message\"}\n\tJSON", "rovai send <<-'JSON' ; {\"body\":\"message\"} ; JSON"],
+    ["rovai send <<'JSON'\n{\"body\":\"unfinished\"}", "rovai send <<'JSON' ; {\"body\":\"unfinished\"}"],
+    ["rovai send <<< '{\"body\":\"message\"}' && pwd", "rovai send <<< '{\"body\":\"message\"}' && pwd"],
+    ["printf '%s' 'independent' && rovai send --body 'message'", "printf '%s' 'independent' && rovai send --body 'message'"]
+  ])('preserves the complete message/input carrier: %s', (command, expected) => {
     const [step] = steps([shell(command)])
     expect(executionStepPublicTitle(step)).toBe(expected)
-    expect(step.detail.split('\n')[0]).toBe(`$ ${expected}`)
+    expect(step.detail).toBe(`$ ${command}\n${JSON.stringify(sent)}`)
     expect(step.detail).not.toContain('[已隐藏]')
   })
 
@@ -135,6 +135,12 @@ describe('Rovai Shell carrier presentation', () => {
     const events = [builtin(), shell()]
     const before = JSON.stringify(events)
     expect(steps(events).map(step => step.id)).toEqual(['core-1'])
+    expect(steps(events)[0]).toMatchObject({
+      builtinOperation: 'camp.message.send', detailOperationId: 'shell-1',
+      activityDomain: 'tool', toolName: 'camp.message.send', iconKind: 'rovai',
+      detail: `$ rovai send --to agent-5 --body 'message'\n${JSON.stringify(sent)}`
+    })
+    expect(executionStepPublicTitle(steps(events)[0])).toBe("rovai send --to agent-5 --body 'message'")
     expect(JSON.stringify(events)).toBe(before)
     expect(steps([builtin(), shell("rovai send <<'JSON'\n{\"body\":\"message\"}\nJSON")])).toHaveLength(1)
     expect(steps([builtin(), shell("rovai send --body '正文中的 `code`、$(literal) 与 <tag> 只是文本'")])).toHaveLength(1)
@@ -143,6 +149,57 @@ describe('Rovai Shell carrier presentation', () => {
     const task = { taskId: 'task-1', title: 'Task', status: 'open', assigneeAgentId: null, version: 1, availableActions: [], internalFact: true }
     const { internalFact: _, ...cliTask } = task
     expect(steps([builtin('team.create_task', { title: 'Task' }, task), shell("rovai task create --title Task", cliTask)])).toHaveLength(1)
+    const pagedShell = shell()
+    pagedShell.payload = { item: { type: 'commandExecution', command: 'rovai send --body message', status: 'completed' }, executionWindowBuiltinOperation: 'camp.message.send' }
+    expect(steps([pagedShell])).toEqual([])
+    const pagedCore = builtin()
+    delete (pagedCore.payload as Record<string, unknown>).coreEnvelope
+    expect(steps([pagedCore, pagedShell])[0]).toMatchObject({
+      id: 'core-1', detailOperationId: 'shell-1', detail: '$ rovai send --body message'
+    })
+    pagedShell.payload = { item: { type: 'commandExecution', command: 'rovai send --body message && git status', status: 'completed' }, executionWindowBuiltinOperation: 'camp.message.send' }
+    expect(steps([pagedShell])).toHaveLength(1)
+  })
+
+  it('preserves multiline input, long values and complete JSON output on the one retained Tool', () => {
+    const body = `line one\n  line two ${'long-value-'.repeat(500)} SECRET_TEST_VALUE`
+    const command = `rovai memory write --body '${body}'`
+    const result = { body, nested: { password: 'TEST_PASSWORD', token: 'TEST_TOKEN' }, count: 123 }
+    const events = [builtin('memory.write', {}, result), shell(command, result)]
+    const [step] = steps(events)
+    expect(steps(events)).toHaveLength(1)
+    expect(step.detail).toBe(`$ ${command}\n${JSON.stringify(result)}`)
+    expect(executionStepPublicTitle(step)).toContain('SECRET_TEST_VALUE')
+    expect(executionStepPublicTitle(step).length).toBeGreaterThan(5_000)
+    expect(executionEvidenceResultText('activity.completed', events[1].payload, events[1].canonical)).toBe(step.detail)
+    const markup = renderToStaticMarkup(createElement(ToolCallRow, {
+      campId: 'camp-1', runId: 'run-1', runStatus: 'succeeded', step: { ...step, detail: '' },
+      completeEvidence: { id: 'existing-shell-result' } as PresentableExecutionEvidence, onFileOpenError: () => {}
+    }))
+    expect(markup).toContain('<details')
+    expect(markup).not.toContain('role="region"')
+  })
+
+  it('does not borrow a window carrier for an ambiguous or unverified Core identity', () => {
+    const pagedShell = shell()
+    pagedShell.payload = { item: { type: 'commandExecution', command: 'rovai send --body message' }, executionWindowBuiltinOperation: 'camp.message.send' }
+    const second = { ...builtin(), canonical: canonical('core-2') }
+    expect(steps([builtin(), second, pagedShell]).every(step => step.detailOperationId === undefined)).toBe(true)
+    const unverified = { ...builtin(), canonical: canonical('core-1', { credibility: 'runtime_structured' }) }
+    expect(steps([unverified, pagedShell])[0].detailOperationId).toBeUndefined()
+    const duplicateShell = { ...pagedShell, canonical: { ...pagedShell.canonical!, operationId: 'shell-2' } }
+    expect(steps([builtin(), pagedShell, duplicateShell])[0].detailOperationId).toBeUndefined()
+  })
+
+  it('counts invocation identities once across lifecycle evidence, while preserving separate invocations', () => {
+    const started = { ...builtin(), id: 'core-started', payload: { ...(builtin().payload as object), status: 'running' } }
+    const second = { ...builtin(), id: 'core-second', canonical: canonical('core-2', { firstEvidenceSequence: 6, lastEvidenceSequence: 7 }) }
+    const secondShell = { ...shell(), id: 'shell-second', canonical: { ...shell().canonical!, operationId: 'shell-2', firstEvidenceSequence: 5, lastEvidenceSequence: 8 } }
+    ;(secondShell.payload as Record<string, unknown>).executionWindowBuiltinOperation = 'camp.message.send'
+    const firstShell = shell()
+    ;(firstShell.payload as Record<string, unknown>).executionWindowBuiltinOperation = 'camp.message.send'
+    expect(steps([started, builtin(), firstShell]).map(step => step.id)).toEqual(['core-1'])
+    expect(steps([started, builtin(), firstShell, second, secondShell]).map(step => step.id)).toEqual(['core-1', 'core-2'])
   })
 
   it.each(['rovai send --help', 'rovai --version', "rovai send --body 'message' && git status",

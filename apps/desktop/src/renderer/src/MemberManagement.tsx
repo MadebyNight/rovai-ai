@@ -40,6 +40,7 @@ import {
 } from './AppDialog'
 import { localizeExecutionEngineTerms } from './product-copy'
 import { SettingsPageHeader } from './SettingsPageHeader'
+import { RuntimeStartupSettings } from './RuntimeStartupSettings'
 import { RuntimeInstallationGuide } from './RuntimeInstallationGuide'
 import { runtimeInstallGuide } from './runtime-install-guide'
 import { invalidateManagedAvatarObjectUrl } from './managed-avatar-cache'
@@ -683,7 +684,7 @@ const MemberEditor = forwardRef<
         parseControlledMemberAvatarRef(selectedAgent.avatarRef)?.kind ===
           'managed'
       )
-        await invalidateManagedAvatarObjectUrl(selectedAgent.avatarRef)
+        await invalidateManagedAvatarObjectUrl(selectedAgent.avatarRef, undefined, client.memberAvatars.read)
       try {
         await onReload()
       } catch (issue) {
@@ -1424,6 +1425,7 @@ export function RuntimeInstallationsPanel({
   onReload(): Promise<void>
 }): React.JSX.Element {
   const client = useCampClient()
+  const [settingsRuntime, setSettingsRuntime] = useState<AdapterKind | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<{ runtimeKind: AdapterKind; mode: 'install' | 'login' } | null>(null)
@@ -1437,14 +1439,16 @@ export function RuntimeInstallationsPanel({
         runtimePlatformAdmissionAllowsUse(row)
     ) ?? false
 
-  const checkProduct = async (runtimeKind: AdapterKind, rediscover = false): Promise<void> => {
+  const checkProduct = async (runtimeKind: AdapterKind): Promise<void> => {
     if (busy !== null) return
     setBusy(`check-${runtimeKind}`)
     setError(null)
     setCheckFeedback(null)
     try {
       try {
-        await requestProductRuntimeCheck(runtimeKind, rediscover, client.request)
+        const result = await requestProductRuntimeCheck(runtimeKind, client.request)
+        if (result.outcome === 'deferred') throw new Error('检查未完成，程序或启动设置已变化，请重新检查。')
+        if (!result.ready) throw new Error('本次检查未通过，请查看当前状态；保留的历史结果不代表本次检查通过。')
       } finally {
         await onReload()
       }
@@ -1470,6 +1474,9 @@ export function RuntimeInstallationsPanel({
       setBusy(null)
     }
   }
+
+  if (settingsRuntime) return <RuntimeStartupSettings key={settingsRuntime} runtimeKind={settingsRuntime} health={health}
+    onBack={() => setSettingsRuntime(null)} onReload={onReload} />
 
   return (
     <>
@@ -1557,13 +1564,15 @@ export function RuntimeInstallationsPanel({
                 </button> : <button type="button" className="quiet-button runtime-product-check" disabled={busy !== null || !allowed} onClick={() => void checkProduct(runtimeKind)}>
                   {checking
                     ? '正在检查…'
-                    : allowed ? '检查可用性' : '不可检查'}
+                    : allowed ? '检查状态' : '不可检查'}<DialogControlIcon name="refresh" />
                 </button>}
+                <button type="button" className="quiet-button runtime-product-settings" aria-label={`${adapterLabel(runtimeKind)} 启动设置`}
+                  title="启动设置" disabled={busy !== null || !allowed} onClick={() => setSettingsRuntime(runtimeKind)}><DialogControlIcon name="settings" /></button>
                 {item?.failure && <RuntimeFailureNotice failure={item.failure} />}
                 {isOpen && guide && expanded ? <RuntimeInstallationGuide
                   id={`${guideId}-${runtimeKind}`} label={adapterLabel(runtimeKind)} guide={guide}
                   mode={expanded.mode} busy={busy !== null} checking={checking} feedback={feedback}
-                  onCheck={() => void checkProduct(runtimeKind, expanded.mode === 'install')}
+                  onCheck={() => void checkProduct(runtimeKind)}
                 /> : feedback}
               </article>
             )

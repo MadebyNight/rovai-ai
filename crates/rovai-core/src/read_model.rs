@@ -11,6 +11,7 @@ use crate::{
     agent_run_image::{AgentRunImagesView, list_camp_images},
     camp_attachment::DIRECTORY_MEDIA_TYPE,
     camp_content::{StructuredCampMessageContent, normalize_content, render_current_plain_text},
+    camp_id::CampId,
     camp_message_publication::{
         public_camp_message_event_predicate, public_camp_message_publication_cte,
     },
@@ -33,7 +34,7 @@ pub const NAVIGATION_SCHEMA_VERSION: i64 = 3;
 pub const EXECUTION_EVIDENCE_PAGE_SCHEMA_VERSION: i64 = 1;
 pub const CAMP_MESSAGE_AROUND_SCHEMA_VERSION: i64 = 1;
 pub const CAMP_MESSAGE_FIND_SCHEMA_VERSION: i64 = 1;
-pub const CAMP_OPEN_SCHEMA_VERSION: i64 = 6;
+pub const CAMP_OPEN_SCHEMA_VERSION: i64 = 7;
 pub const CAMP_MESSAGE_PAGE_SCHEMA_VERSION: i64 = 1;
 pub const AGENT_RUN_DIAGNOSTIC_SCHEMA_VERSION: i64 = 1;
 pub const NAVIGATION_RECENT_CAMP_LIMIT: usize = 5;
@@ -46,6 +47,31 @@ const CAMP_OPEN_DELIVERY_LIMIT: i64 = 200;
 const CAMP_OPEN_TURN_LIMIT: i64 = 64;
 const CAMP_OPEN_AGENT_RUN_LIMIT: i64 = 96;
 const CAMP_OPEN_APPROVAL_LIMIT: i64 = 32;
+
+const FIND_NAVIGATION_CAMP_SQL: &str = r#"
+    SELECT camp.id, camp.title, camp.activation_state, camp.project_binding_kind, camp.project_path,
+           channel_conversation.provider, channel_conversation.conversation_kind
+    FROM camp
+    LEFT JOIN channel_conversation_binding AS channel_binding ON channel_binding.camp_id = camp.id
+    LEFT JOIN channel_conversation ON channel_conversation.id = channel_binding.channel_conversation_id
+    LEFT JOIN camp_composer_draft ON camp_composer_draft.camp_id = camp.id
+    WHERE camp.id = ?1
+      AND (camp.activation_state = 'active'
+        OR length(trim(COALESCE(camp_composer_draft.body, ''))) > 0
+        OR EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = camp.id))
+"#;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NavigationCampTarget {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_source: Option<CampChannelSource>,
+    pub activation_state: String,
+    pub project_binding_kind: String,
+    pub project_path: String,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -916,18 +942,23 @@ impl ReadModelService {
     }
 
     pub fn navigation_snapshot(&self, database: &mut Database) -> Result<NavigationSnapshot> {
-        self.navigation_snapshot_for_client(database, &crate::draft_client::DraftClient::default())
+        self.navigation_snapshot_with_group_limits(
+            database,
+            &BTreeMap::new(),
+            &crate::draft_client::DraftClient::default(),
+        )
     }
 
-    pub fn navigation_snapshot_for_client(
+    pub fn navigation_snapshot_with_group_limits(
         &self,
         database: &mut Database,
+        group_limits: &BTreeMap<String, usize>,
         client: &crate::draft_client::DraftClient,
     ) -> Result<NavigationSnapshot> {
         let transaction = database.connection_mut().transaction()?;
         let through_global_sequence = current_global_sequence(&transaction)?;
         let camps = load_navigation_camps(&transaction, client)?;
-        let (quick_chat, projects) = group_navigation_camps(camps);
+        let (quick_chat, projects) = group_navigation_camps(camps, group_limits);
         transaction.commit()?;
         Ok(NavigationSnapshot {
             schema_version: NAVIGATION_SCHEMA_VERSION,
@@ -985,6 +1016,27 @@ impl ReadModelService {
             next_offset,
             camps,
         })
+    }
+
+    pub fn find_navigation_camp(
+        &self,
+        database: &Database,
+        camp_id: &CampId,
+    ) -> Result<Option<NavigationCampTarget>> {
+        database
+            .connection()
+            .query_row(FIND_NAVIGATION_CAMP_SQL, [camp_id], |row| {
+                Ok(NavigationCampTarget {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    channel_source: camp_channel_source_from_row(row, 5)?,
+                    activation_state: row.get(2)?,
+                    project_binding_kind: row.get(3)?,
+                    project_path: row.get(4)?,
+                })
+            })
+            .optional()
+            .context("failed to find navigation Camp by ID")
     }
 
     pub fn acknowledge_camp_viewed(
@@ -1111,7 +1163,8 @@ impl ReadModelService {
             load_message_deliveries(&transaction, camp_id, Some(CAMP_OPEN_DELIVERY_LIMIT))?;
         let turns = load_turns(&transaction, camp_id, Some(CAMP_OPEN_TURN_LIMIT))?;
         let agent_runs = load_agent_runs(&transaction, camp_id, Some(CAMP_OPEN_AGENT_RUN_LIMIT))?;
-        let mut execution_evidence = load_execution_evidence(&transaction, camp_id, None, true)?;
+        // Execution content is requested only by an opened, visible Run surface.
+        let execution_evidence = Vec::new();
         let agent_run_file_changes = list_completed_run_file_changes(&transaction, camp_id)?;
         let agent_run_images = list_camp_images(&transaction, camp_id)?;
         let approvals =
@@ -1132,7 +1185,6 @@ impl ReadModelService {
             approvals: collection_coverage(approvals.len(), counts.pending_approvals),
         };
         transaction.commit()?;
-        crate::execution_text::overlay(database, &mut execution_evidence)?;
         Ok(CampOpenProjection {
             schema_version: CAMP_OPEN_SCHEMA_VERSION,
             through_global_sequence,
@@ -1677,17 +1729,8 @@ fn load_navigation_camps(
             SELECT
                 event_log.camp_id,
                 MAX(CASE
-                    WHEN (
-                        {publication_predicate}
-                        AND camp_message.author_type IN ('user', 'agent', 'external_principal')
-                    ) OR event_log.event_type IN (
-                        'agent_run.succeeded',
-                        'agent_run.failed',
-                        'agent_run.cancelled'
-                    ) OR (
-                        event_log.event_type = 'camp_turn.status_changed'
-                        AND json_extract(event_log.payload_json, '$.status') = 'cancelled'
-                    )
+                    WHEN {publication_predicate}
+                        AND camp_message.author_type IN ('user', 'external_principal')
                     THEN event_log.global_sequence
                 END) AS last_activity_sequence,
                 MAX(CASE
@@ -1721,11 +1764,7 @@ fn load_navigation_camps(
             lead.id,
             lead.display_name,
             COALESCE(navigation_activity.last_activity_sequence, 0),
-            CASE
-                WHEN camp.activation_state = 'pending'
-                THEN COALESCE(camp_composer_draft.updated_at, camp.updated_at)
-                ELSE COALESCE(activity_event.created_at, camp.created_at)
-            END,
+            COALESCE(activity_event.created_at, camp.created_at),
             COALESCE(navigation_activity.latest_completion_sequence, 0),
             COALESCE(camp_view_state.last_seen_global_sequence, 0),
             EXISTS(
@@ -1805,7 +1844,16 @@ fn compare_navigation_camps(left: &NavigationCampItem, right: &NavigationCampIte
 
 fn group_navigation_camps(
     camps: Vec<NavigationCampItem>,
+    group_limits: &BTreeMap<String, usize>,
 ) -> (NavigationCampGroup, Vec<ProjectNavigationGroup>) {
+    // A request only selects a prefix of existing rows; it never determines an allocation size.
+    let limit = |key: &str| {
+        group_limits
+            .get(key)
+            .copied()
+            .unwrap_or(NAVIGATION_RECENT_CAMP_LIMIT)
+            .max(NAVIGATION_RECENT_CAMP_LIMIT)
+    };
     let mut quick_chat_camps = Vec::new();
     let mut project_camps = BTreeMap::<String, Vec<NavigationCampItem>>::new();
     for camp in camps {
@@ -1823,7 +1871,7 @@ fn group_navigation_camps(
         total_count: quick_chat_camps.len(),
         recent_camps: quick_chat_camps
             .into_iter()
-            .take(NAVIGATION_RECENT_CAMP_LIMIT)
+            .take(limit("quick-chat"))
             .collect(),
     };
 
@@ -1832,17 +1880,16 @@ fn group_navigation_camps(
         .filter_map(|(project_path, mut camps)| {
             camps.sort_by(compare_navigation_camps);
             let representative = camps.first()?.clone();
+            let project_key = format!("directory:{project_path}");
+            let recent_limit = limit(&project_key);
             Some(ProjectNavigationGroup {
-                project_key: format!("directory:{project_path}"),
+                project_key,
                 name: project_display_name(&project_path),
                 project_path,
                 last_activity_at: representative.last_activity_at.clone(),
                 last_activity_global_sequence: representative.last_activity_global_sequence,
                 total_count: camps.len(),
-                recent_camps: camps
-                    .into_iter()
-                    .take(NAVIGATION_RECENT_CAMP_LIMIT)
-                    .collect(),
+                recent_camps: camps.into_iter().take(recent_limit).collect(),
             })
         })
         .collect::<Vec<_>>();
@@ -3193,7 +3240,7 @@ pub(crate) fn public_execution_evidence_for_agent_run(
     Ok(evidence)
 }
 
-type ExecutionEvidenceRow = (
+pub(crate) type ExecutionEvidenceRow = (
     String,
     String,
     i64,
@@ -3208,7 +3255,9 @@ type ExecutionEvidenceRow = (
     String,
 );
 
-fn execution_evidence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExecutionEvidenceRow> {
+pub(crate) fn execution_evidence_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ExecutionEvidenceRow> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -3225,7 +3274,9 @@ fn execution_evidence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Execution
     ))
 }
 
-fn execution_evidence_view(row: ExecutionEvidenceRow) -> Result<AgentRunExecutionEvidenceView> {
+pub(crate) fn execution_evidence_view(
+    row: ExecutionEvidenceRow,
+) -> Result<AgentRunExecutionEvidenceView> {
     let (
         id,
         agent_run_id,
@@ -3258,7 +3309,7 @@ fn execution_evidence_view(row: ExecutionEvidenceRow) -> Result<AgentRunExecutio
     })
 }
 
-fn attach_canonical_activity(
+pub(crate) fn attach_canonical_activity(
     connection: &Connection,
     evidence: &mut [AgentRunExecutionEvidenceView],
 ) -> Result<()> {
@@ -3272,12 +3323,20 @@ fn attach_canonical_activity(
     let requested_json = serde_json::to_string(&requested)?;
     let mut statement = connection.prepare(
         r#"
-        WITH requested AS (
+        WITH requested AS MATERIALIZED (
             SELECT
                 CAST(json_extract(value, '$[0]') AS TEXT) AS evidence_id,
                 CAST(json_extract(value, '$[1]') AS TEXT) AS agent_run_id,
                 CAST(json_extract(value, '$[2]') AS INTEGER) AS execution_epoch
             FROM json_each(?1)
+        ), candidates AS MATERIALIZED (
+            SELECT source.value AS requested_evidence_id, activity.*
+            FROM (SELECT DISTINCT agent_run_id, execution_epoch FROM requested) AS target
+            JOIN canonical_runtime_activity AS activity
+              ON activity.agent_run_id = target.agent_run_id
+             AND activity.execution_epoch = target.execution_epoch
+            JOIN json_each(activity.source_evidence_ids_json) AS source
+            WHERE activity.classifier_version IN (?2, ?3, ?4, ?5)
         )
         SELECT requested.evidence_id,
                activity.operation_id, activity.classifier_version,
@@ -3290,15 +3349,10 @@ fn attach_canonical_activity(
                activity.first_evidence_sequence,
                activity.last_evidence_sequence, activity.revision
         FROM requested
-        JOIN canonical_runtime_activity AS activity
+        JOIN candidates AS activity
           ON activity.agent_run_id = requested.agent_run_id
          AND activity.execution_epoch = requested.execution_epoch
-         AND activity.classifier_version IN (?2, ?3, ?4, ?5)
-        WHERE EXISTS (
-            SELECT 1
-            FROM json_each(activity.source_evidence_ids_json) AS source_evidence
-            WHERE source_evidence.value = requested.evidence_id
-        )
+         AND activity.requested_evidence_id = requested.evidence_id
         ORDER BY requested.evidence_id,
                  CASE activity.classifier_version
                    WHEN ?2 THEN 0
@@ -4972,7 +5026,7 @@ mod slow_tests {
     }
 
     #[test]
-    fn navigation_groups_camps_and_limits_each_recent_section_to_five() {
+    fn navigation_groups_camps_and_reads_requested_prefixes_with_default_five() {
         let directory =
             std::env::temp_dir().join(format!("rovai-navigation-groups-test-{}", Uuid::new_v4()));
         let quick_chat_root = directory.join("quick-chat");
@@ -4989,7 +5043,7 @@ mod slow_tests {
                 &format!("快速对话 {index}"),
             );
         }
-        for index in 0..2 {
+        for index in 0..6 {
             create_navigation_camp(
                 &mut database,
                 &collaboration,
@@ -5007,8 +5061,8 @@ mod slow_tests {
         assert_eq!(snapshot.quick_chat.recent_camps.len(), 5);
         assert_eq!(snapshot.projects.len(), 1);
         assert_eq!(snapshot.projects[0].name, "rovai-ai");
-        assert_eq!(snapshot.projects[0].total_count, 2);
-        assert_eq!(snapshot.projects[0].recent_camps.len(), 2);
+        assert_eq!(snapshot.projects[0].total_count, 6);
+        assert_eq!(snapshot.projects[0].recent_camps.len(), 5);
         assert!(
             snapshot
                 .quick_chat
@@ -5043,6 +5097,220 @@ mod slow_tests {
         assert_eq!(final_page.camps.len(), 1);
         assert_eq!(final_page.next_offset, None);
 
+        // Exact lookup must reach beyond the five recent Camps without reading history.
+        let older = &final_page.camps[0];
+        assert!(
+            snapshot
+                .quick_chat
+                .recent_camps
+                .iter()
+                .all(|camp| camp.id != older.id)
+        );
+        for camp in [older, &snapshot.projects[0].recent_camps[0]] {
+            let found = read_model
+                .find_navigation_camp(&database, &CampId::parse(&camp.id).unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(found.id, camp.id);
+            assert_eq!(found.title, camp.title);
+            assert_eq!(found.project_path, camp.project_path);
+            assert_eq!(found.activation_state, camp.activation_state);
+            assert_eq!(found.project_binding_kind, camp.project_binding_kind);
+        }
+        assert!(
+            read_model
+                .find_navigation_camp(&database, &CampId::new())
+                .unwrap()
+                .is_none()
+        );
+
+        let plan = database
+            .connection()
+            .prepare(&format!("EXPLAIN QUERY PLAN {FIND_NAVIGATION_CAMP_SQL}"))
+            .unwrap()
+            .query_map([&older.id], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH camp USING INDEX") && step.contains("id=?")),
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN ")),
+            "{plan:?}"
+        );
+
+        // Existing transaction fixture owns default, independent group selection,
+        // minimum and oversized prefix contracts; no parallel database fixture.
+        for (quick_limit, project_limit, expected_quick, expected_project) in
+            [(0, 0, 5, 5), (15, 5, 6, 5), (5, 15, 5, 6), (25, 25, 6, 6)]
+        {
+            let expanded = read_model
+                .navigation_snapshot_with_group_limits(
+                    &mut database,
+                    &BTreeMap::from([
+                        ("quick-chat".to_string(), quick_limit),
+                        (snapshot.projects[0].project_key.clone(), project_limit),
+                        ("directory:/unknown".to_string(), usize::MAX),
+                    ]),
+                    &crate::draft_client::DraftClient::default(),
+                )
+                .unwrap();
+            assert_eq!(
+                expanded.through_global_sequence,
+                snapshot.through_global_sequence
+            );
+            assert_eq!(expanded.quick_chat.recent_camps.len(), expected_quick);
+            assert_eq!(expanded.projects[0].recent_camps.len(), expected_project);
+            assert_eq!(expanded.projects.len(), 1);
+            for (actual, expected) in expanded.quick_chat.recent_camps.iter().zip(
+                read_model
+                    .navigation_group_camps(&mut database, None, 0, 200)
+                    .unwrap()
+                    .camps,
+            ) {
+                assert_eq!(actual.id, expected.id);
+                assert_eq!(actual.marker, expected.marker);
+            }
+        }
+
+        // Empty pending Camps remain outside navigation; a saved draft makes one discoverable.
+        let mut pending_command =
+            CreateCampCommand::for_test(project_root.to_string_lossy().to_string());
+        pending_command.activation_state = crate::collaboration::CampActivationState::Pending;
+        let pending = collaboration
+            .create_camp(
+                &mut database,
+                &user_envelope("navigation-pending", None, pending_command),
+            )
+            .unwrap();
+        let pending_id = CampId::parse(pending.result.payload["campId"].as_str().unwrap()).unwrap();
+        assert!(
+            read_model
+                .find_navigation_camp(&database, &pending_id)
+                .unwrap()
+                .is_none()
+        );
+        CampAttachmentStore::new(&directory)
+            .save_body(&mut database, pending_id.as_str(), "saved draft")
+            .unwrap();
+        assert_eq!(
+            read_model
+                .find_navigation_camp(&database, &pending_id)
+                .unwrap()
+                .unwrap()
+                .activation_state,
+            "pending"
+        );
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn navigation_order_advances_only_for_published_human_messages() {
+        let directory = std::env::temp_dir().join(format!(
+            "rovai-navigation-human-order-test-{}",
+            Uuid::new_v4()
+        ));
+        let mut database = crate::test_support::fresh_schema_database_at(&directory);
+        // Exercise the persisted author/publication join and creation-time fallback,
+        // without launching a Runtime or duplicating channel admission fixtures.
+        database.connection().execute_batch(
+            r#"
+            INSERT INTO camp(id, title, project_binding_kind, project_path, created_at, updated_at)
+            VALUES ('order-a', 'A', 'quick_chat', '/quick-chat', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                   ('order-b', 'B', 'quick_chat', '/quick-chat', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z');
+            "#,
+        ).unwrap();
+        let mut previous = ReadModelService.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(previous.quick_chat.recent_camps[0].id, "order-b");
+        for (index, (event_type, author, advances)) in [
+            ("camp_message.sent", Some("agent"), false),
+            ("camp_message.public_a2a_sent", Some("agent"), false),
+            ("camp_message.sent", Some("system"), false),
+            ("agent_run.queued", None, false),
+            ("agent_run.started", None, false),
+            ("agent_run.succeeded", None, false),
+            ("agent_run.failed", None, false),
+            ("agent_run.cancelled", None, false),
+            ("camp_turn.status_changed", None, false),
+            ("camp_message.created", Some("user"), false),
+            ("camp_message.sent", Some("user"), true),
+            ("camp_message.sent", Some("external_principal"), true),
+            ("camp_message.public_a2a_sent", Some("agent"), false),
+            ("agent_run.succeeded", None, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = previous.quick_chat.recent_camps.last().unwrap();
+            let camp_id = target.id.clone();
+            let entity_id = format!("order-event-{index}");
+            // Equal timestamps on successive human messages also exercise the sequence tie-break.
+            let timestamp = "2026-02-01T00:00:00Z";
+            if let Some(author) = author {
+                database
+                    .connection()
+                    .execute(
+                        r#"
+                    INSERT INTO camp_message(
+                        id, camp_id, sequence, author_type, author_id, body,
+                        structured_content_json, content_digest, address_mode,
+                        addressed_agent_ids_json, version, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, 'order-author', 'message', '[]', ?1,
+                              'default', '[]', 1, ?5, ?5)
+                    "#,
+                        params![entity_id, camp_id, index as i64 + 1, author, timestamp],
+                    )
+                    .unwrap();
+            }
+            database
+                .connection()
+                .execute(
+                    r#"
+                INSERT INTO event_log(event_id, event_type, payload_json, camp_id,
+                                      entity_type, entity_id, actor_type, actor_id, created_at)
+                VALUES (?1, ?2, '{"status":"cancelled"}', ?3, ?4, ?1, 'system', 'order-test', ?5)
+                "#,
+                    params![
+                        entity_id,
+                        event_type,
+                        camp_id,
+                        if author.is_some() {
+                            "camp_message"
+                        } else {
+                            "agent_run"
+                        },
+                        timestamp
+                    ],
+                )
+                .unwrap();
+            let next = ReadModelService.navigation_snapshot(&mut database).unwrap();
+            if advances {
+                let first = &next.quick_chat.recent_camps[0];
+                assert_eq!(first.id, camp_id, "{event_type}/{author:?}");
+                assert_eq!(first.last_activity_at, timestamp);
+                assert!(first.last_activity_global_sequence > target.last_activity_global_sequence);
+            } else {
+                for (actual, expected) in next
+                    .quick_chat
+                    .recent_camps
+                    .iter()
+                    .zip(&previous.quick_chat.recent_camps)
+                {
+                    assert_eq!(actual.id, expected.id, "{event_type}/{author:?}");
+                    assert_eq!(actual.last_activity_at, expected.last_activity_at);
+                    assert_eq!(
+                        actual.last_activity_global_sequence,
+                        expected.last_activity_global_sequence
+                    );
+                }
+            }
+            previous = next;
+        }
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -5124,6 +5392,14 @@ mod slow_tests {
         let item = &completed.projects[0].recent_camps[0];
         assert_eq!(item.marker, "unread_completed");
         assert!(item.latest_completion_global_sequence > 0);
+        assert_eq!(
+            item.last_activity_at,
+            running.projects[0].recent_camps[0].last_activity_at
+        );
+        assert_eq!(
+            item.last_activity_global_sequence,
+            running.projects[0].recent_camps[0].last_activity_global_sequence
+        );
         let activity_at = item.last_activity_at.clone();
         let acknowledged = read_model
             .acknowledge_camp_viewed(&mut database, &camp_id, completed.through_global_sequence)
@@ -5356,6 +5632,10 @@ mod slow_tests {
                 )
                 .unwrap();
         }
+        database.connection().execute(
+            "UPDATE agent_run_execution_evidence SET event_type = 'activity.started', kind = 'command', phase = 'started', payload_preview_json = ?1 WHERE id = 'evidence-3'",
+            [json!({"item": {"id": "command-1", "type": "commandExecution", "command": "TOKEN=fixture-value cargo test", "status": "inProgress"}}).to_string()],
+        ).unwrap();
         database
             .connection()
             .execute(
@@ -5377,7 +5657,8 @@ mod slow_tests {
                         "item": {
                             "id": "command-1",
                             "type": "commandExecution",
-                            "status": "completed"
+                            "status": "completed",
+                            "aggregatedOutput": "fixture output must load only on expansion"
                         }
                     })
                     .to_string(),
@@ -5457,7 +5738,10 @@ mod slow_tests {
         assert!(!second.has_more);
         assert_eq!(second.next_after_sequence, 4);
         assert_eq!(second.evidence.len(), 2);
-        assert_eq!(second.evidence[0].payload["delta"], "片段3");
+        assert_eq!(
+            second.evidence[0].payload["item"]["command"],
+            "TOKEN=fixture-value cargo test"
+        );
         assert_eq!(
             second.evidence[0]
                 .canonical
@@ -5481,6 +5765,55 @@ mod slow_tests {
                     0,
                     2,
                 )
+                .is_err()
+        );
+
+        let latest =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, None, 1)
+                .unwrap();
+        assert_eq!(latest.evidence.len(), 1);
+        assert_eq!(latest.evidence[0].sequence, 3);
+        assert_eq!(latest.evidence[0].id, "evidence-4");
+        assert_eq!(
+            latest.evidence[0].payload["item"]["command"],
+            "TOKEN=fixture-value cargo test"
+        );
+        assert!(
+            latest.evidence[0].payload["item"]
+                .get("aggregatedOutput")
+                .is_none()
+        );
+        assert!(latest.evidence[0].is_truncated);
+        assert_eq!(latest.next_before_sequence, Some(3));
+        let older = crate::execution_window::read_page(
+            &mut database,
+            camp_id,
+            agent_run_id,
+            latest.next_before_sequence,
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            older
+                .evidence
+                .iter()
+                .map(|item| item.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(!older.has_more);
+        assert!(
+            crate::execution_window::read_page(
+                &mut database,
+                "another-camp",
+                agent_run_id,
+                None,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(0), 1)
                 .is_err()
         );
 
@@ -5518,12 +5851,30 @@ mod slow_tests {
         let open = read_model
             .camp_open_projection(&mut database, camp_id)
             .unwrap();
-        assert_eq!(open.execution_evidence.len(), 85);
-        assert_eq!(open.execution_evidence.first().unwrap().sequence, 1);
-        assert_eq!(open.execution_evidence.last().unwrap().sequence, 85);
-        assert_eq!(open.coverage.execution_evidence.loaded_count, 85);
+        assert!(open.execution_evidence.is_empty());
+        assert_eq!(open.coverage.execution_evidence.loaded_count, 0);
         assert_eq!(open.coverage.execution_evidence.total_count, 85);
-        assert!(open.coverage.execution_evidence.complete);
+        assert!(!open.coverage.execution_evidence.complete);
+        database.connection().execute("UPDATE canonical_runtime_activity SET phase = 'started', outcome = 'unsettled' WHERE operation_id = 'operation-command-1'", []).unwrap();
+        let pinned =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, None, 2)
+                .unwrap();
+        assert_eq!(
+            pinned
+                .evidence
+                .iter()
+                .map(|item| item.sequence)
+                .collect::<Vec<_>>(),
+            vec![84, 85]
+        );
+        assert_eq!(pinned.next_before_sequence, Some(84));
+        assert_eq!(pinned.active_evidence.len(), 1);
+        assert_eq!(pinned.active_evidence[0].sequence, 3);
+        database.connection().execute("UPDATE canonical_runtime_activity SET phase = 'terminal', outcome = 'succeeded' WHERE operation_id = 'operation-command-1'", []).unwrap();
+        let settled =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, None, 2)
+                .unwrap();
+        assert!(settled.active_evidence.is_empty());
 
         database
             .connection()
@@ -5566,6 +5917,85 @@ mod slow_tests {
                 .all(|evidence| evidence.event_type != "runtime.compaction.display")
         );
         transaction.commit().unwrap();
+
+        // A CLI carrier and its Core operation may straddle a page boundary.
+        // Exact result association travels as metadata, without either output body.
+        let response = json!({"taskId": "fixture-task", "title": "fixture"});
+        for (id, sequence, event_type, payload) in [
+            (
+                "carrier-start",
+                90,
+                "activity.started",
+                json!({"item": {"id": "carrier", "type": "commandExecution", "command": "rovai task get --task-id fixture-task --json", "status": "inProgress"}}),
+            ),
+            (
+                "core-get",
+                91,
+                "runtime.action",
+                json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "coreEnvelope": {"ok": true, "operation": "team.get_task", "result": response}}),
+            ),
+            (
+                "carrier-end",
+                94,
+                "activity.completed",
+                json!({"item": {"id": "carrier", "type": "commandExecution", "status": "completed", "aggregatedOutput": response.to_string()}}),
+            ),
+        ] {
+            database.connection().execute(
+                "INSERT INTO agent_run_execution_evidence(id, agent_run_id, execution_epoch, sequence, event_type, kind, phase, payload_preview_json, content_byte_count, is_truncated, occurred_at)
+                 VALUES(?1, ?2, 0, ?3, ?4, 'command', 'completed', ?5, 100, 0, ?6)",
+                params![id, agent_run_id, sequence, event_type, payload.to_string(), now],
+            ).unwrap();
+        }
+        for (id, domain, authority, credibility, sources, first, last) in [
+            (
+                "carrier",
+                "shell",
+                "runtime",
+                "runtime_structured",
+                "[\"carrier-start\",\"carrier-end\"]",
+                90,
+                94,
+            ),
+            (
+                "core-get",
+                "tool",
+                "core",
+                "core_verified",
+                "[\"core-get\"]",
+                91,
+                91,
+            ),
+        ] {
+            database.connection().execute(
+                "INSERT INTO canonical_runtime_activity(agent_run_id, execution_epoch, operation_id, classifier_version, activity_domain, phase, outcome, credibility, coverage_level, source_authority, source_evidence_ids_json, first_evidence_sequence, last_evidence_sequence, revision, created_at, updated_at)
+                 VALUES(?1, 0, ?2, 'activity-v1', ?3, 'terminal', 'succeeded', ?4, 'fine_grained', ?5, ?6, ?7, ?8, 1, ?9, ?9)",
+                params![agent_run_id, id, domain, credibility, authority, sources, first, last, now],
+            ).unwrap();
+        }
+        let carrier =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(91), 1)
+                .unwrap();
+        assert_eq!(carrier.evidence[0].sequence, 90);
+        assert_eq!(
+            carrier.evidence[0].payload["executionWindowBuiltinOperation"],
+            "team.get_task"
+        );
+        assert!(
+            carrier.evidence[0].payload["item"]
+                .get("aggregatedOutput")
+                .is_none()
+        );
+        database.connection().execute("UPDATE agent_run_execution_evidence SET payload_preview_json = json_set(payload_preview_json, '$.coreEnvelope.result.title', 'different') WHERE id = 'core-get'", []).unwrap();
+        let distinct =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(91), 1)
+                .unwrap();
+        assert!(
+            distinct.evidence[0]
+                .payload
+                .get("executionWindowBuiltinOperation")
+                .is_none()
+        );
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();

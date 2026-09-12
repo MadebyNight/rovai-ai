@@ -3,13 +3,13 @@ document_type: architecture
 architecture: desktop-navigation-refresh
 authority: desktop-navigation-invalidation-and-refresh-boundaries
 status: accepted
-last_updated: 2026-09-10
+last_updated: 2026-09-12
 ---
 
 # Desktop Navigation Refresh 架构
 
 本架构规定 Desktop 侧栏 Navigation Snapshot 的失效、刷新、失败恢复、前后台与 Sidecar Project 顺序边界。
-Core Navigation Read Model 拥有 Project 聚合、Camp 活动排序与活动字段；Main-owned Navigation Preferences
+Core Navigation Read Model 拥有 Project 聚合、Camp 用户消息排序与活动字段；Main-owned Navigation Preferences
 拥有当前设备的 Sidecar Project 顺序和项目显示名称。Renderer 只组合两份完整快照，不从增量事件猜测位置。
 
 ## Component authority
@@ -64,6 +64,41 @@ blocker resolution 都必须最终进入同一失效入口。
   Navigation 读取路径。
 
 Promise 完成只表示新 Snapshot 已提交到 Renderer state，不承诺浏览器已经完成下一帧 paint。
+
+## Visible Camp windows
+
+### Camp ordering
+
+Navigation 的 `lastActivityAt` / `lastActivityGlobalSequence` 只由已发布的用户 CampMessage 推进：
+`author_type = user` 或 `external_principal`（包括飞书、钉钉等渠道用户），通过统一公共消息 publication seam
+读取。队员消息（含 A2A）、系统消息、工具活动以及 AgentRun/CampTurn 状态均不推进排序。
+没有已发布用户消息时使用 Camp 的 `created_at` 和 sequence 0；Pending Draft 编辑、附件准备、查看和重命名
+不改变这个初始排序时间。时间降序、global sequence 降序、Camp ID 升序的确定性比较规则保持不变。
+
+`latestCompletionGlobalSequence`、loading 与完成未读 marker 继续独立读取 Run/Turn 事实与查看水位；
+状态刷新不能借用用户消息排序水位，否则后台完成提示会丢失。Core Project 聚合使用组内最近用户消息字段，
+Sidecar 已保存的 Project 顺序仍按下文的本机偏好规则保持稳定。
+
+### Snapshot prefixes
+
+`navigation.snapshot` 接受可选 `groupLimits: Record<string, non-negative integer>`，key 为
+`quick-chat` 或 Core 返回的 canonical `directory:<projectPath>`。未指定分组默认 5，低于 5 按 5；
+未知 key 不创建分组。每组 `recentCamps` 是同一个 SQLite 读事务内按最近用户消息排序得到的完整前 N 条，
+最多返回该组实际总数；`totalCount` 始终为完整分组计数。请求不按 N 预分配内存。响应 shape 与 schema 3 不变。
+
+Renderer 的 window reader 只保存请求范围与已展示数量，不保存 offset 页或第二份 Camp 对象数组。
+普通项目、置顶项目和快速对话按 canonical group key 共用该范围。分组内 Camp 行的状态、标题、版本、顺序和删除
+都来自最新完整 Snapshot，不能把新前五条与旧第六条以后的缓存拼接。
+
+“查看更多”把当前数量增加 10，立即通过同一全局协调器重读完整新前缀（5 → 15 → 25），而不是只读取
+offset 之后的十条。请求期间保留当前列表并显示按钮读取态；成功时一起提交 Snapshot 和数量；失败保留
+最后成功的列表与数量，可手动重试，后台重试只恢复该已确认窗口的新鲜度。收起立即把展示数量降到 5，
+再次展开必须重读，即使上一次 Snapshot 曾包含更多条目。
+
+失效事件、20 秒安全刷新、focus 和显式刷新全部读取当前窗口（含在途展开意图）。改变窗口会推进
+协调器 generation；window reader 忽略旧范围的迟到响应或失败，由 trailing read 提交最新范围，不能让
+旧 5 条响应缩掉新 15 条，也不能让迟到展开撤销收起。失效事件仍只用于触发读取，不直接改 marker。
+`navigation.groupCamps` 继续供置顶 Camp 定位等独立按需读取使用，不再作为分组内可见行的分页缓存来源。
 
 ## Sidecar Project order synchronization
 
@@ -122,6 +157,10 @@ preference 失败可以报告自己的错误，但不能停止 Navigation retry�
 - trailing 失败 reject 当前调用者且自动按上限退避恢复，不形成热循环或 unhandled rejection；
 - App 隐藏时不做周期 Navigation Snapshot，focus 后立即收敛；
 - 即使失效事件丢失，前台 20 秒安全刷新仍能纠正；
+- 用户消息导致 Camp 移出前五条后不会恢复旧 spinner；第六条在未展示时变化，展开后立即显示最新状态；
+- 桌面和渠道用户消息推进 Camp 顺序；队员消息、A2A、终态和草稿编辑不重排，完成未读仍正常出现与清除；
+- 已展开窗口的完成未读、已读、标题、删除和排序在刷新时整体替换；收起再展开不复用旧业务对象；
+- 多组并发展开、旧范围响应晚到、收起与展开交错、展开失败重试都保持最后确认的展示范围；
 - Overview 附属模块失败不禁用侧栏刷新；
 - Core 通知只在权威 mutation 已提交后发生。
 - schema 2 第一次进入时冻结旧显示顺序，合法升级不产生偏好损坏提示；

@@ -54,8 +54,12 @@ const MAX_VERSION_OUTPUT_BYTES: usize = 8 * 1024;
 const GO_BUILD_INFO_MAGIC: &[u8] = b"\xff Go buildinf:";
 
 static ACTIVE_RUNTIME_COMMAND_PATH: OnceLock<RwLock<OsString>> = OnceLock::new();
+static ACTIVE_RUNTIME_ENVIRONMENT: OnceLock<
+    RwLock<BTreeMap<AdapterKind, crate::runtime_startup::RuntimeStartupConfiguration>>,
+> = OnceLock::new();
 tokio::task_local! {
     static SCOPED_RUNTIME_COMMAND_PATH: OsString;
+    static SCOPED_RUNTIME_ENVIRONMENT: (AdapterKind, crate::runtime_startup::RuntimeStartupConfiguration);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -107,6 +111,11 @@ pub struct ShellPathDiagnostic {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSearchEnvironment {
+    runtime_overrides: BTreeMap<AdapterKind, PathBuf>,
+    zcode_default_executables: Vec<PathBuf>,
+    diagnostic_codes: Vec<&'static str>,
+    startup_configurations:
+        BTreeMap<AdapterKind, crate::runtime_startup::RuntimeStartupConfiguration>,
     generation: u64,
     path_entries: Vec<SearchPathEntry>,
     path_value: OsString,
@@ -118,6 +127,7 @@ pub struct RuntimeSearchEnvironment {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSearchEnvironmentSummary {
+    pub diagnostic_codes: Vec<&'static str>,
     pub generation: u64,
     pub created_at: String,
     pub path_entry_count: usize,
@@ -287,6 +297,10 @@ impl RuntimeSearchEnvironment {
         let path_value = env::join_paths(path_entries.iter().map(|entry| entry.path.as_os_str()))
             .unwrap_or_default();
         Self {
+            diagnostic_codes: Vec::new(),
+            runtime_overrides: BTreeMap::new(),
+            zcode_default_executables: Vec::new(),
+            startup_configurations: BTreeMap::new(),
             generation: generation.max(1),
             path_entries,
             path_value,
@@ -311,6 +325,7 @@ impl RuntimeSearchEnvironment {
     }
 
     fn capture(generation: u64, interactive: bool) -> Self {
+        let mut diagnostic_codes = Vec::new();
         let mut entries = Vec::new();
         if let Some(inherited) = env::var_os("PATH") {
             #[cfg(windows)]
@@ -328,12 +343,22 @@ impl RuntimeSearchEnvironment {
         #[cfg(windows)]
         {
             let registry_paths = read_registry_path_values();
+            if registry_paths.user.is_none() {
+                diagnostic_codes.push("runtime_user_registry_path_unavailable");
+            }
+            if registry_paths.machine.is_none() {
+                diagnostic_codes.push("runtime_machine_registry_path_unavailable");
+            }
             let environment = env::vars_os().collect::<Vec<_>>();
             extend_windows_registry_paths(&mut entries, &registry_paths, &environment);
         }
 
         let shell_start = Instant::now();
         let (shell_status, shell_name, shell_paths) = capture_shell_path(interactive);
+        #[cfg(unix)]
+        if shell_status != ShellPathStatus::Captured {
+            diagnostic_codes.push("runtime_shell_path_capture_incomplete");
+        }
         let shell_entry_count = shell_paths.len();
         extend_paths(
             &mut entries,
@@ -346,8 +371,21 @@ impl RuntimeSearchEnvironment {
             SearchPathSource::KnownLocation,
         );
         let path_value = env::join_paths(entries.iter().map(|entry| entry.path.as_os_str()))
-            .unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default());
+            .unwrap_or_else(|_| {
+                diagnostic_codes.push("runtime_search_path_join_failed_using_inherited");
+                env::var_os("PATH").unwrap_or_default()
+            });
         Self {
+            diagnostic_codes,
+            zcode_default_executables: crate::zcode::default_executables(),
+            runtime_overrides: AdapterKind::ALL
+                .into_iter()
+                .filter_map(|kind| {
+                    env::var_os(kind.override_environment_key())
+                        .map(|path| (kind, PathBuf::from(path)))
+                })
+                .collect(),
+            startup_configurations: BTreeMap::new(),
             generation,
             path_entries: entries,
             path_value,
@@ -400,6 +438,7 @@ impl RuntimeSearchEnvironment {
 
     pub fn summary(&self) -> RuntimeSearchEnvironmentSummary {
         RuntimeSearchEnvironmentSummary {
+            diagnostic_codes: self.diagnostic_codes.clone(),
             generation: self.generation,
             created_at: self.created_at.clone(),
             path_entry_count: self.path_entries.len(),
@@ -407,11 +446,60 @@ impl RuntimeSearchEnvironment {
         }
     }
 
-    pub fn configure_tokio_command(&self, command: &mut TokioCommand) {
+    pub fn configure_tokio_command(&self, kind: AdapterKind, command: &mut TokioCommand) {
         command.env("PATH", &self.path_value);
+        if let Some(configuration) = self.startup_configurations.get(&kind) {
+            command.envs(
+                configuration
+                    .environment
+                    .iter()
+                    .map(|entry| (&entry.name, &entry.value)),
+            );
+        }
+    }
+
+    pub fn with_startup_configurations(
+        mut self,
+        configurations: BTreeMap<AdapterKind, crate::runtime_startup::RuntimeStartupConfiguration>,
+    ) -> Self {
+        self.startup_configurations = configurations;
+        self
+    }
+
+    pub fn with_startup_configuration(
+        mut self,
+        kind: AdapterKind,
+        configuration: crate::runtime_startup::RuntimeStartupConfiguration,
+    ) -> Self {
+        self.startup_configurations.insert(kind, configuration);
+        self
+    }
+
+    pub fn with_generation(mut self, generation: u64) -> Self {
+        self.generation = generation;
+        self.created_at = chrono::Utc::now().to_rfc3339();
+        self
+    }
+
+    pub fn has_startup_configuration(&self, kind: AdapterKind) -> bool {
+        self.startup_configurations.contains_key(&kind)
+    }
+
+    pub fn startup_configuration(
+        &self,
+        kind: AdapterKind,
+    ) -> crate::runtime_startup::RuntimeStartupConfiguration {
+        self.startup_configurations
+            .get(&kind)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn activate_for_runtime_commands(&self) {
+        let environments = ACTIVE_RUNTIME_ENVIRONMENT.get_or_init(|| RwLock::new(BTreeMap::new()));
+        if let Ok(mut active) = environments.write() {
+            *active = self.startup_configurations.clone();
+        }
         let store =
             ACTIVE_RUNTIME_COMMAND_PATH.get_or_init(|| RwLock::new(self.path_value.clone()));
         if let Ok(mut active) = store.write() {
@@ -424,10 +512,43 @@ impl RuntimeSearchEnvironment {
         kind: AdapterKind,
         manual_candidates: impl IntoIterator<Item = PathBuf>,
     ) -> Vec<RuntimeExecutableCandidate> {
+        if let Some(configuration) = self.startup_configurations.get(&kind) {
+            if let Some(path) = &configuration.program_path {
+                let path = PathBuf::from(path);
+                #[cfg(target_os = "macos")]
+                let path = if path.extension().is_some_and(|extension| extension == "app") {
+                    path.join("Contents/MacOS").join(match kind {
+                        AdapterKind::ZcodeApp => "ZCode",
+                        AdapterKind::AntigravityApp => "Antigravity",
+                        _ => return Vec::new(),
+                    })
+                } else {
+                    path
+                };
+                if !path.is_absolute() || !path.is_file() {
+                    return Vec::new();
+                }
+                let mut candidates = Vec::new();
+                push_candidates_for_kind(
+                    &mut candidates,
+                    path,
+                    InstallationSource::Manual,
+                    None,
+                    kind,
+                    &self.executable_suffixes,
+                );
+                return candidates;
+            }
+            return self.candidates_with_override(
+                kind,
+                std::iter::empty(),
+                self.runtime_overrides.get(&kind).cloned(),
+            );
+        }
         self.candidates_with_override(
             kind,
             manual_candidates,
-            env::var_os(kind.override_environment_key()).map(PathBuf::from),
+            self.runtime_overrides.get(&kind).cloned(),
         )
     }
 
@@ -449,8 +570,9 @@ impl RuntimeSearchEnvironment {
                         .map(|p| (p, InstallationSource::Env)),
                 )
                 .chain(
-                    crate::zcode::default_executables()
-                        .into_iter()
+                    self.zcode_default_executables
+                        .iter()
+                        .cloned()
                         .map(|p| (p, InstallationSource::KnownLocation)),
                 )
             {
@@ -543,7 +665,7 @@ impl RuntimeSearchEnvironment {
     }
 }
 
-pub fn configure_active_runtime_command(command: &mut TokioCommand) {
+fn configure_runtime_path(command: &mut TokioCommand) {
     if let Ok(path) = SCOPED_RUNTIME_COMMAND_PATH.try_with(Clone::clone) {
         command.env("PATH", path);
         return;
@@ -554,6 +676,101 @@ pub fn configure_active_runtime_command(command: &mut TokioCommand) {
     {
         command.env("PATH", path);
     }
+}
+
+pub fn configure_active_runtime_command(command: &mut TokioCommand) {
+    configure_runtime_path(command);
+    let _ = SCOPED_RUNTIME_ENVIRONMENT.try_with(|(_, configuration)| {
+        command.envs(
+            configuration
+                .environment
+                .iter()
+                .map(|entry| (&entry.name, &entry.value)),
+        );
+    });
+}
+
+fn effective_startup_configuration(
+    kind: AdapterKind,
+) -> Option<crate::runtime_startup::RuntimeStartupConfiguration> {
+    SCOPED_RUNTIME_ENVIRONMENT
+        .try_with(|(scoped_kind, configuration)| {
+            (*scoped_kind == kind).then(|| configuration.clone())
+        })
+        .ok()
+        .flatten()
+        .or_else(|| {
+            ACTIVE_RUNTIME_ENVIRONMENT
+                .get()
+                .and_then(|store| store.read().ok()?.get(&kind).cloned())
+        })
+}
+
+fn configured_environment_variable(kind: AdapterKind, key: &str) -> Option<OsString> {
+    effective_startup_configuration(kind)?
+        .environment
+        .into_iter()
+        .find(|entry| {
+            if cfg!(windows) {
+                entry.name.eq_ignore_ascii_case(key)
+            } else {
+                entry.name == key
+            }
+        })
+        .map(|entry| OsString::from(entry.value))
+}
+
+/// Native configuration readers use the same Runtime-local overlay as child commands.
+/// Neither this function nor command configuration writes the process environment.
+pub fn runtime_environment_variable(kind: AdapterKind, key: &str) -> Option<OsString> {
+    configured_environment_variable(kind, key).or_else(|| env::var_os(key))
+}
+
+pub fn runtime_home_directory(kind: AdapterKind) -> Option<PathBuf> {
+    configured_environment_variable(kind, if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+}
+
+pub fn runtime_environment(kind: AdapterKind) -> BTreeMap<String, String> {
+    let mut environment = env::vars().collect::<BTreeMap<_, _>>();
+    if let Some(configuration) = effective_startup_configuration(kind) {
+        for entry in configuration.environment {
+            if cfg!(windows) {
+                environment.retain(|key, _| !key.eq_ignore_ascii_case(&entry.name));
+            }
+            environment.insert(entry.name, entry.value);
+        }
+    }
+    environment
+}
+
+pub fn configure_runtime_command(kind: AdapterKind, command: &mut TokioCommand) {
+    configure_runtime_path(command);
+    if let Some(configuration) = effective_startup_configuration(kind) {
+        command.envs(
+            configuration
+                .environment
+                .iter()
+                .map(|entry| (entry.name.as_str(), entry.value.as_str())),
+        );
+    }
+}
+
+pub async fn with_runtime_configuration<F, T>(
+    kind: AdapterKind,
+    search: &RuntimeSearchEnvironment,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    SCOPED_RUNTIME_ENVIRONMENT
+        .scope(
+            (kind, search.startup_configuration(kind)),
+            with_runtime_search_environment(search, future),
+        )
+        .await
 }
 
 pub async fn with_runtime_search_environment<F, T>(
@@ -641,6 +858,18 @@ fn discover_runtime_path_from_candidates(
 }
 
 pub async fn discover_runtime_version(
+    observation: &mut RuntimeDiscoveryObservation,
+    search: &RuntimeSearchEnvironment,
+) {
+    with_runtime_configuration(
+        observation.runtime_kind,
+        search,
+        discover_runtime_version_scoped(observation, search),
+    )
+    .await;
+}
+
+async fn discover_runtime_version_scoped(
     observation: &mut RuntimeDiscoveryObservation,
     search: &RuntimeSearchEnvironment,
 ) {
@@ -838,7 +1067,7 @@ async fn bounded_version_command(
         TokioCommand::new(executable)
     };
     command.args(arguments).stdin(Stdio::null());
-    search.configure_tokio_command(&mut command);
+    search.configure_tokio_command(kind, &mut command);
     let output = run_bounded_command(
         &mut command,
         ProbeCommandLimits {
@@ -1460,6 +1689,10 @@ mod tests {
 
     fn test_search(entries: Vec<SearchPathEntry>) -> RuntimeSearchEnvironment {
         RuntimeSearchEnvironment {
+            zcode_default_executables: Vec::new(),
+            runtime_overrides: BTreeMap::new(),
+            diagnostic_codes: Vec::new(),
+            startup_configurations: BTreeMap::new(),
             generation: 7,
             path_value: env::join_paths(entries.iter().map(|entry| entry.path.as_os_str()))
                 .unwrap(),
@@ -1654,6 +1887,40 @@ mod tests {
                 InstallationSource::LoginShell,
                 InstallationSource::KnownLocation,
             ]
+        );
+        let configured = search.with_startup_configuration(
+            AdapterKind::CodexCli,
+            crate::runtime_startup::RuntimeStartupConfiguration {
+                program_path: Some(
+                    directory
+                        .join("manual/codex")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                environment: Vec::new(),
+            },
+        );
+        let selected = configured.candidates(AdapterKind::CodexCli, [directory.join("override")]);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].source, InstallationSource::Manual);
+        assert_eq!(
+            selected[0].path,
+            directory.join("manual/codex").canonicalize().unwrap()
+        );
+        fs::remove_file(directory.join("manual/codex")).unwrap();
+        assert!(
+            configured
+                .candidates(AdapterKind::CodexCli, [directory.join("override")])
+                .is_empty(),
+            "a deleted custom program must not silently switch installations"
+        );
+        let automatic =
+            configured.with_startup_configuration(AdapterKind::CodexCli, Default::default());
+        assert!(
+            !automatic
+                .candidates(AdapterKind::CodexCli, [directory.join("override")])
+                .iter()
+                .any(|candidate| candidate.source == InstallationSource::Manual)
         );
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1918,7 +2185,11 @@ mod windows_tests {
         path_entries: Vec<SearchPathEntry>,
     ) -> RuntimeSearchEnvironment {
         RuntimeSearchEnvironment {
+            diagnostic_codes: Vec::new(),
+            startup_configurations: BTreeMap::new(),
             generation,
+            runtime_overrides: BTreeMap::new(),
+            zcode_default_executables: Vec::new(),
             path_value: env::join_paths(path_entries.iter().map(|entry| entry.path.as_os_str()))
                 .unwrap(),
             path_entries,

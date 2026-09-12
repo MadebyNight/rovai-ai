@@ -57,39 +57,42 @@ export function WindowsApplicationMenu(): React.JSX.Element {
   }
 
   return (
-    <div className="windows-application-menu" role="menubar" aria-label="应用菜单">
-      {WINDOWS_APPLICATION_MENU_ITEMS.map((item, index) => (
-        <button
-          className="windows-application-menu-item"
-          type="button"
-          role="menuitem"
-          aria-haspopup="menu"
-          accessKey={item.accessKey}
-          key={item.section}
-          ref={(element) => { buttons.current[index] = element }}
-          tabIndex={index === activeIndex ? 0 : -1}
-          onFocus={() => setActiveIndex(index)}
-          onClick={(event) => openMenu(
-            item.section,
-            event.currentTarget,
-            event.detail === 0 ? 'keyboard' : 'mouse'
-          )}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowDown') {
+    <div className="windows-application-menu">
+      <div id="navigation-chrome-toggle-slot" className="navigation-windows-control" />
+      <div className="windows-application-menu-items" role="menubar" aria-label="应用菜单">
+        {WINDOWS_APPLICATION_MENU_ITEMS.map((item, index) => (
+          <button
+            className="windows-application-menu-item"
+            type="button"
+            role="menuitem"
+            aria-haspopup="menu"
+            accessKey={item.accessKey}
+            key={item.section}
+            ref={(element) => { buttons.current[index] = element }}
+            tabIndex={index === activeIndex ? 0 : -1}
+            onFocus={() => setActiveIndex(index)}
+            onClick={(event) => openMenu(
+              item.section,
+              event.currentTarget,
+              event.detail === 0 ? 'keyboard' : 'mouse'
+            )}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                openMenu(item.section, event.currentTarget, 'keyboard')
+                return
+              }
+              const nextIndex = windowsApplicationMenuFocusIndex(index, event.key)
+              if (nextIndex === null) return
               event.preventDefault()
-              openMenu(item.section, event.currentTarget, 'keyboard')
-              return
-            }
-            const nextIndex = windowsApplicationMenuFocusIndex(index, event.key)
-            if (nextIndex === null) return
-            event.preventDefault()
-            setActiveIndex(nextIndex)
-            buttons.current[nextIndex]?.focus()
-          }}
-        >
-          {item.label}
-        </button>
-      ))}
+              setActiveIndex(nextIndex)
+              buttons.current[nextIndex]?.focus()
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

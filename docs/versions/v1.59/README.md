@@ -22,7 +22,7 @@ Server 覆盖 macOS arm64/x64、Windows x64、Linux x64。交付依次为 Server
 Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](implementation-plan.md)。
 
 当前已抽取共享运行层，接入 Headless CLI、同 Host 的 Desktop/Web 管理及共享生产 Camp 页面；
-第五阶段已有交互稿保留，按最新指令暂停新增 Mobile、扩平台、容器及发布优化，先收敛阶段 1–3。
+第五阶段已有交互稿保留，先收敛阶段 1–3，再推进阶段四能在 Mac 完成的部署验收；其他平台实机、容器与 Mobile 暂停。
 用户已通过 [Desktop/Web 行为差异与宽屏对照稿](../../ui/host-web-parity.md)及[组件/API 复用说明](frontend-reuse.md)的方向评审，
 直接按共享 Camp、真实写入闭环、双入口一致、逐页复用管理能力推进。Core 已接入独立编辑归属、source 上传、
 发送和审批；实际 Desktop/浏览器对照与独立 Host 原生 Runtime 证据正在逐项补齐。完整业务能力、双入口全场景与平台安全资格仍待完成，
@@ -40,7 +40,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | --- | --- | --- |
 | Version lifecycle | 已更新 | 前版生命周期冻结；本概览、实施计划与[版本索引](../README.md)建立唯一 current v1.59 |
 | Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host 与分阶段迁移 |
-| Contracts | 已更新 | [Host Lifecycle v1](../../contracts/host-lifecycle-v1.md)保留；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 150 保留旧 Desktop 数据 |
+| Contracts | 已更新 | [Host Lifecycle v1](../../contracts/host-lifecycle-v1.md)保留；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 152 保留旧 Desktop 数据，并原子升级旧任务分支的 150 客户端草稿 |
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 已替换独立 Workspace，挂载共享 BusinessApp/CampNavigation/CampWorkspace；[差异表](../../ui/host-web-parity.md)继续记录私聊和管理页等缺口；Mobile 稿保留并暂停新增 |
 | Runtime Activity | 确认无需更新 | Runtime Adapter 语义与活动分类保持不变 |

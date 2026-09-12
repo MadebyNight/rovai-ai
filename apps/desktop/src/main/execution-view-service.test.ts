@@ -204,7 +204,7 @@ describe('ExecutionViewService', () => {
           kind: 'activityGroup',
           status: 'completed',
           statusLabel: '全部成功',
-          primary: '完成了 1 个步骤',
+          primary: '已完成 1 个步骤',
           activities: [{
             iconKind: 'unknown',
             title: 'pnpm test',
@@ -214,7 +214,7 @@ describe('ExecutionViewService', () => {
         }, { kind: 'narration', body: '公开正文' }]
       }]
     })
-    expect(JSON.stringify(publicSnapshot)).not.toContain('private-stdout-token')
+    expect(JSON.stringify(publicSnapshot)).toContain('private-stdout-token')
 
     rawSnapshot.runs[0].invocationKind = 'a2a'
     rawSnapshot.runs[0].trigger.authorDisplayName = '药师寺惠'

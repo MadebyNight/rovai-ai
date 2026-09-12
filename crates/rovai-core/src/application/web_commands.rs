@@ -49,6 +49,65 @@ pub(super) fn reconcile(
         }};
     }
     match query.operation.as_str() {
+        "skills.import.commit" => user!(CommitSkillImportCommand),
+        "skills.setEnabled" => user!(SetSkillEnabledCommand),
+        "skills.setGroupAssignments" => user!(SetSkillGroupAssignmentsCommand),
+        "skills.delete" => user!(DeleteSkillCommand),
+
+        "memory.create" => user!(CreateMemoryCommand),
+        "memory.revise" => user!(ReviseMemoryCommand),
+        "memory.retire" => user!(RetireMemoryCommand),
+        "memory.reactivate" => user!(ReactivateMemoryCommand),
+        "memory.forget" => user!(ForgetMemoryCommand),
+        "memory.supersede" => user!(SupersedeMemoriesCommand),
+        "memory.review.schedule" => user!(ScheduleMemoryReviewCommand),
+        "memory.hearthReviewItems.accept" => user!(AcceptHearthReviewItemCommand),
+        "memory.hearthReviewItems.reject" => user!(RejectHearthReviewItemCommand),
+        "automations.create" => user!(CreateAutomationCommand),
+        "automations.update" => user!(UpdateAutomationCommand),
+        "automations.close" => user!(CloseAutomationCommand),
+        "automations.delete" => user!(DeleteAutomationCommand),
+        "automations.run" => user!(RunAutomationCommand),
+        "tasks.create" => {
+            let params: CreateTaskParams = serde_json::from_value(query.params)?;
+            receipt(
+                database,
+                user_camp_command_envelope(
+                    params.command_id,
+                    params.camp_id.to_string(),
+                    CreateTaskCommand {
+                        camp_id: params.camp_id.to_string(),
+                        title: params.title,
+                        description: params.description,
+                        acceptance_criteria: params.acceptance_criteria,
+                        assignee_agent_id: params.assignee_agent_id,
+                    },
+                ),
+            )
+        }
+        "tasks.update" => {
+            let params: UpdateTaskParams = serde_json::from_value(query.params)?;
+            receipt(
+                database,
+                user_camp_command_envelope(
+                    params.command_id,
+                    params.camp_id.to_string(),
+                    UpdateTaskCommand {
+                        task_id: params.task_id,
+                        expected_version: params.expected_version,
+                        title: params.title,
+                        description: params.description,
+                        acceptance_criteria: params.acceptance_criteria,
+                        status: params.status,
+                        assignee: params.assignee,
+                        blocked_reason: params.blocked_reason,
+                        completion_summary: params.completion_summary,
+                        cancel_reason: params.cancel_reason,
+                    },
+                ),
+            )
+        }
+
         "camp.messages.send" => {
             let mut params: SendCampMessageParams = serde_json::from_value(query.params)?;
             params.draft_client = client.clone();

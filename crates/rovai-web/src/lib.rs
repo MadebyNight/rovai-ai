@@ -1,4 +1,5 @@
 mod auth;
+mod avatars;
 mod network;
 mod operations;
 mod resources;
@@ -164,6 +165,10 @@ fn routes(state: WebState) -> Router {
             post(uploads::upload).layer(DefaultBodyLimit::max(uploads::MAX_BYTES + 16384)),
         )
         .route("/uploads/reconcile", post(uploads::reconcile))
+        .route(
+            "/avatars",
+            post(avatars::avatar).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
         .route("/files", post(resources::files))
         .route("/attachments", post(resources::attachment))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));

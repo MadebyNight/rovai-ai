@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -27,6 +28,7 @@ import { CapabilityDeleteDialog } from './CapabilityDeleteDialog'
 import { AppDialogGlyph, DialogControlIcon } from './AppDialog'
 
 export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): React.JSX.Element {
+  const client = useCampClient()
   const [skills, setSkills] = useState<SkillView[] | null>(null)
   const [groups, setGroups] = useState<SkillDeliveryGroupView[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -51,20 +53,20 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
   const load = useCallback(async (): Promise<void> => {
     const request = ++generation.current
     const [nextSkills, nextGroups] = await Promise.all([
-      window.rovai.request<SkillView[]>('skills.list'),
-      window.rovai.request<SkillDeliveryGroupView[]>('skills.deliveryGroups.list')
+      client.request<SkillView[]>('skills.list'),
+      client.request<SkillDeliveryGroupView[]>('skills.deliveryGroups.list')
     ])
     if (request !== generation.current) return
     setSkills(nextSkills)
     setGroups(nextGroups)
-  }, [])
+  }, [client])
   useEffect(() => {
     const refresh = (): void => {
       if (!locked.current) void load().catch((reason) => setError(errorMessage(reason)))
     }
     refresh()
     window.addEventListener('focus', refresh)
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (
         !locked.current &&
         event.method === 'runtime.state' &&
@@ -72,13 +74,15 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
       )
         void load().catch((reason) => setError(errorMessage(reason)))
     })
+    const unsubscribeInvalidated = client.onInvalidated?.(refresh)
     return () => {
       generation.current++
       choose('')
       window.removeEventListener('focus', refresh)
-      unsubscribe()
+      unsubscribe?.()
+      unsubscribeInvalidated?.()
     }
-  }, [load])
+  }, [client, load])
   const allSkills = useMemo(() => settingsVisibleSkills(skills, '') ?? [], [skills])
   const visible = useMemo(
     () => settingsVisibleSkills(skills, search, filter) ?? [],
@@ -125,11 +129,11 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
     void run('inspect', async () => {
       let next: SkillImportInspection
       if (importTab === 'local') {
-        const path = await window.rovai.selectSkillImportDirectory()
+        const path = await client.selectSkillImportDirectory()
         if (!path) return
-        next = await window.rovai.request<SkillImportInspection>('skills.import.inspect', { path })
+        next = await client.request<SkillImportInspection>('skills.import.inspect', { path })
       } else
-        next = await window.rovai.request<SkillImportInspection>(
+        next = await client.request<SkillImportInspection>(
           'skills.import.github.inspect',
           parseGithubImportInput(githubInput)
         )
@@ -142,7 +146,7 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
   const commit = (confirmUpdate: boolean): void => {
     if (!candidate || !inspection) return
     void run('import', async () => {
-      const result = await window.rovai.request<StoredCommandResult>('skills.import.commit', {
+      const result = await client.request<StoredCommandResult>('skills.import.commit', {
         commandId: newCommandId(),
         command: {
           stagingToken: inspection.stagingToken,
@@ -171,7 +175,7 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
   }
   const toggle = (skill: SkillView): void => {
     void run('toggle', async () => {
-      const result = await window.rovai.request<StoredCommandResult>('skills.setEnabled', {
+      const result = await client.request<StoredCommandResult>('skills.setEnabled', {
         commandId: newCommandId(),
         command: {
           skillId: skill.id,
@@ -185,7 +189,7 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
   }
   const assign = (skill: SkillView, keys: SkillDeliveryGroupKey[]): void => {
     void run('groups', async () => {
-      const result = await window.rovai.request<StoredCommandResult>('skills.setGroupAssignments', {
+      const result = await client.request<StoredCommandResult>('skills.setGroupAssignments', {
         commandId: newCommandId(),
         command: {
           skillId: skill.id,
@@ -194,7 +198,7 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
         }
       })
       assertCommandApplied(result)
-      const updated = await window.rovai.request<SkillView>('skills.get', {
+      const updated = await client.request<SkillView>('skills.get', {
         skillId: skill.id
       })
       setSkills((values) => (values ? replaceSkillRow(values, updated) : values))
@@ -204,7 +208,7 @@ export function SkillSettings({ theme = 'day' }: { theme?: ResolvedTheme }): Rea
     if (!deleteTarget) return
     const skill = deleteTarget
     void run('delete', async () => {
-      const result = await window.rovai.request<StoredCommandResult>('skills.delete', {
+      const result = await client.request<StoredCommandResult>('skills.delete', {
         commandId: newCommandId(),
         command: { skillId: skill.id, expectedVersion: skill.version }
       })

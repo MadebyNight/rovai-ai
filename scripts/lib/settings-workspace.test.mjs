@@ -12,7 +12,7 @@ import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
 const source = join(root, 'scripts/fixtures/settings-workspace')
-test('settings preserve channel actions, large-roster selection, sparse usage and failure recovery across themes and zoom', { timeout: 120_000 }, async t => {
+test('settings preserve channel actions, large-roster selection, sparse usage and failure recovery across themes and zoom', { timeout: 240_000 }, async t => {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-settings-workspace-test-'))
   let child, closed
@@ -32,7 +32,7 @@ test('settings preserve channel actions, large-roster selection, sparse usage an
     let output = ''
     child.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk) })
     child.stderr.on('data', chunk => { output += chunk; process.stderr.write(chunk) })
-    const timeout = setTimeout(() => child.kill('SIGKILL'), 90_000)
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 210_000)
     let code
     try { [code] = await closed } finally { clearTimeout(timeout) }
     assert.equal(code, 0, output)

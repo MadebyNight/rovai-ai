@@ -10,6 +10,7 @@ app.setPath('userData', userData)
 app.setPath('sessionData', join(userData, 'session'))
 
 app.whenReady().then(async () => {
+  console.error('settings fixture: Electron ready')
   const window = new BrowserWindow({ show: process.platform === 'linux', width: 1440, height: 920, useContentSize: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
   window.webContents.on('console-message', event => console.error(event.message))
@@ -17,12 +18,13 @@ app.whenReady().then(async () => {
   const settle = () => run('window.settingsTest.settle()')
   const waitFor = async expression => {
     for(let attempt=0;attempt<40;attempt++){
-      if(await run(expression)) return
+      if(await run(`Boolean(${expression})`)) return
       await new Promise(resolve=>setTimeout(resolve,50))
     }
     throw Error('UI did not settle: '+expression)
   }
   const navigate = async (page, scenario = 'normal') => {
+    console.error('settings fixture: ' + page)
     await run(`window.settingsTest.navigate(${JSON.stringify(page)},${JSON.stringify(scenario)})`)
     await settle()
   }
@@ -79,10 +81,89 @@ app.whenReady().then(async () => {
     await noOverflow(label)
   }
   try {
-    await window.loadFile(renderer); await settle()
+    await window.loadFile(renderer); console.error('settings fixture: renderer loaded'); await settle()
     // Keep native DOM focus events available without depending on the active desktop window.
     window.webContents.debugger.attach('1.3')
     await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+    // Runtime editor regression: valid variable addition saves directly, failure
+    // preserves the draft, and clean/dirty transitions keep both actions visible.
+    window.webContents.setZoomFactor(1); window.setContentSize(1280, 850)
+    await navigate('runtime')
+    const codexRow = '.runtime-product-row:has(.runtime-product-settings[aria-label="Codex CLI 启动设置"])'
+    for (const [outcome, label] of [['stable_failure', '本次检查未通过'], ['deferred', '检查未完成']]) {
+      await run(`window.settingsTest.state.checkOutcome=${JSON.stringify(outcome)}`)
+      await click(`${codexRow} .runtime-product-check`)
+      await waitFor(`document.querySelector(${JSON.stringify(codexRow + ' .runtime-guide-feedback')})?.textContent.includes(${JSON.stringify(label)})`)
+      assert.equal(await run(`document.querySelector(${JSON.stringify(codexRow + ' .runtime-product-status')}).textContent`), '可用')
+    }
+    await click('.runtime-guide-trigger[aria-label="GitHub Copilot 登录指南"]')
+    await click('.runtime-install-guide .primary-button')
+    assert.equal(await run("window.settingsTest.requests.filter(r=>r.method==='runtime.product.check').at(-1).params.runtimeKind"), 'copilot-cli')
+    assert.equal(await run("window.settingsTest.requests.filter(r=>r.method==='runtime.discovery.rescan').length"), 0)
+    await click('.runtime-product-settings[aria-label="Codex CLI 启动设置"]')
+    await waitFor("document.querySelector('.runtime-startup-form') && !document.querySelector('.runtime-startup-page').getAttribute('aria-busy').includes('true')")
+    assert.equal(await run("[...document.querySelectorAll('.runtime-startup-actions button')].filter(b => b.disabled).length"), 2)
+    assert.equal(await run("getComputedStyle(document.querySelector('.runtime-startup-actions')).display"), 'flex')
+    await click('.runtime-startup-section:nth-of-type(2) .quiet-button')
+    await click('input[aria-label="变量名 1"]')
+    await run("document.execCommand('insertText',false,'HTTP_PROXY')"); await settle()
+    await click('input[aria-label="变量值 1"]')
+    await run("document.execCommand('insertText',false,'http://localhost:8080')"); await settle()
+    assert.equal(await run("document.querySelector('.runtime-startup-actions button[type=submit]').disabled"), false)
+    assert.equal(await run("document.querySelector('input[aria-label=\"变量值 1\"]').type"), 'password')
+    await run("window.settingsTest.state.failure='runtime.startup.save'")
+    await click('.runtime-startup-actions button[type=submit]')
+    await waitFor("document.querySelector('.runtime-startup-form .inline-error')")
+    assert.equal(await run("document.querySelector('input[aria-label=\"变量名 1\"]').value"), 'HTTP_PROXY')
+    assert.equal(await run("document.querySelector('.runtime-startup-actions button[type=submit]').disabled"), false)
+    await click('.runtime-startup-actions button[type=submit]')
+    await waitFor("document.querySelector('.runtime-startup-actions button[type=submit]').disabled")
+    assert.equal(await run("window.settingsTest.requests.filter(r => r.method==='runtime.startup.check').length"), 0)
+    assert.equal(await run("window.settingsTest.state.startup['codex-cli'].configuration.environment[0].name"), 'HTTP_PROXY')
+    await click('.runtime-startup-section:nth-of-type(2) .quiet-button')
+    await click('.runtime-startup-actions button[type=button]')
+    assert.equal(await run("document.querySelectorAll('.runtime-environment-row').length"), 1)
+    assert.equal(await run("document.querySelector('.runtime-startup-actions button[type=submit]').disabled"), true)
+    await click('.runtime-startup-inspection .quiet-button')
+    await waitFor("document.querySelector('.runtime-startup-result').textContent.includes('需要登录')")
+    // Restore-auto uses fresh private preview, not a formal rescan or implicit save.
+    await click('.runtime-startup-path button')
+    await waitFor("!document.querySelector('.runtime-startup-actions button[type=submit]').disabled")
+    await click('.runtime-startup-actions button[type=submit]')
+    await waitFor("document.querySelector('.runtime-startup-actions button[type=submit]').disabled")
+    await run("window.settingsTest.state.previewVersion='0.200.0'")
+    await click('.runtime-startup-section-heading > button')
+    await waitFor("document.querySelector('.runtime-startup-version')?.textContent==='0.200.0'")
+    assert.equal(await run("document.querySelector('.runtime-startup-path input').value"), '/sample/bin/codex')
+    assert.equal(await run("window.settingsTest.state.startup['codex-cli'].configuration.programPath"), '/sample/custom/codex')
+    assert.equal(await run("window.settingsTest.requests.filter(r=>r.method==='runtime.discovery.rescan').length"), 0)
+    await click('.runtime-startup-actions button[type=button]')
+    await run("window.settingsTest.fail('runtime.startup.inspect')")
+    await click('.runtime-startup-section-heading > button')
+    await waitFor("document.querySelector('.runtime-startup-form .inline-error')")
+    assert.equal(await run("document.querySelector('.runtime-startup-path input').value"), '')
+    assert.equal(await run("document.querySelector('.runtime-startup-result').textContent"), '')
+    await click('.runtime-startup-actions button[type=button]')
+    await run("window.settingsTest.state.deferStartupInspection=true")
+    await click('.runtime-startup-inspection .quiet-button')
+    await navigate('general'); await navigate('runtime')
+    await click('.runtime-product-settings[aria-label="Codex CLI 启动设置"]')
+    await waitFor("document.querySelector('.runtime-startup-form')")
+    await run("window.settingsTest.finishStartupInspection({status:'ready', executablePath:'/old',reportedVersion:'OUTDATED'})")
+    await settle()
+    assert.equal(await run("document.querySelector('.runtime-startup-page').textContent.includes('OUTDATED')"), false)
+    for (const theme of ['day', 'night']) {
+      await run(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
+      await noOverflow(`startup/${theme}/1280`); await capture(`runtime-startup-${theme}`)
+      window.webContents.setZoomFactor(2)
+      await noOverflow(`startup/${theme}/200%`); await capture(`runtime-startup-${theme}-200`)
+      window.webContents.setZoomFactor(1)
+    }
+
+    await navigate('general')
+    window.setContentSize(1440, 920)
+    console.error('settings fixture: runtime regression passed')
+    await run("document.documentElement.dataset.theme='day'")
     assert.equal(await run("document.querySelectorAll('.general-save-row .dialog-glyph').length"), 1)
     assert.equal(await run("document.querySelectorAll('.general-save-state').length"), 0)
     await click('.general-default-member-picker > summary')
@@ -351,6 +432,7 @@ app.whenReady().then(async () => {
     console.log(JSON.stringify({ ok: true }))
     app.exit(0)
   } catch (error) {
+    console.error(error)
     await capture('failure')
     console.error(error); app.exit(1)
   }

@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type {
   AgentProfile,
@@ -107,6 +108,7 @@ export function McpSettings({
   agents: AgentProfile[]
   platform?: NodeJS.Platform
 }): React.JSX.Element {
+  const client = useCampClient()
   const members = useMemo(
     () =>
       agents
@@ -139,30 +141,32 @@ export function McpSettings({
   const editorSession = useRef(0)
   const load = useCallback(async (): Promise<McpConfigView> => {
     const request = ++generation.current
-    const next = await window.rovai.request<McpConfigView>('mcp.config.get')
+    const next = await client.request<McpConfigView>('mcp.config.get')
     if (request === generation.current) setConfig(next)
     return next
-  }, [])
+  }, [client])
   useEffect(() => {
     const refresh = (): void => {
       if (!locked.current) void load().catch((reason) => setError(errorMessage(reason)))
     }
     refresh()
     window.addEventListener('focus', refresh)
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (
         event.method === 'runtime.state' &&
         (event.params as { status?: string })?.status === 'ready'
       )
         refresh()
     })
+    const unsubscribeInvalidated = client.onInvalidated?.(refresh)
     return () => {
       generation.current++
       choose(null)
       window.removeEventListener('focus', refresh)
-      unsubscribe()
+      unsubscribe?.()
+      unsubscribeInvalidated?.()
     }
-  }, [load])
+  }, [client, load])
   const run = async (key: string, action: () => Promise<void>): Promise<void> => {
     if (locked.current) return
     locked.current = true
@@ -236,7 +240,7 @@ export function McpSettings({
       }
       if (server && drafts[server.serverId]?.baseDefinition !== server.definitionJson)
         throw new Error('该连接已在其他位置更新。请保留需要的内容，再点击“重新载入”后编辑。')
-      const result = await window.rovai.request<McpMutationResult>(
+      const result = await client.request<McpMutationResult>(
         adding ? 'mcp.servers.create' : 'mcp.servers.update',
         {
           expectedConfigDigest: server
@@ -259,7 +263,7 @@ export function McpSettings({
         if (selectedRef.current === 'new') choose(created?.serverId ?? null)
         if (created && newMembers.length)
           await apply(
-            await window.rovai.request<McpMutationResult>('mcp.servers.setMembers', {
+            await client.request<McpMutationResult>('mcp.servers.setMembers', {
               expectedConfigDigest: next.configDigest,
               serverId: created.serverId,
               agentIds: newMembers,
@@ -279,7 +283,7 @@ export function McpSettings({
       beforeDigest = config.configDigest
     void run('assignment', async () => {
       const next = await apply(
-        await window.rovai.request<McpMutationResult>('mcp.servers.setMembers', {
+        await client.request<McpMutationResult>('mcp.servers.setMembers', {
           expectedConfigDigest: beforeDigest,
           serverId: server.serverId,
           agentIds,
@@ -300,7 +304,7 @@ export function McpSettings({
     if (!deleteTarget) return
     const target = deleteTarget
     void run('delete', async () => {
-      const result = await window.rovai.request<McpMutationResult>('mcp.servers.delete', {
+      const result = await client.request<McpMutationResult>('mcp.servers.delete', {
         expectedConfigDigest: target.configDigest,
         serverId: target.serverId
       })
@@ -318,7 +322,7 @@ export function McpSettings({
     if (selectedId !== 'import') choose('import')
     const session = editorSession.current
     void run('scan', async () => {
-      const next = await window.rovai.request<McpImportInspection>('mcp.import.scan')
+      const next = await client.request<McpImportInspection>('mcp.import.scan')
       if (editorSession.current !== session) return
       setInspection(next)
       setImportDrafts((previous) => buildMcpImportDrafts(next, config?.servers ?? [], previous))
@@ -348,7 +352,7 @@ export function McpSettings({
         })
       if (!selections.length) throw new Error('请选择要导入的 MCP。')
       const next = await apply(
-        await window.rovai.request<McpMutationResult>('mcp.import.commit', {
+        await client.request<McpMutationResult>('mcp.import.commit', {
           expectedConfigDigest: inspection.configDigest,
           selections
         })
@@ -582,18 +586,18 @@ export function McpSettings({
             >
               重新读取
             </button>
-            <button
+            {client.revealMcpConfig && <button
               type="button"
               className="quiet-button compact"
               disabled={busy !== null}
               onClick={() => {
                 void run('reveal', async () => {
-                  await window.rovai.revealMcpConfig()
+                  await client.revealMcpConfig?.()
                 })
               }}
             >
               打开文件
-            </button>
+            </button>}
           </div>
         </div>
       )}
@@ -606,7 +610,7 @@ export function McpSettings({
             disabled={busy !== null}
             onClick={() => {
               void run('permissions', async () =>
-                setConfig(await window.rovai.request<McpConfigView>('mcp.config.repairPermissions'))
+                setConfig(await client.request<McpConfigView>('mcp.config.repairPermissions'))
               )
             }}
           >

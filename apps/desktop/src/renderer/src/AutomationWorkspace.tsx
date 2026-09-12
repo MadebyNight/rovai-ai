@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -39,6 +40,7 @@ export function AutomationWorkspace({
   onNotify(message: string): void
   onLeaveGuardChange?(guard: AutomationLeaveGuard | null): void
 }): React.JSX.Element {
+  const client = useCampClient()
   const [automations, setAutomations] = useState<AutomationView[]>([])
   const automationsRef = useRef<AutomationView[]>([])
   const [selectedId, setSelectedId] = useState<string | 'new' | null>(null)
@@ -114,7 +116,7 @@ export function AutomationWorkspace({
       const seenCursors = new Set<string>()
       let cursor: string | null = null
       for (;;) {
-        const page: AutomationListPage = await window.rovai.request<AutomationListPage>('automations.list', {
+        const page: AutomationListPage = await client.request<AutomationListPage>('automations.list', {
           status: 'all', limit: 50, ...(cursor ? { cursor } : {})
         })
         loaded.push(...page.automations)
@@ -166,19 +168,21 @@ export function AutomationWorkspace({
       }
       return false
     }
-  }, [])
+  }, [client])
 
   useEffect(() => {
     void refresh()
     const interval = window.setInterval(() => void refresh(true), 5_000)
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (event.method === 'automations.updated') void refresh(true)
     })
+    const unsubscribeInvalidated = client.onInvalidated?.(() => void refresh(true))
     return () => {
       window.clearInterval(interval)
-      unsubscribe()
+      unsubscribe?.()
+      unsubscribeInvalidated?.()
     }
-  }, [refresh])
+  }, [client, refresh])
 
   useEffect(() => {
     setDeleteArmed(null)
@@ -221,7 +225,7 @@ export function AutomationWorkspace({
         setIssue((active) => active?.kind === 'save' || active?.kind === 'conflict' ? null : active)
       }
       try {
-        const result = await window.rovai.request<StoredCommandResult>('automations.update', {
+        const result = await client.request<StoredCommandResult>('automations.update', {
           commandId: newCommandId(),
           command: {
             automationId,
@@ -362,7 +366,7 @@ export function AutomationWorkspace({
     setBusy('create')
     setIssue(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('automations.create', {
+      const result = await client.request<StoredCommandResult>('automations.create', {
         commandId: newCommandId(), command: draft
       })
       const created = automationFromResult(result)
@@ -385,7 +389,7 @@ export function AutomationWorkspace({
     setBusy('run')
     setIssue(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('automations.run', {
+      const result = await client.request<StoredCommandResult>('automations.run', {
         commandId: newCommandId(), command: { automationId: current.automationId }
       })
       if (result.status === 'rejected') throw new Error(String(result.payload.message ?? '任务未能开始。'))
@@ -411,7 +415,7 @@ export function AutomationWorkspace({
       const command = enabled
         ? { automationId: current.automationId, expectedVersion: current.version, enabled: true }
         : { automationId: current.automationId, expectedVersion: current.version }
-      const result = await window.rovai.request<StoredCommandResult>(method, {
+      const result = await client.request<StoredCommandResult>(method, {
         commandId: newCommandId(), command
       })
       const updated = automationFromResult(result)
@@ -430,7 +434,7 @@ export function AutomationWorkspace({
     setBusy('delete')
     setIssue(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('automations.delete', {
+      const result = await client.request<StoredCommandResult>('automations.delete', {
         commandId: newCommandId(),
         command: { automationId: current.automationId, expectedVersion: current.version }
       })

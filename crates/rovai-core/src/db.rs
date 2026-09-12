@@ -277,7 +277,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 100;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 102;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -702,6 +702,8 @@ struct CurrentMigrationState {
     v148: bool,
     v149: bool,
     v150: bool,
+    v151: bool,
+    v152: bool,
 }
 
 impl CurrentMigrationState {
@@ -790,8 +792,46 @@ impl CurrentMigrationState {
             && self.v147
             && self.v148
             && self.v149
-            && self.v150;
-        let client_draft_source = contract == "v1.57"
+            && self.v150
+            && self.v151
+            && self.v152;
+        let client_draft_source = contract == "v1.58"
+            && schema == 101
+            && classifier == V147_CLASSIFIER_VERSION
+            && self.v142
+            && self.v143
+            && self.v144
+            && self.v145
+            && self.v146
+            && self.v147
+            && self.v148
+            && self.v149
+            && self.v150
+            && self.v151
+            && !self.v152;
+        if self.v152 && !current {
+            return false;
+        }
+        let startup_source = contract == "v1.58"
+            && schema == 100
+            && classifier == V147_CLASSIFIER_VERSION
+            && self.v142
+            && self.v143
+            && self.v144
+            && self.v145
+            && self.v146
+            && self.v147
+            && self.v148
+            && self.v149
+            && self.v150
+            && !self.v151;
+        if self.v151 && !current && !client_draft_source {
+            return false;
+        }
+        if self.v150 && !current && !client_draft_source && !startup_source {
+            return false;
+        }
+        let dingtalk_names_source = contract == "v1.57"
             && schema == 99
             && classifier == V147_CLASSIFIER_VERSION
             && self.v142
@@ -803,10 +843,12 @@ impl CurrentMigrationState {
             && self.v148
             && self.v149
             && !self.v150;
-        if self.v150 && !current {
-            return false;
-        }
-        if self.v149 && !current && !client_draft_source {
+        if self.v149
+            && !current
+            && !client_draft_source
+            && !startup_source
+            && !dingtalk_names_source
+        {
             return false;
         }
         let zcode_source = contract == "v1.56"
@@ -820,7 +862,13 @@ impl CurrentMigrationState {
             && self.v147
             && self.v148
             && !self.v149;
-        if self.v148 && !current && !client_draft_source && !zcode_source {
+        if self.v148
+            && !current
+            && !client_draft_source
+            && !startup_source
+            && !zcode_source
+            && !dingtalk_names_source
+        {
             return false;
         }
         let message_quotes_source = contract == "v1.55"
@@ -889,6 +937,8 @@ impl CurrentMigrationState {
             && !self.v147;
         if current
             || client_draft_source
+            || startup_source
+            || dingtalk_names_source
             || message_quotes_source
             || zcode_source
             || pi_edit_diff_source
@@ -2587,7 +2637,7 @@ fn pending_fast_schema_matches(
             } else {
                 expected
             };
-            let expected = if state.v150
+            let expected = if state.v152
                 && matches!(*name, "pending_camp_input" | "pending_input_edit_session")
             {
                 let before = if *name == "pending_camp_input" {
@@ -2809,14 +2859,17 @@ pub(crate) fn classify_database_contract(
         return Ok(DatabaseContractClassification::Unknown(None));
     };
     let migrations = load_current_migration_state(connection)?;
+    let legacy_client_source = legacy_web_client_source(connection, &marker, migrations)?;
     let deployed_tool_source = marker.contract_version == "v1.52"
         && marker.projection_schema_version == 92
         && marker.classifier_version == V142_CLASSIFIER_VERSION;
-    if !migrations.admits(
-        &marker.contract_version,
-        marker.projection_schema_version,
-        &marker.classifier_version,
-    ) || (migrations.v135 && !migrations.v139 && !pi_runtime_v135_schema_matches(connection)?)
+    if (!legacy_client_source
+        && !migrations.admits(
+            &marker.contract_version,
+            marker.projection_schema_version,
+            &marker.classifier_version,
+        ))
+        || (migrations.v135 && !migrations.v139 && !pi_runtime_v135_schema_matches(connection)?)
         || (migrations.v136 && !migrations.v138 && !pi_runtime_v136_schema_matches(connection)?)
         || (migrations.v137 && !source_attachment_v137_schema_matches(connection)?)
         || (migrations.v138 && !pi_native_input_v138_schema_matches(connection)?)
@@ -2825,7 +2878,11 @@ pub(crate) fn classify_database_contract(
         || (migrations.v145 && !automation_v145_schema_matches(connection)?)
         || (migrations.v148 && !message_quote_v148_schema_matches(connection)?)
         || (migrations.v149 && !zcode_runtime_v149_schema_matches(connection)?)
-        || (migrations.v150 && !client_draft_v150_schema_matches(connection)?)
+        || (migrations.v150
+            && !legacy_client_source
+            && !dingtalk_display_names_v150_schema_matches(connection)?)
+        || (migrations.v151 && !runtime_startup_v151_schema_matches(connection)?)
+        || (migrations.v152 && !client_draft_v152_schema_matches(connection)?)
         || (migrations.v141
             && if deployed_tool_source {
                 !deployed_tool_v141_image_schema_matches(connection)?
@@ -2854,7 +2911,38 @@ pub(crate) fn classify_database_contract(
     }
 }
 
-fn client_draft_v150_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+// The pushed Host preview used receipt 150 before main allocated that number.
+// Admit only its exact marker, prior chain and editor schema; never infer from a table name alone.
+fn legacy_web_client_source(
+    connection: &Connection,
+    marker: &DatabaseContractMarker,
+    mut state: CurrentMigrationState,
+) -> rusqlite::Result<bool> {
+    if marker.contract_version != "v1.59"
+        || marker.projection_schema_version != 100
+        || marker.classifier_version != V147_CLASSIFIER_VERSION
+        || !state.v150
+        || state.v151
+        || state.v152
+    {
+        return Ok(false);
+    }
+    state.v150 = false;
+    if !state.admits("v1.57", 99, V147_CLASSIFIER_VERSION)
+        || !client_draft_v152_schema_matches(connection)?
+    {
+        return Ok(false);
+    }
+    let old_names: i64 = connection.query_row("SELECT count(*) FROM pragma_table_info('dingtalk_account') WHERE name IN ('user_name','corp_name') AND type='TEXT' AND \"notnull\"=1", [], |r| r.get(0))?;
+    let startup: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='runtime_startup_setting')",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(old_names == 2 && !startup)
+}
+
+fn client_draft_v152_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
     let keys = {
         let mut statement = connection.prepare("SELECT name, pk FROM pragma_table_info('camp_composer_draft') WHERE pk > 0 ORDER BY pk")?;
         statement
@@ -2905,6 +2993,43 @@ fn client_draft_v150_schema_matches(connection: &Connection) -> rusqlite::Result
     Ok(identity_columns == ["client_id", "owner_id", "proof_digest"]
         && connection.query_row("SELECT count(*) FROM pragma_table_info('web_editor_identity') WHERE \"notnull\"=1 AND (name!='client_id' OR pk=1)", [], |r| r.get::<_, i64>(0))? == 3
         && connection.query_row("SELECT count(*) FROM sqlite_master WHERE name='web_editor_identity' AND replace(sql,' ','') LIKE '%CHECK(length(proof_digest)=32)%'", [], |r| r.get::<_, i64>(0))? == 1)
+}
+
+fn runtime_startup_v151_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let columns: i64 = connection.query_row(
+        r#"SELECT count(*) FROM pragma_table_info('runtime_startup_setting')
+        WHERE (name='runtime_kind' AND type='TEXT' AND pk=1 AND "notnull"=1) OR
+              (name='revision' AND type='INTEGER' AND "notnull"=1) OR
+              (name='configuration_json' AND type='TEXT' AND "notnull"=1) OR
+              (name='updated_at' AND type='TEXT' AND "notnull"=1)"#,
+        [],
+        |row| row.get(0),
+    )?;
+    let total: i64 = connection.query_row(
+        "SELECT count(*) FROM pragma_table_info('runtime_startup_setting')",
+        [],
+        |row| row.get(0),
+    )?;
+    let constraints: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_startup_setting' AND sql LIKE '%CHECK(revision > 0)%' AND sql LIKE '%CHECK(json_valid(configuration_json))%')", [], |row| row.get(0))?;
+    Ok(columns == 4 && total == 4 && constraints)
+}
+
+fn dingtalk_display_names_v150_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let mut statement = connection.prepare("PRAGMA table_info(dingtalk_account)")?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, bool>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(["user_name", "corp_name"].iter().all(|name| {
+        columns
+            .iter()
+            .any(|(column, kind, required)| column == name && kind == "TEXT" && !required)
+    }))
 }
 
 fn zcode_runtime_v149_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -3441,7 +3566,9 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 147),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 148),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 149),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 150)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 150),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 151),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 152)
         "#,
         [],
         |row| {
@@ -3527,6 +3654,8 @@ fn load_current_migration_state(
                 v148: row.get(78)?,
                 v149: row.get(79)?,
                 v150: row.get(80)?,
+                v151: row.get(81)?,
+                v152: row.get(82)?,
             })
         },
     )
@@ -6412,7 +6541,13 @@ impl Database {
                 migration_step!("migration_149", self.migrate_zcode_runtime_v149());
             }
             if !self.schema_migration_applied(150)? {
-                migration_step!("migration_150", self.migrate_client_drafts_v150());
+                migration_step!("migration_150", self.migrate_dingtalk_display_names_v150());
+            }
+            if !self.schema_migration_applied(151)? {
+                migration_step!("migration_151", self.migrate_runtime_startup_v151());
+            }
+            if !self.schema_migration_applied(152)? {
+                migration_step!("migration_152", self.migrate_client_drafts_v152());
             }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
@@ -7057,13 +7192,44 @@ impl Database {
             migration_step!("migration_149", self.migrate_zcode_runtime_v149());
         }
         if !self.schema_migration_applied(150)? {
-            migration_step!("migration_150", self.migrate_client_drafts_v150());
+            migration_step!("migration_150", self.migrate_dingtalk_display_names_v150());
+        }
+        if !self.schema_migration_applied(151)? {
+            migration_step!("migration_151", self.migrate_runtime_startup_v151());
+        }
+        if !self.schema_migration_applied(152)? {
+            migration_step!("migration_152", self.migrate_client_drafts_v152());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
             eprintln!("Notification Episode startup retention failed: {error:#}");
         }
+        Ok(())
+    }
+
+    fn migrate_runtime_startup_v151(&mut self) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        anyhow::ensure!(
+            matches!(classify_database_contract(&transaction)?,
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.58" && marker.projection_schema_version == 100),
+            "Runtime startup migration requires exact v1.58/schema 100 source"
+        );
+        transaction.execute_batch(
+            "CREATE TABLE runtime_startup_setting (
+            runtime_kind TEXT PRIMARY KEY NOT NULL,
+            revision INTEGER NOT NULL CHECK(revision > 0),
+            configuration_json TEXT NOT NULL CHECK(json_valid(configuration_json)),
+            updated_at TEXT NOT NULL
+        ); INSERT INTO schema_migration VALUES(151, datetime('now'));",
+        )?;
+        transaction.execute(
+            "UPDATE rovai_data_contract SET contract_version=?1, projection_schema_version=?2,
+            updated_at=datetime('now') WHERE singleton=1",
+            params!["v1.58", 101],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -23598,16 +23764,16 @@ impl Database {
         result
     }
 
-    fn migrate_client_drafts_v150(&mut self) -> Result<()> {
+    fn migrate_client_drafts_v152(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
             let tx = self
                 .connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
             if !matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
-                if marker.contract_version == "v1.57" && marker.projection_schema_version == 99)
+                if marker.contract_version == "v1.58" && marker.projection_schema_version == 101)
             {
-                anyhow::bail!("Client Draft migration requires the exact v1.57/schema 99 source");
+                anyhow::bail!("Client Draft migration requires the exact v1.58/schema 101 source");
             }
             let triggers = {
                 let mut statement = tx.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name")?;
@@ -23694,11 +23860,142 @@ impl Database {
             }
             tx.execute("UPDATE rovai_data_contract SET contract_version=?1, projection_schema_version=?2, updated_at=datetime('now') WHERE singleton=1", params![CURRENT_DATA_CONTRACT_VERSION, CURRENT_PROJECTION_SCHEMA_VERSION])?;
             tx.execute(
-                "INSERT INTO schema_migration VALUES(150, datetime('now'))",
+                "INSERT INTO schema_migration VALUES(152, datetime('now'))",
                 [],
             )?;
             tx.commit()?;
             Ok(())
+        })();
+        self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result
+    }
+
+    fn migrate_dingtalk_display_names_v150(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if !matches!(classify_database_contract(&transaction)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.57" && marker.projection_schema_version == 99)
+            {
+                anyhow::bail!("DingTalk name migration requires the exact v1.57/schema 99 source");
+            }
+            let triggers = {
+                let mut statement = transaction.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name")?;
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (name, _) in &triggers {
+                transaction
+                    .execute_batch(&format!("DROP TRIGGER \"{}\";", name.replace('"', "\"\"")))?;
+            }
+            // NULL represents missing presentation data. ID constraints and every existing row remain intact.
+            expand_closed_set(
+                &transaction,
+                "dingtalk_account",
+                "user_name TEXT NOT NULL",
+                "user_name TEXT",
+            )?;
+            expand_closed_set(
+                &transaction,
+                "dingtalk_account",
+                "corp_name TEXT NOT NULL",
+                "corp_name TEXT",
+            )?;
+            for (_, sql) in triggers {
+                transaction.execute_batch(&sql)?;
+            }
+            if transaction
+                .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                .optional()?
+                .is_some()
+            {
+                anyhow::bail!("DingTalk name migration found a foreign-key violation");
+            }
+            transaction.execute("UPDATE rovai_data_contract SET contract_version=?1, projection_schema_version=?2, updated_at=datetime('now') WHERE singleton=1", params!["v1.58", 100])?;
+            transaction.execute(
+                "INSERT INTO schema_migration VALUES(150, datetime('now'))",
+                [],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result
+    }
+
+    fn reconcile_web_client_migration_collision(&mut self) -> Result<bool> {
+        let classification = classify_database_contract(&self.connection)?;
+        if !matches!(classification, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.59" && marker.projection_schema_version == 100)
+        {
+            return Ok(false);
+        }
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<bool> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 100),
+                "Host preview source changed before reconciliation"
+            );
+            let triggers = {
+                let mut query = tx.prepare(
+                    "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL",
+                )?;
+                query
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (name, _) in &triggers {
+                tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))?;
+            }
+            expand_closed_set(
+                &tx,
+                "dingtalk_account",
+                "user_name TEXT NOT NULL",
+                "user_name TEXT",
+            )?;
+            expand_closed_set(
+                &tx,
+                "dingtalk_account",
+                "corp_name TEXT NOT NULL",
+                "corp_name TEXT",
+            )?;
+            for (_, sql) in triggers {
+                tx.execute_batch(&sql)?;
+            }
+            tx.execute_batch(
+                "UPDATE schema_migration SET version=152 WHERE version=150;
+                CREATE TABLE runtime_startup_setting (
+                    runtime_kind TEXT PRIMARY KEY NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision > 0),
+                    configuration_json TEXT NOT NULL CHECK(json_valid(configuration_json)),
+                    updated_at TEXT NOT NULL);
+                INSERT INTO schema_migration VALUES(150, datetime('now')), (151, datetime('now'));",
+            )?;
+            tx.execute("UPDATE rovai_data_contract SET contract_version=?1,projection_schema_version=?2,updated_at=datetime('now') WHERE singleton=1", params![CURRENT_DATA_CONTRACT_VERSION,CURRENT_PROJECTION_SCHEMA_VERSION])?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "Reconciled Host preview failed current schema admission"
+            );
+            anyhow::ensure!(
+                tx.query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                    .optional()?
+                    .is_none(),
+                "Host preview reconciliation found a foreign-key violation"
+            );
+            tx.commit()?;
+            Ok(true)
         })();
         self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
         result
@@ -23755,6 +24052,9 @@ impl Database {
     }
 
     fn reconcile_legacy_feishu_migration_collision(&mut self) -> Result<bool> {
+        if self.reconcile_web_client_migration_collision()? {
+            return Ok(true);
+        }
         if self.reconcile_deployed_tool_classifier_v141()? {
             return Ok(true);
         }
@@ -28490,7 +28790,8 @@ fn rebuild_table_to_v135_source_for_test(
 
 #[cfg(test)]
 fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
-    downgrade_current_schema_to_v149_source_for_test(connection);
+    downgrade_current_schema_to_v151_source_for_test(connection);
+    connection.execute_batch("DROP TABLE IF EXISTS runtime_startup_setting; DELETE FROM schema_migration WHERE version IN (150,151);").unwrap();
     if !connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=149)",
@@ -28561,7 +28862,7 @@ fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
     for (_, sql) in triggers {
         transaction.execute_batch(&sql).unwrap();
     }
-    transaction.execute_batch("DELETE FROM schema_migration WHERE version=149; UPDATE rovai_data_contract SET contract_version='v1.56',projection_schema_version=98 WHERE singleton=1;").unwrap();
+    transaction.execute_batch("DELETE FROM schema_migration WHERE version>=149; UPDATE rovai_data_contract SET contract_version='v1.56',projection_schema_version=98 WHERE singleton=1;").unwrap();
     transaction.commit().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 }
@@ -28569,10 +28870,10 @@ fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
 // Historical fixtures must remove the new ownership schema, not merely change
 // a version marker. Used by all earlier migration owners through v148 below.
 #[cfg(test)]
-fn downgrade_current_schema_to_v149_source_for_test(connection: &Connection) {
+fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
     if !connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=150)",
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=152)",
             [],
             |row| row.get::<_, bool>(0),
         )
@@ -28648,7 +28949,7 @@ fn downgrade_current_schema_to_v149_source_for_test(connection: &Connection) {
             tx.execute_batch(&index).unwrap();
         }
     }
-    tx.execute_batch("DROP TABLE web_editor_identity; ALTER TABLE pending_camp_input DROP COLUMN client_id; ALTER TABLE pending_input_edit_session DROP COLUMN client_id; DELETE FROM schema_migration WHERE version=150; UPDATE rovai_data_contract SET contract_version='v1.57',projection_schema_version=99 WHERE singleton=1;").unwrap();
+    tx.execute_batch("DROP TABLE web_editor_identity; ALTER TABLE pending_camp_input DROP COLUMN client_id; ALTER TABLE pending_input_edit_session DROP COLUMN client_id; DELETE FROM schema_migration WHERE version=152; UPDATE rovai_data_contract SET contract_version='v1.58',projection_schema_version=101 WHERE singleton=1;").unwrap();
     for (_, sql) in triggers {
         tx.execute_batch(&sql).unwrap();
     }
@@ -31663,6 +31964,8 @@ mod tests {
             v148: version >= 148,
             v149: version >= 149,
             v150: version >= 150,
+            v151: version >= 151,
+            v152: version >= 152,
         }
     }
 
@@ -31769,10 +32072,22 @@ mod tests {
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
+                152,
+            ),
+            ("v1.58/schema 101 before client drafts", "v1.58", 101, 151),
+            ("v1.56/schema 98 before ZCode", "v1.56", 98, 148),
+            (
+                "v1.58/schema 100 before startup settings",
+                "v1.58",
+                100,
                 150,
             ),
-            ("v1.57/schema 99 before client drafts", "v1.57", 99, 149),
-            ("v1.56/schema 98 before ZCode", "v1.56", 98, 148),
+            (
+                "v1.57/schema 99 before optional DingTalk names",
+                "v1.57",
+                99,
+                149,
+            ),
             (
                 "v1.54/schema-96 after notification migration and before Pi edit Diff classifier",
                 V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION,
@@ -32217,7 +32532,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(150);
+        let current = migration_state_through(152);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -32608,7 +32923,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(150));
+        assert_eq!(state, migration_state_through(152));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -32715,7 +33030,9 @@ mod tests {
         database.migrate_message_quotes_v148().unwrap();
         assert!(!connection_has_current_data_contract(database.connection()).unwrap());
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(database.schema_migration_applied(144).unwrap());
 
@@ -32782,7 +33099,9 @@ mod tests {
         database.migrate_message_quotes_v148().unwrap();
         assert!(!connection_has_current_data_contract(database.connection()).unwrap());
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -32882,8 +33201,237 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }
 
+    // This migration owns the new persistence seam and receipt rollback. Existing
+    // marker matrices cannot prove the table/receipt/authority marker commit together.
     #[test]
-    fn v150_preserves_desktop_drafts_and_rolls_back_partial_editor_migration() {
+    fn startup_settings_migration_from_schema_100_is_atomic_and_preserves_authority() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-startup-migration-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v151_source_for_test(database.connection());
+        database.connection().execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version=151;
+            UPDATE rovai_data_contract SET contract_version='v1.58',projection_schema_version=100 WHERE singleton=1;").unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        let event_count: i64 = database
+            .connection()
+            .query_row("SELECT count(*) FROM event_log", [], |row| row.get(0))
+            .unwrap();
+        database.connection().execute_batch("CREATE TEMP TRIGGER reject_startup_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=151
+            BEGIN SELECT RAISE(ABORT, 'startup receipt fixture failure'); END;").unwrap();
+        assert!(database.migrate_runtime_startup_v151().is_err());
+        assert!(!database.schema_migration_applied(151).unwrap());
+        assert!(!runtime_startup_v151_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_startup_receipt;")
+            .unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT count(*) FROM event_log", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            event_count
+        );
+        let configuration = crate::runtime_startup::RuntimeStartupConfiguration {
+            program_path: None,
+            environment: vec![crate::runtime_startup::RuntimeEnvironmentVariable {
+                name: "HTTP_PROXY".into(),
+                value: "http://localhost:8080".into(),
+            }],
+        };
+        let saved = crate::runtime_startup::save(
+            &mut database,
+            crate::agent_profile::AdapterKind::CodexCli,
+            0,
+            configuration.clone(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(saved.revision, 1);
+        assert!(
+            crate::runtime_startup::save(
+                &mut database,
+                crate::agent_profile::AdapterKind::CodexCli,
+                0,
+                Default::default(),
+                3
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::runtime_startup::load(&database, crate::agent_profile::AdapterKind::CodexCli)
+                .unwrap()
+                .configuration,
+            configuration
+        );
+        drop(database);
+        let reopened = Database::open(&directory).unwrap();
+        assert_eq!(
+            crate::runtime_startup::load(&reopened, crate::agent_profile::AdapterKind::CodexCli)
+                .unwrap()
+                .configuration,
+            configuration
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn dingtalk_optional_name_migration_preserves_bindings_and_rolls_back_on_receipt_failure() {
+        // Migration owns a cross-table transactional boundary, so an isolated
+        // SQLite fixture is required; pure identity validation cannot cover it.
+        let directory =
+            std::env::temp_dir().join(format!("rovai-dingtalk-names-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v151_source_for_test(database.connection());
+        let connection = database.connection();
+        connection
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let triggers = {
+            let mut query = transaction
+                .prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'")
+                .unwrap();
+            query
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        for (name, _) in &triggers {
+            transaction
+                .execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
+                .unwrap();
+        }
+        expand_closed_set(
+            &transaction,
+            "dingtalk_account",
+            "user_name TEXT",
+            "user_name TEXT NOT NULL",
+        )
+        .unwrap();
+        expand_closed_set(
+            &transaction,
+            "dingtalk_account",
+            "corp_name TEXT",
+            "corp_name TEXT NOT NULL",
+        )
+        .unwrap();
+        for (_, sql) in &triggers {
+            transaction.execute_batch(sql).unwrap();
+        }
+        transaction.execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version IN (150,151);
+            UPDATE rovai_data_contract SET contract_version='v1.57',projection_schema_version=99;
+            INSERT INTO dingtalk_account VALUES('kept-account','digest','kept-corp','kept-user','kept-corp-name','kept-profile','connected',3,'created','updated','connected','verified',NULL);
+            INSERT INTO dingtalk_owner_identity VALUES('kept-account','kept-corp','kept-principal','digest',4,'created','updated');
+            INSERT INTO dingtalk_owner_app_identity VALUES('kept-app','kept-account','kept-corp','digest',5,'created','updated');").unwrap();
+        transaction.commit().unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        assert!(!dingtalk_display_names_v150_schema_matches(connection).unwrap());
+        let before: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='dingtalk_account'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection.execute_batch("CREATE TEMP TRIGGER reject_dingtalk_name_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=150 BEGIN SELECT RAISE(ABORT,'receipt fixture failure'); END;").unwrap();
+        assert!(database.migrate_dingtalk_display_names_v150().is_err());
+        let after: String = database
+            .connection()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='dingtalk_account'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, after);
+        assert!(!database.schema_migration_applied(150).unwrap());
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_dingtalk_name_receipt;")
+            .unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        assert!(dingtalk_display_names_v150_schema_matches(database.connection()).unwrap());
+        let kept: (String, String, i64) = database
+            .connection()
+            .query_row(
+                "SELECT corp_id,user_name,version FROM dingtalk_account WHERE id='kept-account'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, ("kept-corp".into(), "kept-user".into(), 3));
+        let binding: (String, String, i64, i64) = database
+            .connection()
+            .query_row(
+                "SELECT o.canonical_owner_principal_id,a.app_key,o.version,a.version
+             FROM dingtalk_owner_identity o JOIN dingtalk_owner_app_identity a USING(account_id)
+             WHERE o.account_id='kept-account'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(binding, ("kept-principal".into(), "kept-app".into(), 4, 5));
+        database
+            .connection()
+            .execute_batch(
+                "UPDATE dingtalk_account SET user_name=NULL,corp_name=NULL WHERE id='kept-account'",
+            )
+            .unwrap();
+        assert!(
+            database
+                .connection()
+                .execute(
+                    "UPDATE dingtalk_account SET corp_id='' WHERE id='kept-account'",
+                    []
+                )
+                .is_err()
+        );
+        assert!(
+            database
+                .connection()
+                .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                .optional()
+                .unwrap()
+                .is_none()
+        );
+        let after_triggers: Vec<(String, String)> = {
+            let mut query = database
+                .connection()
+                .prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger'")
+                .unwrap();
+            query
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let mut before_triggers = triggers;
+        before_triggers.sort();
+        let mut after_triggers = after_triggers;
+        after_triggers.sort();
+        assert_eq!(before_triggers, after_triggers);
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v152_preserves_desktop_drafts_and_rolls_back_partial_editor_migration() {
         // This migration owns a new composite FK plus durable editor proofs.
         // A failed receipt must leave the v149 source usable; a pure schema
         // comparison cannot prove preservation/rollback of existing drafts.
@@ -32896,17 +33444,17 @@ mod tests {
         let draft = store
             .save_body(&mut database, camp_id, "Desktop edit survives upgrade")
             .unwrap();
-        downgrade_current_schema_to_v149_source_for_test(database.connection());
+        downgrade_current_schema_to_v151_source_for_test(database.connection());
         assert!(connection_has_admissible_data_contract(database.connection()).unwrap());
-        database.connection().execute_batch("CREATE TEMP TRIGGER reject_editor_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=150 BEGIN SELECT RAISE(ABORT, 'editor receipt fixture failure'); END;").unwrap();
+        database.connection().execute_batch("CREATE TEMP TRIGGER reject_editor_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=152 BEGIN SELECT RAISE(ABORT, 'editor receipt fixture failure'); END;").unwrap();
         assert!(
             database
-                .migrate_client_drafts_v150()
+                .migrate_client_drafts_v152()
                 .unwrap_err()
                 .to_string()
                 .contains("editor receipt fixture failure")
         );
-        assert!(!database.schema_migration_applied(150).unwrap());
+        assert!(!database.schema_migration_applied(152).unwrap());
         assert!(connection_has_admissible_data_contract(database.connection()).unwrap());
         assert!(
             !table_columns(database.connection(), "camp_composer_draft")
@@ -32935,13 +33483,90 @@ mod tests {
             .connection()
             .execute_batch("DROP TRIGGER reject_editor_receipt;")
             .unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(store.load_draft(&database, camp_id).unwrap(), draft);
         drop(database);
-        let reopened = Database::open(&directory).unwrap();
+        let mut reopened = Database::open(&directory).unwrap();
         assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
         assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
+        // Same owner also verifies the already-pushed preview source: the old
+        // receipt 150 must be joined without rebuilding or discarding Web editors.
+        let editor = crate::draft_client::resolve_editor(&reopened, None).unwrap();
+        reopened
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        let tx = reopened.connection().unchecked_transaction().unwrap();
+        let triggers = {
+            let mut query = tx
+                .prepare(
+                    "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL",
+                )
+                .unwrap();
+            query
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        for (name, _) in &triggers {
+            tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
+                .unwrap();
+        }
+        expand_closed_set(
+            &tx,
+            "dingtalk_account",
+            "user_name TEXT",
+            "user_name TEXT NOT NULL",
+        )
+        .unwrap();
+        expand_closed_set(
+            &tx,
+            "dingtalk_account",
+            "corp_name TEXT",
+            "corp_name TEXT NOT NULL",
+        )
+        .unwrap();
+        for (_, sql) in triggers {
+            tx.execute_batch(&sql).unwrap();
+        }
+        tx.execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version IN (150,151);
+            UPDATE schema_migration SET version=150 WHERE version=152;
+            UPDATE rovai_data_contract SET contract_version='v1.59',projection_schema_version=100;").unwrap();
+        tx.commit().unwrap();
+        reopened
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .unwrap();
+        assert!(matches!(
+            classify_database_contract(reopened.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        reopened.connection().execute_batch("CREATE TEMP TRIGGER reject_preview_join BEFORE INSERT ON schema_migration WHEN NEW.version=151 BEGIN SELECT RAISE(ABORT,'preview receipt failure'); END;").unwrap();
+        assert!(reopened.reconcile_web_client_migration_collision().is_err());
+        assert!(matches!(
+            classify_database_contract(reopened.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        reopened
+            .connection()
+            .execute_batch("DROP TRIGGER reject_preview_join;")
+            .unwrap();
+        drop(reopened);
+        let reopened = Database::open(&directory).unwrap();
+        assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
+        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        let resumed = crate::draft_client::resolve_editor(
+            &reopened,
+            Some(crate::draft_client::EditorResume {
+                client_id: editor.client_id.clone(),
+                proof: editor.proof,
+            }),
+        )
+        .unwrap();
+        assert_eq!(resumed.client_id, editor.client_id);
         reopened
             .connection()
             .execute_batch("DROP TABLE web_editor_identity;")
@@ -33025,7 +33650,9 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_zcode_receipt;")
             .unwrap();
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(zcode_runtime_v149_schema_matches(database.connection()).unwrap());
         assert_eq!(snapshot(database.connection()), before);
@@ -35648,7 +36275,9 @@ mod tests {
         database.migrate_message_quotes_v148().unwrap();
         assert!(!connection_has_current_data_contract(database.connection()).unwrap());
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let after: (String, String) = database.connection().query_row(
             "SELECT default_model_selection_json, runtime_binding_revision FROM agent_profile WHERE id = 'agent_1'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
@@ -35850,7 +36479,9 @@ mod tests {
         database.migrate_message_quotes_v148().unwrap();
         assert!(!connection_has_current_data_contract(database.connection()).unwrap());
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained: (i64, Option<String>) = database
             .connection()
@@ -36029,7 +36660,9 @@ mod tests {
         database.migrate_message_quotes_v148().unwrap();
         assert!(!connection_has_current_data_contract(database.connection()).unwrap());
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_client_drafts_v150().unwrap();
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_client_drafts_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained = database
             .connection()

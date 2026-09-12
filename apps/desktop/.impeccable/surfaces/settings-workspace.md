@@ -167,7 +167,9 @@ Code, Codex CLI and OpenCode show a primary official installation command, colla
 prerequisites, a launch/login step and a recheck action. Other products and other admitted platforms link
 to official instructions; Antigravity links to its download site. Commands are copied, never executed by
 the Renderer. Admission remains Core-owned; unqualified, unsupported and pending products gain no action.
-The post-install action refreshes interactive-shell discovery before checking the selected product.
+List and guide checks share one backend operation that captures fresh discovery inputs before checking
+the selected product. Do not issue a separate frontend rescan first. Failed and deferred responses remain
+failed/incomplete even when historical availability is retained.
 Pending checks preserve focus and the open guide; real status, public failures and retry feedback remain
 in the same row. Guide content and download clicks never imply successful installation or readiness.
 
@@ -181,7 +183,7 @@ result reads “可用” and means the executable can be selected and tried; su
 capabilities are confirmed by explicit check or first task. A path-only result remains temporarily unknown,
 never synthetic checking. Do not expose internal “found/not checked”, fingerprint or
 attempt stages. Do not show discovery summaries (source, entrypoint kind, candidate extension, native target
-resolution or version probe outcome) in Runtime rows on any platform. Executable path, fingerprint, backoff
+resolution or version probe outcome) in Runtime rows on any platform. Executable paths are editable in the dedicated startup settings page; fingerprint, backoff
 and audit remain inside advanced diagnostics.
 
 Before those machine states, every row consumes the Core-owned Runtime Platform Admission. On Windows,
@@ -218,7 +220,7 @@ role, portrait and other unrelated fields editable. Only a Runtime-subobject mut
 platform error; do not block the whole settings save or silently select a replacement default.
 
 TRAE uses the same bounded startup/rescan version check and “可用” light-ready presentation as the other
-Runtime rows. Every supported row uses “检查可用性”; for TRAE that explicit action starts a fast ACP
+Runtime rows. Every supported row uses “检查状态”; for TRAE that explicit action starts a fast ACP
 initialize/session check without sending a model prompt, then presents the resulting Ready or actionable
 failure. Startup and rescan may run bounded identity commands, while page entry and selection changes never
 start deep checks.
@@ -288,3 +290,27 @@ installation handoff. Main stages the updater before entering the existing contr
 Inherit root [`DESIGN.md`](../../../../DESIGN.md), theme and accessibility contracts. This brief does
 not change Shell persistence, Runtime probing, Skill/MCP authority, secrets, diagnostics redaction or
 Core projection semantics.
+
+
+## Runtime startup settings
+
+The catalog retains its white day content surface, including expanded guides. Remove the dot only from
+Runtime status badges. Align status, the four-character action “检查状态 / 安装指南 / 登录指南”, its trailing
+refresh or chevron icon, and the settings gear as consistent columns. Settings remain available for installed
+and missing Runtimes admitted on the current platform. Preserve actual installation/login guide content.
+
+The startup page reuses the 1040px content track and an at-most-800px form. Show Runtime identity, program
+path with native picker and restore-auto action, the inline check result, then environment rows. Values start
+masked and have reveal/delete controls. Keep errors actionable and local; no empty-state explanation, top-right
+unsaved badge or repeated “next launch”/“does not change system variables” small print.
+
+“放弃更改” and “保存” remain visible from first load. Both are disabled while clean or submitting and enabled
+when values change; save validates rather than requiring a prior manual check. Save failure preserves the
+editable values. Discard, successful save and reverting to original values restore the clean state. Known
+unauthenticated installs read “已识别程序，需要登录” and remain savable. Switching settings categories retains
+the draft; returning to the catalog asks before discarding an unsaved draft. Behavior is owned by
+[Runtime Launch v41](../../../../docs/contracts/runtime-launch-and-verification-v41.md).
+
+Draft checks and restore-auto previews read fresh private search inputs. Failed previews must not fall back
+to the saved program/version as though it had just been checked. Editing or leaving invalidates older
+preview responses. A fallback search source retains a local warning without exposing environment values.

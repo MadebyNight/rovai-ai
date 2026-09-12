@@ -350,6 +350,26 @@ export interface CommandHealth {
   path?: string | null
 }
 
+export interface RuntimeEnvironmentVariable { name: string; value: string }
+
+export interface RuntimeStartupConfiguration {
+  programPath: string | null
+  environment: RuntimeEnvironmentVariable[]
+}
+
+export interface RuntimeStartupSettings {
+  runtimeKind: AdapterKind
+  revision: number
+  configuration: RuntimeStartupConfiguration
+}
+
+export interface RuntimeStartupInspection {
+  status: 'missing' | 'recognized' | 'version_unverified' | 'authentication_required' | 'ready' | 'check_failed'
+  executablePath: string | null
+  reportedVersion: string | null
+  searchEnvironment?: HealthStatus['searchEnvironment']
+}
+
 export type RuntimeDiscoveryStatus = 'detecting' | 'found' | 'missing'
 
 export type RuntimeSearchPathSource =
@@ -480,6 +500,7 @@ export interface HealthStatus {
   runtimePlatformAdmission: RuntimePlatformAdmission[]
   runtimeAvailability: ProductRuntimeAvailability[]
   searchEnvironment: {
+    diagnosticCodes?: string[]
     generation: number
     createdAt: string
     pathEntryCount: number
@@ -941,6 +962,9 @@ export interface NavigationCampItem {
   version: number
 }
 
+export type NavigationCampTarget = Pick<NavigationCampItem,
+  'id' | 'title' | 'channelSource' | 'activationState' | 'projectBindingKind' | 'projectPath'>
+
 export interface NavigationCampGroup {
   totalCount: number
   recentCamps: NavigationCampItem[]
@@ -954,6 +978,11 @@ export interface ProjectNavigationGroup {
   lastActivityGlobalSequence: number
   totalCount: number
   recentCamps: NavigationCampItem[]
+}
+
+export interface NavigationSnapshotRequest {
+  /** Full prefix sizes by canonical group key; omitted groups default to five. */
+  groupLimits?: Record<string, number>
 }
 
 export interface NavigationSnapshot {
@@ -1549,6 +1578,7 @@ export type OpenFilePreviewResult =
   | { kind: 'opened_in_system'; fileName: string }
 
 export type FilePreviewErrorCode =
+  | 'preview_timeout'
   | 'source_not_authorized'
   | 'reference_not_clickable'
   | 'file_not_found'
@@ -1612,6 +1642,16 @@ export interface FilePreviewBinaryContent {
   contentVersion: FileContentVersion
 }
 
+export interface FilePreviewHtmlSite {
+  previewId: string
+  generation: string
+  origin: string
+  entryUrl: string
+  documentUrl: string
+  contentGeneration: string
+  contentVersion: FileContentVersion
+}
+
 export interface FilePreviewHtmlDocument {
   html: string
   tabToken: string
@@ -1635,6 +1675,8 @@ export interface FilePreviewApi {
   readPage(request: { handleId: string; expectedGeneration: string; offset: number; maxBytes?: number }): Promise<FilePreviewOperationResult<FilePreviewPageContent>>
   resolveLine(request: { handleId: string; expectedGeneration: string; line: number }): Promise<FilePreviewOperationResult<{ offset: number; line: number; contentGeneration: string }>>
   readBinary(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<FilePreviewBinaryContent>>
+  prepareHtmlSite(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<FilePreviewHtmlSite>>
+  releaseHtmlSite(request: { previewId: string }): Promise<{ released: true }>
   prepareHtml(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<FilePreviewHtmlDocument>>
   reload(request: { handleId: string; reopenToken: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<ResolvedFilePreview>>
   release(request: { handleId: string }): Promise<{ released: true }>
@@ -1864,6 +1906,21 @@ export interface AgentRunExecutionEvidencePage {
   nextAfterSequence: number
   throughSequence: number
   hasMore: boolean
+  evidence: AgentRunExecutionEvidenceView[]
+}
+
+/** Logical execution items, ordered by their stable first evidence sequence. */
+export interface AgentRunExecutionWindowPage {
+  schemaVersion: 1
+  campId: string
+  agentRunId: string
+  requestedBeforeSequence: number | null
+  nextBeforeSequence: number | null
+  throughSequence: number
+  hasMore: boolean
+  /** Unfinished operations older than the first page remain visible, outside the cursor. */
+  activeEvidence?: AgentRunExecutionEvidenceView[]
+  /** Commands contain display metadata; isTruncated also marks deferred output/diff. */
   evidence: AgentRunExecutionEvidenceView[]
 }
 
@@ -2199,7 +2256,7 @@ export interface CampOpenMessageCoverage extends CampOpenCollectionCoverage {
 }
 
 export interface CampOpenProjection {
-  schemaVersion: 6
+  schemaVersion: 7
   throughGlobalSequence: number
   camp: CampSnapshot['camp']
   members: CampMemberView[]
@@ -2715,7 +2772,9 @@ export interface ChannelQrAttemptView {
     | 'loading_local_session'
     | 'preparing'
     | 'awaiting_scan'
+    | 'awaiting_refresh'
     | 'scan_confirmed'
+    | 'completing_login'
     | 'awaiting_interaction'
     | 'inspecting_identity'
     | 'saving_local_session'
@@ -2724,15 +2783,20 @@ export interface ChannelQrAttemptView {
     | 'cancelled'
     | 'failed'
   qrDataUrl: string | null
+  /** Server-provided expiry only. */
   expiresAt: string | null
+  /** Legacy local deadline metadata; the login dialog does not display it. */
+  waitUntil?: string | null
+  /** Local transaction acknowledgement is unknown; cancellation stays locked. */
+  commitUncertain?: boolean
   detail: string
 }
 
 export interface ChannelAccountView {
   accountId: string
-  userName: string
+  userName: string | null
   email?: string
-  tenantName: string
+  tenantName: string | null
   brand: 'feishu' | 'lark' | 'dingtalk'
   connectedAt: string
   lastVerifiedAt: string
@@ -3572,6 +3636,10 @@ export type CoreMethod =
   | 'runtime.subsystems.retry'
   | 'runtime.product.ensure'
   | 'runtime.product.check'
+  | 'runtime.startup.get'
+  | 'runtime.startup.inspect'
+  | 'runtime.startup.check'
+  | 'runtime.startup.save'
   | 'runtime.modelCatalog.open'
   | 'runtime.pendingExecution.cancel'
   | 'members.list'
@@ -3579,6 +3647,8 @@ export type CoreMethod =
   | 'members.camps.list'
   | 'members.create'
   | 'members.update'
+  | 'memberAvatars.read'
+  | 'memberAvatars.save'
   | 'members.avatar.set'
   | 'members.runtime.set'
   | 'members.runtime.clear'
@@ -3697,6 +3767,7 @@ export type CoreMethod =
   | 'workspaces.inspect'
   | 'navigation.snapshot'
   | 'navigation.groupCamps'
+  | 'navigation.findCamp'
   | 'navigation.campViewed'
   | 'camps.create'
   | 'camps.discardPending'
@@ -3734,6 +3805,7 @@ export type CoreMethod =
   | 'camp.messages.find'
   | 'agentRunEvidence.getContent'
   | 'agentRunEvidence.list'
+  | 'agentRunExecution.page'
   | 'tasks.create'
   | 'tasks.update'
   | 'tasks.list'

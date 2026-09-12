@@ -18,7 +18,7 @@ Windows chrome，也不能成为第三份组件、文案或状态真源。
 
 ## 1. 保持不变的产品结构
 
-- App Shell 仍使用 270px rail、50px App 顶行及同一 Project / Camp / Quick Chat 导航；
+- App Shell 使用默认 270px、可调宽且可完全收起的 rail、50px App 顶行及同一 Project / Camp / Quick Chat 导航；
 - 设置分类、队员工作区、Camp 工作区、Memory、Diagnostics、Onboarding 和 Planned Shutdown 不增删一级入口；
 - Day / Night 是同一生产组件的两套 Token；`system` 只改变解析结果，不改变内容或能力；
 - Core command、Draft、selection、focus return、version check、Recovery 和未保存 Runtime 草稿保护保持同义；
@@ -53,6 +53,10 @@ Windows `BrowserWindow` 保留系统 frame，但以 `titleBarStyle: hidden` 隐�
 同时启用 Window Controls Overlay。Electron application menu model、command、accelerator 与原生 submenu 保持权威；
 系统 menu bar 呈现被隐藏，Renderer 只投影 `File / Edit / View / Window` 四个顶层入口并按受限 IPC 打开
 对应原生 submenu，不复制或重建 submenu command。
+
+导航折叠按钮位于 File 左侧，为独立 `no-drag` 控件，不属于菜单的方向键循环；折叠后保持原位。
+按钮使用无填色的圆角小窗图标，收起状态内侧竖线贴近左边缘。macOS 对照位置为系统红黄绿右侧。
+完整行为见[App Shell 调宽与完全折叠](components/app-shell-navigation.md#调宽与完全折叠)。
 
 顶层菜单行与 Window Controls Overlay 的 Day / Night 背景都使用 `--rail` 对应颜色，图标使用对应 `--ink`，
 主题切换时同步更新。高度读取 WCO CSS environment value，不写死覆盖值，继续采用系统默认值适配多屏 DPI。

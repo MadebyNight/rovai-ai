@@ -838,6 +838,26 @@ fn masked_source_json(source_name: &str, value: &Value) -> String {
     let masked = match value.as_object() {
         Some(object) => {
             let mut masked = object.clone();
+            if masked
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|value| {
+                    url::Url::parse(value).is_ok_and(|url| {
+                        !url.username().is_empty()
+                            || url.password().is_some()
+                            || url.query().is_some()
+                    })
+                })
+            {
+                masked.insert("url".into(), Value::String(HIDDEN_SOURCE_VALUE.into()));
+            }
+            // Source args are only a preview. Commit rereads the inspected
+            // source and never materializes credentials from this text.
+            if let Some(args) = masked.get_mut("args").and_then(Value::as_array_mut) {
+                for arg in args {
+                    *arg = Value::String(HIDDEN_SOURCE_VALUE.into());
+                }
+            }
             for field in ["env", "environment", "headers", "http_headers"] {
                 if let Some(values) = masked.get_mut(field).and_then(Value::as_object_mut) {
                     for value in values.values_mut() {

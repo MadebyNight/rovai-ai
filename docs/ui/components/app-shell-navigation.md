@@ -2,18 +2,34 @@
 document_type: ui-component-contract
 authority: renderer-app-shell-navigation
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # App Shell 与统一侧栏
 
 ## 统一侧栏结构
 
-所有一级页面共享固定 270px rail 和 50px 顶行。侧栏品牌字标为 `Rovai AI`，不带副标题或通知铃铛；
+所有一级页面共享默认 270px、可调宽的 rail 和 50px 顶行。侧栏品牌字标为 `Rovai AI`，不带副标题或通知铃铛；
 普通侧栏在“新对话”后依次提供“队员”“定时任务”“记忆”一级入口，底部以“设置”为主入口；存在可操作 App 新版本时，其右侧可以出现独立的紧凑更新状态徽标。
 徽标只深链到“关于与更新”，不改变“设置”主入口恢复最后设置分类的语义。应用内普通提醒只在新动态
 到达时临时呈现，偏好位于“设置 → 提醒”。设置
-分类覆盖同一个 270px 槽位，不在内容区再增加第二列导航。
+分类覆盖同一个侧栏槽位，共享调宽和折叠偏好，不在内容区再增加第二列导航。
+
+### 调宽与完全折叠
+
+- 右边缘提供 8px 隐形命中区；悬停和拖拽时整条边界使用 `--resize-line` 浅黑色，始终为 1px。
+- 展开范围 200–420px，上限随窗口宽度收敛，为内容列尽量保留 600px。200px 保留品牌、常用入口和项目操作，长标题省略。
+- 拖至小于 200px 直接收起到 0px；整个导航隐藏且 inert，不保留图标栏或空白列。导航组件与页面保持挂载，列表状态与草稿保留。
+- 收起后窗口左边缘保留不占布局宽度的命中区，向右拖至 200px 可展开；同一次手势可反向拖回。
+- 顶部使用无填色的圆角小窗图标；折叠时内侧短竖线贴近左边缘，不使用箭头。macOS 位于红黄绿右侧，Windows 位于 File 左侧，均为 `no-drag`。
+- macOS 完全收起后为系统按钮和展开按钮保留顶部空间；Windows 的按钮属于独立菜单行，不进入 File/Edit/View/Window 的方向键循环。
+- 展开宽度与折叠状态保存为本机布局偏好。按钮恢复上次展开宽度；拖拽触发折叠时保留手势开始前的宽度。视口收缩只限制显示宽度。
+- 双击恢复 270px；方向键每次 10px、Shift 加速到 40px；Home/End 到最窄/最宽；Enter 折叠。向左越过最小宽度也会完全收起。
+- 右键或空格提供紧凑、默认、宽侧栏和折叠菜单，保留单次点击替代拖拽。Escape、指针取消、窗口失焦或窗口尺寸变化取消手势并恢复开始时的布局。
+- 启动框架复用相同布局偏好；尚未允许交互或正在关闭时禁用按钮与分隔线。
+
+回归命令为 `pnpm test:navigation-shell`，使用隔离 Electron Renderer fixture，覆盖原生拖拽、折叠恢复、键盘、
+偏好持久化、内容挂载与草稿保留；`ROVAI_KEEP_NAVIGATION_FIXTURE=1` 保留截图，不连接 Core、Runtime 或日常 userData。
 
 普通侧栏依次显示置顶内容和 Project。每个 Project 行负责展开/折叠，不显示独立折叠图标；
 右侧仅保留项目级 `＋` 与三点菜单。标题与“查看更多 / 收起”不显示 Camp 数量。当前 Project
@@ -24,8 +40,13 @@ Hover 不能是发现行操作的唯一方式。
 Sidecar Project 行在升级后保持稳定位置。合法旧偏好第一次进入时按用户当时看到的 Project 顺序冻结；
 之后现有 Project 保持原相对顺序，新发现或重新恢复的 Project 追加到末尾，已消失或从本机移除的
 Project 可以清理。老 Project 收到新消息、开始或结束 Run、更新活动时间或未读状态时都不能移动行。
-这些活动只继续影响该 Project 内 Camp 的最近活动排序、时间与状态反馈。刚选择且尚无 Camp 的空 Project
+这些活动继续刷新状态反馈；只有已发布的用户消息推进该 Project 内 Camp 的排序与活动时间。刚选择且尚无 Camp 的空 Project
 同样追加到现有 Project 末尾。
+
+Camp（包括快速对话）按最近一条已发布用户消息排序，桌面用户与飞书、钉钉等渠道的用户同等计入。
+队员公开消息、A2A 消息、工具输出和 Run 状态变化不改变 Camp 的排序时间；运行中与完成未读提示仍正常更新。
+没有用户消息的 Camp 使用创建时间作为稳定初始位置，未发送草稿的编辑或附件准备不推进排序。
+置顶项和已保存的 Project 顺序继续由本机偏好拥有。
 
 Camp 行显示稳定标题和必要状态。三点菜单是置顶/取消置顶、重命名、复制会话 ID 和删除的唯一
 入口；复制只写稳定 Camp ID 原文。Camp 顶栏不得重复这些操作。
@@ -59,6 +80,20 @@ Project 的“移除项目”菜单使用红字，确认标题为“从侧栏移
 该操作只从此设备的导航移除并取消相关置顶，不删除工作目录、Camp 或历史。
 重新选择相同目录可恢复。Core 的访问 ledger 与运行中清理边界由架构/ADR 决定，Renderer 不用
 隐藏行状态推断目录已经删除。
+
+## 会话搜索
+
+`CommandOrControl K` 的普通文字输入继续在已加载会话的标题和项目名中忽略大小写过滤，最多显示 12 项。
+去掉首尾空白后，只有通过共享 `isCampId` 完整校验的输入才进入 ID 精确查询；ID 保持 canonical 小写，
+不补全片段、不转换大小写，也不在未命中时回退到标题搜索。
+
+完整 ID 经短暂防抖调用 Desktop `navigation.findCamp({ campId })`；Core 再通过 `CampId` 校验，按
+`camp.id` 主键等值读取，返回单个 `NavigationCampTarget`（ID、标题、渠道来源、激活状态、项目绑定类型和路径）或
+`null`。该路径覆盖未进入最近五条列表的旧会话，不加载消息或聚合活动历史，不改变已读状态。
+Active Camp 和有正文或附件的 Pending Camp 可被查询；空 Pending Camp 与不存在的 ID 返回无结果。
+
+查询期间显示加载反馈，失败与未命中分别呈现；修改输入或关闭搜索后丢弃旧请求结果。方向键选择和回车
+打开沿用现有会话激活入口。普通文字输入不会调用 ID 查询，标题过滤与 ID 查找互斥。
 
 ## Quick Chat 与 Project 分组
 
@@ -100,6 +135,12 @@ Main Window Session 必须等待本机偏好读取后冻结恢复目标，不能
 只有明确 `blocked` / `crashed` 才使用 [Bootstrap Shell](bootstrap-shell.md)；局部偏好读取失败立即在内容区提供重试。
 
 ## 导航投影新鲜度
+
+每组先展示 5 条，“查看更多”每次请求最新完整前缀并增加 10 条。读取期间保留当前行、按钮显示
+“正在读取…”并禁止重复展开；成功后才展示新范围，失败保留当前数量并允许重试。收起立即回到 5 条，
+再次展开仍须重读。普通项目、置顶项目与快速对话使用相同语义，不以旧分页缓存恢复 Camp 状态。
+后续通知、前台安全刷新和 focus 覆盖整个已展开窗口；后台第六条变化不必提前读取，但进入可见范围前
+必须重新读取。此处的展开仅指 Camp 数量，“点击项目行折叠整个分组”的既有行为不变。
 
 Camp 运行开始、取消或终态后，侧栏通过 Core 提交后的失效提示重读完整 Navigation Snapshot；不得等用户
 打开该 Camp，也不得要求重载 Renderer 才清除运行 spinner。多个 Camp 的突发事件由一个全局协调器合并，
@@ -156,7 +197,7 @@ macOS 保留 hidden title bar 与受控 drag region；新对话、设置、队�
 
 ## 响应式与可访问性
 
-270px rail 不收缩。队员内容区名册默认 236px，可显式收起到 76px。最小 `1040×700` 下内容区自行
+全局 rail 默认 270px，按上文规则调宽或完全收起。队员内容区名册默认 256px，可显式收起到 76px。最小 `1040×700` 下内容区自行
 重排，不能让 rail、名册、菜单或主要操作被裁切。
 Project/Camp 行、菜单、临时提醒和设置返回均可键盘操作，Icon-only 控件有可访问名称；选中、展开和
 未读状态不能只靠颜色。Camp 行“有新回复”只在真正打开该会话、窗口可见且拥有焦点后消除；后台
@@ -180,4 +221,4 @@ App Shell 在不抢夺焦点的全局浮层中短暂显示实际缩放比例，�
 
 ## Jump search and overlay closure
 
-⌘K / Ctrl+K opens the existing title/project search, with a small “跳转到对话” title, neutral selected result and “↑ ↓ 选择　↵ 打开　Esc 关闭” footer. Search input has no focus underline or frame; arrows and Enter retain their behavior and respect IME composition. Closing sidebar menus, rename/delete/removal dialogs or settings does not force focus back to the entry button, including after pin mutations. Shared DOM focus for keyboard input and menu navigation remains available.
+⌘K / Ctrl+K opens the title/project search or exact lookup by a complete Camp ID, with a small “跳转到对话” title, neutral selected result and “↑ ↓ 选择　↵ 打开　Esc 关闭” footer. Search input has no focus underline or frame; arrows and Enter retain their behavior and respect IME composition. Closing sidebar menus, rename/delete/removal dialogs or settings does not force focus back to the entry button, including after pin mutations. Shared DOM focus for keyboard input and menu navigation remains available.

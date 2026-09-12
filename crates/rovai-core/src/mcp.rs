@@ -1159,7 +1159,7 @@ impl McpConfigStore {
                         server_id: metadata.server_id.clone(),
                         name: name.clone(),
                         transport: definition.transport_name().to_string(),
-                        endpoint: definition.endpoint_summary(),
+                        endpoint: redact_definition(definition, READ_ONLY_MASK).endpoint_summary(),
                         enabled: metadata.enabled,
                         assigned_agent_ids,
                         source: metadata.source,
@@ -1389,14 +1389,40 @@ fn materialize_preserved_values(
         }
     };
     match definition {
-        McpServerDefinition::Stdio { env, .. } => {
+        McpServerDefinition::Stdio { args, env, .. } => {
+            for (index, arg) in args.iter_mut().enumerate() {
+                if is_preservation_marker(arg) {
+                    if let Some(McpServerDefinition::Stdio { args: stored, .. }) = existing
+                        && let Some(value) = stored.get(index)
+                    {
+                        *arg = value.clone();
+                    } else {
+                        issues.push(McpConfigIssue::new(
+                            "mcp.preserved_value_missing",
+                            "The masked argument must be entered again",
+                            Some(format!("args.{index}")),
+                        ));
+                    }
+                }
+            }
             let stored = match existing {
                 Some(McpServerDefinition::Stdio { env, .. }) => Some(env),
                 _ => None,
             };
             preserve_map(env, stored, "env", issues);
         }
-        McpServerDefinition::StreamableHttp { headers, .. } => {
+        McpServerDefinition::StreamableHttp { url, headers } => {
+            if is_preservation_marker(url) {
+                if let Some(McpServerDefinition::StreamableHttp { url: stored, .. }) = existing {
+                    *url = stored.clone();
+                } else {
+                    issues.push(McpConfigIssue::new(
+                        "mcp.preserved_value_missing",
+                        "The masked URL must be entered again",
+                        Some("url".into()),
+                    ));
+                }
+            }
             let stored = match existing {
                 Some(McpServerDefinition::StreamableHttp { headers, .. }) => Some(headers),
                 _ => None,
@@ -1707,13 +1733,26 @@ pub(crate) fn redact_definition(
             env,
         } => McpServerDefinition::Stdio {
             command: command.clone(),
-            args: args.clone(),
+            args: if args
+                .iter()
+                .any(|arg| sensitive_key(arg) || sensitive_value("", arg))
+            {
+                args.iter().map(|_| masked_value.to_string()).collect()
+            } else {
+                args.clone()
+            },
             cwd: cwd.clone(),
             env: redact_values(env, false, masked_value),
         },
         McpServerDefinition::StreamableHttp { url, headers } => {
             McpServerDefinition::StreamableHttp {
-                url: url.clone(),
+                url: if url::Url::parse(url).is_ok_and(|url| {
+                    !url.username().is_empty() || url.password().is_some() || url.query().is_some()
+                }) {
+                    masked_value.to_string()
+                } else {
+                    url.clone()
+                },
                 headers: redact_values(headers, true, masked_value),
             }
         }

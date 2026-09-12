@@ -445,10 +445,35 @@ pnpm accept:task-card-ui
 fixture、截图、窗口尺寸和直接调用 capture 脚本的方法见
 [桌面 UI 验收](ui-acceptance.md)。
 
+侧栏可见窗口可独立运行 `ROVAI_SIDEBAR_ACCEPT_SCOPE=navigation-windows pnpm accept:sidebar-ui`。
+它复用同一隔离 packaged App/Core fixture，覆盖 5 → 15 条、收起重开、第八条改名/删除补位、快速对话、
+项目置顶迁移、重启及双主题小窗口；等待 Core ready 并明确模拟前台。默认 `all` 保留完整菜单/设置/确认
+Dialog 验收，专项结果不能替代默认全套结果。
+
 `accept:v0.16`、`accept:v0.17` 等带版本号的聚合命令属于历史版本验收入口，不是常青
 日常门禁。其精确断言、Migration 版本和证据应从对应版本实施文档或测试源码读取。
 
 ## 隔离与副作用
+
+### 主动检查的环境刷新
+
+当前语义由 [Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md) 拥有。
+`runtime_check_refresh_tests` 是 macOS/Windows Check Manager、保存 CAS、正式状态与草稿隔离的集成 owner：使用可注入的
+基础环境读取器、UUID 临时目录、私有 SQLite 和合成程序，不读取真实 Runtime 安装或账号。
+它覆盖目录变化、原路径升级、指定路径失效不回退、进程 PATH 不参与主程序选择、草稿/恢复自动不发布、
+保存及新请求与旧探测交错、环境读取失败不沿用缓存。程序替换继续复用既有 identity-checked probe owner。
+这些跨 manager/数据库的断言不能降为单独的发现函数测试；不新增第二套协议模拟或真实模型 Smoke。
+
+```bash
+cargo test -p rovai-core --bin rovai-core --features slow-tests runtime_check_environment::tests
+pnpm exec vitest run apps/desktop/src/renderer/src/runtime-check.test.ts
+pnpm test:settings-workspace
+```
+
+Renderer 复用生产设置组件和既有隔离 Electron fixture，增加恢复自动、失败预览及离开后迟到结果检查。
+测试中的 `userData` 与 Skill Library 均属于临时夹具，不启动真实 Core 或 Runtime。
+
+### 通用隔离规则
 
 - Smoke 应使用临时 Core `data-dir`、临时工作区和独立配置投影；不得读写日常
   Rovai-ai SQLite。
@@ -461,3 +486,15 @@ fixture、截图、窗口尺寸和直接调用 capture 脚本的方法见
 - 某个 Smoke 通过只证明该 suite 的范围，不代表全部 Product Runtime 的完整兼容性复核；TRAE managed Skill
   projection Verified 不会升级用户级 Skill 调用或 Compaction detector，后者继续按独立证据保持
   `Unverified` / `NotObserved`。
+
+## HTML 预览 HTTP 链路
+
+`pnpm test:html-preview` 使用共享 HTTP 核心、正式 FilePreviewProvider/Pane、桌面文件能力适配和普通 Chrome
+分别验证 History 初始化、query 内部画布、依赖加载及错误诊断。服务路径和访问矩阵由 `packages/html-preview`
+Vitest owner 负责，窗口/代际释放由 Main 既有 service owner 负责，文件布局与查找继续归 `test:file-preview-layout`。
+
+所有浏览器使用临时绝对 userData/profile，Electron 不启动 Core、Runtime 或日常 Skill Library。
+`ROVAI_TEST_CHROME` 指定普通 Chrome 路径；缺失时该项标记未运行，不能宣称跨端验收已通过。
+`ROVAI_HTML_HISTORY_SAMPLE` 和 `ROVAI_HTML_CANVAS_SAMPLE` 可提供两份独立原稿，测试仅复制、核验摘要并验证实际正文与
+子画布联动；`ROVAI_KEEP_HTML_PREVIEW_FIXTURE=1` 保留临时资源和截图。详见
+[v1.58 记录](../versions/v1.58/html-preview-http.md)。

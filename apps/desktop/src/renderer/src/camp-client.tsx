@@ -9,6 +9,12 @@ import { desktopCampClient } from './desktop-camp-client'
 export type CampClient = Pick<RovaiApi,
   'request' | 'composerAttachments' | 'platform'
 > & {
+  /** Explicit resource/platform dependencies of the shared management pages. */
+  memberAvatars: RovaiApi['memberAvatars']
+  selectSkillImportDirectory: RovaiApi['selectSkillImportDirectory']
+  selectRuntimeExecutable: RovaiApi['selectRuntimeExecutable'] | null
+  revealMcpConfig: RovaiApi['revealMcpConfig'] | null
+  channels: Pick<RovaiApi['channels'], 'get' | 'onChanged'> | null
   onEvent?: RovaiApi['onEvent']
   /** Authorized invalidation signal; it is deliberately not a CoreEvent. */
   onInvalidated?: (listener: () => void) => () => void

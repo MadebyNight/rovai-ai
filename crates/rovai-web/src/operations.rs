@@ -5,6 +5,86 @@ use serde::{Deserialize, Serialize};
 /// and the legacy shared draft remain outside the network capability.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum Operation {
+    #[serde(rename = "skills.content.read")]
+    SkillContent,
+    #[serde(rename = "skills.import.inspect")]
+    SkillImportInspect,
+    #[serde(rename = "skills.import.github.inspect")]
+    SkillGithubInspect,
+    #[serde(rename = "skills.import.commit")]
+    SkillImportCommit,
+    #[serde(rename = "skills.setEnabled")]
+    SkillEnable,
+    #[serde(rename = "skills.setGroupAssignments")]
+    SkillGroupsSet,
+    #[serde(rename = "skills.delete")]
+    SkillDelete,
+    #[serde(rename = "mcp.servers.create")]
+    McpCreate,
+    #[serde(rename = "mcp.servers.update")]
+    McpUpdate,
+    #[serde(rename = "mcp.servers.setMembers")]
+    McpMembers,
+    #[serde(rename = "mcp.servers.setEnabled")]
+    McpEnable,
+    #[serde(rename = "mcp.servers.delete")]
+    McpDelete,
+    #[serde(rename = "mcp.servers.reveal")]
+    McpReveal,
+    #[serde(rename = "mcp.config.repairPermissions")]
+    McpRepair,
+    #[serde(rename = "mcp.import.scan")]
+    McpScan,
+    #[serde(rename = "mcp.import.commit")]
+    McpImport,
+    #[serde(rename = "runtime.startup.get")]
+    RuntimeStartupGet,
+    #[serde(rename = "runtime.startup.save")]
+    RuntimeStartupSave,
+    #[serde(rename = "runtime.startup.inspect")]
+    RuntimeStartupInspect,
+    #[serde(rename = "runtime.startup.check")]
+    RuntimeStartupCheck,
+
+    #[serde(rename = "navigation.findCamp")]
+    NavigationFindCamp,
+    #[serde(rename = "agentRunExecution.page")]
+    RunExecutionPage,
+    #[serde(rename = "tasks.create")]
+    TaskCreate,
+    #[serde(rename = "tasks.update")]
+    TaskUpdate,
+    #[serde(rename = "memory.create")]
+    MemoryCreate,
+    #[serde(rename = "memory.revise")]
+    MemoryRevise,
+    #[serde(rename = "memory.retire")]
+    MemoryRetire,
+    #[serde(rename = "memory.reactivate")]
+    MemoryReactivate,
+    #[serde(rename = "memory.forget")]
+    MemoryForget,
+    #[serde(rename = "memory.supersede")]
+    MemorySupersede,
+    #[serde(rename = "memory.review.schedule")]
+    MemorySchedule,
+    #[serde(rename = "memory.hearthReviewItems.accept")]
+    MemoryAccept,
+    #[serde(rename = "memory.hearthReviewItems.reject")]
+    MemoryReject,
+    #[serde(rename = "memory.export")]
+    MemoryExport,
+    #[serde(rename = "automations.create")]
+    AutomationCreate,
+    #[serde(rename = "automations.update")]
+    AutomationUpdate,
+    #[serde(rename = "automations.close")]
+    AutomationClose,
+    #[serde(rename = "automations.delete")]
+    AutomationDelete,
+    #[serde(rename = "automations.run")]
+    AutomationRun,
+
     #[serde(rename = "camps.open")]
     CampOpen,
     #[serde(rename = "camps.enter")]
@@ -144,7 +224,12 @@ pub enum Operation {
 impl Operation {
     pub fn timeout(self) -> std::time::Duration {
         std::time::Duration::from_secs(match self {
-            Self::RuntimeCheck | Self::RuntimeCatalog | Self::RuntimeDiscover => 120,
+            Self::RuntimeCheck
+            | Self::RuntimeCatalog
+            | Self::RuntimeDiscover
+            | Self::RuntimeStartupCheck
+            | Self::RuntimeStartupInspect
+            | Self::SkillGithubInspect => 120,
             _ => 15,
         })
     }
@@ -152,16 +237,50 @@ impl Operation {
         use serde_json::json;
         match self {
             Self::AppInfo => json!({"name":value["name"],"version":value["version"]}),
-            Self::Mcp => {
-                json!({"servers":value["servers"].as_array().map(|servers| servers.iter().map(|server| json!({
-                "serverId":server["serverId"], "name":server["name"], "transport":server["transport"],
-                "enabled":server["enabled"], "assignedAgentIds":server["assignedAgentIds"]
-            })).collect::<Vec<_>>()).unwrap_or_default()})
+            // Core owns credential redaction and digest-CAS. These projections
+            // admit the fields used by the shared editor, never future fields.
+            Self::Mcp | Self::McpRepair => project_mcp_config(value),
+            Self::McpCreate
+            | Self::McpUpdate
+            | Self::McpMembers
+            | Self::McpEnable
+            | Self::McpDelete
+            | Self::McpImport => {
+                let mut projected = select_fields(
+                    &value,
+                    &[
+                        "status",
+                        "configDigest",
+                        "actualConfigDigest",
+                        "issues",
+                        "serverId",
+                    ],
+                );
+                if value.get("config").is_some() {
+                    projected["config"] = project_mcp_config(value["config"].take());
+                }
+                projected
             }
-            // Mutation affordances belong to each client capability, not to a
-            // copied internal view. Never advertise desktop actions on the Web.
+            // This response is requested by the explicit reveal control. It is
+            // never included in a list, event, automatic retry or receipt.
+            Self::McpReveal => select_fields(
+                &value,
+                &[
+                    "status",
+                    "serverId",
+                    "configDigest",
+                    "actualConfigDigest",
+                    "definitionJson",
+                    "issues",
+                ],
+            ),
+            // Preserve only individually admitted actions and the Core decision.
+            // Unknown/future actions remain unavailable at the network boundary.
             _ => {
-                remove_actions(&mut value);
+                filter_actions(
+                    &mut value,
+                    matches!(self, Self::Tasks | Self::Task | Self::CampOpen),
+                );
                 value
             }
         }
@@ -169,6 +288,47 @@ impl Operation {
 
     pub fn method(self) -> &'static str {
         match self {
+            Self::SkillContent => "skills.content.read",
+            Self::SkillImportInspect => "skills.import.inspect",
+            Self::SkillGithubInspect => "skills.import.github.inspect",
+            Self::SkillImportCommit => "skills.import.commit",
+            Self::SkillEnable => "skills.setEnabled",
+            Self::SkillGroupsSet => "skills.setGroupAssignments",
+            Self::SkillDelete => "skills.delete",
+            Self::McpCreate => "mcp.servers.create",
+            Self::McpUpdate => "mcp.servers.update",
+            Self::McpMembers => "mcp.servers.setMembers",
+            Self::McpEnable => "mcp.servers.setEnabled",
+            Self::McpDelete => "mcp.servers.delete",
+            Self::McpReveal => "mcp.servers.reveal",
+            Self::McpRepair => "mcp.config.repairPermissions",
+            Self::McpScan => "mcp.import.scan",
+            Self::McpImport => "mcp.import.commit",
+            Self::RuntimeStartupGet => "runtime.startup.get",
+            Self::RuntimeStartupSave => "runtime.startup.save",
+            Self::RuntimeStartupInspect => "runtime.startup.inspect",
+            Self::RuntimeStartupCheck => "runtime.startup.check",
+
+            Self::NavigationFindCamp => "navigation.findCamp",
+            Self::RunExecutionPage => "agentRunExecution.page",
+            Self::TaskCreate => "tasks.create",
+            Self::TaskUpdate => "tasks.update",
+            Self::MemoryCreate => "memory.create",
+            Self::MemoryRevise => "memory.revise",
+            Self::MemoryRetire => "memory.retire",
+            Self::MemoryReactivate => "memory.reactivate",
+            Self::MemoryForget => "memory.forget",
+            Self::MemorySupersede => "memory.supersede",
+            Self::MemorySchedule => "memory.review.schedule",
+            Self::MemoryAccept => "memory.hearthReviewItems.accept",
+            Self::MemoryReject => "memory.hearthReviewItems.reject",
+            Self::MemoryExport => "memory.export",
+            Self::AutomationCreate => "automations.create",
+            Self::AutomationUpdate => "automations.update",
+            Self::AutomationClose => "automations.close",
+            Self::AutomationDelete => "automations.delete",
+            Self::AutomationRun => "automations.run",
+
             Self::RuntimeEnsure => "runtime.product.ensure",
             Self::RuntimeCheck => "runtime.product.check",
             Self::RuntimeCatalog => "runtime.modelCatalog.open",
@@ -240,19 +400,85 @@ impl Operation {
     }
 }
 
-fn remove_actions(value: &mut serde_json::Value) {
+fn select_fields(value: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    for field in fields {
+        if let Some(value) = value.get(field) {
+            object.insert((*field).into(), value.clone());
+        }
+    }
+    serde_json::Value::Object(object)
+}
+fn project_mcp_config(value: serde_json::Value) -> serde_json::Value {
+    let mut projected = select_fields(
+        &value,
+        &[
+            "path",
+            "exists",
+            "configDigest",
+            "publicConfigJson",
+            "fileIssue",
+            "permissionIssue",
+        ],
+    );
+    projected["servers"] = serde_json::json!(
+        value["servers"]
+            .as_array()
+            .map(|servers| servers
+                .iter()
+                .map(|server| select_fields(
+                    server,
+                    &[
+                        "serverId",
+                        "name",
+                        "transport",
+                        "endpoint",
+                        "enabled",
+                        "assignedAgentIds",
+                        "source",
+                        "riskLevel",
+                        "riskAcknowledged",
+                        "definitionJson",
+                        "configurationIssues"
+                    ]
+                ))
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+    projected
+}
+
+fn filter_actions(value: &mut serde_json::Value, task_updates: bool) {
     match value {
         serde_json::Value::Object(object) => {
             if object.contains_key("availableActions") {
-                object.insert("availableActions".into(), serde_json::json!([]));
+                let actions = if task_updates
+                    && object
+                        .get("taskId")
+                        .is_some_and(serde_json::Value::is_string)
+                {
+                    object["availableActions"]
+                        .as_array()
+                        .map(|actions| {
+                            actions
+                                .iter()
+                                .filter(|action| action.as_str() == Some("update"))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                object.insert("availableActions".into(), serde_json::json!(actions));
             }
             for value in object.values_mut() {
-                remove_actions(value);
+                filter_actions(value, task_updates);
             }
         }
         serde_json::Value::Array(array) => {
             for value in array {
-                remove_actions(value);
+                filter_actions(value, task_updates);
             }
         }
         _ => {}
@@ -271,18 +497,18 @@ mod tests {
             "serverId":"fixture", "name":"Example", "enabled":true,
             "transport":"http", "assignedAgentIds":[],
             "headers":{"Authorization":"fixture-secret"},
-            "definitionJson":"fixture-secret", "endpoint":"https://fixture.invalid/?secret=fixture-secret",
+            "definitionJson":"{\"mcpServers\":{\"Example\":{\"url\":\"********\"}}}", "endpoint":"********",
             "futureCredentialField":"fixture-secret"
         }]}));
         assert_eq!(
             projected,
             json!({"servers":[{"serverId":"fixture", "name":"Example", "enabled":true,
-            "transport":"http", "assignedAgentIds":[]}]})
+            "transport":"http", "assignedAgentIds":[], "definitionJson":"{\"mcpServers\":{\"Example\":{\"url\":\"********\"}}}", "endpoint":"********"}]})
         );
         assert_eq!(
             Operation::Tasks
-                .project(json!({"items":[{"body":"keep content", "availableActions":["edit"]}]})),
-            json!({"items":[{"body":"keep content", "availableActions":[]}]})
+                .project(json!({"items":[{"taskId":"task_fixture", "body":"keep content", "availableActions":["update","edit"]}]})),
+            json!({"items":[{"taskId":"task_fixture", "body":"keep content", "availableActions":["update"]}]})
         );
         assert!(serde_json::from_value::<Operation>(json!("host.web.rotate")).is_err());
         assert!(

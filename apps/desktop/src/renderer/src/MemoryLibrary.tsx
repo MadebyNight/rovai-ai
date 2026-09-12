@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { readErrorMessage } from './error-message'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -123,6 +124,7 @@ export function MemoryLibrary({
 }): React.JSX.Element {
   const [library, setLibrary] = useState<MemoryLibraryView | null>(null)
   const [reviewItems, setReviewItems] = useState<HearthReviewItem[]>([])
+  const client = useCampClient()
   const [scope, setScope] = useState<MemoryScopeKind>('hearth')
   const [governance, setGovernance] = useState<GovernanceFilter>('all')
   const [search, setSearch] = useState('')
@@ -139,21 +141,21 @@ export function MemoryLibrary({
   const startupContentVisible = startupFeedbackVisible || Boolean(error)
 
   const loadMemoryLibrary = useCallback(async (): Promise<MemoryLibraryView> => {
-    const nextLibrary = await window.rovai.request<MemoryLibraryView>('memory.list')
+    const nextLibrary = await client.request<MemoryLibraryView>('memory.list')
     setLibrary(nextLibrary)
     return nextLibrary
-  }, [])
+  }, [client])
 
   const load = useCallback(async (): Promise<MemorySnapshot> => {
     const [nextLibrary, nextReviewItems] = await Promise.all([
-      window.rovai.request<MemoryLibraryView>('memory.list'),
-      window.rovai.request<HearthReviewItem[]>('memory.hearthReviewItems.list')
+      client.request<MemoryLibraryView>('memory.list'),
+      client.request<HearthReviewItem[]>('memory.hearthReviewItems.list')
     ])
     setLibrary(nextLibrary)
     setReviewItems(nextReviewItems)
     onPendingCountChange?.(nextReviewItems.filter((reviewItem) => reviewItem.status === 'pending').length)
     return { library: nextLibrary, reviewItems: nextReviewItems }
-  }, [onPendingCountChange])
+  }, [client, onPendingCountChange])
 
   useEffect(() => {
     if (library) onReady?.()
@@ -163,13 +165,17 @@ export function MemoryLibrary({
     void load().catch((nextError) => setError(errorMessage(nextError)))
   }, [load])
 
-  useEffect(() => window.rovai.onEvent((event) => {
+  useEffect(() => client.onEvent?.((event) => {
     if (event.method !== 'runtime.state') return
     const params = typeof event.params === 'object' && event.params !== null
       ? event.params as Record<string, unknown>
       : {}
     if (params.status === 'ready') void load().catch((nextError) => setError(errorMessage(nextError)))
-  }), [load])
+  }), [client, load])
+
+  useEffect(() => client.onInvalidated?.(() => {
+    void load().catch((nextError) => setError(errorMessage(nextError)))
+  }), [client, load])
 
   useEffect(() => {
     if (refreshSignal > 0) void load().catch((nextError) => setError(errorMessage(nextError)))
@@ -323,13 +329,13 @@ export function MemoryLibrary({
     await run(`editor-${editor.kind}`, async () => {
       let result: StoredCommandResult
       if (editor.kind === 'create') {
-        result = await window.rovai.request('memory.create', {
+        result = await client.request('memory.create', {
           commandId: newCommandId(),
           command: createCommand()
         })
       } else if (editor.kind === 'revise') {
         if (!editor.memory.currentRevisionId) throw new Error('当前记忆没有可修订的版本。')
-        result = await window.rovai.request('memory.revise', {
+        result = await client.request('memory.revise', {
           commandId: newCommandId(),
           command: {
             memoryId: editor.memory.id,
@@ -347,7 +353,7 @@ export function MemoryLibrary({
           finalBody: draft.body.trim(),
           finalRetrievalKeys: retrievalKeys()
         }
-        result = await window.rovai.request('memory.hearthReviewItems.accept', {
+        result = await client.request('memory.hearthReviewItems.accept', {
           commandId: newCommandId(),
           command
         })
@@ -362,7 +368,7 @@ export function MemoryLibrary({
 
   const acceptReview = (reviewItem: HearthReviewItem): Promise<void> =>
     run(`accept-${reviewItem.reviewItemId}`, async () => {
-      const result = await window.rovai.request<StoredCommandResult>('memory.hearthReviewItems.accept', {
+      const result = await client.request<StoredCommandResult>('memory.hearthReviewItems.accept', {
         commandId: newCommandId(),
         command: {
           reviewItemId: reviewItem.reviewItemId,
@@ -375,7 +381,7 @@ export function MemoryLibrary({
 
   const rejectReview = (reviewItem: HearthReviewItem): Promise<void> =>
     run(`reject-${reviewItem.reviewItemId}`, async () => {
-      const result = await window.rovai.request<StoredCommandResult>('memory.hearthReviewItems.reject', {
+      const result = await client.request<StoredCommandResult>('memory.hearthReviewItems.reject', {
         commandId: newCommandId(),
         command: {
           reviewItemId: reviewItem.reviewItemId,
@@ -390,7 +396,7 @@ export function MemoryLibrary({
     method: 'memory.retire' | 'memory.reactivate',
     memory: MemoryRecord
   ): Promise<void> => run(`${method}-${memory.id}`, async () => {
-    const result = await window.rovai.request<StoredCommandResult>(method, {
+    const result = await client.request<StoredCommandResult>(method, {
       commandId: newCommandId(),
       command: { memoryId: memory.id, expectedVersion: memory.version }
     })
@@ -398,7 +404,7 @@ export function MemoryLibrary({
   })
 
   const forget = (memory: MemoryRecord): Promise<void> => run(`forget-${memory.id}`, async () => {
-    const result = await window.rovai.request<StoredCommandResult>('memory.forget', {
+    const result = await client.request<StoredCommandResult>('memory.forget', {
       commandId: newCommandId(),
       command: { memoryId: memory.id, expectedVersion: memory.version }
     })
@@ -444,7 +450,7 @@ export function MemoryLibrary({
     })
 
     try {
-      const result = await window.rovai.request<StoredCommandResult>('memory.review.schedule', {
+      const result = await client.request<StoredCommandResult>('memory.review.schedule', {
         commandId: newCommandId(),
         command: {
           memoryId: current.memory.id,

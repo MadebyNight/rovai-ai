@@ -36,6 +36,7 @@ import type {
   OnboardingRuntimeSelection,
   OnboardingSnapshot,
   NavigationCampItem,
+  NavigationCampTarget,
   NavigationCampPage,
   NavigationPin,
   NavigationPreferencesSnapshot,
@@ -79,6 +80,7 @@ import {
 import { NewConversationDialog } from './NewConversationDialog'
 import { openRuntimeModelCatalog } from './runtime-check'
 import { FilePreviewProvider } from './FilePreviewContext'
+import { NavigationShell } from './NavigationShell'
 import { forgetFilePreviewSession } from './file-preview-session'
 import { AppearanceSettings } from './AppearanceSettings'
 import { AboutUpdatesSettings } from './AboutUpdatesSettings'
@@ -139,10 +141,8 @@ import {
   shouldInvalidateNewConversationDefaults,
   type CurrentProject
 } from './new-conversation-preferences'
-import {
-  createNavigationRefreshCoordinator,
-  type NavigationRefreshTrigger
-} from './navigation-refresh-coordinator'
+import { type NavigationRefreshTrigger } from './navigation-refresh-coordinator'
+import { createNavigationWindowReader, type NavigationGroupLimits } from './navigation-window-reader'
 import { appendLiveRuntimeEventBatch, createLiveRuntimeEventBuffer } from './live-runtime-event-buffer'
 
 export { allNavigationCamps }
@@ -749,8 +749,8 @@ export function StartupWorkspace({
     : view === 'members' ? 'members-content'
       : view === 'memory' ? 'memory-content' : 'task-content compose-content'
   return (
-    <div
-      className={view === 'camp' ? 'app-shell app-shell-camp' : 'app-shell'}
+    <NavigationShell platform={window.rovai.platform} disabled
+      className={view === 'camp' ? 'app-shell-camp' : ''}
       data-startup-frame={target?.kind ?? 'location'}
     >
       <CampNavigation
@@ -792,7 +792,7 @@ export function StartupWorkspace({
           : <StartupGate waiting={error !== null} error={error} onRetry={onRetry}
               onExportDiagnostics={() => window.rovai.exportDiagnostics()} />)}
       </main>
-    </div>
+    </NavigationShell>
   )
 }
 
@@ -986,6 +986,7 @@ export function BusinessApp({
   const [agents, setAgents] = useState<AgentProfile[]>([])
   const [installations, setInstallations] = useState<AdapterInstallation[]>([])
   const [navigation, setNavigation] = useState<NavigationSnapshot | null>(null)
+  const [navigationGroupLimits, setNavigationGroupLimits] = useState<NavigationGroupLimits>({})
   const [navigationState, setNavigationState] = useState<LoadState>('loading')
   const [navigationPins, setNavigationPins] = useState<NavigationPin[]>([])
   const [removedProjectKeys, setRemovedProjectKeys] = useState<Set<string>>(() => new Set())
@@ -1257,7 +1258,7 @@ export function BusinessApp({
           command: { campId }
         })
       : await requestAuthoritativeCampOpenProjection(client, campId, traceId)
-    if (projection.schemaVersion !== 6) throw new Error('会话打开数据版本不兼容。')
+    if (projection.schemaVersion !== 7) throw new Error('会话打开数据版本不兼容。')
     console.info(
       `[camp-open] trace=${traceId} stage=renderer_received method=${method} `
       + `elapsed_ms=${(performance.now() - startedAt).toFixed(1)} `
@@ -1311,28 +1312,26 @@ export function BusinessApp({
     return request
   }, [])
 
-  const commitNavigation = useCallback((nextNavigation: NavigationSnapshot): void => {
+  const commitNavigation = useCallback((
+    nextNavigation: NavigationSnapshot,
+    groupLimits: NavigationGroupLimits
+  ): void => {
     navigationSnapshotRef.current = nextNavigation
     setNavigation(nextNavigation)
+    setNavigationGroupLimits(groupLimits)
+    setNavigationState('ready')
   }, [])
 
-  const readAndCommitNavigation = useCallback(async (): Promise<void> => {
-    if (navigationSnapshotRef.current === null) setNavigationState('loading')
-    try {
-      const nextNavigation = await client.request<NavigationSnapshot>('navigation.snapshot')
-      commitNavigation(nextNavigation)
-      setNavigationState('ready')
-    } catch (nextError) {
-      setNavigationState('error')
-      throw nextError
-    }
-  }, [commitNavigation])
-
   const navigationRefreshCoordinator = useMemo(
-    () => createNavigationRefreshCoordinator(readAndCommitNavigation, {
-      initiallyVisible: document.visibilityState !== 'hidden'
-    }),
-    [readAndCommitNavigation]
+    () => createNavigationWindowReader(
+      (request) => client.request<NavigationSnapshot>('navigation.snapshot', request),
+      commitNavigation,
+      {
+        initiallyVisible: document.visibilityState !== 'hidden',
+        onError: () => setNavigationState('error')
+      }
+    ),
+    [client, commitNavigation]
   )
 
   const loadNavigation = useCallback(async (
@@ -2741,7 +2740,7 @@ export function BusinessApp({
     })
   }
 
-  const chooseCamp = (camp: NavigationCampItem): void => {
+  const chooseCamp = (camp: NavigationCampTarget): void => {
     void requestMemberTransition(() => {
       return activateCamp(camp.id, {
         reconcileDefaultLead: camp.activationState !== 'pending'
@@ -3797,13 +3796,15 @@ export function BusinessApp({
 
   return (
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
-    <div className={view === 'camp' ? 'app-shell app-shell-camp' : 'app-shell'}>
+    <NavigationShell platform={client.platform} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''}>
       <CampNavigation
         platform={client.platform}
         footer={sidebarFooter}
         view={view}
         state={startupGateVisible ? 'loading' : navigationState}
         navigation={displayNavigation}
+        groupLimits={navigationGroupLimits}
+        onGroupLimitChange={navigationRefreshCoordinator.resizeGroup}
         activeCampId={activeCampId}
         openingCampId={openingCampId}
         currentProjectKey={currentProjectKey}
@@ -4115,7 +4116,7 @@ export function BusinessApp({
         onOpenDetails={openUpdateSettings}
         onDownload={appUpdates.download}
       />}
-    </div>
+    </NavigationShell>
     </FilePreviewProvider>
   )
 }
@@ -4287,9 +4288,9 @@ export function SettingsView({
         )}
         <Activity mode={section === 'skills' ? 'visible' : 'hidden'}><SkillSettings theme={appearance.resolvedTheme} /></Activity>
         <Activity mode={section === 'mcp' ? 'visible' : 'hidden'}><McpSettings agents={agents} platform={platform} /></Activity>
-        {section === 'runtime' && (
+        <Activity mode={section === 'runtime' ? 'visible' : 'hidden'}>
           <RuntimeInstallationsPanel health={health} installations={installations} onReload={onReload} />
-        )}
+        </Activity>
         {section === 'channels' && <ChannelSettings agents={agents} />}
         {section === 'appearance' && (
           <AppearanceSettings

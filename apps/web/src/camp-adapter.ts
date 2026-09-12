@@ -1,3 +1,4 @@
+import { browserMemberAvatars } from './member-avatars'
 import type { CampClient } from '../../desktop/src/renderer/src/camp-client'
 import type { BusinessEnvironment } from '../../desktop/src/renderer/src/business-environment'
 import type { CoreMethod, FilePreviewApi, FilePreviewExternalUpdateEvent, FilePreviewOperationResult, FilePreviewBinaryContent, OpenFilePreviewResult } from '@contracts'
@@ -15,6 +16,11 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
   const unimplemented = async (): Promise<never> => { throw new Error('此操作的 Web 适配尚未接通。') }
   const client: CampClient = {
     platform: browserPlatform(),
+    memberAvatars: browserMemberAvatars(transport),
+    selectSkillImportDirectory: async () => (await selectWorkspaceDirectory())?.projectPath ?? null,
+    selectRuntimeExecutable: null,
+    revealMcpConfig: null,
+    channels: null,
     request: <T,>(method: CoreMethod, params?: unknown): Promise<T> => {
       if (!(WEB_OPERATIONS as readonly string[]).includes(method)) return Promise.reject(new Error(`尚未开放此 Web 操作：${method}`))
       return transport.request<T>(method as WebOperation, params)
@@ -40,6 +46,8 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
       if (!result.ok) return result
       return { ok: true, value: { ...result.value, bytes: Uint8Array.from(atob(result.value.base64), char => char.charCodeAt(0)) } }
     },
+    prepareHtmlSite: async () => ({ ok: false, error: { code: 'source_not_authorized', message: 'Web 以文本方式打开 HTML。', retryable: false } }),
+    releaseHtmlSite: unimplemented,
     prepareHtml: async () => ({ ok: false, error: { code: 'source_not_authorized', message: 'Web 以文本方式打开 HTML。', retryable: false } }),
     reload: request => transport.files('reload', request),
     release: async request => { names.delete(request.handleId); return transport.files('release', request) },

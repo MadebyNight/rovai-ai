@@ -3,7 +3,8 @@ import { VISIBLE_PRODUCT_RUNTIMES } from './runtime-products'
 import { DEFAULT_APPEARANCE } from '../../shared/appearance'
 import { AgentRunFileChangesReviewSurface } from './FileChangesPreview'
 import { CampDetailEntries } from './CampDetailPopover'
-import { createElement } from 'react'
+import { createElement, type ComponentProps } from 'react'
+import { ExecutionToolGroupStateContext } from './ExecutionToolGroup'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type {
@@ -187,6 +188,14 @@ import {
   selectCompleteExecutionEvidence,
   type LiveRuntimeEvent
 } from './ui-model'
+
+// Exercise the same controlled disclosure state used to preserve open groups across paging.
+function renderExpandedExecution(props: ComponentProps<typeof RunExecutionDisclosure>): string {
+  const expanded = new Set((props.progress?.items ?? []).filter(item => item.kind === 'tool')
+    .map(item => `${props.run.id}:${item.key}`))
+  return renderToStaticMarkup(createElement(ExecutionToolGroupStateContext.Provider,
+    { value: { expanded, change: () => {} } }, createElement(RunExecutionDisclosure, props)))
+}
 
 function testAppUpdatesController(): AppUpdatesController {
   return {
@@ -486,7 +495,7 @@ describe('active Camp event invalidation', () => {
         complete: true
       }
       return {
-        schemaVersion: 6,
+        schemaVersion: 7,
         throughGlobalSequence: terminal ? 12 : 10,
         camp: {
           id: 'camp-terminal-refresh', title: '终态刷新', activationState: 'active',
@@ -869,7 +878,7 @@ describe('Camp snapshot cache', () => {
       complete: true
     }
     const projection = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       throughGlobalSequence: 20,
       camp,
       members: [],
@@ -3867,7 +3876,7 @@ describe('task event projections', () => {
     expect(markup).toContain('execution-disclosure')
     expect(markup).not.toContain('stream-reasoning')
     expect(markup).toContain('process-copy stream-narration')
-    expect(markup).toContain('tool-call-disclosure')
+    expect(markup).not.toContain('tool-call-disclosure')
     expect(markup).not.toContain('working-row')
     expect(markup).not.toContain('live-execution-progress')
     expect(markup).toContain('aria-label="停止当前执行"')
@@ -4038,7 +4047,7 @@ describe('task event projections', () => {
       stopping: false,
       onStop: () => undefined
     }))
-    expect(groupedEvidenceMarkup).toContain('tool-call-disclosure')
+    expect(groupedEvidenceMarkup).not.toContain('tool-call-disclosure')
     expect(groupedEvidenceMarkup).not.toContain('complete-evidence-control')
     expect(groupedEvidenceMarkup).not.toContain('查看完整工具调用')
     expect(groupedEvidenceMarkup).not.toContain('查看完整文件变更')
@@ -5624,9 +5633,9 @@ describe('task event projections', () => {
       version: 1, createdAt: '2026-08-14T00:00:00Z', startedAt: '2026-08-14T00:00:01Z',
       endedAt: null, updatedAt: '2026-08-14T00:00:02Z'
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-1', focused: true
-    }))
+    })
     expect(markup).toContain('tool-call-static')
     expect(markup).toContain('class="tool-activity-group status-running"')
     expect(markup).toContain('aria-label="执行中：检查工作区状态"')
@@ -5694,7 +5703,7 @@ describe('task event projections', () => {
       focused: true
     }))
     expect(boundaryMarkup).toContain('class="tool-activity-group status-completed"')
-    expect(boundaryMarkup).toContain('aria-label="完成了 1 个步骤"')
+    expect(boundaryMarkup).toContain('aria-label="已完成 1 个步骤"')
     expect(boundaryMarkup).not.toMatch(/Thinking|连接中|思考中/)
     expect(boundaryMarkup).not.toMatch(/工作了|处理过程 ·|正在工作/)
 
@@ -5824,11 +5833,11 @@ describe('task event projections', () => {
       version: 1, createdAt: '2026-08-18T00:00:00Z', startedAt: '2026-08-18T00:00:00Z',
       endedAt: '2026-08-18T00:00:02Z', updatedAt: '2026-08-18T00:00:02Z'
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-1', focused: true
-    }))
+    })
     expect(markup.match(/<details class="tool-activity-group/g)).toHaveLength(1)
-    expect(markup).toContain('aria-label="完成了 2 个步骤"')
+    expect(markup).toContain('aria-label="已完成 2 个步骤"')
     expect(markup).not.toContain('>全部成功<')
     expect(markup).not.toContain('class="tool-group-count"')
     expect(markup.match(/<details class="process-action tool-call-disclosure/g)).toHaveLength(2)
@@ -5888,15 +5897,15 @@ describe('task event projections', () => {
         }
       }))
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-domains', focused: true
-    }))
+    })
 
     for (const { iconKind } of icons) {
       expect(markup).toContain(`data-icon-domain="${iconKind}"`)
       expect(markup).not.toContain(`${iconKind} complete result`)
     }
-    expect(markup).toContain('aria-label="完成了 9 个步骤"')
+    expect(markup).toContain('aria-label="已完成 9 个步骤"')
     expect(markup.match(/class="tool-group-icon"/g)).toHaveLength(1)
     expect(markup.match(/class="tool-call-icon"/g)).toHaveLength(icons.length)
     expect(markup.match(/<svg viewBox="0 0 16 16"/g)?.length).toBeGreaterThanOrEqual(icons.length)
@@ -5963,9 +5972,9 @@ describe('task event projections', () => {
       version: 1, createdAt: '2026-08-18T00:00:00Z', startedAt: '2026-08-18T00:00:00Z',
       endedAt: '2026-08-18T00:00:01Z', updatedAt: '2026-08-18T00:00:01Z'
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-1', focused: true
-    }))
+    })
     expect(markup).toContain('tool-call-disclosure')
     expect(markup).toContain('tool-call-disclosure-slot')
     expect(markup).not.toContain('tool-call-disclosure-slot is-placeholder')
@@ -5980,7 +5989,7 @@ describe('task event projections', () => {
     expect(markup).not.toContain('>已完成<')
     expect(markup).not.toContain('tool-call-static')
 
-    const failedMarkup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const failedMarkup = renderExpandedExecution({
       run: { ...run, status: 'failed' as const },
       progress: {
         items: [{
@@ -5996,7 +6005,7 @@ describe('task event projections', () => {
       },
       campId: 'camp-1',
       focused: true
-    }))
+    })
     expect(failedMarkup).toContain('class="tool-call-state status-failed"')
     expect(failedMarkup).toContain('aria-label="失败"')
   })
@@ -6134,12 +6143,12 @@ describe('task event projections', () => {
       version: 1, createdAt: '2026-08-27T00:00:00Z', startedAt: '2026-08-27T00:00:00Z',
       endedAt: '2026-08-27T00:00:02Z', updatedAt: '2026-08-27T00:00:02Z'
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-1', focused: true
-    }))
+    })
     expect(markup.match(/class="process-action modified-file-row"/g)).toHaveLength(2)
     expect(markup.match(/class="tool-activity-group status-completed"/g)).toHaveLength(1)
-    expect(markup).toContain('aria-label="完成了 1 个步骤"')
+    expect(markup).toContain('aria-label="已完成 1 个步骤"')
     expect(markup).toContain('aria-label="编辑 src/app.ts，新增 2 行，删除 1 行"')
     expect(markup).toContain('aria-label="新增 src/styles.css，新增 1 行，删除 0 行"')
     expect(markup.match(/data-icon-domain="file-write"/g)).toHaveLength(2)
@@ -6147,8 +6156,8 @@ describe('task event projections', () => {
     expect(markup.match(/aria-controls="[^"]+" aria-expanded="false"/g)).toHaveLength(2)
     expect(markup).toContain('src/app.ts · 打开文件预览')
     expect(markup).toContain('app.ts 的文件差异')
-    expect(markup).toContain('modified-file-diff-line is-metadata')
-    expect(markup).toContain('new file mode 100644')
+    expect(markup).not.toContain('modified-file-diff-line is-metadata')
+    expect(markup).not.toContain('new file mode 100644')
     expect(markup).not.toContain('apply_patch')
     expect(markup).not.toContain('编辑了 2 个文件')
   })
@@ -6265,16 +6274,16 @@ describe('task event projections', () => {
       version: 1, createdAt: '2026-08-27T00:00:00Z', startedAt: '2026-08-27T00:00:00Z',
       endedAt: '2026-08-27T00:00:02Z', updatedAt: '2026-08-27T00:00:02Z'
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-1', focused: true
-    }))
+    })
     expect(markup.match(/class="process-action modified-file-row"/g)).toHaveLength(2)
     expect(markup.match(/modified-file-diff is-exact-mutation/g)).toHaveLength(2)
     expect(markup.match(/class="tool-activity-group status-completed"/g)).toHaveLength(1)
-    expect(markup).toContain('aria-label="完成了 2 个步骤"')
+    expect(markup).toContain('aria-label="已完成 2 个步骤"')
     expect(markup).toContain('CampWorkspace.tsx 的修改片段')
-    expect(markup).toContain('const enabled = false')
-    expect(markup).toContain('const enabled = ready')
+    expect(markup).not.toContain('const enabled = false')
+    expect(markup).not.toContain('const enabled = ready')
     expect(markup).not.toContain('@@')
     expect(markup).not.toContain('oldLine')
     expect(markup).not.toContain('newLine')
@@ -6353,12 +6362,12 @@ describe('task event projections', () => {
         command: 'OPENAI_API_KEY=sk-agy-secret pnpm test -- --password agy-password --token agy-token'
       }
     })
-    expect(agySensitive).toContain('OPENAI_API_KEY=[已隐藏]')
-    expect(agySensitive).toContain('--password [已隐藏]')
-    expect(agySensitive).toContain('--token [已隐藏]')
-    expect(agySensitive).not.toContain('sk-agy-secret')
-    expect(agySensitive).not.toContain('agy-password')
-    expect(agySensitive).not.toContain('agy-token')
+    expect(agySensitive).toContain('OPENAI_API_KEY=sk-agy-secret')
+    expect(agySensitive).toContain('--password agy-password')
+    expect(agySensitive).toContain('--token agy-token')
+    expect(agySensitive).not.toContain('[已隐藏]')
+    expect(agySensitive).toContain('agy-password')
+    expect(agySensitive).toContain('agy-token')
     const reopenedAgyProgress = buildLiveExecutionProgress([{
       id: 'agy-command-completed', agentRunId: 'run-agy', eventType: 'runtime.action',
       payload: {
@@ -6383,7 +6392,7 @@ describe('task event projections', () => {
     })
     expect(executionActivityTitle(genericShell, codexPayload(
       `/bin/zsh -lc "rovai send --public-only --body 'TOP_SECRET_ARGUMENT'"`
-    ))).toBe('rovai send --public-only')
+    ))).toBe("rovai send --public-only --body 'TOP_SECRET_ARGUMENT'")
     expect(executionActivityTitle(genericShell, codexPayload(
       `/bin/zsh -lc 'rovai --help'`
     ))).toBe('rovai --help')
@@ -6395,10 +6404,10 @@ describe('task event projections', () => {
     ))).toBe('rg --help /private/project/path')
     expect(executionActivityTitle(genericShell, codexPayload(
       `rovai send --body '--help'`
-    ))).toBe('rovai send')
+    ))).toBe("rovai send --body '--help'")
     expect(executionActivityTitle(genericShell, codexPayload(
       `rovai send 'TOP_SECRET_POSITIONAL_BODY'`
-    ))).toBe('rovai send')
+    ))).toBe("rovai send 'TOP_SECRET_POSITIONAL_BODY'")
     expect(executionActivityTitle(genericShell, codexPayload(
       `rovai camp TOP_SECRET_UNKNOWN_ACTION`
     ))).toBe('rovai camp TOP_SECRET_UNKNOWN_ACTION')
@@ -6414,14 +6423,14 @@ describe('task event projections', () => {
     const sensitive = executionActivityTitle(genericShell, codexPayload(
       `OPENAI_API_KEY=sk-secret curl -H 'Authorization: Bearer secret-token' --token abc https://example.test`
     ))
-    expect(sensitive).toContain('OPENAI_API_KEY=[已隐藏]')
-    expect(sensitive).toContain('"Authorization: [已隐藏]"')
-    expect(sensitive).toContain('--token [已隐藏]')
-    expect(sensitive).not.toContain('sk-secret')
-    expect(sensitive).not.toContain('secret-token')
+    expect(sensitive).toContain('OPENAI_API_KEY=sk-secret')
+    expect(sensitive).toContain('Authorization: Bearer secret-token')
+    expect(sensitive).toContain('--token abc')
+    expect(sensitive).not.toContain('[已隐藏]')
+    expect(sensitive).toContain('secret-token')
     expect(executionActivityTitle(genericShell, codexPayload(
       `curl --header='Authorization: Bearer another-secret' https://example.test`
-    ))).toBe('curl --header="Authorization: [已隐藏]" https://example.test')
+    ))).toBe("curl --header='Authorization: Bearer another-secret' https://example.test")
     expect(executionActivityTitle({
       ...genericShell,
       presentationHint: '搜索项目文件'
@@ -6780,9 +6789,9 @@ describe('task event projections', () => {
       version: 1, createdAt: '2026-09-06T00:00:00Z', startedAt: '2026-09-06T00:00:00Z',
       endedAt: '2026-09-06T00:00:01Z', updatedAt: '2026-09-06T00:00:01Z'
     }
-    const markup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+    const markup = renderExpandedExecution({
       run, progress, campId: 'camp-codex-read', focused: true
-    }))
+    })
     expect(markup).toContain('class="process-action tool-call-summary tool-call-static file-operation-row status-completed"')
     expect(markup).toContain('role="group" aria-label="阅读 docs/README.md，成功"')
     expect(markup).toContain('role="group" aria-label="新增 src/new-file.ts，成功"')
@@ -6883,7 +6892,7 @@ describe('task event projections', () => {
         aggregatedOutput: 'done'
       }
     })).toBe(
-      "$ node <<'NODE' ; const token = '[已隐藏]' ; console.log('done') ; NODE\ndone"
+      "$ node <<'NODE'\nconst token = 'must-not-leak';\nconsole.log('done');\nNODE\ndone"
     )
     expect(executionEvidenceResultText('runtime.action', {
       output: { status: 'accepted', receiptId: 'receipt-1' },
@@ -7198,7 +7207,7 @@ describe('task event projections', () => {
     }))
 
     expect(markup).toContain('GitHub Copilot')
-    expect(markup).toContain('未安装')
+    expect(markup).toContain('未检测到')
     expect(markup).toContain('前往 Agent 运行时')
     expect(markup).toMatch(/<button[^>]*aria-label="保存运行配置"[^>]*disabled=""/)
     expect(markup).toContain('放弃更改')
@@ -7391,14 +7400,14 @@ describe('task event projections', () => {
     expect(markup).toContain('Claude Code 尚未登录')
     expect(markup).toContain('请先在终端完成 Claude Code 登录。')
     expect(markup).not.toContain('Rovai 内部错误')
-    expect(markup).toContain('未安装')
+    expect(markup).toContain('未检测到')
     expect(markup).not.toContain('已找到')
     expect(markup).not.toContain('尚未检查')
     expect(markup).not.toContain('已检查')
     expect(markup).not.toMatch(/稳定|测试|实验性/)
     expect(markup.match(/class="runtime-product-logo"/g)).toHaveLength(14)
     expect(markup.match(/class="quiet-button runtime-product-check"/g)).toHaveLength(12)
-    expect(markup.match(/检查可用性/g)).toHaveLength(12)
+    expect(markup.match(/检查状态/g)).toHaveLength(12)
     expect(markup).toContain('Claude Code 登录指南')
     expect(markup).toContain('Antigravity 安装指南')
     expect(markup).toContain('aria-expanded="false"')
@@ -7438,7 +7447,7 @@ describe('task event projections', () => {
           ? `<strong>Codex CLI</strong><small title="${subtitle}">${subtitle}</small>`
           : '<strong>Codex CLI</strong></div>')
         expect(versionMarkup).toContain('status-available">可用</span>')
-        expect(versionMarkup.match(/检查可用性/g)).toHaveLength(14)
+        expect(versionMarkup.match(/检查状态/g)).toHaveLength(14)
         expect(versionMarkup).not.toContain('DeepSeek Harness')
         expect(versionMarkup).not.toMatch(/测试|试运行|实验性/)
         expect(versionMarkup).toContain('<strong>ZCode</strong></div>')
@@ -7476,7 +7485,7 @@ describe('task event projections', () => {
 
     expect(markup.match(/Windows 尚未验证/g)).toHaveLength(14)
     expect(markup.match(/不可检查/g)).toHaveLength(14)
-    expect(markup).not.toContain('检查可用性')
+    expect(markup).not.toContain('检查状态')
     expect(markup).toContain('当前平台尚无可检测 Runtime')
     expect(markup).toContain('这不是本机安装、登录或扫描故障')
     expect(markup).not.toContain('安装指南')

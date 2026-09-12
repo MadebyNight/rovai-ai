@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Rovai-ai v1.58：上下文 Gate 与双轨评测
@@ -29,7 +29,7 @@ last_updated: 2026-09-12
 
 复用 Qualification Runner、Case admission、合同测试、双 View Judge、Core 持久证据、用户 CLI 和 Rovai Automation。新增受限只读 Trace 导出、日报与曲线、Host 报告准备、两级 Gate 及每周报告历史。通用集 12 个 Case；Memory 与 Review Duo 各有 3 个专属 Case。没有专属集的其他 Skill 先补样本，不能默认为已覆盖。
 
-本次没有新增数据库字段，沿用 main 的 Data Contract 99、Camp Snapshot 34、formatter/manifest 23 及 Built-in tool/context 语义。旧评测构建使用 Data Contract 98，不能冒充本次合并构建的执行证据。Memory 精确计数、文档体系重构和队员成长仍属后续项，日报中的两项 Memory 指标为未知。User Automation 新增 owner-only 元数据操作，不注入 Agent 上下文。
+评测增量没有新增数据库字段，合入时沿用 main 的 Data Contract 99、Camp Snapshot 34、formatter/manifest 23 及 Built-in tool/context 语义；后续钉钉名称可空增量将 Data Contract 升至 100，见下文。旧评测构建使用 Data Contract 98，不能冒充本次合并构建的执行证据。Memory 精确计数、文档体系重构和队员成长仍属后续项，日报中的两项 Memory 指标为未知。User Automation 新增 owner-only 元数据操作，不注入 Agent 上下文。
 
 2026-09-10 开发者明确授权继续实现两条评测线，并授权实现者自行选择必要实现细节、最后汇总。该评测增量不修改核心模型可见机制或内置 Skill 内容，因此自身不触发产品模型上下文 revision；后续实际上下文／Skill 机制改动仍按 Gate 流程确认和验证。
 
@@ -76,6 +76,23 @@ Claude Code 模型目录从 help 别名改为无 Prompt 控制初始化，原生
 [实施计划](implementation-plan.md#claude-code-动态模型目录)；当前合同为
 [Runtime Launch v39](../../contracts/runtime-launch-and-verification-v39.md)。此项不改变当前版本状态或 Runtime 平台资格。
 
+飞书接口扫码改造按 [Feishu Channel v16](../../contracts/feishu-channel-v16.md) 实施，替换隐藏浏览器扫码，
+统一身份解析、会话恢复、可信域和提交结果核对。该独立增量不改变模型上下文；验证边界见[实施计划](implementation-plan.md#飞书接口扫码登录)。
+
+## 钉钉接口扫码登录
+
+按用户提出的开发者账号连接范围实现 [DingTalk Channel v13](../../contracts/dingtalk-channel-v13.md)。
+通过本次后台上下文调用实际 OAuth QR 接口，Main 本地生成二维码、串行处理结构化状态并完成 SSO；保留 `/baseInfo`、
+pending → Core commitConnection → activate 的提交次序。官方页面只承接额外交互，未知协议明确失败。
+名称别名取首个去除空白后有效的值，允许缺失但不放宽 corpId/staffId 身份；Migration 150 将 Data Contract 升为
+v1.58/schema 100，仅放宽 dingtalk_account 两个展示名的 NULL 约束，保持绑定与触发器及回滚。
+
+此增量不改变模型上下文或平台能力 gate。已完成隔离匿名 QR 初始化和等待响应的实测，协议/状态/取消/存储的自动验证
+及本机 Electron 呈现验证；真实手机确认、企业选择、SSO 身份和 packaged App 账号操作尚待隔离验收。
+来源与各类证据边界见[协议调查](../../research/dingtalk-login-protocol.md)，不能以匿名 Probe 或模拟 SSO 宣称完整登录已实测。
+自动检查、并发时限复验与隔离 UI 记录见[实施计划](implementation-plan.md#钉钉接口扫码登录)。
+当前文档导航、渠道架构、UI 与开发验收路由同步至 v13；Runtime、根 README 与其他 Provider 能力无需变更。
+
 
 ## Built-in 工具入参展示
 
@@ -85,8 +102,43 @@ Claude Code 模型目录从 help 别名改为无 Prompt 控制初始化，原生
 没有架构数据流、模型上下文、Runtime classifier、兼容性或版本指针变更，其他 v1.58 验收缺口保持独立。
 实施与验证见[工具入参展示记录](builtin-tool-input-presentation.md)。
 
+
+## Camp 执行详情按需读取
+
+在长 Run 的 Camp 切换路径中，执行详情从首屏投影移至可视窗口：按需分页并预取相邻一页；同时取消执行
+命令和工具结果的内容脱敏，收起组不挂载子行，Diff 按条展开后读取。当前合同为
+[Camp Open v18](../../contracts/camp-open-projection-v18.md) 和
+[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)，
+取代上一个入参展示批次的 Shell 正文与凭据省略规则。字段白名单和 Built-in 入参用途保持原边界。
+
+本次更新 Contracts、Camp Open Architecture、会话 UI 与当前规范导航；Open wire 提升到 7，Snapshot 34、
+Data Contract 99、当前版本指针、模型上下文和 Runtime classifier 不变，无数据库迁移或历史删除。
+实施与测量见[执行窗口性能记录](camp-execution-loading.md)。
+
+2026-09-13 的后续修正把两页 DOM 窗口与已读页面、完整正文缓存分开，取消“加载较新记录”按钮，复用会话区
+的更早记录样式，并恢复异步首屏及正文到达后的最新位置跟随。同步更新现行缓存与阅读合同、Architecture 和 UI；
+wire、数据库、模型上下文、Runtime 及版本指针不变。回归证据见同一[实施记录](camp-execution-loading.md#缓存与初始定位修正)。
+
 ## 待发送消息移回输入框
 
 按用户确认，公屏及单聊的编辑入口改为退出队列、覆盖普通输入框；剩余 FIFO 正常推进，重新发送进入当前队尾。
 当前合同为 [Pending Camp Input v4](../../contracts/pending-camp-input-v4.md)、[Camp Composer Draft v13](../../contracts/camp-composer-draft-v13.md)
 与 [Single Chat v5](../../contracts/single-chat-v5.md)。不改变数据库 schema、Runtime 或模型上下文；实现与验证见[实施计划](implementation-plan.md#待发送消息移回输入框)。
+
+
+## Runtime 自定义启动设置
+
+按用户确认的交互提供自定义程序路径与按 Runtime 注入的环境变量。Core 拥有保存与草稿检查；
+管理列表保持白色、状态无圆点，启动设置操作行始终可见。该独立增量通过 Migration 151 将
+Data Contract 从 v1.58 / schema 100 升为 v1.58 / schema 101；不改变模型上下文、事件协议或平台资格。
+当前合同为 [Runtime Launch v41](../../contracts/runtime-launch-and-verification-v41.md)，架构与设置 brief
+同步。实现、测试 owner 与交付证据见[实施计划](implementation-plan.md#runtime-自定义启动设置)。
+
+
+## HTML 交互预览
+
+按用户确认迁移正式 HTML 预览至可撤销、不同源 HTTP 站点，默认脚本/依赖/内部 iframe 加载，补充诊断与源码切换。
+当前合同 [File Preview v12](../../contracts/file-preview-v12.md)，取舍 [V1.58-D07](decisions.md#v1-58-d07)，
+实现与两份原稿独立验收见 [HTML 预览验证](html-preview-http.md)。Contracts、Architecture、UI、开发测试与当前规范
+导航同步；不改变版本指针、数据库、模型上下文、Runtime classifier/兼容性、根 README 产品定位或其他文件类型。
+本增量不代表整个 v1.58 或日常安装版已完成部署。

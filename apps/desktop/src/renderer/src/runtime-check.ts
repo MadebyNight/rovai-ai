@@ -10,10 +10,8 @@ export type ProductRuntimeCheckResult = {
   runtimeKind: AdapterKind
 }
 
-export async function requestProductRuntimeCheck(runtimeKind: AdapterKind, rediscover = false, request: RovaiApi['request'] = desktopCampClient.request): Promise<ProductRuntimeCheckResult> {
-  if (rediscover) {
-    await request('runtime.discovery.rescan', { interactiveShell: true })
-  }
+export async function requestProductRuntimeCheck(runtimeKind: AdapterKind, request: RovaiApi['request'] = desktopCampClient.request): Promise<ProductRuntimeCheckResult> {
+  // Core refreshes discovery inputs for every explicit check, including guides.
   return request<ProductRuntimeCheckResult>('runtime.product.check', { runtimeKind })
 }
 

@@ -1,3 +1,4 @@
+import { FilePreviewFrameNavigation } from './file-preview/file-preview-navigation'
 import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
@@ -151,6 +152,7 @@ import {
   parseCopyPathRequest,
   parseFilePreviewCamp,
   parseGenerationRequest,
+  parseHtmlSiteRequest,
   parseHandleRequest,
   parseLineRequest,
   parseOpenFilePreviewRequest,
@@ -242,6 +244,7 @@ const allowedMethods = new Set<CoreMethod>([
   'workspaces.inspect',
   'navigation.snapshot',
   'navigation.groupCamps',
+  'navigation.findCamp',
   'navigation.campViewed',
   'camps.create',
   'camps.discardPending',
@@ -274,6 +277,7 @@ const allowedMethods = new Set<CoreMethod>([
   'camp.messages.find',
   'agentRunEvidence.getContent',
   'agentRunEvidence.list',
+  'agentRunExecution.page',
   'tasks.create',
   'tasks.update',
   'tasks.list',
@@ -476,6 +480,17 @@ executionView.onChanged((snapshot) => {
 const filePreview = new FilePreviewService(
   new CoreFilePreviewSourceAuthority(core),
   {
+    previewProtectedRoots() {
+      return [
+        app.getPath('userData'),
+        ...(coreDataPath === null ? [] : [coreDataPath]),
+        userAutomationRoot(app.getPath('appData'), app.getPath('userData'), hasExplicitUserDataDirectory)
+      ]
+    },
+    previewHostOrigin(webContentsId) {
+      if (mainWindow?.webContents.id !== webContentsId) throw new Error('Preview window is unavailable')
+      return new URL(mainWindow.webContents.getURL()).origin
+    },
     async selectRoot(webContentsId) {
       const window = mainWindow?.webContents.id === webContentsId ? mainWindow : null
       if (!window || window.isDestroyed()) return null
@@ -814,8 +829,13 @@ function createWindow(): void {
     const current = window.webContents.getURL()
     if (current && url !== current) event.preventDefault()
   })
-  window.webContents.on('will-frame-navigate', (details) => {
-    if (!details.isMainFrame) details.preventDefault()
+  const previewNavigation = new FilePreviewFrameNavigation(url => filePreview.ownsHtmlPreviewOrigin(webContentsId, url))
+  window.webContents.on('will-frame-navigate', details => {
+    if (!details.isMainFrame && !previewNavigation.allows(details.url, details.frame, window.webContents.mainFrame, window.webContents.mainFrame.framesInSubtree)) details.preventDefault()
+  })
+
+  window.webContents.on('will-redirect', details => {
+    if (!details.isMainFrame && !previewNavigation.allows(details.url, details.frame, window.webContents.mainFrame, window.webContents.mainFrame.framesInSubtree)) details.preventDefault()
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -1135,6 +1155,12 @@ ipcMain.handle('rovai:file-preview-resolve-line', (event, value: unknown) =>
 ipcMain.handle('rovai:file-preview-read-binary', (event, value: unknown) =>
   filePreview.readBinary(requireFilePreviewSender(event), parseGenerationRequest(value)))
 
+ipcMain.handle('rovai:file-preview-prepare-html-site', (event, value: unknown) =>
+  filePreview.prepareHtmlSite(requireFilePreviewSender(event), parseGenerationRequest(value)))
+
+ipcMain.handle('rovai:file-preview-release-html-site', (event, value: unknown) =>
+  filePreview.releaseHtmlSite(requireFilePreviewSender(event), parseHtmlSiteRequest(value)))
+
 ipcMain.handle('rovai:file-preview-prepare-html', (event, value: unknown) =>
   filePreview.prepareHtml(requireFilePreviewSender(event), parseGenerationRequest(value)))
 
@@ -1370,7 +1396,7 @@ ipcMain.handle('rovai:channels-login-view-bounds', (event, attemptId: unknown, b
 ipcMain.handle('rovai:channels-refresh-login-qr', (event, attemptId: unknown) => {
   requireMainWindow(event.sender)
   if (typeof attemptId !== 'string' || !attemptId) throw new Error('Invalid QR attempt ID')
-  channelSettings.refreshLoginQr(attemptId)
+  return channelSettings.refreshLoginQr(attemptId)
 })
 
 ipcMain.handle('rovai:onboarding-get', async () => {
@@ -1549,7 +1575,11 @@ ipcMain.handle('rovai:member-avatar-select-source', async () => {
 
 ipcMain.handle(
   'rovai:member-avatar-save',
-  async (_event, input: SaveMemberAvatarAssetInput) => requireMemberAvatars().save(input)
+  async (_event, input: SaveMemberAvatarAssetInput) => core.request('memberAvatars.save', {
+    sourceBase64: Buffer.from(input.sourcePng).toString('base64'),
+    iconBase64: Buffer.from(input.iconPng).toString('base64'),
+    sourceWidth: input.sourceWidth, sourceHeight: input.sourceHeight, crop: input.crop
+  })
 )
 
 ipcMain.handle(
@@ -1565,7 +1595,8 @@ ipcMain.handle(
     ) {
       throw new Error('Unsupported member avatar read request')
     }
-    return requireMemberAvatars().read(avatarRef, rendition)
+    const image = await core.request<{ base64: string; mediaType: 'image/png'; width: number; height: number; crop: import('@contracts').MemberAvatarCrop } | null>('memberAvatars.read', { avatarRef, rendition })
+    return image ? { ...image, bytes: Uint8Array.from(Buffer.from(image.base64, 'base64')) } : null
   }
 )
 

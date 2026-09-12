@@ -15,10 +15,32 @@ export class SessionRequired extends Error {
 
 export type WorkspaceListing = { name: string; projectPath: string; parentPath: string | null; roots: string[]; directories: { name: string; projectPath: string }[]; nextOffset: number | null }
 
-export const WEB_OPERATIONS = ["app.info", "navigation.snapshot", "navigation.groupCamps", "navigation.campViewed", "camps.exists", "camps.open", "camps.enter", "camp.messages.page", "camp.messages.around", "camp.messages.find", "members.list", "members.get", "tasks.list", "tasks.get", "memory.list", "memory.get", "memory.hearthReviewItems.list", "automations.list", "automations.get", "automations.runs.list", "runtime.installations.list", "runtime.subsystems.get", "monitoring.snapshot", "health.check", "skills.list", "skills.get", "skills.deliveryGroups.list", "mcp.config.get", "agentRunEvidence.list", "agentRunEvidence.getContent", "camp.composerDraft.get", "camp.composerDraft.save", "camp.composerDraft.discard", "camp.composerDraft.startReply", "camp.composerDraft.cancelReply", "camp.composerDraft.resolveReplyRecipient", "camp.composerDraft.dismissContinuation", "camp.composerDraft.resolveContinuationRecipient", "camp.composerDraft.removeAttachment", "messageQuotes.mutateDraft", "camp.pendingInputs.get", "camp.pendingInputs.edit", "camp.messages.send", "action.approvals.resolve", "agentRuns.cancel", "campTurns.cancel", "commands.reconcile", "camps.create", "camps.creationPreflight", "camps.members.add", "camps.members.remove", "camps.members.removalPreview", "camps.changeDefaultLead", "members.create", "members.update", "members.avatar.set", "members.runtime.set", "members.runtime.clear", "workspaces.inspect", "workspaces.validate", "agentRunImages.read", "agentRunFileChanges.get", "agentRuns.diagnostic.get", "runtime.product.ensure", "runtime.product.check", "runtime.modelCatalog.open", "runtime.discovery.rescan"] as const
+export const WEB_OPERATIONS = ["skills.content.read", "skills.import.inspect", "skills.import.github.inspect", "skills.import.commit", "skills.setEnabled", "skills.setGroupAssignments", "skills.delete", "mcp.servers.create", "mcp.servers.update", "mcp.servers.setMembers", "mcp.servers.setEnabled", "mcp.servers.delete", "mcp.servers.reveal", "mcp.config.repairPermissions", "mcp.import.scan", "mcp.import.commit", "runtime.startup.get", "runtime.startup.save", "runtime.startup.inspect", "runtime.startup.check", "navigation.findCamp", "agentRunExecution.page", "tasks.create", "tasks.update", "memory.create", "memory.revise", "memory.retire", "memory.reactivate", "memory.forget", "memory.supersede", "memory.review.schedule", "memory.hearthReviewItems.accept", "memory.hearthReviewItems.reject", "memory.export", "automations.create", "automations.update", "automations.close", "automations.delete", "automations.run", "app.info", "navigation.snapshot", "navigation.groupCamps", "navigation.campViewed", "camps.exists", "camps.open", "camps.enter", "camp.messages.page", "camp.messages.around", "camp.messages.find", "members.list", "members.get", "tasks.list", "tasks.get", "memory.list", "memory.get", "memory.hearthReviewItems.list", "automations.list", "automations.get", "automations.runs.list", "runtime.installations.list", "runtime.subsystems.get", "monitoring.snapshot", "health.check", "skills.list", "skills.get", "skills.deliveryGroups.list", "mcp.config.get", "agentRunEvidence.list", "agentRunEvidence.getContent", "camp.composerDraft.get", "camp.composerDraft.save", "camp.composerDraft.discard", "camp.composerDraft.startReply", "camp.composerDraft.cancelReply", "camp.composerDraft.resolveReplyRecipient", "camp.composerDraft.dismissContinuation", "camp.composerDraft.resolveContinuationRecipient", "camp.composerDraft.removeAttachment", "messageQuotes.mutateDraft", "camp.pendingInputs.get", "camp.pendingInputs.edit", "camp.messages.send", "action.approvals.resolve", "agentRuns.cancel", "campTurns.cancel", "commands.reconcile", "camps.create", "camps.creationPreflight", "camps.members.add", "camps.members.remove", "camps.members.removalPreview", "camps.changeDefaultLead", "members.create", "members.update", "members.avatar.set", "members.runtime.set", "members.runtime.clear", "workspaces.inspect", "workspaces.validate", "agentRunImages.read", "agentRunFileChanges.get", "agentRuns.diagnostic.get", "runtime.product.ensure", "runtime.product.check", "runtime.modelCatalog.open", "runtime.discovery.rescan"] as const
 export type WebOperation = typeof WEB_OPERATIONS[number]
 
 const RECONCILABLE_COMMANDS = new Set<WebOperation>([
+  'skills.import.commit',
+  'skills.setEnabled',
+  'skills.setGroupAssignments',
+  'skills.delete',
+
+  'tasks.create',
+  'tasks.update',
+  'memory.create',
+  'memory.revise',
+  'memory.retire',
+  'memory.reactivate',
+  'memory.forget',
+  'memory.supersede',
+  'memory.review.schedule',
+  'memory.hearthReviewItems.accept',
+  'memory.hearthReviewItems.reject',
+  'automations.create',
+  'automations.update',
+  'automations.close',
+  'automations.delete',
+  'automations.run',
+
   'camp.messages.send', 'action.approvals.resolve', 'agentRuns.cancel', 'campTurns.cancel',
   'camps.create', 'camps.changeDefaultLead', 'camps.members.add', 'camps.members.remove',
   'members.create', 'members.update', 'members.avatar.set', 'members.runtime.set', 'members.runtime.clear',
@@ -218,6 +240,10 @@ export class ConsoleClient {
     }
   }
 
+  async avatar<T>(action: 'read' | 'save', request: unknown): Promise<T> {
+    return this.#json('avatars', { method: 'POST', body: JSON.stringify({ action, request }) })
+  }
+
   async files<T>(action: string, request: unknown): Promise<T> {
     return this.#json('files', { method: 'POST', body: JSON.stringify({ action, request }) })
   }
@@ -269,14 +295,14 @@ export class ConsoleClient {
     return this.#json('workspaces', { method: 'POST', body: JSON.stringify({ path, offset }) })
   }
 
-  async #json<T>(path: 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files', options: RequestInit = {}): Promise<T> {
+  async #json<T>(path: 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
     const generation = this.#generation
     const result = await (await this.#authorized(path, options)).json() as T
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     return result
   }
 
-  async #authorized(path: 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments', options: RequestInit = {}): Promise<Response> {
+  async #authorized(path: 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
     if (!this.#token) throw new SessionRequired()
     const generation = this.#generation
     const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {

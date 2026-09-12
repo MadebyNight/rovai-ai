@@ -58,6 +58,7 @@
   --muted: #616a73;
   --faint: #6e7382;
   --line: #dfe4e8;
+  --resize-line: #777777;
   --line-strong: #c7cfd6;
   --control-line: #8b9389;
   --new-camp-picker-surface: #ffffff;
@@ -236,6 +237,7 @@
   --muted: #abb5bc;
   --faint: #919da6;
   --line: #333e46;
+  --resize-line: #777777;
   --line-strong: #53616b;
   --control-line: #687b88;
   --new-camp-picker-surface: #1b2227;

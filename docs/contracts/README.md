@@ -45,7 +45,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Runtime Images v4（历史）](runtime-images-v4.md) | v3 来源/读取/去重不变；Runtime 图片并入 Agent 图片区，按作者分区并采用 Agent 原比例与用户 72px 两种 Gallery variant；自动展示来源由 v5 收紧 |
 | [Runtime Images v3（历史）](runtime-images-v3.md) | v2 来源/保存/读取不变；同 Run 的已发送同摘要图片优先展示；统一图片几何与附件原序规则由 v4 替代 |
 | [Runtime Images v2（历史）](runtime-images-v2.md) | 本地结构化图片、ACP 增量累积、混合存储与 Camp-scoped 读取；允许显式附件重复展示的规则由 v3 替代 |
-| [Camp Open Projection v17（当前）](camp-open-projection-v17.md) | v16 wire 不变；公屏审批排除私有 Conversation |
+| [Camp Open Projection v18（当前）](camp-open-projection-v18.md) | Open schema 7；首屏仅业务摘要，执行详情按可视窗口分页并预取相邻页 |
+| [Camp Open Projection v17（历史）](camp-open-projection-v17.md) | v16 wire 不变；公屏审批排除私有 Conversation |
 | [Camp Open Projection v16（历史）](camp-open-projection-v16.md) | v15 wire/附件读取不变；`agentRunImages` 只投影两类 Adapter 已确认原生生图，未知来源保留但不展示 |
 | [Camp Open Projection v15（历史）](camp-open-projection-v15.md) | v14 取消兼容不变；统一 source/Managed/legacy 无路径附件 View，历史读取 availability unknown 且不访问文件系统；图片集合语义由 v16 收紧 |
 | [Camp Open Projection v14（历史）](camp-open-projection-v14.md) | v13 wire/修复不变；精确兼容投影旧取消失败行，不改写底层证据 |
@@ -55,7 +56,9 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v10（历史）](camp-open-projection-v10.md) | main Snapshot 34/Open 6；Open 不读取 event_log，移除 timeline/coverage.timeline，保留 high-water 与业务卡片 |
 | [Camp Open Projection v10（渠道分支历史）](camp-open-projection-channel-v10.md) | v9 保留；Camp/Navigation 增加可选 channelSource，原始 title 不变；合并时保留原文以区分同号合同 |
 | [Camp Open Projection v9（历史）](camp-open-projection-v9.md) | v8 保留；Snapshot 34/Open 5 增加可选 member.fast，仅查询安全缓存 |
-| [Runtime Launch and Verification v39（当前）](runtime-launch-and-verification-v39.md) | Claude Code 无 Prompt 控制初始化动态模型目录；原生模型元数据、统一缓存与旧别名目录退役 |
+| [Runtime Launch and Verification v41（当前）](runtime-launch-and-verification-v41.md) | 主动检查读取最新查找环境、私有草稿预览与检查代数/程序身份一致性；继承 v40 启动设置边界 |
+| [Runtime Launch and Verification v40（历史）](runtime-launch-and-verification-v40.md) | 本机自定义程序路径、Runtime 环境变量、草稿检查、CAS 保存与进程生效边界 |
+| [Runtime Launch and Verification v39（历史）](runtime-launch-and-verification-v39.md) | Claude Code 无 Prompt 控制初始化动态模型目录；原生模型元数据、统一缓存与旧别名目录退役 |
 | [Runtime Launch and Verification v38（历史）](runtime-launch-and-verification-v38.md) | Grok BYOK、Kimi、Kiro 普通 Probe 继承原生 Home；保留临时 cwd、非生成请求、认证与有界清理 |
 | [Runtime Launch and Verification v37（历史）](runtime-launch-and-verification-v37.md) | 官方 ZCode Runtime 与原生证据边界；继承上一版合同 |
 | [Runtime Launch and Verification v36（历史）](runtime-launch-and-verification-v36.md) | v35 的 Fleet/epoch/abort/exact resume/图片边界不变；Pi 固定原生 project trust，删除 Rovai Tool Approval 与新 Managed Input Receipt，`agent_start` 原子接受 Delivery 并发布 started |
@@ -90,7 +93,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Channel/Main Schema Join v2（当前）](channel-main-schema-join-v2.md) | 精确来源与既有 receipt 含义不变；原库事务重映射 main 117/118/119→126/127/130，逐步恢复，128/129 历史合同保留，131 封口 |
 | [Channel/Main Schema Join v1（历史）](channel-main-schema-join-v1.md) | 主线 Pending/Fast 与渠道精确来源准入、126/127 receipt 与 128 封闭；副本执行位置由 v2 替代 |
 | [Channel Storage v1（历史）](channel-storage-v1.md) | 飞书/钉钉 credential 与 Developer Session 的 `rovai.sqlite` 明文存储、Main-only API、批量启动、账号/发布原子提交、CAS refresh 与旧 `.bin` clean break |
-| [Feishu Channel v15（当前）](feishu-channel-v15.md) | v14 渠道与欢迎卡不变；打开执行台使用蓝色主按钮，动作列在窄端纵向拉伸、宽端等宽同行 |
+| [Feishu Channel v16（当前）](feishu-channel-v16.md) | Session HTTP 扫码、被动身份归一化、三站点恢复、单调进度与本地提交结果核对 |
+| [Feishu Channel v15（历史）](feishu-channel-v15.md) | v14 渠道与欢迎卡不变；打开执行台使用蓝色主按钮，动作列在窄端纵向拉伸、宽端等宽同行 |
 | [Feishu Channel v14（历史）](feishu-channel-v14.md) | v13 入站与执行入口不变；新 Bot 首次发布完成后向 exact Owner 发送非阻断、稳定 UUID 的私聊欢迎卡；动作布局由 v15 替代 |
 | [Feishu Channel v13（历史）](feishu-channel-v13.md) | v12 设置、入站与执行入口不变；最近输出的安全 command 原生折叠，结果限两行，长 command 按显示列保留首尾；发布通知由 v14 替代 |
 | [Feishu Channel v12（历史）](feishu-channel-v12.md) | v11 入站规范化与此前执行卡/公开投影不变；缺少设置文件时默认开启，仅在存在当前已发布渠道 Bot 时监听；最近输出呈现由 v13 替代 |
@@ -105,7 +109,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Feishu Channel v3（历史）](feishu-channel-v3.md) | 飞书终态外层原生折叠、正文直接可见、仅过程分页与翻页保持展开；终态呈现由 v4 替代 |
 | [Feishu Channel v2（历史）](feishu-channel-v2.md) | Owner-only 入站、Quick Chat/PendingCampBinding、统一 admission、每 AgentRun 临时执行控制台、永久 Markdown 与 Managed Attachment 原生投递；终态平铺由 v3 替代，存储条款由 Channel Storage v2 替代 |
 | [Feishu Channel v1（历史）](feishu-channel-v1.md) | Developer Identity/Session、持久 Bot publication intent、owner-only ProjectBinding、ExternalPrincipal、multi-App aggregate、serial ChannelTurnRequest、roster 与 durable ChannelDelivery；不含 template/activation-first 恢复边界 |
-| [DingTalk Channel v12（当前）](dingtalk-channel-v12.md) | v11 渠道能力不变；解除 Renderer “敬请期待”门禁，钉钉与飞书进入同一可管理 Provider 路径，未验收能力仍独立关闭 |
+| [DingTalk Channel v13（当前）](dingtalk-channel-v13.md) | v12 渠道能力不变；开发者登录由接口驱动，本地 QR、结构化状态、独立期限与 SSO；展示名称可空，身份归属与原子提交不变 |
+| [DingTalk Channel v12（历史）](dingtalk-channel-v12.md) | v11 渠道能力不变；解除 Renderer “敬请期待”门禁，钉钉与飞书进入同一可管理 Provider 路径，未验收能力仍独立关闭 |
 | [DingTalk Channel v11（历史）](dingtalk-channel-v11.md) | v10 卡片与撤回不变；多 App callback durable 合并为一个有序根请求，截止后可从 SQLite 封口；永久 Markdown 增加父消息摘要，Snapshot 增加安全阶段计数；Renderer 入口由 v12 开放 |
 | [DingTalk Channel v10（历史）](dingtalk-channel-v10.md) | v9 群准入与通用 callback 不变；AI Card 分离 outTrack 更新身份与 carrier 撤回身份，执行卡和排队卡使用 Robot OpenAPI 真实撤回；入站聚合由 v11 替代 |
 | [DingTalk Channel v9（历史）](dingtalk-channel-v9.md) | v8 私聊、执行入口与欢迎卡不变；普通群以 exact credential-bound Stream App、匹配的 `robotCode` 与 `isInAtList` 证明 receiving Bot，不比较 opaque Bot/mention ID；卡片撤回由 v10 替代 |
@@ -127,7 +132,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v11（当前）](file-preview-v11.md) | 在 v10 基础上区分本地源附件与受管附件；源文件成功预览后显示实际路径，Managed/legacy 保持内部路径私有 |
+| [File Preview v12（当前）](file-preview-v12.md) | HTML 正式迁移至隔离 HTTP 站点；默认交互与依赖加载、诊断、源码及可撤销生命周期 |
+| [File Preview v11（历史）](file-preview-v11.md) | 在 v10 基础上区分本地源附件与受管附件；源文件成功预览后显示实际路径，Managed/legacy 保持内部路径私有 |
 | [File Preview v10（历史）](file-preview-v10.md) | v9 来源、Files Changed 路由与成功后提交不变；项目根与项目外普通文件显示实际路径，同名 Tab 使用最短唯一目录后缀，复制普通文件返回 canonical 绝对路径 |
 | [File Preview v9（历史）](file-preview-v9.md) | v8 来源、恢复与成功后提交不变；Files Changed 有可靠差异时进入不可变 Review，operation-only 直接预览当前文件且失败不切换导航 |
 | [File Preview v8（历史）](file-preview-v8.md) | v7 会话恢复与副作用边界不变；项目内 child 获得独立 `camp_workspace` 恢复来源；执行过程文件入口成功后才提交导航，失败只显示当前页 danger Toast |
@@ -365,7 +371,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v9 (historical)](context-manifest-evidence-v9.md) | bounded public omission evidence；不作为 Formatter v13 恢复入口 |
 | [Context Delivery Profile v2 (historical)](context-delivery-profile-v2.md) | 公共引用链与历史 budget 的旧当前合同；不选择 self-active Task |
 | [Context Delivery Profile v1 (historical)](context-delivery-profile-v1.md) | AgentRun 公共消息窗口、Unicode scalar 正文截断、历史字符预算与遗漏提示 |
-| [Run Process Detail Surface v32（当前）](run-process-detail-surface-v32.md) | v31 布局和普通工具结果不变；Built-in 使用 CLI 名称、仅显示公开入参，省略正文并折叠可靠关联的 Shell 载体 |
+| [Run Process Detail Surface v33（当前）](run-process-detail-surface-v33.md) | 执行按窗口加载，关闭组不挂载子行，Diff 按条读取，取消执行内容脱敏 |
+| [Run Process Detail Surface v32（历史）](run-process-detail-surface-v32.md) | v31 布局和普通工具结果不变；Built-in 使用 CLI 名称、仅显示公开入参，省略正文并折叠可靠关联的 Shell 载体 |
 | [Run Process Detail Surface v31（历史）](run-process-detail-surface-v31.md) | v30 公开指令不变；统一终态步骤摘要、子行状态形状、Tool 详情与文件入口，并收敛 Evidence 历史压缩及默认模型观察写入边界 |
 | [Run Process Detail Surface v30（历史）](run-process-detail-surface-v30.md) | v29 布局、Tool 行与 Compaction 不变；活动 Tool 组摘要优先展示已有公开证据中的具体当前指令 |
 | [Run Process Detail Surface v29（历史）](run-process-detail-surface-v29.md) | v28 布局与取消不变；增加 active AgentRun 的本地非 Tool Compaction 展示旁路 |

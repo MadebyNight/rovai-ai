@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { useEffect, useRef, useState } from 'react'
 import type { ResolvedTheme, SkillContentRequest, SkillContentView } from '@contracts'
 import { CapabilityError } from './CapabilityWorkspace'
@@ -21,6 +22,7 @@ export function SkillContentPreview({
 
 function SkillContentPreviewSession({ target, theme }: { target: SkillContentRequest; theme: ResolvedTheme }): React.JSX.Element {
   const preview = useRef<HTMLDivElement>(null)
+  const client = useCampClient()
   const [path, setPath] = useState('SKILL.md')
   const [raw, setRaw] = useState(false)
   const [view, setView] = useState<SkillContentView | null>(null)
@@ -32,7 +34,7 @@ function SkillContentPreviewSession({ target, theme }: { target: SkillContentReq
     let cancelled = false
     setView(null)
     setError(null)
-    void window.rovai
+    void client
       .request<SkillContentView>('skills.content.read', {
         ...JSON.parse(targetKey),
         path
@@ -49,7 +51,7 @@ function SkillContentPreviewSession({ target, theme }: { target: SkillContentReq
     return () => {
       cancelled = true
     }
-  }, [targetKey, path, retry])
+  }, [client, targetKey, path, retry])
   return (
     <div ref={preview} className="skill-content-preview">
       <SkillFileNavigation
