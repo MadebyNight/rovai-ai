@@ -32,6 +32,7 @@ import type {
   OnboardingRuntimeSelection,
   OnboardingSnapshot,
   NavigationCampItem,
+  NavigationCampTarget,
   NavigationCampPage,
   NavigationPin,
   NavigationPreferencesSnapshot,
@@ -2851,7 +2852,7 @@ function AuthoritativeApp({
     })
   }
 
-  const chooseCamp = (camp: NavigationCampItem): void => {
+  const chooseCamp = (camp: NavigationCampTarget): void => {
     void requestMemberTransition(() => {
       return activateCamp(camp.id, {
         reconcileDefaultLead: camp.activationState !== 'pending'

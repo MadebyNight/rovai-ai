@@ -242,6 +242,7 @@ const allowedMethods = new Set<CoreMethod>([
   'workspaces.inspect',
   'navigation.snapshot',
   'navigation.groupCamps',
+  'navigation.findCamp',
   'navigation.campViewed',
   'camps.create',
   'camps.discardPending',
