@@ -43,23 +43,23 @@ describe('explicit Runtime check targeting', () => {
     })
   })
 
-  it('waits for interactive discovery before checking a newly installed Runtime', async () => {
-    let finishDiscovery!: () => void
-    const discovery = new Promise<void>(resolve => { finishDiscovery = resolve })
-    const request = vi.fn().mockReturnValueOnce(discovery).mockResolvedValueOnce({ ready: false, outcome: 'stable_failure' })
+  it('waits for the backend-owned fresh check and preserves its failure outcome without a separate rescan', async () => {
+    let finishCheck!: (result: unknown) => void
+    const completion = new Promise(resolve => { finishCheck = resolve })
+    const request = vi.fn().mockReturnValueOnce(completion)
     vi.stubGlobal('window', { rovai: { request } })
 
-    const check = requestProductRuntimeCheck('codex-cli', true)
-    expect(request).toHaveBeenCalledExactlyOnceWith('runtime.discovery.rescan', { interactiveShell: true })
-    finishDiscovery()
+    const check = requestProductRuntimeCheck('codex-cli')
+    expect(request).toHaveBeenCalledExactlyOnceWith('runtime.product.check', { runtimeKind: 'codex-cli' })
+    finishCheck({ ready: false, outcome: 'stable_failure' })
     await expect(check).resolves.toEqual({ ready: false, outcome: 'stable_failure' })
-    expect(request).toHaveBeenNthCalledWith(2, 'runtime.product.check', { runtimeKind: 'codex-cli' })
+    expect(request).toHaveBeenCalledTimes(1)
   })
 
-  it('does not check stale discovery after a failed rescan', async () => {
+  it('does not hide a backend environment-read failure or retry with cached discovery', async () => {
     const request = vi.fn().mockRejectedValue(new Error('discovery failed'))
     vi.stubGlobal('window', { rovai: { request } })
-    await expect(requestProductRuntimeCheck('codex-cli', true)).rejects.toThrow('discovery failed')
+    await expect(requestProductRuntimeCheck('codex-cli')).rejects.toThrow('discovery failed')
     expect(request).toHaveBeenCalledTimes(1)
   })
 })

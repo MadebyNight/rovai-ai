@@ -25,6 +25,7 @@ const state = {
 state.preferences.newConversationDefaults.memberAgentIds = fixture.largeRoster.slice(0, 12).map(a => a.agentId)
 const channelListeners = new Set(), webListeners = new Set()
 let pendingChannelAction = null
+let pendingStartupInspection = null
 const emitChannels = () => channelListeners.forEach(fn => fn(clone(state.channels)))
 async function channelAction(action, kind) {
   await request(`channels.${action}`, { kind })
@@ -90,10 +91,17 @@ Object.assign(window, { rovai: {
       state.startup[params.runtimeKind] = settings
       return clone(settings)
     }
-    if (method === 'runtime.startup.inspect' || method === 'runtime.startup.check') return {
-      status: method === 'runtime.startup.check' ? 'authentication_required' : 'recognized',
-      executablePath: params.configuration.programPath ?? '/sample/bin/codex', reportedVersion: '0.153.4'
+    if (method === 'runtime.startup.inspect' || method === 'runtime.startup.check') {
+      if (state.deferStartupInspection) {
+        state.deferStartupInspection = false
+        return new Promise(resolve => { pendingStartupInspection = resolve })
+      }
+      return {
+        status: method === 'runtime.startup.check' ? 'authentication_required' : 'recognized',
+        executablePath: params.configuration.programPath ?? '/sample/bin/codex', reportedVersion: state.previewVersion ?? '0.153.4'
+      }
     }
+    if (method === 'runtime.product.check') return { ready: false, outcome: state.checkOutcome ?? 'stable_failure' }
     if (method === 'notifications.preference.get') return clone(state.notifications)
     if (method === 'notifications.preference.update') {
       state.notifications = { ...state.notifications, ...params.command, version: state.notifications.version + 1 }
@@ -170,6 +178,7 @@ window.settingsTest = {
     emitChannels()
   },
   fail: method => { state.failure = method },
+  finishStartupInspection: result => { pendingStartupInspection(result); pendingStartupInspection = null },
   settle: () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 35))))
 }
 createRoot(document.getElementById('root')).render(<Fixture />)

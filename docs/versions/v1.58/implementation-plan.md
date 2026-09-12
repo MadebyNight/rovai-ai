@@ -281,12 +281,25 @@ Main/Core/Renderer 支持缺失展示名称，Migration 150 放宽两个名称�
 
 ## Runtime 自定义启动设置
 
+后续主动检查刷新修复由 Runtime Launch v41 约束：后端统一读取最新基础环境，正式检查加载已保存配置，
+草稿检查使用临时快照；按搜索代数隔离请求合并与结果写回。列表/指南不再重复 rescan，失败或未完成
+不以历史成功冒充当前结果。新增临时程序/数据库集成 owner，并扩展既有设置页 fixture。
+本段为新增实现范围，下面 PR #361 的既有验证记录不代表本次回归已经通过。
+
+本次 Windows 专项验证：discovery 22 项、startup overlay 2 项、Core runtime 38 项通过（1 项显式 Smoke 忽略）；
+前端定向 30 项、类型检查、文档治理和 Core all-features Clippy（`-D warnings`）通过。隔离 Electron fixture
+的 Runtime 段通过，覆盖正式失败/未完成、登录指南、恢复自动与迟到预览，双主题/缩放截图已检查；整套
+settings suite 后续在既有 channels 段超时，不能记为整套通过。
+全量本机门禁仍有 Windows 限制：Rust Library 553 通过、43 失败、7 忽略；Vitest 1886 通过、14 失败、16 跳过。
+失败涉及本次未修改的 POSIX 路径预期、symlink 权限、私有目录 ACL 和进程断言；Rust PR 聚合在 Library 失败
+后未继续 CLI/slow 阶段。专项证据不替代这些失败或未运行项目，PR CI 单独记录。
+
 范围来自 Issue #338 与用户确认的交互：允许已发现程序继续替换路径、选择后浅检、独立草稿深检、
 环境变量新增编辑与遮蔽、CAS 保存、恢复自动和常显置灰的“放弃更改 / 保存”。Issue 在新版本发布前保持开启。
 
 - Core：`runtime_startup` 持久化/输入边界、Migration 151、不可变配置快照、按 Runtime 的进程 overlay。
 - Desktop：原生选择器、owner RPC allowlist、草稿结果与已保存配置分离、白色管理列表和统一尾部图标。
-- 当前权威：[Runtime Launch v40](../../contracts/runtime-launch-and-verification-v40.md)、
+- 当前权威：[Runtime Launch v41](../../contracts/runtime-launch-and-verification-v41.md)、
   [Runtime Catalog](../../architecture/runtime-catalog-boundaries.md#本机启动设置)与设置工作区 brief。
 - 不新增模型可见字段、Runtime Kind、第三方依赖或系统环境修改；现有进程继续使用启动时捕获的环境。
 

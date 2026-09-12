@@ -131,7 +131,7 @@ wire、数据库、模型上下文、Runtime 及版本指针不变。回归证�
 按用户确认的交互提供自定义程序路径与按 Runtime 注入的环境变量。Core 拥有保存与草稿检查；
 管理列表保持白色、状态无圆点，启动设置操作行始终可见。该独立增量通过 Migration 151 将
 Data Contract 从 v1.58 / schema 100 升为 v1.58 / schema 101；不改变模型上下文、事件协议或平台资格。
-当前合同为 [Runtime Launch v40](../../contracts/runtime-launch-and-verification-v40.md)，架构与设置 brief
+当前合同为 [Runtime Launch v41](../../contracts/runtime-launch-and-verification-v41.md)，架构与设置 brief
 同步。实现、测试 owner 与交付证据见[实施计划](implementation-plan.md#runtime-自定义启动设置)。
 
 

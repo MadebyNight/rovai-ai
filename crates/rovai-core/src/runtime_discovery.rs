@@ -111,6 +111,9 @@ pub struct ShellPathDiagnostic {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSearchEnvironment {
+    runtime_overrides: BTreeMap<AdapterKind, PathBuf>,
+    zcode_default_executables: Vec<PathBuf>,
+    diagnostic_codes: Vec<&'static str>,
     startup_configurations:
         BTreeMap<AdapterKind, crate::runtime_startup::RuntimeStartupConfiguration>,
     generation: u64,
@@ -124,6 +127,7 @@ pub struct RuntimeSearchEnvironment {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSearchEnvironmentSummary {
+    pub diagnostic_codes: Vec<&'static str>,
     pub generation: u64,
     pub created_at: String,
     pub path_entry_count: usize,
@@ -293,6 +297,9 @@ impl RuntimeSearchEnvironment {
         let path_value = env::join_paths(path_entries.iter().map(|entry| entry.path.as_os_str()))
             .unwrap_or_default();
         Self {
+            diagnostic_codes: Vec::new(),
+            runtime_overrides: BTreeMap::new(),
+            zcode_default_executables: Vec::new(),
             startup_configurations: BTreeMap::new(),
             generation: generation.max(1),
             path_entries,
@@ -318,6 +325,7 @@ impl RuntimeSearchEnvironment {
     }
 
     fn capture(generation: u64, interactive: bool) -> Self {
+        let mut diagnostic_codes = Vec::new();
         let mut entries = Vec::new();
         if let Some(inherited) = env::var_os("PATH") {
             #[cfg(windows)]
@@ -335,12 +343,22 @@ impl RuntimeSearchEnvironment {
         #[cfg(windows)]
         {
             let registry_paths = read_registry_path_values();
+            if registry_paths.user.is_none() {
+                diagnostic_codes.push("runtime_user_registry_path_unavailable");
+            }
+            if registry_paths.machine.is_none() {
+                diagnostic_codes.push("runtime_machine_registry_path_unavailable");
+            }
             let environment = env::vars_os().collect::<Vec<_>>();
             extend_windows_registry_paths(&mut entries, &registry_paths, &environment);
         }
 
         let shell_start = Instant::now();
         let (shell_status, shell_name, shell_paths) = capture_shell_path(interactive);
+        #[cfg(unix)]
+        if shell_status != ShellPathStatus::Captured {
+            diagnostic_codes.push("runtime_shell_path_capture_incomplete");
+        }
         let shell_entry_count = shell_paths.len();
         extend_paths(
             &mut entries,
@@ -353,8 +371,20 @@ impl RuntimeSearchEnvironment {
             SearchPathSource::KnownLocation,
         );
         let path_value = env::join_paths(entries.iter().map(|entry| entry.path.as_os_str()))
-            .unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default());
+            .unwrap_or_else(|_| {
+                diagnostic_codes.push("runtime_search_path_join_failed_using_inherited");
+                env::var_os("PATH").unwrap_or_default()
+            });
         Self {
+            diagnostic_codes,
+            zcode_default_executables: crate::zcode::default_executables(),
+            runtime_overrides: AdapterKind::ALL
+                .into_iter()
+                .filter_map(|kind| {
+                    env::var_os(kind.override_environment_key())
+                        .map(|path| (kind, PathBuf::from(path)))
+                })
+                .collect(),
             startup_configurations: BTreeMap::new(),
             generation,
             path_entries: entries,
@@ -408,6 +438,7 @@ impl RuntimeSearchEnvironment {
 
     pub fn summary(&self) -> RuntimeSearchEnvironmentSummary {
         RuntimeSearchEnvironmentSummary {
+            diagnostic_codes: self.diagnostic_codes.clone(),
             generation: self.generation,
             created_at: self.created_at.clone(),
             path_entry_count: self.path_entries.len(),
@@ -511,13 +542,13 @@ impl RuntimeSearchEnvironment {
             return self.candidates_with_override(
                 kind,
                 std::iter::empty(),
-                env::var_os(kind.override_environment_key()).map(PathBuf::from),
+                self.runtime_overrides.get(&kind).cloned(),
             );
         }
         self.candidates_with_override(
             kind,
             manual_candidates,
-            env::var_os(kind.override_environment_key()).map(PathBuf::from),
+            self.runtime_overrides.get(&kind).cloned(),
         )
     }
 
@@ -539,8 +570,9 @@ impl RuntimeSearchEnvironment {
                         .map(|p| (p, InstallationSource::Env)),
                 )
                 .chain(
-                    crate::zcode::default_executables()
-                        .into_iter()
+                    self.zcode_default_executables
+                        .iter()
+                        .cloned()
                         .map(|p| (p, InstallationSource::KnownLocation)),
                 )
             {
@@ -1657,6 +1689,9 @@ mod tests {
 
     fn test_search(entries: Vec<SearchPathEntry>) -> RuntimeSearchEnvironment {
         RuntimeSearchEnvironment {
+            zcode_default_executables: Vec::new(),
+            runtime_overrides: BTreeMap::new(),
+            diagnostic_codes: Vec::new(),
             startup_configurations: BTreeMap::new(),
             generation: 7,
             path_value: env::join_paths(entries.iter().map(|entry| entry.path.as_os_str()))
@@ -2150,8 +2185,11 @@ mod windows_tests {
         path_entries: Vec<SearchPathEntry>,
     ) -> RuntimeSearchEnvironment {
         RuntimeSearchEnvironment {
+            diagnostic_codes: Vec::new(),
             startup_configurations: BTreeMap::new(),
             generation,
+            runtime_overrides: BTreeMap::new(),
+            zcode_default_executables: Vec::new(),
             path_value: env::join_paths(path_entries.iter().map(|entry| entry.path.as_os_str()))
                 .unwrap(),
             path_entries,

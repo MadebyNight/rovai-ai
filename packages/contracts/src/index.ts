@@ -367,6 +367,7 @@ export interface RuntimeStartupInspection {
   status: 'missing' | 'recognized' | 'version_unverified' | 'authentication_required' | 'ready' | 'check_failed'
   executablePath: string | null
   reportedVersion: string | null
+  searchEnvironment?: HealthStatus['searchEnvironment']
 }
 
 export type RuntimeDiscoveryStatus = 'detecting' | 'found' | 'missing'
@@ -499,6 +500,7 @@ export interface HealthStatus {
   runtimePlatformAdmission: RuntimePlatformAdmission[]
   runtimeAvailability: ProductRuntimeAvailability[]
   searchEnvironment: {
+    diagnosticCodes?: string[]
     generation: number
     createdAt: string
     pathEntryCount: number
