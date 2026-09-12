@@ -41,5 +41,8 @@
     "web-stop-active.png",
     "web-stop-complete.png"
   ],
-  "packageLocation": "Relocated product from package-upgrade acceptance, outside the repository"
+  "packageLocation": "Relocated product from package-upgrade acceptance, outside the repository",
+  "finalPackageManifestSha256": "f9defae5255cb0d067c7cb08e3fe84abe557459a582dcf481d8c4a03eb3c18a4",
+  "finalPackageSourceCommit": "69e1bb836d39bb6489d9804ab2e1f4f2c11e6e6d",
+  "executableAndWebHashesMatchFinalPackage": true
 }

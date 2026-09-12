@@ -1,10 +1,10 @@
 {
   "current": {
-    "commit": "f6e9541915eac3d29da83a62f34cda5362eb9432",
-    "dirty": true,
+    "commit": "69e1bb836d39bb6489d9804ab2e1f4f2c11e6e6d",
+    "dirty": false,
     "profile": "release",
     "target": "macos-arm64",
-    "manifestSha256": "6956cf9567fb977438314cd141b8672338eb6feb538ee8559ea4679690046f14"
+    "manifestSha256": "f9defae5255cb0d067c7cb08e3fe84abe557459a582dcf481d8c4a03eb3c18a4"
   },
   "previous": {
     "commit": "1be7f5459a1998ffcfde186992d7414f16927691",
@@ -25,6 +25,12 @@
     "stoppedBackupRollback": true
   },
   "status": "passed",
-  "sourceReportSha256": "bb98e8c626bbce5fa26322c4787432e2cd18e26b8ffeca310e32140a465f8aa0",
-  "scope": "Isolated previous development preview to current macOS arm64 package; one durable message; stopped in-place rollback. Not a production release or cross-machine backup qualification."
+  "sourceReportSha256": "7007bec5c617422a9d0db041567ffd8a0a8c6c009c8438a3dcec7625716c3008",
+  "scope": "macOS arm64 development package; actual previous preview data, one durable message and stopped in-place rollback; no cross-machine backup claim.",
+  "archive": {
+    "name": "rovai-server-macos-arm64-69e1bb83.tar.gz",
+    "sha256": "94d4a68b3d51ab7e8184414cf05719fd020e36ea2fba26a02c25a807d1250e34",
+    "bytes": 20009675
+  },
+  "executableAndWebHashesMatchQualifiedRuntimePackage": true
 }
