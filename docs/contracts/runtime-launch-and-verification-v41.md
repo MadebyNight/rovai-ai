@@ -61,6 +61,7 @@ Shell 失败/超时继续保留原 `shell` 诊断；注册表来源不可用或 
 ## 验证边界
 
 可控环境读取、临时目录、合成入口与私有数据库证明新环境选择、原路径升级、手动不回退、PATH overlay 不选主程序、
-草稿/恢复自动不生效、保存和新检查不与旧 attempt 混并。程序替换沿用 identity-checked probe 的回归 owner。
+草稿/恢复自动不生效、草稿探测期间程序替换不提交混合结果、保存和新检查不与旧 attempt 混并。
+正式程序替换的有界重试继续沿用 identity-checked probe 的回归 owner。
 Renderer 继续使用生产设置组件的隔离 Electron fixture，验证预览失败和迟到结果，不访问日常数据或真实账号。
 具体命令与合同 owner 见[测试说明](../development/testing.md#主动检查的环境刷新)。

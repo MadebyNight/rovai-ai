@@ -251,6 +251,35 @@ async fn fresh_formal_and_draft_checks_preserve_program_selection_and_private_st
         fixture.core.runtime_health_payload().await.unwrap(),
         public_before
     );
+    // Replace the program between its version and authentication probes. A
+    // private preview must reject the mixed identity without touching public state.
+    fixture.program("new", "3.1.0", true);
+    let draft_core = fixture.core.clone();
+    let changed_draft = configuration(Some(&new), "draft-private", old.parent().unwrap());
+    let changing_preview = tokio::spawn(async move {
+        draft_core
+            .handle_runtime_startup(
+                "runtime.startup.check",
+                json!({
+                    "runtimeKind": KIND, "configuration": changed_draft,
+                }),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !fixture.root.join("probe-started").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.program("new", "3.2.0", false);
+    std::fs::write(fixture.root.join("probe-release"), b"release").unwrap();
+    assert!(changing_preview.await.unwrap().is_err());
+    assert_eq!(
+        fixture.core.runtime_health_payload().await.unwrap(),
+        public_before
+    );
     let automatic = configuration(None, "draft-auto", old.parent().unwrap());
     let preview = fixture
         .core
@@ -262,7 +291,7 @@ async fn fresh_formal_and_draft_checks_preserve_program_selection_and_private_st
         )
         .await
         .unwrap();
-    assert_eq!(preview["reportedVersion"], "codex-cli 3.0.0");
+    assert_eq!(preview["reportedVersion"], "codex-cli 3.2.0");
     assert_eq!(
         fixture.settings().await,
         settings_before,
@@ -287,7 +316,7 @@ async fn fresh_formal_and_draft_checks_preserve_program_selection_and_private_st
     assert_eq!(fixture.settings().await, settings_before);
     fixture.save(1, &automatic).await;
     fixture.check().await;
-    assert_eq!(fixture.health().await["reportedVersion"], "codex-cli 3.0.0");
+    assert_eq!(fixture.health().await["reportedVersion"], "codex-cli 3.2.0");
     fixture.close().await;
 }
 
