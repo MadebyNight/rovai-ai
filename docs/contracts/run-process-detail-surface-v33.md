@@ -5,7 +5,7 @@ authority: execution-window-and-unredacted-presentation
 status: accepted
 version: 33
 source_version: v1.58
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Run Process Detail Surface v33
@@ -49,6 +49,10 @@ Camp 执行台与 Inspector 共用 [Camp Open v18](camp-open-projection-v18.md) 
 收起的工具组只挂载 summary，展开后才挂载子行。文件 Diff 只在对应文件行展开后读取与解析；普通工具结果
 继续按条展开读取、失败重试。组跨页时按稳定操作身份保留展开意图，翻页保留阅读锚点。关闭 Run 后卸载详情，
 重新打开从最新窗口读取；此预算替换旧版无限保留已激活详情的要求。
+
+两页 DOM 窗口不淘汰所有已读数据。页面和完整正文按 Camp Open v18 的独立预算缓存，向下滚动恢复缓存，
+不提供“加载较新记录”按钮；“回到最新”是采用最新缓存的跳转。更早记录入口复用会话区的文字箭头、计数、
+加载与错误重试样式。首次展开正在执行的 Run 时，首个页面和完整正文异步到达后仍跟随到最新位置。
 
 本次不更换视觉体系：28px 工具行、原生 disclosure、状态图形、文件预览按钮、底部和 Inspector 的独立滚动
 继续使用现有组件与主题 token。

@@ -8308,11 +8308,12 @@ function RunExecutionContent({
   const nonTerminal = NON_TERMINAL_RUNS.has(run.status)
   const publicFailure = run.status === 'failed' ? run.failure : null
   const showUnsettledWarning = agentRunShowsUnsettledWarning(run)
-  const windowPage = useExecutionWindow(windowedEvidence, campId, run, liveRevision)
+  const [narrationBodies, setNarrationBodies] = useState<Map<string, string>>(new Map())
+  const windowPage = useExecutionWindow(windowedEvidence, campId, run, liveRevision, narrationBodies)
   const displayedEvidence = windowedEvidence ? windowPage.evidence : historicalEvidence
   const narrationEvidence = displayedEvidence ?? truncatedEvidence
-  const [narrationBodies, setNarrationBodies] = useState<Map<string, string>>(new Map())
   const narrationCache = useRef(new Map<string, { stamp: string; body: string }>())
+  const latestNarrationIds = useRef(new Set<string>())
   const [narrationStatus, setNarrationStatus] = useState<RunExecutionHistoryStatus>('idle')
   const [narrationRetry, setNarrationRetry] = useState(0)
   useEffect(() => {
@@ -8321,8 +8322,27 @@ function RunExecutionContent({
       && item.isTruncated && item.contentBlobId)
     const stamps = new Map(needed.map(item => [item.id, `${item.contentBlobId}:${item.contentByteCount}`]))
     const cache = narrationCache.current
-    for (const [id, cached] of cache) if (stamps.get(id) !== cached.stamp) cache.delete(id)
-    const cachedBodies = (): Map<string, string> => new Map([...cache].map(([id, value]) => [`narration:${id}`, value.body]))
+    if (!windowPage.hasNewer) latestNarrationIds.current = new Set(stamps.keys())
+    for (const [id, stamp] of stamps) {
+      const cached = cache.get(id)
+      if (!cached) continue
+      cache.delete(id)
+      if (cached.stamp === stamp) cache.set(id, cached)
+    }
+    const cachedBodies = (): Map<string, string> => {
+      let bytes = [...cache.values()].reduce((total, value) => total + value.body.length * 2, 0)
+      for (const [id, value] of cache) {
+        if (cache.size <= 64 && bytes <= 8 * 1024 * 1024) break
+        if (stamps.has(id) || latestNarrationIds.current.has(id)) continue
+        cache.delete(id)
+        bytes -= value.body.length * 2
+      }
+      // Body retention is independent from the two mounted pages as well.
+      return new Map(needed.flatMap(item => {
+        const cached = cache.get(item.id)
+        return cached ? [[`narration:${item.id}`, cached.body] as const] : []
+      }))
+    }
     setNarrationBodies(cachedBodies())
     const missing = needed.filter(item => !cache.has(item.id))
     if (missing.length === 0) {
@@ -8344,7 +8364,7 @@ function RunExecutionContent({
       if (!disposed) setNarrationStatus('failed')
     })
     return () => { disposed = true }
-  }, [campId, narrationEvidence, narrationRetry])
+  }, [campId, narrationEvidence, narrationRetry, windowPage.hasNewer])
   const historicalProgress = useMemo(() => displayedEvidence
     ? buildLiveExecutionProgress(
         displayedEvidence.map(liveRuntimeEventFromExecutionEvidence),
@@ -8403,15 +8423,28 @@ function RunExecutionContent({
       : activeRetryDiagnostic
         ? `等待 Claude Code 自动重试（${activeRetryDiagnostic.attempt}/${activeRetryDiagnostic.maxAttempts}）`
         : executionInitialFeedback(run.status, processItems, Boolean(finalBody))
+  const earlierLoadError = windowPage.direction === 'newer' ? null : windowPage.error
+  const earlierLoading = windowPage.loading && windowPage.direction !== 'newer'
 
   return (
     <div className="process-content" ref={windowPage.root}>
-      {windowedEvidence && (windowPage.hasEarlier || windowPage.error || windowPage.loading) && (
-        <div className="execution-window-navigation" role="status">
-          <button className="quiet-button compact" type="button" disabled={windowPage.loading} onClick={() => {
-            void windowPage.move(windowPage.error ? 'retry' : windowPage.evidence.length ? 'earlier' : 'latest')
-          }}>{windowPage.loading ? '正在读取执行记录…' : windowPage.error ? '重试' : '载入更早记录'}</button>
-          {windowPage.error && <span>执行记录读取失败。</span>}
+      {windowedEvidence && (windowPage.hasEarlier || earlierLoadError || earlierLoading) && (
+        <div className={`camp-history-loader execution-history-loader${earlierLoadError ? ' is-error' : ''}`}
+          role={earlierLoadError ? 'alert' : 'status'} aria-atomic="true">
+          {earlierLoadError && <>
+            <span>执行记录暂时没有加载</span>
+            <span className="camp-history-separator" aria-hidden="true">·</span>
+          </>}
+          <button className="camp-history-text-button" type="button" disabled={windowPage.loading} onClick={() => {
+            void windowPage.move(earlierLoadError ? 'retry' : windowPage.evidence.length ? 'earlier' : 'latest')
+          }}>{earlierLoading ? <>
+            <span className="camp-history-spinner" aria-hidden="true" />
+            <span>{windowPage.evidence.length ? '正在加载执行记录…' : '正在加载…'}</span>
+          </> : earlierLoadError ? '重试' : <><span aria-hidden="true">↑</span><span>加载更早记录</span></>}</button>
+          {!earlierLoadError && windowPage.evidence.length > 0 && <>
+            <span className="camp-history-separator" aria-hidden="true">·</span>
+            <span className="camp-history-count">已显示 {processItems.length} 项</span>
+          </>}
         </div>
       )}
       {publicFailure && <RuntimeFailureNotice failure={publicFailure} presentation="agent-run" />}
@@ -8517,9 +8550,14 @@ function RunExecutionContent({
           />
         )
       })}
-      {windowedEvidence && windowPage.hasNewer && <div className="execution-window-navigation">
-        <button className="quiet-button compact" type="button" disabled={windowPage.loading} onClick={() => void windowPage.move('newer')}>载入较新记录</button>
-        <button className="quiet-button compact" type="button" disabled={windowPage.loading} onClick={() => void windowPage.move('latest')}>回到最新</button>
+      {windowedEvidence && windowPage.hasNewer && <div className={`camp-history-loader execution-history-loader execution-history-latest${windowPage.direction === 'newer' && windowPage.error ? ' is-error' : ''}`}
+        role={windowPage.direction === 'newer' && windowPage.error ? 'alert' : 'status'}>
+        {windowPage.direction === 'newer' && windowPage.loading && <span className="camp-history-spinner" aria-label="正在加载执行记录" />}
+        {windowPage.direction === 'newer' && windowPage.error && <button className="camp-history-text-button" type="button"
+          onClick={() => void windowPage.move('retry')}>读取失败，重试</button>}
+        <button className="camp-history-text-button" type="button" disabled={windowPage.loading} onClick={() => void windowPage.move('latest')}>
+          <span aria-hidden="true">↓</span><span>回到最新</span>
+        </button>
       </div>}
       {(historyStatus === 'loading' || narrationStatus === 'loading') && (
         <div className="process-action current" role="status">

@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Rovai-ai v1.58：上下文 Gate 与双轨评测
@@ -114,6 +114,10 @@ v1.58/schema 100，仅放宽 dingtalk_account 两个展示名的 NULL 约束，�
 本次更新 Contracts、Camp Open Architecture、会话 UI 与当前规范导航；Open wire 提升到 7，Snapshot 34、
 Data Contract 99、当前版本指针、模型上下文和 Runtime classifier 不变，无数据库迁移或历史删除。
 实施与测量见[执行窗口性能记录](camp-execution-loading.md)。
+
+2026-09-13 的后续修正把两页 DOM 窗口与已读页面、完整正文缓存分开，取消“加载较新记录”按钮，复用会话区
+的更早记录样式，并恢复异步首屏及正文到达后的最新位置跟随。同步更新现行缓存与阅读合同、Architecture 和 UI；
+wire、数据库、模型上下文、Runtime 及版本指针不变。回归证据见同一[实施记录](camp-execution-loading.md#缓存与初始定位修正)。
 
 ## 待发送消息移回输入框
 

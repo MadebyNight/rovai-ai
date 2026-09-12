@@ -51,6 +51,7 @@ const attachmentReviewMode = new URLSearchParams(window.location.search).get('re
 const executionRequests: { beforeSequence: number | null; limit: number }[] = []
 const executionContentReads: string[] = []
 let executionReadFailure = false
+let runningExecutionScenario = false
 const executionRun = { ...textRun, id: 'window-run', executionEvidenceCount: 1000 }
 function windowEvidence(sequence: number): AgentRunExecutionEvidenceView {
   const id = `window-${sequence}`
@@ -310,12 +311,17 @@ Object.assign(window, { rovai: {
       const beforeSequence = params?.beforeSequence ?? null
       const limit = params?.limit ?? 24
       executionRequests.push({ beforeSequence, limit })
+      if (runningExecutionScenario) await new Promise(resolve => setTimeout(resolve, 120))
       if (executionReadFailure && beforeSequence !== null) throw new Error('Fixture page offline')
       const end = (beforeSequence ?? 1001) - 1
       const start = Math.max(1, end - limit + 1)
       return { schemaVersion: 1, campId, agentRunId: executionRun.id, requestedBeforeSequence: beforeSequence,
         nextBeforeSequence: start > 1 ? start : null, throughSequence: 1000, hasMore: start > 1,
-        evidence: Array.from({ length: end - start + 1 }, (_, offset) => windowEvidence(start + offset)) }
+        evidence: Array.from({ length: end - start + 1 }, (_, offset) => {
+          const item = windowEvidence(start + offset)
+          return runningExecutionScenario && item.kind === 'narration'
+            ? { ...item, isTruncated: true, contentBlobId: `body-${item.id}`, payload: { ...item.payload, text: '正文预览' } } : item
+        }) }
     }
     if (method === 'agentRunEvidence.list') return { schemaVersion: 1, agentRunId: 'text-run',
       requestedAfterSequence: 0, nextAfterSequence: 60, throughSequence: 60, hasMore: false, evidence: textEvidence }
@@ -323,6 +329,10 @@ Object.assign(window, { rovai: {
       if (params?.evidenceId?.startsWith('window-')) {
         executionContentReads.push(params.evidenceId)
         const evidence = windowEvidence(Number(params.evidenceId.slice(7)))
+        if (evidence.kind === 'narration') {
+          await new Promise(resolve => setTimeout(resolve, 180))
+          return { payload: evidence.payload }
+        }
         if (evidence.canonical?.diffProjection?.entries) evidence.canonical.diffProjection.entries[0].diff = '@@ -1 +1 @@\n-old\n+TOKEN=fixture-value\n'
         return { payload: { item: { aggregatedOutput: 'OUTPUT_TOKEN=fixture-value' } }, canonical: evidence.canonical }
       }
@@ -414,7 +424,9 @@ const navigation: NavigationSnapshot = {
   }]
 }
 
-function Fixture(): React.JSX.Element {
+function Fixture({ executionPlacement = 'bottom', windowed = false }: {
+  executionPlacement?: 'bottom' | 'inspector'; windowed?: boolean
+}): React.JSX.Element {
   const [snapshot, setSnapshot] = useState(current)
   const [profile, setProfile] = useState(DEFAULT_CURRENT_USER_PROFILE)
   const [messageHistory, setMessageHistory] = useState<CampOpenMessageCoverage | null>(null)
@@ -450,7 +462,8 @@ function Fixture(): React.JSX.Element {
             oldestLoadedSequence: 1, newestLoadedSequence: 61, hasEarlier: false })
         }}
         onSend={async () => {}} onChangeLead={async () => {}} onTasksChanged={async () => {}}
-        onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement="bottom"
+        onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement={executionPlacement}
+        openCoverage={windowed ? projection(60).coverage : null}
         inspectorVisible={open} inspectorTab={tab} detailEntryHost={entryHost}
         onInspectorTabChange={setTab}
         onOpenInspector={next => { setTab(next); setOpen(true) }} onCloseInspector={() => setOpen(false)} />
@@ -592,6 +605,7 @@ Object.assign(window, { campOpenTest: {
   },
   showTextEvidence: () => reactRoot.render(<RunExecutionDisclosure run={textRun} campId={campId} />),
   showExecutionWindow: (placement: 'bottom' | 'inspector' = 'bottom') => {
+    runningExecutionScenario = false
     executionRequests.length = 0
     executionContentReads.length = 0
     reactRoot.render(<section key={placement} className={`execution-drawer placement-${placement}`} style={{ position: 'relative', width: placement === 'inspector' ? 440 : 'calc(100% - 48px)', height: 430, maxHeight: 430, margin: 24 }}>
@@ -600,6 +614,17 @@ Object.assign(window, { campOpenTest: {
         <RunExecutionDisclosure key={placement} run={executionRun} campId={campId} windowedEvidence />
       </div>
     </section>)
+  },
+  showRunningExecution: (placement: 'bottom' | 'inspector', sample: number) => {
+    runningExecutionScenario = true
+    executionRequests.length = 0
+    executionContentReads.length = 0
+    const run = { ...executionRun, agentId: agent.agentId, campTurnId: 'stopped-turn', status: 'running' as const,
+      cancelRequestedAt: null, cancelAcknowledgedAt: null, cancelReasonCode: null, endedAt: null }
+    current = { ...campOpenProjectionAsSnapshot(projection(60)), tasks: [], messages: [],
+      agentRunFileChanges: [], agentRuns: [run], executionEvidence: [],
+      turns: [{ ...projection(60).turns[0], status: 'running', cancelRequestedAt: null, endedAt: null }] }
+    reactRoot.render(<Fixture key={`running-${placement}-${sample}`} executionPlacement={placement} windowed />)
   },
   executionWindowState: () => ({
     requests: executionRequests, contentReads: executionContentReads,

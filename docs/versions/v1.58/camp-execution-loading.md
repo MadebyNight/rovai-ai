@@ -2,7 +2,7 @@
 document_type: implementation-record
 version: v1.58
 status: implemented
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Camp 执行窗口性能
@@ -22,7 +22,7 @@ Renderer 又对整轮命令与输出做重复格式化、敏感值扫描。18,74
 
 - Open schema 7 只带业务摘要和 Evidence coverage；执行详情使用 `agentRunExecution.page`。
 - 逻辑操作 cursor 合并开始/完成，最新页补充仍活动的操作；完整历史保留按需访问。
-- 初始一页加相邻预取，最多两页展示加一页缓存；保持阅读锚点、同方向重试和切换 generation。
+- 初始批次为一页加相邻预取，最多两页展示加一页缓存；其缓存与初始定位问题由下述后续修正替代。
 - Canonical 来源一次展开索引关联，关闭工具组不挂载子行，Diff 只在单条展开后解析和读取。
 - 移除执行内容的敏感值检测、正文省略和结果替换；Desktop 不生成未使用的渠道 publicResult。
 
@@ -66,3 +66,30 @@ staged 路由的 workspace 验证另覆盖 Core Main 237 项（6 项既有忽略
 [Camp Open Architecture](../../architecture/camp-open-read-path.md)、会话 UI 和 CURRENT 同步更新。
 无需数据库迁移、历史数据清理、模型上下文变化、Runtime classifier 变化或版本指针变更。
 旧数据曾被省略的字段不会反推；展示字段白名单、大小预算和 Built-in 输入用途继续保留。
+
+## 缓存与初始定位修正
+
+用户确认会话区的更早记录样式，并指出向下恢复已读内容不应要求“加载较新记录”。本次基于 main
+`cc91ec0d10d3ccfe10d77ccebfeadebea7e64fd1`，使用 `codex/execution-history-cache` 隔离分支。
+
+初始跟随标记在 IntersectionObserver 开始异步请求前被清除，分页到达后父级原始 Evidence 数量没有变化，
+导致滚动停在顶部。原缓存又跟着两页展示窗口裁剪，返回已读页必须再次请求。回归先证明两个失败：旧实现
+在离线返回已读页时失败；真实 CampWorkspace 的延迟页面／正文场景中，底部 `scrollTop = 0`、距底部 202px。
+
+- 页面缓存采用按 cursor 的 LRU，最新页固定保留；历史阅读保留旧链头，后台只更新最新缓存。回到最新采用
+  缓存并重建 cursor 链，不混合不同边界；向下滚动恢复已读页，淘汰后的缺页才自动请求。
+- DOM 仍只挂载两页。页面 12 页／8 MiB、正文 64 条／8 MiB 的目标预算独立于 DOM，必需内容的预算例外
+  由 [Camp Open v18](../../contracts/camp-open-projection-v18.md) 拥有，不声称精确 heap 上限。
+- 初始跟随等待页面成功到达，完整正文后续填入时继续跟随；历史翻页保留锚点。
+- 更早入口直接复用会话区的文字箭头、计数、spinner 与错误状态；删除较新记录按钮，保留回到最新跳转。
+
+缓存与在途刷新由现有 `execution-window.test.ts` owner 验证；真实滚动由现有 CampOpen Electron fixture
+扩展，纯函数或静态渲染不能证明滚动位置。两种位置各重复三次用于覆盖异步首屏／焦点调度，另验证正文缓存、
+离线向下恢复、键盘焦点、展开组和 Diff。仅使用合成数据和独立 userData，不启动 Core、Skill Library 或 Runtime。
+本机验收不能替代用户另一台 Windows 的真机结果；本次不启动或更新日常安装版。
+
+本地门禁通过：`pnpm typecheck`、`pnpm build:desktop`、`VITEST_MAX_WORKERS=1 pnpm test`
+（181 个 Vitest 文件、1,920 项测试；脚本 317 项通过、2 项既有平台跳过），以及固定基线的
+`pnpm docs:check:ci`。CampOpen 的其余六个 Electron 场景通过；执行场景补正连续向下滚动的夹具操作后重跑通过，
+底部三次距底部均为 0px，Inspector 三次也均为 0px。两种主题下离线返回已读页均没有增加分页请求，
+展开结果后的夹具 DOM 为 428 个节点；这个合成夹具节点数不作为真实 Camp 性能收益。
