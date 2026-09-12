@@ -1042,6 +1042,7 @@ export function BusinessApp({
   )
   const [memberRuntimeFocusRequest, setMemberRuntimeFocusRequest] = useState(0)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
+  const [remotePort, setRemotePort] = useState<string | null>(null)
   const [generalPreferences, setGeneralPreferences] = useState<GeneralPreferencesSnapshot | null>(null)
   const [currentProject, setCurrentProject] = useState<CurrentProject>(() => readCurrentProject())
   const [currentWorkspaceHint, setCurrentWorkspaceHint] = useState<WorkspaceSelection | null>(null)
@@ -3995,7 +3996,7 @@ export function BusinessApp({
           <SettingsView
             preferencesApi={uiPreferences.generalPreferences}
             nativeSettings={environment.desktop && { windowControls: environment.desktop.windowControls }}
-            remoteConnection={environment.desktop?.hostWeb ? <HostWebSettings api={environment.desktop.hostWeb} /> : remoteConnection}
+            remoteConnection={environment.desktop?.hostWeb ? <HostWebSettings portDraft={remotePort} onPortDraftChange={setRemotePort} api={environment.desktop.hostWeb} /> : remoteConnection}
             zoomManagedBy={environment.desktop ? 'desktop' : 'browser'}
             platform={client.platform}
             appearance={appearance}

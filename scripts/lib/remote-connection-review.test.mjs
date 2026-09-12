@@ -38,9 +38,11 @@ test('remote connection design preserves production settings geometry, keyboard 
       await browser.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.select()})()`)
       await browser.send('Input.insertText', { text: value })
     }
-    const checkQr = async theme => {
-      const selected = await browser.evaluate(`document.querySelector('#remote-address').value`)
-      await browser.click(button('二维码'))
+    const addressValue = label => `document.querySelector('.remote-connection-address[aria-label="${label}"]').dataset.address`
+    const icon = label => `document.querySelector('button[aria-label="${label}"]')`
+    const checkQr = async (theme, label = '远程地址') => {
+      const selected = await browser.evaluate(addressValue(label))
+      await browser.click(icon(`${label}二维码`))
       await dialogReady()
       const pixels = await browser.evaluate(`(async()=>{
         const svg = document.querySelector('.remote-qr svg')
@@ -53,10 +55,10 @@ test('remote connection design preserves production settings geometry, keyboard 
         } finally { URL.revokeObjectURL(url) }
       })()`)
       assert.equal(jsQR(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height)?.data, selected, 'the rendered QR decodes to the selected address only')
-      await browser.capture(join(output, `desktop-qr-${theme}.png`))
+      await browser.capture(join(output, `desktop-qr-${theme}-${label === '本机地址' ? 'local' : 'remote'}.png`))
       await browser.key('Escape')
       await browser.wait(`document.querySelector('[role="dialog"]')===null`)
-      await browser.wait(`document.activeElement.tagName==='BUTTON' && document.activeElement.textContent==='二维码'`)
+      await browser.wait(`document.activeElement.getAttribute('aria-label')===${JSON.stringify(label+'二维码')}`)
     }
     const geometry = () => browser.evaluate(`(()=>{const rail=document.querySelector('.unified-sidebar'),header=document.querySelector('.settings-page-heading'), title=header.querySelector('h1');return {rail:rail.getBoundingClientRect().width,top:document.querySelector('.window-drag-strip').getBoundingClientRect().height,titleSize:getComputedStyle(title).fontSize,titleWeight:getComputedStyle(title).fontWeight,titleX:title.getBoundingClientRect().x,titleY:title.getBoundingClientRect().y,railColor:getComputedStyle(rail).backgroundColor,canvas:getComputedStyle(document.querySelector('.settings-panel')).backgroundColor,overflow:document.documentElement.scrollWidth>innerWidth||[...document.querySelectorAll('.settings-panel')].some(e=>e.scrollWidth>e.clientWidth+1),nativeBridge:typeof window.rovai}})()`)
     for (const theme of ['day', 'night']) {
@@ -75,6 +77,9 @@ test('remote connection design preserves production settings geometry, keyboard 
           assert.equal(await browser.evaluate(`document.querySelectorAll('.remote-connection-page h2, .remote-service-icon').length`), 0)
           assert.equal(await browser.evaluate(`document.querySelector('#remote-address').textContent.includes('198.18.')`), false)
           await checkQr(theme)
+          await checkQr(theme, '本机地址')
+          assert.match(await browser.evaluate(addressValue('本机地址')), /127\.0\.0\.1/)
+          assert.equal(await browser.evaluate(`document.querySelector('#remote-access')===null && document.querySelector('#remote-port')!==null`), true)
         }
       }
     }
@@ -85,7 +90,6 @@ test('remote connection design preserves production settings geometry, keyboard 
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="远程访问"]').checked`), false)
     assert.match(await browser.evaluate('document.body.innerText'), /1–65535/)
     await input('#remote-port', '4321')
-    await browser.evaluate(`(()=>{const e=document.querySelector('#remote-access');e.value='lan';e.dispatchEvent(new Event('change',{bubbles:true}))})()`)
     await browser.click(`document.querySelector('[aria-label="远程访问"]')`)
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="远程访问"]').disabled`), true)
     await browser.wait(`document.querySelector('#remote-token') !== null`)
@@ -102,10 +106,14 @@ test('remote connection design preserves production settings geometry, keyboard 
     await browser.click(button('重新生成')); await dialogReady(); await browser.click(button('确认'))
     await browser.wait(`document.querySelector('[role="dialog"]')===null`)
     assert.notEqual(await browser.evaluate(`document.querySelector('#remote-token').value`), originalToken)
+    await input('#remote-port', '4322')
+    assert.equal(await browser.evaluate(`document.querySelector('#remote-enabled').checked`), true)
+    assert.match(await browser.evaluate(addressValue('远程地址')), /:4321$/)
     await browser.click(button('外观'))
     await browser.wait(`document.querySelector('.appearance-settings-page')!==null`)
     await browser.click(button('远程连接'))
     await browser.wait(`document.querySelector('#remote-token')?.value.length > 0`)
+    assert.equal(await browser.evaluate(`document.querySelector('#remote-port').value`), '4322', 'unapplied port survives settings navigation')
     const resumedToken = await browser.evaluate(`document.querySelector('#remote-token').value`)
     assert.notEqual(resumedToken, originalToken, 'the regenerated token can be read again after returning')
     await browser.evaluate(`(()=>{const e=document.querySelector('#remote-address');e.value=[...e.options].find(o=>o.value.includes('192.168.2.')).value;e.dispatchEvent(new Event('change',{bubbles:true}))})()`)
@@ -113,27 +121,27 @@ test('remote connection design preserves production settings geometry, keyboard 
     assert.match(await browser.evaluate(`document.querySelector('#remote-address').value`), /192\.168\.2\./)
     await checkQr('changed-address')
     await browser.evaluate(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new Error('clipboard unavailable')}}})`)
-    await browser.click(button('复制地址'))
+    await browser.click(icon('复制远程地址'))
     assert.match(await browser.evaluate(`document.querySelector('.remote-feedback').textContent`), /http:\/\/192\.168\.2\.12:4321/)
     assert.equal(await browser.evaluate(`getComputedStyle(document.querySelector('.remote-feedback')).userSelect`), 'text', 'the fallback address remains manually selectable')
     await browser.click(button('复制令牌'))
     assert.equal(await browser.evaluate(`document.querySelector('.remote-feedback').textContent.includes(document.querySelector('#remote-token').value)`), false, 'copy failure must not expose a masked token')
     await browser.click(`document.querySelector('[aria-label="远程访问"]')`)
-    await dialogReady()
-    await browser.capture(join(output, 'desktop-stop-confirm-day.png'))
-    await browser.click(button('取消'))
-    await browser.wait(`document.querySelector('[role="dialog"]')===null`)
-    assert.equal(await browser.evaluate(`document.querySelector('[aria-label="远程访问"]').checked`), true)
+    assert.equal(await browser.evaluate(`document.querySelector('[role="dialog"]')===null`), true, 'stop has no second confirmation')
+    await browser.wait(`document.querySelector('#remote-token')===null`)
+    assert.equal(await browser.evaluate(`document.querySelector('#remote-port').value`), '4322')
+    await browser.capture(join(output, 'desktop-stopped-day.png'))
     await browser.click(`document.querySelector('[aria-label="远程访问"]')`)
-    await dialogReady()
-    await browser.click(button('确认'))
-    await browser.wait(`document.querySelector('#remote-port')!==null`)
-    assert.equal(await browser.evaluate(`document.querySelector('#remote-port').value`), '4317')
-    evidence.checks.push('field-validation-focus-and-edit-retention', 'explicit-LAN-selection-with-cleartext-notice', 'submitting-disables-repeat', 'token-masked-and-readable-after-navigation', 'interface-selection-preserves-token', 'rotate-and-stop-cancel-and-confirm')
+    await browser.wait(`document.querySelector('#remote-token')!==null`)
+    assert.match(await browser.evaluate(addressValue('远程地址')), /:4322$/)
+    assert.match(await browser.evaluate(addressValue('本机地址')), /:4322$/)
+    evidence.checks.push('field-validation-focus-and-edit-retention', 'one-switch-start-with-cleartext-notice', 'submitting-disables-repeat', 'token-masked-and-readable-after-navigation', 'interface-selection-preserves-token', 'rotate-cancel-and-confirm', 'stop-without-confirmation', 'pending-port-survives-navigation-and-applies-only-on-next-start')
     await open('desktop', 'day', 'empty')
-    await browser.wait(`document.querySelector('#remote-address') !== null`)
-    assert.equal(await browser.evaluate(`${button('复制地址')}.disabled && ${button('二维码')}.disabled`), true)
-    assert.equal(await browser.evaluate(`document.querySelector('#remote-address').value`), '')
+    await browser.wait(`document.querySelector('.remote-addresses') !== null`)
+    for (const label of ['本机地址','远程地址']) {
+      assert.equal(await browser.evaluate(`${icon('复制'+label)}.disabled && ${icon(label+'二维码')}.disabled`), true)
+      assert.equal(await browser.evaluate(addressValue(label)), '')
+    }
     evidence.checks.push('QR-decodes-to-selected-address-only-in-both-themes', 'QR-Escape-restores-focus', 'empty-discovery-disables-copy-and-QR', 'copy-failure-allows-manual-address-copy-without-exposing-token', 'compact-switch-without-duplicate-headings-or-start-success-notice')
     await open('web', 'night', 'expired')
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="远程访问"]')===null`), true)

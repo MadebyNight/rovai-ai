@@ -34,6 +34,9 @@ an advertised address. Interface discovery does not guarantee remote reachabilit
 The listener accepts its actual interface authorities and optional explicit reverse-proxy `publicOrigin`; an Origin
 header must match the same authority's complete origin. Arbitrary Host, cross-origin requests and query parameters are
 rejected; there is no credentialed CORS. LAN HTTP requires an explicit enable choice, with HTTPS/VPN for untrusted networks.
+In Desktop, the Remote Access switch is that explicit choice: it starts the IPv4 wildcard listener without a separate
+local/LAN selector, and shows local and remote addresses separately. The always-visible port is pending launch-form state:
+editing it does not restart or reconfigure the running service; the next start uses it. Stopping needs no second confirmation.
 
 Trusted local `host.web.token` returns `{administratorToken}` repeatedly without rotation or session revocation.
 Start and rotate still return the new token. The Host retains the administrator token in private process memory solely

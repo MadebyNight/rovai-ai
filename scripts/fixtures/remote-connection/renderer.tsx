@@ -49,7 +49,7 @@ const windowControls = { getResetCapability: async () => ({ canReset: true, reas
 
 let token = 'review-only-not-a-real-administrator-token'
 let hostStatus = { enabled: ['enabled', 'empty'].includes(initialState), sessions: initialState === 'enabled' ? 2 : 0,
-  origin: 'http://192.168.1.12:4317', addresses: initialState === 'empty' ? [] : addresses('4317') }
+  listen: '0.0.0.0:4317', origin: 'http://192.168.1.12:4317', addresses: initialState === 'empty' ? [] : addresses('4317') }
 function addresses(port: string) { return [
   { origin: `http://192.168.1.12:${port}`, interface: 'en0', recommended: true },
   { origin: `http://192.168.2.12:${port}`, interface: 'en1', recommended: true },
@@ -60,12 +60,13 @@ let failRead = initialState === 'error'
 const hostApi: HostWebApi = {
   status: async () => { if (failRead) { failRead = false; throw new Error('暂时无法读取 Host 状态，请重试。') }; if (initialState === 'loading') await new Promise(() => {}); return structuredClone(hostStatus) },
   token: async () => ({ administratorToken: token }),
-  start: async input => { await delay(); if (initialState === 'error') throw new Error('端口已被占用，请更换端口后重试。'); const port = input.listen.split(':').at(-1)!; hostStatus = { enabled: true, sessions: 0, origin: `http://192.168.1.12:${port}`, addresses: addresses(port) }; return { ...structuredClone(hostStatus), administratorToken: token } },
+  start: async input => { await delay(); if (initialState === 'error') throw new Error('端口已被占用，请更换端口后重试。'); if (!input.allowInsecureLan || !input.listen.startsWith('0.0.0.0:')) throw new Error('Expected explicit remote-access start'); const port = input.listen.split(':').at(-1)!; hostStatus = { enabled: true, sessions: 0, listen: input.listen, origin: `http://192.168.1.12:${port}`, addresses: addresses(port) }; return { ...structuredClone(hostStatus), administratorToken: token } },
   rotate: async () => { await delay(); token = 'review-only-replacement-not-a-real-token'; hostStatus.sessions = 0; return { ...structuredClone(hostStatus), administratorToken: token } },
   stop: async () => { await delay(); hostStatus.enabled = false; hostStatus.sessions = 0; return structuredClone(hostStatus) }
 }
 function Review() {
   const [page, setPage] = useState(initialPage)
+  const [remotePort, setRemotePort] = useState<string | null>(null)
   const [appearance, setAppearance] = useState<AppearanceSnapshot>({ ...DEFAULT_APPEARANCE, preference: initialTheme === 'night' ? 'night' : 'day', resolvedTheme: initialTheme === 'night' ? 'night' : 'day' })
   const [connection, setConnection] = useState<'live' | 'offline' | 'expired'>(initialState === 'offline' ? 'offline' : initialState === 'expired' ? 'expired' : 'live')
   const [loginOpen, setLoginOpen] = useState(false)
@@ -80,7 +81,7 @@ function Review() {
     <main className="content settings-content"><div className="settings-workbench"><div className={`settings-panel settings-panel-${page}`}>
       {page === 'general' && <GeneralSettings api={preferenceApi} windowControls={desktop ? windowControls : undefined} />}
       {page === 'appearance' && <AppearanceSettings appearance={appearance} disabled={false} zoomManagedBy={desktop ? 'desktop' : 'browser'} onChange={async value => { const next = { ...value, resolvedTheme: value.preference === 'night' ? 'night' as const : 'day' as const }; setAppearance(next); return next }} />}
-      {page === 'remote' && (desktop ? <HostWebSettings api={hostApi} /> : <RemoteConnectionStatus origin={hostStatus.origin} state={connection} onLogout={() => setConnection('expired')} onLogin={() => setLoginOpen(true)} />)}
+      {page === 'remote' && (desktop ? <HostWebSettings portDraft={remotePort} onPortDraftChange={setRemotePort} api={hostApi} /> : <RemoteConnectionStatus origin={hostStatus.origin} state={connection} onLogout={() => setConnection('expired')} onLogin={() => setLoginOpen(true)} />)}
     </div></div></main>
     <Dialog.Root open={loginOpen} onOpenChange={setLoginOpen}><Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><AppDialogContent><AppDialogHeader title="重新登录" description="模拟登录，保留页面内编辑。" /><form onSubmit={event => { event.preventDefault(); setConnection('live'); setLoginOpen(false) }}><AppDialogBody><label>管理令牌<input type="password" required /></label></AppDialogBody><AppDialogFooter><button type="submit" className="primary-button">登录</button></AppDialogFooter></form></AppDialogContent></Dialog.Portal></Dialog.Root>
   </div></CurrentUserProfileContext.Provider></CampClientProvider>

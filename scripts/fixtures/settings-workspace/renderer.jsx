@@ -68,7 +68,7 @@ Object.assign(window, { rovai: {
     },
     start: async params => {
       await request('hostWeb.start', params)
-      state.hostWeb = { enabled: true, origin: 'http://127.0.0.1:4317', sessions: 0 }
+      state.hostWeb = { enabled: true, listen: params.listen, origin: 'http://127.0.0.1:' + params.listen.split(':').at(-1), addresses: [{ origin: 'http://127.0.0.1:' + params.listen.split(':').at(-1), interface: 'lo0', recommended: false }], sessions: 0 }
       if (state.loseHostStartReply) { state.loseHostStartReply = false; throw new Error('启动结果未知') }
       return { ...clone(state.hostWeb), administratorToken: `fixture-token-${++hostTokenGeneration}` }
     },
@@ -126,6 +126,7 @@ Object.assign(window, { rovai: {
 
 function Fixture() {
   const [page, setPage] = useState('general')
+  const [remotePort, setRemotePort] = useState(null)
   const [generation, setGeneration] = useState(0)
   const [roster, setRoster] = useState(fixture.largeRoster)
   const [appearance, setAppearance] = useState(fixture.appearance)
@@ -150,7 +151,7 @@ function Fixture() {
     <main className="content settings-content">
       <div className="settings-workbench"><div className={`settings-panel settings-panel-${page}`} key={`${page}-${generation}`}>
         {page === 'general' && <GeneralSettings api={window.rovai.generalPreferences} windowControls={window.rovai.windowControls} agents={roster} initialPreferences={state.preferences} currentProjectLabel="rovai-ai" onPreferencesChange={ignore} />}
-        {page === 'remote' && <HostWebSettings api={window.rovai.hostWeb} />}
+        {page === 'remote' && <HostWebSettings portDraft={remotePort} onPortDraftChange={setRemotePort} api={window.rovai.hostWeb} />}
         {page === 'appearance' && <AppearanceSettings appearance={appearance} disabled={false} onChange={async value => { setAppearance(value); return value }} />}
         {page === 'notifications' && <NotificationSettings />}
         {page === 'runtime' && <RuntimeInstallationsPanel health={fixture.healthSnapshot()} installations={[]} onReload={async () => {}} />}
