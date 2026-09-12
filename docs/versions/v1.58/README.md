@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Rovai-ai v1.58：上下文 Gate 与双轨评测
@@ -115,6 +115,10 @@ v1.58/schema 100，仅放宽 dingtalk_account 两个展示名的 NULL 约束，�
 Data Contract 99、当前版本指针、模型上下文和 Runtime classifier 不变，无数据库迁移或历史删除。
 实施与测量见[执行窗口性能记录](camp-execution-loading.md)。
 
+2026-09-13 的后续修正把两页 DOM 窗口与已读页面、完整正文缓存分开，取消“加载较新记录”按钮，复用会话区
+的更早记录样式，并恢复异步首屏及正文到达后的最新位置跟随。同步更新现行缓存与阅读合同、Architecture 和 UI；
+wire、数据库、模型上下文、Runtime 及版本指针不变。回归证据见同一[实施记录](camp-execution-loading.md#缓存与初始定位修正)。
+
 ## 待发送消息移回输入框
 
 按用户确认，公屏及单聊的编辑入口改为退出队列、覆盖普通输入框；剩余 FIFO 正常推进，重新发送进入当前队尾。
@@ -129,3 +133,12 @@ Data Contract 99、当前版本指针、模型上下文和 Runtime classifier �
 Data Contract 从 v1.58 / schema 100 升为 v1.58 / schema 101；不改变模型上下文、事件协议或平台资格。
 当前合同为 [Runtime Launch v41](../../contracts/runtime-launch-and-verification-v41.md)，架构与设置 brief
 同步。实现、测试 owner 与交付证据见[实施计划](implementation-plan.md#runtime-自定义启动设置)。
+
+
+## HTML 交互预览
+
+按用户确认迁移正式 HTML 预览至可撤销、不同源 HTTP 站点，默认脚本/依赖/内部 iframe 加载，补充诊断与源码切换。
+当前合同 [File Preview v12](../../contracts/file-preview-v12.md)，取舍 [V1.58-D07](decisions.md#v1-58-d07)，
+实现与两份原稿独立验收见 [HTML 预览验证](html-preview-http.md)。Contracts、Architecture、UI、开发测试与当前规范
+导航同步；不改变版本指针、数据库、模型上下文、Runtime classifier/兼容性、根 README 产品定位或其他文件类型。
+本增量不代表整个 v1.58 或日常安装版已完成部署。

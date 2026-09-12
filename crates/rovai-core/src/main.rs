@@ -7491,6 +7491,13 @@ impl Core {
                     )?,
                 )?)
             }
+            "navigation.findCamp" => {
+                let params: CampIdParams = serde_json::from_value(request.params.clone())?;
+                let database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    ReadModelService.find_navigation_camp(&database, &params.camp_id)?,
+                )?)
+            }
             "navigation.campViewed" => {
                 let params: AcknowledgeCampViewedParams =
                     serde_json::from_value(request.params.clone())?;
@@ -24978,6 +24985,7 @@ while IFS= read -r _ignored; do :; done
         for method in [
             "navigation.snapshot",
             "navigation.groupCamps",
+            "navigation.findCamp",
             "camps.open",
             "camp.messages.page",
             "health.check",

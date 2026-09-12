@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-camp-workspace
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Camp 会话工作区
@@ -462,7 +462,10 @@ Task related execution、停止结果和世界地图入口在右侧承载时必�
 处理后关闭整个浮层，返回顶部执行入口，保留 Agent/Run selection、已展开记录与滚动位置。
 
 命令、文件操作及其失败作为可展开 Tool Call 留在对应 Run stage。已读取 Evidence 中的 Tool chronology
-按窗口呈现，较早记录有明确分页入口与回到最新操作，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
+按窗口呈现。顶部“加载更早记录”复用会话区的文字箭头、已显示计数与原位加载／重试样式；向下滚动自动恢复
+已读缓存，取消“加载较新记录”按钮。“回到最新”采用最新缓存并跳转；首次展开执行中 Run 时，首屏与完整正文
+异步到达后仍定位到最新。历史阅读期间后台只更新最新缓存，不替换当前窗口或抢滚动位置。缓存预算见
+[Camp Open v18](../../contracts/camp-open-projection-v18.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
 Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ command` 与下一行原始 JSON／文本输出，保留正文参数
 和多行输入，沿用 Shell Evidence 的按条惰性读取。Core 操作身份、图标和状态保持不变；不新增入参存储。
 缺少可靠关联时回退对应 `rovai` CLI 名称和同一 operation 的 Core 公共 `canonicalInput`，省略投影辅助事实和
