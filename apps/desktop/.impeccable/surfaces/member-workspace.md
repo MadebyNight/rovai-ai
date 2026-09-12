@@ -1,5 +1,5 @@
 ---
-version: 12
+version: 13
 slug: "member-workspace"
 primary_target: "apps/desktop/src/renderer/src/MemberManagement.tsx"
 related_targets:
@@ -98,11 +98,14 @@ provided, with the full text available on hover. Claude's initialize catalog use
 rows or inferred version labels are supplied by Renderer.
 
 Opening the model Picker uses Core-owned stale-while-revalidate state. Fresh catalogs display immediately;
-serviceable stale catalogs remain interactive while a single background refresh runs; expired, unavailable or
-invalidated catalogs show a bounded loading state until discovery settles. A failed refresh keeps and labels the
-last successful catalog. Switching Runtime never triggers discovery, and an older async result must not mutate the
-new draft. Runtime default remains selectable without a catalog. An existing saved explicit model that cannot yet
-be checked reads “尚未核对”; a fresh or stale catalog that omits it uses evidence-specific copy instead of the
+stale and same-identity expired catalogs remain interactive while a single background refresh runs. Only absence
+of displayable history shows loading; identity invalidation retains Core's existing rules. Displayability never
+relaxes validation for a new selection. A failed refresh keeps the list and offers “重试”. Normal closed controls show
+only the model and parameters, not TTL maintenance copy. Saving an explicit catalog-refresh rejection waits for
+committed refresh and retries once under one continuous saving state, preserving the draft and expectedVersion.
+Switching Runtime never triggers discovery, and an older async result must not mutate the new draft.
+Runtime default remains selectable without a catalog. An existing saved explicit model keeps its ID in the closed
+control; the menu may say “尚未核对”; a fresh or stale catalog that omits it uses evidence-specific copy instead of the
 absolute “已失效”. This does not add repair semantics for manually modified or technically recovered corrupt data.
 
 Keep presence and destructive removal in the header overflow menu. Removal uses its existing confirmation

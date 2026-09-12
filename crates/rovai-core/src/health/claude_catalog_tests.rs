@@ -42,7 +42,11 @@ while IFS= read -r request; do printf '%s\n' "$request" >> "$root/requests"; don
         "timeout",
     ] {
         fs::write(root.join("case"), case).unwrap();
-        let result = claude_code_model_catalog(&executable, Duration::from_secs(1)).await;
+        let result = if case == "success" {
+            refresh_model_catalog(&executable, AdapterKind::ClaudeCodeCli).await
+        } else {
+            claude_code_model_catalog(&executable, Duration::from_secs(1)).await
+        };
         if case == "success" {
             let models = result.unwrap();
             assert_eq!(models.len(), 2);

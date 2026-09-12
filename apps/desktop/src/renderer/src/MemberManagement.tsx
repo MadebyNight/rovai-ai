@@ -517,10 +517,12 @@ const MemberEditor = forwardRef<
     setBusy(busyKey)
     setError(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>(method, {
-        commandId: crypto.randomUUID(),
-        command
-      })
+      const result = method === 'members.runtime.set'
+        ? await submitMemberRuntimeConfiguration(command as { adapterKind: AdapterKind })
+        : await window.rovai.request<StoredCommandResult>(method, {
+          commandId: crypto.randomUUID(),
+          command
+        })
       assertApplied(result)
       const version = result.payload.version
       if (selectedAgent && typeof version === 'number') {
@@ -1104,6 +1106,7 @@ export const MemberRuntimeForm = forwardRef<
   const agentIdRef = useRef(agent.agentId)
   const persistedRuntimeKeyRef = useRef(persistedRuntimeKey(agent))
   const pendingSubmissionRef = useRef<PendingRuntimeSubmission | null>(null)
+  const submittingRef = useRef(false)
   const currentStateKey = runtimeEditorStateKey({ selectedKind, draft })
   const dirty = currentStateKey !== baselineStateKey
   const availability =
@@ -1221,7 +1224,8 @@ export const MemberRuntimeForm = forwardRef<
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
-    if (!canSave) return
+    if (!canSave || busy !== null || submittingRef.current) return
+    submittingRef.current = true
     setSubmitError(null)
     const pendingSubmission: PendingRuntimeSubmission = {
       baseVersion: agent.version,
@@ -1243,6 +1247,8 @@ export const MemberRuntimeForm = forwardRef<
         pendingSubmissionRef.current = null
       }
       setSubmitError(errorMessage(nextError))
+    } finally {
+      submittingRef.current = false
     }
   }
 
@@ -1353,7 +1359,14 @@ export const MemberRuntimeForm = forwardRef<
             </button>
           </div>
         )}
-        {submitError && <div className="inline-error">{submitError}</div>}
+        {submitError && (
+          <div className="inline-error" role="alert">
+            {submitError}
+            {submitError === commandCodeLabel('runtime_model_catalog_refresh_required') && (
+              <button className="quiet-button" type="submit" disabled={!canSave || busy !== null}>重试</button>
+            )}
+          </div>
+        )}
         <div className="member-editor-save-row">
           <span
             className={`member-editor-save-status ${dirty ? 'is-dirty' : ''}`}
@@ -1582,8 +1595,50 @@ export function RuntimeInstallationsPanel({
   )
 }
 
+// Local to member Runtime saving: one explicit rejection, one awaited catalog
+// refresh, one resubmission. The original command (and expectedVersion) is frozen.
+export async function submitMemberRuntimeConfiguration(
+  command: { adapterKind: AdapterKind }
+): Promise<StoredCommandResult> {
+  const submit = async (): Promise<StoredCommandResult> => {
+    try {
+      return await window.rovai.request('members.runtime.set', { commandId: crypto.randomUUID(), command })
+    } catch (error) {
+      console.warn('[member-runtime] submission outcome unknown', error)
+      throw new MemberRuntimeCommandError('runtime_save_outcome_unknown')
+    }
+  }
+  const result = await submit()
+  if (result.status !== 'rejected' || result.code !== 'runtime_model_catalog_refresh_required') return result
+  try {
+    const catalog = await openRuntimeModelCatalog(command.adapterKind, true)
+    if ((catalog.refreshStatus !== 'completed' && catalog.refreshStatus !== 'not_required')
+      || (catalog.cache.status !== 'fresh' && catalog.cache.status !== 'stale')) {
+      throw new MemberRuntimeCommandError('runtime_model_catalog_refresh_required')
+    }
+  } catch {
+    console.warn('[member-runtime] runtime_model_catalog_refresh_required: refresh did not complete')
+    throw new MemberRuntimeCommandError('runtime_model_catalog_refresh_required')
+  }
+  return submit()
+}
+
+class MemberRuntimeCommandError extends Error {
+  constructor(readonly code: string, payload?: StoredCommandResult['payload']) {
+    const option = payload ? stringField(payload, 'option') : null
+    const label = option && ({ reasoning_effort: '推理强度', effort: '推理强度', thinking_level: '思考深度' } as Record<string, string>)[option]
+    super(label && (code === 'runtime_model_option_invalid' || code === 'runtime_model_option_unknown')
+      ? `所选模型不支持当前「${label}」设置，请调整该参数。填写内容已保留。`
+      : commandCodeLabel(code))
+  }
+}
+
 function assertApplied(result: StoredCommandResult): void {
   if (result.status !== 'rejected') return
+  if (result.code.startsWith('runtime_') || result.code === 'agent_profile.version_conflict' || result.code === 'version_conflict') {
+    console.warn('[member-runtime] command rejected', result.code)
+    throw new MemberRuntimeCommandError(result.code, result.payload)
+  }
   const detail =
     stringField(result.payload, 'message') ??
     stringField(result.payload, 'detail')
@@ -1599,14 +1654,30 @@ function commandCodeLabel(code: string): string {
     (
       {
         'agent_profile.display_name_conflict': '该名称已被其他队员使用',
-        'agent_profile.version_conflict': '队员已被其他操作更新，请刷新后重试',
+        'agent_profile.version_conflict': '配置已被其他操作更新，请重新载入后确认修改。填写内容已保留。',
+        version_conflict: '配置已被其他操作更新，请重新载入后确认修改。填写内容已保留。',
+        runtime_model_catalog_refresh_required: '暂时无法验证所选模型，本次修改尚未保存，填写内容已保留。',
+        runtime_save_outcome_unknown: '暂时无法确认保存结果，请重新载入后核对配置。填写内容已保留。',
+        runtime_model_requires_verification: '运行环境尚未完成验证，请先检查 Agent 运行时。填写内容已保留。',
+        runtime_configuration_unavailable: '当前运行环境不可用，请检查 Agent 运行时。填写内容已保留。',
+        runtime_model_unavailable: '所选模型已不在当前可选列表中，请调整模型选择。填写内容已保留。',
+        runtime_model_options_invalid: '所选模型的参数格式无效，请调整模型参数。填写内容已保留。',
+        runtime_model_option_unknown: '所选模型不支持此参数，请调整模型参数。填写内容已保留。',
+        runtime_model_option_invalid: '所选模型不支持当前参数值，请调整推理强度等模型参数。填写内容已保留。',
+        runtime_permission_adapter_mismatch: '权限配置与运行环境不匹配，请重新选择权限。填写内容已保留。',
+        runtime_permission_schema_mismatch: '运行环境的权限选项已变化，请重新确认权限。填写内容已保留。',
+        runtime_permission_values_invalid: '权限配置格式无效，请重新确认权限。填写内容已保留。',
+        runtime_permission_option_unknown: '运行环境不支持此权限选项，请调整权限。填写内容已保留。',
+        runtime_permission_option_unsupported: '运行环境不支持此权限选项，请调整权限。填写内容已保留。',
+        runtime_permission_option_invalid: '权限选项值无效，请调整权限。填写内容已保留。',
+        runtime_permission_value_invalid: '权限选项值无效，请调整权限。填写内容已保留。',
         'agent_profile.default_lead_successor_required':
           '该队员仍是某个会话的默认负责人，请先在对应会话中指定继任者',
         'adapter_installation.already_exists': '这个 Agent 运行时已经存在',
         'adapter_installation.version_conflict':
           'Agent 运行时已被更新，请刷新后重试'
       } as Record<string, string>
-    )[code] ?? `操作未完成：${code}`
+    )[code] ?? '操作未完成，请稍后重试；详细原因可在诊断中查看。'
   )
 }
 

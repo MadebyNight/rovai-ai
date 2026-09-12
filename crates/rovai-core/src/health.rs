@@ -232,6 +232,77 @@ pub async fn antigravity_capability_probe_at(path: &Path) -> AntigravityCapabili
     antigravity_probe_at(path).await
 }
 
+/// Only the existing verified snapshot authorizes omitting full checks. Session
+/// authentication/handshakes required to read a native catalog still run.
+pub fn catalog_refresh_evidence_current(
+    kind: AdapterKind,
+    snapshot: &rovai_core::agent_profile::AdapterCapabilitySnapshot,
+) -> bool {
+    let required = match kind {
+        AdapterKind::CodexCli => vec!["model.list".into(), "app_server.initialize".into()],
+        AdapterKind::ClaudeCodeCli => vec![CLAUDE_MODEL_CATALOG_CAPABILITY.into()],
+        AdapterKind::AntigravityApp => vec!["model.list".into()],
+        AdapterKind::Pi => pi_machine_ready_requirements(),
+        _ => acp_required_capabilities(kind),
+    };
+    snapshot.probe_status == "ready"
+        && snapshot.authentication_status == "authenticated"
+        && snapshot.stale_at.is_none()
+        && snapshot.last_successful_probe_at.is_some()
+        && rovai_core::agent_runtime_adapter::validate_machine_ready_snapshot(kind, snapshot)
+            .is_ok()
+        && (kind != AdapterKind::ZcodeApp
+            || rovai_core::zcode::supported_version(snapshot.reported_version.as_deref()))
+        && required
+            .iter()
+            .all(|capability| snapshot.capabilities.contains(capability))
+}
+
+/// Catalog-only branch of the same check task. Returns models, never Ready evidence.
+pub async fn refresh_model_catalog(path: &Path, kind: AdapterKind) -> Result<Vec<ModelDescriptor>> {
+    let purpose = RuntimeLaunchPurpose::AvailabilityCheck;
+    if !runtime_launch_allowed(kind, purpose) {
+        bail!(runtime_launch_disallowed_detail(purpose));
+    }
+    match kind {
+        AdapterKind::CodexCli => {
+            rovai_core::agent_runtime_adapter::codex_models(&codex_model_catalog(path).await?)
+        }
+        AdapterKind::ClaudeCodeCli => {
+            claude_code_model_catalog(path, Duration::from_secs(30)).await
+        }
+        AdapterKind::Pi => rovai_core::agent_runtime_adapter::pi_models(Some(
+            &crate::pi::model_catalog_probe(path).await?,
+        )),
+        AdapterKind::AntigravityApp => {
+            let output = antigravity_model_output(path).await?;
+            if !output.status.success() {
+                bail!("Antigravity model discovery failed ({})", output.status);
+            }
+            let ids = antigravity_model_ids(&output.stdout.bytes);
+            if ids.is_empty() {
+                bail!("Antigravity model catalog is empty or malformed");
+            }
+            Ok(rovai_core::agent_runtime_adapter::antigravity_models(ids))
+        }
+        _ => {
+            let (_, session, _) = run_acp_probe_with_scope(path, kind, true, purpose, true).await?;
+            let mut models = rovai_core::agent_runtime_adapter::acp_model_catalog_from_session(
+                session
+                    .as_ref()
+                    .context("ACP catalog did not create a Session")?,
+            )?;
+            // The same native Kiro mapping as full checks; reasoning is not configurable.
+            if kind == AdapterKind::KiroCli {
+                for model in &mut models {
+                    model.options.clear();
+                }
+            }
+            Ok(models)
+        }
+    }
+}
+
 pub async fn pi_capability_probe_at(path: &Path) -> PiCapabilityProbe {
     let probed_at = chrono::Utc::now().to_rfc3339();
     let path_text = path.to_string_lossy().to_string();
@@ -886,15 +957,10 @@ async fn antigravity_probe_at(path: &Path) -> AntigravityCapabilityProbe {
         capabilities.push("output.stream_json".to_string());
     }
 
-    let mut model_command = runtime_command(&canonical, Some(AdapterKind::AntigravityApp));
-    model_command.arg("models");
-    let model_output = bounded_output(&mut model_command, Duration::from_secs(60)).await;
+    let model_output = antigravity_model_output(&canonical).await;
     match model_output {
         Ok(output) if output.status.success() => {
-            let models = String::from_utf8_lossy(&output.stdout.bytes)
-                .lines()
-                .filter_map(antigravity_model_identifier_from_line)
-                .collect::<Vec<_>>();
+            let models = antigravity_model_ids(&output.stdout.bytes);
             if models.is_empty() {
                 let failure = public_probe_failure(
                     AdapterKind::AntigravityApp,
@@ -1003,6 +1069,19 @@ async fn antigravity_probe_at(path: &Path) -> AntigravityCapabilityProbe {
             )
         }
     }
+}
+
+async fn antigravity_model_output(path: &Path) -> Result<BoundedCommandOutput> {
+    let mut command = runtime_command(path, Some(AdapterKind::AntigravityApp));
+    command.arg("models");
+    bounded_output(&mut command, Duration::from_secs(60)).await
+}
+
+fn antigravity_model_ids(stdout: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(antigravity_model_identifier_from_line)
+        .collect()
 }
 
 fn antigravity_stream_json_supported(help: &str) -> bool {
@@ -1592,6 +1671,16 @@ async fn run_acp_probe(
     include_session: bool,
     purpose: RuntimeLaunchPurpose,
 ) -> Result<(Value, Option<Value>, bool)> {
+    run_acp_probe_with_scope(path, kind, include_session, purpose, false).await
+}
+
+async fn run_acp_probe_with_scope(
+    path: &Path,
+    kind: AdapterKind,
+    include_session: bool,
+    purpose: RuntimeLaunchPurpose,
+    catalog_only: bool,
+) -> Result<(Value, Option<Value>, bool)> {
     if !runtime_launch_allowed(kind, purpose) {
         bail!(runtime_launch_disallowed_detail(purpose));
     }
@@ -1746,7 +1835,8 @@ async fn run_acp_probe(
                 .context("ACP session/new did not return sessionId")?;
             let mut next_request_id = session_request_id + 1;
             let mut grok_resume_verified = false;
-            if kind == AdapterKind::GrokBuild
+            if !catalog_only
+                && kind == AdapterKind::GrokBuild
                 && initialize
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object)
@@ -1781,7 +1871,7 @@ async fn run_acp_probe(
                 grok_resume_verified = true;
                 next_request_id += 1;
             }
-            if matches!(kind, AdapterKind::KiroCli | AdapterKind::GrokBuild) {
+            if !catalog_only && matches!(kind, AdapterKind::KiroCli | AdapterKind::GrokBuild) {
                 let current_model = session
                     .pointer("/models/currentModelId")
                     .and_then(Value::as_str)
@@ -3387,6 +3477,110 @@ mod tests {
     use rovai_core::agent_runtime_adapter::{AcpProbeObservation, AgentRuntimeAdapterRegistry};
     use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
 
+    // Owns the light/full admission decision; transport tests cannot establish
+    // that historical Ready evidence is still strong enough to skip full checks.
+    #[test]
+    fn catalog_refresh_requires_current_full_acp_evidence() {
+        for kind in [
+            AdapterKind::OpencodeCli,
+            AdapterKind::CopilotCli,
+            AdapterKind::KiroCli,
+            AdapterKind::QoderCli,
+            AdapterKind::CodebuddyCli,
+            AdapterKind::QwenCode,
+            AdapterKind::TraeCnCli,
+            AdapterKind::CursorAgent,
+            AdapterKind::KimiCodeCli,
+            AdapterKind::GrokBuild,
+            AdapterKind::ZcodeApp,
+        ] {
+            let snapshot = AgentRuntimeAdapterRegistry::default().acp_capability_snapshot(AcpProbeObservation {
+                adapter_kind: kind,
+                reported_version: Some(if kind == AdapterKind::ZcodeApp { "0.17.0" } else { "1.0.0" }.into()),
+                executable_fingerprint: Some("sha256:fixture".into()),
+                authentication_status: "authenticated".into(), probe_status: "ready".into(),
+                capabilities: acp_required_capabilities(kind),
+                initialize_result: Some(json!({"protocolVersion":1})),
+                session_result: Some(json!({"sessionId":"fixture-session", "models":{
+                    "currentModelId":"fixture", "availableModels":[{"modelId":"fixture", "name":"Fixture"}]},
+                    "modes":{"currentModeId":"default","availableModes":[{"id":"default","name":"Default"}]}})),
+                attempted_at: "2000-01-01T00:00:00Z".into(), last_error: None,
+            }).unwrap();
+            assert!(
+                catalog_refresh_evidence_current(kind, &snapshot),
+                "{kind:?}: expired directory alone must not require full verification"
+            );
+            for invalidation in ["status", "auth", "capability", "stale", "success"] {
+                let mut invalid = snapshot.clone();
+                match invalidation {
+                    "status" => invalid.probe_status = "installed_unverified".into(),
+                    "auth" => invalid.authentication_status = "unknown".into(),
+                    "capability" => invalid.capabilities.clear(),
+                    "stale" => invalid.stale_at = Some("2000-01-02T00:00:00Z".into()),
+                    "success" => invalid.last_successful_probe_at = None,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    !catalog_refresh_evidence_current(kind, &invalid),
+                    "{kind:?}: {invalidation}"
+                );
+            }
+        }
+    }
+
+    // Owns command/process omission, not the model-row parser. The retained
+    // full path is the baseline, and malformed refreshes must not fabricate success.
+    #[tokio::test]
+    async fn antigravity_catalog_refresh_skips_version_and_help() {
+        let root = env::temp_dir().join(format!("rovai-agy-catalog-{}", uuid::Uuid::new_v4()));
+        let _cleanup = ProbeRootCleanup(root.clone());
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("agy");
+        std::fs::write(&executable, r#"#!/bin/sh
+root=$(/usr/bin/dirname "$0")
+printf '%s\n' "$*" >> "$root/calls"
+case "$1" in
+  --version) printf '%s\n' 'Antigravity 1.0.0' ;;
+  --help) printf '%s\n' '--print --conversation --model --mode --sandbox --add-dir --log-file --print-timeout' ;;
+  models) /bin/cat "$root/models" ;;
+  *) exit 91 ;;
+esac
+"#).unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        std::fs::write(root.join("models"), "claude-sonnet-4-6\n").unwrap();
+        let full_started = std::time::Instant::now();
+        let full = antigravity_capability_probe_at(&executable).await;
+        let full_ms = full_started.elapsed().as_millis();
+        assert_eq!(full.result.status, AgentRuntimeProbeStatus::Ready);
+        assert_eq!(
+            std::fs::read_to_string(root.join("calls")).unwrap(),
+            "--version\n--help\nmodels\n"
+        );
+        let light_started = std::time::Instant::now();
+        let models = refresh_model_catalog(&executable, AdapterKind::AntigravityApp)
+            .await
+            .unwrap();
+        let light_ms = light_started.elapsed().as_millis();
+        assert_eq!(
+            models,
+            rovai_core::agent_runtime_adapter::antigravity_models(full.models)
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("calls")).unwrap(),
+            "--version\n--help\nmodels\nmodels\n"
+        );
+        eprintln!(
+            "[model-catalog-test] runtime=antigravity-app synthetic_full_ms={full_ms} synthetic_light_ms={light_ms} old_processes=3 new_processes=1"
+        );
+        std::fs::write(root.join("models"), "Fetching available models...\n").unwrap();
+        assert!(
+            refresh_model_catalog(&executable, AdapterKind::AntigravityApp)
+                .await
+                .is_err()
+        );
+    }
     #[tokio::test]
     async fn native_fast_checks_use_the_selected_executable_and_execution_directory() {
         let directory =

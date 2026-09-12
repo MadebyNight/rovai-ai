@@ -407,10 +407,13 @@ function ModelFields({
   optionKey,
   optionLabel
 }: ModelFieldsProps): React.JSX.Element {
+  const identity = catalogInstallationIdentity(installation)
+  const [live, setLive] = useState<{ identity: string; catalog: RuntimeModelCatalogView } | null>(null)
   const explicit = draft.model.mode === 'explicit' ? draft.model : null
-  const initialModels = modelCatalogIsServiceable(installation.modelCatalog)
-    ? selectableModels(snapshot.models)
-    : []
+  const initialModels = live?.identity === identity
+    && liveCatalogIsAtLeastAsRecent(live.catalog, installation.modelCatalog)
+    ? selectableModels(live.catalog.models)
+    : displayableInstallationModels(installation)
   const selectedModel = explicit
     ? initialModels.find((model) => model.id === explicit.modelId) ?? null
     : null
@@ -439,17 +442,19 @@ function ModelFields({
   return (
     <>
       <RuntimeModelPicker
+        key={identity}
         adapterKind={adapterKind}
         installation={installation}
         draft={draft}
         disabled={disabled}
         onOpenModelCatalog={onOpenModelCatalog}
         onChange={onChange}
+        onCatalogChange={(catalog) => setLive({ identity, catalog })}
       />
 
-      {explicit && option && optionKey && (
+      {explicit && optionKey && (option || optionValue) && (
         <label className="field-label">
-          <span>{optionLabel ?? option.label}</span>
+          <span>{optionLabel ?? option?.label ?? optionKey}</span>
           <select
             value={optionValue}
             disabled={disabled}
@@ -457,9 +462,9 @@ function ModelFields({
           >
             <option value="">跟随模型默认值</option>
             {optionInvalid && (
-              <option value={optionValue} disabled>已失效 · {optionValue}</option>
+              <option value={optionValue} disabled>当前目录未提供 · {optionValue}</option>
             )}
-            {option.values.map((choice) => (
+            {option?.values.map((choice) => (
               <option key={choice.value} value={choice.value}>{choice.label}</option>
             ))}
           </select>
@@ -475,7 +480,8 @@ function RuntimeModelPicker({
   draft,
   disabled,
   onOpenModelCatalog,
-  onChange
+  onChange,
+  onCatalogChange
 }: {
   adapterKind: AdapterKind
   installation: AdapterInstallation
@@ -483,6 +489,7 @@ function RuntimeModelPicker({
   disabled: boolean
   onOpenModelCatalog?: () => Promise<RuntimeModelCatalogView>
   onChange(draft: MemberRuntimeDraft): void
+  onCatalogChange(catalog: RuntimeModelCatalogView): void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -490,22 +497,20 @@ function RuntimeModelPicker({
   const [liveCatalog, setLiveCatalog] = useState<RuntimeModelCatalogView | null>(null)
   const requestGeneration = useRef(0)
   const initialCache = installation.modelCatalog
-  const initialModels = modelCatalogIsServiceable(initialCache)
-    ? selectableModels(installation.snapshot?.models ?? [])
-    : []
+  const initialModels = displayableInstallationModels(installation)
   const activeLiveCatalog = liveCatalogIsAtLeastAsRecent(liveCatalog, initialCache)
     ? liveCatalog
     : null
   const cache = activeLiveCatalog?.cache ?? initialCache
   const models = activeLiveCatalog
-    ? (modelCatalogIsServiceable(activeLiveCatalog.cache) ? selectableModels(activeLiveCatalog.models) : [])
+    ? selectableModels(activeLiveCatalog.models)
     : initialModels
   const explicit = draft.model.mode === 'explicit' ? draft.model : null
   const selectedModel = explicit
     ? models.find((model) => model.id === explicit.modelId) ?? null
     : null
   const selectedValue = explicit?.modelId ?? 'runtime_default'
-  const persistedRefreshFailed = latestCatalogRefreshFailed(installation)
+  const persistedRefreshFailed = latestCatalogRefreshFailed(installation, cache)
 
   useEffect(() => {
     requestGeneration.current += 1
@@ -517,13 +522,24 @@ function RuntimeModelPicker({
 
   const loadCatalog = (): void => {
     if (!onOpenModelCatalog) return
+    const startedAt = performance.now()
     const generation = ++requestGeneration.current
-    setLoading(models.length === 0)
+    const recordFirstDisplay = (cached: boolean): void => {
+      requestAnimationFrame(() => {
+        if (generation === requestGeneration.current) console.info('[model-catalog] display', {
+          runtimeKind: adapterKind, cached, firstDisplayMs: Math.round(performance.now() - startedAt)
+        })
+      })
+    }
+    if (models.length > 0) recordFirstDisplay(true)
+    setLoading(true)
     setRefreshFailed(false)
     void onOpenModelCatalog()
       .then((catalog) => {
         if (generation !== requestGeneration.current || catalog.runtimeKind !== adapterKind) return
         setLiveCatalog(catalog)
+        onCatalogChange(catalog)
+        if (models.length === 0 && catalog.models.length > 0) recordFirstDisplay(false)
         setRefreshFailed(catalog.refreshStatus === 'failed')
       })
       .catch(() => {
@@ -545,17 +561,17 @@ function RuntimeModelPicker({
   }
 
   const statusCopy = modelCatalogStatusCopy(cache, {
-    loading,
-    refreshFailed: refreshFailed || persistedRefreshFailed,
+    loading: loading && models.length === 0,
+    refreshFailed: !loading && (refreshFailed || persistedRefreshFailed),
     servingCachedModels: models.length > 0,
-    refreshStatus: activeLiveCatalog?.refreshStatus ?? null
+    refreshStatus: loading ? 'joined' : activeLiveCatalog?.refreshStatus ?? null
   })
   const missingSelectionLabel = explicit && !selectedModel
     ? missingModelLabel(explicit.modelId, cache.status)
     : null
   const triggerLabel = draft.model.mode === 'runtime_default'
     ? '默认'
-    : selectedModel?.displayName ?? missingSelectionLabel ?? draft.model.modelId
+    : selectedModel?.displayName ?? draft.model.modelId
 
   return (
     <div className="field-label runtime-model-field">
@@ -573,11 +589,9 @@ function RuntimeModelPicker({
             type="button"
             disabled={disabled}
             aria-label={`模型，${triggerLabel}`}
-            title={statusCopy}
           >
             <span>
               <strong>{triggerLabel}</strong>
-              <small>{explicit ? `固定模型 · ${statusCopy}` : statusCopy}</small>
             </span>
             <svg aria-hidden="true" viewBox="0 0 16 16">
               <path d="m4 6 4 4 4-4" />
@@ -594,7 +608,7 @@ function RuntimeModelPicker({
           >
             <DropdownMenu.Label className="runtime-model-picker-heading">
               <strong>选择模型</strong>
-              <small>{statusCopy}</small>
+              {statusCopy && <small role="status">{statusCopy}</small>}
             </DropdownMenu.Label>
             <DropdownMenu.RadioGroup value={selectedValue} onValueChange={selectModel}>
               <RuntimeModelPickerItem value="runtime_default" label="默认" />
@@ -617,17 +631,23 @@ function RuntimeModelPicker({
                 />
               ))}
             </DropdownMenu.RadioGroup>
-            {loading && (
+            {loading && models.length === 0 && (
               <DropdownMenu.Label className="runtime-model-picker-state">
-                <i aria-hidden="true" />正在获取当前模型目录…
+                <i aria-hidden="true" />正在获取模型列表…
               </DropdownMenu.Label>
             )}
             {!loading && models.length === 0 && (
               <DropdownMenu.Label className={`runtime-model-picker-state ${refreshFailed || persistedRefreshFailed ? 'error' : ''}`}>
                 {refreshFailed || persistedRefreshFailed
-                  ? '暂时无法获取模型目录；可以稍后重试。'
+                  ? '暂时无法获取模型列表。'
                   : '当前没有可选的固定模型。'}
               </DropdownMenu.Label>
+            )}
+            {(refreshFailed || persistedRefreshFailed) && !loading && (
+              <DropdownMenu.Item className="runtime-model-picker-item" onSelect={(event) => {
+                event.preventDefault()
+                loadCatalog()
+              }}><span className="runtime-model-picker-copy"><strong>重试</strong></span></DropdownMenu.Item>
             )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
@@ -682,6 +702,21 @@ function modelCatalogIsServiceable(cache: RuntimeModelCatalogCache): boolean {
   return cache.status === 'fresh' || cache.status === 'stale'
 }
 
+function catalogInstallationIdentity(installation: AdapterInstallation): string {
+  return [installation.id, installation.generation, installation.snapshot?.executableFingerprint,
+    installation.snapshot?.staleAt].join(':')
+}
+
+// Display policy only. Never use this to approve a new saved model selection.
+export function displayableInstallationModels(installation: AdapterInstallation): ModelDescriptor[] {
+  const cache = installation.modelCatalog
+  const snapshot = installation.snapshot
+  const sameEnvironmentHistory = cache.status === 'expired'
+    && snapshot?.probeStatus === 'ready' && !snapshot.staleAt
+  return modelCatalogIsServiceable(cache) || sameEnvironmentHistory
+    ? selectableModels(snapshot?.models ?? []) : []
+}
+
 export function liveCatalogIsAtLeastAsRecent(
   liveCatalog: RuntimeModelCatalogView | null,
   initialCache: RuntimeModelCatalogCache
@@ -695,10 +730,10 @@ export function liveCatalogIsAtLeastAsRecent(
   return Date.parse(liveObservedAt) >= Date.parse(initialObservedAt)
 }
 
-function latestCatalogRefreshFailed(installation: AdapterInstallation): boolean {
+function latestCatalogRefreshFailed(installation: AdapterInstallation, cache: RuntimeModelCatalogCache): boolean {
   const attempt = installation.lastProbeAttempt
   if (attempt?.status !== 'failed') return false
-  const observedAt = installation.modelCatalog.observedAt
+  const observedAt = cache.observedAt
   if (!observedAt) return true
   const attemptedTime = Date.parse(attempt.attemptedAt)
   const observedTime = Date.parse(observedAt)
@@ -725,27 +760,21 @@ export function modelCatalogStatusCopy(
     refreshStatus: RuntimeModelCatalogView['refreshStatus'] | null
   }
 ): string {
-  if (state.loading) return '正在获取当前模型目录'
+  if (state.loading) return '正在获取模型列表…'
   if (state.refreshFailed) {
     return state.servingCachedModels
-      ? '刷新失败，继续显示上次成功结果'
-      : '获取失败，打开后重试'
+      ? '暂时无法更新模型列表，已保留上次结果。'
+      : '暂时无法获取模型列表，请重试。'
   }
   if (state.refreshStatus === 'scheduled' || state.refreshStatus === 'joined') {
-    return '显示上次成功结果，正在后台刷新'
+    return '正在更新模型列表…'
   }
   if (state.refreshStatus === 'deferred') {
     return state.servingCachedModels
       ? '运行环境正在更新，继续显示上次成功结果'
       : '运行环境正在更新，稍后重新获取'
   }
-  switch (cache.status) {
-    case 'fresh': return '模型目录刚刚核对'
-    case 'stale': return '显示上次成功结果，打开时后台刷新'
-    case 'expired': return '缓存已超过 24 小时，打开后重新获取'
-    case 'invalidated': return '运行环境已变化，打开后重新获取'
-    case 'unavailable': return '尚未获取目录，打开后检查'
-  }
+  return ''
 }
 
 function explicitSelection(model: ModelDescriptor): ModelSelection {
