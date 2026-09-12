@@ -22,6 +22,15 @@ const assets = new Map()
 let selectedSource = null
 let externalAfterUpdate = null
 let delayedReload = false
+let catalogScenario = null
+let releaseCatalog = null
+const catalogCalls = []
+const catalogDisplayTimings = []
+const fixtureConsoleInfo = console.info.bind(console)
+console.info = (label, ...values) => {
+  if (label === '[model-catalog] display') catalogDisplayTimings.push(values[0])
+  fixtureConsoleInfo(label, ...values)
+}
 window.rovai = {
   platform: 'darwin',
   currentUserProfile: {
@@ -59,27 +68,33 @@ window.rovai = {
     }
   },
   request: async (method, payload) => {
-    if (method === 'runtime.modelCatalog') {
+    if (method === 'runtime.modelCatalog.open') {
+      catalogCalls.push(clone(payload))
       const installation = installations.find(
         (item) => item.adapterKind === payload.runtimeKind
       )
+      if (catalogScenario?.hold) await new Promise(resolve => { releaseCatalog = resolve })
+      const refreshStatus = catalogScenario?.refreshStatus ?? 'completed'
       return {
         runtimeKind: payload.runtimeKind,
-        cache: installation.modelCatalog,
+        cache: { ...installation.modelCatalog, status: refreshStatus === 'completed' ? 'fresh' : installation.modelCatalog.status, observedAt: new Date().toISOString() },
         models: installation.snapshot.models,
-        refreshStatus: 'completed',
+        refreshStatus,
         diagnosticCode: null
       }
     }
     if (method === 'members.list') return clone(members)
     const command = payload.command ?? payload
-    calls.push({ method, command: clone(command) })
+    calls.push({ method, command: clone(command), commandId: payload.commandId })
     await new Promise((resolve) => setTimeout(resolve, 70))
     if (failMethod === method) {
       failMethod = null
       throw new Error('验收模拟保存失败，修改仍保留。')
     }
     const member = members.find((item) => item.agentId === command.agentId)
+    if (method === 'members.runtime.set' && catalogScenario?.rejectCodes?.length) {
+      return { status: 'rejected', code: catalogScenario.rejectCodes.shift(), payload: { option: 'reasoning_effort' } }
+    }
     if (method === 'members.removalPreview')
       return {
         agentId: member.agentId,
@@ -153,6 +168,15 @@ window.rovai = {
 }
 window.memberFixture = {
   calls,
+  catalogCalls,
+  catalogDisplayTimings,
+  catalogScenario: (scenario) => {
+    catalogScenario = scenario
+    const installation = installations.find(item => item.adapterKind === 'codex-cli')
+    installation.modelCatalog.status = scenario ? 'expired' : 'fresh'
+    reload()
+  },
+  releaseCatalog: () => { if (catalogScenario) catalogScenario.hold = false; releaseCatalog?.(); releaseCatalog = null },
   roster: (away = 0) => {
     const base = initialMembers()
     members = Array.from({ length: 16 }, (_, index) => ({

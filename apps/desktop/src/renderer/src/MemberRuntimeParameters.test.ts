@@ -12,6 +12,7 @@ import {
   MemberModelParameters,
   MemberRuntimeParameters,
   draftFromDefaults,
+  displayableInstallationModels,
   liveCatalogIsAtLeastAsRecent,
   modelCatalogStatusCopy,
   runtimeDraftForMember,
@@ -21,6 +22,16 @@ import {
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
 
 describe('runtime model catalog source', () => {
+  it('keeps expired same-environment history displayable without accepting invalidated history', () => {
+    const installation = runtimeInstallation('codex-cli')
+    installation.modelCatalog.status = 'expired'
+    expect(displayableInstallationModels(installation)).toEqual(installation.snapshot!.models)
+    installation.modelCatalog.status = 'invalidated'
+    expect(displayableInstallationModels(installation)).toEqual([])
+    installation.modelCatalog.status = 'expired'
+    installation.snapshot!.probeStatus = 'light_ready'
+    expect(displayableInstallationModels(installation)).toEqual([])
+  })
   const installation = runtimeInstallation('copilot-cli')
   const cached: RuntimeModelCatalogView = {
     runtimeKind: 'copilot-cli',
@@ -142,7 +153,7 @@ describe('member runtime parameters', () => {
       onChange: () => undefined
     }))
 
-    expect(markup).toContain('固定模型')
+    expect(markup).not.toContain('打开后重新获取')
     expect(markup).toContain('Runtime Model')
     expect(markup).toContain('推理强度')
     expect(markup).toContain('value="high" selected')
@@ -171,7 +182,7 @@ describe('member runtime parameters', () => {
       onChange: () => undefined
     }))
 
-    expect(markup).toContain('尚未核对 · claude-opus-5')
+    expect(markup).toContain('模型，claude-opus-5')
     expect(markup).not.toContain('已失效')
   })
 
@@ -202,7 +213,9 @@ describe('member runtime parameters', () => {
     }))
 
     expect(markup).toContain('Runtime Model')
-    expect(markup).toContain('刷新失败，继续显示上次成功结果')
+    expect(modelCatalogStatusCopy(installation.modelCatalog, {
+      loading: false, refreshFailed: true, servingCachedModels: true, refreshStatus: 'failed'
+    })).toBe('暂时无法更新模型列表，已保留上次结果。')
   })
 
   it.each([

@@ -543,6 +543,20 @@ pub fn runtime_model_catalog_cache_view(
     snapshot: Option<&AdapterCapabilitySnapshot>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> RuntimeModelCatalogCacheView {
+    runtime_model_catalog_cache_view_at(
+        adapter_kind,
+        snapshot,
+        snapshot.and_then(|snapshot| snapshot.last_successful_probe_at.as_deref()),
+        now,
+    )
+}
+
+fn runtime_model_catalog_cache_view_at(
+    adapter_kind: AdapterKind,
+    snapshot: Option<&AdapterCapabilitySnapshot>,
+    catalog_succeeded_at: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> RuntimeModelCatalogCacheView {
     let Some(snapshot) = snapshot else {
         return RuntimeModelCatalogCacheView {
             status: RuntimeModelCatalogCacheStatus::Unavailable,
@@ -555,14 +569,14 @@ pub fn runtime_model_catalog_cache_view(
         return RuntimeModelCatalogCacheView {
             status: RuntimeModelCatalogCacheStatus::Invalidated,
             observed_at: (snapshot.probe_status == "ready")
-                .then(|| snapshot.last_successful_probe_at.clone())
+                .then(|| catalog_succeeded_at.map(str::to_owned))
                 .flatten(),
             revalidate_after: None,
             expires_at: None,
         };
     }
     let retained_lkg = snapshot.probe_status != "ready"
-        && snapshot.last_successful_probe_at.is_some()
+        && catalog_succeeded_at.is_some()
         && !snapshot.models.is_empty();
     if (snapshot.probe_status != "ready" && !retained_lkg)
         || !model_catalog_has_native_evidence(adapter_kind, &snapshot.models)
@@ -574,7 +588,7 @@ pub fn runtime_model_catalog_cache_view(
             expires_at: None,
         };
     }
-    let observed_at = snapshot.last_successful_probe_at.clone();
+    let observed_at = catalog_succeeded_at.map(str::to_owned);
     let Some(observed_at_value) = observed_at.as_deref() else {
         return RuntimeModelCatalogCacheView {
             status: RuntimeModelCatalogCacheStatus::Unavailable,
@@ -671,6 +685,19 @@ pub struct AdapterInstallationView {
     pub relocation_history: Vec<AdapterRelocationAudit>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl AdapterInstallationView {
+    /// Browsing an unchanged environment's LKG does not authorize saving a new selection.
+    pub fn model_catalog_can_display(&self) -> bool {
+        self.model_catalog.is_serviceable()
+            || (self.model_catalog.status == RuntimeModelCatalogCacheStatus::Expired
+                && self.snapshot.as_ref().is_some_and(|snapshot| {
+                    snapshot.probe_status == "ready"
+                        && snapshot.stale_at.is_none()
+                        && model_catalog_has_native_evidence(self.adapter_kind, &snapshot.models)
+                }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1188,7 +1215,8 @@ impl AgentProfileService {
                        attempt.id, attempt.status, attempt.failure_class,
                        attempt.diagnostic_code, attempt.candidate_path,
                        attempt.executable_fingerprint, attempt.attempted_at,
-                       attempt.retry_after, attempt.public_runtime_failure_json
+                       attempt.retry_after, attempt.public_runtime_failure_json,
+                       COALESCE(snapshot.model_catalog_succeeded_at, snapshot.last_successful_probe_at)
                 FROM adapter_installation AS installation
                 LEFT JOIN adapter_capability_snapshot AS snapshot
                   ON snapshot.installation_id = installation.id
@@ -1865,6 +1893,39 @@ impl AgentProfileService {
         Ok(installation_id)
     }
 
+    /// A catalog-only success never manufactures new authentication/capability
+    /// evidence or advances last_successful_probe_at / installation generation.
+    pub fn commit_runtime_model_catalog(
+        &self,
+        database: &mut Database,
+        expected: &AdapterInstallationView,
+        models: &[ModelDescriptor],
+        succeeded_at: &str,
+    ) -> Result<bool> {
+        let Some(snapshot) = expected.snapshot.as_ref() else {
+            return Ok(false);
+        };
+        let transaction = database.connection_mut().transaction()?;
+        let updated = transaction.execute(
+            "UPDATE adapter_capability_snapshot SET model_catalog_json = ?2, model_catalog_succeeded_at = ?3
+             WHERE installation_id = ?1 AND probe_status = 'ready'
+               AND authentication_status = 'authenticated' AND stale_at IS NULL
+               AND executable_fingerprint = ?4 AND permission_schema_digest = ?5
+               AND last_successful_probe_at IS ?6
+               AND EXISTS(SELECT 1 FROM adapter_installation installation
+                 WHERE installation.id = ?1 AND installation.generation = ?7
+                   AND installation.executable_path = ?8 AND installation.enabled = 1
+                   AND installation.path_state = 'valid' AND installation.auth_scope = ?9
+                   AND installation.adapter_kind = ?10)",
+            params![expected.id, serde_json::to_string(models)?, succeeded_at,
+                snapshot.executable_fingerprint, snapshot.permission_schema_digest,
+                snapshot.last_successful_probe_at, expected.generation, expected.executable_path,
+                expected.auth_scope, expected.adapter_kind.as_str()],
+        )? != 0;
+        transaction.commit()?;
+        Ok(updated)
+    }
+
     pub fn commit_discovered_managed_installation(
         &self,
         database: &mut Database,
@@ -1912,7 +1973,8 @@ impl AgentProfileService {
                        snapshot.permission_options_json,
                        snapshot.model_catalog_json,
                        snapshot.last_successful_probe_at,
-                       locator.compatibility_fingerprint
+                       locator.compatibility_fingerprint,
+                       COALESCE(snapshot.model_catalog_succeeded_at, snapshot.last_successful_probe_at)
                 FROM adapter_installation AS installation
                 LEFT JOIN adapter_capability_snapshot AS snapshot
                   ON snapshot.installation_id = installation.id
@@ -1935,6 +1997,7 @@ impl AgentProfileService {
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
                     ))
                 },
             )
@@ -1960,6 +2023,7 @@ impl AgentProfileService {
             model_catalog_json,
             last_successful_probe_at,
             locator_fingerprint,
+            catalog_succeeded_at,
         )) = existing
         {
             let identity_changed =
@@ -2023,7 +2087,11 @@ impl AgentProfileService {
                     let models_json = model_catalog_json?;
                     let last_successful_probe_at = last_successful_probe_at?;
                     let models = serde_json::from_str::<Vec<ModelDescriptor>>(&models_json).ok()?;
-                    (!models.is_empty()).then_some((models_json, last_successful_probe_at))
+                    (!models.is_empty()).then_some((
+                        models_json,
+                        last_successful_probe_at,
+                        catalog_succeeded_at,
+                    ))
                 })
                 .flatten();
             (
@@ -2080,15 +2148,21 @@ impl AgentProfileService {
                 ],
             )?;
         }
-        if let Some((models_json, last_successful_probe_at)) = retained_lkg {
+        if let Some((models_json, last_successful_probe_at, catalog_succeeded_at)) = retained_lkg {
             transaction.execute(
                 r#"
                 UPDATE adapter_capability_snapshot
                 SET model_catalog_json = ?2,
-                    last_successful_probe_at = ?3
+                    last_successful_probe_at = ?3,
+                    model_catalog_succeeded_at = ?4
                 WHERE installation_id = ?1
                 "#,
-                params![installation_id, models_json, last_successful_probe_at],
+                params![
+                    installation_id,
+                    models_json,
+                    last_successful_probe_at,
+                    catalog_succeeded_at
+                ],
             )?;
         }
         if let (Some(identity), Some(fingerprint)) =
@@ -2501,6 +2575,33 @@ impl AgentProfileService {
                 model: envelope.payload.model.clone(),
                 permissions: envelope.payload.permissions.clone(),
             };
+            // Retaining a saved model is not a new catalog selection. Compare the
+            // complete model (including options) and the persisted installation
+            // generation; never let this exemption cross an identity change.
+            let retaining_model = transaction.query_row(
+                "SELECT selected_runtime_adapter_kind, default_runtime_installation_id,
+                        default_model_selection_json, default_runtime_generation
+                 FROM agent_profile WHERE id = ?1",
+                [&envelope.payload.agent_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )?;
+            let retaining_model = retaining_model.0.as_deref()
+                == Some(binding.adapter_kind.as_str())
+                && retaining_model.1.as_deref() == Some(binding.installation_id.as_str())
+                && retaining_model.3 == Some(ready.installation_generation)
+                && retaining_model
+                    .2
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<ModelSelection>(value).ok())
+                    .as_ref()
+                    == Some(&binding.model);
             if ready.preflight_required && !matches!(binding.model, ModelSelection::RuntimeDefault)
             {
                 return Ok(CommandHandlerResult::rejected(
@@ -2510,17 +2611,28 @@ impl AgentProfileService {
             }
             if matches!(binding.model, ModelSelection::Explicit { .. })
                 && !ready.model_catalog_serviceable
+                && !retaining_model
             {
                 return Ok(CommandHandlerResult::rejected(
                     "runtime_model_catalog_refresh_required",
                     json!({ "adapterKind": envelope.payload.adapter_kind }),
                 ));
             }
+            // Keep permission validation even if the current catalog no longer
+            // includes this unchanged, previously saved model or its options.
+            let validation_binding = if retaining_model {
+                ResolvedRuntimeBinding {
+                    model: ModelSelection::RuntimeDefault,
+                    ..binding.clone()
+                }
+            } else {
+                binding.clone()
+            };
             if let Some(issue) = runtime_configuration_issue(
                 &ready.models_json,
                 ready.permission_schema_version,
                 &ready.permissions_json,
-                &binding,
+                &validation_binding,
             )? {
                 return Ok(CommandHandlerResult::rejected(issue.code, issue.payload));
             }
@@ -2532,6 +2644,7 @@ impl AgentProfileService {
                     default_runtime_installation_id = ?3,
                     default_model_selection_json = ?4,
                     default_permission_config_json = ?5,
+                    default_runtime_generation = ?8,
                     version = version + 1, updated_at = ?6
                 WHERE id = ?1 AND version = ?7
                 "#,
@@ -2543,6 +2656,7 @@ impl AgentProfileService {
                     serde_json::to_string(&binding.permissions)?,
                     now,
                     envelope.payload.expected_version,
+                    ready.installation_generation,
                 ],
             )?;
             Ok(profile_updated_result(
@@ -2583,6 +2697,7 @@ impl AgentProfileService {
                 SET selected_runtime_adapter_kind = NULL,
                     default_runtime_installation_id = NULL,
                     default_model_selection_json = NULL,
+                    default_runtime_generation = NULL,
                     default_permission_config_json = NULL,
                     version = version + 1, updated_at = ?2
                 WHERE id = ?1 AND version = ?3
@@ -3264,6 +3379,10 @@ impl AgentProfileService {
                         snapshot.native_session_compatibility_key,
                     ],
                 )?;
+                transaction.execute(
+                    "UPDATE adapter_capability_snapshot SET model_catalog_succeeded_at = ?2 WHERE installation_id = ?1",
+                    params![envelope.payload.installation_id, snapshot.last_attempted_at],
+                )?;
                 if let (Some((executable_path, identity)), Some(executable_fingerprint)) = (
                     executable_identity.as_ref(),
                     snapshot.executable_fingerprint.as_deref(),
@@ -3506,8 +3625,13 @@ fn installation_from_row(row: &Row<'_>) -> rusqlite::Result<AdapterInstallationV
     } else {
         None
     };
-    let model_catalog =
-        runtime_model_catalog_cache_view(adapter_kind, snapshot.as_ref(), chrono::Utc::now());
+    let catalog_succeeded_at = row.get::<_, Option<String>>(39)?;
+    let model_catalog = runtime_model_catalog_cache_view_at(
+        adapter_kind,
+        snapshot.as_ref(),
+        catalog_succeeded_at.as_deref(),
+        chrono::Utc::now(),
+    );
     Ok(AdapterInstallationView {
         id: row.get(0)?,
         adapter_kind,
@@ -3634,6 +3758,10 @@ fn upsert_successful_capability_snapshot(
             snapshot.native_session_compatibility_key,
         ],
     )?;
+    transaction.execute(
+        "UPDATE adapter_capability_snapshot SET model_catalog_succeeded_at = ?2 WHERE installation_id = ?1",
+        params![installation_id, snapshot.last_attempted_at],
+    )?;
     Ok(())
 }
 
@@ -3673,6 +3801,7 @@ fn upsert_static_capability_snapshot(
             observed_at = excluded.observed_at,
             last_attempted_at = excluded.last_attempted_at,
             last_successful_probe_at = NULL,
+            model_catalog_succeeded_at = NULL,
             stale_at = NULL,
             last_error = excluded.last_error,
             native_session_compatibility_key = NULL
@@ -4602,6 +4731,7 @@ fn needs_attention(code: &str, detail: Option<String>) -> RuntimeReadiness {
 
 struct ConfigurableManagedRuntimeSnapshot {
     installation_id: String,
+    installation_generation: i64,
     permission_schema_version: i64,
     models_json: String,
     permissions_json: String,
@@ -4618,7 +4748,9 @@ fn configurable_managed_runtime_snapshot(
             r#"
             SELECT installation.id, snapshot.permission_schema_version,
                    snapshot.model_catalog_json, snapshot.permission_options_json,
-                   snapshot.probe_status, snapshot.last_successful_probe_at
+                   snapshot.probe_status,
+                   COALESCE(snapshot.model_catalog_succeeded_at, snapshot.last_successful_probe_at),
+                   installation.generation
             FROM adapter_installation AS installation
             JOIN adapter_capability_snapshot AS snapshot
               ON snapshot.installation_id = installation.id
@@ -4664,6 +4796,7 @@ fn configurable_managed_runtime_snapshot(
                         });
                 Ok(ConfigurableManagedRuntimeSnapshot {
                     installation_id: row.get(0)?,
+                    installation_generation: row.get(6)?,
                     permission_schema_version: row.get(1)?,
                     models_json: if preflight_required && stored_models.is_empty() {
                         serde_json::to_string(&provisional_runtime_models(adapter_kind)).map_err(
@@ -6744,6 +6877,132 @@ mod slow_tests {
             unchanged.runtime_configuration,
             configured.runtime_configuration
         );
+
+        // This transaction owner also covers preservation vs new selection:
+        // catalog expiry/removal must not turn a permission-only edit into a
+        // new model selection, while options, identity and version remain gated.
+        let original_models = serde_json::to_string(&ready_codex_snapshot().models).unwrap();
+        let expired_at = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
+        let mut version = unchanged.version;
+        for (
+            index,
+            (
+                removed,
+                changed_options,
+                changed_identity,
+                invalid_permission,
+                stale_version,
+                expected,
+            ),
+        ) in [
+            (
+                false,
+                false,
+                false,
+                false,
+                false,
+                "agent_profile.runtime_configured",
+            ),
+            (
+                true,
+                false,
+                false,
+                false,
+                false,
+                "agent_profile.runtime_configured",
+            ),
+            (
+                true,
+                false,
+                false,
+                false,
+                false,
+                "agent_profile.runtime_configured",
+            ),
+            (
+                true,
+                false,
+                false,
+                true,
+                false,
+                "runtime_permission_value_invalid",
+            ),
+            (
+                true,
+                true,
+                false,
+                false,
+                false,
+                "runtime_model_catalog_refresh_required",
+            ),
+            (
+                true,
+                false,
+                true,
+                false,
+                false,
+                "runtime_model_catalog_refresh_required",
+            ),
+            (true, false, false, false, true, "version_conflict"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            database.connection().execute(
+                "UPDATE adapter_capability_snapshot SET model_catalog_json = ?1, model_catalog_succeeded_at = ?2",
+                params![if removed { "[]" } else { &original_models },
+                    if index == 2 { chrono::Utc::now().to_rfc3339() } else { expired_at.clone() }],
+            ).unwrap();
+            if changed_identity {
+                database
+                    .connection()
+                    .execute(
+                        "UPDATE adapter_installation SET generation = generation + 1",
+                        [],
+                    )
+                    .unwrap();
+            }
+            let permissions = AdapterPermissionConfig {
+                values: json!({"sandbox_mode": if invalid_permission { "invalid" } else { "workspace-write" }, "approval_policy": "never"}),
+                ..configuration.permissions.clone()
+            };
+            let model = if changed_options {
+                ModelSelection::Explicit {
+                    model_id: "gpt-test".into(),
+                    options: json!({"reasoning_effort":"high"}),
+                }
+            } else {
+                configuration.model.clone()
+            };
+            let result = service
+                .set_runtime(
+                    &mut database,
+                    &user_command(
+                        &format!("retain-model-{index}"),
+                        SetMemberRuntimeConfigurationCommand {
+                            agent_id: profile.agent_id.clone(),
+                            expected_version: if stale_version { version - 1 } else { version },
+                            adapter_kind: AdapterKind::CodexCli,
+                            model,
+                            permissions,
+                        },
+                    ),
+                )
+                .unwrap();
+            assert_eq!(result.result.code, expected, "case {index}");
+            if expected == "agent_profile.runtime_configured" {
+                version += 1;
+            }
+            let saved = service
+                .get_profile(&database, &profile.agent_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.version, version);
+            assert_eq!(
+                saved.runtime_configuration.unwrap().model,
+                configuration.model
+            );
+        }
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();

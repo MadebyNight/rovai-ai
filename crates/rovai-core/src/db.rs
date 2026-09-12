@@ -277,7 +277,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.58";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 101;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 102;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -703,6 +703,7 @@ struct CurrentMigrationState {
     v149: bool,
     v150: bool,
     v151: bool,
+    v152: bool,
 }
 
 impl CurrentMigrationState {
@@ -792,7 +793,25 @@ impl CurrentMigrationState {
             && self.v148
             && self.v149
             && self.v150
-            && self.v151;
+            && self.v151
+            && self.v152;
+        let model_catalog_source = contract == "v1.58"
+            && schema == 101
+            && classifier == V147_CLASSIFIER_VERSION
+            && self.v142
+            && self.v143
+            && self.v144
+            && self.v145
+            && self.v146
+            && self.v147
+            && self.v148
+            && self.v149
+            && self.v150
+            && self.v151
+            && !self.v152;
+        if self.v152 && !current {
+            return false;
+        }
         let startup_source = contract == "v1.58"
             && schema == 100
             && classifier == V147_CLASSIFIER_VERSION
@@ -806,10 +825,10 @@ impl CurrentMigrationState {
             && self.v149
             && self.v150
             && !self.v151;
-        if self.v151 && !current {
+        if self.v151 && !current && !model_catalog_source {
             return false;
         }
-        if self.v150 && !current && !startup_source {
+        if self.v150 && !current && !model_catalog_source && !startup_source {
             return false;
         }
         let dingtalk_names_source = contract == "v1.57"
@@ -824,7 +843,12 @@ impl CurrentMigrationState {
             && self.v148
             && self.v149
             && !self.v150;
-        if self.v149 && !current && !startup_source && !dingtalk_names_source {
+        if self.v149
+            && !current
+            && !model_catalog_source
+            && !startup_source
+            && !dingtalk_names_source
+        {
             return false;
         }
         let zcode_source = contract == "v1.56"
@@ -838,7 +862,13 @@ impl CurrentMigrationState {
             && self.v147
             && self.v148
             && !self.v149;
-        if self.v148 && !current && !startup_source && !zcode_source && !dingtalk_names_source {
+        if self.v148
+            && !current
+            && !model_catalog_source
+            && !startup_source
+            && !zcode_source
+            && !dingtalk_names_source
+        {
             return false;
         }
         let message_quotes_source = contract == "v1.55"
@@ -906,6 +936,7 @@ impl CurrentMigrationState {
             && !self.v146
             && !self.v147;
         if current
+            || model_catalog_source
             || startup_source
             || dingtalk_names_source
             || message_quotes_source
@@ -2830,6 +2861,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v149 && !zcode_runtime_v149_schema_matches(connection)?)
         || (migrations.v150 && !dingtalk_display_names_v150_schema_matches(connection)?)
         || (migrations.v151 && !runtime_startup_v151_schema_matches(connection)?)
+        || (migrations.v152 && !model_catalog_v152_schema_matches(connection)?)
         || (migrations.v141
             && if deployed_tool_source {
                 !deployed_tool_v141_image_schema_matches(connection)?
@@ -2856,6 +2888,17 @@ pub(crate) fn classify_database_contract(
             marker,
         ))
     }
+}
+
+fn model_catalog_v152_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('adapter_capability_snapshot')
+                       WHERE name = 'model_catalog_succeeded_at' AND type = 'TEXT')
+             AND EXISTS(SELECT 1 FROM pragma_table_info('agent_profile')
+                       WHERE name = 'default_runtime_generation' AND type = 'INTEGER')",
+        [],
+        |row| row.get(0),
+    )
 }
 
 fn runtime_startup_v151_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -3430,7 +3473,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 148),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 149),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 150),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 151)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 151),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 152)
         "#,
         [],
         |row| {
@@ -3517,6 +3561,7 @@ fn load_current_migration_state(
                 v149: row.get(79)?,
                 v150: row.get(80)?,
                 v151: row.get(81)?,
+                v152: row.get(82)?,
             })
         },
     )
@@ -6407,6 +6452,9 @@ impl Database {
             if !self.schema_migration_applied(151)? {
                 migration_step!("migration_151", self.migrate_runtime_startup_v151());
             }
+            if !self.schema_migration_applied(152)? {
+                migration_step!("migration_152", self.migrate_model_catalog_v152());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7055,11 +7103,61 @@ impl Database {
         if !self.schema_migration_applied(151)? {
             migration_step!("migration_151", self.migrate_runtime_startup_v151());
         }
+        if !self.schema_migration_applied(152)? {
+            migration_step!("migration_152", self.migrate_model_catalog_v152());
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
             eprintln!("Notification Episode startup retention failed: {error:#}");
         }
+        Ok(())
+    }
+
+    fn migrate_model_catalog_v152(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !matches!(classify_database_contract(&transaction)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.58" && marker.projection_schema_version == 101)
+        {
+            anyhow::bail!("Model catalog migration requires the exact v1.58/schema 101 source");
+        }
+        add_migration_column_if_missing(
+            &transaction,
+            "adapter_capability_snapshot",
+            "model_catalog_succeeded_at",
+            "model_catalog_succeeded_at TEXT",
+        )?;
+        add_migration_column_if_missing(
+            &transaction,
+            "agent_profile",
+            "default_runtime_generation",
+            "default_runtime_generation INTEGER",
+        )?;
+        // Never make old catalogs fresh at migration time. Legacy member identity
+        // is adopted only where the existing installation predates the saved row;
+        // unknown identity history must take the normal validation path once.
+        transaction.execute_batch(
+            "UPDATE adapter_capability_snapshot
+             SET model_catalog_succeeded_at = last_successful_probe_at
+             WHERE model_catalog_succeeded_at IS NULL;
+             UPDATE agent_profile SET default_runtime_generation = (
+                 SELECT installation.generation FROM adapter_installation installation
+                 JOIN adapter_capability_snapshot snapshot ON snapshot.installation_id = installation.id
+                 WHERE installation.id = agent_profile.default_runtime_installation_id
+                   AND installation.adapter_kind = agent_profile.selected_runtime_adapter_kind
+                   AND snapshot.probe_status = 'ready' AND snapshot.stale_at IS NULL
+                   AND julianday(installation.updated_at) <= julianday(agent_profile.updated_at)
+             ) WHERE default_runtime_generation IS NULL;"
+        )?;
+        transaction.execute("UPDATE rovai_data_contract SET projection_schema_version=?1, updated_at=datetime('now') WHERE singleton=1",
+            [CURRENT_PROJECTION_SCHEMA_VERSION])?;
+        transaction.execute(
+            "INSERT INTO schema_migration VALUES(152, datetime('now'))",
+            [],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -7082,10 +7180,7 @@ impl Database {
         transaction.execute(
             "UPDATE rovai_data_contract SET contract_version=?1, projection_schema_version=?2,
             updated_at=datetime('now') WHERE singleton=1",
-            params![
-                CURRENT_DATA_CONTRACT_VERSION,
-                CURRENT_PROJECTION_SCHEMA_VERSION
-            ],
+            params![CURRENT_DATA_CONTRACT_VERSION, 101],
         )?;
         transaction.commit()?;
         Ok(())
@@ -31550,6 +31645,7 @@ mod tests {
             v149: version >= 149,
             v150: version >= 150,
             v151: version >= 151,
+            v152: version >= 152,
         }
     }
 
@@ -31656,6 +31752,12 @@ mod tests {
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
+                152,
+            ),
+            (
+                "v1.58/schema 101 before independent catalog age",
+                "v1.58",
+                101,
                 151,
             ),
             ("v1.56/schema 98 before ZCode", "v1.56", 98, 148),
@@ -32115,7 +32217,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(151);
+        let current = migration_state_through(152);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -32506,7 +32608,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(151));
+        assert_eq!(state, migration_state_through(152));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -32615,6 +32717,7 @@ mod tests {
         database.migrate_zcode_runtime_v149().unwrap();
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(database.schema_migration_applied(144).unwrap());
 
@@ -32683,6 +32786,7 @@ mod tests {
         database.migrate_zcode_runtime_v149().unwrap();
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -32782,6 +32886,68 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }
 
+    #[test]
+    fn model_catalog_migration_preserves_age_and_rolls_back_atomically() {
+        // This migration owns timestamp/identity backfill and receipt atomicity;
+        // a temporary SQLite source is necessary to exercise that boundary.
+        let directory =
+            std::env::temp_dir().join(format!("rovai-catalog-migration-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        database.connection().execute_batch(
+            r#"DELETE FROM schema_migration WHERE version=152;
+             UPDATE rovai_data_contract SET projection_schema_version=101;
+             ALTER TABLE adapter_capability_snapshot DROP COLUMN model_catalog_succeeded_at;
+             ALTER TABLE agent_profile DROP COLUMN default_runtime_generation;
+             INSERT INTO adapter_installation(id,adapter_kind,executable_path,command_name,installation_class,source,auth_scope,enabled,generation,path_state,version,created_at,updated_at)
+             VALUES('catalog-fixture','codex-cli','/fixture/codex','codex','managed_default','manual','default',1,7,'valid',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+             INSERT INTO adapter_capability_snapshot(installation_id,authentication_status,probe_status,permission_schema_version,permission_schema_digest,last_attempted_at,last_successful_probe_at)
+             VALUES('catalog-fixture','authenticated','ready',1,'fixture','2026-01-02T00:00:00Z','2026-01-01T00:00:00Z');
+             UPDATE agent_profile SET selected_runtime_adapter_kind='codex-cli',default_runtime_installation_id='catalog-fixture',default_model_selection_json='{"mode":"runtime_default"}',default_permission_config_json='{"adapterKind":"codex-cli","schemaVersion":1,"values":{}}',updated_at='2026-01-03T00:00:00Z' WHERE id='agent_1';
+             UPDATE agent_profile SET selected_runtime_adapter_kind='codex-cli',default_runtime_installation_id='catalog-fixture',default_model_selection_json='{"mode":"runtime_default"}',default_permission_config_json='{"adapterKind":"codex-cli","schemaVersion":1,"values":{}}',updated_at='2025-12-01T00:00:00Z' WHERE id='agent_2';
+             CREATE TEMP TRIGGER reject_catalog_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=152 BEGIN SELECT RAISE(ABORT,'catalog receipt failure'); END;"#
+        ).unwrap();
+        assert!(
+            database
+                .migrate_model_catalog_v152()
+                .unwrap_err()
+                .to_string()
+                .contains("catalog receipt failure")
+        );
+        assert!(!model_catalog_v152_schema_matches(database.connection()).unwrap());
+        assert!(!database.schema_migration_applied(152).unwrap());
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_catalog_receipt;")
+            .unwrap();
+        database.migrate_model_catalog_v152().unwrap();
+        let times: (String, String) = database.connection().query_row(
+            "SELECT model_catalog_succeeded_at,last_successful_probe_at FROM adapter_capability_snapshot WHERE installation_id='catalog-fixture'",
+            [], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(
+            times,
+            ("2026-01-01T00:00:00Z".into(), "2026-01-01T00:00:00Z".into())
+        );
+        let generation = |id: &str| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT default_runtime_generation FROM agent_profile WHERE id=?1",
+                    [id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(generation("agent_1"), Some(7));
+        assert_eq!(
+            generation("agent_2"),
+            None,
+            "unknown identity history is not grandfathered"
+        );
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     // This migration owns the new persistence seam and receipt rollback. Existing
     // marker matrices cannot prove the table/receipt/authority marker commit together.
     #[test]
@@ -32789,7 +32955,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rovai-startup-migration-{}", Uuid::new_v4()));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
-        database.connection().execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version=151;
+        database.connection().execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version>=151;
             UPDATE rovai_data_contract SET contract_version='v1.58',projection_schema_version=100 WHERE singleton=1;").unwrap();
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
@@ -32813,6 +32979,7 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_startup_receipt;")
             .unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(
             database
@@ -32912,7 +33079,7 @@ mod tests {
         for (_, sql) in &triggers {
             transaction.execute_batch(sql).unwrap();
         }
-        transaction.execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version IN (150,151);
+        transaction.execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version >= 150;
             UPDATE rovai_data_contract SET contract_version='v1.57',projection_schema_version=99;
             INSERT INTO dingtalk_account VALUES('kept-account','digest','kept-corp','kept-user','kept-corp-name','kept-profile','connected',3,'created','updated','connected','verified',NULL);
             INSERT INTO dingtalk_owner_identity VALUES('kept-account','kept-corp','kept-principal','digest',4,'created','updated');
@@ -33081,6 +33248,7 @@ mod tests {
         database.migrate_zcode_runtime_v149().unwrap();
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(zcode_runtime_v149_schema_matches(database.connection()).unwrap());
         assert_eq!(snapshot(database.connection()), before);
@@ -35704,6 +35872,7 @@ mod tests {
         database.migrate_zcode_runtime_v149().unwrap();
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let after: (String, String) = database.connection().query_row(
             "SELECT default_model_selection_json, runtime_binding_revision FROM agent_profile WHERE id = 'agent_1'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
@@ -35907,6 +36076,7 @@ mod tests {
         database.migrate_zcode_runtime_v149().unwrap();
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained: (i64, Option<String>) = database
             .connection()
@@ -36087,6 +36257,7 @@ mod tests {
         database.migrate_zcode_runtime_v149().unwrap();
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained = database
             .connection()

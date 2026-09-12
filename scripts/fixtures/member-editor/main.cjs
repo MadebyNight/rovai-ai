@@ -114,6 +114,9 @@ app
       )
     const reloadPage = async () => {
       const loaded = require('node:events').once(window.webContents, 'did-finish-load')
+      // A fixture reset deliberately discards its own draft; normal UI guard
+      // behavior is exercised separately above and below these reset points.
+      window.webContents.once('will-prevent-unload', (event) => event.preventDefault())
       window.webContents.reload()
       await loaded
       await wait(`document.querySelector(${JSON.stringify(textInput)})`)
@@ -308,7 +311,7 @@ app
       async () => {
         await click(`${active}[data-member-runtime-select]`)
         await wait(
-          'document.querySelectorAll(".member-runtime-menu-item").length === 14'
+          'document.querySelectorAll(".member-runtime-menu-item").length === 15'
         )
         const labels = await run(
           '[...document.querySelectorAll(".member-runtime-menu-item")].map(node => node.textContent.trim())'
@@ -320,7 +323,7 @@ app
           await run(
             'document.querySelectorAll(".member-runtime-menu-item .member-runtime-glyph").length'
           ),
-          14
+          15
         )
         await capture('runtime-menu')
         await key('Escape')
@@ -491,6 +494,56 @@ app
           true
         )
         await click(`${active}.member-runtime-conflict button`)
+      }
+    )
+    await check(
+      'expired catalogs stay interactive and a continuous save recovers once without losing drafts',
+      async () => {
+        await reloadPage()
+        await run(`window.memberFixture.catalogScenario({ hold: true, refreshStatus: 'failed' })`)
+        await click(`${active}.runtime-model-picker-trigger`)
+        assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('gpt-5.4-mini')`), true)
+        assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('24 小时')`), false)
+        assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('正在更新模型列表')`), true)
+        await capture('model-catalog-expired-visible')
+        console.log(JSON.stringify({ modelCatalogDisplay: await run('window.memberFixture.catalogDisplayTimings') }))
+        await run('window.memberFixture.releaseCatalog()')
+        await wait(`document.querySelector('.runtime-model-picker-menu').textContent.includes('已保留上次结果')`)
+        await capture('model-catalog-refresh-failed')
+        await click('.runtime-model-picker-item', 'gpt-5.4-mini')
+        await selectPermission(0, 'high')
+        const draft = await run(`window.memberFixture.profiles()[0].runtimeConfiguration`)
+        await run(`window.memberFixture.catalogScenario({ hold: true, refreshStatus: 'completed', rejectCodes: ['runtime_model_catalog_refresh_required'] }); window.memberFixture.calls.splice(0); window.memberFixture.catalogCalls.splice(0)`)
+        await saveRuntime()
+        await wait('window.memberFixture.catalogCalls.length === 1')
+        assert.equal(await run(`document.querySelector('${active}.member-runtime-form').textContent.includes('正在保存')`), true)
+        assert.equal(await run(`!!document.querySelector('${active}.member-runtime-form [role=alert]')`), false)
+        assert.deepEqual(await run('window.memberFixture.profiles()[0].runtimeConfiguration'), draft)
+        await run(`document.querySelector('${active}.member-runtime-form').requestSubmit()`)
+        assert.equal(await run('window.memberFixture.calls.length'), 1)
+        await run('window.memberFixture.releaseCatalog()')
+        await wait(`window.memberFixture.profiles()[0].runtimeConfiguration.model.modelId === 'gpt-5.4-mini'`)
+        const submissions = await run('window.memberFixture.calls')
+        assert.equal(submissions.length, 2)
+        assert.deepEqual(submissions[0].command, submissions[1].command)
+        assert.notEqual(submissions[0].commandId, submissions[1].commandId)
+        assert.equal(submissions[1].command.model.options.reasoning_effort, 'high')
+        // Refresh failure and confirmed invalid parameter both retain the entire
+        // local draft; only the transient case offers in-place retry.
+        for (const [refreshStatus, code, text, retry] of [
+          ['failed', null, '暂时无法验证所选模型', true],
+          ['completed', 'runtime_model_option_invalid', '「推理强度」', false]
+        ]) {
+          await selectPermission(0, 'low')
+          await run(`window.memberFixture.catalogScenario({ refreshStatus: '${refreshStatus}', rejectCodes: ['runtime_model_catalog_refresh_required', ${code ? `'${code}'` : "'runtime_model_catalog_refresh_required'"}] }); window.memberFixture.calls.splice(0)`)
+          await saveRuntime()
+          await wait(`document.querySelector('${active}.member-runtime-form [role=alert]')?.textContent.includes('${text}')`)
+          assert.equal(await run(`document.querySelector('${active}.runtime-parameter-form select').value`), 'low')
+          assert.equal(await run('window.memberFixture.profiles()[0].runtimeConfiguration.model.options.reasoning_effort'), 'high')
+          assert.equal(await run(`!!document.querySelector('${active}.member-runtime-form [role=alert] button')`), retry)
+          await capture(`model-save-${refreshStatus}`)
+        }
+        await reloadPage()
       }
     )
     await check(

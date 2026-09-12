@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # Runtime Catalog Boundaries
@@ -142,20 +142,27 @@ Camp 意图。模型变化仅失效资格缓存，权限变化不影响 Fast；�
 
 ## 模型目录缓存与执行事实
 
-模型目录是 Product Runtime Availability snapshot 的一部分，但其配置体验与执行事实分离。只有 deep probe
-形成的 `ready` 成功 snapshot 才能创建或替换 catalog success；`light_ready`、`installed_unverified`、failed
-attempt 或 synthetic runtime-default descriptor 不能自行制造动态目录。Core 从成功时间统一投影 `fresh`（60 秒内）、
+模型目录是 Product Runtime Availability snapshot 的一部分，但其配置体验与执行事实分离。首次目录仍由完整
+检查形成；已验证且身份及相关能力证据仍有效的 Runtime 复用既有原生目录读取步骤轻量刷新，入口细节见
+[Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md#目录展示与保存恢复)。轻量刷新只更新目录
+与独立 `model_catalog_succeeded_at`，不更新完整验证时间或 Ready 证据。旧数据从原成功时间回填，不用迁移时间。
+`light_ready`、`installed_unverified`、failed attempt 或 synthetic descriptor 不能制造动态目录。Core 从目录成功时间统一投影 `fresh`（60 秒内）、
 `stale`（60 秒至 24 小时）、`expired`（24 小时及以上）、`unavailable` 与 `invalidated`，Renderer 不自行计算
 TTL。
 
 当前 executable fingerprint 改变时，旧 Deep Probe 不再构成当前 Runtime Ready evidence。发现事务可以只保留
-旧成功 snapshot 的 models 与原 `lastSuccessfulProbeAt` 作为 stale LKG；即使原成功不足 60 秒也不能投影 fresh，
+旧成功 snapshot 的 models 与原目录成功时间作为 stale LKG；即使原成功不足 60 秒也不能投影 fresh，
 24 小时上限继续从原成功时间计算且不得刷新。LKG 只服务模型下拉，不证明新 binary 支持相同模型，不继承
 capability/auth/permission/session evidence，也不能绕过当前 fingerprint 的 Dispatch Preflight。
 
-切换队员 Runtime 只读取 Installation，不启动进程。打开模型 Picker 才进入 `runtime.modelCatalog.open` seam：
-fresh 直接返回，stale 立即服务 last-known-good 并由 Check Manager 后台单飞刷新，其他状态等待一次用户动作
-授权的 Availability Check。刷新失败只追加 failed Probe Attempt，保留成功 snapshot。Superseded 刷新不追加
+切换队员 Runtime 只读取 Installation，不启动进程。打开模型 Picker 进入既有 `runtime.modelCatalog.open` seam：
+fresh 直接返回，stale 或同一已验证身份的 expired 历史目录立即展示并后台单飞刷新；没有可展示历史时才等待。
+展示资格不放宽 `is_serviceable` 或新选择的保存校验。身份变化仍按原 LKG 失效规则处理。
+该入口的 `waitForRefresh=true` 供保存恢复等待成功写回，`scheduled`/`joined` 不是刷新成功。完整检查可以满足
+目录等待者，轻量刷新不能满足完整验证；复用原 Check Manager 的串行、deadline 和清理，不新增调度器。
+各适配器写回前复核 installation generation、executable identity 与相关证据；首次使用、身份或相关验证失效
+仍走原完整检查。省去重复版本/行为验证不等于省去读取目录所需的原生认证和连接，也不改变平台准入资格。
+刷新失败只追加 failed Probe Attempt，保留成功 snapshot。Superseded 刷新不追加
 attempt，等待式 Picker 返回 `deferred`；当前 fingerprint 尚未 Ready 时，未过期 LKG 继续以 stale 服务。只有
 当前 Installation canonical path 自身的确定 fingerprint/identity 变化才可撤销当前 Ready；其他搜索候选的失败是
 candidate-local transient attempt，不得修改当前 snapshot 的 `stale_at`。备用候选只有完整 deep probe 成功并
@@ -163,8 +170,13 @@ candidate-local transient attempt，不得修改当前 snapshot 的 `stale_at`�
 失效。account/provider 变化只有 Adapter 提供稳定、非敏感 identity
 evidence 时才自动比较，不能从凭据内容或错误文案猜测。
 
-Picker catalog 只用于建立新的显式选择。既有已保存显式模型在目录暂不可用或 Provider 后续移除时保持原值，
-并按当前证据显示尚未核对或目录未提供；不为人工修改或技术恢复的损坏数据提供兼容修复。真实 AgentRun
+Picker catalog 用于建立新的显式选择或修改模型参数。Core 以数据库配置为准：绑定与保存的环境 generation、
+模型和全部模型参数未变化时，只改权限不受目录年龄、暂时失败或目录移除原模型拦截，权限仍正常校验。
+旧配置只有可从原时间证据确认绑定身份时才回填 generation，未知身份历史仍走正常验证。
+保存明确拒绝为 `runtime_model_catalog_refresh_required` 时，编辑器在同一保存状态内等待刷新并最多重提一次，
+保留原 expectedVersion、使用新 commandId；其他拒绝或结果未知不自动重试。失败与并发冲突保留草稿，
+新的无效模型或参数要求调整，不静默替换。页面不常态展示 TTL，错误码只留诊断，主要提示使用中文。
+不为人工修改或技术恢复的损坏数据提供兼容修复。真实 AgentRun
 仍在 Host/Session 建立后核对当前目录，不存在或无法核对即 fail closed。`runtime_default` 不依赖 catalog，
 内部 sentinel 只用于审计和冻结，Adapter 不向真实 Runtime 发送该 sentinel。
 

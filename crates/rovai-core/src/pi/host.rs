@@ -1706,7 +1706,7 @@ pub(crate) struct PiMachineReadyProbe {
     pub raw_model_catalog: Value,
 }
 
-pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineReadyProbe> {
+async fn spawn_probe_host(executable: &Path) -> Result<(Arc<PiHost>, PiProbeRootCleanup)> {
     let probe_root = std::env::temp_dir().join(format!("rovai-pi-probe-{}", uuid::Uuid::new_v4()));
     let _probe_root_cleanup = PiProbeRootCleanup(probe_root.clone());
     let private_runtime_dir = probe_root.join("private");
@@ -1737,35 +1737,58 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
         builtin_tools: None,
     })
     .await?;
+    Ok((host, _probe_root_cleanup))
+}
+
+pub(crate) async fn model_catalog_probe(executable: &Path) -> Result<Value> {
+    let (host, _probe_root) = spawn_probe_host(executable).await?;
+    let result = read_probe_model_catalog(&host).await;
+    if !host.shutdown_and_reap_with_status().await {
+        bail!("Pi catalog Host did not shutdown and reap within the grace period");
+    }
+    result
+}
+
+async fn read_probe_model_catalog(host: &PiHost) -> Result<Value> {
+    let response = host.command("get_available_models", json!({})).await?;
+    let catalog = response
+        .pointer("/data/models")
+        .cloned()
+        .context("Pi probe model catalog is unavailable")?;
+    let models = catalog
+        .as_array()
+        .filter(|models| !models.is_empty())
+        .context("Pi probe model catalog is empty or malformed")?;
+    if models.iter().any(|model| {
+        ["provider", "id"].iter().any(|key| {
+            model
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+        })
+    }) {
+        bail!("Pi probe model catalog contains an invalid entry");
+    }
+    Ok(catalog)
+}
+
+pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineReadyProbe> {
+    let (host, _probe_root_cleanup) = spawn_probe_host(executable).await?;
+    let probe_root = &_probe_root_cleanup.0;
+    let private_runtime_dir = probe_root.join("private");
+    let session_dir = probe_root.join("sessions");
     let result = async {
-        let models_response = host.command("get_available_models", json!({})).await?;
-        let raw_model_catalog = models_response
-            .pointer("/data/models")
-            .cloned()
-            .context("Pi probe model catalog is unavailable")?;
+        let raw_model_catalog = read_probe_model_catalog(&host).await?;
         let models = raw_model_catalog
             .as_array()
-            .filter(|models| !models.is_empty())
-            .context("Pi probe model catalog is empty or malformed")?;
-        if models.iter().any(|model| {
-            model
-                .get("provider")
-                .and_then(Value::as_str)
-                .is_none_or(|provider| provider.trim().is_empty())
-                || model
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .is_none_or(|id| id.trim().is_empty())
-        }) {
-            bail!("Pi probe model catalog contains an invalid entry");
-        }
+            .expect("catalog reader validated array");
         let state = host.command("get_state", json!({})).await?;
         let locator_root = private_runtime_dir.join("probe-locator");
         let (session_id, session_file, provider, model, thinking, _) = validate_host_state(
             &state,
             None,
             &locator_root,
-            &probe_root,
+            probe_root,
             PI_RUNTIME_DEFAULT_MODEL_ID,
         )?;
         let probe_binding = host
@@ -1783,7 +1806,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
             &probe_binding,
             &session_id,
             &session_file,
-            &probe_root,
+            probe_root,
         )?;
         validate_probe_session_file_directory(&session_file, &session_dir)?;
         let canonical_session_file = session_file
@@ -1793,7 +1816,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
             &locator_root,
             &session_id,
             &canonical_session_file,
-            &probe_root,
+            probe_root,
             true,
         )?;
         if !models.iter().any(|entry| {
@@ -1811,7 +1834,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
             &replacement_state,
             None,
             &locator_root,
-            &probe_root,
+            probe_root,
             PI_RUNTIME_DEFAULT_MODEL_ID,
         )?;
         validate_probe_session_file_directory(&replacement_file, &session_dir)?;
@@ -1824,7 +1847,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
             &probe_binding,
             &replacement_id,
             &replacement_file,
-            &probe_root,
+            probe_root,
         )?;
         if replacement_id == session_id
             || canonical_or_future_session_path(&replacement_file)?
@@ -1849,7 +1872,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
             &restored_state,
             Some(&session_id),
             &locator_root,
-            &probe_root,
+            probe_root,
             PI_RUNTIME_DEFAULT_MODEL_ID,
         )?;
         if restored_id != session_id || restored_file.canonicalize()? != canonical_session_file {
@@ -1864,7 +1887,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
             &probe_binding,
             &restored_id,
             &restored_file,
-            &probe_root,
+            probe_root,
         )?;
 
         Ok(PiMachineReadyProbe {
@@ -1883,7 +1906,7 @@ pub(crate) async fn machine_ready_probe(executable: &Path) -> Result<PiMachineRe
     }
     .await;
     let reaped_gracefully = host.shutdown_and_reap_with_status().await;
-    let cleanup = std::fs::remove_dir_all(&probe_root)
+    let cleanup = std::fs::remove_dir_all(probe_root)
         .context("failed to remove the private Pi probe Session/config root");
     match result {
         Ok(observation) => {
@@ -2591,6 +2614,32 @@ done
         assert!(
             !probe_root.exists(),
             "the private probe Session/config root must be removed"
+        );
+
+        // Compare scopes at the same managed-host boundary: catalog refresh must
+        // not repeat the full replacement/resume behavioral checks above.
+        let catalog = model_catalog_probe(&executable).await.unwrap();
+        assert_eq!(catalog, observation.raw_model_catalog);
+        let requests = std::fs::read_to_string(root.join("requests.jsonl")).unwrap();
+        let catalog_commands = requests
+            .lines()
+            .skip(command_types.len())
+            .map(|line| {
+                serde_json::from_str::<Value>(line).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(catalog_commands, ["get_state", "get_available_models"]);
+        let catalog_root = PathBuf::from(
+            std::fs::read_to_string(root.join("probe-root"))
+                .unwrap()
+                .trim(),
+        );
+        assert!(
+            !catalog_root.exists(),
+            "catalog-only private root must also be cleaned"
         );
 
         std::fs::remove_dir_all(root).unwrap();

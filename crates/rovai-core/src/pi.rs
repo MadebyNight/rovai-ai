@@ -17,7 +17,7 @@ use crate::acp::CompletedAcpAction;
 
 pub(crate) use host::{
     PiActivationFailureKind, PiHost, PiPromptImage, PreparedPiPromptImage, activation_failure_kind,
-    machine_ready_probe, prepare_prompt_images,
+    machine_ready_probe, model_catalog_probe, prepare_prompt_images,
 };
 pub use host::{PiAgentRunRuntimeRequest, PiRpcRuntimeAdapter, PiRuntime};
 

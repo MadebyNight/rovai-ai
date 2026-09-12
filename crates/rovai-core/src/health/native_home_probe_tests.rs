@@ -8,6 +8,7 @@ use std::{fs, os::unix::fs::PermissionsExt};
 async fn acp_probes_keep_native_homes_without_prompting() {
     const ROOT_ENV: &str = "ROVAI_TEST_ACP_PROBE_ROOT";
     const CASE_ENV: &str = "ROVAI_TEST_ACP_PROBE_CASE";
+    const CATALOG_ENV: &str = "ROVAI_TEST_ACP_CATALOG_ONLY";
     const HOME_KEYS: [&str; 5] = [
         "HOME",
         "USERPROFILE",
@@ -22,15 +23,35 @@ async fn acp_probes_keep_native_homes_without_prompting() {
             "grok-byok" | "grok-account" => AdapterKind::GrokBuild,
             "kimi" => AdapterKind::KimiCodeCli,
             "kiro" => AdapterKind::KiroCli,
+            "opencode" => AdapterKind::OpencodeCli,
+            "copilot" => AdapterKind::CopilotCli,
+            "qoder" => AdapterKind::QoderCli,
+            "codebuddy" => AdapterKind::CodebuddyCli,
+            "qwen" => AdapterKind::QwenCode,
+            "trae" => AdapterKind::TraeCnCli,
+            "cursor" => AdapterKind::CursorAgent,
             _ => panic!("unknown fixture case"),
         };
-        let result = run_acp_probe(
-            &root.join("runtime"),
-            kind,
-            true,
-            RuntimeLaunchPurpose::AvailabilityCheck,
-        )
-        .await;
+        let catalog_only = env::var(CATALOG_ENV).unwrap() == "1";
+        let result = if catalog_only {
+            refresh_model_catalog(&root.join("runtime"), kind)
+                .await
+                .map(|models| {
+                    assert!(models.iter().any(|model| model.id == "fixture"));
+                    if kind == AdapterKind::KiroCli {
+                        assert!(models.iter().all(|model| model.options.is_empty()));
+                    }
+                })
+        } else {
+            run_acp_probe(
+                &root.join("runtime"),
+                kind,
+                true,
+                RuntimeLaunchPurpose::AvailabilityCheck,
+            )
+            .await
+            .map(|_| ())
+        };
         let rejected = env::var("ROVAI_TEST_ACP_PROBE_REJECT").unwrap() == "1";
         assert_eq!(result.is_err(), rejected, "{case}: {result:?}");
         let observed = fs::read_to_string(root.join("environment")).unwrap();
@@ -70,11 +91,13 @@ async fn acp_probes_keep_native_homes_without_prompting() {
             .map(|request| request["method"].as_str().unwrap())
             .collect::<Vec<_>>();
         let mut expected_methods = vec!["initialize"];
-        if kind == AdapterKind::GrokBuild {
+        if matches!(kind, AdapterKind::GrokBuild | AdapterKind::CursorAgent) {
             expected_methods.push("authenticate");
             assert_eq!(
                 requests[1]["params"]["methodId"],
-                if case == "grok-byok" {
+                if kind == AdapterKind::CursorAgent {
+                    "cursor_login"
+                } else if case == "grok-byok" {
                     "xai.api_key"
                 } else {
                     "cached_token"
@@ -83,7 +106,7 @@ async fn acp_probes_keep_native_homes_without_prompting() {
             assert_eq!(requests[1]["params"]["_meta"]["headless"], true);
         }
         expected_methods.push("session/new");
-        if !rejected {
+        if !rejected && !catalog_only {
             if kind == AdapterKind::GrokBuild {
                 expected_methods.push("session/resume");
             }
@@ -110,43 +133,63 @@ async fn acp_probes_keep_native_homes_without_prompting() {
         return;
     }
 
-    for case in ["grok-byok", "grok-account", "kimi", "kiro"] {
+    for case in [
+        "grok-byok",
+        "grok-account",
+        "kimi",
+        "kiro",
+        "opencode",
+        "copilot",
+        "qoder",
+        "codebuddy",
+        "qwen",
+        "trae",
+        "cursor",
+    ] {
         for custom_home in [false, true] {
             for rejected in [false, true] {
-                let root = env::temp_dir()
-                    .join(format!("rovai-native-home-test-{}", uuid::Uuid::new_v4()));
-                let _cleanup = ProbeRootCleanup(root.clone());
-                let home = root.join("home");
-                fs::create_dir_all(&home).unwrap();
-                fs::write(home.join("native-state"), "keep native state").unwrap();
-                let grok_home = if custom_home {
-                    root.join("custom grok 中文")
-                } else {
-                    home.join(".grok")
-                };
-                fs::create_dir_all(&grok_home).unwrap();
-                let grok_config = if case == "grok-byok" {
-                    "[models]\ndefault = \"fixture\"\n[model.fixture]\nmodel = \"fixture\"\nenv_key = \"FIXTURE_GROK_API_KEY\"\n"
-                } else {
-                    "[models]\ndefault = \"grok-build\"\n"
-                };
-                fs::write(grok_home.join("config.toml"), grok_config).unwrap();
-                let env_file = grok_home.join(".env");
-                fs::write(
-                    &env_file,
-                    if case == "grok-byok" {
-                        "FIXTURE_GROK_API_KEY=test-only-key\n"
+                for catalog_only in [false, true] {
+                    // Preserve the full native-Home matrix and compare light/full
+                    // scopes there. Other ACP adapters need only prove dispatch.
+                    if !matches!(case, "grok-byok" | "grok-account" | "kimi" | "kiro")
+                        && (!catalog_only || custom_home || rejected)
+                    {
+                        continue;
+                    }
+                    let root = env::temp_dir()
+                        .join(format!("rovai-native-home-test-{}", uuid::Uuid::new_v4()));
+                    let _cleanup = ProbeRootCleanup(root.clone());
+                    let home = root.join("home");
+                    fs::create_dir_all(&home).unwrap();
+                    fs::write(home.join("native-state"), "keep native state").unwrap();
+                    let grok_home = if custom_home {
+                        root.join("custom grok 中文")
                     } else {
-                        ""
-                    },
-                )
-                .unwrap();
-                fs::set_permissions(&env_file, fs::Permissions::from_mode(0o600)).unwrap();
-                let kimi_config = root.join("kimi-code.env");
-                fs::write(&kimi_config, "KIMI_MODEL_NAME=fixture\nKIMI_MODEL_PROVIDER_TYPE=anthropic\nKIMI_MODEL_API_KEY=test-only-key\nKIMI_MODEL_BASE_URL=https://fixture.invalid\n").unwrap();
-                fs::set_permissions(&kimi_config, fs::Permissions::from_mode(0o600)).unwrap();
-                let runtime = root.join("runtime");
-                fs::write(&runtime, r#"#!/bin/sh
+                        home.join(".grok")
+                    };
+                    fs::create_dir_all(&grok_home).unwrap();
+                    let grok_config = if case == "grok-byok" {
+                        "[models]\ndefault = \"fixture\"\n[model.fixture]\nmodel = \"fixture\"\nenv_key = \"FIXTURE_GROK_API_KEY\"\n"
+                    } else {
+                        "[models]\ndefault = \"grok-build\"\n"
+                    };
+                    fs::write(grok_home.join("config.toml"), grok_config).unwrap();
+                    let env_file = grok_home.join(".env");
+                    fs::write(
+                        &env_file,
+                        if case == "grok-byok" {
+                            "FIXTURE_GROK_API_KEY=test-only-key\n"
+                        } else {
+                            ""
+                        },
+                    )
+                    .unwrap();
+                    fs::set_permissions(&env_file, fs::Permissions::from_mode(0o600)).unwrap();
+                    let kimi_config = root.join("kimi-code.env");
+                    fs::write(&kimi_config, "KIMI_MODEL_NAME=fixture\nKIMI_MODEL_PROVIDER_TYPE=anthropic\nKIMI_MODEL_API_KEY=test-only-key\nKIMI_MODEL_BASE_URL=https://fixture.invalid\n").unwrap();
+                    fs::set_permissions(&kimi_config, fs::Permissions::from_mode(0o600)).unwrap();
+                    let runtime = root.join("runtime");
+                    fs::write(&runtime, r#"#!/bin/sh
 log="$ROVAI_TEST_ACP_PROBE_ROOT"
 printf '%s\n' "$HOME" "${USERPROFILE-__UNSET__}" "${GROK_HOME-__UNSET__}" "${KIMI_CODE_HOME-__UNSET__}" "${KIRO_HOME-__UNSET__}" > "$log/environment"
 printf '%s\n' "$PWD" > "$log/cwd"
@@ -161,7 +204,7 @@ while IFS= read -r request; do
   printf '%s\n' "$request" >> "$log/requests"
   id=$((id + 1))
   case "$request" in
-    *'"method":"initialize"'*) result='{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}},"authMethods":[{"id":"cached_token"},{"id":"xai.api_key"}],"_meta":{"defaultAuthMethodId":"cached_token"}}' ;;
+    *'"method":"initialize"'*) result='{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":{"resume":{}}},"authMethods":[{"id":"cached_token"},{"id":"xai.api_key"},{"id":"cursor_login"}],"_meta":{"defaultAuthMethodId":"cached_token"}}' ;;
     *'"method":"authenticate"'*) result='{}' ;;
     *'"method":"session/new"'*)
       if [ "$ROVAI_TEST_ACP_PROBE_REJECT" = 1 ]; then
@@ -176,9 +219,9 @@ while IFS= read -r request; do
   printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$result"
 done
 "#).unwrap();
-                fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
-                let mut command = Command::new(env::current_exe().unwrap());
-                command
+                    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+                    let mut command = Command::new(env::current_exe().unwrap());
+                    command
                         .args([
                             "--exact",
                             "health::native_home_probe_tests::acp_probes_keep_native_homes_without_prompting",
@@ -190,36 +233,38 @@ done
                         .env("USERPROFILE", root.join("profile 中文"))
                         .env(ROOT_ENV, &root)
                         .env(CASE_ENV, case)
+                        .env(CATALOG_ENV, if catalog_only { "1" } else { "0" })
                         .env(
                             "ROVAI_TEST_ACP_PROBE_REJECT",
                             if rejected { "1" } else { "0" },
                         )
                         .env("ROVAI_KIMI_CONFIG", &kimi_config)
                         .kill_on_drop(true);
-                if custom_home {
-                    command
-                        .env("GROK_HOME", &grok_home)
-                        .env("KIMI_CODE_HOME", root.join("custom kimi 中文"))
-                        .env("KIRO_HOME", root.join("custom kiro 中文"));
+                    if custom_home {
+                        command
+                            .env("GROK_HOME", &grok_home)
+                            .env("KIMI_CODE_HOME", root.join("custom kimi 中文"))
+                            .env("KIRO_HOME", root.join("custom kiro 中文"));
+                    }
+                    let output = timeout(Duration::from_secs(15), command.output())
+                        .await
+                        .expect("isolated probe fixture must finish within its bound")
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{case}, custom_home={custom_home}, rejected={rejected}, catalog_only={catalog_only}: {}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert_eq!(
+                        fs::read_to_string(grok_home.join("config.toml")).unwrap(),
+                        grok_config
+                    );
+                    assert!(
+                        env_file.is_file() && kimi_config.is_file(),
+                        "native configuration must survive probe cleanup"
+                    );
                 }
-                let output = timeout(Duration::from_secs(15), command.output())
-                    .await
-                    .expect("isolated probe fixture must finish within its bound")
-                    .unwrap();
-                assert!(
-                    output.status.success(),
-                    "{case}, custom_home={custom_home}, rejected={rejected}: {}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                assert_eq!(
-                    fs::read_to_string(grok_home.join("config.toml")).unwrap(),
-                    grok_config
-                );
-                assert!(
-                    env_file.is_file() && kimi_config.is_file(),
-                    "native configuration must survive probe cleanup"
-                );
             }
         }
     }
