@@ -65,6 +65,20 @@ Project 的“移除项目”菜单使用红字，确认标题为“从侧栏移
 重新选择相同目录可恢复。Core 的访问 ledger 与运行中清理边界由架构/ADR 决定，Renderer 不用
 隐藏行状态推断目录已经删除。
 
+## 会话搜索
+
+`CommandOrControl K` 的普通文字输入继续在已加载会话的标题和项目名中忽略大小写过滤，最多显示 12 项。
+去掉首尾空白后，只有通过共享 `isCampId` 完整校验的输入才进入 ID 精确查询；ID 保持 canonical 小写，
+不补全片段、不转换大小写，也不在未命中时回退到标题搜索。
+
+完整 ID 经短暂防抖调用 Desktop `navigation.findCamp({ campId })`；Core 再通过 `CampId` 校验，按
+`camp.id` 主键等值读取，返回单个 `NavigationCampTarget`（ID、标题、渠道来源、激活状态、项目绑定类型和路径）或
+`null`。该路径覆盖未进入最近五条列表的旧会话，不加载消息或聚合活动历史，不改变已读状态。
+Active Camp 和有正文或附件的 Pending Camp 可被查询；空 Pending Camp 与不存在的 ID 返回无结果。
+
+查询期间显示加载反馈，失败与未命中分别呈现；修改输入或关闭搜索后丢弃旧请求结果。方向键选择和回车
+打开沿用现有会话激活入口。普通文字输入不会调用 ID 查询，标题过滤与 ID 查找互斥。
+
 ## Quick Chat 与 Project 分组
 
 “快速对话”在 Renderer 中是 Project 列表末尾的文件夹式投影，底层仍是 `quick_chat`，不创建
@@ -191,4 +205,4 @@ App Shell 在不抢夺焦点的全局浮层中短暂显示实际缩放比例，�
 
 ## Jump search and overlay closure
 
-⌘K / Ctrl+K opens the existing title/project search, with a small “跳转到对话” title, neutral selected result and “↑ ↓ 选择　↵ 打开　Esc 关闭” footer. Search input has no focus underline or frame; arrows and Enter retain their behavior and respect IME composition. Closing sidebar menus, rename/delete/removal dialogs or settings does not force focus back to the entry button, including after pin mutations. Shared DOM focus for keyboard input and menu navigation remains available.
+⌘K / Ctrl+K opens the title/project search or exact lookup by a complete Camp ID, with a small “跳转到对话” title, neutral selected result and “↑ ↓ 选择　↵ 打开　Esc 关闭” footer. Search input has no focus underline or frame; arrows and Enter retain their behavior and respect IME composition. Closing sidebar menus, rename/delete/removal dialogs or settings does not force focus back to the entry button, including after pin mutations. Shared DOM focus for keyboard input and menu navigation remains available.

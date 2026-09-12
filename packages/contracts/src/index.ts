@@ -960,6 +960,9 @@ export interface NavigationCampItem {
   version: number
 }
 
+export type NavigationCampTarget = Pick<NavigationCampItem,
+  'id' | 'title' | 'channelSource' | 'activationState' | 'projectBindingKind' | 'projectPath'>
+
 export interface NavigationCampGroup {
   totalCount: number
   recentCamps: NavigationCampItem[]
@@ -3755,6 +3758,7 @@ export type CoreMethod =
   | 'workspaces.inspect'
   | 'navigation.snapshot'
   | 'navigation.groupCamps'
+  | 'navigation.findCamp'
   | 'navigation.campViewed'
   | 'camps.create'
   | 'camps.discardPending'
