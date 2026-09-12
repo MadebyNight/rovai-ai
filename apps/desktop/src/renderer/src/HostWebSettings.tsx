@@ -70,7 +70,6 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
       setToken('administratorToken' in next ? next.administratorToken as string : '')
       if (operation !== 'rotate') setAddress('')
       setConfirm(false)
-      setFeedback(operation === 'rotate' ? '令牌已重新生成，原浏览器会话已退出。' : '')
     } catch (failure) {
       if (current !== generation.current) return
       setError(readErrorMessage(failure))
@@ -83,7 +82,7 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
     } finally { changing.current = false; if (current === generation.current) setBusy(false) }
   }
   async function copy(value: string, label: string): Promise<boolean> {
-    try { await navigator.clipboard.writeText(value); setFeedback(`${label}已复制。`); return true }
+    try { await navigator.clipboard.writeText(value); setFeedback(''); return true }
     catch { setFeedback(label === '连接地址' ? `无法自动复制，请手动复制：${value}` : `无法自动复制，请选择${label}后手动复制。`); return false }
   }
   const addresses = status?.addresses ?? []
@@ -114,7 +113,16 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
           </div>
           <div className="remote-field">
             <label htmlFor="remote-token">管理令牌</label>
-            <div className="remote-token"><input id="remote-token" type={visible ? 'text' : 'password'} value={token} readOnly autoComplete="off" spellCheck={false} /><button type="button" className="quiet-button compact" disabled={!token} onClick={() => setVisible(value => !value)} aria-pressed={visible}>{visible ? '隐藏' : '显示'}</button><button type="button" className="quiet-button compact" disabled={!token} onClick={() => void copy(token, '管理令牌')}>复制令牌</button><button type="button" className="quiet-button compact" disabled={busy} onClick={() => setConfirm(true)}>重新生成</button></div>
+            <div className="remote-token">
+              <input id="remote-token" type={visible ? 'text' : 'password'} value={token} readOnly autoComplete="off" spellCheck={false} />
+              <div className="remote-token-actions">
+                <button type="button" className="message-copy-button" disabled={!token} onClick={() => setVisible(value => !value)} aria-pressed={visible} aria-label={visible ? '隐藏管理令牌' : '显示管理令牌'} title={visible ? '隐藏管理令牌' : '显示管理令牌'}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">{visible ? <><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.4A10 10 0 0 1 12 5c6 0 10 7 10 7a18 18 0 0 1-3 3.8M6 6.5A20 20 0 0 0 2 12s4 7 10 7a11 11 0 0 0 5-1.4" /></> : <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>}</svg>
+                </button>
+                <RemoteCopyButton key={token} label="复制管理令牌" value={token} onCopy={() => copy(token, '管理令牌')} />
+                <button type="button" className="message-copy-button" disabled={busy} onClick={() => setConfirm(true)} aria-label="重新生成管理令牌" title="重新生成管理令牌"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9" /></svg></button>
+              </div>
+            </div>
           </div>
         </>}
       </section>
@@ -141,14 +149,11 @@ function RemoteAddress({ label, description, value, onCopy, children }: {
   onCopy(): Promise<boolean>
   children?: React.ReactNode
 }): React.JSX.Element {
-  const [copied, setCopied] = useState(false)
-  useEffect(() => { setCopied(false) }, [value])
-  useEffect(() => { if (copied) { const timer = setTimeout(() => setCopied(false), 1600); return () => clearTimeout(timer) } }, [copied])
   return <div className="remote-connection-address" data-address={value} aria-label={label}>
     <div className="remote-copy"><strong>{label}</strong><p>{description}</p></div>
     <div className="remote-address-value">{children || <code>{value || '暂无可用地址'}</code>}</div>
     <div className="remote-address-actions">
-      <button type="button" className="message-copy-button" aria-label={`复制${label}`} title={copied ? '已复制' : `复制${label}`} disabled={!value} onClick={() => { void onCopy().then(success => setCopied(success)) }}><CopyIcon copied={copied} /></button>
+      <RemoteCopyButton key={value} label={`复制${label}`} value={value} onCopy={onCopy} />
       <Dialog.Root><Dialog.Trigger asChild><button type="button" className="message-copy-button" aria-label={`${label}二维码`} title="二维码" disabled={!value}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h3v3h3v3h-6v-3M20 14h.01M7 7h.01M17 7h.01M7 17h.01" /></svg></button></Dialog.Trigger>
         {value && <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><AppDialogContent onCloseAutoFocus={() => {}}>
           <AppDialogHeader title={label} description={description} />
@@ -157,4 +162,18 @@ function RemoteAddress({ label, description, value, onCopy, children }: {
       </Dialog.Root>
     </div>
   </div>
+}
+
+function RemoteCopyButton({ label, value, onCopy }: { label: string; value: string; onCopy(): Promise<boolean> }): React.JSX.Element {
+  const [copiedAt, setCopiedAt] = useState<number | null>(null)
+  const copied = copiedAt !== null
+  useEffect(() => {
+    if (copiedAt === null) return
+    const timer = setTimeout(() => setCopiedAt(null), 1600)
+    return () => clearTimeout(timer)
+  }, [copiedAt])
+  return <>
+    <button type="button" className="message-copy-button" aria-label={label} title={copied ? '已复制' : label} disabled={!value} onClick={() => { void onCopy().then(success => setCopiedAt(success ? Date.now() : null)) }}><CopyIcon copied={copied} /></button>
+    <span className="copy-feedback" role="status" aria-live="polite">{copied ? '已复制' : ''}</span>
+  </>
 }

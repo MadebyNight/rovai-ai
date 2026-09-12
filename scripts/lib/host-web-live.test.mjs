@@ -86,9 +86,10 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     assert.equal(await desktop.evaluate(`document.querySelector('#remote-port').value`), String(nextPort))
     assert.ok(started.addresses.length > 0)
     await desktop.click(`[...document.querySelectorAll('button')].find(e=>e.getAttribute('aria-label')==='复制远程地址')`)
-    await desktop.wait(`document.body.innerText.includes('连接地址已复制')`)
-    await desktop.click(`[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='复制令牌')`)
-    await desktop.wait(`document.body.innerText.includes('管理令牌已复制')`)
+    await desktop.wait(`document.querySelector('button[aria-label="复制远程地址"]').title==='已复制'`)
+    await desktop.click(`document.querySelector('button[aria-label="复制管理令牌"]')`)
+    await desktop.wait(`document.querySelector('button[aria-label="复制管理令牌"]').title==='已复制'`)
+    assert.equal(await desktop.evaluate(`document.querySelector('.remote-feedback')===null`), true, 'successful copy uses the icon without a page notice')
     await desktop.capture(join(output, 'desktop-remote-enabled.png'))
     await desktop.click(`document.querySelector('.settings-sidebar-back')`)
     await choose(desktop)
@@ -216,7 +217,7 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     assert.deepEqual(desktop.errors, []); assert.deepEqual(web.errors, []); assert.deepEqual(second.errors, [])
     await web.capture(join(output, 'web-after-reauth.png'))
     const evidence = { stage: 'managed-desktop-web-passed', simulation: false, realRuntime: false, desktopFocusEmulated: true, campId, geometry: await geometry(web), draftOwners: rows.map(r => r.client_id === 'desktop' ? 'desktop' : 'web'), sameComposerAfterReauth: true, nativeBridgeInBrowser: false,
-      ownerModel: { desktopSettingsStart: true, pendingPortAppliesOnlyOnNextStart: true, stopWithoutConfirmation: true, copiedAddressAndToken: true, actualInterfaceAddress: true, nonLoopbackOrigin: !started.origin.includes('127.0.0.1'), directoryPickerWithoutPreauthorization: true, sameMachineBrowsers: true, secondPhysicalDevice: false },
+      ownerModel: { desktopSettingsStart: true, pendingPortAppliesOnlyOnNextStart: true, stopWithoutConfirmation: true, copiedAddressAndToken: true, copyIconFeedbackWithoutPageNotice: true, actualInterfaceAddress: true, nonLoopbackOrigin: !started.origin.includes('127.0.0.1'), directoryPickerWithoutPreauthorization: true, sameMachineBrowsers: true, secondPhysicalDevice: false },
       mainSync: { browserGeneralPreferences: true, nativeWindowControlsAbsent: true, browserZoomExplicit: true, previewSelectAllScoped: true, finalLineQuoteAccepted: true, pendingReturnScopedToCurrentClient: true, pendingAttachmentsAddedInComposer: true, pendingFixture: 'one needs_repair row in isolated database; no Runtime' } }
     await desktop.evaluate(`window.rovai.hostWeb.stop()`)
     assert.ok((await request('app.info')).dataDir)

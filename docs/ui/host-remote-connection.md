@@ -53,7 +53,9 @@ Desktop 的“应用”组在“提醒”之后提供“远程连接”。通用
 关闭直接生效，不再二次确认；开启与关闭都不添加成功提示。
 开启后分别展示“本机地址／在这台电脑上访问”和“远程地址／在其他设备上访问”。仅多个远程地址时提供接口下拉选择。
 每行右侧均有复制与二维码图标，复制与会话区共用 `CopyIcon` 和按钮样式，图标具备 tooltip 与可访问名称。
-令牌默认遮掩，可重复显示、复制或独立重新生成。
+令牌默认遮掩，显示／隐藏、复制、重新生成使用三个图标按钮，沿用会话区的尺寸与线条。
+地址与令牌复制成功仅让原图标短暂变勾，随后恢复；不在页面下方追加“已复制”或重新生成成功提示。
+图标有明确的可访问名称与悬停说明，复制结果保留不可见的读屏通知；复制失败才显示可操作的失败说明，且不暴露遮掩的令牌。
 切换地址只更新页面选择；不调用 start/stop/rotate，不授予权限或改变 Host 状态。
 地址发现直接排除 198.18.0.0/15，不作为可复制、可扫码或推荐地址；没有特殊入口，网络层不主动封禁。
 二维码在本页生成，只含所选地址，不含令牌。没有可展示地址时禁用复制与二维码，服务仍可运行。
@@ -79,12 +81,13 @@ Web 的同一菜单显示当前 Host 地址及连接状态，可退出本页登�
 - `HostWorkspacePicker`：浏览器文件系统适配，不复制 Core 的工作区业务规则。
 
 `pnpm test:remote-connection-review` 在隔离 Chrome profile 验证双主题、几何、键盘错误定位、
-一键开启、直接关闭、端口延迟应用与切页保留、重新生成确认、页面返回后读取令牌、地址切换不改令牌、两类地址的二维码解码结果与地址一致、
+图标复制反馈与恢复、令牌显隐、一键开启、直接关闭、端口延迟应用与切页保留、重新生成确认、页面返回后读取令牌、地址切换不改令牌、两类地址的二维码解码结果与地址一致、
 空地址禁用复制和二维码、窄宽屏及减少动效。
 该稿使用模拟 API，不能替代实际网络验收。真实 `pnpm test:host-web` 证明无预授权目录的 HTTP 项目操作、
 令牌重复读取不撤销登录，以及已有草稿/上传/回执/撤销/关闭边界。真实 Desktop/Web 页面验收由
 `pnpm test:host-web-live` 拥有；结果与剩余缺口见[当前实施计划](../versions/v1.59/implementation-plan.md)。
 
-本轮外观见[日间](../versions/v1.59/evidence/remote-addresses/remote-day.png)与
-[夜间](../versions/v1.59/evidence/remote-addresses/remote-night.png)；
-[交互/产物哈希记录](../versions/v1.59/evidence/remote-addresses/remote-connection-review.json)明确标记模拟 API。
+本轮外观见[日间](../versions/v1.59/evidence/remote-token-actions/remote-day.png)与
+[夜间](../versions/v1.59/evidence/remote-token-actions/remote-night.png)与
+[复制反馈](../versions/v1.59/evidence/remote-token-actions/remote-copied.png)；
+[交互/产物哈希记录](../versions/v1.59/evidence/remote-token-actions/remote-connection-review.json)明确标记模拟 API。

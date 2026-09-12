@@ -15,12 +15,24 @@ last_updated: 2026-09-13
 
 ## 当前收敛：阶段 1–3，单 Owner 的真实业务闭环
 
-最新交互调整：端口常驻，修改仅用于下次启动，当前窗口内切换菜单也保留未应用输入；不再选择本机／远程范围，
+最新交互调整：管理令牌的显示／隐藏、复制、重新生成改用同一尺寸的图标按钮；
+地址与令牌复制成功只短暂变勾，不再在页面下方显示复制或重新生成成功提示。
+保留图标可访问名称、读屏反馈、失败时手动复制说明与重新生成确认。
+当前[日间](evidence/remote-token-actions/remote-day.png)、[夜间](evidence/remote-token-actions/remote-night.png)和
+[复制状态](evidence/remote-token-actions/remote-copied.png)使用生产组件；
+[交互稿记录](evidence/remote-token-actions/remote-connection-review.json)覆盖 14 个日夜状态、图标操作、复制内容、
+反馈恢复、无页面位移及既有端口／二维码／失败路径。
+[真实 Desktop/双浏览器回归](evidence/remote-token-actions/desktop-web-live.json)确认复制成功仅在图标反馈，
+并通过既有开启、目录选择、编辑与重新认证流程；仅同机隔离实例，无模型、无第二实体设备。
+TypeScript、Desktop/Web 构建、`pnpm test`（175 文件/1798 项 Vitest；Node 317 通过、2 既有平台跳过）、
+原生设置、交互稿及真实 Desktop/双浏览器均通过。本次无 Rust 改动，前次 Rust 记录不作为本次重跑。
+
+前次交互调整（`d83786e7`）：端口常驻，修改仅用于下次启动，当前窗口内切换菜单也保留未应用输入；不再选择本机／远程范围，
 “远程访问”开关直接开启服务，关闭不再确认。本机与远程地址分别说明使用设备，每行使用复制、二维码两个图标，
 复制图形与会话区共用 `CopyIcon`，布局保持设置页的双主题、阅读轴和控件风格。
-当前[日间](evidence/remote-addresses/remote-day.png)、[夜间](evidence/remote-addresses/remote-night.png)与
+该次[日间](evidence/remote-addresses/remote-day.png)、[夜间](evidence/remote-addresses/remote-night.png)与
 [交互稿记录](evidence/remote-addresses/remote-connection-review.json)覆盖两类二维码、端口延迟应用、切页保留和直接关闭。
-本次[真实 Desktop/双浏览器回归](evidence/remote-addresses/desktop-web-live.json)验证输入新端口后旧监听和令牌保持不变，
+该次[真实 Desktop/双浏览器回归](evidence/remote-addresses/desktop-web-live.json)验证输入新端口后旧监听和令牌保持不变，
 直接关闭后 Core 存活，再开启使用新端口；随后完成登录、目录选择、共享编辑与重新认证恢复。无模型、无第二实体设备。
 本次只调整前端及既有验收，不修改 Rust 网络、认证、草稿与审批实现；下方 Rust 门禁属于前一提交证据。
 

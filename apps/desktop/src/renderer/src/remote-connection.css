@@ -33,7 +33,7 @@
 .remote-access-fields { gap: 20px; }
 .remote-access-fields > .remote-setting-row { flex-wrap: nowrap; }
 .remote-access-fields .remote-field > label { font-size: 13px; }
-.remote-address-actions { flex: none; }
+.remote-address-actions, .remote-token-actions { flex: none; }
 .remote-qr { display: grid; justify-items: center; gap: 16px; }
 :root .app-dialog-body.remote-qr { padding-bottom: 24px; }
 .remote-qr svg { width: 208px; height: auto; max-width: 100%; }
@@ -45,8 +45,8 @@
 .remote-address-value { min-width: 0; }
 .remote-address-value code { color: var(--ink); font-size: 12px; overflow-wrap: anywhere; user-select: text; }
 .remote-connection-page select.remote-address-select { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.remote-address-actions { display: flex; align-items: center; gap: 8px; }
-.remote-address-actions .message-copy-button { background: transparent; }
+.remote-address-actions, .remote-token-actions { display: flex; align-items: center; gap: 8px; }
+:is(.remote-address-actions, .remote-token-actions) .message-copy-button { background: transparent; }
 @container remote-settings (max-width: 600px) {
   .remote-connection-address { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
   .remote-connection-address > .remote-copy { grid-column: 1 / -1; }
