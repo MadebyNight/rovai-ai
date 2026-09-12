@@ -7,31 +7,44 @@ export type ExecutionWindowRequest = (params: {
   limit: number
 }) => Promise<AgentRunExecutionWindowPage>
 
-/** Two displayed pages and one adjacent prefetched page, irrespective of Run length. */
+type Direction = 'earlier' | 'newer' | 'latest'
+type CacheBudget = { maxPages: number; maxBytes: number }
+const DEFAULT_CACHE_BUDGET: CacheBudget = { maxPages: 12, maxBytes: 8 * 1024 * 1024 }
+
+/** Two mounted pages; visited data has a separate, bounded LRU cache. */
 export class ExecutionWindow {
-  pages = new Map<number, AgentRunExecutionWindowPage>()
+  readonly pages = new Map<number | null, AgentRunExecutionWindowPage>()
   visible: number[] = []
   loading = false
   error: string | null = null
+  direction: Direction = 'latest'
   private generation = 0
   private cursors = new Map<number, number | null>([[0, null]])
-  private pending = new Map<number, Promise<AgentRunExecutionWindowPage>>()
-  private failedDirection: 'earlier' | 'newer' | 'latest' = 'latest'
+  private pending = new Map<number | null, Promise<AgentRunExecutionWindowPage>>()
+  // Keep the reading chain stable while the live head advances in the cache.
+  private head: AgentRunExecutionWindowPage | null = null
+  private refreshing = false
   private queuedRefresh: (() => boolean) | null = null
+  private sizes = new WeakMap<AgentRunExecutionWindowPage, number>()
 
   constructor(
     readonly campId: string,
     readonly agentRunId: string,
     readonly limit: number,
     private readonly request: ExecutionWindowRequest,
-    private readonly changed: () => void
+    private readonly changed: () => void,
+    private readonly budget: CacheBudget = DEFAULT_CACHE_BUDGET
   ) {}
+
+  private page(index: number): AgentRunExecutionWindowPage | undefined {
+    return index === 0 ? this.head ?? undefined : this.pages.get(this.cursors.get(index)!)
+  }
 
   get evidence(): AgentRunExecutionWindowPage['evidence'] {
     const entries = new Map<string, AgentRunExecutionWindowPage['evidence'][number]>()
-    // The newer page wins if live updates overlap a previously visited boundary.
     for (const index of [...this.visible].sort((a, b) => b - a)) {
-      for (const item of [...(this.pages.get(index)?.evidence ?? []), ...(this.pages.get(index)?.activeEvidence ?? [])]) {
+      const page = this.page(index)
+      for (const item of [...(page?.evidence ?? []), ...(page?.activeEvidence ?? [])]) {
         const key = item.canonical
           ? `${item.executionEpoch}:operation:${item.canonical.operationId}` : item.id
         entries.set(key, item)
@@ -40,83 +53,78 @@ export class ExecutionWindow {
     return [...entries.values()].sort((a, b) => a.sequence - b.sequence)
   }
 
-  get hasEarlier(): boolean {
-    const oldest = Math.max(...this.visible)
-    return this.pages.get(oldest)?.hasMore ?? false
-  }
-
+  get hasEarlier(): boolean { return this.page(Math.max(...this.visible))?.hasMore ?? false }
   get hasNewer(): boolean { return this.visible.length > 0 && Math.min(...this.visible) > 0 }
 
   dispose(): void { this.generation += 1; this.queuedRefresh = null }
 
-  async latest(): Promise<void> {
-    if (this.loading) return
-    this.generation += 1
-    this.pending.clear()
-    await this.show(0, 'latest')
-  }
-
-  async retry(): Promise<void> { await this[this.failedDirection]() }
-
+  async latest(): Promise<void> { await this.show(0, 'latest') }
+  async retry(): Promise<void> { await this[this.direction]() }
   async earlier(): Promise<void> {
     if (this.hasEarlier) await this.show(Math.max(...this.visible) + 1, 'earlier')
   }
-
   async newer(): Promise<void> {
     if (this.hasNewer) await this.show(Math.min(...this.visible) - 1, 'newer')
   }
 
-  /** Live refresh is explicit; callers suppress it while the user reads history. */
+  /** Invalidation refreshes the live cache; accept controls only replacing the view. */
   async refresh(accept: () => boolean = () => true): Promise<void> {
-    if (!accept() || this.hasNewer) return
-    if (this.loading) { this.queuedRefresh = accept; return }
+    if (this.loading || this.refreshing) { this.queuedRefresh = accept; return }
     if (this.visible.length === 0) return
-    const generation = ++this.generation
-    this.loading = true
-    this.pending.clear()
+    const generation = this.generation
+    this.refreshing = true
     try {
-      const page = await this.fetch(0)
-      if (generation !== this.generation || !accept()) return
-      this.pages = new Map([[0, page]])
-      this.cursors = new Map([[0, null]])
-      this.remember(0, page)
-      this.visible = [0]
-      this.error = null
+      const page = await this.fetch(null)
+      if (generation !== this.generation) return
+      this.remember(page)
+      if (accept() && !this.hasNewer && !this.loading) {
+        this.adoptHead(page)
+        this.visible = [0]
+        this.changed()
+      }
+      this.prune()
     } catch {
-      // Keep the last successful view. The next live invalidation or explicit
-      // latest action can retry without replacing content with a spinner.
+      // Keep successful content. A later invalidation retries in the background.
     } finally {
       if (generation === this.generation) {
-        this.loading = false
-        this.changed()
+        this.refreshing = false
         this.afterRead()
       }
     }
   }
 
-  private async show(index: number, direction: 'earlier' | 'newer' | 'latest'): Promise<void> {
+  private adoptHead(page: AgentRunExecutionWindowPage): void {
+    if (this.head === page) return
+    this.head = page
+    this.cursors = new Map([[0, null]])
+    if (page.nextBeforeSequence !== null) this.cursors.set(1, page.nextBeforeSequence)
+  }
+
+  private async show(index: number, direction: Direction): Promise<void> {
     if (this.loading) return
     const generation = this.generation
     this.loading = true
+    this.direction = direction
     this.error = null
     this.changed()
     try {
-      const page = (direction === 'latest' ? undefined : this.pages.get(index)) ?? await this.fetch(index)
+      const cursor = this.cursors.get(index)
+      if (cursor === undefined) throw new Error('执行记录分页位置不可用')
+      const page = (direction === 'latest' ? this.pages.get(null) : this.page(index)) ?? await this.fetch(cursor)
       if (generation !== this.generation) return
+      // A frozen reading head must not replace the newer live cache.
+      if (index !== 0 || direction === 'latest') this.remember(page)
       if (direction === 'latest') {
-        this.pages.clear()
-        this.cursors = new Map([[0, null]])
-        this.visible = []
+        this.adoptHead(page)
+        this.visible = [0]
+      } else {
+        if (page.nextBeforeSequence !== null) this.cursors.set(index + 1, page.nextBeforeSequence)
+        this.visible = [...new Set([...this.visible, index])].sort((a, b) => a - b)
+        this.visible = direction === 'earlier' ? this.visible.slice(-2) : this.visible.slice(0, 2)
       }
-      this.remember(index, page)
-      this.visible = [...new Set([...this.visible, index])].sort((a, b) => a - b)
-      this.visible = direction === 'earlier' ? this.visible.slice(-2) : this.visible.slice(0, 2)
       this.prune()
     } catch (error) {
-      if (generation === this.generation) {
-        this.failedDirection = direction
-        this.error = error instanceof Error ? error.message : '读取执行记录失败'
-      }
+      if (generation === this.generation) this.error = error instanceof Error ? error.message : '读取执行记录失败'
     } finally {
       if (generation === this.generation) {
         this.loading = false
@@ -129,20 +137,19 @@ export class ExecutionWindow {
   private afterRead(): void {
     const refresh = this.queuedRefresh
     this.queuedRefresh = null
-    if (refresh?.()) void this.refresh(refresh)
+    if (refresh) void this.refresh(refresh)
     else void this.prefetch()
   }
 
-  private remember(index: number, page: AgentRunExecutionWindowPage): void {
-    this.pages.set(index, page)
-    if (page.nextBeforeSequence !== null) this.cursors.set(index + 1, page.nextBeforeSequence)
+  private remember(page: AgentRunExecutionWindowPage): void {
+    this.pages.delete(page.requestedBeforeSequence)
+    this.pages.set(page.requestedBeforeSequence, page)
+    if (!this.sizes.has(page)) this.sizes.set(page, JSON.stringify(page).length * 2)
   }
 
-  private async fetch(index: number): Promise<AgentRunExecutionWindowPage> {
-    const existing = this.pending.get(index)
+  private async fetch(beforeSequence: number | null): Promise<AgentRunExecutionWindowPage> {
+    const existing = this.pending.get(beforeSequence)
     if (existing) return existing
-    const beforeSequence = this.cursors.get(index)
-    if (beforeSequence === undefined) throw new Error('执行记录分页位置不可用')
     const promise = this.request({ campId: this.campId, agentRunId: this.agentRunId, beforeSequence, limit: this.limit })
       .then(page => {
         const sequences = page.evidence.map(item => item.sequence)
@@ -162,30 +169,44 @@ export class ExecutionWindow {
         }
         return page
       })
-    this.pending.set(index, promise)
+    this.pending.set(beforeSequence, promise)
     try { return await promise } finally {
-      if (this.pending.get(index) === promise) this.pending.delete(index)
+      if (this.pending.get(beforeSequence) === promise) this.pending.delete(beforeSequence)
     }
   }
 
   private async prefetch(): Promise<void> {
     if (!this.hasEarlier || this.error) return
     const index = Math.max(...this.visible) + 1
-    if (this.pages.has(index)) return
+    const cursor = this.page(index - 1)?.nextBeforeSequence
+    if (cursor == null) return
+    this.cursors.set(index, cursor)
+    if (this.pages.has(cursor)) return
     const generation = this.generation
     try {
-      const page = await this.fetch(index)
+      const page = await this.fetch(cursor)
       if (generation !== this.generation) return
-      this.remember(index, page)
+      this.remember(page)
       this.prune()
-      // Prefetch is cached data only: no render, no recursive prefetch.
+      // Cache only: no render and no recursive prefetch.
     } catch { /* Explicit navigation retries and reports a failure. */ }
   }
 
   private prune(): void {
-    const adjacent = Math.max(...this.visible) + 1
-    for (const index of this.pages.keys()) {
-      if (!this.visible.includes(index) && index !== adjacent) this.pages.delete(index)
+    const pinned = new Set([null, ...this.visible.map(index => this.cursors.get(index)),
+      this.page(Math.max(...this.visible))?.nextBeforeSequence])
+    const frozen = this.head && this.head !== this.pages.get(null) ? this.head : null
+    let count = this.pages.size + (frozen ? 1 : 0)
+    let bytes = [...this.pages.values(), ...(frozen ? [frozen] : [])]
+      .reduce((total, page) => total + (this.sizes.get(page) ?? 0), 0)
+    for (const [cursor, page] of this.pages) {
+      if (count <= this.budget.maxPages && bytes <= this.budget.maxBytes) break
+      // Visible content, the adjacent page and the live head take precedence
+      // when one unusually large page alone exceeds the byte budget.
+      if (pinned.has(cursor)) continue
+      this.pages.delete(cursor)
+      count -= 1
+      bytes -= this.sizes.get(page) ?? 0
     }
   }
 }

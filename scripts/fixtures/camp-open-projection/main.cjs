@@ -47,6 +47,39 @@ app.whenReady().then(async () => {
         assert.fail(`Execution window condition: ${expression}`)
       }
       const report = []
+      const initialPositions = []
+      const waitForContent = () => waitFor(`!document.querySelector('.execution-history-loader .camp-history-spinner')
+        && ![...document.querySelectorAll('.process-action.current')].some(item => item.textContent.includes('正在读取完整过程'))`)
+      for (const placement of ['bottom', 'inspector']) {
+        for (let sample = 0; sample < 3; sample++) {
+          await run(`window.campOpenTest.showRunningExecution('${placement}', ${sample})`)
+          await waitFor('document.querySelector("button[aria-label^=打开][aria-label*=执行过程]") !== null')
+          await run('document.querySelector("button[aria-label^=打开][aria-label*=执行过程]").click()')
+          await waitFor('document.querySelector(".process-copy")?.textContent.includes("这一页的执行说明")')
+          await settle()
+          const position = await run(`(() => { const host = document.querySelector('.execution-drawer-body'); return {
+            top: host.scrollTop, gap: host.scrollHeight - host.clientHeight - host.scrollTop,
+            following: host.dataset.followingLatest,
+          }; })()`)
+          assert.ok(position.top > 0 && position.gap < 8, `${placement} sample ${sample}: asynchronous first page and full bodies follow latest: ${JSON.stringify(position)}`)
+          initialPositions.push({ placement, sample, ...position })
+          if (sample === 0) {
+            await capture(`running-execution-latest-${placement}`)
+            for (let index = 0; index < 3; index++) {
+              await run('document.querySelector(".execution-history-loader button").click()')
+              await waitForContent()
+            }
+            const before = await run('window.campOpenTest.executionWindowState()')
+            await run('document.querySelector(".execution-history-latest button").click()')
+            await waitForContent()
+            const after = await run('window.campOpenTest.executionWindowState()')
+            assert.equal(after.requests.filter(request => request.beforeSequence === null).length,
+              before.requests.filter(request => request.beforeSequence === null).length, 'return to latest uses the cached page')
+            assert.equal(after.contentReads.length, before.contentReads.length, 'return to latest also retains full narration bodies')
+            assert.equal(await run('document.querySelector(".execution-drawer-body").scrollHeight - document.querySelector(".execution-drawer-body").clientHeight - document.querySelector(".execution-drawer-body").scrollTop < 8'), true)
+          }
+        }
+      }
       for (const placement of ['bottom', 'inspector']) {
         await run(`document.documentElement.dataset.theme = '${placement === 'bottom' ? 'day' : 'night'}'; window.campOpenTest.showExecutionWindow('${placement}')`)
         await settle()
@@ -64,21 +97,39 @@ app.whenReady().then(async () => {
         assert.ok(state.requests[0].limit < 30)
         await run('document.querySelector(".execution-drawer-body").scrollTop = 630')
         await settle()
+        await capture(`execution-history-loader-${placement}`)
         const anchor = await run(`(() => { const n = document.querySelector('[data-execution-item-key]'); return {key:n.dataset.executionItemKey, top:n.getBoundingClientRect().top}; })()`)
-        await run('document.querySelector(".execution-window-navigation button").focus({preventScroll:true})')
+        await run('document.querySelector(".execution-history-loader button").focus({preventScroll:true})')
         window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
         window.webContents.sendInputEvent({ type: 'char', keyCode: '\r' })
         window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
         await waitFor('window.campOpenTest.executionWindowState().requests.length === 3')
-        assert.equal(await run('document.activeElement.matches(".execution-window-navigation button")'), true, 'paging retains keyboard focus')
+        assert.equal(await run('document.activeElement.matches(".execution-history-loader button")'), true, 'paging retains keyboard focus')
         const after = await run('document.querySelector(' + JSON.stringify(`[data-execution-item-key="${anchor.key}"], [data-execution-item-keys~="${anchor.key}"]`) + ').getBoundingClientRect().top')
         assert.ok(Math.abs(after - anchor.top) < 2, `anchor preserved: ${after - anchor.top}`)
         for (let index = 0; index < 3; index++) {
-          await run('document.querySelector(".execution-window-navigation button").click()')
+          await run('document.querySelector(".execution-history-loader button").click()')
           await settle()
         }
-        await run('[...document.querySelectorAll(".execution-window-navigation button")].find(button => button.textContent === "回到最新").click()')
+        const cachedReads = (await run('window.campOpenTest.executionWindowState()')).requests.length
+        await run('window.campOpenTest.failExecutionRead(true)')
+        await run('document.querySelector(".execution-drawer-body").scrollTop -= 80')
         await settle()
+        for (let index = 0; index < 3; index++) {
+          await run('document.querySelector(".execution-drawer-body").scrollTop = document.querySelector(".execution-drawer-body").scrollHeight')
+          await settle()
+        }
+        assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, cachedReads, 'scrolling down restores cached pages without transport reads')
+        assert.equal(await run('document.querySelector(".process-content").textContent.includes("记录 1000")'), true, 'scrolling down reaches the already loaded tail')
+        assert.equal(await run('[...document.querySelectorAll(".process-content button")].some(button => /载入较新|加载较新/.test(button.textContent))'), false)
+        for (let index = 0; index < 3; index++) {
+          await run('document.querySelector(".execution-history-loader button").click()')
+          await settle()
+        }
+        await run('[...document.querySelectorAll(".execution-history-loader button")].find(button => button.textContent.includes("回到最新")).click()')
+        await settle()
+        assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, cachedReads, 'cached latest works offline')
+        await run('window.campOpenTest.failExecutionRead(false)')
         await run('document.querySelectorAll(".tool-activity-group > summary").forEach(summary => summary.click())')
         await settle()
         state = await run('window.campOpenTest.executionWindowState()')
@@ -101,7 +152,7 @@ app.whenReady().then(async () => {
       }
       assert.notEqual(report[0].background, report[1].background, 'both themes are applied')
       assert.equal(errors.length, 0, errors.join('\n'))
-      console.log(JSON.stringify({ ok: true, mode, report }))
+      console.log(JSON.stringify({ ok: true, mode, report, initialPositions }))
       app.exit(0)
       return
     }
