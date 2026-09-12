@@ -959,9 +959,9 @@
 }
 .member-roster-resizer[aria-disabled="true"] { pointer-events: none; }
 .member-roster-resizer::before { position: absolute; inset: 0 -5px; content: ''; }
-.member-roster-resizer::after { position: absolute; top: 50%; left: -1px; width: 3px; height: 30px; border-radius: 2px; background: var(--muted); content: ''; opacity: 0; transform: translateY(-50%); transition: opacity 120ms ease; }
-.member-roster-resizer:hover::after,
-.member-roster-resizer.is-dragging::after { opacity: 1; }
+.member-roster-resizer::after { content: none; }
+.member-roster-resizer:hover,
+.member-roster-resizer.is-dragging { background: var(--resize-line); }
 .member-roster-resize-hint {
   position: absolute;
   top: 16px;

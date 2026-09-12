@@ -75,6 +75,7 @@ import {
 import { NewConversationDialog } from './NewConversationDialog'
 import { openRuntimeModelCatalog } from './runtime-check'
 import { FilePreviewProvider, useOptionalFilePreview } from './FilePreviewContext'
+import { NavigationShell } from './NavigationShell'
 import { forgetFilePreviewSession } from './file-preview-session'
 import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { FilePreviewTabs } from './FilePreviewTabs'
@@ -885,8 +886,8 @@ function StartupWorkspace({
     : view === 'members' ? 'members-content'
       : view === 'memory' ? 'memory-content' : 'task-content compose-content'
   return (
-    <div
-      className={view === 'camp' ? 'app-shell app-shell-camp' : 'app-shell'}
+    <NavigationShell platform={window.rovai.platform} disabled
+      className={view === 'camp' ? 'app-shell-camp' : ''}
       data-startup-frame={target?.kind ?? 'location'}
     >
       <CampNavigation
@@ -926,7 +927,7 @@ function StartupWorkspace({
             />
           : <StartupGate waiting={error !== null} error={error} onRetry={onRetry} />)}
       </main>
-    </div>
+    </NavigationShell>
   )
 }
 
@@ -3907,7 +3908,7 @@ function AuthoritativeApp({
 
   return (
     <FilePreviewProvider campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
-    <div className={view === 'camp' ? 'app-shell app-shell-camp' : 'app-shell'}>
+    <NavigationShell platform={window.rovai.platform} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''}>
       <CampNavigation
         platform={window.rovai.platform}
         view={view}
@@ -4219,7 +4220,7 @@ function AuthoritativeApp({
         onOpenDetails={openUpdateSettings}
         onDownload={appUpdates.download}
       />
-    </div>
+    </NavigationShell>
     </FilePreviewProvider>
   )
 }

@@ -105,7 +105,10 @@ values and evidence.
 
 ## Layout
 
-The desktop shell uses a fixed 270px navigation rail, a 50px top row and a flexible content column.
+The desktop shell uses a default 270px navigation rail, a 50px top row and a flexible content column.
+The global rail resizes from 200px to 420px within the window. Dragging below 200px or using the
+window-chrome toggle collapses it completely to 0px, without an icon strip. Restore through the toggle,
+keyboard, or a drag from the left edge; retain the previous expanded width and mounted page state.
 The minimum supported window is `1040×700`; reference checks also cover `1440×920` and
 `2560×1440`, 200% zoom and reduced motion.
 
@@ -148,8 +151,11 @@ without extra focus outlines or halos; higher contrast preferences restore the s
 - **Navigation:** rows and selection surfaces establish location. Selected conversation and teammate rows omit
   the left rail and use neutral text. Memory and Automation use `--neutral-selected` and `--neutral-hover`; sidebar backgrounds stay unchanged. Hover is supplementary;
   selected state and actions remain understandable from text, icons and placement.
-- **Resizable boundaries:** existing splitters share a single `1px` `--line`; the `--muted` grip appears
-  only on hover or drag. Preserve keyboard resizing and reset without floating arrow controls.
+- **Resizable boundaries:** navigation, member roster, file preview, MCP/Skills, Automation and execution-panel splitters
+  share a single `1px` line. Hover and dragging change the entire boundary to neutral `--resize-line`,
+  without a short grip or increased thickness. Invisible hit areas remain wider. Preserve keyboard resizing,
+  cancellation and reset. Collapse icons use an unfilled rounded window with an inner line near the corresponding
+  edge when collapsed; the navigation control sits right of macOS traffic lights or left of Windows File.
 - **Containers:** prefer one open surface with dividers over card walls. A card is justified only
   when it represents a bounded object, decision or independent state.
 - **Dialogs and Popovers:** one raised neutral surface with a 1px structural boundary and no colored
