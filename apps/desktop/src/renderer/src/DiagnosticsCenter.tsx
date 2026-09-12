@@ -1,3 +1,4 @@
+import { useCampClient, type CampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { readErrorMessage } from './error-message'
 import { useEffect, useMemo, useState } from 'react'
@@ -48,6 +49,7 @@ export function DiagnosticsCenter({
   onNavigate(section: 'mcp' | 'runtime', runtimeKind?: AdapterKind): void
   platform?: NodeJS.Platform
 }): React.JSX.Element {
+  const client = useCampClient()
   const [report, setReport] = useState<DiagnosticsReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
@@ -60,7 +62,7 @@ export function DiagnosticsCenter({
 
   useEffect(() => {
     let cancelled = false
-    void readReport()
+    void readReport(client)
       .then((next) => {
         if (!cancelled) {
           setReport(next)
@@ -74,7 +76,7 @@ export function DiagnosticsCenter({
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [client])
 
   const issues = useMemo(
     () => report?.checks.filter((check) => check.status === 'attention') ?? [],
@@ -88,7 +90,7 @@ export function DiagnosticsCenter({
     setRecoveryError(null)
     setNotice(null)
     try {
-      const next = await readReport()
+      const next = await readReport(client)
       setReport(next)
       setInitialError(null)
       setNotice({
@@ -110,8 +112,8 @@ export function DiagnosticsCenter({
     setExporting(true)
     setNotice(null)
     try {
-      const path = await window.rovai.exportDiagnostics()
-      if (path) {
+      const { exported, path } = await client.exportDiagnostics()
+      if (exported) {
         setNotice({
           tone: 'success',
           title: '诊断 JSON 已导出',
@@ -147,20 +149,20 @@ export function DiagnosticsCenter({
     setRecoveryError(null)
     try {
       if (action.kind === 'repair_skill') {
-        const result = await window.rovai.request<StoredCommandResult>('skills.reconcile', {
+        const result = await client.request<StoredCommandResult>('skills.reconcile', {
           commandId: newCommandId(),
           command: {}
         })
         assertApplied(result)
       } else if (action.kind === 'repair_mcp') {
-        await window.rovai.request('mcp.config.repairPermissions')
+        await client.request('mcp.config.repairPermissions')
       } else {
-        await requestProductRuntimeCheck(action.runtimeKind)
+        await requestProductRuntimeCheck(action.runtimeKind, client.request)
       }
 
       const next = action.kind === 'retry_runtime'
-        ? await waitForRuntimeResult(check.id)
-        : await readReport()
+        ? await waitForRuntimeResult(check.id, client)
+        : await readReport(client)
       setReport(next)
       const rechecked = next.checks.find((candidate) => candidate.id === check.id)
       if (rechecked?.status === 'ok') {
@@ -241,8 +243,8 @@ export function DiagnosticsCenter({
             <div className={`diagnostics-notice is-${notice.tone}`} role="status" aria-live="polite">
               <span aria-hidden="true"><DiagnosticStatusIcon status={notice.tone === 'success' ? 'ok' : notice.tone === 'attention' ? 'attention' : 'unknown'} /></span>
               <div><strong>{notice.title}</strong><small>{notice.detail}</small></div>
-              {notice.exportPath && (
-                <button className="quiet-button compact" type="button" onClick={() => void window.rovai.revealDiagnosticsExport(notice.exportPath!)}>{revealInFileManagerLabel(platform)}</button>
+              {notice.exportPath && client.revealDiagnosticsExport && (
+                <button className="quiet-button compact" type="button" onClick={() => void client.revealDiagnosticsExport?.(notice.exportPath!)}>{revealInFileManagerLabel(platform)}</button>
               )}
               <button className="icon-button" type="button" aria-label="关闭提示" onClick={() => setNotice(null)}><DiagnosticGlyph name="close" /></button>
             </div>
@@ -595,19 +597,19 @@ function formatTimestamp(value: string | null | undefined): string {
   }).format(date)
 }
 
-async function readReport(): Promise<DiagnosticsReport> {
-  const report = await window.rovai.request<DiagnosticsReport>('diagnostics.check')
+async function readReport(client: CampClient): Promise<DiagnosticsReport> {
+  const report = await client.request<DiagnosticsReport>('diagnostics.check')
   if (report.schemaVersion !== 1) throw new Error('诊断报告版本不兼容。')
   return report
 }
 
-async function waitForRuntimeResult(checkId: string): Promise<DiagnosticsReport> {
-  let latest = await readReport()
+async function waitForRuntimeResult(checkId: string, client: CampClient): Promise<DiagnosticsReport> {
+  let latest = await readReport(client)
   for (let attempt = 0; attempt < 24; attempt += 1) {
     const check = latest.checks.find((candidate) => candidate.id === checkId)
     if (!check || check.code !== 'runtime_check_incomplete') return latest
     await new Promise((resolve) => window.setTimeout(resolve, 500))
-    latest = await readReport()
+    latest = await readReport(client)
   }
   return latest
 }

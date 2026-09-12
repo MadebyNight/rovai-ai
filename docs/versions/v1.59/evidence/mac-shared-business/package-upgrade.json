@@ -1,0 +1,30 @@
+{
+  "current": {
+    "commit": "f6e9541915eac3d29da83a62f34cda5362eb9432",
+    "dirty": true,
+    "profile": "release",
+    "target": "macos-arm64",
+    "manifestSha256": "6956cf9567fb977438314cd141b8672338eb6feb538ee8559ea4679690046f14"
+  },
+  "previous": {
+    "commit": "1be7f5459a1998ffcfde186992d7414f16927691",
+    "dirty": true,
+    "profile": "debug",
+    "target": "macos-arm64",
+    "manifestSha256": "bd19e5fb710dd69a63dc1f5a9b435fcd78016c3ff85832c1b07f0cc3e01e94fd"
+  },
+  "realRuntime": false,
+  "checks": {
+    "manifestHashes": true,
+    "relocatedPackage": true,
+    "hostRunsWithoutNodeOnPath": true,
+    "bundledCliStarts": true,
+    "baselineDataUpgraded": true,
+    "authorizedWebReadsPreservedMessageOnce": true,
+    "headlessSignalSettled": true,
+    "stoppedBackupRollback": true
+  },
+  "status": "passed",
+  "sourceReportSha256": "bb98e8c626bbce5fa26322c4787432e2cd18e26b8ffeca310e32140a465f8aa0",
+  "scope": "Isolated previous development preview to current macOS arm64 package; one durable message; stopped in-place rollback. Not a production release or cross-machine backup qualification."
+}

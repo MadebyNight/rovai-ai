@@ -1,9 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { SafeMarkdown } from './SafeMarkdown'
 import { FileFindScope } from './FilePreviewFind'
 import { FileFindDomAdapter } from './FileFindDomAdapter'
 import { HtmlViewer } from './HtmlFileViewer'
-import { useFilePreview, type FilePreviewTabModel } from './FilePreviewContext'
+import { useFilePreview, useFilePreviewApi, type FilePreviewTabModel } from './FilePreviewContext'
 import { FileChangesPreview } from './FileChangesPreview'
 import { FilePreviewTabIcon, ResourceReferenceIcon } from './FilePreviewTabIcon'
 import { ReadonlyCodeViewer } from './ReadonlyCodeViewer'
@@ -284,6 +284,11 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   const { open, resolvedTheme } = useFilePreview()
   const [linkError, setLinkError] = useState<string | null>(null)
   const file = tab.file
+  const api = useFilePreviewApi()
+  const readImage = useCallback((rawReference: string) => {
+    if (!file || !api.readChildImage) throw new Error('图片资源适配不可用。')
+    return api.readChildImage({ handleId: file.handleId, expectedGeneration: file.contentGeneration, rawReference })
+  }, [api, file])
   if (!tab.content || !file) return <div className="file-preview-empty-content" />
   if (tab.content.kind === 'markdown') {
     return (
@@ -296,6 +301,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
           theme={resolvedTheme}
           headingTarget={file.target?.heading}
           onHeadingTargetResult={(found) => setLinkError(found ? null : '未找到指定的标题，已保持在文件顶部。')}
+          localImageContent={api.readChildImage && file.capabilities.includes('read_child') ? readImage : undefined}
           localImageUrl={file.capabilities.includes('preview_asset') ? (rawReference) => filePreviewAssetUrl(
             rawReference,
             tab.content?.kind === 'markdown' ? tab.content.tabToken : '',

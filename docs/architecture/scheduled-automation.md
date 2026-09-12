@@ -2,19 +2,19 @@
 document_type: architecture
 authority: scheduled-automation-architecture
 status: accepted
-last_updated: 2026-09-07
+last_updated: 2026-09-13
 ---
 
 # Scheduled Automation Architecture
 
-Scheduled Automation 是 Desktop/Core 内的持久计划控制面。它只决定何时领取一份已授权定义、如何建立普通 Camp
+Scheduled Automation 是共享 Rust Host/Core 内的持久计划控制面。它只决定何时领取一份已授权定义、如何建立普通 Camp
 执行图，以及怎样从 CampTurn 结算运行；具体模型执行、公共消息、渠道凭据和投递仍分别由现有 Runtime、
 Collaboration 与 Channel 组件拥有。
 
 ## 组件职责
 
 ```text
-Desktop Automation Workspace ── typed Core RPC ──► AutomationService
+Desktop / Web Automation Workspace ── Core Client ──► AutomationService
                                                        │
                                       SQLite definition/run/delivery
                                                        │
@@ -50,7 +50,11 @@ Automation 定义是未来 occurrence 的可变配置。AutomationRun 是一次�
 行写入处于同一事务，因此重复扫描不会重复消费。活跃运行使用 partial unique index 保护；业务预检查只用于返回清晰的
 `skipped(overlap)`。
 
-应用启动与 Desktop 明确的系统恢复事件拥有恢复边界；普通 tick 不推进该边界。计划求值统一使用五段 Cron 引擎，
+Rust Host 的调度循环每 500ms 驱动计划，不依赖 Electron、浏览器或 HTTP/SSE 连接。Desktop 只传递原生暂停／恢复控制，
+不再提交 tick。Core 启动、Desktop 明确的恢复事件与 macOS 原生时钟观察拥有恢复边界；普通 tick 不推进该边界。
+macOS 比较包含睡眠的 continuous time 与不包含睡眠的 absolute time，按夹逼读数界定误差；有争议的读数跳过本次领取。
+发现睡眠差值后以读数完成后的时间推进恢复边界，并跳过该次领取，避免跨睡眠采样使用旧边界。线程排队或墙上时钟调整
+不作为恢复事件。其他平台仍保留 Desktop 原生事件适配，独立 Host 的系统唤醒资格须在对应实机补验。计划求值统一使用五段 Cron 引擎，
 定义更新只有在规范化 schedule 实值变化或重新开启时重算 `nextRunAt`。显式 manual run 不受 `enabled` 限制，且不改写
 定义的计划状态。
 
@@ -72,12 +76,16 @@ CampTurn 完成时只在 root AgentRun 的
 
 ## 进程与权限边界
 
-V1 没有常驻独立 daemon、云端 scheduler 或 OS 登录唤醒任务。Core 生命周期和设备唤醒状态决定能否到点执行，恢复只
-记录一次 missed。已启用定义是调度执行授权；定义管理继续属于当前本机用户，Agent 只能经 current Built-in lease 和
+共享 Host 可独立运行，不新增第二套 daemon、云端 scheduler 或 OS 登录唤醒任务。Core 生命周期和设备唤醒状态决定能否到点执行，恢复只
+记录一次 missed。已启用定义是调度执行授权；定义管理属于当前 Owner，Agent 只能经 current Built-in lease 和
 用户明确意图使用封闭操作。
 
 Automation 来源不改变 AgentRun 的文件、网络、Built-in、External MCP 或 Runtime 权限。执行仍能产生普通外部效果，
 因此系统通过禁止恢复重派发来避免把未知中断变成重复执行。
+
+macOS 时钟接口依据 [Apple mach_time.h](https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/mach_time.h)。
+纯时钟 owner 覆盖延迟、回拨、不确定采样与跨读数睡眠；`host-web.test.mjs` 的时钟 owner 使用未配置 Runtime 的隔离计划，
+覆盖 Web 关闭、独立 Host 和重启的领取次数，不把它当成真实 Runtime 或实体睡眠验收。
 
 ## References
 

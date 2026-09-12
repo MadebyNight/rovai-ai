@@ -465,6 +465,29 @@ pub fn add_working_source_attachment_for_client(
     let transaction = database
         .connection_mut()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    commit_working_source_attachment_in_transaction(
+        &transaction,
+        camp_id,
+        pending_input_id,
+        expected_revision,
+        edit_token,
+        source_ref,
+        client,
+    )?;
+    transaction.commit()?;
+    read_queue_for_client(database, camp_id, client)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_working_source_attachment_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    camp_id: &str,
+    pending_input_id: &str,
+    expected_revision: i64,
+    edit_token: &str,
+    source_ref: LocalAttachmentSourceRef,
+    client: &crate::draft_client::DraftClient,
+) -> Result<()> {
     let pending_revision = transaction
         .query_row(
             "SELECT revision FROM pending_camp_input
@@ -477,7 +500,7 @@ pub fn add_working_source_attachment_for_client(
         pending_revision == Some(expected_revision),
         "pending_input.changed"
     );
-    let session = load_edit_session(&transaction, camp_id)?;
+    let session = load_edit_session(transaction, camp_id)?;
     let owns = session.as_ref().is_some_and(|session| {
         session.client_id == client.id()
             && session.pending_input_id == pending_input_id
@@ -486,11 +509,10 @@ pub fn add_working_source_attachment_for_client(
             && !session.recovery_required
     });
     anyhow::ensure!(owns, "pending_input.edit_fenced");
-    let mut refs = load_working_source_refs(&transaction, camp_id, pending_input_id, edit_token)?;
+    let mut refs = load_working_source_refs(transaction, camp_id, pending_input_id, edit_token)?;
     refs.push(source_ref);
-    store_working_source_refs(&transaction, camp_id, pending_input_id, edit_token, &refs)?;
-    transaction.commit()?;
-    read_queue_for_client(database, camp_id, client)
+    store_working_source_refs(transaction, camp_id, pending_input_id, edit_token, &refs)?;
+    Ok(())
 }
 
 fn reject(code: &str, message: &str) -> CommandHandlerResult {

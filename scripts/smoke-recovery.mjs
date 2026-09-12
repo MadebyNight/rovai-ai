@@ -15,6 +15,8 @@ const fixtureRoot = await realpath(await mkdtemp(join(tmpdir(), 'rovai-recovery-
 const projectRoot = join(fixtureRoot, 'project')
 const dataDir = join(fixtureRoot, 'data')
 const adapterKind = process.env.ROVAI_RECOVERY_ADAPTER ?? 'opencode-cli'
+const coreBinary = resolve(process.env.ROVAI_RECOVERY_BIN ?? join(root, 'target/debug/rovai-core'))
+console.log(JSON.stringify({ channel: 'automatic_acceptance', fixtureRoot, dataDir, skillLibraryRoot: join(dataDir, 'managed-skill-library'), mcpConfigPath: join(dataDir, 'mcp.json'), coreBinary, adapterKind }))
 const agentId = 'agent_1'
 let firstCore = null
 let recoveredCore = null
@@ -86,6 +88,8 @@ try {
     commandId: taskCommandId,
     campId,
     title: 'Durable recovery checkpoint',
+    assigneeAgentId: agentId,
+    acceptanceCriteria: ['Survives restart once without re-enqueueing the accepted input.'],
     description: 'Must survive a hard Core restart exactly once.'
   }
   const createdTask = await firstCore.request('tasks.create', taskRequest)
@@ -97,7 +101,7 @@ try {
   const originalEpoch = beforeCrash.run.executionEpoch
   const manifestId = beforeCrash.manifest.id
   await firstCore.crash()
-  if (!firstCore.stderr.includes('rovai-core')) {
+  if (!firstCore.stderr.includes('rovai-core') && !firstCore.stderr.includes('Host')) {
     throw new Error(`First Core produced no startup diagnostics: ${firstCore.stderr}`)
   }
   firstCore = null
@@ -203,6 +207,7 @@ try {
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
+    coreBinary,
     adapterKind,
     runtimeVersion,
     campId,
@@ -228,9 +233,10 @@ try {
 }
 
 function startCore(dataDirectory) {
-  const child = spawn(join(root, 'target', 'debug', 'rovai-core'), [
+  const child = spawn(coreBinary, [
     ...coreDataDirectoryArguments(dataDirectory),
-    '--skill-library-root', join(dataDirectory, 'managed-skill-library')
+    '--skill-library-root', join(dataDirectory, 'managed-skill-library'),
+    '--mcp-config-path', join(dataDirectory, 'mcp.json')
   ], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe']

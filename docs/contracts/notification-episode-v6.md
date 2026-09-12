@@ -19,7 +19,7 @@ Inbox / Change Batch 的 `schemaVersion` 升为 7。`NotificationActionView.kind
 所有字段为 string；来源使用 Run 冻结的 `destination_conversation_id`，审批通过 Action 的 Run 解析。
 `campTurnId` 仍绑定精确终态，`approvalId` 仍绑定精确审批，acknowledgement / observed version 不变。
 
-单聊完成、失败、未完成与审批只向本机 Owner 提醒，复用现有分类偏好，不创建私有 Mention 或另一通知中心。
+单聊完成、失败、未完成与审批只向唯一 Owner 提醒，复用现有分类偏好，不创建私有 Mention 或另一通知中心。
 卡片点击先确认该精确 Occurrence，再打开原 Conversation / Run 或审批详情；不授予权限，不调用
 `singleChat.open`，不替换为同成员的 successor Conversation。已结束、缺失或成员不可用的来源不可导航，
 也不新投递 heads-up；已保存事实仍保留。私有正文不进入公共 Camp / Agent / 渠道投影。
@@ -43,3 +43,8 @@ Migration 146 仅变更后续状态触发器，不改存储字段、data contrac
 
 卡片宽 340px，保留主题，标题只展示来源，正文最多两行；单聊来源为“Camp 名 · 与成员单聊”，
 不附加重复类型标题、Runtime、路径、时间或项目页脚。完成文案为“本轮已完成”。
+
+
+可信自托管 Host 的已认证 Web Owner 复用本合同的 Inbox、Journal、偏好和精确 acknowledgement。
+各浏览器保留自己的临时队列、焦点与可见来源观察；同一 Owner 的持久已读状态和偏好仍由 Core 统一拥有。
+HTTP/SSE 失效信号触发重新读取，不冒充完整 CoreEvent；重新登录继续核对原提交。

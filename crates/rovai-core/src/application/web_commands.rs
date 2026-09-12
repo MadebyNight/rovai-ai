@@ -49,6 +49,60 @@ pub(super) fn reconcile(
         }};
     }
     match query.operation.as_str() {
+        "camps.rename" => camp!(RenameCampCommand),
+        "camps.delete" => camp!(DeleteCampCommand),
+        "camps.discardPending" => camp!(DiscardPendingCampCommand),
+        "camps.members.fast.set" => camp!(rovai_core::camp_fast::SetCampMemberFastCommand),
+        "agentRuns.resolveRecoveryBlocker" => camp!(ResolveAcceptedInputRecoveryBlockerCommand),
+        "members.remove" => user!(RemoveMemberCommand),
+        "members.reorder" => user!(ReorderAgentProfilesCommand),
+        "notifications.preference.update" => user!(UpdateNotificationPreferenceCommand),
+        "notifications.acknowledge" => user!(AcknowledgeNotificationEpisodeCommand),
+        "notifications.acknowledgeVisibleSources" => {
+            user!(AcknowledgeVisibleNotificationSourcesCommand)
+        }
+        "skills.reconcile" => user!(ReconcileSkillProjectionsCommand),
+
+        "singleChat.open" => {
+            let mut params: UserCommandParams<OpenSingleChatCommand> =
+                serde_json::from_value(query.params)?;
+            params.command.draft_client = client.clone();
+            receipt(
+                database,
+                user_camp_command_envelope(
+                    params.command_id,
+                    params.command.camp_id.clone(),
+                    params.command,
+                ),
+            )
+        }
+        "singleChat.send" => {
+            let mut params: UserCommandParams<SendSingleChatMessageCommand> =
+                serde_json::from_value(query.params)?;
+            params.command.draft_client = client.clone();
+            receipt(
+                database,
+                user_camp_command_envelope(
+                    params.command_id,
+                    params.command.camp_id.clone(),
+                    params.command,
+                ),
+            )
+        }
+        "singleChat.pendingInputs.edit" => {
+            let mut params: UserCommandParams<EditSingleChatPendingInputCommand> =
+                serde_json::from_value(query.params)?;
+            params.command.draft_client = client.clone();
+            receipt(
+                database,
+                user_camp_command_envelope(
+                    params.command_id,
+                    params.command.camp_id.clone(),
+                    params.command,
+                ),
+            )
+        }
+        "singleChat.end" => camp!(EndSingleChatCommand),
         "skills.import.commit" => user!(CommitSkillImportCommand),
         "skills.setEnabled" => user!(SetSkillEnabledCommand),
         "skills.setGroupAssignments" => user!(SetSkillGroupAssignmentsCommand),
@@ -149,10 +203,6 @@ pub(super) fn reconcile(
             let mut params: UserCommandParams<rovai_core::message_quote::MutateQuoteDraftCommand> =
                 serde_json::from_value(query.params)?;
             params.command.draft_client = client.clone();
-            anyhow::ensure!(
-                params.command.conversation_id.is_none(),
-                "Private Draft client scope is not admitted yet"
-            );
             let value = receipt(
                 database,
                 user_camp_command_envelope(
@@ -171,9 +221,18 @@ pub(super) fn reconcile(
                     let code = &value["result"]["code"];
                     return Ok(json!({"state":"recorded", "error":{"code":code,"message":code}}));
                 }
-                Ok(
-                    json!({"state":"recorded", "result":CampAttachmentStore::for_client(data_dir, client.clone()).load_draft(database, &params.command.camp_id)?}),
-                )
+                let result = if let Some(conversation_id) = params.command.conversation_id {
+                    serde_json::to_value(
+                        SingleChatService::for_client(client.clone())
+                            .snapshot(database, &conversation_id)?,
+                    )?
+                } else {
+                    serde_json::to_value(
+                        CampAttachmentStore::for_client(data_dir, client.clone())
+                            .load_draft(database, &params.command.camp_id)?,
+                    )?
+                };
+                Ok(json!({"state":"recorded", "result":result}))
             } else {
                 Ok(value)
             }

@@ -379,7 +379,7 @@ let currentUserProfile: CurrentUserProfileStore | null = null
 let onboarding: OnboardingStore | null = null
 let restorableLocations: RestorableLocationStore | null = null
 let navigationPreferences: NavigationPreferencesStore | null = null
-let automationSchedulerTimer: NodeJS.Timeout | null = null
+let desktopBackgroundTimer: NodeJS.Timeout | null = null
 let dailyAnalysis: DailyAnalysisService | null = null
 let evaluationHost: EvaluationHostService | null = null
 let localStoresReady = false
@@ -889,12 +889,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
       console.warn('[rovai] Scheduled Automation resume boundary was not updated.', error)
     })
   })
-  automationSchedulerTimer = setInterval(() => {
-    void core.tickAutomationScheduler(new Date().toISOString()).catch(() => undefined)
+  desktopBackgroundTimer = setInterval(() => {
     void dailyAnalysis?.tick().catch(() => undefined)
     void evaluationHost?.tick().catch((error) => { console.warn('[rovai] Evaluation Host preparation failed:', error.message) })
   }, 500)
-  automationSchedulerTimer.unref()
+  desktopBackgroundTimer.unref()
   const userDataPath = app.getPath('userData')
   appearanceFilePath = join(userDataPath, 'appearance.json')
   const generalPreferencesPath = join(userDataPath, 'general-preferences.json')
@@ -2300,9 +2299,9 @@ const appQuitCoordinator = new AppQuitCoordinator({
     () => new MessageChannelMain()
   ),
   drain: async () => {
-    if (automationSchedulerTimer) {
-      clearInterval(automationSchedulerTimer)
-      automationSchedulerTimer = null
+    if (desktopBackgroundTimer) {
+      clearInterval(desktopBackgroundTimer)
+      desktopBackgroundTimer = null
     }
     appUpdates?.dispose()
     nativeTheme.removeListener('updated', publishAppearance)

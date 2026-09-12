@@ -14,7 +14,7 @@ last_updated: 2026-09-12
 | 目标页面 | 共享生产组件 | 原生依赖如何处理 | IPC/HTTP 共同调用的 Rust 服务 |
 | --- | --- | --- | --- |
 | Camp | `CampNavigation`、独立提取的 `AppHeader`、`CampWorkspace`、`SafeMarkdown`、执行/任务组件 | Camp 内 request/event/附件动作通过 `CampClient` 注入；App 的 startup/supervisor/desktopSession/窗口与更新留 Desktop 入口 | 既有 Core application 的 Camp/open/message/run/task 服务；通过同一 `CoreService`，HTTP 逐项授权 |
-| Composer/私聊 | 原草稿协调器、Mention、pending 与 `SingleChatPanel` | UI/焦点/缓存保留 React；Host/Owner/编辑客户端更换才切换编辑作用域；认证和连接代次独立更新；私聊依赖仍需后续迁移 | Camp draft/pending/send 已带后端 client 归属；Conversation 范围待接入；Core 原子消费与 command result，不新增同步服务 |
+| Composer/私聊 | 原草稿协调器、Mention、pending 与 `SingleChatPanel` | UI/焦点/缓存保留 React；Host/Owner/编辑客户端更换才切换编辑作用域；认证和连接代次独立更新；私聊通过同一 CampClient 注入请求、事件失效和附件资源 | Camp draft/pending/send 已带后端 client 归属；Conversation Draft 与 Pending 编辑已按后端 client 分隔；Core 原子消费与 command result，不新增同步服务 |
 | 新建/队员 | `NewConversationDialog`、`MembersView`、`MemberRuntimeForm/Parameters` | 原目录选择 callback 变成 Host 文件系统目录选择；模型目录和 runtime check 接受注入 request；本机安装/认证是受信平台能力 | workspaces inspection/preflight、成员/运行绑定、Runtime 发现与检测；返回授权的 DTO |
 | 文件 | `AttachmentCard`、`FilePreviewProvider/Pane/Tabs`、`ImageGallery` | `FilePreviewProvider` 接受显式 `FilePreviewApi`；附件动作区分 native open/reveal 与 Web download；图片缓存按客户端对象隔离；用户头像、相对资源及分页仍待补齐 | 复用 Core source refs/managed 产物，补按 owner locator 授权的 Host 资源服务；不把 Main 本地路径 API 直接公开 |
 | Task/Memory/Automation | 生产 `TaskPanel`、`MemoryLibrary`、`AutomationWorkspace` 与内部编辑逻辑 | 页内领域 request/event 接入客户端；本机导出/导航留平台适配；不重写为通用 rows | 原任务、Memory、Automation 领域服务；Automation 调度时钟迁 Host，按原恢复语义验收 |
@@ -24,7 +24,7 @@ last_updated: 2026-09-12
 `App.tsx` 保留原生启动/关闭壳层；Desktop 显式注入 `desktopBusinessEnvironment`，Web 注入 `createCampAdapter`。
 `CampClientProvider` 与 `FilePreviewProvider` 不接受浏览器缺省桥接。主题、导航与一般展示偏好解析从 Main 提取为纯共享模型，
 两端沿用相同校验规则；浏览器持久存储只保留展示偏好，不保存 Draft、命令、Token 或编辑恢复证明。
-Task、Memory、Automation、Skills/MCP 与头像编辑已开始接入显式 CampClient 资源依赖；私聊仍待迁移，管理动作及失败恢复仍需实测，不能把实现进度写成验收完成。
+Task、Memory、Automation、Skills/MCP 与头像编辑已开始接入显式 CampClient 资源依赖；私聊已接入同一生产组件，管理动作及完整失败恢复仍需实测，不能把实现进度写成验收完成。
 通用页已要求两端显式传入 `GeneralPreferencesApi`，不读取 `window.rovai`；原生窗口控制和浏览器访问管理
 由 Desktop 入口单独提供。外观继续共享页面与阅读偏好，Web 缩放由浏览器管理，页面不再显示不能生效的缩放选择器。
 一次 Host/Owner/编辑客户端作用域内保持 client/API 稳定。网络重连与同页面同 Owner 重新登录只更新认证和连接代次，
@@ -50,4 +50,4 @@ Composer DOM/输入未重建；图片缓存按 CampClient 分开，Markdown 无 
 
 真实 B/C 仍须证明：命令准入后断网不取消，unknown outcome 按原 commandId 查询；两端审批只有一次有效
 决议；草稿/附件归属贯穿 queue/send；Desktop 与独立 Server 使用同一 Web 产物；关闭 Web 后执行继续。
-安全仅保留[实施计划中的一个待确认决策项](implementation-plan.md#host-protection-decision)，与页面复用缺口分开追踪。
+安全边界按[实施计划中的已确认单 Owner 模型](implementation-plan.md#host-protection-decision)执行；历史同 UID 隔离风险保留，不再作为页面复用或交付前置。

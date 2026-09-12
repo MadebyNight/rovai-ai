@@ -5,6 +5,60 @@ use serde::{Deserialize, Serialize};
 /// and the legacy shared draft remain outside the network capability.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum Operation {
+    #[serde(rename = "camps.rename")]
+    CampRename,
+    #[serde(rename = "camps.delete")]
+    CampDelete,
+    #[serde(rename = "camps.discardPending")]
+    CampDiscardPending,
+    #[serde(rename = "camps.members.fast.check")]
+    CampFastCheck,
+    #[serde(rename = "camps.members.fast.set")]
+    CampFastSet,
+    #[serde(rename = "members.removalPreview")]
+    MemberRemovalPreview,
+    #[serde(rename = "members.remove")]
+    MemberRemove,
+    #[serde(rename = "members.reorder")]
+    MemberReorder,
+    #[serde(rename = "agentRuns.resolveRecoveryBlocker")]
+    RunResolveRecovery,
+    #[serde(rename = "runtime.subsystems.retry")]
+    SubsystemRetry,
+    #[serde(rename = "notifications.inbox")]
+    NotificationInbox,
+    #[serde(rename = "notifications.changesSince")]
+    NotificationChanges,
+    #[serde(rename = "notifications.preference.get")]
+    NotificationPreference,
+    #[serde(rename = "notifications.preference.update")]
+    NotificationPreferenceUpdate,
+    #[serde(rename = "notifications.acknowledge")]
+    NotificationAcknowledge,
+    #[serde(rename = "notifications.acknowledgeVisibleSources")]
+    NotificationVisible,
+    #[serde(rename = "diagnostics.check")]
+    DiagnosticsCheck,
+    #[serde(rename = "diagnostics.export")]
+    DiagnosticsExport,
+    #[serde(rename = "skills.reconcile")]
+    SkillReconcile,
+
+    #[serde(rename = "singleChat.list")]
+    SingleChatList,
+    #[serde(rename = "singleChat.get")]
+    SingleChatGet,
+    #[serde(rename = "singleChat.open")]
+    SingleChatOpen,
+    #[serde(rename = "singleChat.send")]
+    SingleChatSend,
+    #[serde(rename = "singleChat.end")]
+    SingleChatEnd,
+    #[serde(rename = "singleChat.pendingInputs.edit")]
+    SingleChatPendingEdit,
+    #[serde(rename = "singleChat.composerDraft.removeAttachment")]
+    SingleChatRemoveAttachment,
+
     #[serde(rename = "skills.content.read")]
     SkillContent,
     #[serde(rename = "skills.import.inspect")]
@@ -288,6 +342,26 @@ impl Operation {
 
     pub fn method(self) -> &'static str {
         match self {
+            Self::CampRename => "camps.rename",
+            Self::CampDelete => "camps.delete",
+            Self::CampDiscardPending => "camps.discardPending",
+            Self::CampFastCheck => "camps.members.fast.check",
+            Self::CampFastSet => "camps.members.fast.set",
+            Self::MemberRemovalPreview => "members.removalPreview",
+            Self::MemberRemove => "members.remove",
+            Self::MemberReorder => "members.reorder",
+            Self::RunResolveRecovery => "agentRuns.resolveRecoveryBlocker",
+            Self::SubsystemRetry => "runtime.subsystems.retry",
+            Self::NotificationInbox => "notifications.inbox",
+            Self::NotificationChanges => "notifications.changesSince",
+            Self::NotificationPreference => "notifications.preference.get",
+            Self::NotificationPreferenceUpdate => "notifications.preference.update",
+            Self::NotificationAcknowledge => "notifications.acknowledge",
+            Self::NotificationVisible => "notifications.acknowledgeVisibleSources",
+            Self::DiagnosticsCheck => "diagnostics.check",
+            Self::DiagnosticsExport => "diagnostics.export",
+            Self::SkillReconcile => "skills.reconcile",
+
             Self::SkillContent => "skills.content.read",
             Self::SkillImportInspect => "skills.import.inspect",
             Self::SkillGithubInspect => "skills.import.github.inspect",
@@ -313,6 +387,14 @@ impl Operation {
             Self::RunExecutionPage => "agentRunExecution.page",
             Self::TaskCreate => "tasks.create",
             Self::TaskUpdate => "tasks.update",
+            Self::SingleChatList => "singleChat.list",
+            Self::SingleChatGet => "singleChat.get",
+            Self::SingleChatOpen => "singleChat.open",
+            Self::SingleChatSend => "singleChat.send",
+            Self::SingleChatEnd => "singleChat.end",
+            Self::SingleChatPendingEdit => "singleChat.pendingInputs.edit",
+            Self::SingleChatRemoveAttachment => "singleChat.composerDraft.removeAttachment",
+
             Self::MemoryCreate => "memory.create",
             Self::MemoryRevise => "memory.revise",
             Self::MemoryRetire => "memory.retire",

@@ -124,7 +124,10 @@ pub async fn upload(
                     if result["replayed"] == true {
                         let _ = tokio::fs::remove_dir_all(&directory).await;
                     }
-                    Ok::<_, anyhow::Error>(Json(json!({"draft":result["draft"]})).into_response())
+                    Ok::<_, anyhow::Error>(
+                        Json(json!({"draft":project_upload(&intent, result["draft"].clone())}))
+                            .into_response(),
+                    )
                 }
                 Ok(_) => {
                     // Core can report a post-commit error. Consult the canonical
@@ -174,13 +177,13 @@ async fn upload_draft(state: &WebState, intent: &UploadIntent, client: &DraftCli
     match state
         .core
         .request_for_editor(
-            "camp.composerDraft.get",
-            json!({"campId":intent.camp_id}),
+            "host.upload.reconcile",
+            json!(intent),
             client.clone(),
         )
         .await
     {
-        Ok(reply) if reply.error.is_none() => Json(json!({"draft":reply.result})).into_response(),
+        Ok(reply) if reply.error.is_none() => Json(json!({"draft":project_upload(intent, reply.result.unwrap_or_default()["draft"].take())})).into_response(),
         _ => error(StatusCode::SERVICE_UNAVAILABLE, "upload_binding_unknown"),
     }
 }
@@ -209,4 +212,16 @@ pub async fn reconcile(
         }
         _ => error(StatusCode::CONFLICT, "upload_conflict"),
     }
+}
+
+fn project_upload(intent: &UploadIntent, value: serde_json::Value) -> serde_json::Value {
+    use rovai_core::web_upload::UploadTarget;
+    let operation = match intent.target {
+        UploadTarget::Camp => operations::Operation::DraftGet,
+        UploadTarget::CampPending { .. } => operations::Operation::PendingInputs,
+        UploadTarget::SingleChat { .. } | UploadTarget::SingleChatPending { .. } => {
+            operations::Operation::SingleChatGet
+        }
+    };
+    operation.project(value)
 }

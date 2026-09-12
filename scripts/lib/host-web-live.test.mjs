@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile, realpath, mkdtemp, rm, access } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, realpath, mkdtemp, rm, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
@@ -9,6 +9,7 @@ import { removeEphemeralRuntimeCampFilesRoot } from './runtime-camp-files-root.m
 import { DatabaseSync } from 'node:sqlite'
 import electron from 'electron'
 import { launchAcceptanceBrowser, pause } from './host-web-browser.mjs'
+import { exerciseBrowserManagement } from './host-web-management-ui.mjs'
 const root = resolve(import.meta.dirname, '../..')
 const chrome = process.env.ROVAI_REVIEW_CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 // Owns the real native entry + browser shared-page seam. The component fixture
@@ -41,12 +42,15 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     await desktop.evaluate(`window.rovai.appearance.setPreference('day')`)
     const profiles = await request('members.list')
     const projectPath = join(fixture, 'owner-project'); await mkdir(projectPath)
+    await writeFile(join(projectPath, 'guide.md'), '# Images\n\n![Inline fixture](./inline.png)\n\n[Child guide](./child.md#details)')
+    await writeFile(join(projectPath, 'child.md'), '# Details\n\nCHILD_GUIDE_MARKER')
+    await writeFile(join(projectPath, 'inline.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'))
     const projectWorkspace = { projectPath, name: 'owner-project' } // Fixture path; actual browser inspection below uses HTTP/Core.
     const created = await request('camps.create', { commandId: crypto.randomUUID(), name: 'Desktop and Web live parity', workspace: projectWorkspace, memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId, collaborationMode: 'peer' })
     assert.equal(created.status, 'applied', JSON.stringify(created)); const campId = created.payload.campId
     for (let i = 1; i <= 8; i++) {
       const draft = await request('camp.composerDraft.get', { campId })
-      const saved = await request('camp.composerDraft.save', { campId, expectedRevision: draft.revision, content: { version: 2, segments: [{ kind: 'text', text: `Controlled Host record ${i}.\n\n**Shared production Camp** preserves message structure and reading position.\n\n\`commandId\` belongs to Rust Host.` }] } })
+      const saved = await request('camp.composerDraft.save', { campId, expectedRevision: draft.revision, content: { version: 2, segments: [{ kind: 'text', text: `Controlled Host record ${i}.\n\n**Shared production Camp** preserves message structure and reading position.\n\n\`commandId\` belongs to Rust Host.\n\n${i === 1 ? '[Preview guide](./guide.md#images)' : ''}` }] } })
       await request('camp.messages.send', { commandId: crypto.randomUUID(), campId, draftRevision: saved.revision, execution: null })
     }
     const choose = async browser => {
@@ -137,8 +141,48 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     assert.equal(await web.evaluate(`document.querySelector('#appearance-zoom') === null`), true)
     assert.match(await web.evaluate('document.body.innerText'), /使用浏览器菜单或快捷键/)
     await web.capture(join(output, 'web-appearance-night.png'))
+    const downloadDirectory = join(fixture, 'browser-downloads'); await mkdir(downloadDirectory)
+    await web.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory })
+    stage = 'shared management settings through HTTP'
+    const settings = async label => web.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent.trim()===${JSON.stringify(label)})`)
+    await settings('提醒')
+    await web.wait(`document.querySelector('[data-notification-preference="headsUpEnabled"]:not(:disabled)')!==null`)
+    const priorPreference = await request('notifications.preference.get')
+    await web.click(`document.querySelector('[data-notification-preference="headsUpEnabled"]')`)
+    await web.wait(`document.querySelector('[data-notification-preference="headsUpEnabled"]').checked===${!priorPreference.headsUpEnabled} && document.querySelector('[data-notification-preference="headsUpEnabled"]').getAttribute('aria-disabled')!=='true'`)
+    assert.equal((await request('notifications.preference.get')).headsUpEnabled, !priorPreference.headsUpEnabled)
+    await web.capture(join(output, 'web-notifications-night.png'))
+    await settings('运行监控')
+    await web.wait(`document.querySelector('.monitoring-state.is-empty')!==null`)
+    await web.click(`[...document.querySelectorAll('.runtime-monitoring button')].find(e=>e.textContent==='导出 JSON')`)
+    await web.wait(`document.querySelector('.monitoring-export-notice')?.textContent.includes('下载已开始')`)
+    await settings('诊断与修复')
+    await web.wait(`document.querySelector('#diagnostics-summary-title')!==null`)
+    await web.click(`[...document.querySelectorAll('.diagnostics-center button')].find(e=>e.textContent==='导出诊断')`)
+    await web.wait(`document.querySelector('.diagnostics-notice')?.textContent.includes('诊断 JSON 已导出')`)
+    assert.equal(await web.evaluate(`document.querySelector('.diagnostics-notice button.quiet-button')===null`), true, 'browser export has no native file manager control')
+    await web.capture(join(output, 'web-diagnostics-night.png'))
+    for (const file of ['rovai-diagnostics.json', 'rovai-runtime-monitoring.json']) {
+      for (let attempt = 0; attempt < 50; attempt++) { try { await access(join(downloadDirectory, file)); break } catch { await pause(100) } }
+      const downloaded = JSON.parse(await readFile(join(downloadDirectory, file), 'utf8'))
+      if (file === 'rovai-diagnostics.json') assert.equal(downloaded.format, 'rovai-diagnostics-v5')
+      else assert.ok(downloaded.exportedAt)
+    }
+    await settings('渠道')
+    await web.wait(`document.querySelector('.channel-settings-page')?.textContent.includes('渠道连接目前由 Desktop 管理')`)
+    assert.equal(await web.evaluate(`window.rovai===undefined`), true)
     await web.click(`document.querySelector('.settings-sidebar-back')`)
+    stage = 'shared Memory Automation MCP and Skill management'
+    await exerciseBrowserManagement({ web, read: request, fixture, campId, openCamp: () => choose(web), capture: name => web.capture(join(output, name)) })
+    await choose(web)
     await web.wait(`document.querySelector('[contenteditable=true]') !== null`)
+    stage = 'Web relative Markdown image and child file'
+    await web.click(`[...document.querySelectorAll('.message-file-reference, .markdown-file-reference')].find(e=>e.textContent.includes('Preview guide'))`)
+    await web.wait(`document.querySelector('.file-preview-markdown img')?.naturalWidth===1`)
+    await web.click(`[...document.querySelectorAll('.file-preview-markdown .markdown-file-reference')].find(e=>e.textContent.includes('Child guide'))`)
+    await web.wait(`[...document.querySelectorAll('.file-preview-markdown')].some(e=>e.getClientRects().length>0 && e.textContent.includes('CHILD_GUIDE_MARKER'))`)
+    await web.click(`document.querySelector('[aria-label="关闭 child.md"]')`)
+    await web.click(`document.querySelector('[aria-label="关闭 guide.md"]')`)
     stage = 'Web preview and final-line quote'
     const uploadPath = join(fixture, 'main-sync-preview.md')
     await writeFile(uploadPath, '# Main sync preview\n\nPREVIEW_SELECTION_ONLY\n\nThe last line stays inside the file.\n')
@@ -218,8 +262,39 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     await web.setFiles('.conversation-controls .composer-file-input', [repairUpload])
     await web.wait(`document.querySelectorAll('.composer-attachment-card .attachment-open:not(:disabled)').length===2`)
     await web.capture(join(output, 'web-pending-return.png'))
+    stage = 'private browser editors and attachments'
+    const privateFile = join(fixture, 'private-browser.md')
+    await writeFile(privateFile, '# Private attachment\n\nPRIVATE_BROWSER_ATTACHMENT')
+    await web.click(`document.querySelector('[data-detail="single-chat"]')`)
+    await web.wait(`document.querySelector('.single-chat-composer textarea:not(:disabled)')!==null`)
+    await web.click(`document.querySelector('.single-chat-composer textarea')`)
+    await web.send('Input.insertText', { text: 'Browser A private unsent text.' })
+    await web.setFiles('.single-chat-composer .composer-file-input', [privateFile])
+    await web.wait(`document.querySelector('.single-chat-composer .attachment-open:not(:disabled)')!==null`)
+    const privateConversationId = await web.evaluate(`document.querySelector('[data-single-chat-owner]').dataset.singleChatOwner`)
+    assert.ok(privateConversationId)
+    await second.click(`document.querySelector('[data-detail="single-chat"]')`)
+    await second.wait(`document.querySelector('.single-chat-composer textarea:not(:disabled)')!==null`)
+    await second.wait(`document.querySelector('[data-single-chat-owner]')?.dataset.singleChatOwner===${JSON.stringify(privateConversationId)}`)
+    assert.equal(await second.evaluate(`document.querySelector('.single-chat-composer textarea').value`), '')
+    assert.equal(await second.evaluate(`document.querySelectorAll('.single-chat-composer .attachment-card').length`), 0)
+    await second.click(`document.querySelector('.single-chat-composer textarea')`)
+    await second.send('Input.insertText', { text: 'Browser B private unsent text.' })
+    await web.click(`document.querySelector('.single-chat-composer .attachment-open')`)
+    await web.wait(`[...document.querySelectorAll('.file-preview-content')].some(e=>e.getClientRects().length>0 && e.innerText.includes('PRIVATE_BROWSER_ATTACHMENT'))`)
+    await web.click(`document.querySelector('[aria-label="收起文件预览"]')`)
+    await web.evaluate(`window.__privateComposer=document.querySelector('.single-chat-composer textarea'); true`)
+    await web.capture(join(output, 'web-private-editor.png'))
     stage = 'token rotation and reauthentication'
     const rotated = await desktop.evaluate(`window.rovai.hostWeb.rotate()`); await login(web, rotated.administratorToken)
+    assert.equal(await web.evaluate(`window.__privateComposer===document.querySelector('.single-chat-composer textarea')`), true)
+    assert.equal(await web.evaluate(`document.querySelector('.single-chat-composer textarea').value`), 'Browser A private unsent text.')
+    await web.wait(`document.querySelector('.single-chat-composer .attachment-open:not(:disabled)')!==null`)
+    await login(second, rotated.administratorToken)
+    assert.equal(await second.evaluate(`document.querySelector('.single-chat-composer textarea').value`), 'Browser B private unsent text.')
+    assert.equal(await second.evaluate(`document.querySelectorAll('.single-chat-composer .attachment-card').length`), 0)
+    await web.click(`document.querySelector('[aria-label="收起单聊"]')`)
+    await second.click(`document.querySelector('[aria-label="收起单聊"]')`)
     assert.equal(await web.evaluate(`window.__acceptedComposer===document.querySelector('[contenteditable=true]')`), true)
     assert.equal(await web.evaluate(`document.querySelector('[contenteditable=true]').textContent`), returnedText)
     assert.equal(await web.evaluate('typeof window.rovai'), 'undefined')
@@ -227,12 +302,14 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
     await web.capture(join(output, 'web-after-reauth.png'))
     const evidence = { stage: 'managed-desktop-web-passed', simulation: false, realRuntime: false, desktopFocusEmulated: true, campId, geometry: await geometry(web), draftOwners: rows.map(r => r.client_id === 'desktop' ? 'desktop' : 'web'), sameComposerAfterReauth: true, nativeBridgeInBrowser: false,
       ownerModel: { desktopSettingsStart: true, pendingPortAppliesOnlyOnNextStart: true, stopWithoutConfirmation: true, copiedAddressAndToken: true, copyIconFeedbackWithoutPageNotice: true, tokenReadableBeforeStartAndAfterStop: true, tokenPreservedOnRestart: true, actualInterfaceAddress: true, nonLoopbackOrigin: !started.origin.includes('127.0.0.1'), directoryPickerWithoutPreauthorization: true, sameMachineBrowsers: true, secondPhysicalDevice: false },
+      management: { notificationPreferenceSavedThroughUi: true, monitoringReadAndDownload: true, relativeMarkdownImageAndChild: true, diagnosticsReadAndDownload: true, channelNativeCapabilityExplicit: true, memoryCreateReviseRetire: true, automationCreateClose: true, mcpCreate: true, skillDirectoryImport: true, builtinPortraitAndManagedAvatarUpload: true, taskCreateUpdateCancel: true, privateDraftAndAttachmentIsolation: true, privateReauthenticationPreservesEditor: true },
       mainSync: { browserGeneralPreferences: true, nativeWindowControlsAbsent: true, browserZoomExplicit: true, previewSelectAllScoped: true, finalLineQuoteAccepted: true, pendingReturnScopedToCurrentClient: true, pendingAttachmentsAddedInComposer: true, pendingFixture: 'one needs_repair row in isolated database; no Runtime' } }
     await desktop.evaluate(`window.rovai.hostWeb.stop()`)
     assert.ok((await request('app.info')).dataDir)
     await writeFile(join(output, 'desktop-web-live.json'), JSON.stringify({ ...evidence, coreAliveAfterWebStop: true }, null, 2))
     console.log(JSON.stringify({ ...evidence, coreAliveAfterWebStop: true }))
   } catch (error) {
+    if (web) await web.capture(join(output, 'web-failure.png')).catch(() => undefined)
     throw new Error(`Live acceptance at ${stage}: ${error.message}`, { cause: error })
   } finally {
     if (second) await second.close(); if (web) await web.close(); if (desktop) await desktop.close()
@@ -243,7 +320,7 @@ test('actual Desktop and browser share Camp geometry while three drafts and reau
   }
 })
 async function launchBrowser(surface, profile) {
-  const env = { ...process.env, ROVAI_ALLOW_ISOLATED_INSTANCE: '1', ROVAI_HOST_BIN: join(root, 'target/debug/rovai-host') }
+  const env = { ...process.env, ROVAI_ALLOW_ISOLATED_INSTANCE: '1', ROVAI_HOST_BIN: process.env.ROVAI_HOST_BIN ?? join(root, 'target/debug/rovai-host') }
   delete env.ELECTRON_RUN_AS_NODE
   const args = surface === 'web'
     ? ['--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank']

@@ -1531,6 +1531,7 @@ export type FilePreviewKind =
   | 'patch'
 
 export type FilePreviewCapability =
+  | 'download'
   | 'read'
   | 'read_child'
   | 'open_in_system'
@@ -1667,6 +1668,9 @@ export interface FilePreviewExternalUpdateEvent {
 }
 
 export interface FilePreviewApi {
+  /** Browser image bytes resolved under the current, generation-bound parent. */
+  readChildImage?(request: { handleId: string; expectedGeneration: string; rawReference: string }): Promise<FilePreviewOperationResult<FilePreviewBinaryContent>>
+
   bindCamp(campId: string | null): Promise<void>
   open(request: OpenFilePreviewRequest): Promise<FilePreviewOperationResult<OpenFilePreviewResult>>
   restore(request: RestoreFilePreviewRequest): Promise<FilePreviewOperationResult<OpenFilePreviewResult>>
@@ -1680,6 +1684,7 @@ export interface FilePreviewApi {
   prepareHtml(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<FilePreviewHtmlDocument>>
   reload(request: { handleId: string; reopenToken: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<ResolvedFilePreview>>
   release(request: { handleId: string }): Promise<{ released: true }>
+  download?(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<{ started: true }>>
   openInSystem(request: { handleId: string }): Promise<FilePreviewOperationResult<{ opened: true }>>
   revealInFolder(request: { handleId: string }): Promise<FilePreviewOperationResult<{ revealed: true }>>
   copyPath(request: { handleId: string; format: 'display' | 'absolute' }): Promise<FilePreviewOperationResult<{ copied: true }>>

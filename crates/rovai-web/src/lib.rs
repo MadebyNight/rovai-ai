@@ -402,6 +402,9 @@ async fn static_file(state: &WebState, relative: &str) -> Response {
         Some("css") => "text/css; charset=utf-8",
         Some("woff2") => "font/woff2",
         Some("png") => "image/png",
+        Some("avif") => "image/avif",
+        Some("webp") => "image/webp",
+        Some("jpg" | "jpeg") => "image/jpeg",
         Some("svg") => "image/svg+xml",
         _ => return error(StatusCode::NOT_FOUND, "asset_not_found"),
     };

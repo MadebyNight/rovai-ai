@@ -13,8 +13,14 @@ struct Handle {
     client: String,
     source: Value,
     path: PathBuf,
+    anchor_path: PathBuf,
+    root: PathBuf,
+    allow_children: bool,
+    restore: Option<Value>,
+    project_root: Option<PathBuf>,
     name: String,
     token: String,
+    version: Value,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,7 +32,7 @@ pub struct FileRequest {
 fn failure(code: &str) -> Value {
     json!({"ok":false,"error":{"code":code,"message":match code {
         "file_too_large" => "文件超出浏览器预览范围，请下载查看。",
-        "outside_authorized_root" => "此文件不在 Host 已授权的工作区内。",
+        "outside_authorized_root" => "此引用超出当前预览来源的文件范围。",
         "source_not_authorized" => "当前来源已失效或未获授权。",
         "file_not_found" => "源文件已不可用，可能已被系统清理。",
         _ => "文件已变化或暂不可读，请重新打开。"
@@ -50,11 +56,77 @@ async fn core_value(
         .context("source_not_authorized")
 }
 
-async fn resolve(
-    state: &WebState,
-    client: &DraftClient,
-    source: &Value,
-) -> Result<(PathBuf, String)> {
+struct ResolvedSource {
+    path: PathBuf,
+    root: PathBuf,
+    name: String,
+    allow_children: bool,
+}
+
+// Resolve the path portion only. The production TS reference parser remains the
+// presentation owner for line/heading targets; Core validates the original source.
+fn reference_path(raw: &str, base: &std::path::Path) -> Result<PathBuf> {
+    ensure!(
+        raw.len() <= 16_384 && !raw.contains(['\0', '\r', '\n']),
+        "source_not_authorized"
+    );
+    let mut raw = raw.trim();
+    for (left, right) in [
+        ('`', '`'),
+        ('"', '"'),
+        ('\'', '\''),
+        ('(', ')'),
+        ('[', ']'),
+        ('{', '}'),
+        ('<', '>'),
+    ] {
+        if let Some(inner) = raw.strip_prefix(left).and_then(|s| s.strip_suffix(right)) {
+            raw = inner;
+            break;
+        }
+    }
+    let path = raw.split(['#', '?']).next().unwrap_or_default();
+    let path = if raw.contains('#') {
+        path
+    } else {
+        let positive =
+            |v: &str| !v.is_empty() && !v.starts_with('0') && v.bytes().all(|b| b.is_ascii_digit());
+        if let Some((prefix, suffix)) = path.rsplit_once(':') {
+            if positive(suffix) {
+                if let Some((file, line)) = prefix.rsplit_once(':') {
+                    if positive(line) { file } else { prefix }
+                } else {
+                    prefix
+                }
+            } else if suffix
+                .split_once('-')
+                .is_some_and(|(a, b)| positive(a) && positive(b))
+            {
+                prefix
+            } else {
+                path
+            }
+        } else {
+            path
+        }
+    };
+    ensure!(!path.is_empty(), "source_not_authorized");
+    let url = if path.to_ascii_lowercase().starts_with("file://") {
+        url::Url::parse(path)?
+    } else {
+        let base = url::Url::from_directory_path(base)
+            .map_err(|_| anyhow::anyhow!("source_not_authorized"))?;
+        base.join(path)?
+    };
+    ensure!(
+        url.scheme() == "file" && url.host_str().is_none_or(|host| host == "localhost"),
+        "source_not_authorized"
+    );
+    url.to_file_path()
+        .map_err(|_| anyhow::anyhow!("source_not_authorized"))
+}
+
+async fn resolve(state: &WebState, client: &DraftClient, source: &Value) -> Result<ResolvedSource> {
     if source["kind"] == "attachment" {
         ensure!(
             source["campId"] == source["locator"]["campId"],
@@ -69,15 +141,18 @@ async fn resolve(
         .await?;
         ensure!(target["kind"] == "file", "not_regular_file");
         let path = PathBuf::from(target["path"].as_str().context("source_not_authorized")?);
-        return Ok((
-            tokio::fs::canonicalize(path)
-                .await
-                .context("file_not_found")?,
-            target["displayName"]
+        let path = tokio::fs::canonicalize(path)
+            .await
+            .context("file_not_found")?;
+        return Ok(ResolvedSource {
+            root: path.parent().context("source_not_authorized")?.to_owned(),
+            path,
+            name: target["displayName"]
                 .as_str()
                 .context("source_not_authorized")?
                 .to_owned(),
-        ));
+            allow_children: false,
+        });
     }
     ensure!(
         matches!(
@@ -88,7 +163,7 @@ async fn resolve(
     );
     let target = core_value(state, client, "filePreview.resolveSource", source.clone()).await?;
     ensure!(target["kind"] == "file_target", "source_not_authorized");
-    let root = tokio::fs::canonicalize(
+    let mut root = tokio::fs::canonicalize(
         target["rootPath"]
             .as_str()
             .context("source_not_authorized")?,
@@ -97,32 +172,53 @@ async fn resolve(
     let raw = target["rawReference"]
         .as_str()
         .context("source_not_authorized")?;
-    ensure!(!raw.contains(['\0', '\r', '\n']), "source_not_authorized");
-    let relative = PathBuf::from(raw);
-    let candidate = if raw.starts_with("file:") {
-        url::Url::parse(raw)?
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("source_not_authorized"))?
-    } else if relative.is_absolute() {
-        relative
-    } else {
-        PathBuf::from(
+    let candidate = reference_path(
+        raw,
+        std::path::Path::new(
             target["basePath"]
                 .as_str()
                 .context("source_not_authorized")?,
-        )
-        .join(relative)
-    };
+        ),
+    )?;
     let path = tokio::fs::canonicalize(candidate)
         .await
         .context("file_not_found")?;
-    ensure!(path.starts_with(&root), "outside_authorized_root");
+    if !path.starts_with(&root) {
+        // Like Desktop, an exact Core-authorized external file uses its parent
+        // only as an ephemeral child/watch boundary, never a persistent grant.
+        ensure!(
+            tokio::fs::metadata(&path).await?.is_file(),
+            "outside_authorized_root"
+        );
+        root = path.parent().context("source_not_authorized")?.to_owned();
+    }
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .context("source_not_authorized")?
         .to_owned();
-    Ok((path, name))
+    Ok(ResolvedSource {
+        path,
+        root,
+        name,
+        allow_children: target["allowChildren"] == true,
+    })
+}
+
+async fn reauthorize(state: &WebState, client: &DraftClient, handle: &Handle) -> Result<()> {
+    let source = resolve(state, client, &handle.source).await?;
+    ensure!(
+        source.path == handle.anchor_path && source.root == handle.root,
+        "source_not_authorized"
+    );
+    let path = tokio::fs::canonicalize(&handle.path)
+        .await
+        .context("file_not_found")?;
+    ensure!(
+        path == handle.path && path.starts_with(&source.root),
+        "outside_authorized_root"
+    );
+    Ok(())
 }
 
 async fn content(path: &std::path::Path) -> Result<(Vec<u8>, Value, String)> {
@@ -167,6 +263,35 @@ fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+fn preview_key(handle: &Handle) -> String {
+    let mut key = Sha256::new();
+    key.update(b"rovai-web-preview-v1\0");
+    key.update(handle.client.as_bytes());
+    key.update(handle.path.as_os_str().as_encoded_bytes());
+    format!("web:{:x}", key.finalize())
+}
+
+fn page_range(text: &str, offset: u64, maximum: u64) -> Result<(usize, usize)> {
+    let offset: usize = offset
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("read_failed"))?;
+    ensure!(
+        offset <= text.len() && text.is_char_boundary(offset),
+        "read_failed"
+    );
+    let mut end = offset
+        .saturating_add(maximum.min(256 * 1024) as usize)
+        .min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    // A page must make progress even when its requested size splits one scalar.
+    if end == offset && offset < text.len() {
+        end += text[offset..].chars().next().expect("nonempty").len_utf8();
+    }
+    Ok((offset, end))
+}
+
 async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
     let (bytes, version, generation) = content(&handle.path).await?;
     let extension = std::path::Path::new(&handle.name)
@@ -177,7 +302,6 @@ async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
     let (kind, mime) = if let Some(mime) = image_mime(&bytes) {
         ("image", mime)
     } else {
-        ensure!(bytes.len() <= 2 * 1024 * 1024, "file_too_large");
         ensure!(
             !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
             "decode_failed"
@@ -185,7 +309,9 @@ async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
         // Uploaded HTML and SVG always use the text reader. No iframe,
         // executable URL or asset proxy is created by the Web adapter.
         (
-            if matches!(extension.as_str(), "md" | "markdown") {
+            if bytes.len() > 2 * 1024 * 1024 {
+                "paged_text"
+            } else if matches!(extension.as_str(), "md" | "markdown") {
                 "markdown"
             } else {
                 "text"
@@ -193,16 +319,34 @@ async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
             "text/plain",
         )
     };
-    let mut key = Sha256::new();
-    key.update(b"rovai-web-preview-v1\0");
-    key.update(handle.client.as_bytes());
-    key.update(handle.path.as_os_str().as_encoded_bytes());
-    let preview_key = format!("web:{:x}", key.finalize());
-    Ok(
-        json!({"handleId":handle_id,"reopenToken":handle.token,"previewKey":preview_key,"restoreRequest":handle.source,
-        "displayPath":handle.name,"pathPresentation":"file_name_only","fileName":handle.name,"size":bytes.len(),"mime":mime,"extension":extension,"kind":kind,
-        "hasExternalUpdate":false,"contentVersion":version,"contentGeneration":generation,"capabilities":["read"]}),
-    )
+    let preview_key = preview_key(handle);
+    let (display_path, presentation) = if handle.source["kind"] == "attachment" {
+        (handle.name.clone(), "file_name_only")
+    } else if let Some(relative) = handle
+        .project_root
+        .as_ref()
+        .and_then(|root| handle.path.strip_prefix(root).ok())
+    {
+        (
+            relative.to_string_lossy().replace('\\', "/"),
+            "project_relative",
+        )
+    } else {
+        (handle.path.to_string_lossy().into_owned(), "external")
+    };
+    let mut result = json!({"handleId":handle_id,"reopenToken":handle.token,"previewKey":preview_key,
+        "displayPath":display_path,"pathPresentation":presentation,"fileName":handle.name,"size":bytes.len(),"mime":mime,"extension":extension,"kind":kind,
+        "hasExternalUpdate":false,"contentVersion":version,"contentGeneration":generation,"capabilities":["read","download"]});
+    if let Some(restore) = &handle.restore {
+        result["restoreRequest"] = restore.clone();
+    }
+    if handle.allow_children {
+        result["capabilities"]
+            .as_array_mut()
+            .expect("capabilities")
+            .push(json!("read_child"));
+    }
+    Ok(result)
 }
 
 pub async fn files(
@@ -211,6 +355,9 @@ pub async fn files(
     Json(body): Json<FileRequest>,
 ) -> Json<Value> {
     let client = DraftClient::verified_web(&session.client_id).expect("Host editor identity");
+    let Ok(_permit) = state.uploads.clone().try_acquire_owned() else {
+        return Json(failure("read_failed"));
+    };
     let result = file_operation(&state, &client, body).await;
     Json(result.unwrap_or_else(|error| {
         failure(match error.to_string().as_str() {
@@ -229,22 +376,129 @@ async fn file_operation(
     body: FileRequest,
 ) -> Result<Value> {
     let request = body.request;
+    if body.action == "updates" {
+        let handles: Vec<_> = state
+            .files
+            .0
+            .lock()
+            .expect("file registry poisoned")
+            .iter()
+            .filter(|(_, handle)| handle.client == client.id())
+            .map(|(id, handle)| (id.clone(), handle.clone()))
+            .collect();
+        let mut updates: HashMap<String, Vec<String>> = HashMap::new();
+        for (_, handle) in handles {
+            let changed = match tokio::fs::metadata(&handle.path).await {
+                Ok(meta) => {
+                    meta.len() != handle.version["size"].as_u64().unwrap_or_default()
+                        || meta
+                            .modified()
+                            .ok()
+                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|time| time.as_millis())
+                            != handle.version["mtimeMs"].as_u64().map(u128::from)
+                }
+                Err(_) => true,
+            };
+            if changed {
+                let key = preview_key(&handle);
+                if let Some(camp_id) = handle.source["campId"].as_str() {
+                    updates.entry(camp_id.to_owned()).or_default().push(key);
+                }
+            }
+        }
+        return Ok(
+            json!({"ok":true,"value":updates.into_iter().map(|(camp_id,preview_keys)|json!({"campId":camp_id,"previewKeys":preview_keys})).collect::<Vec<_>>()}),
+        );
+    }
     if matches!(body.action.as_str(), "open" | "restore") {
         if request["kind"] == "run_evidence" && request["action"] == "review" {
             let value = core_value(state, client, "filePreview.resolveSource", request).await?;
             ensure!(value["kind"] == "evidence_review", "source_not_authorized");
             return Ok(json!({"ok":true,"value":value}));
         }
-        let (path, name) = resolve(state, client, &request).await?;
         let id = new_token()?;
-        let handle = Handle {
-            client: client.id().to_owned(),
-            source: request,
-            path,
-            name,
-            token: new_token()?,
+        let mut handle = if request["kind"] == "child_of_handle" {
+            let parent = state
+                .files
+                .0
+                .lock()
+                .expect("file registry poisoned")
+                .get(
+                    request["parentHandleId"]
+                        .as_str()
+                        .context("source_not_authorized")?,
+                )
+                .filter(|h| {
+                    h.client == client.id()
+                        && request
+                            .get("campId")
+                            .is_none_or(|camp| *camp == h.source["campId"])
+                        && h.allow_children
+                })
+                .cloned()
+                .context("source_not_authorized")?;
+            reauthorize(state, client, &parent).await?;
+            let candidate = reference_path(
+                request["rawReference"]
+                    .as_str()
+                    .context("source_not_authorized")?,
+                parent.path.parent().context("source_not_authorized")?,
+            )?;
+            let path = tokio::fs::canonicalize(candidate)
+                .await
+                .context("file_not_found")?;
+            ensure!(path.starts_with(&parent.root), "outside_authorized_root");
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .context("source_not_authorized")?
+                .to_owned();
+            // Match Desktop: only project children get a durable independent
+            // restore request. External children retain their exact parent source.
+            let workspace = json!({"kind":"camp_workspace","campId":parent.source["campId"],"rawReference":"."});
+            let restore = if let Ok(root) = resolve(state, client, &workspace).await {
+                path.strip_prefix(&root.root).ok().and_then(|relative| relative.to_str()).map(|relative|
+                    json!({"kind":"camp_workspace","campId":parent.source["campId"],"rawReference":relative}))
+            } else {
+                None
+            };
+            Handle {
+                path,
+                name,
+                restore,
+                token: new_token()?,
+                version: Value::Null,
+                ..parent
+            }
+        } else {
+            let resolved = resolve(state, client, &request).await?;
+            let workspace =
+                json!({"kind":"camp_workspace","campId":request["campId"],"rawReference":"."});
+            let project_root = if request["kind"] == "attachment" {
+                None
+            } else {
+                resolve(state, client, &workspace)
+                    .await
+                    .ok()
+                    .map(|source| source.root)
+            };
+            Handle {
+                project_root,
+                client: client.id().to_owned(),
+                source: request.clone(),
+                restore: Some(request),
+                anchor_path: resolved.path.clone(),
+                path: resolved.path,
+                root: resolved.root,
+                allow_children: resolved.allow_children,
+                name: resolved.name,
+                token: new_token()?,
+                version: Value::Null,
+            }
         };
         let file = metadata(&handle, &id).await?;
+        handle.version = file["contentVersion"].clone();
         let mut handles = state.files.0.lock().expect("file registry poisoned");
         ensure!(
             handles.len() < 128
@@ -288,24 +542,91 @@ async fn file_operation(
             .remove(&id);
         return Ok(json!({"released":true}));
     }
-    let (path, _) = resolve(state, client, &handle.source).await?;
-    ensure!(path == handle.path, "source_not_authorized");
+    reauthorize(state, client, &handle).await?;
     if matches!(body.action.as_str(), "reload" | "reopen") {
         ensure!(
             Some(handle.token.as_str()) == request["reopenToken"].as_str(),
             "source_not_authorized"
         );
         let value = metadata(&handle, &id).await?;
+        if let Some(current) = state
+            .files
+            .0
+            .lock()
+            .expect("file registry poisoned")
+            .get_mut(&id)
+        {
+            current.version = value["contentVersion"].clone();
+        }
         return Ok(
             json!({"ok":true,"value":if body.action=="reopen" { json!({"kind":"file_preview","file":value}) } else { value }}),
         );
     }
-    let (bytes, version, generation) = content(&path).await?;
+    let (bytes, version, generation) = content(&handle.path).await?;
     ensure!(
         Some(generation.as_str()) == request["expectedGeneration"].as_str(),
         "read_failed"
     );
     match body.action.as_str() {
+        "readChildImage" => {
+            ensure!(handle.allow_children, "source_not_authorized");
+            let candidate = reference_path(
+                request["rawReference"]
+                    .as_str()
+                    .context("source_not_authorized")?,
+                handle.path.parent().context("source_not_authorized")?,
+            )?;
+            let path = tokio::fs::canonicalize(candidate)
+                .await
+                .context("file_not_found")?;
+            ensure!(path.starts_with(&handle.root), "outside_authorized_root");
+            let (bytes, version, generation) = content(&path).await?;
+            let mime = image_mime(&bytes).context("decode_failed")?;
+            Ok(
+                json!({"ok":true,"value":{"base64":base64::engine::general_purpose::STANDARD.encode(bytes),"mime":mime,"contentGeneration":generation,"contentVersion":version}}),
+            )
+        }
+        "download" => Ok(
+            json!({"ok":true,"value":{"base64":base64::engine::general_purpose::STANDARD.encode(bytes),"name":handle.name}}),
+        ),
+        "readPage" => {
+            let offset = request["offset"].as_u64().context("read_failed")?;
+            let maximum = request
+                .get("maxBytes")
+                .map(|v| v.as_u64().context("read_failed"))
+                .transpose()?
+                .unwrap_or(256 * 1024)
+                .clamp(1, 256 * 1024);
+            let text = std::str::from_utf8(&bytes).context("decode_failed")?;
+            let (offset, end) = page_range(text, offset, maximum)?;
+            let line = bytes[..offset]
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count()
+                + 1;
+            Ok(
+                json!({"ok":true,"value":{"text":&text[offset..end],"startOffset":offset,"endOffset":end,"startLine":line,
+                "hasPrevious":offset>0,"hasNext":end<bytes.len(),"contentGeneration":generation,"contentVersion":version}}),
+            )
+        }
+        "resolveLine" => {
+            let requested = request["line"]
+                .as_u64()
+                .filter(|line| *line > 0)
+                .context("read_failed")?;
+            std::str::from_utf8(&bytes).context("decode_failed")?;
+            let mut line = 1u64;
+            let mut offset = 0;
+            while offset < bytes.len() && line < requested {
+                if bytes[offset] == b'\n' {
+                    line += 1;
+                }
+                offset += 1;
+            }
+            Ok(
+                json!({"ok":true,"value":{"offset":offset,"line":line,"contentGeneration":generation}}),
+            )
+        }
         "readText" => {
             ensure!(bytes.len() <= 2 * 1024 * 1024, "file_too_large");
             let text = std::str::from_utf8(&bytes).context("decode_failed")?;
@@ -331,8 +652,9 @@ pub async fn attachment(
     let client = DraftClient::verified_web(&session.client_id).expect("Host editor identity");
     let result = async {
         let source = json!({"kind":"attachment","campId":locator["campId"],"locator":locator});
-        let (path, name) = resolve(&state, &client, &source).await?;
-        let (bytes, _, _) = content(&path).await?;
+        let resolved = resolve(&state, &client, &source).await?;
+        let (bytes, _, _) = content(&resolved.path).await?;
+        let name = resolved.name;
         // Encode every UTF-8 byte: no source name can inject a response header or
         // silently lose its original extension in a browser download.
         let encoded: String = name
@@ -354,4 +676,36 @@ pub async fn attachment(
     }
     .await;
     result.unwrap_or_else(|_| error(StatusCode::NOT_FOUND, "attachment_unavailable"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Owns UTF-8/byte offsets at the new HTTP paging seam. The Desktop reader
+    // cannot exercise this Rust boundary; no database or real file is needed.
+    #[test]
+    fn page_boundaries_preserve_scalars_and_progress() {
+        let base = std::env::temp_dir().join("workspace");
+        for reference in ["./a%20b.md#L3", "./a%20b.md:3:2", "`./a%20b.md:3-5`"] {
+            assert_eq!(
+                reference_path(reference, &base).unwrap(),
+                base.join("a b.md")
+            );
+        }
+        let uri = url::Url::from_file_path(base.join("a b.md")).unwrap();
+        assert_eq!(
+            reference_path(uri.as_str(), &base).unwrap(),
+            base.join("a b.md")
+        );
+        assert!(reference_path("https://example.com/a.md", &base).is_err());
+        assert!(reference_path("file://example.com/a.md", &base).is_err());
+        let text = "a你好\n🌸z";
+        assert_eq!(page_range(text, 0, 3).unwrap(), (0, 1));
+        assert_eq!(page_range(text, 1, 1).unwrap(), (1, 4));
+        assert_eq!(page_range(text, 7, 3).unwrap(), (7, 8));
+        assert_eq!(page_range(text, 8, 1).unwrap(), (8, 12));
+        assert_eq!(page_range(text, 13, 1).unwrap(), (13, 13));
+        assert!(page_range(text, 2, 5).is_err());
+        assert!(page_range(text, u64::MAX, 1).is_err());
+    }
 }

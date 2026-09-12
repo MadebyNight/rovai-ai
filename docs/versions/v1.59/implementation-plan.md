@@ -19,9 +19,45 @@ last_updated: 2026-09-13
 Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当前同步点为 `d53f8ca9`；
 保留共享业务入口，并接入上游导航窗口、执行历史和 Runtime 启动配置。
 合并基线通过 TypeScript 与 Rust workspace default：Core 799 通过/6 既有忽略、CLI 35、Web 4。
-随后 Task/Memory/Automation/Skills/MCP 页面与资源适配正在实现和验证，这些新改动不继承基线的通过结论。
+Task/Memory/Automation/Skills/MCP、单聊和资源适配现已接入同一业务入口；以下记录使用本轮重新执行的证据。
 Migration 153 保留上游 150/151/152；旧任务分支的客户端草稿 150 通过精确 schema 检查和原子迁移升级，
-保留 editor proof、草稿及回执。私聊、无浏览器时钟与完整两入口执行矩阵仍待完成。
+保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，当前 schema 104。
+
+本轮管理资源与 Host 时钟增量的 Core library：803 通过／6 既有忽略；Desktop 时钟适配 20 项、共享 Web build 通过。
+Rust 调度循环在两入口自行运行；原 Host pipe/HTTP owner 与新增无浏览器时钟 seam 共 2 项通过，
+后一项使用未配置 Runtime 的持久计划，验证关闭 Web、独立 Host 与重启领取次数，不冒充模型执行或实体睡眠。
+随后私聊与四种上传目标共用原业务事务。私聊既有 9 项含新增跨 client 资源／回执／移回矩阵通过，
+前端私聊与 ConsoleClient 定向 24 项通过，TypeScript 通过。Migration 154 的数据库组 72 项通过；真实 HTTP 私聊上传/重放、跨 client 拒绝和独立草稿通过。
+随后补齐会话管理、Fast、成员排序/移除、通知、运行监控与诊断等共享入口；页面内提醒复用正式控制器。
+当前真实 HTTP owner 通过新操作及删除后回执、文件分页/行定位/下载、相对链接/独立恢复、图片归属和变化检测。
+实际 Desktop/双浏览器回归已验证提醒保存、监控/诊断下载文件、三草稿及同页重新认证；继续覆盖 Memory
+新建/修订/停止沿用、Automation 创建/关闭、MCP 保存、Host 目录导入 Skill、头像上传/裁剪/保存、Task
+创建/编辑/取消，以及单聊正文/附件独立与重新认证保留输入。此 UI owner 不调用模型。
+
+[管理页与双浏览器记录](evidence/mac-shared-business/desktop-web-live.json)、
+[独立 Host 原生执行](evidence/mac-shared-business/headless-runtime.json)、
+[Desktop 托管原生执行](evidence/mac-shared-business/desktop-runtime.json)和
+[Host 强杀恢复](evidence/mac-shared-business/host-recovery.json)分别拥有自己的证据范围。
+两种入口都从空 Host 经生产浏览器检测 Codex、保存队员配置、选择目录、新建 Camp，完成 source 上传、
+发送、一次原生审批、竞争审批拒绝、执行中编辑保留、产物阅读及停止；Desktop 入口另验证执行中关闭 Web，
+Core 继续运行，重新登录后可停止。强杀恢复保持原接受输入与 execution epoch，进入显式 recovery blocker，
+不重发原提示词；再次重启不产生重复 Run/Task，再由原业务操作关闭未知结果。
+
+本轮常规门禁：TypeScript、Vitest 189 文件/1960 项、Node 聚合 317 通过/2 既有平台跳过，
+Rust workspace default Core 803/6 既有忽略、CLI 35、Web 5，以及 slow-tests 310 项通过。
+Clippy workspace/all-targets 与 fmt 通过。扩展门禁修正了 MCP slow owner 的宏/字段引用；未删除或禁用用例。
+AVIF 大头像由实际静态资源 HTTP 和页面图片解码验证，文件预览继续保持原 HTML/SVG 文本边界。
+实体 LAN 第二设备、实体睡眠唤醒、Intel Mac 与其他 OS 不从这些本机证据推导通过。
+
+阶段四的本机增量：[包级升级/回退](evidence/mac-shared-business/package-upgrade.json)校验 manifest，
+将实际旧预览包和新 release 包搬至仓库外，用不含 Node/pnpm 的 PATH 启动原生 Host；旧数据迁入当前合同后，
+浏览器授权读取保留消息，再恢复停机备份交由原旧包读取。演练保留根目录身份，不做逆向 schema 修改。
+旧包为带独立 manifest 的开发预览，不冒充历史正式发布。试验中的目录读取权限只调整本次停止的隔离夹具，
+恢复源与备份原权限。初版演练更换 Runtime 根目录触发 marker identity 拒绝，修正为原目录内恢复后通过。
+[包内真实 Codex](evidence/mac-shared-business/package-runtime.json)使用搬迁后的 Host/CLI/Web，完成同一生产
+配置、发送、原生审批、产物与停止流程；[门禁与二进制范围](evidence/mac-shared-business/validation.json)
+记录 macOS 26.3/arm64、声明的最低 OS 与系统依赖。阶段四其余平台及正式发布保持未完成。
+
 
 
 最新交互调整：管理令牌栏始终显示，关闭服务后仍能查看和复制；移除环形箭头入口，只保留显隐、复制两个图标。
@@ -108,9 +144,9 @@ CLI 35、slow 309；workspace all-target check、Clippy、fmt 和固定 main bas
 | --- | --- | --- |
 | 评审稿 | 同 fixture / 1440×920 / 日夜主题，Camp、新建、执行审批、附件预览、队员配置共用生产组件；模拟明确标识 | 用户已确认方向；模拟证据不代替 A–D |
 | A 共享 Camp | 登录后实际 Web 挂载共享业务页面；Native 启动留 Desktop；旧 Desktop 无回归 | 实际 Web 已挂载共享 BusinessApp/导航/Camp；真实 Desktop/Chrome 同数据、1440×920、日夜主题对照及 Camp/文件页面回归通过 |
-| B 真实写入闭环 | 独立 Host 从受信空目录初始化，经浏览器配置、创建、发送、审批、停止、文件读取；草稿/上传/幂等前置 | 浏览器生产 Composer 发送、真实 Codex 执行/原生审批、产物阅读与停止已通过；初始化后配置/建 Camp 仍由真实 HTTP 验证，完整配置 UI 和私聊/待发送附件等未闭合 |
-| C 双入口一致 | 同一 Web 产物分别连接 Desktop-managed 与独立 Host；双草稿、审批竞争、失效/迟到/断线与 Web 开关 | 两种 Host 挂载同一 Web 产物；真实 Desktop/双浏览器草稿独立，同页重新认证保留 Composer；第二客户端处理已决审批被拒；两入口完整相同执行场景、运行中关闭 Web 仍待补 |
-| D 逐页业务能力 | 队员/Runtime、Task、Memory、Automation、Skills/MCP 与必要设置逐项原动作/失败/权限/刷新闭合 | 未完成；通用只读行不计入 |
+| B 真实写入闭环 | 独立 Host 从受信空目录初始化，经浏览器配置、创建、发送、审批、停止、文件读取；草稿/上传/幂等前置 | macOS 空 Host 生产配置/建 Camp UI、真实发送/审批/停止通过；Camp/单聊独立草稿、四种上传及原命令重放通过 |
+| C 双入口一致 | 同一 Web 产物分别连接 Desktop-managed 与独立 Host；双草稿、审批竞争、失效/迟到/断线与 Web 开关 | macOS 两入口真实执行通过；双浏览器/单聊草稿独立，同页重认证保留编辑；竞争审批拒绝，执行中关闭 Web 不停止 Core，Host 强杀不重发输入 |
+| D 逐页业务能力 | 队员/Runtime、Task、Memory、Automation、Skills/MCP 与必要设置逐项原动作/失败/权限/刷新闭合 | 正式共享管理页及资源适配已接通；本机真实 UI 覆盖 Runtime 配置、Task/Memory/Automation/Skills/MCP/头像、提醒与诊断，权限/失败/刷新由原 Core 与客户端 owner 回归 |
 
 Mobile 新增、扩平台、容器与发布优化暂停，已有包/CI/原型保留。长期 Server 仍为 macOS、Windows、Linux。
 安全边界按用户最新确认的单 Owner 模型执行；原 S1 已从交付前置移除，失败记录保留。
@@ -164,8 +200,8 @@ macOS `O_SEARCH` / Linux `O_PATH` 的目录句柄，最终文件仍只读且逐�
 浏览器保留连接恢复而不访问桌面桥。并行重负载曾导致进程启动和定时测试超时，最终上述验收按组串行复跑通过；
 没有因此改生产时限或关闭门禁。文档门禁在最终证据入库后再执行。
 
-未完成项保持可见：浏览器完整新建/配置路径、私聊独立草稿、头像编辑、相对资源/大文件分页、
-共同管理页动作、无 Desktop/浏览器的 Automation 时钟、两种 Host 的完整相同运行场景及第二台设备。
+首个增量当时尚未完成浏览器新建/配置、私聊草稿、头像、管理页、双入口完整运行和第二实体设备；
+本轮新增证据见本文顶部，历史通过结果不回填。第二实体设备仍未验收。
 首个真实 Camp 增量不等于 B/C/D 或阶段 1–3 整体完成。
 
 ### 本次 main 同步与远程连接设计稿
@@ -249,13 +285,13 @@ Web 固定示例下载、Runtime 配置版本保存，以及独立 HTML 的入�
 
 | 阶段 | 工作与放行条件 | 状态 |
 | --- | --- | --- |
-| 1A 共享 Core | 抽取应用运行层，普通串行入口与必要独立通道不变；旧 Desktop 准入、重复实例、执行、关闭回归；补齐 Main 迁移表及窄接口 | 实施中 |
-| 1A 平台原型 | Windows/Linux 实测文件、环境/句柄、必要进程访问、IPC 冒用、管理恢复、授权工作区与后代回收；失败先由用户确认最小修正 | 四个目标的文件边界均未通过；其余边界未验收 |
-| 1B Headless | 空目录初始化与原生 Runtime 认证；真实发送、产物、审批、取消、受控关闭、强杀恢复；无 Electron/基础 Node 依赖 | macOS 独立 Host 的浏览器发送/原生审批/产物/取消已验证；配置页面、恢复和全部场景尚未验收 |
-| 1C Web 闭环 | 同一 Axum 模块、内存 Bearer、受限 Fetch、上传 source ref、草稿归属、SSE 与宽屏闭环；第二台 LAN 电脑使用 | 共享生产 Camp、独立草稿、上传与发送已接通；完整闭环与 LAN 第二设备尚未全部验收 |
-| 2 Desktop 共用 | 受保护本机 IPC、同 Host Web 开关与会话管理；关闭 Web 不停 Core，bind 失败不毁 Desktop；保留退出与父进程异常语义 | 同 Host/匿名父管道/Web 开关已接入并做进程验证；完整隔离与 Desktop 交互验收待补 |
-| 3 宽屏完整性 | Camp/成员/Task/Runtime/Memory/Automation/Skills/MCP 与必要设置；声明能力矩阵；多端、私聊归属、审批竞争和迟到响应回归 | 独立通用资源页已移除；共享业务页面逐项适配中，私聊、管理动作和无浏览器 Automation 等尚未完成 |
-| 4 三平台发布 | macOS arm64/x64、Windows x64、Linux x64 实际 CLI Server 闭环与匹配 Host/Web 包；平台/Runtime/部署方式分别留证 | 四个原生预览包与有限链路已验证；隔离未通过，未正式发布 |
+| 1A 共享 Core | 抽取应用运行层，普通串行入口与必要独立通道不变；旧 Desktop 准入、重复实例、执行、关闭回归；补齐 Main 迁移表及窄接口 | 共享 Core、原 Desktop 入口与完整本机门禁通过 |
+| 1A 平台原型 | Windows/Linux 实测文件、环境/句柄、必要进程访问、IPC 冒用、管理恢复、授权工作区与后代回收；失败先由用户确认最小修正 | 历史原型失败保留；按单 Owner 模型已移出本轮交付前置 |
+| 1B Headless | 空目录初始化与原生 Runtime 认证；真实发送、产物、审批、取消、受控关闭、强杀恢复；无 Electron/基础 Node 依赖 | macOS 空 Host 配置 UI、发送/审批/产物/取消、受控信号关闭和强杀恢复通过；其他 OS 独立验收 |
+| 1C Web 闭环 | 同一 Axum 模块、内存 Bearer、受限 Fetch、上传 source ref、草稿归属、SSE 与宽屏闭环；第二台 LAN 电脑使用 | 本机真实业务闭环通过；第二实体 LAN 设备尚未验收 |
+| 2 Desktop 共用 | 受保护本机 IPC、同 Host Web 开关与会话管理；关闭 Web 不停 Core，bind 失败不毁 Desktop；保留退出与父进程异常语义 | 同 Host/匿名父管道、失败隔离、执行中 Web 开关、重新登录继续工作与真实执行通过 |
+| 3 宽屏完整性 | Camp/成员/Task/Runtime/Memory/Automation/Skills/MCP 与必要设置；声明能力矩阵；多端、私聊归属、审批竞争和迟到响应回归 | 共享正式页面、单聊归属、管理动作与无浏览器 Host 时钟通过本机验收；合理平台差异见对照表 |
+| 4 三平台发布 | macOS arm64/x64、Windows x64、Linux x64 实际 CLI Server 闭环与匹配 Host/Web 包；平台/Runtime/部署方式分别留证 | 本轮推进 Mac arm64 原生 release 包、搬迁/旧包升级/停机回退及真实 Runtime；其余原生预览证据保留，不宣称三平台正式发布 |
 | 5 Mobile | 按 2026-09-12 用户追加要求先出沿用现有风格的交互稿；真实 Mobile 生产实现与设备验收留待后续 | 已有可交互 HTML 和状态检查保留；新增工作暂停 |
 
 1C 的基础门禁不能后移：两标签页互不覆盖，伪造归属不能读/写/绑定/消费；陈旧 revision 不消费新内容；

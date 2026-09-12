@@ -460,7 +460,8 @@ describe('Single Chat presentation', () => {
     expect(pollingEffect).toContain('refreshCurrent,')
     expect(pollingEffect).not.toContain('singleChat.list')
     expect(SINGLE_CHAT_POLL_INTERVAL_MS).toBe(800)
-    expect(source).toContain("if (!visible) return\n    return window.rovai.onEvent")
+    expect(source).toContain("if (!visible) return\n    return client.onEvent?")
+    expect(source).toContain("if (!visible) return\n    return client.onInvalidated?")
   })
 
   it('separates list reads and target loading from coalesced current-conversation reads', () => {

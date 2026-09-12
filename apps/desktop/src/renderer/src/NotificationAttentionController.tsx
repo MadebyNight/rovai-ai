@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { readErrorMessage } from './error-message'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -283,6 +284,7 @@ export function NotificationAttentionController({
   singleChatSources = null,
   onHeadsUpVisibleChange
 }: NotificationAttentionControllerProps): React.JSX.Element {
+  const client = useCampClient()
   const readingSources = useMemo(() => activeCampVisible
     ? [publicSources, singleChatSources].filter((source): source is VisibleNotificationSources => (
       source !== null && source.campId === activeCampId && source.surfaceVisible !== false
@@ -328,7 +330,7 @@ export function NotificationAttentionController({
   }, [])
 
   const loadPreference = useCallback(async (): Promise<NotificationPreference> => {
-    const next = await window.rovai.request<NotificationPreference>(
+    const next = await client.request<NotificationPreference>(
       'notifications.preference.get'
     )
     if (!validPreference(next)) throw new Error('提醒设置合同不兼容。')
@@ -338,7 +340,7 @@ export function NotificationAttentionController({
   }, [])
 
   const readUnreadStatus = useCallback(async (): Promise<NotificationEpisodeInbox> => {
-    const inbox = await window.rovai.request<NotificationEpisodeInbox>(
+    const inbox = await client.request<NotificationEpisodeInbox>(
       'notifications.inbox',
       { filter: 'unread', limit: 1 }
     )
@@ -392,7 +394,7 @@ export function NotificationAttentionController({
   ): Promise<void> => {
     const acknowledgementId = action.acknowledgementId
     if (!acknowledgementId) return
-    const result = await window.rovai.request<StoredCommandResult>(
+    const result = await client.request<StoredCommandResult>(
       'notifications.acknowledge',
       {
         commandId: newCommandId(),
@@ -420,7 +422,7 @@ export function NotificationAttentionController({
     try {
       const collected = await readNotificationChangePages(
         changeCursor.current,
-        (afterChangeSequence) => window.rovai.request<NotificationEpisodeChangeBatch>(
+        (afterChangeSequence) => client.request<NotificationEpisodeChangeBatch>(
           'notifications.changesSince',
           { afterChangeSequence, limit: 100 }
         )
@@ -529,21 +531,23 @@ export function NotificationAttentionController({
         void pollChanges().catch(() => undefined)
       }, 80)
     }
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (event.method === 'notification_episode.preference_changed') {
         void loadPreference().catch(() => undefined)
         return
       }
       if (shouldPollForNotificationEvent(event.method)) schedulePoll()
     })
+    const unlisten = client.onInvalidated?.(() => { void loadPreference().catch(() => undefined); schedulePoll() })
     window.addEventListener('focus', schedulePoll)
     return () => {
       window.clearInterval(timer)
       if (eventTimer !== null) window.clearTimeout(eventTimer)
       window.removeEventListener('focus', schedulePoll)
-      unsubscribe()
+      unsubscribe?.()
+      unlisten?.()
     }
-  }, [enabled, loadPreference, pollChanges])
+  }, [client, enabled, loadPreference, pollChanges])
 
   useEffect(() => {
     if (!windowAttentive || !enabled) {
@@ -584,7 +588,7 @@ export function NotificationAttentionController({
     visibleCommands.current.set(visibleSources.campId, intent)
     const generation = baselineGeneration.current
     let applied = false
-    void window.rovai.request<StoredCommandResult>(
+    void client.request<StoredCommandResult>(
       'notifications.acknowledgeVisibleSources',
       intent.request
     ).then(async (result) => {

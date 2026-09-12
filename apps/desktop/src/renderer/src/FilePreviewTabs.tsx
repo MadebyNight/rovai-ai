@@ -40,6 +40,7 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
     hidePane,
     move,
     closeMany,
+    download,
     openInSystem,
     revealInFolder,
     copyPath,
@@ -355,14 +356,18 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
             aria-label={`${tabLabels.get(tab.id) ?? previewTabLabel(tab)} 操作`}
             style={{ left: menu.left, top: menu.top }}
           >
-            {tab.kind === 'file' && <><button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
+            {tab.kind === 'file' && <>
+            {tab.file?.capabilities.includes('download') && <button role="menuitem" type="button" onClick={() => void runSystemAction(
+              () => download(tab.id), '已开始下载'
+            )}>下载文件</button>}
+            {tab.file?.capabilities.includes('open_in_system') && <><button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
               () => openInSystem(tab.id),
               '已交给系统默认应用打开'
             )}>使用默认应用打开</button>
             <button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
               () => revealInFolder(tab.id),
               '已在文件夹中定位'
-            )}>{revealLabel}</button>
+            )}>{revealLabel}</button></>}
             <button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
               () => copyPath(tab.id),
               tab.presentation.pathPresentation === 'file_name_only' ? '已复制文件名' : '已复制完整路径'

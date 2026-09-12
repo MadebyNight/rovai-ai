@@ -33,10 +33,15 @@ for (const name of ['rovai-host', 'rovai']) {
 }
 cpSync(join(repository, 'out/web'), join(destination, 'web-ui'), { recursive: true })
 copyFileSync(join(repository, 'LICENSE'), join(destination, 'LICENSE'))
-copyFileSync(join(repository, 'docs/development/server-preview.md'), join(destination, 'README.md'))
 const version = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')).version
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
 const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' }).trim().length > 0
+// The copied guide must also work outside a checkout. Keep its canonical
+// documentation links pinned to the package's recorded source revision.
+const guideBase = `https://github.com/murray17/rovai-ai/blob/${commit}/docs/development/server-preview.md`
+const guide = readFileSync(join(repository, 'docs/development/server-preview.md'), 'utf8')
+  .replace(/\]\((?!https?:|#)([^)]+)\)/g, (_, target) => `](${new URL(target, guideBase).href})`)
+writeFileSync(join(destination, 'README.md'), guide)
 const files = {}
 function hashTree(directory, prefix = '') {
   for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {

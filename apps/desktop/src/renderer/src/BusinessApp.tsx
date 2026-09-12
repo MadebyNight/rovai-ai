@@ -4088,7 +4088,7 @@ export function BusinessApp({
           activationState: campActivationStateForCreation('dialog')
         }, enableOneClick)}
       />
-      {desktop && <NotificationAttentionController
+      <NotificationAttentionController
         enabled={startupStatus === 'resolved'}
         activeCampId={activeCampId}
         activeCampVisible={view === 'camp'
@@ -4104,7 +4104,7 @@ export function BusinessApp({
         singleChatSources={singleChatVisible ? visibleSingleChatSources : null}
         visibleSources={visibleNotificationSources}
         onHeadsUpVisibleChange={setNotificationHeadsUpVisible}
-      />}
+      />
       {desktop && <AppUpdatePrompt
         snapshot={appUpdates.snapshot}
         campComposerVisible={view === 'camp'}

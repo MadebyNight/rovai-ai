@@ -2332,7 +2332,7 @@ mod slow_tests {
             .create(
                 CreateMcpServerParams {
                     expected_config_digest: initial.config_digest,
-                    definition_json: r#"{"mcpServers":{"remote":{"url":"https://example.com/mcp","headers":{"Authorization":"Bearer secret"}}}}"#.to_string(),
+                    definition_json: r#"{"mcpServers":{"remote":{"url":"https://owner:password@example.com/mcp?token=private-query","headers":{"Authorization":"Bearer secret"}}}}"#.to_string(),
                 },
                 &agents(),
             )
@@ -2347,6 +2347,8 @@ mod slow_tests {
             .unwrap();
         assert!(server.definition_json.contains(READ_ONLY_MASK));
         assert!(!server.definition_json.contains("Bearer secret"));
+        assert!(!server.definition_json.contains("private-query"));
+        assert!(!server.endpoint.contains("private-query"));
         let server_id = server.server_id.clone();
         let before_reveal = fs::read(store.path()).unwrap();
         let revealed = store
@@ -2399,7 +2401,30 @@ mod slow_tests {
         assert!(values["Authorization"] == "Bearer ${DOCS_TOKEN}");
         assert!(values["X-Region"] == "  cn  " && values["X-Empty"].is_empty());
         assert!(values["Custom"] == READ_ONLY_MASK);
+        let masked_definition = server.definition_json.clone();
         let mut config = *config;
+        let masked = store
+            .update(
+                UpdateMcpServerParams {
+                    expected_config_digest: config.config_digest.clone(),
+                    server_id: server_id.clone(),
+                    definition_json: masked_definition,
+                },
+                &agents(),
+            )
+            .unwrap();
+        let McpMutationResult::Ok {
+            config: preserved, ..
+        } = masked
+        else {
+            panic!("a masked URL must preserve its exact stored value");
+        };
+        config = *preserved;
+        assert!(
+            fs::read_to_string(store.path())
+                .unwrap()
+                .contains("private-query")
+        );
         // Name/endpoint-only edits, missing fields and blank placeholders preserve stored credentials.
         for headers in [
             serde_json::json!({"Authorization": READ_ONLY_MASK}),
@@ -2457,6 +2482,71 @@ mod slow_tests {
                 .unwrap()
                 .contains("private-invalid-value")
         );
+        let created = store.create(CreateMcpServerParams {
+            expected_config_digest: store.get(&agents()).unwrap().config_digest,
+            definition_json: r#"{"mcpServers":{"stdio":{"command":"node","args":["server.js","--token","private-argument"]}}}"#.into(),
+        }, &agents()).unwrap();
+        let McpMutationResult::Ok { config, .. } = created else {
+            panic!("stdio create");
+        };
+        let server = config
+            .servers
+            .iter()
+            .find(|server| server.name == "stdio")
+            .unwrap();
+        assert!(!server.definition_json.contains("private-argument"));
+        let masked_definition = server.definition_json.clone();
+        let server_id = server.server_id.clone();
+        let updated = store
+            .update(
+                UpdateMcpServerParams {
+                    expected_config_digest: config.config_digest.clone(),
+                    server_id: server_id.clone(),
+                    definition_json: masked_definition.clone(),
+                },
+                &agents(),
+            )
+            .unwrap();
+        let McpMutationResult::Ok { config, .. } = updated else {
+            panic!("same-path args preserve");
+        };
+        let revealed = store
+            .reveal(RevealMcpServerParams {
+                expected_config_digest: config.config_digest.clone(),
+                server_id: server_id.clone(),
+            })
+            .unwrap();
+        let McpRevealResult::Ok {
+            definition_json, ..
+        } = revealed
+        else {
+            panic!("stdio reveal");
+        };
+        let revealed: serde_json::Value = serde_json::from_str(&definition_json).unwrap();
+        assert_eq!(
+            revealed["mcpServers"]["stdio"]["args"],
+            serde_json::json!(["server.js", "--token", "private-argument"])
+        );
+        let mut invalid: serde_json::Value = serde_json::from_str(&masked_definition).unwrap();
+        invalid["mcpServers"]["stdio"]["args"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(READ_ONLY_MASK));
+        let before = fs::read(store.path()).unwrap();
+        assert!(matches!(
+            store
+                .update(
+                    UpdateMcpServerParams {
+                        expected_config_digest: config.config_digest.clone(),
+                        server_id,
+                        definition_json: invalid.to_string(),
+                    },
+                    &agents()
+                )
+                .unwrap(),
+            McpMutationResult::Invalid { .. }
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { feishuLoginFailureDetail } from '../../shared/feishu-login-progress'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -33,6 +34,14 @@ export function visibleChannelMembers(agents: readonly AgentProfile[]): AgentPro
 }
 
 export function ChannelSettings({ agents }: { agents: AgentProfile[] }): React.JSX.Element {
+  const client = useCampClient()
+  if (!client.channels) return <div className="channel-settings-page">
+    <SettingsPageHeader eyebrow="Settings / Channels" title="渠道" description="渠道连接目前由 Desktop 管理。" />
+  </div>
+  return <NativeChannelSettings agents={agents} />
+}
+
+function NativeChannelSettings({ agents }: { agents: AgentProfile[] }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ChannelSettingsSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

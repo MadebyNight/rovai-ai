@@ -15,10 +15,156 @@ export class SessionRequired extends Error {
 
 export type WorkspaceListing = { name: string; projectPath: string; parentPath: string | null; roots: string[]; directories: { name: string; projectPath: string }[]; nextOffset: number | null }
 
-export const WEB_OPERATIONS = ["skills.content.read", "skills.import.inspect", "skills.import.github.inspect", "skills.import.commit", "skills.setEnabled", "skills.setGroupAssignments", "skills.delete", "mcp.servers.create", "mcp.servers.update", "mcp.servers.setMembers", "mcp.servers.setEnabled", "mcp.servers.delete", "mcp.servers.reveal", "mcp.config.repairPermissions", "mcp.import.scan", "mcp.import.commit", "runtime.startup.get", "runtime.startup.save", "runtime.startup.inspect", "runtime.startup.check", "navigation.findCamp", "agentRunExecution.page", "tasks.create", "tasks.update", "memory.create", "memory.revise", "memory.retire", "memory.reactivate", "memory.forget", "memory.supersede", "memory.review.schedule", "memory.hearthReviewItems.accept", "memory.hearthReviewItems.reject", "memory.export", "automations.create", "automations.update", "automations.close", "automations.delete", "automations.run", "app.info", "navigation.snapshot", "navigation.groupCamps", "navigation.campViewed", "camps.exists", "camps.open", "camps.enter", "camp.messages.page", "camp.messages.around", "camp.messages.find", "members.list", "members.get", "tasks.list", "tasks.get", "memory.list", "memory.get", "memory.hearthReviewItems.list", "automations.list", "automations.get", "automations.runs.list", "runtime.installations.list", "runtime.subsystems.get", "monitoring.snapshot", "health.check", "skills.list", "skills.get", "skills.deliveryGroups.list", "mcp.config.get", "agentRunEvidence.list", "agentRunEvidence.getContent", "camp.composerDraft.get", "camp.composerDraft.save", "camp.composerDraft.discard", "camp.composerDraft.startReply", "camp.composerDraft.cancelReply", "camp.composerDraft.resolveReplyRecipient", "camp.composerDraft.dismissContinuation", "camp.composerDraft.resolveContinuationRecipient", "camp.composerDraft.removeAttachment", "messageQuotes.mutateDraft", "camp.pendingInputs.get", "camp.pendingInputs.edit", "camp.messages.send", "action.approvals.resolve", "agentRuns.cancel", "campTurns.cancel", "commands.reconcile", "camps.create", "camps.creationPreflight", "camps.members.add", "camps.members.remove", "camps.members.removalPreview", "camps.changeDefaultLead", "members.create", "members.update", "members.avatar.set", "members.runtime.set", "members.runtime.clear", "workspaces.inspect", "workspaces.validate", "agentRunImages.read", "agentRunFileChanges.get", "agentRuns.diagnostic.get", "runtime.product.ensure", "runtime.product.check", "runtime.modelCatalog.open", "runtime.discovery.rescan"] as const
+export const WEB_OPERATIONS = [
+  'camps.rename',
+  'camps.delete',
+  'camps.discardPending',
+  'camps.members.fast.check',
+  'camps.members.fast.set',
+  'members.removalPreview',
+  'members.remove',
+  'members.reorder',
+  'agentRuns.resolveRecoveryBlocker',
+  'runtime.subsystems.retry',
+  'notifications.inbox',
+  'notifications.changesSince',
+  'notifications.preference.get',
+  'notifications.preference.update',
+  'notifications.acknowledge',
+  'notifications.acknowledgeVisibleSources',
+  'diagnostics.check',
+  'diagnostics.export',
+  'skills.reconcile',
+  'singleChat.list',
+  'singleChat.get',
+  'singleChat.open',
+  'singleChat.send',
+  'singleChat.end',
+  'singleChat.pendingInputs.edit',
+  'singleChat.composerDraft.removeAttachment',
+  'skills.content.read',
+  'skills.import.inspect',
+  'skills.import.github.inspect',
+  'skills.import.commit',
+  'skills.setEnabled',
+  'skills.setGroupAssignments',
+  'skills.delete',
+  'mcp.servers.create',
+  'mcp.servers.update',
+  'mcp.servers.setMembers',
+  'mcp.servers.setEnabled',
+  'mcp.servers.delete',
+  'mcp.servers.reveal',
+  'mcp.config.repairPermissions',
+  'mcp.import.scan',
+  'mcp.import.commit',
+  'runtime.startup.get',
+  'runtime.startup.save',
+  'runtime.startup.inspect',
+  'runtime.startup.check',
+  'navigation.findCamp',
+  'agentRunExecution.page',
+  'tasks.create',
+  'tasks.update',
+  'memory.create',
+  'memory.revise',
+  'memory.retire',
+  'memory.reactivate',
+  'memory.forget',
+  'memory.supersede',
+  'memory.review.schedule',
+  'memory.hearthReviewItems.accept',
+  'memory.hearthReviewItems.reject',
+  'memory.export',
+  'automations.create',
+  'automations.update',
+  'automations.close',
+  'automations.delete',
+  'automations.run',
+  'app.info',
+  'navigation.snapshot',
+  'navigation.groupCamps',
+  'navigation.campViewed',
+  'camps.exists',
+  'camps.open',
+  'camps.enter',
+  'camp.messages.page',
+  'camp.messages.around',
+  'camp.messages.find',
+  'members.list',
+  'members.get',
+  'tasks.list',
+  'tasks.get',
+  'memory.list',
+  'memory.get',
+  'memory.hearthReviewItems.list',
+  'automations.list',
+  'automations.get',
+  'automations.runs.list',
+  'runtime.installations.list',
+  'runtime.subsystems.get',
+  'monitoring.snapshot',
+  'health.check',
+  'skills.list',
+  'skills.get',
+  'skills.deliveryGroups.list',
+  'mcp.config.get',
+  'agentRunEvidence.list',
+  'agentRunEvidence.getContent',
+  'camp.composerDraft.get',
+  'camp.composerDraft.save',
+  'camp.composerDraft.discard',
+  'camp.composerDraft.startReply',
+  'camp.composerDraft.cancelReply',
+  'camp.composerDraft.resolveReplyRecipient',
+  'camp.composerDraft.dismissContinuation',
+  'camp.composerDraft.resolveContinuationRecipient',
+  'camp.composerDraft.removeAttachment',
+  'messageQuotes.mutateDraft',
+  'camp.pendingInputs.get',
+  'camp.pendingInputs.edit',
+  'camp.messages.send',
+  'action.approvals.resolve',
+  'agentRuns.cancel',
+  'campTurns.cancel',
+  'commands.reconcile',
+  'camps.create',
+  'camps.creationPreflight',
+  'camps.members.add',
+  'camps.members.remove',
+  'camps.members.removalPreview',
+  'camps.changeDefaultLead',
+  'members.create',
+  'members.update',
+  'members.avatar.set',
+  'members.runtime.set',
+  'members.runtime.clear',
+  'workspaces.inspect',
+  'workspaces.validate',
+  'agentRunImages.read',
+  'agentRunFileChanges.get',
+  'agentRuns.diagnostic.get',
+  'runtime.product.ensure',
+  'runtime.product.check',
+  'runtime.modelCatalog.open',
+  'runtime.discovery.rescan',
+] as const
 export type WebOperation = typeof WEB_OPERATIONS[number]
 
 const RECONCILABLE_COMMANDS = new Set<WebOperation>([
+  'camps.rename',
+  'camps.delete',
+  'camps.discardPending',
+  'camps.members.fast.set',
+  'agentRuns.resolveRecoveryBlocker',
+  'members.remove',
+  'members.reorder',
+  'notifications.preference.update',
+  'notifications.acknowledge',
+  'notifications.acknowledgeVisibleSources',
+  'skills.reconcile',
+
+  'singleChat.open', 'singleChat.send', 'singleChat.end', 'singleChat.pendingInputs.edit',
   'skills.import.commit',
   'skills.setEnabled',
   'skills.setGroupAssignments',
@@ -49,7 +195,7 @@ const RECONCILABLE_COMMANDS = new Set<WebOperation>([
 
 export type ConnectionState = 'connecting' | 'live' | 'offline' | 'expired'
 type PendingCommand = { operation: WebOperation; params: unknown; resolve(value: unknown): void; reject(error: unknown): void }
-type PendingUpload = { intent: unknown; data: FormData; resolve(draft: CampComposerDraftView): void; reject(error: unknown): void }
+type PendingUpload = { intent: unknown; data: FormData; resolve(draft: unknown): void; reject(error: unknown): void }
 type CommandReceipt = { state: 'unknown' | 'recorded'; result?: unknown; error?: { code: string; message?: string } }
 
 /** Decodes bounded SSE frames; payloads are invalidations, never private Core events. */
@@ -200,22 +346,30 @@ export class ConsoleClient {
   }
 
   async uploadFile(campId: string, expectedRevision: number, file: File): Promise<CampComposerDraftView> {
+    return this.uploadTo<CampComposerDraftView>(campId, expectedRevision, file)
+  }
+
+  async uploadTo<T>(campId: string, expectedRevision: number, file: File, target?:
+    | { kind: 'camp_pending'; pendingInputId: string; editToken: string }
+    | { kind: 'single_chat'; conversationId: string }
+    | { kind: 'single_chat_pending'; conversationId: string; pendingInputId: string; editToken: string }
+  ): Promise<T> {
     if (!this.authenticated) throw new SessionRequired()
     if (file.size > 20 * 1024 * 1024) throw new Error('单个上传文件不能超过 20 MB。')
     const digest = sha256(new Uint8Array(await file.arrayBuffer()))
     const commandId = newCommandId()
-    const intent = { commandId, campId, expectedRevision, displayName: file.name, byteSize: file.size,
+    const intent = { commandId, campId, expectedRevision, ...(target ? { target } : {}), displayName: file.name, byteSize: file.size,
       sha256: [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('') }
     const data = new FormData(); data.append('intent', JSON.stringify(intent)); data.append('file', file)
     return new Promise((resolve, reject) => {
-      const entry = { intent, data, resolve, reject }
+      const entry: PendingUpload = { intent, data, resolve: value => resolve(value as T), reject }
       this.#pendingUploads.set(commandId, entry); this.#notifyPending()
       void this.#dispatchUpload(commandId, entry)
     })
   }
 
   async #dispatchUpload(commandId: string, entry: PendingUpload, preserveUnknown = false): Promise<void> {
-    await this.#json<{ draft: CampComposerDraftView }>('uploads', { method: 'POST', body: entry.data }).then(result => {
+    await this.#json<{ draft: unknown }>('uploads', { method: 'POST', body: entry.data }).then(result => {
         if (this.#pendingUploads.get(commandId) !== entry) return
         this.#pendingUploads.delete(commandId); this.#notifyPending(); entry.resolve(result.draft)
       }).catch(error => {
@@ -273,7 +427,7 @@ export class ConsoleClient {
       }
       for (const [id, entry] of this.#pendingUploads) {
         try {
-          const result = await this.#json<{ draft?: CampComposerDraftView }>('uploads/reconcile', { method: 'POST', body: JSON.stringify(entry.intent) })
+          const result = await this.#json<{ draft?: unknown }>('uploads/reconcile', { method: 'POST', body: JSON.stringify(entry.intent) })
           if (result.draft && this.#pendingUploads.get(id) === entry) {
             this.#pendingUploads.delete(id); this.#notifyPending(); entry.resolve(result.draft)
           }

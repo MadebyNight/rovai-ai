@@ -1,4 +1,4 @@
-import { createContext, isValidElement, useContext, useEffect, useLayoutEffect, useMemo, useRef, type JSX, type ReactNode } from 'react'
+import { createContext, isValidElement, useContext, useEffect, useState, useLayoutEffect, useMemo, useRef, type JSX, type ReactNode } from 'react'
 import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { FILE_REFERENCE_FRAGMENT, FileReferenceLink, type FileReferenceActivation } from './FileReferenceLink'
@@ -6,7 +6,7 @@ import { ResourceReferenceIcon } from './FilePreviewTabIcon'
 import { remarkRepairCjkUrlTail } from './remark-repair-cjk-url-tail'
 import { parseFileReference } from '../../file-preview-reference'
 import { MarkdownCodeBlock } from './MarkdownCodeBlock'
-import type { ResolvedTheme } from '@contracts'
+import type { FilePreviewBinaryContent, FilePreviewOperationResult, ResolvedTheme } from '@contracts'
 
 type MarkdownTreeNode = {
   type?: string
@@ -99,6 +99,7 @@ export function SafeMarkdown({
   className,
   onFileReference,
   localImageUrl,
+  localImageContent,
   headingTarget,
   onHeadingTargetResult,
   leadingContent,
@@ -110,6 +111,7 @@ export function SafeMarkdown({
   className?: string
   onFileReference?: FileReferenceActivation
   localImageUrl?(rawReference: string): string | null
+  localImageContent?(rawReference: string): Promise<FilePreviewOperationResult<FilePreviewBinaryContent>>
   headingTarget?: string
   onHeadingTargetResult?(found: boolean): void
   /** Trusted inline UI, never parsed from the Markdown source. */
@@ -168,7 +170,7 @@ export function SafeMarkdown({
         ]}
         skipHtml
         disallowedElements={[
-          ...(!localImageUrl ? ['img'] : []),
+          ...(!localImageUrl && !localImageContent ? ['img'] : []),
           'iframe', 'object', 'embed', 'script', 'style'
         ]}
         unwrapDisallowed
@@ -245,11 +247,12 @@ export function SafeMarkdown({
             )
           },
           img({ src, alt }) {
-            if (!localImageUrl || !src) return null
+            if ((!localImageUrl && !localImageContent) || !src) return null
             const rawReference = src.startsWith(FILE_REFERENCE_FRAGMENT)
               ? decodeURIComponent(src.slice(FILE_REFERENCE_FRAGMENT.length))
               : src
-            const safeUrl = localImageUrl(rawReference)
+            if (localImageContent) return <LocalMarkdownImage reference={rawReference} alt={alt ?? ''} read={localImageContent} />
+            const safeUrl = localImageUrl?.(rawReference)
             return safeUrl ? <img src={safeUrl} alt={alt ?? ''} loading="lazy" /> : null
           }
         }}
@@ -258,7 +261,7 @@ export function SafeMarkdown({
         {children}
       </Markdown>
     )
-  }, [children, fileReferencesEnabled, localImageUrl, hasLeadingContent, inlineLeadingContent, mode, theme])
+  }, [children, fileReferencesEnabled, localImageUrl, localImageContent, hasLeadingContent, inlineLeadingContent, mode, theme])
 
   return (
     <LeadingMarkdownContentContext.Provider value={leadingContent}>
@@ -274,4 +277,36 @@ export function SafeMarkdown({
       </div>
     </LeadingMarkdownContentContext.Provider>
   )
+}
+
+function LocalMarkdownImage({ reference, alt, read }: {
+  reference: string; alt: string
+  read(reference: string): Promise<FilePreviewOperationResult<FilePreviewBinaryContent>>
+}): React.JSX.Element {
+  const root = useRef<HTMLSpanElement>(null)
+  const [visible, setVisible] = useState(false)
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    if (!root.current || typeof IntersectionObserver === 'undefined') { setVisible(true); return }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect() }
+    }, { rootMargin: '160px' })
+    observer.observe(root.current)
+    return () => observer.disconnect()
+  }, [])
+  useEffect(() => {
+    if (!visible) return
+    let active = true
+    let objectUrl: string | null = null
+    setUrl(null); setFailed(false)
+    void read(reference).then(result => {
+      if (!active) return
+      if (!result.ok) { setFailed(true); return }
+      objectUrl = URL.createObjectURL(new Blob([Uint8Array.from(result.value.bytes)], { type: result.value.mime }))
+      setUrl(objectUrl)
+    }).catch(() => { if (active) setFailed(true) })
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [reference, read, visible])
+  return <span ref={root}>{url ? <img src={url} alt={alt} loading="lazy" /> : failed ? <span role="status">{alt || '图片'}（暂不可读）</span> : <span>{alt || '图片'}</span>}</span>
 }

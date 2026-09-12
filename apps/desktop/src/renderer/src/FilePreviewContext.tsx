@@ -124,6 +124,7 @@ export interface FilePreviewContextValue {
   move(tabId: string, direction: -1 | 1): void
   close(tabId: string): void
   closeMany(tabIds: string[]): void
+  download(tabId: string): Promise<FilePreviewOperationResult<{ started: true }>>
   openInSystem(tabId: string): Promise<FilePreviewOperationResult<{ opened: true }>>
   revealInFolder(tabId: string): Promise<FilePreviewOperationResult<{ revealed: true }>>
   copyPath(tabId: string): Promise<FilePreviewOperationResult<{ copied: true }>>
@@ -132,6 +133,8 @@ export interface FilePreviewContextValue {
   retry(tabId: string): Promise<void>
   changePage(tabId: string, direction: -1 | 1): Promise<void>
 }
+
+const FilePreviewApiContext = createContext<FilePreviewApi | null>(null)
 
 const FilePreviewContext = createContext<FilePreviewContextValue | null>(null)
 
@@ -965,6 +968,13 @@ export function FilePreviewProvider({
     return tab?.kind === 'file' ? tab.file : null
   }, [])
 
+  const download = useCallback(async (tabId: string) => {
+    const file = fileForAction(tabId)
+    return file && api.download
+      ? api.download({ handleId: file.handleId, expectedGeneration: file.contentGeneration })
+      : { ok: false as const, error: errorFromUnknown() }
+  }, [api, fileForAction])
+
   const openInSystem = useCallback(async (tabId: string) => {
     const file = fileForAction(tabId)
     return file
@@ -1118,6 +1128,7 @@ export function FilePreviewProvider({
     move,
     close,
     closeMany,
+    download,
     openInSystem,
     revealInFolder,
     copyPath,
@@ -1125,14 +1136,14 @@ export function FilePreviewProvider({
     reopen,
     retry,
     changePage
-  }), [activate, activeTab, activeTabId, changePage, close, closeMany, copyPath, hidePane, move, open, openFileChanges, openFeedback, openInSystem, paneVisible, reload, reopen, resolvedTheme, revealInFolder, retry, selectChangedFile, showPane, tabs])
+  }), [activate, activeTab, activeTabId, changePage, close, closeMany, copyPath, hidePane, move, open, openFileChanges, openFeedback, download, openInSystem, paneVisible, reload, reopen, resolvedTheme, revealInFolder, retry, selectChangedFile, showPane, tabs])
 
   return (
-    <FilePreviewContext.Provider value={value}>
+    <FilePreviewApiContext.Provider value={api}><FilePreviewContext.Provider value={value}>
       <FilePreviewLayoutProvider campId={campId} visible={paneVisible}>
         <FileFindProvider activeTabId={activeTabId} visible={paneVisible}>{children}</FileFindProvider>
       </FilePreviewLayoutProvider>
-    </FilePreviewContext.Provider>
+    </FilePreviewContext.Provider></FilePreviewApiContext.Provider>
   )
 }
 
@@ -1144,4 +1155,10 @@ export function useFilePreview(): FilePreviewContextValue {
 
 export function useOptionalFilePreview(): FilePreviewContextValue | null {
   return useContext(FilePreviewContext)
+}
+
+export function useFilePreviewApi(): FilePreviewApi {
+  const api = useContext(FilePreviewApiContext)
+  if (!api) throw new Error('FilePreviewApi is unavailable')
+  return api
 }

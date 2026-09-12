@@ -453,8 +453,8 @@ fn publish_managed_member_avatar(
     crop: MemberAvatarCrop,
 ) -> std::result::Result<ManagedMemberAvatarSummary, MemberAvatarImportError> {
     let asset_id = asset_id.hyphenated().to_string();
-    let source_manifest = manifest_file("source.png", source_width, source_height, &source_png);
-    let icon_manifest = manifest_file("icon-192.png", ICON_EDGE, ICON_EDGE, &icon_png);
+    let source_manifest = manifest_file("source.png", source_width, source_height, source_png);
+    let icon_manifest = manifest_file("icon-192.png", ICON_EDGE, ICON_EDGE, icon_png);
     let root = data_dir.join("member-avatars");
     ensure_private_directory(&root)?;
     let final_directory = root.join(&asset_id);
@@ -484,8 +484,8 @@ fn publish_managed_member_avatar(
     remove_scoped_temporary_path(&temporary_directory)?;
     create_private_directory(&temporary_directory)?;
     let write_result = (|| {
-        write_private_file(&temporary_directory.join("source.png"), &source_png)?;
-        write_private_file(&temporary_directory.join("icon-192.png"), &icon_png)?;
+        write_private_file(&temporary_directory.join("source.png"), source_png)?;
+        write_private_file(&temporary_directory.join("icon-192.png"), icon_png)?;
         let manifest = AvatarManifestV1 {
             schema_version: 1,
             asset_id: asset_id.clone(),

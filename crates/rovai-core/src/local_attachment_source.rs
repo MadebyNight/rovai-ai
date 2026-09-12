@@ -436,15 +436,6 @@ pub fn load_source_attachment_for_client(
     client: &crate::draft_client::DraftClient,
 ) -> Result<Option<LocalAttachmentSourceRef>> {
     let connection = database.connection();
-    if !client.is_desktop()
-        && matches!(
-            locator,
-            LocalAttachmentOwnerLocator::SingleChatComposer { .. }
-                | LocalAttachmentOwnerLocator::SingleChatPendingEdit { .. }
-        )
-    {
-        anyhow::bail!("Private Draft client scope is not admitted yet");
-    }
     let json = match locator {
         LocalAttachmentOwnerLocator::Composer { camp_id, .. } => connection
             .query_row(
@@ -499,9 +490,9 @@ pub fn load_source_attachment_for_client(
                 JOIN conversation ON conversation.id = draft.conversation_id
                 WHERE conversation.camp_id = ?1
                   AND conversation.id = ?2
-                  AND conversation.kind = 'single_chat'
+                  AND conversation.kind = 'single_chat' AND draft.client_id = ?3
                 "#,
-                params![camp_id, conversation_id],
+                params![camp_id, conversation_id, client.id()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,
@@ -543,9 +534,9 @@ pub fn load_source_attachment_for_client(
                   AND conversation.kind = 'single_chat'
                   AND edit.conversation_id = conversation.id
                   AND edit.pending_input_id = ?3
-                  AND edit.edit_token = ?4
+                  AND edit.edit_token = ?4 AND edit.client_id = ?5
                 "#,
-                params![camp_id, conversation_id, pending_input_id, edit_token],
+                params![camp_id, conversation_id, pending_input_id, edit_token, client.id()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,

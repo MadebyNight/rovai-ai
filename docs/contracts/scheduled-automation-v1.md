@@ -8,7 +8,7 @@ last_updated: 2026-09-07
 
 # Scheduled Automation v1
 
-本合同定义 Desktop/Core 内的本机定时 Automation。它与普通用户的 `rovai app` IPC Automation 是不同领域；
+本合同定义共享 Rust Host/Core 内的定时 Automation，Desktop 与 Web 共用业务操作。它与普通用户的 `rovai app` IPC Automation 是不同领域；
 每次执行仍复用普通 Camp、CampTurn、AgentRun、Runtime 和渠道 Bot。
 
 ## 1. 定义与执行快照

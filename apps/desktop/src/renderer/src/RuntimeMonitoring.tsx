@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { RuntimeUsageChart, USAGE_CHART_SERIES } from './RuntimeUsageChart'
 import { readErrorMessage } from './error-message'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -72,6 +73,8 @@ export function RuntimeMonitoring({
 }: {
   platform?: NodeJS.Platform
 } = {}): React.JSX.Element {
+  const client = useCampClient()
+  const [exported, setExported] = useState(false)
   const [filter, setFilter] = useState<MonitoringFilter>({ range: '24h' })
   const [snapshot, setSnapshot] = useState<RuntimeUsageSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
@@ -125,7 +128,7 @@ export function RuntimeMonitoring({
       setRefreshError(null)
     }
     try {
-      const result = await window.rovai.request<RuntimeUsageSnapshot>(
+      const result = await client.request<RuntimeUsageSnapshot>(
         'monitoring.snapshot',
         requestedFilter
       )
@@ -156,7 +159,7 @@ export function RuntimeMonitoring({
         setLoading(false)
       }
     }
-  }, [filter])
+  }, [client, filter])
   loadSnapshotRef.current = (foreground, urgent = false) => {
     void loadSnapshot(foreground, urgent)
   }
@@ -206,15 +209,17 @@ export function RuntimeMonitoring({
         schedule(true)
       }
     }
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (shouldRefreshMonitoringEvent(event.method)) {
         schedule(event.method === 'agent_run.terminal')
       }
     })
+    const unlisten = client.onInvalidated?.(() => schedule(true))
     document.addEventListener('visibilitychange', onVisibilityChange)
     startPoll()
     return () => {
-      unsubscribe()
+      unsubscribe?.()
+      unlisten?.()
       document.removeEventListener('visibilitychange', onVisibilityChange)
       stopPoll()
       if (eventTimer !== null) clearTimeout(eventTimer)
@@ -234,17 +239,19 @@ export function RuntimeMonitoring({
 
   const exportData = useCallback(async () => {
     setExporting(true)
+    setExported(false)
     setExportPath(null)
     setExportError(null)
     try {
-      const path = await window.rovai.exportMonitoring(filter)
-      if (path) setExportPath(path)
+      const result = await client.exportMonitoring(filter)
+      setExported(result.exported)
+      if (result.path) setExportPath(result.path)
     } catch (reason) {
       setExportError(errorMessage(reason))
     } finally {
       setExporting(false)
     }
-  }, [filter])
+  }, [client, filter])
 
   const isEmpty = snapshot !== null && !hasRuntimeUsage(snapshot)
 
@@ -273,10 +280,10 @@ export function RuntimeMonitoring({
           disabled={loading}
           onChange={updateFilter}
         />
-        {exportPath && (
+        {exported && (
           <div className="monitoring-export-notice" role="status">
-            <span>导出已保存。</span>
-            <button className="quiet-button compact" type="button" onClick={() => void window.rovai.revealMonitoringExport(exportPath)}>{revealInFileManagerLabel(platform)}</button>
+            <span>{exportPath ? '导出已保存。' : '下载已开始。'}</span>
+            <>{exportPath && client.revealMonitoringExport && <button className="quiet-button compact" type="button" onClick={() => void client.revealMonitoringExport?.(exportPath)}>{revealInFileManagerLabel(platform)}</button>}</>
           </div>
         )}
         {exportError && (

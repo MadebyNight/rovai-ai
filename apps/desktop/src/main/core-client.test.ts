@@ -424,7 +424,6 @@ while IFS= read -r request; do :; done
         expect(launch).toContain('--automation-scheduler-epoch 1')
         expect(launch).toContain('--automation-recovery-boundary 2026-09-05T09:00:00.000Z')
 
-        await client.tickAutomationScheduler('2026-09-05T09:30:00.000Z')
         await client.notifyAutomationSystemSuspending()
         await client.notifyAutomationSystemResumed('2026-09-05T10:00:00.000Z')
         const requests = readFileSync(requestPath, 'utf8')
@@ -432,12 +431,6 @@ while IFS= read -r request; do :; done
           .split('\n')
           .map((line) => JSON.parse(line))
         expect(requests).toMatchObject([{
-          method: 'automations.schedulerTick',
-          params: {
-            epoch: 1,
-            now: '2026-09-05T09:30:00.000Z'
-          }
-        }, {
           method: 'automations.schedulerControl',
           params: {
             epoch: 2,

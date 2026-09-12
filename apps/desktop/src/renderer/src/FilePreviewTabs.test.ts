@@ -10,7 +10,7 @@ import {
 import { FilePreviewPane } from './FilePreviewPane'
 import { FilePreviewTabs } from './FilePreviewTabs'
 
-vi.mock('./FilePreviewContext', () => ({ useFilePreview: vi.fn() }))
+vi.mock('./FilePreviewContext', () => ({ useFilePreview: vi.fn(), useFilePreviewApi: () => ({}) }))
 
 function tab(id: string): FilePreviewTabModel {
   const file = {
@@ -98,6 +98,7 @@ beforeEach(() => {
     move: vi.fn(),
     close: vi.fn(),
     closeMany: vi.fn(),
+    download: vi.fn(),
     openInSystem: vi.fn(),
     revealInFolder: vi.fn(),
     copyPath: vi.fn(),

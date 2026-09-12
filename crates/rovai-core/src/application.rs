@@ -647,7 +647,6 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
             | "camp.messages.send"
             | "userAutomation.camp.send"
             | "automations.schedulerControl"
-            | "automations.schedulerTick"
             | "automations.run"
             | "camp.sourceAttachments.addFromPath"
             | "camp.pendingInputs.addSourceAttachmentFromPath"
@@ -1306,13 +1305,6 @@ pub struct AutomationSchedulerControl {
 }
 
 type AutomationSchedulerControlParams = AutomationSchedulerControl;
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AutomationSchedulerTickParams {
-    epoch: u64,
-    now: chrono::DateTime<chrono::Utc>,
-}
 
 fn apply_automation_scheduler_control(
     current: &mut Option<AutomationSchedulerControl>,
@@ -6106,14 +6098,26 @@ impl Core {
                     params.source,
                 )?;
                 Ok(
-                    json!({"receipt":execution.result, "replayed":execution.replayed, "draft":CampAttachmentStore::for_client(&self.data_dir, request.client.clone()).load_draft(&database, &params.intent.camp_id)?}),
+                    json!({"receipt":execution.result, "replayed":execution.replayed, "draft":rovai_core::web_upload::snapshot(&database, &self.data_dir, &request.client, &params.intent)?}),
                 )
             }
             "host.upload.reconcile" => {
-                let intent = serde_json::from_value(request.params.clone())?;
+                let intent: rovai_core::web_upload::UploadIntent =
+                    serde_json::from_value(request.params.clone())?;
                 let database = self.database.lock().await;
-                let result = rovai_core::web_upload::reconcile(&database, &request.client, intent)?;
-                Ok(json!({"receipt":result.map(|execution| execution.result)}))
+                let result =
+                    rovai_core::web_upload::reconcile(&database, &request.client, intent.clone())?;
+                let draft = if result.is_some() {
+                    rovai_core::web_upload::snapshot(
+                        &database,
+                        &self.data_dir,
+                        &request.client,
+                        &intent,
+                    )?
+                } else {
+                    Value::Null
+                };
+                Ok(json!({"receipt":result.map(|execution| execution.result), "draft":draft}))
             }
             "runtime.networkRecovery.wake" => {
                 let woken = self
@@ -6138,23 +6142,6 @@ impl Core {
                     "applied": applied,
                     "epoch": current.as_ref().map(|value| value.epoch),
                 }))
-            }
-            "automations.schedulerTick" => {
-                let params: AutomationSchedulerTickParams =
-                    serde_json::from_value(request.params.clone())?;
-                let current = self.automation_scheduler_control.read().await;
-                let Some(control) = *current else {
-                    return Ok(json!({ "processed": false }));
-                };
-                if control.paused || control.epoch != params.epoch {
-                    return Ok(json!({ "processed": false }));
-                }
-                // The Desktop timestamp is fixed when the tick is sent. If the
-                // process sleeps while this request is in flight, it cannot turn
-                // into a post-resume claim with the older recovery boundary.
-                self.process_automations(params.now, control.recovery_boundary)
-                    .await;
-                Ok(json!({ "processed": true }))
             }
             "automations.list" => {
                 let params: AutomationListQuery = serde_json::from_value(request.params.clone())?;
@@ -8015,7 +8002,8 @@ impl Core {
                 let params: CampIdParams = serde_json::from_value(request.params.clone())?;
                 let database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    SingleChatService::default().list_active(&database, params.camp_id.as_str())?,
+                    SingleChatService::for_client(request.client.clone())
+                        .list_active(&database, params.camp_id.as_str())?,
                 )?)
             }
             "singleChat.get" => {
@@ -8023,7 +8011,8 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    SingleChatService::default().snapshot(&database, &params.conversation_id)?,
+                    SingleChatService::for_client(request.client.clone())
+                        .snapshot(&database, &params.conversation_id)?,
                 )?)
             }
             "singleChat.sourceAttachments.addFromPath" => {
@@ -8037,7 +8026,7 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let snapshot = {
                     let mut database = self.database.lock().await;
-                    SingleChatService::default().remove_source_attachment(
+                    SingleChatService::for_client(request.client.clone()).remove_source_attachment(
                         &mut database,
                         &params.conversation_id,
                         params.expected_draft_revision,
@@ -8065,15 +8054,21 @@ impl Core {
                 .await
             }
             "singleChat.pendingInputs.edit" => {
-                let params: UserCommandParams<EditSingleChatPendingInputCommand> =
+                let mut params: UserCommandParams<EditSingleChatPendingInputCommand> =
                     serde_json::from_value(request.params.clone())?;
+                params.command.draft_client = request.client.clone();
                 let camp_id = params.command.camp_id.clone();
                 let conversation_id = params.command.conversation_id.clone();
                 let mut database = self.database.lock().await;
-                let execution = SingleChatService::default().edit_pending_input(
-                    &mut database,
-                    &user_camp_command_envelope(params.command_id, camp_id.clone(), params.command),
-                )?;
+                let execution = SingleChatService::for_client(request.client.clone())
+                    .edit_pending_input(
+                        &mut database,
+                        &user_camp_command_envelope(
+                            params.command_id,
+                            camp_id.clone(),
+                            params.command,
+                        ),
+                    )?;
                 drop(database);
                 if execution.result.status != CommandResultStatus::Rejected && !execution.replayed {
                     emit(
@@ -8089,11 +8084,12 @@ impl Core {
                 Ok(serde_json::to_value(execution.result)?)
             }
             "singleChat.open" => {
-                let params: UserCommandParams<OpenSingleChatCommand> =
+                let mut params: UserCommandParams<OpenSingleChatCommand> =
                     serde_json::from_value(request.params.clone())?;
+                params.command.draft_client = request.client.clone();
                 let camp_id = params.command.camp_id.clone();
                 let mut database = self.database.lock().await;
-                let execution = SingleChatService::default().open(
+                let execution = SingleChatService::for_client(request.client.clone()).open(
                     &mut database,
                     &user_camp_command_envelope(params.command_id, camp_id.clone(), params.command),
                 )?;
@@ -8109,11 +8105,12 @@ impl Core {
                 Ok(serde_json::to_value(execution.result)?)
             }
             "singleChat.send" => {
-                let params: UserCommandParams<SendSingleChatMessageCommand> =
+                let mut params: UserCommandParams<SendSingleChatMessageCommand> =
                     serde_json::from_value(request.params.clone())?;
+                params.command.draft_client = request.client.clone();
                 let camp_id = params.command.camp_id.clone();
                 let mut database = self.database.lock().await;
-                let execution = SingleChatService::default().send(
+                let execution = SingleChatService::for_client(request.client.clone()).send(
                     &mut database,
                     &user_camp_command_envelope(params.command_id, camp_id.clone(), params.command),
                 )?;
@@ -8133,7 +8130,7 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let camp_id = params.command.camp_id.clone();
                 let mut database = self.database.lock().await;
-                let execution = SingleChatService::default().end(
+                let execution = SingleChatService::for_client(request.client.clone()).end(
                     &mut database,
                     &user_camp_command_envelope(params.command_id, camp_id.clone(), params.command),
                 )?;
@@ -8687,10 +8684,6 @@ impl Core {
                     rovai_core::message_quote::MutateQuoteDraftCommand,
                 > = serde_json::from_value(request.params.clone())?;
                 params.command.draft_client = request.client.clone();
-                anyhow::ensure!(
-                    request.client.is_desktop() || params.command.conversation_id.is_none(),
-                    "Private Draft client scope is not admitted yet"
-                );
                 let camp_id = params.command.camp_id.clone();
                 let conversation_id = params.command.conversation_id.clone();
                 let mut database = self.database.lock().await;
@@ -8702,8 +8695,8 @@ impl Core {
                     anyhow::bail!("{}", execution.result.code);
                 }
                 if let Some(conversation_id) = conversation_id {
-                    let snapshot =
-                        SingleChatService::default().snapshot(&database, &conversation_id)?;
+                    let snapshot = SingleChatService::for_client(request.client.clone())
+                        .snapshot(&database, &conversation_id)?;
                     emit(
                         &self.output,
                         "single_chat.changed",
@@ -21592,6 +21585,7 @@ async fn process_agent_run_scheduler(
     output: mpsc::UnboundedSender<String>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
+    let mut automation_clock = crate::automation_clock::AutomationClock::start();
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut mcp_cleanup_interval = tokio::time::interval_at(
@@ -21607,6 +21601,16 @@ async fn process_agent_run_scheduler(
     loop {
         tokio::select! {
             _ = interval.tick() => {
+                {
+                    // Hold the same fence used by native suspend/resume control.
+                    let control = core.automation_scheduler_control.read().await;
+                    if let Some((now, boundary)) = automation_clock.tick()
+                        && !control.is_some_and(|value| value.paused)
+                    {
+                        let boundary = control.map_or(boundary, |value| boundary.max(value.recovery_boundary));
+                        core.process_automations(now, boundary).await;
+                    }
+                }
                 core.expire_elapsed_execution_budgets(&output).await;
                 core.dispatch_runtime_deliveries(&output).await;
                 core.dispatch_agent_run_cancellations(&output).await;

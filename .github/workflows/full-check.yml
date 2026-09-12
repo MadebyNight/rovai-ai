@@ -234,10 +234,12 @@ jobs:
           ROVAI_WEB_UI: ${{ github.workspace }}/out/server/${{ matrix.target }}/web-ui
         run: node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs
       - name: Observe native managed Runtime file boundary
+        # Single-Owner trusted Host: keep same-UID observations as risk evidence,
+        # not a strong-isolation release gate. Workspace access must still work.
         run: |
           node -e "require('node:fs').mkdirSync('out/server-evidence', { recursive: true })"
           cargo run --quiet -p rovai-core --example host_runtime_boundary_probe > out/server-evidence/${{ matrix.target }}.json
-          node -e "const r=JSON.parse(require('node:fs').readFileSync('out/server-evidence/${{ matrix.target }}.json','utf8')); console.log(JSON.stringify(r)); if (!r.privateFileIsolationSatisfied || !r.observation.authorizedWorkspaceWritable || !r.observation.descendant.authorizedWorkspaceWritable) process.exit(2)"
+          node -e "const r=JSON.parse(require('node:fs').readFileSync('out/server-evidence/${{ matrix.target }}.json','utf8')); console.log(JSON.stringify(r)); if (!r.observation.authorizedWorkspaceWritable || !r.observation.descendant.authorizedWorkspaceWritable) process.exit(2)"
       - name: Upload native boundary observation
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -19,7 +19,6 @@ import type {
 type CoreInternalMethod =
   | 'core.shutdown'
   | 'automations.schedulerControl'
-  | 'automations.schedulerTick'
 
 export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate'
 
@@ -324,7 +323,6 @@ export class CoreClient {
   #skillLibraryRoot: string | null = null
   #mcpConfigPath: string | null = null
   #automationSchedulerControl: AutomationSchedulerControl
-  #automationTickPending = false
   readonly #dataDirectory: string | null
   readonly #runtimeCampFilesRoot: string | null
   #startupBlock: { error: StructuredError; phase: StartupPhase } | null = null
@@ -552,28 +550,6 @@ export class CoreClient {
       paused: false
     }
     await this.#publishAutomationSchedulerControl()
-  }
-
-  async tickAutomationScheduler(now: string): Promise<void> {
-    if (
-      this.#stopping
-      || this.#automationSchedulerControl.paused
-      || this.#automationTickPending
-    ) return
-    const active = this.#child
-    if (!active?.ready || this.#snapshot.fullCoreState !== 'ready') return
-    const epoch = this.#automationSchedulerControl.epoch
-    this.#automationTickPending = true
-    try {
-      await this.#sendRequest(
-        active,
-        'automations.schedulerTick',
-        { epoch, now },
-        5_000
-      )
-    } finally {
-      this.#automationTickPending = false
-    }
   }
 
   shutdown(): Promise<CoreShutdownResult> {

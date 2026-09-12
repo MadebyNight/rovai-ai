@@ -45,6 +45,7 @@ export async function launchAcceptanceBrowser({ executable, args, env = process.
     const pending = new Map()
     const errors = []
     const responses = []
+    const fileChoosers = []
     socket.addEventListener('message', event => {
       const message = JSON.parse(String(event.data))
       const request = pending.get(message.id)
@@ -56,6 +57,7 @@ export async function launchAcceptanceBrowser({ executable, args, env = process.
       if (message.method === 'Runtime.exceptionThrown') {
         errors.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text)
       }
+      if (message.method === 'Page.fileChooserOpened') fileChoosers.push(message.params)
       if (message.method === 'Network.responseReceived') {
         const { response, requestId } = message.params
         const path = new URL(response.url).pathname
@@ -85,18 +87,27 @@ export async function launchAcceptanceBrowser({ executable, args, env = process.
       return reply.result.value
     }
     return {
-      send, evaluate, errors, responses, close,
+      send, evaluate, errors, responses, fileChoosers, close,
       async key(key) {
         const params = { key, code: key, windowsVirtualKeyCode: key === 'Enter' ? 13 : 27 }
         await send('Input.dispatchKeyEvent', { type: 'keyDown', ...params })
         await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
       },
       async click(expression) {
-        const point = await evaluate(`(() => { const e = ${expression}; if (!e) throw Error('Click target missing: ' + ${JSON.stringify(expression)}); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 } })()`)
+        let point = await evaluate(`(() => { const e = ${expression}; if (!e) throw Error('Click target missing: ' + ${JSON.stringify(expression)}); e.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 } })()`)
         // Native pointers enter the target before pressing. This also reveals
         // production hover controls whose pointer-events are otherwise disabled.
         await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
         await evaluate('new Promise(resolve => requestAnimationFrame(() => resolve(true)))')
+        // Panel expansion can move a target after scrolling. Press its settled
+        // location rather than the pre-layout position of another control.
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await pause(50)
+          const next = await evaluate(`(()=>{const r=(${expression}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+          const settled = Math.abs(next.x-point.x)<1 && Math.abs(next.y-point.y)<1
+          point = next
+          if (settled) break
+        }
         await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
         await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
       },

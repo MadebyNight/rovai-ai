@@ -122,14 +122,20 @@ Message transfers use the existing Core transactions. OS cleanup can make histor
 store is introduced; [Camp Attachment v9](camp-attachment-v9.md) and Agent Managed artifacts keep their lifetimes.
 
 `POST /files` and `POST /attachments` use exact Core owner locators or Core-resolved workspace/evidence sources. Every
-read revalidates source ownership; opaque handles/reopen tokens are scoped to the editor and Web instance. Canonical
-containment plus handle-based no-follow opening prevents path replacement from becoming an arbitrary Host read.
+read revalidates source ownership; opaque handles/reopen tokens are scoped to the editor and Web instance. An exact external file admitted by Core follows Desktop's existing file semantics: its canonical parent is an ephemeral
+child/watch boundary, not a directory grant. Relative resources are resolved under that boundary; canonical checks and
+handle-based no-follow opening prevent replacement from changing the retained source.
 There are at most 128 handles per server and 32 per editor. Reads have byte and generation bounds. Download uses an
 octet-stream response with an encoded original filename; credentials never enter the download URL.
 
 The initial resource adapter supports bounded UTF-8 text/Markdown and PNG/JPEG/WebP. HTML/SVG use text or download,
-never executable preview. Paged large text, relative resources and external-change watching remain implementation
-gaps; they are not declared permanent Web exclusions. Static assets remain separate from user files.
+never executable preview. UTF-8 text above 2 MiB is paged (256 KiB pages, 20 MiB read bound); byte offsets preserve
+Unicode scalars. Child links retain the Core-authorized parent source; project children receive independent workspace
+restore requests, matching Desktop. Local PNG/JPEG/WebP images are read lazily through the same authenticated,
+generation-bound parent. The browser creates only in-memory object URLs, revoked on unmount. File metadata polling
+marks open tabs changed; reload reauthorizes the source and replaces its generation. Native open/reveal actions are
+absent, while download and displayed-path copy use browser controls. Attachment storage paths stay hidden.
+Static assets remain separate from user files.
 
 ## Shared presentation and verification
 
@@ -168,3 +174,26 @@ by the editor control; it never enters list refreshes, SSE or command receipts. 
 existing config-digest CAS. A lost result requires rereading authority and resolving a conflict, without silently claiming
 success or automatically retrying a configuration change. SQLite-backed Task/Memory/Automation/Skill commands instead
 use their existing durable gateway receipts and the original command ID.
+
+## 私聊与其他上传目标
+
+Migration 154 将 Single Chat Draft 改为 `(conversation_id, client_id)`，既有记录归 Desktop，
+Pending 的来源与活动编辑也记录后端 client。认证后的 Owner 共享已提交的私聊会话，但未提交附件、引用、
+编辑令牌和 Pending working refs 只通过已校验的编辑身份读取；命令的幂等摘要包含该身份。
+Desktop 的默认身份不增加旧命令的序列化字段。结束私聊沿用 Core 的线性化点，清除该会话全部客户端 Draft。
+
+`singleChat.open/get/list/send/end`、原 Pending 编辑和移除草稿附件均调用同一 SingleChatService。
+上传 intent 保持原 Camp 默认形状，显式 target 可选择 Camp Pending、Single Chat Draft 或 Single Chat Pending。
+四种目标共用上传限额、摘要校验、弱持久 Source Ref 和命令回执；目标的版本、编辑令牌和 client 检查发生在原领域事务中。
+上传回执查询不重新派发；返回对应客户端当前授权视图。SSE 只发失效通知，共享私聊页面重读列表／当前快照，
+不把失效消息解释为私有 CoreEvent。正文输入仍由当前页面保存，同 Owner 重新认证不重挂业务子树。
+
+
+Shared administration now includes Camp rename/delete/discard, member reorder/removal preview/removal, Camp Fast
+configuration, accepted-input recovery decisions, notifications, monitoring, diagnostics and Skill reconciliation.
+Each public method is individually admitted; durable commands use their existing Core envelope and receipt lookup,
+including after Camp deletion. No host shutdown, token management, raw source resolver or source-path ingress RPC is
+made public. Diagnostics download uses Core's redacted v5 export; monitoring uses the existing filtered snapshot.
+Notification preferences and acknowledgements belong to the single Owner; heads-up queues, focus and visible-source
+observations remain per browser. Invalidations reread authorized notification changes/preference; they are not CoreEvents.
+Channels remain the explicitly deferred Desktop integration; Web renders that capability state without invoking Electron.

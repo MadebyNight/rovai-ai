@@ -161,6 +161,7 @@ pub enum QuoteStorage<'a> {
     CampEdit,
     CampMessage,
     PrivateDraft,
+    ClientPrivateDraft(&'a crate::draft_client::DraftClient),
     PrivatePending,
     PrivateEdit,
     PrivateMessage,
@@ -168,8 +169,10 @@ pub enum QuoteStorage<'a> {
 impl QuoteStorage<'_> {
     fn client_filter(self) -> String {
         match self {
-            Self::CampDraft => " AND client_id = 'desktop'".to_owned(),
-            Self::ClientCampDraft(client) => format!(" AND client_id = '{}'", client.sql_key()),
+            Self::CampDraft | Self::PrivateDraft => " AND client_id = 'desktop'".to_owned(),
+            Self::ClientCampDraft(client) | Self::ClientPrivateDraft(client) => {
+                format!(" AND client_id = '{}'", client.sql_key())
+            }
             _ => String::new(),
         }
     }
@@ -179,7 +182,7 @@ impl QuoteStorage<'_> {
             Self::CampPending => "pending_camp_input",
             Self::CampEdit => "pending_input_edit_session",
             Self::CampMessage => "camp_message",
-            Self::PrivateDraft => "single_chat_composer_draft",
+            Self::PrivateDraft | Self::ClientPrivateDraft(_) => "single_chat_composer_draft",
             Self::PrivatePending => "single_chat_pending_input",
             Self::PrivateEdit => "single_chat_pending_input_edit_session",
             Self::PrivateMessage => "conversation_message",
@@ -188,7 +191,9 @@ impl QuoteStorage<'_> {
     fn key(self) -> &'static str {
         match self {
             Self::CampDraft | Self::ClientCampDraft(_) | Self::CampEdit => "camp_id",
-            Self::PrivateDraft | Self::PrivateEdit => "conversation_id",
+            Self::PrivateDraft | Self::ClientPrivateDraft(_) | Self::PrivateEdit => {
+                "conversation_id"
+            }
             _ => "id",
         }
     }
@@ -687,7 +692,7 @@ pub fn mutate_draft(
                 let valid: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM conversation WHERE id=?1 AND camp_id=?2 AND kind='single_chat' AND ended_at IS NULL)",
                     params![conversation_id, command.camp_id], |row| row.get(0))?;
                 ensure!(valid, "quote.owner_unavailable");
-                (QuoteStorage::PrivateDraft, conversation_id)
+                (QuoteStorage::ClientPrivateDraft(&command.draft_client), conversation_id)
             }
             None => {
                 let valid: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM camp WHERE id=?1)", [&command.camp_id], |row| row.get(0))?;
@@ -704,7 +709,7 @@ pub fn mutate_draft(
             transaction.execute("INSERT INTO camp_composer_draft(camp_id, body, structured_content_json, revision, created_at, updated_at, expires_at, client_id) VALUES(?1,'',?2,1,?3,?3,?4,?5) ON CONFLICT(camp_id, client_id) DO NOTHING",
                 params![owner_id, crate::camp_content::EMPTY_COMPOSER_DOCUMENT_JSON, now.to_rfc3339(), (now + chrono::Duration::days(crate::camp_attachment::DRAFT_RETENTION_DAYS)).to_rfc3339(), command.draft_client.id()])?;
         } else {
-            transaction.execute("INSERT OR IGNORE INTO single_chat_composer_draft(conversation_id, revision, source_attachments_json, updated_at) VALUES(?1,0,'[]',?2)", params![owner_id, now.to_rfc3339()])?;
+            transaction.execute("INSERT OR IGNORE INTO single_chat_composer_draft(conversation_id, revision, source_attachments_json, updated_at, client_id) VALUES(?1,0,'[]',?2,?3)", params![owner_id, now.to_rfc3339(), command.draft_client.id()])?;
         }
         mutate_quotes(transaction, storage, owner_id, &command.camp_id, command.conversation_id.as_deref(), &command.action)?;
         transaction.execute(&format!("UPDATE {} SET revision=?3, updated_at=?2 WHERE {}=?1{}", storage.table(), storage.key(), storage.client_filter()), params![owner_id, now.to_rfc3339(), revision + 1])?;

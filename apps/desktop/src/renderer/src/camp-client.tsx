@@ -7,9 +7,13 @@ import { desktopCampClient } from './desktop-camp-client'
  * Native startup, credentials, window controls and supervisor are intentionally absent.
  */
 export type CampClient = Pick<RovaiApi,
-  'request' | 'composerAttachments' | 'platform'
+  'request' | 'composerAttachments' | 'singleChatAttachments' | 'platform'
 > & {
   /** Explicit resource/platform dependencies of the shared management pages. */
+  exportMonitoring: (filter: import('@contracts').MonitoringFilter) => Promise<{ exported: boolean; path?: string }>
+  revealMonitoringExport: RovaiApi['revealMonitoringExport'] | null
+  exportDiagnostics: () => Promise<{ exported: boolean; path?: string }>
+  revealDiagnosticsExport: RovaiApi['revealDiagnosticsExport'] | null
   memberAvatars: RovaiApi['memberAvatars']
   selectSkillImportDirectory: RovaiApi['selectSkillImportDirectory']
   selectRuntimeExecutable: RovaiApi['selectRuntimeExecutable'] | null

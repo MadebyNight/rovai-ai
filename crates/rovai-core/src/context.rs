@@ -13197,6 +13197,7 @@ mod slow_tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: OpenSingleChatCommand {
+                        draft_client: Default::default(),
                         camp_id: fixture.camp_id.clone(),
                         agent_id: "agent_1".to_string(),
                     },
@@ -13219,6 +13220,7 @@ mod slow_tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendSingleChatMessageCommand {
+                        draft_client: Default::default(),
                         camp_id: fixture.camp_id.clone(),
                         conversation_id,
                         body: "只检查当前单聊输入".to_string(),
