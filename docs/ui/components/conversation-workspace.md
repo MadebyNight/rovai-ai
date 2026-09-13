@@ -492,17 +492,17 @@ Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ comm
 [Built-in 入参与载体展示](../../contracts/run-process-detail-surface-v34.md)。
 
 同一 Run 内最大连续的 Tool items 默认收成一条可展开组摘要；收起时只挂载摘要，展开后才挂载子行，文件 Diff 在文件行展开后读取和解析；narration、plan 与 diagnostic 都会截断
-分组，不能跨 Run 或跨队员合并。有 running/waiting 操作时，活动组只显示“执行中/等待审批 · 当前操作”，
+分组，不能跨 Run 或跨队员合并。有 running 操作时，活动组只显示当前指令；waiting 保留“等待审批 · 当前操作”，
 不再同时追加累计数。当前操作优先展示已有公开证据中的具体指令：Shell 使用原 command，File 使用
 可靠阅读／编辑文件名或多文件数量，Web 搜索使用 typed query，其他操作使用非通用 Runtime title/toolName；
 没有具体值时回退稳定 Tool 行标题，不从 raw input/output 猜测。当前 Tool 已结算但尾组尚未收口时，继续显示
-“执行中 · <最近一条指令>”。真正收口后只显示 `已完成 x 个步骤`，只计成功；失败、停止、跳过、结果未知
+“<最近一条指令>”。真正收口后只显示 `已完成 x 个步骤`，只计成功；失败、停止、跳过、结果未知
 不在摘要追加数量，也不算成功，具体结果由展开后的 Tool 行表达。分页读取沿用相同的执行结果摘要，不改成“已载入 x 项执行记录”；组摘要只统计
 当前组已读取的逻辑操作，不表示整轮总量。已载入范围只在“加载更早记录”入口呈现。
 `x` 按去重后的可见逻辑操作计数；同一 Built-in 与已关联 Shell 载体计一步，started/result/delta 和一个 Activity 的多文件行不重复计数。
 
 Runtime Compaction 作为根级、非 Tool process item 同样截断前后 Tool 分组，但不进入“已完成 x 个步骤”。
-它复用普通 command 的 28px 四轨行、状态点、disclosure 与结果文本框，并使用独立 16px SVG；同一
+它复用普通 command 的桌面 28px 行、最右侧状态 icon、文字后展开提示与结果文本框，并保留独立压缩 SVG；同一
 `compactionId` 的 started/completed 在当前 Run 原位更新。只有明确 token 字段或非空 summary 才可展开；message count、
 elapsed、Runtime/事件/Session identity、trigger 与 phase 单独存在时保持无箭头、不可点击的静态单行。summary 的完整内容
 沿用本地 Managed Blob 惰性读取，不投影到渠道、局域网执行台、世界地图或公开 Evidence。精确归属、协议和失败关闭边界见
@@ -511,13 +511,18 @@ elapsed、Runtime/事件/Session identity、trigger 与 phase 单独存在时保
 非终态 Run 的 `started` 显示 running 状态并暂停重复的底部进行中提示，`completed` 使用完成状态。
 
 当已投影的最后一个 process item 是 Tool 组且父 Run 仍为 running 时，该尾组在当前 Tool 已结算后继续保持
-provisional 活动态，显示“执行中 · <最近一条指令>”，也不在下方追加普通等待提示。这里“执行中”表达父 Run
+provisional 活动态，显示“<最近一条指令>”，也不在下方追加普通等待提示。此处活动态表达父 Run
 仍在运行，不改写上一条 Tool 的真实终态；下一条连续 Tool 到达后只在同一组原位替换为新指令。
 narration、plan、diagnostic、waiting/cancelling 或 Run 终态才构成真实收口边界。该规则按 process/Run 事实
 判断，不使用时间防抖。
-组 summary 的左侧 16px 图标与摘要文字共享 16px 中心线，底部和窄 Inspector 使用同一结构。右侧状态槽只有
-执行中和等待审批显示图形；终态保留等宽空槽，不显示成功、失败、停止、跳过或未知图形，也不生成对应 tooltip
-或辅助名称。完整结果由展开后的精确 Tool 行表达。
+组 summary 的左侧 16px 图标与摘要文字共享中心线；活动组的图标与文字从同一条当前操作选择，使用已有
+Terminal、File Read、File Write、Web 等图标。运行时最右端只有状态 icon，不常驻上下箭头；悬停或键盘聚焦时，
+文字后的预留槽显示 `>`，出现时不挤动文字。组收口后恢复分组图标、成功步骤数与最右端上下展开箭头，
+不重复显示终态状态 icon。底部和窄 Inspector 使用同一结构。
+
+收起且运行的组摘要、收起且压缩中的 Compact、思考中与连接中文字，以约 2.4 秒一轮从左到右依次高亮。
+高亮只覆盖静止的文字，不移动文字或闪烁背景；展开组或 Compact 后停止该行高亮，子指令及结果正文保持静态。
+完成、失败、等待、停止和结果未知保持静态；减少动态效果或 forced-colors 时关闭文字高亮，状态事实仍保留。
 
 用户展开后保持展开，新 Tool 与组终态只原位更新，不自动收起或抢焦点。展开组只显示全部 Tool summary，
 完整结果仍须再展开精确 Tool；结果 region 在首次展开前不进入 DOM，Managed Blob 也不提前读取。收起组时
@@ -535,7 +540,10 @@ Shell `-c/-lc` 包装，保留参数、Node inline/heredoc 代码开头、全部
 presentation，不得参与 identity 或 lifecycle 合并；ACP 仅由 Adapter 白名单的 command shape 在原生 kind
 缺失时证明 execute。上述稳定 Tool 行标题不因活动组的具体当前指令而改变，渠道卡片也不读取该组摘要字段。
 
-Tool 行固定为 `16px 类型图标 / 可缩略名称 / 16px 状态轨 / 20px disclosure 轨`，不可展开行也保留末轨占位。
+Tool 与 Compact 行使用 `16px 类型图标 / 可缩略名称与行内展开提示 / 20px 状态轨`，已有状态 icon 移至最右端，
+不新增重复 icon。可展开行在文字后预留 `>` 提示槽；悬停和键盘聚焦时出现，单条展开后转为向下并保持可见。
+无详情行不显示展开提示。触摸设备常显可用提示、行点击区域至少 44px；桌面仍为 28px，并提供可见键盘焦点。
+窄视口仍显示“移到浮层／移到底部”文字及原方向图标。
 类型图标收敛为 Terminal、File Read、File Write、Web、Tool、Rovai、Runtime 和 Unknown 统一 16px 单色 SVG，不代表状态。
 Rovai 图标使用四向星与弧形地平线及 `--rail-logo` 色，只由 Core Catalog 验证后的
 `sourceAuthority=core + credibility=core_verified + toolName` 选择；Shell command 即使以 `rovai` 开头也仍用
@@ -567,7 +575,13 @@ disclosure 继续在原位渲染完整公开结果，不再截断，不再提供
 公开结果时从下一行连续显示，不插入“搜索词 / 结果”标签或空白分隔行。query 原样展示，不做敏感词过滤或去重，历史 Evidence 缺失 typed
 projection 时不显示空占位。Web 搜索仍是 Tool item，计入所在连续组的步骤数，组内使用 Web 图标；
 Shell、Web、Built-in 和普通 Tool detail 统一使用现有 Shell 详情底色与 2px 左外边距，同时保留各自内容、
-内边距、字号和换行；不增加标签、分隔线或额外空行。底部和 Inspector 复用同一行为。仍不显示
+内边距、字号和换行；不增加标签、分隔线或额外空行。详情填满当前内容轨道，移除旧的 52px 右侧预留；保留 2px 左外边距、结果/加载底色、字号、圆角和阴影。
+底部和 Inspector 复用同一行为。用户展开或收起 command／Compact 时，summary 保留点击前的屏幕纵坐标；
+加载切换到结果、错误或重试结果仍原位，不自动追到最新。内容较少的底部执行台保留点击时的外壳高度，
+必要的末尾阅读空间避免收起时浏览器夹紧 scrollTop；既有用户高度调整仍优先。生产窗口与实测高度虚拟列表
+共同保留该行，不靠扩大外壳解决详情宽度。用户滚轮、触摸或键盘滚动立即解除该点击锚点，继续自由阅读；
+显式“回到最新”解除锚点并恢复既有跟随。文件预览按钮保留样式和点击预览，点击不展开 command。
+仍不显示
 standalone raw Evidence、Envelope JSON 或独立
 “查看完整工具调用”。精确合同见
 [Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)。

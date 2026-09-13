@@ -57,21 +57,30 @@ let executionThrough = 1000
 const executionTails = new Map<string, number>()
 let executionReadFailure = false
 let runningExecutionScenario = false
+let commandInteraction = false
+const pendingCommandResults = new Map<string, { resolve(): void; reject(error: Error): void }>()
 const executionRun = { ...textRun, id: 'window-run', executionEvidenceCount: 1000 }
 function windowEvidence(sequence: number): AgentRunExecutionEvidenceView {
   const id = `window-${sequence}`
-  const narration = sequence % 8 === 0
+  if (commandInteraction && sequence === 81) return {
+    id, agentRunId: executionRun.id, executionEpoch: 1, sequence,
+    eventType: 'runtime.compaction.display', kind: 'step', phase: 'started',
+    payload: { schemaVersion: 1, compactionId: 'fixture-compact', adapterKind: 'codex-cli',
+      phase: 'started', tokens: { before: 12345 }, summaryText: '压缩摘要预览' },
+    contentBlobId: 'fixture-compact-body', contentByteCount: 2000, isTruncated: true, occurredAt: now
+  }
+  const narration = !commandInteraction && sequence % 8 === 0
   const file = sequence === 999
   return {
     id, agentRunId: executionRun.id, executionEpoch: 1, sequence,
     eventType: narration ? 'agent.text.block' : 'activity.completed',
     kind: narration ? 'narration' : 'command', phase: 'completed',
     payload: narration ? { blockId: id, itemId: id, text: `记录 ${sequence}：${'这一页的执行说明。'.repeat(30)}`, status: 'completed' }
-      : { item: { id, type: file ? 'fileChange' : 'commandExecution', status: 'completed', command: file ? undefined : `TOKEN=fixture-value echo ${sequence}` } },
+      : { item: { id, type: file ? 'fileChange' : 'commandExecution', status: 'completed', command: file ? undefined : commandInteraction && sequence === 79 ? "sed -n '1,10p' src/a.ts; sed -n '1,10p' src/b.ts" : `TOKEN=fixture-value echo ${sequence}` } },
     canonical: narration ? null : {
       operationId: id, classifierVersion: 'activity-v4', activityDomain: file ? 'file' : 'shell',
       semanticKind: file ? 'file.write' : 'shell.execute', toolName: null,
-      presentationHint: file ? '编辑文件' : '执行命令', phase: 'terminal', outcome: 'succeeded',
+      presentationHint: file ? '编辑文件' : '执行命令', phase: commandInteraction && sequence === 80 ? 'started' : 'terminal', outcome: commandInteraction && sequence === 80 ? 'unknown' : 'succeeded',
       credibility: 'runtime_structured', coverageLevel: 'fine_grained', sourceAuthority: 'runtime',
       sourceEvidenceIds: [id], firstEvidenceSequence: sequence, lastEvidenceSequence: sequence, revision: 1,
       diffProjection: file ? { schemaVersion: 1, source: 'runtime_reported', revision: 1, sourceEvidenceIds: [id],
@@ -350,6 +359,11 @@ Object.assign(window, { rovai: {
       if (params?.evidenceId?.startsWith('window-')) {
         executionContentReads.push(params.evidenceId)
         const evidence = windowEvidence(Number(params.evidenceId.slice(7)))
+        if (commandInteraction) {
+          await new Promise<void>((resolve, reject) => pendingCommandResults.set(params!.evidenceId!, { resolve, reject }))
+          if (evidence.eventType === 'runtime.compaction.display') return { payload: { ...evidence.payload, summaryText: '完整压缩结果\n'.repeat(60) } }
+          return { payload: { item: { aggregatedOutput: '完整指令结果\n'.repeat(60) } }, canonical: evidence.canonical }
+        }
         if (evidence.kind === 'narration') {
           await new Promise(resolve => setTimeout(resolve, 180))
           return { payload: evidence.payload }
@@ -451,6 +465,7 @@ function Fixture({ executionPlacement = 'bottom', windowed = false }: {
   const [snapshot, setSnapshot] = useState(current)
   const [profile, setProfile] = useState(DEFAULT_CURRENT_USER_PROFILE)
   const [messageHistory, setMessageHistory] = useState<CampOpenMessageCoverage | null>(null)
+  const [activePlacement, setActivePlacement] = useState(executionPlacement)
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<CampInspectorTab>(attachmentReviewMode ? 'members' : 'tasks')
   const [entryHost, setEntryHost] = useState<HTMLElement | null>(null)
@@ -483,7 +498,8 @@ function Fixture({ executionPlacement = 'bottom', windowed = false }: {
             oldestLoadedSequence: 1, newestLoadedSequence: 61, hasEarlier: false })
         }}
         onSend={async () => {}} onChangeLead={async () => {}} onTasksChanged={async () => {}}
-        onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement={executionPlacement}
+        onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement={activePlacement}
+        onExecutionPlacementChange={async next => { setActivePlacement(next); return next }}
         openCoverage={windowed ? projection(60).coverage : null}
         inspectorVisible={open} inspectorTab={tab} detailEntryHost={entryHost}
         onInspectorTabChange={setTab}
@@ -524,6 +540,15 @@ reactRoot.render(<Fixture />)
 const element = (selector: string): HTMLElement => document.querySelector(selector)!
 let anchor: HTMLElement | null = null
 Object.assign(window, { campOpenTest: {
+  commandInteraction: (enabled: boolean) => { commandInteraction = enabled },
+  releaseCommandResult: (fail = false) => {
+    for (const pending of pendingCommandResults.values()) {
+      if (fail) pending.reject(new Error('验收：结果读取失败'))
+      else pending.resolve()
+    }
+    pendingCommandResults.clear()
+  },
+  pendingCommandResults: () => pendingCommandResults.size,
   showHistoricalReturnWindow: () => reactRoot.render(<HistoricalReturnWindow />),
   updateReturnWindow: (revision: number, hasNewer: boolean) => updateReturnWindow({ revision, hasNewer }),
   appendCollapsedRunningExecution: () => {

@@ -3,6 +3,7 @@ import {
   activityStatusForAgentRun,
   executionStepCurrentInstructionTitle,
   type ActivityStatus,
+  type ActivityIconKind,
   type ExecutionProgressItem,
   type RuntimeCompactionDisplayItem
 } from './index'
@@ -25,6 +26,7 @@ export type ToolActivityGroupPresentation = {
   statusLabel: string
   primary: string
   currentTitle: string | null
+  currentIconKind: ActivityIconKind | null
   countLabel: string | null
   accessibleLabel: string
 }
@@ -112,6 +114,7 @@ export function toolActivityGroupPresentation(
       statusLabel,
       primary,
       currentTitle,
+      currentIconKind: items[activeIndex].step.iconKind,
       countLabel: null,
       accessibleLabel: `${primary}：${currentTitle}`
     }
@@ -124,6 +127,7 @@ export function toolActivityGroupPresentation(
       statusLabel: '执行中',
       primary: '执行中',
       currentTitle,
+      currentIconKind: items[items.length - 1].step.iconKind,
       countLabel: null,
       accessibleLabel: `执行中：${currentTitle}`
     }
@@ -152,6 +156,7 @@ export function toolActivityGroupPresentation(
     statusLabel,
     primary,
     currentTitle: null,
+    currentIconKind: null,
     countLabel: null,
     accessibleLabel: primary
   }

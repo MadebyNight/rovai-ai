@@ -5600,7 +5600,7 @@ describe('task event projections', () => {
     expect(markup).toContain('aria-live="polite"')
     expect(markup).not.toContain('<span>Thinking</span>')
     expect(markup).not.toContain('<details class="process-action tool-call-disclosure')
-    expect(markup).toContain('tool-call-disclosure-slot is-placeholder')
+    expect(markup).not.toContain('tool-call-disclosure-slot is-placeholder')
     expect(markup).not.toContain('>execute<')
   })
 
@@ -5644,7 +5644,7 @@ describe('task event projections', () => {
     }))
     expect(liveTailMarkup).toContain('class="tool-activity-group status-running"')
     expect(liveTailMarkup).toContain('aria-label="执行中：pnpm test"')
-    expect(liveTailMarkup).toContain('class="tool-group-current"')
+    expect(liveTailMarkup).toContain('running-text tool-group-current')
     expect(liveTailMarkup).not.toContain('class="tool-group-count"')
     expect(liveTailMarkup).not.toContain('<span>Thinking</span>')
 
@@ -5810,7 +5810,7 @@ describe('task event projections', () => {
     expect(markup).not.toContain('private-request-2')
   })
 
-  it('uses one 16px SVG family and stable four-track markup for the converged icon set', () => {
+  it('uses one 16px SVG family and inline cues and trailing state markup for the converged icon set', () => {
     const icons = [
       { iconKind: 'terminal' as const, activityDomain: 'shell' },
       { iconKind: 'file' as const, activityDomain: 'file' },
@@ -5866,10 +5866,10 @@ describe('task event projections', () => {
     expect(markup.match(/class="tool-group-icon"/g)).toHaveLength(1)
     expect(markup.match(/class="tool-call-icon"/g)).toHaveLength(icons.length)
     expect(markup.match(/<svg viewBox="0 0 16 16"/g)?.length).toBeGreaterThanOrEqual(icons.length)
-    expect(markup.match(/<summary class="tool-call-summary">/g)).toHaveLength(icons.length)
+    expect(markup.match(/<summary[^>]*class="tool-call-summary"/g)).toHaveLength(icons.length)
     expect(markup.match(/class="tool-call-state status-completed"/g)).toHaveLength(icons.length)
-    expect(markup.match(/class="tool-call-disclosure-slot"/g)).toHaveLength(icons.length)
-    expect(markup).toMatch(/tool-call-icon[\s\S]*tool-call-title[\s\S]*tool-call-state[\s\S]*tool-call-disclosure-slot/)
+    expect(markup.match(/class="command-expand-cue"/g)).toHaveLength(icons.length)
+    expect(markup).toMatch(/tool-call-icon[\s\S]*tool-call-title[\s\S]*command-expand-cue[\s\S]*tool-call-state/)
     expect(markup).not.toMatch(/<summary class="tool-call-summary"[^>]*aria-label=/)
   })
 
@@ -5933,7 +5933,7 @@ describe('task event projections', () => {
       run, progress, campId: 'camp-1', focused: true
     })
     expect(markup).toContain('tool-call-disclosure')
-    expect(markup).toContain('tool-call-disclosure-slot')
+    expect(markup).toContain('command-expand-cue')
     expect(markup).not.toContain('tool-call-disclosure-slot is-placeholder')
     expect(markup).toContain('class="tool-call-state status-completed"')
     expect(markup).toContain('aria-label="成功"')
@@ -6760,7 +6760,7 @@ describe('task event projections', () => {
     expect(markup).toContain('>new-file.ts</button>')
     expect(markup).not.toContain('private file content must not become row detail')
     expect(markup).not.toContain('<details class="process-action tool-call-disclosure')
-    expect(markup).toContain('class="tool-group-state is-placeholder"')
+    expect(markup).toContain('class="tool-group-disclosure"')
     expect(markup).not.toContain('class="tool-group-state status-completed"')
   })
 
