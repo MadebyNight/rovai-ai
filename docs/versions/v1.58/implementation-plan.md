@@ -35,7 +35,8 @@ Day/Night 展开与折叠截图核对了按钮中心 y=20、原会话标题及�
 
 - 去重继续只保留 Core Tool 行，唯一已确认 Shell 提供标题与展开内容；完整命令（含正文和多行）加原始输出，
   完整结果复用 Shell Evidence 的惰性读取和重试。没有关联时保留既有语义入参回退，不猜测入参，不新增数据库存储。
-- 完整组仅把成功操作计为“已完成”，其他终态单列；分页继续显示“已载入 N 项执行记录”，不冒充 Run 总数。
+- 组摘要只显示“已完成 N 个步骤”，仅计当前组已读取且成功的逻辑操作，其他终态由展开后的 Tool 行表达。
+  分页沿用同一摘要，不改成“已载入 N 项执行记录”，不冒充 Run 总数；修正过程见 [Camp 执行窗口性能](camp-execution-loading.md)。
 - 当前合同、会话 UI 与验收规则已同步；这是可逆的展示修正，不新增 Version Decision、Schema、Migration 或 Core 接口。
 - Windows x64 验证：TypeScript 检查通过；相关 8 文件／326 项 Vitest 通过；生产组件 Electron 夹具证明
   唯一 Core 行、精确 Shell 读取、展开前零读取、失败重试、完整 8,100 行 JSON、多行长正文、键盘和 Day/Night／200% zoom。
