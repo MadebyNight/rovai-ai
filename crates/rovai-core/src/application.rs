@@ -1112,6 +1112,18 @@ struct ExecutionWindowParams {
     agent_run_id: String,
     before_sequence: Option<i64>,
     limit: Option<i64>,
+    after_sequence: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExecutionChangesParams {
+    camp_id: CampId,
+    agent_run_id: String,
+    after_sequence: i64,
+    #[serde(default)]
+    refresh_evidence_ids: Vec<String>,
+    limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -8522,15 +8534,31 @@ impl Core {
                     json!({ "evidenceId": params.evidence_id, "payload": payload, "canonical": canonical }),
                 )
             }
+            "agentRunExecution.changes" => {
+                let params: ExecutionChangesParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::execution_window::read_changes(
+                        &mut database,
+                        params.camp_id.as_str(),
+                        &params.agent_run_id,
+                        params.after_sequence,
+                        &params.refresh_evidence_ids,
+                        params.limit.unwrap_or(96),
+                    )?,
+                )?)
+            }
             "agentRunExecution.page" => {
                 let params: ExecutionWindowParams = serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::execution_window::read_page(
+                    rovai_core::execution_window::read_range(
                         &mut database,
                         params.camp_id.as_str(),
                         &params.agent_run_id,
                         params.before_sequence,
+                        params.after_sequence,
                         params
                             .limit
                             .unwrap_or(rovai_core::execution_window::DEFAULT_WINDOW_LIMIT),

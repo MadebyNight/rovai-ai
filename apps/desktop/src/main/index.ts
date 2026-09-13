@@ -278,6 +278,7 @@ const allowedMethods = new Set<CoreMethod>([
   'agentRunEvidence.getContent',
   'agentRunEvidence.list',
   'agentRunExecution.page',
+  'agentRunExecution.changes',
   'tasks.create',
   'tasks.update',
   'tasks.list',

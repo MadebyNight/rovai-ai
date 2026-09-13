@@ -104,6 +104,8 @@ pub enum Operation {
     NavigationFindCamp,
     #[serde(rename = "agentRunExecution.page")]
     RunExecutionPage,
+    #[serde(rename = "agentRunExecution.changes")]
+    RunExecutionChanges,
     #[serde(rename = "tasks.create")]
     TaskCreate,
     #[serde(rename = "tasks.update")]
@@ -385,6 +387,7 @@ impl Operation {
 
             Self::NavigationFindCamp => "navigation.findCamp",
             Self::RunExecutionPage => "agentRunExecution.page",
+            Self::RunExecutionChanges => "agentRunExecution.changes",
             Self::TaskCreate => "tasks.create",
             Self::TaskUpdate => "tasks.update",
             Self::SingleChatList => "singleChat.list",

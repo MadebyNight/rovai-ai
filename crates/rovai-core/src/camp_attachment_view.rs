@@ -5214,6 +5214,11 @@ pub(crate) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
+        // A Windows drive prefix (including \\?\C:) is not a directory.
+        // Inspect the complete root after RootDir, then every actual ancestor.
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 anyhow::bail!(
@@ -5223,7 +5228,14 @@ pub(crate) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect Runtime Files ancestor {}",
+                        current.display()
+                    )
+                });
+            }
         }
     }
     Ok(())

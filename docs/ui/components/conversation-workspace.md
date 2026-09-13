@@ -40,7 +40,7 @@ Files Changed 历史 Review 真源。
 
 ## 打开与渐进历史
 
-Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v18](../../contracts/camp-open-projection-v18.md)：
+Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v19](../../contracts/camp-open-projection-v19.md)：
 Camp/成员、最近消息、当前运行摘要、pending Approval 和 Composer 可用即完成。项目导航恢复、侧栏刷新
 与可见来源确认在首屏后执行，失败不能撤销已打开会话。只显示“正在打开对话”的 Shell 不算完成。
 
@@ -61,7 +61,7 @@ Files Changed；时钟回拨时消息 sequence 优先，不能用非传递比较
 后保持用户当前阅读锚点，不跳到顶部或最新消息。没有 earlier history 时不显示该控件。
 
 Camp open/refresh 仅返回 Run 摘要与 Evidence 总数；可见展开的 Run 才读取执行窗口，按详情高度估算首屏项数，
-并预取相邻更早一页。滚到边界或点击后才翻页，最多挂载两页；完整历史可继续按需访问，关闭的 Drawer、
+并预取相邻更早一页。滚到边界或点击后才翻页，只挂载视口附近的内容；完整历史可继续按需访问，关闭的 Drawer、
 隐藏 Inspector、收起的 Run 与世界地图不读取历史。活动操作可补充到最新页，原始 Evidence 不被删除。
 普通 event refresh 保留较早消息、Draft、阅读位置、Inspector 选择和地图模式；在途执行刷新不覆盖历史阅读。
 
@@ -465,14 +465,14 @@ Task related execution、停止结果和世界地图入口在右侧承载时必�
 按窗口呈现。顶部“加载更早记录”复用会话区的文字箭头、已显示计数与原位加载／重试样式；向下滚动自动恢复
 已读缓存，取消“加载较新记录”按钮。“回到最新”采用最新缓存并跳转；首次展开执行中 Run 时，首屏与完整正文
 异步到达后仍定位到最新。历史阅读期间后台只更新最新缓存，不替换当前窗口或抢滚动位置。缓存预算见
-[Camp Open v18](../../contracts/camp-open-projection-v18.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
+[Camp Open v19](../../contracts/camp-open-projection-v19.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
 Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ command` 与下一行原始 JSON／文本输出，保留正文参数
 和多行输入，沿用 Shell Evidence 的按条惰性读取。Core 操作身份、图标和状态保持不变；不新增入参存储。
 缺少可靠关联时回退对应 `rovai` CLI 名称和同一 operation 的 Core 公共 `canonicalInput`，省略投影辅助事实和
 由消息面拥有的 Send/Gather 正文；没有可显示入参时为无箭头静态行，不借用其他调用的结果。
 纯 CLI Shell 的完整成功返回值与其生命周期内唯一 Core 调用精确匹配时，折叠到 Built-in 行；混合命令、帮助、
 提前失败或不确定关联保留。底层 Evidence 和 Canonical 身份不变。完整规则见
-[Built-in 入参与载体展示](../../contracts/run-process-detail-surface-v33.md)。
+[Built-in 入参与载体展示](../../contracts/run-process-detail-surface-v34.md)。
 
 同一 Run 内最大连续的 Tool items 默认收成一条可展开组摘要；收起时只挂载摘要，展开后才挂载子行，文件 Diff 在文件行展开后读取和解析；narration、plan 与 diagnostic 都会截断
 分组，不能跨 Run 或跨队员合并。有 running/waiting 操作时，活动组只显示“执行中/等待审批 · 当前操作”，
@@ -488,7 +488,7 @@ Runtime Compaction 作为根级、非 Tool process item 同样截断前后 Tool 
 `compactionId` 的 started/completed 在当前 Run 原位更新。只有明确 token 字段或非空 summary 才可展开；message count、
 elapsed、Runtime/事件/Session identity、trigger 与 phase 单独存在时保持无箭头、不可点击的静态单行。summary 的完整内容
 沿用本地 Managed Blob 惰性读取，不投影到渠道、局域网执行台、世界地图或公开 Evidence。精确归属、协议和失败关闭边界见
-[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)。
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)。
 独立图标沿用普通 command 的 muted 色，不使用品牌色。`imminent` 是一次性 `recorded` 记录，不压掉 Run 尚未输出时的“思考中”；只有
 非终态 Run 的 `started` 显示 running 状态并暂停重复的底部进行中提示，`completed` 使用完成状态。
 
@@ -552,7 +552,7 @@ Shell、Web、Built-in 和普通 Tool detail 统一使用现有 Shell 详情底�
 内边距、字号和换行；不增加标签、分隔线或额外空行。底部和 Inspector 复用同一行为。仍不显示
 standalone raw Evidence、Envelope JSON 或独立
 “查看完整工具调用”。精确合同见
-[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)。
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)。
 
 ### Runtime 终态文件变更与 AgentRun 文件变化
 
@@ -629,7 +629,7 @@ Inspector 复用同一语义。刷新不得自动打开执行台、改变 Run se
 “已停止”作为主状态。该展示只表达父 Run 已失去继续执行权，不改写子活动的 Canonical phase/outcome，
 也不删除底层 Input/Action 审计；业务取消本身不产生外部效果待确认提示。明确 canonical cancelled 的 Tool Call
 同样显示“已停止”，其他非取消路径独立投影的待确认提示仍保留。精确合同见
-[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)。
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)。
 
 当前非终态 Claude Code Run 收到安全 `runtime_api_retrying` Evidence 时，在精确 Run 过程内显示 attention
 notice：“Claude Code API 暂时不可用”，并显示最新重试次数、等待秒数和“本次执行尚未结束，可继续等待或
@@ -637,7 +637,7 @@ notice：“Claude Code API 暂时不可用”，并显示最新重试次数、�
 该状态仍是 running，不产生 Tool、Toast、消息或终态 failure；Run 终态后隐藏旧 notice，真实失败继续使用
 下述 Runtime failure 边界。Renderer 只接受固定 code/status 与有界数字，不展示 raw stderr、API body、
 凭证、用户名或绝对路径。精确合同见
-[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)。
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)。
 
 同一 App/Core generation 内，权威 Run 为 `waiting/network_recovery` 时显示 attention 状态“连接中断，等待恢复”，
 并说明只有在确认当前输入未被接收后才会自动重试；新 epoch 已进入正式恢复但 Input 尚未 accepted 时显示“正在恢复”／
@@ -741,7 +741,7 @@ Composer 中的 CampTurn Stop 继续是唯一整轮停止入口并 fence 当前�
 Header、Task 卡、时间线和 Composer 不增加 Run-local 入口。`recovery_blocked` 继续只显示“结束此运行”，
 不与普通 Stop 同时出现。Run-local 请求不创建 Camp 时间线消息；Turn-level 终态用户取消仍以一条“你已在
 {耗时} 后停止”进入时间线。精确资格、required/optional 后果与不确定态见
-[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)。
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)。
 
 ## 会话 Pane 紧凑布局
 

@@ -22,7 +22,7 @@ app.whenReady().then(async () => {
     if (event.level === 'warning' || event.level === 'error' || event.level >= 2) errors.push(event.message)
   })
   await window.loadFile(renderer, attachmentReview ? { query: { review: 'attachments' } } : undefined)
-  const run = code => window.webContents.executeJavaScript(code, true)
+  const run = code => window.webContents.executeJavaScript(code, true).catch(error => { throw new Error(`Fixture action failed: ${code}`, { cause: error }) })
   const state = async () => { await run('window.campOpenTest.settle()'); return run('window.campOpenTest.state()') }
   const capture = async name => writeFileSync(join(dirname(userData), `${name}.png`), (await window.webContents.capturePage()).toPNG())
   const assertUserAttachmentLayout = (attachmentState, label) => {
@@ -63,6 +63,29 @@ app.whenReady().then(async () => {
           }; })()`)
           assert.ok(position.top > 0 && position.gap < 8, `${placement} sample ${sample}: asynchronous first page and full bodies follow latest: ${JSON.stringify(position)}`)
           initialPositions.push({ placement, sample, ...position })
+          if (sample === 1) {
+            const initial = await run(`(() => { const root = document.querySelector('.process-content'); return {
+              count: Number(root.dataset.executionLoadedCount), first: root.dataset.executionFirstSequence,
+              pages: window.campOpenTest.executionWindowState().requests.length
+            }; })()`)
+            await run('window.campOpenTest.appendExecution(513)')
+            await waitFor(`Number(document.querySelector('.process-content').dataset.executionLoadedCount) === ${initial.count + 513}`)
+            assert.equal(await run("document.querySelector('.process-content').dataset.executionFirstSequence"), initial.first,
+              'live append retains the original loaded prefix')
+            assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, initial.pages,
+              'live append does not reread latest or shift the historical prefetch cursor')
+            await waitFor('document.querySelector(".execution-drawer-body").scrollHeight - document.querySelector(".execution-drawer-body").clientHeight - document.querySelector(".execution-drawer-body").scrollTop < 8')
+            assert.ok((await run('window.campOpenTest.executionWindowState()')).dom < 2000, 'hundreds of loaded records keep DOM bounded')
+            await run(`window.campOpenTest.showRunningExecution('${placement}', 99)`)
+            await settle()
+            await run(`window.campOpenTest.showRunningExecution('${placement}', 1)`)
+            await settle()
+            await run('document.querySelector("button[aria-label^=打开][aria-label*=执行过程]").click()')
+            await waitFor(`Number(document.querySelector('.process-content')?.dataset.executionLoadedCount) === ${initial.count + 513}`)
+            assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, 0,
+              'remount restores cached execution without initial or historical page reads')
+            await waitFor('document.querySelector(".execution-drawer-body").scrollHeight - document.querySelector(".execution-drawer-body").clientHeight - document.querySelector(".execution-drawer-body").scrollTop < 8')
+          }
           if (sample === 0) {
             await capture(`running-execution-latest-${placement}`)
             for (let index = 0; index < 3; index++) {
@@ -75,7 +98,8 @@ app.whenReady().then(async () => {
             const after = await run('window.campOpenTest.executionWindowState()')
             assert.equal(after.requests.filter(request => request.beforeSequence === null).length,
               before.requests.filter(request => request.beforeSequence === null).length, 'return to latest uses the cached page')
-            assert.equal(after.contentReads.length, before.contentReads.length, 'return to latest also retains full narration bodies')
+            for (const id of before.contentReads) assert.equal(after.contentReads.filter(value => value === id).length,
+              before.contentReads.filter(value => value === id).length, `cached full body ${id} is not reread`)
             assert.equal(await run('document.querySelector(".execution-drawer-body").scrollHeight - document.querySelector(".execution-drawer-body").clientHeight - document.querySelector(".execution-drawer-body").scrollTop < 8'), true)
           }
         }
@@ -122,19 +146,20 @@ app.whenReady().then(async () => {
         assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, cachedReads, 'scrolling down restores cached pages without transport reads')
         assert.equal(await run('document.querySelector(".process-content").textContent.includes("记录 1000")'), true, 'scrolling down reaches the already loaded tail')
         assert.equal(await run('[...document.querySelectorAll(".process-content button")].some(button => /载入较新|加载较新/.test(button.textContent))'), false)
-        for (let index = 0; index < 3; index++) {
-          await run('document.querySelector(".execution-history-loader button").click()')
-          await settle()
-        }
+        // Loaded history stays in the native scroll range; no page button is needed to revisit it.
+        await run('document.querySelector(".execution-drawer-body").scrollTop = document.querySelector(".execution-drawer-body").scrollHeight / 2')
+        await settle()
         await run('[...document.querySelectorAll(".execution-history-loader button")].find(button => button.textContent.includes("回到最新")).click()')
         await settle()
         assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, cachedReads, 'cached latest works offline')
         await run('window.campOpenTest.failExecutionRead(false)')
-        await run('document.querySelectorAll(".tool-activity-group > summary").forEach(summary => summary.click())')
+        await run('[...document.querySelectorAll(".tool-activity-group > summary")].at(-1).click()')
         await settle()
         state = await run('window.campOpenTest.executionWindowState()')
         assert.ok(state.toolRows > 0 && state.toolRows < 30)
         assert.equal(state.contentReads.length, 0, 'opening a group does not fetch outputs or diffs')
+        await run('document.querySelector(".execution-drawer-body").scrollTop = document.querySelector(".execution-drawer-body").scrollHeight')
+        await waitFor('Boolean(document.querySelector(".modified-file-row summary"))')
         await run('document.querySelector(".modified-file-row summary").click()')
         await waitFor('window.campOpenTest.executionWindowState().contentReads.length === 1')
         await waitFor('document.querySelector(".modified-file-row").textContent.includes("TOKEN=fixture-value")')
@@ -147,6 +172,13 @@ app.whenReady().then(async () => {
         await settle()
         assert.ok(await run('document.querySelector(".tool-call-disclosure[open]")?.textContent.includes("OUTPUT_TOKEN=fixture-value")'), 'page-boundary group changes retain the opened result')
         assert.equal((await run('window.campOpenTest.executionWindowState()')).contentReads.length, 2, 'retained results do not refetch on a group boundary')
+        await run('document.querySelector(".tool-call-disclosure[open]").closest(".tool-activity-group").querySelector(":scope > summary").click()')
+        await settle()
+        await run('[...document.querySelectorAll(".tool-activity-group > summary")].at(-1).click()')
+        await waitFor('document.querySelector(".tool-call-disclosure[open]")?.textContent.includes("OUTPUT_TOKEN=fixture-value")')
+        await waitFor('document.querySelector(".modified-file-row[open]")?.textContent.includes("TOKEN=fixture-value")')
+        assert.equal((await run('window.campOpenTest.executionWindowState()')).contentReads.length, 2,
+          'remounted rows restore open disclosures and cached full results')
         await capture(`execution-window-${placement}`)
         report.push({ placement, background: await run('getComputedStyle(document.querySelector(".execution-drawer")).backgroundColor'), ...(await run('window.campOpenTest.executionWindowState()')), text: undefined })
       }

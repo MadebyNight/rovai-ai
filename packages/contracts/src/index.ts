@@ -1920,6 +1920,8 @@ export interface AgentRunExecutionWindowPage {
   campId: string
   agentRunId: string
   requestedBeforeSequence: number | null
+  requestedAfterSequence?: number | null
+  nextAfterSequence?: number | null
   nextBeforeSequence: number | null
   throughSequence: number
   hasMore: boolean
@@ -1927,6 +1929,19 @@ export interface AgentRunExecutionWindowPage {
   activeEvidence?: AgentRunExecutionEvidenceView[]
   /** Commands contain display metadata; isTruncated also marks deferred output/diff. */
   evidence: AgentRunExecutionEvidenceView[]
+}
+
+export interface AgentRunExecutionWindowChanges {
+  schemaVersion: 1
+  campId: string
+  agentRunId: string
+  requestedAfterSequence: number
+  nextAfterSequence: number
+  throughSequence: number
+  hasMore: boolean
+  evidence: AgentRunExecutionEvidenceView[]
+  /** In-place updates of previously loaded, unfinished evidence (including text). */
+  refreshedEvidence: AgentRunExecutionEvidenceView[]
 }
 
 export interface ExecutionConsolePage {
@@ -3811,6 +3826,7 @@ export type CoreMethod =
   | 'agentRunEvidence.getContent'
   | 'agentRunEvidence.list'
   | 'agentRunExecution.page'
+  | 'agentRunExecution.changes'
   | 'tasks.create'
   | 'tasks.update'
   | 'tasks.list'
