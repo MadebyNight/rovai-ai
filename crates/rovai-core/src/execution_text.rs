@@ -648,6 +648,31 @@ mod slow_tests {
             json!({"item":{"type":"commandExecution","id":"tool-1","command":"pwd"}}),
         );
         let complete=write(&mut database,"activity.completed",json!({"item":{"type":"agentMessage","id":"A","text":format!("{}终态",delta.repeat(1000))}})).unwrap();
+        // Text completion mutates the same row: refresh IDs must work without a new raw sequence.
+        let current_sequence: i64 = database
+            .connection()
+            .query_row(
+                "SELECT MAX(sequence) FROM agent_run_execution_evidence WHERE agent_run_id=?1",
+                [run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let delta_view = crate::execution_window::read_changes(
+            &mut database,
+            camp,
+            run,
+            current_sequence,
+            &[live.evidence[0].id.clone()],
+            24,
+        )
+        .unwrap();
+        assert!(delta_view.evidence.is_empty());
+        assert_eq!(delta_view.refreshed_evidence.len(), 1);
+        assert_eq!(delta_view.refreshed_evidence[0].phase, "completed");
+        assert_eq!(
+            delta_view.refreshed_evidence[0].content_blob_id,
+            complete.content_blob_id
+        );
         assert_eq!(first.sequence, complete.sequence);
         assert!(complete.content_blob_id.is_some());
         let full = ExecutionEvidenceService

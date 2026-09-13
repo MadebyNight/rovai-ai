@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AgentRunView, AgentRunExecutionWindowPage } from '@contracts'
-import { ExecutionWindow, executionWindowPageSize } from './execution-window'
+import type { AgentRunView, AgentRunExecutionWindowPage, AgentRunExecutionWindowChanges } from '@contracts'
+import { ExecutionWindow, executionWindowPageSize, executionWindowCache } from './execution-window'
 
 export const ExecutionReadingContext = createContext<((following: boolean) => void) | null>(null)
 
@@ -29,18 +29,29 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
       const target = [...(root.current?.querySelectorAll<HTMLElement>('[data-execution-item-key]') ?? [])]
         .filter(element => !element.querySelector('[data-execution-item-key]'))
         .find(element => element.getBoundingClientRect().bottom > top + 4)
+      if (target) {
+        host.dataset.executionAnchorKey = target.dataset.executionItemKey!
+        host.dataset.executionAnchorRun = run.id
+      }
       if (target) anchor.current = { key: target.dataset.executionItemKey!, top: target.getBoundingClientRect().top, host }
     }
-    if (action === 'latest') followAfterLoad.current = 'explicit'
+    if (action === 'latest') {
+      followAfterLoad.current = 'explicit'
+      if (host) delete host.dataset.executionAnchorKey
+    }
     await current[direction]()
   }
 
   useLayoutEffect(() => {
     if (!enabled) return undefined
     const host = scrollHost()
-    const current = new ExecutionWindow(campId, run.id, executionWindowPageSize(host?.clientHeight ?? 500),
-      params => window.rovai.request<AgentRunExecutionWindowPage>('agentRunExecution.page', params),
+    const retained = executionWindowCache.acquire(`${campId}:${run.id}:${run.executionEpoch}`,
+      notify => new ExecutionWindow(campId, run.id, executionWindowPageSize(host?.clientHeight || 500),
+        params => window.rovai.request<AgentRunExecutionWindowPage>('agentRunExecution.page', params), notify,
+        params => window.rovai.request<AgentRunExecutionWindowChanges>('agentRunExecution.changes', params)),
       () => changed(value => value + 1))
+    const current = retained.window
+    const wasLoaded = current.loaded
     store.current = current
     initialInvalidation.current = true
     readingHistory.current = false
@@ -49,11 +60,11 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     // stages intersect the viewport. Offscreen failed/history stages stay cold.
     let observer: IntersectionObserver | null = null
     const frame = requestAnimationFrame(() => {
-      if (!host || !root.current) { void current.latest(); return }
+      if (!host || !root.current) { void current.latest().then(() => { if (wasLoaded) void current.refresh() }); return }
       observer = new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting)) {
           observer?.disconnect()
-          void current.latest()
+          void current.latest().then(() => { if (wasLoaded) void current.refresh() })
         }
       }, { root: host, rootMargin: '80px 0px' })
       observer.observe(root.current)
@@ -61,13 +72,13 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     return () => {
       cancelAnimationFrame(frame)
       observer?.disconnect()
-      current.dispose()
+      retained.release()
       if (store.current === current) store.current = null
       if (pendingRefresh.current !== null) clearTimeout(pendingRefresh.current)
       pendingRefresh.current = null
       anchor.current = null
     }
-  }, [enabled, campId, run.id])
+  }, [enabled, campId, run.id, run.executionEpoch])
 
   useEffect(() => {
     if (!enabled || !store.current || pendingRefresh.current !== null) return
@@ -84,7 +95,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     const current = store.current
     // The initial request starts after intersection/focus. Keep the follow intent
     // until an actual page has arrived, including a successfully empty page.
-    if (!enabled || !current || current.loading || current.visible.length === 0) return
+    if (!enabled || !current || current.loading || !current.loaded) return
     const saved = anchor.current
     anchor.current = null
     if (saved) {
@@ -98,6 +109,8 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     }
     followAfterLoad.current = false
     lastScrollTop.current = scrollHost()?.scrollTop ?? 0
+    const adjustedHost = scrollHost()
+    if (adjustedHost) adjustedHost.dataset.executionAdjustedTop = String(adjustedHost.scrollTop)
   }, [enabled, revision, contentRevision])
 
   useEffect(() => {
@@ -107,13 +120,20 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     const onScroll = (): void => {
       const previous = lastScrollTop.current
       lastScrollTop.current = host.scrollTop
+      const adjusted = host.dataset.executionAdjustedTop
+      delete host.dataset.executionAdjustedTop
+      if (adjusted !== undefined && Math.abs(Number(adjusted) - host.scrollTop) < 1) return
+      delete host.dataset.executionAnchorKey
       const current = store.current
       if (!current || current.loading || current.error || anchor.current) return
       const bounds = root.current?.getBoundingClientRect()
       if (!bounds) return
       const viewport = host.getBoundingClientRect()
       if (bounds.top >= viewport.bottom || bounds.bottom <= viewport.top) return
-      if (host.scrollTop < previous) readingHistory.current = true
+      if (host.scrollTop < previous && !readingHistory.current) {
+        readingHistory.current = true
+        changed(value => value + 1)
+      }
       // Direction is required: initial layout, resize and prefetched data never
       // trigger a chain of background loads through the whole Run.
       if (host.scrollTop < previous && bounds.top >= viewport.top - 120 && current.hasEarlier) void move('earlier')
@@ -130,11 +150,14 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
   const evidence = useMemo(() => store.current?.campId === campId && store.current.agentRunId === run.id
     ? store.current.evidence : [], [revision, enabled, campId, run.id])
   return {
-    root, evidence, loading: enabled && (store.current?.loading || (!store.current?.visible.length && !store.current?.error)),
+    project: <T,>(input: AgentRunExecutionWindowPage['evidence'], build: () => T): T => store.current?.project(input, build) ?? build(),
+    contentCache: store.current?.content ?? null,
+    setViewport: (first: number, last: number) => store.current?.setViewport(first, last),
+    root, evidence, loading: enabled && (store.current?.loading || (!store.current?.loaded && !store.current?.error)),
     direction: store.current?.direction ?? 'latest',
     error: store.current?.error ?? null,
     hasEarlier: store.current?.hasEarlier ?? false,
-    hasNewer: store.current?.hasNewer ?? false,
+    hasNewer: Boolean(store.current?.hasNewer || readingHistory.current),
     move
   }
 }

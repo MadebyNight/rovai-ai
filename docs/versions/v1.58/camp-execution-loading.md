@@ -62,7 +62,7 @@ staged 路由的 workspace 验证另覆盖 Core Main 237 项（6 项既有忽略
 
 ## 权威与影响
 
-[Camp Open v18](../../contracts/camp-open-projection-v18.md)、[Run Process v33](../../contracts/run-process-detail-surface-v33.md)、
+[Camp Open v19](../../contracts/camp-open-projection-v19.md)、[Run Process v34](../../contracts/run-process-detail-surface-v34.md)、
 [Camp Open Architecture](../../architecture/camp-open-read-path.md)、会话 UI 和 CURRENT 同步更新。
 无需数据库迁移、历史数据清理、模型上下文变化、Runtime classifier 变化或版本指针变更。
 旧数据曾被省略的字段不会反推；展示字段白名单、大小预算和 Built-in 输入用途继续保留。
@@ -93,3 +93,43 @@ staged 路由的 workspace 验证另覆盖 Core Main 237 项（6 项既有忽略
 `pnpm docs:check:ci`。CampOpen 的其余六个 Electron 场景通过；执行场景补正连续向下滚动的夹具操作后重跑通过，
 底部三次距底部均为 0px，Inspector 三次也均为 0px。两种主题下离线返回已读页均没有增加分页请求，
 展开结果后的夹具 DOM 为 428 个节点；这个合成夹具节点数不作为真实 Camp 性能收益。
+
+
+## 连续阅读与跨 Camp 缓存修正
+
+前次修正保留了刷新后只显示最新一页的规则，导致第 13 条到来时第 1 条消失。基于 main
+`49b7b623` 的回归先确认该失败，再替换为连续区间和实测高度虚拟列表。当前规范由
+[Camp Open v19](../../contracts/camp-open-projection-v19.md) 与
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md) 拥有，上述两页窗口规则不再适用。
+
+- 首屏继续按视口读取 12–48 项，历史批次 64 项，只预取一页；新记录追加不改变历史边界。
+- 展示增量按原始变化水位读取，旧 command 完成仍更新原位置；原地完成的正文刷新使用展示页返回的
+  Evidence ID，不能使用带 delta offset 的传输帧 ID。
+- 展示与完整正文缓存跨 Run 组件卸载保留，并复用在途正文读取；缓存的展示模型复用，切回不重复归约全部历史。
+- 原生滚动空间由实测高度占位维持，组内长列表同样虚拟化；翻页锚点保持到测量完成，程序滚动补偿不触发历史加载。
+- 单 Run 展示、正文与 Renderer session 各自有预算；缓存内回看没有加载按钮，淘汰后才按需恢复。
+
+现有 Rust 分页和正文 owner 扩展了增量、向前范围、同一正文行原地完成及错误目标/水位输入，未新增独立 SQLite
+fixture。Renderer 状态 owner 将原两页替换断言更新为连续保留、较大历史批次、离线回看、淘汰后恢复和跨组件缓存。
+真实 Electron 在底部和 Inspector 各验证异步初始定位、连续新增 513 条、首部不消失、历史页请求不增加，
+切走后重新挂载不请求执行页，以及键盘分页锚点、正文复用、Diff 和工具结果展开。
+
+固定 Camp 回放仅使用既有诊断副本，不启动 Core 或真实 Runtime，不读取或写入日常数据库。
+性能数字只代表本机 Renderer 的固定数据回放，不能替代 Windows 真机结果；原始执行数据与截图不进入仓库。
+
+基线 `49b7b623` 与本次实现使用相同固定投影、生产 CampWorkspace 和 CSS，在 1440×920 隔离 Electron 中
+各回放 8 次 A→B→A；先访问历史，再切回同一 Run。执行分页 stub 立即返回，不包含真实 IPC、Core 或 Blob 延迟：
+
+| 指标 | 基线 | 连续缓存 |
+| --- | ---: | ---: |
+| 每次切回的执行分页请求 | 2 | 0 |
+| 执行内容绘制中位数 | 66.75 ms | 65.55 ms |
+| 8 次绘制范围 | 62.9–74.4 ms | 56.8–78.4 ms |
+| 切回后 DOM | 1,823 | 1,778–1,862 |
+
+本机绘制时间基本持平；此结果证明缓存回看消除了重复分页读取，并在保留历史时维持有限 DOM，
+不将帧调度波动解释为性能百分比收益。前文 18,743 个节点与最初优化数据不作为这次修正的前后对照。
+
+本地门禁：189 个 Vitest 文件、1,958 项测试及 317 项脚本测试通过（2 项既有平台跳过）；Rust staged
+workspace 默认门禁 834 项通过（6 项既有忽略），慢速集成 310 项通过。严格 Clippy、类型检查、桌面构建、
+文档 diff-aware 门禁与 7 个 CampOpen Electron 场景通过；执行窗口场景在最终虚拟范围调整后再次验证。

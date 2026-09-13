@@ -8,7 +8,7 @@ last_updated: 2026-09-13
 
 # Camp Open Read Path 架构
 
-字段与窗口见 [Camp Open Projection v18](../contracts/camp-open-projection-v18.md)与
+字段与窗口见 [Camp Open Projection v19](../contracts/camp-open-projection-v19.md)与
 [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)。本架构把“进入会话”、
 “继续阅读”、“查找完整当前会话”和“检查运行详情”分成用途明确的接口，同时保持 SQLite Read Side
 为唯一权威。
@@ -97,7 +97,7 @@ receipt 执行无效 join/group。它和 Camp Open 共用 Core 数据库锁，�
 业务依赖。可见来源 acknowledge 的去重也不使用全局 cursor 或 Snapshot watermark 作为来源变化，见
 [Notification Episode v6](../contracts/notification-episode-v6.md)。
 
-缓存只保存最近的 Camp 业务投影；collection 保持有界，执行详情将两页 DOM 窗口与按 cursor 保留的有界页面缓存分开。cache hit 可立即
+缓存只保存最近的 Camp 业务投影；collection 保持有界，执行详情将实测高度虚拟列表与跨 Camp 保留的有界数据缓存分开。cache hit 可立即
 恢复阅读面，但仍由 high-water refresh 验证；cache miss 不把
 当前 Snapshot 清空，也不提前切换 route。普通请求在 400 ms 内不呈现 loading，超过预算只在目标导航行
 显示非阻塞进度。schema mismatch、Core restart、Camp mismatch 或 sequence regression 使缓存失效。
@@ -109,10 +109,12 @@ Renderer 不通过 event replay 补齐权威对象。
 用户滚到边界或主动点击才继续加载；预取不挂载 DOM，也不递归读完整 Run。操作开始/完成按稳定身份合并，
 较早但仍运行的操作由最新页补充，不影响历史 cursor。完整输出和文件 Diff 在单条展开后读取。
 
-Renderer 最多挂载两页，按阅读锚点替换窗口，组内关闭的工具行不创建 DOM。Camp 切换拒绝迟到响应，
-错误保留已有内容。向下滚动优先恢复已读缓存，回到最新不强制重读。运行中刷新继续更新最新页缓存，
-历史阅读保留原 cursor 链和锚点，返回最新时才采用新的链头。初始跟随意图等首个异步页面及完整正文到达后完成。
-具体缓存预算、字段和界限由 Camp Open v18 拥有。
+Renderer 保留连续已加载区间，用实测高度占位虚拟化视口外内容；长工具组内部同样虚拟化。首屏 12–48 项，
+历史页 64 项；只有用户接近未加载边界才读下一批。正文在可见行中读取，命中缓存或在途请求则复用。
+运行中通过 `agentRunExecution.changes` 按原始变化水位追加/更新逻辑项，同时刷新原地变化的未完成正文。
+增量合并不改变历史 cursor，不把可见内容裁回最新一页。Camp 切换只卸载订阅与 DOM，保留有界 session 缓存；
+切回先显示最新缓存，再补齐变化。虚拟高度调整与翻页保留锚点，初始跟随意图等异步内容到达后完成。
+预算、淘汰后按需恢复和字段由 Camp Open v19 拥有。
 
 ## Complete conversation find flow
 
@@ -153,6 +155,6 @@ Memory 分别拥有局部 loading/error；全屏 StartupGate 只允许覆盖 Mai
 
 - [Core 受管内容不变量](foundational-invariants.md#core-managed-content)
 - [协作与执行准入不变量](foundational-invariants.md#collaboration-admission)
-- [Camp Open Projection v18](../contracts/camp-open-projection-v18.md)
+- [Camp Open Projection v19](../contracts/camp-open-projection-v19.md)
 - [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)
 - [Desktop Navigation Refresh](desktop-navigation-refresh.md)

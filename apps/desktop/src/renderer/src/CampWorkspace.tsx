@@ -1,3 +1,5 @@
+import { ExecutionContentContext, ExecutionVirtualList } from './ExecutionVirtualList'
+import { ExecutionNarration } from './ExecutionNarration'
 import type { MessageQuoteSnapshot } from '@contracts'
 import { revealMessageQuote } from './message-quote-reveal'
 import { MessageQuotes, MessageQuoteSelectionToolbar } from './MessageQuotes'
@@ -8317,6 +8319,7 @@ function RunExecutionContent({
   const [narrationStatus, setNarrationStatus] = useState<RunExecutionHistoryStatus>('idle')
   const [narrationRetry, setNarrationRetry] = useState(0)
   useEffect(() => {
+    if (windowedEvidence) return undefined
     let disposed = false
     const needed = narrationEvidence.filter(item => item.eventType === 'agent.text.block'
       && item.isTruncated && item.contentBlobId)
@@ -8364,13 +8367,13 @@ function RunExecutionContent({
       if (!disposed) setNarrationStatus('failed')
     })
     return () => { disposed = true }
-  }, [campId, narrationEvidence, narrationRetry, windowPage.hasNewer])
-  const historicalProgress = useMemo(() => displayedEvidence
-    ? buildLiveExecutionProgress(
-        displayedEvidence.map(liveRuntimeEventFromExecutionEvidence),
-        run.id, { includePublicResults: false }
-      )
-    : null, [displayedEvidence, run.id])
+  }, [campId, narrationEvidence, narrationRetry, windowPage.hasNewer, windowedEvidence])
+  const historicalProgress = useMemo(() => {
+    if (!displayedEvidence) return null
+    const build = () => buildLiveExecutionProgress(displayedEvidence.map(liveRuntimeEventFromExecutionEvidence),
+      run.id, { includePublicResults: false })
+    return windowedEvidence ? windowPage.project(displayedEvidence, build) : build()
+  }, [displayedEvidence, run.id, windowedEvidence])
   const effectiveTruncatedEvidence = (displayedEvidence ?? truncatedEvidence)
     .filter((evidence) => evidence.isTruncated)
     .filter(isPresentableExecutionEvidence)
@@ -8388,6 +8391,8 @@ function RunExecutionContent({
     const groups = groupConsecutiveToolItems(processItems)
     if (!windowedEvidence) return groups
     const identities = windowGroupKeys.current
+    const currentKeys = new Set(processItems.map(item => item.key))
+    for (const key of identities.byItem.keys()) if (!currentKeys.has(key)) identities.byItem.delete(key)
     const used = new Set<string>()
     return groups.map(group => {
       if (group.kind !== 'toolGroup') return group
@@ -8423,11 +8428,20 @@ function RunExecutionContent({
       : activeRetryDiagnostic
         ? `等待 Claude Code 自动重试（${activeRetryDiagnostic.attempt}/${activeRetryDiagnostic.maxAttempts}）`
         : executionInitialFeedback(run.status, processItems, Boolean(finalBody))
+  const sequenceByKey = useMemo(() => new Map<string, number>((displayedEvidence ?? []).flatMap(item => [
+    [`narration:${item.id}`, item.sequence] as const,
+    [`tool:${item.canonical?.operationId ?? item.id}`, item.sequence] as const
+  ])), [displayedEvidence])
+  const narrationByKey = useMemo(() => new Map((displayedEvidence ?? []).map(item => [`narration:${item.id}`, item])), [displayedEvidence])
   const earlierLoadError = windowPage.direction === 'newer' ? null : windowPage.error
   const earlierLoading = windowPage.loading && windowPage.direction !== 'newer'
 
   return (
-    <div className="process-content" ref={windowPage.root}>
+    <ExecutionContentContext.Provider value={windowedEvidence ? windowPage.contentCache : null}>
+    <div className="process-content" ref={windowPage.root}
+      data-execution-run-id={run.id}
+      data-execution-loaded-count={windowedEvidence ? windowPage.evidence.length : undefined}
+      data-execution-first-sequence={windowedEvidence ? windowPage.evidence[0]?.sequence : undefined}>
       {windowedEvidence && (windowPage.hasEarlier || earlierLoadError || earlierLoading) && (
         <div className={`camp-history-loader execution-history-loader${earlierLoadError ? ' is-error' : ''}`}
           role={earlierLoadError ? 'alert' : 'status'} aria-atomic="true">
@@ -8443,7 +8457,7 @@ function RunExecutionContent({
           </> : earlierLoadError ? '重试' : <><span aria-hidden="true">↑</span><span>加载更早记录</span></>}</button>
           {!earlierLoadError && windowPage.evidence.length > 0 && <>
             <span className="camp-history-separator" aria-hidden="true">·</span>
-            <span className="camp-history-count">已显示 {processItems.length} 项</span>
+            <span className="camp-history-count">已载入 {processItems.length} 项</span>
           </>}
         </div>
       )}
@@ -8453,7 +8467,14 @@ function RunExecutionContent({
           仍有外部效果待确认
         </p>
       )}
-      {groupedProcessItems.map((item) => {
+      <ExecutionVirtualList items={groupedProcessItems} enabled={windowedEvidence}
+        gapAfter={(item, next) => (item.kind === 'toolGroup' && next.kind === 'compaction')
+          || (item.kind === 'compaction' && (next.kind === 'toolGroup' || next.kind === 'compaction')) ? 4 : 14}
+        onVisible={visible => {
+        const keys = visible.flatMap(item => item.kind === 'toolGroup' ? item.items.map(child => child.key) : [item.key])
+        const sequences = keys.flatMap(key => sequenceByKey.has(key) ? [sequenceByKey.get(key)!] : [])
+        if (sequences.length) windowPage.setViewport(Math.min(...sequences), Math.max(...sequences))
+      }}>{(item) => {
         if (item.kind === 'toolGroup') {
           return (
             <ToolActivityGroup
@@ -8490,7 +8511,8 @@ function RunExecutionContent({
         if (item.kind === 'narration') {
           return (
             <div className={`process-copy stream-${item.kind}`} key={item.key} data-execution-item-key={item.key}>
-              <SafeMarkdown>{item.body}</SafeMarkdown>
+              {windowedEvidence ? <ExecutionNarration campId={campId} evidence={narrationByKey.get(item.key)} preview={item.body} />
+                : <SafeMarkdown>{item.body}</SafeMarkdown>}
             </div>
           )
         }
@@ -8549,7 +8571,7 @@ function RunExecutionContent({
             onFileOpenError={onFileOpenError}
           />
         )
-      })}
+      }}</ExecutionVirtualList>
       {windowedEvidence && windowPage.hasNewer && <div className={`camp-history-loader execution-history-loader execution-history-latest${windowPage.direction === 'newer' && windowPage.error ? ' is-error' : ''}`}
         role={windowPage.direction === 'newer' && windowPage.error ? 'alert' : 'status'}>
         {windowPage.direction === 'newer' && windowPage.loading && <span className="camp-history-spinner" aria-label="正在加载执行记录" />}
@@ -8626,6 +8648,7 @@ function RunExecutionContent({
         </div>
       )}
     </div>
+    </ExecutionContentContext.Provider>
   )
 }
 

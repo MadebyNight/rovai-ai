@@ -50,6 +50,9 @@ const textRun: AgentRunView = {
 const attachmentReviewMode = new URLSearchParams(window.location.search).get('review') === 'attachments'
 const executionRequests: { beforeSequence: number | null; limit: number }[] = []
 const executionContentReads: string[] = []
+const executionChanges: number[] = []
+let executionThrough = 1000
+const executionTails = new Map<string, number>()
 let executionReadFailure = false
 let runningExecutionScenario = false
 const executionRun = { ...textRun, id: 'window-run', executionEvidenceCount: 1000 }
@@ -302,6 +305,8 @@ Object.assign(window, { rovai: {
     content?: CampComposerDraftView['content']
     evidenceId?: string
     replyToCampMessageId?: string
+    afterSequence?: number
+    refreshEvidenceIds?: string[]
     beforeSequence?: number | null
     limit?: number
 
@@ -313,15 +318,23 @@ Object.assign(window, { rovai: {
       executionRequests.push({ beforeSequence, limit })
       if (runningExecutionScenario) await new Promise(resolve => setTimeout(resolve, 120))
       if (executionReadFailure && beforeSequence !== null) throw new Error('Fixture page offline')
-      const end = (beforeSequence ?? 1001) - 1
+      const end = (beforeSequence ?? executionThrough + 1) - 1
       const start = Math.max(1, end - limit + 1)
       return { schemaVersion: 1, campId, agentRunId: executionRun.id, requestedBeforeSequence: beforeSequence,
-        nextBeforeSequence: start > 1 ? start : null, throughSequence: 1000, hasMore: start > 1,
+        nextBeforeSequence: start > 1 ? start : null, throughSequence: executionThrough, hasMore: start > 1,
         evidence: Array.from({ length: end - start + 1 }, (_, offset) => {
           const item = windowEvidence(start + offset)
           return runningExecutionScenario && item.kind === 'narration'
             ? { ...item, isTruncated: true, contentBlobId: `body-${item.id}`, payload: { ...item.payload, text: '正文预览' } } : item
         }) }
+    }
+    if (method === 'agentRunExecution.changes') {
+      const after = params?.afterSequence ?? 0
+      const end = Math.min(executionThrough, after + (params?.limit ?? 96))
+      executionChanges.push(after)
+      return { schemaVersion: 1, campId, agentRunId: executionRun.id, requestedAfterSequence: after,
+        nextAfterSequence: end, throughSequence: executionThrough, hasMore: end < executionThrough,
+        evidence: Array.from({ length: Math.max(0, end - after) }, (_, i) => windowEvidence(after + i + 1)), refreshedEvidence: [] }
     }
     if (method === 'agentRunEvidence.list') return { schemaVersion: 1, agentRunId: 'text-run',
       requestedAfterSequence: 0, nextAfterSequence: 60, throughSequence: 60, hasMore: false, evidence: textEvidence }
@@ -605,6 +618,8 @@ Object.assign(window, { campOpenTest: {
   },
   showTextEvidence: () => reactRoot.render(<RunExecutionDisclosure run={textRun} campId={campId} />),
   showExecutionWindow: (placement: 'bottom' | 'inspector' = 'bottom') => {
+    executionRun.id = `window-static-${placement}`
+    executionThrough = 1000
     runningExecutionScenario = false
     executionRequests.length = 0
     executionContentReads.length = 0
@@ -616,20 +631,31 @@ Object.assign(window, { campOpenTest: {
     </section>)
   },
   showRunningExecution: (placement: 'bottom' | 'inspector', sample: number) => {
+    executionRun.id = `window-live-${placement}-${sample}`
+    executionThrough = executionTails.get(executionRun.id) ?? 1000
     runningExecutionScenario = true
+    executionChanges.length = 0
     executionRequests.length = 0
     executionContentReads.length = 0
-    const run = { ...executionRun, agentId: agent.agentId, campTurnId: 'stopped-turn', status: 'running' as const,
+    const run = { ...executionRun, executionEvidenceCount: executionThrough, agentId: agent.agentId, campTurnId: 'stopped-turn', status: 'running' as const,
       cancelRequestedAt: null, cancelAcknowledgedAt: null, cancelReasonCode: null, endedAt: null }
     current = { ...campOpenProjectionAsSnapshot(projection(60)), tasks: [], messages: [],
       agentRunFileChanges: [], agentRuns: [run], executionEvidence: [],
       turns: [{ ...projection(60).turns[0], status: 'running', cancelRequestedAt: null, endedAt: null }] }
     reactRoot.render(<Fixture key={`running-${placement}-${sample}`} executionPlacement={placement} windowed />)
   },
+  appendExecution: (count: number) => {
+    executionThrough += count
+    executionTails.set(executionRun.id, executionThrough)
+    current = { ...current, agentRuns: current.agentRuns.map(run => ({ ...run,
+      executionEvidenceCount: executionThrough, updatedAt: `${now}:${executionThrough}` })) }
+    updateSnapshot(current)
+  },
   executionWindowState: () => ({
+    changes: executionChanges, through: executionThrough,
     requests: executionRequests, contentReads: executionContentReads,
     dom: document.querySelectorAll('*').length,
-    toolRows: document.querySelectorAll('.tool-group-items > *').length,
+    toolRows: document.querySelectorAll('.tool-group-items .tool-call-disclosure, .tool-group-items .modified-file-row').length,
     diffLines: document.querySelectorAll('.modified-file-diff-line').length,
     text: document.querySelector('.process-content')?.textContent ?? '',
     overflow: document.documentElement.scrollWidth > innerWidth
