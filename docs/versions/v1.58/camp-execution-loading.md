@@ -7,6 +7,11 @@ last_updated: 2026-09-13
 
 # Camp 执行窗口性能
 
+2026-09-13 按用户确认恢复执行组原有“已完成 N 个步骤”及失败、停止等结果数量摘要。分页读取不再
+替换组摘要为“已载入 N 项执行记录”；计数限于当前组已读取的逻辑操作，加载范围留在更早记录入口。
+本次只移除 Renderer 文案覆盖并同步当前 UI 与 Run Process Detail Surface v34，不改变分页、缓存、
+数据协议或 Runtime 状态。验证证据见本次 PR。
+
 用户要求取消执行展示中的脱敏，并选择“按需分页＋相邻页预取”。本次工作基于 main 的
 `afd01d1010639a99ad4862774d1d17c03e1dd19b`，使用独立 `rovai/camp-execution-loading` worktree。
 

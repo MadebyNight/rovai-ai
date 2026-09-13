@@ -8480,7 +8480,6 @@ function RunExecutionContent({
             <ToolActivityGroup
               key={item.key}
               campId={campId}
-              partial={windowedEvidence}
               items={item.items}
               liveTail={item.key === liveTailToolGroupKey}
               cancelling={cancelling}
