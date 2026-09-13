@@ -158,3 +158,82 @@ describe('window navigation history', () => {
     expect(second.getSnapshot()).toEqual({ entries: [camp('B')], index: 0 })
   })
 })
+
+describe('uncommitted destinations and entry-owned corrections', () => {
+  it('backs through displayed entries while an unseen push is loading', async () => {
+    let release!: () => void
+    const navigation = createDesktopNavigation(async (target, transaction) => {
+      if (target.kind === 'camp' && target.campId === 'C') await new Promise<void>(resolve => { release = resolve })
+      transaction.commit()
+    })
+    navigation.reset(camp('A')); await navigation.push(camp('B'))
+    const pending = navigation.push(camp('C'))
+    await navigation.back(); release(); await pending
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('B')], index: 0 })
+  })
+
+  it('retains the committed forward branch while cancelling an unfinished push', async () => {
+    let release!: () => void
+    const navigation = createDesktopNavigation(async (target, transaction) => {
+      if (target.kind === 'camp' && target.campId === 'C') await new Promise<void>(resolve => { release = resolve })
+      transaction.commit()
+    })
+    navigation.reset(camp('A')); await navigation.push(camp('B')); await navigation.back()
+    const pending = navigation.push(camp('C'))
+    await navigation.forward(); release(); await pending
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('B')], index: 1 })
+  })
+
+  it('repairs the displayed entry without superseding a newer push or losing the repair at commit', async () => {
+    let release!: () => void
+    const navigation = createDesktopNavigation(async (target, transaction) => {
+      if (target.kind === 'camp' && target.campId === 'C') await new Promise<void>(resolve => { release = resolve })
+      transaction.commit()
+    })
+    navigation.reset(camp('A')); await navigation.push({ kind: 'memory', memoryId: null })
+    const entry = navigation.captureCurrentEntry()
+    const pending = navigation.push(camp('C'))
+    expect(entry.update({ kind: 'memory', memoryId: 'M' })).toBe(true)
+    release(); expect(await pending).toBe(true)
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), { kind: 'memory', memoryId: 'M' }, camp('C')], index: 2 })
+    expect(entry.update({ kind: 'memory', memoryId: 'old' })).toBe(false)
+    await navigation.back()
+    expect(entry.update({ kind: 'memory', memoryId: 'old' })).toBe(false)
+  })
+
+  it('commits a preview and its loaded content to one entry', async () => {
+    const navigation = createDesktopNavigation(async (_target, transaction) => {
+      transaction.commit()
+      await Promise.resolve()
+      transaction.commit()
+    })
+    navigation.reset(camp('A'))
+    await navigation.push(camp('B'))
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('B')], index: 1 })
+  })
+
+  it('user replace cancels pending push without inheriting its extra entry', async () => {
+    let release!: () => void
+    const navigation = createDesktopNavigation(async (target, transaction) => {
+      if (target.kind === 'camp' && target.campId === 'C') await new Promise<void>(resolve => { release = resolve })
+      transaction.commit()
+    })
+    navigation.reset(camp('A')); await navigation.push(camp('B'))
+    const pending = navigation.push(camp('C'))
+    await navigation.replace({ kind: 'quick_chat' }); release(); await pending
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), { kind: 'quick_chat' }], index: 1 })
+  })
+
+  it('reserves creation intent before a target exists and invalidates it even on a repeated current-page click', async () => {
+    const navigation = create()
+    navigation.reset(camp('A'))
+    const creating = navigation.beginIntent()
+    expect(creating.isCurrent()).toBe(true)
+    await navigation.push(camp('A'))
+    expect(creating.isCurrent()).toBe(false)
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A')], index: 0 })
+    const other = navigation.beginIntent()
+    navigation.reset(camp('A'))
+    expect(other.isCurrent()).toBe(false)
+  })
+})

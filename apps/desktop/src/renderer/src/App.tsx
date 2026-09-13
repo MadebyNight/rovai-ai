@@ -77,7 +77,7 @@ import { NewConversationDialog } from './NewConversationDialog'
 import { openRuntimeModelCatalog } from './runtime-check'
 import { FilePreviewProvider, useOptionalFilePreview } from './FilePreviewContext'
 import { NavigationShell } from './NavigationShell'
-import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type MemoryNavigationTarget } from './desktop-navigation'
+import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type NavigationIntent, type MemoryNavigationTarget } from './desktop-navigation'
 import { forgetFilePreviewSession } from './file-preview-session'
 import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { FilePreviewTabs } from './FilePreviewTabs'
@@ -1090,6 +1090,7 @@ function AuthoritativeApp({
     (target, transaction, context) => applyNavigationRef.current(target, transaction, context)
   ), [])
   useEffect(() => () => desktopNavigation.reset(), [desktopNavigation])
+  const displayedEntry = desktopNavigation.captureCurrentEntry()
   const lastMainTarget = useRef<NavigationTarget>({ kind: 'quick_chat' })
   const [appearance, setAppearance] = useState<AppearanceSnapshot>(
     () => initialAppearanceSnapshot(document.documentElement)
@@ -1416,9 +1417,9 @@ function AuthoritativeApp({
     const agentId = next?.agentId ?? null
     if (agentId === selectedMemberId) return
     if (desktopNavigation.getSnapshot().entries.length) {
-      void desktopNavigation.replace({ kind: 'members', agentId, tab: memberTab })
+      if (displayedEntry.update({ kind: 'members', agentId, tab: memberTab })) setSelectedMemberId(agentId)
     } else setSelectedMemberId(agentId)
-  }, [agents, selectedMemberId, view, memberTab, desktopNavigation])
+  }, [agents, selectedMemberId, view, memberTab, desktopNavigation, displayedEntry])
 
   useEffect(() => {
     setCampInspectorCampId((current) => view === 'camp' && current === activeCampId ? current : null)
@@ -2646,6 +2647,7 @@ function AuthoritativeApp({
     if (busy === 'create-camp') return 'ignored'
     const defaults = resolveAvailableNewConversationDefaults(generalPreferences, agents)
     if (generalPreferences?.oneClickNewConversationEnabled && defaults) {
+      const intent = desktopNavigation.beginIntent()
       try {
         await createCamp({
           name: null,
@@ -2654,9 +2656,10 @@ function AuthoritativeApp({
           defaultLeadAgentId: defaults.defaults.defaultLeadAgentId,
           collaborationMode: 'peer',
           activationState: campActivationStateForCreation('one_click')
-        })
+        }, false, intent)
         return 'created'
       } catch (nextError) {
+        if (!intent.isCurrent()) return 'ignored'
         openNewConversation(
           workspace,
           `一键创建未完成：${errorMessage(nextError)} 请重新确认项目、队员与默认负责人。`
@@ -2782,6 +2785,7 @@ function AuthoritativeApp({
       switch (target.kind) {
         case 'settings': setSettingsSection(target.section); setView('settings'); break
         case 'members':
+          membersViewRef.current?.showSelectedMember()
           setSelectedMemberId(target.agentId); setMemberTab(target.tab); setView('members'); break
         case 'memory': setMemoryTarget(target); setView('memory'); break
         case 'automations': setView('automations'); break
@@ -3526,8 +3530,10 @@ function AuthoritativeApp({
 
   async function createCamp(
     draft: Omit<CreateCampRequest, 'commandId'>,
-    enableOneClick = false
+    enableOneClick = false,
+    intent: NavigationIntent = desktopNavigation.beginIntent()
   ): Promise<void> {
+    cancelPendingCampActivation()
     setBusy('create-camp')
     try {
       if (draft.workspace) {
@@ -3554,7 +3560,13 @@ function AuthoritativeApp({
         }
       }
       try {
-        await activateCamp(campId, { reconcileDefaultLead: false, initializeComposerDraft: true })
+        if (intent.isCurrent()) {
+          await activateCamp(campId, { reconcileDefaultLead: false, initializeComposerDraft: true })
+        } else {
+          // Core owns the created Camp. Refresh its visibility without stealing focus;
+          // empty one-click drafts still follow the existing pending-Camp lifecycle.
+          await loadNavigation()
+        }
       } finally {
         if (preferencesSaveFailed) {
           notifyError('对话已创建，但默认队伍与一键新建设置未保存。可在「设置 → 通用」重试。')
@@ -4128,7 +4140,10 @@ function AuthoritativeApp({
             topNotices={inlineNotices}
             refreshSignal={memoryRefreshKey}
             navigationTarget={memoryTarget}
-            onNavigate={(target, mode) => { void desktopNavigation[mode](target) }}
+            onNavigate={(target, mode) => {
+              if (mode === 'push') void desktopNavigation.push(target)
+              else if (displayedEntry.update(target)) setMemoryTarget(target)
+            }}
             reviewDrawerSignal={memoryReviewDrawerSignal}
             onReviewDrawerSignalConsumed={() => setMemoryReviewDrawerSignal(0)}
             onPendingCountChange={setPendingMemoryCount}

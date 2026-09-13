@@ -38,7 +38,7 @@ let onboarding = deferred<OnboardingSnapshot>()
 let root: Root | null = null
 let supervisor: SupervisorSnapshot
 let appearanceTheme: 'day' | 'night' = 'day'
-let captureNavigation: (theme: 'day' | 'night', collapsed: boolean) => Promise<unknown>
+let captureNavigation: (theme: 'day' | 'night', collapsed: boolean, setup?: () => void) => Promise<unknown>
 
 function starting(): SupervisorSnapshot {
   return {
@@ -80,7 +80,7 @@ function api(path = ''): unknown {
       if (path === 'generalPreferences.get') return Promise.resolve({ schemaVersion: 4,
         startupLocationMode: 'last_location', lastSettingsSection: 'general', executionConsolePlacement: 'bottom',
         newConversationDefaults: null, newConversationDefaultsRequireConfirmation: false,
-        oneClickNewConversationEnabled: false, worldMapEnabled: true })
+        oneClickNewConversationEnabled: false, worldMapEnabled: true, ...(responses.get(path) ?? {}) })
       calls.push(path === 'request' ? args[0] : path)
       if (path === 'request' && requestHandlers.has(args[0])) return Promise.resolve().then(() => requestHandlers.get(args[0])!(args[1]))
       if (responses.has(path)) return Promise.resolve(responses.get(path))
@@ -479,13 +479,14 @@ Object.assign(window, { startupTest: {
     cases.push('Desktop Camp navigation preserves the forward branch, ignores stale reads and retains the page on failure')
     const navigationResponses = new Map(responses)
     const navigationHandlers = new Map(requestHandlers)
-    captureNavigation = async (theme, collapsed) => {
+    captureNavigation = async (theme, collapsed, setup) => {
       appearanceTheme = theme
       window.localStorage.removeItem('rovai.navigation-layout.v1')
       await reset({ kind: 'quick_chat' })
       for (const [method, response] of navigationResponses) responses.set(method, response)
       for (const [method, handler] of navigationHandlers) requestHandlers.set(method, handler)
       campRequest = id => campProjection(id)
+      setup?.()
       onboarding.resolve({ schemaVersion: 2, status: 'completed', origin: 'existing_installation', completedAt: stamp,
         selectedMemberRole: null, memberAgentId: null, quickChatCampId: null })
       publish({ runtimeMode: 'full_core', fullCoreState: 'ready', startupPhase: null, authorityState: { kind: 'current', origin: 'existing' },
@@ -503,6 +504,95 @@ Object.assign(window, { startupTest: {
       check(document.querySelectorAll('.camp-detail-entry').length === 3, 'The real Camp header keeps all three existing actions')
       return { control: center('.navigation-collapse-button'), title: center('.camp-topbar h1'), actions: center('.camp-detail-entry') }
     }
+
+    await captureNavigation('day', false)
+    await clickNavigation('导航会话 B', '.camp-nav-open')
+    const cancelledPush = deferred<unknown>()
+    campRequest = id => id === 'C' ? cancelledPush.promise : campProjection(id)
+    await clickNavigation('导航会话 C', '.camp-nav-open')
+    await back()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Back while C loads must traverse committed A/B history')
+    cancelledPush.resolve(campProjection('C')); await flush(); await flush()
+    await forward()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Forward after cancelled C restores B')
+    check(document.querySelector<HTMLButtonElement>('[aria-label="前进"]')?.disabled, 'Unseen C must not survive in the forward branch')
+
+    await captureNavigation('day', false)
+    const memoryLoading = deferred<unknown>(), campLoading = deferred<unknown>()
+    requestHandlers.set('memory.list', () => memoryLoading.promise)
+    campRequest = id => id === 'C' ? campLoading.promise : campProjection(id)
+    await clickNavigation('记忆', '.unified-primary-nav button')
+    await clickNavigation('导航会话 C', '.camp-nav-open')
+    memoryLoading.resolve(responses.get('memory.list')); await flush(); await flush()
+    check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Memory may normalize its displayed entry while C loads')
+    campLoading.resolve(campProjection('C')); await flush(); await flush()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 C', 'Old memory normalization must not cancel the newer C navigation')
+    await back()
+    check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Memory correction survives the pending Camp commit')
+    await back()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Memory normalization must not create an extra history entry')
+    cases.push('Pending pushes never enter history and memory normalization cannot supersede newer navigation')
+
+    const navigationAgents = ['A', 'B'].map((name, index) => ({
+      agentId: 'agent-' + name, displayName: '导航队员 ' + name, avatarRef: null, accent: null,
+      teamRole: '项目协作', professionalResponsibilities: '', personalityTraits: [], workingPrinciples: '', growthTopic: '',
+      defaultCapabilities: [], presence: 'present', removedAt: null, memberOrder: index, version: 1, createdAt: stamp, updatedAt: stamp,
+      runtimeConfiguration: { adapterKind: 'codex-cli', model: { mode: 'runtime_default' },
+        permissions: { adapterKind: 'codex-cli', schemaVersion: 1, values: {} } }, runtimeReadiness: { status: 'ready', blockers: [] }
+    }))
+    const setupCreation = () => {
+      responses.set('members.list', navigationAgents)
+      responses.set('generalPreferences.get', { oneClickNewConversationEnabled: true,
+        newConversationDefaults: { memberAgentIds: ['agent-A'], defaultLeadAgentId: 'agent-A' } })
+    }
+    await captureNavigation('day', false, setupCreation)
+    const lateCreation = deferred<unknown>()
+    requestHandlers.set('camps.create', () => lateCreation.promise)
+    await clickNavigation('新对话', '.unified-primary-nav button')
+    check(calls.includes('camps.create'), 'One-click creation must reach Core before navigation moves')
+    await clickNavigation('记忆', '.unified-primary-nav button')
+    lateCreation.resolve({ status: 'applied', payload: { campId: 'NEW' } }); await flush(); await flush()
+    check(document.querySelector('.memory-catalog-item.selected'), 'Late Camp creation must leave the newer memory page visible')
+    check(!document.querySelector('.camp-topbar'), 'Late creation must not activate its new Camp')
+    await back()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Late creation must not add a navigation step')
+    const failedCreation = deferred<unknown>()
+    requestHandlers.set('camps.create', () => failedCreation.promise)
+    await clickNavigation('新对话', '.unified-primary-nav button')
+    await clickNavigation('记忆', '.unified-primary-nav button')
+    failedCreation.reject(new Error('Fixture creation rejected')); await flush(); await flush()
+    check(!document.querySelector('.new-camp-dialog'), 'Obsolete creation failure must not reopen its dialog over the newer page')
+    requestHandlers.set('camps.create', () => ({ status: 'applied', payload: { campId: 'NEW' } }))
+    await clickNavigation('新对话', '.unified-primary-nav button')
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 NEW', 'Current creation intent still opens its new Camp')
+    await back()
+    check(document.querySelector('.memory-catalog-item.selected'), 'Successful current creation adds exactly one history entry')
+    cases.push('One-click creation success and failure respect newer navigation intent')
+
+    await captureNavigation('day', false, setupCreation)
+    await clickNavigation('队员', '.unified-primary-nav button')
+    const selectMember = async (name: string) => {
+      const button = document.querySelector<HTMLButtonElement>(`[aria-label^="导航队员 ${name}，"]`)
+      check(button, 'Member row must exist'); button.click(); await flush(); await flush()
+    }
+    const selectedMemberName = () => document.querySelector<HTMLInputElement>('.member-editor-page:not([hidden]) input[id$="displayName"]')?.value
+    await selectMember('A'); await selectMember('B')
+    await clickNavigation('新增队员')
+    const draftName = document.querySelector<HTMLInputElement>('.member-editor-page:not([hidden]) input[id$="displayName"]')!
+    check(draftName, 'New-member name input must exist')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(draftName, '保留的队员草稿')
+    draftName.dispatchEvent(new Event('input', { bubbles: true })); await flush()
+    await back()
+    check(selectedMemberName() === '导航队员 A', 'History replay must leave creating mode and show A')
+    await clickNavigation('继续编辑新队员草稿')
+    check(selectedMemberName() === '保留的队员草稿', 'Changing display mode must retain the new-member draft')
+    await selectMember('A')
+    document.querySelector<HTMLButtonElement>('.member-sidebar-row.selected .member-runtime-shortcut')!.click(); await flush(); await flush()
+    document.querySelector<HTMLButtonElement>('.personal-roster-button')!.click(); await flush()
+    check(document.querySelector('.personal-editor-page:not([hidden])'), 'Personal profile mode must be active before replay')
+    await back()
+    check(selectedMemberName() === '导航队员 A', 'Same-agent tab replay must leave personal profile mode')
+    cases.push('Member history replay selects the requested editor while retaining new-member drafts')
 
     let dialogOpen = true
     let dialogBusy = false

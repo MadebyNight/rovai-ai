@@ -35,42 +35,66 @@ export type NavigationTransaction = {
   commit(target?: NavigationTarget): boolean
 }
 
-/** One window-owned history. Pending intent is transactional, never a second router history. */
+export type NavigationIntent = { isCurrent(): boolean }
+type NavigationOperation =
+  | { kind: 'push' | 'replace'; target: NavigationTarget }
+  | { kind: 'traverse'; index: number }
+
+/** Only displayed entries are committed. Pending cursor moves never own another entries array. */
 export function createDesktopNavigation<Context = undefined>(
   apply: (target: NavigationTarget, transaction: NavigationTransaction, context?: Context) => Promise<void>
 ) {
   let state: NavigationState = { entries: [], index: -1 }
-  let intent = state
+  let pending: NavigationOperation | { kind: 'reservation' } | null = null
   let generation = 0
+  let entryRevision = 0
   let supersede: (() => void) | undefined
   const listeners = new Set<() => void>()
   const publish = (): void => { for (const listener of listeners) listener() }
-
-  const navigate = async (next: NavigationState, context?: Context): Promise<boolean> => {
-    if (next === intent) return false
-    intent = next
-    const request = ++generation
+  const invalidate = (): number => {
+    ++generation
     supersede?.()
+    supersede = undefined
+    pending = null
+    return generation
+  }
+
+  const navigate = async (operation: NavigationOperation, context?: Context): Promise<boolean> => {
+    const request = invalidate()
+    pending = operation
+    const target = operation.kind === 'traverse' ? state.entries[operation.index] : operation.target
     const superseded = new Promise<void>(resolve => { supersede = resolve })
     let committed = false
     const transaction: NavigationTransaction = {
       isCurrent: () => request === generation,
       superseded,
-      commit: (target = next.entries[next.index]) => {
+      commit: (resolvedTarget = target) => {
         if (request !== generation) return false
-        const entries = [...next.entries]
-        entries[next.index] = target
-        state = intent = { entries, index: next.index }
+        // Build from the latest committed entries so in-page repairs made during a slow
+        // departure survive. A second commit (Camp preview -> full projection) replaces.
+        let entries = [...state.entries]
+        let index = state.index
+        if (!committed && operation.kind === 'push') {
+          entries = [...entries.slice(0, index + 1), resolvedTarget].slice(-MAX_NAVIGATION_ENTRIES)
+          index = entries.length - 1
+        } else {
+          if (!committed && operation.kind === 'traverse') index = operation.index
+          index = Math.max(0, index)
+          entries[index] = resolvedTarget
+        }
+        state = { entries, index }
+        pending = null
+        ++entryRevision
         committed = true
         publish()
         return true
       }
     }
     try {
-      await apply(next.entries[next.index], transaction, context)
+      await apply(target, transaction, context)
       return committed && request === generation
     } finally {
-      if (request === generation && !committed) intent = state
+      if (request === generation) pending = null
     }
   }
 
@@ -80,35 +104,51 @@ export function createDesktopNavigation<Context = undefined>(
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
+    /** Reserve user intent before an async creation has produced a navigation target. */
+    beginIntent(): NavigationIntent {
+      const request = invalidate()
+      pending = { kind: 'reservation' }
+      return { isCurrent: () => request === generation }
+    },
+    /** In-page normalization owns this displayed revision, never a newer user request. */
+    captureCurrentEntry() {
+      const revision = entryRevision
+      return {
+        update(target: NavigationTarget): boolean {
+          if (revision !== entryRevision || state.index < 0) return false
+          const entries = [...state.entries]
+          entries[state.index] = target
+          state = { entries, index: state.index }
+          ++entryRevision
+          publish()
+          return true
+        }
+      }
+    },
     reset(target?: NavigationTarget): void {
-      ++generation
-      supersede?.()
-      supersede = undefined
-      state = intent = target ? { entries: [target], index: 0 } : { entries: [], index: -1 }
+      invalidate()
+      ++entryRevision
+      state = target ? { entries: [target], index: 0 } : { entries: [], index: -1 }
       publish()
     },
     push(target: NavigationTarget, context?: Context): Promise<boolean> {
       const current = state.entries[state.index]
       if (current && sameNavigationDestination(current, target)) {
-        // Clicking the displayed page cancels an unfinished departure without adding a step.
-        return intent === state ? Promise.resolve(false) : navigate(state, context)
+        return pending ? navigate({ kind: 'traverse', index: state.index }, context) : Promise.resolve(false)
       }
-      // A superseded destination that never rendered must not become a phantom entry.
-      const entries = [...state.entries.slice(0, state.index + 1), target].slice(-MAX_NAVIGATION_ENTRIES)
-      return navigate({ entries, index: entries.length - 1 }, context)
+      return navigate({ kind: 'push', target }, context)
     },
     replace(target: NavigationTarget, context?: Context): Promise<boolean> {
-      const entries = [...intent.entries]
-      const index = Math.max(0, intent.index)
-      entries[index] = target
-      return navigate({ entries, index }, context)
+      return navigate({ kind: 'replace', target }, context)
     },
     back(): Promise<boolean> {
-      return intent.index > 0 ? navigate({ ...intent, index: intent.index - 1 }) : Promise.resolve(false)
+      const index = pending?.kind === 'traverse' ? pending.index : state.index
+      return index > 0 ? navigate({ kind: 'traverse', index: index - 1 }) : Promise.resolve(false)
     },
     forward(): Promise<boolean> {
-      return intent.index < intent.entries.length - 1
-        ? navigate({ ...intent, index: intent.index + 1 }) : Promise.resolve(false)
+      const index = pending?.kind === 'traverse' ? pending.index : state.index
+      return index < state.entries.length - 1
+        ? navigate({ kind: 'traverse', index: index + 1 }) : Promise.resolve(false)
     }
   }
 }
