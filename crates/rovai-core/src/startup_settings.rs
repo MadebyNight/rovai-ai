@@ -102,17 +102,23 @@ impl Core {
                         return Ok(serde_json::to_value(saved)?);
                     }
                 }
-                let current = self.runtime_search_environment.read().await.clone();
-                let search = current
-                    .as_ref()
-                    .clone()
-                    .with_generation(
+                let search = if configuration.program_path.is_none() {
+                    // Restore-auto previews use fresh discovery inputs. Capture them
+                    // again under the save lock, then merge the latest saved settings.
+                    // Nothing is published until the revision CAS below succeeds.
+                    let search = self.read_runtime_check_environment(true).await?;
+                    let configurations = runtime_startup::load_all(&*self.database.lock().await)?;
+                    search.with_startup_configurations(configurations)
+                } else {
+                    let current = self.runtime_search_environment.read().await.clone();
+                    current.as_ref().clone().with_generation(
                         current
                             .generation()
                             .checked_add(1)
                             .context("Runtime generation exhausted")?,
                     )
-                    .with_startup_configuration(kind, configuration.clone());
+                }
+                .with_startup_configuration(kind, configuration.clone());
                 if configuration.program_path.is_some() {
                     let draft_search = search.clone();
                     let observation = tokio::task::spawn_blocking(move || {
