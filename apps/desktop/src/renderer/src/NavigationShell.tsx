@@ -62,7 +62,6 @@ export function NavigationShell({ platform, disabled = false, className = '', ch
   const shellStyle = useMemo(() => ({ ...attributes.style, '--rail-width': `${width}px` }) as CSSProperties, [attributes.style, width])
   return <NavigationContext.Provider value={layout.collapsed}>
     <div {...attributes} className={`app-shell navigation-shell ${className}${layout.collapsed ? ' navigation-collapsed' : ''}${resizing ? ' navigation-resizing' : ''}`} style={shellStyle}>
-      {platform === 'win32' ? chromeSlot && createPortal(control, chromeSlot) : <div className="navigation-macos-control">{control}</div>}
       {children}
       <DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenu.Trigger asChild disabled={disabled}>
@@ -114,6 +113,8 @@ export function NavigationShell({ platform, disabled = false, className = '', ch
         </DropdownMenu.Content></DropdownMenu.Portal>
       </DropdownMenu.Root>
       <span id="navigation-resize-help" className="sr-only">方向键调宽，Shift 加速，Home 最窄，End 最宽，Enter 折叠，空格选择宽度。低于 200 像素完全收起；从左边缘拖出恢复。Escape 取消拖拽。</span>
+      {/* Electron applies drag regions in DOM order; keep this no-drag control after the sidebar and topbar drag regions. */}
+      {platform === 'win32' ? chromeSlot && createPortal(control, chromeSlot) : <div className="navigation-macos-control">{control}</div>}
     </div>
   </NavigationContext.Provider>
 }

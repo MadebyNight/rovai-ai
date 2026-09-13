@@ -56,8 +56,10 @@ export async function navigationAcceptance(window: BrowserWindow, userData: stri
   await wait(() => run(`window.previewRootHandshakes > ${handshakes}`))
   await wait(async () => Boolean(activeFrame().frames.length) && await activeFrame().frames[0].executeJavaScript('Boolean(document.querySelector("#rendered"))').catch(() => false))
   await run('window.previewTestClock.tick(3001)'); await pause()
+  await activeFrame().executeJavaScript(`const image=new Image();image.src='./stalled-missing.png';document.body.append(image)`)
+  await wait(async () => (await snapshot()).text.includes('HTTP 404'))
   const stalled = await snapshot()
-  cases.push({ name: 'loaded A navigates to stalled B; same-document handshake and child load do not extend its deadline', ok: stalled.document === 'unresponsive' && !stalled.overlay, evidence: stalled })
+  cases.push({ name: 'loaded A navigates to stalled B; same-document handshake and child load do not extend its deadline', ok: stalled.document === 'unresponsive' && !stalled.overlay && stalled.text.includes('加载未完成 · 1 项问题'), evidence: stalled })
   await writeFile(join(userData, 'navigation-unresponsive.png'), (await window.webContents.capturePage()).toPNG())
   await close()
 
@@ -89,7 +91,7 @@ export async function navigationAcceptance(window: BrowserWindow, userData: stri
   await activeFrame().executeJavaScript(`const image=new Image();image.src='./current-page-missing.png';document.body.append(image)`)
   await wait(async () => (await snapshot()).text.includes('current-page-missing.png') && (await snapshot()).text.includes('HTTP 404'))
   const clean = await snapshot()
-  cases.push({ name: 'new root document does not replay the previous page resource failures', ok: !clean.text.includes('missing.css') && !clean.text.includes('/assets/missing.png') && !clean.text.includes('child fixture') && clean.text.includes('此页面有 1 项加载问题'), evidence: clean })
+  cases.push({ name: 'new root document does not replay the previous page resource failures', ok: !clean.text.includes('missing.css') && !clean.text.includes('/assets/missing.png') && !clean.text.includes('child fixture') && clean.text.includes('1 项问题'), evidence: clean })
   await close()
   return cases
 }

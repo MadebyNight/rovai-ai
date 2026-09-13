@@ -103,6 +103,7 @@ beforeEach(() => {
     revealInFolder: vi.fn(),
     copyPath: vi.fn(),
     reload: vi.fn(),
+    toggleHtmlSource: vi.fn(),
     reopen: vi.fn(),
     retry: vi.fn(),
     changePage: vi.fn()

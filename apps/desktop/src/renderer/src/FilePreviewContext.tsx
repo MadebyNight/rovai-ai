@@ -68,6 +68,7 @@ export interface FilePreviewTabModel {
   refreshError: string | null
   pageOffsets: number[]
   pageIndex: number
+  htmlSourceMode?: boolean
 }
 
 export interface FileChangesPreviewTabModel {
@@ -128,6 +129,7 @@ export interface FilePreviewContextValue {
   openInSystem(tabId: string): Promise<FilePreviewOperationResult<{ opened: true }>>
   revealInFolder(tabId: string): Promise<FilePreviewOperationResult<{ revealed: true }>>
   copyPath(tabId: string): Promise<FilePreviewOperationResult<{ copied: true }>>
+  toggleHtmlSource(tabId: string): void
   reload(tabId: string): Promise<void>
   reopen(tabId: string): Promise<void>
   retry(tabId: string): Promise<void>
@@ -999,6 +1001,12 @@ export function FilePreviewProvider({
       : { ok: false as const, error: errorFromUnknown() }
   }, [api, fileForAction])
 
+  const toggleHtmlSource = useCallback((tabId: string): void => {
+    setTabs((current) => current.map((tab) => tab.kind === 'file' && tab.id === tabId && tab.content?.kind === 'html'
+      ? { ...tab, htmlSourceMode: !tab.htmlSourceMode }
+      : tab))
+  }, [setTabs])
+
   const retry = reopen
 
   const reload = useCallback(async (tabId: string): Promise<void> => {
@@ -1132,11 +1140,12 @@ export function FilePreviewProvider({
     openInSystem,
     revealInFolder,
     copyPath,
+    toggleHtmlSource,
     reload,
     reopen,
     retry,
     changePage
-  }), [activate, activeTab, activeTabId, changePage, close, closeMany, copyPath, hidePane, move, open, openFileChanges, openFeedback, download, openInSystem, paneVisible, reload, reopen, resolvedTheme, revealInFolder, retry, selectChangedFile, showPane, tabs])
+  }), [activate, activeTab, activeTabId, changePage, close, closeMany, copyPath, hidePane, move, open, openFileChanges, openFeedback, download, openInSystem, paneVisible, reload, reopen, resolvedTheme, revealInFolder, retry, selectChangedFile, showPane, tabs, toggleHtmlSource])
 
   return (
     <FilePreviewApiContext.Provider value={api}><FilePreviewContext.Provider value={value}>
