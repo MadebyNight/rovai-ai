@@ -2986,7 +2986,7 @@ export interface GeneralPreferencesApi {
   setNewConversationDefaults(defaults: NewConversationDefaults, enableOneClick?: boolean): Promise<GeneralPreferencesSnapshot>
   setOneClickNewConversationEnabled(enabled: boolean): Promise<GeneralPreferencesSnapshot>
   setWorldMapEnabled(enabled: boolean): Promise<GeneralPreferencesSnapshot>
-  invalidateNewConversationDefaults(): Promise<GeneralPreferencesSnapshot>
+  invalidateNewConversationDefaults(expectedDefaults?: NewConversationDefaults | null): Promise<GeneralPreferencesSnapshot>
 }
 
 export type OnboardingStep = 'welcome' | 'member' | 'runtime'

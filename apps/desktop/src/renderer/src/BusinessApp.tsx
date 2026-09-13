@@ -1901,7 +1901,7 @@ export function BusinessApp({
       || invalidatingNewConversationDefaults.current
     ) return
     invalidatingNewConversationDefaults.current = true
-    void uiPreferences.generalPreferences.invalidateNewConversationDefaults()
+    void uiPreferences.generalPreferences.invalidateNewConversationDefaults(generalPreferences?.newConversationDefaults ?? null)
       .then(setGeneralPreferences)
       .catch((nextError) => setError(errorMessage(nextError)))
       .finally(() => { invalidatingNewConversationDefaults.current = false })

@@ -35,9 +35,9 @@ export function withHostConversationPreferences(local: Omit<GeneralPreferencesAp
     setWorldMapEnabled: value => localChange(local.setWorldMapEnabled(value)),
     setNewConversationDefaults: async (defaults, enableOneClick = false) => merge(await request('preferences.newConversation.setDefaults', { defaults, enableOneClick })),
     setOneClickNewConversationEnabled: async enabled => merge(await request('preferences.newConversation.setOneClick', { enabled })),
-    invalidateNewConversationDefaults: async () => {
-      if (!observed) await get()
-      return merge(await request('preferences.newConversation.invalidate', { expectedDefaults: observed!.newConversationDefaults }))
+    invalidateNewConversationDefaults: async expectedDefaults => {
+      if (expectedDefaults === undefined && !observed) await get()
+      return merge(await request('preferences.newConversation.invalidate', { expectedDefaults: expectedDefaults === undefined ? observed!.newConversationDefaults : expectedDefaults }))
     }
   }
 }

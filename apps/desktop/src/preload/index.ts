@@ -5,6 +5,7 @@ import {
   type AppQuitPreparationResponse
 } from '../shared/app-lifecycle'
 import type {
+  NewConversationDefaults,
   AppearancePreferences,
   AppearanceSnapshot,
   AppUpdateSnapshot,
@@ -189,8 +190,8 @@ const api: RovaiApi = {
     setWorldMapEnabled(enabled: boolean) {
       return ipcRenderer.invoke('rovai:general-preferences-set-world-map', enabled)
     },
-    invalidateNewConversationDefaults() {
-      return ipcRenderer.invoke('rovai:general-preferences-invalidate-new-conversation-defaults')
+    invalidateNewConversationDefaults(expectedDefaults?: NewConversationDefaults | null) {
+      return ipcRenderer.invoke('rovai:general-preferences-invalidate-new-conversation-defaults', expectedDefaults)
     }
   },
   channels: {

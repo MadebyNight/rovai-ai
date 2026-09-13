@@ -31,6 +31,9 @@ it('uses the Host team and one-click flag across browser sessions', async () => 
   expect(await api.setWorldMapEnabled(true)).toMatchObject({ ...saved, worldMapEnabled: true })
   expect(JSON.parse([...entries.values()][0]).newConversationDefaults).toBeNull()
   expect(await browserPreferences(transport.presentationScope!, transport).preferences.generalPreferences.get()).toMatchObject(saved)
+  const staleTeam = { memberAgentIds: ['agent-a'], defaultLeadAgentId: 'agent-a' }
+  await api.invalidateNewConversationDefaults(staleTeam)
+  expect(JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body)).params.expectedDefaults).toEqual(staleTeam)
   fetcher.mockImplementation(async () => Response.json({ result: {} }))
   await expect(api.get()).rejects.toThrow('不完整')
   transport.clear()
