@@ -1,3 +1,5 @@
+import { useExecutionDisclosureAnchor } from './useExecutionDisclosureAnchor'
+import { RunningText } from './RunningText'
 import { ExecutionContentContext, ExecutionVirtualList } from './ExecutionVirtualList'
 import { ExecutionNarration } from './ExecutionNarration'
 import type { MessageQuoteSnapshot } from '@contracts'
@@ -5609,8 +5611,10 @@ function ExecutionDrawer({
   }), [latestRun?.id, latestRequest])
   const setFollowingLatest = (following: boolean): void => {
     followingLatestRef.current = following
+    if (drawerBodyRef.current) drawerBodyRef.current.dataset.followingLatest = String(following)
     setFollowingLatestState((current) => current === following ? current : following)
   }
+  useExecutionDisclosureAnchor(drawerBodyRef, `${campId}:${process.agentId}`, () => setFollowingLatest(false))
   const appliedHeight = placement === 'bottom' && preferredHeight !== null && heightBounds
     ? clampExecutionDrawerHeight(preferredHeight, heightBounds)
     : null
@@ -5626,6 +5630,7 @@ function ExecutionDrawer({
   }, [heightBounds])
 
   const resetPreferredHeight = useCallback((): void => {
+    drawerRef.current?.style.removeProperty('--execution-reading-height')
     setPreferredHeight(null)
     persistExecutionDrawerHeight(null)
   }, [])
@@ -5788,6 +5793,7 @@ function ExecutionDrawer({
       ? focusedRunId
       : preferredAgentProcessRun(processRef.current.runs)?.id ?? null
     const runId = requestedRunId
+    drawerBodyRef.current?.dispatchEvent(new Event('execution-return-latest'))
     if (!runId) return undefined
     const run = processRef.current.runs.find((candidate) => candidate.id === runId) ?? null
     const followLatest = Boolean(run && NON_TERMINAL_RUNS.has(run.status))
@@ -5811,7 +5817,7 @@ function ExecutionDrawer({
     const terminal = !NON_TERMINAL_RUNS.has(latestRun.status)
     const frame = window.requestAnimationFrame(() => {
       const body = drawerBodyRef.current
-      if (body) scrollExecutionDrawerToLatest(body)
+      if (body && followingLatestRef.current) scrollExecutionDrawerToLatest(body)
       if (terminal) setFollowingLatest(false)
     })
     return () => window.cancelAnimationFrame(frame)
@@ -5953,6 +5959,9 @@ function ExecutionDrawer({
           data-following-latest={followingLatest ? 'true' : 'false'}
           onScroll={(event) => {
             const body = event.currentTarget
+            if (body.dataset.executionDisclosureAnchor === 'true') return
+            if (body.dataset.executionAdjustedTop !== undefined
+              && Math.abs(Number(body.dataset.executionAdjustedTop) - body.scrollTop) < 1) return
             if (body.scrollHeight - body.clientHeight <= 1) return
             const eligible = Boolean(
               latestRun && NON_TERMINAL_RUNS.has(latestRun.status)
@@ -6021,6 +6030,7 @@ function ExecutionDrawer({
               )
             })}
           </ol>
+          <div className="execution-reading-space" aria-hidden="true" />
           </ExecutionToolGroupStateContext.Provider>
           </ExecutionReadingContext.Provider>
           </ExecutionLatestContext.Provider>
@@ -6035,7 +6045,10 @@ function ExecutionDrawer({
             setFollowingLatest(Boolean(latestRun && NON_TERMINAL_RUNS.has(latestRun.status)))
             setLatestRequest((request) => request + 1)
             const body = drawerBodyRef.current
-            if (body) delete body.dataset.executionAnchorKey
+            if (body) {
+              body.dispatchEvent(new Event('execution-return-latest'))
+              delete body.dataset.executionAnchorKey
+            }
           }}
         />
     </section>
@@ -8661,7 +8674,7 @@ function RunExecutionContent({
         && (
           <div className="process-action current" role="status">
             <span className="process-spinner" aria-hidden="true" />
-            <span>{feedback}</span>
+            <RunningText text={feedback} />
           </div>
         )}
       {cancelling && nonTerminal && (

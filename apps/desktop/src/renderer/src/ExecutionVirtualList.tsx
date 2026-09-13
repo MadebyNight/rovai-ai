@@ -20,7 +20,7 @@ export function ExecutionVirtualList<T extends { key: string }>({ items, childre
   const root = useRef<HTMLDivElement>(null)
   const heights = useRef(new Map<string, number>())
   const [measurement, measure] = useState(0)
-  const [range, setRange] = useState(() => ({ start: Math.max(0, items.length - 8), end: items.length, key: items[Math.max(0, items.length - 8)]?.key, focus: undefined as string | undefined }))
+  const [range, setRange] = useState(() => ({ start: Math.max(0, items.length - 8), end: items.length, key: items[Math.max(0, items.length - 8)]?.key, focus: undefined as string | undefined, anchor: undefined as string | undefined }))
   const onVisibleRef = useRef(onVisible); onVisibleRef.current = onVisible
   const gaps = useMemo(() => items.map((item, index) => index === items.length - 1 ? 0
     : gapAfter?.(item, items[index + 1]) ?? gap), [items, gap, gapAfter])
@@ -50,7 +50,11 @@ export function ExecutionVirtualList<T extends { key: string }>({ items, childre
       while (last < items.length && positions[last] < upper) last++
       // Keep keyboard focus mounted even when scrolling with the keyboard.
       const focused = element.querySelector<HTMLElement>('[data-execution-virtual-key]:focus-within')?.dataset.executionVirtualKey
-      setRange(previous => previous.start === first && previous.end === last && previous.key === items[first]?.key && previous.focus === focused ? previous : { start: first, end: last, key: items[first]?.key, focus: focused })
+      const anchor = host.dataset.executionDisclosureAnchor === 'true'
+        ? [...element.querySelectorAll<HTMLElement>(':scope > [data-execution-virtual-key]')]
+          .find(row => row.querySelector(`[data-execution-item-key="${CSS.escape(host.dataset.executionAnchorKey ?? '')}"], [data-execution-item-keys~="${CSS.escape(host.dataset.executionAnchorKey ?? '')}"]`))?.dataset.executionVirtualKey
+        : undefined
+      setRange(previous => previous.start === first && previous.end === last && previous.key === items[first]?.key && previous.focus === focused && previous.anchor === anchor ? previous : { start: first, end: last, key: items[first]?.key, focus: focused, anchor })
       onVisibleRef.current?.(items.slice(first, last))
     }
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update) }
@@ -72,8 +76,11 @@ export function ExecutionVirtualList<T extends { key: string }>({ items, childre
         if (!row.contains(anchor ?? null) && row.getBoundingClientRect().bottom <= anchorTop) adjustment += height - previous
       }
       if (dirty) {
-        if (host.dataset.followingLatest === 'true') host.scrollTop = host.scrollHeight
-        else if (adjustment) host.scrollTop += adjustment
+        // Disclosure geometry has one owner, after the new measurements commit.
+        if (host.dataset.executionDisclosureAnchor !== 'true') {
+          if (host.dataset.followingLatest === 'true') host.scrollTop = host.scrollHeight
+          else if (adjustment) host.scrollTop += adjustment
+        }
         host.dataset.executionAdjustedTop = String(host.scrollTop)
         measure(value => value + 1)
       }
@@ -82,9 +89,10 @@ export function ExecutionVirtualList<T extends { key: string }>({ items, childre
     resize.observe(host)
     element.querySelectorAll<HTMLElement>(':scope > [data-execution-virtual-key]').forEach(row => resize.observe(row))
     host.addEventListener('scroll', schedule, { passive: true })
+    host.addEventListener('execution-disclosure-anchor', update)
     schedule()
-    return () => { cancelAnimationFrame(frame); resize.disconnect(); host.removeEventListener('scroll', schedule) }
-  }, [enabled, items, positions, gap, start, end])
+    return () => { cancelAnimationFrame(frame); resize.disconnect(); host.removeEventListener('scroll', schedule); host.removeEventListener('execution-disclosure-anchor', update) }
+  }, [enabled, items, positions, gap, start, end, range.anchor, range.focus])
 
   // Retain measurements only for the bounded loaded interval.
   useLayoutEffect(() => {
@@ -97,6 +105,8 @@ export function ExecutionVirtualList<T extends { key: string }>({ items, childre
   const indexes = Array.from({ length: end - start }, (_, offset) => start + offset)
   const focusedIndex = range.focus ? items.findIndex(item => item.key === range.focus) : -1
   if (focusedIndex >= 0 && !indexes.includes(focusedIndex)) indexes.push(focusedIndex)
+  const anchorIndex = range.anchor ? items.findIndex(item => item.key === range.anchor) : -1
+  if (anchorIndex >= 0 && !indexes.includes(anchorIndex)) indexes.push(anchorIndex)
   indexes.sort((a, b) => a - b)
   let cursor = 0
   const rows = indexes.flatMap(index => {

@@ -1,3 +1,4 @@
+import { RunningText } from './RunningText'
 import { revealMessageQuote } from './message-quote-reveal'
 import { ReturnToLatest } from './ReturnToLatest'
 import { MessageQuotes, MessageQuoteSelectionToolbar } from './MessageQuotes'
@@ -419,7 +420,7 @@ export function SingleChatRunHistory({
             {!terminal && !stopping && !hasActiveTool && !hasActiveCompaction && liveTailKey === null && feedback && (
               <div className="process-action current" role="status">
                 <span className="process-spinner" aria-hidden="true" />
-                <span>{feedback}</span>
+                <RunningText text={feedback} />
               </div>
             )}
             {stopping && <div className="process-action cancelling" role="status">正在提交停止请求，完成后即可继续发送。</div>}
@@ -1637,7 +1638,7 @@ export function SingleChatPanel({
           {!sending && currentSnapshot && currentSnapshot.messages.length === 0 && <div className="single-chat-empty"><strong>和 {selectedMember?.displayName} 单独聊聊</strong><span>发送第一条消息开始这段对话。</span></div>}
           {currentSnapshot && <SingleChatTranscript snapshot={currentSnapshot} now={now} cancelling={cancelling} onNotify={onNotify} />}
           {sending && !activeRun && <div className="process-action current single-chat-send-feedback" role="status">
-            <span className="process-spinner" aria-hidden="true" /><span>连接中</span>
+            <span className="process-spinner" aria-hidden="true" /><RunningText text="连接中" />
           </div>}
         </div>
       </section>

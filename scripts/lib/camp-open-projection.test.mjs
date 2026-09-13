@@ -21,6 +21,8 @@ test('terminal Run artifacts retain their authors and layout across themes and w
 test('public message groups follow rendered content height and preserve individual actions', { timeout: 60_000 }, t => runFixture(t, '--message-groups'))
 test('current user avatars and structured mentions open a live, keyboard-accessible profile card', { timeout: 60_000 }, t => runFixture(t, '--current-user-profile'))
 
+test('command interaction keeps disclosure anchors through async results and accessible states', { timeout: 120_000 }, t => runFixture(t, '--command-interaction'))
+
 test('pending edit withdraws into the ordinary Composer and fences failed or uncertain returns', { timeout: 60_000 }, t => runFixture(t, '--pending-return'))
 
 async function runFixture(t, mode = '--camp-open') {
@@ -51,7 +53,7 @@ async function runFixture(t, mode = '--camp-open') {
     child.stderr.on('data', chunk => { output += chunk.toString() })
     // The window scenario traverses both viewports and captures expanded results
     // in both themes; retain a separate bounded Electron budget for that pass.
-    const timeout = setTimeout(() => child.kill('SIGKILL'), mode === '--execution-window' ? 75_000 : 45_000)
+    const timeout = setTimeout(() => child.kill('SIGKILL'), ['--execution-window', '--command-interaction'].includes(mode) ? 75_000 : 45_000)
     let code
     try { [code] = await closed } finally { clearTimeout(timeout) }
     assert.equal(code, 0, `CampOpen refresh regression failed:\n${output}`)
