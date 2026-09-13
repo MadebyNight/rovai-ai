@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { RuntimeModelSearch } from './RuntimeModelSearch'
+import { RuntimeParameterSelect } from './RuntimeParameterSelect'
 import type {
   AdapterInstallation,
   AdapterKind,
@@ -453,22 +454,17 @@ function ModelFields({
       />
 
       {explicit && optionKey && (option || optionValue) && (
-        <label className="field-label">
-          <span>{optionLabel ?? option?.label ?? optionKey}</span>
-          <select
-            value={optionValue}
-            disabled={disabled}
-            onChange={(event) => setOption(event.target.value)}
-          >
-            <option value="">跟随模型默认值</option>
-            {optionInvalid && (
-              <option value={optionValue} disabled>当前目录未提供 · {optionValue}</option>
-            )}
-            {option?.values.map((choice) => (
-              <option key={choice.value} value={choice.value}>{choice.label}</option>
-            ))}
-          </select>
-        </label>
+        <RuntimeParameterSelect
+          label={optionLabel ?? option?.label ?? optionKey}
+          value={optionValue}
+          disabled={disabled}
+          onChange={setOption}
+          defaultChoice={{ value: '', label: '跟随模型默认值' }}
+          choices={[
+            ...(optionInvalid ? [{ value: optionValue, label: `当前目录未提供 · ${optionValue}`, disabled: true }] : []),
+            ...(option?.values ?? [])
+          ]}
+        />
       )}
     </>
   )
@@ -576,117 +572,25 @@ function RuntimeModelPicker({
   return (
     <div className="field-label runtime-model-field">
       <span>模型策略</span>
-      <DropdownMenu.Root
+      <RuntimeModelSearch
         open={open}
         onOpenChange={(nextOpen) => {
           setOpen(nextOpen)
           if (nextOpen) loadCatalog()
         }}
-      >
-        <DropdownMenu.Trigger asChild>
-          <button
-            className="runtime-model-picker-trigger"
-            type="button"
-            disabled={disabled}
-            aria-label={`模型，${triggerLabel}`}
-          >
-            <span>
-              <strong>{triggerLabel}</strong>
-            </span>
-            <svg aria-hidden="true" viewBox="0 0 16 16">
-              <path d="m4 6 4 4 4-4" />
-            </svg>
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            className="runtime-model-picker-menu"
-            align="start"
-            sideOffset={5}
-            collisionPadding={10}
-            loop
-          >
-            <DropdownMenu.Label className="runtime-model-picker-heading">
-              <strong>选择模型</strong>
-              {statusCopy && <small role="status">{statusCopy}</small>}
-            </DropdownMenu.Label>
-            <DropdownMenu.RadioGroup value={selectedValue} onValueChange={selectModel}>
-              <RuntimeModelPickerItem value="runtime_default" label="默认" />
-              {missingSelectionLabel && (
-                <RuntimeModelPickerItem
-                  value={explicit?.modelId ?? ''}
-                  label={missingSelectionLabel}
-                  disabled
-                  code
-                />
-              )}
-              {models.map((model) => (
-                <RuntimeModelPickerItem
-                  key={model.id}
-                  value={model.id}
-                  label={model.displayName}
-                  detail={model.id === model.displayName ? undefined : model.id}
-                  description={model.description ?? undefined}
-                  code
-                />
-              ))}
-            </DropdownMenu.RadioGroup>
-            {loading && models.length === 0 && (
-              <DropdownMenu.Label className="runtime-model-picker-state">
-                <i aria-hidden="true" />正在获取模型列表…
-              </DropdownMenu.Label>
-            )}
-            {!loading && models.length === 0 && (
-              <DropdownMenu.Label className={`runtime-model-picker-state ${refreshFailed || persistedRefreshFailed ? 'error' : ''}`}>
-                {refreshFailed || persistedRefreshFailed
-                  ? '暂时无法获取模型列表。'
-                  : '当前没有可选的固定模型。'}
-              </DropdownMenu.Label>
-            )}
-            {(refreshFailed || persistedRefreshFailed) && !loading && (
-              <DropdownMenu.Item className="runtime-model-picker-item" onSelect={(event) => {
-                event.preventDefault()
-                loadCatalog()
-              }}><span className="runtime-model-picker-copy"><strong>重试</strong></span></DropdownMenu.Item>
-            )}
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </div>
-  )
-}
+        models={models}
+        value={selectedValue}
+        label={triggerLabel}
+        missingLabel={missingSelectionLabel}
+        disabled={disabled}
+        loading={loading}
+        failed={refreshFailed || persistedRefreshFailed}
+        onSelect={selectModel}
+        notice={!loading && (refreshFailed || persistedRefreshFailed) ? statusCopy : null}
+        onRetry={loadCatalog}
+      />
 
-function RuntimeModelPickerItem({
-  value,
-  label,
-  detail,
-  description,
-  disabled = false,
-  code = false
-}: {
-  value: string
-  label: string
-  detail?: string
-  description?: string
-  disabled?: boolean
-  code?: boolean
-}): React.JSX.Element {
-  return (
-    <DropdownMenu.RadioItem
-      className="runtime-model-picker-item"
-      value={value}
-      disabled={disabled}
-      title={[label, detail, description].filter(Boolean).join('\n')}
-    >
-      <span className="runtime-model-picker-copy">
-        <strong>{label}</strong>
-        {detail && <small className={code ? 'is-code' : ''}>{detail}</small>}
-        {description && <small>{description}</small>}
-      </span>
-      <DropdownMenu.ItemIndicator className="runtime-model-picker-check">
-        <svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg>
-      </DropdownMenu.ItemIndicator>
-    </DropdownMenu.RadioItem>
+    </div>
   )
 }
 
@@ -804,20 +708,17 @@ function PermissionSelect({
   const invalid = Boolean(currentValue)
     && !descriptor.choices.some((choice) => choice.value === currentValue)
   return (
-    <label className="field-label">
-      <span>{label}</span>
-      <select
-        value={currentValue}
-        disabled={disabled}
-        onChange={(event) => updatePermission(draft, fieldKey, event.target.value, onChange)}
-      >
-        {!currentValue && <option value="">请选择</option>}
-        {invalid && <option value={currentValue} disabled>已失效 · {currentValue}</option>}
-        {descriptor.choices.map((choice) => (
-          <option key={choice.value} value={choice.value}>{choice.label}</option>
-        ))}
-      </select>
-    </label>
+    <RuntimeParameterSelect
+      label={label}
+      value={currentValue}
+      disabled={disabled}
+      onChange={(value) => updatePermission(draft, fieldKey, value, onChange)}
+      choices={[
+        ...(!currentValue ? [{ value: '', label: '请选择' }] : []),
+        ...(invalid ? [{ value: currentValue, label: `已失效 · ${currentValue}`, disabled: true }] : []),
+        ...descriptor.choices
+      ]}
+    />
   )
 }
 
