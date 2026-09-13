@@ -10,8 +10,49 @@ last_updated: 2026-09-13
 # v1.59 实施与验收
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
-实现工作目录为仓库同级 `rovai-ai-unified-rust-host`，分支 `rovai/unified-rust-host`，
-起点 `a18425ec78ae2e1a0666b2c029564ff3f7bc8f78`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
+复用任务分支继续开发，并合入 main `93a5a1dc`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+
+## 本轮：Web 刷新恢复与共享导航
+
+功能提交 `d24a624a` 在已有 Bearer Session 上补齐当前标签页恢复：`sessionStorage` 保存登录、
+编辑身份及证明、未提交编辑和原命令核对材料，启动先经 Host 验证再挂载正式页面。
+正常刷新保持原草稿身份；复制标签页通过独立文档租约检测后，由 Host 验证并派生独立 Session / 编辑身份，
+不继承原标签的编辑与待定命令。派生 Session 不延长原有效期，退出只撤销当前 Session。
+非秘密租约与卸载交接标记不保存 Token、证明或编辑内容；这些材料仅在当前标签页 `sessionStorage` 中保存。
+上传刷新后只恢复提交核对材料，不把文件正文塞进浏览器存储；未完成上传需要重新选择文件。
+
+main 新增的页面历史、离开保护与导航组件已接入共享 `BusinessApp`。Desktop 继续使用内存历史，
+Web 以浏览器 History API 驱动同一导航控制器，页内箭头、浏览器前后退和刷新后的前进保持一致；
+Web 控件从左侧开始，不留 macOS 原生三按钮空位。侧栏移除健康连接的“已连接 Host”常驻文案。
+
+[真实浏览器记录](evidence/web-recovery/validation.json)与
+[日间](evidence/web-recovery/web-recovery-day.png)、[夜间](evidence/web-recovery/web-recovery-night.png)
+使用真实 Rust Host / 正式 Web 页面验证刷新保留原编辑身份和尚未自动保存的 Composer 内容、
+页内与浏览器历史、刷新后前进、复制 `sessionStorage` 的新标签独立编辑、退出副本不影响原页。
+复制场景使用 `window.open` 触发浏览器原生存储复制，不冒充已点验所有浏览器的“复制标签页”菜单。
+正式渠道页面原有浏览器验收通过；原生 Electron 导航与结构化 Composer 两个既有 owner 通过。
+
+macOS arm64 验证：TypeScript、Desktop / Web 构建、Rust Web 5 项、Clippy 与通用文档门禁通过；
+HTTP owner 扩展验证 Session 恢复证明、派生身份和独立撤销。客户端 / 浏览器导航 / Composer 定向
+22 项通过，Desktop / Web 导航含超过 50 项浏览器历史的 12 项通过。
+全量 Vitest 首轮为 1984 通过 / 1 超时失败，失败来自未改动的 CoreClient 启动重试时间断言；
+停止并行编译后该文件 21 项定向复验通过，未删除或放宽断言，不将首轮改记为全量通过。
+本轮未运行 Windows 原生资格、真实模型或实体第二设备验收；既有 Windows 附件 404 未因此消失。
+
+干净 `d24a624a` 构建的 macOS arm64 日常包版本为 0.2.5，ad-hoc 签名、Bundle ID 和三个 Rust
+程序架构门禁通过。[打包 App 验收](evidence/web-recovery/packaged-validation.json)使用全新独立
+userData / Skill Library / MCP，走首次引导并通过既有命令暂缓 Runtime 配置；创建测试 Camp，
+确认[Desktop 正式页面](evidence/web-recovery/packaged-desktop.png)、包内 Host 开启的
+[Web 正式页面](evidence/web-recovery/packaged-web.png)、刷新身份与草稿、关闭 Web 后 Core 继续就绪。
+首次脚本曾等待首次引导后的侧栏而超时；补齐新安装引导前置后通过，没有修改产品断言。
+
+按用户明确要求通过 `install:mac:daily` 完成[非终止安装](evidence/web-recovery/installation.json)：
+新包位于 `/Applications/Rovai AI.app`，旧包保留为
+`/Applications/Rovai AI.backup-before-web-recovery-20260913T125721Z.app`。
+暂存与最终位置验签通过，最终 app.asar / Core / Host / CLI SHA-256 与已验收来源一致，原 App、Host
+和 Helper 五个 PID 安装后仍存活；不修改日常 userData。当前会话仍运行旧版本，用户稍后退出后从
+规范路径打开才使用新版本；不把磁盘替换表述为热升级。安装后追加的记录提交不改变该功能包。
 
 ## 本轮：原生入口与 Desktop Web 渠道收敛
 
