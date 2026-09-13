@@ -89,3 +89,29 @@ HTTP 共享单元测试另验证 cookie/Host/来源/跨实例拒绝、query、MI
 History 导航、刷新代际、真实导航 404 与关闭撤销；普通 Chrome、文件预览布局、TypeScript 和桌面构建在最终代码上
 再次通过。Rust PR 套件各段通过：同步 main 后的库测试 559 项、CLI 35 项、慢测试 310 项；Clippy 无警告。
 远端 CI 的最终提交状态见 [PR #363](https://github.com/murray17/rovai-ai/pull/363)。
+
+## 连续导航状态与诊断修正（2026-09-13）
+
+基线为 main `d53f8ca9`，修复用户指出的三个导航生命周期问题。先在正式 Provider/Pane、Main service 和隔离
+Electron 中建立失败用例；只控制宿主截止计时，iframe HTTP、作者脚本与导航保持浏览器原生行为：
+
+| 场景 | 修复前实际结果 | 修复后专项结果 |
+| --- | --- | --- |
+| 正常 A → 卡住 B | 推进 60 秒后仍 loading、剩余计时器 0 | B 按自己的期限进入 unresponsive，正文可见；同页重复握手和真实子 iframe 加载不能延后期限 |
+| 已加载页面 → 无鉴权的纯文本 403 | load 后标为 loaded，诊断 unavailable | 显示无法确认与重试，错误响应原文可见，无遮罩或上一页诊断 |
+| 旧页 CSS/图片 404 → 新页面 | 两条旧 404 在新页重放 | 只出现新页主动触发的当前错误；该新请求用作诊断流顺序屏障 |
+
+最小命令为 `node --test --test-name-pattern='document navigation' scripts/lib/html-preview-site.test.mjs`；此用例同时
+进入默认 `pnpm test:html-preview`。它与首次打开即卡住的既有回归分别执行，不用状态逻辑模拟替代正式界面证据。
+共享 HTTP 测试另验证旧页延迟请求、105 条历史失败后的新页额度、子 HTML 不清除根错误及未知文档订阅拒绝。
+负例首先观察到 `old-page-missing.css` 混入新订阅，修复后仅留下当前请求。宿主加载状态的确定性测试覆盖重复握手、
+旧根状态、无响应、完成/失败与销毁清理。此修正不更改权限界面、资源改写策略或作者文件。
+
+最终 TypeScript、桌面构建、完整 `VITEST_MAX_WORKERS=2 pnpm test`（189 个文件/1960 项 Vitest；Node 子集 317
+通过、2 项平台专属跳过）、HTML 套件、普通 Chrome、文档治理与 Clippy 通过。Rust PR 套件为库 560、CLI 35、慢测试
+310 项通过。磁盘空间有限，本次 Rust 验证关闭 incremental 与 debug symbols，未复用其他 worktree 的 target。
+
+文件布局原生输入回归在分支与未修改 main `d53f8ca9` 上都失败于同一项：拖动关闭时分隔线是
+`rgb(119, 119, 119)`，原断言要求与 danger 提示 `rgb(162, 76, 70)` 一致；本次未修改分隔线代码或放宽断言，
+不把这一项报告为通过。完整测试的 sandbox admission 源码检查还发现 main 的 `navigation-shell.test.mjs` 中
+`if` 后缺少空格；本次仅补齐该空格以匹配既有检查，调用、隔离准入与测试语义保持不变。

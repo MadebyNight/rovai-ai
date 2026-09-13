@@ -204,7 +204,7 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
     // A stream in every iframe would exhaust HTTP/1 browser connection slots.
     void (async () => {
     try {
-      const response = await fetch(`${config.origin}/__rovai-preview/events`, { signal: abort.signal, credentials: 'same-origin', cache: 'no-store' })
+      const response = await fetch(`${config.origin}/__rovai-preview/events?documentId=${encodeURIComponent(config.documentId)}`, { signal: abort.signal, credentials: 'same-origin', cache: 'no-store' })
       if (!response.ok || !response.body) throw new Error('预览诊断通道不可用。')
       const reader = response.body.getReader(), decoder = new TextDecoder()
       let pending = ''
