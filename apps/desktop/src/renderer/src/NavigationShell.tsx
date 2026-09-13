@@ -73,7 +73,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
   const gesture = useRef<{ id: number; x: number; width: number; before: NavigationLayout; moved: boolean } | null>(null)
   const frame = useRef<number | null>(null)
   const maximum = navigationMaxWidth(viewport)
-  const fixedSettings = !browser && platform === 'darwin' && settings
+  const fixedSettings = settings && (browser || platform === 'darwin')
   const width = layout.collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
   const label = layout.collapsed ? '展开导航侧栏' : '收起导航侧栏'
   const toggle = (): void => setLayout(current => fixedSettings && !current.collapsed ? current : { ...current, collapsed: !current.collapsed })
