@@ -11,7 +11,7 @@ import { build } from 'vite'
 import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 
 test('production navigation shell preserves drafts and supports complete collapse through native input', {timeout:120000}, async t => {
-  if(!admitElectronIntegrationTest(t)) return
+  if (!admitElectronIntegrationTest(t)) return
   const root=resolve(import.meta.dirname,'../..'), source=join(root,'scripts/fixtures/navigation-shell')
   const temporaryRoot=await realpath(tmpdir())
   const fixture=await mkdtemp(join(temporaryRoot,'rovai-navigation-shell-'))

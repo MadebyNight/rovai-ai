@@ -280,6 +280,30 @@ async fn fresh_formal_and_draft_checks_preserve_program_selection_and_private_st
         fixture.core.runtime_health_payload().await.unwrap(),
         public_before
     );
+    std::fs::rename(&old, old.with_extension("moved")).unwrap();
+    fixture.check().await;
+    let missing = fixture.health().await;
+    assert_eq!(missing["discovery"]["discoveryStatus"], "missing");
+    assert!(
+        missing["reportedVersion"].is_null(),
+        "never label a missing manual program with an old version"
+    );
+    assert_eq!(fixture.settings().await, settings_before);
+
+    let other = configuration(None, "other-private", new.parent().unwrap());
+    fixture
+        .core
+        .handle_runtime_startup(
+            "runtime.startup.save",
+            json!({"runtimeKind": "pi", "expectedRevision": 0, "configuration": other}),
+        )
+        .await
+        .unwrap();
+    // The active search still points at new/3.2.0. Restore-auto sees a changed
+    // search source, and saving must adopt it without a subsequent formal check.
+    let latest = fixture.program("latest", "4.0.0", false);
+    *fixture.paths.lock().unwrap() = vec![latest.parent().unwrap().into()];
+    let public_before = fixture.core.runtime_health_payload().await.unwrap();
     let automatic = configuration(None, "draft-auto", old.parent().unwrap());
     let preview = fixture
         .core
@@ -291,7 +315,7 @@ async fn fresh_formal_and_draft_checks_preserve_program_selection_and_private_st
         )
         .await
         .unwrap();
-    assert_eq!(preview["reportedVersion"], "codex-cli 3.2.0");
+    assert_eq!(preview["reportedVersion"], "codex-cli 4.0.0");
     assert_eq!(
         fixture.settings().await,
         settings_before,
@@ -305,18 +329,48 @@ async fn fresh_formal_and_draft_checks_preserve_program_selection_and_private_st
     assert!(!preview.to_string().contains("draft-auto"));
     assert!(fixture.captures.load(Ordering::SeqCst) >= 6);
 
-    std::fs::rename(&old, old.with_extension("moved")).unwrap();
-    fixture.check().await;
-    let missing = fixture.health().await;
-    assert_eq!(missing["discovery"]["discoveryStatus"], "missing");
     assert!(
-        missing["reportedVersion"].is_null(),
-        "never label a missing manual program with an old version"
+        fixture
+            .core
+            .handle_runtime_startup(
+                "runtime.startup.save",
+                json!({
+                    "runtimeKind": KIND, "expectedRevision": 0, "configuration": automatic,
+                })
+            )
+            .await
+            .is_err(),
+        "a stale save cannot publish the fresh search environment"
     );
     assert_eq!(fixture.settings().await, settings_before);
+    assert_eq!(
+        fixture.core.runtime_health_payload().await.unwrap(),
+        public_before
+    );
     fixture.save(1, &automatic).await;
-    fixture.check().await;
-    assert_eq!(fixture.health().await["reportedVersion"], "codex-cli 3.2.0");
+    let health = fixture.health().await;
+    assert_eq!(
+        health["discovery"]["executablePath"],
+        preview["executablePath"]
+    );
+    assert_eq!(health["reportedVersion"], "codex-cli 4.0.0");
+    assert_eq!(
+        fixture
+            .core
+            .runtime_search_environment
+            .read()
+            .await
+            .startup_configuration(AdapterKind::Pi),
+        other,
+        "refreshing the base environment preserves other saved Runtime settings"
+    );
+    let captures = fixture.captures.load(Ordering::SeqCst);
+    fixture.save(1, &automatic).await;
+    assert_eq!(
+        fixture.captures.load(Ordering::SeqCst),
+        captures,
+        "same-write retries remain idempotent"
+    );
     fixture.close().await;
 }
 
@@ -385,6 +439,23 @@ async fn failed_environment_reader_does_not_reuse_or_publish_the_cached_environm
         core.inspect_runtime_startup(KIND, RuntimeStartupConfiguration::default(), false)
             .await
             .is_err()
+    );
+    assert!(
+        core.handle_runtime_startup(
+            "runtime.startup.save",
+            json!({
+                "runtimeKind": KIND, "expectedRevision": 0,
+                "configuration": RuntimeStartupConfiguration::default(),
+            })
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        core.handle_runtime_startup("runtime.startup.get", json!({"runtimeKind": KIND}))
+            .await
+            .unwrap()["revision"],
+        0
     );
     assert_eq!(
         serde_json::to_value(core.runtime_search_environment.read().await.summary()).unwrap(),
