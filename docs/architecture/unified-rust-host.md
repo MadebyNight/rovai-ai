@@ -44,7 +44,8 @@ macOS/Linux 本机传输为 UDS，Windows 为受保护 Named Pipe，另有可信
 服务端从验证过的本机身份、Remote Session 或 Agent Built-in 上下文确定能力；不信任客户端自报用户身份。
 Web 管理令牌交换短期可撤销 opaque Bearer Session；不使用认证 Cookie。短期 Session 与编辑恢复材料保存在当前标签页 sessionStorage，启动先验证再恢复；管理令牌不持久化。
 仅固定控制台 origin 的封闭 API 使用显式 Authorization；登录和认证 Fetch 拒绝重定向，SSE、图片、下载同样
-走认证 Fetch，必要时生成并释放 Blob URL。不把凭据写 URL、预览链接、日志或浏览器长期存储。
+走认证 Fetch，必要时生成并释放 Blob URL。不把管理令牌、Bearer 或编辑证明写 URL、预览链接、日志或浏览器长期存储；
+扫码登录的一次性 fragment 票据按下述短期例外处理。
 
 管理令牌使用 256-bit 系统随机数，本机入口初始化、重复查看/复制或独立轮换。Host 为重复查看保留进程内原值；
 认证使用带类型区分摘要、恒定时间比较。Session 仍只存摘要，凭据不进入状态、日志或公开网络投影。

@@ -11,13 +11,13 @@ last_updated: 2026-09-13
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，并合入 main `93a5a1dc`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+复用任务分支继续开发，当前已合入 main `93487750`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：Web 刷新恢复与共享导航
+## 本轮：扫码登录、Web 刷新恢复与共享导航
 
 2026-09-13 后续同步 main `93487750`，合并提交 `b1d5000f` 保留原 Web 实现，并纳入共同的“回到最新”
-交互；TypeScript 与 Camp / 单聊两项对应原生 Electron 交互回归通过。随后用户新增扫码登录要求，
-旧的合并后包尚未提升到日常安装位置，安装继续等待含扫码登录的构建与验收。
+交互；TypeScript 与 Camp / 单聊两项对应原生 Electron 交互回归通过。随后按用户新增要求完成扫码登录，
+安装的是含该功能的 `4c92c500`，没有先提升中间合并包。
 
 Desktop 远程连接二维码改为显式“扫码登录”。普通复制地址和手工管理 Token 登录保留；本机管理入口
 `host.web.loginTicket` 让 Rust 会话注册表签发两分钟、一次性的随机票据，内存仅保留摘要和到期时间。
@@ -32,6 +32,25 @@ StrictMode 单次兑换、票据不进入 sessionStorage、真实 120 秒过期�
 两客户端竞争来自同一 Mac 的独立请求，不宣称已完成两台实体设备扫码验收。
 Rust 原 Session 生命周期 owner 扩展输入矩阵后 Web 5 项通过，Clippy 通过；Web 客户端 / fragment / 导航 16 项通过。
 设置页 14 个既有状态、双主题二维码独立解码、复制和键盘交互通过；模拟 API 仅证明呈现，不代替 Host 票据事实。
+
+干净功能提交 `4c92c500129be3e2c5bf2850bf196383ecbfb65c` 完成 TypeScript、设置评审入口类型检查、
+release 构建及 `package:mac:daily`；0.2.5 / macOS arm64 的签名、Bundle ID 与架构门禁通过。
+[实际打包 App 验收](evidence/scan-login/packaged-validation.json)使用独立 userData / Skill Library / MCP，
+从 Desktop 正式设置页解码真实二维码，重新生成后旧码 HTTP 401，新码直接进入正式 Web，重复兑换 401；
+刷新保留原编辑身份和未提交内容，关闭 Web 后 Core 继续就绪。
+[日间](evidence/scan-login/scan-login-day.png)与[夜间](evidence/scan-login/scan-login-night.png)
+来自该 App，截图中的票据已经兑换并随隔离 Host 关闭失效；[Web](evidence/scan-login/packaged-web.png)
+来自该包所托管的页面。首轮验收曾发生 CDP `Runtime.evaluate` 超时；只增加脚本阶段日志后，在全新隔离目录
+以原期限和产品代码重跑通过，未把首次超时宣称为已定位或修复。UI 模拟入口的独立
+[状态验证记录](evidence/scan-login/settings-validation.json)另行保留，不冒充真实票据服务。
+
+已通过官方 `install:mac:daily` 完成[本次非终止安装](evidence/scan-login/installation.json)：
+规范目标 `/Applications/Rovai AI.app`，备份
+`/Applications/Rovai AI.backup-before-scan-login-20260913T132121Z.app`。
+暂存及最终目标验签通过，app.asar / Core / Host / CLI 的 SHA-256 与已验收来源相同；
+安装前记录的五个 App / Helper / Host 进程仍存活，未修改日常 userData，未开启第二份日常实例。
+新版本已安装，当前进程仍是旧版本；用户随后退出并从规范路径打开才生效，以下旧安装记录保留作历史证据。
+安装后追加的文档与证据提交不改变上述功能包。
 
 功能提交 `d24a624a` 在已有 Bearer Session 上补齐当前标签页恢复：`sessionStorage` 保存登录、
 编辑身份及证明、未提交编辑和原命令核对材料，启动先经 Host 验证再挂载正式页面。

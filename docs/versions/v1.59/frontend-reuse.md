@@ -29,7 +29,9 @@ Task、Memory、Automation、Skills/MCP 与头像编辑已开始接入显式 Cam
 由 Desktop 入口单独提供。外观继续共享页面与阅读偏好，Web 缩放由浏览器管理，页面不再显示不能生效的缩放选择器。
 一次 Host/Owner/编辑客户端作用域内保持 client/API 稳定。网络重连与同页面同 Owner 重新登录只更新认证和连接代次，
 保留业务子树、未提交编辑与原命令 ID；Host/Owner 改变才更换编辑与缓存作用域。后端验证页面恢复证明，
-不能仅凭 clientId/draftId 访问另一标签页草稿。短期 Bearer、恢复证明与未确认命令按标签页保存在 sessionStorage，启动先向 Host 验证再恢复；管理令牌不保存，凭据不落 URL、日志或 localStorage。复制标签页通过 Host 创建独立编辑身份。
+不能仅凭 clientId/draftId 访问另一标签页草稿。短期 Bearer、恢复证明与未确认命令按标签页保存在 sessionStorage，启动先向 Host 验证再恢复；管理令牌不保存，管理令牌／Bearer／恢复证明不落 URL、日志或 localStorage。复制标签页通过 Host 创建独立编辑身份。
+显式扫码登录仅用 URL fragment 传递 Host 签发的两分钟一次性票据；前端立即清除地址再 POST 兑换，票据不进入日志或恢复存储。
+已有标签页使用原编辑证明，新标签页及复制标签页使用独立编辑身份；兑换后继续走正常 Session 与刷新恢复路径。
 生产 Web 缺少客户端或资源适配立即报错；Desktop 旧路径的延迟默认值仅用于迁移兼容。客户端 platform 来自
 浏览器设备；Host OS/Runtime 准入来自真实 health 投影，不能沿用 fixture 的固定 darwin。
 
