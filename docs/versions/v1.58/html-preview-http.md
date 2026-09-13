@@ -115,3 +115,23 @@ Electron 中建立失败用例；只控制宿主截止计时，iframe HTTP、作
 `rgb(119, 119, 119)`，原断言要求与 danger 提示 `rgb(162, 76, 70)` 一致；本次未修改分隔线代码或放宽断言，
 不把这一项报告为通过。完整测试的 sandbox admission 源码检查还发现 main 的 `navigation-shell.test.mjs` 中
 `if` 后缺少空格；本次仅补齐该空格以匹配既有检查，调用、隔离准入与测试语义保持不变。
+
+## HTML 反馈收敛（2026-09-13）
+
+按用户的新交互稿调整正式 Renderer：正常页面去除“页面已加载／查看详情”整行提示，有路径时将源码与临时状态
+并入路径行，异常详情默认收起并限高滚动。无路径附件从既有 Tab 菜单切换源码，正常时不增加任何路径占位。
+问题数与加载/未确认状态可同时存在；失败重试保留页面及诊断，成功换代后收起详情。当前规范同步至
+[文件预览 UI](../../ui/components/file-preview.md#html-运行反馈) 与 [File Preview v12](../../contracts/file-preview-v12.md#状态交互与生命周期)。
+
+源码切换的原有“只保留 iframe 节点”不足以保留滚动位置：正式 Electron 反例中输入和脚本变量保持，但
+`display: none` 后滚动从 120 回到 0。现在隐藏网页时继续保留其视口尺寸，附件菜单往返后输入、脚本变量与
+120px 滚动均保持；只读源码依然逐字对应原稿。原有 HTML 验收 owner 扩展真实 Provider/Pane/Tabs 与 Main
+service 断言，覆盖健康页零诊断行、无路径附件源码/问题入口、键盘展开、420px 双主题、夜间 200% 缩放、实际
+源文件移走后的重试失败、成功恢复及导航隔离。重试等待仅在文件 API 前设置确定性放行门，失败由真实 Main
+读取产生；HTTP、作者脚本、iframe 与交互仍由浏览器执行。普通 Chrome 回归同时通过。
+
+验证通过：`pnpm typecheck`、`pnpm build:desktop`、`VITEST_MAX_WORKERS=2 pnpm test`（189 个 Vitest 文件 /
+1958 项；Node 子集 317 通过、2 项平台专属跳过）、`pnpm test:html-preview`（Electron 两个场景与普通 Chrome）。
+通用文件布局回归初次在源码主题切换的可见行断言失败；独立重跑通过该项，随后与未修改 main `62eff9d6`
+同样停在拖动关闭分隔线的既有颜色断言（实际 `rgb(119, 119, 119)`，预期 `rgb(162, 76, 70)`）。未修改分隔线
+实现或放宽断言，该套件不报告为通过。所有 Electron/Chrome 验收使用独立临时 userData/profile，未连接日常 Core 或 Runtime。
