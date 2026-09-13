@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { spawnSync, execFileSync } from 'node:child_process'
-import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 import { hostServerTargetKey, serverTarget } from './lib/sidecar-targets.mjs'
 import { archiveServerPackage } from './lib/server-archive.mjs'
 
@@ -22,45 +23,53 @@ function run(command, args) {
   const result = spawnSync(command, args, { cwd: repository, stdio: 'inherit', shell: process.platform === 'win32' })
   if (result.status !== 0) throw new Error(`Server build step failed: ${command}`)
 }
-run('pnpm', ['build:web'])
-run('cargo', ['build', '--locked', '-p', 'rovai-host', '-p', 'rovai-core', '--bin', 'rovai-host', '--bin', 'rovai-server', '--bin', 'rovai', ...(debug ? [] : ['--release'])])
-const destination = join(repository, 'out/server', key)
-rmSync(destination, { recursive: true, force: true })
-mkdirSync(destination, { recursive: true })
-for (const name of ['rovai-host', 'rovai-server', 'rovai']) {
-  const executable = `${name}${target.executableSuffix}`
-  copyFileSync(join(repository, 'target', profile, executable), join(destination, executable))
-  if (target.platform !== 'win32') chmodSync(join(destination, executable), 0o755)
-}
-cpSync(join(repository, 'out/web'), join(destination, 'web-ui'), { recursive: true })
-copyFileSync(join(repository, 'LICENSE'), join(destination, 'LICENSE'))
-const version = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')).version
-writeFileSync(join(destination, 'package-info'), `schema=1\nversion=${version}\ntarget=${target.key}\n`)
-copyFileSync(join(repository, 'scripts', target.platform === 'win32' ? 'install-server.ps1' : 'install-server.sh'), join(destination, target.platform === 'win32' ? 'install-server.ps1' : 'install-server.sh'))
-const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
-const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' }).trim().length > 0
-// The copied guide must also work outside a checkout. Keep its canonical
-// documentation links pinned to the package's recorded source revision.
-const guideBase = `https://github.com/murray17/rovai-ai/blob/${commit}/docs/development/server-preview.md`
-const guide = readFileSync(join(repository, 'docs/development/server-preview.md'), 'utf8')
-  .replace(/\]\((?!https?:|#)([^)]+)\)/g, (_, target) => `](${new URL(target, guideBase).href})`)
-writeFileSync(join(destination, 'README.md'), guide)
-const files = {}
-function hashTree(directory, prefix = '') {
-  for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const relative = `${prefix}${entry.name}`
-    if (entry.isDirectory()) hashTree(join(directory, entry.name), `${relative}/`)
-    else if (entry.isFile()) files[relative] = createHash('sha256').update(readFileSync(join(directory, entry.name))).digest('hex')
-    else throw new Error('Server package may contain only regular files and directories')
+// A Desktop build may empty out/web while native Rust compilation runs.
+// Own this UI build directory until the matching package has been copied.
+const webBuildDirectory = mkdtempSync(join(tmpdir(), 'rovai-server-web-'))
+try {
+  run('pnpm', ['build:web', '--outDir', webBuildDirectory])
+  run('cargo', ['build', '--locked', '-p', 'rovai-host', '-p', 'rovai-core', '--bin', 'rovai-host', '--bin', 'rovai-server', '--bin', 'rovai', ...(debug ? [] : ['--release'])])
+  const destination = join(repository, 'out/server', key)
+  rmSync(destination, { recursive: true, force: true })
+  mkdirSync(destination, { recursive: true })
+  for (const name of ['rovai-host', 'rovai-server', 'rovai']) {
+    const executable = `${name}${target.executableSuffix}`
+    copyFileSync(join(repository, 'target', profile, executable), join(destination, executable))
+    if (target.platform !== 'win32') chmodSync(join(destination, executable), 0o755)
   }
+  if (!existsSync(join(webBuildDirectory, 'index.html'))) throw new Error('Server WebUI build is missing index.html')
+  cpSync(webBuildDirectory, join(destination, 'web-ui'), { recursive: true })
+  copyFileSync(join(repository, 'LICENSE'), join(destination, 'LICENSE'))
+  const version = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')).version
+  writeFileSync(join(destination, 'package-info'), `schema=1\nversion=${version}\ntarget=${target.key}\n`)
+  copyFileSync(join(repository, 'scripts', target.platform === 'win32' ? 'install-server.ps1' : 'install-server.sh'), join(destination, target.platform === 'win32' ? 'install-server.ps1' : 'install-server.sh'))
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+  const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' }).trim().length > 0
+  // The copied guide must also work outside a checkout. Keep its canonical
+  // documentation links pinned to the package's recorded source revision.
+  const guideBase = `https://github.com/murray17/rovai-ai/blob/${commit}/docs/development/server-preview.md`
+  const guide = readFileSync(join(repository, 'docs/development/server-preview.md'), 'utf8')
+    .replace(/\]\((?!https?:|#)([^)]+)\)/g, (_, target) => `](${new URL(target, guideBase).href})`)
+  writeFileSync(join(destination, 'README.md'), guide)
+  const files = {}
+  function hashTree(directory, prefix = '') {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const relative = `${prefix}${entry.name}`
+      if (entry.isDirectory()) hashTree(join(directory, entry.name), `${relative}/`)
+      else if (entry.isFile()) files[relative] = createHash('sha256').update(readFileSync(join(directory, entry.name))).digest('hex')
+      else throw new Error('Server package may contain only regular files and directories')
+    }
+  }
+  hashTree(destination)
+  writeFileSync(join(destination, 'manifest.json'), JSON.stringify({
+    schemaVersion: 1, version, commit, dirty, target: target.key, rustTarget: target.rustTarget,
+    profile, qualification: 'development-preview', files
+  }, null, 2) + '\n')
+  execFileSync(join(destination, `rovai-host${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
+  execFileSync(join(destination, `rovai-server${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
+  console.log(`Server preview staged at ${destination}`)
+  const archive = archiveServerPackage(destination, join(repository, 'out/server/releases', key), { version, target: key })
+  console.log(`Unpublished Server archive: ${archive.archive}`)
+} finally {
+  rmSync(webBuildDirectory, { recursive: true, force: true })
 }
-hashTree(destination)
-writeFileSync(join(destination, 'manifest.json'), JSON.stringify({
-  schemaVersion: 1, version, commit, dirty, target: target.key, rustTarget: target.rustTarget,
-  profile, qualification: 'development-preview', files
-}, null, 2) + '\n')
-execFileSync(join(destination, `rovai-host${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
-execFileSync(join(destination, `rovai-server${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
-console.log(`Server preview staged at ${destination}`)
-const archive = archiveServerPackage(destination, join(repository, 'out/server/releases', key), { version, target: key })
-console.log(`Unpublished Server archive: ${archive.archive}`)
