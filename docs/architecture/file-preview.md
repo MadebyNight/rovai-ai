@@ -2,7 +2,7 @@
 document_type: architecture
 authority: file-preview-components-and-boundaries
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # File Preview Architecture
@@ -182,6 +182,9 @@ HTTP(S) 网络依赖和必要子页面，保留 CORS/证书/混合内容与第�
 
 诊断按受校验的 source/origin/实例/generation/challenge/document 消息通道送回宿主，同源子页面仅经直属 frame
 窗口校验后转发。脚本错误、资源错误、文档加载和诊断连接分别管理；可见正文及用户路由保留，失败不伪造恢复。
+Renderer 的文档期限由当前根 `documentId` 拥有，重复握手及子 frame 不重置；iframe load 只触发确认，不代表成功。
+无响应显示非阻塞的未知状态。服务端诊断采用有界回放与文档订阅起点，按请求开始序号过滤旧记录和延迟旧请求，
+子页面不清空根页面诊断，新的导航不继承历史页已耗尽的展示额度。
 查找使用有界可见正文快照、现有 Worker 和高亮定位；源码独立读取未注入内容。完整 wire、限制和状态见
 [File Preview v12](../contracts/file-preview-v12.md)。
 

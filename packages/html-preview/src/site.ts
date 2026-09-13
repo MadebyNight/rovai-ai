@@ -6,7 +6,7 @@ import { previewBrowserBridge, type PreviewBridgeConfig } from './browser-bridge
 import { injectPreviewScript } from './document'
 import { createFileFindDomIndex } from './find-dom'
 import { PreviewResourceError, previewRequestPath, type PreviewResource } from './file-source'
-import { HTML_PREVIEW_DIAGNOSTIC_LIMIT, htmlPreviewDiagnosticKey, parseHtmlPreviewDiagnostic, type HtmlPreviewDescriptor, type HtmlPreviewDiagnostic, type HtmlPreviewDiagnosticKind } from './protocol'
+import { HTML_PREVIEW_DIAGNOSTIC_LIMIT, parseHtmlPreviewDiagnostic, type HtmlPreviewDescriptor, type HtmlPreviewDiagnostic, type HtmlPreviewDiagnosticKind } from './protocol'
 
 export interface HtmlPreviewSiteOptions {
   generation: string
@@ -41,9 +41,10 @@ export class HtmlPreviewSite {
   readonly #cookie = randomBytes(32).toString('base64url')
   readonly #abort = new AbortController()
   readonly #scripts = new Map<string, string>()
-  readonly #events = new Set<ServerResponse>()
-  readonly #diagnostics: HtmlPreviewDiagnostic[] = []
-  readonly #diagnosticKeys = new Set<string>()
+  readonly #documentStarts = new Map<string, number>()
+  readonly #events = new Map<ServerResponse, number>()
+  readonly #diagnostics: { requestSequence: number; diagnostic: HtmlPreviewDiagnostic }[] = []
+  #requestSequence = 0
   #entryNavigationPending = false
   #timer: ReturnType<typeof setTimeout> | null = null
   #closing: Promise<void> | null = null
@@ -94,7 +95,8 @@ export class HtmlPreviewSite {
     this.#abort.abort()
     if (this.#timer) clearTimeout(this.#timer)
     this.#scripts.clear()
-    for (const response of this.#events) response.end()
+    this.#documentStarts.clear(); this.#diagnostics.length = 0
+    for (const response of this.#events.keys()) response.end()
     this.#events.clear()
     this.#closing = new Promise(resolve => {
       this.#server.closeAllConnections()
@@ -104,14 +106,17 @@ export class HtmlPreviewSite {
     return this.#closing
   }
 
-  report(kind: HtmlPreviewDiagnosticKind, message: string, resourceUrl: string | null, status: number | null = null): void {
+  #report(kind: HtmlPreviewDiagnosticKind, message: string, resourceUrl: string | null, status: number | null, requestSequence: number): void {
     const item: HtmlPreviewDiagnostic = { previewId: this.descriptor.previewId, generation: this.descriptor.generation,
       kind, message: message.slice(0, 2000), resourceUrl: resourceUrl?.slice(0, 2048) ?? null,
       line: null, column: null, stack: null, timestamp: new Date().toISOString(), status }
-    const key = htmlPreviewDiagnosticKey(item)
-    if (this.closed || this.#diagnosticKeys.has(key) || this.#diagnostics.length >= HTML_PREVIEW_DIAGNOSTIC_LIMIT) return
-    this.#diagnosticKeys.add(key); this.#diagnostics.push(item)
-    for (const stream of this.#events) {
+    if (this.closed) return
+    // A rolling journal serves late subscriptions; the per-document bridge owns
+    // deduplication and its 100-item budget. Old pages never exhaust a new one.
+    this.#diagnostics.push({ requestSequence, diagnostic: item })
+    if (this.#diagnostics.length > HTML_PREVIEW_DIAGNOSTIC_LIMIT) this.#diagnostics.shift()
+    for (const [stream, afterRequest] of this.#events) {
+      if (requestSequence <= afterRequest) continue
       if (stream.writableLength > 128 * 1024) { stream.end(); this.#events.delete(stream); continue }
       stream.write(`${JSON.stringify(item)}\n`)
     }
@@ -135,12 +140,19 @@ export class HtmlPreviewSite {
     const config: PreviewBridgeConfig = { previewId: this.descriptor.previewId, generation: this.descriptor.generation, origin: this.descriptor.origin, documentId, hostOrigin: this.#options.hostOrigin,
       documentUrl: url, map: injected.map, documentError }
     this.#scripts.set(scriptPath, `(${previewBrowserBridge.toString()})(${jsonForScript(config)},(${createFileFindDomIndex.toString()}),(${parseHtmlPreviewDiagnostic.toString()}));`)
+    this.#documentStarts.set(documentId, this.#requestSequence)
     // A bounded collection retains outstanding document requests and subframes.
-    while (this.#scripts.size > 128) this.#scripts.delete(this.#scripts.keys().next().value!)
+    while (this.#documentStarts.size > 128) {
+      const oldest = this.#documentStarts.keys().next().value!
+      this.#documentStarts.delete(oldest); this.#scripts.delete(`${INTERNAL}bridge/${oldest}.js`)
+    }
     return injected.html
   }
 
   async #serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    // Capture admission order, not completion order: a delayed request from A
+    // cannot enter B's diagnostics merely because it failed after B loaded.
+    const requestSequence = ++this.#requestSequence
     const requestAbort = new AbortController()
     response.once('close', () => requestAbort.abort())
     const signal = AbortSignal.any([this.#abort.signal, requestAbort.signal])
@@ -176,11 +188,13 @@ export class HtmlPreviewSite {
       }
       if (entryNavigation) this.#entryNavigationPending = false
       if (url.pathname === `${INTERNAL}events`) {
+        const afterRequest = this.#documentStarts.get(url.searchParams.get('documentId') ?? '')
+        if (afterRequest === undefined) throw new PreviewResourceError(403, '预览文档诊断订阅已失效。')
         if (request.method !== 'GET' || this.#events.size >= 64) throw new PreviewResourceError(429, '预览诊断连接过多。')
         response.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' })
         response.flushHeaders()
-        for (const item of this.#diagnostics) response.write(`${JSON.stringify(item)}\n`)
-        this.#events.add(response); response.once('close', () => this.#events.delete(response)); return
+        for (const item of this.#diagnostics) if (item.requestSequence > afterRequest) response.write(`${JSON.stringify(item.diagnostic)}\n`)
+        this.#events.set(response, afterRequest); response.once('close', () => this.#events.delete(response)); return
       }
       const script = this.#scripts.get(url.pathname)
       if (script) {
@@ -230,7 +244,7 @@ export class HtmlPreviewSite {
       if (signal.aborted || response.destroyed) return
       const status = error instanceof PreviewResourceError ? error.status : 410
       const message = error instanceof PreviewResourceError ? error.message : '预览文件上下文已失效，请重新打开。'
-      if (authenticated && url && !url.pathname.startsWith(INTERNAL)) this.report('resource', `${message}（HTTP ${status}）`, url.href, status)
+      if (authenticated && url && !url.pathname.startsWith(INTERNAL)) this.#report('resource', `${message}（HTTP ${status}）`, url.href, status, requestSequence)
       if (response.headersSent) { response.destroy(); return }
       response.removeHeader('Content-Length'); response.setHeader('Cache-Control', 'no-store')
       // An authenticated failed navigation is still a real error response. Its
