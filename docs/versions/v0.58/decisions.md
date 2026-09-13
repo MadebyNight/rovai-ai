@@ -428,7 +428,7 @@ Upstream improvements and security fixes are not automatic; maintainers must rev
 - [ADR-0158: Default-All Runtime Delivery for Managed Skills](decisions.md#adr-0158)
 - [Skill settings UI strategy](../../../apps/desktop/.impeccable/surfaces/settings-workspace.md)
 - [Domain terminology](../../../CONTEXT.md)
-- [`tasteful-ui` source](../../../skills/tasteful-ui/SKILL.md)
+- [`tasteful-ui` source](https://github.com/murray17/rovai-ai/blob/b86ab21ab1c16d40df707ef25560ab14f09ece21/skills/tasteful-ui/SKILL.md)
 - [Pinned upstream repository](https://github.com/DonkeyKing01/tasteful-ui-skill/tree/159ccd47a320f3a7bd0289d07366d422211895a1/tasteful-ui)
 <!-- legacy-adr-body:end id=ADR-0159 -->
 <!-- legacy-adr:end id=ADR-0159 -->
