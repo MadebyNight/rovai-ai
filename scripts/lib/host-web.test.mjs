@@ -136,12 +136,35 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal('dataDir' in info, false)
     assert.equal(info.name, (await host.request('app.info')).name)
     assert.deepEqual(await call(second, 'navigation.snapshot'), await host.request('navigation.snapshot'))
-    for (const operation of ['host.web.token', 'host.web.rotate', 'host.web.loginTicket', 'core.shutdown', 'host.editor.resolve', 'host.upload.bind', 'camp.sourceAttachments.addFromPath', 'camp.attachments.desktopOpenTarget', 'filePreview.resolveSource']) {
+    for (const operation of ['preferences.newConversation.initialize', 'host.web.token', 'host.web.rotate', 'host.web.loginTicket', 'core.shutdown', 'host.editor.resolve', 'host.upload.bind', 'camp.sourceAttachments.addFromPath', 'camp.attachments.desktopOpenTarget', 'filePreview.resolveSource']) {
       const response = await authorized(first, 'request', { method: 'POST', body: JSON.stringify({ operation, params: {} }) })
       assert.equal(response.status, 400, operation)
     }
     // Writes use real Core services and independent, proof-bound editing scopes.
     const profiles = await call(first, 'members.list')
+    const defaultsMethod = 'preferences.newConversation.'
+    const legacyDefaults = { newConversationDefaults: { memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId }, newConversationDefaultsRequireConfirmation: false, oneClickNewConversationEnabled: true }
+    assert.equal((await call(first, defaultsMethod + 'get')).newConversationDefaults, null)
+    await host.request(defaultsMethod + 'initialize', legacyDefaults)
+    assert.deepEqual(await call(first, defaultsMethod + 'get'), legacyDefaults)
+    assert.deepEqual(await call(second, defaultsMethod + 'get'), legacyDefaults)
+    const toggled = await call(first, defaultsMethod + 'setOneClick', { enabled: false })
+    assert.equal(toggled.oneClickNewConversationEnabled, false)
+    // Re-import after restart must never overwrite a choice made in Web.
+    assert.deepEqual(await host.request(defaultsMethod + 'initialize', legacyDefaults), toggled)
+    const nextTeam = { memberAgentIds: profiles.slice(0, 2).map(profile => profile.agentId), defaultLeadAgentId: profiles[1].agentId }
+    const sharedDefaults = await call(second, defaultsMethod + 'setDefaults', { defaults: nextTeam, enableOneClick: true })
+    assert.equal(sharedDefaults.oneClickNewConversationEnabled, true)
+    assert.deepEqual(await host.request(defaultsMethod + 'get'), sharedDefaults)
+    assert.deepEqual(await call(first, defaultsMethod + 'invalidate', { expectedDefaults: legacyDefaults.newConversationDefaults }), sharedDefaults)
+    const invalidated = await call(first, defaultsMethod + 'invalidate', { expectedDefaults: nextTeam })
+    assert.equal(invalidated.newConversationDefaultsRequireConfirmation, true)
+    await assert.rejects(host.request(defaultsMethod + 'setOneClick', { enabled: true }))
+    assert.deepEqual(await call(first, defaultsMethod + 'setDefaults', { defaults: nextTeam, enableOneClick: false }), sharedDefaults)
+    for (const defaults of [{ ...nextTeam, defaultLeadAgentId: 'missing' }, { memberAgentIds: ['missing'], defaultLeadAgentId: 'missing' }, { memberAgentIds: [profiles[0].agentId, profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId }]) {
+      await assert.rejects(host.request(defaultsMethod + 'setDefaults', { defaults, enableOneClick: false }))
+      assert.deepEqual(await call(first, defaultsMethod + 'get'), sharedDefaults)
+    }
     const createParams = { commandId: crypto.randomUUID(), name: 'Web owned draft', workspace: null, memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId, collaborationMode: 'peer' }
     const created = await call(first, 'camps.create', createParams)
     assert.equal(created.status, 'applied')
@@ -424,6 +447,15 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(host.unmatchedResponses.length, 0, 'Web correlation responses must never leak into Desktop stdout')
     assert.ok(!host.stderr().includes(administrator), 'management credentials must not enter logs')
     assert.ok(!host.stderr().includes(first.token), 'session credentials must not enter logs')
+    const reopened = launch([...coreDataDirectoryArguments(dataDir), '--skill-library-root', join(dataDir, 'skills'), '--mcp-config-path', join(dataDir, 'mcp.json')])
+    try {
+      await within(reopened.ready)
+      assert.deepEqual(await reopened.request(defaultsMethod + 'get'), sharedDefaults)
+      assert.deepEqual(await reopened.request(defaultsMethod + 'initialize', legacyDefaults), sharedDefaults)
+      const path = join(dataDir, 'new-conversation-preferences.json')
+      await writeFile(path, '{broken')
+      await assert.rejects(reopened.request(defaultsMethod + 'get'), 'corrupt preferences cannot masquerade as an empty team')
+    } finally { await reopened.close() }
   } finally {
     controllers.forEach((controller) => controller.abort())
     await host.close()

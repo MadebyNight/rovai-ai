@@ -1035,6 +1035,7 @@ export function BusinessApp({
   const [memberRuntimeFocusRequest, setMemberRuntimeFocusRequest] = useState(0)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [remotePort, setRemotePort] = useState<string | null>(null)
+  const newConversationRequestBusy = useRef(false)
   const [generalPreferences, setGeneralPreferences] = useState<GeneralPreferencesSnapshot | null>(null)
   const [currentProject, setCurrentProject] = useState<CurrentProject>(() => readCurrentProject())
   const [currentWorkspaceHint, setCurrentWorkspaceHint] = useState<WorkspaceSelection | null>(null)
@@ -2315,6 +2316,9 @@ export function BusinessApp({
       if (liveEvent) {
         liveEvents.push(liveEvent)
       }
+      if (event.method === 'preferences.new_conversation_changed') {
+        void uiPreferences.generalPreferences.get().then(setGeneralPreferences).catch((e) => setError(errorMessage(e)))
+      }
       if (event.method === 'agent_run.terminal') liveEvents.flush()
       if (event.method === 'runtime.state') {
         const runtimeStatus = stringField(params, 'status')
@@ -2513,11 +2517,12 @@ export function BusinessApp({
   }, [activeCampId, campSnapshot?.camp.id, requestCampProjection, setCampSnapshot])
 
   useEffect(() => client.onInvalidated?.(() => {
+    void uiPreferences.generalPreferences.get().then(setGeneralPreferences).catch((e) => setError(errorMessage(e)))
     void loadNavigation('invalidation').catch(() => undefined)
     const campId = activeCampIdRef.current
     if (campId) void activeCampRefreshCoordinator.refresh(campId).catch((e) => setError(errorMessage(e)))
     void loadAgents().catch(() => undefined)
-  }), [client, loadNavigation, loadAgents, activeCampRefreshCoordinator])
+  }), [client, uiPreferences, loadNavigation, loadAgents, activeCampRefreshCoordinator])
 
   const chooseCurrentProject = (
     nextProject: CurrentProject,
@@ -2530,10 +2535,11 @@ export function BusinessApp({
 
   const openNewConversation = (
     workspace: WorkspaceSelection | null,
-    attentionMessage: string | null = null
+    attentionMessage: string | null = null,
+    preferences = generalPreferences
   ): void => {
     setNewConversationInitialWorkspace(workspace)
-    setNewConversationInitialSelection(generalPreferences?.newConversationDefaults ?? null)
+    setNewConversationInitialSelection(preferences?.newConversationDefaults ?? null)
     setNewConversationAttention(attentionMessage)
     setNewConversationOpen(true)
   }
@@ -2541,29 +2547,35 @@ export function BusinessApp({
   const requestNewConversation = async (
     workspace: WorkspaceSelection | null
   ): Promise<'created' | 'dialog' | 'ignored'> => {
-    if (busy === 'create-camp') return 'ignored'
-    const defaults = resolveAvailableNewConversationDefaults(generalPreferences, agents)
-    if (generalPreferences?.oneClickNewConversationEnabled && defaults) {
-      try {
-        await createCamp({
-          name: null,
-          workspace: workspace ? { projectPath: workspace.projectPath } : null,
-          memberAgentIds: defaults.defaults.memberAgentIds,
-          defaultLeadAgentId: defaults.defaults.defaultLeadAgentId,
-          collaborationMode: 'peer',
-          activationState: campActivationStateForCreation('one_click')
-        })
-        return 'created'
-      } catch (nextError) {
-        openNewConversation(
-          workspace,
-          `一键创建未完成：${errorMessage(nextError)} 请重新确认项目、队员与默认负责人。`
-        )
-        return 'dialog'
+    if (busy === 'create-camp' || newConversationRequestBusy.current) return 'ignored'
+    newConversationRequestBusy.current = true
+    try {
+      // Another device may have changed the team since this page mounted.
+      const preferences = await uiPreferences.generalPreferences.get()
+      setGeneralPreferences(preferences)
+      const defaults = resolveAvailableNewConversationDefaults(preferences, agents)
+      if (preferences.oneClickNewConversationEnabled && defaults) {
+        try {
+          await createCamp({
+            name: null,
+            workspace: workspace ? { projectPath: workspace.projectPath } : null,
+            memberAgentIds: defaults.defaults.memberAgentIds,
+            defaultLeadAgentId: defaults.defaults.defaultLeadAgentId,
+            collaborationMode: 'peer',
+            activationState: campActivationStateForCreation('one_click')
+          })
+          return 'created'
+        } catch (nextError) {
+          openNewConversation(workspace, `一键创建未完成：${errorMessage(nextError)} 请重新确认项目、队员与默认负责人。`, preferences)
+          return 'dialog'
+        }
       }
-    }
-    openNewConversation(workspace)
-    return 'dialog'
+      openNewConversation(workspace, null, preferences)
+      return 'dialog'
+    } catch (nextError) {
+      setError(`默认队员设置读取失败：${errorMessage(nextError)}`)
+      return 'ignored'
+    } finally { newConversationRequestBusy.current = false }
   }
 
   const chooseWorkspaceDirectory = async (): Promise<WorkspaceSelection | null> => {

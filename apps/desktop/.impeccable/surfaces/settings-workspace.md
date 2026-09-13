@@ -1,5 +1,5 @@
 ---
-version: 15
+version: 16
 slug: "settings-workspace"
 primary_target: "apps/desktop/src/renderer/src/SettingsPageHeader.tsx"
 related_targets:
@@ -47,7 +47,8 @@ platform; packaged macOS startup only makes a best-effort removal of any retired
 the first Windows release creates no Startup task or Run-key entry. General does not add hidden/background
 launch, default Project, recovery or update policy.
 
-The shared General page receives its preference API explicitly from either entry. Web stores only client
+The shared General page receives its preference API explicitly from either entry. Creation team, Lead and
+one-click flag come from the same Host-owned record; Desktop legacy choices are imported once. Web stores only client
 presentation preferences; window reset and Host browser-access administration remain injected Desktop
 capabilities. Web does not fall back to a native global. The separate Remote Connection menu is now the production Host-management/current-browser-connection surface;
 its [interactive review](../../../../docs/ui/host-remote-connection.md) uses the same components.

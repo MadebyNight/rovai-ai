@@ -1,3 +1,4 @@
+import { creationPreferences, withHostConversationPreferences } from '../shared/host-general-preferences'
 import { createHostChannelHandler } from './host-channels'
 import { FilePreviewFrameNavigation } from './file-preview/file-preview-navigation'
 import { installWindowNavigation } from './window-navigation'
@@ -1116,6 +1117,7 @@ ipcMain.handle('rovai:host-web', async (event, operation: unknown, value: unknow
     || Object.keys(input).some((key) => !['listen', 'publicOrigin', 'allowInsecureLan'].includes(key))) {
     throw new Error('Invalid Host Web settings')
   }
+  await hostGeneralPreferences().get()
   // Assets are selected by Main, never by a renderer-supplied filesystem path.
   return core.request('host.web.start', {
     ...input,
@@ -1281,21 +1283,21 @@ ipcMain.handle('rovai:desktop-session-commit-location', async (_event, location:
   await restorableLocations.commit(validated)
 })
 
-ipcMain.handle('rovai:general-preferences-get', () => requireGeneralPreferences().get())
+ipcMain.handle('rovai:general-preferences-get', () => hostGeneralPreferences().get())
 
 ipcMain.handle('rovai:general-preferences-set-startup', (_event, mode: unknown) => {
   if (!isStartupLocationMode(mode)) throw new Error('Unsupported startup location mode')
-  return requireGeneralPreferences().setStartupLocationMode(mode as StartupLocationMode)
+  return hostGeneralPreferences().setStartupLocationMode(mode as StartupLocationMode)
 })
 
 ipcMain.handle('rovai:general-preferences-set-section', (_event, section: unknown) => {
   if (!isSettingsSection(section)) throw new Error('Unsupported settings section')
-  return requireGeneralPreferences().setLastSettingsSection(section as SettingsSection)
+  return hostGeneralPreferences().setLastSettingsSection(section as SettingsSection)
 })
 
 ipcMain.handle('rovai:general-preferences-set-execution-placement', (_event, placement: unknown) => {
   if (!isExecutionConsolePlacement(placement)) throw new Error('Unsupported execution console placement')
-  return requireGeneralPreferences().setExecutionConsolePlacement(
+  return hostGeneralPreferences().setExecutionConsolePlacement(
     placement as ExecutionConsolePlacement
   )
 })
@@ -1303,21 +1305,21 @@ ipcMain.handle('rovai:general-preferences-set-execution-placement', (_event, pla
 ipcMain.handle('rovai:general-preferences-set-new-conversation-defaults', (_event, defaults: unknown, enableOneClick: unknown = false) => {
   if (!isNewConversationDefaults(defaults)) throw new Error('Invalid default new conversation configuration')
   if (typeof enableOneClick !== 'boolean') throw new Error('Invalid one-click new conversation preference')
-  return requireGeneralPreferences().setNewConversationDefaults(defaults, enableOneClick)
+  return hostGeneralPreferences().setNewConversationDefaults(defaults, enableOneClick)
 })
 
 ipcMain.handle('rovai:general-preferences-set-one-click-new-conversation', (_event, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Invalid one-click new conversation preference')
-  return requireGeneralPreferences().setOneClickNewConversationEnabled(enabled)
+  return hostGeneralPreferences().setOneClickNewConversationEnabled(enabled)
 })
 
 ipcMain.handle('rovai:general-preferences-set-world-map', (_event, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Invalid world map preference')
-  return requireGeneralPreferences().setWorldMapEnabled(enabled)
+  return hostGeneralPreferences().setWorldMapEnabled(enabled)
 })
 
 ipcMain.handle('rovai:general-preferences-invalidate-new-conversation-defaults', () => {
-  return requireGeneralPreferences().invalidateNewConversationDefaults()
+  return hostGeneralPreferences().invalidateNewConversationDefaults()
 })
 
 ipcMain.handle('rovai:channels-get', (event) => {
@@ -2347,6 +2349,17 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   appQuitCoordinator.handleQuitRequest(event)
 })
+
+let sharedGeneralPreferences: ReturnType<typeof withHostConversationPreferences> | null = null
+function hostGeneralPreferences(): ReturnType<typeof withHostConversationPreferences> {
+  sharedGeneralPreferences ??= withHostConversationPreferences(requireGeneralPreferences(), async (method, params) => {
+    // Import legacy Desktop choices only while the Host has no saved record.
+    // Repeating this after a Core restart cannot overwrite newer Web choices.
+    await core.request('preferences.newConversation.initialize', creationPreferences(requireGeneralPreferences().get()))
+    return core.request(method, params)
+  })
+  return sharedGeneralPreferences
+}
 
 function requireGeneralPreferences(): GeneralPreferencesStore {
   if (!generalPreferences) throw new Error('General Preferences store is unavailable')

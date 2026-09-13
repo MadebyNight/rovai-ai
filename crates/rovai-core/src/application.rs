@@ -1,4 +1,5 @@
 mod config;
+mod conversation_preferences;
 mod transport;
 mod web_commands;
 pub use config::{CoreConfig, RemovedSkillProjectRoots};
@@ -7028,6 +7029,27 @@ impl Core {
             "runtime.subsystems.retry" => {
                 self.initialize_optional_subsystems().await;
                 Ok(serde_json::to_value(self.subsystems.snapshot())?)
+            }
+            "preferences.newConversation.get"
+            | "preferences.newConversation.initialize"
+            | "preferences.newConversation.setDefaults"
+            | "preferences.newConversation.setOneClick"
+            | "preferences.newConversation.invalidate" => {
+                let database = self.database.lock().await;
+                let (snapshot, changed) = conversation_preferences::execute(
+                    &self.data_dir,
+                    &database,
+                    &request.method,
+                    request.params.clone(),
+                )?;
+                if changed {
+                    emit(
+                        &self.output,
+                        "preferences.new_conversation_changed",
+                        json!({}),
+                    );
+                }
+                Ok(snapshot)
             }
             "app.info" => Ok(json!({
                 "name": "Rovai-ai",

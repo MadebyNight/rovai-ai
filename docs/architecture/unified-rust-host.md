@@ -28,6 +28,8 @@ last_updated: 2026-09-13
 
 Host 独占 data-dir lease、SQLite 准入、执行、恢复与后台驱动。普通业务命令保留串行入口和已有独立通道；
 HTTP 并发不改变领域调度，SSE 不占命令队列，取消与审批不等待长 Runtime 执行。
+默认新对话队伍、队长和一键创建开关由 Core 在当前数据根统一保存；Desktop 的旧值只导入一次，
+两端经共享偏好适配读取，窗口、外观与导航展示偏好继续各端保存。细节见 [Host Web v2](../contracts/host-web-v2.md#shared-creation-preferences)。
 Desktop-only 窗口、原生交互与更新保留 Electron；基础 Server 不要求 Electron 或 Node。
 Runtime 自身依赖单独声明。Automation 时钟迁 Host；日报、评测与渠道未迁移驱动初始保留可选 Desktop
 适配，并在 Headless capabilities 明确关闭。Desktop 托管 Web 的渠道管理通过受认证的 Axum 渠道操作、封闭父管道回调复用当前 Electron Main

@@ -156,7 +156,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
       return { opened: true, error: null, availability: 'available' }
     } catch { return { opened: false, error: 'target_unavailable', availability: 'missing' } }
   } }
-  const { preferences, profile } = browserPreferences(transport.presentationScope)
+  const { preferences, profile } = browserPreferences(transport.presentationScope, transport)
   const environment: BusinessEnvironment = { navigationHistory: createBrowserNavigationHistory(transport.editingScope), client, preferences, files, selectWorkspaceDirectory }
   return { environment, profile, invalidate: () => { for (const listener of listeners) listener(); void refreshUpdates() } }
 }

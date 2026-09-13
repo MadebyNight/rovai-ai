@@ -2,7 +2,7 @@
 document_type: architecture
 authority: camp-activation-component-boundary
 status: accepted
-last_updated: 2026-09-05
+last_updated: 2026-09-13
 ---
 
 # Camp Activation Lifecycle
@@ -11,7 +11,8 @@ last_updated: 2026-09-05
 
 | Component | Responsibility |
 | --- | --- |
-| Electron Main | Stores the one-click preference and saved default member/Lead configuration; it does not store Camp activation or Composer content. |
+| Rust Host / Core | Stores the shared one-click preference and saved default member/Lead configuration under the instance data root; see [Host Web v2](../contracts/host-web-v2.md#shared-creation-preferences). |
+| Electron Main | Imports legacy creation preferences once through Core and adapts local presentation preferences; it does not store Camp activation or Composer content. |
 | Renderer | Chooses `pending` for a valid one-click entry and `active` for the explicit Dialog, renders the returned Camp, autosaves through the existing Core Composer Draft APIs, commits a Pending restore target only after Navigation proves the Draft meaningful, and reuses the App-level active-Camp leave guard before activating another Camp. |
 | Core collaboration service | Validates creation structure, persists Camp activation, guards pre-activation mutation/discard, and activates Pending in the accepted first-message transaction. |
 | Camp attachment store | Remains the sole authority for structured Composer Draft content, revision and prepared attachments for both Pending and Active Camps. |

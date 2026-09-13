@@ -276,3 +276,28 @@ recoverable failures stay in the current page. Existing structured approval cand
 Web logout is available once under Settings → Remote connection. It revokes only that Session; Host, tasks, other
 sessions and channel services keep running. Closing a browser or stopping Desktop's Web listener does not stop channel
 connections or admitted publication work. Only Desktop's existing controlled shutdown owns channel service shutdown.
+
+## Shared creation preferences
+
+The current Host owns default member IDs, default Lead, the confirmation latch and one-click creation flag.
+Desktop and Web compose these fields with their own presentation preferences through one shared adapter.
+`preferences.newConversation.get`, `.setDefaults` (`{defaults, enableOneClick}`), `.setOneClick` (`{enabled}`)
+and `.invalidate` (`{expectedDefaults}`) are individually authenticated network operations with closed parameters.
+Saving the team clears its confirmation latch, optionally enables one-click atomically, and otherwise preserves
+that flag. Enabling requires an existing, confirmed team; unknown/removed members, duplicate IDs and a Lead
+outside the team are rejected without changing saved values. Invalidation only applies to the expected team,
+so a stale client cannot invalidate a newer selection. Temporary Runtime unavailability continues to open the
+shared creation dialog without invalidating the saved team; normal Core creation admission remains unchanged.
+
+Core serializes and atomically stores this small record in `new-conversation-preferences.json` within its selected
+data root, using the existing platform private-file publisher. It persists across Host restart. An unreadable or
+invalid record is an error, never a successful empty preference snapshot. A change emits invalidation and clients
+reread authorized preferences; new-conversation entry also rereads before choosing one-click or dialog.
+
+Desktop's private `preferences.newConversation.initialize` imports only the three creation fields from its
+previous general preferences, and only while the Host record does not exist. Main completes this before exposing
+Desktop Web; subsequent reads and Core restarts cannot overwrite Web edits with the retained legacy file.
+Initialize is not admitted over HTTP. Existing browser-local copies are ignored; appearance, navigation, startup
+location, execution placement and map display remain local presentation choices. This is instance-wide preference
+storage, not shared Composer editing, account sync, or a second business service. Independent Server uses the same
+store under its own data root and does not read another Desktop instance's preferences.

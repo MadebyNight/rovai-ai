@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 /// and the legacy shared draft remain outside the network capability.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum Operation {
+    #[serde(rename = "preferences.newConversation.get")]
+    NewConversationGet,
+    #[serde(rename = "preferences.newConversation.setDefaults")]
+    NewConversationSetDefaults,
+    #[serde(rename = "preferences.newConversation.setOneClick")]
+    NewConversationSetOneClick,
+    #[serde(rename = "preferences.newConversation.invalidate")]
+    NewConversationInvalidate,
+
     #[serde(rename = "camps.rename")]
     CampRename,
     #[serde(rename = "camps.delete")]
@@ -344,6 +353,10 @@ impl Operation {
 
     pub fn method(self) -> &'static str {
         match self {
+            Self::NewConversationGet => "preferences.newConversation.get",
+            Self::NewConversationSetDefaults => "preferences.newConversation.setDefaults",
+            Self::NewConversationSetOneClick => "preferences.newConversation.setOneClick",
+            Self::NewConversationInvalidate => "preferences.newConversation.invalidate",
             Self::CampRename => "camps.rename",
             Self::CampDelete => "camps.delete",
             Self::CampDiscardPending => "camps.discardPending",

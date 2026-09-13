@@ -3656,6 +3656,12 @@ export interface UpdateAutomationCommand {
 }
 
 export type CoreMethod =
+  | 'preferences.newConversation.get'
+  | 'preferences.newConversation.setDefaults'
+  | 'preferences.newConversation.setOneClick'
+  | 'preferences.newConversation.invalidate'
+  | 'preferences.newConversation.initialize'
+
   | 'health.check'
   | 'diagnostics.check'
   | 'monitoring.snapshot'

@@ -13,6 +13,18 @@ last_updated: 2026-09-13
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已合入 main `93487750`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
+## 本轮：默认队伍与一键创建设置对齐
+
+Web 正式页面最初接入时（`b62752dd9`），通用偏好适配将默认队伍、队长和一键创建开关保存为浏览器本地值，
+因此无法带入 Desktop 设置。`apps/web/src/preferences.test.ts` 在原生产适配上复现：期望已保存队伍及开启开关，
+实际返回 null / false。修复后三项由当前 Core 统一持久化，两端共用偏好适配；Desktop 旧值只导入一次，
+其他展示偏好保留客户端归属。新对话点击前重读，读取失败不以空默认值继续创建；请求期间阻止重复点击。
+
+既有 HTTP / Host 生命周期 owner 扩展验证跨端读写、设置合并、旧副本重复导入、迟到失效请求、无效队伍拒绝、
+Host 重启与损坏记录显式失败；本机 1 项通过。客户端、原偏好与选择规则 4 文件 / 33 项通过，TypeScript、
+Desktop/Web 构建及通用文档门禁通过。新建弹窗唯一的 `compact-primary` 仍使用旧 Steel token，改为已有
+conversation-action 中性按钮；日间为黑色，夜间遵循同一主题配对。真实打包 App 及界面验收记录随后补齐。
+
 ## 本轮：扫码登录、Web 刷新恢复与共享导航
 
 2026-09-13 后续同步 main `93487750`，合并提交 `b1d5000f` 保留原 Web 实现，并纳入共同的“回到最新”

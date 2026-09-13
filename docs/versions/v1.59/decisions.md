@@ -80,3 +80,15 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 容器作为前置，原生包降低用户部署依赖，并保留未来的分发渠道选择。代价是必须维护每个原生目标的
 库基线、资产校验和安装验证，不能以共享代码或 CI 构建代替资格。Docker 完全移出本轮任务，不作为
 可选阶段或 Mobile 前置；不另建 Node/Bun 服务端或独立业务后端。
+
+<a id="v1-59-d03"></a>
+## V1.59-D03：新对话默认队伍按 Host 归属
+
+- 状态：accepted
+- 日期：2026-09-13
+- 当前权威：[Host Web v2](../../contracts/host-web-v2.md#shared-creation-preferences)、[Camp Activation](../../architecture/camp-activation-lifecycle.md#component-authority)
+
+共享页面最初把整份通用设置当成浏览器展示偏好，导致同一 Host 的默认队伍和一键创建行为与 Desktop 分叉。
+用户要求带入现有设置。选择由当前 Rust Core 保存这组创建偏好，Desktop 旧值只导入一次，保留其他展示偏好的客户端归属。
+不采用重复复制浏览器 localStorage 或长期转发到 Electron Main：前者会继续产生冲突，后者使独立 Server 缺少同一持久入口。
+代价是增加小型 Core 偏好记录及一次性导入边界；共享的是创建选择，不共享 Composer 草稿或不同实例的数据。

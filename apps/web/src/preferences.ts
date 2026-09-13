@@ -1,3 +1,5 @@
+import { withHostConversationPreferences } from '../../desktop/src/shared/host-general-preferences'
+import type { ConsoleClient } from './client'
 import type { AppearanceSnapshot, CurrentUserProfileApi, GeneralPreferencesSnapshot, NavigationPreferencesSnapshot } from '@contracts'
 import { DEFAULT_CURRENT_USER_PROFILE, currentUserNameError } from '@contracts'
 import type { BusinessEnvironment } from '../../desktop/src/renderer/src/business-environment'
@@ -7,7 +9,7 @@ import { sanitizeSnapshot } from '../../desktop/src/shared/navigation-preference
 import { normalizeProjectDisplayName, projectDisplayNameError } from '../../desktop/src/shared/project-display-name'
 
 /** Browser presentation preferences only. No drafts, domain facts or credentials enter storage. */
-export function browserPreferences(scope: string): {
+export function browserPreferences(scope: string, transport: ConsoleClient): {
   preferences: BusinessEnvironment['preferences']; profile: CurrentUserProfileApi
 } {
   const key = `rovai.presentation:${scope}`
@@ -16,7 +18,7 @@ export function browserPreferences(scope: string): {
     catch { return fallback }
   }
   const write = (name: string, value: unknown): void => localStorage.setItem(`${key}:${name}`, JSON.stringify(value))
-  let general = parseGeneralPreferences(read('general', DEFAULT_GENERAL_PREFERENCES)) ?? structuredClone(DEFAULT_GENERAL_PREFERENCES)
+  let general = { ...(parseGeneralPreferences(read('general', DEFAULT_GENERAL_PREFERENCES)) ?? structuredClone(DEFAULT_GENERAL_PREFERENCES)), newConversationDefaults: null, newConversationDefaultsRequireConfirmation: false, oneClickNewConversationEnabled: false } as GeneralPreferencesSnapshot
   let navigation = sanitizeSnapshot(read('navigation', null))
   const commitGeneral = async (patch: Partial<GeneralPreferencesSnapshot>): Promise<GeneralPreferencesSnapshot> => {
     const next = parseGeneralPreferences({ ...general, ...patch })
@@ -61,7 +63,7 @@ export function browserPreferences(scope: string): {
           return () => { appearanceListeners.delete(listener); if (!appearanceListeners.size) media.removeEventListener('change', publish) }
         }
       },
-      generalPreferences: {
+      generalPreferences: withHostConversationPreferences({
         get: async () => structuredClone(general),
         setStartupLocationMode: startupLocationMode => commitGeneral({ startupLocationMode }),
         setLastSettingsSection: lastSettingsSection => commitGeneral({ lastSettingsSection }),
@@ -70,7 +72,7 @@ export function browserPreferences(scope: string): {
         setOneClickNewConversationEnabled: oneClickNewConversationEnabled => commitGeneral({ oneClickNewConversationEnabled }),
         setWorldMapEnabled: worldMapEnabled => commitGeneral({ worldMapEnabled }),
         invalidateNewConversationDefaults: () => commitGeneral({ newConversationDefaultsRequireConfirmation: general.newConversationDefaults !== null })
-      },
+      }, (method, params) => transport.request(method, params)),
       navigationPreferences: {
         get: async () => structuredClone(navigation),
         replacePins: pins => commitNavigation({ pins }),

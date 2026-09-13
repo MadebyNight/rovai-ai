@@ -8168,8 +8168,8 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
 .compact-field-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }
 .compact-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 8px; padding: 22px 24px 24px; }
 .compact-primary, .compact-cancel { display: grid; min-width: 72px; height: 36px; padding: 0 15px; place-items: center; border: 1px solid transparent; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
-.compact-primary { background: var(--brand); color: var(--brand-contrast); border-color: var(--brand); }
-.compact-primary:hover { background: var(--brand-hover); }
+.compact-primary { background: var(--conversation-action); color: var(--conversation-action-contrast); border-color: var(--conversation-action); }
+.compact-primary:hover:not(:disabled) { background: var(--conversation-action-hover); border-color: var(--conversation-action-hover); }
 .compact-cancel { background: transparent; color: var(--muted); }
 .compact-cancel:hover { color: var(--ink); background: var(--surface-hover); }
 .compact-dialog button:disabled, .compact-dialog input:disabled, .compact-dialog textarea:disabled { opacity: .52; cursor: not-allowed; }
