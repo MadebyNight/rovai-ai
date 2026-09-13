@@ -3981,7 +3981,6 @@ export function CampWorkspace({
       confirmingRunIds={confirmingRunIds}
       focusedRunId={executionDrawerFocusedRunId}
       focusRequest={executionDrawerFocusRequest}
-      onLatestRun={setExecutionDrawerFocusedRunId}
       onClose={closeExecutionProcess}
       onResolveRecoveryBlocker={resolveRecoveryBlocker}
       onCancelAgentRun={onCancelAgentRun}
@@ -5501,7 +5500,6 @@ function ExecutionDrawer({
   confirmingRunIds,
   focusedRunId,
   focusRequest,
-  onLatestRun,
   onClose,
   onResolveRecoveryBlocker,
   onCancelAgentRun,
@@ -5529,7 +5527,6 @@ function ExecutionDrawer({
   confirmingRunIds: ReadonlySet<string>
   focusedRunId: string | null
   focusRequest: ExecutionDrawerFocusRequest
-  onLatestRun(runId: string): void
   onClose(): void
   onResolveRecoveryBlocker(run: AgentRunView): Promise<void>
   onCancelAgentRun(run: AgentRunView): Promise<void>
@@ -5594,17 +5591,17 @@ function ExecutionDrawer({
         turnCancelling: turnStopping
       })
     : 'hidden'
-  const focusedProgress = resolvedFocusedRunId
-    ? progressByRunId.get(resolvedFocusedRunId)
+  const latestRun = process.runs.at(-1)
+  const latestProgress = latestRun
+    ? progressByRunId.get(latestRun.id)
     : undefined
   const progressFollowKey = JSON.stringify([
-    resolvedFocusedRun?.status ?? null,
-    resolvedFocusedRun?.waitReason ?? null,
-    windowedEvidence ? resolvedFocusedRun?.executionEvidenceCount : focusedProgress?.items ?? []
+    latestRun?.status ?? null,
+    latestRun?.waitReason ?? null,
+    windowedEvidence ? latestRun?.executionEvidenceCount : latestProgress?.items ?? []
   ])
   const followingLatestRef = useRef(false)
   const [followingLatest, setFollowingLatestState] = useState(false)
-  const latestRun = process.runs.at(-1)
   const [latestRequest, setLatestRequest] = useState(0)
   const [hasNewer, setHasNewer] = useState(false)
   const latestContext = useMemo(() => ({
@@ -5810,15 +5807,15 @@ function ExecutionDrawer({
   }, [focusRequest.sequence, process.agentId])
 
   useLayoutEffect(() => {
-    if (!followingLatestRef.current || !resolvedFocusedRun) return undefined
-    const terminal = !NON_TERMINAL_RUNS.has(resolvedFocusedRun.status)
+    if (!followingLatestRef.current || !latestRun) return undefined
+    const terminal = !NON_TERMINAL_RUNS.has(latestRun.status)
     const frame = window.requestAnimationFrame(() => {
       const body = drawerBodyRef.current
       if (body) scrollExecutionDrawerToLatest(body)
       if (terminal) setFollowingLatest(false)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [progressFollowKey, resolvedFocusedRunId])
+  }, [progressFollowKey, latestRun?.id])
 
   const displayName = member?.displayName ?? profile?.displayName ?? process.agentId
   const drawerTitle = executionDrawerTitle(
@@ -5958,7 +5955,7 @@ function ExecutionDrawer({
             const body = event.currentTarget
             if (body.scrollHeight - body.clientHeight <= 1) return
             const eligible = Boolean(
-              resolvedFocusedRun && NON_TERMINAL_RUNS.has(resolvedFocusedRun.status)
+              latestRun && NON_TERMINAL_RUNS.has(latestRun.status)
             )
             setFollowingLatest(eligible && executionDrawerIsNearBottom(
               body.scrollTop,
@@ -6035,7 +6032,6 @@ function ExecutionDrawer({
           scope="execution"
           hasNewer={hasNewer}
           onLatest={() => {
-            if (latestRun) onLatestRun(latestRun.id)
             setFollowingLatest(Boolean(latestRun && NON_TERMINAL_RUNS.has(latestRun.status)))
             setLatestRequest((request) => request + 1)
             const body = drawerBodyRef.current

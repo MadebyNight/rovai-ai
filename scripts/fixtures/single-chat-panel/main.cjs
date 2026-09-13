@@ -155,6 +155,7 @@ app.whenReady().then(async () => {
       await settle(350)
       assert.ok(Math.abs(await run('document.querySelector(".single-chat-viewport").scrollTop') - top) < 2)
       assert.equal(await run('document.querySelectorAll(".return-to-latest-dot").length'), 1)
+      await capture('return-latest-single')
       await assertReturnToLatest(window, run, 'single')
       await settle()
       assert.equal(await run('document.querySelectorAll("[data-return-scope=single]").length'), 0)
@@ -166,6 +167,13 @@ app.whenReady().then(async () => {
       await settle()
       assert.equal(await run('document.querySelectorAll("[data-return-scope=single]").length'), 0)
       assert.equal(await run('document.activeElement.matches(".single-chat-viewport")'), true)
+      await run('document.querySelector(".single-chat-viewport").scrollTop = 200')
+      await settle()
+      await run('document.querySelector("[data-return-scope=single]").focus({preventScroll:true}); const v=document.querySelector(".single-chat-viewport"); v.scrollTop=v.scrollHeight')
+      await settle()
+      assert.equal(await run('document.querySelectorAll("[data-return-scope=single]").length'), 0)
+      assert.equal(await run('document.activeElement.matches(".single-chat-viewport")'), true,
+        'scrolling to the bottom returns focus when the control disappears without a click')
       console.log(JSON.stringify({ ok: true, verified: { readingPosition: true, pressedGeometry: true, localReturn: true, keyboardReturn: true } }))
       app.quit()
       return

@@ -506,11 +506,34 @@ function StaticExecutionWindow({ placement }: { placement: string }) {
       scope="execution" hasNewer={hasNewer} onLatest={() => setRequest(value => value + 1)} />
   </section>
 }
+let updateReturnWindow: (state: { revision: number; hasNewer: boolean }) => void
+function HistoricalReturnWindow() {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState({ revision: 1, hasNewer: true })
+  updateReturnWindow = setState
+  return <section className="execution-drawer" style={{ position: 'relative', height: 300 }}>
+    <div ref={viewportRef} className="execution-drawer-body" style={{ height: 240, overflow: 'auto' }}>
+      <p>已加载的历史窗口；较新的缓存尚未恢复。</p>
+    </div>
+    <ReturnToLatest viewportRef={viewportRef} ownerKey="historical-return-window" scope="execution"
+      contentRevision={state.revision} hasNewer={state.hasNewer} onLatest={() => setState({ ...state, hasNewer: false })} />
+  </section>
+}
 const reactRoot = createRoot(document.getElementById('root')!)
 reactRoot.render(<Fixture />)
 const element = (selector: string): HTMLElement => document.querySelector(selector)!
 let anchor: HTMLElement | null = null
 Object.assign(window, { campOpenTest: {
+  showHistoricalReturnWindow: () => reactRoot.render(<HistoricalReturnWindow />),
+  updateReturnWindow: (revision: number, hasNewer: boolean) => updateReturnWindow({ revision, hasNewer }),
+  appendCollapsedRunningExecution: () => {
+    current = { ...current, agentRuns: [...current.agentRuns, { ...executionRun,
+      id: 'empty-failed-latest-running', agentId: agent.agentId, campTurnId: 'stopped-turn',
+      status: 'running', failure: null, executionEvidenceCount: 0, cancelRequestedAt: null,
+      cancelAcknowledgedAt: null, cancelReasonCode: null, endedAt: null,
+      createdAt: new Date(Date.parse(now) + 5000).toISOString() }] }
+    updateSnapshot(current)
+  },
   showFailedExecutions: (placement: 'bottom' | 'inspector') => {
     current = { ...campOpenProjectionAsSnapshot(projection(60)), tasks: [], messages: [], agentRunFileChanges: [],
       agentRuns: Array.from({ length: 4 }, (_, index) => ({ ...executionRun,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 /** One local overlay per reading viewport. Its state never rerenders the transcript. */
 export function ReturnToLatest({
@@ -18,6 +18,16 @@ export function ReturnToLatest({
   const awayRef = useRef(false)
   const previous = useRef({ ownerKey, contentRevision })
   const measureRef = useRef<(() => void) | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const setButtonRef = useCallback((button: HTMLButtonElement | null): void => {
+    const viewport = viewportRef.current
+    if (!button && buttonRef.current === document.activeElement
+      && viewport?.isConnected && viewport.clientHeight > 0) {
+      viewport.setAttribute('tabindex', '-1')
+      viewport.focus({ preventScroll: true })
+    }
+    buttonRef.current = button
+  }, [viewportRef])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -56,12 +66,12 @@ export function ReturnToLatest({
       awayRef.current = false
       setAway(false)
       setHasNewContent(false)
-    } else if (previous.current.contentRevision !== contentRevision && awayRef.current) {
+    } else if (previous.current.contentRevision !== contentRevision && (awayRef.current || hasNewer)) {
       setHasNewContent(true)
     }
     previous.current = { ownerKey, contentRevision }
     measureRef.current?.()
-  }, [ownerKey, contentRevision])
+  }, [ownerKey, contentRevision, hasNewer])
 
   if (!enabled || !visibleViewport || (!away && !hasNewer)) return null
   const label = hasNewContent
@@ -70,6 +80,7 @@ export function ReturnToLatest({
   return (
     <div className="return-to-latest-layer">
       <button
+        ref={setButtonRef}
         type="button"
         className="return-to-latest"
         data-return-scope={scope}
