@@ -156,7 +156,7 @@ describe('member runtime parameters', () => {
     expect(markup).not.toContain('打开后重新获取')
     expect(markup).toContain('Runtime Model')
     expect(markup).toContain('推理强度')
-    expect(markup).toContain('value="high" selected')
+    expect(markup).toContain('推理强度，High')
   })
 
   it.each(['copilot-cli', 'claude-code-cli'] as const)('marks a saved unknown model as unverified when no serviceable catalog exists (%s)', (adapterKind) => {
@@ -238,7 +238,7 @@ describe('member runtime parameters', () => {
     }))
 
     expect(markup).toContain(label)
-    expect(markup).toContain(`value="${value}" selected`)
+    expect(markup).toContain(`aria-label="${label}，${value}"`)
   })
 
   it('does not present an approval mode for native Pi tool execution', () => {
@@ -280,7 +280,6 @@ describe('member runtime parameters', () => {
       /\.member-runtime-parameters \.runtime-model-picker-trigger,[\s\S]*?\.member-runtime-parameters \.runtime-parameter-switch \{[\s\S]*?\n\}/
     )?.[0]
 
-    expect(controlContract).toContain('.member-runtime-parameters .field-label > select')
     expect(controlContract).toContain('height: var(--runtime-parameter-control-height)')
     expect(controlContract).toContain('min-height: var(--runtime-parameter-control-height)')
   })

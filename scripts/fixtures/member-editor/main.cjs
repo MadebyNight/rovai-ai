@@ -100,11 +100,16 @@ app
       click(`${active}.member-identity-form button[aria-label="保存队员信息"]`)
     const saveRuntime = () =>
       click(`${active}.member-runtime-form button[aria-label="保存运行配置"]`)
+    const parameterButtons = active + '.runtime-parameter-form .field-label:not(.runtime-model-field) .runtime-model-picker-trigger'
+    const openParameter = async index => {
+      const label = await run(`document.querySelectorAll(${JSON.stringify(parameterButtons)})[${index}].getAttribute('aria-label')`)
+      await click(`button[aria-label=${JSON.stringify(label)}]`)
+    }
     const selectPermission = async (index, value) => {
-      await run(
-        `(() => { const select = document.querySelectorAll(${JSON.stringify(active + '.runtime-parameter-form select')})[${index}]; select.value = ${JSON.stringify(value)}; select.dispatchEvent(new Event('change', { bubbles: true })) })()`
-      )
-      await settle()
+      await openParameter(index)
+      const label = await run(`window.memberFixture.installations.flatMap(item => [...(item.snapshot?.permissionOptions ?? []).flatMap(option => option.choices ?? []), ...(item.snapshot?.models ?? []).flatMap(model => model.options.flatMap(option => option.values))]).find(choice => choice.value === ${JSON.stringify(value)})?.label ?? ${JSON.stringify(value)}`)
+      assert.ok(label, `Missing parameter choice: ${value}`)
+      await click('[role=menuitemradio]', label)
     }
     const roleValue = () =>
       run(`document.querySelectorAll(${JSON.stringify(textInput)})[1].value`)
@@ -158,20 +163,15 @@ app
         modal: false
       })
       await capture('member-day')
-      const options = await run(
-        `[...document.querySelectorAll('${active}.runtime-parameter-form select')].map(select => [...select.options].map(option => [option.value, option.textContent]))`
-      )
+      const options = []
+      for (const index of [0, 1]) {
+        await openParameter(index)
+        options.push(await run(`[...document.querySelectorAll('[role=menuitemradio]')].map(node => node.textContent.trim())`))
+        await key('Escape')
+      }
       assert.deepEqual(options, [
-        [
-          ['read-only', 'read-only'],
-          ['workspace-write', 'workspace-write'],
-          ['danger-full-access', 'danger-full-access (no sandbox)']
-        ],
-        [
-          ['untrusted', 'untrusted'],
-          ['on-request', 'on-request'],
-          ['never', 'never (no approval prompts)']
-        ]
+        ['read-only', 'workspace-write', 'danger-full-access (no sandbox)'],
+        ['untrusted', 'on-request', 'never (no approval prompts)']
       ])
     })
     await check('sidebar dialogs dismiss without refocusing ellipsis and jump search keeps keyboard input', async () => {
@@ -351,7 +351,7 @@ app
         )
         assert.equal(
           await run(
-            `document.querySelector('${active}.runtime-parameter-form select').value`
+            `document.querySelector(${JSON.stringify(parameterButtons)}).textContent.trim()`
           ),
           'read-only'
         )
@@ -361,7 +361,7 @@ app
         )
         assert.equal(
           await run(
-            `document.querySelector('${active}.runtime-parameter-form select').value`
+            `document.querySelector(${JSON.stringify(parameterButtons)}).textContent.trim()`
           ),
           'read-only'
         )
@@ -504,11 +504,11 @@ app
         await click(`${active}.runtime-model-picker-trigger`)
         assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('gpt-5.4-mini')`), true)
         assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('24 小时')`), false)
-        assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('正在更新模型列表')`), true)
+        assert.equal(await run(`document.querySelector('.runtime-model-picker-menu').textContent.includes('正在更新模型列表')`), false)
         await capture('model-catalog-expired-visible')
         console.log(JSON.stringify({ modelCatalogDisplay: await run('window.memberFixture.catalogDisplayTimings') }))
         await run('window.memberFixture.releaseCatalog()')
-        await wait(`document.querySelector('.runtime-model-picker-menu').textContent.includes('已保留上次结果')`)
+        await wait(`document.querySelector('.runtime-model-picker-notice')?.textContent.includes('已保留上次结果')`)
         await capture('model-catalog-refresh-failed')
         await click('.runtime-model-picker-item', 'gpt-5.4-mini')
         await selectPermission(0, 'high')
@@ -538,7 +538,7 @@ app
           await run(`window.memberFixture.catalogScenario({ refreshStatus: '${refreshStatus}', rejectCodes: ['runtime_model_catalog_refresh_required', ${code ? `'${code}'` : "'runtime_model_catalog_refresh_required'"}] }); window.memberFixture.calls.splice(0)`)
           await saveRuntime()
           await wait(`document.querySelector('${active}.member-runtime-form [role=alert]')?.textContent.includes('${text}')`)
-          assert.equal(await run(`document.querySelector('${active}.runtime-parameter-form select').value`), 'low')
+          assert.equal(await run(`document.querySelector(${JSON.stringify(parameterButtons)}).textContent.trim()`), '低')
           assert.equal(await run('window.memberFixture.profiles()[0].runtimeConfiguration.model.options.reasoning_effort'), 'high')
           assert.equal(await run(`!!document.querySelector('${active}.member-runtime-form [role=alert] button')`), retry)
           await capture(`model-save-${refreshStatus}`)

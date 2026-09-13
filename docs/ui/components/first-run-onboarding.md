@@ -2,7 +2,7 @@
 document_type: ui-component-spec
 authority: first-run-onboarding-presentation
 status: accepted
-last_updated: 2026-09-08
+last_updated: 2026-09-13
 ---
 
 # 首次训练与“初次集结”
@@ -46,6 +46,8 @@ Dispatch Preflight 中确认。
 
 模型字段复用队员运行配置的 schema 驱动组件。Runtime Default 不依赖 catalog；显式模型需要 24 小时内可服务
 且未失效的 catalog。打开 Picker 使用 Core-owned 60 秒 stale-while-revalidate，切换 Runtime 不触发 discovery。
+菜单的搜索、默认项置底及推理强度样式与[队员配置](member-identity.md#队员配置页)同步。初始模型保持 Runtime Default；
+用户选择固定模型后，推理强度保持跟随模型默认值，不预填 schema 的推荐值。
 页面只告诉用户选择 Runtime 与模型，权限取 Adapter 静态默认值且
 不在 onboarding 展示。
 
