@@ -212,6 +212,20 @@ describe('uncommitted destinations and entry-owned corrections', () => {
     expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('B')], index: 1 })
   })
 
+  it('does not let a late preview hydration restore an automatically removed resource', async () => {
+    let release!: () => void
+    const navigation = createDesktopNavigation(async (_target, transaction) => {
+      transaction.commit()
+      await new Promise<void>(resolve => { release = resolve })
+      expect(transaction.commit()).toBe(false)
+    })
+    navigation.reset(camp('A'))
+    const opening = navigation.push(camp('D'))
+    navigation.captureCurrentEntry().update({ kind: 'quick_chat' })
+    release(); expect(await opening).toBe(false)
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), { kind: 'quick_chat' }], index: 1 })
+  })
+
   it('user replace cancels pending push without inheriting its extra entry', async () => {
     let release!: () => void
     const navigation = createDesktopNavigation(async (target, transaction) => {

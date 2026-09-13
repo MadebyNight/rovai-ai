@@ -65,11 +65,12 @@ export function createDesktopNavigation<Context = undefined>(
     const target = operation.kind === 'traverse' ? state.entries[operation.index] : operation.target
     const superseded = new Promise<void>(resolve => { supersede = resolve })
     let committed = false
+    let committedRevision = -1
     const transaction: NavigationTransaction = {
-      isCurrent: () => request === generation,
+      isCurrent: () => request === generation && (!committed || committedRevision === entryRevision),
       superseded,
       commit: (resolvedTarget = target) => {
-        if (request !== generation) return false
+        if (request !== generation || (committed && committedRevision !== entryRevision)) return false
         // Build from the latest committed entries so in-page repairs made during a slow
         // departure survive. A second commit (Camp preview -> full projection) replaces.
         let entries = [...state.entries]
@@ -84,7 +85,7 @@ export function createDesktopNavigation<Context = undefined>(
         }
         state = { entries, index }
         pending = null
-        ++entryRevision
+        committedRevision = ++entryRevision
         committed = true
         publish()
         return true
@@ -92,7 +93,7 @@ export function createDesktopNavigation<Context = undefined>(
     }
     try {
       await apply(target, transaction, context)
-      return committed && request === generation
+      return committed && transaction.isCurrent()
     } finally {
       if (request === generation) pending = null
     }

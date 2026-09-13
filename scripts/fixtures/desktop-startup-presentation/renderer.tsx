@@ -533,6 +533,26 @@ Object.assign(window, { startupTest: {
     check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Memory normalization must not create an extra history entry')
     cases.push('Pending pushes never enter history and memory normalization cannot supersede newer navigation')
 
+    await captureNavigation('day', false)
+    const cleanup = deferred<unknown>(), afterCleanup = deferred<unknown>()
+    requestHandlers.set('camps.discardPending', () => cleanup.promise)
+    campRequest = id => id === 'C' ? afterCleanup.promise : id === 'D'
+      ? { ...campProjection(id), camp: { ...campProjection(id).camp, activationState: 'pending' } } : campProjection(id)
+    await clickNavigation('导航会话 D', '.camp-nav-open')
+    await flush(); await flush()
+    await clickNavigation('导航会话 A', '.camp-nav-open')
+    await flush(); await flush()
+    await back()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 D', 'Cleanup race must revisit D before opening C')
+    check(calls.includes('camps.discardPending'), 'Cleanup race must have a pending discard')
+    await clickNavigation('导航会话 C', '.camp-nav-open')
+    cleanup.resolve({ status: 'applied', code: 'camp.pending_discarded', payload: {} }); await flush(); await flush()
+    check(document.querySelector('.compose-content'), 'Deleted displayed pending Camp must resolve to home during a slow departure: ' + document.querySelector('.camp-topbar h1')?.textContent)
+    afterCleanup.resolve(campProjection('C')); await flush(); await flush()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 C', 'Pending Camp cleanup must not cancel a newer destination')
+    await back()
+    check(document.querySelector('.compose-content'), 'Deleted Camp fallback remains a corrected history entry')
+
     const navigationAgents = ['A', 'B'].map((name, index) => ({
       agentId: 'agent-' + name, displayName: '导航队员 ' + name, avatarRef: null, accent: null,
       teamRole: '项目协作', professionalResponsibilities: '', personalityTraits: [], workingPrinciples: '', growthTopic: '',

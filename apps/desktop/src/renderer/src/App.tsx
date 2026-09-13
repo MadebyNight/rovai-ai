@@ -3131,11 +3131,8 @@ function AuthoritativeApp({
           persistCurrentProject(fallback)
         }
         if (removingActiveCamp) {
-          cancelPendingCampActivation()
-          setActiveCampId(null)
-          setCampSnapshot(null)
+          if (activeCampId) forgetRemovedCampSurface(activeCampId)
           setNotificationFocus(null)
-          if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
         }
         if (removingCurrent || removingActiveCamp) {
           await commitRestorableLocation({ kind: 'quick_chat' })
@@ -3199,10 +3196,7 @@ function AuthoritativeApp({
       forgetFilePreviewSession(camp.id, activeCampId === camp.id)
       campSnapshotCache.current.delete(camp.id)
       if (activeCampId === camp.id) {
-        cancelPendingCampActivation()
-        setActiveCampId(null)
-        setCampSnapshot(null)
-        if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
+        forgetRemovedCampSurface(camp.id)
       }
       await loadNavigation()
     } finally {
@@ -3577,6 +3571,18 @@ function AuthoritativeApp({
     }
   }
 
+  function forgetRemovedCampSurface(campId: string): void {
+    if (activeCampIdRef.current !== campId) return
+    setActiveCampId(null)
+    setCampSnapshot(null)
+    const current = desktopNavigation.getSnapshot()
+    const target = current.entries[current.index]
+    if (viewRef.current === 'camp' && target?.kind === 'camp' && target.campId === campId) {
+      // Correct the displayed resource without invalidating a newer Camp read.
+      if (desktopNavigation.captureCurrentEntry().update({ kind: 'quick_chat' })) setView('compose')
+    }
+  }
+
   const refreshPendingCampNavigation = (): void => {
     void loadNavigation('invalidation').catch(() => undefined)
   }
@@ -3594,12 +3600,7 @@ function AuthoritativeApp({
       throw new Error(commandFailureMessage(result))
     }
     if (result.status !== 'rejected') campSnapshotCache.current.delete(draft.campId)
-    if (result.status !== 'rejected' && activeCampIdRef.current === draft.campId) {
-      cancelPendingCampActivation()
-      setActiveCampId(null)
-      setCampSnapshot(null)
-      if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
-    }
+    if (result.status !== 'rejected') forgetRemovedCampSurface(draft.campId)
     await loadNavigation()
   }
 
