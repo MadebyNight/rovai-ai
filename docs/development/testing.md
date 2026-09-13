@@ -73,6 +73,20 @@ cargo test --workspace -- --list
 
 ## 测试层级
 
+### Pi Windows 工作目录
+
+`pi::host::tests::host_cwd_uses_safe_dos_spelling_and_rejects_extended_only_paths` 拥有 Pi 命令构造边界的
+路径转换矩阵：规范化的本地英文/中文路径必须传为等价 DOS 写法；需要 verbatim 语义的路径必须明确失败。
+既有 argv/Session 参数测试不检查 cwd，因此不能覆盖 Issue #346 的默认 Session 目录命名回归。
+Windows 定向命令为 `cargo test -p rovai-core --bin rovai-core pi::host::tests::`。
+
+独立的 ignored `native_pi_host_starts_with_canonical_workspace` 使用真实 native Pi、Managed Process 和正式
+Host 参数验证 canonical Quick Chat/中文目录上的 `get_state`，不指定 Session 目录、不调用模型，并回收进程。
+运行前将 `ROVAI_PI_STARTUP_SMOKE_EXE` 指向官方 `pi.exe`，将 `ROVAI_PI_STARTUP_SMOKE_ROOT` 指向独立绝对
+临时目录，`PI_CODING_AGENT_DIR` 必须等于该目录下的 `agent`；Home/AppData 也应隔离，不继承认证环境。
+通过 `cargo test -p rovai-core --bin rovai-core pi::host::tests::native_pi_host_starts_with_canonical_workspace -- --exact --ignored`
+显式执行。该 smoke 证明原生进程解释 cwd 的结果，不能由命令字段断言代替。
+
 ### CampOpen 业务读取边界
 
 `read_model::camp_open_slow_tests` 拥有 Open 的完整 SQLite 读取边界：authorizer 拒绝任何直接或间接

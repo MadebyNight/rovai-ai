@@ -394,6 +394,27 @@ fn append_host_arguments(command: &mut Command, extension_path: &Path) {
         .arg(extension_path);
 }
 
+fn configure_host_working_directory(command: &mut Command, cwd: &Path) -> Result<()> {
+    #[cfg(windows)]
+    let cwd = {
+        // Pi encodes cwd into its native Session directory name, retaining the
+        // '?' in a verbatim prefix. Only change the process-visible spelling;
+        // Host/Fleet/Session identity continues to use the admitted canonical cwd.
+        let visible = dunce::simplified(cwd);
+        if matches!(
+            visible.components().next(),
+            Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+        ) {
+            bail!(
+                "Pi working directory requires unsupported Windows verbatim syntax; use a shorter local directory without reserved names or trailing dots/spaces"
+            );
+        }
+        visible
+    };
+    command.current_dir(cwd);
+    Ok(())
+}
+
 impl PiHost {
     async fn spawn(launch: PiHostLaunch<'_>) -> Result<Arc<Self>> {
         create_private_directory(launch.private_runtime_dir)?;
@@ -422,8 +443,8 @@ impl PiHost {
         append_initial_session_argument(&mut command, launch.initial_session_file);
         command
             .env("ROVAI_PI_HOST_BINDING_FILE", &binding_path)
-            .env("PI_TELEMETRY", "0")
-            .current_dir(launch.cwd);
+            .env("PI_TELEMETRY", "0");
+        configure_host_working_directory(&mut command, launch.cwd)?;
         let spec = ManagedProcessLaunchSpec::capture(
             &command,
             ManagedProcessPurpose::RuntimeHost,
@@ -2811,6 +2832,92 @@ done
         ] {
             assert!(!production_args.iter().any(|argument| argument == forbidden));
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn host_cwd_uses_safe_dos_spelling_and_rejects_extended_only_paths() {
+        let long_path = format!(r"\\?\C:\{}\project", "segment\\".repeat(40));
+        let cases = [
+            (r"C:\work\project", Some(r"C:\work\project")),
+            (r"\\?\C:\work\project", Some(r"C:\work\project")),
+            (r"\\?\C:\用户\项目 空格", Some(r"C:\用户\项目 空格")),
+            (r"\\?\C:\work\trailing.", None),
+            (r"\\?\C:\work\trailing ", None),
+            (r"\\?\C:\work\NUL", None),
+            (r"\\?\UNC\server\share\project", None),
+            (r"\\?\Volume{fixture}\project", None),
+            (long_path.as_str(), None),
+        ];
+        for (cwd, expected) in cases {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            let result = configure_host_working_directory(&mut command, Path::new(cwd));
+            match expected {
+                Some(expected) => {
+                    result.unwrap();
+                    assert_eq!(
+                        command.as_std().get_current_dir(),
+                        Some(Path::new(expected))
+                    );
+                }
+                None => {
+                    let error = result.expect_err(cwd);
+                    assert!(error.to_string().contains("Pi working directory"));
+                    assert!(command.as_std().get_current_dir().is_none());
+                }
+            }
+        }
+    }
+
+    // This explicit smoke owns native EXE + ManagedProcess + Pi's default
+    // Session-directory creation. The deterministic command test above cannot
+    // prove how an upstream binary interprets the captured Windows cwd.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires native Pi via ROVAI_PI_STARTUP_SMOKE_EXE and an isolated ROVAI_PI_STARTUP_SMOKE_ROOT/PI_CODING_AGENT_DIR"]
+    async fn native_pi_host_starts_with_canonical_workspace() -> Result<()> {
+        let executable = PathBuf::from(std::env::var("ROVAI_PI_STARTUP_SMOKE_EXE")?);
+        let root = PathBuf::from(std::env::var("ROVAI_PI_STARTUP_SMOKE_ROOT")?);
+        let agent_dir = PathBuf::from(std::env::var("PI_CODING_AGENT_DIR")?);
+        anyhow::ensure!(root.is_absolute() && agent_dir == root.join("agent"));
+        anyhow::ensure!(executable.extension().is_some_and(|ext| ext == "exe"));
+        std::fs::create_dir_all(&agent_dir)?;
+        for workspace_name in ["quick-chat", "中文项目 空格"] {
+            let workspace = root.join(workspace_name);
+            std::fs::create_dir_all(&workspace)?;
+            let canonical = workspace.canonicalize()?;
+            let bootstrap = "Pi cwd no-Prompt smoke".to_string();
+            let seed = PiBindingSeed {
+                agent_run_id: uuid::Uuid::new_v4().to_string(),
+                execution_epoch: 1,
+                native_binding_id: uuid::Uuid::new_v4().to_string(),
+                native_binding_generation: 1,
+                expected_native_session_id: None,
+                bootstrap_payload_digest: format!("{:x}", Sha256::digest(bootstrap.as_bytes())),
+                bootstrap,
+            };
+            let (incoming, _receiver) = mpsc::unbounded_channel();
+            let host = PiHost::spawn(PiHostLaunch {
+                executable: &executable,
+                cwd: &canonical,
+                private_runtime_dir: &private_runtime_directory(&root),
+                session_dir: None,
+                initial_session_file: None,
+                initial_binding: &seed,
+                incoming,
+                builtin_tools: None,
+            })
+            .await?;
+            let state = host.command("get_state", json!({})).await;
+            let reaped = host.shutdown_and_reap_with_status().await;
+            let state = state?;
+            anyhow::ensure!(reaped, "Pi Host was not reaped");
+            assert_eq!(host.cwd, canonical);
+            let session_file = PathBuf::from(state["data"]["sessionFile"].as_str().unwrap());
+            assert!(session_file.starts_with(agent_dir.join("sessions")));
+            assert!(!session_file.to_string_lossy().contains('?'));
+        }
+        Ok(())
     }
 
     #[test]
