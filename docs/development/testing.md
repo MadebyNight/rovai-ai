@@ -527,4 +527,9 @@ Vitest owner 负责，窗口/代际释放由 Main 既有 service owner 负责，
 
 `apps/web/src/client.test.ts` 拥有 Bearer/proof 恢复、复制材料 fork、过期重登及原命令恢复；`navigation-history.test.ts` 拥有浏览器历史适配的拒绝、刷新与跨 Desktop 上限的浏览器历史。现有 `host-web.test.mjs` 扩展真实 HTTP resume/fork 归属校验，现有 Rust Session 生命周期测试扩展 fork 继承到期时间、独立撤销与撤销后拒绝，不另建 SQLite fixture。
 
-构建 Host 与 Web 后，`node scripts/smoke-web-recovery.mjs` 运行真实 Host/生产 Web/隔离 Chrome 验收；只使用独立数据和默认队员，不调用模型。输出位置可用 `ROVAI_RECOVERY_OUTPUT` 指定。Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
+构建 Host 与 Web 后，`node scripts/smoke-web-recovery.mjs` 运行真实 Host/生产 Web/隔离 Chrome 验收；只使用独立数据和默认队员，不调用模型。
+入口通过一次性 fragment 票据自动登录，检查立即清理地址、StrictMode 仅兑换一次、票据不进入恢复存储，以及刷新后原身份和草稿、复制标签页隔离；
+场景并行利用票据有效窗口后等待真实 120 秒到期并核对拒绝，整个 smoke 至少约两分钟。输出位置可用 `ROVAI_RECOVERY_OUTPUT` 指定。
+票据过期、替换、关闭／轮换和消费竞争的确定性输入矩阵扩展 Rust `auth` 的既有 Session 生命周期 owner，不新增 Core fixture。
+真实 HTTP owner 验证本机签发与 HTTP 兑换接线、双客户端竞争、旧票据撤销，以及公共操作不能签发票据。
+Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。

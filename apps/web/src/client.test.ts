@@ -225,6 +225,37 @@ describe('tab session recovery', () => {
     return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value) }, removeItem: (key: string) => { values.delete(key) } }
   }
   const identity = { protocolVersion: 2, token: 'a'.repeat(64), clientId: 'b'.repeat(64), editorProof: 'c'.repeat(64), ownerId: 'local_user', channels: 'desktop' }
+  it('exchanges a scan ticket only in POST and retains this tab editor but never a copied editor', async () => {
+    const storage = memory()
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json(identity))
+    const first = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    await first.login('d'.repeat(64))
+    storage.setItem('rovai.web.edits.v1', 'original unsaved text')
+    const next = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    const assertTab = vi.fn(async () => undefined)
+    fetcher.mockClear()
+    await next.restore(false, assertTab, false)
+    expect(fetcher).not.toHaveBeenCalled()
+    await next.loginTicket('e'.repeat(64))
+    expect(next.editingScope).toBe(first.editingScope)
+    expect(assertTab).toHaveBeenCalledOnce()
+    expect(fetcher.mock.calls[0][0]).toBe('http://localhost:4317/api/v1/login-ticket')
+    const options = fetcher.mock.calls[0][1]!
+    expect(options).toMatchObject({ method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store' })
+    expect(JSON.parse(String(options.body))).toEqual({ protocolVersion: 2, ticket: 'e'.repeat(64), editor: { clientId: identity.clientId, proof: identity.editorProof } })
+    expect(storage.getItem('rovai.web.session.v1')).not.toContain('e'.repeat(64))
+    expect(storage.getItem('rovai.web.edits.v1')).toBe('original unsaved text')
+    const copy = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    await copy.restore(true, async () => undefined, false)
+    fetcher.mockResolvedValue(Response.json({ ...identity, token: 'f'.repeat(64), clientId: 'f'.repeat(64) }))
+    await copy.loginTicket('e'.repeat(64))
+    expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body)).editor).toBeUndefined()
+    expect(copy.editingScope).not.toBe(first.editingScope)
+    expect(storage.getItem('rovai.web.edits.v1')).toBeNull()
+    fetcher.mockResolvedValue(Response.json({ error: { code: 'login_ticket_invalid' } }, { status: 401 }))
+    await expect(copy.loginTicket('e'.repeat(64))).rejects.toThrow('过期或已使用')
+    expect(copy.authenticated).toBe(false)
+  })
   it('validates the saved Bearer and proof before restoring the same editor; logout keeps editing but removes authentication', async () => {
     const storage = memory()
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async url => String(url).endsWith('/logout') ? new Response(null, { status: 204 }) : Response.json(identity))

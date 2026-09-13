@@ -3882,6 +3882,7 @@ export type HostWebStartInput = {
 }
 
 export interface HostWebApi {
+  loginTicket(): Promise<{ ticket: string; expiresInSeconds: number }>
   token(): Promise<{ administratorToken: string }>
   status(): Promise<HostWebStatus>
   start(input: HostWebStartInput): Promise<HostWebStatus & { administratorToken: string }>

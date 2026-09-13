@@ -10,7 +10,7 @@ mod workspaces;
 
 use anyhow::{Context, Result, ensure};
 pub use auth::new_token;
-use auth::{LoginFailure, SESSION_LIFETIME, Session, Sessions};
+use auth::{LOGIN_TICKET_LIFETIME, LoginFailure, SESSION_LIFETIME, Session, Sessions, TicketGrant};
 use axum::{
     Json, Router,
     body::Body,
@@ -142,6 +142,12 @@ impl WebServer {
         self.sessions.rotate(&token)?;
         Ok(token)
     }
+    pub fn login_ticket(&self) -> Result<Value> {
+        ensure!(!self.task.is_finished(), "Web service is disabled");
+        Ok(
+            json!({"ticket":self.sessions.login_ticket()?,"expiresInSeconds":LOGIN_TICKET_LIFETIME.as_secs()}),
+        )
+    }
     pub async fn stop(mut self) {
         self.sessions.close();
         if let Some(shutdown) = self.shutdown.take() {
@@ -190,6 +196,7 @@ fn routes(state: WebState) -> Router {
     Router::new()
         .nest("/api/v1", api)
         .route("/api/v1/login", post(login))
+        .route("/api/v1/login-ticket", post(redeem_login_ticket))
         .route("/", get(index))
         .route("/assets/{*path}", get(asset))
         .layer(DefaultBodyLimit::max(1024 * 1024))
@@ -280,9 +287,48 @@ async fn login(
         Ok(generation) => generation,
         Err(failure) => return login_failure(failure),
     };
+    finish_login(state, body.editor, LoginGrant::Administrator(generation)).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketLogin {
+    protocol_version: u32,
+    ticket: String,
+    #[serde(default)]
+    editor: Option<EditorResume>,
+}
+
+enum LoginGrant {
+    Administrator(u64),
+    Ticket(TicketGrant),
+}
+
+async fn redeem_login_ticket(
+    State(state): State<WebState>,
+    body: std::result::Result<Json<TicketLogin>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return error(StatusCode::BAD_REQUEST, "invalid_login");
+    };
+    if body.protocol_version != 2 {
+        return error(StatusCode::CONFLICT, "protocol_incompatible");
+    }
+    let grant = match state.sessions.authorize_ticket(&body.ticket) {
+        Ok(grant) => grant,
+        Err(failure) => return ticket_failure(failure),
+    };
+    finish_login(state, body.editor, LoginGrant::Ticket(grant)).await
+}
+
+async fn finish_login(
+    state: WebState,
+    editor: Option<EditorResume>,
+    grant: LoginGrant,
+) -> Response {
     let identity = match state
         .core
-        .request("host.editor.resolve", json!(body.editor))
+        .request("host.editor.resolve", json!(editor))
         .await
     {
         Ok(reply) if reply.error.is_none() => reply.result.unwrap_or(Value::Null),
@@ -291,9 +337,24 @@ async fn login(
     let Some(client_id) = identity["clientId"].as_str() else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable");
     };
-    match state.sessions.issue(generation, client_id.to_owned()) {
+    let ticket = matches!(grant, LoginGrant::Ticket(_));
+    let result = match grant {
+        LoginGrant::Administrator(generation) => {
+            state.sessions.issue(generation, client_id.to_owned())
+        }
+        LoginGrant::Ticket(grant) => state.sessions.issue_ticket(grant, client_id.to_owned()),
+    };
+    match result {
         Ok((token, session)) => Json(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"expiresInSeconds":SESSION_LIFETIME.as_secs(),"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }})).into_response(),
+        Err(failure) if ticket => ticket_failure(failure),
         Err(failure) => login_failure(failure),
+    }
+}
+
+fn ticket_failure(failure: LoginFailure) -> Response {
+    match failure {
+        LoginFailure::Unauthorized => error(StatusCode::UNAUTHORIZED, "login_ticket_invalid"),
+        failure => login_failure(failure),
     }
 }
 

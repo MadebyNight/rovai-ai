@@ -16105,6 +16105,7 @@ async fn run_core(
             "host.web.start" => Some(HostWebOperation::Start),
             "host.web.stop" => Some(HostWebOperation::Stop),
             "host.web.rotate" => Some(HostWebOperation::Rotate),
+            "host.web.loginTicket" => Some(HostWebOperation::LoginTicket),
             "host.channels.dispatch" => Some(HostWebOperation::ChannelDispatch),
             "host.channels.reply" => Some(HostWebOperation::ChannelReply),
             _ => None,

@@ -105,6 +105,16 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
   const client: CampClient = {
     platform: 'darwin', // Both comparison frames use the same macOS content baseline; native chrome is outside the viewport.
     request: request as CampClient['request'], onEvent: fn => { events.add(fn); return () => events.delete(fn) },
+    exportMonitoring: async () => unavailable('monitoring export'), revealMonitoringExport: null,
+    exportDiagnostics: async () => unavailable('diagnostic export'), revealDiagnosticsExport: null,
+    memberAvatars: { selectSource: async () => unavailable('avatar source'), save: async () => unavailable('avatar save'), read: async () => unavailable('avatar read') },
+    selectSkillImportDirectory: async () => unavailable('skill import'), selectRuntimeExecutable: null,
+    revealMcpConfig: null, channels: null,
+    singleChatAttachments: {
+      prepare: async () => unavailable('single chat upload'),
+      preparePending: async () => unavailable('single chat pending upload'),
+      remove: async () => unavailable('single chat attachment removal')
+    },
     attachments: surface === 'desktop' ? { kind: 'native', open: opened,
       reveal: async () => { note('模拟 Desktop：在 Finder 中显示固定示例。'); return { availability: 'available', revealed: true, error: null } } }
       : { kind: 'download', download: async locator => {
@@ -152,6 +162,7 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
     prepareHtml: async req => req.handleId === file.handleId && req.expectedGeneration === file.contentGeneration
       ? { ok: true, value: { html: fileText, tabToken: 'review-markdown', bridgeToken: 'review-no-html-execution', assetBasePath: '',
           contentGeneration: file.contentGeneration, contentVersion: file.contentVersion } } : forbidden(),
+    prepareHtmlSite: forbidden, releaseHtmlSite: async () => ({ released: true }),
     readPage: forbidden, readBinary: forbidden, resolveLine: forbidden, reload: forbidden,
     release: async () => ({ released: true }), openInSystem: forbidden, revealInFolder: forbidden,
     copyPath: forbidden, chooseAuthorizedRoot: forbidden

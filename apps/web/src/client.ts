@@ -268,7 +268,7 @@ export class ConsoleClient {
     this.#fetch = fetcher.bind(globalThis)
   }
 
-  async restore(fork = false, assertTab: () => Promise<void> = async () => undefined): Promise<boolean> {
+  async restore(fork = false, assertTab: () => Promise<void> = async () => undefined, authenticate = true): Promise<boolean> {
     this.#assertTab = assertTab
     if (this.#restored) return this.authenticated
     this.#restored = true
@@ -290,7 +290,7 @@ export class ConsoleClient {
         if (typeof id === 'string') this.#pendingUploads.set(id, { intent, data: null, resolve: () => this.#notifyRecovered(), reject: () => this.#notifyRecovered() })
       }
     }
-    if (!saved.token) { if (fork) this.#storage?.removeItem(RECOVERY_KEY); return false }
+    if (!authenticate || !saved.token) { if (fork) this.#storage?.removeItem(RECOVERY_KEY); return false }
     this.#token = saved.token
     try {
       const response = await this.#json<Record<string, unknown>>('session', { method: 'POST', body: JSON.stringify({ editor: saved.editor, fork }) })
@@ -332,15 +332,23 @@ export class ConsoleClient {
   clearEditingRecovery(): void { this.#storage?.removeItem('rovai.web.edits.v1') }
 
   async login(administratorToken: string): Promise<void> {
+    await this.#login('login', { administratorToken })
+  }
+
+  async loginTicket(ticket: string): Promise<void> {
+    await this.#login('login-ticket', { ticket })
+  }
+
+  async #login(path: 'login' | 'login-ticket', credential: { administratorToken: string } | { ticket: string }): Promise<void> {
     if (this.#assertTab) await this.#assertTab()
     this.clear()
     const generation = this.#generation
-    const response = await this.#fetch(`${this.origin}/api/v1/login`, {
+    const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: 2, administratorToken, ...(this.#editor ? { editor: this.#editor } : {}) }), credentials: 'omit', redirect: 'error', cache: 'no-store',
+      body: JSON.stringify({ protocolVersion: 2, ...credential, ...(this.#editor ? { editor: this.#editor } : {}) }), credentials: 'omit', redirect: 'error', cache: 'no-store',
       signal: this.#lifetime.signal
     })
-    if (!response.ok) throw new Error(response.status === 409 ? 'Web 与 Host 协议不兼容，请使用同一版本。' : response.status === 429 ? '登录次数过多，请稍后再试。' : '登录失败，请检查管理令牌。')
+    if (!response.ok) throw new Error(response.status === 409 ? 'Web 与 Host 协议不兼容，请使用同一版本。' : response.status === 429 ? '登录暂受限，请稍后再试。' : path === 'login-ticket' ? '扫码登录未完成，二维码可能已过期或已使用。请在运行服务的 Desktop 重新生成，或使用管理令牌登录。' : '登录失败，请检查管理令牌。')
     const session = await response.json() as { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown }
     if (generation !== this.#generation) throw new SessionRequired()
     this.#acceptSession(session)

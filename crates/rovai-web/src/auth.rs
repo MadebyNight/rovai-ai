@@ -9,6 +9,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{Semaphore, watch};
 
 pub const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 60);
+pub const LOGIN_TICKET_LIFETIME: Duration = Duration::from_secs(120);
 const MAX_SESSIONS: usize = 32;
 const LOGIN_ATTEMPTS: usize = 12;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
@@ -23,6 +24,18 @@ struct SessionState {
     sessions: HashMap<[u8; 32], Arc<Session>>,
     attempts: VecDeque<Instant>,
     generation: u64,
+    ticket: Option<LoginTicket>,
+}
+
+struct LoginTicket {
+    digest: [u8; 32],
+    expires_at: Instant,
+}
+
+// No Debug/Serialize: this grant is internal and never appears in diagnostics.
+pub struct TicketGrant {
+    generation: u64,
+    digest: [u8; 32],
 }
 
 pub struct Session {
@@ -68,6 +81,7 @@ impl Sessions {
             sessions: HashMap::new(),
             attempts: VecDeque::new(),
             generation: 0,
+            ticket: None,
         })))
     }
 
@@ -85,6 +99,18 @@ impl Sessions {
     pub fn authorize_login(&self, administrator: &str) -> std::result::Result<u64, LoginFailure> {
         let now = Instant::now();
         let mut state = self.0.lock().expect("session registry poisoned");
+        Self::admit_login(&mut state, now)?;
+        let candidate = digest(b"rovai-administrator-v1\0", administrator);
+        if !valid_token(administrator) || !bool::from(state.administrator.ct_eq(&candidate)) {
+            return Err(LoginFailure::Unauthorized);
+        }
+        Ok(state.generation)
+    }
+
+    fn admit_login(
+        state: &mut SessionState,
+        now: Instant,
+    ) -> std::result::Result<(), LoginFailure> {
         if !state.enabled {
             return Err(LoginFailure::Unauthorized);
         }
@@ -99,11 +125,54 @@ impl Sessions {
             return Err(LoginFailure::Throttled);
         }
         state.attempts.push_back(now);
-        let candidate = digest(b"rovai-administrator-v1\0", administrator);
-        if !valid_token(administrator) || !bool::from(state.administrator.ct_eq(&candidate)) {
+        Ok(())
+    }
+
+    pub fn login_ticket(&self) -> Result<String> {
+        let token = new_token()?;
+        let mut state = self.0.lock().expect("session registry poisoned");
+        ensure!(state.enabled, "Web service is disabled");
+        state.ticket = Some(LoginTicket {
+            digest: digest(b"rovai-login-ticket-v1\0", &token),
+            expires_at: Instant::now() + LOGIN_TICKET_LIFETIME,
+        });
+        Ok(token)
+    }
+
+    pub fn authorize_ticket(&self, ticket: &str) -> std::result::Result<TicketGrant, LoginFailure> {
+        let mut state = self.0.lock().expect("session registry poisoned");
+        let now = Instant::now();
+        Self::admit_login(&mut state, now)?;
+        let candidate = digest(b"rovai-login-ticket-v1\0", ticket);
+        if !valid_token(ticket)
+            || !state.ticket.as_ref().is_some_and(|stored| {
+                stored.expires_at > now && bool::from(stored.digest.ct_eq(&candidate))
+            })
+        {
             return Err(LoginFailure::Unauthorized);
         }
-        Ok(state.generation)
+        Ok(TicketGrant {
+            generation: state.generation,
+            digest: candidate,
+        })
+    }
+
+    /// Recheck after Core resolves the editor. Consumption and Session creation
+    /// share one mutex: competing devices, regeneration and stop cannot both win.
+    pub fn issue_ticket(
+        &self,
+        grant: TicketGrant,
+        client_id: String,
+    ) -> std::result::Result<(String, Arc<Session>), LoginFailure> {
+        let mut state = self.0.lock().expect("session registry poisoned");
+        if !state.ticket.as_ref().is_some_and(|stored| {
+            stored.expires_at > Instant::now() && bool::from(stored.digest.ct_eq(&grant.digest))
+        }) {
+            return Err(LoginFailure::Unauthorized);
+        }
+        let result = Self::issue_locked(&mut state, grant.generation, client_id)?;
+        state.ticket = None;
+        Ok(result)
     }
 
     /// `client_id` comes from Core's verified editing identity, never directly
@@ -113,8 +182,16 @@ impl Sessions {
         generation: u64,
         client_id: String,
     ) -> std::result::Result<(String, Arc<Session>), LoginFailure> {
-        let now = Instant::now();
         let mut state = self.0.lock().expect("session registry poisoned");
+        Self::issue_locked(&mut state, generation, client_id)
+    }
+
+    fn issue_locked(
+        state: &mut SessionState,
+        generation: u64,
+        client_id: String,
+    ) -> std::result::Result<(String, Arc<Session>), LoginFailure> {
+        let now = Instant::now();
         if !state.enabled || state.generation != generation || !valid_token(&client_id) {
             return Err(LoginFailure::Unauthorized);
         }
@@ -226,6 +303,7 @@ impl Sessions {
         }
         state.sessions.clear();
         state.attempts.clear();
+        state.ticket = None;
         Ok(())
     }
 
@@ -238,6 +316,7 @@ impl Sessions {
             session.revoked.send_replace(true);
         }
         state.sessions.clear();
+        state.ticket = None;
     }
 
     pub fn count(&self) -> usize {
@@ -259,6 +338,65 @@ mod tests {
     // no Core, files, sockets, timers or Runtime fixture.
     #[test]
     fn sessions_are_independent_revocable_expiring_and_do_not_survive_listener_close() {
+        // The existing credential lifecycle owner also covers one-time ticket
+        // expiry, replacement and the authorization-to-commit race, without timeouts.
+        let tickets = Arc::new(Sessions::new(&new_token().unwrap()).unwrap());
+        let old_ticket = tickets.login_ticket().unwrap();
+        let old_grant = tickets.authorize_ticket(&old_ticket).ok().unwrap();
+        let ticket = tickets.login_ticket().unwrap();
+        assert!(tickets.authorize_ticket(&old_ticket).is_err());
+        assert!(
+            tickets
+                .issue_ticket(old_grant, new_token().unwrap())
+                .is_err()
+        );
+        let left = tickets.authorize_ticket(&ticket).ok().unwrap();
+        let right = tickets.authorize_ticket(&ticket).ok().unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = [left, right]
+            .into_iter()
+            .map(|grant| {
+                let tickets = tickets.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    tickets.issue_ticket(grant, new_token().unwrap()).is_ok()
+                })
+            })
+            .collect();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(tickets.count(), 1);
+        assert!(tickets.authorize_ticket(&ticket).is_err());
+        let expired = tickets.login_ticket().unwrap();
+        let grant = tickets.authorize_ticket(&expired).ok().unwrap();
+        tickets
+            .0
+            .lock()
+            .unwrap()
+            .ticket
+            .as_mut()
+            .unwrap()
+            .expires_at = Instant::now();
+        assert!(tickets.authorize_ticket(&expired).is_err());
+        assert!(tickets.issue_ticket(grant, new_token().unwrap()).is_err());
+        let before_rotation = tickets.login_ticket().unwrap();
+        let grant = tickets.authorize_ticket(&before_rotation).ok().unwrap();
+        tickets.rotate(&new_token().unwrap()).unwrap();
+        assert!(tickets.authorize_ticket(&before_rotation).is_err());
+        assert!(tickets.issue_ticket(grant, new_token().unwrap()).is_err());
+        let before_close = tickets.login_ticket().unwrap();
+        let grant = tickets.authorize_ticket(&before_close).ok().unwrap();
+        tickets.close();
+        assert!(tickets.authorize_ticket(&before_close).is_err());
+        assert!(tickets.issue_ticket(grant, new_token().unwrap()).is_err());
+        assert!(tickets.login_ticket().is_err());
+
         let administrator = new_token().unwrap();
         let sessions = Sessions::new(&administrator).unwrap();
         assert!(sessions.authenticate(&administrator).is_none());

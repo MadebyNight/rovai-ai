@@ -28,7 +28,9 @@ Each address contains `origin`, `interface` and `recommended`. Rust enumerates a
 listener. Discovery excludes 198.18.0.0/15 (including mapped IPv4 literals); these addresses are not shown, recommended,
 copied or encoded as QR codes. This is a presentation filter, not a network ban. IPv6 link-local URLs requiring
 browser-unsupported scope IDs are not advertised. Selecting an address is local presentation state only: it cannot
-change the listener, Owner, permissions or credentials. QR codes contain only the selected address, never credentials.
+change the listener, Owner, permissions or credentials. Ordinary address sharing contains no credentials. Explicit
+scan-to-login QR codes may carry only a short-lived, single-use ticket in a URL fragment, never an administrator Token
+or an existing browser Session. Generating a login QR is a separate local credential operation.
 `origin` is the first advertised address and is omitted when discovery is empty; starting the listener does not require
 an advertised address. Interface discovery does not guarantee remote reachability.
 The listener accepts its actual interface authorities and optional explicit reverse-proxy `publicOrigin`; an Origin
@@ -51,14 +53,32 @@ token on stdin as before. Browser authentication keeps the short-lived Bearer Se
 
 ## Authentication and editor ownership
 
+Trusted local `host.web.loginTicket` requires a running Web listener and returns `{ ticket, expiresInSeconds: 120 }`.
+The unified Rust Host uses 256 random bits, stores only its digest and monotonic expiry in memory, and retains at most
+one unused ticket. Regeneration invalidates the previous unused ticket; administrator rotation, Web stop and Host exit
+invalidate all unused tickets, including exchanges already waiting for Core editor verification. An expired, consumed
+or replaced ticket cannot be redeemed. Issuance and atomic consumption belong to the existing Rust session registry;
+there is no new account, device or channel service. Already issued Sessions survive QR regeneration.
+
+The QR URL uses `#login-ticket=<ticket>`. The Web entry reads and immediately removes this fragment with `replaceState`
+before asynchronous work, then POSTs `{ protocolVersion: 2, ticket, editor? }` to `/api/v1/login-ticket` on the fixed
+origin, with redirects rejected and cookies omitted. Ticket values never enter query strings, logs, status, diagnostics,
+history state or sessionStorage. The fragment is a transient credential carrier, not a bookmarkable application route.
+The exchange shares manual login's admission limits, Origin/Host checks, Core editing proof verification and normal
+Session issuance. Ticket consumption and Session creation commit under one lock after Core verification; competing
+devices can obtain at most one Session. A lost successful response is not replayable: generate another QR or log in
+manually. A new tab gets a fresh editor; same-tab reauthentication preserves its independently proven editor and pending
+commands, while copied-tab recovery discards the source editor before ticket exchange. Refresh after success uses the
+normal Bearer Session and original editor recovery path. Manual Token login and plain address copying remain available.
+
 `POST /api/v1/login` accepts `{ protocolVersion: 2, administratorToken, editor? }`.
 `editor`, when present, is exactly `{ clientId, proof }`. An incompatible protocol is rejected before issuing a session.
 The response contains `protocolVersion: 2`, `token`, `clientId`, `editorProof`, `ownerId`, `expiresInSeconds` `epoch` and `channels: "desktop" | "unsupported"`.
 The browser checks the response protocol before mounting business pages or sending commands.
 
 Fresh login creates a Core-owned random 256-bit editor identity and an independent random recovery proof.
-Core persists only the proof digest, bound to the current Owner; the Host first verifies administrator authentication
-or an existing Bearer Session before resolving the editor. A client ID, Draft ID or proof alone never authenticates
+Core persists only the proof digest, bound to the current Owner; the Host first verifies administrator authentication,
+a valid login ticket or an existing Bearer Session before resolving the editor. A client ID, Draft ID or proof alone never authenticates
 a Session. Another client's proof cannot resume the named editor. Reauthentication replaces that editor's old Session,
 including at session capacity. Rotation and Web shutdown fence an in-flight login as well as existing sessions.
 
@@ -70,7 +90,8 @@ Host/Owner/editor/proof binding, unsaved Composer and single-chat text, and orig
 Refresh validates `POST /api/v1/session` with `{ editor: { clientId, proof }, fork?: boolean }` before mounting business pages.
 Resume requires both the authenticated Session's client ID and the Core-verified proof. It returns the same editor and
 capabilities without rotating the Bearer. Expiry clears authentication while retaining editing and reconciliation materials
-for same-Owner login. Host/Owner mismatches fail explicitly. Credentials never enter URLs, history entries, logs or localStorage.
+for same-Owner login. Host/Owner mismatches fail explicitly. Administrator Tokens, Bearer Sessions and editor proofs never
+enter URLs, history entries, logs or localStorage; the only transient URL exception is the immediately removed scan ticket fragment above.
 
 A non-secret browser document lease prevents a copied sessionStorage snapshot from sharing live editing ownership.
 IndexedDB transactions serialize claims; a synchronous pagehide release marker allows normal reload to reclaim its editor.

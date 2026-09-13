@@ -1104,7 +1104,7 @@ ipcMain.handle('rovai:host-web', async (event, operation: unknown, value: unknow
     || event.senderFrame !== event.sender.mainFrame) {
     throw new Error('Host controls require a local Desktop window')
   }
-  if (operation === 'token' || operation === 'status' || operation === 'stop' || operation === 'rotate') {
+  if (operation === 'token' || operation === 'status' || operation === 'stop' || operation === 'rotate' || operation === 'loginTicket') {
     return core.request(`host.web.${operation}`)
   }
   if (operation !== 'start' || !value || typeof value !== 'object') {

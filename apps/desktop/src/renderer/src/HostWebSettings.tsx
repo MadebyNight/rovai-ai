@@ -105,8 +105,8 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
         <p className="remote-footnote">HTTP 明文连接，请仅在可信网络开启。</p>
         {enabled &&
           <div className="remote-addresses">
-            <RemoteAddress label="本机地址" description="在这台电脑上访问" value={local} onCopy={() => copy(local, '连接地址')} />
-            <RemoteAddress label="远程地址" description="在其他设备上访问" value={selected} onCopy={() => copy(selected, '连接地址')}>
+            <RemoteAddress api={api} label="本机地址" description="在这台电脑上访问" value={local} onCopy={() => copy(local, '连接地址')} />
+            <RemoteAddress api={api} label="远程地址" description="在其他设备上访问" value={selected} onCopy={() => copy(selected, '连接地址')}>
               {remoteAddresses.length > 1 && <select id="remote-address" aria-label="选择远程地址" className="remote-address-select" value={selected} onChange={event => { setAddress(event.target.value); setFeedback('') }}>{remoteAddresses.map(item => <option key={item.origin} value={item.origin}>{item.origin} · {item.interface}</option>)}</select>}
             </RemoteAddress>
           </div>
@@ -135,7 +135,8 @@ function isLocalAddress(origin: string): boolean {
   return host === 'localhost' || host === '[::1]' || host.startsWith('127.') || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]+\]$/.test(host)
 }
 
-function RemoteAddress({ label, description, value, onCopy, children }: {
+function RemoteAddress({ api, label, description, value, onCopy, children }: {
+  api: HostWebApi
   label: string
   description: string
   value: string
@@ -147,14 +148,47 @@ function RemoteAddress({ label, description, value, onCopy, children }: {
     <div className="remote-address-value">{children || <code>{value || '暂无可用地址'}</code>}</div>
     <div className="remote-address-actions">
       <RemoteCopyButton key={value} label={`复制${label}`} value={value} onCopy={onCopy} />
-      <Dialog.Root><Dialog.Trigger asChild><button type="button" className="message-copy-button" aria-label={`${label}二维码`} title="二维码" disabled={!value}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h3v3h3v3h-6v-3M20 14h.01M7 7h.01M17 7h.01M7 17h.01" /></svg></button></Dialog.Trigger>
+      <Dialog.Root><Dialog.Trigger asChild><button type="button" className="message-copy-button" aria-label={`${label}二维码`} title="扫码登录" disabled={!value}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h3v3h3v3h-6v-3M20 14h.01M7 7h.01M17 7h.01M7 17h.01" /></svg></button></Dialog.Trigger>
         {value && <Dialog.Portal><Dialog.Overlay className="dialog-overlay" /><AppDialogContent onCloseAutoFocus={() => {}}>
-          <AppDialogHeader title={label} description={description} />
-          <AppDialogBody className="remote-qr"><QRCodeSVG value={value} size={208} marginSize={4} level="M" role="img" title={`${label}二维码`} /><code>{value}</code></AppDialogBody>
+          <AppDialogHeader title="扫码登录" description="2 分钟内有效，仅可使用一次。" />
+          <LoginQr key={value} api={api} origin={value} label={label} />
         </AppDialogContent></Dialog.Portal>}
       </Dialog.Root>
     </div>
   </div>
+}
+
+function LoginQr({ api, origin, label }: { api: HostWebApi; origin: string; label: string }): React.JSX.Element {
+  const [attempt, setAttempt] = useState(0)
+  const [code, setCode] = useState<string | null>(null)
+  const [busy, setBusy] = useState(true)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    let expiry: ReturnType<typeof setTimeout> | undefined
+    const started = Date.now()
+    setCode(null); setBusy(true); setError('')
+    void api.loginTicket().then(result => {
+      if (!active) return
+      if (!/^[a-f0-9]{64}$/.test(result.ticket) || !Number.isFinite(result.expiresInSeconds) || result.expiresInSeconds <= 0) throw new Error('Invalid ticket response')
+      const remaining = started + result.expiresInSeconds * 1000 - Date.now()
+      if (remaining <= 0) return
+      const url = new URL(origin)
+      url.hash = `login-ticket=${result.ticket}`
+      setCode(url.href)
+      expiry = setTimeout(() => setCode(null), remaining)
+    }).catch(() => { if (active) setError('二维码未能生成，请重试。') })
+      .finally(() => { if (active) setBusy(false) })
+    return () => { active = false; clearTimeout(expiry) }
+  }, [api, origin, attempt])
+  return <AppDialogBody className="remote-qr">
+    <div className="remote-qr-frame">
+      {code ? <QRCodeSVG value={code} size={208} marginSize={4} level="M" role="img" title={`${label}扫码登录`} />
+        : <p role={error ? 'alert' : 'status'}>{busy ? '正在生成二维码…' : error || '二维码已过期'}</p>}
+    </div>
+    <code>{origin}</code>
+    <button type="button" className="quiet-button compact" disabled={busy} onClick={() => setAttempt(value => value + 1)}>重新生成</button>
+  </AppDialogBody>
 }
 
 function RemoteCopyButton({ label, value, onCopy }: { label: string; value: string; onCopy(): Promise<boolean> }): React.JSX.Element {

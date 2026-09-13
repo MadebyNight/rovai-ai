@@ -51,3 +51,5 @@
   .remote-connection-address { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
   .remote-connection-address > .remote-copy { grid-column: 1 / -1; }
 }
+.remote-qr-frame { width: 208px; height: 208px; display: grid; place-items: center; }
+.remote-qr-frame p { color: var(--muted); text-align: center; }

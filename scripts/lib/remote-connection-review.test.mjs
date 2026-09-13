@@ -44,6 +44,7 @@ test('remote connection design preserves production settings geometry, keyboard 
       const selected = await browser.evaluate(addressValue(label))
       await browser.click(icon(`${label}二维码`))
       await dialogReady()
+      await browser.wait(`document.querySelector('.remote-qr svg')!==null`)
       const pixels = await browser.evaluate(`(async()=>{
         const svg = document.querySelector('.remote-qr svg')
         const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], {type:'image/svg+xml'}))
@@ -54,7 +55,10 @@ test('remote connection design preserves production settings geometry, keyboard 
           return {width:canvas.width,height:canvas.height,data:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)}
         } finally { URL.revokeObjectURL(url) }
       })()`)
-      assert.equal(jsQR(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height)?.data, selected, 'the rendered QR decodes to the selected address only')
+      const decoded = new URL(jsQR(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height)?.data)
+      assert.equal(decoded.origin, selected)
+      assert.equal(decoded.hash, '#login-ticket=' + 'a'.repeat(64), 'explicit scan uses the short-lived fixture ticket, never the manager token')
+      assert.equal(await browser.evaluate(`document.querySelector('.remote-qr code').textContent`), selected)
       await browser.capture(join(output, `desktop-qr-${theme}-${label === '本机地址' ? 'local' : 'remote'}.png`))
       await browser.key('Escape')
       await browser.wait(`document.querySelector('[role="dialog"]')===null`)
@@ -163,7 +167,7 @@ test('remote connection design preserves production settings geometry, keyboard 
       assert.equal(await browser.evaluate(`${icon('复制'+label)}.disabled && ${icon(label+'二维码')}.disabled`), true)
       assert.equal(await browser.evaluate(addressValue(label)), '')
     }
-    evidence.checks.push('QR-decodes-to-selected-address-only-in-both-themes', 'QR-Escape-restores-focus', 'empty-discovery-disables-copy-and-QR', 'copy-failure-allows-manual-address-copy-without-exposing-token', 'compact-switch-without-duplicate-headings-or-start-success-notice')
+    evidence.checks.push('login-QR-uses-selected-origin-and-one-time-fragment-in-both-themes', 'QR-Escape-restores-focus', 'empty-discovery-disables-copy-and-QR', 'copy-failure-allows-manual-address-copy-without-exposing-token', 'compact-switch-without-duplicate-headings-or-start-success-notice')
     await open('web', 'night', 'expired')
     assert.equal(await browser.evaluate(`document.querySelector('[aria-label="远程访问"]')===null`), true)
     await browser.click(button('重新登录'))

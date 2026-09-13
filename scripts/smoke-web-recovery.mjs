@@ -29,13 +29,17 @@ try {
   const members = await host.request('members.list')
   for (const name of ['Refresh A', 'Refresh B']) await host.request('camps.create', { commandId: crypto.randomUUID(), name, workspace: null, memberAgentIds: [members[0].agentId], defaultLeadAgentId: members[0].agentId, collaborationMode: 'peer' })
   const web = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: join(root, 'out/web') })
+  const ticket = await host.request('host.web.loginTicket')
   browser = await launchAcceptanceBrowser({ executable: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', args: ['--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${join(fixture, 'browser')}`, 'about:blank'] })
-  await browser.send('Page.navigate', { url: web.origin })
-  await browser.wait(`document.querySelector('#administrator-token')!==null`)
-  await browser.click(`document.querySelector('#administrator-token')`)
-  await browser.send('Input.insertText', { text: web.administratorToken })
-  await browser.click(`document.querySelector('.web-login .primary-button')`)
+  await browser.send('Page.navigate', { url: `${web.origin}/#login-ticket=${ticket.ticket}` })
   await browser.wait(ready)
+  assert.equal(await browser.evaluate('location.hash'), '')
+  assert.equal(await browser.evaluate(`Object.values(sessionStorage).some(value=>value.includes(${JSON.stringify(ticket.ticket)}))`), false)
+  assert.equal(browser.responses.filter(response=>response.path==='/api/v1/login-ticket' && response.status===200).length, 1)
+  // Real monotonic Host expiry, not a frontend clock override. Other browser
+  // scenarios run during the two-minute validity window, then check rejection.
+  const expiring = await host.request('host.web.loginTicket')
+  const expiryDeadline = Date.now() + expiring.expiresInSeconds * 1000 + 100
   await browser.wait(`${choose('Refresh A')}!==undefined`)
   await browser.click(choose('Refresh A'))
   await browser.wait(`${composer}?.getAttribute('contenteditable')==='true'`)
@@ -85,7 +89,13 @@ try {
   await browser.evaluate(`document.documentElement.dataset.theme='night'`)
   await browser.capture(join(output, 'web-recovery-night.png'))
   assert.deepEqual(browser.errors, [])
-  await writeFile(join(output, 'validation.json'), JSON.stringify({ status: 'passed', platform: process.platform, realHost: true, productionWeb: true, noRuntime: true, sameEditorAfterReload: true, unsavedComposerRestored: true, browserAndPageNavigation: true, forwardAfterRefresh: true, copiedTabIndependent: true, copiedLogoutKeepsOriginal: true, controlsStartLeft: true }, null, 2)+'\n')
+  stage = 'real ticket expiry'
+  console.log('Checking real 120-second ticket expiry; browser recovery assertions passed.')
+  while (Date.now() < expiryDeadline) await pause(Math.min(10_000, expiryDeadline - Date.now()))
+  const expired = await fetch(`${web.origin}/api/v1/login-ticket`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, ticket: expiring.ticket }) })
+  assert.equal(expired.status, 401)
+  assert.equal((await expired.json()).error.code, 'login_ticket_invalid')
+  await writeFile(join(output, 'validation.json'), JSON.stringify({ status: 'passed', platform: process.platform, realHost: true, productionWeb: true, noRuntime: true, scanLogin: true, fragmentCleared: true, ticketNotStored: true, strictModeSingleExchange: true, realTwoMinuteExpiry: true, sameEditorAfterReload: true, unsavedComposerRestored: true, browserAndPageNavigation: true, forwardAfterRefresh: true, copiedTabIndependent: true, copiedLogoutKeepsOriginal: true, controlsStartLeft: true }, null, 2)+'\n')
   console.log(JSON.stringify({ status: 'passed', evidence: output }))
 } catch (error) {
   console.error('Web recovery acceptance failed at', stage)

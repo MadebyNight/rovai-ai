@@ -58,6 +58,7 @@ function addresses(port: string) { return [
 const delay = () => new Promise(resolve => setTimeout(resolve, 450))
 let failRead = initialState === 'error'
 const hostApi: HostWebApi = {
+  loginTicket: async () => { await delay(); return { ticket: 'a'.repeat(64), expiresInSeconds: 120 } },
   status: async () => { if (failRead) { failRead = false; throw new Error('暂时无法读取 Host 状态，请重试。') }; if (initialState === 'loading') await new Promise(() => {}); return structuredClone(hostStatus) },
   token: async () => ({ administratorToken: token }),
   start: async input => { await delay(); if (initialState === 'error') throw new Error('端口已被占用，请更换端口后重试。'); if (!input.allowInsecureLan || !input.listen.startsWith('0.0.0.0:')) throw new Error('Expected explicit remote-access start'); const port = input.listen.split(':').at(-1)!; hostStatus = { enabled: true, sessions: 0, listen: input.listen, origin: `http://192.168.1.12:${port}`, addresses: addresses(port) }; return { ...structuredClone(hostStatus), administratorToken: token } },

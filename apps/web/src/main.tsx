@@ -1,4 +1,5 @@
 import { acquireTabRecovery } from './tab-recovery'
+import { takeLoginTicket } from './login-ticket'
 import { StrictMode, useEffect, useState } from 'react'
 import { RemoteConnectionStatus } from '../../desktop/src/renderer/src/RemoteConnectionStatus'
 import { HostWorkspacePicker } from './HostWorkspacePicker'
@@ -17,7 +18,21 @@ import './styles.css'
 const transport = new ConsoleClient(window.location.origin, fetch, sessionStorage)
 document.documentElement.dataset.platform = browserPlatform()
 document.documentElement.dataset.rovaiSurface = 'web'
-const recovery = acquireTabRecovery().then(owner => transport.restore(owner.fork, owner.assert))
+const recovery = (async () => {
+  // Synchronous fragment removal happens before the first await. StrictMode
+  // remounts subscribe to this one promise, never redeem the ticket twice.
+  let ticket: string | null = null
+  let ticketError: unknown
+  try { ticket = takeLoginTicket() } catch (error) { ticketError = error }
+  const owner = await acquireTabRecovery()
+  const restored = await transport.restore(owner.fork, owner.assert, ticket === null && !ticketError)
+  if (ticketError) throw ticketError
+  if (ticket !== null) {
+    try { await transport.loginTicket(ticket) } finally { ticket = null }
+    return true
+  }
+  return restored
+})()
 
 function WebEntry() {
   const [workspaceChoice, setWorkspaceChoice] = useState<{ resolve(value: WorkspaceSelection | null): void } | null>(null)
@@ -47,7 +62,7 @@ function WebEntry() {
     let cancelled = false
     void recovery.then(restored => {
       if (cancelled) return
-      if (restored) {
+      if (restored && transport.authenticated) {
         setAdapter(current => current ?? createCampAdapter(transport, selectWorkspace))
         setAuthenticated(true)
       }
@@ -56,6 +71,24 @@ function WebEntry() {
     return () => { cancelled = true }
   }, [])
   useEffect(() => transport.onRecovered(() => adapter?.invalidate()), [adapter])
+  useEffect(() => {
+    let active = true
+    const scanned = (): void => {
+      let ticket: string | null
+      try { ticket = takeLoginTicket() } catch (e) { setError(e instanceof Error ? e.message : '扫码登录失败。'); return }
+      if (ticket === null) return
+      setBusy(true); setError(null)
+      // Same-document scans reuse this tab's verified editor. Copied tabs were
+      // already separated by startup recovery before this handler can sign in.
+      void recovery.catch(() => false).then(() => transport.loginTicket(ticket!)).then(() => {
+        if (!active) return
+        setAdapter(current => current ?? createCampAdapter(transport, selectWorkspace)); setAuthenticated(true)
+      }).catch(e => { if (active) setError(e instanceof Error ? e.message : '扫码登录失败。') })
+        .finally(() => { ticket = null; if (active) setBusy(false) })
+    }
+    window.addEventListener('hashchange', scanned)
+    return () => { active = false; window.removeEventListener('hashchange', scanned) }
+  }, [])
   const login = async (): Promise<void> => {
     setBusy(true); setError(null)
     const token = credential; setCredential('')

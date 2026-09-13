@@ -79,6 +79,17 @@ impl HostControl for WebControl {
                     let token = self.state.lock().await.token()?;
                     Ok(json!({"administratorToken":token}))
                 }
+                HostWebOperation::LoginTicket => {
+                    let state = self.state.lock().await;
+                    let server = state.server.as_ref().ok_or(HostControlError {
+                        code: "HOST_WEB_DISABLED",
+                        message: "请先开启 Web 服务。".into(),
+                    })?;
+                    server.login_ticket().map_err(|_| HostControlError {
+                        code: "HOST_WEB_TICKET_UNAVAILABLE",
+                        message: "扫码登录暂不可用，请重新生成二维码。".into(),
+                    })
+                }
                 HostWebOperation::Start => {
                     let config: WebConfig =
                         serde_json::from_value(params).map_err(|_| invalid())?;

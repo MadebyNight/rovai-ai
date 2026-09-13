@@ -21,7 +21,7 @@ type CoreInternalMethod =
   | 'core.shutdown'
   | 'automations.schedulerControl'
 
-export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate' | 'host.channels.reply'
+export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate' | 'host.web.loginTicket' | 'host.channels.reply'
 
 export type AutomationSchedulerControl = {
   epoch: number

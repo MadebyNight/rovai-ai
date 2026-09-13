@@ -23,6 +23,7 @@ pub enum HostWebOperation {
     Start,
     Stop,
     Rotate,
+    LoginTicket,
     ChannelDispatch,
     ChannelReply,
 }
