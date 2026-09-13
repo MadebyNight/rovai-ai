@@ -35,6 +35,14 @@ Web 的 HTML/HTM 不再强制标为普通文本。正式文件查看器复用 De
 TypeScript、Web 构建、Vitest 2001 / 197 文件、Node 317 通过（2 个既有 Windows 专项跳过）与文档门禁通过；
 本次不改 Rust，不把 macOS 浏览器模拟窄屏计为实体手机或 Windows 验收。
 
+干净 `831092a0` 构建 0.2.6 arm64 daily App，架构、Bundle ID 与 ad-hoc 签名通过。
+[包级复验](evidence/web-login/validation.json)使用包内 Host 和 WebUI，覆盖上述登录全流程；
+HTML 既有 owner 同时通过，测试 UI 目录与包内目录逐文件一致。
+已由专用 daily 安装器非终止安装到 `/Applications/Rovai AI.app`，
+备份为 `/Applications/Rovai AI.backup-before-web-login-831092a0.app`。
+[安装核对](evidence/web-login/installation.json)确认 App/Host/Core/CLI 哈希及全部 138 个 Web 文件与来源相同，
+原 App、Host 和三个 Helper 的 PID 均存活。当前进程仍是旧版；用户退出后从规范路径重开，再刷新 Web 生效。
+
 `pnpm test:host-web-html` 拥有真实 Rust 授权读取、正式共享 Viewer 与 Chrome CSP 的新适配交界，
 无需 Electron 或模型；已有 Host HTTP owner 扩展 HTML 分类、原稿读取和编辑/代次拒绝，不新增 Rust 测试实例。
 TypeScript 单元测试拥有注入位置映射与 opaque 消息来源/代次校验；Desktop 原不同源站点由既有 HTML 回归负责。
