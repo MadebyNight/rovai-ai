@@ -23,7 +23,24 @@ Web 正式页面最初接入时（`b62752dd9`），通用偏好适配将默认�
 既有 HTTP / Host 生命周期 owner 扩展验证跨端读写、设置合并、旧副本重复导入、迟到失效请求、无效队伍拒绝、
 Host 重启与损坏记录显式失败；本机 1 项通过。客户端、原偏好与选择规则 4 文件 / 33 项通过，TypeScript、
 Desktop/Web 构建及通用文档门禁通过。新建弹窗唯一的 `compact-primary` 仍使用旧 Steel token，改为已有
-conversation-action 中性按钮；日间为黑色，夜间遵循同一主题配对。真实打包 App 及界面验收记录随后补齐。
+conversation-action 中性按钮；日间为黑色，夜间遵循同一主题配对。该处在 `112db2a83` 中性操作按钮调整时遗漏。
+
+功能提交 `ff7e6a1f`，`ee224fa0` 补齐页面实际观察值到失效请求的传递，避免旧页面使较新队伍失效；
+后者的相关 3 文件 / 20 项复验、TypeScript、Core/Web/Host Clippy `--all-targets -- -D warnings` 通过。
+实际 0.2.5 arm64 daily 包的[界面证据](evidence/shared-defaults/validation.json)覆盖 Main 旧设置导入、Web 通用回显、
+Web 保存后 Desktop 回显、日夜弹窗默认勾选及按钮颜色、一键 Pending 创建与刷新恢复。
+脚本使用独立 userData/Skill/MCP 和 Chrome profile；仅浏览器看到的 Runtime 可用性为响应夹具，
+设置持久化、授权、Camp 创建和读回均使用实际包内 Host；未启动真实模型。
+
+验证脚本曾因 DOM 引用不可序列化、过早检查保存状态和错误的单数 `camp.open` 方法失败，已分别修正为
+布尔谓词、完整保存完成态和既有 `camps.open`，未放宽数据断言。另有 CDP 启动/evaluate 超时；
+脚本增加分阶段记录，并在启动及切换受测窗口前调用 `Page.bringToFront` 后，以原超时和原产品代码完整通过。
+最终观测的 visibility 均为 visible，不能据此认定先前超时由窗口遮挡造成；根因仍未确定。
+
+[本机安装记录](evidence/shared-defaults/installation.json)：专用 daily 签名、Bundle ID 与架构门禁通过，
+官方非终止安装到 `/Applications/Rovai AI.app`；app.asar、Core、Host、CLI 与验收来源的 SHA-256 一致。
+旧包保留为 `Rovai AI.backup-before-shared-defaults-20260913T135905Z.app`，原五个进程继续存活，
+用户退出后从规范路径打开才使用新版本；后续提交仅含验收脚本与文档证据。
 
 ## 本轮：扫码登录、Web 刷新恢复与共享导航
 

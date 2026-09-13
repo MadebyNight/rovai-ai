@@ -528,8 +528,17 @@ Vitest owner 负责，窗口/代际释放由 Main 既有 service owner 负责，
 `apps/web/src/client.test.ts` 拥有 Bearer/proof 恢复、复制材料 fork、过期重登及原命令恢复；`navigation-history.test.ts` 拥有浏览器历史适配的拒绝、刷新与跨 Desktop 上限的浏览器历史。现有 `host-web.test.mjs` 扩展真实 HTTP resume/fork 归属校验，现有 Rust Session 生命周期测试扩展 fork 继承到期时间、独立撤销与撤销后拒绝，不另建 SQLite fixture。
 
 构建 Host 与 Web 后，`node scripts/smoke-web-recovery.mjs` 运行真实 Host/生产 Web/隔离 Chrome 验收；只使用独立数据和默认队员，不调用模型。
+
 入口通过一次性 fragment 票据自动登录，检查立即清理地址、StrictMode 仅兑换一次、票据不进入恢复存储，以及刷新后原身份和草稿、复制标签页隔离；
 场景并行利用票据有效窗口后等待真实 120 秒到期并核对拒绝，整个 smoke 至少约两分钟。输出位置可用 `ROVAI_RECOVERY_OUTPUT` 指定。
 票据过期、替换、关闭／轮换和消费竞争的确定性输入矩阵扩展 Rust `auth` 的既有 Session 生命周期 owner，不新增 Core fixture。
+
+默认队伍回归由 `apps/web/src/preferences.test.ts` 覆盖浏览器本地旧值不遮蔽 Host、保存合并与迟到失效请求；
+既有 `scripts/lib/host-web.test.mjs` owner 覆盖本机/HTTP 双入口、一次性导入、并发字段保留、重启及损坏记录。
+`pnpm package:mac:daily` 后，`node scripts/smoke-web-preferences.mjs <输出目录>` 验证实际 Main 的旧偏好导入、
+Web 通用设置回显、跨端保存、创建弹窗默认勾选、一键 Pending 创建和刷新。脚本创建独立 userData/Skill/MCP 与 Chrome profile；
+仅 Runtime 可用性使用浏览器响应夹具，以免触发真实模型或修改用户 Runtime 配置。持久设置与 Camp 创建仍走实际包内 Host。
+截图通过正式主题选择控件切换日夜，并验证新建按钮中性色。该证据不代替真实 Runtime、Windows 或第二实体设备验收。
+
 真实 HTTP owner 验证本机签发与 HTTP 兑换接线、双客户端竞争、旧票据撤销，以及公共操作不能签发票据。
 Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
