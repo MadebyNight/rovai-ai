@@ -117,9 +117,9 @@ function WebEntry() {
     {!authenticated && <div className="web-login-overlay">
       {restoring ? <p role="status">正在恢复…</p> : <form className="web-login" onSubmit={event => { event.preventDefault(); void login() }}>
         <h1>{current ? '重新登录 Rovai AI' : '登录 Rovai AI'}</h1>
-        <p>{current ? '当前页面的编辑仍保留。认证后重新读取 Host 状态。' : '使用 Host 的登录 Token登录。'}</p>
+        <p>{current ? '当前页面的编辑仍保留。认证后重新读取 Host 状态。' : '使用 Host 的登录 Token 登录。'}</p>
         <label htmlFor="administrator-token">登录 Token</label>
-        <input id="administrator-token" type="password" value={credential} autoComplete="off" autoFocus
+        <input id="administrator-token" type="password" placeholder="输入 64 位的 Token" value={credential} autoComplete="off" autoFocus
           onChange={event => setCredential(event.target.value)} required disabled={busy} />
         {error && <p role="alert">{error}</p>}
         <button className="primary-button" type="submit" disabled={busy || !credential.trim()}>{busy ? '正在登录…' : '登录'}</button>

@@ -166,8 +166,19 @@ handle-based no-follow opening prevent replacement from changing the retained so
 There are at most 128 handles per server and 32 per editor. Reads have byte and generation bounds. Download uses an
 octet-stream response with an encoded original filename; credentials never enter the download URL.
 
-The initial resource adapter supports bounded UTF-8 text/Markdown and PNG/JPEG/WebP. HTML/SVG use text or download,
-never executable preview. UTF-8 text above 2 MiB is paged (256 KiB pages, 20 MiB read bound); byte offsets preserve
+The resource adapter supports bounded UTF-8 text/Markdown, PNG/JPEG/WebP and interactive HTML/HTM documents.
+HTML uses the shared viewer and diagnostic/find bridge. Its bytes are read by authenticated POST `readHtml`, with
+exact-source reauthorization, editor ownership, content-generation validation and the existing 20 MiB read bound.
+A credential-free static `/preview.html` receives only those document bytes through a parent/window/generation-bound
+message channel. Both the response CSP and iframe enforce `sandbox allow-scripts`, without `allow-same-origin`;
+HTML cannot access the Host page, its sessionStorage or authenticated transport. Only this static shell permits
+inline author scripts; the main WebUI retains its stricter CSP. No management Token, Bearer, editor proof or file
+handle enters the preview URL or document. Closing the file destroys its iframe; reopening/refresh reads and
+reauthorizes the source again. Source mode reads the original document, never injected bridge code (up to 4 MiB
+whole HTML source, otherwise the existing paged reader). The current Web adapter supports self-contained HTML
+and HTTP(S) dependencies; it does not serve a Host directory as a multi-file website or proxy local relative assets.
+Missing resources retain visible diagnostics. Standalone SVG stays text or download.
+UTF-8 text above 2 MiB is paged (256 KiB pages, 20 MiB read bound); byte offsets preserve
 Unicode scalars. Child links retain the Core-authorized parent source; project children receive independent workspace
 restore requests, matching Desktop. Local PNG/JPEG/WebP images are read lazily through the same authenticated,
 generation-bound parent. The browser creates only in-memory object URLs, revoked on unmount. File metadata polling

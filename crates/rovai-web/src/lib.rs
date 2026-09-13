@@ -198,6 +198,7 @@ fn routes(state: WebState) -> Router {
         .route("/api/v1/login", post(login))
         .route("/api/v1/login-ticket", post(redeem_login_ticket))
         .route("/", get(index))
+        .route("/preview.html", get(preview_shell))
         .route("/assets/{*path}", get(asset))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
@@ -214,6 +215,7 @@ async fn boundary(State(state): State<WebState>, req: Request, next: Next) -> Re
         .get(header::HOST)
         .and_then(|value| value.to_str().ok());
     let origin = req.headers().get(header::ORIGIN);
+    let preview_shell = req.uri().path() == "/preview.html";
     let mut response = if !state
         .network
         .allows(host, origin.and_then(|value| value.to_str().ok()))
@@ -228,7 +230,14 @@ async fn boundary(State(state): State<WebState>, req: Request, next: Next) -> Re
     };
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"));
+    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"));
+    if preview_shell && response.status().is_success() {
+        // Only this credential-free bootstrap gets executable content. CSP sandbox
+        // also isolates direct navigation, independent of the parent's iframe flags.
+        response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(
+            "sandbox allow-scripts; default-src 'none'; script-src http: https: data: 'unsafe-inline' 'unsafe-eval'; style-src http: https: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data:; connect-src http: https: ws: wss:; frame-src http: https: data:; frame-ancestors 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"));
+    }
+    let headers = response.headers_mut();
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -518,6 +527,9 @@ async fn events(
 async fn index(State(state): State<WebState>) -> Response {
     static_file(&state, "index.html").await
 }
+async fn preview_shell(State(state): State<WebState>) -> Response {
+    static_file(&state, "preview.html").await
+}
 async fn asset(State(state): State<WebState>, Path(path): Path<String>) -> Response {
     static_file(&state, &format!("assets/{path}")).await
 }
@@ -536,7 +548,9 @@ async fn static_file(state: &WebState, relative: &str) -> Response {
         return error(StatusCode::NOT_FOUND, "asset_not_found");
     }
     let content_type = match path.extension().and_then(|extension| extension.to_str()) {
-        Some("html") if relative == "index.html" => "text/html; charset=utf-8",
+        Some("html") if matches!(relative, "index.html" | "preview.html") => {
+            "text/html; charset=utf-8"
+        }
         Some("js") => "text/javascript; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("woff2") => "font/woff2",

@@ -11,7 +11,22 @@ last_updated: 2026-09-13
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，当前已合入 main `93487750`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+复用任务分支继续开发，当前已合入 main `c1fa5966`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+
+## 本轮：HTML 附件预览与登录提示
+
+Web 的 HTML/HTM 不再强制标为普通文本。正式文件查看器复用 Desktop 的交互视图、源码读取、查找与诊断；
+认证 Host 读取后把文档交给无凭据静态 shell，响应 CSP 和 iframe 都使用不含 `allow-same-origin` 的 sandbox。
+保留原读取限额、编辑归属和 generation 校验；当前单文件 HTML 与 HTTP(S) 依赖可用，本地多文件站点依赖尚未接通。
+下方早期“HTML 不执行”的记录仅描述当时实现，当前边界由 [Host Web v2](../../contracts/host-web-v2.md)拥有。
+
+登录框与离线登录页交互稿使用“输入 64 位的 Token”，位数来自现有 32 字节随机值的十六进制编码。
+“核对 N 项提交／重试原提交”追溯到 `b62752dd9`（2026-09-12），在存在未确认完成的命令或上传时出现（也包含正在发送的请求），
+复用原回执和 commandId，本轮未移除或新建该恢复机制。按用户要求关闭 PR #345；后续默认仅推送任务分支。
+
+`pnpm test:host-web-html` 拥有真实 Rust 授权读取、正式共享 Viewer 与 Chrome CSP 的新适配交界，
+无需 Electron 或模型；已有 Host HTTP owner 扩展 HTML 分类、原稿读取和编辑/代次拒绝，不新增 Rust 测试实例。
+TypeScript 单元测试拥有注入位置映射与 opaque 消息来源/代次校验；Desktop 原不同源站点由既有 HTML 回归负责。
 
 ## 本轮：区分默认端口与 Web 设置导航
 

@@ -1,3 +1,4 @@
+import { createBrowserHtmlPreview } from './html-preview'
 import { browserMemberAvatars } from './member-avatars'
 import type { CampClient } from '../../desktop/src/renderer/src/camp-client'
 import type { BusinessEnvironment } from '../../desktop/src/renderer/src/business-environment'
@@ -101,9 +102,9 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
       if (!result.ok) return result
       return { ok: true, value: { ...result.value, bytes: Uint8Array.from(atob(result.value.base64), char => char.charCodeAt(0)) } }
     },
-    prepareHtmlSite: async () => ({ ok: false, error: { code: 'source_not_authorized', message: 'Web 以文本方式打开 HTML。', retryable: false } }),
-    releaseHtmlSite: unimplemented,
-    prepareHtml: async () => ({ ok: false, error: { code: 'source_not_authorized', message: 'Web 以文本方式打开 HTML。', retryable: false } }),
+    prepareHtmlSite: request => createBrowserHtmlPreview(transport, request),
+    releaseHtmlSite: async () => ({ released: true }), // The document belongs to the mounted iframe; no server site or object URL survives it.
+    prepareHtml: unimplemented, // Legacy Desktop transport; the shared viewer uses prepareHtmlSite.
     reload: request => transport.files('reload', request),
     release: async request => { names.delete(request.handleId); return transport.files('release', request) },
     download: async request => {

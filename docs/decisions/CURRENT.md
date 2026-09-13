@@ -177,3 +177,4 @@ last_updated: 2026-09-12
 - 理由来源：[V1.59-D01](../versions/v1.59/decisions.md#v1-59-d01)、[V1.59-D02](../versions/v1.59/decisions.md#v1-59-d02)。
 
 - 新对话默认队伍归属：[Host Web v2](../contracts/host-web-v2.md#shared-creation-preferences)、[Camp Activation](../architecture/camp-activation-lifecycle.md#component-authority)；理由见 [V1.59-D03](../versions/v1.59/decisions.md#v1-59-d03)。
+- Web HTML 附件预览：[统一 Host 的用户文件](../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../contracts/host-web-v2.md)、[文件查看器](../ui/components/file-preview.md)；理由见 [V1.59-D04](../versions/v1.59/decisions.md#v1-59-d04)。

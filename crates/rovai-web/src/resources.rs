@@ -306,17 +306,23 @@ async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
             !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
             "decode_failed"
         );
-        // Uploaded HTML and SVG always use the text reader. No iframe,
-        // executable URL or asset proxy is created by the Web adapter.
+        // HTML bytes travel only through authenticated, generation-bound reads.
+        // The browser renders them in an opaque sandbox; standalone SVG stays text.
         (
-            if bytes.len() > 2 * 1024 * 1024 {
+            if matches!(extension.as_str(), "html" | "htm") {
+                "html"
+            } else if bytes.len() > 2 * 1024 * 1024 {
                 "paged_text"
             } else if matches!(extension.as_str(), "md" | "markdown") {
                 "markdown"
             } else {
                 "text"
             },
-            "text/plain",
+            if matches!(extension.as_str(), "html" | "htm") {
+                "text/html"
+            } else {
+                "text/plain"
+            },
         )
     };
     let preview_key = preview_key(handle);
@@ -627,8 +633,21 @@ async fn file_operation(
                 json!({"ok":true,"value":{"offset":offset,"line":line,"contentGeneration":generation}}),
             )
         }
-        "readText" => {
-            ensure!(bytes.len() <= 2 * 1024 * 1024, "file_too_large");
+        "readHtml" | "readText" => {
+            let html = std::path::Path::new(&handle.name)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
+                });
+            if body.action == "readHtml" {
+                ensure!(html, "source_not_authorized");
+            } else {
+                ensure!(
+                    bytes.len() <= if html { 4 } else { 2 } * 1024 * 1024,
+                    "file_too_large"
+                );
+            }
             let text = std::str::from_utf8(&bytes).context("decode_failed")?;
             Ok(
                 json!({"ok":true,"value":{"text":text,"contentGeneration":generation,"contentVersion":version}}),

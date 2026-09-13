@@ -1649,6 +1649,8 @@ export interface FilePreviewHtmlSite {
   origin: string
   entryUrl: string
   documentUrl: string
+  /** Browser-only opaque sandbox. Never grant allow-same-origin to this document. */
+  sandboxedDocument?: string
   contentGeneration: string
   contentVersion: FileContentVersion
 }

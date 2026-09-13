@@ -153,6 +153,10 @@ pnpm smoke:host-web-runtime
 原始目录可能包含 Runtime 会话材料，不得整体上传。它不证明其他 Runtime、其他平台或同 UID 强隔离。设置 `ROVAI_HOST_ENTRY=desktop` 运行同一真实流程，
 并验证执行中关闭 Web、重新登录后继续停止运行。`ROVAI_HOST_BIN` 和 `ROVAI_WEB_UI` 可以指向匹配的独立包。
 
+独立的 `pnpm test:host-web-html` 使用隔离 Rust Host 和 macOS Chrome，验证正式 Web 页面上传 HTML、
+交互预览、原稿源码切换、刷新恢复、资源错误和 opaque sandbox 的主页面/存储隔离；不启动 Electron 或模型。
+运行前完成 `cargo build -p rovai-host` 与 `pnpm build:web`，其他 OS 的浏览器验收单独记录。
+
 ## 更新、备份与既有 Mac 包演练
 
 新入口更新时重新运行同一安装器，替换匹配程序与 UI，仍用原 `--data-dir` 启动。自定义数据根不会被安装器改写。

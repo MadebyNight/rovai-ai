@@ -92,3 +92,18 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 用户要求带入现有设置。选择由当前 Rust Core 保存这组创建偏好，Desktop 旧值只导入一次，保留其他展示偏好的客户端归属。
 不采用重复复制浏览器 localStorage 或长期转发到 Electron Main：前者会继续产生冲突，后者使独立 Server 缺少同一持久入口。
 代价是增加小型 Core 偏好记录及一次性导入边界；共享的是创建选择，不共享 Composer 草稿或不同实例的数据。
+
+<a id="v1-59-d04"></a>
+## V1.59-D04：Web HTML 附件使用共享查看器与不透明源沙箱
+
+- 状态：accepted
+- 日期：2026-09-13
+- 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md)、[文件查看器](../../ui/components/file-preview.md)
+
+用户指出浏览器把 HTML 附件打开为源码，要求恢复页面预览。取消首版一律按文本处理 HTML 的边界，
+继续复用正式 Viewer 和诊断/查找通道。采用认证读取后向无凭据静态 shell 交付文档，浏览器原生 sandbox
+隔离页面脚本与主应用存储；Rust 仍拥有文件读取、编辑归属与代次校验，不增加 Node 或另一个业务后端。
+
+不把附件作为可访问 Session 存储的主应用同源页面执行。本轮也不为每份 HTML 增加远程可达的独立端口或预览代理；
+静态 shell 没有文件读取凭据，不扩大 Host 的公开资源能力。代价是 Web 当前只支持单文件 HTML 和 HTTP(S)
+依赖，本地多文件站点资源仍是实现缺口；Desktop 的既有不同源站点能力保持，不能据此宣称两端全部 HTML 能力相同。

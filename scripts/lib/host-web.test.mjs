@@ -354,6 +354,25 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(downloaded.ok, true)
     assert.equal(Buffer.compare(Buffer.from(downloaded.value.base64, 'base64'), Buffer.from(largeText + '\nchanged')), 0)
     await fileCall(first, 'release', { handleId: largeFile.handleId })
+    // HTML classification, original-source reads and editor/generation fences use
+    // the real Host API. The separate Chrome case owns rendering and isolation.
+    const htmlText = '<!doctype html><h1>HTML preview</h1><button>Run</button>'
+    await writeFile(join(workspace, 'interactive.html'), htmlText)
+    const htmlFile = (await fileCall(first, 'open', { kind: 'camp_workspace', campId: fileCampId, rawReference: 'interactive.html' })).value.file
+    assert.equal(htmlFile.kind, 'html')
+    assert.equal(htmlFile.mime, 'text/html')
+    const htmlRead = { handleId: htmlFile.handleId, expectedGeneration: htmlFile.contentGeneration }
+    assert.equal((await fileCall(first, 'readHtml', htmlRead)).value.text, htmlText)
+    assert.equal((await fileCall(first, 'readText', htmlRead)).value.text, htmlText)
+    assert.equal((await fileCall(second, 'readHtml', htmlRead)).ok, false)
+    assert.equal((await fileCall(first, 'readHtml', { ...htmlRead, expectedGeneration: 'obsolete' })).ok, false)
+    await fileCall(first, 'release', { handleId: htmlFile.handleId })
+    assert.equal((await fileCall(first, 'readHtml', htmlRead)).ok, false)
+    const shell = await fetch(`${origin}/preview.html`)
+    assert.equal(shell.status, 200)
+    assert.match(shell.headers.get('content-security-policy'), /sandbox allow-scripts;/)
+    assert.doesNotMatch(shell.headers.get('content-security-policy'), /allow-same-origin/)
+    assert.equal(shell.headers.get('cache-control'), 'no-store')
     const childPath = join(workspace, 'child notes.md')
     await writeFile(childPath, '# Child\nRelative resource marker')
     await writeFile(join(workspace, 'parent.md'), '[Child](./child%20notes.md#L2)')
