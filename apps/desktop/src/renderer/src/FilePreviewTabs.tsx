@@ -42,6 +42,7 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
     revealInFolder,
     copyPath,
     reload,
+    toggleHtmlSource,
     reopen
   } = useFilePreview()
   const listRef = useRef<HTMLDivElement>(null)
@@ -270,7 +271,7 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
                 onContextMenu={(event) => {
                   event.preventDefault()
                   const width = 196
-                  const height = tab.kind === 'file' ? 282 : 134
+                  const height = tab.kind === 'file' ? tab.content?.kind === 'html' ? 312 : 282 : 134
                   const keyboardInvocation = event.clientX === 0 && event.clientY === 0
                   const bounds = event.currentTarget.getBoundingClientRect()
                   const requestedLeft = keyboardInvocation ? bounds.left + 8 : event.clientX
@@ -375,6 +376,12 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
                 else void reopen(tab.id)
               }}
             >{tab.file && tab.loadState === 'ready' ? '重新加载' : '重新打开'}</button>
+            {tab.content?.kind === 'html' && <button role="menuitem" type="button" onClick={() => {
+              setMenu(null)
+              activate(tab.id)
+              toggleHtmlSource(tab.id)
+              focusTab(tab.id)
+            }}>{tab.htmlSourceMode ? '交互预览' : '查看源码'}</button>}
             <div role="separator" /></>}
             <button role="menuitem" type="button" onClick={() => {
               setMenu(null)

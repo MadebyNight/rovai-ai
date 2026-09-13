@@ -22,6 +22,7 @@ for (const scenario of ['basic', 'navigation']) test(scenario === 'basic' ? 'pro
   try {
     const resources = join(fixture, 'resources')
     await cp(source, resources, {recursive:true})
+    await copyFile(join(resources, 'history.html'), join(resources, 'attachment.html'))
     for (const [key, name] of [['ROVAI_HTML_HISTORY_SAMPLE','original-history.html'],['ROVAI_HTML_CANVAS_SAMPLE','original-canvas.html']]) {
       if (process.env[key]) { await copyFile(process.env[key], join(resources,name)); console.log(`${name} sha256 ${createHash('sha256').update(await readFile(join(resources,name))).digest('hex')}`) }
     }

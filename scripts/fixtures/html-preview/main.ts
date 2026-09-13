@@ -4,11 +4,15 @@ import { join } from 'node:path'
 import { FilePreviewFrameNavigation } from '../../../apps/desktop/src/main/file-preview/file-preview-navigation'
 import { FilePreviewService } from '../../../apps/desktop/src/main/file-preview/file-preview-service'
 import { navigationAcceptance } from './navigation'
+import { feedbackAcceptance } from './feedback'
 
 const [renderer, userData, root, preload] = process.argv.slice(2)
 app.setPath('userData', userData)
 app.setPath('sessionData', join(userData, 'session'))
 const service = new FilePreviewService({ async resolve(request) {
+  if (request.kind === 'attachment') return { kind: 'file_target', sourceKind: 'attachment', campId: request.campId,
+    sourceIdentity: 'attachment-history', rootPath: root, basePath: root, candidatePath: join(root, 'attachment.html'),
+    displayName: '附件交互稿.html', canShowPath: false, allowChildren: true }
   if (request.kind !== 'camp_workspace') return null
   return { kind: 'file_target', sourceKind: request.kind, campId: request.campId,
     sourceIdentity: request.rawReference, rootPath: root, basePath: root,
@@ -29,7 +33,7 @@ app.whenReady().then(async () => {
   const errors: string[] = []
   window.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message.slice(0, 1000)) })
   await window.loadFile(renderer)
-  const run = (code: string) => window.webContents.executeJavaScript(code)
+  const run = (code: string) => window.webContents.executeJavaScript(code).catch(error => { throw new Error(`HTML acceptance step failed: ${code}`, { cause: error }) })
   for (let n = 0; n < 50 && !await run('Boolean(window.previewAcceptance)'); n++) await new Promise(resolve => setTimeout(resolve, 40))
   if (process.env.ROVAI_HTML_PREVIEW_SCENARIO === 'navigation') {
     const cases = await navigationAcceptance(window, userData)
@@ -84,8 +88,8 @@ app.whenReady().then(async () => {
       cases.push({name,ok:evidence?.text === 'module dynamic JSON classic' && evidence?.color === 'rgb(1, 2, 3)' && evidence?.image === 12,evidence})
     } else if (name === 'errors.html') {
       const evidence = await run(`({text:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-stage')?.textContent,state:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-stage')?.dataset})`)
-      cases.push({name,ok:['synchronous fixture','promise fixture','missing.css','missing.png','child fixture','此页面有 5 项加载问题','HTTP 404'].every(text=>evidence.text?.includes(text)) && !evidence.text?.includes('状态码未知') && evidence.state?.documentState === 'loaded',evidence})
-      await run(`document.querySelector('.file-preview-tab-panel:not([hidden]) details')?.setAttribute('open','')`)
+      cases.push({name,ok:['synchronous fixture','promise fixture','missing.css','missing.png','child fixture','5 项问题','HTTP 404'].every(text=>evidence.text?.includes(text)) && !evidence.text?.includes('状态码未知') && evidence.state?.documentState === 'loaded',evidence})
+      await run(`document.querySelector('.file-preview-tab-panel:not([hidden]) button.file-preview-html-feedback')?.click()`)
       await writeFile(join(userData,'diagnostics.png'), (await window.webContents.capturePage()).toPNG())
     } else if (name === 'many-frames.html') {
       const children=await Promise.all(frames().filter(frame=>frame.url.includes('/child.html')).map(frame=>frame.executeJavaScript(`document.querySelector('#child-ready')?.textContent`).catch(()=>null)))
@@ -139,7 +143,7 @@ app.whenReady().then(async () => {
   await historyFrame.executeJavaScript(`window.fixtureKept=73;document.querySelector('#navigate').click()`)
   const routed=await historyFrame.executeJavaScript(`({query:location.search,title:document.querySelector('#rendered').textContent})`)
   cases.push({name:'author History navigation',ok:routed.query==='?tab=all' && routed.title==='启动设置',evidence:routed})
-  await run(`Array.from(document.querySelectorAll('.file-preview-tab-panel:not([hidden]) .file-preview-html-status button')).find(button=>button.textContent==='查看源码').click()`)
+  await run(`Array.from(document.querySelectorAll('.file-preview-tab-panel:not([hidden]) .file-preview-html-source-toggle')).find(button=>button.textContent==='源码').click()`)
   let sourceText=''
   for(let count=0;count<100;count++) {
     sourceText=await run(`Array.from(document.querySelectorAll('.file-preview-tab-panel:not([hidden]) .cm-line')).map(line=>line.textContent).join('\\n')`)
@@ -147,9 +151,12 @@ app.whenReady().then(async () => {
     await new Promise(resolve=>setTimeout(resolve,50))
   }
   const rawSource=await readFile(join(root,'history.html'),'utf8')
-  await run(`Array.from(document.querySelectorAll('.file-preview-tab-panel:not([hidden]) .file-preview-html-status button')).find(button=>button.textContent==='交互预览').click()`)
+  await run(`Array.from(document.querySelectorAll('.file-preview-tab-panel:not([hidden]) .file-preview-html-source-toggle')).find(button=>button.textContent==='交互预览').click()`)
   const retained=await historyFrame.executeJavaScript('window.fixtureKept')
   cases.push({name:'author source and preserved interactive document',ok:sourceText.trim()===rawSource.trim() && !sourceText.includes('data-rovai-preview-diagnostic') && retained===73,evidence:{exactSource:sourceText.trim()===rawSource.trim(),retained}})
+  cases.push(...await feedbackAcceptance(window, userData, root))
+  await run(`window.previewAcceptance.activate(window.previewAcceptance.tabs.find(tab=>tab.file?.fileName==='history.html').id)`)
+  for(let count=0;count<100 && !await run(`window.previewAcceptance.activeTab?.file?.fileName==='history.html'`);count++) await new Promise(resolve=>setTimeout(resolve,20))
   const previousOrigin = new URL(historyFrame.url).origin
   await run('window.previewAcceptance.reload(window.previewAcceptance.activeTabId)')
   let freshFrame: Electron.WebFrameMain | undefined
@@ -164,11 +171,11 @@ app.whenReady().then(async () => {
   await freshFrame?.executeJavaScript(`location.href='./missing-page.html'`).catch(()=>undefined)
   let documentFailure: any
   for(let count=0;count<100;count++) {
-    documentFailure=await run(`({state:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-stage')?.dataset.documentState,text:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-failure')?.textContent})`)
+    documentFailure=await run(`({state:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-stage')?.dataset.documentState,role:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-failure')?.getAttribute('role'),text:document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-failure')?.textContent})`)
     if(documentFailure.state==='failed') break
     await new Promise(resolve=>setTimeout(resolve,50))
   }
-  cases.push({name:'missing navigation remains a real document failure',ok:documentFailure.state==='failed' && documentFailure.text?.includes('HTTP 404'),evidence:documentFailure})
+  cases.push({name:'missing navigation remains a real document failure',ok:documentFailure.state==='failed' && documentFailure.role==='alert' && documentFailure.text?.includes('HTTP 404'),evidence:documentFailure})
   await run('window.previewAcceptance.close(window.previewAcceptance.activeTabId)')
   for(let count=0;count<100 && service.ownsHtmlPreviewOrigin(window.webContents.id,freshOrigin);count++) await new Promise(resolve=>setTimeout(resolve,20))
   cases.push({name:'closed tab revokes its site',ok:!service.ownsHtmlPreviewOrigin(window.webContents.id,freshOrigin),evidence:{revoked:!service.ownsHtmlPreviewOrigin(window.webContents.id,freshOrigin)}})

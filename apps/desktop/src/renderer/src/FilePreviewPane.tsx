@@ -317,9 +317,6 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
       </div>
     )
   }
-  if (tab.content.kind === 'html') {
-    return <HtmlViewer tab={tab} />
-  }
   if (tab.content.kind === 'image') {
     return <ImageViewer tab={tab} />
   }
@@ -348,24 +345,30 @@ function FilePreviewDocument({ tab }: { tab: FilePreviewTabModel }): React.JSX.E
       {tab.isRefreshing ? '正在重新加载' : '有更新'}
     </button>
   ) : null
+  const pathControl = showPath ? <>
+    <FilePathButton
+      path={tab.presentation.displayPath}
+      fileName={tab.presentation.fileName}
+      onReveal={() => {
+        setPathActionError(null)
+        void revealInFolder(tab.id).then((result) => {
+          setPathActionError(result.ok ? null : result.error.message)
+        }).catch(() => {
+          setPathActionError('暂时无法显示这个文件的位置')
+        })
+      }}
+    />
+    {pathActionError && <span className="file-preview-path-error" role="alert" title={pathActionError}>
+      {pathActionError}
+    </span>}
+  </> : null
+  if (tab.content?.kind === 'html') {
+    return <HtmlViewer tab={tab} pathControl={pathControl} updateAction={tab.isRefreshing ? null : updateAction} />
+  }
   return (
     <>
       {showPath && <div className="file-preview-path-row">
-        <FilePathButton
-          path={tab.presentation.displayPath}
-          fileName={tab.presentation.fileName}
-          onReveal={() => {
-            setPathActionError(null)
-            void revealInFolder(tab.id).then((result) => {
-              setPathActionError(result.ok ? null : result.error.message)
-            }).catch(() => {
-              setPathActionError('暂时无法显示这个文件的位置')
-            })
-          }}
-        />
-        {pathActionError && <span className="file-preview-path-error" role="alert" title={pathActionError}>
-          {pathActionError}
-        </span>}
+        {pathControl}
         {updateAction}
       </div>}
       {!showPath && updateAction && <div className="file-preview-update-row">{updateAction}</div>}

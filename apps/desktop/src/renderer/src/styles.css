@@ -2190,26 +2190,37 @@ html.file-preview-resizing .file-preview-pane { pointer-events: none; }
 .file-reference-label,
 .resource-reference-label { min-width: 0; overflow-wrap: anywhere; }
 .file-preview-inline-error { max-width: 780px; margin: 0 auto 12px; color: var(--danger); font-size: 10px; }
-.file-preview-html-stage { position: relative; display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
-.file-preview-html-stage > iframe { flex: 1; min-height: 0; }
-.file-preview-html-source { display: flex; flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
+.file-preview-html-stage { display: flex; flex: 1; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
+.file-preview-html-source { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
 .file-preview-html-source > .file-preview-source { flex: 1; min-height: 0; }
-.file-preview-html-status { display: flex; gap: 8px; align-items: start; padding: 7px 12px; border-bottom: 1px solid var(--line); color: var(--ink); font-size: 12px; background: var(--surface); }
-.file-preview-html-status details { flex: 1; min-width: 0; }
-.file-preview-html-status summary { cursor: pointer; }
-.file-preview-html-detail-label { margin-left: 12px; color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
-.file-preview-html-diagnostics { max-height: min(32vh, 280px); overflow: auto; overflow-wrap: anywhere; color: var(--ink); line-height: 1.6; }
+.file-preview-html-feedback-row { display: flex; min-width: 0; flex: 0 0 auto; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; padding: 3px 10px; border-bottom: 1px solid var(--line); background: var(--conversation-surface); }
+.file-preview-html-feedback,
+.file-preview-html-source-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; min-height: 24px; padding: 2px 4px; border: 0; border-radius: 3px; color: var(--muted); background: transparent; font: 500 11px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; white-space: nowrap; }
+button.file-preview-html-feedback,
+.file-preview-html-source-toggle { cursor: pointer; }
+.file-preview-html-feedback.is-problem { color: var(--danger); }
+.file-preview-html-feedback svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+button.file-preview-html-feedback:hover,
+.file-preview-html-source-toggle:hover { background: var(--surface-hover); }
+.file-preview-html-source-toggle[aria-pressed="true"] { color: var(--ink); background: var(--surface-hover); }
+.file-preview-html-diagnostics { flex: 0 1 auto; min-height: 0; max-height: min(32vh, 260px); padding: 0 12px 10px; overflow: auto; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); color: var(--ink); background: var(--conversation-surface); font-size: 12px; line-height: 1.6; }
+.file-preview-html-diagnostics[hidden] { display: none; }
 .file-preview-html-diagnostics p { margin: 10px 0; }
 .file-preview-html-diagnostics ol { padding-inline-start: 22px; }
 .file-preview-html-diagnostics li + li { margin-top: 12px; }
 .file-preview-html-diagnostics pre { white-space: pre-wrap; font-size: 11px; }
-.file-preview-html-status button { padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface-raised); }
-.file-preview-html-status button:hover { background: var(--surface-hover); }
-.file-preview-html-status :is(button, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.file-preview-html-status button:disabled { opacity: .6; cursor: wait; }
-.file-preview-html-notice { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--ink); background: var(--surface-raised); }
-.file-preview-html-failure { position: absolute; inset: 35px 0 0; background: var(--surface); }
-.file-preview-html { width: 100%; height: 100%; border: 0; background: var(--conversation-surface); }
+.file-preview-html-diagnostics button,
+.file-preview-html-failure button { padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface-raised); cursor: pointer; }
+.file-preview-html-diagnostics button:hover,
+.file-preview-html-failure button:hover { background: var(--surface-hover); }
+.file-preview-html-stage button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.file-preview-html-stage button:disabled { opacity: .6; cursor: wait; }
+.file-preview-html-notice { margin: 0; padding: 6px 12px; font-size: 12px; color: var(--ink); background: var(--conversation-surface); }
+.file-preview-html-diagnostics .file-preview-html-notice { padding: 0; }
+.file-preview-html-failure { position: absolute; inset: 0; background: var(--surface); }
+.file-preview-html { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; border: 0; background: var(--conversation-surface); }
+/* Keep the hidden document viewport intact so source switching preserves its scroll position. */
+.file-preview-html[hidden] { display: block; visibility: hidden; pointer-events: none; }
 .file-preview-image-stage {
   position: relative;
   display: grid;
