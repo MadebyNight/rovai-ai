@@ -112,14 +112,14 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
           </div>
         }
         <div className="remote-field">
-          <label htmlFor="remote-token">管理令牌</label>
+          <label htmlFor="remote-token">登录 Token</label>
           <div className="remote-token">
             <input id="remote-token" type={visible ? 'text' : 'password'} value={token} readOnly autoComplete="off" spellCheck={false} />
             <div className="remote-token-actions">
-              <button type="button" className="message-copy-button" disabled={!token} onClick={() => setVisible(value => !value)} aria-pressed={visible} aria-label={visible ? '隐藏管理令牌' : '显示管理令牌'} title={visible ? '隐藏管理令牌' : '显示管理令牌'}>
+              <button type="button" className="message-copy-button" disabled={!token} onClick={() => setVisible(value => !value)} aria-pressed={visible} aria-label={visible ? '隐藏登录 Token' : '显示登录 Token'} title={visible ? '隐藏登录 Token' : '显示登录 Token'}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">{visible ? <><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.5 5.4A10 10 0 0 1 12 5c6 0 10 7 10 7a18 18 0 0 1-3 3.8M6 6.5A20 20 0 0 0 2 12s4 7 10 7a11 11 0 0 0 5-1.4" /></> : <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>}</svg>
               </button>
-              <RemoteCopyButton key={token} label="复制管理令牌" value={token} onCopy={() => copy(token, '管理令牌')} />
+              <RemoteCopyButton key={token} label="复制登录 Token" value={token} onCopy={() => copy(token, '登录 Token')} />
             </div>
           </div>
         </div>
@@ -145,7 +145,7 @@ function RemoteAddress({ api, label, description, value, onCopy, children }: {
 }): React.JSX.Element {
   return <div className="remote-connection-address" data-address={value} aria-label={label}>
     <div className="remote-copy"><strong>{label}</strong><p>{description}</p></div>
-    <div className="remote-address-value">{children || <code>{value || '暂无可用地址'}</code>}</div>
+    <div className="remote-address-value">{value ? <a href={value} target="_blank" rel="noopener noreferrer">{value}</a> : <span>暂无可用地址</span>}{children}</div>
     <div className="remote-address-actions">
       <RemoteCopyButton key={value} label={`复制${label}`} value={value} onCopy={onCopy} />
       <Dialog.Root><Dialog.Trigger asChild><button type="button" className="message-copy-button" aria-label={`${label}二维码`} title="扫码登录" disabled={!value}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><path d="M14 14h3v3h3v3h-6v-3M20 14h.01M7 7h.01M17 7h.01M7 17h.01" /></svg></button></Dialog.Trigger>

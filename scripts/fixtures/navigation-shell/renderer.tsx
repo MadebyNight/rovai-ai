@@ -32,7 +32,8 @@ function Fixture(): React.JSX.Element {
   }, [])
   const [platform, setPlatform] = useState<'win32' | 'darwin'>('win32')
   const [disabled, setDisabled] = useState(false)
-  document.documentElement.dataset.rovaiPlatform = platform
+  document.documentElement.dataset.rovaiPlatform = browser ? 'browser' : platform
+  document.documentElement.dataset.rovaiSurface = browser ? 'web' : 'desktop'
   Object.assign(window, { navigationTest: {
     renders: () => renders, setSettings, setPlatform, setDisabled, setBrowser, navigation, target,
     hostNavigation: (direction: 'back' | 'forward') => navigationListeners.forEach(listener => listener(direction)),

@@ -74,8 +74,10 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
   const frame = useRef<number | null>(null)
   const maximum = navigationMaxWidth(viewport)
   const fixedSettings = settings && (browser || platform === 'darwin')
-  const width = layout.collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
-  const label = layout.collapsed ? '展开导航侧栏' : '收起导航侧栏'
+  // Web settings always expose their categories; ordinary-page layout stays saved.
+  const collapsed = layout.collapsed && !(browser && settings)
+  const width = collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
+  const label = collapsed ? '展开导航侧栏' : '收起导航侧栏'
   const toggle = (): void => setLayout(current => fixedSettings && !current.collapsed ? current : { ...current, collapsed: !current.collapsed })
   const resizeTo = (value: number): void => setLayout({ width: clampNavigationWidth(value, maximum), collapsed: false })
   const cancelFrame = (): void => { if (frame.current !== null) cancelAnimationFrame(frame.current); frame.current = null }
@@ -106,10 +108,10 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
     try { window.localStorage.setItem(NAVIGATION_LAYOUT_KEY, JSON.stringify(layout)) } catch { /* Preferences may be unavailable; in-window layout still works. */ }
   }, [layout, resizing])
   useEffect(() => { if (disabled || fixedSettings) { finish(true); setMenuOpen(false) } }, [disabled, fixedSettings])
-  const control = fixedSettings && !layout.collapsed ? null : <div className="navigation-chrome-controls"><button className="navigation-collapse-button" type="button" disabled={disabled} title={label} aria-label={label} aria-expanded={!layout.collapsed} aria-controls="global-navigation" onClick={toggle}>
+  const control = fixedSettings && !collapsed ? null : <div className="navigation-chrome-controls"><button className="navigation-collapse-button" type="button" disabled={disabled} title={label} aria-label={label} aria-expanded={!layout.collapsed} aria-controls="global-navigation" onClick={toggle}>
     <PanelToggleIcon side="left" visible={!layout.collapsed} />
   </button>
-    {!layout.collapsed && !fixedSettings && navigation && <div className="navigation-history-controls" role="group" aria-label="浏览历史">
+    {!collapsed && !fixedSettings && navigation && <div className="navigation-history-controls" role="group" aria-label="浏览历史">
       {(['back', 'forward'] as const).map((direction) => {
         const text = direction === 'back' ? '后退' : '前进'
         const key = direction === 'back' ? '[' : ']'
@@ -123,8 +125,8 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
     </div>}
   </div>
   const shellStyle = useMemo(() => ({ ...attributes.style, '--rail-width': `${width}px` }) as CSSProperties, [attributes.style, width])
-  return <NavigationContext.Provider value={layout.collapsed}>
-    <div {...attributes} className={`app-shell navigation-shell ${className}${layout.collapsed ? ' navigation-collapsed' : ''}${resizing ? ' navigation-resizing' : ''}`} style={shellStyle}>
+  return <NavigationContext.Provider value={collapsed}>
+    <div {...attributes} className={`app-shell navigation-shell ${className}${collapsed ? ' navigation-collapsed' : ''}${resizing ? ' navigation-resizing' : ''}`} style={shellStyle}>
       {children}
       {!fixedSettings && <DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenu.Trigger asChild disabled={disabled}>

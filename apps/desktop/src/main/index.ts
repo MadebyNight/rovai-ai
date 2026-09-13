@@ -3,6 +3,7 @@ import { createHostChannelHandler } from './host-channels'
 import { FilePreviewFrameNavigation } from './file-preview/file-preview-navigation'
 import { installWindowNavigation } from './window-navigation'
 import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { openHostWebLink } from './host-web-link'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
 import {
@@ -829,6 +830,7 @@ function createWindow(): void {
   window.once('ready-to-show', () => window.show())
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url)
+    else if (url.startsWith('http://')) void openHostWebLink(url, () => core.request('host.web.status'), value => shell.openExternal(value)).catch(() => undefined)
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event, url) => {
