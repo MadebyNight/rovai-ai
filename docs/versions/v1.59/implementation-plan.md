@@ -13,16 +13,27 @@ last_updated: 2026-09-13
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已合入 main `c1fa5966`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：HTML 附件预览与登录提示
+## 本轮：HTML 附件预览与正式登录页
 
 Web 的 HTML/HTM 不再强制标为普通文本。正式文件查看器复用 Desktop 的交互视图、源码读取、查找与诊断；
 认证 Host 读取后把文档交给无凭据静态 shell，响应 CSP 和 iframe 都使用不含 `allow-same-origin` 的 sandbox。
 保留原读取限额、编辑归属和 generation 校验；当前单文件 HTML 与 HTTP(S) 依赖可用，本地多文件站点依赖尚未接通。
 下方早期“HTML 不执行”的记录仅描述当时实现，当前边界由 [Host Web v2](../../contracts/host-web-v2.md)拥有。
 
-登录框与离线登录页交互稿使用“输入 64 位的 Token”，位数来自现有 32 字节随机值的十六进制编码。
-“核对 N 项提交／重试原提交”追溯到 `b62752dd9`（2026-09-12），在存在未确认完成的命令或上传时出现（也包含正在发送的请求），
-复用原回执和 commandId，本轮未移除或新建该恢复机制。按用户要求关闭 PR #345；后续默认仅推送任务分支。
+已确认的登录交互稿接入正式 WebUI：沿用完整 Rovai 标志、Porcelain Day / Steel Night、紧凑 Token 表单，
+支持键盘提交、Token 显隐、真实错误和提交反馈；恢复与扫码等待共用同一品牌入口。
+提示为“输入 64 位的 Token”，位数来自现有 32 字节随机值的十六进制编码。首次登录跟随浏览器设备主题，
+已挂载工作台的重新登录沿用当前主题与编辑；继续使用原 Bearer Session 和标签页恢复机制。
+窄屏仅适配登录入口，不宣称完成 Mobile 工作台。
+“核对 N 项提交／重试原提交”追溯到 `b62752dd9`（2026-09-12），此前在未确认完成的命令或上传期间显示。
+用户随后确认移除这两个 Web 专用按钮及其界面计数，Desktop 本来没有这些入口；保留断线反馈、
+原命令材料、自动回执核对和幂等逻辑，不因移除按钮而自动重发命令。按用户要求关闭 PR #345；后续默认仅推送任务分支。
+
+正式登录页使用隔离 Rust Host + Chrome 验证：日夜 1440/390px 与 844px 横屏、键盘显隐/Enter、错误 Token、
+真实离线请求、提交禁用、刷新恢复、同一编辑器重新认证、扫码单次进入及两个浏览器草稿独立均通过。
+验收脚本首轮过早点击尚未加载的会话列表；两处改为等待正式列表出现后，原产品代码通过完整复跑。
+TypeScript、Web 构建、Vitest 2001 / 197 文件、Node 317 通过（2 个既有 Windows 专项跳过）与文档门禁通过；
+本次不改 Rust，不把 macOS 浏览器模拟窄屏计为实体手机或 Windows 验收。
 
 `pnpm test:host-web-html` 拥有真实 Rust 授权读取、正式共享 Viewer 与 Chrome CSP 的新适配交界，
 无需 Electron 或模型；已有 Host HTTP owner 扩展 HTML 分类、原稿读取和编辑/代次拒绝，不新增 Rust 测试实例。
