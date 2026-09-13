@@ -27,6 +27,7 @@ GitHub Releases 为正式发布目标；安装脚本地址、命令可用性与�
 本轮同步 `origin/main` 至 `de239656`，通过 merge 保留已有分支工作。
 
 本机 macOS arm64 自动验收：默认与自定义根实际经 HTTP 写入 MCP、导入 Skill，重启后读回相同数据与令牌；
+同时运行使用既有布局的 Desktop pipe Host，实际从该 Host 读回未变的 MCP/Skills；Desktop 开 Web 前后都未创建独立数据根。
 第二 Host 占用拒绝，主库丢失后不重建空库；旧 SQLite、旧默认建议目录和 Desktop 资源目录有明确兼容提示。
 入口不会通过 symlink 祖先创建新根。所有进程使用临时账号 Home/独立绝对数据根，不调用模型、不动日常 App。
 安装器的归档校验、重复安装、内容替换、错误包不切换、链接成员拒绝、PATH 去重与数据保留通过。
@@ -510,3 +511,13 @@ Run 保持 failure。Windows console 事件的原生受控关闭仍未验收，�
 
 新增限制需要明确保护对象和必要性。保留网络认证、Bearer 凭据不自动跨端口泄漏、浏览器内容及跨站请求保护、
 文件操作校验、基本限额；继续验证客户端草稿、原命令回执、审批一致性与生命周期。
+
+### 原生安装矩阵的首轮问题与复核
+
+`a8e809b5` 的 Full check run `34742163864` 中，macOS arm64 与 Linux x64 的包级安装和数据根测试通过。
+Windows 原生构建成功，但测试发现：PowerShell 进程可能继承不含 `Get-FileHash` 的模块路径；安装器改用
+.NET 流式 SHA-256，保持同一校验规则。Web 路径断言改为规范路径身份比较，兼容 Windows extended prefix。
+Clock owner 在 Windows 使用 Node 强制终止来验证持久计划重开，明确不把 SIGTERM 当作 console Ctrl-C 正常关闭；
+原 Windows console 资格仍未验收。修复后的平台结果以随后原生矩阵为准，不抹掉首轮失败。
+
+已同步 main 的 `49b7b623`（模型选择器），保留上游 UI 改动；合并后的 TypeScript 与共享 Host 客户端回归通过。

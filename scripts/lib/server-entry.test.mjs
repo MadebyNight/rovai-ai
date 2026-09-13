@@ -6,6 +6,7 @@ import { join, resolve, sep } from 'node:path'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
+import { launchHost } from './host-test-client.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
 const executable = process.platform === 'win32' ? 'rovai-server.exe' : 'rovai-server'
@@ -42,8 +43,11 @@ test('Native Server default and custom roots retain data and token, reject anoth
     await mkdir(join(install, 'web-ui'), { recursive: true }); await cp(binary, installedBinary)
     await writeFile(join(install, 'web-ui/index.html'), '<!doctype html><title>Matched package UI</title><h1>Shared Host</h1>')
   }
-  await writeFile(join(desktop, 'mcp.json'), 'desktop sentinel')
-  await writeFile(join(desktop, 'skills/sentinel'), 'desktop skill')
+  const hostBinary = process.env.ROVAI_HOST_BIN ?? join(root, 'target/debug/rovai-host')
+  const isolatedEnvironment = { ...process.env, HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }
+  const desktopPaths = JSON.parse(execFileSync(hostBinary, ['prepare', '--data-dir', join(fixture, 'desktop-data')], { env: isolatedEnvironment, encoding: 'utf8' }))
+  console.log(JSON.stringify({ channel: 'automatic_acceptance', name: 'parallel-desktop-host', dataDir: desktopPaths.dataDir, skillLibraryRoot: join(desktop, 'skills'), mcpConfigPath: join(desktop, 'mcp.json'), runtime: false }))
+  const desktopHost = launchHost(hostBinary, ['--data-dir', desktopPaths.dataDir, '--skill-library-root', join(desktop, 'skills'), '--mcp-config-path', join(desktop, 'mcp.json'), '--runtime-camp-files-root', desktopPaths.runtimeCampFilesRoot], { cwd: fixture, env: isolatedEnvironment })
   const processes = []
   const start = args => {
     const child = spawn(installedBinary, [...args, '--listen', '127.0.0.1:0'], { cwd: fixture, env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -68,7 +72,29 @@ test('Native Server default and custom roots retain data and token, reject anoth
       assert.equal(result.error, null, JSON.stringify(result.error)); return result.result
     }
   }
+  const desktopCall = async (operation, params = {}) => {
+    const deadline = Date.now() + 15_000
+    for (;;) {
+      try { return await desktopHost.request(operation, params) }
+      catch (error) {
+        if (error?.code !== 'subsystem_unavailable' || error?.details?.state !== 'initializing' || Date.now() >= deadline) throw error
+        await delay(50)
+      }
+    }
+  }
   try {
+    await wait(desktopHost.ready)
+    const desktopConfig = await desktopCall('mcp.config.get')
+    assert.equal((await desktopCall('mcp.servers.create', { expectedConfigDigest: desktopConfig.configDigest, definitionJson: JSON.stringify({ mcpServers: { 'desktop-only': { command: 'not-executed-fixture', args: [] } } }) })).status, 'ok')
+    const desktopSource = join(fixture, 'desktop-only-skill'); await mkdir(desktopSource)
+    await writeFile(join(desktopSource, 'SKILL.md'), '---\nname: desktop-only-skill\ndescription: Parallel Desktop isolation fixture.\n---\nNever executed.\n')
+    const desktopImport = await desktopCall('skills.import.inspect', { path: desktopSource })
+    assert.equal(desktopImport.candidates.length, 1, JSON.stringify(desktopImport.rejectedCandidates))
+    assert.equal((await desktopCall('skills.import.commit', { commandId: randomUUID(), command: { stagingToken: desktopImport.stagingToken, candidateName: desktopImport.candidates[0].name, expectedDigest: desktopImport.candidates[0].contentDigest, expectedSkillVersion: null, confirmUpdate: false } })).status, 'applied')
+    const desktopBaseline = { mcp: await readFile(join(desktop, 'mcp.json'), 'utf8'), skills: await desktopCall('skills.list'), instances: await readdir(join(desktop, 'instances')) }
+    const desktopWeb = await desktopHost.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: join(install, process.env.ROVAI_SERVER_RELEASE_DIR ? 'current/web-ui' : 'web-ui') })
+    assert.equal((await call({ origin: () => desktopWeb.origin }, desktopWeb.administratorToken, 'mcp.config.get')).configDigest, (await desktopCall('mcp.config.get')).configDigest)
+    await assert.rejects(access(join(home, '.rovai-server')), { code: 'ENOENT' })
     for (const [name, args, data] of [['default', [], join(home, '.rovai-server')], ['custom', ['--data-dir', join(fixture, 'custom')], join(fixture, 'custom')]]) {
       console.log(JSON.stringify({ channel: 'automatic_acceptance', name, dataDir: data, skillLibraryRoot: join(data, 'skills'), mcpConfigPath: join(data, 'mcp.json'), runtime: false }))
       const first = start(args); await wait(first.ready)
@@ -77,6 +103,7 @@ test('Native Server default and custom roots retain data and token, reject anoth
       assert.equal(first.output().includes(token), false)
       assert.ok((await fetch(first.origin())).status === 200)
       const config = await call(first, token, 'mcp.config.get')
+      assert.equal(config.servers.some(server => server.name === 'desktop-only'), false)
       const created = await call(first, token, 'mcp.servers.create', { expectedConfigDigest: config.configDigest, definitionJson: JSON.stringify({ mcpServers: { 'server-only': { command: 'not-executed-fixture', args: [] } } }) })
       assert.equal(created.status, 'ok')
       const source = join(fixture, `${name}-skill`); await mkdir(source)
@@ -86,6 +113,10 @@ test('Native Server default and custom roots retain data and token, reject anoth
       const imported = await call(first, token, 'skills.import.commit', { commandId: randomUUID(), command: { stagingToken: inspected.stagingToken, candidateName: inspected.candidates[0].name, expectedDigest: inspected.candidates[0].contentDigest, expectedSkillVersion: null, confirmUpdate: false } })
       assert.equal(imported.status, 'applied', JSON.stringify(imported))
       const skills = await call(first, token, 'skills.list'); assert.ok(skills.some(skill => skill.name === `${name}-skill`))
+      assert.equal(skills.some(skill => skill.name === 'desktop-only-skill'), false)
+      assert.equal(desktopHost.child.exitCode, null, 'Desktop Host remains live beside Server')
+      assert.equal(await readFile(join(desktop, 'mcp.json'), 'utf8'), desktopBaseline.mcp)
+      assert.deepEqual(await desktopCall('skills.list'), desktopBaseline.skills)
       await access(join(data, 'rovai.sqlite')); await access(join(data, 'mcp.json')); await access(join(data, 'skills')); await access(join(data, 'logs/server.log'))
       const instances = await readdir(join(data, 'instances')); assert.equal(instances.length, 1)
       await access(join(data, 'instances', instances[0], 'runtime-files/.runtime-camp-files-root.json'))
@@ -105,11 +136,11 @@ test('Native Server default and custom roots retain data and token, reject anoth
       const lostDatabase = start(args); assert.equal((await wait(lostDatabase.closed)).code, 1)
       await assert.rejects(access(join(data, 'rovai.sqlite')), { code: 'ENOENT' })
     }
-    assert.equal(await readFile(join(desktop, 'mcp.json'), 'utf8'), 'desktop sentinel')
-    assert.equal(await readFile(join(desktop, 'skills/sentinel'), 'utf8'), 'desktop skill')
-    await assert.rejects(access(join(desktop, 'instances')), { code: 'ENOENT' })
+    assert.equal(await readFile(join(desktop, 'mcp.json'), 'utf8'), desktopBaseline.mcp)
+    assert.deepEqual(await desktopCall('skills.list'), desktopBaseline.skills)
+    assert.deepEqual(await readdir(join(desktop, 'instances')), desktopBaseline.instances)
     const desktopRoot = start(['--data-dir', desktop]); assert.equal((await wait(desktopRoot.closed)).code, 1); assert.match(desktopRoot.output(), /server_legacy_layout/)
-    assert.equal(await readFile(join(desktop, 'mcp.json'), 'utf8'), 'desktop sentinel')
+    assert.equal(await readFile(join(desktop, 'mcp.json'), 'utf8'), desktopBaseline.mcp)
     await assert.rejects(access(join(desktop, 'server-layout.json')), { code: 'ENOENT' })
     const legacy = join(fixture, 'legacy'); await mkdir(legacy); await writeFile(join(legacy, 'rovai.sqlite'), 'legacy sentinel')
     const refused = start(['--data-dir', legacy]); assert.equal((await wait(refused.closed)).code, 1); assert.match(refused.output(), /server_legacy_layout/)
@@ -124,6 +155,7 @@ test('Native Server default and custom roots retain data and token, reject anoth
     const oldDefaultHint = start([]); assert.equal((await wait(oldDefaultHint.closed)).code, 1); assert.match(oldDefaultHint.output(), /previous preview data exists/)
     assert.equal(await readFile(join(oldDefault, 'rovai.sqlite'), 'utf8'), 'old preview')
   } finally {
+    await desktopHost.close()
     for (const host of processes) { if (host.child.exitCode === null && host.child.signalCode === null) host.child.kill('SIGKILL'); await wait(host.closed).catch(() => {}) }
     await rm(fixture, { recursive: true, force: true })
   }

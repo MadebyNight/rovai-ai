@@ -42,7 +42,13 @@ try {
     $matches_ = @(Get-Content $sums | Where-Object { $_ -cmatch ('^[0-9a-f]{64}  ' + [Regex]::Escape($asset) + '$') })
     if ($matches_.Count -ne 1) { throw 'Missing or duplicate archive checksum.' }
     $expected = $matches_[0].Substring(0, 64)
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant() -cne $expected) { throw 'Archive checksum mismatch; installation unchanged.' }
+    # Use the framework directly: Windows PowerShell can inherit a PowerShell 7
+    # module path that does not expose the Get-FileHash script module.
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($archive)
+    try { $actual = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $hasher.Dispose() }
+    if ($actual -cne $expected) { throw 'Archive checksum mismatch; installation unchanged.' }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($archive)
     try {

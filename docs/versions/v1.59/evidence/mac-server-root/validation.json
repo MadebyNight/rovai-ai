@@ -27,7 +27,9 @@
         "second owner rejected",
         "lost authority not reinitialized",
         "legacy preview and Desktop resource roots rejected without modification",
-        "symlink ancestor rejected before directory preparation"
+        "symlink ancestor rejected before directory preparation",
+        "parallel Desktop pipe Host retains MCP and Skill state during Server writes",
+        "Desktop Web opens the existing Desktop Host without creating standalone default data"
       ]
     },
     {
