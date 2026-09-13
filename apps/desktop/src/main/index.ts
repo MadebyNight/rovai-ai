@@ -1,3 +1,4 @@
+import { createHostChannelHandler } from './host-channels'
 import { FilePreviewFrameNavigation } from './file-preview/file-preview-navigation'
 import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -453,6 +454,7 @@ const channelSettings = new ChannelSettingsCoordinator({
   feishu: feishuChannelSettings,
   dingtalk: dingtalkChannelSettings
 })
+core.setChannelHandler(createHostChannelHandler(channelSettings))
 const channelHostLifecycle = new ChannelHostLifecycle({
   async start() {
     await channelSettings.start()

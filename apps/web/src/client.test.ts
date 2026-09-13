@@ -6,6 +6,30 @@ import { newCommandId } from '../../desktop/src/shared/command-id'
 // cannot detect a client adding cookies, following a redirect, or accepting a
 // late response from a replaced session.
 describe('console transport', () => {
+  it('uses Host channel capabilities and fences a channel reply across reauthentication', async () => {
+    let pending: ((value: Response) => void) | undefined
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async url => {
+      if (String(url).endsWith('/login')) return Response.json({ protocolVersion: 2, token: 'a'.repeat(64), clientId: 'd'.repeat(64), editorProof: 'e'.repeat(64), ownerId: 'local_user', channels: 'desktop' })
+      return new Promise(resolve => { pending = resolve })
+    })
+    const client = new ConsoleClient('http://127.0.0.1:4317', fetcher)
+    expect(client.channels).toBe('unsupported')
+    await client.login('b'.repeat(64)); expect(client.channels).toBe('desktop')
+    const old = client.channel({ operation: 'retry', kind: 'dingtalk', agentId: 'original' })
+    await client.login('b'.repeat(64))
+    pending!(Response.json({ result: { schemaVersion: 4 } }))
+    await expect(old).rejects.toMatchObject({ name: 'AbortError' })
+    for (const [code, expected] of [
+      ['channel_session_expired', '请在运行此服务的 Rovai Desktop 中重新连接账号'],
+      ['channel_operation_failed', '请重新读取发布状态']
+    ]) {
+      const next = client.channel({ operation: 'get' })
+      pending!(Response.json({ error: { code } }, { status: 503 }))
+      await expect(next).rejects.toThrow(expected)
+    }
+    client.clear()
+  })
+
   it('rejects an incompatible Host before installing credentials or admitting business requests', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ protocolVersion: 1, token: 'a'.repeat(64), clientId: 'd'.repeat(64), editorProof: 'e'.repeat(64), ownerId: 'local_user' }))
     const client = new ConsoleClient('http://127.0.0.1:4317', fetcher)

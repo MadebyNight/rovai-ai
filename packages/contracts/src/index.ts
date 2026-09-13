@@ -2823,11 +2823,17 @@ export interface ChannelAccountView {
 }
 
 export interface ChannelConnectionView {
+  /** Latest runtime inspection; absent older snapshots are unknown. */
+  sessionStatus?: 'valid' | 'invalid' | 'unavailable' | 'unknown'
   status: ChannelConnectionStatus
   account: ChannelAccountView | null
 }
 
 export interface ChannelMemberBotView {
+  /** Durable Bot publication fact, even if a later connection/retry failed. */
+  published?: boolean
+  /** Live transport observation, independent of durable publication status. */
+  connectionStatus?: 'online' | 'offline' | 'unknown'
   agentId: string
   publicationStatus: ChannelPublicationStatus
   botDisplayName: string | null
@@ -2864,6 +2870,8 @@ export interface ChannelProviderView {
   hostStatus: ChannelHostStatus
   connection: ChannelConnectionView
   memberBots: ChannelMemberBotView[]
+  /** This provider's original publication progress; independent of other providers. */
+  provisioning?: MemberBotProvisioningView | null
   pendingBindingCount?: number
   bindingIssueCount?: number
 }

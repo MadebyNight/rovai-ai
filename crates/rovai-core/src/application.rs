@@ -16105,6 +16105,8 @@ async fn run_core(
             "host.web.start" => Some(HostWebOperation::Start),
             "host.web.stop" => Some(HostWebOperation::Stop),
             "host.web.rotate" => Some(HostWebOperation::Rotate),
+            "host.channels.dispatch" => Some(HostWebOperation::ChannelDispatch),
+            "host.channels.reply" => Some(HostWebOperation::ChannelReply),
             _ => None,
         };
         if let Some(operation) = host_operation {
@@ -16116,6 +16118,15 @@ async fn run_core(
                     message: "This process does not provide Host Web control".into(),
                 })
             };
+            if let (HostWebOperation::ChannelDispatch, Ok(value)) = (operation, &reply) {
+                // Share the single Desktop writer, never write a second
+                // stdout stream that could interleave JSON frames.
+                output_tx
+                    .send(serde_json::to_string(
+                        &json!({"method":"host.channels.request","params":value}),
+                    )?)
+                    .map_err(|_| anyhow::anyhow!("Desktop output is unavailable"))?;
+            }
             let response = match reply {
                 Ok(value) => Response {
                     id: request.id,

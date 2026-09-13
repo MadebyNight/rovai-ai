@@ -30,7 +30,9 @@ Host 独占 data-dir lease、SQLite 准入、执行、恢复与后台驱动。�
 HTTP 并发不改变领域调度，SSE 不占命令队列，取消与审批不等待长 Runtime 执行。
 Desktop-only 窗口、原生交互与更新保留 Electron；基础 Server 不要求 Electron 或 Node。
 Runtime 自身依赖单独声明。Automation 时钟迁 Host；日报、评测与渠道未迁移驱动初始保留可选 Desktop
-适配，并在 Headless capabilities 明确关闭。实际 Main 归属见当前实施计划。
+适配，并在 Headless capabilities 明确关闭。Desktop 托管 Web 的渠道管理通过受认证的 Axum 渠道操作、封闭父管道回调复用当前 Electron Main
+渠道服务；发布流程、登录 Session 与运行期凭据不迁入 Rust。回调先释放 Core 请求队列，再由 Desktop
+服务调用同一 Core，避免循环等待。独立 Server 不提供渠道能力，也不加载额外渠道进程。实际 Main 归属见当前实施计划。
 
 macOS/Linux 本机传输为 UDS，Windows 为受保护 Named Pipe，另有可信身份、实例与代次握手。
 同一目录不能被两个 Host 抢占；不自动 attach、抢锁或双写。Desktop Web 默认关闭；关闭 Web 仅关闭

@@ -53,7 +53,7 @@ token on stdin as before. Browser authentication still keeps only a short-lived 
 
 `POST /api/v1/login` accepts `{ protocolVersion: 2, administratorToken, editor? }`.
 `editor`, when present, is exactly `{ clientId, proof }`. An incompatible protocol is rejected before issuing a session.
-The response contains `protocolVersion: 2`, `token`, `clientId`, `editorProof`, `ownerId`, `expiresInSeconds` and `epoch`.
+The response contains `protocolVersion: 2`, `token`, `clientId`, `editorProof`, `ownerId`, `expiresInSeconds` `epoch` and `channels: "desktop" | "unsupported"`.
 The browser checks the response protocol before mounting business pages or sending commands.
 
 Fresh login creates a Core-owned random 256-bit editor identity and an independent random recovery proof.
@@ -157,8 +157,7 @@ remaining business, network and platform checks recorded in the version plan.
 Management pages receive request, invalidation and resource adapters explicitly. An invalidation rereads the authorized
 list/detail while retaining local drafts and version conflict handling. Skill directory selection refers to the Host
 filesystem; Runtime startup on Web accepts a Host absolute program path. Browser keyboard conventions remain local,
-while installation and Runtime qualification use the Host health platform. Optional Desktop channel and system-file
-integration is represented as an absent capability, without dereferencing an Electron bridge in Web.
+while installation and Runtime qualification use the Host health platform. Channel capability comes from the authenticated Host deployment; native system-file integration remains absent in Web. Browser code never dereferences an Electron bridge.
 
 `POST /api/v1/avatars` accepts a closed `read | save` action. Save carries bounded normalized PNG source/icon and crop,
 never an arbitrary path; the shared Rust member-avatar store verifies dimensions, crop, format and byte limits before
@@ -196,4 +195,46 @@ including after Camp deletion. No host shutdown, token management, raw source re
 made public. Diagnostics download uses Core's redacted v5 export; monitoring uses the existing filtered snapshot.
 Notification preferences and acknowledgements belong to the single Owner; heads-up queues, focus and visible-source
 observations remain per browser. Invalidations reread authorized notification changes/preference; they are not CoreEvents.
-Channels remain the explicitly deferred Desktop integration; Web renders that capability state without invoking Electron.
+Channels are supported in Desktop-hosted Web through the closed adapter below; standalone Server channels remain outside stage 1–4 qualification.
+
+
+## Desktop-hosted channels and logout
+
+The authenticated login reply and `/api/v1/capabilities` declare `channels: "desktop" | "unsupported"`.
+Standalone Server omits the channel settings navigation; retained routes show:
+“独立 Server 当前不支持飞书／钉钉渠道。渠道功能请使用 Rovai Desktop。” No manual Bot import or credential migration route is added.
+
+Desktop-hosted Web mounts the production `ChannelSettings` page with an injected channel client. Account connection,
+switching and reauthentication stay on the computer running that Desktop; only genuinely native steps redirect there.
+Publishing, retrying and structured approver selection remain browser actions against the existing Desktop coordinator,
+provider service, publication identity and Core persistence. Unknown creation outcomes never authorize a new Bot.
+
+`POST /api/v1/channels` shares the authenticated, same-origin, bounded-body network boundary. Its closed tagged bodies are
+`{operation:"get"}`, `{operation:"publish"|"retry",kind,agentId}` and
+`{operation:"selectApprover",kind:"dingtalk",agentId,userId}`. IDs are nonempty, at most 256 UTF-8 bytes, with no control
+characters. Extra fields, native login operations and arbitrary RPC methods are rejected. The Host bounds waiters to 16,
+with a 60-second result deadline; losing a waiter never cancels admitted Desktop work. A result timeout is unknown,
+not proof that the operation failed. Re-read the existing publication and use its existing recovery path.
+
+The local parent pipe uses `host.channels.dispatch`/`host.channels.reply` with a Host-registered request identity and one
+`host.channels.request` notification. Dispatch acknowledgement frees the Core queue before Desktop calls Core again.
+These methods are never admitted as Web Core operations. The Desktop callback accepts only the same four operations,
+fences responses by child generation, and projects the public snapshot field by field. Cookie, App Secret, native login
+QR and raw exceptions are absent. Generic Main forwarding and new platform publication state machines are prohibited.
+Desktop IPC and Web publication mutations share a per-provider admission gate in the existing coordinator.
+
+The mounted Web page re-reads the authorized snapshot every two seconds, including progress that has no Core event;
+responses are fenced by authentication generation. Read failure shows unavailable/unknown live state while retaining
+stored publication facts. Each provider's `provisioning` retains its original publication progress independently;
+the legacy aggregate cannot hide another provider's in-flight work or approver choices.
+`connection.sessionStatus` is the latest runtime inspection (`valid`, `invalid`, `unavailable`,
+`unknown`), distinct from account connection records. Bot `connectionStatus` is `online`, `offline` or `unknown`, separate
+from publication status. `published` retains the durable Bot publication fact when a later retry/connection failed. Absent live fields are unknown; persisted records alone cannot establish current connectivity.
+
+Only known expired/mismatched sessions produce `channel_session_expired` and the instruction:
+“请在运行此服务的 Rovai Desktop 中重新连接账号，完成后返回本页重试。” Timeouts, platform approval and ordinary
+recoverable failures stay in the current page. Existing structured approval candidates use the shared selection form.
+
+Web logout is available once under Settings → Remote connection. It revokes only that Session; Host, tasks, other
+sessions and channel services keep running. Closing a browser or stopping Desktop's Web listener does not stop channel
+connections or admitted publication work. Only Desktop's existing controlled shutdown owns channel service shutdown.

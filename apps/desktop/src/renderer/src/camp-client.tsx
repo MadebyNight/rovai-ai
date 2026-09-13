@@ -18,7 +18,9 @@ export type CampClient = Pick<RovaiApi,
   selectSkillImportDirectory: RovaiApi['selectSkillImportDirectory']
   selectRuntimeExecutable: RovaiApi['selectRuntimeExecutable'] | null
   revealMcpConfig: RovaiApi['revealMcpConfig'] | null
-  channels: Pick<RovaiApi['channels'], 'get' | 'onChanged'> | null
+  channels: (Pick<RovaiApi['channels'], 'get' | 'onChanged' | 'publishMemberBot' | 'retryMemberBot' | 'selectPublicationApprover'> & {
+    native: Pick<RovaiApi['channels'], 'connect' | 'disconnect' | 'cancelQrAttempt' | 'refreshLoginQr'> | null
+  }) | null
   onEvent?: RovaiApi['onEvent']
   /** Authorized invalidation signal; it is deliberately not a CoreEvent. */
   onInvalidated?: (listener: () => void) => () => void

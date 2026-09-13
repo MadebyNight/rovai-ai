@@ -167,7 +167,13 @@ pub(crate) fn commit_private_directory_temporary(source: &Path, destination: &Pa
 /// truncating or inheritable handle, and Windows existing-object admission is
 /// mandatory before the handle is returned.
 pub(crate) fn open_private_read_write_file(path: &Path) -> Result<File> {
-    open_private_read_write_file_platform(path)
+    open_private_read_write_file_platform(path, false)
+}
+
+/// Append-only diagnostics retain the same private-file admission. Multiple
+/// entry processes cannot overwrite each other's startup/refusal records.
+pub(crate) fn open_private_append_file(path: &Path) -> Result<File> {
+    open_private_read_write_file_platform(path, true)
 }
 
 /// Opens an existing private regular file without ever creating a replacement.
@@ -355,13 +361,14 @@ fn open_private_read_file_platform(path: &Path) -> Result<File> {
 }
 
 #[cfg(unix)]
-fn open_private_read_write_file_platform(path: &Path) -> Result<File> {
+fn open_private_read_write_file_platform(path: &Path, append: bool) -> Result<File> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     use anyhow::Context;
 
     let mut options = std::fs::OpenOptions::new();
     options
+        .append(append)
         .create(true)
         .read(true)
         .write(true)
@@ -424,7 +431,7 @@ mod windows {
             HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
         },
         Storage::FileSystem::{
-            CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
+            CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_DIRECTORY,
             FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
             FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -501,7 +508,13 @@ mod windows {
         prepare_private_directory(path)
     }
 
-    pub(super) fn open_private_read_write_file(path: &Path) -> Result<File> {
+    pub(super) fn open_private_read_write_file(path: &Path, append: bool) -> Result<File> {
+        let access = GENERIC_READ
+            | if append {
+                FILE_APPEND_DATA
+            } else {
+                GENERIC_WRITE
+            };
         validate_native_absolute_path(path)?;
         let parent = path.parent().ok_or_else(|| {
             blocker(
@@ -524,7 +537,7 @@ mod windows {
             // prevents opening an unknown existing object under creation ACLs.
             CreateFileW(
                 wide_path.as_ptr(),
-                GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+                access | READ_CONTROL,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 &attributes,
                 CREATE_NEW,
@@ -539,17 +552,15 @@ mod windows {
                 Some(ERROR_FILE_EXISTS) | Some(ERROR_ALREADY_EXISTS)
             ) {
                 created = false;
-                open_existing_private_file(path, GENERIC_READ | GENERIC_WRITE).map_err(
-                    |open_error| {
-                        blocker(
-                            PRIVATE_ACL_INVALID,
-                            format!(
-                                "failed to open existing private file {}: {open_error:#}",
-                                path.display()
-                            ),
-                        )
-                    },
-                )?
+                open_existing_private_file(path, access).map_err(|open_error| {
+                    blocker(
+                        PRIVATE_ACL_INVALID,
+                        format!(
+                            "failed to open existing private file {}: {open_error:#}",
+                            path.display()
+                        ),
+                    )
+                })?
             } else {
                 return Err(error)
                     .with_context(|| format!("failed to create private file {}", path.display()));
@@ -1125,8 +1136,8 @@ fn create_private_directory_platform(path: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(windows)]
-fn open_private_read_write_file_platform(path: &Path) -> Result<File> {
-    windows::open_private_read_write_file(path)
+fn open_private_read_write_file_platform(path: &Path, append: bool) -> Result<File> {
+    windows::open_private_read_write_file(path, append)
 }
 
 #[cfg(windows)]
@@ -1150,7 +1161,7 @@ fn prepare_private_directory_platform(_path: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_private_read_write_file_platform(_path: &Path) -> Result<File> {
+fn open_private_read_write_file_platform(_path: &Path, _append: bool) -> Result<File> {
     anyhow::bail!("private Rovai storage is unsupported on this platform")
 }
 

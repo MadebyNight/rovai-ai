@@ -355,7 +355,7 @@ export function CampNavigation({
         {view === 'settings'
           ? (
               settingsNavigation ?? <SettingsSidebarNavigation
-                groups={SETTINGS_SIDEBAR_GROUPS}
+                groups={client.channels ? SETTINGS_SIDEBAR_GROUPS : SETTINGS_SIDEBAR_GROUPS.map(group => ({ ...group, items: group.items.filter(item => item.key !== 'channels') }))}
                 section={settingsSection}
                 updateBadge={updateBadge}
                 onSectionChange={onSettingsSectionChange}

@@ -10,7 +10,16 @@ export const desktopCampClient: CampClient = {
   selectSkillImportDirectory: () => window.rovai.selectSkillImportDirectory(),
   selectRuntimeExecutable: () => window.rovai.selectRuntimeExecutable(),
   revealMcpConfig: () => window.rovai.revealMcpConfig(),
-  channels: { get: () => window.rovai.channels.get(), onChanged: listener => window.rovai.channels.onChanged(listener) },
+  channels: {
+    get: () => window.rovai.channels.get(), onChanged: listener => window.rovai.channels.onChanged(listener),
+    publishMemberBot: (agentId, kind) => window.rovai.channels.publishMemberBot(agentId, kind),
+    retryMemberBot: (agentId, kind) => window.rovai.channels.retryMemberBot(agentId, kind),
+    selectPublicationApprover: (agentId, userId, kind) => window.rovai.channels.selectPublicationApprover(agentId, userId, kind),
+    native: {
+      connect: kind => window.rovai.channels.connect(kind), disconnect: kind => window.rovai.channels.disconnect(kind),
+      cancelQrAttempt: id => window.rovai.channels.cancelQrAttempt(id), refreshLoginQr: id => window.rovai.channels.refreshLoginQr(id)
+    }
+  },
   request: (method, params) => window.rovai.request(method, params),
   onEvent: (listener) => window.rovai.onEvent(listener),
   onClosePreviewRequested: listener => window.rovai.windowControls.onCloseTabRequested(listener),

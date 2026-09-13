@@ -5,6 +5,7 @@ export function launchHost(binary, args, options = {}) {
   const child = spawn(binary, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] })
   const pending = new Map()
   const unmatchedResponses = []
+  const notifications = new Set()
   let nextId = 1
   let stderr = ''
   let resolveReady; let rejectReady
@@ -25,6 +26,7 @@ export function launchHost(binary, args, options = {}) {
     const message = JSON.parse(line)
     if (message.kind === 'core_startup' && message.status === 'ready') resolveReady(message)
     if (message.kind === 'core_startup' && ['failed', 'blocked'].includes(message.status)) rejectReady(new Error(message.error?.code ?? 'Core refused'))
+    if (message.method) for (const listener of notifications) listener(message)
     if (message.id !== undefined) {
       const request = pending.get(message.id)
       if (!request) { unmatchedResponses.push(message.id); return }
@@ -34,6 +36,7 @@ export function launchHost(binary, args, options = {}) {
     }
   })
   return {
+    onNotification(listener) { notifications.add(listener); return () => notifications.delete(listener) },
     child, ready, closed, unmatchedResponses, stderr: () => stderr,
     async request(method, params = {}) {
       await within(ready)

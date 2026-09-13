@@ -11,6 +11,7 @@ import { launchHost } from './host-test-client.mjs'
 const root = resolve(import.meta.dirname, '../..')
 const executable = process.platform === 'win32' ? 'rovai-server.exe' : 'rovai-server'
 const binary = process.env.ROVAI_SERVER_BIN ?? join(root, 'target/debug', executable)
+const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
 
 test('Server default root is account scoped and independent of working directory', async () => {
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-server-paths-')))
@@ -53,10 +54,10 @@ test('Native Server default and custom roots retain data and token, reject anoth
     const child = spawn(installedBinary, [...args, '--listen', '127.0.0.1:0'], { cwd: fixture, env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }, stdio: ['ignore', 'pipe', 'pipe'] })
     let output = ''; let resolveReady, rejectReady
     const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject }); void ready.catch(() => {})
-    const collect = chunk => { output += chunk; if (output.includes('Host Core is ready')) resolveReady() }
+    const collect = chunk => { output += chunk; if (output.includes('· Ready')) resolveReady() }
     child.stdout.on('data', collect); child.stderr.on('data', collect)
     const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { rejectReady(new Error(output)); resolve({ code, signal }) }) })
-    const host = { child, ready, closed, output: () => output, origin: () => /origin="(http:\/\/127\.0\.0\.1:\d+)"/.exec(output)?.[1] }
+    const host = { child, ready, closed, output: () => output, origin: () => /Address  (http:\/\/127\.0\.0\.1:\d+)/.exec(output)?.[1] }
     processes.push(host); return host
   }
   const wait = promise => Promise.race([promise, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Server entry step timed out')), 20000); timer.unref() })])
@@ -101,6 +102,10 @@ test('Native Server default and custom roots retain data and token, reject anoth
       assert.ok(first.origin(), first.output())
       const token = await readFile(join(data, 'server-token'), 'utf8')
       assert.equal(first.output().includes(token), false)
+      assert.ok(first.output().includes(`Rovai Server ${version} · Ready`))
+      assert.match(first.output(), /Foreground/)
+      assert.equal(first.output().includes('Host Core is ready'), false)
+      assert.equal(first.output().includes('\x1b['), false)
       assert.ok((await fetch(first.origin())).status === 200)
       const config = await call(first, token, 'mcp.config.get')
       assert.equal(config.servers.some(server => server.name === 'desktop-only'), false)
@@ -128,7 +133,7 @@ test('Native Server default and custom roots retain data and token, reject anoth
       assert.deepEqual(await call(reopened, token, 'navigation.snapshot'), before)
       assert.equal((await call(reopened, token, 'mcp.config.get')).configDigest, created.config.configDigest)
       assert.deepEqual(await call(reopened, token, 'skills.list'), skills)
-      reopened.child.kill('SIGINT'); assert.deepEqual(await wait(reopened.closed), { code: 0, signal: null }, reopened.output())
+      reopened.child.kill(name === 'default' ? 'SIGHUP' : 'SIGINT'); assert.deepEqual(await wait(reopened.closed), { code: 0, signal: null }, reopened.output())
       assert.match(await readFile(join(data, 'logs/server.log'), 'utf8'), /Host Core stopped after durable settlement/)
       assert.equal((await readFile(join(data, 'logs/server.log'), 'utf8')).includes(token), false)
       // A previously admitted instance with a lost DB must not become a fresh empty instance.
@@ -157,6 +162,170 @@ test('Native Server default and custom roots retain data and token, reject anoth
   } finally {
     await desktopHost.close()
     for (const host of processes) { if (host.child.exitCode === null && host.child.signalCode === null) host.child.kill('SIGKILL'); await wait(host.closed).catch(() => {}) }
+    await rm(fixture, { recursive: true, force: true })
+  }
+})
+
+// Uses real POSIX controlling terminals. Never prints the fixture credential,
+// including on assertion failure; only boolean observations leave the child.
+test('interactive Server shows the retained token outside diagnostics and settles terminal hangup', {
+  timeout: 90_000,
+  skip: process.platform === 'win32' ? 'POSIX PTY evidence; Windows console closure is qualified separately' : false
+}, async () => {
+  const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-server-terminal-')))
+  const ui = join(fixture, 'web-ui'); await mkdir(ui); await writeFile(join(ui, 'index.html'), '<!doctype html><title>Server terminal fixture</title>')
+  try {
+    for (const mode of ['quiet-hangup', 'verbose', 'redirected-output']) {
+      const data = join(fixture, mode)
+      console.log(JSON.stringify({ channel: 'automatic_acceptance', dataDir: data, skillLibraryRoot: join(data, 'skills'), mcpConfigPath: join(data, 'mcp.json'), runtime: false, terminal: mode }))
+      const result = JSON.parse(execFileSync('python3', ['-c', String.raw`
+import os, pty, select, signal, subprocess, sys, time, json
+binary, data, ui, mode, version = sys.argv[1:]
+args = [binary, '--data-dir', data, '--web-ui', ui, '--listen', '127.0.0.1:0']
+if mode == 'verbose': args += ['--verbose']
+output = bytearray()
+if mode == 'redirected-output':
+    master, slave = pty.openpty()
+    child = subprocess.Popen(args, stdin=slave, stdout=subprocess.PIPE, stderr=slave)
+    pid = child.pid
+    stream = child.stdout.fileno()
+    os.close(slave)
+else:
+    pid, master = pty.fork()
+    if pid == 0:
+        os.environ['TERM'] = 'xterm-256color'
+        os.environ.pop('NO_COLOR', None)
+        os.execv(binary, args)
+    stream = master
+try:
+    deadline = time.monotonic() + 25
+    while b'Foreground' not in output:
+        if time.monotonic() > deadline: raise RuntimeError('terminal startup timed out')
+        if select.select([stream], [], [], .1)[0]:
+            chunk = os.read(stream, 8192)
+            if not chunk: raise RuntimeError('terminal closed before ready')
+            output.extend(chunk)
+    token = open(os.path.join(data, 'server-token'), 'rb').read()
+    token_command = subprocess.check_output([binary, '--data-dir', data, 'token']).strip()
+    if mode == 'quiet-hangup':
+        os.close(master)
+        master = None
+    else:
+        os.kill(pid, signal.SIGINT)
+    status = None
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        waited, status = os.waitpid(pid, os.WNOHANG)
+        if waited: break
+        if master is not None and select.select([stream], [], [], .1)[0]:
+            try: output.extend(os.read(stream, 8192))
+            except OSError: pass
+        time.sleep(.02)
+    else: raise RuntimeError('terminal shutdown timed out')
+    logs = open(os.path.join(data, 'logs', 'server.log'), 'rb').read()
+    print(json.dumps({
+        'tokenVisible': token in output,
+        'tokenRetained': token == token_command,
+        'tokenInLogs': token in logs,
+        'color': b'\x1b[' in output,
+        'mirrored': b'Host Core is ready' in output,
+        'durableStop': b'Host Core stopped after durable settlement' in logs,
+        'normalExit': os.waitstatus_to_exitcode(status) == 0,
+        'realVersion': ('Rovai Server ' + version).encode() in output,
+    }))
+finally:
+    try: os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError: pass
+    if master is not None: os.close(master)
+`, binary, data, ui, mode, version], { encoding: 'utf8', timeout: 45_000 }))
+      assert.deepEqual(result, {
+        tokenVisible: mode !== 'redirected-output', tokenRetained: true, tokenInLogs: false,
+        color: mode !== 'redirected-output', mirrored: mode === 'verbose', durableStop: true, normalExit: true, realVersion: true
+      }, mode)
+    }
+  } finally { await rm(fixture, { recursive: true, force: true }) }
+})
+
+// A real Windows console window is closed with WM_CLOSE. No JS platform
+// override or simulated Ctrl-C is accepted as native console-close evidence.
+test('Windows native console close completes the existing durable shutdown', {
+  timeout: 90_000, skip: process.platform !== 'win32' ? 'Requires native Windows console' : false
+}, async () => {
+  const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-server-console-')))
+  const data = join(fixture, 'data'), metadata = join(fixture, 'console.json')
+  const launch = join(fixture, 'launch.ps1'), close = join(fixture, 'close.ps1'), config = join(fixture, 'launch.json')
+  let launcher, serverPid, closed = false
+  try {
+    await writeFile(config, JSON.stringify({ binary, args: ['--data-dir', data, '--web-ui', process.env.ROVAI_WEB_UI ?? join(root, 'out/web'), '--listen', '127.0.0.1:0'], metadata }))
+    await writeFile(launch, String.raw`
+param([string]$Config)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class TestConsole {
+  [DllImport("kernel32.dll")] public static extern bool FreeConsole();
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AllocConsole();
+  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+}
+'@
+[void][TestConsole]::FreeConsole()
+if (-not [TestConsole]::AllocConsole()) { throw 'Cannot allocate isolated console' }
+$c = Get-Content -Raw -LiteralPath $Config | ConvertFrom-Json
+$p = [System.Diagnostics.ProcessStartInfo]::new()
+$p.FileName = $c.binary
+$p.UseShellExecute = $false
+$p.CreateNoWindow = $false
+$p.RedirectStandardInput = $true
+$p.RedirectStandardOutput = $true
+$p.RedirectStandardError = $true
+foreach ($argument in $c.args) { $p.ArgumentList.Add($argument) }
+$server = [System.Diagnostics.Process]::Start($p)
+$stdout = $server.StandardOutput.ReadToEndAsync()
+$stderr = $server.StandardError.ReadToEndAsync()
+[System.IO.File]::WriteAllText($c.metadata, (@{ serverPid=$server.Id; window=[TestConsole]::GetConsoleWindow().ToInt64() } | ConvertTo-Json -Compress))
+$server.WaitForExit()
+`)
+    await writeFile(close, String.raw`
+param([string]$Metadata)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CloseTestConsole {
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool PostMessageW(IntPtr window, uint message, UIntPtr w, IntPtr l);
+}
+'@
+$c = Get-Content -Raw -LiteralPath $Metadata | ConvertFrom-Json
+$server = [System.Diagnostics.Process]::GetProcessById($c.serverPid)
+$handle = $server.Handle
+if ($c.window -eq 0) { throw 'No native console window; cannot qualify console close' }
+if (-not [CloseTestConsole]::PostMessageW([IntPtr]$c.window, 0x0010, [UIntPtr]::Zero, [IntPtr]::Zero)) { throw 'WM_CLOSE was not delivered' }
+if (-not $server.WaitForExit(20000)) { throw 'Server did not exit after native console close' }
+@{ exited=$true; code=$server.ExitCode } | ConvertTo-Json -Compress
+`)
+    console.log(JSON.stringify({ channel: 'automatic_acceptance', nativePlatform: 'win32', dataDir: data, skillLibraryRoot: join(data, 'skills'), mcpConfigPath: join(data, 'mcp.json'), runtime: false, stop: 'native-console-WM_CLOSE' }))
+    launcher = spawn('pwsh', ['-NoProfile', '-NonInteractive', '-File', launch, '-Config', config], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let launcherError = ''; launcher.stderr.on('data', chunk => { launcherError += chunk })
+    launcher.stdout.resume()
+    const deadline = Date.now() + 35_000
+    for (;;) {
+      try {
+        const current = JSON.parse(await readFile(metadata, 'utf8')); serverPid = current.serverPid
+        if ((await readFile(join(data, 'logs/server.log'), 'utf8')).includes('Host Core is ready')) break
+      } catch { /* Wait only for this fixture's metadata and readiness. */ }
+      assert.ok(Date.now() < deadline, `Native console startup timed out: ${launcherError.slice(-1000)}`)
+      await delay(100)
+    }
+    const result = JSON.parse(execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', close, '-Metadata', metadata], { encoding: 'utf8', timeout: 30_000 }))
+    closed = result.exited
+    assert.deepEqual(result, { exited: true, code: 0 })
+    const log = await readFile(join(data, 'logs/server.log'), 'utf8')
+    assert.match(log, /Host Core stopped after durable settlement/)
+    assert.equal(log.includes(await readFile(join(data, 'server-token'), 'utf8')), false)
+  } finally {
+    if (!closed && serverPid) { try { process.kill(serverPid) } catch { /* Already exited. */ } }
+    launcher?.kill()
     await rm(fixture, { recursive: true, force: true })
   }
 })

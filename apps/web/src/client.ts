@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import { newCommandId } from '../../desktop/src/shared/command-id'
-import type { CampComposerDraftView } from '@contracts'
+import type { CampComposerDraftView, ChannelSettingsSnapshot } from '@contracts'
 class HttpRequestError extends Error {
   constructor(readonly status: number, readonly code: string) { super(`请求未完成（${code}）。`) }
 }
@@ -217,6 +217,8 @@ export class InvalidationDecoder {
 
 export class ConsoleClient {
   readonly origin: string
+  #channels: 'desktop' | 'unsupported' = 'unsupported'
+  get channels(): 'desktop' | 'unsupported' { return this.#channels }
   #token: string | null = null
   #generation = 0
   #lifetime = new AbortController()
@@ -266,7 +268,7 @@ export class ConsoleClient {
       signal: this.#lifetime.signal
     })
     if (!response.ok) throw new Error(response.status === 409 ? 'Web 与 Host 协议不兼容，请使用同一版本。' : response.status === 429 ? '登录次数过多，请稍后再试。' : '登录失败，请检查管理令牌。')
-    const session = await response.json() as { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown }
+    const session = await response.json() as { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown }
     if (generation !== this.#generation) throw new SessionRequired()
     if (session.protocolVersion !== 2) throw new Error('Web 与 Host 协议不兼容，请使用同一版本。')
     if (typeof session.token !== 'string' || !/^[a-f0-9]{64}$/.test(session.token)) throw new Error('会话响应无效。')
@@ -277,6 +279,7 @@ export class ConsoleClient {
     if (this.#editor !== null && this.#editor.clientId !== session.clientId) throw new Error('编辑归属已变化，无法把当前编辑转交给新的草稿身份。')
     this.#editor = { clientId: session.clientId, proof: session.editorProof }
     this.#ownerId = session.ownerId
+    this.#channels = session.channels === 'desktop' ? 'desktop' : 'unsupported'
     this.#token = session.token
     void this.reconcilePending()
     for (const listener of this.#authListeners) listener()
@@ -445,18 +448,37 @@ export class ConsoleClient {
     return body.result
   }
 
+  async channel(request: { operation: 'get' | 'publish' | 'retry' | 'selectApprover'; kind?: 'feishu' | 'dingtalk'; agentId?: string; userId?: string }): Promise<ChannelSettingsSnapshot> {
+    try {
+      const reply = await this.#json<{ result: ChannelSettingsSnapshot }>('channels', { method: 'POST', body: JSON.stringify(request) })
+      return reply.result
+    } catch (error) {
+      if (!(error instanceof HttpRequestError)) throw error
+      const message = error.code === 'channel_session_expired'
+        ? '请在运行此服务的 Rovai Desktop 中重新连接账号，完成后返回本页重试。'
+        : error.code === 'channel_native_interaction'
+          ? '此步骤需要原生页面，请在运行此服务的 Rovai Desktop 中完成后返回。'
+          : error.code === 'channels_unsupported'
+            ? '独立 Server 当前不支持飞书／钉钉渠道。渠道功能请使用 Rovai Desktop。'
+            : error.code === 'channel_capacity'
+              ? '渠道操作较多，请稍后重新读取状态。'
+              : '渠道操作结果暂时无法确认。请重新读取发布状态，再继续原发布流程。'
+      throw new CoreRequestError(error.code, message)
+    }
+  }
+
   async getWorkspaces(path?: string, offset = 0): Promise<WorkspaceListing> {
     return this.#json('workspaces', { method: 'POST', body: JSON.stringify({ path, offset }) })
   }
 
-  async #json<T>(path: 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
+  async #json<T>(path: 'channels' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
     const generation = this.#generation
     const result = await (await this.#authorized(path, options)).json() as T
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     return result
   }
 
-  async #authorized(path: 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
+  async #authorized(path: 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
     if (!this.#token) throw new SessionRequired()
     const generation = this.#generation
     const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {

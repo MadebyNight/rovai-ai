@@ -16,6 +16,16 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
   if (!transport.editingScope || !transport.presentationScope) throw new Error('必须先认证才能建立编辑作用域。')
   const listeners = new Set<() => void>()
   const unimplemented = async (): Promise<never> => { throw new Error('此操作的 Web 适配尚未接通。') }
+  const channelAdapter: NonNullable<CampClient['channels']> = {
+    native: null,
+    get: () => transport.channel({ operation: 'get' }),
+    // Main-owned channel progress is read by the mounted shared page, including
+    // steps that do not emit Core events. Polling never owns publication work.
+    onChanged: () => () => undefined,
+    publishMemberBot: (agentId, kind = 'feishu') => transport.channel({ operation: 'publish', agentId, kind }),
+    retryMemberBot: (agentId, kind = 'feishu') => transport.channel({ operation: 'retry', agentId, kind }),
+    selectPublicationApprover: (agentId, userId, kind = 'feishu') => transport.channel({ operation: 'selectApprover', agentId, userId, kind })
+  }
   const client: CampClient = {
     platform: browserPlatform(),
     exportDiagnostics: async () => downloadJson(await transport.request('diagnostics.export'), 'rovai-diagnostics.json'),
@@ -26,7 +36,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     selectSkillImportDirectory: async () => (await selectWorkspaceDirectory())?.projectPath ?? null,
     selectRuntimeExecutable: null,
     revealMcpConfig: null,
-    channels: null,
+    get channels() { return transport.channels === 'desktop' ? channelAdapter : null },
     request: <T,>(method: CoreMethod, params?: unknown): Promise<T> => {
       if (!(WEB_OPERATIONS as readonly string[]).includes(method)) return Promise.reject(new Error(`尚未开放此 Web 操作：${method}`))
       return transport.request<T>(method as WebOperation, params)

@@ -13,6 +13,24 @@ last_updated: 2026-09-13
 实现工作目录为仓库同级 `rovai-ai-unified-rust-host`，分支 `rovai/unified-rust-host`，
 起点 `a18425ec78ae2e1a0666b2c029564ff3f7bc8f78`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
+## 本轮：原生入口与 Desktop Web 渠道收敛
+
+在 main `bfd93864` 合入后实现：Web 退出登录收敛到设置 → 远程连接；交互式 Server 就绪后展示现有 Token，
+非交互默认不展示；诊断默认仅写当前数据根日志，`--verbose` 才镜像终端；SIGHUP 与 Windows console close
+接入既有受控关闭。Windows 原生 close 资格单列，不能把 POSIX PTY 结果记作 Windows 通过。
+
+Desktop Web 注入明确渠道能力，复用正式管理页面与现有 Desktop 发布、恢复、审批人服务；账号登录留在
+运行该服务的 Desktop。独立 Server 隐藏渠道入口，不新增渠道迁移或运行层。新增验证区分真实
+Host/HTTP/父管道/生产调用适配与平台服务夹具，不把夹具结果写成真实平台 Bot 发布通过。
+[浏览器验收记录](evidence/desktop-web-channels/validation.json)来自实际生产 Web 与 Rust Host，
+[日间](evidence/desktop-web-channels/desktop-web-channels-day.png)、[夜间](evidence/desktop-web-channels/desktop-web-channels-night.png)、
+[审批表单](evidence/desktop-web-channels/desktop-web-approver.png)和[独立 Server 遗留入口](evidence/desktop-web-channels/standalone-legacy-channel.png)
+确认正式页复用、授权进度重读、结构化选择、设置内唯一退出与 Server 能力隐藏；平台发布服务为可控夹具，未操作真实账号。
+`scripts/lib/server-entry.test.mjs` 的 macOS PTY 实测确认当前令牌仅交互显示、非交互与重定向不显示、
+普通输出不镜像诊断、显式 verbose 镜像及真实 PTY 关闭后的 durable settlement。Windows WM_CLOSE case
+只在 Windows 执行，Mac 上的跳过不是 Windows 通过。
+
+
 ## 当前收敛：原生 Server 数据根、启动与安装
 
 2026-09-13 最新补充覆盖冲突约定：独立入口使用 `~/.rovai-server`，一个 `--data-dir` 推导 SQLite、

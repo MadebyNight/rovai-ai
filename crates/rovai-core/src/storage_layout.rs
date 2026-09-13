@@ -1,7 +1,7 @@
 //! Locations only: both entrypoints keep using the same stores and authority
 //! admission. The standalone layout never falls back to Desktop's Home roots.
 use crate::platform::private_storage::{
-    create_private_new_file, open_private_read_file, open_private_read_write_file,
+    create_private_new_file, open_private_append_file, open_private_read_file,
     prepare_private_directory,
 };
 use anyhow::{Context, Result, ensure};
@@ -116,7 +116,7 @@ impl ServerPaths {
     }
 
     pub fn open_log(&self) -> Result<File> {
-        open_private_read_write_file(&self.logs.join("server.log"))
+        open_private_append_file(&self.logs.join("server.log"))
     }
 
     /// The Host passes the admitted canonical data directory. No directory is
@@ -221,6 +221,17 @@ mod tests {
                 .management_token(|| panic!("do not replace a stored token"))
                 .unwrap(),
             token
+        );
+        let mut first_log = paths.open_log().unwrap();
+        let mut second_log = paths.open_log().unwrap();
+        first_log.write_all(b"first\n").unwrap();
+        second_log.write_all(b"second\n").unwrap();
+        first_log.write_all(b"third\n").unwrap();
+        first_log.sync_data().unwrap();
+        drop((first_log, second_log));
+        assert_eq!(
+            std::fs::read(paths.logs.join("server.log")).unwrap(),
+            b"first\nsecond\nthird\n"
         );
         let server = CampAttachmentViewStore::admit(root, &paths.data_dir, &[]).unwrap();
         drop(server);

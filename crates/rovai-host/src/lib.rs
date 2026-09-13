@@ -1,5 +1,7 @@
+mod desktop_channels;
 mod lifecycle;
 mod server;
+mod server_logs;
 mod signals;
 mod web_control;
 
@@ -183,13 +185,12 @@ fn run(
     config: CoreConfig,
     web: Option<(rovai_web::WebConfig, String)>,
     desktop: bool,
-    log: Option<std::fs::File>,
+    console: Option<&server::Console>,
 ) -> Result<()> {
-    let writer = server::LogWriter::new(log);
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_target(false)
-        .with_writer(move || writer.clone())
+        .with_writer(std::io::stderr)
         .init();
 
     // Preserve the Desktop adapter's ordering: discovery captures its search
@@ -197,7 +198,7 @@ fn run(
     let environment = Arc::new(RuntimeSearchEnvironment::capture_initial());
     environment.activate_for_runtime_commands();
     let (core, runner) = embedded(config, environment)?;
-    let control = web_control::WebControl::new(core.clone());
+    let control = web_control::WebControl::new(core.clone(), desktop);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -210,14 +211,21 @@ fn run(
         }
         // Register listeners before starting Core, including during admission.
         let signals = signals::StopSignals::register()?;
+        let mut ready_web = None;
         if let Some((config, token)) = web {
             let status = control.start(config, &token).await?;
             tracing::info!(
                 origin = status["origin"].as_str().unwrap_or_default(),
                 "Host Web listener started"
             );
+            ready_web = Some((status, token));
         }
-        let result = lifecycle::run(core, runner, signals.wait()).await;
+        let result = lifecycle::run(core, runner, signals.wait(), || {
+            if let (Some(console), Some((status, token))) = (console, &ready_web) {
+                console.ready(status, token);
+            }
+        })
+        .await;
         control.stop().await;
         result
     });

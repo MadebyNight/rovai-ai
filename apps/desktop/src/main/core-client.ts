@@ -1,3 +1,4 @@
+import { parseHostChannelRequest, type HostChannelRequest, type HostChannelReply } from './host-channels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
@@ -20,7 +21,7 @@ type CoreInternalMethod =
   | 'core.shutdown'
   | 'automations.schedulerControl'
 
-export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate'
+export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate' | 'host.channels.reply'
 
 export type AutomationSchedulerControl = {
   epoch: number
@@ -304,6 +305,8 @@ function errorMessage(error: unknown): string {
 }
 
 export class CoreClient {
+  #channelHandler: ((request: HostChannelRequest) => Promise<HostChannelReply>) | null = null
+  #channelCalls = new Set<string>()
   #child: ActiveChild | null = null
   #nextId = 1
   #pending = new Map<number, PendingRequest>()
@@ -700,6 +703,10 @@ export class CoreClient {
     )
   }
 
+  setChannelHandler(handler: (request: HostChannelRequest) => Promise<HostChannelReply>): void {
+    this.#channelHandler = handler
+  }
+
   onEvent(listener: (event: CoreEvent) => void): () => void {
     this.#eventListeners.add(listener)
     return () => this.#eventListeners.delete(listener)
@@ -725,7 +732,30 @@ export class CoreClient {
 
     if (response.method) {
       if (!this.#isActive(generation, childToken)) return
-      if (response.method === 'runtime.subsystemsChanged' && this.#child?.ready) {
+      if (response.method === 'host.channels.request') {
+        const params = response.params as { requestId?: unknown; request?: unknown } | null
+        const request = parseHostChannelRequest(params?.request)
+        const id = params?.requestId
+        const active = this.#child
+        if (!active || !request || typeof id !== 'string' || !/^\d{1,20}$/u.test(id)) return
+        const key = `${generation}:${id}`
+        if (this.#channelCalls.has(key)) return
+        // The Host bounds live waiters. Keep admitted Desktop work independent
+        // of HTTP cancellation, while refusing an unbounded callback backlog.
+        if (this.#channelCalls.size >= 32) {
+          void this.#sendRequest(active, 'host.channels.reply', { requestId: id, reply: { error: 'channel_operation_failed' } }, 10_000).catch(() => undefined)
+          return
+        }
+        this.#channelCalls.add(key)
+        void Promise.resolve().then(() => this.#channelHandler?.(request) ?? { error: 'channel_operation_failed' as const })
+          .catch(() => ({ error: 'channel_operation_failed' as const }))
+          .then(async reply => {
+            if (!this.#isActive(generation, childToken)) return
+            await this.#sendRequest(active, 'host.channels.reply', { requestId: id, reply }, 10_000).catch(() => undefined)
+          }).finally(() => this.#channelCalls.delete(key))
+        return
+      }
+      if (response.method === 'runtime.subsystemsChanged'  && this.#child?.ready) {
         const coreSubsystems = parseCoreSubsystems(response.params)
         if (coreSubsystems) this.#updateSnapshot({ coreSubsystems })
       }

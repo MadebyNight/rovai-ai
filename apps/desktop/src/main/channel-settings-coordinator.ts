@@ -18,6 +18,7 @@ export function hasPublishedChannelBot(snapshot: {
 export class ChannelSettingsCoordinator {
   readonly #feishu: ChannelSettingsService
   readonly #dingtalk: DingTalkChannelSettingsService
+  readonly #publications = new Set<ChannelKind>()
   readonly #listeners = new Set<(snapshot: ChannelSettingsSnapshot) => void>()
   readonly #unsubscribeChildren: Array<() => void>
 
@@ -68,7 +69,12 @@ export class ChannelSettingsCoordinator {
     ])
     return {
       schemaVersion: 4,
-      channels: [...feishu.channels, dingtalk.provider],
+      channels: [
+        ...feishu.channels.map(provider => ({ ...provider, provisioning: feishu.activeProvisioning
+          ? { ...feishu.activeProvisioning, kind: 'feishu' as const } : null })),
+        { ...dingtalk.provider, provisioning: dingtalk.activeProvisioning
+          ? { ...dingtalk.activeProvisioning, kind: 'dingtalk' as const } : null }
+      ],
       pendingBindingCount: feishu.pendingBindingCount + dingtalk.pendingBindingCount,
       bindingIssueCount: feishu.bindingIssueCount + dingtalk.bindingIssueCount,
       activeQrAttempt: dingtalk.activeQrAttempt
@@ -105,18 +111,20 @@ export class ChannelSettingsCoordinator {
     agentId: string,
     kind: ChannelKind = 'feishu'
   ): Promise<ChannelSettingsSnapshot> {
-    if (kind === 'dingtalk') await this.#dingtalk.publish(agentId)
-    else await this.#feishu.publishMemberBot(agentId)
-    return this.get()
+    return this.#publication(kind, async () => {
+      if (kind === 'dingtalk') await this.#dingtalk.publish(agentId)
+      else await this.#feishu.publishMemberBot(agentId)
+    })
   }
 
   async retryMemberBot(
     agentId: string,
     kind: ChannelKind = 'feishu'
   ): Promise<ChannelSettingsSnapshot> {
-    if (kind === 'dingtalk') await this.#dingtalk.publish(agentId)
-    else await this.#feishu.retryMemberBot(agentId)
-    return this.get()
+    return this.#publication(kind, async () => {
+      if (kind === 'dingtalk') await this.#dingtalk.publish(agentId)
+      else await this.#feishu.retryMemberBot(agentId)
+    })
   }
 
   async selectPublicationApprover(
@@ -125,8 +133,16 @@ export class ChannelSettingsCoordinator {
     kind: ChannelKind = 'feishu'
   ): Promise<ChannelSettingsSnapshot> {
     if (kind !== 'dingtalk') throw new Error('feishu_publication_approver_not_supported')
-    await this.#dingtalk.selectApprover(agentId, userId)
-    return this.get()
+    return this.#publication(kind, () => this.#dingtalk.selectApprover(agentId, userId))
+  }
+
+  async #publication(kind: ChannelKind, action: () => Promise<unknown>): Promise<ChannelSettingsSnapshot> {
+    // Desktop IPC and hosted Web use the same coordinator. Admit before the
+    // first asynchronous Core read so simultaneous callers cannot both create.
+    if (this.#publications.has(kind)) throw new Error('channel_publication_busy')
+    this.#publications.add(kind)
+    try { await action(); return await this.get() }
+    finally { this.#publications.delete(kind) }
   }
 
   async cancelQrAttempt(attemptId: string): Promise<ChannelSettingsSnapshot> {

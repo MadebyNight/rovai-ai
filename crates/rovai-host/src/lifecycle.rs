@@ -5,8 +5,6 @@ use rovai_core::application::{CoreRunner, CoreService};
 use serde_json::json;
 use tokio::task::JoinHandle;
 
-const STOP_DEADLINE: Duration = Duration::from_secs(10);
-
 struct CoreTask(JoinHandle<Result<()>>);
 
 impl Drop for CoreTask {
@@ -20,7 +18,8 @@ impl Drop for CoreTask {
 pub async fn run(
     core: CoreService,
     runner: CoreRunner,
-    stop: impl Future<Output = Result<()>>,
+    stop: impl Future<Output = Result<Duration>>,
+    ready: impl FnOnce(),
 ) -> Result<()> {
     let mut task = CoreTask(tokio::spawn(runner.run()));
     tokio::pin!(stop);
@@ -34,6 +33,7 @@ pub async fn run(
         result = &mut stop => return stop_core(&core, &mut task, result).await,
     }
     tracing::info!("Host Core is ready");
+    ready();
     let stop_result = tokio::select! {
         result = &mut stop => result,
         result = &mut task.0 => {
@@ -44,14 +44,19 @@ pub async fn run(
     stop_core(&core, &mut task, stop_result).await
 }
 
-async fn stop_core(core: &CoreService, task: &mut CoreTask, stop_result: Result<()>) -> Result<()> {
+async fn stop_core(
+    core: &CoreService,
+    task: &mut CoreTask,
+    stop_result: Result<Duration>,
+) -> Result<()> {
     tracing::info!("Host is stopping");
     // The same deadline includes a signal received during startup, Core's
     // existing cancel-all protocol, the report and actual runner completion.
-    tokio::time::timeout(STOP_DEADLINE, async {
+    let deadline = stop_result?;
+    tokio::time::timeout(deadline, async {
         core.wait_ready().await?;
         let reply = core
-            .request("core.shutdown", json!({"protocolVersion":3,"deadlineMs":10_000}))
+            .request("core.shutdown", json!({"protocolVersion":3,"deadlineMs":deadline.as_millis() as u64}))
             .await?;
         if let Some(error) = reply.error {
             bail!("Core rejected Host shutdown: {error}");
@@ -69,8 +74,8 @@ async fn stop_core(core: &CoreService, task: &mut CoreTask, stop_result: Result<
             "Core shutdown did not complete its durable settlement; inspect startup recovery before retrying work"
         );
         tracing::info!("Host Core stopped after durable settlement");
-        stop_result
+        Ok(())
     })
     .await
-    .context("Host shutdown exceeded ten seconds; completion was not confirmed")?
+    .context("Host shutdown exceeded its deadline; completion was not confirmed")?
 }

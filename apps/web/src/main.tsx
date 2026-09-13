@@ -55,7 +55,6 @@ function WebEntry() {
       <CurrentUserProfileProvider api={current.profile}>
         <BusinessApp environment={current.environment} remoteConnection={<RemoteConnectionStatus origin={transport.origin} state={authenticated ? connection : 'expired'} onLogout={() => void transport.logout().catch(() => undefined)} />} sidebarFooter={authenticated ? <div className="web-connection" role="status">
           <span>{connection === 'live' ? '已连接 Host' : connection === 'offline' ? '连接中断，编辑保留' : '正在连接 Host'}</span>
-          <button type="button" className="quiet-button compact" onClick={() => void transport.logout().catch(() => undefined)}>退出登录</button>
           {pendingCount > 0 && <>
             <button type="button" className="quiet-button compact" onClick={() => void transport.reconcilePending()}>核对 {pendingCount} 项提交</button>
             <button type="button" className="quiet-button compact" title="使用原命令编号和内容重试；Host 已保存的结果会直接返回。" onClick={() => void transport.retryPending().catch(() => undefined)}>重试原提交</button>

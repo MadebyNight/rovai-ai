@@ -2,11 +2,9 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use rovai_core::{application::CoreConfig, storage_layout::ServerPaths};
 use std::{
-    fs::File,
-    io::{self, Seek, SeekFrom, Write},
+    io::{self, IsTerminal, Write},
     net::SocketAddr,
     path::PathBuf,
-    sync::{Arc, Mutex},
 };
 
 #[derive(Parser)]
@@ -29,6 +27,9 @@ struct Cli {
     /// Developer-only override. Installed packages locate their matching WebUI automatically.
     #[arg(long, hide = true)]
     web_ui: Option<PathBuf>,
+    /// Mirror diagnostic logs to the terminal as well as the data-root log file.
+    #[arg(long)]
+    verbose: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -84,16 +85,19 @@ pub fn run() -> Result<()> {
         println!("{token}");
         return Ok(());
     }
-    let log = paths.open_log()?;
+    let log_path = paths.logs.join("server.log");
+    let console = Console::new(
+        paths.data_dir.clone(),
+        log_path.clone(),
+        cli.listen,
+        cli.public_origin.is_some(),
+    );
+    let diagnostics = super::server_logs::Capture::start(paths.open_log()?, cli.verbose)?;
     let require_existing_authority = paths.database.try_exists()?
         || paths
             .runtime_camp_files_root
             .join(".runtime-camp-files-root.json")
             .try_exists()?;
-    eprintln!("Rovai Server data: {}", paths.data_dir.display());
-    eprintln!(
-        "Management token: run rovai-server --data-dir <same-directory> token. The token is never printed in startup logs."
-    );
     let config = CoreConfig {
         data_dir: paths.data_dir,
         skill_library_root: paths.skill_library_root,
@@ -103,7 +107,7 @@ pub fn run() -> Result<()> {
         automation_scheduler_control: None,
         removed_skill_project_roots: Default::default(),
     };
-    super::run(
+    let result = super::run(
         config,
         Some((
             rovai_web::WebConfig {
@@ -115,34 +119,139 @@ pub fn run() -> Result<()> {
             token,
         )),
         false,
-        Some(log),
-    )
-}
-
-/// Both entrypoints retain stderr logging; only standalone Server additionally
-/// persists it under its selected data root. Tokens never enter this writer.
-#[derive(Clone)]
-pub(crate) struct LogWriter(Option<Arc<Mutex<File>>>);
-
-impl LogWriter {
-    pub(crate) fn new(file: Option<File>) -> Self {
-        Self(file.map(|file| Arc::new(Mutex::new(file))))
+        Some(&console),
+    );
+    if let Err(error) = &result {
+        // Detailed failures stay in the diagnostic stream; the token is never
+        // included in configuration Debug output or this error chain.
+        eprintln!("Server failed: {error:#}");
     }
-}
-
-impl Write for LogWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        io::stderr().write_all(bytes)?;
-        if let Some(file) = &self.0 {
-            let mut file = file
-                .lock()
-                .map_err(|_| io::Error::other("Server log lock is unavailable"))?;
-            file.seek(SeekFrom::End(0))?;
-            file.write_all(bytes)?;
+    let drained = diagnostics.finish();
+    let result = result.and(drained);
+    match result {
+        Ok(()) => {
+            console.line("Rovai Server stopped.");
+            Ok(())
         }
-        Ok(bytes.len())
+        Err(error) => Err(anyhow::anyhow!(
+            "{} · logs: {}",
+            short_error(&error),
+            log_path.display()
+        )),
     }
-    fn flush(&mut self) -> io::Result<()> {
-        io::stderr().flush()
+}
+
+/// Human output bypasses stderr/file diagnostics, including in verbose mode.
+/// A redirected stdout or noninteractive stdin never receives startup credentials.
+pub(crate) struct Console {
+    interactive: bool,
+    color: bool,
+    data: PathBuf,
+    log: PathBuf,
+    listen: SocketAddr,
+    proxy: bool,
+}
+
+impl Console {
+    fn new(data: PathBuf, log: PathBuf, listen: SocketAddr, proxy: bool) -> Self {
+        let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+        Self {
+            interactive,
+            color: terminal_color()
+                && std::env::var_os("NO_COLOR").is_none()
+                && std::env::var("TERM").as_deref() != Ok("dumb"),
+            data,
+            log,
+            listen,
+            proxy,
+        }
     }
+
+    pub(crate) fn ready(&self, status: &serde_json::Value, token: &str) {
+        let heading = format!("Rovai Server {} · Ready", env!("CARGO_PKG_VERSION"));
+        let mut lines = vec![if self.color {
+            format!("\x1b[1;32m{heading}\x1b[0m")
+        } else {
+            heading
+        }];
+        if let Some(addresses) = status["addresses"].as_array() {
+            for address in addresses {
+                if let Some(origin) = address["origin"].as_str() {
+                    lines.push(format!("  Address  {origin}"));
+                }
+            }
+        }
+        let scope = if self.listen.ip().is_loopback() {
+            "this computer"
+        } else {
+            "network interfaces (HTTP)"
+        };
+        lines.push(format!(
+            "  Access   {scope}{}; Owner login required",
+            if self.proxy {
+                " + configured proxy"
+            } else {
+                ""
+            }
+        ));
+        lines.push(format!("  Data     {}", self.data.display()));
+        lines.push(format!("  Logs     {}", self.log.display()));
+        if self.interactive {
+            lines.push(format!("  Token    {token}"));
+        } else {
+            lines.push(
+                "  Token    available with rovai-server --data-dir <same-directory> token".into(),
+            );
+        }
+        lines.push("  Foreground · Ctrl-C to stop · --verbose for terminal diagnostics".into());
+        self.line(&lines.join("\n"));
+    }
+
+    pub(crate) fn line(&self, message: &str) {
+        // Closing a terminal must not turn successful durable shutdown into a
+        // panic because the human output stream has gone away.
+        let mut output = io::stdout().lock();
+        let _ = writeln!(output, "{message}");
+        let _ = output.flush();
+    }
+}
+
+fn short_error(error: &anyhow::Error) -> String {
+    let message = error.to_string();
+    if let Some(code) = message
+        .strip_prefix("Core authority is unavailable: ")
+        .and_then(|frame| serde_json::from_str::<serde_json::Value>(frame).ok())
+        .and_then(|frame| frame["error"]["code"].as_str().map(str::to_owned))
+    {
+        return format!("Core startup refused ({code})");
+    }
+    message
+        .lines()
+        .next()
+        .unwrap_or("Server operation failed")
+        .chars()
+        .take(240)
+        .collect()
+}
+
+fn terminal_color() -> bool {
+    if !io::stdout().is_terminal() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
+            SetConsoleMode,
+        };
+        // The handle is borrowed from the process and remains owned by stdout.
+        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let mut mode = 0;
+        return unsafe {
+            GetConsoleMode(handle, &mut mode) != 0
+                && SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0
+        };
+    }
+    #[cfg(not(windows))]
+    true
 }

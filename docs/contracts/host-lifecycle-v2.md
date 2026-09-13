@@ -53,8 +53,16 @@ authority 继续按现行准入拒绝。曾建立 Runtime root 的实例若主�
 不能仅复制 SQLite 后宣称完整迁移；实例 Runtime marker 与路径/目录身份绑定。
 
 `rovai-server paths` 只输出推导路径，不启动或写数据库。`rovai-server [--data-dir ...] token` 输出本实例
-管理令牌，stdout 是秘密；普通启动和日志不打印令牌。令牌在独立 Server 重启、更新之间保留；Desktop
+管理令牌，stdout 是秘密。交互式终端（stdin、stdout 均为 TTY）在 Core 与监听器就绪后直接显示当前有效令牌；
+仅展示，不轮换。非交互启动或 stdout 重定向默认不显示令牌，原 `token` 命令保留。凭据直接写人类终端输出，
+不经过 stderr 或文件日志管道，`--verbose` 也不改变这一点。令牌在独立 Server 重启、更新之间保留；Desktop
 令牌现有进程生命周期不变。Web Session 仍按现行短期认证与进程代次撤销。
+
+原生入口默认只输出简洁就绪摘要：编译版本、Ready、真实监听端口对应的可用地址、访问范围、数据根、
+日志文件与前台运行提示；不是把请求的 `:0` 或 `0.0.0.0` 当作可用地址。地址发现沿用 Web 的过滤规则。
+TTY 使用颜色，重定向、`NO_COLOR` 或 dumb terminal 使用纯文本。普通运行诊断（包括 Core stderr）只追加到
+选定数据根的 `logs/server.log`；`--verbose` 显式同时镜像到 stderr。失败与停止保留简短提示；详细失败写日志。
+无持续终端日志不表示后台常驻，不新增后台启动/停止管理。
 
 ## Web、停止与安装归属
 
@@ -63,9 +71,12 @@ authority 继续按现行准入拒绝。曾建立 Runtime root 的实例若主�
 `127.0.0.1:4317`；可选 `--listen`、`--public-origin` 和显式 `--allow-insecure-lan` 沿用
 [Host Web v2](host-web-v2.md) 的认证和网络边界。开发专用 WebUI 覆盖不构成用户安装要求。
 
-Unix SIGINT/SIGTERM、Windows console Ctrl-C/Ctrl-Break 的停止继续完全使用 v1 定义的 protocol 3：
+Unix SIGINT/SIGTERM/SIGHUP、Windows console Ctrl-C/Ctrl-Break 的停止继续使用 v1 定义的 protocol 3：
 注册监听早于 Core 启动，十秒总期限包含启动期间的停止，必须验证 durable 关闭报告和 runner 实际结束；
-失败或超时非零退出，不承诺无损热升级。默认不建立后台服务或开机启动。
+失败或超时非零退出，不承诺无损热升级。Windows console close 接入同一关闭路径，但请求期限缩为四秒，
+给操作系统关闭窗口的通常五秒预算留出退出余量；OS 强制终止、断电或更短系统预算仍依赖下次启动恢复。
+这是实现边界，不能由 Mac 的 PTY/SIGHUP 结果推断 Windows console close 已验收。
+默认不建立后台服务或开机启动。
 
 程序与数据分别管理。Desktop 更新整个安装包，包括随包 Host/WebUI；独立 Server 只替换自己的匹配
 程序与 WebUI，不修改数据根、令牌或 Desktop 安装。未来 WebUI/CLI 的更新对象取决于所连接的 Host，

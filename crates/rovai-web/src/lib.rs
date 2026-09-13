@@ -1,4 +1,6 @@
 mod auth;
+mod channels;
+pub use channels::{ChannelFuture, ChannelHost, ChannelReply, ChannelRequest};
 mod avatars;
 mod network;
 mod operations;
@@ -45,6 +47,7 @@ pub struct WebConfig {
 #[derive(Clone)]
 struct WebState {
     core: CoreService,
+    channels: Option<Arc<dyn ChannelHost>>,
     sessions: Arc<Sessions>,
     network: Arc<network::Network>,
     assets: PathBuf,
@@ -65,6 +68,15 @@ pub struct WebServer {
 
 impl WebServer {
     pub async fn start(core: CoreService, config: WebConfig, administrator: &str) -> Result<Self> {
+        Self::start_with_channels(core, config, administrator, None).await
+    }
+
+    pub async fn start_with_channels(
+        core: CoreService,
+        config: WebConfig,
+        administrator: &str,
+        channels: Option<Arc<dyn ChannelHost>>,
+    ) -> Result<Self> {
         ensure!(
             config.listen.ip().is_loopback() || config.allow_insecure_lan,
             "LAN HTTP must be explicitly enabled; use HTTPS or a trusted VPN on untrusted networks"
@@ -88,6 +100,7 @@ impl WebServer {
         let network = Arc::new(network::Network::new(address, config.public_origin)?);
         let state = WebState {
             core,
+            channels,
             sessions: sessions.clone(),
             network: network.clone(),
             assets,
@@ -156,6 +169,7 @@ impl Drop for WebServer {
 fn routes(state: WebState) -> Router {
     let api = Router::new()
         .route("/capabilities", get(capabilities))
+        .route("/channels", post(channels::request))
         .route("/request", post(request))
         .route("/events", get(events))
         .route("/logout", post(logout))
@@ -277,7 +291,7 @@ async fn login(
         return error(StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable");
     };
     match state.sessions.issue(generation, client_id.to_owned()) {
-        Ok((token, session)) => Json(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"expiresInSeconds":SESSION_LIFETIME.as_secs(),"epoch":state.epoch})).into_response(),
+        Ok((token, session)) => Json(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"expiresInSeconds":SESSION_LIFETIME.as_secs(),"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }})).into_response(),
         Err(failure) => login_failure(failure),
     }
 }
@@ -303,7 +317,7 @@ async fn logout(
 
 async fn capabilities(State(state): State<WebState>) -> Json<Value> {
     Json(
-        json!({"protocolVersion":2,"epoch":state.epoch,"read":true,"composer":true,"uploads":true,"approval":true,"nativeFilePicker":false,"desktopWindow":false,"releaseQualified":false}),
+        json!({"protocolVersion":2,"epoch":state.epoch,"read":true,"composer":true,"uploads":true,"approval":true,"nativeFilePicker":false,"desktopWindow":false,"releaseQualified":false,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }}),
     )
 }
 

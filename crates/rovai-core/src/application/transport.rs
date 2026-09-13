@@ -23,6 +23,8 @@ pub enum HostWebOperation {
     Start,
     Stop,
     Rotate,
+    ChannelDispatch,
+    ChannelReply,
 }
 
 pub struct HostControlError {

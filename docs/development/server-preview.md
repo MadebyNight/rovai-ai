@@ -67,8 +67,18 @@ rovai-server --data-dir /data/rovai token
 ```
 
 Windows 同一个参数接口：`rovai-server.exe --data-dir "D:\RovaiData"`。`token` 的 stdout 是秘密，供登录使用，
-不要接入日志采集。普通启动不输出令牌；该私有令牌文件会随原数据根保留，浏览器 Session 仍按进程撤销。
+不要接入日志采集。交互式终端启动成功后已直接显示当前 Token，可立即复制登录；展示不会轮换 Token。
+非交互启动或 stdout 重定向不显示 Token，仍可用上面的 `token` 命令查询。凭据不会进入 Server 文件日志。
+该私有令牌文件会随原数据根保留，浏览器 Session 仍按进程撤销。
+
+启动摘要显示实际版本、就绪地址、访问范围、数据根与日志位置。默认前台运行，Ctrl-C 受控停止；
+终端挂断也进入受控关闭。普通诊断写入 `<data-dir>/logs/server.log`，需要同时在终端排障时使用
+`rovai-server --verbose`（自定义数据根仍传相同 `--data-dir`）。无刷屏不表示服务已转入后台。
 Web 默认地址为 `http://127.0.0.1:4317`，配套 UI 从可执行文件真实目录定位，不依赖当前工作目录。
+
+独立 Server 当前不支持飞书／钉钉渠道。渠道功能请使用 Rovai Desktop。
+Desktop 设置中开启的 Web 服务属于该 Desktop 实例，可以管理已有账号的 Bot 发布、重试和结构化审批人选择；
+它与独立 Server 不自动共享渠道配置或登录态。账号连接、切换和重新登录在运行服务的那台 Desktop 中完成。
 
 不传内部路径参数：默认使用当前账号 `~/.rovai-server`，其中包括 `rovai.sqlite`、`mcp.json`、`skills/`、
 `instances/<instance-key>/runtime-files/`、`logs/server.log` 及私有布局/令牌文件。自定义 `--data-dir` 后全部跟随，
