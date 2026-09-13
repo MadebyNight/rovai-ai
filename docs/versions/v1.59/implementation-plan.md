@@ -30,6 +30,27 @@ Host/HTTP/父管道/生产调用适配与平台服务夹具，不把夹具结果
 普通输出不镜像诊断、显式 verbose 镜像及真实 PTY 关闭后的 durable settlement。Windows WM_CLOSE case
 只在 Windows 执行，Mac 上的跳过不是 Windows 通过。
 
+功能提交 `4f95d5f2` 的 macOS 26.3 / arm64 验证：TypeScript、Desktop/Web 构建、通用文档门禁与
+Clippy 通过；全量 Vitest 190 文件 / 1970 项、Node 聚合 317 通过 / 2 原有平台跳过。
+Rust workspace default 为 Core 805 通过 / 6 原有忽略、CLI 35、Web 5。
+Host 生命周期 / HTTP / 渠道 / Server 入口合计 8 通过 / 1 Windows 专用跳过。
+既有隔离 Electron 设置页 owner 通过双主题与缩放、原生账号操作及登录态有效 / 待校验 / 暂不可用。
+
+干净 `4f95d5f2d51f719f79505fbd79639ab9a00cb78a` 生成的 macOS arm64 Debug 原生包版本为 0.2.4，
+`rovai-server-0.2.4-macos-arm64.tar.gz` SHA-256：
+`0dd18acca26fc43489c9ec41c0eb962842926bcda57a88f26941f5f717583845`。
+通过原生安装器装到临时目录，再在无 Node/pnpm PATH 下验证默认 / 自定义根、数据与 Token 保留；
+包内程序通过真实 PTY 的凭据 / 日志 / 挂断检查。包与安装 owner 合计 4 通过 / 1 Windows 专用跳过。
+这是 development-preview 调试包，不是签名公证或正式发布证明。
+Windows 原生资格来自同一功能提交的 [Windows 2022 CI](https://github.com/murray17/rovai-ai/actions/runs/34750040484)：
+原生 Release 构建、凭据状态、进程 / 私有存储（含追加日志）检查通过；实际 `WM_CLOSE` 控制台关闭
+在 12.37 秒的完整用例中通过，断言退出码 0、durable settlement 与日志不含令牌。该时长含控制台创建、
+Server 启动和 PowerShell 编译，不是关闭耗时。新的 Desktop Web 渠道父管道 owner 也通过。
+Node 原生批次为 6 通过 / 1 失败 / 3 有原因的平台跳过；整套 CI 仍失败：
+`scripts/lib/host-web.test.mjs:182` 的附件读取期望 200、实际 404，与此前
+[`ab278fa2` 原生记录](https://github.com/murray17/rovai-ai/actions/runs/34744528165)相同。
+保留失败断言，本轮未扩大为 Windows 附件修复；不能把控制台关闭通过记作全部 Windows / 阶段 1–4 完成。
+
 
 ## 当前收敛：原生 Server 数据根、启动与安装
 

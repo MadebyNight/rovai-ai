@@ -283,12 +283,18 @@ app.whenReady().then(async () => {
     }
     for (const kind of ['feishu', 'dingtalk']) {
       const account = { ...savedAccount, accountId: `sample-${kind}`, brand: kind }
-      const connected = { status: 'connected', account }
+      const connected = { status: 'connected', sessionStatus: 'valid', account }
       const tab = `.channel-provider-tab:has(.channel-mark-${kind})`
       await updateChannel(kind, { connection: connected })
       await click(tab)
       assert.equal(await run("document.querySelectorAll('.channel-connection-actions button').length"), 1)
-      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '登录有效')
+      await updateChannel(kind, { connection: { status: 'connected', account } })
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录态待校验')
+      await updateChannel(kind, { connection: { ...connected, sessionStatus: 'unavailable' } })
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录态暂不可用')
+      assert.equal(await run('JSON.stringify(window.settingsTest.state.channels.channels.map(c => c.memberBots))'), savedBots)
+      await updateChannel(kind, { connection: connected })
       const requestCount = (await channelRequests()).length
       await run(`document.querySelector(${JSON.stringify(trigger)}).focus()`)
       await key('Enter')
@@ -310,14 +316,14 @@ app.whenReady().then(async () => {
       assert.equal(await run("document.querySelector('.channel-account-heading strong').textContent"), savedAccount.userName)
       await key('Escape')
       await waitFor("document.querySelector('.channel-qr-dialog') === null && !document.querySelector('.channel-connection-trigger').disabled")
-      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '登录有效')
       assert.equal(await run("document.querySelector('.channel-settings [role=alert]')"), null)
 
       await click(trigger); await click(`${menu} [role=menuitem]:first-child`)
       await waitFor("document.querySelector('.channel-qr-dialog') !== null")
       await finishChannelAction(`${kind}_connection_error`)
       assert.equal(await run("document.querySelector('.channel-account-heading strong').textContent"), savedAccount.userName)
-      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录有效')
       assert.ok(await run("document.querySelector('.channel-settings [role=alert]') !== null"))
       await click(trigger); await click(`${menu} [role=menuitem]:first-child`)
       await finishChannelAction(null)
@@ -333,7 +339,7 @@ app.whenReady().then(async () => {
       await click(trigger)
       assert.equal((await channelRequests()).length, disconnectCount, 'busy state prevents duplicate disconnect')
       await finishChannelAction(`${kind}_connection_error`)
-      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录有效')
       await click(trigger); await click(`${menu} .is-danger`)
       await finishChannelAction(null)
       assert.equal(await run("document.querySelector('.channel-connection-actions button').textContent"), kind === 'feishu' ? '登录开放平台' : '连接钉钉')
@@ -355,7 +361,7 @@ app.whenReady().then(async () => {
       await updateChannel(kind, { hostStatus: 'unavailable' })
       await menuClosed()
       assert.ok(await run("document.querySelector('.channel-connection-trigger').disabled"))
-      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录有效')
       await updateChannel(kind, { hostStatus: 'ready' }); await menuClosed()
       await click(trigger)
       await click(`.channel-provider-tab:has(.channel-mark-${kind === 'feishu' ? 'dingtalk' : 'feishu'})`)
