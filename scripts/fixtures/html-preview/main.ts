@@ -3,6 +3,7 @@ import { access, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { FilePreviewFrameNavigation } from '../../../apps/desktop/src/main/file-preview/file-preview-navigation'
 import { FilePreviewService } from '../../../apps/desktop/src/main/file-preview/file-preview-service'
+import { navigationAcceptance } from './navigation'
 
 const [renderer, userData, root, preload] = process.argv.slice(2)
 app.setPath('userData', userData)
@@ -30,6 +31,11 @@ app.whenReady().then(async () => {
   await window.loadFile(renderer)
   const run = (code: string) => window.webContents.executeJavaScript(code)
   for (let n = 0; n < 50 && !await run('Boolean(window.previewAcceptance)'); n++) await new Promise(resolve => setTimeout(resolve, 40))
+  if (process.env.ROVAI_HTML_PREVIEW_SCENARIO === 'navigation') {
+    const cases = await navigationAcceptance(window, userData)
+    console.log(JSON.stringify({ htmlPreviewAcceptance: true, ok: cases.every(result => result.ok), cases, errors }))
+    await service.closeAll(); window.destroy(); app.exit(cases.every(result => result.ok) ? 0 : 1); return
+  }
   const cases: { name: string; ok: boolean; evidence: unknown }[] = []
   const names = ['history.html', 'canvas.html', 'assets.html', 'errors.html', 'network.html', 'stalled.html', 'many-frames.html']
   for (const name of ['original-history.html','original-canvas.html']) if (await access(join(root,name)).then(()=>true,()=>false)) names.push(name)

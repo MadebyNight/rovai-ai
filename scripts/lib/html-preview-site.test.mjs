@@ -14,7 +14,7 @@ import electron from 'electron'
 import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
-test('production HTML preview runs History initialization and a query-addressed nested canvas independently', { timeout: 90_000 }, async t => {
+for (const scenario of ['basic', 'navigation']) test(scenario === 'basic' ? 'production HTML preview runs History initialization and a query-addressed nested canvas independently' : 'production HTML preview isolates document navigation state and diagnostics', { timeout: 90_000 }, async t => {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-html-site-'))
   const source = join(root, 'scripts/fixtures/html-preview')
@@ -52,7 +52,7 @@ test('production HTML preview runs History initialization and a query-addressed 
     const alias = { '@contracts': join(root, 'packages/contracts/src/index.ts') }
     await build({ configFile: false, root: source, base: './', logLevel: 'error', plugins: [react()], resolve: { alias }, build: { outDir: join(fixture, 'renderer'), minify: false } })
     await build({ configFile: false, logLevel: 'error', resolve: { alias }, ssr: { noExternal: ['parse5', 'entities'] }, build: { ssr: join(source, 'main.ts'), outDir: join(fixture, 'main'), minify: false, rollupOptions: { external: ['electron'], output: { format: 'cjs', entryFileNames: 'main.cjs' } } } })
-    const env = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
+    const env = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', ROVAI_HTML_PREVIEW_SCENARIO: scenario }
     delete env.ELECTRON_RUN_AS_NODE
     console.log(`Isolated HTML acceptance: ${userData}; Skill Library: ${join(userData, 'managed-skill-library')}; no Core/Runtime`)
     child = spawn(electron, [join(fixture, 'main/main.cjs'), join(fixture, 'renderer/index.html'), userData, resources, join(fixture, 'preload.cjs'), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], { env, stdio: ['ignore', 'pipe', 'pipe'] })
