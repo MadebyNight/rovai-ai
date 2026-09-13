@@ -3032,6 +3032,7 @@ export interface OnboardingApi {
 }
 
 export interface WindowControlsApi {
+  onNavigationRequested?(listener: (direction: 'back' | 'forward') => void): () => void
   onCloseTabRequested(listener: () => boolean): () => void
   getResetCapability(): Promise<WindowResetCapability>
   resetBounds(): Promise<WindowResetResult>

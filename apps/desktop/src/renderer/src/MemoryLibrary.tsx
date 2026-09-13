@@ -1,4 +1,5 @@
 import { readErrorMessage } from './error-message'
+import type { MemoryNavigationTarget } from './desktop-navigation'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type {
@@ -104,6 +105,8 @@ export function MemoryLibrary({
   topNotices,
   refreshSignal = 0,
   focusMemoryId = null,
+  navigationTarget,
+  onNavigate,
   reviewDrawerSignal = 0,
   onReviewDrawerSignalConsumed,
   onPendingCountChange,
@@ -114,6 +117,8 @@ export function MemoryLibrary({
   topNotices?: ReactNode
   refreshSignal?: number
   focusMemoryId?: string | null
+  navigationTarget?: MemoryNavigationTarget
+  onNavigate?(target: MemoryNavigationTarget, mode: 'push' | 'replace'): void
   reviewDrawerSignal?: number
   onReviewDrawerSignalConsumed?(): void
   onPendingCountChange?(count: number): void
@@ -122,10 +127,27 @@ export function MemoryLibrary({
 }): React.JSX.Element {
   const [library, setLibrary] = useState<MemoryLibraryView | null>(null)
   const [reviewItems, setReviewItems] = useState<HearthReviewItem[]>([])
-  const [scope, setScope] = useState<MemoryScopeKind>('hearth')
-  const [governance, setGovernance] = useState<GovernanceFilter>('all')
-  const [search, setSearch] = useState('')
-  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null)
+  const [localScope, setLocalScope] = useState<MemoryScopeKind>('hearth')
+  const [localGovernance, setLocalGovernance] = useState<GovernanceFilter>('all')
+  const [localSearch, setLocalSearch] = useState('')
+  const [localMemoryId, setLocalMemoryId] = useState<string | null>(null)
+  const scope = navigationTarget?.scope ?? localScope
+  const governance = navigationTarget?.governance ?? localGovernance
+  const search = navigationTarget?.search ?? localSearch
+  const selectedMemoryId = navigationTarget ? navigationTarget.memoryId : localMemoryId
+  const navigateMemory = (patch: Partial<MemoryNavigationTarget>, mode: 'push' | 'replace'): void => {
+    if (onNavigate) onNavigate({ kind: 'memory', memoryId: selectedMemoryId, scope, governance, search, ...patch }, mode)
+    else {
+      if ('memoryId' in patch) setLocalMemoryId(patch.memoryId ?? null)
+      if (patch.scope !== undefined) setLocalScope(patch.scope)
+      if (patch.governance !== undefined) setLocalGovernance(patch.governance)
+      if (patch.search !== undefined) setLocalSearch(patch.search)
+    }
+  }
+  const setScope = (value: MemoryScopeKind): void => navigateMemory({ scope: value }, 'replace')
+  const setGovernance = (value: GovernanceFilter): void => navigateMemory({ governance: value }, 'replace')
+  const setSearch = (value: string): void => navigateMemory({ search: value }, 'replace')
+  const setSelectedMemoryId = (value: string | null): void => navigateMemory({ memoryId: value }, 'push')
   const [reviewDrawerOpen, setReviewDrawerOpen] = useState(false)
   const [editor, setEditor] = useState<Editor>(null)
   const [draft, setDraft] = useState<Draft>(initialDraft)
@@ -181,15 +203,15 @@ export function MemoryLibrary({
   }, [onReviewDrawerSignalConsumed, reviewDrawerSignal])
 
   useEffect(() => {
-    if (!focusMemoryId || !library) return
+    if (navigationTarget || !focusMemoryId || !library) return
     const memory = library.memories.find((candidate) => candidate.id === focusMemoryId)
     if (!memory?.scope) return
-    setScope(memory.scope)
-    setGovernance(memory.lifecycle === 'active'
+    setLocalScope(memory.scope)
+    setLocalGovernance(memory.lifecycle === 'active'
       ? memory.creationOrigin === 'agent' ? 'agent' : 'all'
       : 'stopped')
-    setSelectedMemoryId(memory.id)
-  }, [focusMemoryId, library])
+    setLocalMemoryId(memory.id)
+  }, [focusMemoryId, library, navigationTarget])
 
   useEffect(() => {
     if (!feedback) return undefined
@@ -219,9 +241,21 @@ export function MemoryLibrary({
     }), [agents, governance, library, scope, search])
 
   useEffect(() => {
+    if (!library) return
+    // Resolve deep links before applying the list's normal default-selection rule.
+    if (navigationTarget?.memoryId && navigationTarget.scope === undefined) {
+      const memory = library.memories.find((item) => item.id === navigationTarget.memoryId && item.lifecycle !== 'forgotten')
+      if (memory?.scope) {
+        onNavigate?.({ ...navigationTarget, scope: memory.scope, governance: memory.lifecycle === 'active' ? 'all' : 'stopped' }, 'replace')
+        return
+      }
+    }
     if (visibleMemories.some((memory) => memory.id === selectedMemoryId)) return
-    setSelectedMemoryId(visibleMemories[0]?.id ?? null)
-  }, [selectedMemoryId, visibleMemories])
+    const memoryId = visibleMemories[0]?.id ?? null
+    if (memoryId === selectedMemoryId) return
+    if (onNavigate) onNavigate({ kind: 'memory', memoryId, scope, governance, search }, 'replace')
+    else setLocalMemoryId(memoryId)
+  }, [library, navigationTarget, onNavigate, selectedMemoryId, visibleMemories, scope, governance, search])
 
   const selectedMemory = visibleMemories.find((memory) => memory.id === selectedMemoryId) ?? null
   const activeCount = library?.memories.filter((memory) => memory.lifecycle === 'active').length ?? 0

@@ -287,6 +287,13 @@ const api: RovaiApi = {
     }
   },
   windowControls: {
+    onNavigationRequested(listener) {
+      const handler = (_event: Electron.IpcRendererEvent, direction: unknown): void => {
+        if (direction === 'back' || direction === 'forward') listener(direction)
+      }
+      ipcRenderer.on('rovai:navigation-requested', handler)
+      return () => ipcRenderer.removeListener('rovai:navigation-requested', handler)
+    },
     onCloseTabRequested: createCloseTabShortcutHandler(ipcRenderer),
     getResetCapability() {
       return ipcRenderer.invoke('rovai:window-reset-capability')
