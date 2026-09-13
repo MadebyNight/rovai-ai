@@ -14,6 +14,7 @@ const root = resolve(import.meta.dirname, '../..')
 const fixtureSource = join(root, 'scripts/fixtures/single-chat-panel')
 
 test('production Single Chat panel preserves private conversation layout and terminal disclosure', { timeout: 90_000 }, t => runFixture(t))
+test('Single Chat return to latest keeps reading and pressed geometry stable', { timeout: 90_000 }, t => runFixture(t, '--return-latest'))
 test('Single Chat pending withdrawal recovers a lost receipt and fences navigation', { timeout: 90_000 }, t => runFixture(t, '--pending-return'))
 
 async function runFixture(t, mode = '--panel') {
@@ -56,6 +57,11 @@ async function runFixture(t, mode = '--panel') {
     assert.ok(reportLine, `Single Chat native UI report was missing:\n${output}`)
     const report = JSON.parse(reportLine)
     assert.equal(report.ok, true)
+    if (mode === '--return-latest') {
+      assert.deepEqual(report.verified, { readingPosition: true, pressedGeometry: true, localReturn: true, keyboardReturn: true })
+      process.stdout.write(`${JSON.stringify(report)}\n`)
+      return
+    }
     if (mode === '--pending-return') {
       assert.deepEqual(report.verified, { withdrawalRecovery: true, navigationFence: true, identicalCommandReplay: true })
       process.stdout.write(`${JSON.stringify(report)}\n`)

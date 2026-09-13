@@ -2,6 +2,7 @@ const assert = require('node:assert/strict')
 const { mkdirSync, writeFileSync, readFileSync } = require('node:fs')
 const { isAbsolute, join, dirname } = require('node:path')
 const { app, BrowserWindow } = require('electron')
+const assertReturnToLatest = require('../assert-return-to-latest.cjs')
 const [renderer, userData, mode] = process.argv.slice(2)
 assert.ok(isAbsolute(renderer) && isAbsolute(userData))
 const attachmentReview = mode === '--attachment-review'
@@ -39,6 +40,83 @@ app.whenReady().then(async () => {
       `${label}: attachments may extend left to the agent avatar or name track`)
   }
   try {
+    if (mode === '--return-latest') {
+      await state()
+      await run('document.querySelector(".camp-timeline").scrollTop = 200')
+      await state()
+      assert.equal(await run('document.querySelectorAll("[data-return-scope=camp]").length'), 1)
+      assert.equal(await run('document.querySelectorAll(".return-to-latest-dot").length'), 0)
+      const top = await run('document.querySelector(".camp-timeline").scrollTop')
+      await run('window.campOpenTest.refresh(true)')
+      await state()
+      assert.ok(Math.abs(await run('document.querySelector(".camp-timeline").scrollTop') - top) < 2)
+      assert.equal(await run('document.querySelectorAll(".return-to-latest-dot").length'), 1)
+      await capture('return-latest-camp')
+      await assertReturnToLatest(window, run, 'camp')
+      assert.equal(await run('document.querySelectorAll("[data-return-scope=camp]").length'), 0)
+      assert.ok(await run('(() => { const v=document.querySelector(".camp-timeline"); return v.scrollHeight-v.clientHeight-v.scrollTop < 2 })()'))
+      for (const placement of ['bottom', 'inspector']) {
+        await run(`document.documentElement.dataset.theme = '${placement === 'bottom' ? 'day' : 'night'}'; window.campOpenTest.showFailedExecutions('${placement}')`)
+        await state()
+        await run('document.querySelector("button[aria-label^=打开][aria-label*=执行过程]").click()')
+        await state()
+        await run('document.querySelector(".execution-drawer-body").scrollTop = 0')
+        await state()
+        assert.equal(await run('document.querySelectorAll(".execution-disclosure .return-to-latest, .execution-history-latest").length'), 0)
+        assert.equal(await run('document.querySelectorAll("[data-return-scope=execution]").length'), 1)
+        await run(`(() => {
+          const host = document.querySelector('.execution-drawer-body')
+          const button = document.querySelector('[data-return-scope=execution]')
+          const target = [...document.querySelectorAll('.execution-disclosure > summary')]
+            .map(summary => host.scrollTop + summary.getBoundingClientRect().top - button.getBoundingClientRect().top - 3)
+            .find(top => top >= 0 && top < host.scrollHeight - host.clientHeight - 24)
+          if (target === undefined) throw new Error('No summary can overlap the control while reading history')
+          host.scrollTop = target
+        })()`)
+        await state()
+        const opened = await run('[...document.querySelectorAll("details.execution-disclosure")].map(node=>node.open)')
+        const summaryOverlap = await run(`(() => {
+          const b=document.querySelector('[data-return-scope=execution]').getBoundingClientRect()
+          return [...document.querySelectorAll('.execution-disclosure > summary')].some(node=>{
+            const r=node.getBoundingClientRect(); return r.top<=b.top+7 && r.bottom>=b.top+7
+          })
+        })()`)
+        assert.equal(summaryOverlap, true, 'regression control overlaps a real Run summary row')
+        await capture(`return-latest-${placement}`)
+        await assertReturnToLatest(window, run, 'execution')
+        await state()
+        assert.deepEqual(await run('[...document.querySelectorAll("details.execution-disclosure")].map(node=>node.open)'), opened)
+        assert.equal(await run('document.querySelectorAll("[data-return-scope=execution]").length'), 0)
+        assert.ok(await run('(() => { const v=document.querySelector(".execution-drawer-body"); return v.scrollHeight-v.clientHeight-v.scrollTop < 2 })()'))
+        await run('window.campOpenTest.appendCollapsedRunningExecution()')
+        await state()
+        assert.equal(await run('document.querySelector("[data-agent-run-id=empty-failed-latest-running] details").open'), false)
+        await run('document.querySelector(".execution-drawer-body").scrollTop = 0')
+        await state()
+        const beforeReturn = await run('[...document.querySelectorAll("details.execution-disclosure")].map(node=>node.open)')
+        await assertReturnToLatest(window, run, 'execution')
+        await state()
+        assert.deepEqual(await run('[...document.querySelectorAll("details.execution-disclosure")].map(node=>node.open)'), beforeReturn,
+          'returning from an older focused Run preserves the collapsed latest running Run')
+        assert.equal(await run('document.querySelector(".execution-drawer-body").dataset.followingLatest'), 'true')
+      }
+      await run('window.campOpenTest.showHistoricalReturnWindow()')
+      await run('window.campOpenTest.settle()')
+      assert.equal(await run('document.querySelectorAll("[data-return-scope=execution]").length'), 1)
+      assert.equal(await run('document.querySelectorAll(".return-to-latest-dot").length'), 0)
+      await run('window.campOpenTest.updateReturnWindow(2, true)')
+      await run('window.campOpenTest.settle()')
+      assert.equal(await run('document.querySelectorAll(".return-to-latest-dot").length'), 1,
+        'new output is signalled even at the bottom of an incomplete historical window')
+      await run('document.querySelector("[data-return-scope=execution]").focus({preventScroll:true}); window.campOpenTest.updateReturnWindow(2, false)')
+      await run('window.campOpenTest.settle()')
+      assert.equal(await run('document.querySelectorAll("[data-return-scope=execution]").length'), 0)
+      assert.equal(await run('document.activeElement.matches(".execution-drawer-body")'), true,
+        'restoring the latest cache returns focus when the control disappears without a click')
+      console.log(JSON.stringify({ ok: true, verified: ['camp-new-reply-position', 'pressed-target-stability', 'failed-run-click-isolation', 'bottom-and-inspector'] }))
+      app.quit()
+      return
+    }
     if (mode === '--execution-window') {
       const settle = () => run('window.campOpenTest.settle()')
       const waitFor = async expression => {
@@ -113,7 +191,9 @@ app.whenReady().then(async () => {
               await waitForContent()
             }
             const before = await run('window.campOpenTest.executionWindowState()')
-            await run('document.querySelector(".execution-history-latest button").click()')
+            await run('document.querySelector(".execution-drawer-body").scrollTop /= 2')
+            await waitFor('document.querySelector("[data-return-scope=execution]") !== null')
+            await run('document.querySelector("[data-return-scope=execution]").click()')
             await waitForContent()
             const after = await run('window.campOpenTest.executionWindowState()')
             assert.equal(after.requests.filter(request => request.beforeSequence === null).length,
@@ -172,7 +252,7 @@ app.whenReady().then(async () => {
         // Loaded history stays in the native scroll range; no page button is needed to revisit it.
         await run('document.querySelector(".execution-drawer-body").scrollTop = document.querySelector(".execution-drawer-body").scrollHeight / 2')
         await settle()
-        await run('[...document.querySelectorAll(".execution-history-loader button")].find(button => button.textContent.includes("回到最新")).click()')
+        await run('document.querySelector("[data-return-scope=execution]").click()')
         await settle()
         assert.equal((await run('window.campOpenTest.executionWindowState()')).requests.length, cachedReads, 'cached latest works offline')
         await run('window.campOpenTest.failExecutionRead(false)')

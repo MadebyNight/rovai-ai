@@ -1,4 +1,5 @@
 import { revealMessageQuote } from './message-quote-reveal'
+import { ReturnToLatest } from './ReturnToLatest'
 import { MessageQuotes, MessageQuoteSelectionToolbar } from './MessageQuotes'
 import type { MessageQuoteAction, MessageQuoteSnapshot } from '@contracts'
 import {
@@ -673,8 +674,6 @@ export function SingleChatPanel({
   const viewportRef = useRef<HTMLElement>(null)
   const approvalRef = useRef<HTMLElement>(null)
   const lastVisibleSources = useRef('')
-  const [hasNewReply, setHasNewReply] = useState(false)
-  const viewportEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const dragLeaveTimer = useRef<number | null>(null)
@@ -1017,10 +1016,10 @@ export function SingleChatPanel({
 
   useEffect(() => {
     if (!visible) return
-    if (!followLatestRef.current) { setHasNewReply(true); return }
-    setHasNewReply(false)
-    viewportEndRef.current?.scrollIntoView({ block: 'end' })
-  }, [currentSnapshot?.conversation.lastMessageSequence, activeRun?.executionEvidenceCount, sending, visible])
+    if (!followLatestRef.current) return
+    const viewport = viewportRef.current
+    if (viewport) viewport.scrollTop = viewport.scrollHeight
+  }, [currentSnapshot?.conversation.id, currentSnapshot?.conversation.lastMessageSequence, activeRun?.executionEvidenceCount, sending, visible])
 
   useEffect(() => {
     if (!onVisibleNotificationSources) return
@@ -1620,6 +1619,7 @@ export function SingleChatPanel({
         </button>
       </div>
 
+      <div className="single-chat-reading-surface">
       <section
         ref={viewportRef}
         className="single-chat-viewport"
@@ -1628,7 +1628,6 @@ export function SingleChatPanel({
           const viewport = viewportRef.current
           if (!viewport) return
           followLatestRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 72
-          if (followLatestRef.current) setHasNewReply(false)
         }}
       >
         <div className="single-chat-transcript">
@@ -1640,15 +1639,18 @@ export function SingleChatPanel({
           {sending && !activeRun && <div className="process-action current single-chat-send-feedback" role="status">
             <span className="process-spinner" aria-hidden="true" /><span>连接中</span>
           </div>}
-          <div ref={viewportEndRef} aria-hidden="true" />
         </div>
       </section>
 
-      {hasNewReply && <button type="button" className="single-chat-new-reply" onClick={() => {
-        followLatestRef.current = true
-        setHasNewReply(false)
-        viewportEndRef.current?.scrollIntoView({ block: 'end' })
-      }}><span className="single-chat-new-reply-dot" aria-hidden="true" />有新回复 · 查看</button>}
+      <ReturnToLatest
+        viewportRef={viewportRef}
+        ownerKey={campId + ':' + (currentSnapshot?.conversation.id ?? selectedAgentId)}
+        contentRevision={String(currentSnapshot?.conversation.lastMessageSequence ?? 0) + ':' + (activeRun?.executionEvidenceCount ?? 0)}
+        scope="single"
+        enabled={visible && currentSnapshot !== null}
+        onLatest={() => { followLatestRef.current = true }}
+      />
+      </div>
       {currentSnapshot && currentSnapshot.approvals.length > 0 && <ApprovalDock
         approvals={currentSnapshot.approvals} profileById={profileById} busy={busy}
         onResolve={onResolveApproval} containerRef={approvalRef}

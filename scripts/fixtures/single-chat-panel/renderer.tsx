@@ -421,6 +421,24 @@ createRoot(document.getElementById('root')!).render(<Fixture />)
 
 Object.assign(window, {
   singleChatTest: {
+    appendReturnHistory: (count: number) => {
+      for (let item = 0; item < count; item++) {
+        const sequence = currentSnapshot.conversation.lastMessageSequence + 1
+        const runId = `return-run-${sequence}`
+        const userId = `return-user-${sequence}`
+        const finalId = `return-final-${sequence}`
+        currentSnapshot = { ...currentSnapshot,
+          conversation: { ...currentSnapshot.conversation, lastMessageSequence: sequence + 1 },
+          messages: [...currentSnapshot.messages,
+            { ...terminalSnapshot.messages[0], id: userId, sequence, agentRunId: runId, body: '请继续检查当前阅读位置。', attachments: [] },
+            { ...terminalSnapshot.messages.find(message => message.authorType === 'agent')!, id: finalId, sequence: sequence + 1,
+              agentRunId: runId, body: '已经核对完成。你可以继续查看历史，准备好后回到最新。', attachments: [] }],
+          agentRuns: [...currentSnapshot.agentRuns, { ...terminalSnapshot.agentRuns[0], id: runId,
+            triggerConversationMessageId: userId, finalConversationMessageId: finalId, executionEvidenceCount: 0 }]
+        }
+      }
+      for (const listener of eventListeners) listener({ method: 'single_chat.changed', params: { campId, conversationId } })
+    },
     showPendingQueue: () => {
       currentSnapshot = { ...terminalSnapshot, pendingInputs: { executionActive: true, editSession: null,
         items: ['B', 'C'].map((name, index) => ({ id: `private-pending-${name}`, conversationId,
