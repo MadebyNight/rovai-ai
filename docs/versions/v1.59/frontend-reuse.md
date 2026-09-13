@@ -29,7 +29,7 @@ Task、Memory、Automation、Skills/MCP 与头像编辑已开始接入显式 Cam
 由 Desktop 入口单独提供。外观继续共享页面与阅读偏好，Web 缩放由浏览器管理，页面不再显示不能生效的缩放选择器。
 一次 Host/Owner/编辑客户端作用域内保持 client/API 稳定。网络重连与同页面同 Owner 重新登录只更新认证和连接代次，
 保留业务子树、未提交编辑与原命令 ID；Host/Owner 改变才更换编辑与缓存作用域。后端验证页面恢复证明，
-不能仅凭 clientId/draftId 访问另一标签页草稿。认证 Token、恢复证明均只在页面内存，不落 URL、日志或浏览器持久存储。
+不能仅凭 clientId/draftId 访问另一标签页草稿。短期 Bearer、恢复证明与未确认命令按标签页保存在 sessionStorage，启动先向 Host 验证再恢复；管理令牌不保存，凭据不落 URL、日志或 localStorage。复制标签页通过 Host 创建独立编辑身份。
 生产 Web 缺少客户端或资源适配立即报错；Desktop 旧路径的延迟默认值仅用于迁移兼容。客户端 platform 来自
 浏览器设备；Host OS/Runtime 准入来自真实 health 投影，不能沿用 fixture 的固定 darwin。
 
@@ -51,3 +51,9 @@ Composer DOM/输入未重建；图片缓存按 CampClient 分开，Markdown 无 
 真实 B/C 仍须证明：命令准入后断网不取消，unknown outcome 按原 commandId 查询；两端审批只有一次有效
 决议；草稿/附件归属贯穿 queue/send；Desktop 与独立 Server 使用同一 Web 产物；关闭 Web 后执行继续。
 安全边界按[实施计划中的已确认单 Owner 模型](implementation-plan.md#host-protection-decision)执行；历史同 UID 隔离风险保留，不再作为页面复用或交付前置。
+
+### 浏览器导航与刷新恢复
+
+最新 Desktop 的导航目标、离开保护、连续操作代次与按钮由 BusinessApp 共用。Desktop 保留窗口内存历史；Web 的前进/后退由 History API 驱动，页面按钮与浏览器按钮共用授权页面恢复。历史只含页面定位，凭据和草稿进入独立的标签页恢复材料。Web 控件从左侧排列，不预留原生 traffic lights；正常连接不显示常驻 Host 状态文案。
+
+恢复验收入口为 `node scripts/smoke-web-recovery.mjs`，使用独立 Host 数据根、Skill Library 和浏览器 profile；无需模型或真实账号。覆盖未自动保存文字刷新、同编辑身份、浏览器与页面箭头、刷新后的前进分支、复制标签页与独立退出。执行证据以实际输出为准。

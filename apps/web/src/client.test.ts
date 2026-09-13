@@ -218,3 +218,73 @@ describe('console transport', () => {
     expect(client.pendingCommandCount).toBe(0)
   })
 })
+
+describe('tab session recovery', () => {
+  const memory = () => {
+    const values = new Map<string, string>()
+    return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value) }, removeItem: (key: string) => { values.delete(key) } }
+  }
+  const identity = { protocolVersion: 2, token: 'a'.repeat(64), clientId: 'b'.repeat(64), editorProof: 'c'.repeat(64), ownerId: 'local_user', channels: 'desktop' }
+  it('validates the saved Bearer and proof before restoring the same editor; logout keeps editing but removes authentication', async () => {
+    const storage = memory()
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async url => String(url).endsWith('/logout') ? new Response(null, { status: 204 }) : Response.json(identity))
+    const first = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    await first.login('d'.repeat(64))
+    expect(storage.getItem('rovai.web.session.v1')).not.toContain('d'.repeat(64))
+    const next = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    expect(next.authenticated).toBe(false)
+    expect(await next.restore()).toBe(true)
+    expect(next.editingScope).toBe(first.editingScope)
+    const [, options] = fetcher.mock.calls.at(-1)!
+    expect(JSON.parse(String(options?.body))).toEqual({ editor: { clientId: identity.clientId, proof: identity.editorProof }, fork: false })
+    expect(new Headers(options?.headers).get('Authorization')).toBe(`Bearer ${identity.token}`)
+    await next.logout()
+    const loggedOut = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    expect(await loggedOut.restore()).toBe(false)
+    expect(loggedOut.editingScope).toBe(first.editingScope)
+    await loggedOut.login('d'.repeat(64))
+    expect(JSON.parse(String(fetcher.mock.calls.at(-1)![1]?.body)).editor.clientId).toBe(identity.clientId)
+  })
+  it('forks copied recovery materials without retaining the source drafts or revoking its Session, including expired copies', async () => {
+    for (const expires of [false, true]) {
+      const storage = memory()
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(identity))
+      await new ConsoleClient('http://localhost:4317', fetcher, storage).login('d'.repeat(64))
+      storage.setItem('rovai.web.edits.v1', 'source unsaved text')
+      fetcher.mockResolvedValue(expires ? Response.json({}, { status: 401 }) : Response.json({ ...identity, token: 'e'.repeat(64), clientId: 'f'.repeat(64) }))
+      const copy = new ConsoleClient('http://localhost:4317', fetcher, storage)
+      expect(await copy.restore(true)).toBe(!expires)
+      expect(storage.getItem('rovai.web.edits.v1')).toBeNull()
+      expect(storage.getItem('rovai.web.session.v1') ?? '').not.toContain(identity.clientId)
+      expect(copy.editingScope).toBe(expires ? null : 'http://localhost:4317/local_user/' + 'f'.repeat(64))
+      expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/logout'))).toBe(false)
+    }
+  })
+  it('restores unknown command identities and only reconciles on startup; explicit retry reuses exact payload', async () => {
+    const storage = memory()
+    let recorded = false
+    const dispatches: unknown[] = []
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, options) => {
+      if (!String(url).endsWith('/request')) return Response.json(identity)
+      const request = JSON.parse(String(options?.body))
+      if (request.operation === 'commands.reconcile') return Response.json({ result: recorded ? { state: 'recorded', result: { ok: true } } : { state: 'unknown' } })
+      dispatches.push(request.params)
+      throw new TypeError('response lost')
+    })
+    const first = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    await first.login('d'.repeat(64))
+    const params = { commandId: newCommandId(), campId: 'original', draftRevision: 7 }
+    void first.request('camp.messages.send', params)
+    await vi.waitFor(() => expect(dispatches).toHaveLength(1))
+    const next = new ConsoleClient('http://localhost:4317', fetcher, storage)
+    await next.restore()
+    expect(next.pendingCommandCount).toBe(1)
+    expect(dispatches).toHaveLength(1)
+    await expect(next.request('camp.messages.send', { ...params, commandId: newCommandId() })).rejects.toThrow('原提交')
+    await next.retryPending()
+    expect(dispatches).toEqual([params, params])
+    recorded = true
+    await vi.waitFor(async () => { await next.reconcilePending(); expect(next.pendingCommandCount).toBe(0) })
+    expect(JSON.parse(storage.getItem('rovai.web.session.v1')!).pending).toEqual([])
+  })
+})

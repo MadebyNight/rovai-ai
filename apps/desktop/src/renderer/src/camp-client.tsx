@@ -6,9 +6,12 @@ import { desktopCampClient } from './desktop-camp-client'
  * Remote adapters must authorize each operation and resource at the Host boundary.
  * Native startup, credentials, window controls and supervisor are intentionally absent.
  */
+export interface EditingRecovery { get(identity: string): unknown; set(identity: string, value: unknown): void }
+
 export type CampClient = Pick<RovaiApi,
   'request' | 'composerAttachments' | 'singleChatAttachments' | 'platform'
 > & {
+  editingRecovery?: EditingRecovery
   /** Explicit resource/platform dependencies of the shared management pages. */
   exportMonitoring: (filter: import('@contracts').MonitoringFilter) => Promise<{ exported: boolean; path?: string }>
   revealMonitoringExport: RovaiApi['revealMonitoringExport'] | null
@@ -51,3 +54,5 @@ export function useCampClient(): CampClient {
   if (typeof window === 'undefined' || window.rovai) return desktopCampClient
   throw new Error('共享页面缺少 CampClientProvider；浏览器不能使用 Desktop 默认适配。')
 }
+
+export function useEditingRecovery(): EditingRecovery | undefined { return useContext(CampClientContext)?.editingRecovery }

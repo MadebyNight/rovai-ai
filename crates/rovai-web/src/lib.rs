@@ -173,6 +173,7 @@ fn routes(state: WebState) -> Router {
         .route("/request", post(request))
         .route("/events", get(events))
         .route("/logout", post(logout))
+        .route("/session", post(resume_session))
         .route("/workspaces", post(workspaces::browse))
         .route(
             "/uploads",
@@ -294,6 +295,69 @@ async fn login(
         Ok((token, session)) => Json(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"expiresInSeconds":SESSION_LIFETIME.as_secs(),"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }})).into_response(),
         Err(failure) => login_failure(failure),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionResume {
+    editor: EditorResume,
+    #[serde(default)]
+    fork: bool,
+}
+
+// Bearer authentication is checked by the same middleware as every business API.
+// Resume verifies both the Session binding and Core-owned editing proof. A copied
+// tab may create a fresh editor but cannot choose another editor by submitting an ID.
+async fn resume_session(
+    State(state): State<WebState>,
+    Extension(session): Extension<Arc<Session>>,
+    Json(body): Json<SessionResume>,
+) -> Response {
+    if body.editor.client_id != session.client_id {
+        return error(StatusCode::UNAUTHORIZED, "editor_resume_denied");
+    }
+    let identity = match state
+        .core
+        .request("host.editor.resolve", json!(body.editor))
+        .await
+    {
+        Ok(reply) if reply.error.is_none() => reply.result.unwrap_or(Value::Null),
+        _ => return error(StatusCode::UNAUTHORIZED, "editor_resume_denied"),
+    };
+    if *session.revoked.borrow() || session.expires_at <= std::time::Instant::now() {
+        return error(StatusCode::UNAUTHORIZED, "session_required");
+    }
+    let mut identity = if body.fork {
+        match state.core.request("host.editor.resolve", Value::Null).await {
+            Ok(reply) if reply.error.is_none() => reply.result.unwrap_or(Value::Null),
+            _ => return error(StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable"),
+        }
+    } else {
+        identity
+    };
+    if body.fork {
+        let Some(client_id) = identity["clientId"].as_str() else {
+            return error(StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable");
+        };
+        match state.sessions.fork(&session, client_id.to_owned()) {
+            Ok((token, _)) => {
+                identity["token"] = json!(token);
+            }
+            Err(failure) => return login_failure(failure),
+        }
+    }
+    identity["editorProof"] = identity["proof"].take();
+    identity
+        .as_object_mut()
+        .expect("Core identity object")
+        .remove("proof");
+    identity["protocolVersion"] = json!(2);
+    identity["channels"] = json!(if state.channels.is_some() {
+        "desktop"
+    } else {
+        "unsupported"
+    });
+    Json(identity).into_response()
 }
 
 fn login_failure(failure: LoginFailure) -> Response {

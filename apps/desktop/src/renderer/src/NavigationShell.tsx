@@ -14,10 +14,12 @@ const emptySnapshot = (): NavigationState => EMPTY_HISTORY
 const noSubscription = (): (() => void) => () => undefined
 
 // Layout state stays below App so resizing does not rebuild the Camp or Composer children.
-export function NavigationShell({ platform, disabled = false, settings = false, navigation, className = '', children, ...attributes }: HTMLAttributes<HTMLDivElement> & {
+export function NavigationShell({ platform, disabled = false, settings = false, navigation, nativeWindowControls, browser = false, className = '', children, ...attributes }: HTMLAttributes<HTMLDivElement> & {
   platform: NodeJS.Platform
   disabled?: boolean
   settings?: boolean
+  browser?: boolean
+  nativeWindowControls?: Pick<import('@contracts').RovaiApi['windowControls'], 'onNavigationRequested'>
   navigation?: Pick<DesktopNavigation, 'getSnapshot' | 'subscribe' | 'back' | 'forward'>
 }): React.JSX.Element {
   const history = useSyncExternalStore(navigation?.subscribe ?? noSubscription, navigation?.getSnapshot ?? emptySnapshot, emptySnapshot)
@@ -36,17 +38,17 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
       void input.current.navigation?.[action]()
     }
     const mouseup = (event: MouseEvent): void => {
-      if (event.button !== 3 && event.button !== 4) return
+      if (browser || (event.button !== 3 && event.button !== 4)) return
       // Windows uses WM_APPCOMMAND exclusively; handling its mouseup too would step twice.
-      if (input.current.platform === 'win32' && window.rovai.windowControls.onNavigationRequested) return
+      if (input.current.platform === 'win32' && nativeWindowControls?.onNavigationRequested) return
       if (event.defaultPrevented || !available()) return
       event.preventDefault()
       void input.current.navigation?.[event.button === 3 ? 'back' : 'forward']()
     }
     const preventDefaultNavigation = (event: MouseEvent): void => {
-      if (event.button === 3 || event.button === 4) event.preventDefault()
+      if (!browser && (event.button === 3 || event.button === 4)) event.preventDefault()
     }
-    const unsubscribe = window.rovai.windowControls.onNavigationRequested?.((direction) => {
+    const unsubscribe = nativeWindowControls?.onNavigationRequested?.((direction) => {
       if (available()) void input.current.navigation?.[direction]()
     })
     window.addEventListener('keydown', keydown)
@@ -58,7 +60,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
       window.removeEventListener('mouseup', mouseup)
       window.removeEventListener('auxclick', preventDefaultNavigation)
     }
-  }, [navigation])
+  }, [navigation, nativeWindowControls, browser])
   const [layout, setLayout] = useState<NavigationLayout>(() => {
     try { return parseNavigationLayout(window.localStorage.getItem(NAVIGATION_LAYOUT_KEY)) }
     catch { return parseNavigationLayout(null) }
@@ -71,7 +73,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
   const gesture = useRef<{ id: number; x: number; width: number; before: NavigationLayout; moved: boolean } | null>(null)
   const frame = useRef<number | null>(null)
   const maximum = navigationMaxWidth(viewport)
-  const fixedSettings = platform === 'darwin' && settings
+  const fixedSettings = !browser && platform === 'darwin' && settings
   const width = layout.collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
   const label = layout.collapsed ? '展开导航侧栏' : '收起导航侧栏'
   const toggle = (): void => setLayout(current => fixedSettings && !current.collapsed ? current : { ...current, collapsed: !current.collapsed })
@@ -175,7 +177,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
       </DropdownMenu.Root>}
       {!fixedSettings && <span id="navigation-resize-help" className="sr-only">方向键调宽，Shift 加速，Home 最窄，End 最宽，Enter 折叠，空格选择宽度。低于 200 像素完全收起；从左边缘拖出恢复。Escape 取消拖拽。</span>}
       {/* Electron applies drag regions in DOM order; keep this no-drag control after the sidebar and topbar drag regions. */}
-      {platform === 'win32' ? chromeSlot && createPortal(control, chromeSlot) : <div className="navigation-macos-control">{control}</div>}
+      {!browser && platform === 'win32' ? chromeSlot && createPortal(control, chromeSlot) : <div className={browser ? "navigation-browser-control" : "navigation-macos-control"}>{control}</div>}
     </div>
   </NavigationContext.Provider>
 }

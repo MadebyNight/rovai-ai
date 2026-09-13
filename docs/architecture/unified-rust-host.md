@@ -42,7 +42,7 @@ macOS/Linux 本机传输为 UDS，Windows 为受保护 Named Pipe，另有可信
 ## 身份与控制面
 
 服务端从验证过的本机身份、Remote Session 或 Agent Built-in 上下文确定能力；不信任客户端自报用户身份。
-Web 管理令牌交换短期可撤销 opaque Bearer Session；不使用认证 Cookie。令牌仅页面内存，刷新可重新登录。
+Web 管理令牌交换短期可撤销 opaque Bearer Session；不使用认证 Cookie。短期 Session 与编辑恢复材料保存在当前标签页 sessionStorage，启动先验证再恢复；管理令牌不持久化。
 仅固定控制台 origin 的封闭 API 使用显式 Authorization；登录和认证 Fetch 拒绝重定向，SSE、图片、下载同样
 走认证 Fetch，必要时生成并释放 Blob URL。不把凭据写 URL、预览链接、日志或浏览器长期存储。
 
@@ -69,7 +69,7 @@ HTTPS/VPN。二维码只含地址，既有执行台身份仍只读。不自建�
 作用域含 Host/Owner/client/Camp，私聊再含 Conversation。客户端提交 ID 不是授权；保留 revision、
 原子消费、命令幂等与 Core FIFO，不做跨端同步、实时合并或多人共编。
 短期认证 Session 与编辑身份分离；同页面同 Owner 重登保留编辑、原命令及 Core 验证的恢复证明。
-两个标签页各建独立编辑身份；细节见[Draft v13](../contracts/camp-composer-draft-v13.md)。
+普通刷新沿用原编辑身份，浏览器标签页占用记录仅存随机文档标识；复制标签页由已认证 Host 分配独立编辑身份和 Session，不复制草稿或原命令。两个标签页各建独立编辑身份；细节见[Draft v13](../contracts/camp-composer-draft-v13.md)。
 
 Web 上传写 Host 临时文件后绑定当前客户端草稿，复用现行 source reference。
 失败或可确认未绑定文件由入口清理；绑定结果未知按原命令查询回执，不能证明未绑定就不删除。

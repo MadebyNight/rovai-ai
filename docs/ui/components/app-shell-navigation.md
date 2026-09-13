@@ -264,3 +264,7 @@ App Shell 在不抢夺焦点的全局浮层中短暂显示实际缩放比例，�
 ## Jump search and overlay closure
 
 ⌘K / Ctrl+K opens the title/project search or exact lookup by a complete Camp ID, with a small “跳转到对话” title, neutral selected result and “↑ ↓ 选择　↵ 打开　Esc 关闭” footer. Search input has no focus underline or frame; arrows and Enter retain their behavior and respect IME composition. Closing sidebar menus, rename/delete/removal dialogs or settings does not force focus back to the entry button, including after pin mutations. Shared DOM focus for keyboard input and menu navigation remains available.
+
+## Web 导航适配
+
+共享 BusinessApp 拥有导航目标、离开保护和页面状态切换。Desktop 的窗口内存历史与 Web 的浏览器 History API 分别通过适配接入同一协调器；Web 页面箭头、浏览器工具栏与原生鼠标历史操作经过同一页面恢复路径。拒绝离开时恢复浏览器游标，不改变已显示页面。历史仅保存 locator，不含输入正文或认证材料。Desktop 保留 50 条窗口记录上限，Web 保留本标签页实际浏览器历史，不截断浏览器仍可到达的站内条目。Web 控件从左侧 12px 开始，不预留 macOS traffic lights；浏览器操作系统仍独立决定快捷键文案。正常连接不占据侧栏状态行，连接失败及未确认命令保留明确反馈。

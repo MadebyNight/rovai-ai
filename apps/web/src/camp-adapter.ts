@@ -3,6 +3,8 @@ import type { CampClient } from '../../desktop/src/renderer/src/camp-client'
 import type { BusinessEnvironment } from '../../desktop/src/renderer/src/business-environment'
 import type { SingleChatSnapshot, CoreMethod, FilePreviewApi, FilePreviewExternalUpdateEvent, FilePreviewOperationResult, FilePreviewBinaryContent, OpenFilePreviewResult } from '@contracts'
 import { ConsoleClient, WEB_OPERATIONS, type WebOperation } from './client'
+import { createBrowserNavigationHistory } from './navigation-history'
+import { browserEditingRecovery } from './editing-recovery'
 import { browserPreferences } from './preferences'
 import { parseFileReference } from '../../desktop/src/file-preview-reference'
 import { writeClipboardText } from '../../desktop/src/renderer/src/clipboard'
@@ -28,6 +30,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
   }
   const client: CampClient = {
     platform: browserPlatform(),
+    editingRecovery: browserEditingRecovery(transport.editingScope),
     exportDiagnostics: async () => downloadJson(await transport.request('diagnostics.export'), 'rovai-diagnostics.json'),
     exportMonitoring: async filter => downloadJson({ exportedAt: new Date().toISOString(), ...await transport.request<object>('monitoring.snapshot', filter) }, 'rovai-runtime-monitoring.json'),
     revealMonitoringExport: null,
@@ -154,7 +157,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     } catch { return { opened: false, error: 'target_unavailable', availability: 'missing' } }
   } }
   const { preferences, profile } = browserPreferences(transport.presentationScope)
-  const environment: BusinessEnvironment = { client, preferences, files, selectWorkspaceDirectory }
+  const environment: BusinessEnvironment = { navigationHistory: createBrowserNavigationHistory(transport.editingScope), client, preferences, files, selectWorkspaceDirectory }
   return { environment, profile, invalidate: () => { for (const listener of listeners) listener(); void refreshUpdates() } }
 }
 

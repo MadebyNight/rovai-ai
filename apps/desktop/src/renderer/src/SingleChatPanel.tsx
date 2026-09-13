@@ -687,7 +687,20 @@ export function SingleChatPanel({
   const [conversations, setConversations] = useState<SingleChatConversationView[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(initialAgentId)
   const [snapshot, setSnapshot] = useState<SingleChatSnapshot | null>(null)
-  const [bodyDrafts, setBodyDrafts] = useState<Record<string, string>>({})
+  const recoveryKey = `single-chat:${campId}`
+  const [bodyDrafts, updateBodyDrafts] = useState<Record<string, string>>(() => {
+    const saved = client.editingRecovery?.get(recoveryKey)
+    return saved && typeof saved === 'object' ? Object.fromEntries(Object.entries(saved).filter(([, value]) => typeof value === 'string')) : {}
+  })
+  const setBodyDrafts: typeof updateBodyDrafts = (next) => updateBodyDrafts(current => {
+    const value = typeof next === 'function' ? next(current) : next
+    client.editingRecovery?.set(recoveryKey, value)
+    return value
+  })
+  useEffect(() => client.onInvalidated?.(() => {
+    const saved = client.editingRecovery?.get(recoveryKey)
+    if (saved && typeof saved === 'object') updateBodyDrafts(Object.fromEntries(Object.entries(saved).filter(([, value]) => typeof value === 'string')))
+  }), [client, recoveryKey])
   const [quoteBusy, setQuoteBusy] = useState(false)
   const quoteTailRef = useRef<Promise<void>>(Promise.resolve())
   const quoteOperationCount = useRef(0)

@@ -10,7 +10,7 @@ last_updated: 2026-09-13
 
 # Host Web v2
 
-v2 replaces [v1](host-web-v1.md) for new Web sessions. One Core, local management, memory-only browser Bearer credentials, bounded admission, CSP and invalidation SSE remain.
+v2 replaces [v1](host-web-v1.md) for new Web sessions. One Core, local management, tab-scoped browser Bearer credentials, bounded admission, CSP and invalidation SSE remain.
 The single-Owner model, directory access, local token rereading and multiple interface origins below supersede v1 restrictions.
 This contract admits the shared Camp write path; it does **not** qualify a platform for secure network release.
 Implementation and remaining acceptance evidence belong to the [version plan](../versions/v1.59/implementation-plan.md).
@@ -47,7 +47,7 @@ explicit local operation that changes the token and revokes sessions. Web stop c
 browser sessions, but retains the administrator token for local viewing/copying and the next start in the same Host
 process. It is not persisted across Host process restarts. Desktop settings always shows the masked token field with
 visibility and copy actions; it has no refresh/regeneration button. Standalone startup accepts the Owner's
-token on stdin as before. Browser authentication still keeps only a short-lived session and editing proof in page memory.
+token on stdin as before. Browser authentication keeps the short-lived Bearer Session and editing proof in current-tab `sessionStorage`; the administrator token is never saved there.
 
 ## Authentication and editor ownership
 
@@ -57,17 +57,34 @@ The response contains `protocolVersion: 2`, `token`, `clientId`, `editorProof`, 
 The browser checks the response protocol before mounting business pages or sending commands.
 
 Fresh login creates a Core-owned random 256-bit editor identity and an independent random recovery proof.
-Core persists only the proof digest, bound to the current Owner; the Host must first verify fresh administrator
-authentication before it can resolve or resume that editor. A client ID, Draft ID or proof alone never authenticates
+Core persists only the proof digest, bound to the current Owner; the Host first verifies administrator authentication
+or an existing Bearer Session before resolving the editor. A client ID, Draft ID or proof alone never authenticates
 a Session. Another client's proof cannot resume the named editor. Reauthentication replaces that editor's old Session,
 including at session capacity. Rotation and Web shutdown fence an in-flight login as well as existing sessions.
 
 Session expiry, reconnect and same-page reauthentication change authentication/connection generations, while retaining
 the editor identity, mounted Composer, unsent local edits and original outstanding command IDs. Host or Owner changes
 require a different editing/cache scope. Production Web currently has one fixed origin per page and refuses an Owner
-change in place. Separate pages create separate editors. Tokens and recovery proofs are kept only in page memory;
-a full reload creates a new editor and is not a cross-page Draft recovery service. Presentation preferences may use
-origin/Owner-scoped browser storage; business state, credentials and Drafts must not enter that store.
+change in place. Separate tabs, including duplicated tabs, own separate editors. Current-tab `sessionStorage` saves the Bearer,
+Host/Owner/editor/proof binding, unsaved Composer and single-chat text, and original unresolved command/upload intents.
+Refresh validates `POST /api/v1/session` with `{ editor: { clientId, proof }, fork?: boolean }` before mounting business pages.
+Resume requires both the authenticated Session's client ID and the Core-verified proof. It returns the same editor and
+capabilities without rotating the Bearer. Expiry clears authentication while retaining editing and reconciliation materials
+for same-Owner login. Host/Owner mismatches fail explicitly. Credentials never enter URLs, history entries, logs or localStorage.
+
+A non-secret browser document lease prevents a copied sessionStorage snapshot from sharing live editing ownership.
+IndexedDB transactions serialize claims; a synchronous pagehide release marker allows normal reload to reclaim its editor.
+HTTP requests recheck ownership, including after a suspended document resumes. Lease records and release markers contain
+only random tab/document identifiers, not credentials or draft content. A copied tab requests `fork: true` through the
+existing authenticated Session; Host creates a new Core editor and a separate Bearer with the parent's remaining lifetime.
+It does not revoke the original tab, extend authentication, or copy its drafts/unknown commands. Logout revokes only that
+Session. Browser storage failure is visible, never silently presented as successful recovery.
+
+Unknown command bodies and IDs persist before dispatch; startup, reconnect and reauthentication only reconcile. Explicit
+retry uses the original payload and ID. Upload recovery retains the binding intent; file bytes are not put in sessionStorage.
+After refresh an unknown upload is reconciled first, and an unavailable body requires selecting the file again. A matching
+recorded private send clears only its matching recovered local text. Unsaved Composer text is restored over the same base
+content, never over a different authoritative draft. Presentation preferences remain separately origin/Owner-scoped.
 
 ## Admitted operations
 

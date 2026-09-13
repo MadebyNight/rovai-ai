@@ -103,6 +103,21 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       assert.equal(result.error, null, operation)
       return result.result
     }
+    const editor = { clientId: first.clientId, proof: first.editorProof }
+    const resume = async (body) => authorized(first, 'session', { method: 'POST', body: JSON.stringify(body) })
+    const restored = await (await resume({ editor })).json()
+    assert.equal(restored.clientId, first.clientId)
+    assert.equal(restored.editorProof, first.editorProof)
+    assert.equal('token' in restored, false, 'validation does not rotate the Bearer')
+    for (const invalid of [{ clientId: second.clientId, proof: second.editorProof }, { ...editor, proof: 'f'.repeat(64) }]) {
+      assert.equal((await resume({ editor: invalid })).status, 401)
+    }
+    const fork = await (await resume({ editor, fork: true })).json()
+    assert.notEqual(fork.clientId, first.clientId)
+    assert.notEqual(fork.token, first.token)
+    assert.equal((await authorized(fork, 'capabilities')).status, 200)
+    await authorized(fork, 'logout', { method: 'POST' })
+    assert.equal((await authorized(first, 'capabilities')).status, 200, 'copied tab logout cannot revoke its opener')
     const info = await call(first, 'app.info')
     assert.equal('dataDir' in info, false)
     assert.equal(info.name, (await host.request('app.info')).name)

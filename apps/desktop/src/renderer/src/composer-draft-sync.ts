@@ -38,7 +38,8 @@ export interface ComposerDraftSyncBindings<Draft = unknown> {
   waitForAuthority?: () => Promise<void>
   currentDraft?: () => Draft | null
   atomIsAvailable(node: ComposerAtomNode): boolean
-  onSaved?: (localVersion: number) => void
+  onLocalDocumentChange?: (document: ComposerDocument) => void
+  onSaved?: (localVersion: number, document: ComposerDocument) => void
   onStatusChange?: (status: ComposerLocalStatus) => void
   onDirtyChange?: (dirty: boolean) => void
   onPersistenceErrorChange?: (error: Error | null) => void
@@ -133,9 +134,20 @@ export class ComposerDraftSync<Draft = unknown> {
 
     this.applyDirtyLeaves(payload.editorState, payload.dirtyLeaves)
     this.localVersion += 1
+    try { this.bindings.onLocalDocumentChange?.(editorStateToComposerDocument(payload.editorState)) }
+    catch (error) { this.setPersistenceError(error instanceof Error ? error : new Error(String(error))) }
     this.retryAttempt = 0
     this.clearRetryTimer()
     this.setDirty(true)
+    this.setPersistenceStatus({ state: 'dirty' })
+    if (this.bindings.persist) this.scheduleSave()
+  }
+
+  restoreLocalState(editorState: EditorState): void {
+    this.latestEditorState = editorState
+    this.localVersion += 1
+    this.setDirty(true)
+    this.rebuildContributions(editorState)
     this.setPersistenceStatus({ state: 'dirty' })
     if (this.bindings.persist) this.scheduleSave()
   }
@@ -242,7 +254,7 @@ export class ComposerDraftSync<Draft = unknown> {
         this.savedVersion = Math.max(this.savedVersion, version)
         this.retryAttempt = 0
         this.setPersistenceError(null)
-        this.bindings.onSaved?.(version)
+        this.bindings.onSaved?.(version, document)
         const clean = this.localVersion === version
         if (clean) this.setDirty(false)
         this.setPersistenceStatus(clean ? { state: 'saved' } : { state: 'dirty' })

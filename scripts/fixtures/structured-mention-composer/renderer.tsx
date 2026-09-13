@@ -1,3 +1,4 @@
+import { CampClientProvider, type CampClient } from '../../../apps/desktop/src/renderer/src/camp-client'
 import type { ComposerDocument } from '@contracts'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -267,4 +268,6 @@ function Harness() {
   </div>
 }
 
-createRoot(document.getElementById('root')!).render(<Harness />)
+// The fixture has no Core or managed avatars; formal shared components still receive an explicit client.
+const fixtureClient = new Proxy({} as CampClient, { get: (_target, key) => { if (key === 'editingRecovery') return undefined; throw new Error(`Unexpected fixture capability: ${String(key)}`) } })
+createRoot(document.getElementById('root')!).render(<CampClientProvider client={fixtureClient}><Harness /></CampClientProvider>)

@@ -143,6 +143,43 @@ impl Sessions {
         Ok((token, session))
     }
 
+    /// A copied browser tab receives its own Session without extending the
+    /// parent's authentication lifetime or revoking that tab's editor.
+    pub fn fork(
+        &self,
+        parent: &Session,
+        client_id: String,
+    ) -> std::result::Result<(String, Arc<Session>), LoginFailure> {
+        let mut state = self.0.lock().expect("session registry poisoned");
+        let now = Instant::now();
+        if !state.enabled
+            || *parent.revoked.borrow()
+            || parent.expires_at <= now
+            || !valid_token(&client_id)
+            || client_id == parent.client_id
+        {
+            return Err(LoginFailure::Unauthorized);
+        }
+        state
+            .sessions
+            .retain(|_, session| session.expires_at > now && !*session.revoked.borrow());
+        if state.sessions.len() >= MAX_SESSIONS {
+            return Err(LoginFailure::Capacity);
+        }
+        let token = new_token().map_err(|_| LoginFailure::Capacity)?;
+        let (revoked, _) = watch::channel(false);
+        let session = Arc::new(Session {
+            client_id,
+            expires_at: parent.expires_at,
+            revoked,
+            streams: Arc::new(Semaphore::new(2)),
+        });
+        state
+            .sessions
+            .insert(digest(b"rovai-session-v1\0", &token), session.clone());
+        Ok((token, session))
+    }
+
     pub fn administrator_token(&self) -> String {
         self.0
             .lock()
@@ -230,7 +267,17 @@ mod tests {
         assert_ne!(first.client_id, second.client_id);
         assert_ne!(first_token, second_token);
         assert!(sessions.authenticate(&first_token).is_some());
+        let (fork_token, fork) = sessions.fork(&first, new_token().unwrap()).ok().unwrap();
+        assert_ne!(fork.client_id, first.client_id);
+        assert_eq!(fork.expires_at, first.expires_at);
+        sessions.revoke(&fork);
+        assert!(sessions.authenticate(&fork_token).is_none());
+        assert!(sessions.authenticate(&first_token).is_some());
         sessions.revoke(&first);
+        assert!(matches!(
+            sessions.fork(&first, new_token().unwrap()),
+            Err(LoginFailure::Unauthorized)
+        ));
         assert!(*first.revoked.borrow());
         assert!(sessions.authenticate(&first_token).is_none());
         assert!(sessions.authenticate(&second_token).is_some());

@@ -37,7 +37,7 @@ function Fixture(): React.JSX.Element {
     hostListenerCount: () => navigationListeners.size,
     settle: () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 90))))
   } })
-  return <><WindowsApplicationMenu /><NavigationShell platform={platform} disabled={disabled} settings={settings} navigation={navigation}>
+  return <><WindowsApplicationMenu /><NavigationShell platform={platform} disabled={disabled} settings={settings} navigation={navigation} nativeWindowControls={window.rovai.windowControls}>
     <CampNavigation platform={platform} view={settings ? 'settings' : 'compose'} state="ready" navigation={null} activeCampId={null} pendingMemoryCount={0}
       onNewConversation={noop} onMembers={noop} onMemory={noop} onSettings={() => setSettings(true)} onSettingsBack={() => setSettings(false)}
       onOpenProject={noop} onCamp={noop} onRemoveProject={async () => undefined} onRename={async () => undefined} onDelete={async () => undefined} onError={noop} />

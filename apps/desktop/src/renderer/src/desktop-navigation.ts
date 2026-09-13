@@ -14,6 +14,13 @@ export type NavigationTarget = Exclude<RestorableLocation, { kind: 'memory' }>
   | { kind: 'automations' }
 
 export type NavigationState = { entries: readonly NavigationTarget[]; index: number }
+/** Platform history stores page locators only; the shared coordinator owns leave guards. */
+export interface NavigationHistory {
+  initial: NavigationState | null
+  write(state: NavigationState, mode: 'push' | 'replace'): NavigationState
+  go(delta: number): Promise<boolean>
+  listen(apply: (state: NavigationState) => Promise<NavigationState | null>): () => void
+}
 export const MAX_NAVIGATION_ENTRIES = 50
 
 export function sameNavigationDestination(a: NavigationTarget, b: NavigationTarget): boolean {
@@ -37,7 +44,8 @@ export type NavigationTransaction = {
 
 /** One window-owned history. Pending intent is transactional, never a second router history. */
 export function createDesktopNavigation<Context = undefined>(
-  apply: (target: NavigationTarget, transaction: NavigationTransaction, context?: Context) => Promise<void>
+  apply: (target: NavigationTarget, transaction: NavigationTransaction, context?: Context) => Promise<void>,
+  history?: NavigationHistory
 ) {
   let state: NavigationState = { entries: [], index: -1 }
   let intent = state
@@ -46,7 +54,7 @@ export function createDesktopNavigation<Context = undefined>(
   const listeners = new Set<() => void>()
   const publish = (): void => { for (const listener of listeners) listener() }
 
-  const navigate = async (next: NavigationState, context?: Context): Promise<boolean> => {
+  const navigate = async (next: NavigationState, context?: Context, mode: 'push' | 'replace' | 'traverse' = 'replace'): Promise<boolean> => {
     if (next === intent) return false
     intent = next
     const request = ++generation
@@ -60,7 +68,9 @@ export function createDesktopNavigation<Context = undefined>(
         if (request !== generation) return false
         const entries = [...next.entries]
         entries[next.index] = target
-        state = intent = { entries, index: next.index }
+        let committedState = { entries, index: next.index } as NavigationState
+        if (mode !== 'traverse' && history) committedState = history.write(committedState, mode)
+        state = intent = committedState
         committed = true
         publish()
         return true
@@ -75,6 +85,8 @@ export function createDesktopNavigation<Context = undefined>(
   }
 
   return {
+    connect(): () => void { return history?.listen(async next => await navigate(next, undefined, 'traverse') ? state : null) ?? (() => undefined) },
+    restore(): Promise<boolean> { return history?.initial ? navigate(history.initial, undefined, 'traverse') : Promise.resolve(false) },
     getSnapshot: (): NavigationState => state,
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener)
@@ -85,6 +97,7 @@ export function createDesktopNavigation<Context = undefined>(
       supersede?.()
       supersede = undefined
       state = intent = target ? { entries: [target], index: 0 } : { entries: [], index: -1 }
+      if (target) history?.write(state, 'replace')
       publish()
     },
     push(target: NavigationTarget, context?: Context): Promise<boolean> {
@@ -94,8 +107,10 @@ export function createDesktopNavigation<Context = undefined>(
         return intent === state ? Promise.resolve(false) : navigate(state, context)
       }
       // A superseded destination that never rendered must not become a phantom entry.
-      const entries = [...state.entries.slice(0, state.index + 1), target].slice(-MAX_NAVIGATION_ENTRIES)
-      return navigate({ entries, index: entries.length - 1 }, context)
+      const visited = [...state.entries.slice(0, state.index + 1), target]
+      // Native browser history remains traversable beyond the Desktop window cap.
+      const entries = history ? visited : visited.slice(-MAX_NAVIGATION_ENTRIES)
+      return navigate({ entries, index: entries.length - 1 }, context, 'push')
     },
     replace(target: NavigationTarget, context?: Context): Promise<boolean> {
       const entries = [...intent.entries]
@@ -104,9 +119,11 @@ export function createDesktopNavigation<Context = undefined>(
       return navigate({ entries, index }, context)
     },
     back(): Promise<boolean> {
+      if (history) return history.go(-1)
       return intent.index > 0 ? navigate({ ...intent, index: intent.index - 1 }) : Promise.resolve(false)
     },
     forward(): Promise<boolean> {
+      if (history) return history.go(1)
       return intent.index < intent.entries.length - 1
         ? navigate({ ...intent, index: intent.index + 1 }) : Promise.resolve(false)
     }

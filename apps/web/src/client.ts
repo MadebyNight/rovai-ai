@@ -1,3 +1,5 @@
+import { browserEditingRecovery } from './editing-recovery'
+import { RECOVERY_KEY, type RecoveryStorage } from './tab-recovery'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { newCommandId } from '../../desktop/src/shared/command-id'
 import type { CampComposerDraftView, ChannelSettingsSnapshot } from '@contracts'
@@ -195,7 +197,7 @@ const RECONCILABLE_COMMANDS = new Set<WebOperation>([
 
 export type ConnectionState = 'connecting' | 'live' | 'offline' | 'expired'
 type PendingCommand = { operation: WebOperation; params: unknown; resolve(value: unknown): void; reject(error: unknown): void }
-type PendingUpload = { intent: unknown; data: FormData; resolve(draft: unknown): void; reject(error: unknown): void }
+type PendingUpload = { intent: unknown; data: FormData | null; resolve(draft: unknown): void; reject(error: unknown): void }
 type CommandReceipt = { state: 'unknown' | 'recorded'; result?: unknown; error?: { code: string; message?: string } }
 
 /** Decodes bounded SSE frames; payloads are invalidations, never private Core events. */
@@ -230,13 +232,19 @@ export class ConsoleClient {
   #pending = new Map<string, PendingCommand>()
   #pendingUploads = new Map<string, PendingUpload>()
   #reconciling = false
+  #restored = false
+  #storage?: RecoveryStorage
+  #assertTab?: () => Promise<void>
+  #recoveryListeners = new Set<() => void>()
+  onRecovered(listener: () => void): () => void { this.#recoveryListeners.add(listener); return () => { this.#recoveryListeners.delete(listener) } }
+  #notifyRecovered(): void { for (const listener of this.#recoveryListeners) listener() }
   #pendingListeners = new Set<() => void>()
   get pendingCommandCount(): number { return this.#pending.size + this.#pendingUploads.size }
   onPendingCommandsChanged(listener: () => void): () => void {
     this.#pendingListeners.add(listener)
     return () => { this.#pendingListeners.delete(listener) }
   }
-  #notifyPending(): void { for (const listener of this.#pendingListeners) listener() }
+  #notifyPending(): void { this.#persistRecovery(); for (const listener of this.#pendingListeners) listener() }
 
   get editingScope(): string | null {
     return this.#editor && this.#ownerId ? `${this.origin}/${this.#ownerId}/${this.#editor.clientId}` : null
@@ -250,16 +258,81 @@ export class ConsoleClient {
     return () => { this.#authListeners.delete(listener) }
   }
 
-  constructor(origin: string, fetcher: typeof fetch = fetch) {
+  constructor(origin: string, fetcher: typeof fetch = fetch, storage?: RecoveryStorage) {
     const parsed = new URL(origin)
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.origin !== origin) throw new Error('控制台地址无效。')
     this.origin = origin
+    this.#storage = storage
     // Native Window.fetch requires its Window receiver even when retained by a
     // transport object. Node's implementation does not expose this constraint.
     this.#fetch = fetcher.bind(globalThis)
   }
 
+  async restore(fork = false, assertTab: () => Promise<void> = async () => undefined): Promise<boolean> {
+    this.#assertTab = assertTab
+    if (this.#restored) return this.authenticated
+    this.#restored = true
+    const raw = this.#storage?.getItem(RECOVERY_KEY)
+    if (!raw) return false
+    let saved: { version: number; origin: string; token: string | null; editor: { clientId: string; proof: string }; ownerId: string; pending?: Array<{ operation: WebOperation; params: unknown }>; uploads?: unknown[] }
+    try { saved = JSON.parse(raw) } catch { throw new Error('登录恢复材料损坏，请清除该标签页数据后重新登录。') }
+    const identity = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    if (saved.version !== 1 || saved.origin !== this.origin || !identity(saved.editor?.clientId) || !identity(saved.editor?.proof) || typeof saved.ownerId !== 'string' || (saved.token !== null && !identity(saved.token))) throw new Error('登录恢复材料无效。')
+    if (fork) { this.#storage?.removeItem(RECOVERY_KEY); this.clearEditingRecovery() }
+    if (!fork) {
+      this.#editor = saved.editor; this.#ownerId = saved.ownerId
+      for (const command of saved.pending ?? []) {
+        const id = (command.params as { commandId?: string })?.commandId
+        if (typeof id === 'string' && RECONCILABLE_COMMANDS.has(command.operation)) this.#pending.set(id, { ...command, resolve: value => this.#settleRecovered(command.operation, command.params, value), reject: () => this.#notifyRecovered() })
+      }
+      for (const intent of saved.uploads ?? []) {
+        const id = (intent as { commandId?: string })?.commandId
+        if (typeof id === 'string') this.#pendingUploads.set(id, { intent, data: null, resolve: () => this.#notifyRecovered(), reject: () => this.#notifyRecovered() })
+      }
+    }
+    if (!saved.token) { if (fork) this.#storage?.removeItem(RECOVERY_KEY); return false }
+    this.#token = saved.token
+    try {
+      const response = await this.#json<Record<string, unknown>>('session', { method: 'POST', body: JSON.stringify({ editor: saved.editor, fork }) })
+      if (response.ownerId !== saved.ownerId || (!fork && response.clientId !== saved.editor.clientId)) throw new Error('Host 或编辑归属已变化，无法恢复当前页面。')
+      this.#acceptSession({ ...response, token: fork ? response.token : saved.token }, false)
+      if (fork) this.clearEditingRecovery()
+      this.#persistRecovery()
+      await this.reconcilePending()
+      return true
+    } catch (error) {
+      // Expiry drops only authentication. Draft proof and original command IDs
+      // survive for reauthentication; a copied tab never inherits them.
+      this.#token = null
+      if (error instanceof SessionRequired) { this.#persistRecovery(); return false }
+      throw error
+    }
+  }
+
+  #settleRecovered(operation: WebOperation, params: unknown, result: unknown): void {
+    if (operation === 'singleChat.send' && this.#storage && this.editingScope && (result as { status?: string })?.status !== 'rejected') {
+      const command = (params as { command?: { campId?: string; conversationId?: string; body?: string } })?.command
+      if (command?.campId && command.conversationId && typeof command.body === 'string') {
+        const recovery = browserEditingRecovery(this.editingScope, this.#storage)
+        const key = `single-chat:${command.campId}`
+        const drafts = recovery.get(key) as Record<string, string> | null
+        const draftKey = `${command.campId}:${command.conversationId}`
+        if (drafts?.[draftKey]?.trim() === command.body) { delete drafts[draftKey]; recovery.set(key, drafts) }
+      }
+    }
+    this.#notifyRecovered()
+  }
+
+  #persistRecovery(): void {
+    if (!this.#storage || !this.#editor || !this.#ownerId) return
+    this.#storage.setItem(RECOVERY_KEY, JSON.stringify({ version: 1, origin: this.origin, token: this.#token, editor: this.#editor, ownerId: this.#ownerId,
+      pending: [...this.#pending.values()].map(({ operation, params }) => ({ operation, params })), uploads: [...this.#pendingUploads.values()].map(({ intent }) => intent) }))
+  }
+
+  clearEditingRecovery(): void { this.#storage?.removeItem('rovai.web.edits.v1') }
+
   async login(administratorToken: string): Promise<void> {
+    if (this.#assertTab) await this.#assertTab()
     this.clear()
     const generation = this.#generation
     const response = await this.#fetch(`${this.origin}/api/v1/login`, {
@@ -270,6 +343,10 @@ export class ConsoleClient {
     if (!response.ok) throw new Error(response.status === 409 ? 'Web 与 Host 协议不兼容，请使用同一版本。' : response.status === 429 ? '登录次数过多，请稍后再试。' : '登录失败，请检查管理令牌。')
     const session = await response.json() as { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown }
     if (generation !== this.#generation) throw new SessionRequired()
+    this.#acceptSession(session)
+  }
+
+  #acceptSession(session: { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown }, reconcile = true): void {
     if (session.protocolVersion !== 2) throw new Error('Web 与 Host 协议不兼容，请使用同一版本。')
     if (typeof session.token !== 'string' || !/^[a-f0-9]{64}$/.test(session.token)) throw new Error('会话响应无效。')
     if (typeof session.clientId !== 'string' || !/^[a-f0-9]{64}$/.test(session.clientId)
@@ -281,7 +358,8 @@ export class ConsoleClient {
     this.#ownerId = session.ownerId
     this.#channels = session.channels === 'desktop' ? 'desktop' : 'unsupported'
     this.#token = session.token
-    void this.reconcilePending()
+    this.#persistRecovery()
+    if (reconcile) void this.reconcilePending()
     for (const listener of this.#authListeners) listener()
   }
 
@@ -290,6 +368,7 @@ export class ConsoleClient {
     this.#generation++
     this.#lifetime.abort()
     this.#lifetime = new AbortController()
+    this.#persistRecovery()
     for (const listener of this.#authListeners) listener()
   }
 
@@ -303,6 +382,7 @@ export class ConsoleClient {
     const commandId = params && typeof params === 'object' && 'commandId' in params ? params.commandId : undefined
     if (!RECONCILABLE_COMMANDS.has(operation) || typeof commandId !== 'string') return this.#rpc<T>(operation, params)
     if (!this.authenticated) throw new SessionRequired()
+    if ([...this.#pending.values()].some(entry => entry.operation === operation)) throw new Error('同类操作的原提交仍待核对，请先核对原提交结果。')
     if (this.#pending.has(commandId)) throw new Error('原命令仍在核对中，请等待其结果。')
     // Keep the original request and promise alive through connection/session
     // loss. Shared production handlers retain their submitting state; no new ID
@@ -372,6 +452,7 @@ export class ConsoleClient {
   }
 
   async #dispatchUpload(commandId: string, entry: PendingUpload, preserveUnknown = false): Promise<void> {
+    if (!entry.data) throw new Error('上传内容无法随刷新保留。请先核对原上传结果；未完成时重新选择文件。')
     await this.#json<{ draft: unknown }>('uploads', { method: 'POST', body: entry.data }).then(result => {
         if (this.#pendingUploads.get(commandId) !== entry) return
         this.#pendingUploads.delete(commandId); this.#notifyPending(); entry.resolve(result.draft)
@@ -471,16 +552,18 @@ export class ConsoleClient {
     return this.#json('workspaces', { method: 'POST', body: JSON.stringify({ path, offset }) })
   }
 
-  async #json<T>(path: 'channels' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
+  async #json<T>(path: 'session' | 'channels' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
     const generation = this.#generation
     const result = await (await this.#authorized(path, options)).json() as T
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     return result
   }
 
-  async #authorized(path: 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
+  async #authorized(path: 'session' | 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
     if (!this.#token) throw new SessionRequired()
     const generation = this.#generation
+    if (this.#assertTab) await this.#assertTab()
+    if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {
       ...options, credentials: 'omit', redirect: 'error', cache: 'no-store',
       headers: { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), Authorization: `Bearer ${this.#token}` },

@@ -1,3 +1,4 @@
+import { acquireTabRecovery } from './tab-recovery'
 import { StrictMode, useEffect, useState } from 'react'
 import { RemoteConnectionStatus } from '../../desktop/src/renderer/src/RemoteConnectionStatus'
 import { HostWorkspacePicker } from './HostWorkspacePicker'
@@ -13,8 +14,10 @@ import '../../desktop/src/renderer/src/styles.css'
 import '../../desktop/src/renderer/src/member-editor.css'
 import './styles.css'
 
-const transport = new ConsoleClient(window.location.origin)
+const transport = new ConsoleClient(window.location.origin, fetch, sessionStorage)
 document.documentElement.dataset.platform = browserPlatform()
+document.documentElement.dataset.rovaiSurface = 'web'
+const recovery = acquireTabRecovery().then(owner => transport.restore(owner.fork, owner.assert))
 
 function WebEntry() {
   const [workspaceChoice, setWorkspaceChoice] = useState<{ resolve(value: WorkspaceSelection | null): void } | null>(null)
@@ -29,6 +32,7 @@ function WebEntry() {
   const [authGeneration, setAuthGeneration] = useState(0)
   const [credential, setCredential] = useState('')
   const [busy, setBusy] = useState(false)
+  const [restoring, setRestoring] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   useEffect(() => transport.onAuthenticationChanged(() => {
@@ -39,6 +43,19 @@ function WebEntry() {
     if (!authenticated) return
     return transport.subscribe(() => adapter?.invalidate(), setConnection)
   }, [authenticated, authGeneration, adapter])
+  useEffect(() => {
+    let cancelled = false
+    void recovery.then(restored => {
+      if (cancelled) return
+      if (restored) {
+        setAdapter(current => current ?? createCampAdapter(transport, selectWorkspace))
+        setAuthenticated(true)
+      }
+    }).catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : '恢复失败，请重试。') })
+      .finally(() => { if (!cancelled) { setRestoring(false); setPendingCount(transport.pendingCommandCount) } })
+    return () => { cancelled = true }
+  }, [])
+  useEffect(() => transport.onRecovered(() => adapter?.invalidate()), [adapter])
   const login = async (): Promise<void> => {
     setBusy(true); setError(null)
     const token = credential; setCredential('')
@@ -53,18 +70,19 @@ function WebEntry() {
   return <>
     {current && <CampClientProvider client={current.environment.client}>
       <CurrentUserProfileProvider api={current.profile}>
-        <BusinessApp environment={current.environment} remoteConnection={<RemoteConnectionStatus origin={transport.origin} state={authenticated ? connection : 'expired'} onLogout={() => void transport.logout().catch(() => undefined)} />} sidebarFooter={authenticated ? <div className="web-connection" role="status">
-          <span>{connection === 'live' ? '已连接 Host' : connection === 'offline' ? '连接中断，编辑保留' : '正在连接 Host'}</span>
+        <BusinessApp environment={current.environment} remoteConnection={<RemoteConnectionStatus origin={transport.origin} state={authenticated ? connection : 'expired'} onLogout={() => void transport.logout().catch(() => undefined)} />} sidebarFooter={authenticated && (connection === 'offline' || pendingCount > 0) ? <div className="web-connection" role="status">
+          {connection === 'offline' && <span>连接中断，编辑保留</span>}
           {pendingCount > 0 && <>
             <button type="button" className="quiet-button compact" onClick={() => void transport.reconcilePending()}>核对 {pendingCount} 项提交</button>
-            <button type="button" className="quiet-button compact" title="使用原命令编号和内容重试；Host 已保存的结果会直接返回。" onClick={() => void transport.retryPending().catch(() => undefined)}>重试原提交</button>
+            <button type="button" className="quiet-button compact" title="使用原命令编号和内容重试；Host 已保存的结果会直接返回。" onClick={() => void transport.retryPending().catch(e => setError(e instanceof Error ? e.message : '重试未完成。'))}>重试原提交</button>
           </>}
         </div> : undefined} />
       </CurrentUserProfileProvider>
     </CampClientProvider>}
+    {authenticated && error && <div className="web-recovery-error" role="alert">{error}<button type="button" className="quiet-button compact" onClick={() => setError(null)}>关闭</button></div>}
     {workspaceChoice && <HostWorkspacePicker transport={transport} onSelect={finishWorkspace} />}
     {!authenticated && <div className="web-login-overlay">
-      <form className="web-login" onSubmit={event => { event.preventDefault(); void login() }}>
+      {restoring ? <p role="status">正在恢复…</p> : <form className="web-login" onSubmit={event => { event.preventDefault(); void login() }}>
         <h1>{current ? '重新登录 Rovai AI' : '登录 Rovai AI'}</h1>
         <p>{current ? '当前页面的编辑仍保留。认证后重新读取 Host 状态。' : '使用 Host 的管理令牌登录。'}</p>
         <label htmlFor="administrator-token">管理令牌</label>
@@ -72,7 +90,7 @@ function WebEntry() {
           onChange={event => setCredential(event.target.value)} required disabled={busy} />
         {error && <p role="alert">{error}</p>}
         <button className="primary-button" type="submit" disabled={busy || !credential.trim()}>{busy ? '正在登录…' : '登录'}</button>
-      </form>
+      </form>}
     </div>}
   </>
 }

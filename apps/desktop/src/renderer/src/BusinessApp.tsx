@@ -959,9 +959,13 @@ export function BusinessApp({
   type NavigationContext = { campOptions?: ActivateCampOptions; beforeCommit?: () => void; prepared?: boolean; memberPrepared?: boolean }
   const applyNavigationRef = useRef<(target: NavigationTarget, transaction: NavigationTransaction, context?: NavigationContext) => Promise<void>>(async () => undefined)
   const desktopNavigation = useMemo(() => createDesktopNavigation<NavigationContext>(
-    (target, transaction, context) => applyNavigationRef.current(target, transaction, context)
-  ), [])
-  useEffect(() => () => desktopNavigation.reset(), [desktopNavigation])
+    (target, transaction, context) => applyNavigationRef.current(target, transaction, context), environment.navigationHistory
+  ), [environment.navigationHistory])
+  useEffect(() => {
+    const disconnect = desktopNavigation.connect()
+    return () => { disconnect(); desktopNavigation.reset() }
+  }, [desktopNavigation])
+  const restoredWebNavigation = useRef(false)
   const lastMainTarget = useRef<NavigationTarget>({ kind: 'quick_chat' })
   const [appearance, setAppearance] = useState<AppearanceSnapshot>(
     () => initialAppearanceSnapshot(document.documentElement)
@@ -2114,6 +2118,13 @@ export function BusinessApp({
 
   useEffect(() => {
     if (startupStatus !== 'resolved' || desktopNavigation.getSnapshot().entries.length) return
+    if (environment.navigationHistory?.initial) {
+      if (!restoredWebNavigation.current) {
+        restoredWebNavigation.current = true
+        void desktopNavigation.restore().then(restored => { if (!restored) desktopNavigation.reset({ kind: 'quick_chat' }) })
+      }
+      return
+    }
     const target: NavigationTarget = view === 'camp' && activeCampId
       ? { kind: 'camp', campId: activeCampId }
       : view === 'members' ? { kind: 'members', agentId: restoredMemberId(selectedMemberId, agents), tab: memberTab }
@@ -3829,7 +3840,7 @@ export function BusinessApp({
 
   return (
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
-    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''}>
+    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''}>
       <CampNavigation
         platform={client.platform}
         footer={sidebarFooter}
