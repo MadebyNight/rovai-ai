@@ -16,6 +16,7 @@ const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).v
 test('Server default root is account scoped and independent of working directory', async () => {
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-server-paths-')))
   try {
+    assert.match(execFileSync(binary, ['--help'], { cwd: fixture, encoding: 'utf8' }), /\[default: 127\.0\.0\.1:8767\]/)
     const paths = JSON.parse(execFileSync(binary, ['paths'], { cwd: fixture, encoding: 'utf8' }))
     assert.equal(paths.dataDir, join(process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME, '.rovai-server'))
     assert.equal(paths.database, join(paths.dataDir, 'rovai.sqlite'))

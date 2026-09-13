@@ -68,7 +68,7 @@ TTY 使用颜色，重定向、`NO_COLOR` 或 dumb terminal 使用纯文本。�
 
 原生包包含同版 Host、Agent `rovai` CLI、`rovai-server` 用户入口与 `web-ui/`；从可执行文件真实目录定位
 资源，用户无需手工定位 WebUI，也不依赖 cwd。缺失配套资源明确报安装失败。Web 默认监听
-`127.0.0.1:4317`；可选 `--listen`、`--public-origin` 和显式 `--allow-insecure-lan` 沿用
+`127.0.0.1:8767`；可选 `--listen`、`--public-origin` 和显式 `--allow-insecure-lan` 沿用
 [Host Web v2](host-web-v2.md) 的认证和网络边界。开发专用 WebUI 覆盖不构成用户安装要求。
 
 Unix SIGINT/SIGTERM/SIGHUP、Windows console Ctrl-C/Ctrl-Break 的停止继续使用 v1 定义的 protocol 3：

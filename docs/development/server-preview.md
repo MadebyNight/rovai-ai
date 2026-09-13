@@ -74,7 +74,7 @@ Windows 同一个参数接口：`rovai-server.exe --data-dir "D:\RovaiData"`。`
 启动摘要显示实际版本、就绪地址、访问范围、数据根与日志位置。默认前台运行，Ctrl-C 受控停止；
 终端挂断也进入受控关闭。普通诊断写入 `<data-dir>/logs/server.log`，需要同时在终端排障时使用
 `rovai-server --verbose`（自定义数据根仍传相同 `--data-dir`）。无刷屏不表示服务已转入后台。
-Web 默认地址为 `http://127.0.0.1:4317`，配套 UI 从可执行文件真实目录定位，不依赖当前工作目录。
+独立 Server 的 Web 默认地址为 `http://127.0.0.1:8767`，配套 UI 从可执行文件真实目录定位，不依赖当前工作目录。
 
 独立 Server 当前不支持飞书／钉钉渠道。渠道功能请使用 Rovai Desktop。
 Desktop 设置中开启的 Web 服务属于该 Desktop 实例，可以管理已有账号的 Bot 发布、重试和结构化审批人选择；
@@ -120,7 +120,7 @@ Web 与 Host 必须使用同一协议版本，当前为 [Host Web v2](../contrac
 ## 网络与停止
 
 默认推荐 loopback。局域网监听显式设置 `--allow-insecure-lan`，Host 自动发现实际网络接口。
-新入口可用 `--listen 0.0.0.0:4317 --allow-insecure-lan`；
+新入口可用 `--listen 0.0.0.0:8767 --allow-insecure-lan`；
 反向代理可补充 `--public-origin https://<代理地址>`（旧入口参数为 `--web-public-origin`）；不要求唯一手填 LAN 地址。地址发现排除 198.18.0.0/15，
 不提供展示、复制或扫码；网络层不主动封禁。明文网络可能暴露令牌和内容；不可信网络使用
 外部 HTTPS 或可信 VPN。本实现不创建域名、证书或预览代理，不信任任意代理转发头。
@@ -128,7 +128,7 @@ Web 与 Host 必须使用同一协议版本，当前为 [Host Web v2](../contrac
 Unix 用 SIGINT/SIGTERM；Windows 用 console Ctrl-C/Ctrl-Break。停止沿用 Core protocol 3；只有 durable
 收口完成才以 0 退出。强杀不构成执行完成，下一次启动由 Core 恢复。两个 Host 不得共用数据目录。
 
-Desktop「设置 → 远程连接」控制当前 Host，Web 默认关闭。关闭 Web 只撤销网络会话与订阅，
+Desktop「设置 → 远程连接」控制当前 Host，Web 默认关闭，端口默认 `8766`；独立 Server 默认 `8767`，允许两者在同一电脑使用独立数据根并行运行。手动设置端口或传入 `--listen` 时以显式值为准。关闭 Web 只撤销网络会话与订阅，
 当前 Core 和任务继续；重启 Desktop 后默认关闭。开发 Desktop 开启前运行 `pnpm build:web`，打包时则
 随包携带同一 WebUI 构建产物。
 

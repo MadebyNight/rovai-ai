@@ -17,7 +17,7 @@ struct Cli {
     /// All Rovai-owned Server data. Defaults to ~/.rovai-server, independently of cwd.
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
-    #[arg(long, default_value = "127.0.0.1:4317")]
+    #[arg(long, default_value = "127.0.0.1:8767")]
     listen: SocketAddr,
     #[arg(long)]
     public_origin: Option<String>,

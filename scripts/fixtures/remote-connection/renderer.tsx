@@ -49,7 +49,7 @@ const windowControls = { getResetCapability: async () => ({ canReset: true, reas
 
 let token = 'review-only-not-a-real-administrator-token'
 let hostStatus = { enabled: ['enabled', 'empty'].includes(initialState), sessions: initialState === 'enabled' ? 2 : 0,
-  listen: '0.0.0.0:4317', origin: 'http://192.168.1.12:4317', addresses: initialState === 'empty' ? [] : addresses('4317') }
+  listen: ['enabled', 'empty'].includes(initialState) ? '0.0.0.0:8766' : undefined, origin: 'http://192.168.1.12:8766', addresses: initialState === 'empty' ? [] : addresses('8766') }
 function addresses(port: string) { return [
   { origin: `http://192.168.1.12:${port}`, interface: 'en0', recommended: true },
   { origin: `http://192.168.2.12:${port}`, interface: 'en1', recommended: true },

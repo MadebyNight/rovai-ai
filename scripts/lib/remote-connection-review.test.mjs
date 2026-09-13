@@ -77,6 +77,7 @@ test('remote connection design preserves production settings geometry, keyboard 
         assert.equal(await browser.evaluate(`document.querySelector('[aria-current="page"]')?.textContent`), '远程连接')
         await browser.capture(join(output, `${surface}-${state}-${theme}.png`))
         evidence.views.push({ surface, theme, state, geometry: actual })
+        if (surface === 'desktop' && state === 'off') assert.equal(await browser.evaluate(`document.querySelector('#remote-port').value`), '8766', 'fresh Desktop defaults to its own Web port')
         if (surface === 'desktop' && state === 'enabled') {
           assert.equal(await browser.evaluate(`document.querySelectorAll('.remote-connection-page h2, .remote-service-icon').length`), 0)
           assert.equal(await browser.evaluate(`document.querySelector('#remote-address').textContent.includes('198.18.')`), false)

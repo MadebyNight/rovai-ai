@@ -17,7 +17,7 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
-  const port = portDraft ?? '4317'
+  const port = portDraft ?? '8766'
   const [address, setAddress] = useState('')
   const [token, setToken] = useState('')
   const [visible, setVisible] = useState(false)
@@ -36,7 +36,7 @@ export function HostWebSettings({ api, portDraft, onPortDraftChange }: {
           const next = await api.status()
           if (!active || current !== generation.current) return
           setStatus(next)
-          onPortDraftChange(current => current ?? next.listen?.split(':').at(-1) ?? '4317')
+          onPortDraftChange(current => current ?? next.listen?.split(':').at(-1) ?? '8766')
           const credential = (await api.token()).administratorToken
           if (!active || current !== generation.current) return
           setToken(credential)
