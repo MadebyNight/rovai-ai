@@ -50,7 +50,27 @@ app.whenReady().then(async () => {
       const initialPositions = []
       const waitForContent = () => waitFor(`!document.querySelector('.execution-history-loader .camp-history-spinner')
         && ![...document.querySelectorAll('.process-action.current')].some(item => item.textContent.includes('正在读取完整过程'))`)
+      const initialFeedback = []
       for (const placement of ['bottom', 'inspector']) {
+        await run(`document.documentElement.dataset.theme = '${placement === 'bottom' ? 'day' : 'night'}'; window.campOpenTest.showRunningExecution('${placement}', -1, 0)`)
+        await waitFor("document.querySelector('.process-action.current')?.textContent === '思考中'")
+        await waitForContent()
+        const feedback = await run(`(() => {
+          const content = document.querySelector('.process-content')
+          const status = content.querySelector('.process-action.current')
+          return { text: status.textContent, gap: status.getBoundingClientRect().top - content.getBoundingClientRect().top }
+        })()`)
+        assert.equal(feedback.gap, 0, `${placement}: initial thinking has no blank row above it`)
+        initialFeedback.push({ placement, ...feedback })
+        await capture(`initial-thinking-${placement}`)
+        await run('window.campOpenTest.appendExecution(1)')
+        await waitFor("Boolean(document.querySelector('.tool-activity-group'))")
+        assert.equal(await run("Boolean(document.querySelector('.process-action.current'))"), false,
+          'first output replaces the initial feedback')
+        await run('window.campOpenTest.appendExecution(7)')
+        await waitFor("document.querySelector('.process-copy')?.textContent.includes('记录 8')")
+        assert.equal(await run("document.querySelector('.process-copy').getBoundingClientRect().height > 0"), true,
+          'narration renders after the empty list receives output')
         for (let sample = 0; sample < 3; sample++) {
           await run(`window.campOpenTest.showRunningExecution('${placement}', ${sample})`)
           await waitFor('document.querySelector("button[aria-label^=打开][aria-label*=执行过程]") !== null')
@@ -187,7 +207,7 @@ app.whenReady().then(async () => {
       }
       assert.notEqual(report[0].background, report[1].background, 'both themes are applied')
       assert.equal(errors.length, 0, errors.join('\n'))
-      console.log(JSON.stringify({ ok: true, mode, report, initialPositions }))
+      console.log(JSON.stringify({ ok: true, mode, report, initialPositions, initialFeedback }))
       app.exit(0)
       return
     }
