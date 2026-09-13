@@ -13,6 +13,24 @@ last_updated: 2026-09-13
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已合入 main `93487750`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
+## 本轮：区分默认端口与 Web 设置导航
+
+`e863243c` 将 Desktop 托管 Web 默认端口从 4317 改为 8766，独立 Server 默认监听改为
+`127.0.0.1:8767`；显式参数与已运行监听优先，未应用的 Desktop 端口仍只在下次开启生效。
+`8e1e704e` 让 Web 设置复用 macOS 固定 270px 导航规则：展开后不显示折叠、后退、前进或调宽入口；
+继承折叠状态时仅保留展开恢复，退出设置后还原普通页面宽度。浏览器 History API 和普通页面按钮保留。
+
+TypeScript、远程连接 14 个既有模拟视图/交互、Server 入口 2 项、正式导航组件原生输入 owner 1 项通过。
+导航 owner 在同一 macOS Electron fixture 切换 darwin/win32 客户端标记，验证两类浏览器都采用同一设置规则，
+不将标记切换计为 Windows 原生验收。通用文档门禁通过。
+
+[实际包与浏览器验证](evidence/default-ports-settings/validation.json)使用干净 `8e1e704e` 的 0.2.5 arm64 daily 包，
+隔离 userData/Skill/MCP 及 Chrome profile；Desktop 正式开关实际启动 8766，同时由本机 debug `rovai-server`
+不带 listen 参数启动独立数据根的 8767，两处 HTTP 均可用。Web 通用/远程栏目无顶部控件，刷新及浏览器后退
+返回设置仍保持；普通页三个按钮保留。Server 受控停止成功，关闭 Desktop Web 后 Core 仍 Ready，未启动模型。
+首轮自动化在引导首个点击发生 CDP evaluate 超时；增加逐次点击记录及窗口激活后，以原期限和同一产品包通过，
+不将该结果视为已确定超时根因。仅端口的中间打包在收到导航补充后停止，未安装；最终从完整提交重新打包。
+
 ## 本轮：默认队伍与一键创建设置对齐
 
 Web 正式页面最初接入时（`b62752dd9`），通用偏好适配将默认队伍、队长和一键创建开关保存为浏览器本地值，
