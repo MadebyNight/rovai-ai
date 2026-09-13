@@ -91,35 +91,35 @@ export function MemberRuntimePicker({
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Content
-            className="member-runtime-menu"
+            className="runtime-model-picker-menu runtime-parameter-picker-menu member-runtime-menu"
             align="start"
             sideOffset={5}
             collisionPadding={10}
             loop
           >
-            <Menu.RadioGroup
+            <Menu.RadioGroup className="runtime-picker-options"
               value={value || '__none__'}
               onValueChange={(next) =>
                 onChange(next === '__none__' ? '' : (next as AdapterKind))
               }
             >
-              {(['', ...VISIBLE_PRODUCT_RUNTIMES] as const).map((kind) => (
+              <div className="runtime-picker-scroll">{(['', ...VISIBLE_PRODUCT_RUNTIMES] as const).map((kind) => (
                 <Menu.RadioItem
                   key={kind}
                   textValue={kind ? adapterLabel(kind) : '暂不配置'}
                   disabled={Boolean(kind && isDisabled(kind))}
                   value={kind || '__none__'}
-                  className="member-runtime-menu-item"
+                  className="runtime-model-picker-item member-runtime-menu-item"
                 >
                   <RuntimeGlyph kind={kind} />
-                  <span>{kind ? adapterLabel(kind) : '暂不配置'}</span>
-                  <Menu.ItemIndicator className="member-runtime-item-check">
+                  <span className="runtime-model-picker-copy"><strong>{kind ? adapterLabel(kind) : '暂不配置'}</strong></span>
+                  <Menu.ItemIndicator className="runtime-model-picker-check">
                     <svg aria-hidden="true" viewBox="0 0 16 16">
                       <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
                     </svg>
                   </Menu.ItemIndicator>
                 </Menu.RadioItem>
-              ))}
+              ))}</div>
             </Menu.RadioGroup>
           </Menu.Content>
         </Menu.Portal>
