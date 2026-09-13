@@ -15,6 +15,9 @@ last_updated: 2026-09-13
 
 ## 范围与状态
 
+Desktop 的 50 条内存导航与 macOS 左上角控件增量见[实施与验证](implementation-plan.md#desktop-内存导航)，
+交互以 [App Shell Navigation](../../ui/components/app-shell-navigation.md#前进与后退) 为准；不新增持久化或模型上下文。
+
 与 main 的 ZCode 版本并行开发期间，本分支曾使用 v1.57；合入时顺延为 v1.58，main 已有 v1.57 的正文与验收记录保留。历史评测报告仍按其实际提交、产品版本和摘要解释，不因文档迁移变成合并后版本的实测结果。合并验证与本机部署进度见[集成记录](merge-and-local-schedules.md)。
 
 每日已完成 7 天非空真实记录复算和最新一天的真实 LLM 分析；实际采集覆盖、两次分析尝试及部署限制见[每日 Trace 实测结果](daily-trace-results.md)，冻结范围见[核验计划](daily-trace-verification.md)。

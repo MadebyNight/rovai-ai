@@ -1,5 +1,6 @@
 import { createHostChannelHandler } from './host-channels'
 import { FilePreviewFrameNavigation } from './file-preview/file-preview-navigation'
+import { installWindowNavigation } from './window-navigation'
 import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
@@ -765,6 +766,7 @@ function createWindow(): void {
     }, 0)
   }
   installCloseTabShortcut(window.webContents, process.platform, () => window.close())
+  installWindowNavigation(window, process.platform)
   window.webContents.on('before-input-event', (event, input) => {
     const action = pageZoomAction(input, process.platform)
     if (action === null) return

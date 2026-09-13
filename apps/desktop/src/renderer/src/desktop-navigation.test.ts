@@ -1,0 +1,160 @@
+import { describe, expect, it } from 'vitest'
+import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction } from './desktop-navigation'
+
+const camp = (campId: string): NavigationTarget => ({ kind: 'camp', campId })
+const create = () => createDesktopNavigation(async (_target, transaction) => { transaction.commit() })
+
+describe('window navigation history', () => {
+  it('keeps one initial page and only ignores the current destination', async () => {
+    const navigation = create()
+    navigation.reset(camp('A'))
+    await navigation.push(camp('A'))
+    await navigation.push(camp('B'))
+    await navigation.push(camp('A'))
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('B'), camp('A')], index: 2 })
+    await navigation.back()
+    await navigation.back()
+    await navigation.back()
+    expect(navigation.getSnapshot().index).toBe(0)
+    await navigation.forward()
+    expect(navigation.getSnapshot().entries).toHaveLength(3)
+  })
+
+  it('trims the forward branch before imposing the 50-entry cap, including the current page', async () => {
+    const navigation = create()
+    navigation.reset(camp('0'))
+    for (let id = 1; id <= 60; id++) await navigation.push(camp(String(id)))
+    expect(navigation.getSnapshot()).toMatchObject({ index: 49 })
+    expect(navigation.getSnapshot().entries).toHaveLength(50)
+    expect(navigation.getSnapshot().entries[0]).toEqual(camp('11'))
+    for (let i = 0; i < 10; i++) await navigation.back()
+    await navigation.push(camp('branch'))
+    expect(navigation.getSnapshot().entries).toHaveLength(41)
+    expect(navigation.getSnapshot().index).toBe(40)
+    expect(navigation.getSnapshot().entries[0]).toEqual(camp('11'))
+    expect(await navigation.forward()).toBe(false)
+  })
+
+  it('replaces a pending ID or filter without consuming a step or losing the forward branch', async () => {
+    const navigation = create()
+    navigation.reset(camp('pending'))
+    await navigation.replace(camp('official'))
+    await navigation.push({ kind: 'memory', memoryId: 'M' })
+    await navigation.replace({ kind: 'memory', memoryId: 'M', search: 'query' })
+    await navigation.push({ kind: 'settings', section: 'runtime' })
+    await navigation.back()
+    await navigation.replace({ kind: 'memory', memoryId: 'M', search: 'other' })
+    expect(navigation.getSnapshot().entries).toEqual([
+      camp('official'), { kind: 'memory', memoryId: 'M', search: 'other' }, { kind: 'settings', section: 'runtime' }
+    ])
+    await navigation.forward()
+    expect(navigation.getSnapshot().index).toBe(2)
+  })
+
+  it('shares history across settings sections, memory details and Camp resources', async () => {
+    const navigation = create()
+    const targets: NavigationTarget[] = [camp('A'), camp('B'), { kind: 'settings', section: 'runtime' },
+      { kind: 'settings', section: 'general' }, { kind: 'memory', memoryId: null }, { kind: 'memory', memoryId: 'M' }]
+    navigation.reset(targets[0])
+    for (const target of targets.slice(1)) await navigation.push(target)
+    for (const target of targets.slice(0, -1).reverse()) {
+      await navigation.back()
+      const state = navigation.getSnapshot()
+      expect(state.entries[state.index]).toEqual(target)
+    }
+  })
+
+  it('applies all rapid cursor moves to the latest intent and rejects stale completions', async () => {
+    let delayed = false
+    const pending: Array<{ transaction: NavigationTransaction; finish(): void }> = []
+    const navigation = createDesktopNavigation(async (_target, transaction) => {
+      if (delayed) await new Promise<void>(finish => pending.push({ transaction, finish }))
+      transaction.commit()
+    })
+    navigation.reset(camp('A'))
+    await navigation.push(camp('B'))
+    await navigation.push(camp('C'))
+    await navigation.push(camp('D'))
+    delayed = true
+    const back1 = navigation.back(), back2 = navigation.back(), back3 = navigation.back()
+    expect(navigation.getSnapshot().index).toBe(3) // The guarded page is still D.
+    pending[2].finish()
+    expect(await back3).toBe(true)
+    expect(navigation.getSnapshot().index).toBe(0)
+    pending[0].finish(); pending[1].finish()
+    expect(await back1).toBe(false); expect(await back2).toBe(false)
+    expect(navigation.getSnapshot().index).toBe(0)
+  })
+
+  it('retains the page, cursor and forward branch when a leave guard refuses', async () => {
+    let allow = true
+    const navigation = createDesktopNavigation(async (_target, transaction) => { if (allow) transaction.commit() })
+    navigation.reset(camp('A')); await navigation.push(camp('B')); await navigation.push(camp('C')); await navigation.back()
+    const before = navigation.getSnapshot()
+    allow = false
+    expect(await navigation.push(camp('D'))).toBe(false)
+    expect(navigation.getSnapshot()).toBe(before)
+    allow = true
+    await navigation.forward()
+    expect(navigation.getSnapshot().entries[2]).toEqual(camp('C'))
+  })
+
+  it('releases obsolete guarded waiting as soon as a newer selection takes over', async () => {
+    let finishedWaiting = false
+    const navigation = createDesktopNavigation(async (target, transaction) => {
+      if (target.kind === 'camp' && target.campId === 'B') {
+        await transaction.superseded
+        finishedWaiting = true
+      }
+      transaction.commit()
+    })
+    navigation.reset(camp('A'))
+    const pending = navigation.push(camp('B'))
+    await navigation.push(camp('A'))
+    expect(await pending).toBe(false)
+    expect(finishedWaiting).toBe(true)
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A')], index: 0 })
+  })
+
+  it('omits superseded destinations that never rendered and cancels a pending departure to the displayed page', async () => {
+    const pending: Array<() => void> = []
+    const navigation = createDesktopNavigation(async (_target, transaction) => {
+      await new Promise<void>(resolve => pending.push(resolve))
+      transaction.commit()
+    })
+    navigation.reset(camp('A'))
+    const first = navigation.push(camp('B'))
+    const second = navigation.push(camp('C'))
+    pending[1](); await second
+    pending[0](); await first
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('C')], index: 1 })
+    const departure = navigation.push(camp('D'))
+    const cancel = navigation.push(camp('C'))
+    pending[3](); await cancel
+    pending[2](); await departure
+    expect(navigation.getSnapshot()).toEqual({ entries: [camp('A'), camp('C')], index: 1 })
+  })
+
+  it('replaces a deleted historical resource with a valid fallback', async () => {
+    let deleted = false
+    const navigation = createDesktopNavigation(async (target, transaction) => {
+      transaction.commit(deleted && target.kind === 'camp' && target.campId === 'A' ? { kind: 'quick_chat' } : target)
+    })
+    navigation.reset(camp('A')); await navigation.push(camp('B')); deleted = true
+    await navigation.back()
+    expect(navigation.getSnapshot()).toEqual({ entries: [{ kind: 'quick_chat' }, camp('B')], index: 0 })
+  })
+
+  it('isolates windows and resets outstanding requests when the session is replaced', async () => {
+    let release!: () => void
+    const first = createDesktopNavigation(async (_target, transaction) => {
+      await new Promise<void>(resolve => { release = resolve }); transaction.commit()
+    })
+    const second = create()
+    first.reset(camp('A')); second.reset(camp('B'))
+    const pending = first.push(camp('C'))
+    first.reset({ kind: 'quick_chat' }); release(); await pending
+    expect(first.getSnapshot()).toEqual({ entries: [{ kind: 'quick_chat' }], index: 0 })
+    expect(second.getSnapshot()).toEqual({ entries: [camp('B')], index: 0 })
+  })
+})

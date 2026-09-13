@@ -630,9 +630,9 @@ Object.assign(window, { campOpenTest: {
       </div>
     </section>)
   },
-  showRunningExecution: (placement: 'bottom' | 'inspector', sample: number) => {
+  showRunningExecution: (placement: 'bottom' | 'inspector', sample: number, initialCount = 1000) => {
     executionRun.id = `window-live-${placement}-${sample}`
-    executionThrough = executionTails.get(executionRun.id) ?? 1000
+    executionThrough = executionTails.get(executionRun.id) ?? initialCount
     runningExecutionScenario = true
     executionChanges.length = 0
     executionRequests.length = 0

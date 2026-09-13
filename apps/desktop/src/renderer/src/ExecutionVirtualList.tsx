@@ -91,6 +91,8 @@ export function ExecutionVirtualList<T extends { key: string }>({ items, childre
     const keys = new Set(items.map(item => item.key))
     for (const key of heights.current.keys()) if (!keys.has(key)) heights.current.delete(key)
   }, [items])
+  // An empty wrapper would add a grid gap before the initial Run feedback.
+  if (items.length === 0) return null
   if (!enabled) return <>{items.map(children)}</>
   const indexes = Array.from({ length: end - start }, (_, offset) => start + offset)
   const focusedIndex = range.focus ? items.findIndex(item => item.key === range.focus) : -1
