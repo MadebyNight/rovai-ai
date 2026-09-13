@@ -427,6 +427,12 @@ Core 私有完整 canonical session file，实际调用 `switch_session` 后核�
 `ResumeContinuityLost` 才最多创建一个 replacement，Host/RPC/model/binding 等失败不降级。Deep Probe 同样执行 exact
 switch，但用 `--session-dir <probe-root>/sessions` 隔离并清理测试 Session。
 
+Windows Pi Host 在自己的启动边界使用 `dunce::simplified` 将可安全表示的 canonical 本地 cwd 转为普通盘符路径，
+避免 Pi 默认 Session 目录编码保留 `\\?\` 中的 `?`。Camp、Fleet 与 Session 校验仍使用原 canonical identity；
+正式启动继续使用 Pi 原生 Session 目录策略。无法安全转换、仍需 verbatim 语法的长路径、特殊文件名或 UNC/device
+路径在 Pi 启动前返回明确兼容错误，不截断路径或静默改指向；Windows UNC workspace 的既有不准入范围不变。
+该适配只属于 Pi，其他 native EXE 的 Managed Process cwd 语义不变。
+
 Bootstrap 使用 managed extension 的 `before_agent_start`，在该 hook 位置的 Pi system prompt 后追加当前完整
 Bootstrap。该 hook 每轮重新读取 binding，只验证基本结构与 Bootstrap digest；失败只诊断并允许 Pi 继续，不重复
 Session/cwd activation，也不验证 Tool/Skill catalog、提交 Receipt 或 abort。Prompt RPC response 只证明 command round
