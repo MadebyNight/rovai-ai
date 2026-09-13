@@ -6582,40 +6582,6 @@ mod tests {
         ));
         fs::create_dir_all(&fixture).unwrap();
 
-        let server_data = fixture.join("server-data");
-        fs::create_dir(&server_data).unwrap();
-        let server_data = fs::canonicalize(server_data).unwrap();
-        let server_root = crate::storage_layout::server_runtime_root(&server_data).unwrap();
-        let server = CampAttachmentViewStore::admit(
-            &server_root,
-            &server_data,
-            &[server_data.join("skills")],
-        )
-        .unwrap();
-        assert_eq!(server.root(), server_root);
-        assert!(
-            CampAttachmentViewStore::admit(&server_root, &server_data, &[]).is_err(),
-            "the standalone root still has one owner"
-        );
-        assert!(
-            CampAttachmentViewStore::admit(
-                &server_data.join("instances/wrong/runtime-files"),
-                &server_data,
-                &[]
-            )
-            .is_err()
-        );
-        drop(server);
-        assert!(
-            CampAttachmentViewStore::admit(
-                &server_root,
-                &server_data,
-                &[server_data.join("instances")]
-            )
-            .is_err(),
-            "standalone layout does not waive managed-root overlap checks"
-        );
-
         let symlink_target = fixture.join("symlink-target");
         let symlink_root = fixture.join("symlink-root");
         fs::create_dir(&symlink_target).unwrap();

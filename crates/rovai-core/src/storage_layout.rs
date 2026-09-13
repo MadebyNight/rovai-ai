@@ -174,4 +174,56 @@ mod tests {
         assert!(ServerPaths::from_data_dir(Path::new("relative")).is_err());
         assert!(ServerPaths::from_data_dir(&std::env::temp_dir().join("../escape")).is_err());
     }
+
+    // The older root-admission fixture is Unix-only. This owner preserves its
+    // standalone cases and also exercises Windows native private-directory ACLs.
+    #[test]
+    fn standalone_runtime_root_preserves_native_admission_and_owner() {
+        use crate::camp_attachment_view::CampAttachmentViewStore;
+        let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let requested = parent.join(format!("rovai-server-layout-{}", uuid::Uuid::new_v4()));
+        let paths = ServerPaths::prepare(&requested).unwrap();
+        let root = &paths.runtime_camp_files_root;
+        let server = CampAttachmentViewStore::admit(
+            root,
+            &paths.data_dir,
+            std::slice::from_ref(&paths.skill_library_root),
+        )
+        .unwrap();
+        assert_eq!(server.root(), root);
+        assert!(
+            CampAttachmentViewStore::admit(root, &paths.data_dir, &[]).is_err(),
+            "the standalone root still has one owner"
+        );
+        assert!(
+            CampAttachmentViewStore::admit(
+                &paths.data_dir.join("instances/wrong/runtime-files"),
+                &paths.data_dir,
+                &[],
+            )
+            .is_err()
+        );
+        drop(server);
+        assert!(
+            CampAttachmentViewStore::admit(
+                root,
+                &paths.data_dir,
+                &[paths.data_dir.join("instances")],
+            )
+            .is_err(),
+            "standalone layout does not waive managed-root overlap checks"
+        );
+        let token = paths.management_token(|| Ok("1".repeat(64))).unwrap();
+        let reopened = ServerPaths::prepare(&requested).unwrap();
+        assert_eq!(reopened.runtime_camp_files_root, *root);
+        assert_eq!(
+            reopened
+                .management_token(|| panic!("do not replace a stored token"))
+                .unwrap(),
+            token
+        );
+        let server = CampAttachmentViewStore::admit(root, &paths.data_dir, &[]).unwrap();
+        drop(server);
+        std::fs::remove_dir_all(requested).unwrap();
+    }
 }

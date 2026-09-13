@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-13T06:23:39.295Z",
+  "scope": "native Server installation and data-root acceptance",
+  "sourceCommit": "a8e809b50d12cb2720ee5ac564978c813f70ab1b",
+  "target": "macos-arm64",
+  "version": "0.2.4",
+  "profile": "release",
+  "sourceDirty": false,
+  "qualification": "development-preview",
+  "archiveSha256": "a7019d7d05e414b644215f436ab4cde49baf9160c1bef12ddb5444c754379d83",
+  "manifestSha256": "64883186b3b4d29b62f2d28fa7c8481ab557714dfbc5f40aa5dbe1be4482d844",
+  "hostSha256": "3ec3f4051ac661c037edda6a9e2c9a01a22cf41a0b758fe6890f4d206e730a6e",
+  "uiEntrySha256": "26337ce657fa80621a5075693fbeabc7c1072aaf1816046827940e4cb8cabbb1",
+  "checks": [
+    {
+      "command": "ROVAI_SERVER_BIN=<package>/rovai-server ROVAI_SERVER_RELEASE_DIR=<release-assets> node --test scripts/lib/server-entry.test.mjs",
+      "exitCode": 0,
+      "passed": 2,
+      "skipped": 0,
+      "assertions": [
+        "verified archive installation outside repository",
+        "runtime PATH excludes Node/pnpm",
+        "default and custom whole-root derivation",
+        "HTTP MCP mutation and Skill import",
+        "data and token retained after restart",
+        "second owner rejected",
+        "lost authority not reinitialized",
+        "legacy preview and Desktop resource roots rejected without modification",
+        "symlink ancestor rejected before directory preparation"
+      ]
+    },
+    {
+      "command": "node --test scripts/lib/server-install.test.mjs",
+      "exitCode": 0,
+      "passed": 1,
+      "skipped": 0,
+      "assertions": [
+        "repeat install and PATH deduplication",
+        "complete checksum before switch",
+        "replacement package preserves data",
+        "wrong target and symlink members rejected"
+      ]
+    },
+    {
+      "command": "node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs",
+      "exitCode": 0,
+      "passed": 4,
+      "skipped": 0
+    }
+  ],
+  "isolation": {
+    "channel": "automatic_acceptance",
+    "temporaryDataRoots": true,
+    "modelsCalled": false,
+    "dailyAppModified": false,
+    "tokensIncluded": false
+  },
+  "notEstablished": [
+    "official Release availability",
+    "Windows console shutdown",
+    "other platforms from this macOS result",
+    "clean-machine native dependency baseline",
+    "all Agent runtimes",
+    "signing and notarization",
+    "WebUI/CLI convenience updater"
+  ]
+}

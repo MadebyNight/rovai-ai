@@ -232,6 +232,7 @@ jobs:
         run: |
           cargo test -p rovai-core --lib managed_process
           cargo test -p rovai-core --lib core_data_dir_lock
+          cargo test -p rovai-core --lib storage_layout
       - name: Verify packaged Host and shared Web lifecycle
         env:
           ROVAI_HOST_BIN: ${{ github.workspace }}/out/server/${{ matrix.target }}/rovai-host${{ matrix.target == 'windows-x64' && '.exe' || '' }}

@@ -30,13 +30,15 @@ GitHub Releases 为正式发布目标；安装脚本地址、命令可用性与�
 第二 Host 占用拒绝，主库丢失后不重建空库；旧 SQLite、旧默认建议目录和 Desktop 资源目录有明确兼容提示。
 入口不会通过 symlink 祖先创建新根。所有进程使用临时账号 Home/独立绝对数据根，不调用模型、不动日常 App。
 安装器的归档校验、重复安装、内容替换、错误包不切换、链接成员拒绝、PATH 去重与数据保留通过。
-实际预编译 Debug 包（含共享生产 WebUI）经安装器装到仓库外，在无 Node/pnpm PATH 下完成同一数据根验收。
+实际预编译 Debug 包及干净 `a8e809b5` 的 release profile 包（含共享生产 WebUI）均经安装器装到仓库外，
+在无 Node/pnpm PATH 下完成同一数据根验收；[包哈希与范围记录](evidence/mac-server-root/validation.json)保留实际来源。
 这证明本机安装链路，不等于正式 Release 或其他平台资格。本轮全量 Vitest 190 文件/1968 项、
 Node 聚合 317 通过/2 既有平台跳过、Rust workspace default（Core 804 通过/6 既有忽略、CLI 35、Web 5）通过。原 Desktop/Headless 生命周期、同 Core Web 与关闭 Web 后
 继续调度的四项 owner 回归通过；Rust 根推导/Runtime root admission、Clippy、TypeScript 和通用文档门禁通过。
 
-测试 owner：`storage_layout` 新单测只拥有单根位置推导（此前无该公共 seam）；既有 Runtime admission owner
-增加精确根、错误 key、重叠及独占 case。`server-entry.test.mjs` 必须用真实进程/SQLite/HTTP 才能证明路径传递、
+测试 owner：`storage_layout` 分别拥有纯位置推导和跨平台私有目录/Runtime root 准入 seam。
+后者保留从 Unix-only fixture 移入的精确根、错误 key、重叠及独占 case，并增加 marker/token 重开；
+这样 Windows 也能实际执行其原生 ACL 准入，不增加第二份等价 Unix fixture。`server-entry.test.mjs` 必须用真实进程/SQLite/HTTP 才能证明路径传递、
 持久化与第二 owner 拒绝；`server-install.test.mjs` 负责已校验包到磁盘入口切换的失败窗口。
 最小命令是 `pnpm test:server-entry` 和两个定向 Rust owner，不增加重复 schema/常量测试，也不替代平台验收。
 
