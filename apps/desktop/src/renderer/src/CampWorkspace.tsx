@@ -9,7 +9,8 @@ import { MessageQuotes, MessageQuoteSelectionToolbar } from './MessageQuotes'
 import { dismissMessageQuoteSelection } from './message-quote-selection'
 import { currentUserDisplayName } from '@contracts'
 import { CurrentUserAvatar, useCurrentUserProfile } from './CurrentUserProfile'
-import { ExecutionReadingContext, useExecutionWindow } from './useExecutionWindow'
+import { ExecutionLatestContext, ExecutionReadingContext, useExecutionWindow } from './useExecutionWindow'
+import { ReturnToLatest } from './ReturnToLatest'
 import { prefersReducedMotion } from './reduced-motion'
 import { isFileFindTarget, useOptionalFileFind } from './FilePreviewFind'
 import { readErrorMessage } from './error-message'
@@ -4695,6 +4696,14 @@ export function CampWorkspace({
               )}
               </div>
             </div>
+            <ReturnToLatest
+              viewportRef={timelineScrollRef}
+              ownerKey={snapshot.camp.id}
+              contentRevision={publishedMessageSequence}
+              scope="camp"
+              enabled={conversationView === 'conversation' && !conversationFind.open}
+              onLatest={() => followTimelineAfterUserSend(snapshot.camp.id)}
+            />
             {worldMapEnabled && (
               <div className="camp-world-map-panel" hidden={conversationView !== 'world'}>
                 <CampWorldMap
@@ -5589,16 +5598,22 @@ function ExecutionDrawer({
         turnCancelling: turnStopping
       })
     : 'hidden'
-  const focusedProgress = resolvedFocusedRunId
-    ? progressByRunId.get(resolvedFocusedRunId)
+  const latestRun = process.runs.at(-1)
+  const latestProgress = latestRun
+    ? progressByRunId.get(latestRun.id)
     : undefined
   const progressFollowKey = JSON.stringify([
-    resolvedFocusedRun?.status ?? null,
-    resolvedFocusedRun?.waitReason ?? null,
-    windowedEvidence ? resolvedFocusedRun?.executionEvidenceCount : focusedProgress?.items ?? []
+    latestRun?.status ?? null,
+    latestRun?.waitReason ?? null,
+    windowedEvidence ? latestRun?.executionEvidenceCount : latestProgress?.items ?? []
   ])
   const followingLatestRef = useRef(false)
   const [followingLatest, setFollowingLatestState] = useState(false)
+  const [latestRequest, setLatestRequest] = useState(0)
+  const [hasNewer, setHasNewer] = useState(false)
+  const latestContext = useMemo(() => ({
+    runId: latestRun?.id ?? null, request: latestRequest, setHasNewer
+  }), [latestRun?.id, latestRequest])
   const setFollowingLatest = (following: boolean): void => {
     followingLatestRef.current = following
     setFollowingLatestState((current) => current === following ? current : following)
@@ -5799,15 +5814,15 @@ function ExecutionDrawer({
   }, [focusRequest.sequence, process.agentId])
 
   useLayoutEffect(() => {
-    if (!followingLatestRef.current || !resolvedFocusedRun) return undefined
-    const terminal = !NON_TERMINAL_RUNS.has(resolvedFocusedRun.status)
+    if (!followingLatestRef.current || !latestRun) return undefined
+    const terminal = !NON_TERMINAL_RUNS.has(latestRun.status)
     const frame = window.requestAnimationFrame(() => {
       const body = drawerBodyRef.current
       if (body) scrollExecutionDrawerToLatest(body)
       if (terminal) setFollowingLatest(false)
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [progressFollowKey, resolvedFocusedRunId])
+  }, [progressFollowKey, latestRun?.id])
 
   const displayName = member?.displayName ?? profile?.displayName ?? process.agentId
   const drawerTitle = executionDrawerTitle(
@@ -5947,7 +5962,7 @@ function ExecutionDrawer({
             const body = event.currentTarget
             if (body.scrollHeight - body.clientHeight <= 1) return
             const eligible = Boolean(
-              resolvedFocusedRun && NON_TERMINAL_RUNS.has(resolvedFocusedRun.status)
+              latestRun && NON_TERMINAL_RUNS.has(latestRun.status)
             )
             setFollowingLatest(eligible && executionDrawerIsNearBottom(
               body.scrollTop,
@@ -5956,6 +5971,7 @@ function ExecutionDrawer({
             ))
           }}
         >
+          <ExecutionLatestContext.Provider value={latestContext}>
           <ExecutionReadingContext.Provider value={setFollowingLatest}>
           <ExecutionToolGroupStateContext.Provider value={groupState}>
           <ol className="execution-process-timeline">
@@ -6014,7 +6030,21 @@ function ExecutionDrawer({
           </ol>
           </ExecutionToolGroupStateContext.Provider>
           </ExecutionReadingContext.Provider>
+          </ExecutionLatestContext.Provider>
         </div>
+        <ReturnToLatest
+          viewportRef={drawerBodyRef}
+          ownerKey={campId + ':' + process.agentId}
+          contentRevision={latestRun ? latestRun.id + ':' + latestRun.executionEvidenceCount + ':' + latestRun.updatedAt : null}
+          scope="execution"
+          hasNewer={hasNewer}
+          onLatest={() => {
+            setFollowingLatest(Boolean(latestRun && NON_TERMINAL_RUNS.has(latestRun.status)))
+            setLatestRequest((request) => request + 1)
+            const body = drawerBodyRef.current
+            if (body) delete body.dataset.executionAnchorKey
+          }}
+        />
     </section>
   )
 }
@@ -8574,14 +8604,11 @@ function RunExecutionContent({
           />
         )
       }}</ExecutionVirtualList>
-      {windowedEvidence && windowPage.hasNewer && <div className={`camp-history-loader execution-history-loader execution-history-latest${windowPage.direction === 'newer' && windowPage.error ? ' is-error' : ''}`}
-        role={windowPage.direction === 'newer' && windowPage.error ? 'alert' : 'status'}>
-        {windowPage.direction === 'newer' && windowPage.loading && <span className="camp-history-spinner" aria-label="正在加载执行记录" />}
-        {windowPage.direction === 'newer' && windowPage.error && <button className="camp-history-text-button" type="button"
+      {windowedEvidence && windowPage.direction === 'newer' && (windowPage.loading || windowPage.error) && <div className={`camp-history-loader execution-history-loader${windowPage.error ? ' is-error' : ''}`}
+        role={windowPage.error ? 'alert' : 'status'}>
+        {windowPage.loading && <span className="camp-history-spinner" aria-label="正在加载执行记录" />}
+        {windowPage.error && <button className="camp-history-text-button" type="button"
           onClick={() => void windowPage.move('retry')}>读取失败，重试</button>}
-        <button className="camp-history-text-button" type="button" disabled={windowPage.loading} onClick={() => void windowPage.move('latest')}>
-          <span aria-hidden="true">↓</span><span>回到最新</span>
-        </button>
       </div>}
       {(historyStatus === 'loading' || narrationStatus === 'loading') && (
         <div className="process-action current" role="status">

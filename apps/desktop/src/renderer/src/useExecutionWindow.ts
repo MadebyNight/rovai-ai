@@ -4,6 +4,11 @@ import type { AgentRunView, AgentRunExecutionWindowPage, AgentRunExecutionWindow
 import { ExecutionWindow, executionWindowPageSize, executionWindowCacheFor } from './execution-window'
 
 export const ExecutionReadingContext = createContext<((following: boolean) => void) | null>(null)
+export const ExecutionLatestContext = createContext<{
+  runId: string | null
+  request: number
+  setHasNewer(hasNewer: boolean): void
+} | null>(null)
 
 export function useExecutionWindow(enabled: boolean, campId: string, run: AgentRunView, liveRevision: unknown, contentRevision: unknown) {
   const client = useCampClient()
@@ -17,6 +22,8 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
   const initialInvalidation = useRef(true)
   const readingHistory = useRef(false)
   const setFollowingLatest = useContext(ExecutionReadingContext)
+  const latest = useContext(ExecutionLatestContext)
+  const handledLatest = useRef(latest?.request ?? 0)
   const scrollHost = (): HTMLElement | null => root.current?.closest<HTMLElement>('.execution-drawer-body') ?? null
 
   const move = async (direction: 'earlier' | 'newer' | 'latest' | 'retry'): Promise<void> => {
@@ -81,6 +88,22 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
       anchor.current = null
     }
   }, [client, enabled, campId, run.id, run.executionEpoch])
+
+  useLayoutEffect(() => {
+    if (!enabled || latest?.runId !== run.id || latest.request === handledLatest.current
+      || !store.current || store.current.loading) return
+    handledLatest.current = latest.request
+    anchor.current = null
+    void move('latest')
+  }, [enabled, latest?.runId, latest?.request, revision])
+
+  useEffect(() => {
+    if (latest?.runId === run.id) latest.setHasNewer(Boolean(enabled && store.current?.hasNewer))
+  }, [enabled, latest?.runId, latest?.setHasNewer, revision, run.id])
+  useEffect(() => {
+    if (latest?.runId !== run.id) return
+    return () => latest.setHasNewer(false)
+  }, [latest?.runId, latest?.setHasNewer, run.id])
 
   useEffect(() => {
     if (!enabled || !store.current || pendingRefresh.current !== null) return
