@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-09-13T06:23:39.295Z",
+  "capturedAt": "2026-09-13T07:23:46.996189+00:00",
   "scope": "native Server installation and data-root acceptance",
-  "sourceCommit": "a8e809b50d12cb2720ee5ac564978c813f70ab1b",
+  "sourceCommit": "e1e73ca2f0f780d5c40caa3bd441231356db1057",
   "target": "macos-arm64",
   "version": "0.2.4",
   "profile": "release",
   "sourceDirty": false,
   "qualification": "development-preview",
-  "archiveSha256": "a7019d7d05e414b644215f436ab4cde49baf9160c1bef12ddb5444c754379d83",
-  "manifestSha256": "64883186b3b4d29b62f2d28fa7c8481ab557714dfbc5f40aa5dbe1be4482d844",
-  "hostSha256": "3ec3f4051ac661c037edda6a9e2c9a01a22cf41a0b758fe6890f4d206e730a6e",
-  "uiEntrySha256": "26337ce657fa80621a5075693fbeabc7c1072aaf1816046827940e4cb8cabbb1",
+  "archiveSha256": "54a7f060c91c4412a6d8c40ab3dc3616769ffbbeea6482a4165550f98b69feed",
+  "manifestSha256": "a116ca8523740f794b7665d0ca560d2f2f8fbbc615b556cd3b1e7fad1966b88a",
+  "hostSha256": "8ad420c52ba30c18a29dec650dba9644341aa91e8aa988a743d78ebf9e855212",
+  "uiEntrySha256": "edb94dad4a1c691453df1daf6eb6548989b49ef3f8f4763646396e756dd8dc37",
   "checks": [
     {
-      "command": "ROVAI_SERVER_BIN=<package>/rovai-server ROVAI_SERVER_RELEASE_DIR=<release-assets> node --test scripts/lib/server-entry.test.mjs",
+      "command": "ROVAI_SERVER_BIN=<package>/rovai-server ROVAI_HOST_BIN=<package>/rovai-host ROVAI_WEB_UI=<package>/web-ui ROVAI_SERVER_RELEASE_DIR=<release-assets> node --test scripts/lib/server-entry.test.mjs",
       "exitCode": 0,
       "passed": 2,
       "skipped": 0,
@@ -45,7 +45,7 @@
       ]
     },
     {
-      "command": "node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs",
+      "command": "ROVAI_HOST_BIN=<package>/rovai-host ROVAI_WEB_UI=<package>/web-ui node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs",
       "exitCode": 0,
       "passed": 4,
       "skipped": 0
@@ -66,5 +66,13 @@
     "all Agent runtimes",
     "signing and notarization",
     "WebUI/CLI convenience updater"
-  ]
+  ],
+  "buildChecks": {
+    "serverAndDesktopConcurrentBuildExitCodes": [
+      0,
+      0
+    ],
+    "webUiStaging": "separate temporary directory",
+    "sharedOutputRaceBeforeFix": "installer rejected the incomplete archive; no installed program switched"
+  }
 }

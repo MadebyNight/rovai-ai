@@ -31,7 +31,7 @@ GitHub Releases 为正式发布目标；安装脚本地址、命令可用性与�
 第二 Host 占用拒绝，主库丢失后不重建空库；旧 SQLite、旧默认建议目录和 Desktop 资源目录有明确兼容提示。
 入口不会通过 symlink 祖先创建新根。所有进程使用临时账号 Home/独立绝对数据根，不调用模型、不动日常 App。
 安装器的归档校验、重复安装、内容替换、错误包不切换、链接成员拒绝、PATH 去重与数据保留通过。
-实际预编译 Debug 包及干净 `a8e809b5` 的 release profile 包（含共享生产 WebUI）均经安装器装到仓库外，
+实际预编译 Debug 包及干净 `e1e73ca2` 的 release profile 包（含共享生产 WebUI）均经安装器装到仓库外，
 在无 Node/pnpm PATH 下完成同一数据根验收；[包哈希与范围记录](evidence/mac-server-root/validation.json)保留实际来源。
 这证明本机安装链路，不等于正式 Release 或其他平台资格。本轮全量 Vitest 190 文件/1968 项、
 Node 聚合 317 通过/2 既有平台跳过、Rust workspace default（Core 804 通过/6 既有忽略、CLI 35、Web 5）通过。原 Desktop/Headless 生命周期、同 Core Web 与关闭 Web 后
@@ -535,3 +535,14 @@ Node 317 通过/2 既有平台跳过；执行区真实 Electron 验收 7 项通�
 当前提交包级复验发现本机同时执行 Desktop 构建会重建共享 `out/web`，Server 在等待 Rust 编译后可能复制到空 UI。
 安装器正确拒绝该不完整包；构建器改为独占临时 WebUI 输出并检查入口，避免两种构建竞争同一目录。
 该次安装失败保留，随后以独立输出重建完整包并重新验收，不将失败产物晋升发布。
+
+`e1e73ca2` 同时运行 Server/Desktop 构建后，完整归档经安装器在仓库外安装，包级 7 项全部通过。
+最终串行 `RUST_TEST_THREADS=1 pnpm test:rust:pr`：Core 805 通过/6 既有忽略、CLI 35、slow integration 310 通过；
+未新增跳过或放宽断言。TypeScript、Clippy、默认 workspace、Desktop/Web 构建与文档门禁另已通过。
+包哈希和准确执行范围更新在本机证据文件；正式 Release、Windows console 与便利更新入口仍未申报完成。
+
+当前远端状态（2026-09-13）：[原生 Run 34744528165](https://github.com/murray17/rovai-ai/actions/runs/34744528165)
+对应 `ab278fa2`，macOS arm64、macOS x64、Linux x64 全部通过。Windows 的数据根准入与安装器已通过，
+但共享 Web 生命周期在读取当前客户端私聊附件时得到 404（预期 200，`host-web.test.mjs:182`），仍待定位修复；
+该 Run 整体失败，Windows 不宣称通过。`e1e73ca2` 后续构建隔离改动已完成本机包级复验，尚无同提交四目标结果。
+用户最新要求仅推送现有远端分支、不新建 PR、不合并；既有 PR #345 保持打开，工作区保留以继续处理未完成项。
