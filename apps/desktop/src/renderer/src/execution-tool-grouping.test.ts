@@ -190,6 +190,7 @@ describe('execution Tool grouping', () => {
       statusLabel: '等待审批',
       primary: '等待审批',
       currentTitle: '指令 three',
+      currentIconKind: 'terminal',
       countLabel: null,
       accessibleLabel: '等待审批：指令 three'
     })
@@ -272,6 +273,7 @@ describe('execution Tool grouping', () => {
       statusLabel: '执行中',
       primary: '执行中',
       currentTitle: '指令 three',
+      currentIconKind: 'terminal',
       countLabel: null,
       accessibleLabel: '执行中：指令 three'
     })

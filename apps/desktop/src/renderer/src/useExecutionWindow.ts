@@ -119,6 +119,11 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     // The initial request starts after intersection/focus. Keep the follow intent
     // until an actual page has arrived, including a successfully empty page.
     if (!enabled || !current || current.loading || !current.loaded) return
+    if (scrollHost()?.dataset.executionDisclosureAnchor === 'true') {
+      anchor.current = null
+      followAfterLoad.current = false
+      return
+    }
     const saved = anchor.current
     anchor.current = null
     if (saved) {
@@ -141,6 +146,10 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     const host = scrollHost()
     if (!host) return undefined
     const onScroll = (): void => {
+      if (host.dataset.executionDisclosureAnchor === 'true') {
+        lastScrollTop.current = host.scrollTop
+        return
+      }
       const previous = lastScrollTop.current
       lastScrollTop.current = host.scrollTop
       const adjusted = host.dataset.executionAdjustedTop

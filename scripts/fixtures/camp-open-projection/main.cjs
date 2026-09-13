@@ -40,6 +40,13 @@ app.whenReady().then(async () => {
       `${label}: attachments may extend left to the agent avatar or name track`)
   }
   try {
+    if (mode === '--command-interaction') {
+      const report = await require('../assert-command-interaction.cjs')(window, run, capture)
+      assert.equal(errors.length, 0, errors.join('\n'))
+      console.log(JSON.stringify({ ok: true, mode, report }))
+      app.exit(0)
+      return
+    }
     if (mode === '--return-latest') {
       await state()
       await run('document.querySelector(".camp-timeline").scrollTop = 200')

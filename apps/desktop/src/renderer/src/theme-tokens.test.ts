@@ -476,15 +476,16 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(css).toMatch(/\.execution-disclosure\.worked:not\(\[open\]\) \.process-disclosure-slot svg\s*\{[^}]*transform:\s*rotate\(-90deg\)/)
   })
 
-  it('keeps complete Tool results in the shared four-track, keyboard-scrollable surface', () => {
-    expect(css).toMatch(/\.tool-call-summary\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*16px minmax\(0, 1fr\) 16px 20px/)
+  it('keeps complete Tool results in the full-width, keyboard-scrollable surface', () => {
+    expect(css).toMatch(/\.tool-call-summary\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*16px minmax\(0, 1fr\) 20px/)
     expect(css).toMatch(/\.tool-call-icon svg\s*\{[^}]*width:\s*16px[^}]*height:\s*16px[^}]*fill:\s*none/)
     expect(css).toMatch(/\.tool-call-disclosure-slot\s*\{[^}]*width:\s*20px[^}]*height:\s*20px/)
     expect(css).toMatch(/\.tool-call-disclosure-slot\.is-placeholder\s*\{[^}]*visibility:\s*hidden/)
-    expect(css).toMatch(/\.tool-call-detail\s*\{[^}]*position:\s*relative[^}]*margin:\s*5px 0 8px 2px[^}]*padding-right:\s*52px/)
+    expect(css).toMatch(/\.tool-call-detail\s*\{[^}]*position:\s*relative[^}]*margin:\s*5px 0 8px 2px[^}]*\}/)
     expect(css).toMatch(/\.tool-call-result-scroll\s*\{[^}]*background:\s*var\(--shell-result-canvas\)/)
     expect(css).toMatch(/\.tool-call-result-scroll\s*\{[^}]*max-height:\s*min\(220px, 30vh\)[^}]*overflow:\s*auto[^}]*scrollbar-gutter:\s*stable/)
     expect(css).toMatch(/\.tool-call-result-scroll\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/)
+    expect(css).not.toMatch(/\.tool-call-detail\s*\{[^}]*padding-right:/)
     expect(css).not.toContain('.tool-output-copy-button')
     expect(css).not.toContain('.tool-call-detail.is-truncated')
   })

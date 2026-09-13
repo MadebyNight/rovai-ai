@@ -1,6 +1,7 @@
 import { ExecutionContentContext, ExecutionVirtualList, useExecutionRetainedState } from './ExecutionVirtualList'
 import { createContext, useContext, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import type { AgentRunExecutionEvidenceView, AgentRunView, CanonicalRuntimeActivityView } from '@contracts'
+import { RunningText } from './RunningText'
 import { ExecutionStatusGlyph } from './ExecutionStatusGlyph'
 import { useOptionalFilePreview } from './FilePreviewContext'
 import { exactMutationDiffLines, inlineDiffLines } from './file-changes-presentation'
@@ -452,7 +453,6 @@ export function FileOperationRow({ campId, step, runStatus, onFileOpenError }: {
         </button>
       </span>
       <ToolCallState status={status} />
-      <span className="tool-call-disclosure-slot is-placeholder" aria-hidden="true" />
     </div>
   )
 }
@@ -512,6 +512,7 @@ export function ToolCallRow({
   const summary = (
     <>
       <ToolCallIcon iconKind={step.iconKind} />
+      <span className="command-copy">
       {readSummary ? (
         <span className="tool-call-title shell-read-summary-copy">
           <span className="shell-read-summary-title">阅读</span>
@@ -527,17 +528,9 @@ export function ToolCallRow({
       ) : (
         <span className="tool-call-title" title={publicTitle}>{publicTitle}</span>
       )}
-      <ToolCallState status={status} />
-      <span
-        className={`tool-call-disclosure-slot${hasDetail ? '' : ' is-placeholder'}`}
-        aria-hidden="true"
-      >
-        {hasDetail && (
-          <svg viewBox="0 0 16 16" focusable="false">
-            <path d="m4.75 6.25 3.25 3.5 3.25-3.5" />
-          </svg>
-        )}
+      {hasDetail && <CommandExpandCue />}
       </span>
+      <ToolCallState status={status} />
     </>
   )
 
@@ -565,7 +558,7 @@ export function ToolCallRow({
         if (nextExpanded) setActivated(true)
       }}
     >
-      <summary ref={summaryRef} className={`tool-call-summary${readSummary ? ' has-shell-read-summary' : ''}`}>{summary}</summary>
+      <summary ref={summaryRef} aria-expanded={expanded} className={`tool-call-summary${readSummary ? ' has-shell-read-summary' : ''}`}>{summary}</summary>
       {activated && (
         <ToolCallDetail
           campId={campId}
@@ -580,6 +573,12 @@ export function ToolCallRow({
       )}
     </details>
   )
+}
+
+function CommandExpandCue(): JSX.Element {
+  return <span className="command-expand-cue" aria-hidden="true">
+    <svg viewBox="0 0 16 16" focusable="false"><path d="m6 4 4 4-4 4" /></svg>
+  </span>
 }
 
 function CompactionEventIcon(): JSX.Element {
@@ -617,24 +616,17 @@ export function CompactionEventRow({
   const summary = (
     <>
       <CompactionEventIcon />
-      <span className="tool-call-title" title={title}>{title}</span>
-      <ToolCallState status={status} />
-      <span
-        className={`tool-call-disclosure-slot${expandable ? '' : ' is-placeholder'}`}
-        aria-hidden="true"
-      >
-        {expandable && (
-          <svg viewBox="0 0 16 16" focusable="false">
-            <path d="m4.75 6.25 3.25 3.5 3.25-3.5" />
-          </svg>
-        )}
+      <span className="command-copy">
+        <RunningText className="tool-call-title" active={status === 'running' && runStatus !== 'waiting' && !expanded} text={title} />
+        {expandable && <CommandExpandCue />}
       </span>
+      <ToolCallState status={status} />
     </>
   )
 
   if (!expandable) {
     return (
-      <div className={`process-action tool-call-summary tool-call-static compaction-event status-${status}`}>
+      <div data-execution-item-key={`compaction:${compaction.id}`} className={`process-action tool-call-summary tool-call-static compaction-event status-${status}`}>
         {summary}
       </div>
     )
@@ -643,6 +635,7 @@ export function CompactionEventRow({
   return (
     <details
       className={`process-action tool-call-disclosure compaction-event status-${status}`}
+      data-execution-item-key={`compaction:${compaction.id}`}
       open={expanded}
       onToggle={(event) => {
         const nextExpanded = event.currentTarget.open
@@ -650,7 +643,7 @@ export function CompactionEventRow({
         if (nextExpanded) setActivated(true)
       }}
     >
-      <summary ref={summaryRef} className="tool-call-summary">{summary}</summary>
+      <summary ref={summaryRef} aria-expanded={expanded} className="tool-call-summary">{summary}</summary>
       {activated && (
         <ToolCallDetail
           campId={campId}
@@ -735,6 +728,7 @@ export function ToolActivityGroup({
         accessibleLabel: '正在停止：等待执行结束'
       }
     : settledPresentation
+  const active = presentation.status === 'running' || presentation.status === 'waiting'
   return (
     <details className={`tool-activity-group status-${presentation.status}`} open={expanded}
       data-execution-item-key={items[0]?.key}
@@ -744,11 +738,16 @@ export function ToolActivityGroup({
       <summary
         className="tool-group-summary"
         aria-label={presentation.accessibleLabel}
+        aria-expanded={expanded}
         aria-live="polite"
         aria-atomic="true"
       >
-        <ToolActivityGroupIcon />
-        <span className="tool-group-copy" aria-hidden="true">
+        {active && presentation.currentIconKind ? <ToolCallIcon iconKind={presentation.currentIconKind} /> : <ToolActivityGroupIcon />}
+        {active ? <span className="tool-group-copy tool-group-command-copy" aria-hidden="true">
+          <RunningText className="tool-group-current" active={presentation.status === 'running' && !expanded}
+            text={presentation.status === 'waiting' ? `${presentation.primary} · ${presentation.currentTitle}` : presentation.currentTitle ?? presentation.primary} />
+          <CommandExpandCue />
+        </span> : <span className="tool-group-copy" aria-hidden="true">
           <span className="tool-group-line">
             <strong>{presentation.primary}</strong>
             {presentation.currentTitle && (
@@ -766,15 +765,14 @@ export function ToolActivityGroup({
               </>
             )}
           </span>
-        </span>
-        {presentation.status === 'running' || presentation.status === 'waiting'
+        </span>}
+        {active
           ? <ToolActivityGroupState status={presentation.status} label={presentation.statusLabel} />
-          : <span className="tool-group-state is-placeholder" aria-hidden="true" />}
-        <span className="tool-group-disclosure" aria-hidden="true">
+          : <span className="tool-group-disclosure" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
             <path d="m4.75 6.25 3.25 3.5 3.25-3.5" />
           </svg>
-        </span>
+        </span>}
       </summary>
       {expanded && <div className="tool-group-items">
         <ExecutionVirtualList items={items} enabled={Boolean(retained)} gap={1}>{(item) => {
