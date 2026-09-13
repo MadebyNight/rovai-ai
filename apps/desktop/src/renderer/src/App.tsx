@@ -3581,10 +3581,12 @@ function AuthoritativeApp({
     if (result.status === 'rejected' && result.code !== 'camp.pending_not_empty') {
       throw new Error(commandFailureMessage(result))
     }
+    if (result.status !== 'rejected') campSnapshotCache.current.delete(draft.campId)
     if (result.status !== 'rejected' && activeCampIdRef.current === draft.campId) {
       cancelPendingCampActivation()
       setActiveCampId(null)
       setCampSnapshot(null)
+      if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
     }
     await loadNavigation()
   }

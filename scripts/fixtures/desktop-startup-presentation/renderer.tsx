@@ -422,7 +422,7 @@ Object.assign(window, { startupTest: {
         messageDeliveries: coverage, turns: coverage, agentRuns: coverage, executionEvidence: coverage, approvals: coverage }
     })
     responses.set('navigation.snapshot', { schemaVersion: 3, throughGlobalSequence: 0, projects: [], quickChat: {
-      totalCount: 3, recentCamps: ['A', 'B', 'C'].map(id => ({ id, title: '导航会话 ' + id, activationState: 'active',
+      totalCount: 4, recentCamps: ['A', 'B', 'C', 'D'].map(id => ({ id, title: '导航会话 ' + id, activationState: 'active',
         projectBindingKind: 'quick_chat', projectPath: '/fixture/quick-chat', defaultLead: null, marker: 'none',
         lastActivityAt: stamp, lastActivityGlobalSequence: 0, latestCompletionGlobalSequence: 0, version: 1 }))
     } })
@@ -461,6 +461,21 @@ Object.assign(window, { startupTest: {
     requestHandlers.set('camps.exists', ({ campId }) => campId !== 'B')
     await forward(); check(document.querySelector('.compose-content'), 'A deleted historical Camp resolves to the valid home page')
     await back(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Deleted-resource fallback replaces the current entry')
+    const pendingDiscard = deferred<unknown>()
+    requestHandlers.set('camps.discardPending', () => pendingDiscard.promise)
+    campRequest = id => {
+      const projection = campProjection(id)
+      return id === 'D' ? { ...projection, camp: { ...projection.camp, activationState: 'pending' } } : projection
+    }
+    await clickNavigation('导航会话 D', '.camp-nav-open')
+    await flush(); await flush()
+    await clickNavigation('导航会话 A', '.camp-nav-open')
+    await flush(); await flush()
+    check(calls.includes('camps.discardPending'), 'Leaving the loaded empty Camp must initiate cleanup before the race is tested')
+    await back(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 D', 'A blank pending Camp can be revisited before its leave cleanup finishes')
+    pendingDiscard.resolve({ status: 'applied', code: 'camp.pending_discarded', payload: {} }); await flush(); await flush()
+    check(document.querySelector('.compose-content'), 'Late cleanup of the revisited empty Camp replaces it with a valid page')
+    await forward(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Empty Camp cleanup preserves the forward branch')
     cases.push('Desktop Camp navigation preserves the forward branch, ignores stale reads and retains the page on failure')
     const navigationResponses = new Map(responses)
     const navigationHandlers = new Map(requestHandlers)
