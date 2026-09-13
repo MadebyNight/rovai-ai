@@ -694,7 +694,6 @@ function ToolActivityGroupState({ status, label }: { status: string; label: stri
 
 export function ToolActivityGroup({
   campId,
-  partial = false,
   items,
   liveTail,
   cancelling,
@@ -704,7 +703,6 @@ export function ToolActivityGroup({
   onFileOpenError
 }: {
   campId: string
-  partial?: boolean
   items: ToolProgressItem[]
   liveTail: boolean
   cancelling: boolean
@@ -736,9 +734,7 @@ export function ToolActivityGroup({
         countLabel: null,
         accessibleLabel: '正在停止：等待执行结束'
       }
-    : partial && !settledPresentation.currentTitle
-      ? { ...settledPresentation, primary: `已载入 ${items.length} 项执行记录`, accessibleLabel: `已载入 ${items.length} 项执行记录` }
-      : settledPresentation
+    : settledPresentation
   return (
     <details className={`tool-activity-group status-${presentation.status}`} open={expanded}
       data-execution-item-key={items[0]?.key}
@@ -766,7 +762,7 @@ export function ToolActivityGroup({
             {presentation.countLabel && (
               <>
                 <span className="tool-group-separator">·</span>
-                <span className="tool-group-count">{partial ? `已载入 ${items.length} 项` : presentation.countLabel}</span>
+                <span className="tool-group-count">{presentation.countLabel}</span>
               </>
             )}
           </span>
