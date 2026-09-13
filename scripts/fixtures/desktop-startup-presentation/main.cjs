@@ -23,6 +23,13 @@ app.whenReady().then(async () => {
   await window.loadFile(renderer)
   const report = await window.webContents.executeJavaScript('window.startupTest.run()', true)
   for (const theme of ['day', 'night']) {
+    for (const collapsed of [false, true]) {
+      const alignment = await window.webContents.executeJavaScript(`window.startupTest.captureNavigation(${JSON.stringify(theme)}, ${collapsed})`, true)
+      assert.deepEqual(alignment, { control: 20, title: 19, actions: 19 }, 'Preserve the approved 1px offset from the original Camp header')
+      writeFileSync(join(dirname(userData), `navigation-camp-${theme}-${collapsed ? 'collapsed' : 'expanded'}.png`), (await window.webContents.capturePage()).toPNG())
+    }
+  }
+  for (const theme of ['day', 'night']) {
     for (const state of ['loading', 'blocked', 'local-error']) {
       await window.webContents.executeJavaScript(`window.startupTest.capture(${JSON.stringify(theme)}, ${JSON.stringify(state)})`, true)
       const capture = await window.webContents.capturePage()

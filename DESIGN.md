@@ -105,7 +105,10 @@ values and evidence.
 
 ## Layout
 
-The desktop shell uses a default 270px navigation rail, a 50px top row and a flexible content column.
+The desktop shell uses a default 270px navigation rail, a 50px top row (38px for Camp) and a flexible content column.
+macOS settings use a fixed 270px rail with no collapse, resize or history controls while expanded;
+when inherited layout is collapsed, only the expand button appears. Ordinary pages show back/forward
+beside the sidebar toggle while expanded, and only the expand button while collapsed.
 The global rail resizes from 200px to 420px within the window. Dragging below 200px or using the
 window-chrome toggle collapses it completely to 0px, without an icon strip. Restore through the toggle,
 keyboard, or a drag from the left edge; retain the previous expanded width and mounted page state.

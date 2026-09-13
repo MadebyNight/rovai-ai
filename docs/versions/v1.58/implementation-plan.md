@@ -4,10 +4,27 @@ version: v1.58
 lifecycle: current
 authority: implementation-status
 status: in_progress
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 ---
 
 # v1.58 实施与验证
+
+## Desktop 内存导航
+
+在稳定 App 容器中接入统一 `push / replace / back / forward`，每窗口最多 50 条，仅保存在内存。
+会话、设置栏目、记忆详情和一级页面共享历史；初始默认选择、失效资源回退与原地筛选替换当前项。
+保留原 App 状态渲染、业务数据保存和草稿离开保护；过期请求不能提交页面，取消慢跳转及时释放输入锁。
+新建 Camp 在首次发送前后沿用既有 Core ID，不因激活追加历史。
+
+左上角保留现有按钮尺寸与位置，箭头尖端缩短；折叠后只保留展开按钮。macOS 设置展开时固定 270px，
+不提供折叠、调宽或箭头入口。会话标题与右侧现有操作保留原布局。详细交互见
+[App Shell Navigation](../../ui/components/app-shell-navigation.md#前进与后退)。
+
+定向状态与宿主输入测试、生产 NavigationShell 和完整 App 的隔离 Electron 验收通过，覆盖
+50 条裁剪、前进分支、快速切换、打开失败、记忆跨挂载恢复、设置栏目、输入消费、Windows 双来源互斥和重载清空。
+Day/Night 展开与折叠截图核对了按钮中心 y=20、原会话标题及操作中心 y=19 的既有 1px 差值。
+测试不启动 Core、Runtime 或日常 App；Windows 物理侧键与 Mac 触控板手势尚未在真实设备上验收。
+没有新的领域决定、存储版本、迁移或模型上下文变更；WebUI 不在本次范围内。
 
 ## Built-in Command View 与步骤计数
 

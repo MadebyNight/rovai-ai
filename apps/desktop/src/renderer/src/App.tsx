@@ -77,6 +77,7 @@ import { NewConversationDialog } from './NewConversationDialog'
 import { openRuntimeModelCatalog } from './runtime-check'
 import { FilePreviewProvider, useOptionalFilePreview } from './FilePreviewContext'
 import { NavigationShell } from './NavigationShell'
+import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type MemoryNavigationTarget } from './desktop-navigation'
 import { forgetFilePreviewSession } from './file-preview-session'
 import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { FilePreviewTabs } from './FilePreviewTabs'
@@ -262,6 +263,7 @@ export const STARTUP_FEEDBACK_DELAY_MS = 400
 export const SHUTDOWN_FEEDBACK_DELAY_MS = 400
 export type View = 'compose' | 'camp' | 'members' | 'automations' | 'memory' | 'settings'
 type ActivateCampOptions = {
+  memberPrepared?: boolean
   reconcileDefaultLead?: boolean
   initializeComposerDraft?: boolean
   preserveNotificationFocus?: boolean
@@ -269,33 +271,11 @@ type ActivateCampOptions = {
   anchoredMessages?: readonly CampMessageView[]
 }
 
-export function activeCampChangeNeedsDraftFlush(
-  view: View,
-  activeCampId: string | null,
-  targetCampId: string
-): boolean {
-  return activeCampSurfaceNeedsLeaveGuard(view, activeCampId) && activeCampId !== targetCampId
-}
-
 export function activeCampSurfaceNeedsLeaveGuard(
   view: View,
   activeCampId: string | null
 ): activeCampId is string {
   return view === 'camp' && activeCampId !== null
-}
-
-export async function runPreparedCampLeaveTransition(
-  preparation: CampLeavePreparation,
-  transition: () => void | Promise<void>,
-  didLeave: () => boolean
-): Promise<void> {
-  try {
-    await transition()
-    preparation.complete(didLeave())
-  } catch (error) {
-    preparation.complete(false)
-    throw error
-  }
 }
 
 export async function prepareActiveCampForAppQuit(
@@ -1104,6 +1084,13 @@ function AuthoritativeApp({
   startupFeedbackDelayElapsed: boolean
 }): React.JSX.Element {
   const initialTarget = startupTargetFromSnapshot(initialStartupSnapshot)
+  type NavigationContext = { campOptions?: ActivateCampOptions; beforeCommit?: () => void; prepared?: boolean; memberPrepared?: boolean }
+  const applyNavigationRef = useRef<(target: NavigationTarget, transaction: NavigationTransaction, context?: NavigationContext) => Promise<void>>(async () => undefined)
+  const desktopNavigation = useMemo(() => createDesktopNavigation<NavigationContext>(
+    (target, transaction, context) => applyNavigationRef.current(target, transaction, context)
+  ), [])
+  useEffect(() => () => desktopNavigation.reset(), [desktopNavigation])
+  const lastMainTarget = useRef<NavigationTarget>({ kind: 'quick_chat' })
   const [appearance, setAppearance] = useState<AppearanceSnapshot>(
     () => initialAppearanceSnapshot(document.documentElement)
   )
@@ -1131,7 +1118,7 @@ function AuthoritativeApp({
     scope: 'companion' | 'relationship' | null
   }>({ count: 0, memoryId: null, scope: null })
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0)
-  const [memoryFocusId, setMemoryFocusId] = useState<string | null>(null)
+  const [memoryTarget, setMemoryTarget] = useState<MemoryNavigationTarget>({ kind: 'memory', memoryId: null })
   const [memoryReviewDrawerSignal, setMemoryReviewDrawerSignal] = useState(0)
   const [campSnapshotState, setCampSnapshotState] = useState<{
     snapshot: CampSurfaceSnapshot | null
@@ -1222,12 +1209,14 @@ function AuthoritativeApp({
   const onboardingRuntimeRequest = useRef<Promise<void> | null>(null)
   const startupTraceId = useRef(crypto.randomUUID())
   const startupStartedAt = useRef(startupStartedAtMs)
-  const lastMainView = useRef<View>(startupView(initialTarget))
   const liveRuntimeEventSequence = useRef(0)
   const runtimeHealthRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const runtimeHealthRefreshIncludesMembers = useRef(false)
   const membersViewRef = useRef<MembersViewHandle>(null)
   const campLeaveGuardRef = useRef<{ campId: string; guard: CampLeaveGuard } | null>(null)
+  const navigationCampPreparation = useRef<{
+    campId: string; guard: CampLeaveGuard; promise: Promise<CampLeavePreparation>; users: number; didLeave: boolean
+  } | null>(null)
   const automationLeaveGuardRef = useRef<AutomationLeaveGuard | null>(null)
   const startupResolvedSessionId = useRef<string | null>(null)
   const pendingRestorableLocation = useRef<RestorableLocation | null>(null)
@@ -1291,22 +1280,29 @@ function AuthoritativeApp({
       return true
     }
 
-    let preparation: CampLeavePreparation
+    let preparation = navigationCampPreparation.current
+    if (!preparation || preparation.campId !== leavingCampId || preparation.guard !== registration.guard) {
+      preparation = { campId: registration.campId, guard: registration.guard,
+        promise: Promise.resolve().then(registration.guard), users: 0, didLeave: false }
+      navigationCampPreparation.current = preparation
+    }
+    preparation.users += 1
+    let prepared: CampLeavePreparation | undefined
     try {
-      preparation = await registration.guard()
+      prepared = await preparation.promise
+      await transition()
+      await afterNextPaint()
+      preparation.didLeave ||= viewRef.current !== 'camp' || activeCampIdRef.current !== leavingCampId
     } catch (nextError) {
       setError(`离开当前会话前未能保存草稿：${errorMessage(nextError)}`)
       return false
+    } finally {
+      preparation.users -= 1
+      if (preparation.users === 0) {
+        prepared?.complete(preparation.didLeave)
+        if (navigationCampPreparation.current === preparation) navigationCampPreparation.current = null
+      }
     }
-
-    await runPreparedCampLeaveTransition(
-      preparation,
-      async () => {
-        await transition()
-        await afterNextPaint()
-      },
-      () => viewRef.current !== 'camp' || activeCampIdRef.current !== leavingCampId
-    )
     return true
   }, [])
 
@@ -1417,8 +1413,12 @@ function AuthoritativeApp({
     const next = manageable.find((agent) => agent.presence === 'present')
       ?? manageable.find((agent) => agent.presence === 'away')
       ?? null
-    setSelectedMemberId(next?.agentId ?? null)
-  }, [agents, selectedMemberId, view])
+    const agentId = next?.agentId ?? null
+    if (agentId === selectedMemberId) return
+    if (desktopNavigation.getSnapshot().entries.length) {
+      void desktopNavigation.replace({ kind: 'members', agentId, tab: memberTab })
+    } else setSelectedMemberId(agentId)
+  }, [agents, selectedMemberId, view, memberTab, desktopNavigation])
 
   useEffect(() => {
     setCampInspectorCampId((current) => view === 'camp' && current === activeCampId ? current : null)
@@ -1700,25 +1700,21 @@ function AuthoritativeApp({
           window.rovai.generalPreferences.get()
         ])
         const target = startupTargetFromSnapshot(snapshot)
+        desktopNavigation.reset()
         cancelPendingCampActivation()
         setActiveCampId(null)
         setCampSnapshot(null)
         setNotificationFocus(null)
         setStartupRouteTarget(target)
         if (target.kind === 'camp') {
-          lastMainView.current = 'camp'
           setView('camp')
         } else if (target.kind === 'members') {
           setSelectedMemberId(target.agentId)
           setMemberTab(target.tab)
-          lastMainView.current = 'members'
           setView('members')
         } else if (target.kind === 'memory') {
-          setMemoryFocusId(null)
-          lastMainView.current = 'memory'
           setView('memory')
         } else {
-          lastMainView.current = 'compose'
           setView('compose')
         }
         setGeneralPreferences(preferences)
@@ -1739,7 +1735,7 @@ function AuthoritativeApp({
       if (startupSnapshotRequest.current === request) startupSnapshotRequest.current = null
     }).catch(() => undefined)
     return request
-  }, [cancelPendingCampActivation, setCampSnapshot])
+  }, [cancelPendingCampActivation, setCampSnapshot, desktopNavigation])
 
   const completeStartup = useCallback((sessionId: string): void => {
     startupResolvedSessionId.current = sessionId
@@ -1765,9 +1761,10 @@ function AuthoritativeApp({
   const activateCampWithoutLeaveGuard = useCallback(async (
     campId: string,
     options: ActivateCampOptions,
-    selectionGeneration: number
+    selectionGeneration: number,
+    transaction?: NavigationTransaction
   ): Promise<boolean> => {
-    if (selectionGeneration !== campSelectionGeneration.current) return false
+    if (selectionGeneration !== campSelectionGeneration.current || (transaction && !transaction.isCurrent())) return false
     const cachedSnapshot = activeCampIdRef.current === campId
       ? null
       : recentCampSnapshot(campSnapshotCache.current, campId)
@@ -1782,6 +1779,7 @@ function AuthoritativeApp({
       entryPreview = false,
       initialComposerDraft: CampComposerDraftView | null = null
     ): void => {
+      if (transaction && !transaction.commit()) return
       const snapshotProject = currentProjectForCamp(snapshot.camp)
       setCurrentProject(snapshotProject)
       persistCurrentProject(snapshotProject)
@@ -1798,7 +1796,6 @@ function AuthoritativeApp({
       }
       setActiveCampId(campId)
       setCampSnapshot(snapshot, entryPreview, initialComposerDraft)
-      lastMainView.current = 'camp'
       setView('camp')
     }
     if (previewSnapshot) {
@@ -1819,7 +1816,7 @@ function AuthoritativeApp({
             .catch(() => null)
           : Promise.resolve(null)
       ])
-      if (selectionGeneration !== campSelectionGeneration.current) {
+      if (selectionGeneration !== campSelectionGeneration.current || (transaction && !transaction.isCurrent())) {
         return false
       }
       clearCampOpenFeedback()
@@ -1846,12 +1843,15 @@ function AuthoritativeApp({
     } catch (nextError) {
       if (selectionGeneration !== campSelectionGeneration.current) return false
       clearCampOpenFeedback()
-      if (options.suppressErrors) {
+      if (transaction && !transaction.isCurrent()) return false
+      // A removed historical resource resolves to a real page by replacing this entry.
+      const exists = await window.rovai.request<boolean>('camps.exists', { campId }).catch(() => true)
+      if (transaction && !transaction.isCurrent()) return false
+      if (!exists && transaction?.commit({ kind: 'quick_chat' })) {
         setActiveCampId(null)
         setCampSnapshot(null)
-        lastMainView.current = 'compose'
         setView('compose')
-      } else {
+      } else if (!options.suppressErrors) {
         setError(errorMessage(nextError))
       }
       return false
@@ -1862,22 +1862,16 @@ function AuthoritativeApp({
     campId: string,
     options: ActivateCampOptions = {}
   ): Promise<boolean> => {
-    const selectionGeneration = ++campSelectionGeneration.current
-    clearCampOpenFeedback()
-    let activated = false
-    const transition = async (): Promise<void> => {
-      activated = await activateCampWithoutLeaveGuard(campId, options, selectionGeneration)
+    const activated = await desktopNavigation.push({ kind: 'camp', campId }, { campOptions: options, memberPrepared: options.memberPrepared })
+    const state = desktopNavigation.getSnapshot()
+    const target = state.entries[state.index]
+    if (target?.kind !== 'camp' || target.campId !== campId) return false
+    if (viewRef.current === 'camp' && activeCampIdRef.current === campId) {
+      if (options.anchoredMessages?.length) setNotificationAnchor({ campId, messages: options.anchoredMessages })
+      return true
     }
-    if (
-      viewRef.current === 'automations'
-      || activeCampChangeNeedsDraftFlush(viewRef.current, activeCampIdRef.current, campId)
-    ) {
-      const transitioned = await leaveActiveSurface(transition)
-      return transitioned && activated
-    }
-    await transition()
     return activated
-  }, [activateCampWithoutLeaveGuard, clearCampOpenFeedback, leaveActiveSurface])
+  }, [desktopNavigation])
 
   useEffect(() => window.rovai.userAutomation.onOpenCamp(({ campId }) => {
     void activateCamp(campId, { reconcileDefaultLead: false })
@@ -2102,7 +2096,6 @@ function AuthoritativeApp({
       setActiveCampId(null)
       setCampSnapshot(null)
       setNotificationFocus(null)
-      lastMainView.current = 'compose'
       setView('compose')
     }
 
@@ -2188,7 +2181,6 @@ function AuthoritativeApp({
         setActiveCampId(target.campId)
         setCampSnapshot(snapshot)
         setNotificationFocus(null)
-        lastMainView.current = 'camp'
         setView('camp')
         completeStartup(startupSnapshot.sessionId)
         await afterNextPaint()
@@ -2239,6 +2231,16 @@ function AuthoritativeApp({
     startupPrerequisitesReady,
     startupSnapshot
   ])
+
+  useEffect(() => {
+    if (startupStatus !== 'resolved' || desktopNavigation.getSnapshot().entries.length) return
+    const target: NavigationTarget = view === 'camp' && activeCampId
+      ? { kind: 'camp', campId: activeCampId }
+      : view === 'members' ? { kind: 'members', agentId: restoredMemberId(selectedMemberId, agents), tab: memberTab }
+      : view === 'memory' ? memoryTarget
+      : { kind: 'quick_chat' }
+    desktopNavigation.reset(target)
+  }, [startupStatus, desktopNavigation, view, activeCampId, selectedMemberId, agents, memberTab, memoryTarget])
 
   useEffect(() => {
     if (startupStatus !== 'resolved' || view !== 'compose') return
@@ -2698,72 +2700,107 @@ function AuthoritativeApp({
     return membersViewRef.current?.requestTransition(action) ?? Promise.resolve(false)
   }, [])
 
-  const chooseView = (nextView: View, beforeCommit?: () => void): void => {
-    const commit = (): void => {
-      beforeCommit?.()
-      if (nextView !== 'camp') cancelPendingCampActivation()
-      if (nextView !== 'settings') lastMainView.current = nextView
-      if (nextView !== 'camp') setNotificationFocus(null)
-      setView(nextView)
-    }
+  const chooseView = (nextView: View): void => {
     if (nextView === viewRef.current) {
-      beforeCommit?.()
+      const current = desktopNavigation.getSnapshot()
+      const target = current.entries[current.index]
+      if (target) void desktopNavigation.push(target)
       return
     }
-    void requestMemberTransition(async () => {
-      await leaveActiveSurface(commit)
-    })
+    const target: NavigationTarget = nextView === 'members'
+      ? { kind: 'members', agentId: selectedMemberId, tab: memberTab }
+      : nextView === 'memory' ? { kind: 'memory', memoryId: null }
+      : nextView === 'automations' ? { kind: 'automations' }
+      : nextView === 'camp' && activeCampId ? { kind: 'camp', campId: activeCampId }
+      : nextView === 'settings' ? { kind: 'settings', section: settingsSection }
+      : { kind: 'quick_chat' }
+    void desktopNavigation.push(target)
   }
 
   const configureMemberRuntime = (agentId: string): void => {
-    chooseView('members', () => {
+    const focusRuntime = (): void => {
       setRuntimeRecovery(null)
-      setSelectedMemberId(agentId)
-      setMemberTab('runtime')
       setMemberRuntimeFocusRequest((request) => request + 1)
-    })
+    }
+    if (viewRef.current === 'members' && selectedMemberId === agentId && memberTab === 'runtime') focusRuntime()
+    else void desktopNavigation.push({ kind: 'members', agentId, tab: 'runtime' }, { beforeCommit: focusRuntime })
   }
 
   const openMemoryReviews = (): void => {
-    chooseView('memory', () => {
+    const showReviews = (): void => {
       setMemoryReviewNotice(false)
-      setMemoryFocusId(null)
       setMemoryReviewDrawerSignal((current) => current + 1)
-    })
+    }
+    if (viewRef.current === 'memory') showReviews()
+    else void desktopNavigation.push({ kind: 'memory', memoryId: null }, { beforeCommit: showReviews })
   }
 
   const openAutomaticMemory = (): void => {
-    chooseView('memory', () => {
-      setMemoryFocusId(memoryAutoNotice.memoryId)
-      setMemoryAutoNotice({ count: 0, memoryId: null, scope: null })
-    })
+    const clearNotice = (): void => setMemoryAutoNotice({ count: 0, memoryId: null, scope: null })
+    if (viewRef.current === 'memory' && memoryTarget.memoryId === memoryAutoNotice.memoryId) clearNotice()
+    else void desktopNavigation.push({ kind: 'memory', memoryId: memoryAutoNotice.memoryId }, { beforeCommit: clearNotice })
   }
 
-  const closeSettings = (): void => {
-    const target = lastMainView.current
-    setView(target === 'camp' && !activeCampId ? 'compose' : target)
-  }
+  const closeSettings = (): void => { void desktopNavigation.push(lastMainTarget.current) }
 
   const chooseSettingsSection = (section: SettingsSection): void => {
-    setSettingsSection(section)
+    if (viewRef.current === 'settings') void desktopNavigation.push({ kind: 'settings', section })
     void window.rovai.generalPreferences.setLastSettingsSection(section)
       .then(setGeneralPreferences)
       .catch((nextError) => setError(errorMessage(nextError)))
   }
 
-  const commitSettingsSurface = (section: SettingsSection): void => {
-    cancelPendingCampActivation()
-    setNotificationFocus(null)
-    setSettingsSection(section)
-    setView('settings')
+  const navigateToSettings = async (section: SettingsSection): Promise<boolean> => {
+    await desktopNavigation.push({ kind: 'settings', section })
+    const current = desktopNavigation.getSnapshot()
+    const target = current.entries[current.index]
+    return target?.kind === 'settings' && target.section === section
   }
 
-  const navigateToSettings = async (section: SettingsSection): Promise<boolean> => {
-    let surfaceTransitioned = false
-    const memberTransitioned = await requestMemberTransition(async () => {
-      surfaceTransitioned = await leaveActiveSurface(() => commitSettingsSurface(section))
-    })
-    return memberTransitioned && surfaceTransitioned
+  applyNavigationRef.current = async (target, transaction, context) => {
+    if (shuttingDownRef.current) return
+    // Invalidate older Camp reads immediately, including reads waiting behind a leave guard.
+    const selectionGeneration = ++campSelectionGeneration.current
+    clearCampOpenFeedback()
+    const apply = async (): Promise<void> => {
+      if (!transaction.isCurrent()) return
+      if (target.kind === 'camp') {
+        if (viewRef.current === 'camp' && activeCampIdRef.current === target.campId) {
+          transaction.commit()
+          return
+        }
+        await activateCampWithoutLeaveGuard(target.campId, context?.campOptions ?? {}, selectionGeneration, transaction)
+        return
+      }
+      const previous = desktopNavigation.getSnapshot()
+      if (target.kind === 'settings' && viewRef.current !== 'settings') {
+        lastMainTarget.current = previous.entries[previous.index] ?? { kind: 'quick_chat' }
+      }
+      if (!transaction.commit()) return
+      context?.beforeCommit?.()
+      setNotificationFocus(null)
+      switch (target.kind) {
+        case 'settings': setSettingsSection(target.section); setView('settings'); break
+        case 'members':
+          setSelectedMemberId(target.agentId); setMemberTab(target.tab); setView('members'); break
+        case 'memory': setMemoryTarget(target); setView('memory'); break
+        case 'automations': setView('automations'); break
+        case 'quick_chat': setView('compose'); break
+      }
+    }
+    const leave = async (): Promise<void> => {
+      if (!transaction.isCurrent()) return
+      const sameSurface = target.kind === viewRef.current
+        && (target.kind !== 'camp' || target.campId === activeCampIdRef.current)
+      if (context?.prepared || sameSurface) await apply()
+      else await leaveActiveSurface(() => Promise.race([apply(), transaction.superseded]))
+    }
+    try {
+      if (viewRef.current === 'members' && target.kind !== 'members' && !context?.prepared && !context?.memberPrepared) await requestMemberTransition(leave)
+      else await leave()
+    } catch (nextError) {
+      if (transaction.isCurrent()) setError(errorMessage(nextError))
+    }
   }
 
   const openSettings = (): void => {
@@ -2854,11 +2891,7 @@ function AuthoritativeApp({
   }
 
   const chooseCamp = (camp: NavigationCampTarget): void => {
-    void requestMemberTransition(() => {
-      return activateCamp(camp.id, {
-        reconcileDefaultLead: camp.activationState !== 'pending'
-      }).then(() => undefined)
-    })
+    void activateCamp(camp.id, { reconcileDefaultLead: camp.activationState !== 'pending' })
   }
 
   const navigateFromNotification = useCallback(async (
@@ -2957,6 +2990,7 @@ function AuthoritativeApp({
             : null
         setNotificationFocus(target ? { ...target, active: false } : null)
         const activated = await activateCamp(action.campId, {
+          memberPrepared: true,
           preserveNotificationFocus: target !== null,
           reconcileDefaultLead: true,
           suppressErrors: true,
@@ -3097,8 +3131,7 @@ function AuthoritativeApp({
           setActiveCampId(null)
           setCampSnapshot(null)
           setNotificationFocus(null)
-          lastMainView.current = 'compose'
-          setView('compose')
+          if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
         }
         if (removingCurrent || removingActiveCamp) {
           await commitRestorableLocation({ kind: 'quick_chat' })
@@ -3165,8 +3198,7 @@ function AuthoritativeApp({
         cancelPendingCampActivation()
         setActiveCampId(null)
         setCampSnapshot(null)
-        lastMainView.current = 'compose'
-        setView('compose')
+        if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
       }
       await loadNavigation()
     } finally {
@@ -3553,7 +3585,6 @@ function AuthoritativeApp({
       cancelPendingCampActivation()
       setActiveCampId(null)
       setCampSnapshot(null)
-      if (lastMainView.current === 'camp') lastMainView.current = 'compose'
     }
     await loadNavigation()
   }
@@ -3909,7 +3940,7 @@ function AuthoritativeApp({
 
   return (
     <FilePreviewProvider campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
-    <NavigationShell platform={window.rovai.platform} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''}>
+    <NavigationShell platform={window.rovai.platform} disabled={startupGateVisible || shuttingDown} settings={view === 'settings'} navigation={desktopNavigation} className={view === 'camp' ? 'app-shell-camp' : ''}>
       <CampNavigation
         platform={window.rovai.platform}
         view={view}
@@ -3929,7 +3960,7 @@ function AuthoritativeApp({
         onNewConversation={beginNewConversation}
         onMembers={() => chooseView('members')}
         onAutomations={() => chooseView('automations')}
-        onMemory={() => chooseView('memory', () => setMemoryFocusId(null))}
+        onMemory={() => chooseView('memory')}
         pendingMemoryCount={pendingMemoryCount}
         onSettings={openSettings}
         onOpenUpdates={() => void openUpdateSettings()}
@@ -4023,7 +4054,7 @@ function AuthoritativeApp({
             onAddMembers={addCampMembers}
             onPreviewMemberRemoval={previewCampMemberRemoval}
             onRemoveMember={removeCampMember}
-            onTasksChanged={() => activateCamp(activeCampId).then(() => undefined)}
+            onTasksChanged={() => refreshActiveCampSnapshot(activeCampId)}
             onResolveApproval={(approval, decision) => {
               void resolveActionApproval(approval, decision)
             }}
@@ -4094,7 +4125,8 @@ function AuthoritativeApp({
             agents={agents}
             topNotices={inlineNotices}
             refreshSignal={memoryRefreshKey}
-            focusMemoryId={memoryFocusId}
+            navigationTarget={memoryTarget}
+            onNavigate={(target, mode) => { void desktopNavigation[mode](target) }}
             reviewDrawerSignal={memoryReviewDrawerSignal}
             onReviewDrawerSignalConsumed={() => setMemoryReviewDrawerSignal(0)}
             onPendingCountChange={setPendingMemoryCount}
@@ -4151,10 +4183,9 @@ function AuthoritativeApp({
                     activeTab={memberTab}
                     runtimeFocusRequest={memberRuntimeFocusRequest}
                     onSelectedAgentChange={(agentId, tab) => {
-                      setSelectedMemberId(agentId)
-                      setMemberTab(tab)
+                      void desktopNavigation.push({ kind: 'members', agentId, tab })
                     }}
-                    onTabChange={setMemberTab}
+                    onTabChange={(tab) => { void desktopNavigation.push({ kind: 'members', agentId: selectedMemberId, tab }) }}
                     onProfileCommitted={(profile) => setAgents((current) => (
                       current.some((agent) => agent.agentId === profile.agentId)
                         ? current.map((agent) => (

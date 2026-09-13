@@ -458,6 +458,12 @@ html[data-rovai-platform="win32"] .windows-application-menu {
 .navigation-collapse-button svg { width: 17px; height: 17px; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .navigation-windows-control .navigation-collapse-button { height: min(30px, calc(env(titlebar-area-height, 32px) - 4px)); }
 .navigation-macos-control { position: absolute; z-index: 25; left: 82px; top: 5px; -webkit-app-region: no-drag; }
+.navigation-chrome-controls { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+.navigation-history-controls { display: flex; align-items: center; gap: 2px; }
+.navigation-history-button:disabled { opacity: .34; cursor: default; }
+.navigation-history-button:focus-visible { outline: 2px solid var(--muted); outline-offset: 1px; }
+.navigation-history-button:active:not(:disabled) { transform: translateY(1px); }
+.navigation-history-button svg { stroke-width: 1.7; }
 html:not([data-rovai-platform="win32"]) .navigation-collapsed > .topbar { padding-left: 128px; }
 html:not([data-rovai-platform="win32"]) .navigation-collapsed > .content:is(.compose-content, .settings-content, .members-content, .memory-content, .automations-content) { grid-row: 2; }
 .navigation-resize-handle { position: absolute; z-index: 20; top: 0; bottom: 0; left: max(0px, calc(var(--rail-width) - 4px)); width: 8px; outline: 0; cursor: col-resize; touch-action: none; -webkit-app-region: no-drag; }

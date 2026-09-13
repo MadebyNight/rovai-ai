@@ -14,6 +14,7 @@ const calls: string[] = []
 const listeners = new Set<(snapshot: SupervisorSnapshot) => void>()
 const coreListeners = new Set<(event: CoreEvent) => void>()
 const responses = new Map<string, unknown>()
+const requestHandlers = new Map<string, (params: any) => unknown>()
 let now = 0
 let nextTimer = 0
 const timers = new Map<number, { at: number; callback: () => void }>()
@@ -37,6 +38,7 @@ let onboarding = deferred<OnboardingSnapshot>()
 let root: Root | null = null
 let supervisor: SupervisorSnapshot
 let appearanceTheme: 'day' | 'night' = 'day'
+let captureNavigation: (theme: 'day' | 'night', collapsed: boolean) => Promise<unknown>
 
 function starting(): SupervisorSnapshot {
   return {
@@ -80,6 +82,8 @@ function api(path = ''): unknown {
         newConversationDefaults: null, newConversationDefaultsRequireConfirmation: false,
         oneClickNewConversationEnabled: false, worldMapEnabled: true })
       calls.push(path === 'request' ? args[0] : path)
+      if (path === 'request' && requestHandlers.has(args[0])) return Promise.resolve().then(() => requestHandlers.get(args[0])!(args[1]))
+      if (responses.has(path)) return Promise.resolve(responses.get(path))
       if (path === 'request' && responses.has(args[0])) return Promise.resolve(responses.get(args[0]))
       if (path === 'onboarding.get') return onboarding.promise
       return new Promise(() => undefined)
@@ -112,6 +116,7 @@ async function reset(target: RestorableLocation | null = { kind: 'camp', campId 
   listeners.clear()
   coreListeners.clear()
   responses.clear()
+  requestHandlers.clear()
   calls.length = 0
   errors.length = 0
   now = 0
@@ -146,6 +151,7 @@ function noAuthority() {
 }
 
 Object.assign(window, { startupTest: {
+  captureNavigation: (theme: 'day' | 'night', collapsed: boolean) => captureNavigation(theme, collapsed),
   async run() {
     const cases: string[] = []
     await reset(null, false)
@@ -343,6 +349,145 @@ Object.assign(window, { startupTest: {
     check(document.body.textContent?.includes('正在安全退出'),
       'The retained authority surface must use the safe-exit copy')
     cases.push('planned shutdown retains the authoritative surface and safe-exit modal')
+
+    await reset({ kind: 'quick_chat' })
+    responses.set('health.check', health)
+    responses.set('members.list', [])
+    responses.set('runtime.installations.list', [])
+    responses.set('navigation.snapshot', { schemaVersion: 3, projects: [], quickChat: { recentCamps: [], totalCount: 0 } })
+    const navPreferences = { pins: [], removedProjects: [], projectOrder: [], projectNames: {} }
+    responses.set('navigationPreferences.get', navPreferences)
+    responses.set('navigationPreferences.synchronizeProjectOrder', navPreferences)
+    responses.set('memory.hearthReviewItems.list', [])
+    responses.set('memory.list', { capacities: [], memories: ['M', 'N'].map(id => ({
+      id, scope: 'hearth', kind: 'preference', creationOrigin: 'user', companionAgentId: null,
+      relationshipAgentIds: [], direction: null, directedActorAgentId: null, lifecycle: 'active',
+      currentRevisionId: 'revision-' + id, currentBody: '导航记忆 ' + id, currentBodyUtf8Bytes: 16,
+      currentRetrievalKeys: [id], reviewAfter: null, reviewDue: false, outgoingSuccessorIds: [], incomingPredecessorIds: [],
+      version: 1, createdAt: '2026-09-13T00:00:00Z', updatedAt: '2026-09-13T00:00:00Z', retiredAt: null, forgottenAt: null, revisions: []
+    })) })
+    onboarding.resolve({ schemaVersion: 2, status: 'completed', origin: 'existing_installation',
+      completedAt: '2026-08-31T00:00:00Z', selectedMemberRole: null, memberAgentId: null, quickChatCampId: null })
+    publish({ runtimeMode: 'full_core', fullCoreState: 'ready', startupPhase: null,
+      authorityState: { kind: 'current', origin: 'existing' },
+      capabilities: { ...supervisor.capabilities, authoritativeWorkspace: true, coreRequests: true } })
+    await flush(); await advance(0); await flush()
+    const clickNavigation = async (name: string, selector = 'button') => {
+      const button = [...document.querySelectorAll<HTMLButtonElement>(selector)].find(item => item.textContent?.trim() === name || item.getAttribute('aria-label') === name)
+      check(button && !button.disabled, 'Missing available navigation button: ' + name)
+      button.click(); await flush(); await flush()
+    }
+    const back = async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: '[', metaKey: true, bubbles: true, cancelable: true })); await flush(); await flush() }
+    const forward = async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: ']', metaKey: true, bubbles: true, cancelable: true })); await flush(); await flush() }
+    check(document.querySelector<HTMLButtonElement>('[aria-label="后退"]')?.disabled, 'Restored home begins a new one-entry history')
+    await clickNavigation('设置', '.unified-sidebar button')
+    check(document.querySelector('.settings-panel-general'), 'Settings open directly to their default section')
+    check(!document.querySelector('.navigation-collapse-button, .navigation-resize-handle'), 'Mac settings remove layout and history controls')
+    await clickNavigation('外观', '.settings-sidebar-menu button')
+    check(document.querySelector('.settings-panel-appearance'), 'Independent settings categories navigate')
+    await back(); check(document.querySelector('.settings-panel-general'), 'Back restores the previous settings category')
+    await back(); check(document.querySelector('.compose-content'), 'No phantom Settings landing entry')
+    await forward(); check(document.querySelector('.settings-panel-general'), 'Forward restores settings')
+    await clickNavigation('返回 App', '.settings-sidebar-back')
+    check(document.querySelector('.compose-content'), 'Return App restores the page preceding settings')
+    await clickNavigation('记忆', '.unified-sidebar button')
+    check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Memory uses the real initial list selection')
+    const memoryRows = [...document.querySelectorAll<HTMLButtonElement>('.memory-catalog-item')]
+    check(memoryRows.length === 2, 'The fixture must have two distinct memory targets')
+    memoryRows[1].click(); await flush(); await flush()
+    check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 N'), 'Selecting a resource navigates to it')
+    await back()
+    check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Back restores the previous memory detail')
+    await back(); check(document.querySelector('.compose-content'), 'Automatic first memory selection replaces rather than pushes')
+    await forward(); check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Forward restores memory ID after remount')
+    await clickNavigation('设置', '.unified-sidebar button')
+    await back()
+    await clickNavigation('收起导航侧栏')
+    check(document.querySelectorAll('.navigation-history-button').length === 0, 'Folded main pages show only the expand button')
+    await forward()
+    check(document.querySelector('[aria-label="展开导航侧栏"]'), 'Entering settings preserves collapsed layout')
+    await clickNavigation('展开导航侧栏')
+    check(!document.querySelector('.navigation-collapse-button, .navigation-resize-handle'), 'Expanded Mac settings have no collapse or resize entry')
+    cases.push('Desktop navigation shares settings and memory history, restores details, and respects Mac folded controls')
+
+    const stamp = '2026-09-13T00:00:00Z'
+    const coverage = { loadedCount: 0, totalCount: 0, omittedCount: 0, complete: true }
+    const campProjection = (id: string) => ({
+      schemaVersion: 7, throughGlobalSequence: 0,
+      camp: { id, title: '导航会话 ' + id, activationState: 'active', projectBindingKind: 'quick_chat',
+        projectPath: '/fixture/quick-chat', defaultLeadAgentId: null, membershipGeneration: 1, version: 1, createdAt: stamp, updatedAt: stamp },
+      members: [], membershipReconciliations: [], tasks: [], messages: [], messageDeliveries: [], turns: [],
+      agentRuns: [], executionEvidence: [], approvals: [], agentRunFileChanges: [],
+      coverage: { tasks: coverage, messages: { ...coverage, hasEarlier: false, oldestLoadedSequence: null, newestLoadedSequence: null },
+        messageDeliveries: coverage, turns: coverage, agentRuns: coverage, executionEvidence: coverage, approvals: coverage }
+    })
+    responses.set('navigation.snapshot', { schemaVersion: 3, throughGlobalSequence: 0, projects: [], quickChat: {
+      totalCount: 3, recentCamps: ['A', 'B', 'C'].map(id => ({ id, title: '导航会话 ' + id, activationState: 'active',
+        projectBindingKind: 'quick_chat', projectPath: '/fixture/quick-chat', defaultLead: null, marker: 'none',
+        lastActivityAt: stamp, lastActivityGlobalSequence: 0, latestCompletionGlobalSequence: 0, version: 1 }))
+    } })
+    responses.set('navigation.campViewed', { acknowledged: true })
+    responses.set('skills.list', [])
+    responses.set('skills.deliveryGroups.list', [])
+    responses.set('camps.exists', true)
+    requestHandlers.set('camp.composerDraft.get', ({ campId }) => ({ campId, body: '', content: { version: 2, segments: [] },
+      revision: 1, attachments: [], replyIntent: null, continuationIntent: null, updatedAt: stamp, expiresAt: null }))
+    requestHandlers.set('camp.pendingInputs.get', ({ campId }) => ({ campId, executionActive: false, editSession: null, items: [] }))
+    let campRequest = (id: string): unknown => campProjection(id)
+    requestHandlers.set('camps.enter', ({ command }) => campRequest(command.campId))
+    requestHandlers.set('camps.open', ({ campId }) => campRequest(campId))
+    for (const listener of coreListeners) listener({ method: 'navigation.invalidated', params: {} } as CoreEvent)
+    await advance(500); await flush()
+    await clickNavigation('返回 App', '.settings-sidebar-back')
+    await clickNavigation('导航会话 A', '.camp-nav-open')
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Camp A is a real authoritative navigation destination')
+    await clickNavigation('导航会话 B', '.camp-nav-open')
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Camp switches share the same history')
+    await back(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Back restores the Camp ID and title')
+    const delayedCamp = deferred<unknown>()
+    campRequest = id => id === 'C' ? delayedCamp.promise : campProjection(id)
+    await clickNavigation('导航会话 C', '.camp-nav-open')
+    check(document.querySelector('.structured-mention-editor')?.getAttribute('contenteditable') === 'false', 'A pending departure locks the existing composer')
+    await clickNavigation('导航会话 A', '.camp-nav-open')
+    check(document.querySelector('.structured-mention-editor')?.getAttribute('contenteditable') === 'true', 'Cancelling a slow departure releases the composer without waiting for its old request')
+    delayedCamp.resolve(campProjection('C')); await flush(); await flush()
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'A late read cannot override a renewed selection of the displayed Camp')
+    await forward(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Cancelling a pending push preserves the forward branch')
+    campRequest = id => { if (id === 'C') throw new Error('Fixture Camp unavailable'); return campProjection(id) }
+    await clickNavigation('导航会话 C', '.camp-nav-open')
+    check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'A failed Camp read keeps the displayed page')
+    await back(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Failed reads do not consume a history entry')
+    campRequest = id => { if (id === 'B') throw new Error('Fixture Camp removed'); return campProjection(id) }
+    requestHandlers.set('camps.exists', ({ campId }) => campId !== 'B')
+    await forward(); check(document.querySelector('.compose-content'), 'A deleted historical Camp resolves to the valid home page')
+    await back(); check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 A', 'Deleted-resource fallback replaces the current entry')
+    cases.push('Desktop Camp navigation preserves the forward branch, ignores stale reads and retains the page on failure')
+    const navigationResponses = new Map(responses)
+    const navigationHandlers = new Map(requestHandlers)
+    captureNavigation = async (theme, collapsed) => {
+      appearanceTheme = theme
+      window.localStorage.removeItem('rovai.navigation-layout.v1')
+      await reset({ kind: 'quick_chat' })
+      for (const [method, response] of navigationResponses) responses.set(method, response)
+      for (const [method, handler] of navigationHandlers) requestHandlers.set(method, handler)
+      campRequest = id => campProjection(id)
+      onboarding.resolve({ schemaVersion: 2, status: 'completed', origin: 'existing_installation', completedAt: stamp,
+        selectedMemberRole: null, memberAgentId: null, quickChatCampId: null })
+      publish({ runtimeMode: 'full_core', fullCoreState: 'ready', startupPhase: null, authorityState: { kind: 'current', origin: 'existing' },
+        capabilities: { ...supervisor.capabilities, authoritativeWorkspace: true, coreRequests: true } })
+      await flush(); await advance(0); await flush(); await advance(0); await flush()
+      await clickNavigation('导航会话 A', '.camp-nav-open')
+      await clickNavigation('导航会话 B', '.camp-nav-open')
+      if (collapsed) await clickNavigation('收起导航侧栏')
+      document.documentElement.dataset.theme = theme
+      await flush()
+      const center = (selector: string) => {
+        const rect = document.querySelector(selector)!.getBoundingClientRect()
+        return rect.y + rect.height / 2
+      }
+      check(document.querySelectorAll('.camp-detail-entry').length === 3, 'The real Camp header keeps all three existing actions')
+      return { control: center('.navigation-collapse-button'), title: center('.camp-topbar h1'), actions: center('.camp-detail-entry') }
+    }
 
     let dialogOpen = true
     let dialogBusy = false
