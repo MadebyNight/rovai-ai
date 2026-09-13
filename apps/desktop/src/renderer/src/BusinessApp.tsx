@@ -81,7 +81,7 @@ import { NewConversationDialog } from './NewConversationDialog'
 import { openRuntimeModelCatalog } from './runtime-check'
 import { FilePreviewProvider } from './FilePreviewContext'
 import { NavigationShell } from './NavigationShell'
-import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type MemoryNavigationTarget } from './desktop-navigation'
+import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type NavigationIntent, type MemoryNavigationTarget } from './desktop-navigation'
 import { forgetFilePreviewSession } from './file-preview-session'
 import { AppearanceSettings } from './AppearanceSettings'
 import { AboutUpdatesSettings } from './AboutUpdatesSettings'
@@ -965,6 +965,7 @@ export function BusinessApp({
     const disconnect = desktopNavigation.connect()
     return () => { disconnect(); desktopNavigation.reset() }
   }, [desktopNavigation])
+  const displayedEntry = desktopNavigation.captureCurrentEntry()
   const restoredWebNavigation = useRef(false)
   const lastMainTarget = useRef<NavigationTarget>({ kind: 'quick_chat' })
   const [appearance, setAppearance] = useState<AppearanceSnapshot>(
@@ -1294,9 +1295,9 @@ export function BusinessApp({
     const agentId = next?.agentId ?? null
     if (agentId === selectedMemberId) return
     if (desktopNavigation.getSnapshot().entries.length) {
-      void desktopNavigation.replace({ kind: 'members', agentId, tab: memberTab })
+      if (displayedEntry.update({ kind: 'members', agentId, tab: memberTab })) setSelectedMemberId(agentId)
     } else setSelectedMemberId(agentId)
-  }, [agents, selectedMemberId, view, memberTab, desktopNavigation])
+  }, [agents, selectedMemberId, view, memberTab, desktopNavigation, displayedEntry])
 
   useEffect(() => {
     setCampInspectorCampId((current) => view === 'camp' && current === activeCampId ? current : null)
@@ -2549,9 +2550,11 @@ export function BusinessApp({
   ): Promise<'created' | 'dialog' | 'ignored'> => {
     if (busy === 'create-camp' || newConversationRequestBusy.current) return 'ignored'
     newConversationRequestBusy.current = true
+    const intent = desktopNavigation.beginIntent()
     try {
       // Another device may have changed the team since this page mounted.
       const preferences = await uiPreferences.generalPreferences.get()
+      if (!intent.isCurrent()) return 'ignored'
       setGeneralPreferences(preferences)
       const defaults = resolveAvailableNewConversationDefaults(preferences, agents)
       if (preferences.oneClickNewConversationEnabled && defaults) {
@@ -2563,9 +2566,10 @@ export function BusinessApp({
             defaultLeadAgentId: defaults.defaults.defaultLeadAgentId,
             collaborationMode: 'peer',
             activationState: campActivationStateForCreation('one_click')
-          })
+          }, false, intent)
           return 'created'
         } catch (nextError) {
+          if (!intent.isCurrent()) return 'ignored'
           openNewConversation(workspace, `一键创建未完成：${errorMessage(nextError)} 请重新确认项目、队员与默认负责人。`, preferences)
           return 'dialog'
         }
@@ -2573,6 +2577,7 @@ export function BusinessApp({
       openNewConversation(workspace, null, preferences)
       return 'dialog'
     } catch (nextError) {
+      if (!intent.isCurrent()) return 'ignored'
       setError(`默认队员设置读取失败：${errorMessage(nextError)}`)
       return 'ignored'
     } finally { newConversationRequestBusy.current = false }
@@ -2692,6 +2697,7 @@ export function BusinessApp({
       switch (target.kind) {
         case 'settings': setSettingsSection(target.section); setView('settings'); break
         case 'members':
+          membersViewRef.current?.showSelectedMember()
           setSelectedMemberId(target.agentId); setMemberTab(target.tab); setView('members'); break
         case 'memory': setMemoryTarget(target); setView('memory'); break
         case 'automations': setView('automations'); break
@@ -3037,11 +3043,8 @@ export function BusinessApp({
           persistCurrentProject(fallback)
         }
         if (removingActiveCamp) {
-          cancelPendingCampActivation()
-          setActiveCampId(null)
-          setCampSnapshot(null)
+          if (activeCampId) forgetRemovedCampSurface(activeCampId)
           setNotificationFocus(null)
-          if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
         }
         if (removingCurrent || removingActiveCamp) {
           await commitRestorableLocation({ kind: 'quick_chat' })
@@ -3105,10 +3108,7 @@ export function BusinessApp({
       forgetFilePreviewSession(camp.id, activeCampId === camp.id)
       campSnapshotCache.current.delete(camp.id)
       if (activeCampId === camp.id) {
-        cancelPendingCampActivation()
-        setActiveCampId(null)
-        setCampSnapshot(null)
-        if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
+        forgetRemovedCampSurface(camp.id)
       }
       await loadNavigation()
     } finally {
@@ -3436,8 +3436,10 @@ export function BusinessApp({
 
   async function createCamp(
     draft: Omit<CreateCampRequest, 'commandId'>,
-    enableOneClick = false
+    enableOneClick = false,
+    intent: NavigationIntent = desktopNavigation.beginIntent()
   ): Promise<void> {
+    cancelPendingCampActivation()
     setBusy('create-camp')
     try {
       if (draft.workspace) {
@@ -3464,7 +3466,13 @@ export function BusinessApp({
         }
       }
       try {
-        await activateCamp(campId, { reconcileDefaultLead: false, initializeComposerDraft: true })
+        if (intent.isCurrent()) {
+          await activateCamp(campId, { reconcileDefaultLead: false, initializeComposerDraft: true })
+        } else {
+          // Core owns the created Camp. Refresh its visibility without stealing focus;
+          // empty one-click drafts still follow the existing pending-Camp lifecycle.
+          await loadNavigation()
+        }
       } finally {
         if (preferencesSaveFailed) {
           notifyError('对话已创建，但默认队伍与一键新建设置未保存。可在「设置 → 通用」重试。')
@@ -3472,6 +3480,18 @@ export function BusinessApp({
       }
     } finally {
       setBusy(null)
+    }
+  }
+
+  function forgetRemovedCampSurface(campId: string): void {
+    if (activeCampIdRef.current !== campId) return
+    setActiveCampId(null)
+    setCampSnapshot(null)
+    const current = desktopNavigation.getSnapshot()
+    const target = current.entries[current.index]
+    if (viewRef.current === 'camp' && target?.kind === 'camp' && target.campId === campId) {
+      // Correct the displayed resource without invalidating a newer Camp read.
+      if (desktopNavigation.captureCurrentEntry().update({ kind: 'quick_chat' })) setView('compose')
     }
   }
 
@@ -3492,12 +3512,7 @@ export function BusinessApp({
       throw new Error(commandFailureMessage(result))
     }
     if (result.status !== 'rejected') campSnapshotCache.current.delete(draft.campId)
-    if (result.status !== 'rejected' && activeCampIdRef.current === draft.campId) {
-      cancelPendingCampActivation()
-      setActiveCampId(null)
-      setCampSnapshot(null)
-      if (viewRef.current === 'camp') await desktopNavigation.replace({ kind: 'quick_chat' }, { prepared: true })
-    }
+    if (result.status !== 'rejected') forgetRemovedCampSurface(draft.campId)
     await loadNavigation()
   }
 
@@ -4041,7 +4056,10 @@ export function BusinessApp({
             topNotices={inlineNotices}
             refreshSignal={memoryRefreshKey}
             navigationTarget={memoryTarget}
-            onNavigate={(target, mode) => { void desktopNavigation[mode](target) }}
+            onNavigate={(target, mode) => {
+              if (mode === 'push') void desktopNavigation.push(target)
+              else if (displayedEntry.update(target)) setMemoryTarget(target)
+            }}
             reviewDrawerSignal={memoryReviewDrawerSignal}
             onReviewDrawerSignalConsumed={() => setMemoryReviewDrawerSignal(0)}
             onPendingCountChange={setPendingMemoryCount}

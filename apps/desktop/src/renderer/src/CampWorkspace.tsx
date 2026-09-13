@@ -131,9 +131,9 @@ import { useOptionalFilePreview } from './FilePreviewContext'
 import {
   agentRunFileChangeHasReviewableDiff,
   agentRunFileChangesPreviewTarget,
-  agentRunFileChangesSummaryLabel,
-  agentRunFilePathParts
+  agentRunFileChangesSummaryLabel
 } from './file-changes-presentation'
+import { RunFileChangePath } from './RunFileChangePath'
 import { openAgentRunCurrentFilePreview } from './agent-run-file-preview'
 import { FileReferenceText, type FileReferenceActivation } from './FileReferenceLink'
 import {
@@ -7457,7 +7457,6 @@ export function AgentRunFileChangesTimelineCard({
       </div>
       <div className="run-file-changes-card-files" aria-label="变更文件">
         {visibleFiles.map((file) => {
-          const { basename, directory } = agentRunFilePathParts(file.path)
           return (
             <button
               key={file.evidenceFileId}
@@ -7474,10 +7473,7 @@ export function AgentRunFileChangesTimelineCard({
                 }
               }}
             >
-              <code title={file.path}>
-                <span className="run-file-change-basename">{basename}</span>
-                <span className="run-file-change-directory">{directory}</span>
-              </code>
+              <RunFileChangePath path={file.path} />
               <span className="run-file-change-stats" aria-hidden="true">
                 {file.additions !== undefined && file.deletions !== undefined
                   ? <>

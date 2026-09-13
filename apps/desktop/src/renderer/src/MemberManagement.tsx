@@ -114,6 +114,7 @@ export type MembersViewHandle = {
     action: () => void | Promise<void>
   ): Promise<boolean>
   requestCreate(trigger: HTMLButtonElement): void
+  showSelectedMember(): void
 }
 
 type MemberEditorHandle = { discard(): void }
@@ -162,13 +163,16 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
     const busy = activeStates.some((state) => state.busy)
     const stateRef = useRef({ dirty, busy })
     stateRef.current = { dirty, busy }
+    const showSelectedMember = (): void => {
+      setCreating(false)
+      setPersonalSelected(false)
+    }
     const select = (
       id: string,
       tab: MemberWorkspaceTab,
       focusRuntime = false
     ): void => {
-      setCreating(false)
-      setPersonalSelected(false)
+      showSelectedMember()
       onSelectedAgentChange(id, tab)
       if (focusRuntime) setRuntimeFocus((value) => value + 1)
     }
@@ -217,7 +221,8 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
     )
     useImperativeHandle(ref, () => ({
       requestTransition,
-      requestCreate: create
+      requestCreate: create,
+      showSelectedMember
     }))
     useEffect(() => {
       const guard = (event: BeforeUnloadEvent): void => {

@@ -239,7 +239,7 @@ describe('execution Tool grouping', () => {
     })
   })
 
-  it('counts only successful steps and reports other terminal outcomes separately', () => {
+  it('counts only successful steps without appending terminal outcome counts', () => {
     expect(toolActivityGroupPresentation([
       tool('one'),
       tool('two', 'failed'),
@@ -247,9 +247,9 @@ describe('execution Tool grouping', () => {
     ], 'failed')).toMatchObject({
       status: 'completed',
       statusLabel: '含成功操作',
-      primary: '已完成 1 个步骤 · 失败 1 个 · 停止 1 个',
+      primary: '已完成 1 个步骤',
       countLabel: null,
-      accessibleLabel: '已完成 1 个步骤 · 失败 1 个 · 停止 1 个'
+      accessibleLabel: '已完成 1 个步骤'
     })
 
     expect(toolActivityGroupPresentation([
@@ -257,7 +257,7 @@ describe('execution Tool grouping', () => {
     ], 'succeeded')).toMatchObject({
       status: 'recorded',
       statusLabel: '已记录',
-      primary: '已完成 0 个步骤 · 结果未知 1 个',
+      primary: '已完成 0 个步骤',
       countLabel: null
     })
   })
@@ -302,7 +302,7 @@ describe('execution Tool grouping', () => {
     ], 'failed')).toMatchObject({
       status: 'failed',
       statusLabel: '全部失败',
-      primary: '已完成 0 个步骤 · 失败 2 个',
+      primary: '已完成 0 个步骤',
       countLabel: null
     })
 
@@ -312,7 +312,7 @@ describe('execution Tool grouping', () => {
     ], 'failed')).toMatchObject({
       status: 'stopped',
       statusLabel: '已停止，含失败操作',
-      primary: '已完成 0 个步骤 · 失败 1 个 · 停止 1 个',
+      primary: '已完成 0 个步骤',
       countLabel: null
     })
   })
@@ -331,6 +331,6 @@ describe('execution Tool grouping', () => {
   it('does not count skipped or unknown results as successful steps', () => {
     expect(toolActivityGroupPresentation([
       tool('success'), tool('skip', 'skipped'), tool('unknown', 'recorded')
-    ], 'succeeded').primary).toBe('已完成 1 个步骤 · 跳过 1 个 · 结果未知 1 个')
+    ], 'succeeded').primary).toBe('已完成 1 个步骤')
   })
 })

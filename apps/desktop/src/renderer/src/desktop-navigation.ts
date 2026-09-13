@@ -17,7 +17,7 @@ export type NavigationState = { entries: readonly NavigationTarget[]; index: num
 /** Platform history stores page locators only; the shared coordinator owns leave guards. */
 export interface NavigationHistory {
   initial: NavigationState | null
-  write(state: NavigationState, mode: 'push' | 'replace'): NavigationState
+  write(state: NavigationState, mode: 'push' | 'replace' | 'repair'): NavigationState
   go(delta: number): Promise<boolean>
   listen(apply: (state: NavigationState) => Promise<NavigationState | null>): () => void
 }
@@ -42,90 +42,135 @@ export type NavigationTransaction = {
   commit(target?: NavigationTarget): boolean
 }
 
-/** One window-owned history. Pending intent is transactional, never a second router history. */
+export type NavigationIntent = { isCurrent(): boolean }
+type NavigationOperation =
+  | { kind: 'push' | 'replace'; target: NavigationTarget }
+  | { kind: 'traverse'; index: number; browserState?: NavigationState }
+
+/** Only displayed entries are committed. Pending cursor moves never own another entries array. */
 export function createDesktopNavigation<Context = undefined>(
   apply: (target: NavigationTarget, transaction: NavigationTransaction, context?: Context) => Promise<void>,
   history?: NavigationHistory
 ) {
   let state: NavigationState = { entries: [], index: -1 }
-  let intent = state
+  let pending: NavigationOperation | { kind: 'reservation' } | null = null
   let generation = 0
+  let entryRevision = 0
   let supersede: (() => void) | undefined
   const listeners = new Set<() => void>()
   const publish = (): void => { for (const listener of listeners) listener() }
-
-  const navigate = async (next: NavigationState, context?: Context, mode: 'push' | 'replace' | 'traverse' = 'replace'): Promise<boolean> => {
-    if (next === intent) return false
-    intent = next
-    const request = ++generation
+  const invalidate = (): number => {
+    ++generation
     supersede?.()
+    supersede = undefined
+    pending = null
+    return generation
+  }
+
+  const navigate = async (operation: NavigationOperation, context?: Context): Promise<boolean> => {
+    const request = invalidate()
+    pending = operation
+    const target = operation.kind === 'traverse' ? (operation.browserState ?? state).entries[operation.index] : operation.target
     const superseded = new Promise<void>(resolve => { supersede = resolve })
     let committed = false
+    let committedRevision = -1
     const transaction: NavigationTransaction = {
-      isCurrent: () => request === generation,
+      isCurrent: () => request === generation && (!committed || committedRevision === entryRevision),
       superseded,
-      commit: (target = next.entries[next.index]) => {
-        if (request !== generation) return false
-        const entries = [...next.entries]
-        entries[next.index] = target
-        let committedState = { entries, index: next.index } as NavigationState
-        if (mode !== 'traverse' && history) committedState = history.write(committedState, mode)
-        state = intent = committedState
+      commit: (resolvedTarget = target) => {
+        if (request !== generation || (committed && committedRevision !== entryRevision)) return false
+        // Build from the latest committed entries so in-page repairs made during a slow
+        // departure survive. A second commit (Camp preview -> full projection) replaces.
+        let entries = [...(state.entries.length ? state.entries : operation.kind === 'traverse' ? operation.browserState?.entries ?? [] : [])]
+        let index = state.index
+        if (!committed && operation.kind === 'push') {
+          const visited = [...entries.slice(0, index + 1), resolvedTarget]
+          entries = history ? visited : visited.slice(-MAX_NAVIGATION_ENTRIES)
+          index = entries.length - 1
+        } else {
+          if (!committed && operation.kind === 'traverse') index = operation.index
+          index = Math.max(0, index)
+          entries[index] = resolvedTarget
+        }
+        let next: NavigationState = { entries, index }
+        if (history && operation.kind !== 'traverse') next = history.write(next, committed ? 'replace' : operation.kind)
+        state = next
+        pending = null
+        committedRevision = ++entryRevision
         committed = true
         publish()
         return true
       }
     }
     try {
-      await apply(next.entries[next.index], transaction, context)
-      return committed && request === generation
+      await apply(target, transaction, context)
+      return committed && transaction.isCurrent()
     } finally {
-      if (request === generation && !committed) intent = state
+      if (request === generation) pending = null
     }
   }
 
   return {
-    connect(): () => void { return history?.listen(async next => await navigate(next, undefined, 'traverse') ? state : null) ?? (() => undefined) },
-    restore(): Promise<boolean> { return history?.initial ? navigate(history.initial, undefined, 'traverse') : Promise.resolve(false) },
+    connect(): () => void {
+      return history?.listen(async next => await navigate({ kind: 'traverse', index: next.index, browserState: next }) ? state : null) ?? (() => undefined)
+    },
+    restore(): Promise<boolean> {
+      return history?.initial ? navigate({ kind: 'traverse', index: history.initial.index, browserState: history.initial }) : Promise.resolve(false)
+    },
     getSnapshot: (): NavigationState => state,
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
+    /** Reserve user intent before an async creation has produced a navigation target. */
+    beginIntent(): NavigationIntent {
+      const request = invalidate()
+      pending = { kind: 'reservation' }
+      return { isCurrent: () => request === generation }
+    },
+    /** In-page normalization owns this displayed revision, never a newer user request. */
+    captureCurrentEntry() {
+      const revision = entryRevision
+      return {
+        update(target: NavigationTarget): boolean {
+          if (revision !== entryRevision || state.index < 0) return false
+          const entries = [...state.entries]
+          entries[state.index] = target
+          state = { entries, index: state.index }
+          history?.write(state, 'repair')
+          ++entryRevision
+          publish()
+          return true
+        }
+      }
+    },
     reset(target?: NavigationTarget): void {
-      ++generation
-      supersede?.()
-      supersede = undefined
-      state = intent = target ? { entries: [target], index: 0 } : { entries: [], index: -1 }
-      if (target) history?.write(state, 'replace')
+      invalidate()
+      ++entryRevision
+      state = target ? { entries: [target], index: 0 } : { entries: [], index: -1 }
+      if (target && history) state = history.write(state, 'replace')
       publish()
     },
     push(target: NavigationTarget, context?: Context): Promise<boolean> {
       const current = state.entries[state.index]
       if (current && sameNavigationDestination(current, target)) {
-        // Clicking the displayed page cancels an unfinished departure without adding a step.
-        return intent === state ? Promise.resolve(false) : navigate(state, context)
+        return pending ? navigate({ kind: 'traverse', index: state.index }, context) : Promise.resolve(false)
       }
-      // A superseded destination that never rendered must not become a phantom entry.
-      const visited = [...state.entries.slice(0, state.index + 1), target]
-      // Native browser history remains traversable beyond the Desktop window cap.
-      const entries = history ? visited : visited.slice(-MAX_NAVIGATION_ENTRIES)
-      return navigate({ entries, index: entries.length - 1 }, context, 'push')
+      return navigate({ kind: 'push', target }, context)
     },
     replace(target: NavigationTarget, context?: Context): Promise<boolean> {
-      const entries = [...intent.entries]
-      const index = Math.max(0, intent.index)
-      entries[index] = target
-      return navigate({ entries, index }, context)
+      return navigate({ kind: 'replace', target }, context)
     },
     back(): Promise<boolean> {
       if (history) return history.go(-1)
-      return intent.index > 0 ? navigate({ ...intent, index: intent.index - 1 }) : Promise.resolve(false)
+      const index = pending?.kind === 'traverse' ? pending.index : state.index
+      return index > 0 ? navigate({ kind: 'traverse', index: index - 1 }) : Promise.resolve(false)
     },
     forward(): Promise<boolean> {
       if (history) return history.go(1)
-      return intent.index < intent.entries.length - 1
-        ? navigate({ ...intent, index: intent.index + 1 }) : Promise.resolve(false)
+      const index = pending?.kind === 'traverse' ? pending.index : state.index
+      return index < state.entries.length - 1
+        ? navigate({ kind: 'traverse', index: index + 1 }) : Promise.resolve(false)
     }
   }
 }

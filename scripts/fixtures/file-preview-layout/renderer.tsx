@@ -911,7 +911,10 @@ Object.assign(window, { previewTest: {
       viewLabel: element('.run-file-changes-card-view')!.textContent,
       fileStatsFit: stats.every(node => node.scrollWidth <= node.clientWidth && node.getBoundingClientRect().right < bounds('.run-file-changes-card')!.right),
       fileStats: stats.map(node => node.textContent),
-      pathTruncated: [...document.querySelectorAll<HTMLElement>('.run-file-change-file code span')].some(node => node.scrollWidth > node.clientWidth),
+      pathTruncated: [...reviewableCard.querySelectorAll<HTMLElement>('.run-file-change-directory')]
+        .some(node => node.textContent?.endsWith('.../')),
+      fileNamesFit: [...reviewableCard.querySelectorAll<HTMLElement>('.run-file-change-basename')]
+        .every(node => node.scrollWidth <= node.clientWidth + 1),
       overflows: ['.camp-timeline', '.task-event-card', '.run-file-changes-card', '.composer', '.composer-box', '.composer-action-row', '.approval-dock', '.runtime-recovery-dock']
         .filter(selector => { const node = element(selector); return node && node.scrollWidth > node.clientWidth + 1 }),
       composer: bounds('.composer-box'), attachment: bounds('.composer-attachment-button'), send: bounds('.composer-send'), stop: bounds('.composer-stop'),

@@ -40,7 +40,7 @@ export function createBrowserNavigationHistory(scope: string, host: Window = win
     const before = committed
     const entries = [...before.entries]
     if (physicalIndex < 0 || physicalIndex >= entries.length) return
-    entries[physicalIndex] = current.target
+    // Stored page repairs may be newer than an inactive native history marker.
     const next = { entries, index: physicalIndex }
     const accepted = await apply?.(next).catch(() => null)
     if (request !== sequence) return
@@ -58,6 +58,13 @@ export function createBrowserNavigationHistory(scope: string, host: Window = win
   return {
     initial: stored,
     write(next, mode) {
+      if (mode === 'repair') {
+        // Repair the displayed entry without cancelling an in-flight native traversal.
+        committed = next
+        if (physicalIndex === next.index) host.history.replaceState({ rovai: { scope, id: ids[next.index], target: next.entries[next.index] } }, '')
+        persist()
+        return next
+      }
       ++sequence; rollback = null; finish(false)
       // Keep native history entries addressable; only Desktop applies its window cap.
       if (mode === 'push' && committed && physicalIndex !== committed.index) {

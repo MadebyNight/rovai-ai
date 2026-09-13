@@ -1478,11 +1478,11 @@ describe('task event projections', () => {
         operationCount: 1, additions: 4, deletions: 1
       }, {
         evidenceFileId: 'ef-card-1',
-        path: 'src/styles.css', changeKind: 'update', presentationKind: 'operation_only',
+        path: 'styles.css', changeKind: 'update', presentationKind: 'operation_only',
         operationCount: 1
       }, {
         evidenceFileId: 'ef-card-2',
-        path: 'src/card.tsx', changeKind: 'update', presentationKind: 'exact_mutations',
+        path: '/xxx/xxx/CONTEXT.md', changeKind: 'update', presentationKind: 'exact_mutations',
         operationCount: 2
       }, {
         evidenceFileId: 'ef-card-3',
@@ -1504,8 +1504,10 @@ describe('task event projections', () => {
     expect(markup).toContain('4 个文件 · 5 次修改')
     expect(markup).toContain('class="run-file-changes-card-view"')
     expect(markup).toContain('aria-label="查看 src/app.ts 的文件变化"')
-    expect(markup).toContain('aria-label="打开当前文件预览：src/styles.css"')
-    expect(markup).toContain('src/card.tsx')
+    expect(markup).toContain('aria-label="打开当前文件预览：styles.css"')
+    expect(markup).toContain('<span class="run-file-change-directory">/xxx/xxx/</span><span class="run-file-change-basename">CONTEXT.md</span>')
+    expect(markup).toContain('<span class="run-file-change-directory"></span><span class="run-file-change-basename">styles.css</span>')
+    expect(markup).not.toContain('当前目录')
     expect(markup).not.toContain('/tmp/outside-fixture.json')
     expect(markup).toContain('再显示 1 个文件')
     expect(markup).not.toContain('本次运行的文件变化')

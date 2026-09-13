@@ -24,6 +24,40 @@ const camp = (campId: string): NavigationTarget => ({ kind: 'camp', campId })
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
 describe('browser navigation adapter', () => {
+  it('repairs the displayed page during native Back without cancelling the newer destination', async () => {
+    const host = browser()
+    let release: (() => void) | undefined
+    let hold = false
+    const navigation = createDesktopNavigation(async (_target, tx) => {
+      if (hold) await new Promise<void>(resolve => { release = resolve })
+      tx.commit()
+    }, createBrowserNavigationHistory('scope', host))
+    const stop = navigation.connect()
+    navigation.reset(camp('A')); await navigation.push(camp('B'))
+    const displayed = navigation.captureCurrentEntry()
+    hold = true
+    const back = navigation.back(); await settle()
+    expect(displayed.update({ kind: 'quick_chat' })).toBe(true)
+    expect(host.history.state.rovai.target).toEqual(camp('A'))
+    hold = false; release!()
+    expect(await back).toBe(true)
+    expect(await navigation.forward()).toBe(true)
+    expect(host.history.state.rovai.target).toEqual({ kind: 'quick_chat' })
+    stop()
+    const restored = createDesktopNavigation(async (_target, tx) => { tx.commit() }, createBrowserNavigationHistory('scope', host))
+    expect(await restored.restore()).toBe(true)
+    expect(restored.getSnapshot().entries[1]).toEqual({ kind: 'quick_chat' })
+  })
+  it('commits preview and full projection into one native history entry', async () => {
+    const host = browser()
+    const navigation = createDesktopNavigation(async (_target, tx) => { tx.commit(); tx.commit() }, createBrowserNavigationHistory('scope', host))
+    const stop = navigation.connect()
+    navigation.reset(camp('A')); await navigation.push(camp('B'))
+    expect(await navigation.back()).toBe(true)
+    expect(host.history.state.rovai.target).toEqual(camp('A'))
+    expect(await navigation.back()).toBe(false)
+    stop()
+  })
   it('shares native and in-page traversal, restores after refresh and returns to the same cursor when a guard declines', async () => {
     const host = browser()
     let allow = true
