@@ -1,0 +1,109 @@
+{
+  "scope": "Standalone HTML interaction draft; local sample data only",
+  "productionHost": false,
+  "realDevice": false,
+  "baseline": "f4eda5fd + main 6c556883",
+  "date": "2026-09-13T16:50:02.188Z",
+  "checks": [
+    "five labeled roots and neutral primary creation",
+    "Camp, private and refresh retain separate text and recipient",
+    "send consumes only submitted text while preserving later editing",
+    "offline disables send; expiry and demo re-login preserve editing",
+    "approval and latest command disclosure preserve reading",
+    "Compact disclosure and reduced motion",
+    "HTML attachment interactive preview, source and quote",
+    "default team and one-click creation carry into the new Camp",
+    "task create and edit remain in the current Camp",
+    "member Runtime configuration and form survive return",
+    "memory scope, ownership, stop and review",
+    "automation schedule, Cron, timezone and switch",
+    "Desktop has channels without an update entry; Server is the inverse",
+    "Server update mock guards active work and completes idle restart",
+    "Desktop channel retry reuses provider state and structured choice"
+  ],
+  "screens": [
+    {
+      "name": "desktop-about-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "conversations-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "camp-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "camp-night",
+      "width": 375,
+      "height": 812,
+      "theme": "night"
+    },
+    {
+      "name": "settings-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "members-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "memory-360",
+      "width": 360,
+      "height": 800,
+      "theme": "day"
+    },
+    {
+      "name": "automation-430",
+      "width": 430,
+      "height": 900,
+      "theme": "night"
+    },
+    {
+      "name": "camp-landscape",
+      "width": 844,
+      "height": 390,
+      "theme": "day"
+    },
+    {
+      "name": "execution-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "execution-night",
+      "width": 390,
+      "height": 844,
+      "theme": "night"
+    },
+    {
+      "name": "overview-day",
+      "width": 1440,
+      "height": 1040,
+      "theme": "day"
+    }
+  ],
+  "errors": [],
+  "artifact": {
+    "name": "rovai-mobile.html",
+    "sha256": "00a0f821162ba284ea8948b6eb1707148131956965136b34548b0cb49bcdc714"
+  },
+  "result": "pass",
+  "limitations": [
+    "Local fixture state only; no real Host or model execution",
+    "Desktop-hosted page has no update; Server Web update flow remains a proposal",
+    "No iOS/Android physical-device, keyboard, camera or network-switch qualification"
+  ]
+}

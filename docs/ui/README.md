@@ -54,7 +54,7 @@ MCP 与 Skills 的列表/详情、导入、启停和拖拽合同见 [Capability 
 - [设置 · 远程连接交互稿](host-remote-connection.md)：正式设置菜单及同组件交互稿，含本机管理、地址发现、令牌重复读取与浏览器连接状态。
 - [Desktop/Web 宽屏对照稿](host-web-parity.md)：阶段 1–3 当前收敛入口，行为差异表、生产组件 fixture 与实际验收边界。
 - [Host Web 与 Mobile 交互提案](host-web-mobile.md)：沿用现有视觉系统，第五阶段先供交互评审；不是生产 Mobile 能力。
-  Mobile 新增工作按当前用户指令暂停，已有稿保留。
+  2026-09-14 按用户要求恢复交互稿，覆盖当前 WebUI 业务和最新执行态；Server 有更新入口，Desktop 托管没有更新。
 
 ## 平台差异
 

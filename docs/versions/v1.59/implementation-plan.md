@@ -4,14 +4,40 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # v1.59 实施与验收
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，当前已合入 main `c1fa5966`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+复用任务分支继续开发，当前以 `59249423` 合入 main `6c556883`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+
+## 本轮：最新执行态与 Mobile 交互稿
+
+同步 main 的 command / Compact 呈现：指令与类型图标一致、收起运行文字高亮、展开后静态、状态在最右、
+触摸目标和明确提示、异步结果与收起时保留阅读位置。两处合并冲突只涉及 import；保留网络 CampClient
+和幂等命令依赖，同时加入共享 RunningText / useExecutionDisclosureAnchor。实际 Web 入口继续挂载
+BusinessApp 并引入共享样式；执行详情和内容读取仍由显式网络客户端完成。
+
+默认 Vitest 原先仅匹配 `.test.ts`，遗漏 main 新增的 8 个 JSX 组件用例；已通用扩展至 `.test.{ts,tsx}`。
+既有 Desktop/Web 对照 owner 改用当前 disclosure 和 Runtime 参数选择组件，增加运行摘要、展开静态、
+阅读锚点、触摸与减少动效验证。完整加载/失败/重试、键盘及位置切换继续由既有 CampOpen owner 负责。
+
+[Mobile 稿](../../ui/host-web-mobile.md)按本轮用户要求恢复，单文件 HTML 随 Camp 附件交付，源码保持本地忽略。
+五个底部入口、对话单列详情、底部面板、独立草稿、HTML 预览、共享管理功能和两套主题均纳入示例，并同步
+上述执行态。Desktop 托管保留渠道且没有更新；独立 Server 隐藏渠道并提供更新提案入口。当前 Web 的 Server
+更新适配尚未接通，稿中检查/下载/重启为模拟状态，不代表生产 API。
+
+验证分别记录在 [Mobile 示例交互](evidence/mobile-review/validation.json)与
+[执行态同步](evidence/execution-sync/validation.json)。本轮不安装或重启日常 App，不启动真实模型，
+不把本机 Chrome/Electron 或窄屏模拟计为实体手机、Windows、Linux 或三平台验收。
+
+TypeScript、Desktop/Web 构建、Vitest 2009 / 198 文件、Node 317（2 个 Windows 专项跳过）和文档三门禁通过。
+[双入口对照](evidence/execution-sync/shared-browser-parity.json)覆盖 24 个场景，
+[CampOpen](evidence/execution-sync/camp-open.json)的 9 组回归全部通过；没有 Rust 改动，staged 路由明确跳过。
+Mobile 的 15 组示例流程通过，截图覆盖日夜、小屏与横屏；原型重置的刷新竞态已修正后完整复跑。
+HTML 子帧使用独立 CDP target 检查，未放宽它的 opaque sandbox。
 
 ## 本轮：HTML 附件预览与正式登录页
 
@@ -524,7 +550,7 @@ Web 固定示例下载、Runtime 配置版本保存，以及独立 HTML 的入�
 | 2 Desktop 共用 | 受保护本机 IPC、同 Host Web 开关与会话管理；关闭 Web 不停 Core，bind 失败不毁 Desktop；保留退出与父进程异常语义 | 同 Host/匿名父管道、失败隔离、执行中 Web 开关、重新登录继续工作与真实执行通过 |
 | 3 宽屏完整性 | Camp/成员/Task/Runtime/Memory/Automation/Skills/MCP 与必要设置；声明能力矩阵；多端、私聊归属、审批竞争和迟到响应回归 | 共享正式页面、单聊归属、管理动作与无浏览器 Host 时钟通过本机验收；合理平台差异见对照表 |
 | 4 三平台发布 | macOS arm64/x64、Windows x64、Linux x64 实际 CLI Server 闭环与匹配 Host/Web 包；平台/Runtime/部署方式分别留证 | 本轮推进 Mac arm64 原生 release 包、搬迁/旧包升级/停机回退及真实 Runtime；其余原生预览证据保留，不宣称三平台正式发布 |
-| 5 Mobile | 按 2026-09-12 用户追加要求先出沿用现有风格的交互稿；真实 Mobile 生产实现与设备验收留待后续 | 已有可交互 HTML 和状态检查保留；新增工作暂停 |
+| 5 Mobile | 2026-09-14 用户重新授权交互稿，要求功能对齐当前 WebUI、手机便利性及两种部署更新入口差异 | 新稿恢复评审并同步最新执行态；生产 Mobile、Server Web 更新接口与设备验收未完成 |
 
 1C 的基础门禁不能后移：两标签页互不覆盖，伪造归属不能读/写/绑定/消费；陈旧 revision 不消费新内容；
 响应丢失按原 commandId 查回执；上传绑定结果未知不误删；源文件消失显示不可用；凭据不进入其他 origin、端口、

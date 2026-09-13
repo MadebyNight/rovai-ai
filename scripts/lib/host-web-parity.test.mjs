@@ -124,13 +124,34 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     return ['simulated-authorized-workspace-picker', 'select-one-member', 'create-and-open-fresh-camp']
   }
   if (scenario === 'running') {
+    assert.match(await driver.evaluate(`document.querySelector('.tool-group-current').textContent`), /pnpm test -- --run/)
+    assert.equal(await driver.evaluate(`document.querySelector('.tool-group-summary > .tool-call-icon').dataset.iconDomain`), 'terminal')
+    assert.equal(await driver.evaluate(`document.querySelector('.tool-group-disclosure') === null`), true)
+    assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.tool-group-summary .running-text-highlight')).animationDuration`), '2.4s')
     await driver.click(`document.querySelector('.tool-group-summary')`)
     await driver.wait(`document.querySelector('.tool-activity-group')?.open === true`)
+    await driver.wait(`document.querySelector('.tool-group-summary').getAttribute('aria-expanded') === 'true'`)
+    assert.equal(await driver.evaluate(`document.querySelector('.tool-group-summary .running-text-highlight') === null`), true)
     await driver.wait(`document.querySelector('summary.tool-call-summary') !== null`)
-    await driver.click(`document.querySelector('summary.tool-call-summary .tool-call-disclosure-slot')`)
+    await driver.click(`document.querySelector('summary.tool-call-summary')`)
     await driver.wait(`document.body.innerText.includes('固定工具输出：已读取交互核对说明。')`)
     assert.match(await driver.evaluate('document.body.innerText'), /pnpm test -- --run/)
-    return ['production-tool-detail-loads-structured-fixture-result']
+    assert.equal(await driver.evaluate(`document.querySelector('.execution-drawer-body').dataset.executionDisclosureAnchor`), 'true')
+    const top = await driver.evaluate(`document.querySelector('summary.tool-call-summary').getBoundingClientRect().top`)
+    await driver.evaluate(`document.querySelector('summary.tool-call-summary').click()`)
+    await pause(150)
+    const after = await driver.evaluate(`document.querySelector('summary.tool-call-summary').getBoundingClientRect().top`)
+    assert.ok(Math.abs(after - top) < 2, `${surface}: collapsing a result retains the summary reading position`)
+    await driver.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+    assert.ok(await driver.evaluate(`document.querySelector('.tool-call-summary').getBoundingClientRect().height >= 44`))
+    await driver.wait(`getComputedStyle(document.querySelector('.command-expand-cue')).opacity === '1'`)
+    await driver.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+    await driver.evaluate(`document.querySelector('.tool-group-summary').click()`)
+    await driver.wait(`document.querySelector('.tool-group-summary .running-text-highlight') !== null`)
+    await driver.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.running-text-highlight')).display`), 'none')
+    await driver.send('Emulation.setEmulatedMedia', { features: [] })
+    return ['production-current-command-and-icon', 'collapsed-running-highlight', 'expanded-static-result', 'collapse-retains-reading-anchor', 'touch-cue-and-44px-target', 'reduced-motion']
   }
   if (scenario === 'file' && surface === 'web') {
     await mkdir(downloads, { recursive: true })
@@ -149,11 +170,13 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     return ['production-markdown-preview', 'explicit-download-adapter-saves-fixed-sample']
   }
   if (scenario === 'member') {
-    await driver.evaluate(`(() => { const input = Array.from(document.querySelectorAll('.member-runtime-form label')).find(e=>e.textContent.includes('文件系统访问')).querySelector('select'); input.value='workspace-write'; input.dispatchEvent(new Event('change', { bubbles: true })); })()`)
+    await driver.click(`document.querySelector('.member-runtime-form button[aria-label^="文件系统访问，"]')`)
+    await driver.wait(`document.querySelector('[role="menuitemradio"][data-state]') !== null`)
+    await driver.click(`Array.from(document.querySelectorAll('[role="menuitemradio"]')).find(e=>e.textContent.trim()==='workspace-write')`)
     await driver.wait(`document.querySelector('[aria-label="保存运行配置"]')?.disabled === false`)
     await driver.click(`document.querySelector('[aria-label="保存运行配置"]')`)
     await driver.wait(`document.querySelector('.member-runtime-form .member-editor-save-status')?.textContent === '当前配置已保存'`)
-    assert.equal(await driver.evaluate(`Array.from(document.querySelectorAll('.member-runtime-form label')).find(e=>e.textContent.includes('文件系统访问')).querySelector('select').value`), 'workspace-write')
+    assert.equal(await driver.evaluate(`document.querySelector('.member-runtime-form button[aria-label^="文件系统访问，"]').getAttribute('aria-label')`), '文件系统访问，workspace-write')
     return ['production-runtime-form-saves-simulated-versioned-configuration']
   }
   return []
