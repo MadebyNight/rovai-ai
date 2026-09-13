@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { ReturnToLatest } from '../../../apps/desktop/src/renderer/src/ReturnToLatest'
+import { ExecutionLatestContext } from '../../../apps/desktop/src/renderer/src/useExecutionWindow'
 import { createRoot } from 'react-dom/client'
 import type {
   AgentProfile,
@@ -304,6 +306,7 @@ Object.assign(window, { rovai: {
     imageId?: string
     content?: CampComposerDraftView['content']
     evidenceId?: string
+    agentRunId?: string
     replyToCampMessageId?: string
     afterSequence?: number
     refreshEvidenceIds?: string[]
@@ -313,6 +316,11 @@ Object.assign(window, { rovai: {
     command?: { pendingInputId: string; expectedRevision: number; action: { type: string; expectedDraftRevision: number } }
   }): Promise<unknown> => {
     if (method === 'agentRunExecution.page') {
+      if (params?.agentRunId?.startsWith('empty-failed-')) return {
+        schemaVersion: 1, campId, agentRunId: params.agentRunId,
+        requestedBeforeSequence: params.beforeSequence ?? null, nextBeforeSequence: null,
+        throughSequence: 0, hasMore: false, evidence: []
+      }
       const beforeSequence = params?.beforeSequence ?? null
       const limit = params?.limit ?? 24
       executionRequests.push({ beforeSequence, limit })
@@ -483,11 +491,37 @@ function Fixture({ executionPlacement = 'bottom', windowed = false }: {
     </main>
   </div></CurrentUserProfileContext.Provider>
 }
+function StaticExecutionWindow({ placement }: { placement: string }) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [request, setRequest] = useState(0)
+  const [hasNewer, setHasNewer] = useState(false)
+  return <section className={`execution-drawer placement-${placement}`} style={{ position: 'relative', width: placement === 'inspector' ? 440 : 'calc(100% - 48px)', height: 430, maxHeight: 430, margin: 24 }}>
+    <div ref={viewportRef} className="execution-drawer-body" data-following-latest="false" style={{ height: 380, overflow: 'auto' }}>
+      <div data-window-spacer style={{ height: 600 }} />
+      <ExecutionLatestContext.Provider value={{ runId: executionRun.id, request, setHasNewer }}>
+        <RunExecutionDisclosure run={executionRun} campId={campId} windowedEvidence />
+      </ExecutionLatestContext.Provider>
+    </div>
+    <ReturnToLatest viewportRef={viewportRef} ownerKey={executionRun.id} contentRevision={executionThrough}
+      scope="execution" hasNewer={hasNewer} onLatest={() => setRequest(value => value + 1)} />
+  </section>
+}
 const reactRoot = createRoot(document.getElementById('root')!)
 reactRoot.render(<Fixture />)
 const element = (selector: string): HTMLElement => document.querySelector(selector)!
 let anchor: HTMLElement | null = null
 Object.assign(window, { campOpenTest: {
+  showFailedExecutions: (placement: 'bottom' | 'inspector') => {
+    current = { ...campOpenProjectionAsSnapshot(projection(60)), tasks: [], messages: [], agentRunFileChanges: [],
+      agentRuns: Array.from({ length: 4 }, (_, index) => ({ ...executionRun,
+        id: `empty-failed-${placement}-${index}`, agentId: agent.agentId, campTurnId: 'stopped-turn',
+        status: 'failed' as const, executionEvidenceCount: 0,
+        createdAt: new Date(Date.parse(now) + index * 1000).toISOString(),
+        failure: { runtimeKind: 'opencode-cli' as const, origin: 'runtime' as const, phase: 'terminal' as const,
+          code: 'runtime_start_failed', summary: '运行时启动失败', detail: '连接中断，本次执行没有产生正文或命令。', retryable: true } })),
+      executionEvidence: [] }
+    reactRoot.render(<Fixture key={`failed-${placement}`} executionPlacement={placement} windowed />)
+  },
   showPendingQueue: () => {
     pendingCalls.length = 0
     pendingQueue = { campId, executionActive: true, editSession: null, items: ['B', 'C'].map((name, index) => ({
@@ -623,12 +657,7 @@ Object.assign(window, { campOpenTest: {
     runningExecutionScenario = false
     executionRequests.length = 0
     executionContentReads.length = 0
-    reactRoot.render(<section key={placement} className={`execution-drawer placement-${placement}`} style={{ position: 'relative', width: placement === 'inspector' ? 440 : 'calc(100% - 48px)', height: 430, maxHeight: 430, margin: 24 }}>
-      <div className="execution-drawer-body" data-following-latest="false" style={{ height: 380, overflow: 'auto' }}>
-        <div data-window-spacer style={{ height: 600 }} />
-        <RunExecutionDisclosure key={placement} run={executionRun} campId={campId} windowedEvidence />
-      </div>
-    </section>)
+    reactRoot.render(<StaticExecutionWindow key={placement} placement={placement} />)
   },
   showRunningExecution: (placement: 'bottom' | 'inspector', sample: number, initialCount = 1000) => {
     executionRun.id = `window-live-${placement}-${sample}`

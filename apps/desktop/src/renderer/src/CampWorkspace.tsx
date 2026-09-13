@@ -6,7 +6,8 @@ import { MessageQuotes, MessageQuoteSelectionToolbar } from './MessageQuotes'
 import { dismissMessageQuoteSelection } from './message-quote-selection'
 import { currentUserDisplayName } from '@contracts'
 import { CurrentUserAvatar, useCurrentUserProfile } from './CurrentUserProfile'
-import { ExecutionReadingContext, useExecutionWindow } from './useExecutionWindow'
+import { ExecutionLatestContext, ExecutionReadingContext, useExecutionWindow } from './useExecutionWindow'
+import { ReturnToLatest } from './ReturnToLatest'
 import { prefersReducedMotion } from './reduced-motion'
 import { isFileFindTarget, useOptionalFileFind } from './FilePreviewFind'
 import { readErrorMessage } from './error-message'
@@ -3980,6 +3981,7 @@ export function CampWorkspace({
       confirmingRunIds={confirmingRunIds}
       focusedRunId={executionDrawerFocusedRunId}
       focusRequest={executionDrawerFocusRequest}
+      onLatestRun={setExecutionDrawerFocusedRunId}
       onClose={closeExecutionProcess}
       onResolveRecoveryBlocker={resolveRecoveryBlocker}
       onCancelAgentRun={onCancelAgentRun}
@@ -4688,6 +4690,14 @@ export function CampWorkspace({
               )}
               </div>
             </div>
+            <ReturnToLatest
+              viewportRef={timelineScrollRef}
+              ownerKey={snapshot.camp.id}
+              contentRevision={publishedMessageSequence}
+              scope="camp"
+              enabled={conversationView === 'conversation' && !conversationFind.open}
+              onLatest={() => followTimelineAfterUserSend(snapshot.camp.id)}
+            />
             {worldMapEnabled && (
               <div className="camp-world-map-panel" hidden={conversationView !== 'world'}>
                 <CampWorldMap
@@ -5491,6 +5501,7 @@ function ExecutionDrawer({
   confirmingRunIds,
   focusedRunId,
   focusRequest,
+  onLatestRun,
   onClose,
   onResolveRecoveryBlocker,
   onCancelAgentRun,
@@ -5518,6 +5529,7 @@ function ExecutionDrawer({
   confirmingRunIds: ReadonlySet<string>
   focusedRunId: string | null
   focusRequest: ExecutionDrawerFocusRequest
+  onLatestRun(runId: string): void
   onClose(): void
   onResolveRecoveryBlocker(run: AgentRunView): Promise<void>
   onCancelAgentRun(run: AgentRunView): Promise<void>
@@ -5592,6 +5604,12 @@ function ExecutionDrawer({
   ])
   const followingLatestRef = useRef(false)
   const [followingLatest, setFollowingLatestState] = useState(false)
+  const latestRun = process.runs.at(-1)
+  const [latestRequest, setLatestRequest] = useState(0)
+  const [hasNewer, setHasNewer] = useState(false)
+  const latestContext = useMemo(() => ({
+    runId: latestRun?.id ?? null, request: latestRequest, setHasNewer
+  }), [latestRun?.id, latestRequest])
   const setFollowingLatest = (following: boolean): void => {
     followingLatestRef.current = following
     setFollowingLatestState((current) => current === following ? current : following)
@@ -5949,6 +5967,7 @@ function ExecutionDrawer({
             ))
           }}
         >
+          <ExecutionLatestContext.Provider value={latestContext}>
           <ExecutionReadingContext.Provider value={setFollowingLatest}>
           <ExecutionToolGroupStateContext.Provider value={groupState}>
           <ol className="execution-process-timeline">
@@ -6007,7 +6026,22 @@ function ExecutionDrawer({
           </ol>
           </ExecutionToolGroupStateContext.Provider>
           </ExecutionReadingContext.Provider>
+          </ExecutionLatestContext.Provider>
         </div>
+        <ReturnToLatest
+          viewportRef={drawerBodyRef}
+          ownerKey={campId + ':' + process.agentId}
+          contentRevision={latestRun ? latestRun.id + ':' + latestRun.executionEvidenceCount + ':' + latestRun.updatedAt : null}
+          scope="execution"
+          hasNewer={hasNewer}
+          onLatest={() => {
+            if (latestRun) onLatestRun(latestRun.id)
+            setFollowingLatest(Boolean(latestRun && NON_TERMINAL_RUNS.has(latestRun.status)))
+            setLatestRequest((request) => request + 1)
+            const body = drawerBodyRef.current
+            if (body) delete body.dataset.executionAnchorKey
+          }}
+        />
     </section>
   )
 }
@@ -8571,14 +8605,11 @@ function RunExecutionContent({
           />
         )
       }}</ExecutionVirtualList>
-      {windowedEvidence && windowPage.hasNewer && <div className={`camp-history-loader execution-history-loader execution-history-latest${windowPage.direction === 'newer' && windowPage.error ? ' is-error' : ''}`}
-        role={windowPage.direction === 'newer' && windowPage.error ? 'alert' : 'status'}>
-        {windowPage.direction === 'newer' && windowPage.loading && <span className="camp-history-spinner" aria-label="正在加载执行记录" />}
-        {windowPage.direction === 'newer' && windowPage.error && <button className="camp-history-text-button" type="button"
+      {windowedEvidence && windowPage.direction === 'newer' && (windowPage.loading || windowPage.error) && <div className={`camp-history-loader execution-history-loader${windowPage.error ? ' is-error' : ''}`}
+        role={windowPage.error ? 'alert' : 'status'}>
+        {windowPage.loading && <span className="camp-history-spinner" aria-label="正在加载执行记录" />}
+        {windowPage.error && <button className="camp-history-text-button" type="button"
           onClick={() => void windowPage.move('retry')}>读取失败，重试</button>}
-        <button className="camp-history-text-button" type="button" disabled={windowPage.loading} onClick={() => void windowPage.move('latest')}>
-          <span aria-hidden="true">↓</span><span>回到最新</span>
-        </button>
       </div>}
       {(historyStatus === 'loading' || narrationStatus === 'loading') && (
         <div className="process-action current" role="status">
