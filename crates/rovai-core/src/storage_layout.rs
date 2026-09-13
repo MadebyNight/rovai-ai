@@ -1,0 +1,177 @@
+//! Locations only: both entrypoints keep using the same stores and authority
+//! admission. The standalone layout never falls back to Desktop's Home roots.
+use crate::platform::private_storage::{
+    create_private_new_file, open_private_read_file, open_private_read_write_file,
+    prepare_private_directory,
+};
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::{Component, Path, PathBuf},
+};
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayoutMarker {
+    schema_version: u32,
+    layout: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerPaths {
+    pub data_dir: PathBuf,
+    pub database: PathBuf,
+    pub mcp_config_path: PathBuf,
+    pub skill_library_root: PathBuf,
+    pub runtime_camp_files_root: PathBuf,
+    pub logs: PathBuf,
+}
+
+impl ServerPaths {
+    pub fn prepare(data_dir: &Path) -> Result<Self> {
+        Self::from_data_dir(data_dir)?;
+        crate::camp_attachment_view::reject_existing_symlink_components(data_dir)?;
+        if let Ok(metadata) = std::fs::symlink_metadata(data_dir) {
+            ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "--data-dir must name a directory, not a file or symbolic link"
+            );
+        }
+        if !data_dir.join("server-layout.json").try_exists()? {
+            for owned_entry in [
+                "rovai.sqlite",
+                "lumen.sqlite",
+                "mcp.json",
+                "skills",
+                "instances",
+                "logs",
+                "server-token",
+            ] {
+                ensure!(
+                    !data_dir.join(owned_entry).try_exists()?,
+                    "server_legacy_layout: existing Rovai data uses a Desktop or legacy preview layout. No data or permissions were changed. Continue with the original Host command and complete associated paths; this entrypoint does not migrate that instance."
+                );
+            }
+        }
+        let root = prepare_private_directory(data_dir)?;
+        let paths = Self::from_data_dir(&root)?;
+        let marker_path = root.join("server-layout.json");
+        if marker_path.try_exists()? {
+            let mut bytes = Vec::new();
+            open_private_read_file(&marker_path)?
+                .take(4097)
+                .read_to_end(&mut bytes)?;
+            ensure!(bytes.len() <= 4096, "Server layout marker is too large");
+            let marker: LayoutMarker = serde_json::from_slice(&bytes)
+                .context("Server layout marker is invalid; existing data was not reset")?;
+            ensure!(
+                marker.schema_version == 1 && marker.layout == "standalone-root",
+                "Server data layout is not supported by this version"
+            );
+        } else {
+            ensure!(
+                !paths.database.try_exists()?,
+                "server_legacy_layout: existing Rovai data has no standalone-root marker. Keep using its original rovai-host run command and paths; this entrypoint does not move Desktop or legacy preview data. Back up the complete instance before migration."
+            );
+            let mut marker = create_private_new_file(&marker_path)?;
+            marker.write_all(&serde_json::to_vec(&LayoutMarker {
+                schema_version: 1,
+                layout: "standalone-root".into(),
+            })?)?;
+            marker.sync_all()?;
+        }
+        // Runtime storage is admitted by Core after the data lease and database
+        // assessment. Do not pre-create its marker or weaken those checks here.
+        for directory in [&paths.skill_library_root, &paths.logs] {
+            crate::camp_attachment_view::reject_existing_symlink_components(directory)?;
+            prepare_private_directory(directory)?;
+        }
+        Ok(paths)
+    }
+
+    pub fn management_token(&self, generate: impl FnOnce() -> Result<String>) -> Result<String> {
+        let path = self.data_dir.join("server-token");
+        if !path.try_exists()? {
+            let token = generate()?;
+            ensure!(
+                token.len() == 64 && token.bytes().all(|value| value.is_ascii_hexdigit()),
+                "Invalid generated management token"
+            );
+            let mut file = create_private_new_file(&path)?;
+            file.write_all(token.as_bytes())?;
+            file.sync_all()?;
+        }
+        let mut token = String::new();
+        open_private_read_file(&path)?
+            .take(65)
+            .read_to_string(&mut token)?;
+        ensure!(
+            token.len() == 64 && token.bytes().all(|value| value.is_ascii_hexdigit()),
+            "Stored Server token is invalid; it has not been replaced"
+        );
+        Ok(token)
+    }
+
+    pub fn open_log(&self) -> Result<File> {
+        open_private_read_write_file(&self.logs.join("server.log"))
+    }
+
+    /// The Host passes the admitted canonical data directory. No directory is
+    /// created here, so callers can inspect paths before opening any store.
+    pub fn from_data_dir(data_dir: &Path) -> Result<Self> {
+        ensure!(
+            data_dir.is_absolute()
+                && !data_dir
+                    .components()
+                    .any(|part| matches!(part, Component::CurDir | Component::ParentDir)),
+            "Server data directory must be a normalized absolute directory"
+        );
+        Ok(Self {
+            data_dir: data_dir.to_owned(),
+            database: data_dir.join("rovai.sqlite"),
+            mcp_config_path: data_dir.join("mcp.json"),
+            skill_library_root: data_dir.join("skills"),
+            runtime_camp_files_root: server_runtime_root(data_dir)?,
+            logs: data_dir.join("logs"),
+        })
+    }
+}
+
+pub fn server_runtime_root(canonical_data_dir: &Path) -> Result<PathBuf> {
+    Ok(canonical_data_dir
+        .join("instances")
+        .join(crate::camp_attachment_view::instance_key(
+            canonical_data_dir,
+        )?)
+        .join("runtime-files"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Owns location derivation, including changing the root as one unit. Process
+    // admission/restart is covered by the Host lifecycle integration owner.
+    #[test]
+    fn server_owned_paths_follow_one_root_without_home_fallback() {
+        for name in ["first-server", "second-server"] {
+            let root = std::env::temp_dir().join(name);
+            let paths = ServerPaths::from_data_dir(&root).unwrap();
+            assert_eq!(paths.database, root.join("rovai.sqlite"));
+            assert_eq!(paths.mcp_config_path, root.join("mcp.json"));
+            assert_eq!(paths.skill_library_root, root.join("skills"));
+            assert_eq!(paths.logs, root.join("logs"));
+            assert_eq!(
+                paths.runtime_camp_files_root,
+                root.join("instances")
+                    .join(crate::camp_attachment_view::instance_key(&root).unwrap())
+                    .join("runtime-files")
+            );
+        }
+        assert!(ServerPaths::from_data_dir(Path::new("relative")).is_err());
+        assert!(ServerPaths::from_data_dir(&std::env::temp_dir().join("../escape")).is_err());
+    }
+}

@@ -171,7 +171,7 @@ pub(crate) fn open_private_read_write_file(path: &Path) -> Result<File> {
 }
 
 /// Opens an existing private regular file without ever creating a replacement.
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 pub(crate) fn open_private_read_file(path: &Path) -> Result<File> {
     open_private_read_file_platform(path)
 }
@@ -337,6 +337,21 @@ fn prepare_private_directory_platform(path: &Path) -> Result<PathBuf> {
             path.display()
         )
     })
+}
+
+#[cfg(unix)]
+fn open_private_read_file_platform(path: &Path) -> Result<File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    anyhow::ensure!(
+        metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
+        "private file is not a regular private file"
+    );
+    Ok(file)
 }
 
 #[cfg(unix)]

@@ -3,6 +3,7 @@ import { spawnSync, execFileSync } from 'node:child_process'
 import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { hostServerTargetKey, serverTarget } from './lib/sidecar-targets.mjs'
+import { archiveServerPackage } from './lib/server-archive.mjs'
 
 const repository = resolve(import.meta.dirname, '..')
 const arguments_ = process.argv.slice(2)
@@ -22,11 +23,11 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`Server build step failed: ${command}`)
 }
 run('pnpm', ['build:web'])
-run('cargo', ['build', '--locked', '-p', 'rovai-host', '-p', 'rovai-core', '--bin', 'rovai-host', '--bin', 'rovai', ...(debug ? [] : ['--release'])])
+run('cargo', ['build', '--locked', '-p', 'rovai-host', '-p', 'rovai-core', '--bin', 'rovai-host', '--bin', 'rovai-server', '--bin', 'rovai', ...(debug ? [] : ['--release'])])
 const destination = join(repository, 'out/server', key)
 rmSync(destination, { recursive: true, force: true })
 mkdirSync(destination, { recursive: true })
-for (const name of ['rovai-host', 'rovai']) {
+for (const name of ['rovai-host', 'rovai-server', 'rovai']) {
   const executable = `${name}${target.executableSuffix}`
   copyFileSync(join(repository, 'target', profile, executable), join(destination, executable))
   if (target.platform !== 'win32') chmodSync(join(destination, executable), 0o755)
@@ -34,6 +35,8 @@ for (const name of ['rovai-host', 'rovai']) {
 cpSync(join(repository, 'out/web'), join(destination, 'web-ui'), { recursive: true })
 copyFileSync(join(repository, 'LICENSE'), join(destination, 'LICENSE'))
 const version = JSON.parse(readFileSync(join(repository, 'package.json'), 'utf8')).version
+writeFileSync(join(destination, 'package-info'), `schema=1\nversion=${version}\ntarget=${target.key}\n`)
+copyFileSync(join(repository, 'scripts', target.platform === 'win32' ? 'install-server.ps1' : 'install-server.sh'), join(destination, target.platform === 'win32' ? 'install-server.ps1' : 'install-server.sh'))
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
 const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' }).trim().length > 0
 // The copied guide must also work outside a checkout. Keep its canonical
@@ -57,4 +60,7 @@ writeFileSync(join(destination, 'manifest.json'), JSON.stringify({
   profile, qualification: 'development-preview', files
 }, null, 2) + '\n')
 execFileSync(join(destination, `rovai-host${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
+execFileSync(join(destination, `rovai-server${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
 console.log(`Server preview staged at ${destination}`)
+const archive = archiveServerPackage(destination, join(repository, 'out/server/releases', key), { version, target: key })
+console.log(`Unpublished Server archive: ${archive.archive}`)

@@ -22,12 +22,15 @@ Server 覆盖 macOS arm64/x64、Windows x64、Linux x64。交付依次为 Server
 Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](implementation-plan.md)。
 
 当前已抽取共享运行层，接入 Headless CLI、同 Host 的 Desktop/Web 管理及共享生产 Camp 页面；
-第五阶段已有交互稿保留，先收敛阶段 1–3，再推进阶段四能在 Mac 完成的部署验收；其他平台实机、容器与 Mobile 暂停。
+第五阶段已有交互稿保留；当前继续原生 Server 数据根、用户入口与安装分发。其他平台实机与 Mobile 验收独立记录；Docker 完全移出当前任务。
 用户已通过 [Desktop/Web 行为差异与宽屏对照稿](../../ui/host-web-parity.md)及[组件/API 复用说明](frontend-reuse.md)的方向评审，
 直接按共享 Camp、真实写入闭环、双入口一致、逐页复用管理能力推进。Core 已接入独立编辑归属、source 上传、
 发送、审批、单聊独立草稿及正式管理页；macOS 两入口真实 Codex 执行、执行中关闭 Web、强杀恢复和
 浏览器管理操作已通过。阶段 1–3 的代码及本机业务闭环已收敛；第二实体设备与实体睡眠唤醒尚未验收。
 阶段四已推进 Mac arm64 独立包、升级/回退与包内执行，仍不宣称三平台正式发布。
+最新补充以 `~/.rovai-server` 替代此前 `~/.rovai/server`：一个可选 `--data-dir` 推导全部 Server 自有
+持久位置，Desktop 不迁移、不重排。原生用户入口、可重复安装和新布局的 macOS 本机验收已接通；
+新原生矩阵和正式发布分别收口，不代表新命令或安装地址已发布。Docker 不是可选阶段，也不阻塞 Mobile。
 架构由[统一 Host](../../architecture/unified-rust-host.md)拥有，取舍见[版本决定](decisions.md)。
 
 所有新增设计只解决数据隔离、命令幂等、凭据保护和宿主运行问题。用户附件保持 source reference 弱持久性；
@@ -40,8 +43,8 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | 前版生命周期冻结；本概览、实施计划与[版本索引](../README.md)建立唯一 current v1.59 |
-| Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host 与分阶段迁移 |
-| Contracts | 已更新 | [Host Lifecycle v1](../../contracts/host-lifecycle-v1.md)保留；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 153 保留旧 Desktop 数据和旧任务分支 150 草稿；154 隔离单聊 Draft/Pending 客户端 |
+| Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host；[V1.59-D02](decisions.md#v1-59-d02)确定独立 Server 数据根和原生部署 |
+| Contracts | 已更新 | [Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)拥有新入口与数据根，v1 保留兼容；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 153 保留旧 Desktop 数据和旧任务分支 150 草稿；154 隔离单聊 Draft/Pending 客户端 |
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 已替换独立 Workspace，挂载共享 BusinessApp/CampNavigation/CampWorkspace；[差异表](../../ui/host-web-parity.md)记录共享页面、已验证能力与合理平台差异；Mobile 稿保留并暂停新增 |
 | Runtime Activity | 确认无需更新 | Runtime Adapter 语义与活动分类保持不变 |

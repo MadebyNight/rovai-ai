@@ -98,6 +98,7 @@ pub mod runtime_startup;
 pub mod single_chat;
 pub mod skill;
 pub mod skill_projection;
+pub mod storage_layout;
 pub mod team_tool;
 pub mod team_tool_catalog;
 #[cfg(windows)]

@@ -173,5 +173,5 @@ last_updated: 2026-09-12
 
 ## 统一 Host 与 Web
 
-- 当前规范：[统一 Rust Host](../architecture/unified-rust-host.md)、[Host Lifecycle v1](../contracts/host-lifecycle-v1.md)、[Host Web v2](../contracts/host-web-v2.md)与[Server 开发预览](../development/server-preview.md)。
-- 理由来源：[V1.59-D01](../versions/v1.59/decisions.md#v1-59-d01)。
+- 当前规范：[统一 Rust Host](../architecture/unified-rust-host.md)、[原生 Server 数据与分发](../architecture/unified-rust-host.md#原生-server-数据与分发)、[Host Lifecycle v2](../contracts/host-lifecycle-v2.md)、[Host Web v2](../contracts/host-web-v2.md)与[Server 开发预览](../development/server-preview.md)。
+- 理由来源：[V1.59-D01](../versions/v1.59/decisions.md#v1-59-d01)、[V1.59-D02](../versions/v1.59/decisions.md#v1-59-d02)。

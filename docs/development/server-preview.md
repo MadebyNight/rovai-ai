@@ -4,9 +4,10 @@ authority: standalone-server-preview-operation
 last_updated: 2026-09-13
 ---
 
-# 独立 Server 开发预览
+# 原生 Server 安装与开发验收
 
-这是开发预览：提供同一个 Rust Host 的本机启动、显式 Web 开关和共享生产 Camp 页面。
+这是尚未正式发布的原生 Server 链路，提供同一个 Rust Host 和共享生产 Camp 页面。
+以下命令在取得匹配的预编译包并安装后使用；当前不宣称 GitHub 安装地址或正式版本已可下载。
 当前已接通独立草稿、四种 source 上传目标、执行审批、单聊和正式管理页，Automation 由 Rust Host 驱动。
 macOS 上的 Desktop/Headless 真实执行及浏览器管理操作已有证据；第二实体设备与其他平台仍分别验收。每个检查点的实际证据见[当前实施计划](../versions/v1.59/implementation-plan.md)。
 该包不是正式发布资格证明。当前产品为单 Owner、可信自托管 Host，不承诺同 UID 强隔离；
@@ -15,24 +16,72 @@ macOS 上的 Desktop/Headless 真实执行及浏览器管理操作已有证据�
 ## 构建与包内容
 
 在目标 OS/CPU 的原生机器上运行 `pnpm build:server`；本地快速验证可加 `--debug`。
-构建依赖 Rust、Node 与 pnpm；包内只有 `rovai-host`、Agent `rovai` CLI、`web-ui/`、许可证及
+构建依赖 Rust、Node 与 pnpm；包内包含 `rovai-server`、兼容入口 `rovai-host`、Agent `rovai` CLI、`web-ui/`、安装脚本、许可证及
 SHA-256 manifest。运行 Host 本身不依赖 Electron、Node 或 pnpm；Runtime 自身依赖另行配置。
-包输出在 `out/server/<target>/`，不能从同名目录推断平台通过。
+解包内容位于 `out/server/<target>/`；压缩包和 `SHA256SUMS` 位于 `out/server/releases/<target>/`，
+不能从同名目录推断平台通过。源码构建属于开发流程，正式用户无需 clone、Rust 或前端工具链。
 
 当前 Windows x64 原生产物动态导入 `VCRUNTIME140.dll`。目标机器需要与构建工具兼容的 x64
 Visual C++ v14 Runtime，获取方式见 [Microsoft 官方说明](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)。
 CI 镜像已安装开发工具，不能据此推断干净 Windows 机器无需该依赖；当前包不自动安装系统组件。
 当前 Linux x64 GNU 产物包含 `GLIBC_2.39` 符号依赖，仅在 Ubuntu 24.04 原生环境验证过启动链路。
-它不适用于更低 glibc 或 musl/Alpine 环境；容器和其他发行版仍需独立构建与验收。
+它不适用于更低 glibc 或 musl 环境；其他发行版须独立验收。本轮不实现 Docker/Compose。
 
 原生构建目标为 macOS arm64/x64、Windows x64、Linux x64。Linux 当前 Runtime 行保持
 `not_qualified`；只有该 Adapter 的真实执行证据才可晋升。没有增加 Linux Desktop 或系统服务安装器。
 `Full check` 的 `scope=server` 使用固定 OS runner 构建并测试四个产物；Windows console 受控关闭与
 真实模型/工作区/恢复仍是独立资格，不由编译或有限进程测试推导。
 原生复核可以用 `server_target` 只选择发生变更的目标；默认 `all` 才运行全部四个目标，单目标通过
-不能写成三平台通过。
+不能写成三平台通过。main 上全部目标通过后可显式开启 `server_release_draft` 组装 GitHub draft Release；
+它校验 source SHA、release profile、版本及平台一致，不自动公开发布或晋升默认安装指针。
 
-## 显式初始化
+## 安装和启动
+
+程序与数据分开：Unix 安装器管理 `~/.local/share/rovai-server/revisions/`，以 `current` 原子链接选择程序，
+命令入口为 `~/.local/bin/rovai-server`。Windows 安装到当前账号 LocalAppData 的 `Programs/RovaiServer/current`，
+将其加入用户 PATH；更新前须先停止该安装的 Server，安装器不终止进程。两种安装都不建立系统服务。
+安装器不会打开、迁移或重置业务数据，不会替换 Desktop 随包 Host。
+
+取得原生压缩包及同一 Release 的 `SHA256SUMS` 后，可在已有脚本上执行本地安装（版本填写包的真实版本）：
+
+```sh
+sh scripts/install-server.sh --version <版本> --from-dir <发布资产目录>
+```
+
+Windows 对应 `install-server.ps1 -Version <版本> -FromDirectory <发布资产目录>`。脚本也包含在解包目录中。
+Unix 默认配置 `.profile`、`.bashrc`、`.bash_profile`、`.zshrc` 的去重 PATH；Windows 配置用户 PATH。
+安装器打印新终端和立即生效方法。自动验收使用隔离安装位置；Windows 测试不修改真实用户 PATH。
+
+官方源固定为 GitHub Releases，Server tag 为 `server-v<版本>`。资产名为
+`rovai-server-<版本>-<target>.tar.gz`（Unix）或 `.zip`（Windows），`SHA256SUMS` 每个资产恰好一项。
+安装器先完整下载、校验 SHA-256，检查归档路径/类型和包内版本/目标，再切换入口；下载/校验失败保留旧安装。
+默认版本由仓库 `scripts/server-channel.txt` 指定；目前为 `unpublished`，因此默认网络安装明确失败。
+只有实际发布相应资产并晋升该指针后，才能把网络安装命令描述为可用。没有独立域名或下载服务。
+
+安装完成后可在任意工作目录运行：
+
+```sh
+rovai-server
+rovai-server --data-dir /data/rovai
+rovai-server --data-dir /data/rovai token
+```
+
+Windows 同一个参数接口：`rovai-server.exe --data-dir "D:\RovaiData"`。`token` 的 stdout 是秘密，供登录使用，
+不要接入日志采集。普通启动不输出令牌；该私有令牌文件会随原数据根保留，浏览器 Session 仍按进程撤销。
+Web 默认地址为 `http://127.0.0.1:4317`，配套 UI 从可执行文件真实目录定位，不依赖当前工作目录。
+
+不传内部路径参数：默认使用当前账号 `~/.rovai-server`，其中包括 `rovai.sqlite`、`mcp.json`、`skills/`、
+`instances/<instance-key>/runtime-files/`、`logs/server.log` 及私有布局/令牌文件。自定义 `--data-dir` 后全部跟随，
+不会默认写回 Desktop 的 `~/.rovai`。`rovai-server paths` 只读显示推导路径。
+不存在的根由 Host 初始化；既有根复用原数据，同根第二个 Host 拒绝启动。改参数选择另一实例，不搬迁旧数据。
+
+## 旧预览数据的兼容入口
+
+以下仅供已经使用旧显式路径布局的实例，不是新用户的安装步骤。没有独立 Server 布局标识的既有数据库，
+以及旧默认建议位置 `~/.rovai/server` 的数据，都会触发明确兼容提示，避免误开空实例。
+继续使用原命令和完整关联路径；不要只复制 SQLite、手工伪造 marker 或修改身份校验来冒充迁移。
+本轮不迁移 Desktop，不新增通用迁移向导。
+
 
 先为该 Host 选择独立绝对路径，禁止使用日常 Desktop 数据目录或其他运行中 Host 的目录。
 从包目录运行 `./rovai-host prepare --data-dir <绝对目录>`（Windows 可执行文件为 `rovai-host.exe`）。
@@ -61,7 +110,8 @@ Web 与 Host 必须使用同一协议版本，当前为 [Host Web v2](../contrac
 ## 网络与停止
 
 默认推荐 loopback。局域网监听显式设置 `--allow-insecure-lan`，Host 自动发现实际网络接口。
-反向代理可补充 `--web-public-origin https://<代理地址>`；不要求唯一手填 LAN 地址。地址发现排除 198.18.0.0/15，
+新入口可用 `--listen 0.0.0.0:4317 --allow-insecure-lan`；
+反向代理可补充 `--public-origin https://<代理地址>`（旧入口参数为 `--web-public-origin`）；不要求唯一手填 LAN 地址。地址发现排除 198.18.0.0/15，
 不提供展示、复制或扫码；网络层不主动封禁。明文网络可能暴露令牌和内容；不可信网络使用
 外部 HTTPS 或可信 VPN。本实现不创建域名、证书或预览代理，不信任任意代理转发头。
 
@@ -93,7 +143,14 @@ pnpm smoke:host-web-runtime
 原始目录可能包含 Runtime 会话材料，不得整体上传。它不证明其他 Runtime、其他平台或同 UID 强隔离。设置 `ROVAI_HOST_ENTRY=desktop` 运行同一真实流程，
 并验证执行中关闭 Web、重新登录后继续停止运行。`ROVAI_HOST_BIN` 和 `ROVAI_WEB_UI` 可以指向匹配的独立包。
 
-## Mac 包与回退演练
+## 更新、备份与既有 Mac 包演练
+
+新入口更新时重新运行同一安装器，替换匹配程序与 UI，仍用原 `--data-dir` 启动。自定义数据根不会被安装器改写。
+WebUI 检查/更新并重启、`rovai-server upgrade` 仍是后续便利入口，当前尚不可用；不宣称无损热升级或自动回滚。
+停机备份新布局时保留整个数据根及其权限、目录身份要求；源附件、用户项目与 Agent CLI 原生认证/会话独立保留。
+恢复前保留当前数据，不让旧程序直接打开已升级 schema。
+
+下面记录的演练针对既有 `rovai-host run` 包和显式关联路径，不代替新入口或其他平台的资格。
 
 本机当前验收为 macOS 26.3 / arm64，Codex CLI 0.153.4；不代表 Intel Mac 或最低 OS 版本实测。
 包内 Mach-O 声明最低 macOS 11.0，仅依赖 Apple 系统库；ad-hoc 签名通过不等于 Developer ID 签名或公证。

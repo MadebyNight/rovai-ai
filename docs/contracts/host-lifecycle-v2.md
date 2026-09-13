@@ -1,0 +1,80 @@
+---
+document_type: protocol-contract
+contract: host-lifecycle-v2
+authority: headless-host-startup-and-controlled-stop
+status: accepted
+version: 2
+source_version: v1.59
+last_updated: 2026-09-13
+---
+
+# Host Lifecycle v2
+
+本版本增加原生 Server 用户入口与单一数据根，替代 [v1](host-lifecycle-v1.md) 的当前入口地位。
+v1 的 `rovai-host run/prepare/token` 和 Desktop 显式参数适配继续用于已有集成与旧预览数据；不自动迁移它们。
+合同 accepted 不等于可下载：正式包、安装地址及平台资格以实际发布与验收记录为准。
+
+## 同一 Host，两种启动布局
+
+Desktop 按安装包中的明确路径启动 `rovai-host`，不从 PATH 查找 `rovai-server`。其数据库、MCP、Skills、
+实例 Runtime 文件和 Electron profile 保持既有路径；Desktop 开启 Web 始终服务当前 Host 和当前数据，
+不创建或选择独立 Server 实例。两入口共用 Core、Axum、业务存储和正式 React UI。
+
+原生用户入口 `rovai-server` / `rovai-server.exe` 默认前台运行。不指定 `--data-dir` 时使用当前账号的
+`~/.rovai-server`，与 cwd 无关；指定时必须是目录的绝对规范路径，不能是 SQLite 文件。
+Host 自动创建尚不存在的必要目录。切换 data-dir 选择另一实例，不移动、复制、同步或接管原实例。
+
+共享 Rust `ServerPaths` 从同一根推导：
+
+| 资源 | 根内相对位置 |
+| --- | --- |
+| 主业务数据库及 SQLite 辅助文件 | `rovai.sqlite` 及既有 `-wal` / `-shm` |
+| MCP | `mcp.json` |
+| Skill Library | `skills/` |
+| Runtime 文件 | `instances/<instance-key>/runtime-files/` |
+| Host 落盘日志 | `logs/server.log` |
+| 原生入口布局标识 | `server-layout.json` |
+| 管理令牌 | 私有 `server-token` 文件 |
+
+不要求用户填写内部 `--skill-library-root`、`--mcp-config-path` 或 `--runtime-camp-files-root`。
+Runtime root 只允许精确实例 key 对应的根内位置；继续检查符号链接、其他受管目录重叠、本地目录所有权、
+独占锁及 root/data identity marker。不能通过放开任意嵌套路径实现集中存储。
+用户项目、source 附件原路径、Agent CLI 安装、原生认证及会话不属于本次集中存储范围。
+
+## 数据准入与兼容
+
+Core 仍先取得 data-dir 独占 lease，再检查 SQLite authority、执行必要迁移和启动恢复。同目录第二 Host
+明确报占用并以非零退出，不终止原 owner。已有兼容数据库正常打开，不清空；损坏、未来 schema、残缺
+authority 继续按现行准入拒绝。曾建立 Runtime root 的实例若主库消失，不再次以空库初始化。
+
+没有 `server-layout.json` 的已有数据库或 MCP/Skills/实例等自有资源被识别为 Desktop/旧预览布局，返回 `server_legacy_layout`，不改动
+该目录权限或数据。继续使用其原 `rovai-host run` 命令和完整关联路径；本轮不新增 Desktop 迁移或通用迁移向导。
+默认根尚无数据库、但旧建议位置 `~/.rovai/server/rovai.sqlite` 存在时同样拒绝静默创建空实例并给出提示。
+不能仅复制 SQLite 后宣称完整迁移；实例 Runtime marker 与路径/目录身份绑定。
+
+`rovai-server paths` 只输出推导路径，不启动或写数据库。`rovai-server [--data-dir ...] token` 输出本实例
+管理令牌，stdout 是秘密；普通启动和日志不打印令牌。令牌在独立 Server 重启、更新之间保留；Desktop
+令牌现有进程生命周期不变。Web Session 仍按现行短期认证与进程代次撤销。
+
+## Web、停止与安装归属
+
+原生包包含同版 Host、Agent `rovai` CLI、`rovai-server` 用户入口与 `web-ui/`；从可执行文件真实目录定位
+资源，用户无需手工定位 WebUI，也不依赖 cwd。缺失配套资源明确报安装失败。Web 默认监听
+`127.0.0.1:4317`；可选 `--listen`、`--public-origin` 和显式 `--allow-insecure-lan` 沿用
+[Host Web v2](host-web-v2.md) 的认证和网络边界。开发专用 WebUI 覆盖不构成用户安装要求。
+
+Unix SIGINT/SIGTERM、Windows console Ctrl-C/Ctrl-Break 的停止继续完全使用 v1 定义的 protocol 3：
+注册监听早于 Core 启动，十秒总期限包含启动期间的停止，必须验证 durable 关闭报告和 runner 实际结束；
+失败或超时非零退出，不承诺无损热升级。默认不建立后台服务或开机启动。
+
+程序与数据分别管理。Desktop 更新整个安装包，包括随包 Host/WebUI；独立 Server 只替换自己的匹配
+程序与 WebUI，不修改数据根、令牌或 Desktop 安装。未来 WebUI/CLI 的更新对象取决于所连接的 Host，
+复用 Rust 更新实现；Desktop-managed Host 不接受独立替换。便利更新入口的实现状态须另行报告。
+本轮不实现 Docker/Compose/镜像/容器初始化或容器内更新，也不把这些作为 Mobile 的前置。
+
+## 验证 owner
+
+`storage_layout` 单元测试负责根推导；既有 Runtime root admission 测试负责精确根、锁、重叠与 marker。
+`scripts/lib/host-lifecycle.test.mjs` 继续拥有旧 Host 控制停止；原生 Server 用户入口的进程测试负责
+默认/自定义路径、日志、持久状态、占用拒绝、旧预览提示与重启。Desktop pipe/Web 原有集成测试独立
+证明 Web 同 Host；原生平台、原生 Runtime 和正式发布分别验收，不由 macOS 通过推断 Windows/Linux 资格。

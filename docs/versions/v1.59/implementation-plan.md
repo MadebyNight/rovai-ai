@@ -13,7 +13,38 @@ last_updated: 2026-09-13
 实现工作目录为仓库同级 `rovai-ai-unified-rust-host`，分支 `rovai/unified-rust-host`，
 起点 `a18425ec78ae2e1a0666b2c029564ff3f7bc8f78`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 当前收敛：阶段 1–3，单 Owner 的真实业务闭环
+## 当前收敛：原生 Server 数据根、启动与安装
+
+2026-09-13 最新补充覆盖冲突约定：独立入口使用 `~/.rovai-server`，一个 `--data-dir` 推导 SQLite、
+MCP、Skills、根内实例 Runtime 文件与落盘日志；Desktop 保持现有存储与同 Host Web。
+共享 Rust 路径解析、资源准入与业务实现不分叉；旧预览数据明确提示，不静默初始化空库。
+Docker/Compose/镜像/容器更新完全移出本轮任务，不作为可选阶段或 Mobile 前置。
+
+已实现 `rovai-server` 薄入口、共享 Rust `ServerPaths`、精确实例 Runtime 根准入和匹配原生归档；
+默认/自定义根、占用拒绝、停止重启、旧数据提示及 Desktop 不变均有定向回归。安装器负责程序与 UI、PATH 与可重复执行，不操作业务数据。
+GitHub Releases 为正式发布目标；安装脚本地址、命令可用性与平台资格在发布前不能声明完成。
+未来 WebUI/CLI 更新继续按连接的 Host 和安装归属，保留当前 data-dir；不将未实现的便利入口写成已可用。
+本轮同步 `origin/main` 至 `de239656`，通过 merge 保留已有分支工作。
+
+本机 macOS arm64 自动验收：默认与自定义根实际经 HTTP 写入 MCP、导入 Skill，重启后读回相同数据与令牌；
+第二 Host 占用拒绝，主库丢失后不重建空库；旧 SQLite、旧默认建议目录和 Desktop 资源目录有明确兼容提示。
+入口不会通过 symlink 祖先创建新根。所有进程使用临时账号 Home/独立绝对数据根，不调用模型、不动日常 App。
+安装器的归档校验、重复安装、内容替换、错误包不切换、链接成员拒绝、PATH 去重与数据保留通过。
+实际预编译 Debug 包（含共享生产 WebUI）经安装器装到仓库外，在无 Node/pnpm PATH 下完成同一数据根验收。
+这证明本机安装链路，不等于正式 Release 或其他平台资格。本轮全量 Vitest 190 文件/1968 项、
+Node 聚合 317 通过/2 既有平台跳过、Rust workspace default（Core 804 通过/6 既有忽略、CLI 35、Web 5）通过。原 Desktop/Headless 生命周期、同 Core Web 与关闭 Web 后
+继续调度的四项 owner 回归通过；Rust 根推导/Runtime root admission、Clippy、TypeScript 和通用文档门禁通过。
+
+测试 owner：`storage_layout` 新单测只拥有单根位置推导（此前无该公共 seam）；既有 Runtime admission owner
+增加精确根、错误 key、重叠及独占 case。`server-entry.test.mjs` 必须用真实进程/SQLite/HTTP 才能证明路径传递、
+持久化与第二 owner 拒绝；`server-install.test.mjs` 负责已校验包到磁盘入口切换的失败窗口。
+最小命令是 `pnpm test:server-entry` 和两个定向 Rust owner，不增加重复 schema/常量测试，也不替代平台验收。
+
+`Full check(scope=server)` 已包含四原生目标的新入口/安装器及带 SHA-256 的归档。只有 main 上手动选择全部目标并开启
+`server_release_draft`、且所有 job 通过后，才组装匹配 source SHA/版本/平台的 GitHub draft Release。
+该流程不会发布草稿或修改 `server-channel.txt`；目前指针为 `unpublished`，WebUI/CLI 便利更新仍未实现。
+
+## 既有阶段 1–3 业务闭环记录
 
 2026-09-13 本轮继续：先同步最新 main，完成阶段 1–3，再推进阶段四可在 Mac 上完成的部署验收。
 Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当前同步点为 `d53f8ca9`；

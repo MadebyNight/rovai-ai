@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    rovai_host::run_host()
+    rovai_host::run_server()
 }

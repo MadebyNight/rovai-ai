@@ -20,6 +20,10 @@ on:
           - macos-x64
           - windows-x64
           - linux-x64
+      server_release_draft:
+        description: Assemble a GitHub draft Release after all native targets pass (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -231,8 +235,17 @@ jobs:
       - name: Verify packaged Host and shared Web lifecycle
         env:
           ROVAI_HOST_BIN: ${{ github.workspace }}/out/server/${{ matrix.target }}/rovai-host${{ matrix.target == 'windows-x64' && '.exe' || '' }}
+          ROVAI_SERVER_BIN: ${{ github.workspace }}/out/server/${{ matrix.target }}/rovai-server${{ matrix.target == 'windows-x64' && '.exe' || '' }}
+          ROVAI_SERVER_RELEASE_DIR: ${{ github.workspace }}/out/server/releases/${{ matrix.target }}
           ROVAI_WEB_UI: ${{ github.workspace }}/out/server/${{ matrix.target }}/web-ui
-        run: node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs
+        run: node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs scripts/lib/server-entry.test.mjs scripts/lib/server-install.test.mjs
+      - name: Upload checksummed native archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rovai-server-archive-${{ matrix.target }}-${{ github.sha }}
+          path: out/server/releases/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 7
       - name: Observe native managed Runtime file boundary
         # Single-Owner trusted Host: keep same-UID observations as risk evidence,
         # not a strong-isolation release gate. Workspace access must still work.
@@ -248,6 +261,7 @@ jobs:
           path: out/server-evidence/${{ matrix.target }}.json
           if-no-files-found: warn
           retention-days: 3
+
       - name: Upload native preview package
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -256,3 +270,32 @@ jobs:
           path: out/server/${{ matrix.target }}/
           if-no-files-found: error
           retention-days: 3
+
+  server-release-draft:
+    name: Assemble native Server draft Release
+    needs: server-native
+    if: inputs.scope == 'server' && inputs.server_release_draft && inputs.server_target == 'all' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: rovai-server-archive-*-${{ github.sha }}
+          path: out/server-downloads
+      - name: Check matched native archives and assemble checksums
+        run: node scripts/prepare-server-release.mjs out/server-downloads out/server-release
+      - name: Create an unpublished draft without changing the default channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          gh release create "server-v$version" --draft --target "$GITHUB_SHA" --title "Rovai Server $version" --notes-file out/server-release/RELEASE-NOTES.md out/server-release/*.tar.gz out/server-release/*.zip out/server-release/SHA256SUMS scripts/install-server.sh scripts/install-server.ps1

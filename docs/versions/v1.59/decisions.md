@@ -54,3 +54,24 @@ S1 系统级隔离证明为交付前置，也不实施 AppContainer/Landlock 等
 用户随后要求令牌栏常驻且移除环形箭头按钮。管理令牌的寿命因此归于 Host 进程，关闭监听不再清空它；
 同一 Host 再次开启沿用原令牌，但旧浏览器 Session 仍失效。设置页只保留显隐和复制，底层显式轮换操作保留。
 本轮不增加跨 Host 进程重启的令牌存储。
+
+<a id="v1-59-d02"></a>
+## V1.59-D02：原生 Server 独立数据根与安装归属
+
+- 状态：accepted
+- 日期：2026-09-13
+- 当前权威：[统一 Host 的原生 Server 数据与分发](../../architecture/unified-rust-host.md#原生-server-数据与分发)、[Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)
+
+共享 Host 不意味着 Desktop 与独立 Server 共用数据或程序安装。把 Desktop SQLite 迁往 `.rovai` 会扩大
+迁移范围；让 Server 的库、MCP、Skills 和实例文件继续散落在 Desktop 关联目录，又使部署和备份边界不清。
+最终保持 Desktop 现状，独立 Server 使用 `~/.rovai-server`，一个 data-dir 决定所有自有持久位置。
+该决定明确替代较早的 `~/.rovai/server` 建议，不做自动 Desktop 接管、数据同步或通用迁移平台。
+
+两者使用共享 Rust 路径解析与存储实现。旧预览布局给出兼容提示，不能静默另起空库。独立 Server
+管理令牌持久在自有根内以支持重启和程序更新；前述 D01 的进程内令牌规则继续适用于 Desktop，
+不再限制独立 Server。Web Session 仍受进程代次和既有撤销规则约束。
+
+正式部署采用 GitHub Releases 原生预编译包，程序与配套 WebUI 按安装归属更新。相较依赖源码构建或
+容器作为前置，原生包降低用户部署依赖，并保留未来的分发渠道选择。代价是必须维护每个原生目标的
+库基线、资产校验和安装验证，不能以共享代码或 CI 构建代替资格。Docker 完全移出本轮任务，不作为
+可选阶段或 Mobile 前置；不另建 Node/Bun 服务端或独立业务后端。

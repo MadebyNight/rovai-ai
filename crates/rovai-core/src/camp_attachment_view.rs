@@ -379,8 +379,13 @@ impl CampAttachmentViewStore {
         let canonical_data_dir = fs::canonicalize(data_dir)
             .context("runtime_camp_files_root_invalid: data_dir is unavailable")?;
         let instance_key = instance_key(&canonical_data_dir)?;
+        // Only the exact instance-bound standalone layout may live below the
+        // authority directory. Arbitrary nested roots remain rejected.
+        let server_root = crate::storage_layout::server_runtime_root(&canonical_data_dir)?;
+        let standalone =
+            normalize_existing_or_lexical(root)? == normalize_existing_or_lexical(&server_root)?;
         #[cfg(target_os = "macos")]
-        {
+        if !standalone {
             let home = dirs::home_dir()
                 .context("runtime_camp_files_root_invalid: current user Home is unavailable")?;
             let canonical_home = fs::canonicalize(home)
@@ -398,7 +403,7 @@ impl CampAttachmentViewStore {
             reject_overlap(root, &canonical_data_dir)?;
         }
         #[cfg(windows)]
-        {
+        if !standalone {
             let expected = canonical_data_dir.join("runtime-files");
             if normalize_existing_or_lexical(root)? != normalize_existing_or_lexical(&expected)? {
                 anyhow::bail!(
@@ -407,7 +412,9 @@ impl CampAttachmentViewStore {
             }
         }
         #[cfg(not(any(target_os = "macos", windows)))]
-        reject_overlap(root, &canonical_data_dir)?;
+        if !standalone {
+            reject_overlap(root, &canonical_data_dir)?;
+        }
         for managed_root in other_managed_roots {
             validate_normalized_absolute(managed_root, "runtime_camp_files_root_invalid")?;
             reject_existing_symlink_components(managed_root)?;
@@ -423,7 +430,9 @@ impl CampAttachmentViewStore {
         validate_current_user_local_root(&canonical_root)?;
         reject_nested_runtime_root_markers(&canonical_root)?;
         #[cfg(not(windows))]
-        reject_overlap(&canonical_root, &canonical_data_dir)?;
+        if !standalone {
+            reject_overlap(&canonical_root, &canonical_data_dir)?;
+        }
 
         let lock_path = canonical_root.join(ROOT_LOCK);
         let mut lock_file = private_open_read_write(&lock_path)?;
@@ -5201,7 +5210,7 @@ fn path_entry_exists(path: &Path) -> Result<bool> {
     }
 }
 
-fn reject_existing_symlink_components(path: &Path) -> Result<()> {
+pub(crate) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
@@ -6572,6 +6581,40 @@ mod tests {
             Uuid::new_v4()
         ));
         fs::create_dir_all(&fixture).unwrap();
+
+        let server_data = fixture.join("server-data");
+        fs::create_dir(&server_data).unwrap();
+        let server_data = fs::canonicalize(server_data).unwrap();
+        let server_root = crate::storage_layout::server_runtime_root(&server_data).unwrap();
+        let server = CampAttachmentViewStore::admit(
+            &server_root,
+            &server_data,
+            &[server_data.join("skills")],
+        )
+        .unwrap();
+        assert_eq!(server.root(), server_root);
+        assert!(
+            CampAttachmentViewStore::admit(&server_root, &server_data, &[]).is_err(),
+            "the standalone root still has one owner"
+        );
+        assert!(
+            CampAttachmentViewStore::admit(
+                &server_data.join("instances/wrong/runtime-files"),
+                &server_data,
+                &[]
+            )
+            .is_err()
+        );
+        drop(server);
+        assert!(
+            CampAttachmentViewStore::admit(
+                &server_root,
+                &server_data,
+                &[server_data.join("instances")]
+            )
+            .is_err(),
+            "standalone layout does not waive managed-root overlap checks"
+        );
 
         let symlink_target = fixture.join("symlink-target");
         let symlink_root = fixture.join("symlink-root");

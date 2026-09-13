@@ -9,7 +9,7 @@ last_updated: 2026-09-13
 本文拥有已确认的 Host 目标结构。实施与平台资格见[当前版本](../versions/README.md)及
 [Runtime 兼容性](../runtime-compatibility.md)，不能由目标结构推断完成。
 现有准入、事务、Runtime 与关闭合同继续有效；新增 wire 合同随对应实现明确发布。
-初始 CLI 的精确路径、初始化准入和停止适配由[Host Lifecycle v1](../contracts/host-lifecycle-v1.md)拥有；
+原生 Server 数据根、初始 CLI 兼容、初始化准入和停止适配由[Host Lifecycle v2](../contracts/host-lifecycle-v2.md)拥有；
 当前受控网络入口由[Host Web v2](../contracts/host-web-v2.md)拥有。
 
 当前已实现父进程匿名管道与进程内请求共用一个 Host/Core、共享生产 Camp 页面、客户端草稿、source 上传及
@@ -88,6 +88,33 @@ SSE 只输出授权投影，快照与水位连续，过期/缺口重取快照；
 缓存和迟到响应以 Host/连接代次隔离，协议不兼容阻止危险写入，敏感响应不缓存。
 
 Runtime Catalog、平台矩阵与 Adapter 唯一维护。Server 目标为 macOS arm64/x64、Windows x64、Linux x64，
-实际原生、Desktop、系统服务、容器分别验收。Linux Desktop、额外 CPU 架构、三平台一键服务安装器不在本轮。
+实际原生、Desktop 与系统服务分别验收。Linux Desktop、额外 CPU 架构、三平台一键服务安装器不在本轮。
 同版 Host/Web 配对发布，数据库升级与回退遵守 authority 准入，不能用旧程序打开新 schema。
 Mobile 最后复用同一 Web：宽屏 >=1040px，紧凑 768–1039px，手机 <768px；不引入离线执行队列或原生移动 App。
+
+## 原生 Server 数据与分发
+
+独立入口名为 `rovai-server`，仍运行同一 Rust Host/Core/Axum。统一实现不要求两份安装共用磁盘上的同一
+可执行文件，更不允许两个进程同时管理同一数据。Desktop 继续使用 Electron 应用数据及既有 `.rovai`
+关联资源布局；开启 Desktop Web 仅开启当前 Host 的网络入口，不选择独立 Server 数据。
+
+独立 Server 默认使用当前账号 `~/.rovai-server`，可选一个 `--data-dir` 覆盖整个自有数据根。共享 Rust
+路径层推导 SQLite、MCP、Skills、实例 Runtime 文件与日志的位置，存储和业务实现保持唯一。
+Runtime 文件使用根内 `instances/<instance-key>/runtime-files`；Desktop 保留其原平台根。
+路径校验只增加精确的 Server 布局，不放开任意目录或取消既有身份与唯一 owner 检查。
+旧预览数据必须明确提示兼容入口，不能悄悄创建空实例；本轮不迁移 Desktop 数据。
+项目与 source 附件、第三方 Agent CLI 安装/认证/会话不被搬进 Server 根，附件语义不变。
+
+正式原生分发目标为 GitHub Releases 预编译包，包含匹配 Host、协议与共享 WebUI。用户无需 clone、Rust
+编译器或前端构建；Host 本体不依赖 Electron、Node、npm 或 Bun，Agent CLI 依赖另行处理。
+安装器管理当前账号的程序和外置资源，macOS/Linux 命令入口目标为 `~/.local/bin/rovai-server`，配置
+常见 Shell PATH 时保持幂等。不自动接管实例，不建立系统常驻服务。不购买域名或建设下载服务器。
+命令、安装地址与平台支持在实际发布和验收前必须标为目标或开发预览。
+
+Desktop 从安装包明确路径启动自己的 Host，随整个 Desktop 安装更新；独立 Server 按自身安装更新。
+两份安装可以版本不同，但每份内部 Host/协议/WebUI 匹配。安装器与未来 Rust 更新入口采用同一资产与
+校验规则，校验后替换程序及 UI，不重置数据。WebUI 更新当前连接的 Host；Desktop-managed Host 引导
+使用 Desktop 更新。主动检查、下载、确认重启，受控停止遵守现有任务关闭语义。
+
+本轮仅交付原生部署。Dockerfile、Compose、官方镜像、容器初始化/挂载/更新均不在当前任务或可选阶段中，
+不阻塞原生 Server 发布与后续 Mobile。也不建立数据同步、多实例管理、全机版本同步或复杂升级监督平台。
