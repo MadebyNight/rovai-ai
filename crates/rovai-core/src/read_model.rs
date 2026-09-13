@@ -5758,6 +5758,55 @@ mod slow_tests {
         );
         assert!(latest.evidence[0].is_truncated);
         assert_eq!(latest.next_before_sequence, Some(3));
+        // The operation stays at display position 3 even though completion changed raw sequence 4.
+        let delta =
+            crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 3, &[], 1)
+                .unwrap();
+        assert_eq!(delta.evidence.len(), 1);
+        assert_eq!(delta.evidence[0].sequence, 3);
+        assert_eq!(delta.evidence[0].id, "evidence-4");
+        assert_eq!(delta.next_after_sequence, 4);
+        assert!(!delta.has_more);
+        assert!(
+            delta.evidence[0].payload["item"]
+                .get("aggregatedOutput")
+                .is_none()
+        );
+        let first_delta =
+            crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 0, &[], 1)
+                .unwrap();
+        assert!(first_delta.has_more);
+        assert_eq!(first_delta.next_after_sequence, 1);
+        let second_delta =
+            crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 1, &[], 1)
+                .unwrap();
+        assert_eq!(second_delta.next_after_sequence, 2);
+        let forward = crate::execution_window::read_range(
+            &mut database,
+            camp_id,
+            agent_run_id,
+            None,
+            Some(1),
+            1,
+        )
+        .unwrap();
+        assert_eq!(forward.evidence[0].sequence, 2);
+        assert_eq!(forward.next_after_sequence, Some(2));
+        assert!(
+            crate::execution_window::read_changes(
+                &mut database,
+                "another-camp",
+                agent_run_id,
+                0,
+                &[],
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 99, &[], 1)
+                .is_err()
+        );
         let older = crate::execution_window::read_page(
             &mut database,
             camp_id,

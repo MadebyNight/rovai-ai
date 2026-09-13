@@ -107,8 +107,8 @@ v1.58/schema 100，仅放宽 dingtalk_account 两个展示名的 NULL 约束，�
 
 在长 Run 的 Camp 切换路径中，执行详情从首屏投影移至可视窗口：按需分页并预取相邻一页；同时取消执行
 命令和工具结果的内容脱敏，收起组不挂载子行，Diff 按条展开后读取。当前合同为
-[Camp Open v18](../../contracts/camp-open-projection-v18.md) 和
-[Run Process Detail Surface v33](../../contracts/run-process-detail-surface-v33.md)，
+[Camp Open v19](../../contracts/camp-open-projection-v19.md) 和
+[Run Process Detail Surface v34](../../contracts/run-process-detail-surface-v34.md)，
 取代上一个入参展示批次的 Shell 正文与凭据省略规则。字段白名单和 Built-in 入参用途保持原边界。
 
 本次更新 Contracts、Camp Open Architecture、会话 UI 与当前规范导航；Open wire 提升到 7，Snapshot 34、

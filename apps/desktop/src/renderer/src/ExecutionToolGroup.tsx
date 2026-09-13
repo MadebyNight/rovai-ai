@@ -1,3 +1,4 @@
+import { ExecutionContentContext, ExecutionVirtualList, useExecutionRetainedState } from './ExecutionVirtualList'
 import { createContext, useContext, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import type { AgentRunExecutionEvidenceView, AgentRunView, CanonicalRuntimeActivityView } from '@contracts'
 import { ExecutionStatusGlyph } from './ExecutionStatusGlyph'
@@ -117,7 +118,7 @@ function ToolCallDetail({
   inputOnly?: boolean
 }): JSX.Element {
   const evidenceId = completeEvidence?.id ?? null
-  const [result, setResult] = useState<ToolResultViewState>(() => ({
+  const [result, setResult] = useExecutionRetainedState<ToolResultViewState>(`result:${resultKey}:${evidenceId}`, () => ({
     evidenceId,
     status: evidenceId ? 'idle' : 'ready',
     text: evidenceId ? '' : detail,
@@ -283,9 +284,9 @@ export function ModifiedFileRow({ campId, change, semanticKind, completeEvidence
   onFileOpenError(message: string): void
 }): JSX.Element {
   const filePreview = useOptionalFilePreview()
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useExecutionRetainedState(`file-expanded:${itemKey ?? change.path}`, false)
   const diffId = useId()
-  const [loadedDiff, setLoadedDiff] = useState<{ evidenceId: string; diff: string } | null>(null)
+  const [loadedDiff, setLoadedDiff] = useExecutionRetainedState<{ evidenceId: string; diff: string } | null>(`diff:${itemKey ?? change.path}:${completeEvidence?.id}`, null)
   const [diffError, setDiffError] = useState(false)
   const [retry, setRetry] = useState(0)
   const deferred = Boolean(completeEvidence && !change.diff)
@@ -327,6 +328,7 @@ export function ModifiedFileRow({ campId, change, semanticKind, completeEvidence
   return (
     <details
       className={`process-action modified-file-row${expanded ? ' is-expanded' : ''}`}
+      open={expanded}
       data-execution-item-key={itemKey}
       data-activity-domain="file"
       onToggle={(event) => setExpanded(event.currentTarget.open)}
@@ -471,8 +473,8 @@ export function ToolCallRow({
   onFileOpenError(message: string): void
 }): JSX.Element {
   const filePreview = useOptionalFilePreview()
-  const [expanded, setExpanded] = useState(false)
-  const [activated, setActivated] = useState(false)
+  const [expanded, setExpanded] = useExecutionRetainedState(`tool-expanded:${runId}:${step.id}`, false)
+  const [activated, setActivated] = useExecutionRetainedState(`tool-activated:${runId}:${step.id}`, false)
   const summaryRef = useRef<HTMLElement>(null)
   const status = activityStatusForAgentRun(step.status, runStatus)
   const publicTitle = executionStepPublicTitle(step)
@@ -554,6 +556,7 @@ export function ToolCallRow({
   return (
     <details
       className={`process-action tool-call-disclosure status-${status}`}
+      open={expanded}
       data-execution-item-key={`tool:${step.id}`}
       data-activity-domain={step.activityDomain}
       onToggle={(event) => {
@@ -604,8 +607,8 @@ export function CompactionEventRow({
   runStatus: AgentRunView['status']
   completeEvidence?: PresentableExecutionEvidence
 }): JSX.Element {
-  const [expanded, setExpanded] = useState(false)
-  const [activated, setActivated] = useState(false)
+  const [expanded, setExpanded] = useExecutionRetainedState(`compaction-expanded:${runId}:${compaction.id}`, false)
+  const [activated, setActivated] = useExecutionRetainedState(`compaction-activated:${runId}:${compaction.id}`, false)
   const summaryRef = useRef<HTMLElement>(null)
   const title = runtimeCompactionTitle(compaction)
   const detail = runtimeCompactionDetailText(compaction) ?? ''
@@ -640,6 +643,7 @@ export function CompactionEventRow({
   return (
     <details
       className={`process-action tool-call-disclosure compaction-event status-${status}`}
+      open={expanded}
       onToggle={(event) => {
         const nextExpanded = event.currentTarget.open
         setExpanded(nextExpanded)
@@ -713,9 +717,11 @@ export function ToolActivityGroup({
 }): JSX.Element {
   const [localExpanded, setLocalExpanded] = useState(false)
   const groupState = useContext(ExecutionToolGroupStateContext)
+  const retained = useContext(ExecutionContentContext)
   const groupKeys = items.map(item => `${runId}:${item.key}`)
-  const expanded = groupState ? groupKeys.some(key => groupState.expanded.has(key)) : localExpanded
+  const expanded = groupKeys.some(key => retained?.get<boolean>(`group:${key}`)) || (groupState ? groupKeys.some(key => groupState.expanded.has(key)) : localExpanded)
   const setExpanded = (value: boolean): void => {
+    for (const key of groupKeys) retained?.set(`group:${key}`, value)
     if (groupState) groupState.change(groupKeys, value)
     else setLocalExpanded(value)
   }
@@ -775,7 +781,7 @@ export function ToolActivityGroup({
         </span>
       </summary>
       {expanded && <div className="tool-group-items">
-        {items.flatMap((item) => {
+        <ExecutionVirtualList items={items} enabled={Boolean(retained)} gap={1}>{(item) => {
           const step = item.step
           if (step.fileChanges?.length) {
             return step.fileChanges.map((change, index) => (
@@ -812,7 +818,7 @@ export function ToolActivityGroup({
               onFileOpenError={onFileOpenError}
             />
           )
-        })}
+        }}</ExecutionVirtualList>
       </div>}
     </details>
   )

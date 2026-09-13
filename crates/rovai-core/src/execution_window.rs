@@ -23,6 +23,8 @@ pub struct ExecutionWindowPage {
     pub camp_id: String,
     pub agent_run_id: String,
     pub requested_before_sequence: Option<i64>,
+    pub requested_after_sequence: Option<i64>,
+    pub next_after_sequence: Option<i64>,
     pub next_before_sequence: Option<i64>,
     pub through_sequence: i64,
     pub has_more: bool,
@@ -37,6 +39,29 @@ pub fn read_page(
     before_sequence: Option<i64>,
     limit: i64,
 ) -> Result<ExecutionWindowPage> {
+    read_range(
+        database,
+        camp_id,
+        agent_run_id,
+        before_sequence,
+        None,
+        limit,
+    )
+}
+
+pub fn read_range(
+    database: &mut Database,
+    camp_id: &str,
+    agent_run_id: &str,
+    before_sequence: Option<i64>,
+    after_position: Option<i64>,
+    limit: i64,
+) -> Result<ExecutionWindowPage> {
+    ensure!(
+        after_position.is_none_or(|position| position > 0)
+            && !(before_sequence.is_some() && after_position.is_some()),
+        "Invalid execution range"
+    );
     ensure!(
         before_sequence.is_none_or(|sequence| sequence > 0),
         "Execution window cursor must be positive"
@@ -53,64 +78,31 @@ pub fn read_page(
         [agent_run_id], |row| row.get(0),
     )?;
     let limit = limit.clamp(1, 96);
-    // Expand the canonical source index once. Only IDs/sequences participate in
-    // window selection; old command/output/diff bodies are not hydrated.
-    let mut statement = transaction.prepare(
-        r#"
-        WITH ranked AS MATERIALIZED (
-          SELECT operation_id, execution_epoch, first_evidence_sequence, source_evidence_ids_json,
-                 ROW_NUMBER() OVER (PARTITION BY operation_id, execution_epoch ORDER BY
-                   CASE classifier_version WHEN ?4 THEN 0 WHEN ?5 THEN 1 WHEN ?6 THEN 2 ELSE 3 END) AS rank
-          FROM canonical_runtime_activity
-          WHERE agent_run_id = ?1 AND classifier_version IN (?4, ?5, ?6, ?7)
-        ), owners AS MATERIALIZED (
-          SELECT source.value AS id, operation_id, execution_epoch, first_evidence_sequence
-          FROM ranked, json_each(source_evidence_ids_json) AS source WHERE rank = 1
-        ), entries AS MATERIALIZED (
-          SELECT e.id, e.sequence,
-                 CASE WHEN o.operation_id IS NOT NULL THEN 'operation:' || o.execution_epoch || ':' || o.operation_id
-                      WHEN e.event_type = 'runtime.compaction.display' THEN 'compaction:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.compactionId'), e.id)
-                      WHEN e.event_type = 'runtime.diagnostic' THEN 'diagnostic:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.diagnosticId'), e.id)
-                      WHEN e.event_type IN ('runtime.plan', 'runtime.plan.delta') THEN 'plan:' || e.execution_epoch
-                      WHEN e.event_type = 'agent.text.delta' THEN 'text:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.itemId'), e.id)
-                      ELSE e.id END AS item_key,
-                 COALESCE(o.first_evidence_sequence, e.sequence) AS first_sequence
-          FROM agent_run_execution_evidence e LEFT JOIN owners o ON o.id = e.id
-          WHERE e.agent_run_id = ?1
-            AND e.event_type IN ('agent.text.block', 'agent.text.delta', 'runtime.plan', 'runtime.plan.delta',
-              'runtime.diagnostic', 'runtime.compaction.display', 'activity.started', 'activity.completed', 'runtime.action')
-            AND e.kind <> 'reasoning_summary'
-        ), items AS (
-          SELECT item_key, MIN(first_sequence) AS first_sequence,
-                 json_group_array(id) AS evidence_ids
-          FROM entries GROUP BY item_key
-        )
-        SELECT first_sequence, evidence_ids FROM items
-        WHERE (?2 IS NULL OR first_sequence < ?2)
-        ORDER BY first_sequence DESC LIMIT ?3
-        "#,
+    let mut selected = select_items(
+        &transaction,
+        agent_run_id,
+        before_sequence,
+        None,
+        None,
+        after_position,
+        limit + 1,
     )?;
-    let mut selected = statement
-        .query_map(
-            params![
-                agent_run_id,
-                before_sequence,
-                limit + 1,
-                canonical_activity::CLASSIFIER_VERSION,
-                canonical_activity::PREVIOUS_CLASSIFIER_VERSION,
-                canonical_activity::INTERMEDIATE_CLASSIFIER_VERSION,
-                canonical_activity::LEGACY_CLASSIFIER_VERSION,
-            ],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
     let has_more = selected.len() > limit as usize;
     selected.truncate(limit as usize);
-    let next_before_sequence = has_more.then(|| selected.last().expect("nonempty window").0);
-    let mut evidence = project_items(&transaction, agent_run_id, selected.into_iter().rev())?;
+    let next_before_sequence =
+        (has_more && after_position.is_none()).then(|| selected.last().expect("nonempty window").0);
+    let next_after_sequence =
+        (has_more && after_position.is_some()).then(|| selected.last().expect("nonempty window").0);
+    selected.sort_by_key(|item| item.0);
+    let mut evidence = project_items(
+        &transaction,
+        agent_run_id,
+        selected
+            .into_iter()
+            .map(|(sequence, ids, _)| (sequence, ids)),
+    )?;
     let mut active_evidence = Vec::new();
-    if before_sequence.is_none() {
+    if before_sequence.is_none() && after_position.is_none() {
         let mut active = transaction.prepare(
             r#"WITH ranked AS (
               SELECT first_evidence_sequence, source_evidence_ids_json, phase,
@@ -149,11 +141,181 @@ pub fn read_page(
         camp_id: camp_id.to_string(),
         agent_run_id: agent_run_id.to_string(),
         requested_before_sequence: before_sequence,
+        requested_after_sequence: after_position,
+        next_after_sequence,
         next_before_sequence,
         through_sequence,
         has_more,
         evidence,
         active_evidence,
+    })
+}
+
+// Only metadata participates in selection; hydrate bounded logical items afterwards.
+fn select_items(
+    connection: &Connection,
+    run: &str,
+    before: Option<i64>,
+    after: Option<i64>,
+    watched: Option<&str>,
+    forward: Option<i64>,
+    limit: i64,
+) -> Result<Vec<(i64, String, i64)>> {
+    let mut statement = connection.prepare(
+        r#"
+        WITH ranked AS MATERIALIZED (
+          SELECT operation_id, execution_epoch, first_evidence_sequence, source_evidence_ids_json,
+                 ROW_NUMBER() OVER (PARTITION BY operation_id, execution_epoch ORDER BY
+                   CASE classifier_version WHEN ?4 THEN 0 WHEN ?5 THEN 1 WHEN ?6 THEN 2 ELSE 3 END) AS rank
+          FROM canonical_runtime_activity
+          WHERE agent_run_id = ?1 AND classifier_version IN (?4, ?5, ?6, ?7)
+        ), owners AS MATERIALIZED (
+          SELECT source.value AS id, operation_id, execution_epoch, first_evidence_sequence
+          FROM ranked, json_each(source_evidence_ids_json) AS source WHERE rank = 1
+        ), entries AS MATERIALIZED (
+          SELECT e.id, e.sequence,
+                 CASE WHEN o.operation_id IS NOT NULL THEN 'operation:' || o.execution_epoch || ':' || o.operation_id
+                      WHEN e.event_type = 'runtime.compaction.display' THEN 'compaction:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.compactionId'), e.id)
+                      WHEN e.event_type = 'runtime.diagnostic' THEN 'diagnostic:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.diagnosticId'), e.id)
+                      WHEN e.event_type IN ('runtime.plan', 'runtime.plan.delta') THEN 'plan:' || e.execution_epoch
+                      WHEN e.event_type = 'agent.text.delta' THEN 'text:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.itemId'), e.id)
+                      ELSE e.id END AS item_key,
+                 COALESCE(o.first_evidence_sequence, e.sequence) AS first_sequence
+          FROM agent_run_execution_evidence e LEFT JOIN owners o ON o.id = e.id
+          WHERE e.agent_run_id = ?1
+            AND e.event_type IN ('agent.text.block', 'agent.text.delta', 'runtime.plan', 'runtime.plan.delta',
+              'runtime.diagnostic', 'runtime.compaction.display', 'activity.started', 'activity.completed', 'runtime.action')
+            AND e.kind <> 'reasoning_summary'
+        ), items AS (
+          SELECT item_key, MIN(first_sequence) AS first_sequence,
+                 json_group_array(id) AS evidence_ids, MAX(sequence) AS change_sequence
+          FROM entries GROUP BY item_key
+        )
+        SELECT first_sequence, evidence_ids, change_sequence FROM items
+        WHERE (?2 IS NULL OR first_sequence < ?2)
+          AND (?8 IS NULL OR change_sequence > ?8)
+          AND (?10 IS NULL OR first_sequence > ?10)
+          AND (?9 IS NULL OR EXISTS (SELECT 1 FROM json_each(evidence_ids) source
+                JOIN json_each(?9) watched ON source.value = watched.value))
+        ORDER BY CASE WHEN ?10 IS NOT NULL THEN first_sequence WHEN ?8 IS NOT NULL THEN change_sequence END ASC, first_sequence DESC LIMIT ?3
+        "#,
+    )?;
+    Ok(statement
+        .query_map(
+            params![
+                run,
+                before,
+                limit,
+                canonical_activity::CLASSIFIER_VERSION,
+                canonical_activity::PREVIOUS_CLASSIFIER_VERSION,
+                canonical_activity::INTERMEDIATE_CLASSIFIER_VERSION,
+                canonical_activity::LEGACY_CLASSIFIER_VERSION,
+                after,
+                watched,
+                forward
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionWindowChanges {
+    pub schema_version: i64,
+    pub camp_id: String,
+    pub agent_run_id: String,
+    pub requested_after_sequence: i64,
+    pub next_after_sequence: i64,
+    pub through_sequence: i64,
+    pub has_more: bool,
+    pub evidence: Vec<AgentRunExecutionEvidenceView>,
+    pub refreshed_evidence: Vec<AgentRunExecutionEvidenceView>,
+}
+
+/// Advance by raw change sequence, not the logical item's stable display position.
+/// Unfinished text blocks mutate in place; explicitly reread their IDs until settled.
+pub fn read_changes(
+    database: &mut Database,
+    camp_id: &str,
+    agent_run_id: &str,
+    after_sequence: i64,
+    refresh_evidence_ids: &[String],
+    limit: i64,
+) -> Result<ExecutionWindowChanges> {
+    ensure!(
+        after_sequence >= 0 && refresh_evidence_ids.len() <= 256,
+        "Invalid execution change cursor or refresh set"
+    );
+    let transaction = database.connection_mut().transaction()?;
+    let belongs: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agent_run JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+         WHERE agent_run.id = ?1 AND camp_turn.camp_id = ?2)",
+        params![agent_run_id, camp_id], |row| row.get(0),
+    )?;
+    ensure!(belongs, "AgentRun does not exist in this Camp");
+    let through_sequence: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(sequence), 0) FROM agent_run_execution_evidence WHERE agent_run_id = ?1",
+        [agent_run_id], |row| row.get(0),
+    )?;
+    ensure!(
+        after_sequence <= through_sequence,
+        "Execution change cursor is ahead of this Run"
+    );
+    let limit = limit.clamp(1, 96);
+    let mut selected = select_items(
+        &transaction,
+        agent_run_id,
+        None,
+        Some(after_sequence),
+        None,
+        None,
+        limit + 1,
+    )?;
+    let has_more = selected.len() > limit as usize;
+    selected.truncate(limit as usize);
+    let next_after_sequence = if has_more {
+        selected.last().expect("nonempty changes").2
+    } else {
+        through_sequence
+    };
+    let mut evidence = project_items(
+        &transaction,
+        agent_run_id,
+        selected.into_iter().map(|(seq, ids, _)| (seq, ids)),
+    )?;
+    let mut refreshed_evidence = if refresh_evidence_ids.is_empty() {
+        Vec::new()
+    } else {
+        let watched = serde_json::to_string(refresh_evidence_ids)?;
+        let selected = select_items(
+            &transaction,
+            agent_run_id,
+            None,
+            None,
+            Some(&watched),
+            None,
+            256,
+        )?;
+        project_items(
+            &transaction,
+            agent_run_id,
+            selected.into_iter().map(|(seq, ids, _)| (seq, ids)),
+        )?
+    };
+    transaction.commit()?;
+    crate::execution_text::overlay(database, &mut evidence)?;
+    crate::execution_text::overlay(database, &mut refreshed_evidence)?;
+    Ok(ExecutionWindowChanges {
+        schema_version: 1,
+        camp_id: camp_id.to_owned(),
+        agent_run_id: agent_run_id.to_owned(),
+        requested_after_sequence: after_sequence,
+        next_after_sequence,
+        through_sequence,
+        has_more,
+        evidence,
+        refreshed_evidence,
     })
 }
 
