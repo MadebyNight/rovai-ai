@@ -1025,10 +1025,10 @@ export function SingleChatPanel({
   }, [activeRun?.id, visible])
 
   useEffect(() => {
-    if (!visible || !focusPanel.current) return
+    if (!visible || (!mobile && !focusPanel.current)) return
     focusPanel.current = false
     panelRef.current?.focus({ preventScroll: true })
-  }, [visible])
+  }, [visible, mobile])
 
   useEffect(() => {
     if (!visible) return
@@ -1585,7 +1585,7 @@ export function SingleChatPanel({
   )
 
   return <>
-    {entryHost ? createPortal(entries, entryHost) : <div className="camp-detail-entry-fallback">{entries}</div>}
+    {!mobile && (entryHost ? createPortal(entries, entryHost) : <div className="camp-detail-entry-fallback">{entries}</div>)}
     <aside
       ref={panelRef}
       id={panelId}

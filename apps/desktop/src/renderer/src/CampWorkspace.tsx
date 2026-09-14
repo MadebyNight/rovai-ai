@@ -1763,6 +1763,12 @@ export function CampWorkspace({
     && executionInspectorActive
     ? 'execution'
     : inspectorTab
+  // Secondary phone panels return to the last primary view, without becoming navigation history.
+  const mobilePrimaryView = useRef<'conversation' | 'execution'>('conversation')
+  useLayoutEffect(() => {
+    if (!mobile || singleChatVisible || (inspectorVisible && inspectorSurfaceTab !== 'execution')) return
+    mobilePrimaryView.current = inspectorVisible ? 'execution' : 'conversation'
+  }, [mobile, singleChatVisible, inspectorVisible, inspectorSurfaceTab])
   const [taskCreationActive, setTaskCreationActive] = useState(false)
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null)
   const [taskFocusRequest, setTaskFocusRequest] = useState(0)
@@ -3729,6 +3735,17 @@ export function CampWorkspace({
     selectInspectorTab(tab)
   }
 
+  const closeMobileSecondaryPanel = (): void => {
+    onCloseSingleChat()
+    if (mobilePrimaryView.current === 'execution') {
+      selectInspectorSurfaceTab('execution')
+      onOpenInspector?.(inspectorTab)
+    } else {
+      onCloseInspector()
+    }
+    detailEntryHost?.querySelector<HTMLButtonElement>('.mobile-camp-more')?.focus({ preventScroll: true })
+  }
+
   const openInspector = (tab: CampInspectorTab): void => {
     setExecutionInspectorActive(false)
     selectInspectorTab(tab)
@@ -4745,11 +4762,13 @@ export function CampWorkspace({
               runningMembers={runningMembers}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
               memberCount={campInspectorMembers(snapshot.members).length}
+              singleChatVisible={singleChatVisible}
+              onOpenSingleChat={onOpenSingleChat}
               onOpen={(tab) => {
                 selectInspectorSurfaceTab(tab)
                 onOpenInspector?.(tab === 'execution' ? inspectorTab : tab)
               }}
-              onClose={onCloseInspector}
+              onClose={mobile && inspectorSurfaceTab !== 'execution' ? closeMobileSecondaryPanel : onCloseInspector}
             >
             <section className="camp-detail-content execution-sidecar-panel" hidden={inspectorSurfaceTab !== 'execution'}>
               {executionPlacement === 'inspector' && (
@@ -4833,7 +4852,7 @@ export function CampWorkspace({
                 entryHost={detailEntryHost}
                 visible={singleChatVisible}
                 onOpen={onOpenSingleChat}
-                onClose={onCloseSingleChat}
+                onClose={mobile ? closeMobileSecondaryPanel : onCloseSingleChat}
                 onNotify={onNotify}
               />
             )}

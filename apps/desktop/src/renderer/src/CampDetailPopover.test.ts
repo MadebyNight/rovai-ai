@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { CampDetailEntries, CampDetailPopover, type RunningCampMember } from './CampDetailPopover'
+import { MobileLayoutProvider } from './MobileLayout'
 
 const source = readFileSync(new URL('./CampDetailPopover.tsx', import.meta.url), 'utf8')
 
@@ -64,5 +65,20 @@ describe('Camp execution entry', () => {
     expect(markup).not.toContain('camp-execution-orbits')
     expect(markup).not.toContain('<small>')
     expect(markup).not.toContain('disabled')
+  })
+
+  it.each([0, 1, 2, 3, 5])('limits the phone execution entry to two avatars for %i running members', count => {
+    const markup = renderToStaticMarkup(createElement(MobileLayoutProvider, { value: true, children:
+      createElement(CampDetailPopover, {
+        activeTab: 'execution', visible: false, showExecution: true, runningMembers: members.slice(0, count),
+        taskCount: 4, memberCount: 5, onOpen: () => undefined, onClose: () => undefined, children: null
+      })
+    }))
+    const entry = markup.split('data-detail="execution"')[1].split('</button>')[0]
+    expect(entry.match(/class="member-avatar"/g) ?? []).toHaveLength(Math.min(count, 2))
+    expect(entry.match(/pathLength="100"/g) ?? []).toHaveLength(count ? 2 : 0)
+    if (count > 2) expect(entry).toContain(`+${count - 2}</span>`)
+    expect(markup).toContain('aria-label="会话更多操作"')
+    expect(markup).not.toContain('mobile-camp-members')
   })
 })
