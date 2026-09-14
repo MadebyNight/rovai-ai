@@ -7258,7 +7258,7 @@ export function ApprovalDock({
             else next.add(approval.id)
             return next
           })} />}
-        <pre>{JSON.stringify(approval.canonicalInput, null, 2)}</pre>
+        <pre tabIndex={0} role="region" aria-label="完整审批请求，可滚动">{JSON.stringify(approval.canonicalInput, null, 2)}</pre>
         <div className="approval-dock-actions">
           {approval.options.map((option) => (
             <button

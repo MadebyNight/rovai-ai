@@ -4,7 +4,7 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 # v1.59 实施与验收
@@ -12,6 +12,21 @@ last_updated: 2026-09-14
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已同步 main `0bfc35b0`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+
+## 当前批次：审批 Dock 与手机适配
+
+2026-09-15 从 PR #391 合入后的 `main`（`f67660b4`）实施用户已确认的审批改进稿。
+共享 Dock 保留橙色顶部，移除左侧橙线和浮层阴影；请求 JSON 与执行台共用中性 command 底色，
+可以键盘聚焦并滚动。手机使用上下标题、44px 控件、原生顺序的双列选项，以及跟随可视高度的滚动回退。
+JSON、原生选项、请求身份、提交禁用与摘要聚焦语义保留；不修改 Core、Runtime 或 wire 合同。
+
+`pnpm typecheck`、`pnpm test`、`pnpm build:desktop`（含 Web）、`pnpm test:rust:pr` 及
+`pnpm test:approval-dock` 已通过。
+[生产组件夹具与截图](../../../scripts/fixtures/approval-dock/README.md)覆盖桌面宽／窄列、双主题、
+375/390/430px、844px 横屏和 500px 可视高度，验证 JSON 无损、44px 目标、12 项长选项的用户滚动、
+原生选项回传和安全焦点。`pnpm test:host-web-mobile` 三项通过，覆盖真实 Host 与 Server 的生产手机入口、
+共享管理、草稿、附件和执行展示；运行目录、Skill Library、MCP 与 Chrome profile 均隔离，无真实 Runtime。
+上述组件和浏览器尺寸模拟不替代实体手机键盘与移动网络资格，后两项仍沿用本版未完成的验收事实。
 
 ## 当前批次：Linux GNU 2.35 基线与 Runtime 实测
 

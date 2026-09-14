@@ -3,7 +3,7 @@ document_type: ui-interaction-draft
 authority: host-web-mobile-interaction-proposal
 status: implemented
 target_version: v1.59
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 # Mobile WebUI
@@ -66,6 +66,13 @@ Composer 外壳内边距 4px，提示与编辑区同用 6px 起点；提示默�
 队伍面板保留邀请和身份/状态信息，私聊由标题的更多菜单打开。任务新建沿用标题、说明、验收条件与负责人，
 状态只在编辑已有任务时出现。不会以界面隐藏替代 Host 的校验。
 任务工具条的“全部状态”和“新建”统一为 36px 高、12px 字号，保持中性色与紧凑对齐。
+
+手机审批沿用共享 Dock 的橙色顶部、中性边框和 command 结果底色，两侧各留 12px。标题与队员／Runtime
+上下排列，翻页、折叠、原因展开及审批按钮至少 44px；选项按原生顺序排成两列，标签完整保留。
+正常高度下原因、原始 JSON 分别可滚动，选项区保持稳定；选项较多或标签较长时内容区也可滚动到底。
+手机壳层以当前可视视口作为命名尺寸容器，
+高度不超过 580px 时改为审批内容与输入区可滚动，定位摘要、读取完整请求和访问所有选项均可完成；
+不为布局改变焦点准入、队列身份、按钮顺序或审批后端语义。
 
 执行区复用 `ExecutionAvatarRail`、连续 Run、`ExecutionToolGroup`、`ExecutionStatusGlyph` 与 `RunningText`。
 头像自动多行，无横向滑条；历史 Run 压缩为摘要，当前 Run 默认展开，每个 Run 可独立开合。

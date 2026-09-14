@@ -13,7 +13,7 @@ import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 const root = resolve(import.meta.dirname, '../..')
 const source = join(root, 'scripts/fixtures/approval-dock')
 
-test('production approvals preserve decision identity, safe focus and readable reasons across layout changes', { timeout: 60_000 }, async (t) => {
+test('production approvals preserve decision identity, safe focus and readable reasons across desktop and phone layouts', { timeout: 90_000 }, async (t) => {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-approval-dock-test-'))
   let child
@@ -31,7 +31,7 @@ test('production approvals preserve decision identity, safe focus and readable r
     let output = ''
     child.stdout.on('data', chunk => { output += chunk.toString() })
     child.stderr.on('data', chunk => { output += chunk.toString() })
-    const timeout = setTimeout(() => child.kill('SIGKILL'), 45_000)
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 75_000)
     let code
     try { [code] = await closed } finally { clearTimeout(timeout) }
     assert.equal(code, 0, `Approval interaction regression failed:\n${output}`)
