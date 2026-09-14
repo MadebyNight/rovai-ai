@@ -29,11 +29,33 @@ AgentRun 状态和“当前执行”标记，不把正文“思考中”的占�
 - 文件更新订阅还须有活动句柄才启动两秒轮询，全部释放后停止，重新打开后恢复。
 - 只有构建清单中带哈希且实际字节摘要匹配的资源可长期缓存；入口、业务、认证、附件和私有文件仍为 no-store。
 
-定向 Web/Rust owner、真实 Host HTTP、手机正式入口和执行组件回归通过。完整前端测试通过（2028 / 200 文件，
-Node 317 通过、2 既有平台跳过）；Rust workspace 847 通过、6 既有手动 ignored，Clippy、格式与类型门禁通过。
-独立 Host 真实 Run 已确认发送不切页、主动打开后默认选中、运行中 command 与摘要文案；包级验收与安装还在进行。
-`node scripts/measure-host-web-resources.mjs` 使用独立 Host 和 20 MiB / 80 页固定输入；计时仅作单机观察，
-不设毫秒门槛，不据此声称消除了每页完整摘要读取，也不等同于实体手机或物理磁盘流量测量。
+功能来源提交 `2ace68a6`。完整前端测试通过（2028 / 200 文件，Node 317 通过、2 既有平台跳过）；
+最后的“保留默认 Run、只取消切页”调整另经 194 项定向测试和真实 Run 验证。
+Rust workspace 847 通过、6 既有手动 ignored，另有 slow-tests 310 通过；Clippy、格式、类型与文档门禁通过。
+[检查记录](evidence/web-resource-performance/checks.json)保留最初失败、修复后的 owner、命令和验证范围。
+
+[固定工作量测量](evidence/web-resource-performance/measurement.json)使用独立 Debug Host、20 MiB 文本和 80 页，
+核对每页内容、行号与完整下载字节。下载响应从 Base64 JSON 的 27,962,080 字节改为 20,971,520 原始字节。
+计时仅作单机观察，不设毫秒门槛，不据此声称消除了每页完整摘要读取，也不等同于实体手机或物理磁盘流量测量。
+复跑入口是 `node scripts/measure-host-web-resources.mjs`。
+
+从功能提交[构建](evidence/web-resource-performance/build.json) 0.2.6 arm64 daily 包，签名、架构与 Bundle ID 门禁通过。
+包内 Host HTTP 验证原始字节、同大小/修改时间的变化拒绝、上传取消/上限/重放清理和静态缓存边界。
+[手机正式入口](evidence/web-resource-performance/mobile.json)上传 2 MiB 图片，Host 确认后初始缩略图不取回原图，
+刷新后一次原始字节读取恢复图片；既有 HTML、独立草稿、设置、目录和定时流程继续通过。
+[共享执行组件](evidence/web-resource-performance/execution.json)验证两主题、四宽度、时间线、逐 Run 折叠和标题文案。
+[包内真实 Runtime](evidence/web-resource-performance/runtime.json)由隔离 Desktop 的 Host 托管，手机点击发送后保持对话，
+手动执行页直接选中对应 Run，command 在运行中可见；Mobile 与 Desktop 摘要相同，Run 最终成功。
+
+[包级恢复](evidence/web-resource-performance/validation.json)继续验证正常 App/Host 重启、浏览器重开、独立草稿和显式撤销。
+首次在隔离 App 的 Camp 操作阶段发生 CDP 超时，夹具已有创建成功的 Camp；只增阶段日志，保持原断言与超时串行复测通过，
+不把时序推测写成产品根因。
+
+已[非终止安装](evidence/web-resource-performance/installation.json)到 `/Applications/Rovai AI.app`，备份为
+`/Applications/Rovai AI.backup-before-resource-perf-2ace68a6-20260914T110020Z.app`。App/Host/Core/CLI 摘要和全部 139 个 Web 文件与验收产物一致；
+记录的 5 个日常 App/Helper/Host 进程保持原 PID 与启动时间，安装器没有修改日常 userData。
+当前进程继续运行原版，退出并从规范路径重新打开后启用新包，已有 Web/Mobile 页面刷新后使用配套前端。
+此批仍为 macOS arm64 与 Chrome 手机视口模拟，Windows/Linux 和实体手机资格没有新增；后续证据提交不改变包来源。
 
 ## 本轮：浏览器会话容量与 Mobile 修复
 

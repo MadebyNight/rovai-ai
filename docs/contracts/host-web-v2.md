@@ -265,7 +265,7 @@ Metadata, paging, line resolution and parent-generation checks use a 64 KiB scan
 UTF-8 validity and one line-count entry per 64 KiB block. A subsequent read may reuse those facts only after a fresh
 full SHA-256 matches their generation; an equal size/mtime never establishes equivalence. This removes repeated
 classification and prefix-line scans, including open → first read, but does not eliminate full-file digest I/O per request.
-No source bytes or files are cached across requests, and the existing size, no-follow, source and generation fences remain.
+The Host does not cache source bytes or files across requests; the existing size, no-follow, source and generation fences remain.
 
 Binary actions `readBinary`, `readChildImage` and preview `download` use `POST /files/bytes` with the same closed
 `{action, request}` body. Success returns original bytes, MIME, `x-rovai-content-generation`, JSON-valued
@@ -275,8 +275,8 @@ or byte array without JSON/Base64 conversion. Blob consumption still buffers the
 
 After confirmed upload binding/reconciliation, a ConsoleClient may retain up to 16 local File objects totaling 40 MiB.
 A thumbnail still opens the exact source at Host, confirming ownership, availability, byte count and generation.
-Only a matching Camp/digest/size uses the local File as a Blob; missing/changed sources, eviction, another client or
-page reload use ordinary Host reads. This optional in-memory cache is cleared with authentication and never changes
+Only a matching Camp/digest/size uses the local File as a Blob. A missing source stays unavailable; changed content,
+eviction, another client or page reload use ordinary Host reads. This optional in-memory cache is cleared with authentication and never changes
 source lifetime. Shared attachment cards and gallery accept this browser Blob without copying it into a byte array.
 
 File polling runs every two seconds only while the client retains a handle and an update subscriber. Releasing the
