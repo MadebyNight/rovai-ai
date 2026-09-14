@@ -312,7 +312,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const html = await fetch(origin, { redirect: 'error' })
     assert.equal(html.status, 200)
     assert.match(html.headers.get('content-security-policy'), /frame-ancestors 'none'/)
-    assert.match(await html.text(), /浏览器工作区/)
+    assert.match(await html.text(), /<title>Rovai AI<\/title>/)
     const portrait = (await readdir(join(uiDirectory, 'assets'))).find(name=>name.endsWith('.avif'))
     assert.ok(portrait, 'production Web package includes the native member portraits')
     const portraitResponse = await fetch(`${origin}/assets/${portrait}`, { redirect: 'error' })
@@ -333,6 +333,20 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       otherReaders.push(reader)
     }
     assert.equal((await authorized(first, 'events')).status, 429, 'a third stream must exceed only this session quota')
+    // Sequential closed-tab recoveries, not simultaneous logins. Two other
+    // Sessions retain actual SSE readers throughout; their drafts must survive.
+    let candidate = first
+    for (let index = 0; index < 64; index++) {
+      const response = await authorized(candidate, 'session', { method: 'POST', body: JSON.stringify({ fork: true }) })
+      assert.equal(response.status, 200, `closed tab recovery ${index}`)
+      const child = await response.json()
+      assert.notEqual(child.clientId, candidate.clientId)
+      assert.equal(child.expiresAt, first.expiresAt)
+      candidate = child
+      assert.ok((await host.request('host.web.status')).sessions <= 32)
+    }
+    assert.equal((await authorized(first, 'capabilities')).status, 200)
+    assert.equal((await authorized(second, 'capabilities')).status, 200)
     await rename(`${workspace}-moved`, workspace)
     const fileCampId = directoryCamp.payload.campId
     const largePath = join(workspace, 'large-preview.txt')

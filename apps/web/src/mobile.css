@@ -62,7 +62,9 @@ html[data-mobile-web="true"] .camp-detail-entry-host { position: static; display
 html[data-mobile-web="true"] .mobile-camp-tabs { position: absolute; bottom: 0; left: 16px; right: 16px; display: grid; grid-template-columns: repeat(3, 1fr); height: 44px; }
 html[data-mobile-web="true"] .mobile-camp-tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; height: 44px; padding: 0; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-size: 13px; }
 html[data-mobile-web="true"] .mobile-camp-tabs [aria-pressed="true"] { border-bottom-color: var(--ink); color: var(--ink); font-weight: 600; }
-html[data-mobile-web="true"] .mobile-camp-tabs .mobile-unread-dot { order: -1; }
+html[data-mobile-web="true"] .mobile-execution-running { order: -1; display: inline-flex; flex: none; color: var(--info); }
+html[data-mobile-web="true"] .mobile-execution-running svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; animation: camp-marker-spin 900ms linear infinite; }
+@media (prefers-reduced-motion: reduce) { html[data-mobile-web="true"] .mobile-execution-running svg { animation: none; } }
 html[data-mobile-web="true"] .mobile-camp-members { position: absolute; top: 4px; right: 46px; }
 html[data-mobile-web="true"] .camp-detail-entry[data-detail="single-chat"] { position: absolute; top: 4px; right: 6px; min-width: 40px; height: 44px; padding: 10px; }
 html[data-mobile-web="true"] .camp-detail-entry[data-detail="single-chat"] :is(span, small) { display: none; }
@@ -87,6 +89,8 @@ html[data-mobile-web="true"] .execution-drawer-header { min-height: 52px; paddin
 html[data-mobile-web="true"] .execution-drawer-title-line { flex-wrap: wrap; gap: 2px; }
 html[data-mobile-web="true"] .execution-drawer-body { padding: 8px 16px 12px; }
 html[data-mobile-web="true"] .execution-process-stage { margin: 0; padding-bottom: 12px; }
+html[data-mobile-web="true"] .execution-process-node { margin-top: 15px; }
+html[data-mobile-web="true"] .execution-process-timeline::before { top: 22px; bottom: 34px; }
 html[data-mobile-web="true"] .execution-run-boundary { display: none; }
 html[data-mobile-web="true"] .camp-workspace .execution-process-stage .execution-process-card { min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 html[data-mobile-web="true"] .execution-process-card .execution-disclosure { margin: 0; padding: 0; border: 0; background: transparent; }
@@ -107,6 +111,7 @@ html[data-mobile-web="true"] .conversation-controls { padding-bottom: env(safe-a
 html[data-mobile-web="true"] .composer { padding: 6px 12px 10px; }
 html[data-mobile-web="true"] .composer-box { border: 1px solid var(--line); border-radius: 14px; }
 html[data-mobile-web="true"] .structured-mention-editor { max-height: min(160px, 27dvh); padding: 12px; font-size: max(16px, var(--chat-font-size, 16px)); }
+html[data-mobile-web="true"] .structured-mention-placeholder { top: 12px; right: 12px; left: 12px; font-size: max(16px, var(--chat-font-size, 16px)); }
 html[data-mobile-web="true"] .composer-action-row { padding: 0 5px 4px; }
 html[data-mobile-web="true"] .composer-attachment-button { min-width: 44px; width: 44px; min-height: 44px; font-size: 21px; }
 html[data-mobile-web="true"] .composer-hint { display: none; }
@@ -184,6 +189,27 @@ html[data-mobile-web="true"] .memory-library:not([data-mobile-detail]) .memory-d
 html[data-mobile-web="true"] .memory-library[data-mobile-detail] > :not(.memory-workbench):not(.mobile-memory-back):not([role="alert"]):not([role="status"]) { display: none; }
 html[data-mobile-web="true"] .memory-library[data-mobile-detail] .memory-catalog { display: none; }
 html[data-mobile-web="true"] .memory-detail { width: 100%; min-width: 0; padding: 0; border: 0; }
+html[data-mobile-web="true"] .memory-summary-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+html[data-mobile-web="true"] .memory-summary-strip > div { min-height: 48px; padding: 6px; background: transparent; }
+html[data-mobile-web="true"] .memory-scope-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+html[data-mobile-web="true"] :is(.memory-scope-tabs, .memory-governance-tabs) button { min-height: 44px; justify-content: center; font-size: 12px; }
+html[data-mobile-web="true"] .memory-governance-tabs { width: 100%; }
+html[data-mobile-web="true"] .memory-governance-tabs button { flex: 1; padding-inline: 4px; }
+html[data-mobile-web="true"] .memory-catalog { max-height: none; padding: 0; background: transparent; }
+html[data-mobile-web="true"] .memory-workbench { flex: none; overflow: visible; }
+html[data-mobile-web="true"] .memory-catalog-list { overflow: visible; gap: 0; }
+html[data-mobile-web="true"] .memory-catalog-item { padding: 14px 4px; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+html[data-mobile-web="true"] .memory-catalog-item > strong { font-size: 15px; line-height: 1.5; }
+html[data-mobile-web="true"] :is(.memory-catalog-item > small, .memory-catalog-meta .memory-kind, .memory-catalog-meta .memory-authority, .memory-detail > header small) { font-size: 11px; }
+html[data-mobile-web="true"] .memory-detail { display: flex; flex-direction: column; overflow: visible; background: transparent; }
+html[data-mobile-web="true"] .memory-detail > header h3 { font-family: inherit; font-size: 16px; font-weight: 500; line-height: 1.65; }
+html[data-mobile-web="true"] .memory-detail-section :is(h4, dt, small) { font-size: 12px; }
+html[data-mobile-web="true"] .memory-detail-section :is(dd, p, strong) { font-size: 14px; overflow-wrap: anywhere; }
+html[data-mobile-web="true"] .memory-detail-actions { padding-block: 12px; border-bottom: 1px solid var(--line); }
+html[data-mobile-web="true"] .memory-detail-actions button { min-height: 44px; font-size: 13px; }
+html[data-mobile-web="true"] .memory-revisions > summary { min-height: 44px; padding-block: 12px; font-size: 13px; cursor: pointer; }
+html[data-mobile-web="true"] .remote-setting-row { flex-wrap: wrap; gap: 12px; }
+html[data-mobile-web="true"] .remote-setting-row > button { flex: none; white-space: nowrap; letter-spacing: normal; }
 html[data-mobile-web="true"] .automation-workspace .automation-split { grid-template-columns: minmax(0, 1fr); }
 html[data-mobile-web="true"] .automation-workspace.detail:not(.editor-closed) .automation-list { display: none; }
 html[data-mobile-web="true"] .automation-splitter { display: none; }
@@ -213,6 +239,8 @@ html[data-mobile-web="true"] .automation-time-presets button { min-height: 44px;
 html[data-mobile-web="true"] .automation-time-footer .primary-button { min-height: 44px; }
 
 /* Touch and focus: keep controls operable without focus-only frames or hover-only actions. */
+html[data-mobile-web="true"] .primary-button { border-color: var(--conversation-action); color: var(--conversation-action-contrast); background: var(--conversation-action); }
+html[data-mobile-web="true"] .primary-button:hover:not(:disabled) { border-color: var(--conversation-action-hover); background: var(--conversation-action-hover); }
 html[data-mobile-web="true"] :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]) { font-size: 16px; }
 html[data-mobile-web="true"] :is(.quiet-button, .primary-button, .optional-action, .app-dialog button, [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], .member-runtime-picker-trigger, .task-panel button, .message-actions button, .runtime-option, .approval-dock-collapse, .approval-reason-toggle) { min-height: 44px; }
 html[data-mobile-web="true"] :is(button, input, textarea, select, [contenteditable], summary):focus-visible { outline: none; box-shadow: none; }

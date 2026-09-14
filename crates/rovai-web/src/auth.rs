@@ -6,7 +6,10 @@ use std::{
     collections::{HashMap, VecDeque},
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
@@ -50,6 +53,8 @@ struct StoredSession {
     digest: [u8; 32],
     client_id: String,
     expires_at: u64,
+    #[serde(default)]
+    last_used_at: u64,
 }
 struct LoginTicket {
     digest: [u8; 32],
@@ -64,14 +69,16 @@ pub struct Session {
     pub expires_at: watch::Sender<u64>,
     pub revoked: watch::Sender<bool>,
     pub streams: Arc<Semaphore>,
+    last_used_at: AtomicU64,
 }
 impl Session {
-    fn new(client_id: String, expires_at: u64) -> Arc<Self> {
+    fn new(client_id: String, expires_at: u64, last_used_at: u64) -> Arc<Self> {
         Arc::new(Self {
             client_id,
             expires_at: watch::channel(expires_at).0,
             revoked: watch::channel(false).0,
             streams: Arc::new(Semaphore::new(2)),
+            last_used_at: AtomicU64::new(last_used_at),
         })
     }
     pub fn expiry(&self) -> u64 {
@@ -208,7 +215,7 @@ impl Sessions {
                 if entry.expires_at > result.now() {
                     state.sessions.insert(
                         entry.digest,
-                        Session::new(entry.client_id, entry.expires_at),
+                        Session::new(entry.client_id, entry.expires_at, entry.last_used_at),
                     );
                 }
             }
@@ -248,6 +255,7 @@ impl Sessions {
                     expires_at: renewal
                         .filter(|(renewed, _)| std::ptr::eq(*renewed, session.as_ref()))
                         .map_or_else(|| session.expiry(), |(_, expiry)| expiry),
+                    last_used_at: session.last_used_at.load(Ordering::Relaxed),
                 })
                 .collect(),
         };
@@ -375,13 +383,31 @@ impl Sessions {
         client_id: String,
         expiry: u64,
     ) -> std::result::Result<(String, Arc<Session>), LoginFailure> {
+        let now = self.now();
+        // Select before cloning the registry: a sole Arc belongs to the registry
+        // only. Authenticated requests and SSE streams retain their own Arc, so
+        // they (including the fork parent) cannot be evicted mid-use. Admission
+        // and authentication share this lock; no new reader can race selection.
+        let oldest_idle = state
+            .sessions
+            .iter()
+            .filter(|(_, session)| {
+                session.expiry() > now
+                    && session.client_id != client_id
+                    && Arc::strong_count(session) == 1
+            })
+            .min_by_key(|(key, session)| (session.last_used_at.load(Ordering::Relaxed), **key))
+            .map(|(key, _)| *key);
         let mut next = state.sessions.clone();
-        next.retain(|_, session| session.expiry() > self.now() && session.client_id != client_id);
+        next.retain(|_, session| session.expiry() > now && session.client_id != client_id);
         if next.len() >= MAX_SESSIONS {
-            return Err(LoginFailure::Capacity);
+            let Some(oldest_idle) = oldest_idle else {
+                return Err(LoginFailure::Capacity);
+            };
+            next.remove(&oldest_idle);
         }
         let token = new_token().map_err(|_| LoginFailure::Capacity)?;
-        let session = Session::new(client_id, expiry);
+        let session = Session::new(client_id, expiry, now);
         next.insert(digest(b"rovai-session-v1\0", &token), session.clone());
         self.replace(state, &state.administrator_plaintext.clone(), next)
             .map_err(|_| LoginFailure::Storage)?;
@@ -447,7 +473,10 @@ impl Sessions {
         }
         let state = self.state.lock().expect("session registry poisoned");
         let session = state.sessions.get(&digest(b"rovai-session-v1\0", token))?;
-        self.live(&state, session).then(|| session.clone())
+        self.live(&state, session).then(|| {
+            session.last_used_at.store(self.now(), Ordering::Relaxed);
+            session.clone()
+        })
     }
     pub fn revoke(&self, session: &Session) -> Result<()> {
         let mut state = self.state.lock().expect("session registry poisoned");
@@ -712,13 +741,40 @@ mod tests {
         let expiry = registry.renew(&session).ok().unwrap()["expiresAt"]
             .as_u64()
             .unwrap();
+        let (first_closed, _) = registry.fork(&session, new_token().unwrap()).ok().unwrap();
+        let mut candidate = first_closed.clone();
+        for _ in 0..MAX_SESSIONS * 2 {
+            now.fetch_add(1, Ordering::SeqCst);
+            let parent = registry.authenticate(&candidate).unwrap();
+            let (next, _) = registry.fork(&parent, new_token().unwrap()).ok().unwrap();
+            candidate = next;
+        }
+        assert!(registry.authenticate(&first_closed).is_none());
         registry.suspend();
         drop(registry);
+        // The previous persisted format has no activity timestamp. Upgrading
+        // must retain its unexpired credentials instead of rejecting the store.
+        let path = root.join(STORE_FILE);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for entry in legacy["sessions"].as_array_mut().unwrap() {
+            assert!(
+                entry
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("lastUsedAt")
+                    .is_some()
+            );
+        }
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let registry = Arc::new(open());
         assert_eq!(stored_administrator_token(&root).unwrap().unwrap(), token);
         let restored = registry.authenticate(&bearer).unwrap();
         assert_eq!(restored.client_id, session.client_id);
         assert_eq!(restored.expiry(), expiry);
+        assert_eq!(registry.count(), MAX_SESSIONS);
+        assert!(registry.authenticate(&first_closed).is_none());
+        assert!(registry.authenticate(&candidate).is_some());
         assert!(registry.authorize_ticket(&ticket).is_err());
         let bytes = std::fs::read_to_string(root.join(STORE_FILE)).unwrap();
         assert!(!bytes.contains(&bearer));
@@ -736,6 +792,12 @@ mod tests {
         assert!(registry.revoke(&restored).is_err());
         assert!(registry.close().is_err());
         assert!(registry.rotate(&new_token().unwrap()).is_err());
+        assert!(matches!(
+            registry.issue(0, new_token().unwrap()),
+            Err(LoginFailure::Storage)
+        ));
+        assert_eq!(registry.count(), MAX_SESSIONS);
+        assert!(registry.authenticate(&candidate).is_some());
         assert!(registry.authenticate(&bearer).is_some());
         std::fs::remove_dir(&path).unwrap();
         std::fs::rename(backup, &path).unwrap();
@@ -803,10 +865,45 @@ mod tests {
             Err(LoginFailure::Throttled)
         ));
         sessions.state.lock().unwrap().attempts.clear();
+        // A closed tab releases its request/SSE Arc, but its persisted Bearer
+        // must still reopen. Repeating beyond the cap owns the accumulation bug.
+        let mut reopened = Sessions::new(&administrator).unwrap();
+        let now = Arc::new(AtomicU64::new(1_800_000_000_000));
+        reopened.clock = {
+            let now = now.clone();
+            Arc::new(move || now.load(Ordering::SeqCst))
+        };
+        let pinned = reopened.login(&administrator).ok().unwrap();
+        let (mut candidate, _) = reopened.login(&administrator).ok().unwrap();
+        let oldest_closed = candidate.clone();
+        for index in 0..MAX_SESSIONS * 3 {
+            now.fetch_add(1, Ordering::SeqCst);
+            let parent = reopened.authenticate(&candidate).unwrap();
+            let child = reopened.fork(&parent, new_token().unwrap());
+            assert!(
+                child.is_ok(),
+                "closed tab reopen {index} exhausted Sessions"
+            );
+            let (token, session) = child.ok().unwrap();
+            assert_ne!(session.client_id, parent.client_id);
+            assert_eq!(session.expiry(), parent.expiry());
+            candidate = token;
+            assert!(reopened.count() <= MAX_SESSIONS);
+            assert!(reopened.authenticate(&pinned.0).is_some());
+            assert!(!*pinned.1.revoked.borrow());
+        }
+        assert_eq!(reopened.count(), MAX_SESSIONS);
+        assert!(reopened.authenticate(&oldest_closed).is_none());
+        assert!(
+            reopened.login(&administrator).is_ok(),
+            "correct long Token can also reclaim an idle slot"
+        );
+        assert!(reopened.authenticate(&pinned.0).is_some());
         // Cardinality is the property being tested; avoid waiting for rate windows.
+        let mut active = Vec::new();
         for _ in 0..MAX_SESSIONS {
             sessions.state.lock().unwrap().attempts.clear();
-            assert!(sessions.login(&administrator).is_ok());
+            active.push(sessions.login(&administrator).ok().unwrap());
         }
         assert!(matches!(
             sessions.login(&administrator),

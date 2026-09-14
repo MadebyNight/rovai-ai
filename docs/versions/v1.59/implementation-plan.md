@@ -13,7 +13,24 @@ last_updated: 2026-09-14
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已同步 main `0bfc35b0`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：同步 main 与本机安装
+## 本轮：浏览器会话容量与 Mobile 修复
+
+连续关闭并重开浏览器会触发 `fork: true`，旧派生 Session 原先只等待 30 天过期，最终耗尽 32 个名额。
+可控时钟回归在第 31 次派生恢复复现容量失败。现在保持 32 上限，满额时回收最久未认证的空闲 Session；
+在途 HTTP、SSE 和当前派生请求持有的 Session 不参与回收，写入失败不提前撤销旧记录。
+既有 Rust 准入与重启恢复 owner 增补 96 次派生、全在线容量拒绝、长期 Token 登录回收、重启和存储失败检查。
+独立真实 Chrome owner 连续新开/关闭 40 次，同时保留两个在线标签，核对身份、草稿和浏览器进程重开免登录。
+精确边界见 [Host Web v2](../../contracts/host-web-v2.md#bounded-session-admission)。
+
+Web 发起的 Run 只显示“思考中”的根因为前端操作白名单遗漏 `agentRunExecution.changes`。
+Host 已持有证据，共享执行窗口的增量请求却在发送前被客户端拒绝；补齐白名单并以实际 ConsoleClient / CampAdapter /
+ExecutionWindow owner 验证新增 command 与原记录状态更新。真实隔离 Desktop Host + Codex 也观察到 command 在运行中出现。
+
+Mobile 修复普通主按钮颜色、执行中图标、时间线对齐、输入提示位置和退出按钮字距；Web / Mobile 标题统一为 `Rovai AI`。
+记忆页不再自动选中首条导致列表立即消失；支持多条列表、点选/返回、修订，治理操作靠近正文，版本记录按需展开。
+页面规则由 [Mobile WebUI](../../ui/host-web-mobile.md) 拥有。本批次完整验证、构建和安装记录完成后补入下方证据。
+
+## 先前批次：同步 main 与本机安装
 
 2026-09-14 按用户要求合入 main `0bfc35b0`，执行失败信息现在位于该 Run 执行记录末尾；Desktop、Web 和
 Mobile 共用同一组件。合并没有冲突，功能源码提交为 `4ffb6892`，包含此前 Mobile、Web 执行光圈与认证持久化改动。

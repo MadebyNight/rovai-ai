@@ -30,10 +30,12 @@ export async function configureBrowserCamp({ browser, read, workspace, name }) {
   await browser.click(`document.querySelector('.member-runtime-picker-field button')`)
   await browser.click(`[...document.querySelectorAll('.member-runtime-menu-item')].find(e=>e.textContent.trim()==='Codex CLI')`)
   for (const [label, value] of [['文件系统访问', 'workspace-write'], ['审批策略', 'on-request']]) {
-    const select = `[...document.querySelectorAll('.member-runtime-parameters label')].find(e=>e.querySelector('span')?.textContent===${JSON.stringify(label)})?.querySelector('select')`
-    await browser.wait(`${select} && !(${select}).disabled`)
-    assert.equal(await browser.evaluate(`[...(${select}).options].some(option=>option.value===${JSON.stringify(value)})`), true)
-    await browser.evaluate(`(()=>{const control=${select};control.value=${JSON.stringify(value)};control.dispatchEvent(new Event('change',{bubbles:true}))})()`)
+    const trigger = `document.querySelector('.member-runtime-parameters button[aria-label^="${label}，"]')`
+    await browser.wait(`${trigger} && !(${trigger}).disabled`)
+    await browser.click(trigger)
+    const option = `[...document.querySelectorAll('[role=menuitemradio]')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(value)}))`
+    await browser.wait(`Boolean(${option})`)
+    await browser.click(option)
   }
   await browser.wait(`document.querySelector('[aria-label="保存运行配置"]:not(:disabled)')!==null`)
   await browser.click(`document.querySelector('[aria-label="保存运行配置"]')`)

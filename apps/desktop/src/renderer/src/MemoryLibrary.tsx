@@ -268,11 +268,13 @@ export function MemoryLibrary({
       }
     }
     if (visibleMemories.some((memory) => memory.id === selectedMemoryId)) return
-    const memoryId = visibleMemories[0]?.id ?? null
+    // A phone opens details only after an explicit selection. Auto-selecting the
+    // first row also undoes Back immediately and makes the catalog unreachable.
+    const memoryId = mobile ? null : visibleMemories[0]?.id ?? null
     if (memoryId === selectedMemoryId) return
     if (onNavigate) onNavigate({ kind: 'memory', memoryId, scope, governance, search }, 'replace')
     else setLocalMemoryId(memoryId)
-  }, [library, navigationTarget, onNavigate, selectedMemoryId, visibleMemories, scope, governance, search])
+  }, [library, mobile, navigationTarget, onNavigate, selectedMemoryId, visibleMemories, scope, governance, search])
 
   const selectedMemory = visibleMemories.find((memory) => memory.id === selectedMemoryId) ?? null
   const activeCount = library?.memories.filter((memory) => memory.lifecycle === 'active').length ?? 0
@@ -861,10 +863,23 @@ function MemoryDetail({
   onReactivate(memory: MemoryRecord): Promise<void>
   onForget(memory: MemoryRecord): void
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
+  const RevisionContainer = mobile ? 'details' : 'section'
   if (!memory) {
     return <aside className="memory-detail empty"><span aria-hidden="true">⌁</span><strong>{loading ? '正在读取记忆' : '选择一条记忆查看详情'}</strong><p>{loading ? '列表与治理状态会在本地数据就绪后显示。' : '这里会显示正文、来源、Retrieval Keys、版本历史和治理操作。'}</p></aside>
   }
   const people = memoryPeople(memory, agents)
+  const actions = (
+    <div className="memory-detail-actions">
+      {memory.lifecycle === 'active' && <>
+        <button className="quiet-button" type="button" onClick={() => onRevise(memory)} disabled={busy !== null}>修订</button>
+        <button className="quiet-button" type="button" onClick={(event) => onReview(memory, event.currentTarget)} disabled={busy !== null}>设置下次复核</button>
+        <button className="quiet-button" type="button" onClick={() => void onRetire(memory)} disabled={busy !== null}>停止沿用</button>
+      </>}
+      {memory.lifecycle === 'retired' && memory.outgoingSuccessorIds.length === 0 && <button className="primary-button" type="button" onClick={() => void onReactivate(memory)} disabled={busy !== null}>重新沿用</button>}
+      {memory.lifecycle !== 'forgotten' && <button className="danger-button" type="button" onClick={() => onForget(memory)} disabled={busy !== null}>永久遗忘</button>}
+    </div>
+  )
   return (
     <aside className="memory-detail" aria-labelledby={`memory-detail-${memory.id}`}>
       <header>
@@ -873,6 +888,7 @@ function MemoryDetail({
         <small>{scopeLabel(memory.scope)} · 更新于 {formatTime(memory.updatedAt)}</small>
       </header>
 
+      {mobile && actions}
       {people.length > 0 && (
         <section className="memory-detail-section">
           <h4>适用队员</h4>
@@ -893,8 +909,8 @@ function MemoryDetail({
         </dl>
       </section>
 
-      <section className="memory-detail-section memory-revisions">
-        <h4>版本记录</h4>
+      <RevisionContainer className="memory-detail-section memory-revisions">
+        {mobile ? <summary>版本记录 · {memory.revisions.length}</summary> : <h4>版本记录</h4>}
         {memory.revisions.map((revision) => (
           <article key={revision.id}>
             <span className={`memory-authority ${revision.actorKind === 'agent' ? 'agent-origin' : 'user-origin'}`}>{revision.actorKind === 'agent' ? '队员修订' : revision.actorKind === 'user' ? '用户修订' : '已清除'}</span>
@@ -903,17 +919,9 @@ function MemoryDetail({
             <small>{formatTime(revision.createdAt)} · {shortId(revision.id)}</small>
           </article>
         ))}
-      </section>
+      </RevisionContainer>
 
-      <div className="memory-detail-actions">
-        {memory.lifecycle === 'active' && <>
-          <button className="quiet-button" type="button" onClick={() => onRevise(memory)} disabled={busy !== null}>修订</button>
-          <button className="quiet-button" type="button" onClick={(event) => onReview(memory, event.currentTarget)} disabled={busy !== null}>设置下次复核</button>
-          <button className="quiet-button" type="button" onClick={() => void onRetire(memory)} disabled={busy !== null}>停止沿用</button>
-        </>}
-        {memory.lifecycle === 'retired' && memory.outgoingSuccessorIds.length === 0 && <button className="primary-button" type="button" onClick={() => void onReactivate(memory)} disabled={busy !== null}>重新沿用</button>}
-        {memory.lifecycle !== 'forgotten' && <button className="danger-button" type="button" onClick={() => onForget(memory)} disabled={busy !== null}>永久遗忘</button>}
-      </div>
+      {!mobile && actions}
     </aside>
   )
 }

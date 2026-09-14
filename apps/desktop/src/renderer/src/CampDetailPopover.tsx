@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from 'react-dom'
 import { useMobileLayout } from './MobileLayout'
 import { MemberAvatar, type MemberAvatarProps } from './MemberAvatar'
+import { ExecutionStatusGlyph } from './ExecutionStatusGlyph'
 
 export type CampDetailTab = 'execution' | 'tasks' | 'members'
 export type RunningCampMember = Pick<MemberAvatarProps, 'agentId' | 'avatarRef' | 'displayName'>
@@ -221,7 +222,7 @@ export function CampDetailPopover({
   const entries = mobile ? <>
     <div className="mobile-camp-tabs" role="group" aria-label="当前会话视图">
       <button type="button" aria-pressed={!visible || activeTab === 'members'} onClick={onClose}>对话</button>
-      {(['execution', 'tasks'] as const).map(tab => <button key={tab} type="button" aria-controls={panelId} aria-pressed={visible && activeTab === tab} onClick={() => onOpen(tab)}>{labels[tab]}{tab === 'execution' && runningMembers.length > 0 && <i className="mobile-unread-dot" aria-label="有执行进行中" />}</button>)}
+      {(['execution', 'tasks'] as const).map(tab => <button key={tab} type="button" aria-controls={panelId} aria-pressed={visible && activeTab === tab} onClick={() => onOpen(tab)}>{labels[tab]}{tab === 'execution' && runningMembers.length > 0 && <span className="mobile-execution-running" role="img" aria-label="执行中"><ExecutionStatusGlyph status="running" /></span>}</button>)}
     </div>
     <button className="mobile-icon-button mobile-camp-members" type="button" aria-label={`会话队员，${memberCount} 位`} aria-expanded={visible && activeTab === 'members'} onClick={() => visible && activeTab === 'members' ? onClose() : onOpen('members')}><CampDetailIcon tab="members" /></button>
   </> : <CampDetailEntries

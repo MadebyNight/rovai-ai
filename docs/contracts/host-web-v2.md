@@ -47,7 +47,7 @@ masked Token, visibility and copy actions; the separate explicit local rotation 
 Neither remote HTTP nor status/diagnostics/logs exposes the long Token. Browsers never persist it or use it for automatic login.
 
 Both Host entrances persist one private `web-auth.json` below the Core data directory, opened only after Core admission.
-It contains the local-readable long Token, typed Bearer digests, editor IDs and absolute UTC expiry milliseconds;
+It contains the local-readable long Token, typed Bearer digests, editor IDs, absolute UTC expiry and last-use milliseconds;
 it contains no raw Bearer, editor proof or QR ticket. Creation, renewal, logout, rotation and explicit Web disable
 publish an atomic private-file replacement under the registry mutex before returning success or changing live state.
 An invalid/unreadable document fails closed without replacing credentials. A write failure returns 503
@@ -101,6 +101,22 @@ Core persists only the proof digest, bound to the current Owner; the Host first 
 a valid login ticket or an existing Bearer Session before resolving the editor. A client ID, Draft ID or proof alone never authenticates
 a Session. Another client's proof cannot resume the named editor. Reauthentication replaces that editor's old Session,
 including at session capacity. Rotation and explicit Web disable fence an in-flight login as well as existing Sessions.
+
+### Bounded Session admission
+
+The registry retains at most 32 Sessions. Login, QR exchange and fork first remove expired Sessions and replace any
+Session for the same proven editor. If still full, admission reclaims the least recently authenticated idle Session.
+An authenticated in-flight request or open SSE stream pins its Session; the fork request also pins its parent. Selection,
+authentication and persistence share the registry lock, so a newly authenticated request cannot race with reclamation.
+If all slots are in use, admission returns the existing capacity error instead of revoking an online Session.
+
+Closing a tab does not revoke credentials. Sequential closes/reopens can reclaim older idle records without exhausting
+the cap, while live tabs retain their independent Bearers and drafts. An idle Session reclaimed under capacity pressure
+cannot authenticate or renew; the unchanged long login Token can issue another Session using the same admission policy.
+Reclamation never extends expiry or transfers editor/draft ownership. The removal and new Session commit atomically;
+a storage failure leaves the old registry usable. Last use is updated in memory on authenticated access and captured by
+existing registry writes, without a disk write per request. Older stored records without this optional field load with
+the oldest priority. Normal Host restart preserves the bounded registry and cannot resurrect a reclaimed Session.
 
 ### Session lifetime and renewal
 

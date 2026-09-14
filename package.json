@@ -155,7 +155,7 @@
     "build:web": "vite build --config web.vite.config.ts",
     "build:server": "node scripts/build-server.mjs",
     "test:server-entry": "cargo build -p rovai-host && node --test scripts/lib/server-entry.test.mjs scripts/lib/server-install.test.mjs",
-    "test:host-web": "node --test scripts/lib/host-web.test.mjs scripts/lib/host-web-channels.test.mjs",
+    "test:host-web": "node --test scripts/lib/host-web.test.mjs scripts/lib/host-web-channels.test.mjs scripts/lib/host-web-sessions.test.mjs",
     "test:host-web-html": "node --test scripts/lib/host-web-html.test.mjs",
     "test:host-web-live": "node --test scripts/lib/host-web-live.test.mjs",
     "smoke:host-web-runtime": "node scripts/smoke-host-web-runtime.mjs",

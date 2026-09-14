@@ -67,6 +67,7 @@ export const WEB_OPERATIONS = [
   'runtime.startup.check',
   'navigation.findCamp',
   'agentRunExecution.page',
+  'agentRunExecution.changes',
   'tasks.create',
   'tasks.update',
   'memory.create',

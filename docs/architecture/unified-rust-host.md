@@ -56,7 +56,9 @@ Host 在准入的 Core data-dir 内持久保存私有认证文档，浏览器 In
 
 长期登录 Token 使用 256-bit 系统随机数，本机入口初始化、重复查看/复制或显式重置。
 Desktop 与 Server 使用同一私有 `web-auth.json` 持久实现，原独立 `server-token` 仅作首次导入；Token 命令优先读取统一文档。
-Host 仅保存 Bearer 的带类型摘要、编辑 ID 和绝对到期时间，认证使用恒定时间比较。
+Host 保存 Bearer 的带类型摘要、编辑 ID、绝对到期时间和最近认证时间，认证使用恒定时间比较。
+Session 上限保持 32；容量满时回收最久未使用且没有在途请求或 SSE 的记录，保护在线标签页与派生请求的父 Session。
+回收与新建原子持久化，具体准入与失败边界由 [Host Web v2](../contracts/host-web-v2.md#bounded-session-admission) 拥有。
 续期、撤销、重置和显式关闭在同一锁下先原子落盘再发布；损坏或写入失败不会静默重置。凭据不进入状态、日志或公开网络投影。
 过期、撤销、轮换和关闭 Web 撤销已有订阅。登录限流，Host/Origin 封闭校验，请求/上传/并发/订阅有界；
 实际网络接口自动展示并按同一 authority/origin 校验；外部代理 origin 可以显式补充。默认 loopback；LAN 明文必须显式开启并说明风险，不可信网络用
