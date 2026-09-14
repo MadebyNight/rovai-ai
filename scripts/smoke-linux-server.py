@@ -82,7 +82,7 @@ def main():
         print(json.dumps({'channel': 'automatic_acceptance', 'dataDir': str(data), 'skillLibraryRoot': str(data / 'skills'), 'runtime': False}), flush=True)
 
         def start():
-            process = subprocess.Popen(command, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            process = subprocess.Popen(command, cwd=root, env=environment, umask=0o077, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             processes.append(process)
             lines = queue.Queue()
             def collect():
@@ -115,6 +115,18 @@ def main():
             except urllib.error.HTTPError as error:
                 assert error.code == 401
             call(origin, session['token'], 'navigation.snapshot')
+            deadline = time.monotonic() + 30
+            required_subsystems = {'skills', 'mcp', 'attachments', 'maintenance', 'builtin-tools'}
+            while True:
+                states = call(origin, session['token'], 'runtime.subsystems.get')
+                selected = [state for state in states if state['id'] in required_subsystems]
+                assert len(selected) == len(required_subsystems)
+                assert all(state['state'] in ('initializing', 'ready') for state in selected), selected
+                if all(state['state'] == 'ready' for state in selected):
+                    break
+                assert time.monotonic() < deadline, 'Server subsystems did not become ready'
+                time.sleep(0.1)
+            checks.append('private_service_umask_and_execution_subsystems')
             config = call(origin, session['token'], 'mcp.config.get')
             created = call(origin, session['token'], 'mcp.servers.create', {
                 'expectedConfigDigest': config['configDigest'],

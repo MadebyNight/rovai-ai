@@ -109,6 +109,12 @@ Python 重新挂靠 PID 1；测试结束已由 cgroup 清理，无内存压力�
 身份；无保留后台任务时取消关闭整个 Host，有后台任务时保留原有作用域取消。修复后真实复验待下一个包。
 [Advin 同包 Gate A](evidence/linux-server/a5f25ba0/advin-server-os.json)通过。
 
+常驻 systemd 采用 `UMask=0077` 后，HTTPS 登录和读写成功，但首条 UI Run 停留 queued；日志明确提示内置
+Skill 摘要不匹配。新建内置文件的声明模式 0644 被 umask 过滤成 0600，摘要包含模式，导致 Skills subsystem degraded。
+既有 `skill::slow_tests::official_skills_apply_management_policy_and_preserve_user_managed_changes` 在独立进程
+umask 077 下复现同一失败；修复通过新文件句柄显式恢复内置声明模式，私有 Skill 根权限保持不变。
+Gate A 增加 umask 077 和五项执行基础 subsystem ready 检查，避免再由纯 HTTP 成功掩盖调度阻塞。
+
 这些是有限集成证据，`fullQualification=false`；Skills/MCP、权限与压缩等 First-Class 全轴尚未逐项闭合，
 14 项 Linux Runtime 均保留 Preview 与缺失资格原因。正式 Release 和实体手机资格尚未完成。
 
