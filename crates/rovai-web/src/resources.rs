@@ -113,6 +113,19 @@ fn reference_path(raw: &str, base: &std::path::Path) -> Result<PathBuf> {
         }
     };
     ensure!(!path.is_empty(), "source_not_authorized");
+    // URL joining treats a Windows drive letter as a scheme. Normalize only
+    // absolute local-drive references, preserving the existing one-time URL decoding.
+    #[cfg(windows)]
+    let windows_absolute = {
+        let bytes = path.as_bytes();
+        (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+        .then(|| format!("file:///{}", path.replace('\\', "/")))
+    };
+    #[cfg(windows)]
+    let path = windows_absolute.as_deref().unwrap_or(path);
     let url = if path.to_ascii_lowercase().starts_with("file://") {
         url::Url::parse(path)?
     } else {
@@ -791,6 +804,25 @@ mod tests {
             reference_path(uri.as_str(), &base).unwrap(),
             base.join("a b.md")
         );
+        #[cfg(windows)]
+        {
+            for reference in [
+                r"C:\external\a%20b.md:3:2",
+                "C:/external/a%20b.md#L3",
+                "file:///C:/external/a%20b.md",
+            ] {
+                assert_eq!(
+                    reference_path(reference, &base).unwrap(),
+                    PathBuf::from(r"C:\external\a b.md")
+                );
+            }
+            assert_eq!(
+                reference_path(r"C:\external\a%2520b.md", &base).unwrap(),
+                PathBuf::from(r"C:\external\a%20b.md")
+            );
+            assert!(reference_path(r"\\remote\share\a.md", &base).is_err());
+            assert!(reference_path("C:relative.md", &base).is_err());
+        }
         assert!(reference_path("https://example.com/a.md", &base).is_err());
         assert!(reference_path("file://example.com/a.md", &base).is_err());
         let text = "a你好\n🌸z";
