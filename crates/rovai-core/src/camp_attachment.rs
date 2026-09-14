@@ -3865,6 +3865,24 @@ mod windows_attachment_tests {
             .unwrap();
         assert!(status.success(), "failed to create the junction fixture");
 
+        let canonical = fs::canonicalize(&fixture).unwrap();
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(
+                &canonical.join("outside/secret.txt")
+            )
+            .is_ok()
+        );
+        let linked = crate::local_attachment_snapshot::open_resolved_file_without_following(
+            &canonical.join("source/linked-outside/secret.txt"),
+        )
+        .unwrap_err();
+        assert!(linked.to_string().contains("reparse point"), "{linked:#}");
+        let volume = canonical.ancestors().last().unwrap();
+        assert!(crate::local_attachment_snapshot::open_source_without_following(volume).is_err());
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(volume).is_err()
+        );
+
         let destination = fixture.join("snapshot");
         let error = copy_and_inspect(&source, &destination).unwrap_err();
         assert_eq!(

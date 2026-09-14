@@ -650,7 +650,7 @@ pub fn open_resolved_file_without_following(path: &Path) -> Result<File> {
             .open(&root)?
     };
     #[cfg(windows)]
-    let mut file = open_source_without_following(&root)?;
+    let mut file = crate::platform::windows_file_tree::open_volume_root_for_traversal(&root)?;
     let (leaf, parents) = names.split_last().context("resolved file has no leaf")?;
     for name in parents {
         anyhow::ensure!(

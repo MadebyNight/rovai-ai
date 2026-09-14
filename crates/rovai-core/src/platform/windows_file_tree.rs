@@ -80,6 +80,29 @@ pub(crate) fn open_path_for_removal(path: &Path) -> Result<File> {
 
 fn open_path_with_access(path: &Path, desired_access: u32) -> Result<File> {
     validate_source_path(path)?;
+    open_validated_path_with_access(path, desired_access)
+}
+
+/// Bootstrap only an internal no-follow component walk. A volume root is never
+/// admitted as an attachment source by `open_path_without_following`.
+pub(crate) fn open_volume_root_for_traversal(path: &Path) -> Result<File> {
+    let mut components = path.components();
+    anyhow::ensure!(
+        matches!(components.next(), Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+            && matches!(components.next(), Some(Component::RootDir))
+            && components.next().is_none(),
+        "file traversal requires a local drive root"
+    );
+    let file = open_validated_path_with_access(path, FILE_GENERIC_READ)?;
+    anyhow::ensure!(
+        inspect_node(&file)?.kind == NodeKind::Directory,
+        "file traversal root is not a directory"
+    );
+    Ok(file)
+}
+
+fn open_validated_path_with_access(path: &Path, desired_access: u32) -> Result<File> {
     let wide_path = wide_nul(path.as_os_str())?;
     let raw = unsafe {
         // SAFETY: wide_path is NUL-terminated. Null security attributes make

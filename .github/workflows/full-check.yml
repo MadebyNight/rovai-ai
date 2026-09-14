@@ -212,9 +212,14 @@ jobs:
         with:
           key: server-${{ matrix.target }}
       - name: Verify credentials and content versions
+        id: web_check
         run: cargo test --locked -p rovai-web
       - name: Verify updater and process handoff
+        if: ${{ !cancelled() && (steps.web_check.conclusion == 'success' || steps.web_check.conclusion == 'failure') }}
         run: cargo test --locked -p rovai-host --lib server_updates
+      - name: Verify Windows resolved-file boundary
+        if: ${{ matrix.target == 'windows-x64' && !cancelled() && (steps.web_check.conclusion == 'success' || steps.web_check.conclusion == 'failure') }}
+        run: cargo test --locked -p rovai-core --lib windows_attachment_directory_rejects_junctions_and_cleans_only_owned_tree
 
   server-native:
     name: Server preview / ${{ matrix.target }}
