@@ -235,6 +235,8 @@ jobs:
         run: |
           cargo test -p rovai-core --lib managed_process
           cargo test -p rovai-core --lib antigravity::tests::
+          cargo test -p rovai-core --lib codebuddy_launch_preserves_native_default_and_explicit_model_selection
+          node --test scripts/test-zcode-owner.mjs
           cargo test -p rovai-core --lib core_data_dir_lock
           cargo test -p rovai-core --lib storage_layout
       - name: Verify packaged Host and shared Web lifecycle

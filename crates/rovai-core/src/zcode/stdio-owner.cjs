@@ -62,6 +62,10 @@ if (process.platform === 'win32') {
     ? `\\\\${kernel.slice(8)}`
     : kernel.startsWith('\\\\?\\') ? kernel.slice(4) : kernel
   require(loadPath)
+} else if (process.argv.length === 3 && process.argv[2] === '--version') {
+  // Metadata never launches an execution Host. On Linux the EOF watcher can
+  // otherwise kill this short-lived group before its successful exit is reaped.
+  require(process.argv[1])
 } else {
 const owner = process.pid
 const groups = new Set()

@@ -78,6 +78,16 @@ cgroup 峰值 598388736 字节，无 max/oom 计数增长，本轮跳过 Kimi。
 取消用例改为受控 Python 子进程，必须同时观察原生 Tool、真实子进程和启动标记，
 取消后检查子进程消失及延迟写入未发生；首次失败不被改写。
 
+[后续 Server Runtime 证据](evidence/linux-server/e1b5ac46/advin-runtime-followup.json)保留 22 次独立 fixture 与内存记录。
+Codex、Claude、Pi、Kiro、Qwen、Copilot、Grok 已通过有限集成链路；Qoder 经原生 `/model` 配置 MiniMax BYOK 后
+工具、续接与内置 CLI 已通过，账号 Credits 不再阻塞 BYOK。OpenCode/Qoder 的新取消用例均复现父进程退出、
+工具子进程仍存活；`ae872240` 增加 Linux pidfd 身份捕获与取消后退出确认，原生 Linux 回归与同包 OS 矩阵正在 CI 验证。
+Antigravity 登录后原生服务明确返回地区不符合资格，不能绕过；修复非零退出码先于结构化 ERROR 的分类，
+既有测试扩展 exit 0/1 并通过。CodeBuddy 原生 MiniMax 调用成功，Server 启动却把 RuntimeDefault sentinel 作为
+模型 ID 传入；修复只对显式选择传 `--model`，构造测试先失败后通过。ZCode 原生内核连接成功，但版本探测
+被执行期 watcher 提前 SIGKILL；只读 `--version` 绕过 watcher 后同机 exit -9→0，实际执行期清理仍保留并通过回归。
+TRAE 已写入原生 BYOK 配置，仍缺其原生登录令牌；Kimi 按用户授权重试失败后跳过。以上阻塞不等于 Linux OS 不支持。
+
 这些是有限集成证据，`fullQualification=false`；Skills/MCP、权限与压缩等 First-Class 全轴尚未逐项闭合，
 14 项 Linux Runtime 均保留 Preview 与缺失资格原因。正式 Release 和实体手机资格尚未完成。
 

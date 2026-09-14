@@ -92,6 +92,11 @@ cargo test --workspace -- --list
 `structured_runtime_failure_preserves_sanitized_provider_detail` 的 exit 0/1 输入矩阵，证明明确 ERROR 的语义和脱敏
 不会被非零退出码吞掉；无结构化终点仍由既有 process failure owner 负责，不新增重复测试。
 
+`acp::tests::codebuddy_launch_preserves_native_default_and_explicit_model_selection` 拥有 CodeBuddy 启动模型选择：
+RuntimeDefault 不得作为 `--model` 原生参数，显式模型仍须在 session/new 前传入。修复前传入内部 sentinel
+导致 BYOK 执行被拒绝。现有 launch owner 分别拥有 Kiro/Cursor 权限，未覆盖此模型边界；新 owner 仅检查命令
+构造，不创建进程或数据库。最小命令：`cargo test -p rovai-core --lib codebuddy_launch_preserves_native_default_and_explicit_model_selection`。
+
 `health::tests::codex_probe_requires_login_unless_native_provider_explicitly_waives_it` 拥有 Codex 原生认证进程边界：
 同一隔离 fixture 覆盖 OpenAI 登录成功、自定义 Provider 明确免登录，以及 true、缺失、类型错误、RPC 拒绝。
 既有 ACP Native Home owner 使用另一协议，不能证明 `account/read` 的语义。fixture 不修改环境或读取真实凭据，

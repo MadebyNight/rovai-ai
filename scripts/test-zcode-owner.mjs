@@ -6,6 +6,23 @@ import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, toNamespacedPath } from 'node:path'
 
+test('ZCode version metadata succeeds without creating an execution watcher', { skip: process.platform === 'win32' }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rovai-zcode-version-'))
+  const companion = await readFile(new URL('../crates/rovai-core/src/zcode/stdio-owner.cjs', import.meta.url), 'utf8')
+  const preload = join(root, 'no-child.cjs'), kernel = join(root, 'kernel.cjs')
+  await writeFile(preload, "require('node:child_process').spawn = () => { throw new Error('metadata must not need an execution watcher') }")
+  await writeFile(kernel, "if (process.argv[2] !== '--version') process.exit(64); console.log('0.16.5')")
+  const probe = spawn(process.execPath, ['--require', preload, '--eval', companion, kernel, '--version'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const closed = once(probe, 'close')
+  const timer = setTimeout(() => probe.kill('SIGKILL'), 5000)
+  let output = ''
+  probe.stdout.on('data', bytes => output += bytes)
+  try {
+    assert.deepEqual(await closed, [0, null])
+    assert.equal(output.trim(), '0.16.5')
+  } finally { clearTimeout(timer); await rm(root, { recursive: true, force: true }) }
+})
+
 // Windows Job membership is owned by the Rust OS-boundary test. This separate
 // seam checks the real Node prelude's request lease and argv/cwd projection.
 test('Windows ZCode freezes async CLI leases and preserves MCP cwd and arguments', { skip: process.platform !== 'win32' }, async () => {

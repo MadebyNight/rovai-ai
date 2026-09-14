@@ -4761,7 +4761,11 @@ fn configure_runtime_command(
                     // Session. A custom provider cannot be selected later with
                     // session/set_model when session/new already rejected the
                     // product-account default for missing authentication.
-                    command.arg("--model").arg(&runtime.model.model_id);
+                    // RuntimeDefault is a Core selection sentinel. Omitting
+                    // --model preserves the user's native model/BYOK config.
+                    if runtime.model.source != "runtime_default" {
+                        command.arg("--model").arg(&runtime.model.model_id);
+                    }
                     command.arg("--permission-mode").arg(if legacy_read_only {
                         "dontAsk"
                     } else {
@@ -8270,6 +8274,47 @@ done
         assert!(error.to_string().contains("group or others"));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codebuddy_launch_preserves_native_default_and_explicit_model_selection() {
+        let root = std::env::temp_dir();
+        let workspace = AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().to_string());
+        for (source, model_id, expected) in [
+            ("runtime_default", "codebuddy-cli://runtime-default", None),
+            (
+                "runtime",
+                "custom-local:MiniMax-M3",
+                Some("custom-local:MiniMax-M3"),
+            ),
+        ] {
+            let mut runtime = frozen_kiro_runtime();
+            runtime.adapter_kind = AdapterKind::CodebuddyCli;
+            runtime.permissions.adapter_kind = AdapterKind::CodebuddyCli;
+            runtime.permissions.values = json!({"permission_mode":"bypassPermissions"});
+            runtime.model.source = source.to_string();
+            runtime.model.model_id = model_id.to_string();
+            let mut command = Command::new("/usr/bin/true");
+            configure_runtime_command(
+                &mut command,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &runtime,
+                false,
+                &BTreeMap::new(),
+                &root,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let arguments = command.as_std().get_args().collect::<Vec<_>>();
+            let selected = arguments
+                .windows(2)
+                .find(|pair| pair[0] == "--model")
+                .map(|pair| pair[1].to_str().unwrap());
+            assert_eq!(selected, expected);
+        }
     }
 
     #[test]

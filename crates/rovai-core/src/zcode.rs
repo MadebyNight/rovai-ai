@@ -14,7 +14,7 @@ pub mod transport;
 
 pub const PROTOCOL: &str = "zcode-app-server-v1";
 pub const MINIMUM_VERSION: &str = "0.16.5";
-pub const BRIDGE_REVISION: &str = "zcode-native-node-transport-v7";
+pub const BRIDGE_REVISION: &str = "zcode-native-node-transport-v8";
 
 pub fn is_bundle_executable(path: &Path) -> bool {
     path.file_name()
