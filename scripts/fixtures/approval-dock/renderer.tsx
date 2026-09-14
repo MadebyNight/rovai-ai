@@ -2,7 +2,9 @@ import { useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ActionApprovalView } from '@contracts'
 import { ApprovalDock } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
+import { MobileLayoutProvider } from '../../../apps/desktop/src/renderer/src/MobileLayout'
 import '../../../apps/desktop/src/renderer/src/styles.css'
+import '../../../apps/web/src/mobile.css'
 
 const reason = 'Runtime requests project access. Review the exact command before allowing it. '
   + 'The permission applies to the selected workspace and must not cover other projects. '
@@ -28,17 +30,25 @@ const initial: ActionApprovalView[] = [1, 2, 3].map(index => ({
 let complete: () => void
 let refresh: () => void
 let setTarget: (id: string | null) => void
+let setMobile: (value: boolean) => void
+let reset: () => void
+let manyOptions: () => void
 let focusSerial = 0
 const presented: number[] = []
 
 function Fixture() {
+  const [mobile, updateMobile] = useState(false)
   const [approvals, setApprovals] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [focus, setFocus] = useState<{ id: string | null; serial: number } | null>(null)
   const dockRef = useRef<HTMLElement>(null)
   refresh = () => setApprovals(previous => previous.map(item => ({ ...item })))
   setTarget = id => setFocus({ id, serial: ++focusSerial })
-  return <div className="camp-workspace" style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+  setMobile = updateMobile
+  reset = () => { setApprovals(initial); setBusy(false); setFocus(null); requests.length = 0 }
+  manyOptions = () => setApprovals(previous => previous.map(item => ({ ...item, options: Array.from({ length: 12 }, (_, index) => ({ ...item.options[0], optionId: `extended-${index}`, label: `Runtime custom decision ${index + 1} with its complete native label` })) })))
+  return <MobileLayoutProvider value={mobile}><div className={mobile ? 'app-shell' : undefined} style={mobile ? undefined : { height: '100vh' }}>
+    <div className="camp-workspace" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
     <div style={{ display: 'flex', gap: 12, padding: 12 }}>
       <button id="locate" onClick={() => setTarget(null)}>定位审批</button>
       <label>消息草稿 <input id="draft" defaultValue="Keep my focus" /></label>
@@ -60,17 +70,20 @@ function Fixture() {
         <form className="composer"><div className="composer-box">Composer remains available</div></form>
       </div>
     </div>
-  </div>
+  </div></div></MobileLayoutProvider>
 }
 
 Object.assign(window, { approvalTest: {
   complete: () => complete(), refresh: () => refresh(), locate: (id: string) => setTarget(id),
+  setMobile: (value: boolean) => setMobile(value), reset: () => reset(),
+  manyOptions: () => manyOptions(),
   setWidth: (width: number) => { document.getElementById('approval-layout')!.style.width = `${width}px` },
   settle: () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 20)))) ,
   snapshot: () => {
     const summary = document.querySelector<HTMLElement>('[data-approval-summary]')
     const reasonNode = document.querySelector<HTMLElement>('.approval-reason')
     const toggle = document.querySelector<HTMLButtonElement>('.approval-reason-toggle')
+    const codeNode = document.querySelector<HTMLElement>('.approval-dock-scroll > pre')
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('.runtime-option')]
     const bounds = (selector: string) => document.querySelector(selector)?.getBoundingClientRect().toJSON()
     return {
@@ -85,6 +98,13 @@ Object.assign(window, { approvalTest: {
       reasonToggle: Boolean(toggle), expanded: toggle?.getAttribute('aria-expanded'),
       dock: bounds('.approval-dock'), console: bounds('.execution-drawer'),
       code: bounds('.approval-dock-scroll > pre'),
+      codeText: document.querySelector('.approval-dock-scroll > pre')?.textContent,
+      expectedCode: JSON.stringify(initial.find(item => item.id === summary?.dataset.approvalSummary)?.canonicalInput, null, 2),
+      codeFocusable: document.querySelector<HTMLElement>('.approval-dock-scroll > pre')?.tabIndex === 0,
+      codeBackground: codeNode ? getComputedStyle(codeNode).backgroundColor : null,
+      dockShadow: getComputedStyle(document.querySelector('.approval-dock')!).boxShadow,
+      touchTargets: [...document.querySelectorAll('.approval-dock button')].map(node => ({label: node.getAttribute('aria-label') ?? node.textContent, ...node.getBoundingClientRect().toJSON()})),
+      composer: bounds('.composer'), controls: bounds('.conversation-controls'),
       codeScrollable: (document.querySelector('.approval-dock-scroll > pre')?.scrollWidth ?? 0)
         > (document.querySelector('.approval-dock-scroll > pre')?.clientWidth ?? 0),
       pageOverflow: document.documentElement.scrollWidth > window.innerWidth,

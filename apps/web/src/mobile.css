@@ -12,6 +12,7 @@
 :root[data-mobile-web="true"][data-theme="night"] { --mobile-page: #000; }
 html[data-mobile-web="true"] :is(body, #root) { min-width: 0; background: var(--mobile-page); }
 html[data-mobile-web="true"] .app-shell {
+  container: mobile-workbench / size;
   position: fixed; inset: var(--mobile-viewport-top, 0px) 0 auto; display: flex; flex-direction: column;
   width: 100%; height: var(--mobile-viewport-height, 100dvh); min-width: 0; overflow: hidden;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); background: var(--mobile-page);
@@ -140,6 +141,33 @@ html[data-mobile-web="true"] .composer-attachment-button { min-width: 36px; widt
 html[data-mobile-web="true"] .composer-attachment-button svg { width: 20px; height: 20px; }
 html[data-mobile-web="true"] .composer-reply-region { padding: 4px 6px 2px; }
 html[data-mobile-web="true"] .composer-hint { display: none; }
+
+/* The same approval request and native decisions, arranged for a phone. */
+html[data-mobile-web="true"] .approval-dock { max-width: calc(100% - 24px); max-height: min(430px, 56cqh); margin: 0 auto 4px; border-radius: 10px; }
+html[data-mobile-web="true"] .approval-dock > header { min-height: 64px; padding: 6px 8px 6px 12px; gap: 4px; align-items: center; flex-wrap: wrap; }
+html[data-mobile-web="true"] .approval-dock-heading { flex-direction: column; align-items: flex-start; gap: 2px; flex-basis: 120px; }
+html[data-mobile-web="true"] .approval-dock-heading strong { width: 100%; font-size: 13px; font-weight: 600; }
+html[data-mobile-web="true"] .approval-dock-heading span { max-width: 100%; font-size: 11px; line-height: 1.5; }
+html[data-mobile-web="true"] .approval-dock > header nav { gap: 4px; margin-left: auto; }
+html[data-mobile-web="true"] .approval-dock > header nav button { width: 44px; height: 44px; font-size: 16px; touch-action: manipulation; }
+html[data-mobile-web="true"] .approval-dock > header nav > span { font-size: 11px; font-variant-numeric: tabular-nums; }
+html[data-mobile-web="true"] .approval-dock-scroll { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; overflow: auto; overscroll-behavior: contain; }
+html[data-mobile-web="true"] .approval-reason-wrap { flex: 0 0 auto; max-height: 110px; margin: 0; overflow: auto; overscroll-behavior: contain; }
+html[data-mobile-web="true"] .approval-reason { font-size: 12px; line-height: 1.5; }
+html[data-mobile-web="true"] .approval-reason-toggle { min-width: 44px; }
+html[data-mobile-web="true"] .approval-dock-scroll > pre { flex: 0 1 auto; min-height: 48px; max-height: 160px; margin: 0; padding: 10px; }
+html[data-mobile-web="true"] .approval-dock-actions { flex: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+html[data-mobile-web="true"] .approval-dock .runtime-option { min-height: 44px; padding: 8px 6px; color: var(--ink); background: var(--surface); font-size: 12px; line-height: 1.35; text-align: center; touch-action: manipulation; }
+html[data-mobile-web="true"] .approval-dock .runtime-option:hover:not(:disabled) { border-color: var(--control-line); background: var(--neutral-hover); }
+html[data-mobile-web="true"] .approval-option-error { font-size: 12px; line-height: 1.5; }
+/* The shell tracks visualViewport, including a raised software keyboard. */
+@container mobile-workbench (max-height: 580px) {
+  html[data-mobile-web="true"] .camp-workspace:has(.approval-dock):not([data-mobile-panel]) > .workspace-grid { grid-template-rows: minmax(0, 1fr) minmax(0, auto); }
+  html[data-mobile-web="true"] .conversation-controls:has(.approval-dock) { min-height: 0; max-height: 100%; overflow-y: auto; overscroll-behavior-y: contain; }
+  html[data-mobile-web="true"] .approval-dock { max-height: 55cqh; }
+  html[data-mobile-web="true"] .approval-dock-scroll { display: block; overflow: auto; }
+  html[data-mobile-web="true"] .approval-dock-scroll > pre { max-height: 100px; margin-block: 8px; }
+}
 html[data-mobile-web="true"] :is(.composer-recipient-summary, .composer-route-slot) { font-size: 11px; }
 html[data-mobile-web="true"] .single-chat-popover { inset: 0; width: 100%; height: 100%; border: 0; border-radius: 0; background: var(--mobile-page); }
 html[data-mobile-web="true"] :is(.single-chat-heading, .camp-detail-heading) > button { display: grid; place-items: center; width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; }

@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-camp-workspace
 status: accepted
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 # Camp 会话工作区
@@ -757,11 +757,16 @@ Lightbox。读取失败沿用当前图片错误展示，不新增持久状态、
 Dock 内以队列计数和上一项／下一项导航呈现多项请求，保留 Runtime 原生选项、范围和决定身份。
 Header/通知摘要只展开、定位并聚焦 Dock，不改变执行台位置或 Run selection，不强制切换详情内容；浮层按外部焦点规则收起。Approval 不进入消息时间线。
 
-Dock 与底部执行台共用会话列全宽，不跟随正文或 Composer 的内缩轨道。单行顶栏显示当前请求摘要、
+Desktop / 宽屏 Web 的 Dock 与底部执行台共用会话列全宽，不跟随正文或 Composer 的内缩轨道。单行顶栏显示当前请求摘要、
 当前队员与 Runtime、队列导航和收起入口；命令与请求 JSON 原样展示，达到内容高度上限后局部滚动。
 选项使用紧凑内容宽度按钮，严格保留 Runtime 的原始顺序、原生标签和 `optionId`，不显示 `consequence`，
 也不通过翻译或术语替换改写 Runtime 文案。ACP 缺少有效 `name` / `label` 时直接展示 `optionId`；
 Codex 无原生显示标签的决定由 Adapter 提供固定英文标签，响应值和作用域不变。
+
+Dock 保留橙色顶部，以中性边框界定请求，移除左侧橙线和浮层阴影。原始 JSON 的底色与执行台 command
+结果框共用 `--shell-result-canvas`，使用 11.5px 等宽文字，保留空白与局部滚动；请求区可由键盘聚焦和滚动。
+按钮保留原生标签与顺序，使用中性边框、500 字重和明确的按下／提交中状态。
+手机的上下标题、44px 控件、双列选项与可视高度适配见 [Mobile WebUI](../host-web-mobile.md#对话与执行)。
 
 翻页保持刚触发的导航按钮焦点。边界按钮使用 `aria-disabled`，仍可保持焦点但触发无操作。
 顶栏定位以及当前审批结束后接续下一项时只聚焦请求摘要；初次显示和普通刷新不主动聚焦决策按钮。
