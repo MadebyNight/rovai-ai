@@ -426,7 +426,7 @@ test('standalone Server phone settings expose update controls, initial login and
   const output = process.env.ROVAI_MOBILE_OUTPUT ?? join(fixture, 'evidence')
   await mkdir(output, { recursive: true })
   console.log(JSON.stringify({ channel: 'automatic_acceptance', dataDir, skillLibraryRoot: join(dataDir, 'skills'), mcpConfigPath: join(dataDir, 'mcp.json'), chromeProfile: join(fixture, 'chrome'), runtime: false }))
-  const child = spawn(join(repository, 'target/debug/rovai-server'), ['--data-dir', dataDir, '--web-ui', join(repository, 'out/web'), '--listen', '127.0.0.1:0'], { cwd: fixture, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.env.ROVAI_SERVER_BIN ?? join(repository, 'target/debug/rovai-server'), ['--data-dir', dataDir, '--web-ui', process.env.ROVAI_WEB_UI ?? join(repository, 'out/web'), '--listen', '127.0.0.1:0'], { cwd: fixture, stdio: ['ignore', 'pipe', 'pipe'] })
   let log = ''; let readyResolve, readyReject
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject })
   const collect = data => { log = (log + data).slice(-16000); if (log.includes('· Ready')) readyResolve() }

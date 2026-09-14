@@ -50,7 +50,7 @@ pub(super) fn prepare(
         "installed version mismatch"
     );
     ensure!(
-        !data.starts_with(root),
+        !fs::canonicalize(data)?.starts_with(fs::canonicalize(root)?),
         "Server data must be outside its program directory before updating"
     );
     let prefix = staging.join("verified");

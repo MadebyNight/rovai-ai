@@ -55,6 +55,25 @@ async fn update_pipeline_keeps_the_running_program_until_verified_and_durably_se
         env!("CARGO_PKG_VERSION")
     );
     fs::write(root.join("package-info"), &old).unwrap();
+    let nested_data = root.join("data");
+    fs::create_dir(&nested_data).unwrap();
+    let alias = fixture.join("program-alias");
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    assert!(
+        install::prepare(
+            &root,
+            &alias.join("data"),
+            &fixture,
+            version,
+            target,
+            &"a".repeat(64),
+            vec![]
+        )
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("outside its program directory")
+    );
     fs::write(data.join("sentinel"), "retained data").unwrap();
     fs::write(
         package.join("package-info"),
