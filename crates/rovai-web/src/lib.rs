@@ -51,6 +51,7 @@ struct WebState {
     sessions: Arc<Sessions>,
     network: Arc<network::Network>,
     assets: PathBuf,
+    cached_assets: Arc<std::collections::HashMap<String, String>>,
     epoch: String,
     requests: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
@@ -112,12 +113,14 @@ impl WebServer {
             .context("Web address could not be bound")?;
         let address = listener.local_addr()?;
         let network = Arc::new(network::Network::new(address, config.public_origin)?);
+        let cached_assets = Arc::new(load_asset_cache(&assets).await);
         let state = WebState {
             core,
             channels,
             sessions: sessions.clone(),
             network: network.clone(),
             assets,
+            cached_assets,
             epoch: new_token()?,
             requests: Arc::new(Semaphore::new(64)),
             uploads: Arc::new(Semaphore::new(4)),
@@ -207,6 +210,7 @@ fn routes(state: WebState) -> Router {
             post(avatars::avatar).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
         )
         .route("/files", post(resources::files))
+        .route("/files/bytes", post(resources::binary))
         .route("/attachments", post(resources::attachment))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     Router::new()
@@ -244,8 +248,16 @@ async fn boundary(State(state): State<WebState>, req: Request, next: Next) -> Re
     } else {
         next.run(req).await
     };
+    let immutable = response.extensions().get::<ImmutableAsset>().is_some();
     let headers = response.headers_mut();
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if immutable {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-store"
+        }),
+    );
     headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"));
     if preview_shell && response.status().is_success() {
         // Only this credential-free bootstrap gets executable content. CSP sandbox
@@ -629,7 +641,68 @@ async fn static_file(state: &WebState, relative: &str) -> Response {
         return error(StatusCode::NOT_FOUND, "asset_not_found");
     }
     match tokio::fs::read(path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, content_type)], Body::from(bytes)).into_response(),
+        Ok(bytes) => {
+            use sha2::{Digest, Sha256};
+            let immutable = state
+                .cached_assets
+                .get(relative)
+                .is_some_and(|expected| *expected == format!("{:x}", Sha256::digest(&bytes)));
+            let mut response =
+                ([(header::CONTENT_TYPE, content_type)], Body::from(bytes)).into_response();
+            if immutable {
+                response.extensions_mut().insert(ImmutableAsset);
+            }
+            response
+        }
         Err(_) => error(StatusCode::NOT_FOUND, "asset_not_found"),
     }
+}
+
+#[derive(Clone, Copy)]
+struct ImmutableAsset;
+
+async fn load_asset_cache(root: &std::path::Path) -> std::collections::HashMap<String, String> {
+    use tokio::io::AsyncReadExt;
+    let Ok(file) = tokio::fs::File::open(root.join("asset-cache.json")).await else {
+        return Default::default();
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take(256 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .is_err()
+        || bytes.len() > 256 * 1024
+    {
+        return Default::default();
+    }
+    let Ok(mut entries) =
+        serde_json::from_slice::<std::collections::HashMap<String, String>>(&bytes)
+    else {
+        return Default::default();
+    };
+    entries.retain(|path, digest| {
+        let Some(name) = path
+            .strip_prefix("assets/")
+            .filter(|name| !name.contains(['/', '\\']))
+        else {
+            return false;
+        };
+        let Some((stem, _extension)) = name.rsplit_once('.') else {
+            return false;
+        };
+        let Some(hash) = stem
+            .get(stem.len().saturating_sub(9)..)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+        else {
+            return false;
+        };
+        hash.len() == 8
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && digest.len() == 64
+            && digest.bytes().all(|b| b.is_ascii_hexdigit())
+    });
+    entries
 }

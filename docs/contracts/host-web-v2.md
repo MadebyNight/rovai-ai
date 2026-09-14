@@ -222,7 +222,11 @@ separate from uploading a file chosen on the browser device. Directory listing i
 
 `POST /uploads` accepts multipart `intent` JSON and exactly one `file`. Intent contains an original UUID command ID,
 Camp, exact Draft revision, display name, byte count and SHA-256. The file limit is 20 MiB, with four uploads in flight.
-The endpoint creates a private OS temporary file and asks Core to atomically bind a source reference and receipt to the
+The browser hashes bounded 256 KiB slices with a UI yield between chunks, preserving the SHA-256 value and exact
+retry intent. Host consumes multipart chunks into a private OS temporary file through a 64 KiB writer while computing
+the incremental digest; it does not collect a whole file with `field.bytes()`. Either multipart field order is accepted.
+An interrupted, invalid, oversized or replayed unbound spool is removed. Once binding is submitted, an unknown result
+retains its source until the existing receipt rules permit cleanup. The endpoint asks Core to atomically bind a source reference and receipt to the
 verified editor's Draft. The digest excludes the physical temporary path, so a duplicate physical upload can replay
 the same command. `POST /uploads/reconcile` reads that binding receipt. A detached binding attempt survives disconnect.
 
@@ -231,7 +235,7 @@ accepts a reference, deleting a reference, failed send, logout or shutdown does 
 Message transfers use the existing Core transactions. OS cleanup can make history unavailable. No permanent user asset
 store is introduced; [Camp Attachment v9](camp-attachment-v9.md) and Agent Managed artifacts keep their lifetimes.
 
-`POST /files` and `POST /attachments` use exact Core owner locators or Core-resolved workspace/evidence sources. Every
+`POST /files`, `POST /files/bytes` and `POST /attachments` use exact Core owner locators or Core-resolved workspace/evidence sources. Every
 read revalidates source ownership; opaque handles/reopen tokens are scoped to the editor and Web instance. An exact external file admitted by Core follows Desktop's existing file semantics: its canonical parent is an ephemeral
 child/watch boundary, not a directory grant. Relative resources are resolved under that boundary; canonical checks and
 handle-based no-follow opening prevent replacement from changing the retained source.
@@ -256,7 +260,35 @@ restore requests, matching Desktop. Local PNG/JPEG/WebP images are read lazily t
 generation-bound parent. The browser creates only in-memory object URLs, revoked on unmount. File metadata polling
 marks open tabs changed; reload reauthorizes the source and replaces its generation. Native open/reveal actions are
 absent, while download and displayed-path copy use browser controls. Attachment storage paths stay hidden.
-Static assets remain separate from user files.
+Metadata, paging, line resolution and parent-generation checks use a 64 KiB scan buffer. Page reads retain at most
+256 KiB plus three UTF-8 boundary bytes; metadata/line/parent checks do not retain the whole body. Metadata records
+UTF-8 validity and one line-count entry per 64 KiB block. A subsequent read may reuse those facts only after a fresh
+full SHA-256 matches their generation; an equal size/mtime never establishes equivalence. This removes repeated
+classification and prefix-line scans, including open → first read, but does not eliminate full-file digest I/O per request.
+No source bytes or files are cached across requests, and the existing size, no-follow, source and generation fences remain.
+
+Binary actions `readBinary`, `readChildImage` and preview `download` use `POST /files/bytes` with the same closed
+`{action, request}` body. Success returns original bytes, MIME, `x-rovai-content-generation`, JSON-valued
+`x-rovai-content-version`, and an encoded Content-Disposition filename for downloads. File failures retain the JSON
+operation-result envelope; the JSON `/files` endpoint no longer serves Base64 binary actions. The browser uses a Blob
+or byte array without JSON/Base64 conversion. Blob consumption still buffers the complete bounded response.
+
+After confirmed upload binding/reconciliation, a ConsoleClient may retain up to 16 local File objects totaling 40 MiB.
+A thumbnail still opens the exact source at Host, confirming ownership, availability, byte count and generation.
+Only a matching Camp/digest/size uses the local File as a Blob; missing/changed sources, eviction, another client or
+page reload use ordinary Host reads. This optional in-memory cache is cleared with authentication and never changes
+source lifetime. Shared attachment cards and gallery accept this browser Blob without copying it into a byte array.
+
+File polling runs every two seconds only while the client retains a handle and an update subscriber. Releasing the
+last handle stops the timer; reopening resumes it. Existing in-flight overlap protection, external-update events and
+background handling remain; hiding a preview alone does not stop a retained handle's checks.
+
+Static assets remain separate from user files. Only content-hashed emitted build files listed in `asset-cache.json`
+receive `Cache-Control: public, max-age=31536000, immutable`, and only when their actual bytes match the build's
+SHA-256 inventory. The build hashes final written output after Vite's preload transforms. Unlisted files, unhashed
+names, digest mismatches, missing/error responses, page entries (including `/preview.html`), authentication, business
+responses, attachments and private files retain `no-store`. The whole `/assets/` directory is not a cache grant.
+Entry/version discovery remains online; no service worker or offline application is introduced.
 
 ## Shared presentation and verification
 

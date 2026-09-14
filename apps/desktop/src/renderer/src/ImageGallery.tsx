@@ -150,7 +150,7 @@ async function readImagePayload(
     const result = await client.composerAttachments.preview(source.locator)
     onAttachmentAvailability?.(result.availability)
     if (!result.preview) return null
-    blob = new Blob(
+    blob = 'blob' in result.preview ? result.preview.blob : new Blob(
       [Uint8Array.from(result.preview.bytes).buffer],
       { type: result.preview.mediaType }
     )

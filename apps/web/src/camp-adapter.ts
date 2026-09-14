@@ -2,7 +2,7 @@ import { createBrowserHtmlPreview } from './html-preview'
 import { browserMemberAvatars } from './member-avatars'
 import type { CampClient } from '../../desktop/src/renderer/src/camp-client'
 import type { BusinessEnvironment } from '../../desktop/src/renderer/src/business-environment'
-import type { SingleChatSnapshot, CoreMethod, FilePreviewApi, FilePreviewExternalUpdateEvent, FilePreviewOperationResult, FilePreviewBinaryContent, OpenFilePreviewResult } from '@contracts'
+import type { SingleChatSnapshot, CoreMethod, FilePreviewApi, FilePreviewExternalUpdateEvent, FilePreviewOperationResult, OpenFilePreviewResult } from '@contracts'
 import { ConsoleClient, WEB_OPERATIONS, type WebOperation } from './client'
 import { createBrowserNavigationHistory } from './navigation-history'
 import { browserEditingRecovery } from './editing-recovery'
@@ -59,12 +59,13 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     attachments: { kind: 'download', download: unimplemented }
   }
   const fileListeners = new Set<(event: FilePreviewExternalUpdateEvent) => void>()
+  const names = new Map<string, string>()
   let watchTimer: ReturnType<typeof setInterval> | null = null
   let watchGeneration = 0
   let watching = false
   let lastWatch = 0
   const refreshUpdates = async () => {
-    if (watching || fileListeners.size === 0 || Date.now() - lastWatch < 1500) return
+    if (watching || names.size === 0 || fileListeners.size === 0 || Date.now() - lastWatch < 1500) return
     const generation = watchGeneration
     watching = true; lastWatch = Date.now()
     try {
@@ -76,11 +77,18 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     finally { watching = false }
   }
 
-  const names = new Map<string, string>()
+  const syncWatch = () => {
+    if (fileListeners.size > 0 && names.size > 0) {
+      if (watchTimer === null) watchTimer = setInterval(() => void refreshUpdates(), 2000)
+    } else if (watchTimer !== null) {
+      clearInterval(watchTimer); watchTimer = null; watchGeneration += 1; lastWatch = 0
+    }
+  }
   const opened = async (action: 'open' | 'restore' | 'reopen', request: unknown) => {
     const result = await transport.files<FilePreviewOperationResult<OpenFilePreviewResult>>(action, request)
     if (result.ok && result.value.kind === 'file_preview') {
       names.set(result.value.file.handleId, result.value.file.displayPath)
+      syncWatch()
       if (request && typeof request === 'object' && 'rawReference' in request && typeof request.rawReference === 'string') {
         result.value.file.target = parseFileReference(request.rawReference)?.target
       }
@@ -93,25 +101,26 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     readText: request => transport.files('readText', request),
     readPage: request => transport.files('readPage', request), resolveLine: request => transport.files('resolveLine', request),
     readChildImage: async request => {
-      const result = await transport.files<FilePreviewOperationResult<Omit<FilePreviewBinaryContent, 'bytes'> & { base64: string }>>('readChildImage', request)
+      const result = await transport.fileBytes('readChildImage', request)
       if (!result.ok) return result
-      return { ok: true, value: { ...result.value, bytes: Uint8Array.from(atob(result.value.base64), char => char.charCodeAt(0)) } }
+      const { blob, ...metadata } = result.value
+      return { ok: true, value: { ...metadata, bytes: new Uint8Array(await blob.arrayBuffer()) } }
     },
     readBinary: async request => {
-      const result = await transport.files<FilePreviewOperationResult<Omit<FilePreviewBinaryContent, 'bytes'> & { base64: string }>>('readBinary', request)
+      const result = await transport.fileBytes('readBinary', request)
       if (!result.ok) return result
-      return { ok: true, value: { ...result.value, bytes: Uint8Array.from(atob(result.value.base64), char => char.charCodeAt(0)) } }
+      const { blob, ...metadata } = result.value
+      return { ok: true, value: { ...metadata, bytes: new Uint8Array(await blob.arrayBuffer()) } }
     },
     prepareHtmlSite: request => createBrowserHtmlPreview(transport, request),
     releaseHtmlSite: async () => ({ released: true }), // The document belongs to the mounted iframe; no server site or object URL survives it.
     prepareHtml: unimplemented, // Legacy Desktop transport; the shared viewer uses prepareHtmlSite.
     reload: request => transport.files('reload', request),
-    release: async request => { names.delete(request.handleId); return transport.files('release', request) },
+    release: async request => { names.delete(request.handleId); syncWatch(); return transport.files('release', request) },
     download: async request => {
-      const result = await transport.files<FilePreviewOperationResult<{ base64: string; name: string }>>('download', request)
+      const result = await transport.fileBytes('download', request)
       if (!result.ok) return result
-      const bytes = Uint8Array.from(atob(result.value.base64), char => char.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }))
+      const url = URL.createObjectURL(result.value.blob)
       const link = document.createElement('a'); link.href = url; link.download = result.value.name; link.click()
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
       return { ok: true, value: { started: true } }
@@ -126,15 +135,8 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     chooseAuthorizedRoot: async () => ({ ok: false, error: { code: 'authorization_required', message: '请选择文件所在的 Host 工作目录后重试。', retryable: true } }),
     onExternalUpdate: listener => {
       fileListeners.add(listener)
-      if (watchTimer === null) watchTimer = setInterval(() => void refreshUpdates(), 2000)
-      return () => {
-        fileListeners.delete(listener)
-        if (fileListeners.size === 0) {
-          watchGeneration += 1
-          if (watchTimer !== null) clearInterval(watchTimer)
-          watchTimer = null
-        }
-      }
+      syncWatch()
+      return () => { fileListeners.delete(listener); syncWatch() }
     }
   }
   client.composerAttachments.preview = async locator => {
@@ -144,8 +146,12 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     const file = result.value.file
     try {
       if (file.kind !== 'image') return { preview: null, availability: 'available' }
-      const image = await files.readBinary({ handleId: file.handleId, expectedGeneration: file.contentGeneration })
-      return image.ok ? { preview: { bytes: image.value.bytes, mediaType: image.value.mime }, availability: 'available' } : { preview: null, availability: 'unreadable' }
+      // Open has just reauthorized the exact binding and hashed the Host source.
+      // Local bytes are usable only when that confirmation matches the upload.
+      const local = transport.confirmedUpload(locator.campId, file.contentGeneration, file.size)
+      if (local) return { preview: { blob: local }, availability: 'available' }
+      const image = await transport.fileBytes('readBinary', { handleId: file.handleId, expectedGeneration: file.contentGeneration })
+      return image.ok ? { preview: { blob: image.value.blob }, availability: 'available' } : { preview: null, availability: 'unreadable' }
     } finally { await files.release({ handleId: file.handleId }) }
   }
   client.attachments = { kind: 'download', download: async locator => {

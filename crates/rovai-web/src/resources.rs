@@ -1,7 +1,8 @@
 //! Browser read capabilities reuse Core's exact-source authorization. Paths and
 //! handles never authorize another source or another editing client.
 use super::*;
-use base64::Engine;
+mod content;
+use content::Selection;
 use rovai_core::draft_client::DraftClient;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Mutex};
@@ -21,6 +22,7 @@ struct Handle {
     name: String,
     token: String,
     version: Value,
+    analysis: Option<Arc<content::Analysis>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -221,34 +223,12 @@ async fn reauthorize(state: &WebState, client: &DraftClient, handle: &Handle) ->
     Ok(())
 }
 
-async fn content(path: &std::path::Path) -> Result<(Vec<u8>, Value, String)> {
-    use tokio::io::AsyncReadExt;
-    let resolved_path = path.to_path_buf();
-    let file = tokio::task::spawn_blocking(move || {
-        rovai_core::local_attachment_snapshot::open_resolved_file_without_following(&resolved_path)
-    })
-    .await??;
-    let mut file = tokio::fs::File::from_std(file);
-    let meta = file.metadata().await?;
-    ensure!(meta.is_file(), "not_regular_file");
-    ensure!(meta.len() <= uploads::MAX_BYTES as u64, "file_too_large");
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(uploads::MAX_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    ensure!(bytes.len() <= uploads::MAX_BYTES, "file_too_large");
-    let after = file.metadata().await?;
-    ensure!(
-        meta.len() == after.len() && meta.modified()? == after.modified()?,
-        "read_failed"
-    );
-    let generation: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    let version = json!({"size":bytes.len(), "mtimeMs":meta.modified()?.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()});
-    Ok((bytes, version, generation))
+async fn content(
+    path: &std::path::Path,
+    permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+) -> Result<(Vec<u8>, Value, String)> {
+    let value = content::read(path, Selection::All, permit).await?;
+    Ok((value.bytes, value.version, value.generation))
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -292,26 +272,28 @@ fn page_range(text: &str, offset: u64, maximum: u64) -> Result<(usize, usize)> {
     Ok((offset, end))
 }
 
-async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
-    let (bytes, version, generation) = content(&handle.path).await?;
+async fn metadata(
+    handle: &Handle,
+    handle_id: &str,
+    permit: &Arc<tokio::sync::OwnedSemaphorePermit>,
+) -> Result<(Value, Arc<content::Analysis>)> {
+    let content = content::read(&handle.path, Selection::Metadata, Some(permit.clone())).await?;
+    let (version, generation) = (content.version, content.generation);
     let extension = std::path::Path::new(&handle.name)
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default()
         .to_lowercase();
-    let (kind, mime) = if let Some(mime) = image_mime(&bytes) {
+    let (kind, mime) = if let Some(mime) = image_mime(&content.prefix) {
         ("image", mime)
     } else {
-        ensure!(
-            !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
-            "decode_failed"
-        );
+        ensure!(!content.has_nul && content.text, "decode_failed");
         // HTML bytes travel only through authenticated, generation-bound reads.
         // The browser renders them in an opaque sandbox; standalone SVG stays text.
         (
             if matches!(extension.as_str(), "html" | "htm") {
                 "html"
-            } else if bytes.len() > 2 * 1024 * 1024 {
+            } else if content.size > 2 * 1024 * 1024 {
                 "paged_text"
             } else if matches!(extension.as_str(), "md" | "markdown") {
                 "markdown"
@@ -341,7 +323,7 @@ async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
         (handle.path.to_string_lossy().into_owned(), "external")
     };
     let mut result = json!({"handleId":handle_id,"reopenToken":handle.token,"previewKey":preview_key,
-        "displayPath":display_path,"pathPresentation":presentation,"fileName":handle.name,"size":bytes.len(),"mime":mime,"extension":extension,"kind":kind,
+        "displayPath":display_path,"pathPresentation":presentation,"fileName":handle.name,"size":content.size,"mime":mime,"extension":extension,"kind":kind,
         "hasExternalUpdate":false,"contentVersion":version,"contentGeneration":generation,"capabilities":["read","download"]});
     if let Some(restore) = &handle.restore {
         result["restoreRequest"] = restore.clone();
@@ -352,7 +334,7 @@ async fn metadata(handle: &Handle, handle_id: &str) -> Result<Value> {
             .expect("capabilities")
             .push(json!("read_child"));
     }
-    Ok(result)
+    Ok((result, content.analysis.expect("metadata analysis")))
 }
 
 pub async fn files(
@@ -364,7 +346,7 @@ pub async fn files(
     let Ok(_permit) = state.uploads.clone().try_acquire_owned() else {
         return Json(failure("read_failed"));
     };
-    let result = file_operation(&state, &client, body).await;
+    let result = file_operation(&state, &client, body, Arc::new(_permit)).await;
     Json(result.unwrap_or_else(|error| {
         failure(match error.to_string().as_str() {
             "file_too_large" => "file_too_large",
@@ -380,6 +362,7 @@ async fn file_operation(
     state: &WebState,
     client: &DraftClient,
     body: FileRequest,
+    permit: Arc<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<Value> {
     let request = body.request;
     if body.action == "updates" {
@@ -475,6 +458,7 @@ async fn file_operation(
                 restore,
                 token: new_token()?,
                 version: Value::Null,
+                analysis: None,
                 ..parent
             }
         } else {
@@ -501,9 +485,11 @@ async fn file_operation(
                 name: resolved.name,
                 token: new_token()?,
                 version: Value::Null,
+                analysis: None,
             }
         };
-        let file = metadata(&handle, &id).await?;
+        let (file, analysis) = metadata(&handle, &id, &permit).await?;
+        handle.analysis = Some(analysis);
         handle.version = file["contentVersion"].clone();
         let mut handles = state.files.0.lock().expect("file registry poisoned");
         ensure!(
@@ -554,7 +540,7 @@ async fn file_operation(
             Some(handle.token.as_str()) == request["reopenToken"].as_str(),
             "source_not_authorized"
         );
-        let value = metadata(&handle, &id).await?;
+        let (value, analysis) = metadata(&handle, &id, &permit).await?;
         if let Some(current) = state
             .files
             .0
@@ -563,74 +549,67 @@ async fn file_operation(
             .get_mut(&id)
         {
             current.version = value["contentVersion"].clone();
+            current.analysis = Some(analysis);
         }
         return Ok(
             json!({"ok":true,"value":if body.action=="reopen" { json!({"kind":"file_preview","file":value}) } else { value }}),
         );
     }
-    let (bytes, version, generation) = content(&handle.path).await?;
+    let selection = match body.action.as_str() {
+        "readPage" => Selection::Page {
+            offset: request["offset"].as_u64().context("read_failed")?,
+            maximum: request
+                .get("maxBytes")
+                .map(|v| v.as_u64().context("read_failed"))
+                .transpose()?
+                .unwrap_or(256 * 1024)
+                .clamp(1, 256 * 1024),
+        },
+        "resolveLine" => Selection::Line {
+            requested: request["line"]
+                .as_u64()
+                .filter(|line| *line > 0)
+                .context("read_failed")?,
+        },
+        "readHtml" | "readText" => Selection::All,
+        _ => anyhow::bail!("source_not_authorized"),
+    };
+    let known = handle.analysis.filter(|analysis| {
+        Some(analysis.generation.as_str()) == request["expectedGeneration"].as_str()
+    });
+    let content = content::read_known(&handle.path, selection, known, Some(permit)).await?;
+    let (bytes, version, generation) = (content.bytes, content.version, content.generation);
     ensure!(
         Some(generation.as_str()) == request["expectedGeneration"].as_str(),
         "read_failed"
     );
     match body.action.as_str() {
-        "readChildImage" => {
-            ensure!(handle.allow_children, "source_not_authorized");
-            let candidate = reference_path(
-                request["rawReference"]
-                    .as_str()
-                    .context("source_not_authorized")?,
-                handle.path.parent().context("source_not_authorized")?,
-            )?;
-            let path = tokio::fs::canonicalize(candidate)
-                .await
-                .context("file_not_found")?;
-            ensure!(path.starts_with(&handle.root), "outside_authorized_root");
-            let (bytes, version, generation) = content(&path).await?;
-            let mime = image_mime(&bytes).context("decode_failed")?;
-            Ok(
-                json!({"ok":true,"value":{"base64":base64::engine::general_purpose::STANDARD.encode(bytes),"mime":mime,"contentGeneration":generation,"contentVersion":version}}),
-            )
-        }
-        "download" => Ok(
-            json!({"ok":true,"value":{"base64":base64::engine::general_purpose::STANDARD.encode(bytes),"name":handle.name}}),
-        ),
         "readPage" => {
-            let offset = request["offset"].as_u64().context("read_failed")?;
-            let maximum = request
-                .get("maxBytes")
-                .map(|v| v.as_u64().context("read_failed"))
-                .transpose()?
-                .unwrap_or(256 * 1024)
-                .clamp(1, 256 * 1024);
-            let text = std::str::from_utf8(&bytes).context("decode_failed")?;
-            let (offset, end) = page_range(text, offset, maximum)?;
-            let line = bytes[..offset]
-                .iter()
-                .filter(|byte| **byte == b'\n')
-                .count()
-                + 1;
+            let Selection::Page { offset, maximum } = selection else {
+                unreachable!()
+            };
+            ensure!(content.text, "decode_failed");
+            ensure!(offset <= content.size as u64, "read_failed");
+            // The window includes up to three extra bytes to finish its last
+            // scalar; a non-boundary start is always rejected.
+            let text = match std::str::from_utf8(&bytes) {
+                Ok(text) => text,
+                Err(error) if error.error_len().is_none() => {
+                    std::str::from_utf8(&bytes[..error.valid_up_to()])?
+                }
+                Err(_) => anyhow::bail!("read_failed"),
+            };
+            let (_, local_end) = page_range(text, 0, maximum)?;
+            let end = offset as usize + local_end;
             Ok(
-                json!({"ok":true,"value":{"text":&text[offset..end],"startOffset":offset,"endOffset":end,"startLine":line,
-                "hasPrevious":offset>0,"hasNext":end<bytes.len(),"contentGeneration":generation,"contentVersion":version}}),
+                json!({"ok":true,"value":{"text":&text[..local_end],"startOffset":offset,"endOffset":end,"startLine":content.line,
+                "hasPrevious":offset>0,"hasNext":end<content.size,"contentGeneration":generation,"contentVersion":version}}),
             )
         }
         "resolveLine" => {
-            let requested = request["line"]
-                .as_u64()
-                .filter(|line| *line > 0)
-                .context("read_failed")?;
-            std::str::from_utf8(&bytes).context("decode_failed")?;
-            let mut line = 1u64;
-            let mut offset = 0;
-            while offset < bytes.len() && line < requested {
-                if bytes[offset] == b'\n' {
-                    line += 1;
-                }
-                offset += 1;
-            }
+            ensure!(content.text, "decode_failed");
             Ok(
-                json!({"ok":true,"value":{"offset":offset,"line":line,"contentGeneration":generation}}),
+                json!({"ok":true,"value":{"offset":content.line_offset,"line":content.line,"contentGeneration":generation}}),
             )
         }
         "readHtml" | "readText" => {
@@ -653,14 +632,115 @@ async fn file_operation(
                 json!({"ok":true,"value":{"text":text,"contentGeneration":generation,"contentVersion":version}}),
             )
         }
-        "readBinary" => {
-            let mime = image_mime(&bytes).context("decode_failed")?;
-            Ok(
-                json!({"ok":true,"value":{"base64":base64::engine::general_purpose::STANDARD.encode(bytes),"mime":mime,"contentGeneration":generation,"contentVersion":version}}),
-            )
-        }
         _ => anyhow::bail!("source_not_authorized"),
     }
+}
+
+// Binary resources keep the same editor/source/generation fences as JSON reads.
+// Only the representation changes; blobs still contain the complete bounded file.
+pub async fn binary(
+    State(state): State<WebState>,
+    Extension(session): Extension<Arc<Session>>,
+    Json(body): Json<FileRequest>,
+) -> Response {
+    let Ok(_permit) = state.uploads.clone().try_acquire_owned() else {
+        return Json(failure("read_failed")).into_response();
+    };
+    let permit = Arc::new(_permit);
+    let result = async {
+        ensure!(
+            matches!(
+                body.action.as_str(),
+                "readBinary" | "readChildImage" | "download"
+            ),
+            "source_not_authorized"
+        );
+        let client = DraftClient::verified_web(&session.client_id).expect("Host editor identity");
+        let request = body.request;
+        let handle = state
+            .files
+            .0
+            .lock()
+            .expect("file registry poisoned")
+            .get(
+                request["handleId"]
+                    .as_str()
+                    .context("source_not_authorized")?,
+            )
+            .filter(|handle| handle.client == client.id())
+            .cloned()
+            .context("source_not_authorized")?;
+        reauthorize(&state, &client, &handle).await?;
+        let parent = content::read(
+            &handle.path,
+            if body.action == "readChildImage" {
+                Selection::Digest
+            } else {
+                Selection::All
+            },
+            Some(permit.clone()),
+        )
+        .await?;
+        let (mut bytes, mut version, mut generation) =
+            (parent.bytes, parent.version, parent.generation);
+        ensure!(
+            Some(generation.as_str()) == request["expectedGeneration"].as_str(),
+            "read_failed"
+        );
+        if body.action == "readChildImage" {
+            ensure!(handle.allow_children, "source_not_authorized");
+            let candidate = reference_path(
+                request["rawReference"]
+                    .as_str()
+                    .context("source_not_authorized")?,
+                handle.path.parent().context("source_not_authorized")?,
+            )?;
+            let path = tokio::fs::canonicalize(candidate)
+                .await
+                .context("file_not_found")?;
+            ensure!(path.starts_with(&handle.root), "outside_authorized_root");
+            (bytes, version, generation) = content(&path, Some(permit.clone())).await?;
+        }
+        let mime = if body.action == "download" {
+            "application/octet-stream"
+        } else {
+            image_mime(&bytes).context("decode_failed")?
+        };
+        let mut response = ([(header::CONTENT_TYPE, mime)], bytes).into_response();
+        response
+            .headers_mut()
+            .insert("x-rovai-content-generation", generation.parse()?);
+        response
+            .headers_mut()
+            .insert("x-rovai-content-version", version.to_string().parse()?);
+        if body.action == "download" {
+            response.headers_mut().insert(
+                header::CONTENT_DISPOSITION,
+                disposition(&handle.name).parse()?,
+            );
+        }
+        Ok::<_, anyhow::Error>(response)
+    }
+    .await;
+    result.unwrap_or_else(|error| {
+        Json(failure(match error.to_string().as_str() {
+            "file_too_large" => "file_too_large",
+            "outside_authorized_root" => "outside_authorized_root",
+            "file_not_found" => "file_not_found",
+            "source_not_authorized" => "source_not_authorized",
+            _ => "read_failed",
+        }))
+        .into_response()
+    })
+}
+
+fn disposition(name: &str) -> String {
+    let encoded: String = name
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect();
+    format!("attachment; filename*=UTF-8''{encoded}")
 }
 
 pub async fn attachment(
@@ -672,16 +752,11 @@ pub async fn attachment(
     let result = async {
         let source = json!({"kind":"attachment","campId":locator["campId"],"locator":locator});
         let resolved = resolve(&state, &client, &source).await?;
-        let (bytes, _, _) = content(&resolved.path).await?;
+        let (bytes, _, _) = content(&resolved.path, None).await?;
         let name = resolved.name;
         // Encode every UTF-8 byte: no source name can inject a response header or
         // silently lose its original extension in a browser download.
-        let encoded: String = name
-            .as_bytes()
-            .iter()
-            .map(|byte| format!("%{byte:02X}"))
-            .collect();
-        let disposition = format!("attachment; filename*=UTF-8''{encoded}");
+        let disposition = disposition(&name);
         Ok::<_, anyhow::Error>(
             (
                 [

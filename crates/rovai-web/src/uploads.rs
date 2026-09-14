@@ -5,8 +5,72 @@ use rovai_core::{
     web_upload::UploadIntent,
 };
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
+
+// Before binding this guard owns cleanup, including a disconnected multipart
+// request. Once submitted, only a definitive Core receipt permits deletion.
+struct TemporaryUpload {
+    directory: PathBuf,
+    retain: bool,
+}
+impl TemporaryUpload {
+    fn create() -> Result<Self> {
+        let directory = std::env::temp_dir().join(format!("rovai-web-upload-{}", new_token()?));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        }
+        #[cfg(not(unix))]
+        rovai_core::platform::prepare_private_directory(&directory)?;
+        Ok(Self {
+            directory,
+            retain: false,
+        })
+    }
+    fn path(&self) -> PathBuf {
+        self.directory.join("source")
+    }
+}
+impl Drop for TemporaryUpload {
+    fn drop(&mut self) {
+        if !self.retain {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+}
+
+struct ReceivedUpload {
+    temporary: TemporaryUpload,
+    hash: String,
+    size: u64,
+    prefix: Vec<u8>,
+}
+async fn receive(mut field: axum::extract::multipart::Field<'_>) -> Result<ReceivedUpload> {
+    let temporary = TemporaryUpload::create()?;
+    let file = tokio::fs::File::create(temporary.path()).await?;
+    let mut file = tokio::io::BufWriter::with_capacity(64 * 1024, file);
+    let mut digest = Sha256::new();
+    let mut size = 0u64;
+    let mut prefix = Vec::with_capacity(12);
+    while let Some(chunk) = field.chunk().await.context("upload_too_large")? {
+        size += chunk.len() as u64;
+        ensure!(size <= MAX_BYTES as u64, "upload_too_large");
+        prefix.extend_from_slice(&chunk[..chunk.len().min(12 - prefix.len())]);
+        digest.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await?;
+    drop(file);
+    Ok(ReceivedUpload {
+        temporary,
+        hash: format!("{:x}", digest.finalize()),
+        size,
+        prefix,
+    })
+}
 
 pub async fn upload(
     State(state): State<WebState>,
@@ -35,13 +99,16 @@ pub async fn upload(
                 }
             }
             Some("file") if contents.is_none() => {
-                let Ok(bytes) = field.bytes().await else {
-                    return error(StatusCode::PAYLOAD_TOO_LARGE, "upload_too_large");
+                contents = match receive(field).await {
+                    Ok(upload) => Some(upload),
+                    Err(failure) => {
+                        return if failure.to_string() == "upload_too_large" {
+                            error(StatusCode::PAYLOAD_TOO_LARGE, "upload_too_large")
+                        } else {
+                            error(StatusCode::BAD_REQUEST, "invalid_upload")
+                        };
+                    }
                 };
-                if bytes.len() > MAX_BYTES {
-                    return error(StatusCode::PAYLOAD_TOO_LARGE, "upload_too_large");
-                }
-                contents = Some(bytes);
             }
             _ => return error(StatusCode::BAD_REQUEST, "invalid_upload"),
         }
@@ -49,18 +116,14 @@ pub async fn upload(
     let (Some(intent), Some(contents)) = (intent, contents) else {
         return error(StatusCode::BAD_REQUEST, "invalid_upload");
     };
-    let hash = Sha256::digest(&contents)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    if hash != intent.sha256
-        || contents.len() as u64 != intent.byte_size
+    if contents.hash != intent.sha256
+        || contents.size != intent.byte_size
         || !state.sessions.is_live(&session)
     {
         return error(StatusCode::BAD_REQUEST, "upload_changed_or_session_expired");
     }
     let client = DraftClient::verified_web(&session.client_id).expect("Host editor identity");
-    // Receipt lookup happens before creating a second temporary file.
+    // A replay discards its unbound spool through the guard; it never rebinds it.
     if let Ok(reply) = state
         .core
         .request_for_editor("host.upload.reconcile", json!(intent), client.clone())
@@ -83,30 +146,23 @@ pub async fn upload(
     // The task owns cleanup until Core returns a definitive binding result.
     let task = tokio::spawn(async move {
         let _permit = _permit;
-        let directory = std::env::temp_dir().join(format!("rovai-web-upload-{}", new_token()?));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
-        }
-        #[cfg(not(unix))]
-        rovai_core::platform::prepare_private_directory(&directory)?;
-        let path = directory.join("source");
-        let mut submitted = false;
-        let bound = async {
-            tokio::fs::write(&path, &contents).await?;
-            let media = if contents.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let mut temporary = contents.temporary;
+        let path = temporary.path();
+        async {
+            let media = if contents.prefix.starts_with(b"\x89PNG\r\n\x1a\n") {
                 Some("image/png")
-            } else if contents.starts_with(b"\xff\xd8\xff") {
+            } else if contents.prefix.starts_with(b"\xff\xd8\xff") {
                 Some("image/jpeg")
-            } else if contents.starts_with(b"RIFF") && contents.get(8..12) == Some(b"WEBP") {
+            } else if contents.prefix.starts_with(b"RIFF")
+                && contents.prefix.get(8..12) == Some(b"WEBP")
+            {
                 Some("image/webp")
             } else {
                 None
             };
             let mut source = observe_source_attachment(&path, &intent.display_name, media)?;
             source.id = intent.command_id.clone();
-            submitted = true;
+            temporary.retain = true;
             let reply = state
                 .core
                 .request_for_editor(
@@ -121,7 +177,7 @@ pub async fn upload(
                     // A replay belongs to its original file, so this duplicate
                     // never became a source and can be cleaned.
                     if result["replayed"] == true {
-                        let _ = tokio::fs::remove_dir_all(&directory).await;
+                        temporary.retain = false;
                     }
                     Ok::<_, anyhow::Error>(
                         Json(json!({"draft":project_upload(&intent, result["draft"].clone())}))
@@ -142,7 +198,7 @@ pub async fn upload(
                                 .as_ref()
                                 .is_some_and(|value| value["receipt"].is_null())
                         {
-                            let _ = tokio::fs::remove_dir_all(&directory).await;
+                            temporary.retain = false;
                             return Ok(error(StatusCode::CONFLICT, "draft_changed"));
                         }
                         if receipt.error.is_none() {
@@ -160,11 +216,7 @@ pub async fn upload(
                 )),
             }
         }
-        .await;
-        if bound.is_err() && !submitted {
-            let _ = tokio::fs::remove_dir_all(&directory).await;
-        }
-        bound
+        .await
     });
     match task.await {
         Ok(Ok(response)) => response,

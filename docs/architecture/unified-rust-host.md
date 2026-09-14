@@ -94,7 +94,11 @@ Agent Managed 与 legacy 机制不变，不建对象存储、附件目录库或�
 
 资源读取按精确身份、owner locator 与作用域授权；路径规范化、符号链接和读取时变化不能逃逸授权。
 远程 Owner 直接选择 Host 有权访问的工作目录，不需要本机预授权名单；Core 继续拥有原有项目和文件校验。
-静态服务只挂应用构建产物。
+文件分页仍逐次完整验证 SHA-256，复用与摘要绑定的 UTF-8 / 稀疏行号信息以减少重复扫描，读取仅保留所需页。
+图片与下载使用认证原始字节响应；上传按块写入和计算摘要。草稿缩略图仅在 Host 确认绑定、可用性及摘要一致后
+复用当前客户端的有界 File 缓存；刷新、内容变化或缓存淘汰恢复 Host 读取。空句柄不启动文件更新轮询。
+静态服务只挂应用构建产物。长期缓存只准入构建清单中带内容哈希且字节校验相符的文件，入口及私有响应仍不缓存。
+具体字段和边界由 [Host Web v2](../contracts/host-web-v2.md#workspaces-uploads-and-resources) 拥有。
 HTML/HTM 附件复用共享交互查看器，由认证 POST 读取后交给无凭据静态预览壳；响应 CSP 与 iframe 均采用不含 `allow-same-origin` 的 `sandbox allow-scripts`，隔离主页面和 Session 存储。Web 当前支持单文件 HTML 与 HTTP(S) 依赖，本地多文件站点资源尚未接通；源码模式保留原稿。SVG 独立文件仍以文本或下载处理。精确读取和消息通道边界见 [Host Web v2](../contracts/host-web-v2.md)。
 
 ## 命令、事件与兼容性

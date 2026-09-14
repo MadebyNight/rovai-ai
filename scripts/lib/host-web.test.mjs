@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtemp, realpath, rm, mkdir, rename, writeFile, readdir } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, mkdir, rename, writeFile, readdir, readFile as readAssetFile, cp, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { launchHost, within } from './host-test-client.mjs'
@@ -19,16 +19,23 @@ const uiDirectory = process.env.ROVAI_WEB_UI ?? join(repository, 'out/web')
 // isolated directories and public record mutations, never a model or daily data.
 test('Desktop and Web share one Core while listener failure, revocation and stop stay local', { timeout: 90_000 }, async () => {
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-host-web-')))
+  const builtUiDirectory = uiDirectory
+  const ownedUiDirectory = join(fixture, 'web-ui')
+  await cp(builtUiDirectory, ownedUiDirectory, { recursive: true })
+  await writeFile(join(ownedUiDirectory, 'assets/plain.js'), 'console.log(1)')
+  await writeFile(join(ownedUiDirectory, 'assets/unlisted-Abcdef12.js'), 'console.log(2)')
   const workspace = join(fixture, 'workspace')
   await mkdir(workspace)
   const dataDir = process.platform === 'win32'
     ? JSON.parse(execFileSync(binary, ['--prepare-windows-data-root', join(fixture, 'formal')], { encoding: 'utf8' })).core
     : join(fixture, 'data')
   console.log(JSON.stringify({ channel: 'automatic_acceptance', dataDir, skillLibraryRoot: join(dataDir, 'skills'), mcpConfigPath: join(dataDir, 'mcp.json'), runtime: false }))
-  const host = launch([
+  const uploadScratch = join(fixture, 'uploads')
+  await mkdir(uploadScratch)
+  const host = launchHost(binary, [
     ...coreDataDirectoryArguments(dataDir),
     '--skill-library-root', join(dataDir, 'skills'), '--mcp-config-path', join(dataDir, 'mcp.json')
-  ])
+  ], { cwd: repository, env: { ...process.env, TMPDIR: uploadScratch, TMP: uploadScratch, TEMP: uploadScratch } })
   const controllers = []
   try {
     await within(host.ready)
@@ -40,15 +47,27 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const occupied = createServer()
     await new Promise((resolve, reject) => { occupied.once('error', reject); occupied.listen(0, '127.0.0.1', resolve) })
     try {
-      await assert.rejects(host.request('host.web.start', { listen: `127.0.0.1:${occupied.address().port}`, uiDirectory }), { code: 'HOST_WEB_START_FAILED' })
+      await assert.rejects(host.request('host.web.start', { listen: `127.0.0.1:${occupied.address().port}`, uiDirectory: ownedUiDirectory }), { code: 'HOST_WEB_START_FAILED' })
       assert.equal((await host.request('host.web.status')).enabled, false)
       assert.ok((await host.request('app.info')).dataDir)
     } finally {
       await new Promise((resolve) => occupied.close(resolve))
     }
-    const started = await host.request('host.web.start', { listen: '127.0.0.1:0', publicOrigin: 'http://198.18.0.1:4317', uiDirectory })
+    const started = await host.request('host.web.start', { listen: '127.0.0.1:0', publicOrigin: 'http://198.18.0.1:4317', uiDirectory: ownedUiDirectory })
     assert.equal(started.enabled, true)
     const origin = started.origin
+    const shellForAssets = await fetch(`${origin}/`)
+    assert.equal(shellForAssets.headers.get('cache-control'), 'no-store')
+    const assetUrl = (await shellForAssets.text()).match(/src="(\/assets\/[^"]+\.js)"/)[1]
+    assert.equal((await fetch(origin + assetUrl)).headers.get('cache-control'), 'public, max-age=31536000, immutable')
+    for (const name of ['plain.js', 'unlisted-Abcdef12.js', 'missing-Abcdef12.js']) {
+      assert.equal((await fetch(`${origin}/assets/${name}`)).headers.get('cache-control'), 'no-store')
+    }
+    const assetPath = join(ownedUiDirectory, assetUrl.slice(1))
+    const originalAsset = await readAssetFile(assetPath)
+    await writeFile(assetPath, 'changed under the same URL')
+    assert.equal((await fetch(origin + assetUrl)).headers.get('cache-control'), 'no-store', 'a mismatched build digest never gets immutable caching')
+    await writeFile(assetPath, originalAsset)
     const administrator = started.administratorToken
     assert.equal(administrator, initialToken, 'failed and successful starts retain the Host credential')
     const status = await host.request('host.web.status')
@@ -58,7 +77,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.ok(status.addresses.some(address => address.origin === origin))
     assert.equal(status.addresses.some(address => address.origin.includes('198.18.')), false)
     assert.equal(origin.includes('198.18.'), false, 'the default address comes from filtered discovery')
-    await assert.rejects(host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory }), { code: 'HOST_WEB_START_FAILED' })
+    await assert.rejects(host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: ownedUiDirectory }), { code: 'HOST_WEB_START_FAILED' })
     const request = (path, options = {}) => fetch(`${origin}/api/v1/${path}`, { ...options, redirect: 'error', signal: AbortSignal.timeout(10_000) })
     // Fetch normalizes Host to its URL. Use HTTP directly to exercise the
     // configured proxy authority without changing this machine's interfaces.
@@ -222,11 +241,36 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const input = new TextEncoder().encode('source ref from real HTTP upload')
     const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', input))].map(value => value.toString(16).padStart(2, '0')).join('')
     const intent = { commandId: crypto.randomUUID(), campId, expectedRevision: draftA.revision, displayName: '浏览器 source.txt', byteSize: input.length, sha256 }
+    const spools = async () => (await readdir(uploadScratch)).filter(name => name.startsWith('rovai-web-upload-'))
+    const postUpload = body => request('uploads', { method: 'POST', headers: { Authorization: `Bearer ${first.token}` }, body })
+    for (const scenario of ['digest', 'duplicate-file', 'too-large']) {
+      const invalid = new FormData(); invalid.append('intent', JSON.stringify(intent))
+      invalid.append('file', new Blob([scenario === 'too-large' ? new Uint8Array(20 * 1024 * 1024 + 1) : input]), 'input')
+      if (scenario === 'duplicate-file') invalid.append('file', new Blob([input]), 'duplicate')
+      if (scenario === 'digest') { invalid.set('intent', JSON.stringify({ ...intent, sha256: '0'.repeat(64) })) }
+      assert.equal((await postUpload(invalid)).status, scenario === 'too-large' ? 413 : 400)
+      assert.deepEqual(await spools(), [], 'rejected multipart bytes must leave no unbound source')
+    }
+    const abort = new AbortController()
+    const boundary = 'rovai-upload-abort-fixture'
+    const partial = new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="partial"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+      controller.enqueue(new Uint8Array(64 * 1024))
+    } })
+    const interruptedUpload = fetch(`${origin}/api/v1/uploads`, { method: 'POST', headers: { Authorization: `Bearer ${first.token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}` }, body: partial, duplex: 'half', signal: abort.signal }).catch(() => undefined)
+    await within((async () => { while ((await spools()).length === 0) await pause(10) })())
+    abort.abort(); await interruptedUpload
+    await within((async () => { while ((await spools()).length !== 0) await pause(10) })())
     const upload = new FormData(); upload.append('intent', JSON.stringify(intent)); upload.append('file', new Blob([input]), 'web-source.txt')
     const uploadResponse = await request('uploads', { method: 'POST', headers: { Authorization: `Bearer ${first.token}` }, body: upload })
     assert.equal(uploadResponse.status, 200, await uploadResponse.clone().text())
     const bound = (await uploadResponse.json()).draft
     assert.equal(bound.attachments[0].id, intent.commandId)
+    assert.equal((await spools()).length, 1, 'a bound source survives request completion')
+    const replayUpload = new FormData(); replayUpload.append('file', new Blob([input]), 'replay'); replayUpload.append('intent', JSON.stringify(intent))
+    assert.equal((await postUpload(replayUpload)).status, 200, 'file-before-intent remains supported')
+    assert.equal((await spools()).length, 1, 'a replay discards only its duplicate spool')
+
     // Actual HTTP ingress and the shared private page API use the verified
     // editor, never the client-provided conversation or command identity alone.
     const privateOpen = session => call(session, 'singleChat.open', { commandId: crypto.randomUUID(), command: { campId, agentId: profiles[0].agentId } })
@@ -281,6 +325,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     for (const isPrivate of [false, true]) {
       const pendingInputId = crypto.randomUUID()
       const seed = new DatabaseSync(join(dataDir, 'rovai.sqlite'))
+      seed.exec('PRAGMA busy_timeout=5000')
       const now = new Date().toISOString()
       try {
         if (isPrivate) seed.prepare(`insert into single_chat_pending_input(id,conversation_id,enqueue_sequence,state,body,user_id,created_at,updated_at)
@@ -313,7 +358,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(html.status, 200)
     assert.match(html.headers.get('content-security-policy'), /frame-ancestors 'none'/)
     assert.match(await html.text(), /<title>Rovai AI<\/title>/)
-    const portrait = (await readdir(join(uiDirectory, 'assets'))).find(name=>name.endsWith('.avif'))
+    const portrait = (await readdir(join(ownedUiDirectory, 'assets'))).find(name=>name.endsWith('.avif'))
     assert.ok(portrait, 'production Web package includes the native member portraits')
     const portraitResponse = await fetch(`${origin}/assets/${portrait}`, { redirect: 'error' })
     assert.equal(portraitResponse.status, 200)
@@ -352,8 +397,17 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const largePath = join(workspace, 'large-preview.txt')
     const largeText = '第一行\n' + 'a'.repeat(2 * 1024 * 1024) + '\n最后🌸'
     await writeFile(largePath, largeText)
+    const fileTime = new Date('2020-01-01T00:00:00Z')
+    await utimes(largePath, fileTime, fileTime)
     const fileCall = async (session, action, value) => {
-      const response = await authorized(session, 'files', { method: 'POST', body: JSON.stringify({ action, request: value }) })
+      const binary = ['readBinary', 'readChildImage', 'download'].includes(action)
+      const response = await authorized(session, binary ? 'files/bytes' : 'files', { method: 'POST', body: JSON.stringify({ action, request: value }) })
+      assert.equal(response.headers.get('cache-control'), 'no-store')
+      if (binary && !response.headers.get('content-type').includes('application/json')) {
+        assert.equal(response.status, 200)
+        return { ok: true, value: { bytes: Buffer.from(await response.arrayBuffer()), mime: response.headers.get('content-type'),
+          contentGeneration: response.headers.get('x-rovai-content-generation'), contentVersion: JSON.parse(response.headers.get('x-rovai-content-version')) } }
+      }
       assert.equal(response.status, 200)
       return response.json()
     }
@@ -368,6 +422,10 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(page.value.endOffset, 9)
     const line = await fileCall(first, 'resolveLine', { handleId: largeFile.handleId, expectedGeneration: largeFile.contentGeneration, line: 2 })
     assert.equal(line.value.offset, 10)
+    await writeFile(largePath, largeText.replace('a', 'b')); await utimes(largePath, fileTime, fileTime)
+    assert.equal((await fileCall(first, 'readPage', { handleId: largeFile.handleId, expectedGeneration: largeFile.contentGeneration, offset: 0 })).ok, false, 'same length and restored mtime cannot hide changed bytes')
+    await writeFile(largePath, largeText); await utimes(largePath, fileTime, fileTime)
+
     assert.equal((await fileCall(second, 'readPage', { handleId: largeFile.handleId, expectedGeneration: largeFile.contentGeneration, offset: 0 })).ok, false)
     await writeFile(largePath, largeText + '\nchanged')
     const updates = await fileCall(first, 'updates', {})
@@ -380,7 +438,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     largeFile = reloaded.value
     const downloaded = await fileCall(first, 'download', { handleId: largeFile.handleId, expectedGeneration: largeFile.contentGeneration })
     assert.equal(downloaded.ok, true)
-    assert.equal(Buffer.compare(Buffer.from(downloaded.value.base64, 'base64'), Buffer.from(largeText + '\nchanged')), 0)
+    assert.equal(Buffer.compare(downloaded.value.bytes, Buffer.from(largeText + '\nchanged')), 0)
     await fileCall(first, 'release', { handleId: largeFile.handleId })
     // HTML classification, original-source reads and editor/generation fences use
     // the real Host API. The separate Chrome case owns rendering and isolation.
@@ -412,7 +470,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const inlineImage = await fileCall(first, 'readChildImage', imageRequest)
     assert.equal(inlineImage.ok, true, JSON.stringify(inlineImage))
     assert.equal(inlineImage.value.mime, 'image/png')
-    assert.equal(Buffer.compare(Buffer.from(inlineImage.value.base64, 'base64'), png), 0)
+    assert.equal(Buffer.compare(inlineImage.value.bytes, png), 0)
     assert.equal((await fileCall(second, 'readChildImage', imageRequest)).ok, false)
     assert.equal((await fileCall(first, 'readChildImage', { ...imageRequest, expectedGeneration: 'obsolete' })).ok, false)
     assert.equal((await fileCall(first, 'readChildImage', { ...imageRequest, rawReference: '../outside.png' })).ok, false)
@@ -479,9 +537,9 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(host.child.exitCode, null, 'stopping Web must leave Core alive')
     assert.equal((await host.request('app.info')).name, info.name)
     await assert.rejects(fetch(origin, { signal: AbortSignal.timeout(2000) }))
-    await assert.rejects(host.request('host.web.start', { listen: '0.0.0.0:0', uiDirectory }), { code: 'HOST_WEB_START_FAILED' })
+    await assert.rejects(host.request('host.web.start', { listen: '0.0.0.0:0', uiDirectory: ownedUiDirectory }), { code: 'HOST_WEB_START_FAILED' })
     assert.equal((await host.request('host.web.status')).enabled, false)
-    const restarted = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory })
+    const restarted = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: ownedUiDirectory })
     assert.equal(restarted.enabled, true)
     assert.equal(restarted.administratorToken, rotated.administratorToken, 'restart reuses the retained credential')
     assert.equal((await fetch(`${restarted.origin}/api/v1/login-ticket`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, ticket: unusedBeforeStop.ticket }) })).status, 401)
@@ -499,7 +557,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const reopened = launch([...coreDataDirectoryArguments(dataDir), '--skill-library-root', join(dataDir, 'skills'), '--mcp-config-path', join(dataDir, 'mcp.json')])
     try {
       await within(reopened.ready)
-      const reopenedWeb = await reopened.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory })
+      const reopenedWeb = await reopened.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: ownedUiDirectory })
       assert.equal(reopenedWeb.administratorToken, restarted.administratorToken)
       const recoveredSession = await fetch(`${reopenedWeb.origin}/api/v1/session`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${beforeExit.token}` }, body: JSON.stringify({ editor: { clientId: beforeExit.clientId, proof: beforeExit.editorProof } }) })
       assert.equal(recoveredSession.status, 200, 'normal Host restart preserves the same Bearer and editor')
@@ -519,7 +577,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       // Explicit stop also revokes persisted Sessions before the first listener
       // start in a reopened Desktop Host, where credentials are still lazy.
       await disabled.request('host.web.stop')
-      const afterDisable = await disabled.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory })
+      const afterDisable = await disabled.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: ownedUiDirectory })
       assert.equal(afterDisable.administratorToken, restarted.administratorToken)
       assert.equal((await fetch(`${afterDisable.origin}/api/v1/capabilities`, { headers: { Authorization: `Bearer ${beforeExit.token}` } })).status, 401)
     } finally { await disabled.close() }

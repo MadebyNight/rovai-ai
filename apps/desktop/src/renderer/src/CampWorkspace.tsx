@@ -3859,11 +3859,11 @@ export function CampWorkspace({
   const openExecutionProcess = (
     agentId: string,
     trigger: HTMLButtonElement | null = null,
-    options: { runId?: string | null; moveDomFocus?: boolean } = {}
+    options: { runId?: string | null; moveDomFocus?: boolean; reveal?: boolean } = {}
   ): void => {
     const process = executionProcessByAgentId.get(agentId)
     if (!process) return
-    if (executionPlacement === 'inspector') {
+    if (executionPlacement === 'inspector' && options.reveal !== false) {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
     }
@@ -3944,7 +3944,8 @@ export function CampWorkspace({
     )) return
     openExecutionProcess(targetRun.agentId, null, {
       runId: targetRun.id,
-      moveDomFocus: false
+      moveDomFocus: false,
+      reveal: !mobile
     })
   }, [
     executionDrawerAgentId,
@@ -3954,6 +3955,7 @@ export function CampWorkspace({
     inspectorVisible,
     snapshot.agentRuns,
     submittedExecutionRequests,
+    mobile,
     pendingQueue,
     snapshot.camp.id,
     taskCreationActive
@@ -8856,10 +8858,11 @@ export function RunExecutionDisclosure({
     >
       <summary hidden={liveOpen} className={mobile ? 'mobile-run-summary' : undefined}>
         {mobile && <time className="mobile-run-time">{runIntervalLabel(run)}</time>}
-        <span className="process-disclosure-label">{!liveOpen && (nonTerminal
+        <span className="process-disclosure-label">{mobile ? agentRunPresentation(run, cancelling).label : !liveOpen && (nonTerminal
           ? cancelling ? '正在停止' : run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
             : executionInitialFeedback(run.status, progress?.items ?? [], Boolean(finalBody)) ?? '执行中'
           : executionRunSummary(run, run.updatedAt))}</span>
+        {mobile && focused && nonTerminal && <span className="current-run-badge">当前执行</span>}
         <span className="process-disclosure-slot" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
             <path d="m4.75 6.25 3.25 3.5 3.25-3.5" />

@@ -9,8 +9,13 @@ import { desktopCampClient } from './desktop-camp-client'
 export interface EditingRecovery { get(identity: string): unknown; set(identity: string, value: unknown): void }
 
 export type CampClient = Pick<RovaiApi,
-  'request' | 'composerAttachments' | 'singleChatAttachments' | 'platform'
+  'request' | 'singleChatAttachments' | 'platform'
 > & {
+  composerAttachments: Omit<RovaiApi['composerAttachments'], 'preview'> & {
+    preview(locator: import('@contracts').LocalAttachmentOwnerLocator): Promise<Omit<import('@contracts').AttachmentPreviewResult, 'preview'> & {
+      preview: import('@contracts').AttachmentPreview | { blob: Blob } | null
+    }>
+  }
   editingRecovery?: EditingRecovery
   /** Explicit resource/platform dependencies of the shared management pages. */
   exportMonitoring: (filter: import('@contracts').MonitoringFilter) => Promise<{ exported: boolean; path?: string }>

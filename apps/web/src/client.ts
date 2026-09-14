@@ -1,9 +1,9 @@
 import { TAB_AUTH_KEY, type AuthStorage, type BrowserSession } from './auth-storage'
 import { browserEditingRecovery } from './editing-recovery'
 import { RECOVERY_KEY, type RecoveryStorage } from './tab-recovery'
-import { sha256 } from '@noble/hashes/sha2.js'
+import { fileDigest } from './file-digest'
 import { newCommandId } from '../../desktop/src/shared/command-id'
-import type { CampComposerDraftView, ChannelSettingsSnapshot } from '@contracts'
+import type { CampComposerDraftView, ChannelSettingsSnapshot, FilePreviewBinaryContent, FilePreviewOperationResult } from '@contracts'
 class HttpRequestError extends Error {
   constructor(readonly status: number, readonly code: string) { super(`请求未完成（${code}）。`) }
 }
@@ -246,6 +246,7 @@ export class ConsoleClient {
 
   #pending = new Map<string, PendingCommand>()
   #pendingUploads = new Map<string, PendingUpload>()
+  #localUploads = new Map<string, File>()
   #reconciling = false
   #restored = false
   #storage?: RecoveryStorage
@@ -454,6 +455,7 @@ export class ConsoleClient {
     this.#retryRenewalAt = 0
     this.#renewal = null
     this.#generation++
+    this.#localUploads.clear()
     this.#lifetime.abort()
     this.#lifetime = new AbortController()
     try {
@@ -560,16 +562,41 @@ export class ConsoleClient {
   ): Promise<T> {
     if (!this.authenticated) throw new SessionRequired()
     if (file.size > 20 * 1024 * 1024) throw new Error('单个上传文件不能超过 20 MB。')
-    const digest = sha256(new Uint8Array(await file.arrayBuffer()))
+    const scope = this.editingScope
+    const digest = await fileDigest(file, this.#lifetime.signal)
     const commandId = newCommandId()
     const intent = { commandId, campId, expectedRevision, ...(target ? { target } : {}), displayName: file.name, byteSize: file.size,
-      sha256: [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('') }
+      sha256: digest }
     const data = new FormData(); data.append('intent', JSON.stringify(intent)); data.append('file', file)
     return new Promise((resolve, reject) => {
-      const entry: PendingUpload = { intent, data, resolve: value => resolve(value as T), reject }
+      const entry: PendingUpload = { intent, data, resolve: value => {
+        // A successful binding or its canonical reconciliation is required before
+        // retaining a payload for previews. Never persist local bytes or credentials.
+        if (scope === this.editingScope && this.authenticated) this.#retainUpload(campId, digest, file)
+        resolve(value as T)
+      }, reject }
       this.#pendingUploads.set(commandId, entry); this.#notifyPending()
       void this.#dispatchUpload(commandId, entry)
     })
+  }
+
+  #retainUpload(campId: string, digest: string, file: File): void {
+    const key = `${campId}:${digest}`
+    this.#localUploads.delete(key); this.#localUploads.set(key, file)
+    let bytes = [...this.#localUploads.values()].reduce((size, item) => size + item.size, 0)
+    // This is a bounded, disposable optimization; eviction restores Host reads.
+    while (this.#localUploads.size > 16 || bytes > 40 * 1024 * 1024) {
+      const oldest = this.#localUploads.keys().next().value!
+      bytes -= this.#localUploads.get(oldest)!.size; this.#localUploads.delete(oldest)
+    }
+  }
+
+  confirmedUpload(campId: string, generation: string, size: number): File | null {
+    const key = `${campId}:${generation}`
+    const file = this.#localUploads.get(key)
+    if (!file || file.size !== size) return null
+    this.#localUploads.delete(key); this.#localUploads.set(key, file)
+    return file
   }
 
   async #dispatchUpload(commandId: string, entry: PendingUpload, preserveUnknown = false): Promise<void> {
@@ -606,14 +633,24 @@ export class ConsoleClient {
   async files<T>(action: string, request: unknown): Promise<T> {
     return this.#json('files', { method: 'POST', body: JSON.stringify({ action, request }) })
   }
+  async fileBytes(action: 'readBinary' | 'readChildImage' | 'download', request: unknown): Promise<FilePreviewOperationResult<Omit<FilePreviewBinaryContent, 'bytes'> & { blob: Blob; name: string }>> {
+    const generation = this.#generation
+    const response = await this.#authorized('files/bytes', { method: 'POST', body: JSON.stringify({ action, request }) })
+    const value = response.headers.get('Content-Type')?.includes('application/json')
+      ? await response.json() as FilePreviewOperationResult<never>
+      : { ok: true as const, value: { blob: await response.blob(), mime: response.headers.get('Content-Type') ?? 'application/octet-stream',
+        contentGeneration: response.headers.get('x-rovai-content-generation') ?? '',
+        contentVersion: JSON.parse(response.headers.get('x-rovai-content-version') ?? 'null') as FilePreviewBinaryContent['contentVersion'],
+        name: responseFileName(response) } }
+    if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
+    return value
+  }
   async attachment(locator: unknown): Promise<{ blob: Blob; name: string }> {
     const generation = this.#generation
     const response = await this.#authorized('attachments', { method: 'POST', body: JSON.stringify(locator) })
     const blob = await response.blob()
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
-    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') ?? '')?.[1]
-    const name = encodedName ? decodeURIComponent(encodedName).replace(/[\\/\x00-\x1f\x7f]/g, '_') : 'attachment'
-    return { blob, name }
+    return { blob, name: responseFileName(response) }
   }
 
   async reconcilePending(): Promise<void> {
@@ -680,7 +717,7 @@ export class ConsoleClient {
     return result
   }
 
-  async #authorized(path: 'session' | 'session/renew' | 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
+  async #authorized(path: 'session' | 'session/renew' | 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'files/bytes' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
     if (!this.#token) throw new SessionRequired()
     const generation = this.#generation
     if (this.#localExpiry !== null && this.#localExpiry - this.#now() <= this.#renewalWindow && !['session', 'session/renew', 'logout'].includes(path)) await this.renewIfNeeded()
@@ -742,4 +779,9 @@ export class ConsoleClient {
     void run()
     return () => controller.abort()
   }
+}
+
+function responseFileName(response: Response): string {
+  const name = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') ?? '')?.[1]
+  return name ? decodeURIComponent(name).replace(/[\\/\x00-\x1f\x7f]/g, '_') : 'attachment'
 }

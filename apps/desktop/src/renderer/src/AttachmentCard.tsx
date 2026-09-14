@@ -106,7 +106,7 @@ export function AttachmentCard({
           return
         }
         const preview = result.preview
-        objectUrl = URL.createObjectURL(new Blob(
+        objectUrl = URL.createObjectURL('blob' in preview ? preview.blob : new Blob(
           [Uint8Array.from(preview.bytes).buffer],
           { type: preview.mediaType }
         ))
