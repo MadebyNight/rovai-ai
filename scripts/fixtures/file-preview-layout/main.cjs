@@ -364,7 +364,7 @@ app.whenReady().then(async () => {
     await open()
   })
 
-  await check('Camp sessions restore the visible active file first and keep hidden or background files lazy', async () => {
+  await check('hot Camp sessions retain content and read positions without reopening', async () => {
     await run('window.previewTest.openTab(0)')
     const before = await reviewSnapshot()
     assert.equal((await snapshot()).tabCount, 2)
@@ -378,15 +378,14 @@ app.whenReady().then(async () => {
     assert.equal((await snapshot()).visible, true)
     assert.equal((await snapshot()).tabCount, 2)
     assert.equal(restored.selectedTab, 'app.ts')
-    assert.equal(restored.fileRestores.length, before.fileRestores.length + 1)
-    assert.equal(restored.fileReads, before.fileReads + 1, 'Only the visible active file reads immediately')
+    assert.equal(restored.fileRestores.length, before.fileRestores.length)
+    assert.equal(restored.fileReads, before.fileReads, 'A hot Camp performs no repeat read')
     assert.deepEqual(restored.campBindings.slice(-2), ['camp-2', 'camp-1'])
-    assert.equal(restored.fileRestores.at(-1).rawReference, 'src/app.ts')
 
     await click('[role="tab"][aria-label="preview-layout.ts"]')
     const activated = await reviewSnapshot()
-    assert.equal(activated.fileRestores.length, before.fileRestores.length + 2)
-    assert.equal(activated.fileReads, before.fileReads + 2, 'The background file reads on first activation')
+    assert.equal(activated.fileRestores.length, before.fileRestores.length)
+    assert.equal(activated.fileReads, before.fileReads, 'A cached background tab performs no repeat read')
 
     await click('.file-preview-toggle')
     const hidden = await reviewSnapshot()
@@ -401,8 +400,8 @@ app.whenReady().then(async () => {
     await click('.file-preview-toggle')
     const shown = await reviewSnapshot()
     assert.equal((await snapshot()).tabCount, 2)
-    assert.equal(shown.fileRestores.length, hidden.fileRestores.length + 1)
-    assert.equal(shown.fileReads, hidden.fileReads + 1)
+    assert.equal(shown.fileRestores.length, hidden.fileRestores.length)
+    assert.equal(shown.fileReads, hidden.fileReads)
     await run('window.previewTest.closeExtraTabs()')
     await open()
   })
@@ -1115,7 +1114,7 @@ app.whenReady().then(async () => {
     await run('window.previewTest.setTheme("day")')
     await viewport(1_440)
   })
-  await check('operation-only DiffCard opens the current file directly and preserves navigation on failure', async () => {
+  await check('operation-only DiffCard opens once and reuses the loaded current file', async () => {
     await run('window.previewTest.closeAll()')
     const before = await reviewSnapshot()
     assert.equal(await run('document.querySelector("[data-diff-card=operation-only] .run-file-changes-card-view").textContent.trim()'), '查看文件')
@@ -1129,12 +1128,12 @@ app.whenReady().then(async () => {
       evidenceFileId: 'file-operation-only', action: 'open_current'
     })
     const tabCount = opened.tabs.length
-    await run('window.previewTest.failNextToolRead()')
     await click('[data-diff-card="operation-only"] .run-file-change-file')
     const failed = await reviewSnapshot()
     assert.equal(failed.selectedTab, 'path-only.ts')
     assert.equal(failed.tabs.length, tabCount)
-    assert.equal(failed.notices.at(-1), '无法打开该文件')
+    assert.equal(failed.fileRestores.length, opened.fileRestores.length, 'A cached click never restores or reads the file again')
+    assert.equal(failed.fileReads, opened.fileReads)
     await run('window.previewTest.clearToolNotices()')
   })
   await check('DiffCard find opens its own review and searches all immutable changes', async () => {
@@ -1159,6 +1158,16 @@ app.whenReady().then(async () => {
     assert.equal((await run('window.previewTest.findSnapshot()')).count, '1 / 1')
     await capture('file-find-html-day')
     await key('Escape')
+    await run('window.retainedHtmlFrame = document.querySelector(".file-preview-html")')
+    const frame = window.webContents.mainFrame.framesInSubtree.find(frame => frame.url.includes('.localhost'))
+    assert.ok(frame, 'The HTML document has its own live frame')
+    const marker = await frame.executeJavaScript('window.previewRetentionMarker = { value: 37 }; performance.timeOrigin')
+    await run('window.previewTest.switchCamp()')
+    assert.equal(await run('window.retainedHtmlFrame.closest("[inert]") !== null'), true)
+    await run('window.previewTest.switchCamp()')
+    assert.equal(await run('window.retainedHtmlFrame === document.querySelector(".file-preview-html")'), true)
+    assert.equal(await frame.executeJavaScript('window.previewRetentionMarker.value'), 37)
+    assert.equal(await frame.executeJavaScript('performance.timeOrigin'), marker)
     await run('document.querySelector(".file-preview-html").focus()')
     await key('f', [process.platform === 'darwin' ? 'meta' : 'control'])
     await snapshot()
@@ -1298,6 +1307,7 @@ app.whenReady().then(async () => {
     }
     assert.equal(await run('document.querySelector(\'[data-tool-case="path-only"] details\')'), null)
     assert.deepEqual((await run('window.previewTest.toolState()')).notices, [])
+    await run('window.previewTest.closeAll()')
     const beforeFailure = await run('window.previewTest.toolState()')
     await run('window.previewTest.failNextToolRead()')
     await click(`${edit} .tool-file-link`)

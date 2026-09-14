@@ -124,7 +124,17 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
     target?.scrollIntoView({ block: 'start' })
     return Boolean(target)
   }
+  let scrollScheduled = false
+  addEventListener('scroll', () => {
+    if (scrollScheduled) return
+    scrollScheduled = true
+    requestAnimationFrame(() => { scrollScheduled = false; send('reading-position', { top: scrollY, left: scrollX }) })
+  }, { passive: true, signal: abort.signal })
   const command = (data: Record<string, unknown>): void => {
+    if (data.type === 'restore-reading' && typeof data.top === 'number' && Number.isFinite(data.top)
+      && typeof data.left === 'number' && Number.isFinite(data.left)) {
+      scrollTo({ top: Math.max(0, data.top), left: Math.max(0, data.left), behavior: 'instant' }); return
+    }
     if (data.type === 'fragment') { send('fragment-result', { found: fragment(data.fragment) }); return }
     if (data.type === 'find-snapshot' && Number.isSafeInteger(data.requestId)) {
       try { send('find-document', { requestId: data.requestId, text: snapshot() }) }

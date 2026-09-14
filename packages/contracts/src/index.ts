@@ -1669,10 +1669,19 @@ export interface FilePreviewExternalUpdateEvent {
   previewKeys: string[]
 }
 
+/** Window-local preview retention. Usage is a user-action sequence, never an I/O timestamp. */
+export interface FilePreviewRetentionState {
+  sessions: { campId: string; previewSessionId: string }[]
+  handles: { handleId: string; previewSessionId: string; tabId: string; lastUsed: number; visible: boolean; busy: boolean; recoverable: boolean }[]
+}
+
 export interface FilePreviewApi {
   /** Browser image bytes resolved under the current, generation-bound parent. */
   readChildImage?(request: { handleId: string; expectedGeneration: string; rawReference: string }): Promise<FilePreviewOperationResult<FilePreviewBinaryContent>>
 
+  /** Native capability ownership; stateless browser adapters do not need a native registry. */
+  updateRetention?(state: FilePreviewRetentionState): Promise<void>
+  onResourcesReleased?(listener: (event: { handleIds: string[] }) => void): () => void
   bindCamp(campId: string | null): Promise<void>
   open(request: OpenFilePreviewRequest): Promise<FilePreviewOperationResult<OpenFilePreviewResult>>
   restore(request: RestoreFilePreviewRequest): Promise<FilePreviewOperationResult<OpenFilePreviewResult>>

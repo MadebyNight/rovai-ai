@@ -2,12 +2,13 @@ import { createBrowserHtmlPreview } from './html-preview'
 import { browserMemberAvatars } from './member-avatars'
 import type { CampClient } from '../../desktop/src/renderer/src/camp-client'
 import type { BusinessEnvironment } from '../../desktop/src/renderer/src/business-environment'
-import type { SingleChatSnapshot, CoreMethod, FilePreviewApi, FilePreviewExternalUpdateEvent, FilePreviewOperationResult, OpenFilePreviewResult } from '@contracts'
+import type { SingleChatSnapshot, CoreMethod, FilePreviewApi, FilePreviewExternalUpdateEvent, FilePreviewOperationResult, OpenFilePreviewResult, RestoreFilePreviewRequest } from '@contracts'
 import { ConsoleClient, WEB_OPERATIONS, type WebOperation } from './client'
 import { createBrowserNavigationHistory } from './navigation-history'
 import { browserEditingRecovery } from './editing-recovery'
 import { browserPreferences } from './preferences'
 import { createServerUpdates } from './server-updates'
+import { restorableFilePreviewRequest } from '../../desktop/src/renderer/src/file-preview-session'
 import { parseFileReference } from '../../desktop/src/file-preview-reference'
 import { writeClipboardText } from '../../desktop/src/renderer/src/clipboard'
 
@@ -61,6 +62,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
   }
   const fileListeners = new Set<(event: FilePreviewExternalUpdateEvent) => void>()
   const names = new Map<string, string>()
+  const sources = new Map<string, RestoreFilePreviewRequest>()
   let watchTimer: ReturnType<typeof setInterval> | null = null
   let watchGeneration = 0
   let watching = false
@@ -89,6 +91,9 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     const result = await transport.files<FilePreviewOperationResult<OpenFilePreviewResult>>(action, request)
     if (result.ok && result.value.kind === 'file_preview') {
       names.set(result.value.file.handleId, result.value.file.displayPath)
+      const source = result.value.file.restoreRequest ?? (request && typeof request === 'object' && 'kind' in request
+        ? restorableFilePreviewRequest(request as RestoreFilePreviewRequest) : null)
+      if (source) sources.set(result.value.file.handleId, source)
       syncWatch()
       if (request && typeof request === 'object' && 'rawReference' in request && typeof request.rawReference === 'string') {
         result.value.file.target = parseFileReference(request.rawReference)?.target
@@ -116,8 +121,15 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     prepareHtmlSite: request => createBrowserHtmlPreview(transport, request),
     releaseHtmlSite: async () => ({ released: true }), // The document belongs to the mounted iframe; no server site or object URL survives it.
     prepareHtml: unimplemented, // Legacy Desktop transport; the shared viewer uses prepareHtmlSite.
-    reload: request => transport.files('reload', request),
-    release: async request => { names.delete(request.handleId); syncWatch(); return transport.files('release', request) },
+    reload: async request => {
+      const source = sources.get(request.handleId)
+      if (!source) return { ok: false, error: { code: 'source_not_authorized', message: '无法重新取得文件，已保留当前预览。', retryable: false } }
+      const result = await opened('restore', source)
+      if (!result.ok) return result
+      return result.value.kind === 'file_preview' ? { ok: true, value: result.value.file }
+        : { ok: false, error: { code: 'read_failed', message: '未能准备新预览。', retryable: true } }
+    },
+    release: async request => { names.delete(request.handleId); sources.delete(request.handleId); syncWatch(); return transport.files('release', request) },
     download: async request => {
       const result = await transport.fileBytes('download', request)
       if (!result.ok) return result

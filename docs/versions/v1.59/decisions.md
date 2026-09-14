@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.59
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 # v1.59 版本决定
@@ -144,3 +144,21 @@ Server OS 资格只拥有 Host 安装与生命周期；Runtime 资格继续按 A
 DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式开放 preview；DeepSeek Harness 不在目录，
 不据此新增 Adapter。新适配范围不等于完成资格，不把原生 CLI 成功或跨平台历史证据当作 Linux First-Class。
 原 DMIT 测试账号与安装已按用户要求删除；具体主机访问资料只保存于私有运维文档。
+
+
+<a id="v1-59-d07"></a>
+
+## V1.59-D07：窗口预览会话与有限 HTML 后台保留
+
+- 状态：accepted
+- 日期：2026-09-15
+- 当前权威：[文件预览架构](../../architecture/file-preview.md)、[File Preview v13](../../contracts/file-preview-v13.md)
+
+切 Camp 销毁资源会重复打开、读取与重建页面，丢失阅读状态。用户确认将预览资源交给窗口会话，以分层容量
+回收代替导航销毁和固定时间过期；保持现有 Camp/Runtime 生命周期，不新增正文持久化。
+
+选择最多 4 个实际 HTML 页面与站点后台保留，接受作者脚本和网络继续运行，以换取切回无需重建。
+不增加通用冻结、API 劫持或自动重页面治理。缓存优化不承诺 CPU、网络、进程内存全部同时下降。
+
+逻辑句柄满额先回收后台可重建资源；刷新以独立候选准备、成功显示后替换，避免旧正文配新句柄或先拆旧站点。
+新旧共存也计容量，无安全空间就保留旧版本并报告失败。不采用无限扩容或通用事务框架。

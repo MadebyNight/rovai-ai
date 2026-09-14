@@ -67,7 +67,7 @@ it('polls changes only while files are open and resumes after reopening', async 
   const fetcher = vi.fn<typeof fetch>(async (url, options) => {
     if (String(url).endsWith('/login')) return Response.json({ protocolVersion: 2, token: 'a'.repeat(64), clientId: 'd'.repeat(64), editorProof: 'e'.repeat(64), ownerId: 'local_user' })
     const { action } = JSON.parse(String(options?.body)); actions.push(action)
-    if (action === 'open') return Response.json({ ok: true, value: { kind: 'file_preview', file: { handleId: 'file', displayPath: 'file.txt' } } })
+    if (action === 'open' || action === 'restore') return Response.json({ ok: true, value: { kind: 'file_preview', file: { handleId: action === 'restore' ? 'candidate' : 'file', displayPath: 'file.txt' } } })
     return Response.json(action === 'release' ? { released: true } : { ok: true, value: [] })
   })
   const transport = new ConsoleClient('http://127.0.0.1:8766', fetcher)
@@ -86,6 +86,12 @@ it('polls changes only while files are open and resumes after reopening', async 
     expect(actions).toEqual(['open', 'updates', 'updates', 'release'])
     await open(); await vi.advanceTimersByTimeAsync(2000)
     expect(actions.slice(-2)).toEqual(['open', 'updates'])
+    const candidate = await files.reload({ handleId: 'file', reopenToken: 'token', expectedGeneration: 'generation' })
+    expect(candidate).toMatchObject({ ok: true, value: { handleId: 'candidate' } })
+    expect(actions.at(-1)).toBe('restore')
+    expect(actions.filter(action => action === 'release')).toHaveLength(1)
+    await files.release({ handleId: 'candidate' })
+    await files.release({ handleId: 'file' })
   } finally { unsubscribe(); transport.clear(); vi.useRealTimers() }
 })
 

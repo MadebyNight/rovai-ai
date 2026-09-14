@@ -25,7 +25,7 @@ app.whenReady().then(async () => {
   const navigation = new FilePreviewFrameNavigation(url => service.ownsHtmlPreviewOrigin(window.webContents.id, url))
   window.webContents.on('will-frame-navigate', details => { if (!details.isMainFrame && !navigation.allows(details.url, details.frame, window.webContents.mainFrame, window.webContents.mainFrame.framesInSubtree)) details.preventDefault() })
   window.webContents.on('will-redirect', details => { if (!details.isMainFrame && !navigation.allows(details.url, details.frame, window.webContents.mainFrame, window.webContents.mainFrame.framesInSubtree)) details.preventDefault() })
-  const calls = ['bindCamp', 'open', 'restore', 'reopen', 'readText', 'readPage', 'resolveLine', 'readBinary', 'prepareHtml', 'prepareHtmlSite', 'releaseHtmlSite', 'reload', 'release']
+  const calls = ['updateRetention', 'bindCamp', 'open', 'restore', 'reopen', 'readText', 'readPage', 'resolveLine', 'readBinary', 'prepareHtml', 'prepareHtmlSite', 'releaseHtmlSite', 'reload', 'release']
   ipcMain.handle('preview-fixture', (event, method: string, args: unknown) => {
     if (event.senderFrame !== window.webContents.mainFrame || !calls.includes(method)) throw new Error('Invalid fixture call')
     return (service as unknown as Record<string, (id: number, args: unknown) => unknown>)[method](event.sender.id, args)
@@ -138,7 +138,10 @@ app.whenReady().then(async () => {
     }
   }
   await run(`window.previewAcceptance.activate(window.previewAcceptance.tabs.find(tab=>tab.presentation?.fileName==='history.html').id)`)
-  await new Promise(resolve=>setTimeout(resolve,80))
+  for (let count=0;count<250;count++) {
+    if (await run(`window.previewAcceptance.activeTab?.content?.kind === 'html' && document.querySelector('.file-preview-tab-panel:not([hidden]) .file-preview-html-stage')?.dataset.documentState === 'loaded'`)) break
+    await new Promise(resolve=>setTimeout(resolve,20))
+  }
   const historyFrame = window.webContents.mainFrame.framesInSubtree.find(frame=>frame.url.includes('/history.html'))!
   await historyFrame.executeJavaScript(`window.fixtureKept=73;document.querySelector('#navigate').click()`)
   const routed=await historyFrame.executeJavaScript(`({query:location.search,title:document.querySelector('#rendered').textContent})`)
@@ -180,7 +183,7 @@ app.whenReady().then(async () => {
   for(let count=0;count<100 && service.ownsHtmlPreviewOrigin(window.webContents.id,freshOrigin);count++) await new Promise(resolve=>setTimeout(resolve,20))
   cases.push({name:'closed tab revokes its site',ok:!service.ownsHtmlPreviewOrigin(window.webContents.id,freshOrigin),evidence:{revoked:!service.ownsHtmlPreviewOrigin(window.webContents.id,freshOrigin)}})
   const channels = await run(`Array.from(document.querySelectorAll('.file-preview-html-stage')).map(el => ({document:el.dataset.documentState,channel:el.dataset.channelState}))`)
-  cases.push({name:'diagnostic connections',ok:channels.length === names.length - 1 && channels.every((state: {channel:string}) => state.channel === 'connected'),evidence:channels})
+  cases.push({name:'diagnostic connections',ok:channels.length > 0 && channels.length <= 4 && channels.every((state: {channel:string}) => state.channel === 'connected'),evidence:channels})
   console.log(JSON.stringify({ htmlPreviewAcceptance: true, ok: cases.every(result => result.ok), cases, errors }))
   await service.closeAll()
   window.destroy()

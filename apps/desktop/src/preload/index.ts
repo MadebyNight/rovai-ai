@@ -474,6 +474,12 @@ const api: RovaiApi = {
     }
   },
   filePreview: {
+    updateRetention(state) { return ipcRenderer.invoke('rovai:file-preview-retention', state) },
+    onResourcesReleased(listener) {
+      const handler = (_event: Electron.IpcRendererEvent, value: { handleIds: string[] }): void => listener(value)
+      ipcRenderer.on('rovai:file-preview-resources-released', handler)
+      return () => ipcRenderer.removeListener('rovai:file-preview-resources-released', handler)
+    },
     bindCamp(campId) {
       return ipcRenderer.invoke('rovai:file-preview-bind-camp', campId)
     },

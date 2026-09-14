@@ -1123,3 +1123,18 @@ Node 317 通过/2 既有平台跳过；执行区真实 Electron 验收 7 项通�
 当前未发布官方 Server Release，不把本地 fixture、编译或其他 Linux Runtime 验收宣布为真实发布升级通过。
 新增 Rust 测试分别拥有发布准入/状态门禁与程序目录事务；不启动 Core/SQLite，既有安装器输入矩阵继续由
 server-install 拥有。最小验证：`cargo test -p rovai-host --lib server_updates`。
+
+
+## 文件预览窗口保留
+
+2026-09-15 增量实现：窗口资源管理与稳定预览宿主、轻量阅读快照、分层 LRU、Main session 身份与满额回收、
+独立候选刷新及 HTML 文档就绪后切换。共享浏览器入口沿用 Host 容量，通过独立 restore 候选避免刷新破坏旧资源。
+验证覆盖热命中零额外读取、后台异步归属、关闭迟到结果、容量淘汰、HTML 页面身份和刷新失败保留旧版本。
+
+本机 macOS 验证通过：`pnpm typecheck`、`pnpm test`（202 个 Vitest 文件、2053 项测试）、
+`pnpm test:desktop-bridge`、`pnpm test:file-preview-layout`、`pnpm test:html-preview`、
+`pnpm test:file-reference-navigation`、`pnpm build:desktop` 与基于 main 的文档 CI 门禁。
+Electron 验收使用独立 userData、真实生产预览组件及 Main 文件服务，不启动 Core/Runtime；同时核对日夜主题截图。
+HTML 跨 Camp 验收直接检查同一 iframe、页面内存标记和 `performance.timeOrigin`，确认保留实际页面。
+Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 310 通过；workspace Clippy 通过。
+此增量没有 Rust 改动，不把本机 fixture 结果声明为跨平台发布资格或应用进程内存上限证明。

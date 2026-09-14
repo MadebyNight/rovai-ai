@@ -57,9 +57,9 @@ last_updated: 2026-09-13
 按钮收起/恢复整个预览区，保留所有 Tab、当前选择、阅读位置与稳定比例。尚无 Tab 时展开空预览，提示从会话
 文件链接或 File Change 卡片选择内容，不伪造默认文件；关闭最后一个 Tab 仍自动收起预览。
 切换 Camp 时，各 Camp 的 Tab 顺序、当前 Tab 与 Pane 可见性在本窗口内独立记忆；关闭 App 后不恢复。返回 Camp
-先显示安全 Tab shell，只有 Pane 可见时才恢复 active 文件，其他普通文件首次激活时再加载，不用旧正文制造即时假象。
+直接复用热预览内容、活动标签和阅读位置；只有被淘汰或未加载的内容才按需读取活动标签，不等待版本检查。
 预览内链接成功打开当前 Camp 工作区内的普通文件后，该子 Tab 使用 Main 签发的独立工作区恢复来源；关闭或删除父 Tab
-不影响它再次重验。未取得可重验业务 source 的项目外 child 或临时授权派生文件仍只保留 unavailable shell，
+不影响它再次重验。未取得可重验业务 source 的项目外 child 或临时授权派生文件在热集合中保留原能力；能力撤销后只保留 unavailable shell，
 不显示新的恢复入口或状态装饰。
 
 预览顶栏空白处与会话顶栏共用原生窗口拖拽和双击行为（遵循平台标题栏设置），不另造全屏状态。
@@ -158,9 +158,9 @@ Tab。全 operation-only 卡片使用“查看文件”，header 默认打开第
 “打开当前文件”继续使用 `run_evidence / open_current` 的来源与授权校验，成功后激活独立普通文件 Tab；
 历史变更 Tab 保留，可以直接切回。历史 Tab 的右键菜单只包含关闭/关闭右侧/关闭其他/全部关闭，不能将
 不可变历史误当成当前文件执行重新加载或系统文件操作。详情加载、错误与重试均留在预览区，不遮挡会话。
-普通文件和历史 Tab 在同一 Camp 内切换、缩放与收起时保留各自的 Viewer 实例和阅读位置。切换 Camp 释放当前文件
-能力和 Viewer 内容，但在窗口 session 中保留无能力 shell；返回后 File Change 仍按 AgentRun/epoch/evidence ID 读取
-不可变 detail，不从当前工作区推测历史。
+普通文件和历史 Tab 在同一 Camp 内切换、缩放与收起时保留各自的 Viewer 实例和阅读位置。切换 Camp 保留热预览的
+实际 Viewer、文件能力与不可变 detail；容量淘汰仍保留标签和位置，冷恢复按 AgentRun/epoch/evidence ID 读取
+不可变 detail，不从当前工作区推测历史。HTML 限制 4 个活实例，隐藏不承诺暂停页面脚本；刷新失败保留旧页面。
 
 ## 路径与 Viewer
 
@@ -247,11 +247,11 @@ HTML 原生解析文档/资源相对路径与站点根相对路径，自动加�
 才显示／激活目标 Tab 和预览 Pane。文件已移动、删除、无权或读取失败时，当前页只显示红色 Toast `无法打开该文件`，不创建失败预览页、不切换
 当前 Tab、不替换已有 ready 内容，也不抢焦点；不支持应用内预览的类型同样不从这类入口启动系统应用或显示目录。
 精确事务与资源清理边界见
-[File Preview v12](../../contracts/file-preview-v12.md)。
+[File Preview v13](../../contracts/file-preview-v13.md)。
 
 首次打开与恢复使用 cold/opening/ready/missing/unavailable/error；快速成功直接显示正文，耗时后才显示轻量 Loading。
 无法形成当前可读内容时，正文只显示水平、垂直居中的 32px 通用文件轮廓，图标下方相隔 12px 显示一句 13px 常规
-公开文案。错误码到文案的 closed mapping 由 [File Preview v12](../../contracts/file-preview-v12.md) 继承的 v8 失败呈现拥有。
+公开文案。错误码到文案的 closed mapping 由 [File Preview v13](../../contracts/file-preview-v13.md) 继承的 v8 失败呈现拥有。
 该状态不显示路径、尺寸、标题、卡片、边框、按钮、技术详情或内部能力名称；错误内容区之外的 Tabs、Viewer 布局和
 其他 Camp 界面沿用既有视觉，不以本状态为理由重做。
 历史 Attachment 初始 availability 为 unknown；预览、打开或显示所在位置的结果只更新当前卡片为 available、missing、
@@ -284,4 +284,4 @@ Managed/legacy 等无路径附件不创建空路径行，也不显示内部路�
 重试在详情与文档失败页中均有明确的进行中状态并禁用重复提交；等待期间保留旧页面及诊断。重试失败显示
 “重新加载失败”，展开可读具体原因；成功后按新 generation 重建页面并收起详情。源码切换使用既有只读源码阅读器
 与网页查找模式，交互 iframe 保持挂载，保留输入、滚动和脚本状态。详情最多 100 项，按文本呈现；未知位置明确
-标注，不显示注入后的伪源码位置。窗口、Tab、Camp、刷新与失效上下文清理见 [File Preview v12](../../contracts/file-preview-v12.md)。
+标注，不显示注入后的伪源码位置。窗口、Tab、Camp、刷新与失效上下文清理见 [File Preview v13](../../contracts/file-preview-v13.md)。

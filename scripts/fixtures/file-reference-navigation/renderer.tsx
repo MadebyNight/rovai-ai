@@ -215,6 +215,7 @@ Object.assign(window, { navigationTest: {
       sameTimeline: scroll === bookmarkedTimeline, sameLink: link() === bookmarkedLink,
       targetLines: [...document.querySelectorAll<HTMLElement>('.cm-location-target')]
         .map((row) => Number(/value_(\d+)/u.exec(row.textContent ?? '')?.[1])),
+      viewerGeometry: { target: target?.getBoundingClientRect().toJSON(), viewport: viewerScroller?.getBoundingClientRect().toJSON(), scrollTop: viewerScroller?.scrollTop },
       targetVisible: Boolean(target && viewerScroller
         && target.getBoundingClientRect().top >= viewerScroller.getBoundingClientRect().top
         && target.getBoundingClientRect().bottom <= viewerScroller.getBoundingClientRect().bottom),

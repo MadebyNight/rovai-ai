@@ -7,7 +7,7 @@ import {
   type FilePreviewOpenFeedback,
   type FilePreviewTabModel
 } from './FilePreviewContext'
-import { FilePreviewPane } from './FilePreviewPane'
+import { FilePreviewPaneContent as FilePreviewPane } from './FilePreviewPane'
 import { FilePreviewTabs } from './FilePreviewTabs'
 
 vi.mock('./FilePreviewContext', () => ({ useFilePreview: vi.fn(), useFilePreviewApi: () => ({}) }))
@@ -75,7 +75,7 @@ function renderTabs(openFeedback: FilePreviewOpenFeedback | null = null): string
 
 function renderPane(): string {
   vi.mocked(useFilePreview).mockReturnValue(preview)
-  return renderToStaticMarkup(createElement(FilePreviewPane))
+  return renderToStaticMarkup(createElement(FilePreviewPane, { visible: true }))
 }
 
 let preview: FilePreviewContextValue
@@ -106,6 +106,7 @@ beforeEach(() => {
     toggleHtmlSource: vi.fn(),
     reopen: vi.fn(),
     retry: vi.fn(),
+    saveReading: vi.fn(), loadChanges: vi.fn(), loadHtmlSource: vi.fn(), saveHtmlSource: vi.fn(), completeHtmlRefresh: vi.fn(), displayed: vi.fn(),
     changePage: vi.fn()
   }
 })
