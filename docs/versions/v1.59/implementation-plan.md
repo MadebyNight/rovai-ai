@@ -106,14 +106,32 @@ Kimi 按用户授权重试失败后跳过。其他阻塞不等于 Linux OS 不�
 66.40 秒、峰值 948539392 字节，无 max/oom/swap。ZCode 0.16.5 两轮前五项通过，但取消均留下独立进程组的
 Python 子进程。第二轮仅加私有信号观测：原生 ps 枚举 616 ms 超过内核的 500 ms 期限，随后只终止 Bash，
 Python 重新挂靠 PID 1；测试结束已由 cgroup 清理，无内存压力。Linux 显式 ZCode Host 回收改用取消前的 pidfd
-身份；无保留后台任务时取消关闭整个 Host，有后台任务时保留原有作用域取消。修复后真实复验待下一个包。
+身份；无保留后台任务时取消关闭整个 Host，有后台任务时保留原有作用域取消。[64b52784 真实复验](evidence/linux-server/64b52784/advin-runtime.json)六项全部通过，67.01 秒、峰值 1721004032 字节，
+真实前台取消子进程已退出，无 max/oom/swap。该 CI 因后续启动修复构建而取消，使用 manifest 校验过的
+原生 preview 归档完成 Runtime 复验，不将其称为通过三系统 Gate A 的发布包。
 [Advin 同包 Gate A](evidence/linux-server/a5f25ba0/advin-server-os.json)通过。
 
 常驻 systemd 采用 `UMask=0077` 后，HTTPS 登录和读写成功，但首条 UI Run 停留 queued；日志明确提示内置
 Skill 摘要不匹配。新建内置文件的声明模式 0644 被 umask 过滤成 0600，摘要包含模式，导致 Skills subsystem degraded。
 既有 `skill::slow_tests::official_skills_apply_management_policy_and_preserve_user_managed_changes` 在独立进程
 umask 077 下复现同一失败；修复通过新文件句柄显式恢复内置声明模式，私有 Skill 根权限保持不变。
-Gate A 增加 umask 077 和五项执行基础 subsystem ready 检查，避免再由纯 HTTP 成功掩盖调度阻塞。
+既有测试在相同 umask 下修复后通过（1 项）；Gate A 增加 umask 077 和五项执行基础 subsystem ready 检查，
+避免再由纯 HTTP 成功掩盖调度阻塞。初次 HTTPS 与调度阻塞记录见[部署观测](evidence/linux-server/a5f25ba0/deployment.json)。
+
+最终安装来源为 `448c234f9163c58f9cb122114453131e7764e15c`；[CI Run](https://github.com/murray17/rovai-ai/actions/runs/34856416812)
+已全部通过：[Ubuntu 22.04](evidence/linux-server/448c234f/ubuntu-22.04.json)、
+[Ubuntu 24.04](evidence/linux-server/448c234f/ubuntu-24.04.json)、[Debian 12 VM](evidence/linux-server/448c234f/debian-12.json)
+与 [Advin](evidence/linux-server/448c234f/advin-server-os.json)使用同一归档，包含 umask 077 和执行基础子系统检查。
+[ABI](evidence/linux-server/448c234f/linux-abi.json)最高导入 GLIBC_2.34，manifest SHA-256 为
+`d06610be60674bf90b6cd2a5516ddfb41525a3b479752535a1e6abab0d53e9ed`。
+
+[常驻部署](evidence/linux-server/448c234f/deployment.json)通过公网 HTTPS、匿名拒绝、Token 登录、systemd 重启和
+持久会话。浏览器升级刷新后恢复登录，在 390×844 视口配置 Codex 的 workspace-write/on-request，真实发消息并
+收到「连接成功」，Run succeeded。五项基础子系统 ready；服务限制 4 GiB / swap 0，异常退出停止，不自动重启，
+已启用开机启动。机器资料、私有凭据路径和手机操作步骤记录在用户 Obsidian 文档，不把凭据写入仓库。
+
+本机共 11 项 Runtime 完成上述六项有限检查；TRAE 按维护者异机实测记录通过，Kimi 已按授权跳过，
+Antigravity 保留地区资格阻塞。Server OS 与 Runtime 结果分别记录，未由 Gate A 推导 Gate B。
 
 这些是有限集成证据，`fullQualification=false`；Skills/MCP、权限与压缩等 First-Class 全轴尚未逐项闭合，
 14 项 Linux Runtime 均保留 Preview 与缺失资格原因。正式 Release 和实体手机资格尚未完成。
