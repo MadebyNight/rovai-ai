@@ -633,6 +633,12 @@ export class ConsoleClient {
   async files<T>(action: string, request: unknown): Promise<T> {
     return this.#json('files', { method: 'POST', body: JSON.stringify({ action, request }) })
   }
+  async updates(operation: 'get' | 'check' | 'download' | 'install', version?: string): Promise<import('@contracts').AppUpdateSnapshot> {
+    const response = await this.#json<{ result: import('@contracts').AppUpdateSnapshot }>('updates', {
+      method: 'POST', body: JSON.stringify({ operation, ...(version ? { version } : {}) })
+    })
+    return response.result
+  }
   async fileBytes(action: 'readBinary' | 'readChildImage' | 'download', request: unknown): Promise<FilePreviewOperationResult<Omit<FilePreviewBinaryContent, 'bytes'> & { blob: Blob; name: string }>> {
     const generation = this.#generation
     const response = await this.#authorized('files/bytes', { method: 'POST', body: JSON.stringify({ action, request }) })
@@ -710,14 +716,14 @@ export class ConsoleClient {
     return this.#json('workspaces', { method: 'POST', body: JSON.stringify({ path, offset }) })
   }
 
-  async #json<T>(path: 'session' | 'session/renew' | 'channels' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
+  async #json<T>(path: 'session' | 'session/renew' | 'channels' | 'updates' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
     const generation = this.#generation
     const result = await (await this.#authorized(path, options)).json() as T
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     return result
   }
 
-  async #authorized(path: 'session' | 'session/renew' | 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'files/bytes' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
+  async #authorized(path: 'session' | 'session/renew' | 'channels' | 'updates' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'files/bytes' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
     if (!this.#token) throw new SessionRequired()
     const generation = this.#generation
     if (this.#localExpiry !== null && this.#localExpiry - this.#now() <= this.#renewalWindow && !['session', 'session/renew', 'logout'].includes(path)) await this.renewIfNeeded()

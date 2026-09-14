@@ -55,6 +55,7 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     }
     await browser.send('Page.navigate', { url: service.origin })
     await browser.wait(`document.querySelector('#administrator-token')!==null`)
+    await verifyInitialLogin(browser, 'desktop', output)
     await fill('#administrator-token', service.administratorToken)
     await browser.click(`document.querySelector('.web-login button[type=submit]')`)
     await browser.wait(`document.documentElement.dataset.mobileWeb==='true' && document.querySelector('.mobile-bottom-navigation')!==null`)
@@ -258,10 +259,10 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     stage = 'settings'
     await click('设置')
     await capture('settings')
-    await click('关于')
-    await browser.wait(`document.querySelector('.remote-about-settings')!==null`)
-    await browser.wait(`/版本 \\d+\\.\\d+/.test(document.querySelector('.about-identity').textContent)`)
-    assert.equal(await browser.evaluate(`document.querySelector('.server-update-entry')===null`), true, 'Desktop-hosted mobile has no updater')
+    await click('关于与更新')
+    await browser.wait(`document.querySelector('.about-updates-settings')!==null`)
+    await browser.wait(`/版本 v?\\d+\\.\\d+/.test(document.querySelector('.about-identity').textContent)`)
+    assert.equal(await browser.evaluate(`document.querySelector('.about-update-actions')===null`), true, 'Desktop-hosted mobile has no updater')
     await capture('desktop-about')
     await browser.click(byLabel('返回设置'))
     await click('外观')
@@ -281,6 +282,12 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
         assert.equal(await browser.evaluate(`(${element('退出登录')}).textContent`), '退出登录')
         assert.equal(await browser.evaluate(`getComputedStyle(${element('退出登录')}).letterSpacing`), 'normal')
         assert.equal(await browser.evaluate(`getComputedStyle(${element('退出登录')}).whiteSpace`), 'nowrap')
+        await click('退出登录')
+        await browser.wait(`document.querySelector('#administrator-token')!==null`)
+        await verifySignedOutLogin(browser, 'desktop', output)
+        await fill('#administrator-token', service.administratorToken)
+        await browser.click(`document.querySelector('.web-login button[type=submit]')`)
+        await browser.wait(`document.querySelector('.web-login-overlay')===null && Boolean(${element('退出登录')})`)
       }
       await capture(`settings-${label}`)
       await browser.click(byLabel('返回设置'))
@@ -412,7 +419,7 @@ test('phone execution shares Desktop evidence, wraps avatars and retains Run dis
   finally { await browser.close(); await rm(fixture, { recursive: true, force: true }) }
 })
 
-test('standalone Server phone settings expose native update guidance and hide channels', { timeout: 60_000 }, async t => {
+test('standalone Server phone settings expose update controls, initial login and hide channels', { timeout: 60_000 }, async t => {
   if (process.platform !== 'darwin' || !await access(executable).then(() => true, () => false)) { t.skip('Requires macOS Chrome'); return }
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-mobile-server-')))
   const dataDir = join(fixture, 'server')
@@ -431,10 +438,21 @@ test('standalone Server phone settings expose native update guidance and hide ch
     const origin = /Address  (http:\/\/127\.0\.0\.1:\d+)/.exec(log)?.[1]
     assert.ok(origin)
     const token = (await readFile(join(dataDir, 'server-token'), 'utf8')).trim()
+    const update = (body, session, headers = {}) => fetch(`${origin}/api/v1/updates`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session}` } : {}), ...headers }, body: JSON.stringify(body) })
+    assert.equal((await update({ operation: 'get' })).status, 401)
+    const session = await (await fetch(`${origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: token }) })).json()
+    assert.equal((await update({ operation: 'get' }, session.token, { Origin: 'http://other-device.invalid' })).status, 403)
+    for (const body of [{ operation: 'exec' }, { operation: 'get', url: 'https://other-device.invalid/package' }, { operation: 'install', version: '999.0.0', path: '/tmp/package' }]) {
+      assert.equal((await update(body, session.token)).status, 400)
+    }
+    assert.equal((await update({ operation: 'install', version: '999.0.0' }, session.token)).status, 409)
+    assert.match((await (await update({ operation: 'get' }, session.token)).json()).result.currentVersion, /^\d+\.\d+\.\d+$/)
+    await fetch(`${origin}/api/v1/logout`, { method: 'POST', headers: { Authorization: `Bearer ${session.token}` } })
     browser = await launchAcceptanceBrowser({ executable, args: ['--headless=new', `--user-data-dir=${join(fixture, 'chrome')}`, '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', 'about:blank'] })
     await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await browser.send('Page.navigate', { url: origin })
     await browser.wait(`document.querySelector('#administrator-token')!==null`)
+    await verifyInitialLogin(browser, 'server', output)
     await browser.click(`document.querySelector('#administrator-token')`)
     await browser.send('Input.insertText', { text: token })
     await browser.click(`document.querySelector('.web-login button[type=submit]')`)
@@ -442,13 +460,19 @@ test('standalone Server phone settings expose native update guidance and hide ch
     await browser.click(`[...document.querySelectorAll('.mobile-bottom-navigation button')].find(e=>e.textContent==='设置')`)
     assert.equal(await browser.evaluate(`[...document.querySelectorAll('.settings-sidebar-menu button')].some(e=>e.textContent.trim()==='渠道')`), false)
     await browser.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent==='关于与更新')`)
-    await browser.wait(`document.querySelector('.server-update-entry')!==null`)
-    await browser.wait(`/版本 \\d+\\.\\d+/.test(document.querySelector('.about-identity').textContent)`)
+    await browser.wait(`document.querySelector('.about-update-actions')!==null`)
+    await browser.wait(`/版本 v?\\d+\\.\\d+/.test(document.querySelector('.about-identity').textContent)`)
     assert.match(await browser.evaluate(`document.querySelector('.about-identity').textContent`), /Server/)
-    assert.match(await browser.evaluate(`document.querySelector('.server-update-entry a').href`), /server-preview/)
+    assert.ok(await browser.evaluate(`document.querySelector('.about-update-actions button')!==null`))
+    assert.match(await browser.evaluate(`document.querySelector('.about-update-source').textContent`), /Server GitHub Release/)
     await browser.capture(join(output, 'server-about.png'))
+    await browser.click(`document.querySelector('[aria-label="返回设置"]')`)
+    await browser.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent==='远程连接')`)
+    await browser.click(`[...document.querySelectorAll('button')].find(e=>e.getClientRects().length && e.textContent.trim()==='退出登录')`)
+    await browser.wait(`document.querySelector('#administrator-token')!==null`)
+    await verifySignedOutLogin(browser, 'server', output)
     assert.deepEqual(browser.errors, [])
-    await writeFile(join(output, 'server-validation.json'), JSON.stringify({ realServer: true, actualUpdateInstall: false, runtime: false, checks: ['server-hides-channels', 'server-only-native-update-entry', 'real-version'] }, null, 2))
+    await writeFile(join(output, 'server-validation.json'), JSON.stringify({ realServer: true, actualUpdateInstall: false, runtime: false, checks: ['server-hides-channels', 'server-update-controls', 'update-auth-and-closed-operations', 'host-specific-login', 'logout-initial-login', 'real-version'] }, null, 2))
   } finally {
     await browser?.close()
     child.kill('SIGINT'); const deadline = setTimeout(() => child.kill('SIGKILL'), 5000)
@@ -456,3 +480,25 @@ test('standalone Server phone settings expose native update guidance and hide ch
     await rm(fixture, { recursive: true, force: true })
   }
 })
+
+async function verifyInitialLogin(browser, kind, output) {
+  const expected = kind === 'desktop' ? '在 Desktop「设置 → 能力 → 远程连接」中查看。' : '在 Server 启动终端中查看。'
+  assert.equal(await browser.evaluate(`document.querySelector('#web-login-help').textContent`), expected)
+  for (const theme of ['light', 'dark']) {
+    await browser.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }, { name: 'prefers-reduced-motion', value: 'reduce' }] })
+    for (const [width, height] of [[375, 812], [844, 390], [1440, 900]]) {
+      await browser.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 1040 })
+      assert.equal(await browser.evaluate(`document.documentElement.scrollWidth > innerWidth`), false)
+      await browser.capture(join(output, `login-${kind}-${theme}-${width}.png`))
+    }
+  }
+  await browser.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] })
+  await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+}
+async function verifySignedOutLogin(browser, kind, output) {
+  assert.equal(await browser.evaluate(`document.querySelector('#web-login-title').textContent`), '登录 Rovai AI')
+  assert.equal(await browser.evaluate(`document.querySelector('.web-login-description').textContent`), '继续你的协作。')
+  assert.equal(await browser.evaluate(`document.querySelector('#administrator-token').value`), '')
+  assert.equal(await browser.evaluate(`document.querySelector('#administrator-token').type`), 'password')
+  await browser.capture(join(output, `login-${kind}-after-logout.png`))
+}

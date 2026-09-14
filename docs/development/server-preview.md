@@ -182,7 +182,10 @@ pnpm smoke:host-web-runtime
 ## 更新、备份与既有 Mac 包演练
 
 新入口更新时重新运行同一安装器，替换匹配程序与 UI，仍用原 `--data-dir` 启动。自定义数据根不会被安装器改写。
-WebUI 检查/更新并重启、`rovai-server upgrade` 仍是后续便利入口，当前尚不可用；不宣称无损热升级或自动回滚。
+完整原生包提供 WebUI/MobileUI「关于与更新」中的检查、下载、安装并重启；使用独立的 `server-v<版本>` 资产。
+当前官方 Server 通道仍需发布和晋升，未发布会明确显示，不能将模拟发布源验证当成真实 Release 升级。
+数据必须放在程序目录之外。安装前会受控结束执行并保留 Session，Windows 重启后不另开终端，诊断仍在原数据目录。
+`rovai-server upgrade` 命令未提供；不宣称无损热升级或数据库自动回滚。
 停机备份新布局时保留整个数据根及其权限、目录身份要求；源附件、用户项目与 Agent CLI 原生认证/会话独立保留。
 恢复前保留当前数据，不让旧程序直接打开已升级 schema。
 
@@ -205,3 +208,12 @@ WebUI 检查/更新并重启、`rovai-server upgrade` 仍是后续便利入口�
 Runtime marker 绑定目录身份，直接替换根目录会按合同拒绝启动。先保留升级后的完整状态，再执行回退；
 不要让旧包直接读取已升级数据库，不修改 schema/receipt，也不重新初始化来绕过失败。
 本轮演练不涵盖跨机器迁移、运行中备份或任意备份工具，不新增系统服务安装器。
+
+
+构建新的本机包而保留正在使用的包：
+
+```sh
+node scripts/build-server.mjs --target-key macos-arm64 --output-dir /absolute/new/server-directory
+```
+
+`--output-dir` 必须尚不存在；归档放在同级 `<目录>-release` 中。该命令只构建，不停止或替换运行中的 Server。

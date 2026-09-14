@@ -416,3 +416,46 @@ Initialize is not admitted over HTTP. Existing browser-local copies are ignored;
 location, execution placement and map display remain local presentation choices. This is instance-wide preference
 storage, not shared Composer editing, account sync, or a second business service. Independent Server uses the same
 store under its own data root and does not read another Desktop instance's preferences.
+
+## Login presentation and Server updates
+
+The no-store HTML entry contains only `rovai-host-kind=desktop|server` as public presentation metadata.
+It selects one Token-help sentence before authentication; it grants no capability. First login, logout and
+expired-session login reuse the same form and heading. Editor proof, drafts, renewal and logout revocation
+retain the authentication contract above.
+
+Desktop-hosted Web/Mobile expose the shared About and Updates page with the current version and bundled,
+version-matched release notes. They expose no check/download/install actions or native updater bridge.
+Standalone `rovai-server` supplies the authenticated `POST /api/v1/updates` capability. The closed request is
+`{operation:"get"|"check"}` or `{operation:"download"|"install",version:string}`; paths, URLs and commands are
+never browser inputs. Desktop and the legacy headless Host return `updates_unsupported` (501).
+The response is `{result:AppUpdateSnapshot,error:null}` using the shared Desktop presentation states.
+The failure reason `release_unpublished` distinguishes an unpromoted Server channel from up-to-date.
+If restart remains unreachable for one minute, the browser uses `restart_unconfirmed` and offers a read-only
+connection retry instead of claiming success or issuing another installation.
+
+The Host checks once after startup and every six hours; automatic checks never download or install.
+Manual check is explicit. Check/download are serialized background operations, observed by authenticated
+polling. Repeated actions during a busy operation return its current state. Download and install require
+the exact release version observed by the client; stale versions and invalid state transitions fail.
+Only the fixed GitHub repository, `scripts/server-channel.txt`, stable `server-v<version>` release,
+matching native Server asset and `SHA256SUMS` are accepted. A draft, prerelease, missing/duplicate asset,
+invalid coordinate, oversized response, truncated file or checksum mismatch cannot become installable.
+The existing bundled native installer validates and extracts into an isolated staging installation with
+PATH modification disabled. The matching program/UI are copied to the program filesystem before shutdown.
+
+Installing requires a complete packaged installation with business data outside the program directory.
+Each running Server holds a shared lease on its executable; a program switch requires an exclusive lease,
+so another instance using the same files prevents replacement.
+Only after staging/preflight succeeds does the Host close HTTP and use the existing durable Core shutdown.
+An unsuccessful settlement never arms the program switch. Unix switches the managed revision link or
+portable program directory and execs the new Server; Windows uses a copied helper outside the locked
+program directory, waits for the parent's explicit settlement marker and pipe closure, then switches and
+starts the new Server. Restart preserves the resolved data directory, listener, proxy and LAN arguments.
+On Windows the restarted Server runs without opening another console; diagnostics remain in the same data root.
+
+A failed directory switch restores the prior program before attempting restart. Old program revisions/
+backups are retained; this is not database/schema rollback and does not promise recovery from failed new
+Core admission. The browser retains its ordinary Session and reloads the matching UI after observing a
+changed version. Network interruption is not proof of installation success. Official Release delivery and
+native Windows/Linux restart qualification must be recorded independently of fixture tests.

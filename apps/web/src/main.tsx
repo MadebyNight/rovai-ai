@@ -19,6 +19,8 @@ import './styles.css'
 import './mobile.css'
 
 const transport = new ConsoleClient(window.location.origin, fetch, sessionStorage, browserAuthStorage(window.location.origin))
+const entryKind = document.querySelector<HTMLMetaElement>('meta[name="rovai-host-kind"]')?.content
+const hostKind = entryKind === 'desktop' || entryKind === 'server' ? entryKind : null
 document.documentElement.dataset.platform = browserPlatform()
 document.documentElement.dataset.rovaiSurface = 'web'
 const loginTheme = matchMedia('(prefers-color-scheme: dark)')
@@ -154,16 +156,16 @@ function WebEntry() {
   }
   const current = adapter
   return <>
-    {current && <CampClientProvider client={current.environment.client}>
+    {current && <div className="web-authenticated-shell" hidden={!authenticated} inert={!authenticated}><CampClientProvider client={current.environment.client}>
       <CurrentUserProfileProvider api={current.profile}>
         <BusinessApp environment={current.environment} remoteConnection={<RemoteConnectionStatus origin={transport.origin} state={authenticated ? connection : 'expired'} onLogout={() => { setError(null); void transport.logout().catch(e => setError(e instanceof Error ? e.message : '退出未完成，请重试。')) }} />} sidebarFooter={authenticated && connection === 'offline' ? <div className="web-connection" role="status">
           <span>连接中断，编辑保留</span>
         </div> : undefined} />
       </CurrentUserProfileProvider>
-    </CampClientProvider>}
+    </CampClientProvider></div>}
     {authenticated && error && <div className="web-recovery-error" role="alert">{error}<button type="button" className="quiet-button compact" onClick={() => setError(null)}>关闭</button></div>}
     {workspaceChoice && <HostWorkspacePicker transport={transport} onSelect={finishWorkspace} />}
-    {!authenticated && <WebLogin reauthenticating={current !== null}
+    {!authenticated && <WebLogin hostKind={hostKind}
       status={scanning ? 'scanning' : restoring ? 'restoring' : busy ? 'submitting' : null}
       error={error} onLogin={token => { void login(token) }} />}
   </>

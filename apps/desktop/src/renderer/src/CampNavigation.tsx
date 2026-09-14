@@ -362,7 +362,7 @@ export function CampNavigation({
         {view === 'settings'
           ? (
               settingsNavigation ?? <SettingsSidebarNavigation
-                groups={SETTINGS_SIDEBAR_GROUPS.map(group => ({ ...group, items: group.items.filter(item => item.key !== 'channels' || client.channels).map(item => client.channels && !client.channels.native && item.key === 'about' ? { ...item, label: '关于' } : item) }))}
+                groups={SETTINGS_SIDEBAR_GROUPS.map(group => ({ ...group, items: group.items.filter(item => item.key !== 'channels' || client.channels) }))}
                 section={settingsSection}
                 updateBadge={updateBadge}
                 onSectionChange={onSettingsSectionChange}

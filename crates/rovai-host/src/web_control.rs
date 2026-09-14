@@ -10,16 +10,23 @@ pub struct WebControl {
     core: CoreService,
     data_dir: PathBuf,
     channels: Option<Arc<crate::desktop_channels::DesktopChannels>>,
+    updates: Option<Arc<dyn rovai_web::UpdateHost>>,
     state: Mutex<WebControlState>,
 }
 
 impl WebControl {
-    pub fn new(core: CoreService, desktop: bool, data_dir: PathBuf) -> Arc<Self> {
+    pub fn new(
+        core: CoreService,
+        desktop: bool,
+        data_dir: PathBuf,
+        updates: Option<Arc<dyn rovai_web::UpdateHost>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             channels: desktop
                 .then(|| Arc::new(crate::desktop_channels::DesktopChannels::new(core.clone()))),
             core,
             data_dir,
+            updates,
             state: Mutex::new(WebControlState {
                 server: None,
                 sessions: None,
@@ -39,6 +46,7 @@ impl WebControl {
                 self.channels
                     .clone()
                     .map(|channels| channels as Arc<dyn rovai_web::ChannelHost>),
+                self.updates.clone(),
             )
             .await
     }
@@ -117,7 +125,7 @@ impl HostControl for WebControl {
                     let config: WebConfig =
                         serde_json::from_value(params).map_err(|_| invalid())?;
                     let mut state = self.state.lock().await;
-                    let mut status = state.start(self.core.clone(), config, &self.data_dir, None, self.channels.clone().map(|channels| channels as Arc<dyn rovai_web::ChannelHost>)).await.map_err(|_| HostControlError { code: "HOST_WEB_START_FAILED", message: "Web 服务未开启。请检查端口是否被占用、WebUI 是否已构建，以及局域网访问是否已明确开启。".into() })?;
+                    let mut status = state.start(self.core.clone(), config, &self.data_dir, None, self.channels.clone().map(|channels| channels as Arc<dyn rovai_web::ChannelHost>), self.updates.clone()).await.map_err(|_| HostControlError { code: "HOST_WEB_START_FAILED", message: "Web 服务未开启。请检查端口是否被占用、WebUI 是否已构建，以及局域网访问是否已明确开启。".into() })?;
                     // The closed, parent-owned pipe returns this only to the
                     // local manager. It is absent from status and diagnostics.
                     status["administratorToken"] = json!(
@@ -181,10 +189,12 @@ impl WebControlState {
         data_dir: &std::path::Path,
         bootstrap: Option<&str>,
         channels: Option<Arc<dyn rovai_web::ChannelHost>>,
+        updates: Option<Arc<dyn rovai_web::UpdateHost>>,
     ) -> anyhow::Result<Value> {
         anyhow::ensure!(self.server.is_none(), "Web service is already running");
         let sessions = self.credentials(data_dir, bootstrap)?;
-        let running = WebServer::start_with_sessions(core, config, sessions, channels).await?;
+        let running =
+            WebServer::start_with_services(core, config, sessions, channels, updates).await?;
         let status = running.status();
         self.server = Some(running);
         Ok(status)

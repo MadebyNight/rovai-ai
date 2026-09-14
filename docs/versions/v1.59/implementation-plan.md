@@ -1094,3 +1094,17 @@ Node 317 通过/2 既有平台跳过；执行区真实 Electron 验收 7 项通�
 但共享 Web 生命周期在读取当前客户端私聊附件时得到 404（预期 200，`host-web.test.mjs:182`），仍待定位修复；
 该 Run 整体失败，Windows 不宣称通过。`e1e73ca2` 后续构建隔离改动已完成本机包级复验，尚无同提交四目标结果。
 用户最新要求仅推送现有远端分支、不新建 PR、不合并；既有 PR #345 保持打开，工作区保留以继续处理未完成项。
+
+
+## 当前增量：登录页统一与 Server 内更新
+
+2026-09-14 用户明确要求：Desktop 托管的 Web/Mobile 进入「关于与更新」只看版本说明；独立 Server
+提供与 Desktop 相同的检查、下载、安装与重启体验，下载独立 Server Release。此项替代前述仅说明入口的交付边界。
+登录页保持单组件，Host 类型只控制 Token 获取说明；退出后恢复初始表单，认证及草稿归属不变。
+
+已实现共享 AboutUpdatesSettingsView、Rust Server updater、固定 GitHub 来源、既有安装器验证与独立暂存、
+受控关闭后程序切换、Windows helper 与 Unix exec 重启。macOS 定向测试、真实 Host/浏览器回归、类型检查、
+构建与 Clippy 已通过，详细范围见 [本轮验证记录](evidence/server-updates/README.md)。
+当前未发布官方 Server Release，不把本地 fixture、编译或其他 Linux Runtime 验收宣布为真实发布升级通过。
+新增 Rust 测试分别拥有发布准入/状态门禁与程序目录事务；不启动 Core/SQLite，既有安装器输入矩阵继续由
+server-install 拥有。最小验证：`cargo test -p rovai-host --lib server_updates`。

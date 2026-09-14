@@ -7,6 +7,7 @@ import { ConsoleClient, WEB_OPERATIONS, type WebOperation } from './client'
 import { createBrowserNavigationHistory } from './navigation-history'
 import { browserEditingRecovery } from './editing-recovery'
 import { browserPreferences } from './preferences'
+import { createServerUpdates } from './server-updates'
 import { parseFileReference } from '../../desktop/src/file-preview-reference'
 import { writeClipboardText } from '../../desktop/src/renderer/src/clipboard'
 
@@ -164,7 +165,8 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     } catch { return { opened: false, error: 'target_unavailable', availability: 'missing' } }
   } }
   const { preferences, profile } = browserPreferences(transport.presentationScope, transport)
-  const environment: BusinessEnvironment = { navigationHistory: createBrowserNavigationHistory(transport.editingScope), client, preferences, files, selectWorkspaceDirectory }
+  const environment: BusinessEnvironment = { navigationHistory: createBrowserNavigationHistory(transport.editingScope), client, preferences, files, selectWorkspaceDirectory,
+    serverUpdates: transport.channels === 'desktop' ? undefined : createServerUpdates(transport) }
   return { environment, profile, invalidate: () => { for (const listener of listeners) listener(); void refreshUpdates() } }
 }
 

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { spawnSync, execFileSync } from 'node:child_process'
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { hostServerTargetKey, serverTarget } from './lib/sidecar-targets.mjs'
 import { archiveServerPackage } from './lib/server-archive.mjs'
@@ -14,7 +14,12 @@ const key = targetIndex === -1 ? hostServerTargetKey() : arguments_[targetIndex 
 const target = serverTarget(key)
 const debug = arguments_.includes('--debug')
 const profile = debug ? 'debug' : 'release'
-const allowed = new Set(['--debug', '--target-key', key])
+const outputIndex = arguments_.indexOf('--output-dir')
+const customOutput = outputIndex === -1 ? null : arguments_[outputIndex + 1]
+if (outputIndex !== -1 && (!customOutput || customOutput.startsWith('--'))) throw new Error('--output-dir requires a new directory')
+const destination = customOutput ? resolve(customOutput) : join(repository, 'out/server', key)
+if (customOutput && existsSync(destination)) throw new Error('--output-dir must not replace an existing installation')
+const allowed = new Set(['--debug', '--target-key', key, '--output-dir', ...(customOutput ? [customOutput] : [])])
 if (arguments_.some((argument) => !allowed.has(argument))) throw new Error('Unknown Server build option')
 // Native verification owns the resulting executable; do not package a foreign
 // binary as though this machine had run its platform acceptance.
@@ -30,9 +35,13 @@ const webBuildDirectory = mkdtempSync(join(tmpdir(), 'rovai-server-web-'))
 try {
   run('pnpm', ['build:web', '--outDir', webBuildDirectory])
   run('cargo', ['build', '--locked', '-p', 'rovai-host', '-p', 'rovai-core', '--bin', 'rovai-host', '--bin', 'rovai-server', '--bin', 'rovai', ...(debug ? [] : ['--release'])])
-  const destination = join(repository, 'out/server', key)
-  rmSync(destination, { recursive: true, force: true })
-  mkdirSync(destination, { recursive: true })
+  if (customOutput) {
+    mkdirSync(dirname(destination), { recursive: true })
+    mkdirSync(destination) // Refuse a concurrently created installation, too.
+  } else {
+    rmSync(destination, { recursive: true, force: true })
+    mkdirSync(destination, { recursive: true })
+  }
   for (const name of ['rovai-host', 'rovai-server', 'rovai']) {
     const executable = `${name}${target.executableSuffix}`
     copyFileSync(join(repository, 'target', profile, executable), join(destination, executable))
@@ -72,7 +81,7 @@ try {
   execFileSync(join(destination, `rovai-host${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
   execFileSync(join(destination, `rovai-server${target.executableSuffix}`), ['--version'], { stdio: 'inherit' })
   console.log(`Server preview staged at ${destination}`)
-  const archive = archiveServerPackage(destination, join(repository, 'out/server/releases', key), { version, target: key })
+  const archive = archiveServerPackage(destination, customOutput ? `${destination}-release` : join(repository, 'out/server/releases', key), { version, target: key })
   console.log(`Unpublished Server archive: ${archive.archive}`)
 } finally {
   rmSync(webBuildDirectory, { recursive: true, force: true })

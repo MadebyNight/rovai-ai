@@ -57,7 +57,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host；[V1.59-D02](decisions.md#v1-59-d02)确定独立 Server 数据根和原生部署；[V1.59-D05](decisions.md#v1-59-d05)确定长期登录与普通 Session 续期 |
 | Contracts | 已更新 | [Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)拥有新入口与数据根，v1 保留兼容；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 153 保留旧 Desktop 数据和旧任务分支 150 草稿；154 隔离单聊 Draft/Pending 客户端 |
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
-| UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机对话/执行双入口、更多菜单与紧凑间距已按最终稿接入；执行彩环最多显示 2 个头像及 +N，Run 文案由同一共享状态驱动；Server 仅提供既有原生更新流程入口，自动更新 API 未交付 |
+| UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机对话/执行双入口、更多菜单与紧凑间距已按最终稿接入；执行彩环最多显示 2 个头像及 +N，Run 文案由同一共享状态驱动；Server 更新 API 与共享更新页已接入，Desktop 托管只读版本说明；真实 Release 和各平台升级验收分别记录 |
 | Runtime Activity | 确认无需更新 | Runtime Adapter 语义与活动分类保持不变 |
 | Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升 |
 | Documentation routing | 已更新 | 文档、架构与决定导航增加统一 Host 入口 |

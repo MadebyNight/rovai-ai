@@ -4093,6 +4093,7 @@ export function BusinessApp({
             busy={busy}
             section={settingsSection}
             updates={appUpdates}
+            serverUpdates={environment.serverUpdates}
             onDiagnosticsNavigate={(section) => chooseSettingsSection(section)}
             onReload={async () => {
               await Promise.all([loadOverview(), loadHealth()])
@@ -4335,6 +4336,7 @@ export function SettingsView({
   busy,
   section,
   updates,
+  serverUpdates,
   onDiagnosticsNavigate,
   onReload,
   onAppearanceChange
@@ -4354,6 +4356,7 @@ export function SettingsView({
   busy: string | null
   section: SettingsSection
   updates: AppUpdatesController
+  serverUpdates?: import('@contracts').AppUpdatesApi
   onDiagnosticsNavigate(section: 'mcp' | 'runtime', runtimeKind?: AdapterKind): void
   onReload(): Promise<void>
   onAppearanceChange(preferences: AppearancePreferences): Promise<AppearanceSnapshot>
@@ -4398,7 +4401,7 @@ export function SettingsView({
           <DiagnosticsCenter onNavigate={onDiagnosticsNavigate} platform={platform} />
         )}
         {section === 'about' && (
-          zoomManagedBy === 'browser' ? <RemoteAboutSettings /> : <AboutUpdatesSettings updates={updates} />
+          zoomManagedBy === 'browser' ? <RemoteAboutSettings updatesApi={serverUpdates} /> : <AboutUpdatesSettings updates={updates} />
         )}
       </div>
     </div>

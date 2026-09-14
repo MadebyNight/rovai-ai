@@ -1517,13 +1517,17 @@ name = "rovai-host"
 version = "0.2.6"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "dirs",
  "libc",
  "os_pipe",
+ "reqwest",
  "rovai-core",
  "rovai-web",
+ "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",

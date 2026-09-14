@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 type LoginStatus = 'restoring' | 'scanning' | 'submitting' | null
 
 /** Authentication presentation only; session and editor ownership stay in WebEntry/ConsoleClient. */
-export function WebLogin({ reauthenticating, status, error, onLogin }: {
-  reauthenticating: boolean
+export function WebLogin({ hostKind, status, error, onLogin }: {
+  hostKind: 'desktop' | 'server' | null
   status: LoginStatus
   error: string | null
   onLogin(token: string): void
@@ -27,8 +27,8 @@ export function WebLogin({ reauthenticating, status, error, onLogin }: {
             <path d="M3 20.96 Q12 15.96 21 20.96" fill="none" stroke="currentColor" strokeWidth="2.08" strokeLinecap="round" />
             <circle className="brand-rendezvous-point" data-brand-point="rendezvous" cx="12" cy="18.46" r="1.05" />
           </svg>
-          <h1 id="web-login-title">{reauthenticating ? '重新登录 Rovai AI' : '登录 Rovai AI'}</h1>
-          <p className="web-login-description">{reauthenticating ? '当前编辑已保留，登录后继续。' : '继续你的协作。'}</p>
+          <h1 id="web-login-title">登录 Rovai AI</h1>
+          <p className="web-login-description">继续你的协作。</p>
         </header>
         {pending ? <div className="web-login-pending" role="status">
           <span className="web-login-spinner" aria-hidden="true" />
@@ -60,7 +60,9 @@ export function WebLogin({ reauthenticating, status, error, onLogin }: {
           <button className="web-login-submit" type="submit" disabled={status !== null || !credential.trim()}>
             {status === 'submitting' ? '正在登录…' : '登录'}
           </button>
-          <p id="web-login-help" className="web-login-help">在 Desktop「设置 → 远程连接」<br />或 Server 启动终端中查看。</p>
+          <p id="web-login-help" className="web-login-help">{hostKind === 'desktop'
+            ? '在 Desktop「设置 → 能力 → 远程连接」中查看。'
+            : hostKind === 'server' ? '在 Server 启动终端中查看。' : '请输入此服务的登录 Token。'}</p>
         </form>}
       </section>
     </div>

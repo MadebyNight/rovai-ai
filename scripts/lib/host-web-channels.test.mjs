@@ -56,6 +56,9 @@ test('Hosted channels use the closed parent adapter and survive browser logout a
   try {
     await within(host.ready)
     let web = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory })
+    const entry = await fetch(`${web.origin}/`)
+    assert.equal(entry.headers.get('cache-control'), 'no-store')
+    assert.match(await entry.text(), /name="rovai-host-kind" content="desktop"/)
     const login = async () => {
       const reply = await fetch(`${web.origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: web.administratorToken }) })
       assert.equal(reply.status, 200)
@@ -63,6 +66,9 @@ test('Hosted channels use the closed parent adapter and survive browser logout a
     }
     const request = (session, body, extra = {}) => fetch(`${web.origin}/api/v1/channels`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session.token}` } : {}), ...extra }, body: JSON.stringify(body) })
     let first = await login(), second = await login()
+    for (const operation of ['get', 'check', 'download', 'install']) {
+      assert.equal((await fetch(`${web.origin}/api/v1/updates`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${first.token}` }, body: JSON.stringify({ operation, version: '999.0.0' }) })).status, 501, 'Desktop never exposes an updater to its browser')
+    }
     assert.equal((await request(null, { operation: 'get' })).status, 401)
     assert.equal((await request(first, { operation: 'get' }, { Origin: 'http://other-device.invalid' })).status, 403)
     for (const body of [{ operation: 'connect' }, { operation: 'get', method: 'shell.open' }, { operation: 'publish', agentId: 'a', kind: 'other' }, { operation: 'selectApprover', agentId: 'a', userId: 'u', kind: 'feishu' }]) {

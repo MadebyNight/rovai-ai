@@ -141,9 +141,14 @@ Runtime 文件使用根内 `instances/<instance-key>/runtime-files`；Desktop �
 命令、安装地址与平台支持在实际发布和验收前必须标为目标或开发预览。
 
 Desktop 从安装包明确路径启动自己的 Host，随整个 Desktop 安装更新；独立 Server 按自身安装更新。
-两份安装可以版本不同，但每份内部 Host/协议/WebUI 匹配。安装器与未来 Rust 更新入口采用同一资产与
+两份安装可以版本不同，但每份内部 Host/协议/WebUI 匹配。安装器与 Rust 更新入口采用同一资产与
 校验规则，校验后替换程序及 UI，不重置数据。WebUI 更新当前连接的 Host；Desktop-managed Host 引导
 使用 Desktop 更新。主动检查、下载、确认重启，受控停止遵守现有任务关闭语义。
 
 本轮仅交付原生部署。Dockerfile、Compose、官方镜像、容器初始化/挂载/更新均不在当前任务或可选阶段中，
 不阻塞原生 Server 发布与后续 Mobile。也不建立数据同步、多实例管理、全机版本同步或复杂升级监督平台。
+
+
+独立 Server 的更新状态、下载验证与重启交接由 Rust Host 的 Server updater 拥有，Web 只提供已认证的封闭动作。
+Desktop 托管页只读展示版本说明，不提供 Electron updater 代理。Server Web/Mobile 与 Desktop 复用同一更新页面及状态，
+下载资产按各自发布通道区分；字段、停机与失败边界见 [Host Web v2](../contracts/host-web-v2.md#login-presentation-and-server-updates)。

@@ -5,8 +5,10 @@ mod avatars;
 mod network;
 mod operations;
 mod resources;
+mod updates;
 mod uploads;
 mod workspaces;
+pub use updates::{UpdateFuture, UpdateHost, UpdateRequest};
 
 use anyhow::{Context, Result, ensure};
 use auth::{LOGIN_TICKET_LIFETIME, LoginFailure, SESSION_LIFETIME, Session, Sessions, TicketGrant};
@@ -48,6 +50,7 @@ pub struct WebConfig {
 struct WebState {
     core: CoreService,
     channels: Option<Arc<dyn ChannelHost>>,
+    updates: Option<Arc<dyn UpdateHost>>,
     sessions: Arc<Sessions>,
     network: Arc<network::Network>,
     assets: PathBuf,
@@ -93,6 +96,16 @@ impl WebServer {
         sessions: Arc<Sessions>,
         channels: Option<Arc<dyn ChannelHost>>,
     ) -> Result<Self> {
+        Self::start_with_services(core, config, sessions, channels, None).await
+    }
+
+    pub async fn start_with_services(
+        core: CoreService,
+        config: WebConfig,
+        sessions: Arc<Sessions>,
+        channels: Option<Arc<dyn ChannelHost>>,
+        updates: Option<Arc<dyn UpdateHost>>,
+    ) -> Result<Self> {
         ensure!(
             config.listen.ip().is_loopback() || config.allow_insecure_lan,
             "LAN HTTP must be explicitly enabled; use HTTPS or a trusted VPN on untrusted networks"
@@ -117,6 +130,7 @@ impl WebServer {
         let state = WebState {
             core,
             channels,
+            updates,
             sessions: sessions.clone(),
             network: network.clone(),
             assets,
@@ -194,6 +208,7 @@ fn routes(state: WebState) -> Router {
     let api = Router::new()
         .route("/capabilities", get(capabilities))
         .route("/channels", post(channels::request))
+        .route("/updates", post(updates::request))
         .route("/request", post(request))
         .route("/events", get(events))
         .route("/logout", post(logout))
@@ -647,6 +662,24 @@ async fn static_file(state: &WebState, relative: &str) -> Response {
                 .cached_assets
                 .get(relative)
                 .is_some_and(|expected| *expected == format!("{:x}", Sha256::digest(&bytes)));
+            // Public presentation metadata only. Credentials and capabilities
+            // remain behind authentication; the entry itself is never cached.
+            let bytes = if relative == "index.html" {
+                let Ok(html) = String::from_utf8(bytes) else {
+                    return error(StatusCode::INTERNAL_SERVER_ERROR, "invalid_web_entry");
+                };
+                html.replace(
+                    "__ROVAI_HOST_KIND__",
+                    if state.channels.is_some() {
+                        "desktop"
+                    } else {
+                        "server"
+                    },
+                )
+                .into_bytes()
+            } else {
+                bytes
+            };
             let mut response =
                 ([(header::CONTENT_TYPE, content_type)], Body::from(bytes)).into_response();
             if immutable {

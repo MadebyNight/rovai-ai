@@ -99,11 +99,12 @@ Composer 外壳内边距 4px，提示与编辑区同用 6px 起点；提示默�
 | 对话、执行和共享管理 | 当前 Host 授权能力 | 当前 Host 授权能力 |
 | 渠道 | 正式管理页；使用宿主登录态发布、重试与结构化选择 | 隐藏，遗留入口明确不支持 |
 | 连接/切换/重新登录渠道 | 指向运行服务的那台 Rovai Desktop | 不提供导入或替代路径 |
-| 关于 | 真实版本与 Desktop 标识，无更新入口 | 真实版本与 Server 标识，提供原生安装/更新说明入口 |
+| 关于与更新 | 真实版本与 Desktop 标识，只读版本说明，无更新操作 | 真实版本与 Server 标识，共享 Desktop 的检查、下载与安装重启体验 |
 | Web 退出 | 只退出当前会话，不停止 Host、渠道或任务 | 只退出当前会话，不停止 Host 或任务 |
 
-Server 更新入口指向现有[原生安装与更新流程](../development/server-preview.md#安装和启动)。当前没有 Web 下载、
-安装或重启 API，前稿的自动更新模拟状态没有进入产品。原生发布渠道仍以该开发文档记录为准，不据此宣称正式资产已发布。
+Server 更新通过统一 Rust Host 的认证接口完成，使用独立 Server GitHub Release 资产；Desktop 托管不提供更新操作。
+协议与停机边界见 [Host Web v2](../contracts/host-web-v2.md#login-presentation-and-server-updates)。正式发布与跨平台原生升级的验收独立记录。
+登录页共用同一组件，按实际 Host 类型分别提示 Token 获取位置；主动退出后恢复初始标题与表单，不显示另一套重新登录页。
 
 刷新、同 Owner 重新登录继续使用同一 Bearer Session、标签页身份租约和独立草稿恢复。
 认证独立持久化到浏览器 IndexedDB；30 天寿命、7 天续期与浏览器重开的编辑隔离复用 [Host Web v2](../contracts/host-web-v2.md#session-lifetime-and-renewal)，手机不另建认证流程。
@@ -122,6 +123,6 @@ Server 更新入口指向现有[原生安装与更新流程](../development/serv
 
 真实 Host 用例覆盖登录、列表 5 → 10 → 11 → 5、更多菜单、二级面板关闭返回、切换/返回/刷新草稿、附件预览、Return、@、共享管理和六种计划。
 多队员连续 Run、命令内容和高亮来自共享生产组件 fixture，明确标记模拟证据，不冒充真实模型执行。
-独立 Server 用例通过真实启动验证渠道隐藏、真实版本和仅 Server 可见的原生更新入口。
+独立 Server 用例验证渠道隐藏、真实版本和仅 Server 可见的更新控件；安装重启与真实 Release 验收分别记录。
 截图覆盖 360/390/430px、触摸横屏 844px 与日夜主题；它们是 macOS Chrome 模拟，**不等于实体手机验收**。
 实体 iOS Safari / Android Chrome 的软键盘、图库/相机、后台恢复与移动网络切换，以及第二实体设备联调仍待完成。

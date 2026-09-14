@@ -36,6 +36,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    UpdateHelper { plan: PathBuf },
     /// Print the stored management token. Treat stdout as a secret.
     Token,
     /// Show resolved data paths without starting Core or opening a database.
@@ -44,6 +46,9 @@ enum Command {
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::UpdateHelper { plan }) = cli.command {
+        return super::server_updates::ServerUpdates::helper(plan);
+    }
     let home = dirs::home_dir().context("Current account's Home is unavailable")?;
     let default_root = home.join(".rovai-server");
     let data_dir = cli.data_dir.unwrap_or_else(|| default_root.clone());
@@ -89,6 +94,28 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
     let log_path = paths.logs.join("server.log");
+    // Other Server instances may share these program files with separate data
+    // roots. An updater cannot replace a portable directory while they use it.
+    let running_program = std::fs::File::open(std::env::current_exe()?)?;
+    running_program
+        .try_lock_shared()
+        .context("Server program is being updated; retry startup")?;
+    let mut restart_arguments = vec![
+        "--data-dir".into(),
+        paths.data_dir.to_string_lossy().into_owned(),
+        "--listen".into(),
+        cli.listen.to_string(),
+    ];
+    if let Some(origin) = &cli.public_origin {
+        restart_arguments.extend(["--public-origin".into(), origin.clone()]);
+    }
+    if cli.allow_insecure_lan {
+        restart_arguments.push("--allow-insecure-lan".into());
+    }
+    if cli.verbose {
+        restart_arguments.push("--verbose".into());
+    }
+    let updates = super::server_updates::ServerUpdates::new(&paths.data_dir, restart_arguments)?;
     let console = Console::new(
         paths.data_dir.clone(),
         log_path.clone(),
@@ -123,6 +150,7 @@ pub fn run() -> Result<()> {
         )),
         false,
         Some(&console),
+        Some(updates.clone()),
     );
     if let Err(error) = &result {
         // Detailed failures stay in the diagnostic stream; the token is never
@@ -131,6 +159,8 @@ pub fn run() -> Result<()> {
     }
     let drained = diagnostics.finish();
     let result = result.and(drained);
+    drop(running_program);
+    updates.finish(result.is_ok())?;
     match result {
         Ok(()) => {
             console.line("Rovai Server stopped.");

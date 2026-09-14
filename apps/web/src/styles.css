@@ -1,5 +1,5 @@
 /* Web owns authentication/connection chrome; all business geometry is production Desktop CSS. */
-.web-login-overlay { position: fixed; inset: 0; z-index: 100; overflow: auto; background: var(--surface); color: var(--ink); }
+.web-login-overlay { --surface: var(--surface-raised); position: fixed; inset: 0; z-index: 100; overflow: auto; background: var(--surface); color: var(--ink); }
 .web-login-stage { min-height: 100%; display: grid; place-items: center; padding: 80px 24px 100px; }
 .web-login { width: min(100%, 340px); margin-top: -32px; font-size: 13px; }
 .web-login-identity { text-align: center; margin-bottom: 32px; }
@@ -57,7 +57,6 @@ html[data-rovai-surface="web"] .navigation-collapsed > .topbar { padding-left: 5
 /* Settings has no native window chrome; the brand occupies the top row. */
 html[data-rovai-surface="web"] .settings-navigation-mode .unified-sidebar-drag { display: none; }
 html[data-rovai-surface="web"] .settings-navigation-mode .unified-brand { padding-top: 6px; }
-.server-update-entry { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
-.server-update-entry h2 { font-size: 16px; }
-.server-update-entry p { color: var(--muted); font-size: 13px; line-height: 1.7; }
-.server-update-entry a { display: inline-flex; align-items: center; color: var(--info); text-decoration: none; }
+
+.web-authenticated-shell { display: contents; }
+.web-authenticated-shell[hidden] { display: none; }

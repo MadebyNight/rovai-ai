@@ -2,6 +2,7 @@ mod desktop_channels;
 mod lifecycle;
 mod server;
 mod server_logs;
+mod server_updates;
 mod signals;
 mod web_control;
 
@@ -178,7 +179,7 @@ pub fn run_host() -> Result<()> {
             }
         }
     };
-    run(config, web, desktop, None)
+    run(config, web, desktop, None, None)
 }
 
 fn run(
@@ -186,6 +187,7 @@ fn run(
     web: Option<(rovai_web::WebConfig, String)>,
     desktop: bool,
     console: Option<&server::Console>,
+    updates: Option<server_updates::ServerUpdates>,
 ) -> Result<()> {
     tracing_subscriber::fmt()
         .with_ansi(false)
@@ -199,7 +201,14 @@ fn run(
     environment.activate_for_runtime_commands();
     let data_dir = config.data_dir.clone();
     let (core, runner) = embedded(config, environment)?;
-    let control = web_control::WebControl::new(core.clone(), desktop, data_dir);
+    let control = web_control::WebControl::new(
+        core.clone(),
+        desktop,
+        data_dir,
+        updates
+            .clone()
+            .map(|u| Arc::new(u) as Arc<dyn rovai_web::UpdateHost>),
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -216,7 +225,10 @@ fn run(
             core,
             runner,
             async {
-                let result = signals.wait().await;
+                let result = tokio::select! {
+                    result = signals.wait() => result,
+                    () = async { if let Some(updates) = &updates { updates.requested().await } else { std::future::pending::<()>().await } } => Ok(Duration::from_secs(10)),
+                };
                 control.shutdown().await;
                 result
             },
@@ -230,6 +242,7 @@ fn run(
                     if let Some(console) = console {
                         console.ready(&status, &token);
                     }
+                    if let Some(updates) = &updates { updates.start_automatic_checks(); }
                 }
                 Ok(())
             },

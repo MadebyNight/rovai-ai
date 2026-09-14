@@ -230,7 +230,9 @@ jobs:
         if: matrix.target == 'linux-x64'
         run: node --test scripts/lib/linux-server-abi.test.mjs
       - name: Verify credential state transitions
-        run: cargo test -p rovai-web
+        run: |
+          cargo test -p rovai-web
+          cargo test -p rovai-host --lib server_updates
       - name: Verify native process and private storage seams
         run: |
           cargo test -p rovai-core --lib managed_process

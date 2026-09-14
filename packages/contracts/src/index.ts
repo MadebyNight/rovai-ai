@@ -2699,6 +2699,8 @@ export type AppUpdateStatus =
   | 'install_failed'
 
 export type AppUpdateFailureReason =
+  | 'release_unpublished'
+  | 'restart_unconfirmed'
   | 'network'
   | 'updater_unavailable'
   | 'invalid_release'
