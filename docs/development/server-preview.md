@@ -33,8 +33,9 @@ Python smoke 只作为外部驱动，Host 的 PATH 中不含 Node/Electron/Rust�
 历史 GLIBC_2.39 包仍保留其原要求，不能因为更新文档而作为兼容包安装。
 本轮不承诺 Debian 11、Alpine/musl、Linux ARM64 或其他发行版，不实现 Docker/Compose。
 
-原生构建目标为 macOS arm64/x64、Windows x64、Linux x64。Linux 首批 Runtime 目标为 Codex CLI 与 Claude Code，
-两者当前为 `preview`、完整资格仍待 Gate B；其余行保持 `not_qualified`。只有该 Adapter 的真实执行证据才可晋升。没有增加 Linux Desktop 或系统服务安装器。
+原生构建目标为 macOS arm64/x64、Windows x64、Linux x64。Linux 当前适配范围为现有目录中除 Cursor 外的
+14 项，显式开放 `preview`；DeepSeek Harness 不在目录中且不新增。完整资格仍须逐项通过 Gate B，
+只有该 Adapter 的真实执行证据才可晋升。没有增加 Linux Desktop 或系统服务安装器。
 `Full check` 的 `scope=server` 使用固定 OS runner 构建并测试四个产物；Windows console 受控关闭与
 真实模型/工作区/恢复仍是独立资格，不由编译或有限进程测试推导。
 原生复核可以用 `server_target` 只选择发生变更的目标；默认 `all` 才运行全部四个目标，单目标通过
@@ -48,7 +49,7 @@ Python smoke 只作为外部驱动，Host 的 PATH 中不含 Node/Electron/Rust�
   `python3 scripts/smoke-linux-server.py <已安装程序目录> --expected-source <SHA> --output <报告>`。
 - Gate B：按 Runtime × version × OS 记录原生 Provider/认证、实际 Camp、文件/命令、Built-in CLI、审批、
   取消/子进程回收、warm/cold resume 和既有 First-Class 能力轴。API/模型不可用不等于 Linux 不支持；
-  安装成功或一次文本回复不等于完整资格通过。首批 Codex/Claude 以外的探测结果不自动改变准入矩阵。
+  安装成功或一次文本回复不等于完整资格通过。任一 Runtime 的探测结果不自动晋升其他准入行。
 - Server 和 Runtime 分别记录 CPU/RAM、峰值、swap、并发与任务规模。2 GB VPS 的低配实验不替代
   Runtime 官方硬件基线验收。与既有服务共机时串行执行，设置独立测试 cgroup，内存不足立即停止测试进程。
 

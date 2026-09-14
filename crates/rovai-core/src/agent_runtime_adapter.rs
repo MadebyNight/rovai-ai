@@ -715,11 +715,27 @@ impl AgentRuntimeAdapterRegistry {
         platform: HostPlatformKey,
     ) -> RuntimePlatformAdmission {
         if platform == HostPlatformKey::LinuxX64
-            && matches!(kind, AdapterKind::CodexCli | AdapterKind::ClaudeCodeCli)
+            && matches!(
+                kind,
+                AdapterKind::CodexCli
+                    | AdapterKind::ClaudeCodeCli
+                    | AdapterKind::Pi
+                    | AdapterKind::OpencodeCli
+                    | AdapterKind::CopilotCli
+                    | AdapterKind::KiroCli
+                    | AdapterKind::QoderCli
+                    | AdapterKind::CodebuddyCli
+                    | AdapterKind::QwenCode
+                    | AdapterKind::TraeCnCli
+                    | AdapterKind::KimiCodeCli
+                    | AdapterKind::GrokBuild
+                    | AdapterKind::ZcodeApp
+                    | AdapterKind::AntigravityApp
+            )
         {
-            // Server OS compatibility does not qualify an Adapter. These two
-            // rows permit explicit Linux evaluation until their own evidence
-            // covers the supported distributions and runtime capabilities.
+            // This explicit evaluation scope excludes Cursor and never admits a
+            // future Adapter implicitly. Server OS success cannot qualify a
+            // Runtime; its own distribution/capability evidence is still needed.
             return RuntimePlatformAdmission::preview(
                 kind,
                 platform,

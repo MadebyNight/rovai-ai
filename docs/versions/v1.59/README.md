@@ -17,7 +17,8 @@ last_updated: 2026-09-14
 ## Linux 第一版范围增量
 
 正式发布目标调整为 GNU x86_64 / glibc 2.35 基线；同一发布归档必测 Ubuntu 22.04、Debian 12、Ubuntu 24.04。
-Server OS 与 Runtime 资格分别记录，首批 Runtime 目标仅 Codex CLI 与 Claude Code，当前开放 preview 等待实测闭合。
+Server OS 与 Runtime 资格分别记录；维护者将 Linux 适配扩大至现有目录中除 Cursor 之外的 14 项，
+当前显式开放 preview 等待各自实测闭合，不新增 DeepSeek Harness。
 其他 Runtime 的 Linux 探测不自动取得产品资格。未增加 musl、ARM64、Debian 11 或 Linux Desktop。
 理由见 [V1.59-D06](decisions.md#v1-59-d06)，进度见[实施计划](implementation-plan.md#当前批次linux-gnu-235-基线与-runtime-实测)。
 
@@ -58,7 +59,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机执行图标、手动切换与 Run 文案由同一共享状态驱动；Server 仅提供既有原生更新流程入口，自动更新 API 未交付 |
 | Runtime Activity | 确认无需更新 | Runtime Adapter 语义与活动分类保持不变 |
-| Runtime compatibility | 已更新 | Linux x64 在同一矩阵中保持全部 not_qualified；原兼容证据保持不变，真实环境验证后才晋升 |
+| Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升 |
 | Documentation routing | 已更新 | 文档、架构与决定导航增加统一 Host 入口 |
 | Root README | 确认无需更新 | 当前尚未交付新增支持平台，不提前增加可用性声明 |
 

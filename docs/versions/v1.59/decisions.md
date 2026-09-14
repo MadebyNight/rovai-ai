@@ -139,3 +139,8 @@ Server OS 资格只拥有 Host 安装与生命周期；Runtime 资格继续按 A
 首批 Codex CLI、Claude Code 允许 preview 实测，保留缺失证据状态；其他 Runtime 的上游探测不自动晋升。
 用户明确允许将既有 MiniMax key 配入本次测试账号的原生 BYOK 配置；不复制其他 Runtime Home、原生订阅或 Session，
 也不把自定义 Provider 成功误报为官方订阅资格。真实机器资源不足时先停止测试，保留代理服务。
+
+2026-09-14 后续范围修订：用户将验收迁往 8 GB 专用开发机，并要求适配现有 Runtime 中除 Cursor、
+DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式开放 preview；DeepSeek Harness 不在目录，
+不据此新增 Adapter。新适配范围不等于完成资格，不把原生 CLI 成功或跨平台历史证据当作 Linux First-Class。
+原 DMIT 测试账号与安装已按用户要求删除；具体主机访问资料只保存于私有运维文档。

@@ -19,7 +19,9 @@ pub const BRIDGE_REVISION: &str = "zcode-native-node-transport-v7";
 pub fn is_bundle_executable(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "ZCode" || name.eq_ignore_ascii_case("ZCode.exe"))
+        .is_some_and(|name| {
+            name == "ZCode" || name == "zcode" || name.eq_ignore_ascii_case("ZCode.exe")
+        })
 }
 
 pub fn supported_version(version: Option<&str>) -> bool {
@@ -45,7 +47,10 @@ pub fn runtime_script(executable: &Path) -> Result<PathBuf> {
         .canonicalize()
         .context("ZCode executable unavailable")?;
     let file_name = executable.file_name().and_then(|name| name.to_str());
-    if file_name.is_some_and(|name| name.eq_ignore_ascii_case("ZCode.exe")) {
+    // Official Linux AppImage extraction and DEB installs use a lowercase
+    // Electron executable next to resources, matching the flat Windows layout.
+    // Only its identity is inspected; the GUI binary is never started.
+    if file_name.is_some_and(|name| name == "zcode" || name.eq_ignore_ascii_case("ZCode.exe")) {
         let root = executable
             .parent()
             .context("ZCode installation root missing")?;
@@ -58,7 +63,7 @@ pub fn runtime_script(executable: &Path) -> Result<PathBuf> {
             || !app.is_file()
             || !script.is_file()
         {
-            bail!("ZCode requires the official Windows App resources");
+            bail!("ZCode requires the official Linux or Windows App resources");
         }
         return Ok(script);
     }
@@ -177,7 +182,16 @@ pub fn default_executables() -> Vec<PathBuf> {
             std::env::var_os("ProgramFiles").as_deref().map(Path::new),
         )
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_default_executables(
+            crate::runtime_discovery::runtime_home_directory(
+                crate::agent_profile::AdapterKind::ZcodeApp,
+            )
+            .as_deref(),
+        )
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let mut paths = vec![PathBuf::from(
             "/Applications/ZCode.app/Contents/MacOS/ZCode",
@@ -189,6 +203,22 @@ pub fn default_executables() -> Vec<PathBuf> {
         }
         paths
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_default_executables(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = vec![
+        PathBuf::from("/opt/ZCode/zcode"),
+        PathBuf::from("/opt/zcode/zcode"),
+    ];
+    if let Some(home) = home.filter(|path| path.is_absolute()) {
+        paths.extend([
+            home.join(".local/share/zcode/current/zcode"),
+            home.join(".local/bin/ZCode"),
+            home.join(".local/bin/zcode"),
+        ]);
+    }
+    paths
 }
 
 #[cfg(any(windows, test))]
@@ -868,9 +898,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("zcode-layout-{}", uuid::Uuid::new_v4()));
         let mac = root.join("ZCode.app/Contents");
         let win = root.join("Windows ZCode");
+        let linux = root.join("Linux ZCode");
         fs::create_dir_all(mac.join("MacOS")).unwrap();
         fs::create_dir_all(mac.join("Resources/glm")).unwrap();
         fs::create_dir_all(win.join("resources/glm")).unwrap();
+        fs::create_dir_all(linux.join("resources/glm")).unwrap();
         fs::write(mac.join("Info.plist"), "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>dev.zcode.app</string></dict></plist>").unwrap();
         fs::write(mac.join("MacOS/ZCode"), "fixture").unwrap();
         fs::write(mac.join("Resources/glm/zcode.cjs"), "fixture").unwrap();
@@ -881,9 +913,14 @@ mod tests {
             "The kernel alone is not an official App layout"
         );
         fs::write(win.join("resources/app.asar"), "fixture").unwrap();
+        fs::write(linux.join("zcode"), "fixture").unwrap();
+        fs::write(linux.join("resources/glm/zcode.cjs"), "fixture").unwrap();
+        assert!(runtime_script(&linux.join("zcode")).is_err());
+        fs::write(linux.join("resources/app.asar"), "fixture").unwrap();
         for (exe, kernel) in [
             (mac.join("MacOS/ZCode"), mac.join("Resources/glm/zcode.cjs")),
             (win.join("ZCode.exe"), win.join("resources/glm/zcode.cjs")),
+            (linux.join("zcode"), linux.join("resources/glm/zcode.cjs")),
         ] {
             assert!(is_bundle_executable(&exe));
             assert_eq!(
@@ -910,7 +947,17 @@ mod tests {
             fs::write(&outside, "fixture").unwrap();
             std::os::unix::fs::symlink(&outside, win.join("resources/glm/zcode.cjs")).unwrap();
             assert!(runtime_script(&win.join("ZCode.exe")).is_err());
+            std::os::unix::fs::symlink(&outside, linux.join("resources/glm/zcode.cjs")).unwrap();
+            assert!(runtime_script(&linux.join("zcode")).is_err());
         }
+        assert!(
+            linux_default_executables(Some(&root))
+                .contains(&root.join(".local/share/zcode/current/zcode"))
+        );
+        assert_eq!(
+            linux_default_executables(Some(Path::new("relative"))),
+            linux_default_executables(None)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

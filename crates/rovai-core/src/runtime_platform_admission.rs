@@ -281,10 +281,7 @@ mod tests {
             for platform in HostPlatformKey::ALL {
                 if platform == HostPlatformKey::LinuxX64 {
                     let admission = registry.platform_admission(runtime_kind, platform);
-                    let preview = matches!(
-                        runtime_kind,
-                        AdapterKind::CodexCli | AdapterKind::ClaudeCodeCli
-                    );
+                    let preview = runtime_kind != AdapterKind::CursorAgent;
                     assert_eq!(
                         admission.status(),
                         if preview {

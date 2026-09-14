@@ -78,9 +78,26 @@ cargo test --workspace -- --list
 `node --test scripts/lib/linux-server-abi.test.mjs` 拥有 ELF 导入版本的解析和兼容拒绝矩阵；构建必须检查实际包内
 所有 ELF。`scripts/smoke-linux-server.py` 拥有同归档、普通用户、无开发工具 PATH 的 Server OS seam，
 不调用 Runtime。Ubuntu 两个原生 runner 与 Debian 12 独立 VM 运行同一包，发布草稿依赖这些 gate。
-既有 `runtime_platform_admission::tests::registry_projects_the_complete_closed_matrix` 扩展 Linux 两条 preview
-和其余阻断行，不新增重复 Rust owner。最小 Rust 验证为 `cargo test -p rovai-core --lib runtime_platform_admission::tests::`。
+既有 `runtime_platform_admission::tests::registry_projects_the_complete_closed_matrix` 扩展 Linux 显式适配范围的 preview
+和 Cursor 阻断行，不新增重复 Rust owner。最小 Rust 验证为 `cargo test -p rovai-core --lib runtime_platform_admission::tests::`。
 
+
+### Codex 自定义 Provider 与 Server Runtime
+
+`health::tests::codex_probe_requires_login_unless_native_provider_explicitly_waives_it` 拥有 Codex 原生认证进程边界：
+同一隔离 fixture 覆盖 OpenAI 登录成功、自定义 Provider 明确免登录，以及 true、缺失、类型错误、RPC 拒绝。
+既有 ACP Native Home owner 使用另一协议，不能证明 `account/read` 的语义。fixture 不修改环境或读取真实凭据，
+故意返回空 capability schema，确保认证通过不会自动变成 Ready。最小命令：
+`cargo test -p rovai-core --lib codex_probe_requires_login_unless_native_provider_explicitly_waives_it`。
+
+既有 `zcode::tests::official_bundle_layouts_reject_launchers_and_missing_resources` 增补官方 Linux 平面布局、
+缺失 App 资源和 kernel symlink 越界拒绝；同时检查 Linux 默认位置不纳入相对 Home，不新增重复 owner。
+最小命令：`cargo test -p rovai-core --lib zcode::tests::official_bundle_layouts_reject_launchers_and_missing_resources`。
+
+`node scripts/smoke-server-runtime.mjs /absolute/server-package codex-cli /absolute/new-fixture` 是显式调用模型的
+包内 HTTP 验收入口，也接受其他显式准入的 Linux Runtime。调用方须提供隔离 HOME 与私有原生 CLI 配置；脚本从新 data-dir
+派生 Skills/MCP 根，验证工具的公开投影、warm/cold continuation 和运行中取消。结果保留源码提交，任何未闭合
+断言均记失败，不能单独替代完整 Runtime 资格清单。
 
 ### Web 文件资源开销与一致性
 

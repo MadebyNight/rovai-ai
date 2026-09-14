@@ -2915,23 +2915,31 @@ async fn codex_runtime_probe_uncached(
 
     let mut auth_command = runtime_command(&path, Some(AdapterKind::CodexCli));
     auth_command.args(["login", "status"]);
+    let mut initialized = false;
     match bounded_output(&mut auth_command, Duration::from_secs(15)).await {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
-            return probe_result(
-                Some(path_text),
-                reported_version,
-                fingerprint,
-                AgentRuntimeProbeStatus::AuthenticationRequired,
-                Vec::new(),
-                required_capability_names(),
-                Some(command_detail(
-                    &output.stdout.bytes,
-                    &output.stderr.bytes,
-                    "Codex authentication is required",
-                )),
-                probed_at,
-            );
+            // `login status` describes OpenAI login, not a custom provider's
+            // native env_key authentication. Let app-server identify the active
+            // provider; absent or malformed evidence must still fail closed.
+            if probe_initialize_handshake(&path, true).await.is_ok() {
+                initialized = true;
+            } else {
+                return probe_result(
+                    Some(path_text),
+                    reported_version,
+                    fingerprint,
+                    AgentRuntimeProbeStatus::AuthenticationRequired,
+                    Vec::new(),
+                    required_capability_names(),
+                    Some(command_detail(
+                        &output.stdout.bytes,
+                        &output.stderr.bytes,
+                        "Codex authentication is required",
+                    )),
+                    probed_at,
+                );
+            }
         }
         Err(error) => {
             return probe_result(
@@ -2947,7 +2955,7 @@ async fn codex_runtime_probe_uncached(
         }
     }
 
-    if let Err(error) = probe_initialize_handshake(&path).await {
+    if !initialized && let Err(error) = probe_initialize_handshake(&path, false).await {
         return probe_result(
             Some(path_text),
             reported_version,
@@ -3000,7 +3008,7 @@ async fn codex_runtime_probe_uncached(
     )
 }
 
-async fn probe_initialize_handshake(path: &Path) -> Result<()> {
+async fn probe_initialize_handshake(path: &Path, require_external_provider: bool) -> Result<()> {
     let mut command = runtime_command(path, Some(AdapterKind::CodexCli));
     command.args(["app-server", "--listen", "stdio://"]);
     let mut process = RuntimeProbeProcess::spawn(
@@ -3060,7 +3068,40 @@ async fn probe_initialize_handshake(path: &Path) -> Result<()> {
                     .await?;
                 stdin.write_all(b"\n").await?;
                 stdin.flush().await?;
-                return Ok(());
+                if !require_external_provider {
+                    return Ok(());
+                }
+                stdin
+                    .write_all(
+                        serde_json::to_string(&json!({
+                            "method": "account/read", "id": 2,
+                            "params": { "refreshToken": false }
+                        }))?
+                        .as_bytes(),
+                    )
+                    .await?;
+                stdin.write_all(b"\n").await?;
+                stdin.flush().await?;
+                while let Some(line) = lines.next_line().await? {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let account: Value =
+                        serde_json::from_str(&line).context("invalid account/read response")?;
+                    if account.get("id").and_then(Value::as_u64) != Some(2) {
+                        continue;
+                    }
+                    anyhow::ensure!(
+                        account.get("error").is_none()
+                            && account
+                                .pointer("/result/requiresOpenaiAuth")
+                                .and_then(Value::as_bool)
+                                == Some(false),
+                        "active provider did not confirm that OpenAI login is unnecessary"
+                    );
+                    return Ok(());
+                }
+                bail!("app-server exited before account/read completed");
             }
             bail!("app-server exited before initialize completed")
         };
@@ -3476,6 +3517,100 @@ mod tests {
     use super::*;
     use rovai_core::agent_runtime_adapter::{AcpProbeObservation, AgentRuntimeAdapterRegistry};
     use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
+
+    // Owns Codex's login/provider process boundary. The ACP Home fixture uses
+    // another protocol and cannot establish the meaning of account/read.
+    #[tokio::test]
+    async fn codex_probe_requires_login_unless_native_provider_explicitly_waives_it() {
+        let python = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .unwrap();
+        assert!(python.status.success());
+        let python = String::from_utf8(python.stdout).unwrap();
+        for (login, account, admits) in [
+            (
+                false,
+                json!({"result":{"account":null,"requiresOpenaiAuth":false}}),
+                true,
+            ),
+            (
+                false,
+                json!({"result":{"account":null,"requiresOpenaiAuth":true}}),
+                false,
+            ),
+            (false, json!({"result":{"account":null}}), false),
+            (
+                false,
+                json!({"result":{"requiresOpenaiAuth":"false"}}),
+                false,
+            ),
+            (
+                false,
+                json!({"error":{"code":-32601},"result":{"requiresOpenaiAuth":false}}),
+                false,
+            ),
+            (true, json!({"error":{"code":-32601}}), true),
+        ] {
+            let root = env::temp_dir().join(format!("rovai-codex-auth-{}", uuid::Uuid::new_v4()));
+            let _cleanup = ProbeRootCleanup(root.clone());
+            fs::create_dir_all(&root).unwrap();
+            fs::write(
+                root.join("case.json"),
+                json!({"login":login,"account":account}).to_string(),
+            )
+            .unwrap();
+            let binary = root.join("codex");
+            fs::write(&binary, format!("#!{}\n{}", python.trim(), r#"
+import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+case = json.loads((root / 'case.json').read_text())
+if sys.argv[1:] == ['--version']:
+    print('codex-cli fixture'); sys.exit(0)
+if sys.argv[1:] == ['login', 'status']:
+    print('Logged in' if case['login'] else 'Not logged in')
+    sys.exit(0 if case['login'] else 1)
+if 'generate-json-schema' in sys.argv:
+    out = pathlib.Path(sys.argv[sys.argv.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
+    for name in ['ClientRequest.json', 'ServerNotification.json', 'ServerRequest.json']:
+        (out / name).write_text('{}')
+    sys.exit(0)
+for line in sys.stdin:
+    request = json.loads(line)
+    with (root / 'methods').open('a') as log: log.write(request['method'] + '\n')
+    if request['method'] == 'initialize':
+        print(json.dumps({'id':request['id'], 'result':{'userAgent':'fixture'}}), flush=True)
+    elif request['method'] == 'account/read':
+        assert request['params'] == {'refreshToken':False}
+        print(json.dumps({'id':request['id'], **case['account']}), flush=True)
+"#)).unwrap();
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+            let probe = codex_runtime_probe_at(&binary).await;
+            // Empty capability schemas deliberately keep the separate capability
+            // gate closed; acceptance here must not imply full Runtime readiness.
+            assert_eq!(
+                probe.status,
+                if admits {
+                    AgentRuntimeProbeStatus::MissingCapabilities
+                } else {
+                    AgentRuntimeProbeStatus::AuthenticationRequired
+                },
+                "{account}: {probe:?}"
+            );
+            let methods = fs::read_to_string(root.join("methods")).unwrap();
+            if login {
+                // Initialized is a notification: cleanup may stop the fixture
+                // before it reads it. No account/read is needed after login.
+                assert_eq!(methods.lines().next(), Some("initialize"));
+                assert!(!methods.lines().any(|method| method == "account/read"));
+            } else {
+                assert_eq!(
+                    methods.lines().collect::<Vec<_>>(),
+                    vec!["initialize", "initialized", "account/read"]
+                );
+            }
+        }
+    }
 
     // Owns the light/full admission decision; transport tests cannot establish
     // that historical Ready evidence is still strong enough to skip full checks.

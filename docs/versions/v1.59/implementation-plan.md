@@ -15,24 +15,39 @@ last_updated: 2026-09-14
 
 ## 当前批次：Linux GNU 2.35 基线与 Runtime 实测
 
-2026-09-14 从 `c72f1ee9` 继续统一 Host 分支。Linux release 改用 Ubuntu 22.04，包内 ABI 门禁与
-同归档 Ubuntu 22.04/24.04、Debian 12 VM 的 Gate A 已接入，执行结果待本轮验证。
-Codex CLI、Claude Code 仅开放 preview，不预写 qualified；其余 Runtime 逐项记录上游安装/Provider/执行事实。
-DMIT Debian 12 / x86_64 / glibc 2.36 的测试使用独立账号、数据根及内存限制，保留既有代理服务；
-可用内存低于 512 MiB、持续新增 swap、测试 cgroup 达到 1100 MiB 上限或 OOM 时停止本次测试并等待用户处理。
+2026-09-14 从 `c72f1ee9` 继续统一 Host 分支。Linux release 使用 Ubuntu 22.04，包内 ABI 门禁拒绝
+高于 GLIBC_2.35 的导入符号。`bda1ab83` 的同一归档已通过 [Linux 原生与三 OS Run](https://github.com/murray17/rovai-ai/actions/runs/34839772567)：
+[Ubuntu 22.04](evidence/linux-server/ubuntu-22.04.json)、[Ubuntu 24.04](evidence/linux-server/ubuntu-24.04.json)、
+[Debian 12 独立 VM](evidence/linux-server/debian-12.json)全部通过；[实际 ABI](evidence/linux-server/linux-abi-bda1ab83.json)
+的三份可执行文件最高导入 GLIBC_2.34。[DMIT 同包 Gate A](evidence/linux-server/dmit-server-os.json)也通过，
+测试账号峰值 RSS 约 59 MiB。以上只证明 Server OS，不晋升 Runtime。
 
-`bda1ab83` 已通过本地 ABI 拒绝矩阵、Rust workspace/all-targets check、Core 单测 805 通过/6 既有忽略、
-格式与文档门禁；[Linux 原生与三 OS Run](https://github.com/murray17/rovai-ai/actions/runs/34839772567)正在执行。
-[DMIT 探测记录](evidence/linux-server/dmit-runtime-probes.json)只证明上游 CLI，不是 Rovai Runtime 资格：
-Codex 0.154.0、Claude Code 2.1.270、Pi 0.85.1 完成 MiniMax-M3 工具写入和读回；
-OpenCode 1.18.30、Copilot 1.0.83 同样完成工具写入和读回，但未满足提示要求的末尾换行，原严格断言保留失败。
-Qwen 0.23.3 的 Chat Completions 请求遇到 MiniMax HTTP 400（空 function parameters），CLI 仍返回成功，
-独立文件断言正确捕获失败；其他协议未复测，不能据此判定 Qwen 不支持 Linux。
+本地 ABI 拒绝矩阵、Rust workspace/all-targets check、Core 单测 805 通过/6 既有忽略、格式与文档门禁
+对应原始 `bda1ab83`。后续依维护者的新范围将现有 14 项 Linux Runtime 显式开放 preview（排除 Cursor），
+完整资格证据仍待逐项闭合；DeepSeek Harness 不在目录且不新增。
+[初轮 DMIT 探测](evidence/linux-server/dmit-runtime-probes.json)与[续测及清理记录](evidence/linux-server/dmit-final-probes.json)
+保留每次失败和协议切换结果：Codex 0.154.0、Claude Code 2.1.270、Pi 0.85.1、Grok 1.0.30 完成 MiniMax-M3
+工具写入/读回；Qwen 0.23.3 改用原生 Anthropic Provider 后通过。OpenCode 1.18.30、Copilot 1.0.83 工具链成功，
+但原严格末尾换行断言失败；不改记为原用例通过。Qoder、CodeBuddy 与 Cursor 的探测遇到各自账号认证门槛，
+不把认证缺失记为 Linux 不支持。Antigravity、TRAE 安装成功；Kimi 首次安装受测试安装器的 Python tarfile API
+版本差异阻断，尚未执行 CLI。
 
-Kiro 安装触发测试 cgroup 内存上限，保护器立即终止安装并阻止后续测试。触发时系统可用内存
-仍约 1.59 GiB、swap 为 0；随后测试进程和临时 unit 均为零，Xray active、内核无 OOM。
-按用户要求保持远端暂停。Rovai 发布包尚未部署到 DMIT；Gate B 全链路、其余 Runtime、正式 Release
-均未完成，不将安装成功或上游工具成功晋升为 FirstClass。
+Claude 包内 Server HTTP 验收已通过原生发现、工具写入/读回与公开投影、warm continuation、Server 重启后的
+cold continuation；取消场景未闭合，整体仍失败。Codex 原生 MiniMax 执行通过，但包内检测把 `login status`
+当作唯一认证事实，误拒绝未登录 OpenAI 的自定义 Provider。修复改由 Codex app-server 的 `account/read`
+明确返回 `requiresOpenaiAuth=false` 时接受原生 Provider 语义；缺失、类型错误、true 或 RPC 错误均不放行。
+回归只拥有认证进程边界，不虚构模型调用和 capability 成功，验证入口见[测试层级](../../development/testing.md)。
+新开发机上的官方 ZCode 3.11.2 Linux AppImage 实测布局为 `zcode` + `resources/app.asar` +
+`resources/glm/zcode.cjs`。Rovai 补充该原生布局与常见安装位置，保持使用独立 Node 启动 bundled kernel，
+不启动 Electron GUI、不引入社区 CLI；缺失资源或越界 symlink 继续拒绝。
+新增修复尚须构建新包并在新主机复验，不能继承旧包的功能结论。
+
+DMIT 使用独立账号与数据根，串行测试设置 1100 MiB cgroup 内存上限。Kiro 安装触发上限后已立即停止；
+当时系统可用内存约 1.59 GiB、swap 为 0、无 OOM。用户随后明确授权跳过 Kiro 继续轻量测试。
+2026-09-14 用户将后续适配迁往专用开发机，并要求卸载：本次测试账号及整个 Home、Node、Runtime、Server
+与测试凭据均已删除，测试进程和 unit 为零，Xray active，swap 0，可用内存约 1667 MiB。
+新范围为 Rovai Server 及其余 Linux Runtime 逐项适配，排除 Cursor 与 DeepSeek Harness；具体访问资料仅存私有
+Obsidian 运维文档。新机验收、其他 Runtime 资格与手机实际连接仍待完成，正式 Release 尚未发布。
 
 ## 本轮：Mobile 执行文案与文件资源性能
 
