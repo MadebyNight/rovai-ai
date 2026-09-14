@@ -122,3 +122,20 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 不采用保存管理 Token 自动重登、双 Token 或 OAuth；这些方案分别扩大浏览器长期管理权限或引入本轮不需要的身份体系。
 代价是两端持久化、撤销提交与跨标签页竞争需要明确处理。浏览器持久认证只用于认证恢复，新标签页仍由 Host 分配
 新编辑身份；认证持久化不授权共享、合并或恢复其他标签页的草稿。撤销范围、故障与时间语义归当前协议拥有。
+
+<a id="v1-59-d06"></a>
+
+## V1.59-D06：Linux GNU 发布基线与两类资格独立
+
+- 状态：accepted
+- 日期：2026-09-14
+- 当前权威：[统一 Host](../../architecture/unified-rust-host.md#命令事件与兼容性)、[平台准入](../../contracts/runtime-platform-admission-v2.md)、[Server 验收](../../development/server-preview.md#linux-的两个验收-gate)
+
+Ubuntu 24.04 构建得到的 GLIBC_2.39 依赖排除了 Debian 12 和 Ubuntu 22.04 VPS。首发改用 Ubuntu 22.04
+原生构建，以 glibc 2.35 为兼容基线，通过 ABI 检查及同一归档的跨发行版实际运行约束后续依赖升级。
+选择 GNU x86_64 覆盖现有 VPS；进一步降低到 Debian 11 或增加 musl/ARM64 会扩大平台维护面，本轮不采用。
+
+Server OS 资格只拥有 Host 安装与生命周期；Runtime 资格继续按 Adapter 及版本独立推进。
+首批 Codex CLI、Claude Code 允许 preview 实测，保留缺失证据状态；其他 Runtime 的上游探测不自动晋升。
+用户明确允许将既有 MiniMax key 配入本次测试账号的原生 BYOK 配置；不复制其他 Runtime Home、原生订阅或 Session，
+也不把自定义 Provider 成功误报为官方订阅资格。真实机器资源不足时先停止测试，保留代理服务。

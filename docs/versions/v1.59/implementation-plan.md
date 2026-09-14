@@ -13,6 +13,15 @@ last_updated: 2026-09-14
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已同步 main `0bfc35b0`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
+## 当前批次：Linux GNU 2.35 基线与 Runtime 实测
+
+2026-09-14 从 `c72f1ee9` 继续统一 Host 分支。Linux release 改用 Ubuntu 22.04，包内 ABI 门禁与
+同归档 Ubuntu 22.04/24.04、Debian 12 VM 的 Gate A 已接入，执行结果待本轮验证。
+Codex CLI、Claude Code 仅开放 preview，不预写 qualified；其余 Runtime 逐项记录上游安装/Provider/执行事实。
+DMIT Debian 12 / x86_64 / glibc 2.36 的测试使用独立账号、数据根及内存限制，保留既有代理服务；
+可用内存低于 512 MiB、持续新增 swap 或 OOM 时停止本次测试并等待用户处理。
+本节不宣称正式 Release、三 OS 或任一 Runtime 已验收通过；结果随实际证据补齐。
+
 ## 本轮：Mobile 执行文案与文件资源性能
 
 手机发送或排队发布 Run 后保持对话页；执行标签仍可主动打开。手机 Run 摘要改用 Desktop 相同的时间范围、

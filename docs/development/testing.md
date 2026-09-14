@@ -73,6 +73,15 @@ cargo test --workspace -- --list
 
 ## 测试层级
 
+### Linux Server ABI 与原生 OS
+
+`node --test scripts/lib/linux-server-abi.test.mjs` 拥有 ELF 导入版本的解析和兼容拒绝矩阵；构建必须检查实际包内
+所有 ELF。`scripts/smoke-linux-server.py` 拥有同归档、普通用户、无开发工具 PATH 的 Server OS seam，
+不调用 Runtime。Ubuntu 两个原生 runner 与 Debian 12 独立 VM 运行同一包，发布草稿依赖这些 gate。
+既有 `runtime_platform_admission::tests::registry_projects_the_complete_closed_matrix` 扩展 Linux 两条 preview
+和其余阻断行，不新增重复 Rust owner。最小 Rust 验证为 `cargo test -p rovai-core --lib runtime_platform_admission::tests::`。
+
+
 ### Web 文件资源开销与一致性
 
 `rovai-web::resources::content::tests::bounded_scan_preserves_digest_unicode_and_same_metadata_changes` 拥有分块

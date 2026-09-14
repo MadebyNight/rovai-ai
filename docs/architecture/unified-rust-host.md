@@ -109,7 +109,15 @@ SSE 只输出授权投影，快照与水位连续，过期/缺口重取快照；
 缓存和迟到响应以 Host/连接代次隔离，协议不兼容阻止危险写入，敏感响应不缓存。
 
 Runtime Catalog、平台矩阵与 Adapter 唯一维护。Server 目标为 macOS arm64/x64、Windows x64、Linux x64，
-实际原生、Desktop 与系统服务分别验收。Linux Desktop、额外 CPU 架构、三平台一键服务安装器不在本轮。
+实际原生、Desktop 与系统服务分别验收。Linux Server 的 GNU x86_64 发布包以 glibc 2.35 为兼容基线，
+在 Ubuntu 22.04 构建；包内所有 ELF 的导入 GLIBC 符号需求不得高于该版本。Ubuntu 22.04、Debian 12、
+Ubuntu 24.04 必须安装和运行同一份归档，记录其 source SHA、manifest 摘要与各自 OS/内核。
+Server OS（Gate A）与 Runtime（Gate B）分别保存资格：前者证明安装、Web、持久化、互斥和受控停止；
+后者由每个 Adapter 的实际认证、执行、权限、内置工具和恢复证据拥有。OS 通过不得自动开放其他 Runtime。
+首批 Linux Runtime 目标为 Codex CLI 与 Claude Code，当前仅开放有缺失理由的 preview；
+其余 Runtime 保持 not_qualified。完整资格和机器上的安装/认证可用性仍为独立事实。
+后续发行版属于兼容目标，实际支持范围随验收证据推进；不承诺 Debian 11、Alpine/musl 或 Linux ARM64。
+Linux Desktop、额外 CPU 架构、三平台一键服务安装器不在本轮。
 同版 Host/Web 配对发布，数据库升级与回退遵守 authority 准入，不能用旧程序打开新 schema。
 Mobile 最后复用同一 Web：宽屏 >=1040px，紧凑 768–1039px，手机 <768px；不引入离线执行队列或原生移动 App。
 

@@ -24,16 +24,33 @@ SHA-256 manifest。运行 Host 本身不依赖 Electron、Node 或 pnpm；Runtim
 当前 Windows x64 原生产物动态导入 `VCRUNTIME140.dll`。目标机器需要与构建工具兼容的 x64
 Visual C++ v14 Runtime，获取方式见 [Microsoft 官方说明](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)。
 CI 镜像已安装开发工具，不能据此推断干净 Windows 机器无需该依赖；当前包不自动安装系统组件。
-当前 Linux x64 GNU 产物包含 `GLIBC_2.39` 符号依赖，仅在 Ubuntu 24.04 原生环境验证过启动链路。
-它不适用于更低 glibc 或 musl 环境；其他发行版须独立验收。本轮不实现 Docker/Compose。
+Linux x64 GNU 发布构建使用 Ubuntu 22.04，glibc 兼容基线为 2.35。构建中的 ABI 门禁检查所有包内 ELF，
+拒绝更高 GLIBC 导入、私有 libc ABI、非 x86_64 或非 GNU 动态加载器；`linux-abi.json` 随 manifest 校验，
+同时记录 GLIBCXX/CXXABI 和所需动态库。更换 runner 本身不等于兼容性通过。
+Gate A 必测 Ubuntu 22.04、Debian 12、Ubuntu 24.04 上完全相同的发布归档。
+`Full check(scope=server)` 分别使用 Ubuntu runner 和 Debian 官方 cloud image 的独立 VM 内核执行；
+Python smoke 只作为外部驱动，Host 的 PATH 中不含 Node/Electron/Rust。真实 VPS 补充环境另记证据。
+历史 GLIBC_2.39 包仍保留其原要求，不能因为更新文档而作为兼容包安装。
+本轮不承诺 Debian 11、Alpine/musl、Linux ARM64 或其他发行版，不实现 Docker/Compose。
 
-原生构建目标为 macOS arm64/x64、Windows x64、Linux x64。Linux 当前 Runtime 行保持
-`not_qualified`；只有该 Adapter 的真实执行证据才可晋升。没有增加 Linux Desktop 或系统服务安装器。
+原生构建目标为 macOS arm64/x64、Windows x64、Linux x64。Linux 首批 Runtime 目标为 Codex CLI 与 Claude Code，
+两者当前为 `preview`、完整资格仍待 Gate B；其余行保持 `not_qualified`。只有该 Adapter 的真实执行证据才可晋升。没有增加 Linux Desktop 或系统服务安装器。
 `Full check` 的 `scope=server` 使用固定 OS runner 构建并测试四个产物；Windows console 受控关闭与
 真实模型/工作区/恢复仍是独立资格，不由编译或有限进程测试推导。
 原生复核可以用 `server_target` 只选择发生变更的目标；默认 `all` 才运行全部四个目标，单目标通过
 不能写成三平台通过。main 上全部目标通过后可显式开启 `server_release_draft` 组装 GitHub draft Release；
 它校验 source SHA、release profile、版本及平台一致，不自动公开发布或晋升默认安装指针。
+
+## Linux 的两个验收 Gate
+
+- Gate A：对同一 release profile/source SHA/归档，在三套目标 OS 的普通用户环境完成安装、Web 登录、认证读写、
+  数据与 Session/Token 持久化、同根互斥和 SIGTERM 停止重开。独立入口为
+  `python3 scripts/smoke-linux-server.py <已安装程序目录> --expected-source <SHA> --output <报告>`。
+- Gate B：按 Runtime × version × OS 记录原生 Provider/认证、实际 Camp、文件/命令、Built-in CLI、审批、
+  取消/子进程回收、warm/cold resume 和既有 First-Class 能力轴。API/模型不可用不等于 Linux 不支持；
+  安装成功或一次文本回复不等于完整资格通过。首批 Codex/Claude 以外的探测结果不自动改变准入矩阵。
+- Server 和 Runtime 分别记录 CPU/RAM、峰值、swap、并发与任务规模。2 GB VPS 的低配实验不替代
+  Runtime 官方硬件基线验收。与既有服务共机时串行执行，设置独立测试 cgroup，内存不足立即停止测试进程。
 
 ## 安装和启动
 

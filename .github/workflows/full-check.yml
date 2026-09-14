@@ -198,7 +198,7 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJSON('{"all":["macos-arm64","macos-x64","windows-x64","linux-x64"],"macos-arm64":["macos-arm64"],"macos-x64":["macos-x64"],"windows-x64":["windows-x64"],"linux-x64":["linux-x64"]}')[inputs.server_target || 'all'] }}
-    runs-on: ${{ fromJSON('{"macos-arm64":"macos-15","macos-x64":"macos-15-intel","windows-x64":"windows-2022","linux-x64":"ubuntu-24.04"}')[matrix.target] }}
+    runs-on: ${{ fromJSON('{"macos-arm64":"macos-15","macos-x64":"macos-15-intel","windows-x64":"windows-2022","linux-x64":"ubuntu-22.04"}')[matrix.target] }}
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 3
@@ -226,6 +226,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build native matching Host and WebUI package
         run: node scripts/build-server.mjs --target-key ${{ matrix.target }}
+      - name: Verify Linux ABI rejection cases
+        if: matrix.target == 'linux-x64'
+        run: node --test scripts/lib/linux-server-abi.test.mjs
       - name: Verify credential state transitions
         run: cargo test -p rovai-web
       - name: Verify native process and private storage seams
@@ -272,9 +275,64 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  server-linux-os:
+    name: Linux Server OS / ${{ matrix.os }}
+    needs: server-native
+    if: inputs.scope == 'server' && (inputs.server_target == 'all' || inputs.server_target == 'linux-x64')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: rovai-server-archive-linux-x64-${{ github.sha }}
+          path: out/server-downloads
+      - name: Install the unchanged Ubuntu 22.04 archive
+        shell: bash
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+          sh scripts/install-server.sh --version "$version" --from-dir "$PWD/out/server-downloads" --prefix "$RUNNER_TEMP/rovai-linux" --bin-dir "$RUNNER_TEMP/rovai-linux-bin" --no-modify-path
+      - name: Exercise Server with no development tools on its PATH
+        run: python3 scripts/smoke-linux-server.py "$RUNNER_TEMP/rovai-linux/current" --expected-source "$GITHUB_SHA" --output out/server-evidence/${{ matrix.os }}.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rovai-server-os-${{ matrix.os }}-${{ github.sha }}
+          path: out/server-evidence/${{ matrix.os }}.json
+          if-no-files-found: error
+
+  server-linux-debian:
+    name: Linux Server OS / Debian 12 VM
+    needs: server-native
+    if: inputs.scope == 'server' && (inputs.server_target == 'all' || inputs.server_target == 'linux-x64')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: rovai-server-archive-linux-x64-${{ github.sha }}
+          path: out/server-downloads
+      - name: Prepare Debian VM tooling
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+      - name: Exercise the unchanged archive inside Debian 12
+        run: bash scripts/smoke-debian-server-vm.sh out/server-downloads "$GITHUB_SHA" out/server-evidence/debian-12.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rovai-server-os-debian-12-${{ github.sha }}
+          path: out/server-evidence/debian-12.json
+          if-no-files-found: error
+
   server-release-draft:
     name: Assemble native Server draft Release
-    needs: server-native
+    needs: [server-native, server-linux-os, server-linux-debian]
     if: inputs.scope == 'server' && inputs.server_release_draft && inputs.server_target == 'all' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:

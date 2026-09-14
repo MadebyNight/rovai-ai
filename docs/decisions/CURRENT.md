@@ -12,6 +12,11 @@ last_updated: 2026-09-14
 
 完整规范内核迁移对应关系见[当前决策权威覆盖](AUTHORITY-COVERAGE.md)，旧数字 ID 查找见[迁移映射](LEGACY-MAP.md)。
 
+## Linux Server 发布基线
+
+- 当前规范：[统一 Host](../architecture/unified-rust-host.md#命令事件与兼容性)、[Runtime Platform Admission v2](../contracts/runtime-platform-admission-v2.md)、[Server 验收](../development/server-preview.md#linux-的两个验收-gate)。
+- 理由来源：[V1.59-D06](../versions/v1.59/decisions.md#v1-59-d06)。
+
 ## Core data 与 Read Side
 
 - 命令结果单份正文与事件双读：[Domain Command Result v1](../contracts/domain-command-result-v1.md)、

@@ -281,11 +281,27 @@ mod tests {
             for platform in HostPlatformKey::ALL {
                 if platform == HostPlatformKey::LinuxX64 {
                     let admission = registry.platform_admission(runtime_kind, platform);
+                    let preview = matches!(
+                        runtime_kind,
+                        AdapterKind::CodexCli | AdapterKind::ClaudeCodeCli
+                    );
                     assert_eq!(
                         admission.status(),
-                        RuntimePlatformAdmissionStatus::NotQualified
+                        if preview {
+                            RuntimePlatformAdmissionStatus::Preview
+                        } else {
+                            RuntimePlatformAdmissionStatus::NotQualified
+                        }
                     );
-                    assert!(!admission.allows_runtime_use());
+                    assert_eq!(admission.allows_runtime_use(), preview);
+                    assert_eq!(
+                        admission.blocker_code(),
+                        if preview {
+                            None
+                        } else {
+                            Some("runtime_platform_not_qualified")
+                        }
+                    );
                     assert!(admission.evidence_revision().is_none());
                 }
                 assert_eq!(

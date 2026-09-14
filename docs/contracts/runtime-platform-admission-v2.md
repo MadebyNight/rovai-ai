@@ -40,8 +40,10 @@ export interface RuntimePlatformAdmission {
 closed reason code，且 `evidenceRevision = null`；它不能被统计或描述为 First-Class/qualified。
 `not_qualified` 与 `unsupported` 的 reason/evidence 规则沿用 v1。
 
-v1.59 增加 Linux x64 Server 的构建平台身份；现有 Runtime 的 Linux 行全部为 `not_qualified` 且无 evidence，
-不会自动开放 discovery、安装或执行，也不增加 Linux Desktop。
+v1.59 的 Linux x64 Server OS 与 Runtime 资格独立。Server 在目标发行版启动不晋升 Adapter。
+Linux 的 Codex CLI、Claude Code 两行开放 `preview`，reason 为 `runtime_platform.qualification_evidence_missing`，
+evidenceRevision 仍为 null，允许 discovery、安装和真实验收；其他 Runtime 继续 `not_qualified`。
+只有目标 Runtime 自己的发行版/版本/能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
 
 ## 2. Authority and projection
 

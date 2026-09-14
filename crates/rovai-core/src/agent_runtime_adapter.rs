@@ -714,6 +714,18 @@ impl AgentRuntimeAdapterRegistry {
         kind: AdapterKind,
         platform: HostPlatformKey,
     ) -> RuntimePlatformAdmission {
+        if platform == HostPlatformKey::LinuxX64
+            && matches!(kind, AdapterKind::CodexCli | AdapterKind::ClaudeCodeCli)
+        {
+            // Server OS compatibility does not qualify an Adapter. These two
+            // rows permit explicit Linux evaluation until their own evidence
+            // covers the supported distributions and runtime capabilities.
+            return RuntimePlatformAdmission::preview(
+                kind,
+                platform,
+                RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing,
+            );
+        }
         let unqualified = || {
             RuntimePlatformAdmission::not_qualified(
                 kind,

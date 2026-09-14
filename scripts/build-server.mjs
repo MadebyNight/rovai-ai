@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { hostServerTargetKey, serverTarget } from './lib/sidecar-targets.mjs'
 import { archiveServerPackage } from './lib/server-archive.mjs'
+import { inspectLinuxServerAbi } from './lib/linux-server-abi.mjs'
 
 const repository = resolve(import.meta.dirname, '..')
 const arguments_ = process.argv.slice(2)
@@ -51,6 +52,9 @@ try {
   const guide = readFileSync(join(repository, 'docs/development/server-preview.md'), 'utf8')
     .replace(/\]\((?!https?:|#)([^)]+)\)/g, (_, target) => `](${new URL(target, guideBase).href})`)
   writeFileSync(join(destination, 'README.md'), guide)
+  if (target.key === 'linux-x64') {
+    writeFileSync(join(destination, 'linux-abi.json'), JSON.stringify(inspectLinuxServerAbi(destination), null, 2) + '\n')
+  }
   const files = {}
   function hashTree(directory, prefix = '') {
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {

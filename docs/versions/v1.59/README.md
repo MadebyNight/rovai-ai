@@ -14,6 +14,13 @@ last_updated: 2026-09-14
 前置：[v1.58](../v1.58/README.md)。前版未完成的评测验收保持原有事实，本版不把它们宣布为完成。
 用户确认统一 Rust Host 与共享 Axum Web 方向，并授权在独立 worktree 实施、验证后推送远程任务分支。
 
+## Linux 第一版范围增量
+
+正式发布目标调整为 GNU x86_64 / glibc 2.35 基线；同一发布归档必测 Ubuntu 22.04、Debian 12、Ubuntu 24.04。
+Server OS 与 Runtime 资格分别记录，首批 Runtime 目标仅 Codex CLI 与 Claude Code，当前开放 preview 等待实测闭合。
+其他 Runtime 的 Linux 探测不自动取得产品资格。未增加 musl、ARM64、Debian 11 或 Linux Desktop。
+理由见 [V1.59-D06](decisions.md#v1-59-d06)，进度见[实施计划](implementation-plan.md#当前批次linux-gnu-235-基线与-runtime-实测)。
+
 ## 范围与状态
 
 最终由同一个 Rust Host 服务普通 Desktop、Desktop 开启的 Web 服务和独立 Server；后者不启动 Electron。
