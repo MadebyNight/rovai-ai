@@ -248,7 +248,26 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       invalid.append('file', new Blob([scenario === 'too-large' ? new Uint8Array(20 * 1024 * 1024 + 1) : input]), 'input')
       if (scenario === 'duplicate-file') invalid.append('file', new Blob([input]), 'duplicate')
       if (scenario === 'digest') { invalid.set('intent', JSON.stringify({ ...intent, sha256: '0'.repeat(64) })) }
-      assert.equal((await postUpload(invalid)).status, scenario === 'too-large' ? 413 : 400)
+      // Invalid multipart requests may be rejected before their body finishes.
+      // Use a fresh HTTP connection and observe the actual rejection response;
+      // fetch's pooled streaming writer can race that close and report EPIPE.
+      const encoded = new Request(`${origin}/api/v1/uploads`, { method: 'POST', body: invalid })
+      const bytes = Buffer.from(await encoded.arrayBuffer())
+      const rejectedStatus = await new Promise((resolve, reject) => {
+        let responding = false
+        const req = httpRequest(encoded.url, { method: 'POST', agent: false,
+          headers: { Authorization: `Bearer ${first.token}`, 'Content-Type': encoded.headers.get('content-type'), 'Content-Length': bytes.length },
+          signal: AbortSignal.timeout(10_000)
+        }, response => {
+          responding = true
+          response.resume()
+          response.on('end', () => resolve(response.statusCode))
+          response.on('error', reject)
+        })
+        req.on('error', error => { if (!responding) reject(error) })
+        req.end(bytes)
+      })
+      assert.equal(rejectedStatus, scenario === 'too-large' ? 413 : 400)
       assert.deepEqual(await spools(), [], 'rejected multipart bytes must leave no unbound source')
     }
     const abort = new AbortController()
