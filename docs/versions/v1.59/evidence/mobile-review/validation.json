@@ -2,14 +2,19 @@
   "scope": "Standalone HTML interaction draft; local sample data only",
   "productionHost": false,
   "realDevice": false,
-  "baseline": "f4eda5fd + main 6c556883",
-  "date": "2026-09-13T16:50:02.188Z",
+  "baseline": "2369c96b; mobile review revision 2 (25 user corrections)",
+  "date": "2026-09-14T05:00:42.075Z",
   "checks": [
     "five labeled roots and neutral primary creation",
+    "quiet conversation list, optional search and compact project entry",
+    "new conversation: optional name, portrait Lead and one-click commit only on creation",
     "Camp, private and refresh retain separate text and recipient",
     "send consumes only submitted text while preserving later editing",
     "offline disables send; expiry and demo re-login preserve editing",
+    "conversation back exits across tabs; approvals remain in conversation",
+    "message actions, quote, right-aligned user and minimal composer",
     "approval and latest command disclosure preserve reading",
+    "execution isolates multiple members and stop; latest is circular",
     "Compact disclosure and reduced motion",
     "HTML attachment interactive preview, source and quote",
     "default team and one-click creation carry into the new Camp",
@@ -17,6 +22,8 @@
     "member Runtime configuration and form survive return",
     "memory scope, ownership, stop and review",
     "automation schedule, Cron, timezone and switch",
+    "font slider, tap alternatives, preview and refresh; no map/motion settings",
+    "white and black page planes; Skills use groups; remote precedes channels in capabilities",
     "Desktop has channels without an update entry; Server is the inverse",
     "Server update mock guards active work and completes idle restart",
     "Desktop channel retry reuses provider state and structured choice"
@@ -89,6 +96,36 @@
       "theme": "night"
     },
     {
+      "name": "member-runtime-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "appearance-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "skills-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "login-expired-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "new-conversation-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
       "name": "overview-day",
       "width": 1440,
       "height": 1040,
@@ -98,12 +135,64 @@
   "errors": [],
   "artifact": {
     "name": "rovai-mobile.html",
-    "sha256": "00a0f821162ba284ea8948b6eb1707148131956965136b34548b0cb49bcdc714"
+    "sha256": "fafa4d9ee9e924d15379b62463d837f9746bbcf6751741c80ec3db2ce1af7d6a"
   },
   "result": "pass",
+  "revision": 2,
   "limitations": [
-    "Local fixture state only; no real Host or model execution",
+    "Local sample state only; no real Host or model execution",
     "Desktop-hosted page has no update; Server Web update flow remains a proposal",
     "No iOS/Android physical-device, keyboard, camera or network-switch qualification"
+  ],
+  "productionChange": {
+    "scope": "Shared Desktop/Web settings navigation only",
+    "remoteGroup": "capabilities",
+    "order": [
+      "skills",
+      "mcp",
+      "runtime",
+      "remote",
+      "channels"
+    ],
+    "serverHidesChannels": true,
+    "appInstalled": false
+  },
+  "sourceChecks": {
+    "files": "FilePreviewPane and file-preview-session restore explicitly opened tabs, not a complete Camp file collection. The invented aggregate file tab is removed.",
+    "recipient": "CampWorkspace.composerRecipientSummary and structured Mention remain production owners. Prototype shows default Lead hint and @, without a separate recipient button.",
+    "skills": "SkillSettings consumes delivery groups; MemberManagement has no Skills/MCP assignment surface.",
+    "latest": "Production return-to-latest has a 36 px circular face, 44 px hit area, centered over reading content."
+  },
+  "productionValidation": {
+    "typecheck": "pass",
+    "buildDesktopAndWeb": "pass",
+    "vitest": {
+      "files": 198,
+      "passed": 2009
+    },
+    "nodeDefaultSuite": {
+      "passed": 317,
+      "skipped": 2,
+      "failed": 0
+    },
+    "navigationShell": {
+      "passed": 1,
+      "runtime": "macOS isolated Electron fixture; no Core/Runtime"
+    },
+    "docs": "docs:test and docs:check passed; diff-aware gate recorded in revision delivery"
+  },
+  "trackedScreens": [
+    "camp-night",
+    "camp-day",
+    "desktop-about-day",
+    "server-update-day",
+    "execution-expanded-day",
+    "overview-day",
+    "new-conversation-day",
+    "appearance-day",
+    "member-runtime-day",
+    "settings-day",
+    "camp-landscape",
+    "login-expired-day"
   ]
 }

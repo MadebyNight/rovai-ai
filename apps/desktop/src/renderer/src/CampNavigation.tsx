@@ -636,8 +636,7 @@ export const SETTINGS_SIDEBAR_GROUPS: SettingsSidebarGroup[] = [
     items: [
       { key: 'general', icon: 'sliders-horizontal', label: '通用' },
       { key: 'appearance', icon: 'sun-moon', label: '外观' },
-      { key: 'notifications', icon: 'bell-ring', label: '提醒' },
-      { key: 'remote', icon: 'monitor-smartphone', label: '远程连接' }
+      { key: 'notifications', icon: 'bell-ring', label: '提醒' }
     ]
   },
   {
@@ -647,6 +646,7 @@ export const SETTINGS_SIDEBAR_GROUPS: SettingsSidebarGroup[] = [
       { key: 'skills', icon: 'sparkles', label: 'Skills' },
       { key: 'mcp', icon: 'blocks', label: 'MCP' },
       { key: 'runtime', icon: 'cpu', label: '运行时' },
+      { key: 'remote', icon: 'monitor-smartphone', label: '远程连接' },
       { key: 'channels', icon: 'radio-tower', label: '渠道' }
     ]
   },
