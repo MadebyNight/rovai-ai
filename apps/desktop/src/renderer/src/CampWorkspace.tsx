@@ -8531,7 +8531,6 @@ function RunExecutionContent({
           </>}
         </div>
       )}
-      {publicFailure && <RuntimeFailureNotice failure={publicFailure} presentation="agent-run" />}
       {showUnsettledWarning && (
         <p className="execution-uncertain" role="status">
           仍有外部效果待确认
@@ -8713,6 +8712,7 @@ function RunExecutionContent({
           正在提交停止请求，完成后即可继续发送。
         </div>
       )}
+      {publicFailure && <RuntimeFailureNotice failure={publicFailure} presentation="agent-run" />}
     </div>
     </ExecutionContentContext.Provider>
   )
