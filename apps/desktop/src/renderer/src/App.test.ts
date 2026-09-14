@@ -5465,7 +5465,7 @@ describe('task event projections', () => {
     })
   })
 
-  it('shows only a failed AgentRun original error even when no execution evidence was recorded', () => {
+  it('shows only a failed AgentRun original error and places it after existing execution records', () => {
     const run: AgentRunView = {
       id: 'run-claude-failed', campTurnId: 'turn-1', conversationId: 'conversation-claude',
       agentId: 'agent-claude', taskId: null, responsibilityKey: 'direct:agent-claude',
@@ -5498,6 +5498,21 @@ describe('task event projections', () => {
     expect(markup).not.toContain('Claude Code 返回错误')
     expect(markup).not.toContain('请求受到速率限制')
     expect(markup).not.toContain('Rovai 内部错误')
+
+    const positionedMarkup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
+      run,
+      progress: {
+        items: [{
+          key: 'narration:before-failure',
+          kind: 'narration',
+          body: '已执行前置检查。'
+        }]
+      },
+      campId: 'camp-1'
+    }))
+    expect(positionedMarkup.indexOf('已执行前置检查。')).toBeGreaterThan(-1)
+    expect(positionedMarkup.indexOf('请稍后重试。'))
+      .toBeGreaterThan(positionedMarkup.indexOf('已执行前置检查。'))
   })
 
   it('mounts Run details only after a terminal Run is focused while keeping non-terminal details immediate', () => {

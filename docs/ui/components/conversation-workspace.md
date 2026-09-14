@@ -683,8 +683,9 @@ notice：“Claude Code API 暂时不可用”，并显示最新重试次数、�
 [Network Interruption Recovery v1](../../contracts/network-interruption-recovery-v1.md)。
 
 failed AgentRun 的公开 `failure` 必须在对应 Run stage 显示 Core 已脱敏并限长的 Runtime 原始错误文本；
-非空 `detail` 优先，否则回退 `summary`。即使没有任何 Execution Evidence 也默认展开，不能被空详情逻辑
-隐藏。AgentRun 不增加 Runtime 名称或 `origin` 标题，不翻译错误文本，所有 `origin` 统一使用 danger
+非空 `detail` 优先，否则回退 `summary`。错误位于本次 Run 的执行记录末尾，作为运行中断原因；即使没有
+任何 Execution Evidence 也默认展开并直接显示，不能被空详情逻辑隐藏。AgentRun 不增加 Runtime 名称或
+`origin` 标题，不翻译错误文本，所有 `origin` 统一使用 danger
 错误底色；成员管理等非 AgentRun surface 继续使用各自既有标题与语义色。Renderer 不读取或展示原始
 stderr、私有日志、内部 error chain 或 digest，也不从公开文本重新猜归因。
 
