@@ -1,3 +1,4 @@
+import { MobileBack, useMobileLayout } from './MobileLayout'
 import { desktopCampClient } from './desktop-camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { useCampClient } from './camp-client'
@@ -123,6 +124,8 @@ const PERSONAL_EDITOR_KEY = 'current-user-profile'
 export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
   function MembersView(props, ref) {
     const { agents, selectedAgentId, onSelectedAgentChange } = props
+    const mobile = useMobileLayout()
+    const [mobileDetail, setMobileDetail] = useState(props.activeTab === 'runtime')
     const [visited, setVisited] = useState<string[]>([])
     const [hasNewDraft, setHasNewDraft] = useState(false)
     const [creating, setCreating] = useState(false)
@@ -172,11 +175,13 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
       tab: MemberWorkspaceTab,
       focusRuntime = false
     ): void => {
+      setMobileDetail(true)
       showSelectedMember()
       onSelectedAgentChange(id, tab)
       if (focusRuntime) setRuntimeFocus((value) => value + 1)
     }
     const create = (): void => {
+      setMobileDetail(true)
       setPersonalSelected(false)
       setHasNewDraft(true)
       setCreating(true)
@@ -270,7 +275,7 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
             personalEntry={<CurrentUserRosterEntry
               dirty={states[PERSONAL_EDITOR_KEY]?.dirty ?? false}
               selected={personalSelected}
-              onSelect={() => { setPersonalVisited(true); setPersonalSelected(true) }}
+              onSelect={() => { setMobileDetail(true); setPersonalVisited(true); setPersonalSelected(true) }}
             />}
             selectedAgentId={creating || personalSelected ? null : selectedAgentId}
             dirtyAgentIds={
@@ -305,7 +310,8 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
             </button>
           )}
         </MemberRosterLayout>
-        <section className="members-view member-editor-view">
+        <section className="members-view member-editor-view" data-mobile-detail={mobile && mobileDetail || undefined}>
+          {mobile && <div className="mobile-member-back"><MobileBack label="返回队员列表" onClick={() => setMobileDetail(false)} /><span>队员</span></div>}
           {personalVisited && <div className="member-editor-page personal-editor-page" hidden={!personalSelected}>
             {props.topNotices}
             <CurrentUserProfileEditor

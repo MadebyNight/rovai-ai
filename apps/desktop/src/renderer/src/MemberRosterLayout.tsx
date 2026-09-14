@@ -1,3 +1,4 @@
+import { useMobileLayout } from './MobileLayout'
 import {
   createContext,
   useCallback,
@@ -66,6 +67,7 @@ function initialPreference(): RosterPreference {
 }
 
 export function MemberRosterLayout({ children }: { children: ReactNode }): React.JSX.Element {
+  const mobile = useMobileLayout()
   const [preference, setPreference] = useState(initialPreference)
   const [maxWidth, setMaxWidth] = useState(MAX_WIDTH)
   const [sorting, setSorting] = useState(false)
@@ -108,7 +110,7 @@ export function MemberRosterLayout({ children }: { children: ReactNode }): React
   }, [maxWidth])
 
   return (
-    <RosterContext.Provider value={{ id, width, maxWidth, collapsed: preference.collapsed, sorting, setSorting, setCollapsed, setWidth }}>
+    <RosterContext.Provider value={{ id, width, maxWidth, collapsed: !mobile && preference.collapsed, sorting, setSorting, setCollapsed, setWidth }}>
       <div
         ref={shellRef}
         className={`member-editor-roster-shell ${dragging ? 'is-resizing' : ''}`}

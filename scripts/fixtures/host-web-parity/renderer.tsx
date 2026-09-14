@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { AdapterInstallation, CampCreationPreflight, ExecutionConsolePlacement, WorkspaceSelection } from '@contracts'
+import { MobileLayoutProvider, useMobileViewport } from '../../../apps/desktop/src/renderer/src/MobileLayout'
 import { AppHeader } from '../../../apps/desktop/src/renderer/src/AppHeader'
 import { CampNavigation } from '../../../apps/desktop/src/renderer/src/CampNavigation'
 import { CampWorkspace, type CampInspectorTab } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
@@ -15,6 +16,7 @@ import { createReviewModel, type Scenario, type Surface } from './model'
 import { agents, availability, campId, installations, navigation, workspacePath } from './data'
 import '../../../apps/desktop/src/renderer/src/styles.css'
 import '../../../apps/desktop/src/renderer/src/member-editor.css'
+import '../../../apps/web/src/mobile.css'
 
 const params = new URL(location.href).searchParams
 const surface = (document.documentElement.dataset.reviewSurface ?? params.get('surface') ?? 'web') as Surface
@@ -34,6 +36,7 @@ function FileScenario() {
 }
 
 function Review() {
+  const mobile = useMobileViewport(surface === 'web')
   const state = useSyncExternalStore(model.subscribe, model.get)
   const [view, setView] = useState<'camp' | 'members'>(scenario === 'member' ? 'members' : 'camp')
   const [creating, setCreating] = useState(scenario === 'new')
@@ -63,12 +66,12 @@ function Review() {
     return () => window.removeEventListener('message', receive)
   }, [])
 
-  return <CampClientProvider client={model.client}>
+  return <MobileLayoutProvider value={mobile}><CampClientProvider client={model.client}>
     <CurrentUserProfileContext.Provider value={{ profile, ready: true, error: null, reload: () => model.note('固定个人资料已载入。'),
       save: async next => { setProfile(next); model.note('模拟：个人资料保存在本页。'); return next } }}>
     <FilePreviewProvider campId={state.snapshot.camp.id} resolvedTheme={theme === 'night' ? 'night' : 'day'} api={model.fileApi}>
     <FileScenario />
-    <div className={view === 'camp' ? 'app-shell app-shell-camp' : 'app-shell'} data-parity-surface={surface}>
+    <div className={view === 'camp' ? 'app-shell app-shell-camp' : 'app-shell'} data-parity-surface={surface} data-mobile-view={mobile ? view : undefined}>
       <CampNavigation view={view} platform="darwin" state="ready" navigation={nav} activeCampId={state.snapshot.camp.id}
         currentProjectKey="review-project" pendingMemoryCount={0}
         onNewConversation={() => setCreating(true)} onMembers={() => setView('members')}
@@ -78,7 +81,7 @@ function Review() {
         onDelete={async () => outsideScope('删除 Camp')} onRename={async (_, title) => model.rename(title)}
         onError={error => model.note(String(error))} />
       {view === 'camp' && <AppHeader campTitle={state.snapshot.camp.title} contextLabel="rovai-workspace"
-        camp={state.snapshot} detailEntryHostRef={setDetailHost}
+        camp={state.snapshot} detailEntryHostRef={setDetailHost} onBack={mobile ? () => outsideScope('返回列表') : undefined}
         onFocusApprovals={() => document.querySelector<HTMLElement>('.approval-dock')?.scrollIntoView({ block: 'nearest' })} />}
       <main className={`content ${view === 'camp' ? 'task-content camp-content' : 'members-content'}`}>
         {view === 'camp' ? <CampWorkspace key={state.snapshot.camp.id} snapshot={state.snapshot} projectName="rovai-workspace"
@@ -116,7 +119,7 @@ function Review() {
     </div>
     </FilePreviewProvider>
     </CurrentUserProfileContext.Provider>
-  </CampClientProvider>
+  </CampClientProvider></MobileLayoutProvider>
 }
 
 createRoot(document.getElementById('root')!).render(<Review />)

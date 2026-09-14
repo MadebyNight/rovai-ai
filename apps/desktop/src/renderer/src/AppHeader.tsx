@@ -1,4 +1,5 @@
 import type { CampSnapshot } from '@contracts'
+import { MobileBack } from './MobileLayout'
 import { useOptionalFilePreview } from './FilePreviewContext'
 import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { FilePreviewTabs } from './FilePreviewTabs'
@@ -9,13 +10,15 @@ export function AppHeader({
   contextLabel,
   camp,
   detailEntryHostRef,
-  onFocusApprovals
+  onFocusApprovals,
+  onBack
 }: {
   campTitle: string | null
   contextLabel: string | null
   camp: CampSnapshot | null
   detailEntryHostRef?(host: HTMLDivElement | null): void
   onFocusApprovals(): void
+  onBack?(): void
 }): React.JSX.Element {
   const filePreview = useOptionalFilePreview()
   const previewLayout = useOptionalFilePreviewLayout()
@@ -28,6 +31,7 @@ export function AppHeader({
       style={previewVisible ? previewLayout?.style : undefined}
     >
       <div className="topbar-conversation-context">
+        {onBack && <MobileBack label={previewVisible ? '返回对话' : '返回对话列表'} onClick={previewVisible ? filePreview!.hidePane : onBack} />}
         <div className="context-breadcrumb">
           {contextLabel && <span className="context-project">{contextLabel}</span>}
           {contextLabel && <span className="context-sep" aria-hidden="true">›</span>}
@@ -68,4 +72,3 @@ export function AppHeader({
     </header>
   )
 }
-

@@ -1,4 +1,5 @@
 import { useCampClient } from './camp-client'
+import { MobileBack, useMobileLayout } from './MobileLayout'
 import { newCommandId } from '../../shared/command-id'
 import { readErrorMessage } from './error-message'
 import type { MemoryNavigationTarget } from './desktop-navigation'
@@ -132,6 +133,7 @@ export function MemoryLibrary({
   const reviewGeneration = useRef(0)
   useEffect(() => () => { libraryGeneration.current++; reviewGeneration.current++ }, [client])
   const [library, setLibrary] = useState<MemoryLibraryView | null>(null)
+  const mobile = useMobileLayout()
   const [reviewItems, setReviewItems] = useState<HearthReviewItem[]>([])
   const [localScope, setLocalScope] = useState<MemoryScopeKind>('hearth')
   const [localGovernance, setLocalGovernance] = useState<GovernanceFilter>('all')
@@ -623,12 +625,14 @@ export function MemoryLibrary({
   return (
     <section
       className={`memory-library${startupContentVisible ? '' : ' startup-feedback-suppressed'}`}
+      data-mobile-detail={mobile && selectedMemory !== null || undefined}
       aria-labelledby="memory-library-title"
       aria-busy={loading}
       aria-hidden={startupContentVisible ? undefined : true}
       data-startup-route="memory"
       data-startup-status={loading ? 'loading' : error && !library ? 'waiting' : 'ready'}
     >
+      {mobile && selectedMemory && <div className="mobile-memory-back"><MobileBack label="返回记忆列表" onClick={() => setSelectedMemoryId(null)} /><span>记忆</span></div>}
       <header className="memory-library-header">
         <div>
           <h2 id="memory-library-title">记忆</h2>

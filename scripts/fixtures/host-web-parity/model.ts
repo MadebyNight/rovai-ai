@@ -2,7 +2,7 @@ import type { ActionApprovalView, CampPendingInputsView, CoreEvent, CoreMethod, 
 import type { CampClient } from '../../../apps/desktop/src/renderer/src/camp-client'
 import { agents, approval, campId, fileText, initial, initialDraft, installations, message, now, run, workspacePath } from './data'
 
-export type Scenario = 'camp' | 'new' | 'running' | 'approval' | 'file' | 'member'
+export type Scenario = 'camp' | 'new' | 'running' | 'approval' | 'file' | 'member' | 'mobile-running'
 export type Surface = 'desktop' | 'web'
 export function createReviewModel(surface: Surface, scenario: Scenario) {
   const listeners = new Set<() => void>()
@@ -51,8 +51,23 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
     snapshot.approvals = waiting ? [structuredClone(approval)] : []
     change({ snapshot })
   }
-  if (scenario === 'running' || scenario === 'approval') showExecution(scenario === 'approval')
+  if (scenario === 'running' || scenario === 'approval' || scenario === 'mobile-running') showExecution(scenario === 'approval')
 
+  if (scenario === 'mobile-running') {
+    const snapshot = structuredClone(state.snapshot)
+    const historical = ['earlier', 'previous'].map((suffix, index) => ({ ...snapshot.agentRuns[0], id: `review-${suffix}`, status: 'succeeded' as const,
+      startedAt: `2026-09-12T02:${index ? '20' : '10'}:00Z`, createdAt: `2026-09-12T02:${index ? '20' : '10'}:00Z`, endedAt: `2026-09-12T02:${index ? '21' : '11'}:00Z`, updatedAt: `2026-09-12T02:${index ? '21' : '11'}:00Z`, executionEvidenceCount: 1 }))
+    snapshot.agentRuns = [...historical, ...snapshot.agentRuns]
+    snapshot.executionEvidence.push(...historical.map((item, index) => ({ ...snapshot.executionEvidence[0], id: `historical-evidence-${index}`, agentRunId: item.id, payload: { itemId: `historical-${index}`, delta: '已完成这次独立执行，保留可展开的正文。' } })))
+    snapshot.executionEvidence.push({ ...snapshot.executionEvidence[0], id: 'review-following-text', sequence: 4, payload: { itemId: 'review-following-narration', delta: '检查命令已经开始。结果返回后继续核对改动与回归。' } })
+    const expandedProfiles = [...state.agents, ...Array.from({ length: 8 }, (_, index) => ({ ...state.agents[1], agentId: `mobile-member-${index}`, displayName: `队员 ${index + 3}`, memberOrder: index + 2 }))]
+    for (const profile of expandedProfiles.slice(1)) {
+      if (!snapshot.members.some(member => member.agentId === profile.agentId)) snapshot.members.push({ ...snapshot.members[1], agentId: profile.agentId, displayName: profile.displayName, memberOrder: profile.memberOrder })
+      snapshot.agentRuns.push({ ...run, id: `run-${profile.agentId}`, agentId: profile.agentId, status: 'running' })
+    }
+    change({ snapshot, agents: expandedProfiles })
+  }
+  const editing = new Map<string, unknown>()
   const request = async (method: CoreMethod, input?: unknown): Promise<unknown> => {
     checkOnline()
     const p = (input ?? {}) as Record<string, any>
@@ -91,7 +106,7 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
         return { projectPath: workspacePath, name: 'rovai-workspace',
         gitObservation: { state: 'not_git', repositoryRoot: null, gitCommonDir: null, objectFormat: null, headCommit: null, branch: null, dirty: null, observedAt: now } }
       case 'agentRunEvidence.list': return { schemaVersion: 1, agentRunId: run.id, requestedAfterSequence: p.afterSequence ?? 0,
-        nextAfterSequence: 3, throughSequence: 3, evidence: state.snapshot.executionEvidence.filter(e => e.sequence > (p.afterSequence ?? 0)), hasMore: false }
+        nextAfterSequence: 3, throughSequence: 3, evidence: state.snapshot.executionEvidence.filter(e => e.agentRunId === (p.agentRunId ?? run.id) && e.sequence > (p.afterSequence ?? 0)), hasMore: false }
       case 'agentRunEvidence.getContent': {
         const evidence = state.snapshot.executionEvidence.find(e => e.id === p.evidenceId)
         if (p.campId !== state.snapshot.camp.id || !evidence) return unavailable(method)
@@ -103,6 +118,7 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
 
   const opened = async () => { note('模拟 Desktop：交给系统打开固定示例文件。'); return { availability: 'available' as const, opened: true, error: null } }
   const client: CampClient = {
+    editingRecovery: { get: key => editing.get(key), set: (key, value) => { editing.set(key, value) } },
     platform: 'darwin', // Both comparison frames use the same macOS content baseline; native chrome is outside the viewport.
     request: request as CampClient['request'], onEvent: fn => { events.add(fn); return () => events.delete(fn) },
     exportMonitoring: async () => unavailable('monitoring export'), revealMonitoringExport: null,

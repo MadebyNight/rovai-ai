@@ -15,6 +15,7 @@ import { createCampAdapter, browserPlatform } from './camp-adapter'
 import '../../desktop/src/renderer/src/styles.css'
 import '../../desktop/src/renderer/src/member-editor.css'
 import './styles.css'
+import './mobile.css'
 
 const transport = new ConsoleClient(window.location.origin, fetch, sessionStorage)
 document.documentElement.dataset.platform = browserPlatform()

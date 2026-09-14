@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import type { AppearancePreferences, AppearanceSnapshot } from '@contracts'
 import { APPEARANCE_ZOOM_OPTIONS, DEFAULT_APPEARANCE, MAX_READING_FONT_SIZE, MIN_READING_FONT_SIZE, appearancePreferencesEqual } from '../../shared/appearance'
+import { useMobileLayout } from './MobileLayout'
 import { SettingsPageHeader } from './SettingsPageHeader'
 import { THEME_OPTIONS } from './theme'
 import systemThumbnail from './assets/appearance/system.svg'
@@ -33,6 +34,7 @@ function BrandMark(): React.JSX.Element {
 function SizeSetting({ kind, value, disabled, onChange }: {
   kind: Preview; value: number; disabled: boolean; onChange(value: number): void
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
   const [text, setText] = useState(String(value))
   useEffect(() => setText(String(value)), [value])
   const accept = (next: number): void => {
@@ -46,7 +48,12 @@ function SizeSetting({ kind, value, disabled, onChange }: {
   }
   return <div className="setting-row">
     <div className="setting-copy"><label htmlFor={`appearance-${kind}-size`}>{sizeLabels[kind]}</label><p id={`appearance-${kind}-hint`}>{sizeHints[kind]}</p></div>
-    <div className="size-stepper">
+    {mobile ? <div className="mobile-font-slider">
+      <button type="button" aria-label={`减小${sizeLabels[kind]}`} disabled={disabled || value <= MIN_READING_FONT_SIZE} onClick={() => accept(value - 1)}>A</button>
+      <input id={`appearance-${kind}-size`} aria-describedby={`appearance-${kind}-hint`} type="range" min={MIN_READING_FONT_SIZE} max={MAX_READING_FONT_SIZE} step={1} value={value} disabled={disabled} onChange={(event) => accept(Number(event.target.value))} />
+      <button type="button" aria-label={`增大${sizeLabels[kind]}`} disabled={disabled || value >= MAX_READING_FONT_SIZE} onClick={() => accept(value + 1)}>A</button>
+      <output aria-live="polite">{value}</output>
+    </div> : <div className="size-stepper">
       <button type="button" aria-label={`减小${sizeLabels[kind]}`} disabled={disabled || value <= MIN_READING_FONT_SIZE} onClick={() => accept(value - 1)}><Icon name="minus" /></button>
       <input id={`appearance-${kind}-size`} aria-describedby={`appearance-${kind}-hint`} type="number" min={MIN_READING_FONT_SIZE} max={MAX_READING_FONT_SIZE} step="1" value={text} disabled={disabled}
         onChange={(event) => {
@@ -57,7 +64,7 @@ function SizeSetting({ kind, value, disabled, onChange }: {
         }} onBlur={commitText} onKeyDown={(event) => { if (event.key === 'Enter') commitText() }} />
       <span className="unit" aria-hidden="true">px</span>
       <button type="button" aria-label={`增大${sizeLabels[kind]}`} disabled={disabled || value >= MAX_READING_FONT_SIZE} onClick={() => accept(value + 1)}><Icon name="plus" /></button>
-    </div>
+    </div>}
   </div>
 }
 

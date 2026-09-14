@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useMobileLayout } from './MobileLayout'
 
 export type CampDetailTab = 'execution' | 'tasks' | 'members'
 
@@ -88,6 +89,7 @@ export function CampDetailPopover({
   onClose(): void
   children: ReactNode
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
   const panelId = useId()
   const panelRef = useRef<HTMLElement>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -118,7 +120,13 @@ export function CampDetailPopover({
     }
   }, [visible, onClose])
 
-  const entries = <CampDetailEntries
+  const entries = mobile ? <>
+    <div className="mobile-camp-tabs" role="group" aria-label="当前会话视图">
+      <button type="button" aria-pressed={!visible || activeTab === 'members'} onClick={onClose}>对话</button>
+      {(['execution', 'tasks'] as const).map(tab => <button key={tab} type="button" aria-controls={panelId} aria-pressed={visible && activeTab === tab} onClick={() => onOpen(tab)}>{labels[tab]}{tab === 'execution' && runningCount > 0 && <i className="mobile-unread-dot" aria-label="有执行进行中" />}</button>)}
+    </div>
+    <button className="mobile-icon-button mobile-camp-members" type="button" aria-label={`会话队员，${memberCount} 位`} aria-expanded={visible && activeTab === 'members'} onClick={() => visible && activeTab === 'members' ? onClose() : onOpen('members')}><CampDetailIcon tab="members" /></button>
+  </> : <CampDetailEntries
     activeTab={activeTab}
     visible={visible}
     panelId={panelId}
@@ -146,8 +154,8 @@ export function CampDetailPopover({
       id={panelId}
       className="camp-detail-popover"
       data-detail={activeTab}
-      role="dialog"
-      aria-modal={false}
+      role={mobile && activeTab !== 'members' ? 'region' : 'dialog'}
+      aria-modal={mobile && activeTab !== 'members' ? undefined : false}
       aria-labelledby={`${panelId}-title`}
       tabIndex={-1}
       hidden={!visible}

@@ -1,6 +1,7 @@
 import { CopyIcon } from './CopyIcon'
 import { newCommandId } from '../../shared/command-id'
-import { useCampClient, type CampClient } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
+import { useCampClient, useEditingRecovery, type CampClient } from './camp-client'
 import { useExecutionDisclosureAnchor } from './useExecutionDisclosureAnchor'
 import { RunningText } from './RunningText'
 import { ExecutionContentContext, ExecutionVirtualList } from './ExecutionVirtualList'
@@ -1568,6 +1569,7 @@ export function CampWorkspace({
   const [attachmentDragState, setAttachmentDragState] = useState<AttachmentDragKind | null>(null)
   const [composerSubmitting, setComposerSubmitting] = useState(false)
   const [routingMutating, setRoutingMutating] = useState(false)
+  const mobile = useMobileLayout()
   const composerSubmittingRef = useRef(false)
   const routingMutatingRef = useRef(false)
   const composerLockAwaitingDisabledCommitRef = useRef(false)
@@ -1941,12 +1943,13 @@ export function CampWorkspace({
     }
     executionDrawerTriggerRef.current = null
     executionDrawerReturnAgentIdRef.current = null
-    if (runningRun && executionPlacement === 'inspector') {
+    if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
   }, [
     executionPlacement,
     inspectorTab,
+    mobile,
     onOpenInspector,
     snapshot.agentRuns,
     workspaceEntrySnapshotReady
@@ -1955,12 +1958,13 @@ export function CampWorkspace({
     if (workspaceEntryInspectorHandled.current) return
     if (!workspaceEntrySnapshotReady) return
     workspaceEntryInspectorHandled.current = true
-    if (workspaceEntryRunningRun && executionPlacement === 'inspector') {
+    if (!mobile && workspaceEntryRunningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
   }, [
     executionPlacement,
     inspectorTab,
+    mobile,
     onOpenInspector,
     workspaceEntryRunningRun,
     workspaceEntrySnapshotReady
@@ -1979,10 +1983,10 @@ export function CampWorkspace({
     setExecutionInspectorActive(executionPlacement === 'inspector')
     executionDrawerTriggerRef.current = null
     executionDrawerReturnAgentIdRef.current = null
-    if (runningRun && executionPlacement === 'inspector') {
+    if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
-  }, [executionPlacement, inspectorTab, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
+  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -4000,7 +4004,7 @@ export function CampWorkspace({
   ) : null
 
   return (
-    <section className="workspace-shell camp-workspace" aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <section
@@ -5202,6 +5206,7 @@ export function CampWorkspace({
                   <path d="m6.2 9.8 4.65-4.65a2.5 2.5 0 0 1 3.54 3.54l-6.1 6.1a4 4 0 0 1-5.66-5.66l6.1-6.1" />
                 </svg>
               </button>
+              {mobile && <button className="composer-attachment-button" type="button" aria-label="提及队员" disabled={busy || composerInteractionDisabled} onPointerDown={(event) => event.preventDefault()} onClick={() => composerHandleRef.current?.startMention()}>@</button>}
             </div>
             <div className="composer-actions">
               {!executionBlocked && (
@@ -5543,8 +5548,17 @@ function ExecutionDrawer({
   memberById: Map<string, CampSnapshot['members'][number]>
   onFileOpenError(message: string): void
 }): JSX.Element {
-  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set())
-  useEffect(() => setExpandedGroups(new Set()), [campId])
+  const mobile = useMobileLayout()
+  const recovery = useEditingRecovery()
+  const groupKey = `mobile-execution-groups:${campId}:${process.agentId}`
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => {
+    try {
+      const saved = mobile ? recovery?.get(groupKey) : null
+      return new Set(Array.isArray(saved) ? saved.filter((key): key is string => typeof key === 'string') : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => { if (!mobile) setExpandedGroups(new Set()) }, [campId, mobile])
+  useEffect(() => { try { if (mobile) recovery?.set(groupKey, [...expandedGroups]) } catch { /* Optional disclosure memory must not block the editor. */ } }, [mobile, recovery, groupKey, expandedGroups])
   const groupState = useMemo(() => ({
     expanded: expandedGroups,
     change(keys: string[], expanded: boolean): void {
@@ -6560,6 +6574,7 @@ function CampMembersPanel({
   onRemoveMember?(preview: CampMemberRemovalPreview): Promise<CampMemberRemoveOutcome>
   onNotify(message: string): void
 }): JSX.Element {
+  const mobile = useMobileLayout()
   const members = campInspectorMembers(snapshot.members)
   const presentCount = members.filter(campMemberIsLeadEligible).length
   const awayCount = members.length - presentCount
@@ -6814,13 +6829,13 @@ function CampMembersPanel({
                 </span>
                 <small title={member.teamRole || undefined}>{runtimeLabel}</small>
               </span>
-              {fast && <CampMemberFastToggle value={fast} displayName={member.displayName} pending={fastControl!.pending}
+              {!mobile && fast && <CampMemberFastToggle value={fast} displayName={member.displayName} pending={fastControl!.pending}
                 onToggle={next => { void memberFast.save(member.agentId, next) }} />}
               <span className={`camp-inspector-member-state ${present ? '' : 'is-away'}`}>
                 <strong>{presenceLabel}</strong>
                 {runtimeTone === 'attention' && profile && <small className="runtime-attention">{runtimeReadinessLabel(profile.runtimeReadiness.status)}</small>}
               </span>
-              <DropdownMenu.Root>
+              {!mobile && <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button
                     className="camp-member-action-button"
@@ -6871,8 +6886,8 @@ function CampMembersPanel({
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-              {runtimeConfiguration && runtimeDetailsOpen && (
+              </DropdownMenu.Root>}
+              {!mobile && runtimeConfiguration && runtimeDetailsOpen && (
                 <dl
                   className="camp-inspector-runtime-detail"
                   id={runtimeDetailsId}
@@ -8720,12 +8735,22 @@ export function RunExecutionDisclosure({
   onFileOpenError?(message: string): void
 }): JSX.Element | null {
   const client = useCampClient()
+  const mobile = useMobileLayout()
+  const recovery = useEditingRecovery()
+  const recoveryKey = `mobile-run:${campId}:${run.id}`
   const nonTerminal = NON_TERMINAL_RUNS.has(run.status)
   const active = executionDisclosureIsLiveOpen(run.status, focused, cancelling)
   const cancellingActive = nonTerminal && cancelling && focused
   const publicFailure = run.status === 'failed' ? run.failure : null
   const hasPublicFailure = publicFailure !== null
-  const [open, setOpen] = useState(active || hasPublicFailure)
+  const defaultOpen = (mobile ? nonTerminal : active) || hasPublicFailure
+  const [open, setOpen] = useState(() => {
+    try {
+      const saved = mobile ? recovery?.get(recoveryKey) : null
+      return typeof saved === 'boolean' ? saved : defaultOpen
+    } catch { return defaultOpen }
+  })
+  useEffect(() => { try { if (mobile) recovery?.set(recoveryKey, open) } catch { /* Optional disclosure memory. */ } }, [mobile, recovery, recoveryKey, open])
   const previousNonTerminal = useRef(nonTerminal)
   const [historicalEvidence, setHistoricalEvidence] = useState<AgentRunExecutionEvidenceView[] | null>(null)
   const [historyStatus, setHistoryStatus] = useState<RunExecutionHistoryStatus>('idle')
@@ -8735,11 +8760,12 @@ export function RunExecutionDisclosure({
   const [contentMounted, setContentMounted] = useState(() => shouldActivateContent)
   useEffect(() => {
     const completed = previousNonTerminal.current && !nonTerminal
+    if (mobile) { previousNonTerminal.current = nonTerminal; return }
     setOpen((currentOpen) => completed
       ? hasPublicFailure
       : executionDisclosureOpenAfterActivity(currentOpen, active || cancellingActive || hasPublicFailure))
     previousNonTerminal.current = nonTerminal
-  }, [active, cancellingActive, hasPublicFailure, nonTerminal])
+  }, [active, cancellingActive, hasPublicFailure, nonTerminal, mobile])
   useEffect(() => {
     if (shouldActivateContent) setContentMounted(true)
   }, [shouldActivateContent])
@@ -8799,7 +8825,7 @@ export function RunExecutionDisclosure({
     />
   ) : null
 
-  const liveOpen = active || cancellingActive
+  const liveOpen = !mobile && (active || cancellingActive)
   return (
     <details
       className={`execution-disclosure ${liveOpen
@@ -8815,7 +8841,8 @@ export function RunExecutionDisclosure({
         }
       }}
     >
-      <summary hidden={liveOpen}>
+      <summary hidden={liveOpen} className={mobile ? 'mobile-run-summary' : undefined}>
+        {mobile && <time className="mobile-run-time">{runIntervalLabel(run)}</time>}
         <span className="process-disclosure-label">{!liveOpen && (nonTerminal
           ? cancelling ? '正在停止' : run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
             : executionInitialFeedback(run.status, progress?.items ?? [], Boolean(finalBody)) ?? '执行中'

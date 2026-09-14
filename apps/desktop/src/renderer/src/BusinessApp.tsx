@@ -1,6 +1,7 @@
 import { newCommandId } from '../../shared/command-id'
 import type { BusinessEnvironment } from './business-environment'
 import { AppHeader } from './AppHeader'
+import { MobileBack, MobileLayoutProvider, MobileNavigation, useMobileViewport } from './MobileLayout'
 export { AppHeader } from './AppHeader'
 import { CurrentUserProfileProvider } from './CurrentUserProfile'
 import { readErrorMessage } from './error-message'
@@ -85,6 +86,7 @@ import { createDesktopNavigation, type NavigationTarget, type NavigationTransact
 import { forgetFilePreviewSession } from './file-preview-session'
 import { AppearanceSettings } from './AppearanceSettings'
 import { AboutUpdatesSettings } from './AboutUpdatesSettings'
+import { RemoteAboutSettings } from './RemoteAboutSettings'
 import { AppUpdatePrompt } from './AppUpdatePrompt'
 import { useAppUpdates, type AppUpdatesController } from './useAppUpdates'
 import {
@@ -954,6 +956,8 @@ export function BusinessApp({
   startupFeedbackDelayElapsed?: boolean
 }): React.JSX.Element {
   const { client, preferences: uiPreferences, desktop } = environment
+  const mobile = useMobileViewport(!desktop)
+  const [mobileSettingsList, setMobileSettingsList] = useState(false)
   const initialTarget: RestorableLocation = initialStartupSnapshot
     ? startupTargetFromSnapshot(initialStartupSnapshot) : { kind: 'quick_chat' }
   type NavigationContext = { campOptions?: ActivateCampOptions; beforeCommit?: () => void; prepared?: boolean; memberPrepared?: boolean }
@@ -3723,6 +3727,7 @@ export function BusinessApp({
   }, [])
 
   const focusCampApprovals = (): void => {
+    if (mobile) { setCampInspectorCampId(null); setSingleChatCampId(null) }
     setNotificationFocus({
       requestId: ++notificationFocusSequence.current,
       kind: 'approval',
@@ -3866,8 +3871,9 @@ export function BusinessApp({
   }
 
   return (
+    <MobileLayoutProvider value={mobile}>
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
-    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''}>
+    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
         platform={client.platform}
         footer={sidebarFooter}
@@ -3892,7 +3898,7 @@ export function BusinessApp({
         pendingMemoryCount={pendingMemoryCount}
         onSettings={openSettings}
         onOpenUpdates={() => void openUpdateSettings()}
-        onSettingsSectionChange={chooseSettingsSection}
+        onSettingsSectionChange={(section) => { setMobileSettingsList(false); chooseSettingsSection(section) }}
         onSettingsBack={closeSettings}
         onOpenProject={() => void openProject()}
         onSelectProject={(project) => {
@@ -3930,10 +3936,12 @@ export function BusinessApp({
         camp={campSnapshot?.camp.id === activeCampId ? campSnapshot : null}
         detailEntryHostRef={setCampDetailEntryHost}
         onFocusApprovals={focusCampApprovals}
+        onBack={mobile ? () => chooseView('compose') : undefined}
       />}
       {windowDragPage && <WindowDragStrip page={windowDragPage} />}
 
       <main className={`content ${pageContentClassName[view]}`}>
+        {mobile && view === 'settings' && !mobileSettingsList && <div className="mobile-settings-back"><MobileBack label="返回设置" onClick={() => setMobileSettingsList(true)} /><span>设置</span></div>}
         {startupGateVisible && startupFeedbackVisible && (
           <StartupGate
             waiting={startupStatus === 'waiting'}
@@ -3995,9 +4003,9 @@ export function BusinessApp({
             onCancelAgentRun={cancelAgentRun}
             stopping={activeCampStopping}
             onStop={() => void stopCampRuns()}
-            executionPlacement={generalPreferences.executionConsolePlacement}
+            executionPlacement={mobile ? 'inspector' : generalPreferences.executionConsolePlacement}
             onExecutionPlacementChange={changeExecutionConsolePlacement}
-            worldMapEnabled={generalPreferences.worldMapEnabled}
+            worldMapEnabled={!mobile && generalPreferences.worldMapEnabled}
             workspaceEntrySnapshotReady={!campSnapshotState.entryPreview}
             inspectorVisible={visibleCampSnapshot.camp.activationState === 'active' && campInspectorVisible}
             inspectorTab={campInspectorTab}
@@ -4143,6 +4151,10 @@ export function BusinessApp({
               )
         )}
       </main>
+      {mobile && view !== 'camp' && <MobileNavigation view={view} disabled={startupGateVisible || shuttingDown} onNavigate={(target) => {
+        if (target === 'settings') setMobileSettingsList(true)
+        chooseView(target)
+      }} />}
 
       <NewConversationDialog
         open={newConversationOpen}
@@ -4192,6 +4204,7 @@ export function BusinessApp({
       />}
     </NavigationShell>
     </FilePreviewProvider>
+    </MobileLayoutProvider>
   )
 }
 
@@ -4385,7 +4398,7 @@ export function SettingsView({
           <DiagnosticsCenter onNavigate={onDiagnosticsNavigate} platform={platform} />
         )}
         {section === 'about' && (
-          <AboutUpdatesSettings updates={updates} />
+          zoomManagedBy === 'browser' ? <RemoteAboutSettings /> : <AboutUpdatesSettings updates={updates} />
         )}
       </div>
     </div>

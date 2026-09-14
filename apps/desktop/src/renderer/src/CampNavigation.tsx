@@ -1,4 +1,5 @@
 import { useCampClient } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
 import {
   useEffect,
   useMemo,
@@ -181,6 +182,7 @@ export function CampNavigation({
   onError(error: unknown): void
 }): JSX.Element {
   const client = useCampClient()
+  const mobile = useMobileLayout()
   const navigationCollapsed = useNavigationCollapsed()
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => new Set())
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(() => new Set())
@@ -240,7 +242,7 @@ export function CampNavigation({
     loadingGroupsRef.current = new Set(loadingGroupsRef.current).add(groupKey)
     setLoadingGroups(new Set(loadingGroupsRef.current))
     try {
-      await onGroupLimitChange(groupKey, currentCount + NAVIGATION_MORE_CAMPS_STEP)
+      await onGroupLimitChange(groupKey, currentCount + (mobile ? NAVIGATION_INITIAL_VISIBLE_CAMPS : NAVIGATION_MORE_CAMPS_STEP))
     } catch (error) {
       onError(error)
     } finally {
@@ -333,6 +335,11 @@ export function CampNavigation({
   return (
     <>
       <aside id="global-navigation" className={`unified-sidebar ${view === 'settings' ? 'settings-navigation-mode' : ''}${navigationCollapsed ? ' is-collapsed' : ''}`} inert={disabled || navigationCollapsed} aria-label={view === 'settings' ? '设置分类' : '全局导航'}>
+        {mobile && view !== 'settings' && <header className="mobile-page-heading"><h1>对话</h1><div>
+          <button className="mobile-icon-button" type="button" aria-label="选择工作目录" disabled={state !== 'ready'} onClick={onOpenProject}><NavigationIcon name="folder-open" /></button>
+          <button className="mobile-icon-button" type="button" aria-label="搜索对话" onClick={() => setPaletteOpen(true)}><NavigationIcon name="search" /></button>
+          <button className="mobile-icon-button" type="button" aria-label="新建对话" disabled={state !== 'ready' || creatingConversation} onClick={onNewConversation}><NavigationIcon name="circle-plus" /></button>
+        </div></header>}
         <div className="unified-sidebar-drag" aria-hidden="true" />
         <div className="unified-brand">
           <span className="rail-logo" role="img" aria-label="Rovai AI">
@@ -355,7 +362,7 @@ export function CampNavigation({
         {view === 'settings'
           ? (
               settingsNavigation ?? <SettingsSidebarNavigation
-                groups={client.channels ? SETTINGS_SIDEBAR_GROUPS : SETTINGS_SIDEBAR_GROUPS.map(group => ({ ...group, items: group.items.filter(item => item.key !== 'channels') }))}
+                groups={SETTINGS_SIDEBAR_GROUPS.map(group => ({ ...group, items: group.items.filter(item => item.key !== 'channels' || client.channels).map(item => client.channels && !client.channels.native && item.key === 'about' ? { ...item, label: '关于' } : item) }))}
                 section={settingsSection}
                 updateBadge={updateBadge}
                 onSectionChange={onSettingsSectionChange}

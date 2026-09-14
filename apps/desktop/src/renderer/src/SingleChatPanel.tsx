@@ -1,4 +1,5 @@
 import { useCampClient } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
 import { newCommandId } from '../../shared/command-id'
 import { RunningText } from './RunningText'
 import { revealMessageQuote } from './message-quote-reveal'
@@ -656,6 +657,7 @@ export function SingleChatPanel({
   onNotify?(message: string): void
 }): React.JSX.Element {
   const client = useCampClient()
+  const mobile = useMobileLayout()
   const panelId = useId()
   const initialAgentId = members.find((member) => memberCanSingleChat(member) && member.isDefaultLead)?.agentId
     ?? members.find(memberCanSingleChat)?.agentId
@@ -1750,6 +1752,7 @@ export function SingleChatPanel({
                 void prepareFiles(files)
               }}
               onKeyDown={(event) => {
+                if (mobile) return
                 if (!shouldSubmitStructuredComposerOnEnter({
                   key: event.key,
                   shiftKey: event.shiftKey,

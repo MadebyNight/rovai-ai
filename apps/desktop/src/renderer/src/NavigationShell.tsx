@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { createPortal } from 'react-dom'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { PanelToggleIcon } from './PanelToggleIcon'
+import { useMobileLayout } from './MobileLayout'
 import type { DesktopNavigation, NavigationState } from './desktop-navigation'
 import { navigationShortcut } from './desktop-navigation-input'
 import { primaryShortcutLabel } from './renderer-platform'
@@ -22,6 +23,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
   nativeWindowControls?: Pick<import('@contracts').RovaiApi['windowControls'], 'onNavigationRequested'>
   navigation?: Pick<DesktopNavigation, 'getSnapshot' | 'subscribe' | 'back' | 'forward'>
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
   const history = useSyncExternalStore(navigation?.subscribe ?? noSubscription, navigation?.getSnapshot ?? emptySnapshot, emptySnapshot)
   const input = useRef({ navigation, disabled, platform })
   input.current = { navigation, disabled, platform }
@@ -73,9 +75,9 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
   const gesture = useRef<{ id: number; x: number; width: number; before: NavigationLayout; moved: boolean } | null>(null)
   const frame = useRef<number | null>(null)
   const maximum = navigationMaxWidth(viewport)
-  const fixedSettings = settings && (browser || platform === 'darwin')
+  const fixedSettings = mobile || settings && (browser || platform === 'darwin')
   // Web settings always expose their categories; ordinary-page layout stays saved.
-  const collapsed = layout.collapsed && !(browser && settings)
+  const collapsed = layout.collapsed && !mobile && !(browser && settings)
   const width = collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
   const label = collapsed ? '展开导航侧栏' : '收起导航侧栏'
   const toggle = (): void => setLayout(current => fixedSettings && !current.collapsed ? current : { ...current, collapsed: !current.collapsed })

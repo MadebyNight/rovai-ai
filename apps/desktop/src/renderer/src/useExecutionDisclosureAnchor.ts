@@ -53,7 +53,7 @@ export function useExecutionDisclosureAnchor(
     const capture = (event: MouseEvent) => {
       if (!(event.target instanceof Element) || event.button !== 0) return
       if (event.target.closest('a, .tool-file-link')) return
-      const summary = event.target.closest<HTMLElement>('summary.tool-call-summary, summary.tool-group-summary')
+      const summary = event.target.closest<HTMLElement>('summary.tool-call-summary, summary.tool-group-summary, summary.mobile-run-summary')
         ?? event.target.closest('.tool-result-retry')?.closest('details')?.querySelector<HTMLElement>(':scope > summary')
       if (!summary || !host.contains(summary)) return
       // A content-sized bottom drawer would otherwise grow upward on first open.

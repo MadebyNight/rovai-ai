@@ -13,7 +13,31 @@ last_updated: 2026-09-14
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前以 `59249423` 合入 main `6c556883`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：最新执行态与 Mobile 交互稿
+## 本轮：Mobile 正式入口
+
+用户确认第四稿并补充左侧蓝点、完整六种定时计划与手机日期选择后，已将手机布局接入实际 `apps/web`。
+新增展示上下文与 Web 专用样式，继续复用 BusinessApp、Camp、结构化 Composer、执行与正式管理页；
+不复制示例状态机，不改变统一 Rust Host。原生 Desktop 不启用手机布局。
+
+手机根页为五项底部导航；对话、执行、任务切换不加入返回历史。会话列表连续 44px，未读蓝点位于左侧，
+初始 5 项、每次增加 5 项，Desktop 保留每次增加 10 项。文件预览全屏阅读后返回对话，公共/私聊分别保留草稿。
+输入框 Return 换行，@ 入口复用结构化 Mention，发送继续使用原命令与默认接收逻辑。
+
+多队员执行头像自动换行，连续 Run 独立展开并通过已有标签页恢复存储保留展示状态。
+队员/记忆改为列表和详情分屏；Runtime 页内编辑；设置复用正式页面并提供 A 字号滑条。
+定时类型为每天、工作日、每周、仅一次、自定义 Cron、手动触发，手机底部日期/时间面板复用 Desktop 字段和校验。
+Desktop 托管的手机页面只有关于；独立 Server 有原生安装/更新说明入口，自动下载/安装/重启 API 仍未交付。
+
+[生产入口记录](evidence/mobile-production/validation.json)、[执行组件记录](evidence/mobile-production/execution-validation.json)
+和[独立 Server 记录](evidence/mobile-production/server-validation.json)分别标明真实 Host 与模拟执行证据。
+测试脚本为 `pnpm test:host-web-mobile`，使用隔离数据、Skills、MCP 与 Chrome 目录，不启动真实 Runtime。
+实体手机软键盘、相机、后台恢复、网络切换与第二设备联调仍待完成；不以窄屏模拟宣称第五阶段全部验收。
+
+TypeScript、Desktop/Web 构建、完整 `pnpm test`（Vitest 2009 / 198 文件、Node 317 通过 / 2 个平台专项跳过）、
+文档三门禁通过。Desktop 导航、启动、Composer 与文件预览原生回归通过；宽屏 Chrome/Electron 双入口 24 个场景通过。
+手机入口 3 组覆盖真实 Host、共享执行/审批组件与独立 Server；最终校验范围与来源见 [验证总表](evidence/mobile-production/checks.json)。
+
+## 先前批次：最新执行态与 Mobile 交互稿
 
 Mobile 第四稿将会话行压为连续 44px，移除列表日期、行间分隔和消息日期分组；顶栏保留圆圈加号，项目级
 改为普通加号。队员消息名后展示 Codex CLI 等 Runtime；移除焦点黑框与装饰，设置图标对齐正式 NavigationIcon。
@@ -72,7 +96,7 @@ Web 的 HTML/HTM 不再强制标为普通文本。正式文件查看器复用 De
 支持键盘提交、Token 显隐、真实错误和提交反馈；恢复与扫码等待共用同一品牌入口。
 提示为“输入 64 位的 Token”，位数来自现有 32 字节随机值的十六进制编码。首次登录跟随浏览器设备主题，
 已挂载工作台的重新登录沿用当前主题与编辑；继续使用原 Bearer Session 和标签页恢复机制。
-窄屏仅适配登录入口，不宣称完成 Mobile 工作台。
+该登录页批次仅适配窄屏入口；后续 Mobile 工作台实施见本页顶部。
 “核对 N 项提交／重试原提交”追溯到 `b62752dd9`（2026-09-12），此前在未确认完成的命令或上传期间显示。
 用户随后确认移除这两个 Web 专用按钮及其界面计数，Desktop 本来没有这些入口；保留断线反馈、
 原命令材料、自动回执核对和幂等逻辑，不因移除按钮而自动重发命令。按用户要求关闭 PR #345；后续默认仅推送任务分支。

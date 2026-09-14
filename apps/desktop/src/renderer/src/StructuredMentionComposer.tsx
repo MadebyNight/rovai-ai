@@ -1,10 +1,14 @@
 import { useEditingRecovery } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
 import type { CampComposerDraftView, ComposerAtom, ComposerDocument } from '@contracts'
 import { LexicalExtensionComposer } from '@lexical/react/LexicalExtensionComposer'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import {
   $getRoot,
+  $getSelection,
+  $isRangeSelection,
+  $isTextNode,
   $nodesOfType,
   CLEAR_HISTORY_COMMAND,
   HISTORY_PUSH_TAG
@@ -80,6 +84,7 @@ export interface StructuredMentionComposerHandle {
   ): void
   setDocument(document: ComposerDocument, boundary?: 'start' | 'end'): void
   focus(boundary?: 'start' | 'end'): void
+  startMention(): void
   getLocalVersion(): number
   isDirty(): boolean
 }
@@ -224,6 +229,9 @@ function ComposerBridge({
   forwardedRef: ForwardedRef<StructuredMentionComposerHandle>
 }): JSX.Element {
   const [editor] = useLexicalComposerContext()
+  const mobile = useMobileLayout()
+  const mobileRef = useRef(mobile)
+  mobileRef.current = mobile
   const recovery = useEditingRecovery()
   const authorityDocument = useRef(document)
   authorityDocument.current = document
@@ -341,6 +349,7 @@ function ComposerBridge({
     const runtime: ComposerExtensionRuntime<CampComposerDraftView> = {
       sync,
       submit: () => { void callbacks.current.onSubmit() },
+      enterInsertsLineBreak: () => mobileRef.current,
       backspaceAtStart: () => { void callbacks.current.onBackspaceAtStart?.() },
       pasteFiles: (files) => callbacks.current.onPasteFiles?.(files),
       plainText: (selection) =>
@@ -460,6 +469,18 @@ function ComposerBridge({
         else $getRoot().selectEnd()
       }, { discrete: true })
       editor.focus(undefined, { defaultSelection: boundary === 'start' ? 'rootStart' : 'rootEnd' })
+    },
+    startMention() {
+      if (!editor.isEditable()) return
+      editor.update(() => {
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          const node = selection.anchor.getNode()
+          const before = $isTextNode(node) ? node.getTextContent().slice(0, selection.anchor.offset) : ''
+          selection.insertText(before && !/\s$/.test(before) ? ' @' : '@')
+        } else $getRoot().selectEnd().insertText(' @')
+      }, { discrete: true, tag: HISTORY_PUSH_TAG })
+      editor.focus()
     },
     getLocalVersion: () => syncRef.current?.getLocalVersion() ?? 0,
     isDirty: () => syncRef.current?.isDirty() ?? false
