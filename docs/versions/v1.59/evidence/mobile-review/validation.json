@@ -2,11 +2,13 @@
   "scope": "Standalone HTML interaction draft; local sample data only",
   "productionHost": false,
   "realDevice": false,
-  "baseline": "2369c96b; mobile review revision 2 (25 user corrections)",
-  "date": "2026-09-14T05:00:42.075Z",
+  "baseline": "bd57bc82; mobile review revision 3 (quiet creation, groups, single-member automation)",
+  "date": "2026-09-14T05:33:36.790Z",
   "checks": [
-    "five labeled roots and neutral primary creation",
+    "five labeled roots and transparent circular-plus creation",
     "quiet conversation list, optional search and compact project entry",
+    "project pagination: five, ten, eleven; collapse and independent folders",
+    "page titles replace repeated product branding and slogans",
     "new conversation: optional name, portrait Lead and one-click commit only on creation",
     "Camp, private and refresh retain separate text and recipient",
     "send consumes only submitted text while preserving later editing",
@@ -22,6 +24,7 @@
     "member Runtime configuration and form survive return",
     "memory scope, ownership, stop and review",
     "automation schedule, Cron, timezone and switch",
+    "automation uses exactly one member; selection survives editing and refresh",
     "font slider, tap alternatives, preview and refresh; no map/motion settings",
     "white and black page planes; Skills use groups; remote precedes channels in capabilities",
     "Desktop has channels without an update entry; Server is the inverse",
@@ -126,6 +129,18 @@
       "theme": "day"
     },
     {
+      "name": "automation-member-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
+      "name": "projects-day",
+      "width": 390,
+      "height": 844,
+      "theme": "day"
+    },
+    {
       "name": "overview-day",
       "width": 1440,
       "height": 1040,
@@ -135,51 +150,30 @@
   "errors": [],
   "artifact": {
     "name": "rovai-mobile.html",
-    "sha256": "fafa4d9ee9e924d15379b62463d837f9746bbcf6751741c80ec3db2ce1af7d6a"
+    "sha256": "0682d785a34dae36296274ee86734a8a16c0e8efcae8b7919b6028b161da69bf"
   },
   "result": "pass",
-  "revision": 2,
+  "revision": 3,
   "limitations": [
     "Local sample state only; no real Host or model execution",
     "Desktop-hosted page has no update; Server Web update flow remains a proposal",
     "No iOS/Android physical-device, keyboard, camera or network-switch qualification"
   ],
-  "productionChange": {
-    "scope": "Shared Desktop/Web settings navigation only",
-    "remoteGroup": "capabilities",
-    "order": [
-      "skills",
-      "mcp",
-      "runtime",
-      "remote",
-      "channels"
-    ],
-    "serverHidesChannels": true,
-    "appInstalled": false
-  },
+  "productionChange": false,
+  "productionBaseline": "bd57bc825ce5c78768bb0cc7f6ab734f7b712a30; no production source changes in revision 3",
   "sourceChecks": {
     "files": "FilePreviewPane and file-preview-session restore explicitly opened tabs, not a complete Camp file collection. The invented aggregate file tab is removed.",
     "recipient": "CampWorkspace.composerRecipientSummary and structured Mention remain production owners. Prototype shows default Lead hint and @, without a separate recipient button.",
     "skills": "SkillSettings consumes delivery groups; MemberManagement has no Skills/MCP assignment surface.",
-    "latest": "Production return-to-latest has a 36 px circular face, 44 px hit area, centered over reading content."
+    "latest": "Production return-to-latest has a 36 px circular face, 44 px hit area, centered over reading content.",
+    "automation": "AutomationEditor/AutomationWorkspace persist a single memberId, not a team. The prototype uses a portrait single select and preserves that member through edits, save and refresh.",
+    "projectPagination": "CampNavigation and navigation-window-reader use five initial conversations and five more per step. The sample Rovai project contains eleven unpinned conversations; folder expansion and per-group limits are independent."
   },
-  "productionValidation": {
-    "typecheck": "pass",
-    "buildDesktopAndWeb": "pass",
-    "vitest": {
-      "files": 198,
-      "passed": 2009
-    },
-    "nodeDefaultSuite": {
-      "passed": 317,
-      "skipped": 2,
-      "failed": 0
-    },
-    "navigationShell": {
-      "passed": 1,
-      "runtime": "macOS isolated Electron fixture; no Core/Runtime"
-    },
-    "docs": "docs:test and docs:check passed; diff-aware gate recorded in revision delivery"
+  "verification": {
+    "prototypeBrowser": "25 interaction groups passed; zero console exceptions",
+    "docsTests": "10 passed",
+    "docsVersionAndDecisionChecks": "pass including diff-aware base bd57bc82",
+    "productionTests": "Not rerun; this revision only changes a local HTML prototype, its documentation and evidence."
   },
   "trackedScreens": [
     "camp-night",
@@ -193,6 +187,10 @@
     "member-runtime-day",
     "settings-day",
     "camp-landscape",
-    "login-expired-day"
+    "login-expired-day",
+    "project-expanded-day",
+    "project-collapsed-day",
+    "automation-member-picker-day",
+    "conversations-day"
   ]
 }
