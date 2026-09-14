@@ -96,6 +96,7 @@ import {
   TaskPanel,
   AgentRunFileChangesTimelineCard,
   agentExecutionProcesses,
+  runningCampMembers,
   agentRunTerminalNote,
   agentRunCountsAsExecuting,
   agentRunShowsUnsettledWarning,
@@ -2297,18 +2298,39 @@ describe('task event projections', () => {
   })
 
   it('keeps execution first, exposes the active detail, and only marks actual execution as loading', () => {
-    const entries = (executionCount: number | null, runningCount: number): string => renderToStaticMarkup(createElement(CampDetailEntries, {
-      activeTab: 'tasks', visible: true, panelId: 'camp-details', executionCount,
-      runningCount, taskCount: 4, memberCount: 3, onSelect: () => undefined
+    const entries = (showExecution: boolean, runningCount: number): string => renderToStaticMarkup(createElement(CampDetailEntries, {
+      activeTab: 'tasks', visible: true, panelId: 'camp-details', showExecution,
+      runningMembers: Array.from({ length: runningCount }, (_, index) => ({
+        agentId: `agent-${index}`, displayName: `队员 ${index + 1}`, avatarRef: null
+      })), taskCount: 4, memberCount: 3, onSelect: () => undefined
     }))
-    const running = entries(3, 2)
+    const running = entries(true, 2)
     expect(running.indexOf('data-detail="execution"')).toBeLessThan(running.indexOf('data-detail="tasks"'))
     expect(running.indexOf('data-detail="tasks"')).toBeLessThan(running.indexOf('data-detail="members"'))
-    expect(running).toContain('aria-label="2 位队员正在执行"')
+    expect(running).toContain('aria-label="执行，2 位队员正在执行：队员 1、队员 2"')
     expect(running).toMatch(/data-detail="tasks" aria-expanded="true"/)
     expect(running).toContain('aria-controls="camp-details"')
-    expect(entries(3, 0)).not.toContain('camp-loading-spinner')
-    expect(entries(null, 2)).not.toContain('data-detail="execution"')
+    expect(entries(true, 0)).not.toContain('camp-execution-orbits')
+    expect(entries(false, 2)).not.toContain('data-detail="execution"')
+  })
+
+  it('selects actual running members once in roster order, excluding waits, queued, stopping and terminal runs', () => {
+    const members: CampSnapshot['members'] = Array.from({ length: 7 }, (_, index) => ({
+      agentId: `agent-${index}`, displayName: `队员 ${index}`, avatarRef: null, teamRole: '队员', accent: '',
+      membershipStatus: 'active', leaveRequestedAt: null, profilePresence: 'present', memberOrder: index,
+      isDefaultLead: index === 0, version: 1
+    }))
+    const runs: Pick<AgentRunView, 'agentId' | 'status' | 'cancelRequestedAt'>[] = [
+      { agentId: 'agent-2', status: 'running', cancelRequestedAt: null },
+      { agentId: 'agent-1', status: 'running', cancelRequestedAt: null },
+      { agentId: 'agent-1', status: 'running', cancelRequestedAt: null },
+      ...(['waiting', 'queued', 'failed', 'succeeded', 'cancelled'] as const).map((status, index) => ({
+        agentId: `agent-${index + 2}`, status, cancelRequestedAt: null
+      })),
+      { agentId: 'agent-0', status: 'running', cancelRequestedAt: '2026-09-14T00:00:00Z' }
+    ]
+    expect(runningCampMembers(runs, [...members].reverse()).map(member => member.agentId)).toEqual(['agent-1', 'agent-2'])
+    expect(runningCampMembers(runs.map(run => ({ ...run, status: 'succeeded' })), members)).toEqual([])
   })
 
   it('shows unsettled external effects only after a failed or cancelled AgentRun', () => {
@@ -3878,11 +3900,12 @@ describe('task event projections', () => {
     const inspectorTabListStart = inspectorMarkup.indexOf('class="camp-detail-entries"')
     const inspectorTabListEnd = inspectorMarkup.indexOf('</div>', inspectorTabListStart)
     const inspectorTabList = inspectorMarkup.slice(inspectorTabListStart, inspectorTabListEnd)
-    expect(inspectorTabList.indexOf('>执行</span><small>'))
+    expect(inspectorTabList.indexOf('>执行</span>')).toBeGreaterThan(-1)
+    expect(inspectorTabList.indexOf('>执行</span>'))
       .toBeLessThan(inspectorTabList.indexOf('>任务</span><small>'))
     expect(inspectorTabList.indexOf('>任务</span><small>'))
       .toBeLessThan(inspectorTabList.indexOf('>队员</span><small>'))
-    expect(inspectorMarkup).toMatch(/data-detail="execution" aria-expanded="true"/)
+    expect(inspectorMarkup).toMatch(/data-detail="execution"[^>]*aria-expanded="true"/)
     expect(inspectorMarkup).toContain('data-placement="inspector"')
     expect(inspectorMarkup).toContain('>移到底部</span>')
     expect(inspectorMarkup).not.toContain('class="run-pulse run-pulse-bottom"')
@@ -3908,7 +3931,7 @@ describe('task event projections', () => {
       executionPlacement: 'inspector',
       inspectorVisible: true
     }))
-    expect(terminalInspectorMarkup).toMatch(/data-detail="execution" aria-expanded="true"/)
+    expect(terminalInspectorMarkup).toMatch(/data-detail="execution"[^>]*aria-expanded="true"/)
 
     const ordinaryInspectorMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
       snapshot,
@@ -3927,7 +3950,7 @@ describe('task event projections', () => {
     const ordinaryTabListStart = ordinaryInspectorMarkup.indexOf('class="camp-detail-entries"')
     const ordinaryTabListEnd = ordinaryInspectorMarkup.indexOf('</div>', ordinaryTabListStart)
     const ordinaryTabList = ordinaryInspectorMarkup.slice(ordinaryTabListStart, ordinaryTabListEnd)
-    expect(ordinaryTabList).not.toContain('>执行</span><small>')
+    expect(ordinaryTabList).not.toContain('data-detail="execution"')
     expect(ordinaryTabList.indexOf('>任务</span><small>'))
       .toBeLessThan(ordinaryTabList.indexOf('>队员</span><small>'))
     expect(ordinaryInspectorMarkup).toMatch(/data-detail="tasks" aria-expanded="true"/)
@@ -4380,8 +4403,8 @@ describe('task event projections', () => {
     expect(markup).toContain('aria-label="收起审批详情"')
     expect(markup).toContain('aria-expanded="true"')
     expect(markup).not.toContain('class="approval-card')
-    expect((markup.match(/class="camp-detail-entry"/g) ?? []).length).toBe(4)
-    expect(markup).toContain('>执行</span><small>0</small>')
+    expect((markup.match(/class="camp-detail-entry(?: [^"]*)?"/g) ?? []).length).toBe(4)
+    expect(markup).toContain('>执行</span></button>')
     expect(markup).toContain('>任务</span><small>0</small>')
     expect(markup).toContain('>队员</span><small>2</small>')
     expect(markup).toContain('>单聊</span><small>0</small>')

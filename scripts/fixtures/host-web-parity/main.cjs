@@ -7,6 +7,7 @@ app.commandLine.appendSwitch('remote-debugging-port', '0')
 app.whenReady().then(() => {
   const window = new BrowserWindow({ width: 1440, height: 920, useContentSize: true, show: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } })
+  window.webContents.on('did-finish-load', () => window.webContents.focus())
   window.loadURL('about:blank')
 })
 app.on('window-all-closed', () => app.quit())

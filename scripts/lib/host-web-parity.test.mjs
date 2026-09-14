@@ -30,7 +30,7 @@ test('production Camp components run in Chrome and Electron without a fake nativ
       const profile = join(fixture, surface, 'profile'); await mkdir(profile, { recursive: true })
       const driver = await launch(surface, profile)
       try {
-        for (const theme of ['day', 'night']) for (const scenario of ['camp', 'new', 'running', 'approval', 'file', 'member']) {
+        for (const theme of ['day', 'night']) for (const scenario of ['camp', 'new', 'running', 'mobile-running', 'approval', 'file', 'member']) {
           const url = pathToFileURL(artifact.productPath); url.search = new URLSearchParams({ surface, theme, scenario }).toString()
           await driver.send('Page.navigate', { url: url.href })
           await driver.wait(`location.href === ${JSON.stringify(url.href)} && document.querySelector('.app-shell') !== null`)
@@ -123,7 +123,9 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     assert.equal(await driver.evaluate(`document.querySelector('[contenteditable="true"]').textContent.trim()`), '')
     return ['simulated-authorized-workspace-picker', 'select-one-member', 'create-and-open-fresh-camp']
   }
-  if (scenario === 'running') {
+  if (scenario === 'running' || scenario === 'mobile-running') {
+    const entryActions = await exerciseExecutionEntry(driver, scenario === 'mobile-running' ? 10 : 1, surface)
+    if (scenario === 'mobile-running') return [...entryActions, ...await finishExecutionEntry(driver)]
     assert.match(await driver.evaluate(`document.querySelector('.tool-group-current').textContent`), /pnpm test -- --run/)
     assert.equal(await driver.evaluate(`document.querySelector('.tool-group-summary > .tool-call-icon').dataset.iconDomain`), 'terminal')
     assert.equal(await driver.evaluate(`document.querySelector('.tool-group-disclosure') === null`), true)
@@ -150,8 +152,9 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     await driver.wait(`document.querySelector('.tool-group-summary .running-text-highlight') !== null`)
     await driver.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.running-text-highlight')).display`), 'none')
+    assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.camp-execution-orbits rect')).animationName`), 'none')
     await driver.send('Emulation.setEmulatedMedia', { features: [] })
-    return ['production-current-command-and-icon', 'collapsed-running-highlight', 'expanded-static-result', 'collapse-retains-reading-anchor', 'touch-cue-and-44px-target', 'reduced-motion']
+    return [...entryActions, 'production-current-command-and-icon', 'collapsed-running-highlight', 'expanded-static-result', 'collapse-retains-reading-anchor', 'touch-cue-and-44px-target', 'reduced-motion', ...await finishExecutionEntry(driver)]
   }
   if (scenario === 'file' && surface === 'web') {
     await mkdir(downloads, { recursive: true })
@@ -180,6 +183,55 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     return ['production-runtime-form-saves-simulated-versioned-configuration']
   }
   return []
+}
+
+async function finishExecutionEntry(driver) {
+  await driver.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+  assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.camp-execution-orbits rect')).animationName`), 'none')
+  await driver.send('Emulation.setEmulatedMedia', { features: [] })
+  await driver.click(`document.querySelector('[aria-label="停止当前运行"]')`)
+  await driver.wait(`document.querySelector('.camp-execution-entry')?.dataset.running === 'false'`)
+  assert.equal(await driver.evaluate(`document.querySelector('.camp-execution-members, .camp-execution-orbits') === null`), true)
+  assert.equal(await driver.evaluate(`document.querySelector('.camp-execution-entry').disabled`), false, 'history remains available after simulated stop')
+  return ['entry-reduced-motion', 'simulated-stop-clears-entry-running-state']
+}
+
+async function exerciseExecutionEntry(driver, runningCount, surface) {
+  const selector = '.camp-execution-entry'
+  await driver.wait(`document.querySelector('${selector}')?.dataset.running === 'true'`)
+  const state = await driver.evaluate(`(() => { const entry = document.querySelector('${selector}'); return {
+    count: entry.querySelectorAll('.member-avatar').length, overflow: entry.querySelector('.camp-execution-overflow')?.textContent,
+    label: entry.getAttribute('aria-label'), duration: getComputedStyle(entry.querySelector('rect')).animationDuration,
+    strokes: [...entry.querySelectorAll('rect')].map(e => getComputedStyle(e).stroke)
+  } })()`)
+  assert.equal(state.count, Math.min(3, runningCount))
+  assert.equal(state.overflow, runningCount > 3 ? `+${runningCount - 3}` : undefined)
+  assert.match(state.label, new RegExp(`${runningCount} 位队员正在执行`))
+  assert.equal(state.duration, '4.8s')
+  assert.equal(new Set(state.strokes).size, 2, 'both theme token colors render')
+  for (const width of surface === 'web' ? [768, 1040, 1440] : [1440]) {
+    await driver.send('Emulation.setDeviceMetricsOverride', { width, height: 920, deviceScaleFactor: 1, mobile: false })
+    const bounds = await driver.evaluate(`(() => { const e = document.querySelector('${selector}'); const r = e.getBoundingClientRect(); const orbit = e.querySelector('svg.camp-execution-orbits').getBoundingClientRect(); return {
+      contained: r.left >= 0 && r.right <= innerWidth && orbit.left >= r.left && orbit.right <= r.right && orbit.top >= r.top && orbit.bottom <= r.bottom,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+      height: r.height
+    } })()`)
+    assert.equal(bounds.contained, true, `${surface}/${width}: orbit stays inside entry`)
+    assert.equal(bounds.overflow, false, `${surface}/${width}: no horizontal overflow`)
+    assert.equal(bounds.height, 28)
+  }
+  await driver.evaluate(`document.querySelector('${selector}').blur(); document.querySelector('${selector}').focus()`)
+  await driver.wait(`document.querySelector('.camp-execution-tooltip') !== null`)
+  assert.equal(await driver.evaluate(`document.querySelector('.camp-execution-tooltip').textContent`), state.label.replace('执行，', ''))
+  await driver.key('Escape')
+  await driver.wait(`document.querySelector('.camp-execution-tooltip') === null`)
+  if (await driver.evaluate(`document.querySelector('${selector}').getAttribute('aria-expanded') === 'true'`)) await driver.click(`document.querySelector('${selector}')`)
+  assert.equal(await driver.evaluate(`document.querySelector('.camp-execution-orbits') !== null`), true, 'collapsed execution retains orbit')
+  await driver.click(`document.querySelector('${selector}')`)
+  await driver.wait(`document.querySelector('.camp-detail-popover[data-detail="execution"]')?.hidden === false`)
+  await driver.click(`document.querySelector('.run-pulse-chip')`)
+  await driver.wait(`document.querySelector('.tool-group-current') !== null`)
+  return ['shared-running-avatars-and-overflow', 'dual-orbit-browser-geometry', 'full-running-names-on-focus', 'collapsed-entry-retains-running-signal']
 }
 
 async function exerciseViewer(driver, path) {
@@ -224,6 +276,9 @@ async function launch(surface, profile) {
     })
     const send = (method, params = {}) => new Promise((resolve, reject) => { pending.set(++id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params })) })
     await send('Page.enable'); await send('Runtime.enable')
+    // Headless Chrome can have DOM focus while its page is unfocused. Exercise
+    // focus tooltips in the same foreground state as an active browser tab.
+    if (surface === 'web') await send('Emulation.setFocusEmulationEnabled', { enabled: true })
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false })
     const evaluate = async expression => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text); return r.result.value }
     return { send, evaluate, errors,

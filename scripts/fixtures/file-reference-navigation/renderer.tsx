@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { CampSnapshot, FilePreviewApi, OpenFilePreviewRequest, ResolvedFilePreview } from '@contracts'
-import { CampWorkspace } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
+import type { CampSnapshot, FilePreviewApi, NavigationCampItem, OpenFilePreviewRequest, ResolvedFilePreview } from '@contracts'
+import { AppHeader } from '../../../apps/desktop/src/renderer/src/App'
+import { CampWorkspace, QuickChatWorkspace } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
 import { FilePreviewProvider, useFilePreview } from '../../../apps/desktop/src/renderer/src/FilePreviewContext'
 import { FilePreviewTabs } from '../../../apps/desktop/src/renderer/src/FilePreviewTabs'
 import { visibleTimelineMessageAnchor } from '../../../apps/desktop/src/renderer/src/timeline-reading-anchor'
@@ -97,34 +99,72 @@ const snapshot: CampSnapshot = {
   membershipReconciliations: [], tasks: [], messageDeliveries: [], turns: [], agentRuns: [], executionEvidence: [],
   agentRunFileChanges: [], contextManifests: [], approvals: [], actions: [], timeline: []
 }
+const wideBody = [
+  '长命令与宽表格应在正文内部滚动。',
+  '```sh',
+  `node scripts/report.mjs --output=/fixture/${'nested-directory/'.repeat(20)}report.html`,
+  '```',
+  '',
+  `| ${Array.from({ length: 24 }, (_, index) => `字段 ${index + 1}`).join(' | ')} |`,
+  `| ${Array.from({ length: 24 }, () => '---').join(' | ')} |`,
+  `| ${Array.from({ length: 24 }, () => '已完成').join(' | ')} |`
+].join('\n')
+const wideSnapshot: CampSnapshot = { ...snapshot, messages: snapshot.messages.map((message, index) => index === 35
+  ? { ...message, body: wideBody, content: [{ kind: 'text', text: wideBody }] } : message) }
+const recentCamps: NavigationCampItem[] = ['长'.repeat(80), 'W'.repeat(80), '日常对话'].map((title, index) => ({
+  id: `recent-${index}`, title, activationState: 'active', projectBindingKind: 'directory', projectPath: '/fixture',
+  defaultLead: null, marker: index === 0 ? 'unread_completed' : index === 1 ? 'loading' : 'none',
+  lastActivityAt: snapshot.camp.updatedAt, lastActivityGlobalSequence: index + 1, latestCompletionGlobalSequence: 0, version: 1
+}))
+type FixtureSurface = 'history' | 'wide-message' | 'home'
+let setSurface: (surface: FixtureSurface) => void
 
-function Workspace(): React.JSX.Element {
+function Workspace({ surface }: { surface: FixtureSurface }): React.JSX.Element {
   const preview = useFilePreview()
+  if (surface === 'home') return <div className="app-shell">
+    <aside style={{ gridRow: '1 / -1', padding: '48px 24px', background: 'var(--rail)' }}>Rovai AI</aside>
+    <AppHeader campTitle={null} contextLabel="Rovai AI" camp={null} onFocusApprovals={() => {}} />
+    <main className="content task-content">
+      <QuickChatWorkspace agents={[]} recentCamps={recentCamps} onOpenCamp={() => {}}
+        onNewConversation={() => {}} onOpenMembers={() => {}} onOpenRuntimeSettings={() => {}} />
+    </main>
+  </div>
   return <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
     <header style={{ display: 'flex', height: 40, flexShrink: 0 }}>
       <button id="toggle-preview" onClick={() => preview.paneVisible ? preview.hidePane() : preview.showPane()}>文件预览</button>
       <FilePreviewTabs />
     </header>
-    <CampWorkspace snapshot={snapshot} projectName="fixture" agents={[]} busy={false} stopping={false}
+    <CampWorkspace snapshot={surface === 'wide-message' ? wideSnapshot : snapshot} projectName="fixture" agents={[]} busy={false} stopping={false}
       onSend={async () => {}} onChangeLead={async () => {}} onTasksChanged={async () => {}}
       onResolveApproval={() => {}} onStop={() => {}} inspectorVisible={false} worldMapEnabled={false}
       onNotify={(message) => notices.push(message)} />
   </div>
 }
-createRoot(document.getElementById('root')!).render(
-  <FilePreviewProvider campId={campId} resolvedTheme="day"><Workspace /></FilePreviewProvider>
-)
+function Fixture(): React.JSX.Element {
+  const [surface, updateSurface] = useState<FixtureSurface>('history')
+  setSurface = updateSurface
+  return <FilePreviewProvider campId={surface === 'home' ? null : campId} resolvedTheme="day">
+    <Workspace surface={surface} />
+  </FilePreviewProvider>
+}
+createRoot(document.getElementById('root')!).render(<Fixture />)
 
 const element = (selector: string): HTMLElement => document.querySelector<HTMLElement>(selector)!
 const link = () => element('[data-message-id="message-12"] [title="run_report.py:44-46"]')
 const timeline = () => element('.camp-timeline')
 const settle = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 190))))
+const overflows = (selectors: string) => [...document.querySelectorAll<HTMLElement>(selectors)]
+  .filter(node => node.getBoundingClientRect().width > 0 && node.scrollWidth > node.clientWidth + 1)
+  .map(node => ({ className: node.className || node.tagName, width: node.clientWidth, scrollWidth: node.scrollWidth }))
+const artifacts = () => [...document.querySelectorAll<HTMLElement>('[data-message-id="message-35"] pre, [data-message-id="message-35"] table')]
 let bookmarkedTimeline: HTMLElement
 let bookmarkedLink: HTMLElement
 let anchorMessageId: string | null = null
 let trace: number[] = []
 Object.assign(window, { navigationTest: {
   settle,
+  async surface(value: FixtureSurface) { setSurface(value); await settle() },
+  async scrollArtifacts() { for (const node of artifacts()) node.scrollLeft = node.scrollWidth; await settle() },
   trace() {
     trace = []
     const deadline = performance.now() + 3_000
@@ -146,6 +186,19 @@ Object.assign(window, { navigationTest: {
   rememberMessage() { anchorMessageId = visibleTimelineMessageAnchor(timeline())?.messageId ?? null },
   async theme(value: string) { document.documentElement.dataset.theme = value; await settle() },
   state() {
+    if (element('.quick-chat-workspace')) return {
+      overflows: overflows('html, body, .app-shell, .content, .quick-chat-workspace, .new-conversation-main, .new-conversation-stage, .quick-chat-continue, .quick-chat-continue-row'),
+      recentRows: [...document.querySelectorAll<HTMLElement>('.quick-chat-continue-row')].map(row => {
+        const title = row.querySelector<HTMLElement>('.truncate')!
+        const time = row.querySelector<HTMLElement>('small')!
+        const status = row.querySelector<HTMLElement>('.task-dot, .camp-loading-spinner')
+        const fits = (node: HTMLElement) => node.getBoundingClientRect().left >= row.getBoundingClientRect().left
+          && node.getBoundingClientRect().right <= row.getBoundingClientRect().right
+        return { title: title.textContent, fullTitle: title.title, truncated: title.scrollWidth > title.clientWidth,
+          ellipsis: getComputedStyle(title).textOverflow, timeVisible: fits(time) && time.clientWidth > 0,
+          statusVisible: status ? fits(status) && status.getBoundingClientRect().width > 0 : null }
+      })
+    }
     const scroll = timeline()
     const viewer = element('.file-preview-code')
     const target = viewer?.querySelector<HTMLElement>('.cm-location-target')
@@ -153,6 +206,10 @@ Object.assign(window, { navigationTest: {
     const message = anchorMessageId ? element(`[data-message-id="${anchorMessageId}"]`) : null
     return {
       linkY: link().getBoundingClientRect().top, scrollTop: scroll.scrollTop, width: scroll.clientWidth,
+      overflows: overflows('html, body, .camp-workspace, .workspace-grid, .timeline-pane, .camp-timeline, .timeline-track, .conversation-bubble.agent, .message-body, .public-message-readout, .message-surface, .final-copy, .safe-markdown'),
+      artifacts: artifacts().map(node => ({ tag: node.tagName, width: node.clientWidth, scrollWidth: node.scrollWidth,
+        scrollLeft: node.scrollLeft, overflowX: getComputedStyle(node).overflowX })),
+      timelineScrollLeft: scroll.scrollLeft,
       bottomGap: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
       visible: Boolean(element('.file-preview-pane')?.getBoundingClientRect().width),
       sameTimeline: scroll === bookmarkedTimeline, sameLink: link() === bookmarkedLink,

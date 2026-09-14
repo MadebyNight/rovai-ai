@@ -1250,6 +1250,28 @@ html[data-rovai-platform="win32"] .bootstrap-shell-brand { padding-left: 20px; }
 .camp-detail-entry[aria-expanded="true"] { color: var(--ink); background: var(--surface-muted); }
 .camp-detail-entry[aria-expanded="true"] > span { font-weight: 650; }
 .camp-detail-entry-fallback { position: absolute; z-index: 20; top: 8px; right: 12px; }
+.camp-execution-entry { position: relative; }
+.camp-execution-entry[data-running="true"] { padding-inline: 8px; }
+.camp-execution-members { display: inline-flex; flex: none; align-items: center; margin-left: 2px; pointer-events: none; }
+.camp-execution-members .member-avatar { border: 1px solid var(--conversation-surface); }
+.camp-execution-members .member-avatar + .member-avatar { margin-left: -4px; }
+.camp-execution-members .member-avatar-fallback { font-size: 10px; font-weight: 600; }
+.camp-execution-entry[aria-expanded="true"] .member-avatar { border-color: var(--surface-muted); }
+.camp-execution-entry:hover .member-avatar { border-color: var(--surface-hover); }
+.camp-execution-overflow { margin-left: 4px; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.camp-execution-entry > .camp-execution-orbits { position: absolute; inset: 1px; width: calc(100% - 2px); height: calc(100% - 2px); overflow: visible; pointer-events: none; }
+.camp-execution-orbits rect { --orbit-phase: 0px; fill: none; stroke: var(--brand); stroke-width: 1.65px; stroke-linecap: round; stroke-dasharray: 24 76; stroke-dashoffset: var(--orbit-phase); animation: camp-execution-orbit 4.8s linear infinite; }
+.camp-execution-orbits .is-ember { --orbit-phase: 50px; stroke: var(--ember); }
+.camp-execution-orbits[data-paused="true"] rect { animation-play-state: paused; }
+@keyframes camp-execution-orbit { from { stroke-dashoffset: var(--orbit-phase); } to { stroke-dashoffset: calc(var(--orbit-phase) - 100px); } }
+.camp-execution-tooltip { position: fixed; z-index: 120; width: max-content; max-width: min(300px, calc(100vw - 24px)); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-raised); color: var(--ink); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; pointer-events: none; }
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .camp-execution-orbits rect { animation: none; }
+}
+@media (forced-colors: active) {
+  .camp-execution-orbits rect { stroke: ButtonText; }
+  .camp-execution-members .member-avatar { border-color: ButtonFace; }
+}
 .camp-detail-popover {
   position: absolute;
   z-index: 60;
@@ -2547,7 +2569,7 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
   place-items: center;
   background: var(--home-surface);
 }
-.new-conversation-stage { display: grid; width: min(680px, 100%); justify-items: center; text-align: center; }
+.new-conversation-stage { display: grid; grid-template-columns: minmax(0, 1fr); width: min(680px, 100%); justify-items: center; text-align: center; }
 .quick-chat-mark { margin-bottom: 14px; color: var(--rail-logo); }
 .quick-chat-mark .brand-rendezvous-point { stroke: var(--home-surface); stroke-width: 1.1; }
 .new-conversation-stage h2 { margin: 0 0 8px; font: 700 22px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; letter-spacing: -0.2px; }
@@ -2557,7 +2579,7 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
 .quick-chat-empty { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 24px; }
 .quick-chat-create { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 8px 18px; border: 0; border-radius: 7px; background: var(--surface-muted); color: var(--ink); font-size: 12.5px; font-weight: 500; cursor: pointer; }
 .quick-chat-create:hover { background: var(--surface-hover); }
-.quick-chat-continue { width: min(640px, 100%); text-align: left; }
+.quick-chat-continue { min-width: 0; width: min(640px, 100%); text-align: left; }
 .quick-chat-continue-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 7px; padding: 0 7px 14px 27px; border-bottom: 1px solid var(--line); }
 .quick-chat-continue-title h2 { margin: 0; font-size: 19px; font-weight: 550; }
 .quick-chat-continue-title button { display: inline-flex; align-items: center; gap: 6px; border: 0; color: var(--muted); background: transparent; font-weight: 400; }
@@ -3065,7 +3087,7 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
 .reply-parent-quote:not(.is-static):hover { color: var(--brand-ink); }
 .reply-parent-quote.is-static { cursor: default; }
 .reply-parent-quote.is-unavailable { color: var(--attention); }
-.final-copy { max-width: 690px; color: var(--ink); font-size: 12.7px; line-height: 1.68; }
+.final-copy { min-width: 0; max-width: 690px; color: var(--ink); font-size: 12.7px; line-height: 1.68; }
 .final-copy p { line-height: 1.68; }
 .message-delivery-footer { --delivery-accent: var(--brand); position: relative; display: flex; width: 100%; max-width: var(--conversation-prose-width); min-width: 0; min-height: 22px; align-items: baseline; flex-wrap: wrap; column-gap: 3px; row-gap: 2px; margin-top: 2px; padding: 3px 32px 0 21px; color: var(--faint); font-size: 10.5px; line-height: 1.5; }
 .message-delivery-handoff-rail { position: absolute; top: 0; left: 2px; display: block; width: 13px; height: 13px; border-bottom: 1px solid var(--line-strong); border-left: 1px solid var(--line-strong); border-radius: 0 0 0 5px; }
@@ -4220,7 +4242,7 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
   .conversation-bubble:is(.user, .agent, .runtime-image-supplement) { width: 100%; max-width: none; }
   .conversation-bubble:is(.user, .agent, .runtime-image-supplement) .message-body { width: 100%; max-width: none; }
   .conversation-bubble.agent .message-surface { width: 100%; }
-  .conversation-bubble.agent .final-copy { max-width: none; }
+  .conversation-bubble.agent .final-copy { max-width: 100%; }
   .conversation-bubble.agent .safe-markdown > :where(p, h3, h4, ul, ol, blockquote) {
     max-width: var(--conversation-prose-width);
   }

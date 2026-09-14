@@ -11,9 +11,29 @@ last_updated: 2026-09-14
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，当前以 `59249423` 合入 main `6c556883`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+复用任务分支继续开发，当前已同步 main `42e1e6d1`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：Mobile 正式入口
+## 本轮：同步 main 与 Web 执行入口
+
+2026-09-14 同步 main `42e1e6d1`，包含执行入口运行头像/双弧及会话横向溢出修复。
+宽屏 Web 复用 `CampDetailEntries` 与 `runningCampMembers`，不另建运行状态或动效实现；
+同一队员去重、最多三张头像、超出 `+N`、完整名单、减少动态和停止后撤下均沿用共享组件。
+合并时保留手机布局上下文，把原手机 `runningCount` 调整为同一 `runningMembers` 投影。
+正式手机仍显示蓝点；紧凑双弧在执行标签内的方案只交付 HTML 交互稿，头像保留在执行页。
+
+补充宽屏 Chrome/Electron 组件验收的单人/十人入口、768/1040/1440px 浏览器几何、焦点名单、
+收起保留提示、减少动态及模拟停止；手机回归覆盖运行/审批提示与既有多 Run 展开。
+Chrome headless 显式设置前台焦点模拟，Electron 夹具使用自身 WebContents 焦点；
+它们仍是组件与模拟执行证据，不代表实际模型或实体手机验收。
+HTML 使用共享生产组件和本地展示覆盖，覆盖浅色/深色、运行/等待/空闲/停止与静止动效，
+不连接 Host，不修改正式手机样式。原生 App 本轮未安装。
+
+[验证记录](evidence/execution-entry-sync/checks.json)保存源码摘要、28 个宽屏场景、手机组件与交互稿检查范围。
+TypeScript、fixture 类型检查、Desktop/Web 构建、完整 `pnpm test` 通过（Vitest 2015 / 198 文件，
+Node 317 通过 / 2 个既有平台专项跳过）；执行头像入口与文件引用/横向溢出的原生 Electron 回归通过。
+新增检查先修正了隐藏窗口焦点与多 Run 夹具的选择前置，最终两端全部通过；没有改变产品的焦点或执行语义。
+
+## 先前批次：Mobile 正式入口
 
 用户确认第四稿并补充左侧蓝点、完整六种定时计划与手机日期选择后，已将手机布局接入实际 `apps/web`。
 新增展示上下文与 Web 专用样式，继续复用 BusinessApp、Camp、结构化 Composer、执行与正式管理页；

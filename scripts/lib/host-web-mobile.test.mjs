@@ -248,6 +248,7 @@ test('phone execution shares Desktop evidence, wraps avatars and retains Run dis
       const url = pathToFileURL(productPath); url.search = new URLSearchParams({ surface: 'web', scenario: 'mobile-running', theme }).toString()
       await browser.send('Page.navigate', { url: url.href })
       await browser.wait(`document.querySelector('.mobile-camp-tabs')!==null`)
+      assert.equal(await browser.evaluate(`document.querySelectorAll('.mobile-camp-tabs .mobile-unread-dot').length`), 1, 'phone keeps its running indicator after the shared entry API changes')
       await browser.capture(join(output, `messages-${theme}.png`))
       await browser.click(`[...document.querySelectorAll('.mobile-camp-tabs button')].find(e=>e.textContent.trim()==='执行')`)
       await browser.wait(`document.querySelectorAll('.run-pulse-chip').length===10`)
@@ -278,6 +279,7 @@ test('phone execution shares Desktop evidence, wraps avatars and retains Run dis
       await browser.send('Page.navigate', { url: url.href })
       const allowButton = `[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Allow once')`
       await browser.wait(`Boolean(${allowButton}) && !(${allowButton}).disabled`)
+      assert.equal(await browser.evaluate(`document.querySelector('.mobile-camp-tabs .mobile-unread-dot')===null`), true, 'waiting for approval does not claim a running member')
       await browser.evaluate(`(${allowButton}).scrollIntoView({block:'nearest'})`)
       const approval = await browser.evaluate(`(${allowButton}).getBoundingClientRect().toJSON()`)
       assert.ok(approval.left >= 0 && approval.right <= 390 && approval.height >= 44, 'native approval option is usable in the phone conversation')

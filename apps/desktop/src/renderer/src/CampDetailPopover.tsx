@@ -1,8 +1,10 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMobileLayout } from './MobileLayout'
+import { MemberAvatar, type MemberAvatarProps } from './MemberAvatar'
 
 export type CampDetailTab = 'execution' | 'tasks' | 'members'
+export type RunningCampMember = Pick<MemberAvatarProps, 'agentId' | 'avatarRef' | 'displayName'>
 
 const labels: Record<CampDetailTab, string> = {
   execution: '执行',
@@ -18,12 +20,105 @@ function CampDetailIcon({ tab }: { tab: CampDetailTab }): React.JSX.Element {
   </svg>
 }
 
+function CampExecutionEntry({ members, expanded, panelId, onSelect }: {
+  members: readonly RunningCampMember[]
+  expanded: boolean
+  panelId: string
+  onSelect(tab: CampDetailTab, trigger: HTMLButtonElement, keyboard: boolean): void
+}): React.JSX.Element {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const tooltipRef = useRef<HTMLSpanElement>(null)
+  const tooltipId = useId()
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const [pageHidden, setPageHidden] = useState(false)
+  const [anchor, setAnchor] = useState({ top: 0, right: 12 })
+  const running = members.length > 0
+  const showNames = running && (hovered || focused) && !dismissed
+  const names = members.map(member => member.displayName).join('、')
+  const description = running ? `${members.length} 位队员正在执行：${names}` : '当前没有队员正在执行'
+
+  useEffect(() => {
+    if (!running) return
+    const update = (): void => setPageHidden(document.hidden)
+    update()
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [running])
+
+  useLayoutEffect(() => {
+    if (!showNames) return
+    const update = (): void => {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      const width = tooltipRef.current?.offsetWidth ?? 0
+      if (rect) setAnchor({ top: rect.bottom + 6,
+        right: Math.max(12, Math.min(window.innerWidth - rect.right, window.innerWidth - width - 12)) })
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    if (triggerRef.current) observer.observe(triggerRef.current)
+    window.addEventListener('resize', update)
+    return () => { observer.disconnect(); window.removeEventListener('resize', update) }
+  }, [showNames, members.length, names])
+
+  return <>
+    <button
+      ref={triggerRef}
+      className="camp-detail-entry camp-execution-entry"
+      type="button"
+      data-detail="execution"
+      data-running={running}
+      aria-label={`执行，${description}`}
+      aria-expanded={expanded}
+      aria-controls={panelId}
+      aria-haspopup="dialog"
+      aria-describedby={showNames ? tooltipId : undefined}
+      onPointerEnter={() => { setHovered(true); setDismissed(false) }}
+      onPointerLeave={() => setHovered(false)}
+      onFocus={() => { setFocused(true); setDismissed(false) }}
+      onBlur={() => setFocused(false)}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || !showNames) return
+        event.preventDefault()
+        event.stopPropagation()
+        setDismissed(true)
+      }}
+      onClick={(event) => {
+        setDismissed(true)
+        onSelect('execution', event.currentTarget, event.detail === 0)
+      }}
+    >
+      <CampDetailIcon tab="execution" />
+      <span>执行</span>
+      {running && <>
+        <span className="camp-execution-members" aria-hidden="true">
+          {members.slice(0, 3).map(member => <MemberAvatar
+            key={member.agentId}
+            {...member}
+            size="execution"
+            decorative
+          />)}
+          {members.length > 3 && <span className="camp-execution-overflow">+{members.length - 3}</span>}
+        </span>
+        <svg className="camp-execution-orbits" aria-hidden="true" focusable="false" data-paused={pageHidden}>
+          <rect width="100%" height="100%" rx="5" pathLength="100" />
+          <rect className="is-ember" width="100%" height="100%" rx="5" pathLength="100" />
+        </svg>
+      </>}
+    </button>
+    {showNames && createPortal(<span ref={tooltipRef} id={tooltipId} role="tooltip" className="camp-execution-tooltip" style={anchor}>
+      {description}
+    </span>, document.body)}
+  </>
+}
+
 export function CampDetailEntries({
   activeTab,
   visible,
   panelId,
-  executionCount,
-  runningCount,
+  showExecution,
+  runningMembers,
   taskCount,
   memberCount,
   onSelect
@@ -31,19 +126,24 @@ export function CampDetailEntries({
   activeTab: CampDetailTab
   visible: boolean
   panelId: string
-  executionCount: number | null
-  runningCount: number
+  showExecution: boolean
+  runningMembers: readonly RunningCampMember[]
   taskCount: number
   memberCount: number
   onSelect(tab: CampDetailTab, trigger: HTMLButtonElement, keyboard: boolean): void
 }): React.JSX.Element {
   const entries: Array<{ tab: CampDetailTab; count: number }> = [
-    ...(executionCount === null ? [] : [{ tab: 'execution' as const, count: executionCount }]),
     { tab: 'tasks', count: taskCount },
     { tab: 'members', count: memberCount }
   ]
   return (
     <div className="camp-detail-entries" role="group" aria-label="当前会话详情入口">
+      {showExecution && <CampExecutionEntry
+        members={runningMembers}
+        expanded={visible && activeTab === 'execution'}
+        panelId={panelId}
+        onSelect={onSelect}
+      />}
       {entries.map(({ tab, count }) => (
         <button
           className="camp-detail-entry"
@@ -55,9 +155,7 @@ export function CampDetailEntries({
           aria-haspopup="dialog"
           onClick={(event) => onSelect(tab, event.currentTarget, event.detail === 0)}
         >
-          {tab === 'execution' && runningCount > 0
-            ? <span className="camp-loading-spinner" role="img" aria-label={`${runningCount} 位队员正在执行`} />
-            : <CampDetailIcon tab={tab} />}
+          <CampDetailIcon tab={tab} />
           <span>{labels[tab]}</span>
           <small>{count}</small>
         </button>
@@ -70,8 +168,8 @@ export function CampDetailPopover({
   entryHost,
   activeTab,
   visible,
-  executionCount,
-  runningCount,
+  showExecution,
+  runningMembers,
   taskCount,
   memberCount,
   onOpen,
@@ -81,8 +179,8 @@ export function CampDetailPopover({
   entryHost?: HTMLElement | null
   activeTab: CampDetailTab
   visible: boolean
-  executionCount: number | null
-  runningCount: number
+  showExecution: boolean
+  runningMembers: readonly RunningCampMember[]
   taskCount: number
   memberCount: number
   onOpen(tab: CampDetailTab): void
@@ -123,15 +221,15 @@ export function CampDetailPopover({
   const entries = mobile ? <>
     <div className="mobile-camp-tabs" role="group" aria-label="当前会话视图">
       <button type="button" aria-pressed={!visible || activeTab === 'members'} onClick={onClose}>对话</button>
-      {(['execution', 'tasks'] as const).map(tab => <button key={tab} type="button" aria-controls={panelId} aria-pressed={visible && activeTab === tab} onClick={() => onOpen(tab)}>{labels[tab]}{tab === 'execution' && runningCount > 0 && <i className="mobile-unread-dot" aria-label="有执行进行中" />}</button>)}
+      {(['execution', 'tasks'] as const).map(tab => <button key={tab} type="button" aria-controls={panelId} aria-pressed={visible && activeTab === tab} onClick={() => onOpen(tab)}>{labels[tab]}{tab === 'execution' && runningMembers.length > 0 && <i className="mobile-unread-dot" aria-label="有执行进行中" />}</button>)}
     </div>
     <button className="mobile-icon-button mobile-camp-members" type="button" aria-label={`会话队员，${memberCount} 位`} aria-expanded={visible && activeTab === 'members'} onClick={() => visible && activeTab === 'members' ? onClose() : onOpen('members')}><CampDetailIcon tab="members" /></button>
   </> : <CampDetailEntries
     activeTab={activeTab}
     visible={visible}
     panelId={panelId}
-    executionCount={executionCount}
-    runningCount={runningCount}
+    showExecution={showExecution}
+    runningMembers={runningMembers}
     taskCount={taskCount}
     memberCount={memberCount}
     onSelect={(tab, trigger, keyboard) => {

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { CampDetailPopover } from './CampDetailPopover'
+import { CampDetailEntries, CampDetailPopover, type RunningCampMember } from './CampDetailPopover'
 
 const source = readFileSync(new URL('./CampDetailPopover.tsx', import.meta.url), 'utf8')
 
@@ -18,8 +18,8 @@ describe('Camp detail popover dismissal', () => {
     const markup = renderToStaticMarkup(createElement(CampDetailPopover, {
       activeTab: 'tasks',
       visible: true,
-      executionCount: 0,
-      runningCount: 0,
+      showExecution: true,
+      runningMembers: [],
       taskCount: 2,
       memberCount: 3,
       onOpen: () => undefined,
@@ -29,5 +29,40 @@ describe('Camp detail popover dismissal', () => {
 
     expect(markup).toContain('aria-label="收起会话详情"')
     expect(markup).toContain('<kbd>Esc</kbd> 收起')
+  })
+})
+
+describe('Camp execution entry', () => {
+  const members: RunningCampMember[] = ['叮叮', '咕咕', '小兔', '小鹿', '小熊'].map((displayName, index) => ({
+    agentId: `agent-${index}`, displayName, avatarRef: null
+  }))
+  const render = (count: number, visible = false): string => renderToStaticMarkup(createElement(CampDetailEntries, {
+    activeTab: 'execution', visible, panelId: 'details', showExecution: true,
+    runningMembers: members.slice(0, count), taskCount: 4, memberCount: members.length,
+    onSelect: () => undefined
+  })).split('</button>')[0]
+
+  it.each([1, 2, 3, 5])('shows at most three stationary member avatars for %i running members even when collapsed', count => {
+    const markup = render(count)
+    expect(markup.match(/class="member-avatar"/g)).toHaveLength(Math.min(count, 3))
+    expect(markup).toContain(`执行，${count} 位队员正在执行：${members.slice(0, count).map(member => member.displayName).join('、')}`)
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).not.toContain('camp-loading-spinner')
+    expect(markup).not.toContain('<small>')
+    expect(markup.match(/pathLength="100"/g)).toHaveLength(2)
+    expect(markup.includes('camp-execution-overflow')).toBe(count > 3)
+    if (count > 3) expect(markup).toContain(`+${count - 3}</span>`)
+  })
+
+  it('removes avatars, orbit and all numeric badges when the last running member ends, while keeping history available', () => {
+    const markup = render(0, true)
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('aria-haspopup="dialog"')
+    expect(markup).toContain('当前没有队员正在执行')
+    expect(markup).toContain('<span>执行</span>')
+    expect(markup).not.toContain('camp-execution-members')
+    expect(markup).not.toContain('camp-execution-orbits')
+    expect(markup).not.toContain('<small>')
+    expect(markup).not.toContain('disabled')
   })
 })

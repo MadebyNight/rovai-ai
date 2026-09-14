@@ -576,6 +576,15 @@ export function agentExecutionProcesses(runs: AgentRunView[]): AgentExecutionPro
     })
 }
 
+export function runningCampMembers(
+  runs: readonly Pick<AgentRunView, 'agentId' | 'status' | 'cancelRequestedAt'>[],
+  members: readonly CampSnapshot['members'][number][]
+): CampSnapshot['members'] {
+  const runningIds = new Set(runs.filter(run => run.status === 'running' && !run.cancelRequestedAt).map(run => run.agentId))
+  return members.filter(member => runningIds.has(member.agentId))
+    .sort((left, right) => left.memberOrder - right.memberOrder || left.agentId.localeCompare(right.agentId))
+}
+
 export function executionDisclosureOpenAfterActivity(
   currentOpen: boolean,
   active: boolean
@@ -2020,6 +2029,10 @@ export function CampWorkspace({
   const executionProcesses = useMemo(
     () => agentExecutionProcesses(snapshot.agentRuns),
     [snapshot.agentRuns]
+  )
+  const runningMembers = useMemo(
+    () => runningCampMembers(snapshot.agentRuns, snapshot.members),
+    [snapshot.agentRuns, snapshot.members]
   )
   const executionProcessByAgentId = useMemo(
     () => new Map(executionProcesses.map((process) => [process.agentId, process])),
@@ -4726,8 +4739,8 @@ export function CampWorkspace({
               entryHost={detailEntryHost}
               activeTab={inspectorSurfaceTab}
               visible={inspectorVisible}
-              executionCount={executionPlacement === 'inspector' ? executionProcesses.length : null}
-              runningCount={executionProcesses.filter((process) => process.runs.some((run) => run.status === 'running')).length}
+              showExecution={executionPlacement === 'inspector'}
+              runningMembers={runningMembers}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
               memberCount={campInspectorMembers(snapshot.members).length}
               onOpen={(tab) => {
