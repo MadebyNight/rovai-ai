@@ -1,5 +1,5 @@
 ---
-version: 8
+version: 9
 slug: "new-conversation-dialog"
 primary_target: "apps/desktop/src/renderer/src/NewConversationDialog.tsx"
 related_targets:
@@ -19,6 +19,12 @@ Open the same Radix Dialog from every entry point. Width is
 `min(520px, viewport width - 48px)` and maximum height is `viewport height - 48px`.
 Header and footer remain fixed while the body scrolls. Use the raised theme surface, a 1px neutral
 boundary and no colored top stripe. Semantic errors keep their own color.
+
+Mobile Web presents the same form as a bottom sheet inside the visible viewport. Workspace,
+teammate and Lead pickers use a second Radix sheet with a back button. Teammates use single-column
+68px rows and a fixed “完成” action. Closing a picker or pressing Escape preserves the parent
+form and restores the originating picker focus without reopening the name keyboard. Desktop
+retains its existing geometry and menus. Both presentations share one draft and submission path.
 
 Header: title “新对话” and an accessibly named close button. Keep the description available to
 assistive technology without repeating it visually. Use the paired dialog label and field tokens,
@@ -43,11 +49,15 @@ arrow-key navigation, `Esc` dismissal and focus return.
    Unconfigured candidates display “未配置运行时”; configured but unavailable candidates display
    “运行时不可用”. Both remain visible, gray and unselectable. All-selection and Lead candidates use
    the same rule; do not prefer deep readiness over light readiness. No routine explanatory footer or
-   runtime warning appears. When no candidates are available, show the empty state and disable creation.
-   These are Desktop selection rules; they do not change Core structural preflight or dispatch checks.
+   runtime warning appears. When no candidates are available, show the empty state.
+   These are shared selection rules; they do not change Core structural preflight or dispatch checks.
    Keep the existing teammate dropdown entry. Its menu uses two columns (four teammates occupy two rows),
    with portraits, role labels and checkboxes. Arrow keys follow the visual columns; Escape returns focus
-   to the trigger. The heading and selection error span both columns, and larger rosters scroll.
+   to the trigger. The heading spans both columns, and larger rosters scroll.
+   “全选 / 取消全选” toggles all available teammates; the last selected teammate can also be removed.
+   Empty draft selection does not raise an error or disable “新建”. On submission, show
+   “请至少选择一位队员。” beneath the teammate field and focus that field without calling Core.
+   Selecting again clears the error and supplies a Lead when the draft has none.
 3. **添加对话名称 / 对话名称** — collapsed by default. Expansion focuses the input. Normalize and count
    Unicode scalars up to 80; align the expanded name editor with the form without a child rail and keep the exact
    placeholder `输入名称...`. Empty means “未命名对话” and is not delegated to a Runtime/LLM.
