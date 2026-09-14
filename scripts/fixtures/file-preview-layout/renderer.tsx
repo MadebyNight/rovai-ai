@@ -38,6 +38,7 @@ const markdownFile: ResolvedFilePreview = {
   mime: 'text/markdown',
   extension: '.md',
   kind: 'markdown',
+  capabilities: ['read', 'read_child', 'preview_asset'],
   target: { heading: '核心阅读' }
 }
 const markdownSource = [

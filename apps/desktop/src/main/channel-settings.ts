@@ -204,6 +204,7 @@ export interface ChannelHostDependencies {
 }
 
 type ManagedChannel = {
+  connectionStatus: 'online' | 'offline' | 'unknown'
   agentId: string
   appId: string
   credentialRef: string
@@ -305,6 +306,7 @@ export class ChannelSettingsService {
   #stopped = false
   #nextRosterSweepAt = 0
   #nextAggregateRecoveryAt = 0
+  #sessionStatus: 'valid' | 'invalid' | 'unavailable' | 'unknown' = 'unknown'
   #sessionCheckGeneration = 0
 
   constructor(dependencies?: ChannelHostDependencies) {
@@ -372,6 +374,7 @@ export class ChannelSettingsService {
   async stop(): Promise<void> {
     this.#stopped = true
     this.#sessionCheckGeneration += 1
+    this.#sessionStatus = 'unknown'
     this.#activeQrAbort?.abort()
     this.#activeQrAbort = null
     this.#activeProvisioningAbort?.abort()
@@ -410,6 +413,7 @@ export class ChannelSettingsService {
     this.#requireHost()
     if (this.#activeQrAttempt) throw new Error('已有一个飞书二维码流程正在进行。')
     this.#sessionCheckGeneration += 1
+    this.#sessionStatus = 'unknown'
     this.#activeProvisioningAbort?.abort()
     const attemptId = randomUUID()
     const abort = new AbortController()
@@ -523,6 +527,7 @@ export class ChannelSettingsService {
     this.#requireHost()
     if (this.#connectionCommit) return this.#emit()
     this.#sessionCheckGeneration += 1
+    this.#sessionStatus = 'unknown'
     const snapshot = await this.#coreSnapshot()
     this.#activeProvisioningAbort?.abort()
     this.#activeProvisioningAbort = null
@@ -1138,7 +1143,10 @@ export class ChannelSettingsService {
   }
 
   async #inspectDeveloperSession(): Promise<FeishuDeveloperSessionInspection> {
-    return this.#developerSession.inspect().catch(() => ({ status: 'unavailable' as const }))
+    const generation = this.#sessionCheckGeneration
+    const inspection = await this.#developerSession.inspect().catch(() => ({ status: 'unavailable' as const }))
+    if (generation === this.#sessionCheckGeneration) this.#sessionStatus = inspection.status
+    return inspection
   }
 
   async #checkDeveloperSession(
@@ -1165,6 +1173,7 @@ export class ChannelSettingsService {
   }
 
   async #expireAccount(account: NonNullable<CoreChannelSnapshot['account']>): Promise<void> {
+    this.#sessionStatus = 'invalid'
     if (account.status !== 'connected') return
     await this.#command('channels.feishu.account.expire', {
       accountId: account.accountId,
@@ -1421,6 +1430,7 @@ export class ChannelSettingsService {
       outbound: { retry: { maxAttempts: 2, baseDelayMs: 350 } }
     })
     const managed: ManagedChannel = {
+      connectionStatus: 'unknown',
       agentId,
       appId: credential.appId,
       credentialRef,
@@ -1447,6 +1457,7 @@ export class ChannelSettingsService {
     managed.unsubscribers.push(channel.on('botAdded', (event) => this.#handleBotRosterChanged(event)))
     managed.unsubscribers.push(channel.on('botRemoved', (event) => this.#handleBotRosterChanged(event)))
     managed.unsubscribers.push(channel.on('error', (error) => {
+      managed.connectionStatus = 'unknown'
       logFeishuBotDiagnostic('ws.error', {
         appIdDigest: digest(managed.appId),
         agentId: managed.agentId,
@@ -1456,12 +1467,15 @@ export class ChannelSettingsService {
       void this.#emit()
     }))
     managed.unsubscribers.push(channel.on('reconnecting', () => {
+      managed.connectionStatus = 'offline'
+      void this.#emit()
       logFeishuBotDiagnostic('ws.reconnecting', {
         appIdDigest: digest(managed.appId),
         agentId: managed.agentId
       })
     }))
     managed.unsubscribers.push(channel.on('reconnected', () => {
+      managed.connectionStatus = 'online'
       logFeishuBotDiagnostic('ws.reconnected', {
         appIdDigest: digest(managed.appId),
         agentId: managed.agentId
@@ -1481,6 +1495,7 @@ export class ChannelSettingsService {
         recovering: true
       })
       await connectionTiming.measure('websocket_handshake_ms', () => channel.connect())
+      managed.connectionStatus = 'online'
       logFeishuBotDiagnostic('ws.connected', {
         appIdDigest: digest(managed.appId),
         agentId: managed.agentId
@@ -1493,6 +1508,7 @@ export class ChannelSettingsService {
   }
 
   async #disconnectManaged(managed: ManagedChannel): Promise<void> {
+    managed.connectionStatus = 'offline'
     for (const unsubscribe of managed.unsubscribers.splice(0)) unsubscribe()
     await managed.channel.disconnect().catch(() => undefined)
   }
@@ -2427,6 +2443,7 @@ export class ChannelSettingsService {
     // Core can publish its commit before the replacement Cookie Session is active.
     const account = this.#connectionCommit ? this.#connectionCommit.previousAccount : snapshot.account
     const connected = account?.status === 'connected'
+    const published = new Set(snapshot.memberBots.filter(bot => bot.status === 'published').map(bot => bot.agentId))
     const bots = new Map<string, ChannelMemberBotView>()
     for (const bot of snapshot.memberBots) {
       bots.set(bot.agentId, {
@@ -2491,6 +2508,7 @@ export class ChannelSettingsService {
         displayName: '飞书',
         hostStatus: 'ready',
         connection: {
+          sessionStatus: connected ? this.#sessionStatus : account?.status === 'session_expired' ? 'invalid' : 'unknown',
           status: connected
             ? 'connected'
             : account?.status === 'session_expired'
@@ -2506,7 +2524,7 @@ export class ChannelSettingsService {
             lastVerifiedAt: account.lastVerifiedAt
           } : null
         },
-        memberBots: [...bots.values()].sort((left, right) => left.agentId.localeCompare(right.agentId)),
+        memberBots: [...bots.values()].map(bot => ({ ...bot, published: published.has(bot.agentId), connectionStatus: bot.appId ? this.#managedChannels.get(bot.appId)?.connectionStatus ?? 'offline' as const : 'unknown' as const })).sort((left, right) => left.agentId.localeCompare(right.agentId)),
         pendingBindingCount: snapshot.pendingBindingCount,
         bindingIssueCount: snapshot.bindingIssueCount
       }],

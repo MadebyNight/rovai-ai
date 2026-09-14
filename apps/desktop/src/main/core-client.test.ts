@@ -67,6 +67,44 @@ afterEach(() => {
 })
 
 describe('CoreClient planned shutdown', () => {
+  it('dispatches only channel operations without blocking Core replies and fences late callbacks after stop', async () => {
+    useSupportedPosixHost()
+    const root = mkdtempSync(join(tmpdir(), 'rovai-channel-wire-')); temporaryRoots.push(root)
+    process.env.ROVAI_CORE_BIN = process.execPath
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(() => true), killed: false })
+    vi.spyOn(childProcess, 'spawn').mockReturnValue(child as unknown as childProcess.ChildProcess)
+    const frames: Array<{ id: number; method: string; params: unknown }> = []
+    child.stdin.on('data', bytes => {
+      const frame = JSON.parse(String(bytes)); frames.push(frame)
+      child.stdout.write(`${JSON.stringify({ id: frame.id, result: { name: 'same Core' } })}\n`)
+    })
+    const client = new CoreClient(root)
+    let release!: () => void
+    const handler = vi.fn(async (request: { operation: string }) => {
+      await expect(client.request('app.info')).resolves.toEqual({ name: 'same Core' })
+      if (request.operation === 'retry') await new Promise<void>(resolve => { release = resolve })
+      return { error: 'channel_operation_failed' as const }
+    })
+    client.setChannelHandler(handler)
+    try {
+      client.start()
+      child.stdout.write(`${JSON.stringify({ kind: 'core_startup', schemaVersion: 1, status: 'ready', authorityState: { kind: 'current' } })}\n`)
+      const notify = (id: string, request: unknown) => child.stdout.write(`${JSON.stringify({ method: 'host.channels.request', params: { requestId: id, request } })}\n`)
+      notify('1', { operation: 'connect' })
+      notify('2', { operation: 'get', cookie: 'forbidden' })
+      notify('3', { operation: 'get' })
+      await vi.waitFor(() => expect(frames.some(frame => frame.method === 'host.channels.reply')).toBe(true))
+      expect(handler).toHaveBeenCalledTimes(1)
+      notify('4', { operation: 'retry', kind: 'feishu', agentId: 'original' })
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+      client.stop(); release()
+      await new Promise(resolve => setTimeout(resolve, 20))
+      expect(frames.filter(frame => frame.method === 'host.channels.reply')).toHaveLength(1)
+    } finally {
+      client.stop(); child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy()
+    }
+  })
+
   it('admits only bounded transient authority retries, independently of the crash budget', () => {
     const busy = { status: 'blocked' as const, authorityState: { kind: 'blocked' as const, reason: { kind: 'busy', stage: 'open' } } }
     expect([0, 1, 2, 3].map(attempt => coreStartupRetryDelay(busy, attempt))).toEqual([250, 750, 1500, null])
@@ -424,7 +462,6 @@ while IFS= read -r request; do :; done
         expect(launch).toContain('--automation-scheduler-epoch 1')
         expect(launch).toContain('--automation-recovery-boundary 2026-09-05T09:00:00.000Z')
 
-        await client.tickAutomationScheduler('2026-09-05T09:30:00.000Z')
         await client.notifyAutomationSystemSuspending()
         await client.notifyAutomationSystemResumed('2026-09-05T10:00:00.000Z')
         const requests = readFileSync(requestPath, 'utf8')
@@ -432,12 +469,6 @@ while IFS= read -r request; do :; done
           .split('\n')
           .map((line) => JSON.parse(line))
         expect(requests).toMatchObject([{
-          method: 'automations.schedulerTick',
-          params: {
-            epoch: 1,
-            now: '2026-09-05T09:30:00.000Z'
-          }
-        }, {
           method: 'automations.schedulerControl',
           params: {
             epoch: 2,

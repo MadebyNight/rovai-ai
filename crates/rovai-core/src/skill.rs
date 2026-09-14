@@ -4003,6 +4003,9 @@ fn materialize_bundled_definition(
             .write(true)
             .mode(*mode)
             .open(path)?;
+        // OpenOptions mode is filtered by the service umask. Bundled revision
+        // digests include the declared mode, inside the private Skill root.
+        file.set_permissions(fs::Permissions::from_mode(*mode))?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
     }

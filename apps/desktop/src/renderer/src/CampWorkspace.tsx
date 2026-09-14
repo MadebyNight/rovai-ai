@@ -1,3 +1,7 @@
+import { CopyIcon } from './CopyIcon'
+import { newCommandId } from '../../shared/command-id'
+import { useMobileLayout } from './MobileLayout'
+import { useCampClient, useEditingRecovery, type CampClient } from './camp-client'
 import { useExecutionDisclosureAnchor } from './useExecutionDisclosureAnchor'
 import { RunningText } from './RunningText'
 import { ExecutionContentContext, ExecutionVirtualList } from './ExecutionVirtualList'
@@ -419,62 +423,63 @@ export function composerDraftNeedsContinuationRepair(
 }
 
 async function mutateComposerDraft(
+  client: CampClient,
   draft: CampComposerDraftView,
   mutation: DraftMutation
 ): Promise<CampComposerDraftView> {
   const common = { campId: draft.campId, expectedRevision: draft.revision }
   switch (mutation.kind) {
     case 'return_pending_input': {
-      const result = await window.rovai.request<StoredCommandResult>('camp.pendingInputs.edit', {
+      const result = await client.request<StoredCommandResult>('camp.pendingInputs.edit', {
         commandId: mutation.commandId,
         command: { campId: draft.campId, pendingInputId: mutation.pendingInputId,
           expectedRevision: mutation.expectedRevision, editToken: mutation.editToken,
           action: { type: 'return_to_composer', expectedDraftRevision: draft.revision } }
       })
       if (result.status === 'rejected') throw new PendingInputReturnRejectedError(pendingError(result.code))
-      return window.rovai.request<CampComposerDraftView>('camp.composerDraft.get', { campId: draft.campId })
+      return client.request<CampComposerDraftView>('camp.composerDraft.get', { campId: draft.campId })
     }
     case 'quote':
-      return window.rovai.request<CampComposerDraftView>('messageQuotes.mutateDraft', {
+      return client.request<CampComposerDraftView>('messageQuotes.mutateDraft', {
         commandId: mutation.commandId,
         command: { ...common, conversationId: null, action: mutation.action }
       })
     case 'save_content':
-      return window.rovai.request<CampComposerDraftView>('camp.composerDraft.save', {
+      return client.request<CampComposerDraftView>('camp.composerDraft.save', {
         ...common,
         content: mutation.content,
         continuationSourceMessageId: draft.continuationIntent?.sourceCampMessageId ?? null
       })
     case 'add_source_attachment':
-      return window.rovai.composerAttachments.prepare(
+      return client.composerAttachments.prepare(
         draft.campId,
         draft.revision,
         mutation.file
       )
     case 'remove_source_attachment':
-      return window.rovai.request<CampComposerDraftView>('camp.composerDraft.removeAttachment', {
+      return client.request<CampComposerDraftView>('camp.composerDraft.removeAttachment', {
         ...common,
         attachmentId: mutation.attachmentId
       })
     case 'start_reply':
-      return window.rovai.request<CampComposerDraftView>('camp.composerDraft.startReply', {
+      return client.request<CampComposerDraftView>('camp.composerDraft.startReply', {
         ...common,
         replyToCampMessageId: mutation.replyToCampMessageId
       })
     case 'cancel_reply':
-      return window.rovai.request<CampComposerDraftView>('camp.composerDraft.cancelReply', common)
+      return client.request<CampComposerDraftView>('camp.composerDraft.cancelReply', common)
     case 'resolve_reply_recipient':
-      return window.rovai.request<CampComposerDraftView>(
+      return client.request<CampComposerDraftView>(
         'camp.composerDraft.resolveReplyRecipient',
         { ...common, recipient: mutation.recipient }
       )
     case 'dismiss_continuation':
-      return window.rovai.request<CampComposerDraftView>(
+      return client.request<CampComposerDraftView>(
         'camp.composerDraft.dismissContinuation',
         { ...common, sourceCampMessageId: mutation.sourceCampMessageId }
       )
     case 'resolve_continuation_recipient':
-      return window.rovai.request<CampComposerDraftView>(
+      return client.request<CampComposerDraftView>(
         'camp.composerDraft.resolveContinuationRecipient',
         { ...common, agentId: mutation.agentId }
       )
@@ -1536,6 +1541,7 @@ export function CampWorkspace({
   onNotify?(message: string): void
   onNotifyError?(message: string): void
 }): JSX.Element {
+  const client = useCampClient()
   const { profile: currentUserProfile } = useCurrentUserProfile()
   const currentUserName = currentUserDisplayName(currentUserProfile)
   const filePreview = useOptionalFilePreview()
@@ -1572,6 +1578,7 @@ export function CampWorkspace({
   const [attachmentDragState, setAttachmentDragState] = useState<AttachmentDragKind | null>(null)
   const [composerSubmitting, setComposerSubmitting] = useState(false)
   const [routingMutating, setRoutingMutating] = useState(false)
+  const mobile = useMobileLayout()
   const composerSubmittingRef = useRef(false)
   const routingMutatingRef = useRef(false)
   const composerLockAwaitingDisabledCommitRef = useRef(false)
@@ -1603,12 +1610,12 @@ export function CampWorkspace({
   const draftCoordinatorRef = useRef<DraftMutationCoordinator | null>(null)
   if (!draftCoordinatorRef.current) {
     draftCoordinatorRef.current = new DraftMutationCoordinator({
-      load: (campId) => window.rovai.request<CampComposerDraftView>(
+      load: (campId) => client.request<CampComposerDraftView>(
         'camp.composerDraft.get',
         { campId }
       ),
       mutate: async (draft, mutation) => {
-        const next = await mutateComposerDraft(draft, mutation)
+        const next = await mutateComposerDraft(client, draft, mutation)
         if (
           activeCampIdRef.current === draft.campId
           && activationStateRef.current === 'pending'
@@ -1756,6 +1763,12 @@ export function CampWorkspace({
     && executionInspectorActive
     ? 'execution'
     : inspectorTab
+  // Secondary phone panels return to the last primary view, without becoming navigation history.
+  const mobilePrimaryView = useRef<'conversation' | 'execution'>('conversation')
+  useLayoutEffect(() => {
+    if (!mobile || singleChatVisible || (inspectorVisible && inspectorSurfaceTab !== 'execution')) return
+    mobilePrimaryView.current = inspectorVisible ? 'execution' : 'conversation'
+  }, [mobile, singleChatVisible, inspectorVisible, inspectorSurfaceTab])
   const [taskCreationActive, setTaskCreationActive] = useState(false)
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null)
   const [taskFocusRequest, setTaskFocusRequest] = useState(0)
@@ -1847,8 +1860,8 @@ export function CampWorkspace({
     const loadSkillCatalog = async (): Promise<void> => {
       try {
         const [skills, groups] = await Promise.all([
-          window.rovai.request<SkillView[]>('skills.list'),
-          window.rovai.request<SkillDeliveryGroupView[]>('skills.deliveryGroups.list')
+          client.request<SkillView[]>('skills.list'),
+          client.request<SkillDeliveryGroupView[]>('skills.deliveryGroups.list')
         ])
         if (!cancelled) setComposerSkillCatalog({ skills, groups, status: 'ready' })
       } catch {
@@ -1860,7 +1873,8 @@ export function CampWorkspace({
       }
     }
     void loadSkillCatalog()
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribeInvalidation = client.onInvalidated?.(() => void loadSkillCatalog())
+    const unsubscribe = client.onEvent?.((event) => {
       if (event.method !== 'runtime.state') return
       const params = event.params !== null && typeof event.params === 'object'
         ? event.params as Record<string, unknown>
@@ -1869,9 +1883,10 @@ export function CampWorkspace({
     })
     return () => {
       cancelled = true
-      unsubscribe()
+      unsubscribe?.()
+      unsubscribeInvalidation?.()
     }
-  }, [])
+  }, [client])
   const closeMentionPopover = useCallback((returnFocus: boolean): void => {
     const trigger = mentionPopover?.trigger
     setMentionPopover(null)
@@ -1943,12 +1958,13 @@ export function CampWorkspace({
     }
     executionDrawerTriggerRef.current = null
     executionDrawerReturnAgentIdRef.current = null
-    if (runningRun && executionPlacement === 'inspector') {
+    if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
   }, [
     executionPlacement,
     inspectorTab,
+    mobile,
     onOpenInspector,
     snapshot.agentRuns,
     workspaceEntrySnapshotReady
@@ -1957,12 +1973,13 @@ export function CampWorkspace({
     if (workspaceEntryInspectorHandled.current) return
     if (!workspaceEntrySnapshotReady) return
     workspaceEntryInspectorHandled.current = true
-    if (workspaceEntryRunningRun && executionPlacement === 'inspector') {
+    if (!mobile && workspaceEntryRunningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
   }, [
     executionPlacement,
     inspectorTab,
+    mobile,
     onOpenInspector,
     workspaceEntryRunningRun,
     workspaceEntrySnapshotReady
@@ -1981,10 +1998,10 @@ export function CampWorkspace({
     setExecutionInspectorActive(executionPlacement === 'inspector')
     executionDrawerTriggerRef.current = null
     executionDrawerReturnAgentIdRef.current = null
-    if (runningRun && executionPlacement === 'inspector') {
+    if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
-  }, [executionPlacement, inspectorTab, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
+  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -2294,7 +2311,7 @@ export function CampWorkspace({
     const existing = replyAnchorLoads.current.get(messageId)
     if (existing) return existing
     const campId = snapshot.camp.id
-    const request = window.rovai.request<CampMessageAroundSnapshot>('camp.messages.around', {
+    const request = client.request<CampMessageAroundSnapshot>('camp.messages.around', {
       campId,
       messageId
     }).then((around) => {
@@ -2319,7 +2336,7 @@ export function CampWorkspace({
     })
     replyAnchorLoads.current.set(messageId, request)
     return request
-  }, [snapshot.camp.id])
+  }, [client, snapshot.camp.id])
 
   useEffect(() => {
     if (!composerDraft || hasLocalDraftPayload || composerSubmitting || routingMutating) return
@@ -2371,7 +2388,7 @@ export function CampWorkspace({
   ): Promise<void> => {
     const campId = snapshot.camp.id
     try {
-      const result = await window.rovai.request<CampMessageFindSnapshot>(
+      const result = await client.request<CampMessageFindSnapshot>(
         'camp.messages.find',
         {
           campId,
@@ -2410,7 +2427,7 @@ export function CampWorkspace({
         `[data-message-id="${CSS.escape(selectedMatch.messageId)}"]`
       ) ?? null
       if (!target) {
-        const around = await window.rovai.request<CampMessageAroundSnapshot>(
+        const around = await client.request<CampMessageAroundSnapshot>(
           'camp.messages.around',
           { campId, messageId: selectedMatch.messageId }
         )
@@ -2486,7 +2503,7 @@ export function CampWorkspace({
           }
         : current)
     }
-  }, [focusConversationFindInput, snapshot.camp.id])
+  }, [client, focusConversationFindInput, snapshot.camp.id])
 
   const openConversationFind = useCallback((): void => {
     if (!conversationFind.open) {
@@ -3522,7 +3539,7 @@ export function CampWorkspace({
     ) return
     const campId = snapshot.camp.id
     const pending = inputs.map(({ file, kindHint }, index) => ({
-      id: crypto.randomUUID(),
+      id: newCommandId(),
       kind: kindHint,
       file: file.name
         ? file
@@ -3718,6 +3735,17 @@ export function CampWorkspace({
     selectInspectorTab(tab)
   }
 
+  const closeMobileSecondaryPanel = (): void => {
+    onCloseSingleChat()
+    if (mobilePrimaryView.current === 'execution') {
+      selectInspectorSurfaceTab('execution')
+      onOpenInspector?.(inspectorTab)
+    } else {
+      onCloseInspector()
+    }
+    detailEntryHost?.querySelector<HTMLButtonElement>('.mobile-camp-more')?.focus({ preventScroll: true })
+  }
+
   const openInspector = (tab: CampInspectorTab): void => {
     setExecutionInspectorActive(false)
     selectInspectorTab(tab)
@@ -3848,11 +3876,11 @@ export function CampWorkspace({
   const openExecutionProcess = (
     agentId: string,
     trigger: HTMLButtonElement | null = null,
-    options: { runId?: string | null; moveDomFocus?: boolean } = {}
+    options: { runId?: string | null; moveDomFocus?: boolean; reveal?: boolean } = {}
   ): void => {
     const process = executionProcessByAgentId.get(agentId)
     if (!process) return
-    if (executionPlacement === 'inspector') {
+    if (executionPlacement === 'inspector' && options.reveal !== false) {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
     }
@@ -3933,7 +3961,8 @@ export function CampWorkspace({
     )) return
     openExecutionProcess(targetRun.agentId, null, {
       runId: targetRun.id,
-      moveDomFocus: false
+      moveDomFocus: false,
+      reveal: !mobile
     })
   }, [
     executionDrawerAgentId,
@@ -3943,6 +3972,7 @@ export function CampWorkspace({
     inspectorVisible,
     snapshot.agentRuns,
     submittedExecutionRequests,
+    mobile,
     pendingQueue,
     snapshot.camp.id,
     taskCreationActive
@@ -4006,7 +4036,7 @@ export function CampWorkspace({
   ) : null
 
   return (
-    <section className="workspace-shell camp-workspace" aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <section
@@ -4732,11 +4762,13 @@ export function CampWorkspace({
               runningMembers={runningMembers}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
               memberCount={campInspectorMembers(snapshot.members).length}
+              singleChatVisible={singleChatVisible}
+              onOpenSingleChat={onOpenSingleChat}
               onOpen={(tab) => {
                 selectInspectorSurfaceTab(tab)
                 onOpenInspector?.(tab === 'execution' ? inspectorTab : tab)
               }}
-              onClose={onCloseInspector}
+              onClose={mobile && inspectorSurfaceTab !== 'execution' ? closeMobileSecondaryPanel : onCloseInspector}
             >
             <section className="camp-detail-content execution-sidecar-panel" hidden={inspectorSurfaceTab !== 'execution'}>
               {executionPlacement === 'inspector' && (
@@ -4820,7 +4852,7 @@ export function CampWorkspace({
                 entryHost={detailEntryHost}
                 visible={singleChatVisible}
                 onOpen={onOpenSingleChat}
-                onClose={onCloseSingleChat}
+                onClose={mobile ? closeMobileSecondaryPanel : onCloseSingleChat}
                 onNotify={onNotify}
               />
             )}
@@ -5208,6 +5240,7 @@ export function CampWorkspace({
                   <path d="m6.2 9.8 4.65-4.65a2.5 2.5 0 0 1 3.54 3.54l-6.1 6.1a4 4 0 0 1-5.66-5.66l6.1-6.1" />
                 </svg>
               </button>
+              {mobile && <button className="composer-attachment-button" type="button" aria-label="提及队员" disabled={busy || composerInteractionDisabled} onPointerDown={(event) => event.preventDefault()} onClick={() => composerHandleRef.current?.startMention()}>@</button>}
             </div>
             <div className="composer-actions">
               {!executionBlocked && (
@@ -5549,8 +5582,17 @@ function ExecutionDrawer({
   memberById: Map<string, CampSnapshot['members'][number]>
   onFileOpenError(message: string): void
 }): JSX.Element {
-  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(new Set())
-  useEffect(() => setExpandedGroups(new Set()), [campId])
+  const mobile = useMobileLayout()
+  const recovery = useEditingRecovery()
+  const groupKey = `mobile-execution-groups:${campId}:${process.agentId}`
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => {
+    try {
+      const saved = mobile ? recovery?.get(groupKey) : null
+      return new Set(Array.isArray(saved) ? saved.filter((key): key is string => typeof key === 'string') : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => { if (!mobile) setExpandedGroups(new Set()) }, [campId, mobile])
+  useEffect(() => { try { if (mobile) recovery?.set(groupKey, [...expandedGroups]) } catch { /* Optional disclosure memory must not block the editor. */ } }, [mobile, recovery, groupKey, expandedGroups])
   const groupState = useMemo(() => ({
     expanded: expandedGroups,
     change(keys: string[], expanded: boolean): void {
@@ -6566,6 +6608,7 @@ function CampMembersPanel({
   onRemoveMember?(preview: CampMemberRemovalPreview): Promise<CampMemberRemoveOutcome>
   onNotify(message: string): void
 }): JSX.Element {
+  const mobile = useMobileLayout()
   const members = campInspectorMembers(snapshot.members)
   const presentCount = members.filter(campMemberIsLeadEligible).length
   const awayCount = members.length - presentCount
@@ -6820,13 +6863,13 @@ function CampMembersPanel({
                 </span>
                 <small title={member.teamRole || undefined}>{runtimeLabel}</small>
               </span>
-              {fast && <CampMemberFastToggle value={fast} displayName={member.displayName} pending={fastControl!.pending}
+              {!mobile && fast && <CampMemberFastToggle value={fast} displayName={member.displayName} pending={fastControl!.pending}
                 onToggle={next => { void memberFast.save(member.agentId, next) }} />}
               <span className={`camp-inspector-member-state ${present ? '' : 'is-away'}`}>
                 <strong>{presenceLabel}</strong>
                 {runtimeTone === 'attention' && profile && <small className="runtime-attention">{runtimeReadinessLabel(profile.runtimeReadiness.status)}</small>}
               </span>
-              <DropdownMenu.Root>
+              {!mobile && <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
                   <button
                     className="camp-member-action-button"
@@ -6877,8 +6920,8 @@ function CampMembersPanel({
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-              {runtimeConfiguration && runtimeDetailsOpen && (
+              </DropdownMenu.Root>}
+              {!mobile && runtimeConfiguration && runtimeDetailsOpen && (
                 <dl
                   className="camp-inspector-runtime-detail"
                   id={runtimeDetailsId}
@@ -8036,12 +8079,7 @@ function MessageCopyButton({
       title="复制"
       onClick={() => { dismissMessageQuoteSelection(); onCopy() }}
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        {copied ? <path d="m5 12 4 4 10-10" /> : <>
-          <rect x="8" y="8" width="11" height="11" rx="2" />
-          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-        </>}
-      </svg>
+      <CopyIcon copied={copied} />
     </button>
   )
 }
@@ -8359,6 +8397,7 @@ function RunExecutionContent({
   resolvingRecoveryBlocker: boolean
   onFileOpenError(message: string): void
 }): JSX.Element {
+  const client = useCampClient()
   const nonTerminal = NON_TERMINAL_RUNS.has(run.status)
   const publicFailure = run.status === 'failed' ? run.failure : null
   const showUnsettledWarning = agentRunShowsUnsettledWarning(run)
@@ -8406,7 +8445,7 @@ function RunExecutionContent({
     }
     setNarrationStatus('loading')
     void loadExecutionNarrationBodies(missing, (evidenceId) =>
-      window.rovai.request('agentRunEvidence.getContent', { campId, evidenceId })
+      client.request('agentRunEvidence.getContent', { campId, evidenceId })
     ).then((bodies) => {
       if (disposed) return
       for (const item of missing) {
@@ -8419,7 +8458,7 @@ function RunExecutionContent({
       if (!disposed) setNarrationStatus('failed')
     })
     return () => { disposed = true }
-  }, [campId, narrationEvidence, narrationRetry, windowPage.hasNewer, windowedEvidence])
+  }, [client, campId, narrationEvidence, narrationRetry, windowPage.hasNewer, windowedEvidence])
   const historicalProgress = useMemo(() => {
     if (!displayedEvidence) return null
     const build = () => buildLiveExecutionProgress(displayedEvidence.map(liveRuntimeEventFromExecutionEvidence),
@@ -8729,12 +8768,23 @@ export function RunExecutionDisclosure({
   resolvingRecoveryBlocker?: boolean
   onFileOpenError?(message: string): void
 }): JSX.Element | null {
+  const client = useCampClient()
+  const mobile = useMobileLayout()
+  const recovery = useEditingRecovery()
+  const recoveryKey = `mobile-run:${campId}:${run.id}`
   const nonTerminal = NON_TERMINAL_RUNS.has(run.status)
   const active = executionDisclosureIsLiveOpen(run.status, focused, cancelling)
   const cancellingActive = nonTerminal && cancelling && focused
   const publicFailure = run.status === 'failed' ? run.failure : null
   const hasPublicFailure = publicFailure !== null
-  const [open, setOpen] = useState(active || hasPublicFailure)
+  const defaultOpen = (mobile ? nonTerminal : active) || hasPublicFailure
+  const [open, setOpen] = useState(() => {
+    try {
+      const saved = mobile ? recovery?.get(recoveryKey) : null
+      return typeof saved === 'boolean' ? saved : defaultOpen
+    } catch { return defaultOpen }
+  })
+  useEffect(() => { try { if (mobile) recovery?.set(recoveryKey, open) } catch { /* Optional disclosure memory. */ } }, [mobile, recovery, recoveryKey, open])
   const previousNonTerminal = useRef(nonTerminal)
   const [historicalEvidence, setHistoricalEvidence] = useState<AgentRunExecutionEvidenceView[] | null>(null)
   const [historyStatus, setHistoryStatus] = useState<RunExecutionHistoryStatus>('idle')
@@ -8744,11 +8794,12 @@ export function RunExecutionDisclosure({
   const [contentMounted, setContentMounted] = useState(() => shouldActivateContent)
   useEffect(() => {
     const completed = previousNonTerminal.current && !nonTerminal
+    if (mobile) { previousNonTerminal.current = nonTerminal; return }
     setOpen((currentOpen) => completed
       ? hasPublicFailure
       : executionDisclosureOpenAfterActivity(currentOpen, active || cancellingActive || hasPublicFailure))
     previousNonTerminal.current = nonTerminal
-  }, [active, cancellingActive, hasPublicFailure, nonTerminal])
+  }, [active, cancellingActive, hasPublicFailure, nonTerminal, mobile])
   useEffect(() => {
     if (shouldActivateContent) setContentMounted(true)
   }, [shouldActivateContent])
@@ -8774,7 +8825,7 @@ export function RunExecutionDisclosure({
     setHistoryStatus('loading')
     try {
       const evidence = await loadCompleteAgentRunExecutionEvidence(
-        (params) => window.rovai.request<AgentRunExecutionEvidencePage>(
+        (params) => client.request<AgentRunExecutionEvidencePage>(
           'agentRunEvidence.list',
           params
         ),
@@ -8808,7 +8859,7 @@ export function RunExecutionDisclosure({
     />
   ) : null
 
-  const liveOpen = active || cancellingActive
+  const liveOpen = !mobile && (active || cancellingActive)
   return (
     <details
       className={`execution-disclosure ${liveOpen
@@ -8824,11 +8875,13 @@ export function RunExecutionDisclosure({
         }
       }}
     >
-      <summary hidden={liveOpen}>
-        <span className="process-disclosure-label">{!liveOpen && (nonTerminal
+      <summary hidden={liveOpen} className={mobile ? 'mobile-run-summary' : undefined}>
+        {mobile && <time className="mobile-run-time">{runIntervalLabel(run)}</time>}
+        <span className="process-disclosure-label">{mobile ? agentRunPresentation(run, cancelling).label : !liveOpen && (nonTerminal
           ? cancelling ? '正在停止' : run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
             : executionInitialFeedback(run.status, progress?.items ?? [], Boolean(finalBody)) ?? '执行中'
           : executionRunSummary(run, run.updatedAt))}</span>
+        {mobile && focused && nonTerminal && <span className="current-run-badge">当前执行</span>}
         <span className="process-disclosure-slot" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
             <path d="m4.75 6.25 3.25 3.5 3.25-3.5" />
@@ -8975,6 +9028,7 @@ export function TaskPanel({
   onOpenAgent?(agentId: string, trigger?: HTMLButtonElement): void
   onCreateModeChange?(active: boolean): void
 }): JSX.Element {
+  const client = useCampClient()
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | TaskStatus>('all')
   const [editorOpen, setEditorOpen] = useState(false)
@@ -9100,8 +9154,8 @@ export function TaskPanel({
     setSubmitting(true)
     setFormError(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('tasks.create', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('tasks.create', {
+        commandId: newCommandId(),
         campId: snapshot.camp.id,
         title: title.trim(),
         description: description.trim(),
@@ -9146,8 +9200,8 @@ export function TaskPanel({
         : { operation: 'clear' as const }
     const criteria = parseAcceptanceCriteria(acceptanceCriteriaText)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('tasks.update', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('tasks.update', {
+        commandId: newCommandId(),
         campId: snapshot.camp.id,
         taskId: selectedTask.taskId,
         expectedVersion,
@@ -9163,7 +9217,7 @@ export function TaskPanel({
       })
       if (result.status === 'rejected') {
         if (result.code === 'task.version_conflict') {
-          const current = await window.rovai.request<TaskView | null>('tasks.get', {
+          const current = await client.request<TaskView | null>('tasks.get', {
             campId: snapshot.camp.id,
             taskId: selectedTask.taskId
           })
@@ -9190,8 +9244,8 @@ export function TaskPanel({
     setSubmitting(true)
     setFormError(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('tasks.update', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('tasks.update', {
+        commandId: newCommandId(),
         campId: snapshot.camp.id,
         taskId: selectedTask.taskId,
         expectedVersion,

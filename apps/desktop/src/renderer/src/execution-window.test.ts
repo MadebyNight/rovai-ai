@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentRunExecutionEvidenceView as Evidence, AgentRunExecutionWindowPage } from '@contracts'
-import { ExecutionWindow, ExecutionWindowCache, executionWindowPageSize, type ExecutionChangesRequest, type ExecutionWindowRequest } from './execution-window'
+import { ExecutionWindow, ExecutionWindowCache, executionWindowCacheFor, executionWindowPageSize, type ExecutionChangesRequest, type ExecutionWindowRequest } from './execution-window'
 
 function evidence(sequence: number): Evidence {
   return { id: `e-${sequence}`, agentRunId: 'run', executionEpoch: 1, sequence,
@@ -162,5 +162,20 @@ describe('continuous execution history', () => {
     const c = cache.acquire('c', create, changed); c.release()
     const old = cache.acquire('b', create, changed)
     expect(old.window).not.toBe(b.window); old.release()
+    // Identical Run IDs on a replacement Host/client must load through the new
+    // transport, while revisiting a Camp on the same client still hits cache.
+    const firstClient = {}, nextClient = {}
+    const firstSource = source(3), nextSource = source(7)
+    const first = executionWindowCacheFor(firstClient).acquire('same-run', notify => new ExecutionWindow('camp', 'run', 12, firstSource.request, notify, firstSource.changes), changed)
+    await first.window.latest(); first.release()
+    const same = executionWindowCacheFor(firstClient).acquire('same-run', create, changed)
+    expect(same.window).toBe(first.window); same.release()
+    const next = executionWindowCacheFor(nextClient).acquire('same-run', notify => new ExecutionWindow('camp', 'run', 12, nextSource.request, notify, nextSource.changes), changed)
+    expect(next.window.evidence).toEqual([])
+    await next.window.latest()
+    expect(next.window.evidence.at(-1)?.sequence).toBe(7)
+    expect(firstSource.request).toHaveBeenCalledTimes(1)
+    expect(nextSource.request).toHaveBeenCalledTimes(1)
+    next.release()
   })
 })

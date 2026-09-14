@@ -1,7 +1,7 @@
 ---
 document_type: user-guide
 authority: user-guide-routing
-last_updated: 2026-09-10
+last_updated: 2026-09-14
 ---
 
 # 用户指南
@@ -11,6 +11,7 @@ last_updated: 2026-09-10
 | 你想做什么 | 入口 |
 |---|---|
 | 下载、安装与首次启动 | [安装指南](installation.md) |
+| 用手机或另一台电脑连接 Server | [Server 部署与远程访问指南](server-access.md)（安装部分待补齐） |
 | 查看产品界面与协作方式 | [产品展示](../product-showcase.md) |
 | 配置队员、Runtime、权限、Skill 与 MCP | [操作指南](operations.md) |
 

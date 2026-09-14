@@ -1,3 +1,5 @@
+import { newCommandId } from '../../shared/command-id'
+import { useCampClient } from './camp-client'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { CampPendingInputsView, ComposerDocument, PendingCampInputView, StoredCommandResult } from '@contracts'
 import { readErrorMessage } from './error-message'
@@ -48,21 +50,23 @@ export function PendingInputRows({ queue, disabled, onEdit, onDelete }: {
     <div className="pending-input-heading"><span>待发送 · {queue.items.length}</span></div>
     <ul className="pending-input-list">
       {queue.items.map((item) => {
+        const foreignEdit = queue.editSession?.pendingInputId === item.id && queue.editSession.foreignClient
         const label = item.body.trim() || `第 ${item.enqueueSequence} 条消息`
         return <li className="pending-input-row" key={item.id}>
           <div className="pending-input-preview" title={item.body}>
             <span className="pending-input-mark" aria-hidden="true" />
             <span className="pending-input-copy">{item.body}</span>
             {(item.quotes?.length ?? 0) > 0 && <small>引用 {item.quotes.length} 段</small>}
-            {queue.editSession?.pendingInputId === item.id && <small>上次编辑未完成 · 请移回输入框</small>}
+            {queue.editSession?.pendingInputId === item.id && <small>{foreignEdit ? '另一客户端编辑未完成 · 可接管移回' : '上次编辑未完成 · 请移回输入框'}</small>}
             {item.state === 'needs_repair' && <small>需要处理</small>}
           </div>
           <span className="pending-input-actions">
             <button type="button" className="pending-input-edit" disabled={disabled} onClick={() => onEdit(item)}
-              aria-label={`编辑待发送消息：${label}`} title="移回输入框编辑（覆盖当前内容）">
+              aria-label={`${foreignEdit ? '接管并编辑' : '编辑'}待发送消息：${label}`}
+              title={foreignEdit ? '接管并移回输入框（覆盖当前内容）' : '移回输入框编辑（覆盖当前内容）'}>
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.2 11.9.7-3.2 6.8-6.8a1.25 1.25 0 0 1 1.8 0l1.6 1.6a1.25 1.25 0 0 1 0 1.8L6.3 12l-3.1.7Z" /><path d="m9.8 2.8 3.4 3.4" /></svg>
             </button>
-            <button type="button" className="pending-input-delete" disabled={disabled} onClick={() => onDelete(item)}
+            <button type="button" className="pending-input-delete" disabled={disabled || Boolean(foreignEdit)} onClick={() => onDelete(item)}
               aria-label={`删除待发送消息：${label}`} title="删除">
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 4.5 7 7m0-7-7 7" /></svg>
             </button>
@@ -79,11 +83,12 @@ export const PendingCampInputs = forwardRef<PendingCampInputsHandle, {
   refreshKey: number
   executionActive: boolean
   disabled: boolean
-  submittedInputIds?: string[]
+  submittedInputIds?: readonly string[]
   onQueueChange(queue: CampPendingInputsView): void
   onReturnToComposer(item: PendingCampInputView, editToken: string | null): Promise<void>
 }>(function PendingCampInputs({ campId, refreshKey, executionActive, disabled,
   submittedInputIds = [], onQueueChange, onReturnToComposer }, ref) {
+  const client = useCampClient()
   const [queue, setQueue] = useState<CampPendingInputsView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -118,7 +123,7 @@ export const PendingCampInputs = forwardRef<PendingCampInputsHandle, {
   useEffect(() => {
     mounted.current = true
     const reader = createPendingInputsRefresh(
-      () => window.rovai.request<CampPendingInputsView>('camp.pendingInputs.get', {
+      () => client.request<CampPendingInputsView>('camp.pendingInputs.get', {
         campId, submittedInputIds: callbacks.current.submittedInputIds
       }),
       (next) => { if (next.campId === campId) { setQueue(next); callbacks.current.onQueueChange(next) } }
@@ -126,7 +131,8 @@ export const PendingCampInputs = forwardRef<PendingCampInputsHandle, {
     readerRef.current = reader
     const invalidate = (): void => { void reader.refresh().catch(() => undefined) }
     const foreground = (): void => { if (document.visibilityState !== 'hidden') invalidate() }
-    const unsubscribe = window.rovai.onEvent((event) => { if (shouldRefreshPendingInputs(event, campId)) invalidate() })
+    const unsubscribe = client.onEvent?.((event) => { if (shouldRefreshPendingInputs(event, campId)) invalidate() })
+    const unsubscribeInvalidation = client.onInvalidated?.(invalidate)
     window.addEventListener('focus', foreground)
     document.addEventListener('visibilitychange', foreground)
     invalidate()
@@ -134,11 +140,12 @@ export const PendingCampInputs = forwardRef<PendingCampInputsHandle, {
       mounted.current = false
       reader.dispose()
       readerRef.current = null
-      unsubscribe()
+      unsubscribe?.()
+      unsubscribeInvalidation?.()
       window.removeEventListener('focus', foreground)
       document.removeEventListener('visibilitychange', foreground)
     }
-  }, [campId])
+  }, [campId, client])
   useEffect(() => { void refresh().catch(() => undefined) }, [refresh, refreshKey, executionActive, submittedKey])
 
   const perform = async (item: PendingCampInputView, remove: boolean): Promise<void> => {
@@ -146,11 +153,25 @@ export const PendingCampInputs = forwardRef<PendingCampInputsHandle, {
     busyRef.current = true
     setBusy(true)
     setError(null)
-    const editToken = queue?.editSession?.pendingInputId === item.id ? queue.editSession.editToken : null
+    const session = queue?.editSession?.pendingInputId === item.id ? queue.editSession : null
+    let editToken = session?.editToken ?? null
     try {
+      if (session?.foreignClient) {
+        if (remove) throw new Error(pendingError('pending_input.edit_fenced'))
+        // The action is explicitly labelled as a takeover. Never resume another
+        // client's working state merely because its lease is visible.
+        const takeover = await client.request<StoredCommandResult>('camp.pendingInputs.edit', {
+          commandId: newCommandId(), command: { campId, pendingInputId: item.id,
+            expectedRevision: item.revision, editToken, action: { type: 'takeover' } }
+        })
+        if (takeover.status === 'rejected') throw new Error(pendingError(takeover.code))
+        const token = takeover.payload.editToken
+        if (typeof token !== 'string') throw new Error('接管结果尚未确认，请刷新队列后重试。')
+        editToken = token
+      }
       if (remove) {
-        const result = await window.rovai.request<StoredCommandResult>('camp.pendingInputs.edit', {
-          commandId: crypto.randomUUID(), command: { campId, pendingInputId: item.id,
+        const result = await client.request<StoredCommandResult>('camp.pendingInputs.edit', {
+          commandId: newCommandId(), command: { campId, pendingInputId: item.id,
             expectedRevision: item.revision, editToken, action: { type: 'delete' } }
         })
         if (result.status === 'rejected') throw new Error(pendingError(result.code))

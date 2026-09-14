@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { ExecutionContentContext, ExecutionVirtualList, useExecutionRetainedState } from './ExecutionVirtualList'
 import { createContext, useContext, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import type { AgentRunExecutionEvidenceView, AgentRunView, CanonicalRuntimeActivityView } from '@contracts'
@@ -118,6 +119,7 @@ function ToolCallDetail({
   summaryRef: RefObject<HTMLElement | null>
   inputOnly?: boolean
 }): JSX.Element {
+  const client = useCampClient()
   const evidenceId = completeEvidence?.id ?? null
   const [result, setResult] = useExecutionRetainedState<ToolResultViewState>(`result:${resultKey}:${evidenceId}`, () => ({
     evidenceId,
@@ -167,7 +169,7 @@ function ToolCallDetail({
       error: null
     })
     try {
-      const response = await window.rovai.request<{ payload: unknown }>(
+      const response = await client.request<{ payload: unknown }>(
         'agentRunEvidence.getContent',
         { campId, evidenceId: completeEvidence.id }
       )
@@ -195,7 +197,7 @@ function ToolCallDetail({
         error: toolResultErrorMessage(error)
       })
     }
-  }, [campId, completeEvidence])
+  }, [client, campId, completeEvidence])
 
   useEffect(() => {
     if (
@@ -284,6 +286,7 @@ export function ModifiedFileRow({ campId, change, semanticKind, completeEvidence
   itemKey?: string
   onFileOpenError(message: string): void
 }): JSX.Element {
+  const client = useCampClient()
   const filePreview = useOptionalFilePreview()
   const [expanded, setExpanded] = useExecutionRetainedState(`file-expanded:${itemKey ?? change.path}`, false)
   const diffId = useId()
@@ -298,7 +301,7 @@ export function ModifiedFileRow({ campId, change, semanticKind, completeEvidence
     if (!expanded || !deferred || !completeEvidence || diff !== null) return undefined
     let disposed = false
     setDiffError(false)
-    void window.rovai.request<{ canonical?: CanonicalRuntimeActivityView | null }>(
+    void client.request<{ canonical?: CanonicalRuntimeActivityView | null }>(
       'agentRunEvidence.getContent', { campId, evidenceId: completeEvidence.id }
     ).then(response => {
       const entry = response.canonical?.diffProjection?.entries?.find(item => item.path === change.path)
@@ -306,7 +309,7 @@ export function ModifiedFileRow({ campId, change, semanticKind, completeEvidence
       if (!disposed) setLoadedDiff({ evidenceId: completeEvidence.id, diff: entry.diff })
     }).catch(() => { if (!disposed) setDiffError(true) })
     return () => { disposed = true }
-  }, [expanded, deferred, campId, completeEvidence?.id, change.path, diff, retry])
+  }, [client, expanded, deferred, campId, completeEvidence?.id, change.path, diff, retry])
   const fileName = change.path.split('/').filter(Boolean).at(-1) ?? change.path
   const verb = change.changeKind === 'add' ? '新增' : '编辑'
   const exactMutation = semanticKind === 'exact_mutation'

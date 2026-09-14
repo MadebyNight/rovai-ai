@@ -1,9 +1,14 @@
+import { useEditingRecovery } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
 import type { CampComposerDraftView, ComposerAtom, ComposerDocument } from '@contracts'
 import { LexicalExtensionComposer } from '@lexical/react/LexicalExtensionComposer'
 import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import {
   $getRoot,
+  $getSelection,
+  $isRangeSelection,
+  $isTextNode,
   $nodesOfType,
   CLEAR_HISTORY_COMMAND,
   HISTORY_PUSH_TAG
@@ -50,6 +55,7 @@ import {
   type ComposerPersistContext
 } from './composer-draft-sync'
 import {
+  composerDocumentsEqualDirect,
   composerDocumentToPlainText,
   emptyComposerDocument,
   parseComposerClipboardDocument,
@@ -78,6 +84,7 @@ export interface StructuredMentionComposerHandle {
   ): void
   setDocument(document: ComposerDocument, boundary?: 'start' | 'end'): void
   focus(boundary?: 'start' | 'end'): void
+  startMention(): void
   getLocalVersion(): number
   isDirty(): boolean
 }
@@ -194,6 +201,7 @@ export const StructuredMentionComposer = forwardRef<
 
 function ComposerBridge({
   id,
+  draftIdentity,
   document,
   ready = true,
   getAuthoritativeDraft,
@@ -221,6 +229,13 @@ function ComposerBridge({
   forwardedRef: ForwardedRef<StructuredMentionComposerHandle>
 }): JSX.Element {
   const [editor] = useLexicalComposerContext()
+  const mobile = useMobileLayout()
+  const mobileRef = useRef(mobile)
+  mobileRef.current = mobile
+  const recovery = useEditingRecovery()
+  const authorityDocument = useRef(document)
+  authorityDocument.current = document
+  const recoveryAttempted = useRef(false)
   const generatedId = useId()
   const syncRef = useRef<ComposerDraftSync<CampComposerDraftView> | null>(null)
   const initializedRef = useRef(false)
@@ -289,10 +304,18 @@ function ComposerBridge({
       atomPresentation(node, callbacks.current).availability === 'available',
     onStatusChange: (status: ComposerLocalStatus) =>
       callbacks.current.onLocalStatusChange?.(status),
-    onDirtyChange: (dirty: boolean) => callbacks.current.onDirtyChange?.(dirty),
+    onLocalDocumentChange: (local: ComposerDocument) => recovery?.set(draftIdentity, { document: local, base: callbacks.current.getAuthoritativeDraft?.()?.content ?? authorityDocument.current }),
+    onSaved: (_version: number, savedDocument: ComposerDocument) => {
+      const pending = recovery?.get(draftIdentity) as { document?: ComposerDocument } | null
+      if (pending?.document) recovery?.set(draftIdentity, { document: pending.document, base: savedDocument })
+    },
+    onDirtyChange: (dirty: boolean) => {
+      if (!dirty) recovery?.set(draftIdentity, null)
+      callbacks.current.onDirtyChange?.(dirty)
+    },
     onPersistenceErrorChange: (error: Error | null) =>
       callbacks.current.onPersistenceErrorChange?.(error)
-  }), [])
+  }), [recovery, draftIdentity])
 
   const replaceAuthoritativeDocument = useCallback((
     nextDocument: ComposerDocument,
@@ -326,6 +349,7 @@ function ComposerBridge({
     const runtime: ComposerExtensionRuntime<CampComposerDraftView> = {
       sync,
       submit: () => { void callbacks.current.onSubmit() },
+      enterInsertsLineBreak: () => mobileRef.current,
       backspaceAtStart: () => { void callbacks.current.onBackspaceAtStart?.() },
       pasteFiles: (files) => callbacks.current.onPasteFiles?.(files),
       plainText: (selection) =>
@@ -351,6 +375,7 @@ function ComposerBridge({
     initializedRef.current = true
     return () => {
       initializedRef.current = false
+      recoveryAttempted.current = false
       sync.destroy()
       syncRef.current = null
       setComposerExtensionRuntime(editor, null)
@@ -382,6 +407,23 @@ function ComposerBridge({
     previousReadyRef.current = true
     replaceAuthoritativeDocument(document)
   }, [document, ready, replaceAuthoritativeDocument])
+
+  useLayoutEffect(() => {
+    if (!ready || recoveryAttempted.current || !recovery || !syncRef.current) return
+    recoveryAttempted.current = true
+    const saved = recovery.get(draftIdentity) as { document?: unknown; base?: unknown } | null
+    if (!saved) return
+    const local = parseComposerClipboardDocument(JSON.stringify(saved.document))
+    const base = parseComposerClipboardDocument(JSON.stringify(saved.base))
+    if (!local || !base) { onPersistenceErrorChange?.(new Error('未保存的编辑恢复材料无效。')); return }
+    if (composerDocumentsEqualDirect(document, local)) { recovery.set(draftIdentity, null); return }
+    if (!composerDocumentsEqualDirect(document, base)) {
+      onPersistenceErrorChange?.(new Error('Host 草稿已变化，本标签页的未保存编辑仍保留，暂未覆盖当前草稿。'))
+      return
+    }
+    editor.update(() => { $replaceEditorWithComposerDocument(local) }, { discrete: true, tag: ROVAI_COMPOSER_INITIALIZE_TAG })
+    syncRef.current.restoreLocalState(editor.getEditorState())
+  }, [document, ready, recovery, draftIdentity, editor, onPersistenceErrorChange])
 
   useEffect(() => {
     editor.setEditable(ready && !disabled && interactionLockCountRef.current === 0)
@@ -427,6 +469,18 @@ function ComposerBridge({
         else $getRoot().selectEnd()
       }, { discrete: true })
       editor.focus(undefined, { defaultSelection: boundary === 'start' ? 'rootStart' : 'rootEnd' })
+    },
+    startMention() {
+      if (!editor.isEditable()) return
+      editor.update(() => {
+        const selection = $getSelection()
+        if ($isRangeSelection(selection)) {
+          const node = selection.anchor.getNode()
+          const before = $isTextNode(node) ? node.getTextContent().slice(0, selection.anchor.offset) : ''
+          selection.insertText(before && !/\s$/.test(before) ? ' @' : '@')
+        } else $getRoot().selectEnd().insertText(' @')
+      }, { discrete: true, tag: HISTORY_PUSH_TAG })
+      editor.focus()
     },
     getLocalVersion: () => syncRef.current?.getLocalVersion() ?? 0,
     isDirty: () => syncRef.current?.isDirty() ?? false

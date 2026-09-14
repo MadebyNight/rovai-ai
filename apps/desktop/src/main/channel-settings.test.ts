@@ -1810,6 +1810,8 @@ describe('channel settings service', () => {
       publicationStatus: 'failed',
       botDisplayName: '审阅员',
       appId: 'cli-frozen',
+      connectionStatus: 'offline',
+      published: false,
       managementUrl: 'https://open.feishu.cn/app/cli-frozen/baseinfo',
       failureCode: 'feishu_console_event_verification_failed'
     })

@@ -1,6 +1,7 @@
+import { useCampClient } from './camp-client'
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRunView, AgentRunExecutionWindowPage, AgentRunExecutionWindowChanges } from '@contracts'
-import { ExecutionWindow, executionWindowPageSize, executionWindowCache } from './execution-window'
+import { ExecutionWindow, executionWindowPageSize, executionWindowCacheFor } from './execution-window'
 
 export const ExecutionReadingContext = createContext<((following: boolean) => void) | null>(null)
 export const ExecutionLatestContext = createContext<{
@@ -10,6 +11,7 @@ export const ExecutionLatestContext = createContext<{
 } | null>(null)
 
 export function useExecutionWindow(enabled: boolean, campId: string, run: AgentRunView, liveRevision: unknown, contentRevision: unknown) {
+  const client = useCampClient()
   const root = useRef<HTMLDivElement>(null)
   const store = useRef<ExecutionWindow | null>(null)
   const [revision, changed] = useState(0)
@@ -52,10 +54,10 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
   useLayoutEffect(() => {
     if (!enabled) return undefined
     const host = scrollHost()
-    const retained = executionWindowCache.acquire(`${campId}:${run.id}:${run.executionEpoch}`,
+    const retained = executionWindowCacheFor(client).acquire(`${campId}:${run.id}:${run.executionEpoch}`,
       notify => new ExecutionWindow(campId, run.id, executionWindowPageSize(host?.clientHeight || 500),
-        params => window.rovai.request<AgentRunExecutionWindowPage>('agentRunExecution.page', params), notify,
-        params => window.rovai.request<AgentRunExecutionWindowChanges>('agentRunExecution.changes', params)),
+        params => client.request<AgentRunExecutionWindowPage>('agentRunExecution.page', params), notify,
+        params => client.request<AgentRunExecutionWindowChanges>('agentRunExecution.changes', params)),
       () => changed(value => value + 1))
     const current = retained.window
     const wasLoaded = current.loaded
@@ -85,7 +87,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
       pendingRefresh.current = null
       anchor.current = null
     }
-  }, [enabled, campId, run.id, run.executionEpoch])
+  }, [client, enabled, campId, run.id, run.executionEpoch])
 
   useLayoutEffect(() => {
     if (!enabled || latest?.runId !== run.id || latest.request === handledLatest.current
@@ -177,7 +179,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     }
     host.addEventListener('scroll', onScroll, { passive: true })
     return () => host.removeEventListener('scroll', onScroll)
-  }, [enabled, campId, run.id])
+  }, [client, enabled, campId, run.id])
 
   const evidence = useMemo(() => store.current?.campId === campId && store.current.agentRunId === run.id
     ? store.current.evidence : [], [revision, enabled, campId, run.id])

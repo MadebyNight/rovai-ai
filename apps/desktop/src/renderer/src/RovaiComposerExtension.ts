@@ -41,6 +41,7 @@ import { ROVAI_COMPOSER_CLIPBOARD_MIME } from './composer-document'
 export interface ComposerExtensionRuntime<Result = unknown> {
   sync: ComposerDraftSync<Result>
   submit(): void
+  enterInsertsLineBreak?(): boolean
   backspaceAtStart(): void
   pasteFiles(files: File[]): void
   plainText(document: ComposerDocument): string
@@ -92,8 +93,8 @@ export const ComposerCommandExtension = defineExtension({
         const runtime = runtimes.get(editor)
         if (!runtime) return false
         if (editor.isComposing() || event?.isComposing) return true
-        if (event?.shiftKey) {
-          event.preventDefault()
+        if (event?.shiftKey || runtime.enterInsertsLineBreak?.()) {
+          event?.preventDefault()
           const selection = $getSelection()
           if ($isRangeSelection(selection)) selection.insertNodes([$createLineBreakNode()])
           return true

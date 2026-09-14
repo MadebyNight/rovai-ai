@@ -39,3 +39,33 @@ it('accepts only bounded diagnostic fields and leaves unavailable details unknow
   expect(parseHtmlPreviewDiagnostic({...diagnostic,status:404},diagnostic)).toMatchObject({status:404})
   for(const patch of [{status:0},{status:'404'},{status:600},{kind:'execute'},{line:0},{line:'2'},{column:-1},{timestamp:'invalid'},{message:'x'.repeat(2001)},{stack:'x'.repeat(8001)},{previewId:'other'},{generation:'old'}]) expect(parseHtmlPreviewDiagnostic({...diagnostic,...patch},diagnostic)).toBeNull()
 })
+
+
+it('binds opaque preview initialization to the current frame, generation and credential-free shell', () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const host = new EventTarget() as EventTarget & { location: { origin: string } }
+  host.location = { origin: 'http://localhost:8766' }
+  const entryUrl = host.location.origin + '/preview.html#p.g'
+  const preview = { previewId: 'p', generation: 'g', origin: 'null', entryUrl, documentUrl: entryUrl, sandboxedDocument: '<h1>Allowed document</h1>' }
+  const sent = vi.fn(), frame = { postMessage: sent } as unknown as Window
+  const channel = new HtmlPreviewHostChannel(preview, () => frame)
+  const detach = channel.attach(host as unknown as Window)
+  const receive = (patch = {}, source = frame, origin = 'null'): void => {
+    const event = new Event('message')
+    Object.assign(event, { origin, source, data: { protocol: 'rovai-html-preview-v1', previewId: 'p', generation: 'g', documentId: 'bootstrap', type: 'bootstrap-ready', ...patch } })
+    host.dispatchEvent(event)
+  }
+  receive({}, {} as Window); receive({}, frame, host.location.origin); receive({ generation: 'old' })
+  expect(sent).not.toHaveBeenCalled()
+  receive()
+  expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'initialize', html: preview.sandboxedDocument }), '*')
+  receive(); expect(sent).toHaveBeenCalledTimes(1) // Author scripts cannot request repeated copies of the whole document.
+  channel.connect()
+  const challenge = sent.mock.calls.at(-1)![0].connectionId
+  receive({ type: 'connected', documentId: 'loaded', connectionId: 'old' }); expect(channel.connected).toBe(false)
+  receive({ type: 'connected', documentId: 'loaded', connectionId: challenge }); expect(channel.connected).toBe(true)
+  for (const patch of [{ origin: host.location.origin }, { entryUrl: host.location.origin + '/index.html' }, { entryUrl: 'https://elsewhere/preview.html#p.g' }, { documentUrl: 'about:blank' }, { sandboxedDocument: undefined }]) {
+    expect(validPreviewOrigin({ ...preview, ...patch }, host.location.origin)).toBe(false)
+  }
+  detach(); vi.unstubAllGlobals()
+})

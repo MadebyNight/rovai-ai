@@ -1,5 +1,5 @@
 //! Fresh discovery inputs are separate from publishing the active search snapshot.
-use crate::{
+use crate::application::{
     AdapterKind, Core, RuntimeDiscoveryObservation, RuntimeDiscoveryStatus,
     RuntimeExecutableCandidate, RuntimeSearchEnvironment,
 };

@@ -45,7 +45,11 @@ describe('managed avatar object URL cache', () => {
     expect(first).toBe(second)
     await expect(first).resolves.toBe('blob:managed-avatar')
     expect(read).toHaveBeenCalledTimes(1)
-    await invalidateManagedAvatarObjectUrl(AVATAR_REF, 'icon')
+    const otherHostRead = vi.fn<ManagedAvatarRead>().mockResolvedValue(null)
+    await expect(managedAvatarObjectUrl(AVATAR_REF, 'icon', otherHostRead)).resolves.toBeNull()
+    expect(otherHostRead).toHaveBeenCalledTimes(1)
+    await expect(managedAvatarObjectUrl(AVATAR_REF, 'icon', read)).resolves.toBe('blob:managed-avatar')
+    await invalidateManagedAvatarObjectUrl(AVATAR_REF, 'icon', read)
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:managed-avatar')
   })
 
@@ -64,7 +68,7 @@ describe('managed avatar object URL cache', () => {
     await managedAvatarObjectUrl(AVATAR_REF, 'icon', read)
     await managedAvatarObjectUrl(AVATAR_REF, 'portrait', read)
     expect(read).toHaveBeenCalledTimes(2)
-    await invalidateManagedAvatarObjectUrl(AVATAR_REF)
+    await invalidateManagedAvatarObjectUrl(AVATAR_REF, undefined, read)
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:icon')
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:portrait')
   })
@@ -76,7 +80,7 @@ describe('managed avatar object URL cache', () => {
     expect(missingRead).toHaveBeenCalledTimes(1)
     expect(createObjectUrl).not.toHaveBeenCalled()
 
-    await invalidateManagedAvatarObjectUrl(AVATAR_REF)
+    await invalidateManagedAvatarObjectUrl(AVATAR_REF, undefined, missingRead)
     const failedRead = vi.fn<ManagedAvatarRead>().mockRejectedValue(new Error('corrupt'))
     await expect(managedAvatarObjectUrl(AVATAR_REF, 'icon', failedRead)).resolves.toBeNull()
     expect(createObjectUrl).not.toHaveBeenCalled()
@@ -89,7 +93,7 @@ describe('managed avatar object URL cache', () => {
     })
     const read: ManagedAvatarRead = () => pendingRead
     const result = managedAvatarObjectUrl(AVATAR_REF, 'icon', read)
-    const invalidation = invalidateManagedAvatarObjectUrl(AVATAR_REF, 'icon')
+    const invalidation = invalidateManagedAvatarObjectUrl(AVATAR_REF, 'icon', read)
     resolveRead({
       mediaType: 'image/png',
       bytes: Uint8Array.from([1]),

@@ -1,5 +1,5 @@
 //! Owner-only startup editor. Draft probes do not publish product readiness.
-use crate::{
+use crate::application::{
     Core, IdentityCheckedProbe, RUNTIME_CHECK_TOTAL_DEADLINE, RuntimeCheckOutcome,
     RuntimeCheckRequest, RuntimeCheckTrigger, RuntimeDiscoveryStatus, RuntimeLaunchPurpose,
     current_runtime_platform_blocker, discover_runtime_path, discover_runtime_version,
@@ -190,8 +190,8 @@ impl Core {
                     .iter()
                     .any(|candidate| {
                         candidate.entrypoint_locator_identity == locator
-                            && crate::canonical_runtime_path(&candidate.path)
-                                == crate::canonical_runtime_path(&path)
+                            && crate::application::canonical_runtime_path(&candidate.path)
+                                == crate::application::canonical_runtime_path(&path)
                             && candidate.entrypoint_locator_identity_is_current()
                     })
         };

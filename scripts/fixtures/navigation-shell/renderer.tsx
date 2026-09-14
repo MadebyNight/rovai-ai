@@ -6,6 +6,7 @@ import { CampNavigation } from '../../../apps/desktop/src/renderer/src/CampNavig
 import { createDesktopNavigation, type NavigationTarget } from '../../../apps/desktop/src/renderer/src/desktop-navigation'
 import { WindowDragStrip } from '../../../apps/desktop/src/renderer/src/App'
 import '../../../apps/desktop/src/renderer/src/styles.css'
+import '../../../apps/web/src/styles.css'
 
 const noop = (): void => undefined
 const navigationListeners = new Set<(direction: 'back' | 'forward') => void>()
@@ -20,6 +21,7 @@ let renders = 0
 function Content(): React.JSX.Element { renders++; return <textarea aria-label="保留的草稿" defaultValue="未发送内容" /> }
 function Fixture(): React.JSX.Element {
   const [settings, setSettings] = useState(false)
+  const [browser, setBrowser] = useState(false)
   const [target, setTarget] = useState<NavigationTarget>({ kind: 'quick_chat' })
   const navigation = useMemo(() => {
     const value = createDesktopNavigation(async (next, transaction) => {
@@ -30,14 +32,15 @@ function Fixture(): React.JSX.Element {
   }, [])
   const [platform, setPlatform] = useState<'win32' | 'darwin'>('win32')
   const [disabled, setDisabled] = useState(false)
-  document.documentElement.dataset.rovaiPlatform = platform
+  document.documentElement.dataset.rovaiPlatform = browser ? 'browser' : platform
+  document.documentElement.dataset.rovaiSurface = browser ? 'web' : 'desktop'
   Object.assign(window, { navigationTest: {
-    renders: () => renders, setSettings, setPlatform, setDisabled, navigation, target,
+    renders: () => renders, setSettings, setPlatform, setDisabled, setBrowser, navigation, target,
     hostNavigation: (direction: 'back' | 'forward') => navigationListeners.forEach(listener => listener(direction)),
     hostListenerCount: () => navigationListeners.size,
     settle: () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 90))))
   } })
-  return <><WindowsApplicationMenu /><NavigationShell platform={platform} disabled={disabled} settings={settings} navigation={navigation}>
+  return <><WindowsApplicationMenu /><NavigationShell platform={platform} browser={browser} disabled={disabled} settings={settings} navigation={navigation} nativeWindowControls={browser ? undefined : window.rovai.windowControls}>
     <CampNavigation platform={platform} view={settings ? 'settings' : 'compose'} state="ready" navigation={null} activeCampId={null} pendingMemoryCount={0}
       onNewConversation={noop} onMembers={noop} onMemory={noop} onSettings={() => setSettings(true)} onSettingsBack={() => setSettings(false)}
       onOpenProject={noop} onCamp={noop} onRemoveProject={async () => undefined} onRename={async () => undefined} onDelete={async () => undefined} onError={noop} />

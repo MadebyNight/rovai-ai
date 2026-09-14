@@ -8,7 +8,13 @@ type CacheEntry = {
   promise: Promise<string | null>
 }
 
-const managedAvatarCache = new Map<string, CacheEntry>()
+const managedAvatarCaches = new Map<ManagedAvatarRead, Map<string, CacheEntry>>()
+const desktopRead: ManagedAvatarRead = (avatarRef, rendition) => window.rovai.memberAvatars.read(avatarRef, rendition)
+function cacheFor(read: ManagedAvatarRead): Map<string, CacheEntry> {
+  let cache = managedAvatarCaches.get(read)
+  if (!cache) { cache = new Map(); managedAvatarCaches.set(read, cache) }
+  return cache
+}
 
 function cacheKey(avatarRef: string, rendition: ManagedAvatarRenditionKind): string {
   return `${avatarRef}\u0000${rendition}`
@@ -22,8 +28,9 @@ function renditionObjectUrl(rendition: MemberAvatarRendition): string {
 export function managedAvatarObjectUrl(
   avatarRef: string,
   rendition: ManagedAvatarRenditionKind,
-  read: ManagedAvatarRead = window.rovai.memberAvatars.read
+  read: ManagedAvatarRead = desktopRead
 ): Promise<string | null> {
+  const managedAvatarCache = cacheFor(read)
   const key = cacheKey(avatarRef, rendition)
   const cached = managedAvatarCache.get(key)
   if (cached) return cached.promise
@@ -46,8 +53,10 @@ export function managedAvatarObjectUrl(
 
 export async function invalidateManagedAvatarObjectUrl(
   avatarRef: string,
-  rendition?: ManagedAvatarRenditionKind
+  rendition?: ManagedAvatarRenditionKind,
+  read: ManagedAvatarRead = desktopRead
 ): Promise<void> {
+  const managedAvatarCache = cacheFor(read)
   const keys = rendition
     ? [cacheKey(avatarRef, rendition)]
     : [
@@ -66,8 +75,9 @@ export async function invalidateManagedAvatarObjectUrl(
 }
 
 export async function clearManagedAvatarObjectUrlCache(): Promise<void> {
-  const entries = [...managedAvatarCache.values()]
-  managedAvatarCache.clear()
+  const entries = [...managedAvatarCaches.values()].flatMap((cache) => [...cache.values()])
+  for (const cache of managedAvatarCaches.values()) cache.clear()
+  managedAvatarCaches.clear()
   const objectUrls = await Promise.all(entries.map((entry) => entry.promise))
   for (const objectUrl of objectUrls) {
     if (objectUrl) URL.revokeObjectURL(objectUrl)

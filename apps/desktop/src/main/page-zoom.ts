@@ -12,9 +12,7 @@ export interface PageZoomKeyboardInput {
 
 export type PageZoomAction = 'in' | 'out' | 'reset'
 
-// Saved preferences still accept legacy values below the first Chrome preset.
-export const MIN_PAGE_ZOOM_PERCENTAGE = 10
-export const MAX_PAGE_ZOOM_PERCENTAGE = 500
+export { MIN_PAGE_ZOOM_PERCENTAGE, MAX_PAGE_ZOOM_PERCENTAGE } from '../shared/appearance'
 
 export function pageZoomAction(
   input: PageZoomKeyboardInput,

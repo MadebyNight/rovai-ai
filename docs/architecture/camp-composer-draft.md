@@ -100,6 +100,10 @@ clipboard 与 Draft Sync；统一 React Typeahead Plugin 负责有界匹配、�
 
 ## Draft synchronization
 
+Draft 的持久作用域现在包括 Host 验证的编辑客户端。Desktop 兼容原保留身份；Web 在同页面内将编辑身份与
+短期 Session 分开，重登更新认证代次但不卸载编辑器。Web 清空/消费只推进本客户端 revision，避免旧 revision
+在删除重建后重新有效。一个 Camp 仍有同一 Pending FIFO；跨客户端显式接管编辑会轮换 lease，不传输未提交文本。
+
 ```text
 committed EditorState
   -> localVersion / latestEditorState ref

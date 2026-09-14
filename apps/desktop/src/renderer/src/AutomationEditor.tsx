@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { useCallback, useEffect, useId, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { AgentProfile, AutomationRunListPage, AutomationRunSummary, AutomationView, ChannelSettingsSnapshot, ProjectNavigationGroup } from '@contracts'
@@ -38,6 +39,7 @@ function MemberCopy({ member }: { member: AgentProfile }): React.JSX.Element {
 }
 
 function RunHistory({ automation, onOpenCamp }: { automation: AutomationView; onOpenCamp(campId: string): void }): React.JSX.Element {
+  const client = useCampClient()
   const [runs, setRuns] = useState<AutomationRunSummary[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -59,7 +61,7 @@ function RunHistory({ automation, onOpenCamp }: { automation: AutomationView; on
       const seen = new Set<string>()
       let pageCursor = nextCursor
       do {
-        const page = await window.rovai.request<AutomationRunListPage>('automations.runs.list', { automationId: automation.automationId, limit: 20, ...(pageCursor ? { cursor: pageCursor } : {}) })
+        const page = await client.request<AutomationRunListPage>('automations.runs.list', { automationId: automation.automationId, limit: 20, ...(pageCursor ? { cursor: pageCursor } : {}) })
         if (request !== generation.current) return
         if (page.truncated && (!page.nextCursor || page.nextCursor === pageCursor || seen.has(page.nextCursor))) throw new Error('执行历史分页状态无效，请重试。')
         loaded.push(...page.runs)
@@ -74,15 +76,16 @@ function RunHistory({ automation, onOpenCamp }: { automation: AutomationView; on
     } finally {
       if (request === generation.current) { loadingRef.current = false; setLoading(false) }
     }
-  }, [automation.automationId])
+  }, [client, automation.automationId])
   useEffect(() => {
     void load()
     const interval = window.setInterval(() => void load(), 5_000)
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (event.method === 'automations.updated') void load()
     })
-    return () => { generation.current += 1; loadingRef.current = false; window.clearInterval(interval); unsubscribe() }
-  }, [load])
+    const unsubscribeInvalidated = client.onInvalidated?.(() => void load())
+    return () => { generation.current += 1; loadingRef.current = false; window.clearInterval(interval); unsubscribe?.(); unsubscribeInvalidated?.() }
+  }, [client, load])
   // The definition refresh supplies current terminal/notification facts without resetting older pages.
   useEffect(() => {
     const latest = automation.lastRun
@@ -116,18 +119,20 @@ export function AutomationEditor({ draft, onChange, agents, projects, automation
   onOpenCamp(campId: string): void
   onCreate(): void
 }): React.JSX.Element {
+  const client = useCampClient()
   const [channels, setChannels] = useState<ChannelSettingsSnapshot | null>(null)
   const [channelError, setChannelError] = useState(false)
   const [channelsOpen, setChannelsOpen] = useState(false)
   const loadChannels = useCallback(async (): Promise<void> => {
+    if (!client.channels) return
     setChannelError(false)
-    try { setChannels(await window.rovai.channels.get()) } catch { setChannelError(true) }
-  }, [])
+    try { setChannels(await client.channels.get()) } catch { setChannelError(true) }
+  }, [client])
   useEffect(() => {
     if (!channelsOpen) return
     void loadChannels()
-    return window.rovai.channels.onChanged(setChannels)
-  }, [channelsOpen, loadChannels])
+    return client.channels?.onChanged(setChannels)
+  }, [client, channelsOpen, loadChannels])
   const member = agents.find((agent) => agent.agentId === draft.memberId)
   const selectableMembers = agents.filter((agent) => agent.presence === 'present')
   const project = draft.projectRef.kind === 'directory' ? projects.find((item) => item.projectPath === projectValue(draft.projectRef)) : null
@@ -183,7 +188,7 @@ export function AutomationEditor({ draft, onChange, agents, projects, automation
           const checked = draft.notifyChannels.includes(channel)
           return <label key={channel} className={`automation-channel-option ${!available ? 'unavailable' : ''}`}>
             <input type="checkbox" checked={checked} disabled={busy || (!available && !checked)} onChange={(event) => onChange((current) => ({ ...current, notifyChannels: event.target.checked ? [...new Set([...current.notifyChannels, channel])] : current.notifyChannels.filter((item) => item !== channel) }))} />
-            <img src={channel === 'feishu' ? feishuLogo : dingtalkLogo} alt="" /><span><strong>{channel === 'feishu' ? '飞书' : '钉钉'}</strong><small>{available ? bot.botDisplayName ?? `${member?.displayName ?? '队员'} Bot` : channelError ? '暂时无法读取' : !channels ? '正在读取…' : '队员尚未发布 Bot'}</small></span>
+            <img src={channel === 'feishu' ? feishuLogo : dingtalkLogo} alt="" /><span><strong>{channel === 'feishu' ? '飞书' : '钉钉'}</strong><small>{available ? bot.botDisplayName ?? `${member?.displayName ?? '队员'} Bot` : !client.channels ? '此 Host 未提供渠道通知' : channelError ? '暂时无法读取' : !channels ? '正在读取…' : '队员尚未发布 Bot'}</small></span>
           </label>
         })}
       </fieldset>

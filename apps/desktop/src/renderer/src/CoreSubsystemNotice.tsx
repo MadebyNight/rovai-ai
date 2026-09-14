@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { useState } from 'react'
 import type { CoreSubsystemSnapshot } from '@contracts'
 import { readErrorMessage } from './error-message'
@@ -19,6 +20,7 @@ export function CoreSubsystemNotice({
 }: {
   subsystems: CoreSubsystemSnapshot[]
 }): React.JSX.Element | null {
+  const client = useCampClient()
   const [retrying, setRetrying] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const degraded = subsystems.filter((subsystem) => subsystem.state === 'degraded')
@@ -28,7 +30,7 @@ export function CoreSubsystemNotice({
     setRetrying(true)
     setError(null)
     try {
-      await window.rovai.request('runtime.subsystems.retry')
+      await client.request('runtime.subsystems.retry')
     } catch (failure) {
       setError(readErrorMessage(failure))
     } finally {

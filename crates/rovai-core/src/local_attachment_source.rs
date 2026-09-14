@@ -423,12 +423,24 @@ pub fn load_source_attachment(
     database: &Database,
     locator: &LocalAttachmentOwnerLocator,
 ) -> Result<Option<LocalAttachmentSourceRef>> {
+    load_source_attachment_for_client(
+        database,
+        locator,
+        &crate::draft_client::DraftClient::default(),
+    )
+}
+
+pub fn load_source_attachment_for_client(
+    database: &Database,
+    locator: &LocalAttachmentOwnerLocator,
+    client: &crate::draft_client::DraftClient,
+) -> Result<Option<LocalAttachmentSourceRef>> {
     let connection = database.connection();
     let json = match locator {
         LocalAttachmentOwnerLocator::Composer { camp_id, .. } => connection
             .query_row(
-                "SELECT source_attachments_json FROM camp_composer_draft WHERE camp_id = ?1",
-                [camp_id],
+                "SELECT source_attachments_json FROM camp_composer_draft WHERE camp_id = ?1 AND client_id = ?2",
+                params![camp_id, client.id()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,
@@ -450,8 +462,8 @@ pub fn load_source_attachment(
             ..
         } => connection
             .query_row(
-                "SELECT working_source_attachments_json FROM pending_input_edit_session WHERE camp_id = ?1 AND pending_input_id = ?2 AND edit_token = ?3",
-                params![camp_id, pending_input_id, edit_token],
+                "SELECT working_source_attachments_json FROM pending_input_edit_session WHERE camp_id = ?1 AND pending_input_id = ?2 AND edit_token = ?3 AND client_id = ?4",
+                params![camp_id, pending_input_id, edit_token, client.id()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,
@@ -478,9 +490,9 @@ pub fn load_source_attachment(
                 JOIN conversation ON conversation.id = draft.conversation_id
                 WHERE conversation.camp_id = ?1
                   AND conversation.id = ?2
-                  AND conversation.kind = 'single_chat'
+                  AND conversation.kind = 'single_chat' AND draft.client_id = ?3
                 "#,
-                params![camp_id, conversation_id],
+                params![camp_id, conversation_id, client.id()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,
@@ -522,9 +534,9 @@ pub fn load_source_attachment(
                   AND conversation.kind = 'single_chat'
                   AND edit.conversation_id = conversation.id
                   AND edit.pending_input_id = ?3
-                  AND edit.edit_token = ?4
+                  AND edit.edit_token = ?4 AND edit.client_id = ?5
                 "#,
-                params![camp_id, conversation_id, pending_input_id, edit_token],
+                params![camp_id, conversation_id, pending_input_id, edit_token, client.id()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,

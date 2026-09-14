@@ -1,4 +1,8 @@
 export type NavigationIconName =
+  | 'messages'
+  | 'circle-plus'
+  | 'search'
+  | 'folder-open'
   | 'arrow-left'
   | 'bell-ring'
   | 'blocks'
@@ -7,6 +11,7 @@ export type NavigationIconName =
   | 'chart-line'
   | 'cpu'
   | 'info'
+  | 'monitor-smartphone'
   | 'radio-tower'
   | 'settings'
   | 'sliders-horizontal'
@@ -36,6 +41,14 @@ export function NavigationIcon({ name }: { name: NavigationIconName }): React.JS
 
 function navigationIconPaths(name: NavigationIconName): React.JSX.Element {
   switch (name) {
+    case 'messages':
+      return <path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8A8.5 8.5 0 0 1 12.5 20a8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z" />
+    case 'circle-plus':
+      return <><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12 8v8" /></>
+    case 'search':
+      return <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></>
+    case 'folder-open':
+      return <><path d="M3 10V6a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v2" /><path d="M5 11h15a1 1 0 0 1 1 1.3l-2 7A1 1 0 0 1 18 20H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2Z" /></>
     case 'arrow-left':
       return <><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></>
     case 'square-pen':
@@ -64,6 +77,8 @@ function navigationIconPaths(name: NavigationIconName): React.JSX.Element {
       return <><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" rx="1" /><path d="M9 1v3" /><path d="M15 1v3" /><path d="M9 20v3" /><path d="M15 20v3" /><path d="M20 9h3" /><path d="M20 14h3" /><path d="M1 9h3" /><path d="M1 14h3" /></>
     case 'radio-tower':
       return <><path d="M5 12a7 7 0 0 1 14 0" /><path d="M8 12a4 4 0 0 1 8 0" /><circle cx="12" cy="12" r="1.5" /><path d="M12 14v7" /></>
+    case 'monitor-smartphone':
+      return <><path d="M13 17H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3" /><path d="M7 21h6M10 17v4" /><rect x="16" y="11" width="6" height="10" rx="1.5" /><path d="M18.5 18h1" /></>
     case 'info':
       return <><circle cx="12" cy="12" r="9" /><path d="M12 11v6" /><path d="M12 7.25h.01" /></>
     case 'stethoscope':

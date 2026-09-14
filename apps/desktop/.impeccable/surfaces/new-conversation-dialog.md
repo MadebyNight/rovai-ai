@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 slug: "new-conversation-dialog"
 primary_target: "apps/desktop/src/renderer/src/NewConversationDialog.tsx"
 related_targets:
@@ -57,7 +57,7 @@ arrow-key navigation, `Esc` dismissal and focus return.
    not toggle the checkbox. No inline explanation or effective-after-creation text is shown.
    Do not save the workspace or optional name as defaults.
 
-Footer contains “取消 / 新建”. Do not repeat directory, teammate count or Lead in a summary.
+Footer contains “取消 / 新建”. The creation action uses the neutral conversation-action tokens (black in Day, the paired light action in Night). Do not repeat directory, teammate count or Lead in a summary.
 
 ## Submission and recovery
 
@@ -65,7 +65,7 @@ Submitting locks controls that could mutate the Draft and prevents duplicate cre
 Core atomically accepts the Active Camp, then refresh Navigation, enter it and focus Composer. A Camp
 with no messages, AgentRun or prebuilt Conversation is valid.
 
-If one-click was requested, persist the team and enable flag in one Main-owned preference write only
+If one-click was requested, persist the team and enable flag in one Host-owned preference write only
 after Core accepts creation. Cancel or creation failure must not change preferences. A preference-write
 failure still opens the accepted Camp and reports that defaults were not saved; it must not invite a
 second creation. Ordinary saves in General settings preserve the existing one-click flag.

@@ -1,5 +1,6 @@
+import { useCampClient, type CampClient } from './camp-client'
 import { feishuLoginFailureDetail } from '../../shared/feishu-login-progress'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
@@ -32,39 +33,67 @@ export function visibleChannelMembers(agents: readonly AgentProfile[]): AgentPro
     .sort((left, right) => left.memberOrder - right.memberOrder || left.agentId.localeCompare(right.agentId))
 }
 
+function channelProvisioning(snapshot: ChannelSettingsSnapshot | null, kind: ChannelKind): MemberBotProvisioningView | null {
+  const provider = snapshot?.channels.find(channel => channel.kind === kind)
+  if (provider?.provisioning !== undefined) return provider.provisioning
+  return snapshot?.activeProvisioning && (snapshot.activeProvisioning.kind ?? 'feishu') === kind
+    ? snapshot.activeProvisioning : null
+}
+
 export function ChannelSettings({ agents }: { agents: AgentProfile[] }): React.JSX.Element {
+  const client = useCampClient()
+  if (!client.channels) return <div className="channel-settings-page">
+    <SettingsPageHeader eyebrow="Settings / Channels" title="渠道" description="独立 Server 当前不支持飞书／钉钉渠道。渠道功能请使用 Rovai Desktop。" />
+  </div>
+  return <ManagedChannelSettings agents={agents} channels={client.channels} />
+}
+
+function ManagedChannelSettings({ agents, channels }: { agents: AgentProfile[]; channels: NonNullable<CampClient['channels']> }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ChannelSettingsSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [readError, setReadError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [selectedKind, setSelectedKind] = useState<ChannelKind>('feishu')
   const [publishAgentId, setPublishAgentId] = useState<string | null>(null)
   const [publishKind, setPublishKind] = useState<ChannelKind>('feishu')
   const [publishBoundAppId, setPublishBoundAppId] = useState<string | null>(null)
 
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    setError(null)
+  const mounted = useRef(false)
+  const reading = useRef(false)
+  const load = useCallback(async (background = false): Promise<void> => {
+    if (reading.current) return
+    reading.current = true
+    if (!background) { setLoading(true); setError(null) }
     try {
-      const next = await window.rovai.channels.get()
+      const next = await channels.get()
+      if (!mounted.current) return
       setSnapshot(assertChannelSettingsSnapshot(next))
+      setReadError(null)
     } catch (nextError) {
-      setError(channelErrorMessage(nextError))
+      if (!mounted.current) return
+      setReadError(channelErrorMessage(nextError))
+      setSnapshot(current => current ? { ...current, channels: current.channels.map(provider => ({
+        ...provider, connection: { ...provider.connection, sessionStatus: 'unavailable' },
+        memberBots: provider.memberBots.map(bot => ({ ...bot, connectionStatus: 'unknown' }))
+      })) } : null)
     } finally {
-      setLoading(false)
+      reading.current = false
+      if (mounted.current) setLoading(false)
     }
-  }, [])
+  }, [channels])
 
   useEffect(() => {
+    mounted.current = true
     void load()
-    return window.rovai.channels.onChanged((next) => {
-      try {
-        setSnapshot(assertChannelSettingsSnapshot(next))
-      } catch (nextError) {
-        setError(channelErrorMessage(nextError))
-      }
+    const unsubscribe = channels.onChanged(next => {
+      if (!mounted.current) return
+      try { setSnapshot(assertChannelSettingsSnapshot(next)); setReadError(null) }
+      catch (nextError) { setReadError(channelErrorMessage(nextError)) }
     })
-  }, [load])
+    const timer = channels.native ? undefined : setInterval(() => void load(true), 2000)
+    return () => { mounted.current = false; unsubscribe(); clearInterval(timer) }
+  }, [channels, load])
 
   const run = useCallback(async (
     key: string,
@@ -75,13 +104,15 @@ export function ChannelSettings({ agents }: { agents: AgentProfile[] }): React.J
     setError(null)
     try {
       const next = assertChannelSettingsSnapshot(await action())
+      if (!mounted.current) return null
       setSnapshot(next)
       return next
     } catch (nextError) {
+      if (!mounted.current) return null
       setError(channelErrorMessage(nextError))
       return null
     } finally {
-      setBusy(null)
+      if (mounted.current) setBusy(null)
     }
   }, [busy])
 
@@ -89,40 +120,42 @@ export function ChannelSettings({ agents }: { agents: AgentProfile[] }): React.J
     setError(null)
     try {
       setSnapshot(assertChannelSettingsSnapshot(
-        await window.rovai.channels.cancelQrAttempt(attemptId)
+        await channels.native!.cancelQrAttempt(attemptId)
       ))
     } catch (nextError) {
       setError(channelErrorMessage(nextError))
     }
-  }, [])
+  }, [channels])
 
   const refreshLoginQr = useCallback(async (attemptId: string): Promise<void> => {
     setError(null)
-    try { await window.rovai.channels.refreshLoginQr(attemptId) }
+    try { await channels.native!.refreshLoginQr(attemptId) }
     catch (nextError) { setError(channelErrorMessage(nextError)) }
-  }, [])
+  }, [channels])
 
   const publishChannel = snapshot?.channels.find((candidate) => candidate.kind === publishKind) ?? null
+  const provisioning = channelProvisioning(snapshot, publishKind)
 
   return (
     <>
       <ChannelSettingsView
         agents={agents}
+        desktopManagedWeb={!channels.native}
         snapshot={snapshot}
         loading={loading}
         busy={busy}
-        error={error}
+        error={error ?? readError}
         selectedKind={selectedKind}
         onSelectChannel={setSelectedKind}
         onRetry={() => void load()}
-        onConnect={(provider) => void run(
+        onConnect={channels.native ? (provider) => void run(
           `connect:${provider.kind}`,
-          () => window.rovai.channels.connect(provider.kind)
-        )}
-        onDisconnect={(provider) => void run(
+          () => channels.native!.connect(provider.kind)
+        ) : undefined}
+        onDisconnect={channels.native ? (provider) => void run(
           `disconnect:${provider.kind}`,
-          () => window.rovai.channels.disconnect(provider.kind)
-        )}
+          () => channels.native!.disconnect(provider.kind)
+        ) : undefined}
         onPublish={(provider, agent) => {
           setError(null)
           setPublishBoundAppId(
@@ -131,49 +164,52 @@ export function ChannelSettings({ agents }: { agents: AgentProfile[] }): React.J
           setPublishKind(provider.kind)
           setPublishAgentId(agent.agentId)
         }}
-        onRetryPublish={(provider, agent) => void run(
+        onRetryPublish={(provider, agent) => {
+          setPublishKind(provider.kind)
+          setPublishAgentId(agent.agentId)
+          setPublishBoundAppId(provider.memberBots.find(bot => bot.agentId === agent.agentId)?.appId ?? null)
+          const pending = channelProvisioning(snapshot, provider.kind)
+          if (pending?.agentId === agent.agentId && pending.failureCode === 'dingtalk_approver_selection_required') return
+          void run(
           `retry:${provider.kind}:${agent.agentId}`,
-          () => window.rovai.channels.retryMemberBot(agent.agentId, provider.kind)
-        )}
+          () => channels.retryMemberBot(agent.agentId, provider.kind)
+        )
+        }}
       />
 
-      <QrDialog
+      {channels.native && <QrDialog
         snapshot={snapshot}
         kind={selectedKind}
         busy={busy !== null}
         onClose={(attemptId) => void cancelQrAttempt(attemptId)}
         onRefresh={(attemptId) => void refreshLoginQr(attemptId)}
-      />
+      />}
 
       <PublishBotDialog
         agent={agents.find((candidate) => candidate.agentId === publishAgentId) ?? null}
         kind={publishKind}
         account={publishChannel?.connection.account ?? null}
         boundAppId={publishBoundAppId}
-        provisioning={snapshot?.activeProvisioning?.agentId === publishAgentId
-          && (snapshot.activeProvisioning.kind ?? 'feishu') === publishKind
-          ? snapshot.activeProvisioning
-          : null}
+        provisioning={provisioning?.agentId === publishAgentId ? provisioning : null}
         busy={busy !== null}
         error={error}
         onClose={() => {
           setPublishAgentId(null)
           setPublishBoundAppId(null)
         }}
-        onReconnect={() => {
+        onReconnect={channels.native ? () => {
           setPublishAgentId(null)
           setPublishBoundAppId(null)
           setSelectedKind(publishKind)
-          void run(`connect:${publishKind}`, () => window.rovai.channels.connect(publishKind))
-        }}
+          void run(`connect:${publishKind}`, () => channels.native!.connect(publishKind))
+        } : undefined}
         onPublish={(agentId) => {
           void run(
             `publish:${publishKind}:${agentId}`,
-            () => window.rovai.channels.publishMemberBot(agentId, publishKind)
+            () => channels.publishMemberBot(agentId, publishKind)
           ).then((next) => {
               if (
-                next?.activeProvisioning?.stage === 'completed'
-                && (next.activeProvisioning.kind ?? 'feishu') === publishKind
+                channelProvisioning(next, publishKind)?.stage === 'completed'
               ) {
                 setPublishAgentId(null)
                 setPublishBoundAppId(null)
@@ -183,11 +219,10 @@ export function ChannelSettings({ agents }: { agents: AgentProfile[] }): React.J
         onSelectApprover={(agentId, userId) => {
           void run(
             `approve:${publishKind}:${agentId}`,
-            () => window.rovai.channels.selectPublicationApprover(agentId, userId, publishKind)
+            () => channels.selectPublicationApprover(agentId, userId, publishKind)
           ).then((next) => {
             if (
-              next?.activeProvisioning?.stage === 'completed'
-              && (next.activeProvisioning.kind ?? 'feishu') === publishKind
+              channelProvisioning(next, publishKind)?.stage === 'completed'
             ) {
               setPublishAgentId(null)
               setPublishBoundAppId(null)
@@ -207,6 +242,7 @@ export function ChannelSettingsView({
   busy = null,
   error = null,
   selectedKind = 'feishu',
+  desktopManagedWeb = false,
   onRetry = () => undefined,
   onSelectChannel,
   onConnect,
@@ -220,6 +256,7 @@ export function ChannelSettingsView({
   busy?: string | null
   error?: string | null
   selectedKind?: ChannelKind
+  desktopManagedWeb?: boolean
   onRetry?(): void
   onSelectChannel?(kind: ChannelKind): void
   onConnect?(channel: ChannelProviderView): void
@@ -240,8 +277,8 @@ export function ChannelSettingsView({
       <SettingsPageHeader
         eyebrow="Settings / Channels"
         title="渠道"
-        description="连接飞书或钉钉，让队员在你常用的平台协作。"
-        aside={<span className="settings-page-note">本机管理</span>}
+        description={desktopManagedWeb ? '渠道由运行此服务的 Rovai Desktop 管理。连接、切换账号和重新登录，请在该电脑的桌面应用中完成；已有账号的 Bot 发布和重试可以在此操作。' : '连接飞书或钉钉，让队员在你常用的平台协作。'}
+        aside={<span className="settings-page-note">{desktopManagedWeb ? '宿主 Desktop 管理' : '本机管理'}</span>}
       />
 
       {loading && !snapshot && <ChannelSettingsState label="正在读取渠道状态…" />}
@@ -304,11 +341,12 @@ export function ChannelSettingsView({
               />
               <ChannelConnectionRow
                 channel={channel}
+                remote={desktopManagedWeb}
                 busy={busy}
                 onConnect={onConnect}
                 onDisconnect={onDisconnect}
               />
-              <details className="settings-disclosure channel-policy"><summary><OwnerShieldIcon /><span>连接与权限</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg></summary><div><p>只有 Rovai Owner 可以从外部渠道触发队员；项目选择与执行管理仍由本机掌控。</p><p>连接只决定后续 Bot 的发布目标，切换连接不会迁移或停用已发布 Bot。</p><p>账号会话和应用凭据保存在这台设备。项目绝对路径不会发送到外部渠道。</p><p>{providerName}中的 Owner 消息不获得本机管理权限。</p></div></details>
+              <details className="settings-disclosure channel-policy"><summary><OwnerShieldIcon /><span>连接与权限</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg></summary><div><p>只有 Rovai Owner 可以从外部渠道触发队员；项目选择与执行管理仍由运行服务的 Desktop 掌控。</p><p>连接只决定后续 Bot 的发布目标，切换连接不会迁移或停用已发布 Bot。</p><p>账号会话和应用凭据保存在运行服务的 Desktop 所在设备。项目绝对路径不会发送到外部渠道。</p><p>{providerName}中的 Owner 消息不获得本机管理权限。</p></div></details>
             </section>
 
             <section className="channel-settings-section" aria-labelledby="channel-member-bots-heading">
@@ -328,11 +366,11 @@ export function ChannelSettingsView({
             </section>
           </>}
 
-          <ExecutionWebSettingsPanel />
+          {!desktopManagedWeb && <ExecutionWebSettingsPanel />}
         </div>
       )}
 
-      {!snapshot && <ExecutionWebSettingsPanel />}
+      {!snapshot && !desktopManagedWeb && <ExecutionWebSettingsPanel />}
     </div>
   )
 }
@@ -514,11 +552,13 @@ function ChannelSectionHeading({
 
 export function ChannelConnectionRow({
   channel,
+  remote = false,
   busy,
   onConnect,
   onDisconnect
 }: {
   channel: ChannelProviderView
+  remote?: boolean
   busy: string | null
   onConnect?: (channel: ChannelProviderView) => void
   onDisconnect?: (channel: ChannelProviderView) => void
@@ -556,8 +596,8 @@ export function ChannelConnectionRow({
           <span>
             <span className="channel-account-heading">
               <strong>{account.userName ?? `${providerName}用户`}</strong>
-              <span className={`channel-connection-status${connected ? ' is-connected' : ''}${expired ? ' is-expired' : ''}`} role="status">
-                {disconnectBusy ? '断开中…' : connected ? '已连接' : expired ? '登录已失效' : '未连接'}
+              <span className={`channel-connection-status${connected && channel.connection.sessionStatus === 'valid' ? ' is-connected' : ''}${expired ? ' is-expired' : ''}`} role="status">
+                {disconnectBusy ? '断开中…' : connected ? sessionLabel(channel) : expired ? '登录已失效' : '未连接'}
               </span>
             </span>
             <small>{account.email ? `${account.email} · ` : ''}{account.tenantName ?? '当前企业'} · {account.brand === 'lark' ? 'Lark' : providerName}</small>
@@ -568,7 +608,7 @@ export function ChannelConnectionRow({
           : expired
             ? '登录已失效，请重新连接' : `还没有连接${providerName}账号`}</span>
       )}
-      <div className="channel-connection-actions">
+      {!remote && <div className="channel-connection-actions">
         {connected ? (
           <DropdownMenu.Root open={menuOpen && !menuDisabled} onOpenChange={setMenuOpen} modal={false}>
             <DropdownMenu.Trigger asChild>
@@ -628,7 +668,7 @@ export function ChannelConnectionRow({
             {connectBusy ? '等待扫码…' : connectLabel}
           </button>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -681,7 +721,8 @@ function ChannelMemberBotTable({
                   : <span>发布后沿用队员身份</span>}
               </div>
               <span className={`channel-publication-status is-${status}`} role="cell">
-                <span>{publicationLabel(status)}</span>
+                <span>{bot?.published && status !== 'published' ? `已发布 · ${publicationLabel(status)}` : publicationLabel(status)}</span>
+                {bot?.appId && <small className="channel-live-status">{bot.connectionStatus === 'online' ? '连接在线' : bot.connectionStatus === 'offline' ? '连接离线' : '连接状态未知'}</small>}
               </span>
               <div className="channel-member-action" role="cell">
                 {published && bot?.managementUrl ? (
@@ -812,7 +853,7 @@ function PublishBotDialog({
   busy: boolean
   error: string | null
   onClose: () => void
-  onReconnect: () => void
+  onReconnect?: () => void
   onPublish: (agentId: string) => void
   onSelectApprover: (agentId: string, userId: string) => void
 }): React.JSX.Element {
@@ -844,7 +885,7 @@ function PublishBotDialog({
             title={boundAppId
               ? `重新发布「${agent.displayName}」${providerName} Bot`
               : `发布「${agent.displayName}」为${providerName} Bot`}
-            description={boundAppId ? "核对并恢复已绑定应用，保持原 App ID。" : "将使用当前账号创建并发布这位队员的独立应用。"}
+            description={effectiveAppId ? "核对并恢复已有应用，保持原 App ID。" : "将使用当前账号创建并发布这位队员的独立应用。"}
             icon="server"
             closeDisabled={busy && !terminal}
           />
@@ -881,7 +922,7 @@ function PublishBotDialog({
                     </option>
                   ))}
                 </select>
-                <small>钉钉要求由 Owner 明确选择，本机不会自动代选。</small>
+                <small>钉钉要求由 Owner 明确选择，Rovai 不会自动代选。</small>
               </label>
             )}
             {provisioning ? (
@@ -917,7 +958,7 @@ function PublishBotDialog({
               ? '重新发布始终复用已绑定应用，不提供换绑入口。'
               : null}>
             <button className="quiet-button" type="button" disabled={busy && !terminal} onClick={onClose}>取消</button>
-            {sessionUnavailable ? (
+            {sessionUnavailable && onReconnect ? (
               <button className="primary-button" type="button" disabled={busy} onClick={onReconnect}>
                 重新连接{providerName}
               </button>
@@ -962,15 +1003,21 @@ function OwnerShieldIcon(): React.JSX.Element {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.8 2.8 8.3 7 10 4.2-1.7 7-5.2 7-10V6Z" /><path d="m9 12 2 2 4-4" /></svg>
 }
 
+function sessionLabel(channel: ChannelProviderView): string {
+  return channel.connection.sessionStatus === 'valid' ? '登录有效'
+    : channel.connection.sessionStatus === 'invalid' ? '登录已失效'
+      : channel.connection.sessionStatus === 'unavailable' ? '登录态暂不可用' : '登录态待校验'
+}
+
 function connectionLabel(channel: ChannelProviderView): string {
-  if (channel.connection.status === 'connected') return '已连接'
+  if (channel.connection.status === 'connected') return sessionLabel(channel)
   if (channel.connection.status === 'session_expired') return '需重新连接'
   return '未连接'
 }
 
 function memberSummary(members: readonly AgentProfile[], bots: readonly ChannelMemberBotView[]): string {
   const visibleMemberIds = new Set(members.map((member) => member.agentId))
-  const published = bots.filter((bot) => visibleMemberIds.has(bot.agentId) && bot.publicationStatus === 'published').length
+  const published = bots.filter((bot) => visibleMemberIds.has(bot.agentId) && (bot.published ?? bot.publicationStatus === 'published')).length
   return `${published} 已发布 · ${members.length - published} 未发布`
 }
 
@@ -1027,6 +1074,7 @@ export function channelErrorMessage(error: unknown): string | null {
   const message = raw
     .replace(/^Error invoking remote method '[^']+': (?:[A-Za-z_$][\w$]*Error|Error):\s*/, '')
     .trim()
+  if (message === 'channel_publication_busy') return '已有渠道发布正在进行，请查看原发布进度。'
   if (message === 'feishu_login_cancelled') return null
   const loginDetail = feishuLoginFailureDetail(message)
   if (loginDetail) return loginDetail

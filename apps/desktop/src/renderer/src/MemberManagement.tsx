@@ -1,3 +1,7 @@
+import { MobileBack, useMobileLayout } from './MobileLayout'
+import { desktopCampClient } from './desktop-camp-client'
+import { newCommandId } from '../../shared/command-id'
+import { useCampClient } from './camp-client'
 import { CurrentUserProfileEditor, CurrentUserRosterEntry } from './CurrentUserProfileEditor'
 import { readErrorMessage } from './error-message'
 import {
@@ -120,6 +124,8 @@ const PERSONAL_EDITOR_KEY = 'current-user-profile'
 export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
   function MembersView(props, ref) {
     const { agents, selectedAgentId, onSelectedAgentChange } = props
+    const mobile = useMobileLayout()
+    const [mobileDetail, setMobileDetail] = useState(props.activeTab === 'runtime')
     const [visited, setVisited] = useState<string[]>([])
     const [hasNewDraft, setHasNewDraft] = useState(false)
     const [creating, setCreating] = useState(false)
@@ -169,11 +175,13 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
       tab: MemberWorkspaceTab,
       focusRuntime = false
     ): void => {
+      setMobileDetail(true)
       showSelectedMember()
       onSelectedAgentChange(id, tab)
       if (focusRuntime) setRuntimeFocus((value) => value + 1)
     }
     const create = (): void => {
+      setMobileDetail(true)
       setPersonalSelected(false)
       setHasNewDraft(true)
       setCreating(true)
@@ -267,7 +275,7 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
             personalEntry={<CurrentUserRosterEntry
               dirty={states[PERSONAL_EDITOR_KEY]?.dirty ?? false}
               selected={personalSelected}
-              onSelect={() => { setPersonalVisited(true); setPersonalSelected(true) }}
+              onSelect={() => { setMobileDetail(true); setPersonalVisited(true); setPersonalSelected(true) }}
             />}
             selectedAgentId={creating || personalSelected ? null : selectedAgentId}
             dirtyAgentIds={
@@ -302,7 +310,8 @@ export const MembersView = forwardRef<MembersViewHandle, MembersViewProps>(
             </button>
           )}
         </MemberRosterLayout>
-        <section className="members-view member-editor-view">
+        <section className="members-view member-editor-view" data-mobile-detail={mobile && mobileDetail || undefined}>
+          {mobile && <div className="mobile-member-back"><MobileBack label="返回队员列表" onClick={() => setMobileDetail(false)} /><span>队员</span></div>}
           {personalVisited && <div className="member-editor-page personal-editor-page" hidden={!personalSelected}>
             {props.topNotices}
             <CurrentUserProfileEditor
@@ -447,6 +456,7 @@ const MemberEditor = forwardRef<
   },
   ref
 ) {
+  const client = useCampClient()
   const activeRef = useRef(active)
   activeRef.current = active
   const authoritative =
@@ -523,9 +533,9 @@ const MemberEditor = forwardRef<
     setError(null)
     try {
       const result = method === 'members.runtime.set'
-        ? await submitMemberRuntimeConfiguration(command as { adapterKind: AdapterKind })
-        : await window.rovai.request<StoredCommandResult>(method, {
-          commandId: crypto.randomUUID(),
+        ? await submitMemberRuntimeConfiguration(command as { adapterKind: AdapterKind }, client.request)
+        : await client.request<StoredCommandResult>(method, {
+          commandId: newCommandId(),
           command
         })
       assertApplied(result)
@@ -622,7 +632,7 @@ const MemberEditor = forwardRef<
     setBusy('remove-preview')
     setError(null)
     try {
-      const preview = await window.rovai.request<MemberRemovalPreview>(
+      const preview = await client.request<MemberRemovalPreview>(
         'members.removalPreview',
         {
           agentId: selectedAgent.agentId
@@ -665,8 +675,8 @@ const MemberEditor = forwardRef<
         draft,
         avatarRef,
         request: (method, command) =>
-          window.rovai.request<StoredCommandResult>(method, {
-            commandId: crypto.randomUUID(),
+          client.request<StoredCommandResult>(method, {
+            commandId: newCommandId(),
             command
           }),
         onCommitted: (profile) => {
@@ -688,7 +698,7 @@ const MemberEditor = forwardRef<
         parseControlledMemberAvatarRef(selectedAgent.avatarRef)?.kind ===
           'managed'
       )
-        await invalidateManagedAvatarObjectUrl(selectedAgent.avatarRef)
+        await invalidateManagedAvatarObjectUrl(selectedAgent.avatarRef, undefined, client.memberAvatars.read)
       try {
         await onReload()
       } catch (issue) {
@@ -1045,7 +1055,8 @@ function MemberDetailHeader({
 const HOST_PLATFORM_LABELS: Record<HostPlatformKey, string> = {
   'macos-arm64': 'macOS Apple Silicon',
   'macos-x64': 'macOS Intel',
-  'windows-x64': 'Windows x64'
+  'windows-x64': 'Windows x64',
+  'linux-x64': 'Linux x64 Server'
 }
 
 export type MemberRuntimeFormHandle = {
@@ -1093,6 +1104,7 @@ export const MemberRuntimeForm = forwardRef<
   },
   ref
 ): React.JSX.Element {
+  const client = useCampClient()
   const runtimeSelectId = useId()
   const initialStateRef = useRef<MemberRuntimeEditorState | null>(null)
   if (!initialStateRef.current)
@@ -1341,7 +1353,7 @@ export const MemberRuntimeForm = forwardRef<
             installation={installation}
             draft={draft}
             disabled={busy !== null || !runtimeMutationAllowed}
-            onOpenModelCatalog={() => openRuntimeModelCatalog(selectedKind)}
+            onOpenModelCatalog={() => openRuntimeModelCatalog(selectedKind, client.request)}
             onChange={(nextDraft) => {
               setDraft(nextDraft)
               setSubmitError(null)
@@ -1437,6 +1449,7 @@ export function RuntimeInstallationsPanel({
   installations: AdapterInstallation[]
   onReload(): Promise<void>
 }): React.JSX.Element {
+  const client = useCampClient()
   const [settingsRuntime, setSettingsRuntime] = useState<AdapterKind | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -1458,7 +1471,7 @@ export function RuntimeInstallationsPanel({
     setCheckFeedback(null)
     try {
       try {
-        const result = await requestProductRuntimeCheck(runtimeKind)
+        const result = await requestProductRuntimeCheck(runtimeKind, client.request)
         if (result.outcome === 'deferred') throw new Error('检查未完成，程序或启动设置已变化，请重新检查。')
         if (!result.ready) throw new Error('本次检查未通过，请查看当前状态；保留的历史结果不代表本次检查通过。')
       } finally {
@@ -1476,7 +1489,7 @@ export function RuntimeInstallationsPanel({
     setBusy('rescan')
     setError(null)
     try {
-      await window.rovai.request('runtime.discovery.rescan', {
+      await client.request('runtime.discovery.rescan', {
         interactiveShell: true
       })
       await onReload()
@@ -1603,11 +1616,12 @@ export function RuntimeInstallationsPanel({
 // Local to member Runtime saving: one explicit rejection, one awaited catalog
 // refresh, one resubmission. The original command (and expectedVersion) is frozen.
 export async function submitMemberRuntimeConfiguration(
-  command: { adapterKind: AdapterKind }
+  command: { adapterKind: AdapterKind },
+  request: import('@contracts').RovaiApi['request'] = desktopCampClient.request
 ): Promise<StoredCommandResult> {
   const submit = async (): Promise<StoredCommandResult> => {
     try {
-      return await window.rovai.request('members.runtime.set', { commandId: crypto.randomUUID(), command })
+      return await request<StoredCommandResult>('members.runtime.set', { commandId: newCommandId(), command })
     } catch (error) {
       console.warn('[member-runtime] submission outcome unknown', error)
       throw new MemberRuntimeCommandError('runtime_save_outcome_unknown')
@@ -1616,7 +1630,7 @@ export async function submitMemberRuntimeConfiguration(
   const result = await submit()
   if (result.status !== 'rejected' || result.code !== 'runtime_model_catalog_refresh_required') return result
   try {
-    const catalog = await openRuntimeModelCatalog(command.adapterKind, true)
+    const catalog = await openRuntimeModelCatalog(command.adapterKind, request, true)
     if ((catalog.refreshStatus !== 'completed' && catalog.refreshStatus !== 'not_required')
       || (catalog.cache.status !== 'fresh' && catalog.cache.status !== 'stale')) {
       throw new MemberRuntimeCommandError('runtime_model_catalog_refresh_required')

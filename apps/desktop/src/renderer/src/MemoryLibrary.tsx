@@ -1,3 +1,6 @@
+import { useCampClient } from './camp-client'
+import { MobileBack, useMobileLayout } from './MobileLayout'
+import { newCommandId } from '../../shared/command-id'
 import { readErrorMessage } from './error-message'
 import type { MemoryNavigationTarget } from './desktop-navigation'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -125,7 +128,12 @@ export function MemoryLibrary({
   onReady?(): void
   startupFeedbackVisible?: boolean
 }): React.JSX.Element {
+  const client = useCampClient()
+  const libraryGeneration = useRef(0)
+  const reviewGeneration = useRef(0)
+  useEffect(() => () => { libraryGeneration.current++; reviewGeneration.current++ }, [client])
   const [library, setLibrary] = useState<MemoryLibraryView | null>(null)
+  const mobile = useMobileLayout()
   const [reviewItems, setReviewItems] = useState<HearthReviewItem[]>([])
   const [localScope, setLocalScope] = useState<MemoryScopeKind>('hearth')
   const [localGovernance, setLocalGovernance] = useState<GovernanceFilter>('all')
@@ -160,21 +168,26 @@ export function MemoryLibrary({
   const startupContentVisible = startupFeedbackVisible || Boolean(error)
 
   const loadMemoryLibrary = useCallback(async (): Promise<MemoryLibraryView> => {
-    const nextLibrary = await window.rovai.request<MemoryLibraryView>('memory.list')
-    setLibrary(nextLibrary)
+    const request = ++libraryGeneration.current
+    const nextLibrary = await client.request<MemoryLibraryView>('memory.list')
+    if (request === libraryGeneration.current) setLibrary(nextLibrary)
     return nextLibrary
-  }, [])
+  }, [client])
 
   const load = useCallback(async (): Promise<MemorySnapshot> => {
+    const libraryRequest = ++libraryGeneration.current
+    const reviewRequest = ++reviewGeneration.current
     const [nextLibrary, nextReviewItems] = await Promise.all([
-      window.rovai.request<MemoryLibraryView>('memory.list'),
-      window.rovai.request<HearthReviewItem[]>('memory.hearthReviewItems.list')
+      client.request<MemoryLibraryView>('memory.list'),
+      client.request<HearthReviewItem[]>('memory.hearthReviewItems.list')
     ])
-    setLibrary(nextLibrary)
-    setReviewItems(nextReviewItems)
-    onPendingCountChange?.(nextReviewItems.filter((reviewItem) => reviewItem.status === 'pending').length)
+    if (libraryRequest === libraryGeneration.current) setLibrary(nextLibrary)
+    if (reviewRequest === reviewGeneration.current) {
+      setReviewItems(nextReviewItems)
+      onPendingCountChange?.(nextReviewItems.filter((reviewItem) => reviewItem.status === 'pending').length)
+    }
     return { library: nextLibrary, reviewItems: nextReviewItems }
-  }, [onPendingCountChange])
+  }, [client, onPendingCountChange])
 
   useEffect(() => {
     if (library) onReady?.()
@@ -184,13 +197,17 @@ export function MemoryLibrary({
     void load().catch((nextError) => setError(errorMessage(nextError)))
   }, [load])
 
-  useEffect(() => window.rovai.onEvent((event) => {
+  useEffect(() => client.onEvent?.((event) => {
     if (event.method !== 'runtime.state') return
     const params = typeof event.params === 'object' && event.params !== null
       ? event.params as Record<string, unknown>
       : {}
     if (params.status === 'ready') void load().catch((nextError) => setError(errorMessage(nextError)))
-  }), [load])
+  }), [client, load])
+
+  useEffect(() => client.onInvalidated?.(() => {
+    void load().catch((nextError) => setError(errorMessage(nextError)))
+  }), [client, load])
 
   useEffect(() => {
     if (refreshSignal > 0) void load().catch((nextError) => setError(errorMessage(nextError)))
@@ -251,11 +268,13 @@ export function MemoryLibrary({
       }
     }
     if (visibleMemories.some((memory) => memory.id === selectedMemoryId)) return
-    const memoryId = visibleMemories[0]?.id ?? null
+    // A phone opens details only after an explicit selection. Auto-selecting the
+    // first row also undoes Back immediately and makes the catalog unreachable.
+    const memoryId = mobile ? null : visibleMemories[0]?.id ?? null
     if (memoryId === selectedMemoryId) return
     if (onNavigate) onNavigate({ kind: 'memory', memoryId, scope, governance, search }, 'replace')
     else setLocalMemoryId(memoryId)
-  }, [library, navigationTarget, onNavigate, selectedMemoryId, visibleMemories, scope, governance, search])
+  }, [library, mobile, navigationTarget, onNavigate, selectedMemoryId, visibleMemories, scope, governance, search])
 
   const selectedMemory = visibleMemories.find((memory) => memory.id === selectedMemoryId) ?? null
   const activeCount = library?.memories.filter((memory) => memory.lifecycle === 'active').length ?? 0
@@ -356,14 +375,14 @@ export function MemoryLibrary({
     await run(`editor-${editor.kind}`, async () => {
       let result: StoredCommandResult
       if (editor.kind === 'create') {
-        result = await window.rovai.request('memory.create', {
-          commandId: crypto.randomUUID(),
+        result = await client.request('memory.create', {
+          commandId: newCommandId(),
           command: createCommand()
         })
       } else if (editor.kind === 'revise') {
         if (!editor.memory.currentRevisionId) throw new Error('当前记忆没有可修订的版本。')
-        result = await window.rovai.request('memory.revise', {
-          commandId: crypto.randomUUID(),
+        result = await client.request('memory.revise', {
+          commandId: newCommandId(),
           command: {
             memoryId: editor.memory.id,
             expectedVersion: editor.memory.version,
@@ -380,8 +399,8 @@ export function MemoryLibrary({
           finalBody: draft.body.trim(),
           finalRetrievalKeys: retrievalKeys()
         }
-        result = await window.rovai.request('memory.hearthReviewItems.accept', {
-          commandId: crypto.randomUUID(),
+        result = await client.request('memory.hearthReviewItems.accept', {
+          commandId: newCommandId(),
           command
         })
       }
@@ -395,8 +414,8 @@ export function MemoryLibrary({
 
   const acceptReview = (reviewItem: HearthReviewItem): Promise<void> =>
     run(`accept-${reviewItem.reviewItemId}`, async () => {
-      const result = await window.rovai.request<StoredCommandResult>('memory.hearthReviewItems.accept', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('memory.hearthReviewItems.accept', {
+        commandId: newCommandId(),
         command: {
           reviewItemId: reviewItem.reviewItemId,
           expectedReviewItemVersion: reviewItem.version
@@ -408,8 +427,8 @@ export function MemoryLibrary({
 
   const rejectReview = (reviewItem: HearthReviewItem): Promise<void> =>
     run(`reject-${reviewItem.reviewItemId}`, async () => {
-      const result = await window.rovai.request<StoredCommandResult>('memory.hearthReviewItems.reject', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('memory.hearthReviewItems.reject', {
+        commandId: newCommandId(),
         command: {
           reviewItemId: reviewItem.reviewItemId,
           expectedReviewItemVersion: reviewItem.version
@@ -423,16 +442,16 @@ export function MemoryLibrary({
     method: 'memory.retire' | 'memory.reactivate',
     memory: MemoryRecord
   ): Promise<void> => run(`${method}-${memory.id}`, async () => {
-    const result = await window.rovai.request<StoredCommandResult>(method, {
-      commandId: crypto.randomUUID(),
+    const result = await client.request<StoredCommandResult>(method, {
+      commandId: newCommandId(),
       command: { memoryId: memory.id, expectedVersion: memory.version }
     })
     assertApplied(result)
   })
 
   const forget = (memory: MemoryRecord): Promise<void> => run(`forget-${memory.id}`, async () => {
-    const result = await window.rovai.request<StoredCommandResult>('memory.forget', {
-      commandId: crypto.randomUUID(),
+    const result = await client.request<StoredCommandResult>('memory.forget', {
+      commandId: newCommandId(),
       command: { memoryId: memory.id, expectedVersion: memory.version }
     })
     assertApplied(result)
@@ -477,8 +496,8 @@ export function MemoryLibrary({
     })
 
     try {
-      const result = await window.rovai.request<StoredCommandResult>('memory.review.schedule', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('memory.review.schedule', {
+        commandId: newCommandId(),
         command: {
           memoryId: current.memory.id,
           expectedVersion: current.memory.version,
@@ -608,12 +627,14 @@ export function MemoryLibrary({
   return (
     <section
       className={`memory-library${startupContentVisible ? '' : ' startup-feedback-suppressed'}`}
+      data-mobile-detail={mobile && selectedMemory !== null || undefined}
       aria-labelledby="memory-library-title"
       aria-busy={loading}
       aria-hidden={startupContentVisible ? undefined : true}
       data-startup-route="memory"
       data-startup-status={loading ? 'loading' : error && !library ? 'waiting' : 'ready'}
     >
+      {mobile && selectedMemory && <div className="mobile-memory-back"><MobileBack label="返回记忆列表" onClick={() => setSelectedMemoryId(null)} /><span>记忆</span></div>}
       <header className="memory-library-header">
         <div>
           <h2 id="memory-library-title">记忆</h2>
@@ -842,10 +863,23 @@ function MemoryDetail({
   onReactivate(memory: MemoryRecord): Promise<void>
   onForget(memory: MemoryRecord): void
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
+  const RevisionContainer = mobile ? 'details' : 'section'
   if (!memory) {
     return <aside className="memory-detail empty"><span aria-hidden="true">⌁</span><strong>{loading ? '正在读取记忆' : '选择一条记忆查看详情'}</strong><p>{loading ? '列表与治理状态会在本地数据就绪后显示。' : '这里会显示正文、来源、Retrieval Keys、版本历史和治理操作。'}</p></aside>
   }
   const people = memoryPeople(memory, agents)
+  const actions = (
+    <div className="memory-detail-actions">
+      {memory.lifecycle === 'active' && <>
+        <button className="quiet-button" type="button" onClick={() => onRevise(memory)} disabled={busy !== null}>修订</button>
+        <button className="quiet-button" type="button" onClick={(event) => onReview(memory, event.currentTarget)} disabled={busy !== null}>设置下次复核</button>
+        <button className="quiet-button" type="button" onClick={() => void onRetire(memory)} disabled={busy !== null}>停止沿用</button>
+      </>}
+      {memory.lifecycle === 'retired' && memory.outgoingSuccessorIds.length === 0 && <button className="primary-button" type="button" onClick={() => void onReactivate(memory)} disabled={busy !== null}>重新沿用</button>}
+      {memory.lifecycle !== 'forgotten' && <button className="danger-button" type="button" onClick={() => onForget(memory)} disabled={busy !== null}>永久遗忘</button>}
+    </div>
+  )
   return (
     <aside className="memory-detail" aria-labelledby={`memory-detail-${memory.id}`}>
       <header>
@@ -854,6 +888,7 @@ function MemoryDetail({
         <small>{scopeLabel(memory.scope)} · 更新于 {formatTime(memory.updatedAt)}</small>
       </header>
 
+      {mobile && actions}
       {people.length > 0 && (
         <section className="memory-detail-section">
           <h4>适用队员</h4>
@@ -874,8 +909,8 @@ function MemoryDetail({
         </dl>
       </section>
 
-      <section className="memory-detail-section memory-revisions">
-        <h4>版本记录</h4>
+      <RevisionContainer className="memory-detail-section memory-revisions">
+        {mobile ? <summary>版本记录 · {memory.revisions.length}</summary> : <h4>版本记录</h4>}
         {memory.revisions.map((revision) => (
           <article key={revision.id}>
             <span className={`memory-authority ${revision.actorKind === 'agent' ? 'agent-origin' : 'user-origin'}`}>{revision.actorKind === 'agent' ? '队员修订' : revision.actorKind === 'user' ? '用户修订' : '已清除'}</span>
@@ -884,17 +919,9 @@ function MemoryDetail({
             <small>{formatTime(revision.createdAt)} · {shortId(revision.id)}</small>
           </article>
         ))}
-      </section>
+      </RevisionContainer>
 
-      <div className="memory-detail-actions">
-        {memory.lifecycle === 'active' && <>
-          <button className="quiet-button" type="button" onClick={() => onRevise(memory)} disabled={busy !== null}>修订</button>
-          <button className="quiet-button" type="button" onClick={(event) => onReview(memory, event.currentTarget)} disabled={busy !== null}>设置下次复核</button>
-          <button className="quiet-button" type="button" onClick={() => void onRetire(memory)} disabled={busy !== null}>停止沿用</button>
-        </>}
-        {memory.lifecycle === 'retired' && memory.outgoingSuccessorIds.length === 0 && <button className="primary-button" type="button" onClick={() => void onReactivate(memory)} disabled={busy !== null}>重新沿用</button>}
-        {memory.lifecycle !== 'forgotten' && <button className="danger-button" type="button" onClick={() => onForget(memory)} disabled={busy !== null}>永久遗忘</button>}
-      </div>
+      {!mobile && actions}
     </aside>
   )
 }

@@ -1,3 +1,4 @@
+import { newCommandId } from '../../shared/command-id'
 import type {
   CampComposerDraftView,
   CampComposerReplyRecipient,
@@ -162,7 +163,7 @@ export class DraftMutationCoordinator {
   }
 
   mutateQuote(action: MessageQuoteAction): Promise<CampComposerDraftView> {
-    const commandId = crypto.randomUUID()
+    const commandId = newCommandId()
     return this.enqueue('quote', (current) => this.bindings.mutate(current, { kind: 'quote', action, commandId }))
   }
 
@@ -175,7 +176,7 @@ export class DraftMutationCoordinator {
   }
 
   returnPendingInput(pendingInputId: string, expectedRevision: number, editToken: string | null): Promise<CampComposerDraftView> {
-    const commandId = crypto.randomUUID()
+    const commandId = newCommandId()
     return this.enqueue('return_pending_input', (current) => this.bindings.mutate(current, {
       kind: 'return_pending_input', pendingInputId, expectedRevision, editToken, commandId
     }))

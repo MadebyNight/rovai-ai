@@ -1,3 +1,4 @@
+use crate::draft_client::DraftClient;
 #[cfg(all(test, feature = "slow-tests"))]
 use crate::local_attachment_snapshot::inspect_prefix;
 use crate::local_attachment_snapshot::make_owned_tree_removable;
@@ -171,6 +172,8 @@ struct ManagedAttachmentMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct CampComposerDraftView {
     pub camp_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_id: Option<String>,
     pub body: String,
     pub content: ComposerDocument,
     pub quotes: Vec<MessageQuoteSnapshot>,
@@ -180,6 +183,31 @@ pub struct CampComposerDraftView {
     pub continuation_intent: Option<CampComposerContinuationIntentView>,
     pub updated_at: Option<String>,
     pub expires_at: Option<String>,
+}
+
+/// Web keeps a monotonic empty revision after consumption. A late save from
+/// before send/discard cannot match a newly-created Draft with the same number.
+/// Source refs are handed off or detached; this never removes their files.
+pub(crate) fn consume_client_draft(
+    connection: &rusqlite::Connection,
+    camp_id: &str,
+    client: &DraftClient,
+) -> Result<()> {
+    if client.is_desktop() {
+        connection.execute(
+            "DELETE FROM camp_composer_draft WHERE camp_id=?1 AND client_id='desktop'",
+            [camp_id],
+        )?;
+    } else {
+        let (now, expires_at) = draft_times();
+        connection.execute("UPDATE camp_composer_draft SET body='', structured_content_json=?3,
+            revision=revision+1, source_attachments_json='[]', quotes_json='[]', quote_trash_json='[]',
+            reply_to_camp_message_id=NULL, recipient_selection_required=0,
+            continuation_source_message_id=NULL, continuation_suppressed_source_message_id=NULL,
+            recipient_selection_touched=0, updated_at=?4, expires_at=?5 WHERE camp_id=?1 AND client_id=?2",
+            params![camp_id, client.id(), EMPTY_COMPOSER_DOCUMENT_JSON, now, expires_at])?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,7 +402,7 @@ pub fn legacy_attachment_belongs_to_owner(
             camp_id,
             attachment_ref_id,
         } => database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = ?1 AND id = ?2)",
+            "SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE client_id = 'desktop' AND camp_id = ?1 AND id = ?2)",
             params![camp_id, attachment_ref_id],
             |row| row.get(0),
         )?,
@@ -408,12 +436,21 @@ pub fn legacy_attachment_belongs_to_owner(
 #[derive(Debug, Clone)]
 pub struct CampAttachmentStore {
     root: PathBuf,
+    client: DraftClient,
 }
 
 impl CampAttachmentStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             root: data_dir.join("camp-attachments"),
+            client: DraftClient::default(),
+        }
+    }
+
+    pub fn for_client(data_dir: &Path, client: DraftClient) -> Self {
+        Self {
+            root: data_dir.join("camp-attachments"),
+            client,
         }
     }
 
@@ -575,7 +612,8 @@ impl CampAttachmentStore {
         let draft = database
             .connection()
             .query_row(
-                r#"
+                &format!(
+                    r#"
                 SELECT structured_content_json, revision,
                        reply_to_camp_message_id, recipient_selection_required,
                        continuation_source_message_id,
@@ -583,8 +621,10 @@ impl CampAttachmentStore {
                        recipient_selection_touched,
                        updated_at, expires_at, source_attachments_json
                 FROM camp_composer_draft
-                WHERE camp_id = ?1
+                WHERE client_id = '{client}' AND camp_id = ?1
                 "#,
+                    client = self.client.sql_key()
+                ),
                 [camp_id],
                 |row| {
                     Ok((
@@ -602,7 +642,11 @@ impl CampAttachmentStore {
                 },
             )
             .optional()?;
-        let prepared_attachments = load_prepared_attachments(database, camp_id)?;
+        let prepared_attachments = if self.client.is_desktop() {
+            load_prepared_attachments(database, camp_id)?
+        } else {
+            Vec::new()
+        };
         Ok(match draft {
             Some((
                 content,
@@ -644,8 +688,13 @@ impl CampAttachmentStore {
                     },
                 )?;
                 CampComposerDraftView {
+                    draft_id: (!self.client.is_desktop()).then(|| self.client.draft_id(camp_id)),
                     camp_id: camp_id.to_string(),
-                    quotes: load_quotes(database.connection(), QuoteStorage::CampDraft, camp_id)?,
+                    quotes: load_quotes(
+                        database.connection(),
+                        QuoteStorage::ClientCampDraft(&self.client),
+                        camp_id,
+                    )?,
                     body: render_composer_document_for_connection(database.connection(), &content)?,
                     content,
                     revision,
@@ -675,8 +724,13 @@ impl CampAttachmentStore {
                     },
                 )?;
                 CampComposerDraftView {
+                    draft_id: (!self.client.is_desktop()).then(|| self.client.draft_id(camp_id)),
                     camp_id: camp_id.to_string(),
-                    quotes: load_quotes(database.connection(), QuoteStorage::CampDraft, camp_id)?,
+                    quotes: load_quotes(
+                        database.connection(),
+                        QuoteStorage::ClientCampDraft(&self.client),
+                        camp_id,
+                    )?,
                     body: String::new(),
                     content: ComposerDocument::default(),
                     revision: 0,
@@ -737,7 +791,7 @@ impl CampAttachmentStore {
         let structured_content = composer_document_to_content(&content)?;
         let content_json = serialize_composer_document(&content)?;
         let body = render_composer_document_for_connection(database.connection(), &content)?;
-        let current = load_draft_mutation_state(database.connection(), camp_id)?;
+        let current = load_draft_mutation_state(&self.client, database.connection(), camp_id)?;
         let current_revision = current.as_ref().map_or(0, |draft| draft.revision);
         if current_revision != expected_revision {
             anyhow::bail!("draft_changed");
@@ -788,11 +842,11 @@ impl CampAttachmentStore {
             return self.load_draft(database, camp_id);
         }
         let has_attachments: bool = database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = ?1)
+            &format!("SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE client_id = '{client}' AND camp_id = ?1)
                  OR EXISTS(
                     SELECT 1 FROM camp_composer_draft
-                    WHERE camp_id = ?1 AND source_attachments_json <> '[]'
-                 )",
+                    WHERE client_id = '{client}' AND camp_id = ?1 AND source_attachments_json <> '[]'
+                 )", client = self.client.sql_key()),
             [camp_id],
             |row| row.get(0),
         )?;
@@ -806,15 +860,18 @@ impl CampAttachmentStore {
         let (now, expires_at) = draft_times();
         if expected_revision == 0 {
             database.connection().execute(
-                r#"
+                &format!(
+                    r#"
                 INSERT INTO camp_composer_draft(
-                    camp_id, body, structured_content_json, revision,
+                    client_id, camp_id, body, structured_content_json, revision,
                     continuation_source_message_id,
                     continuation_suppressed_source_message_id,
                     recipient_selection_touched,
                     created_at, updated_at, expires_at
-                ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?7, ?8)
+                ) VALUES ('{client}', ?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?7, ?8)
                 "#,
+                    client = self.client.sql_key()
+                ),
                 params![
                     camp_id,
                     body,
@@ -828,7 +885,8 @@ impl CampAttachmentStore {
             )?;
         } else {
             let updated = database.connection().execute(
-                r#"
+                &format!(
+                    r#"
                 UPDATE camp_composer_draft
                 SET body = ?3,
                     structured_content_json = ?4,
@@ -838,8 +896,10 @@ impl CampAttachmentStore {
                     revision = revision + 1,
                     updated_at = ?8,
                     expires_at = ?9
-                WHERE camp_id = ?1 AND revision = ?2
+                WHERE client_id = '{client}' AND camp_id = ?1 AND revision = ?2
                 "#,
+                    client = self.client.sql_key()
+                ),
                 params![
                     camp_id,
                     expected_revision,
@@ -886,7 +946,7 @@ impl CampAttachmentStore {
         let Some((author_type, author_id)) = target else {
             anyhow::bail!("camp_message.invalid_reply");
         };
-        let current = load_draft_mutation_state(&transaction, camp_id)?;
+        let current = load_draft_mutation_state(&self.client, &transaction, camp_id)?;
         require_expected_revision(current.as_ref(), expected_revision)?;
         let mut content = current
             .as_ref()
@@ -909,6 +969,7 @@ impl CampAttachmentStore {
             false
         };
         persist_reply_mutation(
+            &self.client,
             &transaction,
             camp_id,
             expected_revision,
@@ -937,13 +998,14 @@ impl CampAttachmentStore {
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = load_draft_mutation_state(&transaction, camp_id)?;
+        let current = load_draft_mutation_state(&self.client, &transaction, camp_id)?;
         require_expected_revision(current.as_ref(), expected_revision)?;
         let Some(current) = current.as_ref() else {
             transaction.commit()?;
             return self.load_draft(database, camp_id);
         };
         persist_reply_mutation(
+            &self.client,
             &transaction,
             camp_id,
             expected_revision,
@@ -971,7 +1033,7 @@ impl CampAttachmentStore {
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = load_draft_mutation_state(&transaction, camp_id)?;
+        let current = load_draft_mutation_state(&self.client, &transaction, camp_id)?;
         require_expected_revision(current.as_ref(), expected_revision)?;
         let current = current.as_ref().context("camp_message.invalid_reply")?;
         let reply_to = current
@@ -1013,6 +1075,7 @@ impl CampAttachmentStore {
         };
         ensure_leading_composer_recipient(&mut content, replacement);
         persist_reply_mutation(
+            &self.client,
             &transaction,
             camp_id,
             expected_revision,
@@ -1041,7 +1104,7 @@ impl CampAttachmentStore {
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = load_draft_mutation_state(&transaction, camp_id)?;
+        let current = load_draft_mutation_state(&self.client, &transaction, camp_id)?;
         require_expected_revision(current.as_ref(), expected_revision)?;
         if current.as_ref().is_some_and(|draft| {
             draft.reply_to_camp_message_id.is_some()
@@ -1062,6 +1125,7 @@ impl CampAttachmentStore {
             anyhow::bail!("continuation_source_invalid");
         }
         persist_continuation_mutation(
+            &self.client,
             &transaction,
             camp_id,
             expected_revision,
@@ -1094,7 +1158,7 @@ impl CampAttachmentStore {
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = load_draft_mutation_state(&transaction, camp_id)?;
+        let current = load_draft_mutation_state(&self.client, &transaction, camp_id)?;
         require_expected_revision(current.as_ref(), expected_revision)?;
         let current = current
             .as_ref()
@@ -1107,11 +1171,11 @@ impl CampAttachmentStore {
             continuation_candidate_for_state(&transaction, camp_id, Some(source_message_id))?
                 .context("continuation_recipient_required")?;
         let has_attachments: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = ?1)
+            &format!("SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE client_id = '{client}' AND camp_id = ?1)
                  OR EXISTS(
                     SELECT 1 FROM camp_composer_draft
-                    WHERE camp_id = ?1 AND source_attachments_json <> '[]'
-                 )",
+                    WHERE client_id = '{client}' AND camp_id = ?1 AND source_attachments_json <> '[]'
+                 )", client = self.client.sql_key()),
             [camp_id],
             |row| row.get(0),
         )?;
@@ -1143,6 +1207,7 @@ impl CampAttachmentStore {
             },
         );
         persist_continuation_mutation(
+            &self.client,
             &transaction,
             camp_id,
             expected_revision,
@@ -1168,12 +1233,20 @@ impl CampAttachmentStore {
     ) -> Result<ComposerAttachmentPreparePlan> {
         CampId::parse(camp_id)?;
         ensure_camp_exists(database, camp_id)?;
-        ensure_draft_revision(database.connection(), camp_id, expected_revision)?;
+        ensure_draft_revision(
+            &self.client,
+            database.connection(),
+            camp_id,
+            expected_revision,
+        )?;
         let has_source_attachments: bool = database.connection().query_row(
-            "SELECT EXISTS(
+            &format!(
+                "SELECT EXISTS(
                 SELECT 1 FROM camp_composer_draft
-                WHERE camp_id = ?1 AND source_attachments_json <> '[]'
+                WHERE client_id = '{client}' AND camp_id = ?1 AND source_attachments_json <> '[]'
              )",
+                client = self.client.sql_key()
+            ),
             [camp_id],
             |row| row.get(0),
         )?;
@@ -1203,16 +1276,33 @@ impl CampAttachmentStore {
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        ensure_draft_revision(&transaction, camp_id, expected_revision)?;
+        self.commit_source_attachment_in_transaction(
+            &transaction,
+            camp_id,
+            expected_revision,
+            source_ref,
+        )?;
+        transaction.commit()?;
+        self.load_draft(database, camp_id)
+    }
+
+    pub(crate) fn commit_source_attachment_in_transaction(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        camp_id: &str,
+        expected_revision: i64,
+        source_ref: LocalAttachmentSourceRef,
+    ) -> Result<()> {
+        ensure_draft_revision(&self.client, transaction, camp_id, expected_revision)?;
         let has_prepared: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = ?1)",
+            &format!("SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE client_id = '{client}' AND camp_id = ?1)", client = self.client.sql_key()),
             [camp_id],
             |row| row.get(0),
         )?;
         anyhow::ensure!(!has_prepared, "legacy_draft.attachments_locked");
         let mut refs = transaction
             .query_row(
-                "SELECT source_attachments_json FROM camp_composer_draft WHERE camp_id = ?1",
+                &format!("SELECT source_attachments_json FROM camp_composer_draft WHERE client_id = '{client}' AND camp_id = ?1", client = self.client.sql_key()),
                 [camp_id],
                 |row| row.get::<_, String>(0),
             )
@@ -1225,12 +1315,15 @@ impl CampAttachmentStore {
         let (now, expires_at) = draft_times();
         if expected_revision == 0 {
             transaction.execute(
-                r#"
+                &format!(
+                    r#"
                 INSERT INTO camp_composer_draft(
-                    camp_id, body, structured_content_json, revision,
+                    client_id, camp_id, body, structured_content_json, revision,
                     source_attachments_json, created_at, updated_at, expires_at
-                ) VALUES (?1, '', ?2, 1, ?3, ?4, ?4, ?5)
+                ) VALUES ('{client}', ?1, '', ?2, 1, ?3, ?4, ?4, ?5)
                 "#,
+                    client = self.client.sql_key()
+                ),
                 params![
                     camp_id,
                     EMPTY_COMPOSER_DOCUMENT_JSON,
@@ -1241,20 +1334,22 @@ impl CampAttachmentStore {
             )?;
         } else {
             let updated = transaction.execute(
-                r#"
+                &format!(
+                    r#"
                 UPDATE camp_composer_draft
                 SET source_attachments_json = ?3, revision = revision + 1,
                     updated_at = ?4, expires_at = ?5
-                WHERE camp_id = ?1 AND revision = ?2
+                WHERE client_id = '{client}' AND camp_id = ?1 AND revision = ?2
                 "#,
+                    client = self.client.sql_key()
+                ),
                 params![camp_id, expected_revision, refs_json, now, expires_at],
             )?;
             if updated != 1 {
                 anyhow::bail!("draft_changed");
             }
         }
-        transaction.commit()?;
-        self.load_draft(database, camp_id)
+        Ok(())
     }
 
     pub fn prepare_from_path_filesystem(
@@ -1300,12 +1395,20 @@ impl CampAttachmentStore {
         prepared: &PreparedComposerAttachment,
     ) -> Result<()> {
         let transaction = database.connection_mut().transaction()?;
-        ensure_draft_revision(&transaction, &prepared.camp_id, prepared.expected_revision)?;
+        ensure_draft_revision(
+            &self.client,
+            &transaction,
+            &prepared.camp_id,
+            prepared.expected_revision,
+        )?;
         let has_source_attachments: bool = transaction.query_row(
-            "SELECT EXISTS(
+            &format!(
+                "SELECT EXISTS(
                 SELECT 1 FROM camp_composer_draft
-                WHERE camp_id = ?1 AND source_attachments_json <> '[]'
+                WHERE client_id = '{client}' AND camp_id = ?1 AND source_attachments_json <> '[]'
              )",
+                client = self.client.sql_key()
+            ),
             [&prepared.camp_id],
             |row| row.get(0),
         )?;
@@ -1316,16 +1419,16 @@ impl CampAttachmentStore {
         validate_draft_capacity_tx(&transaction, &prepared.camp_id, prepared.prepared.byte_size)?;
         let (now, expires_at) = draft_times();
         transaction.execute(
-            r#"
+            &format!(r#"
             INSERT INTO camp_composer_draft(
-                camp_id, body, structured_content_json, created_at, updated_at, expires_at
+                client_id, camp_id, body, structured_content_json, created_at, updated_at, expires_at
             )
-            VALUES (?1, '', ?2, ?3, ?3, ?4)
-            ON CONFLICT(camp_id) DO UPDATE SET
+            VALUES ('{client}', ?1, '', ?2, ?3, ?3, ?4)
+            ON CONFLICT(camp_id, client_id) DO UPDATE SET
                 revision = camp_composer_draft.revision + 1,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at
-            "#,
+            "#, client = self.client.sql_key()),
             params![
                 prepared.camp_id,
                 EMPTY_COMPOSER_DOCUMENT_JSON,
@@ -1334,7 +1437,7 @@ impl CampAttachmentStore {
             ],
         )?;
         let ordinal: i64 = transaction.query_row(
-            "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM prepared_attachment WHERE camp_id = ?1",
+            &format!("SELECT COALESCE(MAX(ordinal), -1) + 1 FROM prepared_attachment WHERE client_id = '{client}' AND camp_id = ?1", client = self.client.sql_key()),
             [&prepared.camp_id],
             |row| row.get(0),
         )?;
@@ -1408,11 +1511,16 @@ impl CampAttachmentStore {
     ) -> Result<(CampComposerDraftView, CampAttachmentCleanupPlan)> {
         CampId::parse(camp_id)?;
         validate_component(attachment_id, "Prepared Attachment")?;
-        ensure_draft_revision(database.connection(), camp_id, expected_revision)?;
+        ensure_draft_revision(
+            &self.client,
+            database.connection(),
+            camp_id,
+            expected_revision,
+        )?;
         let source_json = database
             .connection()
             .query_row(
-                "SELECT source_attachments_json FROM camp_composer_draft WHERE camp_id = ?1",
+                &format!("SELECT source_attachments_json FROM camp_composer_draft WHERE client_id = '{client}' AND camp_id = ?1", client = self.client.sql_key()),
                 [camp_id],
                 |row| row.get::<_, String>(0),
             )
@@ -1425,15 +1533,18 @@ impl CampAttachmentStore {
                 let transaction = database
                     .connection_mut()
                     .transaction_with_behavior(TransactionBehavior::Immediate)?;
-                ensure_draft_revision(&transaction, camp_id, expected_revision)?;
+                ensure_draft_revision(&self.client, &transaction, camp_id, expected_revision)?;
                 let (now, expires_at) = draft_times();
                 let updated = transaction.execute(
-                    r#"
+                    &format!(
+                        r#"
                     UPDATE camp_composer_draft
                     SET source_attachments_json = ?3, revision = revision + 1,
                         updated_at = ?4, expires_at = ?5
-                    WHERE camp_id = ?1 AND revision = ?2
+                    WHERE client_id = '{client}' AND camp_id = ?1 AND revision = ?2
                     "#,
+                        client = self.client.sql_key()
+                    ),
                     params![
                         camp_id,
                         expected_revision,
@@ -1468,7 +1579,7 @@ impl CampAttachmentStore {
             .optional()?
             .context("Prepared Attachment does not exist in this Camp")?;
         let transaction = database.connection_mut().transaction()?;
-        ensure_draft_revision(&transaction, camp_id, expected_revision)?;
+        ensure_draft_revision(&self.client, &transaction, camp_id, expected_revision)?;
         transaction.execute(
             "DELETE FROM prepared_attachment WHERE id = ?1 AND camp_id = ?2",
             params![attachment_id, camp_id],
@@ -1476,11 +1587,14 @@ impl CampAttachmentStore {
         normalize_ordinals(&transaction, camp_id)?;
         let (now, expires_at) = draft_times();
         transaction.execute(
-            r#"
+            &format!(
+                r#"
             UPDATE camp_composer_draft
             SET revision = revision + 1, updated_at = ?2, expires_at = ?3
-            WHERE camp_id = ?1
+            WHERE client_id = '{client}' AND camp_id = ?1
             "#,
+                client = self.client.sql_key()
+            ),
             params![camp_id, now, expires_at],
         )?;
         transaction.commit()?;
@@ -1521,12 +1635,8 @@ impl CampAttachmentStore {
         database: &mut Database,
         camp_id: &str,
     ) -> Result<CampAttachmentCleanupPlan> {
-        CampId::parse(camp_id)?;
         let cleanup = self.draft_attachment_cleanup_plan(database, camp_id)?;
-        database.connection().execute(
-            "DELETE FROM camp_composer_draft WHERE camp_id = ?1",
-            [camp_id],
-        )?;
+        consume_client_draft(database.connection(), camp_id, &self.client)?;
         Ok(cleanup)
     }
 
@@ -1536,12 +1646,14 @@ impl CampAttachmentStore {
         camp_id: &str,
     ) -> Result<CampAttachmentCleanupPlan> {
         CampId::parse(camp_id)?;
+        let paths = if self.client.is_desktop() {
+            prepared_paths(database, camp_id)?
+        } else {
+            Vec::new()
+        };
         Ok(CampAttachmentCleanupPlan {
             camp_id: camp_id.to_string(),
-            attachment_paths: prepared_paths(database, camp_id)?
-                .into_iter()
-                .map(PathBuf::from)
-                .collect(),
+            attachment_paths: paths.into_iter().map(PathBuf::from).collect(),
         })
     }
 
@@ -2008,15 +2120,22 @@ impl CampAttachmentStore {
     pub fn cleanup_expired(&self, database: &mut Database) -> Result<usize> {
         let now = Utc::now().to_rfc3339();
         let camps = {
-            let mut statement = database
-                .connection()
-                .prepare("SELECT camp_id FROM camp_composer_draft WHERE expires_at <= ?1")?;
+            let mut statement = database.connection().prepare(
+                "SELECT camp_id, client_id FROM camp_composer_draft WHERE expires_at <= ?1",
+            )?;
             statement
-                .query_map([&now], |row| row.get::<_, String>(0))?
+                .query_map([&now], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        for camp_id in &camps {
-            self.discard_draft(database, camp_id)?;
+        for (camp_id, client_id) in &camps {
+            let client = DraftClient::try_from(client_id.clone())?;
+            if client.is_desktop() {
+                self.discard_draft(database, camp_id)?;
+            } else {
+                consume_client_draft(database.connection(), camp_id, &client)?;
+            }
         }
         Ok(camps.len())
     }
@@ -2168,27 +2287,29 @@ pub(crate) fn cleanup_consumed_prepared_attachment_paths(
 pub(crate) fn restore_pending_draft(
     transaction: &Transaction<'_>,
     camp_id: &str,
+    client: &DraftClient,
     revision: i64,
     input: &crate::pending_camp_input::StoredPendingInput,
 ) -> Result<()> {
     let (now, expires_at) = draft_times();
     let document = normalize_composer_document(input.document.clone());
     validate_composer_document(&document)?;
-    // Deleting the old owner also detaches legacy Prepared attachments. Main cleans
+    // Deleting the old owner also detaches legacy Prepared attachments. The Host cleans
     // their files after commit; user-owned source files are never deleted.
     transaction.execute(
-        "DELETE FROM camp_composer_draft WHERE camp_id = ?1",
-        [camp_id],
+        "DELETE FROM camp_composer_draft WHERE camp_id = ?1 AND client_id = ?2",
+        params![camp_id, client.sql_key()],
     )?;
     transaction.execute(
         "INSERT INTO camp_composer_draft(
-            camp_id, body, structured_content_json, revision,
+            camp_id, client_id, body, structured_content_json, revision,
             reply_to_camp_message_id, recipient_selection_required,
             recipient_selection_touched, source_attachments_json,
             created_at, updated_at, expires_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8, ?9)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?9, ?10)",
         params![
             camp_id,
+            client.sql_key(),
             render_composer_document_for_connection(transaction, &document)?,
             serialize_composer_document(&document)?,
             revision + 1,
@@ -2229,20 +2350,24 @@ struct ContinuationMutation<'a> {
 }
 
 fn load_draft_mutation_state(
+    client: &DraftClient,
     connection: &Connection,
     camp_id: &str,
 ) -> Result<Option<DraftMutationState>> {
     let stored = connection
         .query_row(
-            r#"
+            &format!(
+                r#"
             SELECT structured_content_json, revision,
                    reply_to_camp_message_id, recipient_selection_required,
                    continuation_source_message_id,
                    continuation_suppressed_source_message_id,
                    recipient_selection_touched
             FROM camp_composer_draft
-            WHERE camp_id = ?1
+            WHERE client_id = '{client}' AND camp_id = ?1
             "#,
+                client = client.sql_key()
+            ),
             [camp_id],
             |row| {
                 Ok((
@@ -2296,6 +2421,7 @@ fn require_expected_revision(
 }
 
 fn persist_reply_mutation(
+    client: &DraftClient,
     transaction: &Transaction<'_>,
     camp_id: &str,
     expected_revision: i64,
@@ -2323,14 +2449,17 @@ fn persist_reply_mutation(
     let (now, expires_at) = draft_times();
     if expected_revision == 0 {
         transaction.execute(
-            r#"
+            &format!(
+                r#"
             INSERT INTO camp_composer_draft(
-                camp_id, body, structured_content_json, revision,
+                client_id, camp_id, body, structured_content_json, revision,
                 reply_to_camp_message_id, recipient_selection_required,
                 recipient_selection_touched,
                 created_at, updated_at, expires_at
-            ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?7, ?8)
+            ) VALUES ('{client}', ?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?7, ?8)
             "#,
+                client = client.sql_key()
+            ),
             params![
                 camp_id,
                 body,
@@ -2344,7 +2473,8 @@ fn persist_reply_mutation(
         )?;
     } else {
         let updated = transaction.execute(
-            r#"
+            &format!(
+                r#"
             UPDATE camp_composer_draft
             SET body = ?3,
                 structured_content_json = ?4,
@@ -2354,8 +2484,10 @@ fn persist_reply_mutation(
                 revision = revision + 1,
                 updated_at = ?8,
                 expires_at = ?9
-            WHERE camp_id = ?1 AND revision = ?2
+            WHERE client_id = '{client}' AND camp_id = ?1 AND revision = ?2
             "#,
+                client = client.sql_key()
+            ),
             params![
                 camp_id,
                 expected_revision,
@@ -2376,6 +2508,7 @@ fn persist_reply_mutation(
 }
 
 fn persist_continuation_mutation(
+    client: &DraftClient,
     transaction: &Transaction<'_>,
     camp_id: &str,
     expected_revision: i64,
@@ -2404,15 +2537,18 @@ fn persist_continuation_mutation(
     let (now, expires_at) = draft_times();
     if expected_revision == 0 {
         transaction.execute(
-            r#"
+            &format!(
+                r#"
             INSERT INTO camp_composer_draft(
-                camp_id, body, structured_content_json, revision,
+                client_id, camp_id, body, structured_content_json, revision,
                 continuation_source_message_id,
                 continuation_suppressed_source_message_id,
                 recipient_selection_touched,
                 created_at, updated_at, expires_at
-            ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?7, ?8)
+            ) VALUES ('{client}', ?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?7, ?8)
             "#,
+                client = client.sql_key()
+            ),
             params![
                 camp_id,
                 body,
@@ -2426,7 +2562,8 @@ fn persist_continuation_mutation(
         )?;
     } else {
         let updated = transaction.execute(
-            r#"
+            &format!(
+                r#"
             UPDATE camp_composer_draft
             SET body = ?3,
                 structured_content_json = ?4,
@@ -2436,8 +2573,10 @@ fn persist_continuation_mutation(
                 revision = revision + 1,
                 updated_at = ?8,
                 expires_at = ?9
-            WHERE camp_id = ?1 AND revision = ?2
+            WHERE client_id = '{client}' AND camp_id = ?1 AND revision = ?2
             "#,
+                client = client.sql_key()
+            ),
             params![
                 camp_id,
                 expected_revision,
@@ -2843,7 +2982,7 @@ pub fn consume_prepared_attachments(
         )?;
     }
     transaction.execute(
-        "DELETE FROM camp_composer_draft WHERE camp_id = ?1",
+        "DELETE FROM camp_composer_draft WHERE camp_id = ?1 AND client_id = 'desktop'",
         [camp_id],
     )?;
     Ok(())
@@ -2864,7 +3003,7 @@ pub fn consume_prepared_attachments_for_managed_ingest(
         anyhow::bail!("Camp Composer Draft attachments changed before commit");
     }
     transaction.execute(
-        "DELETE FROM camp_composer_draft WHERE camp_id = ?1",
+        "DELETE FROM camp_composer_draft WHERE camp_id = ?1 AND client_id = 'desktop'",
         [camp_id],
     )?;
     Ok(())
@@ -3129,6 +3268,7 @@ fn validate_draft_capacity_connection(
 }
 
 fn ensure_draft_revision(
+    client: &DraftClient,
     connection: &rusqlite::Connection,
     camp_id: &str,
     expected_revision: i64,
@@ -3138,7 +3278,7 @@ fn ensure_draft_revision(
     }
     let revision = connection
         .query_row(
-            "SELECT revision FROM camp_composer_draft WHERE camp_id = ?1",
+            &format!("SELECT revision FROM camp_composer_draft WHERE client_id = '{client}' AND camp_id = ?1", client = client.sql_key()),
             [camp_id],
             |row| row.get::<_, i64>(0),
         )
@@ -3725,6 +3865,36 @@ mod windows_attachment_tests {
             .unwrap();
         assert!(status.success(), "failed to create the junction fixture");
 
+        let canonical = fs::canonicalize(&fixture).unwrap();
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(
+                &canonical.join("outside/secret.txt")
+            )
+            .is_ok()
+        );
+        let linked = crate::local_attachment_snapshot::open_resolved_file_without_following(
+            &canonical.join("source/linked-outside/secret.txt"),
+        )
+        .unwrap_err();
+        assert!(linked.to_string().contains("reparse point"), "{linked:#}");
+        assert_eq!(
+            linked.downcast_ref::<crate::local_attachment_snapshot::LocalAttachmentError>(),
+            Some(&crate::local_attachment_snapshot::LocalAttachmentError::Unsupported)
+        );
+        let linked_leaf = crate::local_attachment_snapshot::open_resolved_file_without_following(
+            &canonical.join("source/linked-outside"),
+        )
+        .unwrap_err();
+        assert!(
+            linked_leaf.to_string().contains("reparse point"),
+            "{linked_leaf:#}"
+        );
+        let volume = canonical.ancestors().last().unwrap();
+        assert!(crate::local_attachment_snapshot::open_source_without_following(volume).is_err());
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(volume).is_err()
+        );
+
         let destination = fixture.join("snapshot");
         let error = copy_and_inspect(&source, &destination).unwrap_err();
         assert_eq!(
@@ -4153,6 +4323,76 @@ mod slow_tests {
             .unwrap();
         assert_eq!(persisted_revision, 3);
 
+        // The same revision value in another tab never names this tab's Draft.
+        let first_identity = crate::draft_client::resolve_editor(&database, None).unwrap();
+        let second_identity = crate::draft_client::resolve_editor(&database, None).unwrap();
+        let first_client = DraftClient::verified_web(&first_identity.client_id).unwrap();
+        let second_client = DraftClient::verified_web(&second_identity.client_id).unwrap();
+        let first_tab = CampAttachmentStore::for_client(&directory, first_client.clone());
+        let second_tab = CampAttachmentStore::for_client(&directory, second_client.clone());
+        let first_web = first_tab
+            .save_body(&mut database, camp_id, "first tab")
+            .unwrap();
+        let second_web = second_tab
+            .save_body(&mut database, camp_id, "second tab")
+            .unwrap();
+        assert_ne!(first_web.draft_id, second_web.draft_id);
+        assert_eq!(first_web.revision, second_web.revision);
+        assert_eq!(
+            first_tab.load_draft(&database, camp_id).unwrap().body,
+            "first tab"
+        );
+        assert_eq!(
+            second_tab.load_draft(&database, camp_id).unwrap().body,
+            "second tab"
+        );
+        assert_eq!(store.load_draft(&database, camp_id).unwrap(), cleared);
+        drop(database);
+        let mut database = Database::open(&directory).unwrap();
+        assert_eq!(first_tab.load_draft(&database, camp_id).unwrap(), first_web);
+        assert_eq!(
+            second_tab.load_draft(&database, camp_id).unwrap(),
+            second_web
+        );
+        assert!(
+            crate::draft_client::resolve_editor(
+                &database,
+                Some(crate::draft_client::EditorResume {
+                    client_id: first_identity.client_id.clone(),
+                    proof: second_identity.proof,
+                })
+            )
+            .is_err()
+        );
+        let resumed = crate::draft_client::resolve_editor(
+            &database,
+            Some(crate::draft_client::EditorResume {
+                client_id: first_identity.client_id.clone(),
+                proof: first_identity.proof,
+            }),
+        )
+        .unwrap();
+        assert_eq!(resumed.client_id, first_identity.client_id);
+        first_tab.discard_draft(&mut database, camp_id).unwrap();
+        let empty = first_tab.load_draft(&database, camp_id).unwrap();
+        assert!(empty.body.is_empty());
+        assert!(empty.revision > first_web.revision);
+        assert!(
+            first_tab
+                .save_content(
+                    &mut database,
+                    camp_id,
+                    first_web.revision,
+                    first_web.content
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("draft_changed")
+        );
+        assert_eq!(
+            second_tab.load_draft(&database, camp_id).unwrap(),
+            second_web
+        );
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -5117,6 +5357,45 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(prepared_count, 0);
+
+        // The Web byte reader uses the same no-follow primitives. A symlink
+        // introduced at a parent must not turn an authorized path into a read
+        // of another file, even when that final component is a regular file.
+        let canonical = fs::canonicalize(&fixture).unwrap();
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(
+                &canonical.join("outside-secret.txt")
+            )
+            .is_ok()
+        );
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(
+                &canonical.join("source/linked-secret.txt")
+            )
+            .is_err()
+        );
+        symlink(&canonical, source.join("linked-parent")).unwrap();
+        assert!(
+            crate::local_attachment_snapshot::open_resolved_file_without_following(
+                &canonical.join("source/linked-parent/outside-secret.txt")
+            )
+            .is_err()
+        );
+
+        // Managed artifact ancestors permit traversal without enumeration. The
+        // exact authorized file remains readable without widening those modes.
+        use std::os::unix::fs::PermissionsExt;
+        let sealed = canonical.join("traverse-only");
+        fs::create_dir(&sealed).unwrap();
+        fs::write(sealed.join("artifact.txt"), b"exact source").unwrap();
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o111)).unwrap();
+        let opened = crate::local_attachment_snapshot::open_resolved_file_without_following(
+            &sealed.join("artifact.txt"),
+        );
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut opened.unwrap(), &mut text).unwrap();
+        assert_eq!(text, "exact source");
 
         store.remove_camp(camp_id).unwrap();
         drop(database);

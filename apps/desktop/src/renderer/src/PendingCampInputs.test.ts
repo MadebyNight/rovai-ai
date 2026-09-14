@@ -17,6 +17,12 @@ describe('PendingInputRows', () => {
     expect(render()).toContain('删除待发送消息')
     expect(render()).not.toMatch(/is-editing|正在编辑|aria-pressed|>保存<|>取消</)
     expect(render(true)).toContain('disabled=""')
+    queue.editSession = { pendingInputId: 'input-1', editToken: 'lease', basePendingRevision: 1,
+      foreignClient: true, recoveryRequired: true, workingQuotes: [], workingAttachments: [] }
+    expect(render()).toContain('接管并移回输入框（覆盖当前内容）')
+    expect(render()).toContain('接管并编辑待发送消息')
+    expect(render()).toContain('另一客户端编辑未完成')
+    expect(render()).toMatch(/class="pending-input-delete" disabled=""/)
     queue.items = []
     expect(render()).toBe('')
   })

@@ -1,3 +1,4 @@
+import { parseHostChannelRequest, type HostChannelRequest, type HostChannelReply } from './host-channels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
@@ -19,7 +20,8 @@ import type {
 type CoreInternalMethod =
   | 'core.shutdown'
   | 'automations.schedulerControl'
-  | 'automations.schedulerTick'
+
+export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate' | 'host.web.loginTicket' | 'host.channels.reply'
 
 export type AutomationSchedulerControl = {
   epoch: number
@@ -36,7 +38,7 @@ type PendingRequest = {
   resolve(value: unknown): void
   reject(error: RovaiRequestError): void
   timer: NodeJS.Timeout
-  method: CoreMethod | CoreInternalMethod
+  method: CoreMethod | CoreInternalMethod | HostWebMethod
   startedAt: number
   traceId: string | null
 }
@@ -303,6 +305,8 @@ function errorMessage(error: unknown): string {
 }
 
 export class CoreClient {
+  #channelHandler: ((request: HostChannelRequest) => Promise<HostChannelReply>) | null = null
+  #channelCalls = new Set<string>()
   #child: ActiveChild | null = null
   #nextId = 1
   #pending = new Map<number, PendingRequest>()
@@ -322,7 +326,6 @@ export class CoreClient {
   #skillLibraryRoot: string | null = null
   #mcpConfigPath: string | null = null
   #automationSchedulerControl: AutomationSchedulerControl
-  #automationTickPending = false
   readonly #dataDirectory: string | null
   readonly #runtimeCampFilesRoot: string | null
   #startupBlock: { error: StructuredError; phase: StartupPhase } | null = null
@@ -508,7 +511,7 @@ export class CoreClient {
     this.#failAllForShutdown('Rust Core stopped')
   }
 
-  async request<T>(method: CoreMethod, params: unknown = {}): Promise<T> {
+  async request<T>(method: CoreMethod | HostWebMethod, params: unknown = {}): Promise<T> {
     if (this.#stopping) {
       throw new RovaiRequestError(structuredFailure(
         'shutdown',
@@ -550,28 +553,6 @@ export class CoreClient {
       paused: false
     }
     await this.#publishAutomationSchedulerControl()
-  }
-
-  async tickAutomationScheduler(now: string): Promise<void> {
-    if (
-      this.#stopping
-      || this.#automationSchedulerControl.paused
-      || this.#automationTickPending
-    ) return
-    const active = this.#child
-    if (!active?.ready || this.#snapshot.fullCoreState !== 'ready') return
-    const epoch = this.#automationSchedulerControl.epoch
-    this.#automationTickPending = true
-    try {
-      await this.#sendRequest(
-        active,
-        'automations.schedulerTick',
-        { epoch, now },
-        5_000
-      )
-    } finally {
-      this.#automationTickPending = false
-    }
   }
 
   shutdown(): Promise<CoreShutdownResult> {
@@ -640,7 +621,7 @@ export class CoreClient {
 
   #sendRequest<T>(
     active: ActiveChild,
-    method: CoreMethod | CoreInternalMethod,
+    method: CoreMethod | CoreInternalMethod | HostWebMethod,
     params: unknown,
     timeoutMs: number
   ): Promise<T> {
@@ -722,6 +703,10 @@ export class CoreClient {
     )
   }
 
+  setChannelHandler(handler: (request: HostChannelRequest) => Promise<HostChannelReply>): void {
+    this.#channelHandler = handler
+  }
+
   onEvent(listener: (event: CoreEvent) => void): () => void {
     this.#eventListeners.add(listener)
     return () => this.#eventListeners.delete(listener)
@@ -733,7 +718,9 @@ export class CoreClient {
     try {
       message = JSON.parse(line) as CoreWireResponse | CoreStartupWireFrame
     } catch (error) {
-      console.error('Invalid Rust Core response', error, line)
+      // A Host response may carry a freshly generated management credential.
+      // Malformed wire input must never turn that response into a log entry.
+      console.error('Invalid Rust Core response frame')
       return
     }
 
@@ -745,7 +732,30 @@ export class CoreClient {
 
     if (response.method) {
       if (!this.#isActive(generation, childToken)) return
-      if (response.method === 'runtime.subsystemsChanged' && this.#child?.ready) {
+      if (response.method === 'host.channels.request') {
+        const params = response.params as { requestId?: unknown; request?: unknown } | null
+        const request = parseHostChannelRequest(params?.request)
+        const id = params?.requestId
+        const active = this.#child
+        if (!active || !request || typeof id !== 'string' || !/^\d{1,20}$/u.test(id)) return
+        const key = `${generation}:${id}`
+        if (this.#channelCalls.has(key)) return
+        // The Host bounds live waiters. Keep admitted Desktop work independent
+        // of HTTP cancellation, while refusing an unbounded callback backlog.
+        if (this.#channelCalls.size >= 32) {
+          void this.#sendRequest(active, 'host.channels.reply', { requestId: id, reply: { error: 'channel_operation_failed' } }, 10_000).catch(() => undefined)
+          return
+        }
+        this.#channelCalls.add(key)
+        void Promise.resolve().then(() => this.#channelHandler?.(request) ?? { error: 'channel_operation_failed' as const })
+          .catch(() => ({ error: 'channel_operation_failed' as const }))
+          .then(async reply => {
+            if (!this.#isActive(generation, childToken)) return
+            await this.#sendRequest(active, 'host.channels.reply', { requestId: id, reply }, 10_000).catch(() => undefined)
+          }).finally(() => this.#channelCalls.delete(key))
+        return
+      }
+      if (response.method === 'runtime.subsystemsChanged'  && this.#child?.ready) {
         const coreSubsystems = parseCoreSubsystems(response.params)
         if (coreSubsystems) this.#updateSnapshot({ coreSubsystems })
       }
@@ -1067,7 +1077,8 @@ export function sidecarExecutableName(
 }
 
 export function resolveCoreBinary(): string {
-  return resolveBundledSidecar('rovai-core', [
+  return resolveBundledSidecar('rovai-host', [
+    process.env.ROVAI_HOST_BIN,
     process.env.ROVAI_CORE_BIN,
     process.env.HORIZONWARD_CORE_BIN,
     process.env.LUMEN_CORE_BIN
@@ -1078,7 +1089,7 @@ export function resolveDesktopBootstrapBinary(): string {
   return resolveBundledSidecar('rovai')
 }
 
-function resolveBundledSidecar(binary: 'rovai-core' | 'rovai', overrides: Array<string | undefined> = []): string {
+function resolveBundledSidecar(binary: 'rovai-host' | 'rovai', overrides: Array<string | undefined> = []): string {
   const executable = sidecarExecutableName(binary)
   const stagedTarget = sidecarTargetKey()
   const candidates = app.isPackaged
@@ -1100,5 +1111,5 @@ function resolveBundledSidecar(binary: 'rovai-core' | 'rovai', overrides: Array<
     }
   }
 
-  throw new Error(`Rovai AI ${binary === 'rovai-core' ? 'Rust Core binary' : 'Desktop bootstrap helper'} was not found. Checked: ${candidates.filter(Boolean).map((candidate) => resolve(candidate as string)).join(', ')}`)
+  throw new Error(`Rovai AI ${binary === 'rovai-host' ? 'Rust Host binary' : 'Desktop bootstrap helper'} was not found. Checked: ${candidates.filter(Boolean).map((candidate) => resolve(candidate as string)).join(', ')}`)
 }

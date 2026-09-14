@@ -280,3 +280,11 @@ single_chat.operation_denied
 single_chat.cross_camp_denied
 single_chat.history_unavailable
 ```
+
+## Host/Web 客户端适配
+
+统一 Host 的远程 Owner 使用同一业务服务和生产页面；网络入口不是 Agent Built-in policy 的扩展。
+Single Chat Draft 以 `(conversation_id, client_id)` 为键，编辑身份来自 Host 校验，不由短期 Bearer Token 或请求中的 ID 决定。
+发送原子消费当前客户端的附件与引用；Pending 仍为会话共同队列，活动编辑令牌、working refs 只投影给其编辑客户端。
+移回 Composer 只写请求者匹配 revision 的 Draft；结束会话清除全部客户端 Draft。既有 Desktop 数据迁到默认客户端，
+旧命令摘要保持原形状。Web 上传复用原附件事务与回执，不开放 addFromPath 内部入口。

@@ -3,14 +3,30 @@ document_type: interface-contract
 contract: pending-camp-input
 version: 4
 status: accepted
-authority: pending-input-return-to-composer
+authority: camp-next-turn-client-edit-ownership
 last_updated: 2026-09-12
 ---
 
 # Pending Camp Input v4
 
-Inherits [v3](pending-camp-input-v3.md) publication, FIFO, source refs, repair, submission outcomes and command
-idempotency. Desktop editing now withdraws an input into the ordinary Composer Draft.
+v4 inherits [v3](pending-camp-input-v3.md)'s FIFO, publication, structured content, repair and durable submission
+outcomes. Admission additionally retains the originating verified Draft client; working edit sessions carry their
+own verified client. This does not create one queue per browser: the Camp still has one Core-owned FIFO.
+
+The authenticated Owner can read canonical pending facts. Only the current editing client receives the working
+attachment/quote state and may save, cancel or mutate working refs under the exact token/revision fence. Other
+clients receive `foreignClient: true`, `recoveryRequired: true`, the current lease identity and empty working refs;
+this projection cannot restore the foreign editor's local text.
+
+The same Owner may **explicitly** request the existing `takeover` action with the current pending ID, revision and
+lease token. Core rotates the token, binds the new editor and initializes working state from canonical Pending content.
+It does not import unsubmitted foreign edits. The prior client cannot write with its old token. A stale takeover also
+fails. Neither reading a queue nor reconnecting automatically takes over. This recovery prevents a closed page from
+holding the FIFO indefinitely while preserving the existing single-edit-session model.
+
+An ordinary foreign cancel/delete/working mutation remains fenced; the UI labels takeover and does not offer it as
+an invisible edit resume. Headless scheduling and attachment lifetime retain the existing Core behavior. Network
+working-file upload still requires the same scope/receipt rules as [Host Web v2](host-web-v2.md) before its admission.
 
 ## Return to Composer
 
@@ -20,12 +36,13 @@ idempotency. Desktop editing now withdraws an input into the ordinary Composer D
 { type: 'return_to_composer', expectedDraftRevision: number }
 ```
 
-The existing envelope requires local User authority, matching Camp, `pendingInputId` and `expectedRevision`.
-If the selected input has a legacy edit session, its current `editToken` is required. Other inputs' sessions do not
+The existing envelope requires authenticated Owner authority, matching Camp, `pendingInputId` and `expectedRevision`.
+If the selected input has a legacy edit session, its verified editing client and current `editToken` are required.
+A foreign client must explicitly take over before returning it; possession of a lease token alone is insufficient. Other inputs' sessions do not
 prevent withdrawal. Only `queued | needs_repair` inputs may return; a published/cancelled or revised input rejects
 with `pending_input.changed`. A changed Draft rejects with `draft_changed`. Neither rejection mutates either owner.
 
-One Core transaction checks both revisions, overwrites the ordinary Draft with the canonical Pending document,
+One Core transaction checks both revisions, overwrites only the caller’s verified `(campId, clientId)` Draft with the canonical Pending document,
 ordered source refs, Reply/recipient-repair intent and immutable quotes, advances Draft revision, marks the Pending
 row `cancelled`, increments its revision and removes its edit session. The old Draft, quotes/trash and legacy Prepared
 attachments are replaced; source files are never moved or removed. Detached legacy files are cleaned after commit.
@@ -44,7 +61,7 @@ has no queue reservation or publication eligibility.
 
 ## Renderer ownership
 
-Desktop locks the ordinary Composer synchronously, settles attachment preparation and flushes existing text through
+The shared Desktop/Web page locks the ordinary Composer synchronously, settles attachment preparation and flushes existing text through
 Draft Mutation Coordinator before requesting withdrawal at its latest revision. The user explicitly chooses to replace
 current input content; there is no save/cancel editor or reserved queue position. On success the coordinator reloads
 the complete Draft and replaces Lexical content, then focuses the ordinary Composer. A rejection preserves existing
@@ -56,10 +73,12 @@ publish directly. It uses current execution settings. Leaving the Camp or closin
 fence in [Camp Composer Draft v13](camp-composer-draft-v13.md).
 
 Legacy begin/takeover/save/cancel and working attachment APIs remain compatible for existing sessions; the new
-Desktop does not begin them. A remaining old session is presented as unfinished work with a neutral return/delete
-entry, and keeps its existing publication fence until explicitly resolved.
+shared Desktop/Web page does not begin them. A remaining old session is presented as unfinished work with a neutral return/delete
+entry. A foreign session instead labels the action “接管并移回输入框” and disables direct deletion. It keeps
+its existing publication fence until explicitly resolved.
 
-## Desktop submission outcomes
+<a id="desktop-submission-outcomes"></a>
+## Submission outcomes
 
 The [v3 durable outcome lookup](pending-camp-input-v3.md#desktop-submission-outcomes) is unchanged. A returned
 Pending input reports `cancelled`; its prior submission receipt cannot auto-focus a future, newly submitted input.

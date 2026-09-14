@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import type { AppearancePreferences, AppearanceSnapshot } from '@contracts'
 import { APPEARANCE_ZOOM_OPTIONS, DEFAULT_APPEARANCE, MAX_READING_FONT_SIZE, MIN_READING_FONT_SIZE, appearancePreferencesEqual } from '../../shared/appearance'
+import { useMobileLayout } from './MobileLayout'
 import { SettingsPageHeader } from './SettingsPageHeader'
 import { THEME_OPTIONS } from './theme'
 import systemThumbnail from './assets/appearance/system.svg'
@@ -33,6 +34,7 @@ function BrandMark(): React.JSX.Element {
 function SizeSetting({ kind, value, disabled, onChange }: {
   kind: Preview; value: number; disabled: boolean; onChange(value: number): void
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
   const [text, setText] = useState(String(value))
   useEffect(() => setText(String(value)), [value])
   const accept = (next: number): void => {
@@ -46,7 +48,12 @@ function SizeSetting({ kind, value, disabled, onChange }: {
   }
   return <div className="setting-row">
     <div className="setting-copy"><label htmlFor={`appearance-${kind}-size`}>{sizeLabels[kind]}</label><p id={`appearance-${kind}-hint`}>{sizeHints[kind]}</p></div>
-    <div className="size-stepper">
+    {mobile ? <div className="mobile-font-slider">
+      <button type="button" aria-label={`减小${sizeLabels[kind]}`} disabled={disabled || value <= MIN_READING_FONT_SIZE} onClick={() => accept(value - 1)}>A</button>
+      <input id={`appearance-${kind}-size`} aria-describedby={`appearance-${kind}-hint`} type="range" min={MIN_READING_FONT_SIZE} max={MAX_READING_FONT_SIZE} step={1} value={value} disabled={disabled} onChange={(event) => accept(Number(event.target.value))} />
+      <button type="button" aria-label={`增大${sizeLabels[kind]}`} disabled={disabled || value >= MAX_READING_FONT_SIZE} onClick={() => accept(value + 1)}>A</button>
+      <output aria-live="polite">{value}</output>
+    </div> : <div className="size-stepper">
       <button type="button" aria-label={`减小${sizeLabels[kind]}`} disabled={disabled || value <= MIN_READING_FONT_SIZE} onClick={() => accept(value - 1)}><Icon name="minus" /></button>
       <input id={`appearance-${kind}-size`} aria-describedby={`appearance-${kind}-hint`} type="number" min={MIN_READING_FONT_SIZE} max={MAX_READING_FONT_SIZE} step="1" value={text} disabled={disabled}
         onChange={(event) => {
@@ -57,14 +64,15 @@ function SizeSetting({ kind, value, disabled, onChange }: {
         }} onBlur={commitText} onKeyDown={(event) => { if (event.key === 'Enter') commitText() }} />
       <span className="unit" aria-hidden="true">px</span>
       <button type="button" aria-label={`增大${sizeLabels[kind]}`} disabled={disabled || value >= MAX_READING_FONT_SIZE} onClick={() => accept(value + 1)}><Icon name="plus" /></button>
-    </div>
+    </div>}
   </div>
 }
 
-export function AppearanceSettings({ appearance, disabled, platform = 'darwin', onChange }: {
+export function AppearanceSettings({ appearance, disabled, platform = 'darwin', zoomManagedBy = 'desktop', onChange }: {
   appearance: AppearanceSnapshot
   disabled: boolean
   platform?: NodeJS.Platform
+  zoomManagedBy?: 'desktop' | 'browser'
   onChange(preferences: AppearancePreferences): Promise<AppearanceSnapshot>
 }): React.JSX.Element {
   const [draft, setDraft] = useState<AppearancePreferences>(appearance)
@@ -173,7 +181,7 @@ export function AppearanceSettings({ appearance, disabled, platform = 'darwin', 
     </section>
     <section className="settings-section display-section" aria-labelledby="appearance-display-heading">
       <div className="section-heading"><h2 id="appearance-display-heading">显示与动效</h2></div>
-      <div className="setting-row"><div className="setting-copy"><label htmlFor="appearance-zoom">界面缩放</label><p id="appearance-zoom-hint">按比例调整整个应用，包括导航、按钮与文字。</p></div><div className="setting-action"><span className="shortcut" aria-hidden="true"><kbd>{shortcut} −</kbd><kbd>{shortcut} +</kbd><kbd>{shortcut} 0</kbd></span><select className="setting-select" id="appearance-zoom" aria-describedby="appearance-zoom-hint" value={draft.zoomPercentage} disabled={disabled} onChange={(event) => void change({ zoomPercentage: Number(event.target.value) })}>{zoomOptions.map((zoom) => <option key={zoom} value={zoom}>{zoom === 100 ? '100%（默认）' : `${zoom}%`}</option>)}</select></div></div>
+      <div className="setting-row"><div className="setting-copy"><label htmlFor={zoomManagedBy === 'desktop' ? 'appearance-zoom' : undefined}>界面缩放</label><p id="appearance-zoom-hint">{zoomManagedBy === 'browser' ? '使用浏览器菜单或快捷键调整缩放，由当前浏览器保存。恢复外观默认值不会重置浏览器缩放。' : '按比例调整整个应用，包括导航、按钮与文字。'}</p></div><div className="setting-action"><span className="shortcut" aria-label="缩小、放大、恢复默认缩放"><kbd>{shortcut} −</kbd><kbd>{shortcut} +</kbd><kbd>{shortcut} 0</kbd></span>{zoomManagedBy === 'desktop' && <select className="setting-select" id="appearance-zoom" aria-describedby="appearance-zoom-hint" value={draft.zoomPercentage} disabled={disabled} onChange={(event) => void change({ zoomPercentage: Number(event.target.value) })}>{zoomOptions.map((zoom) => <option key={zoom} value={zoom}>{zoom === 100 ? '100%（默认）' : `${zoom}%`}</option>)}</select>}</div></div>
       <div className="setting-row"><div className="setting-copy motion-copy"><label htmlFor="appearance-motion">减少动态效果</label><p id="appearance-motion-hint">减少弹窗位移、标签动画和平滑滚动，保留状态与进度提示。</p></div><select className="setting-select" id="appearance-motion" aria-describedby="appearance-motion-hint" disabled={disabled} value={draft.motionPreference} onChange={(event) => void change({ motionPreference: event.target.value as AppearancePreferences['motionPreference'] })}><option value="system">跟随系统</option><option value="reduce">始终减少</option></select></div>
     </section>
   </div>

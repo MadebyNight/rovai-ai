@@ -49,6 +49,10 @@ pub struct PendingCampInputView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingInputEditSession {
+    #[serde(skip)]
+    pub client_id: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub foreign_client: bool,
     pub working_quotes: Vec<MessageQuoteSnapshot>,
     pub pending_input_id: String,
     pub edit_token: String,
@@ -80,6 +84,11 @@ pub struct PendingCampInputSubmissionOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditPendingCampInputCommand {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::draft_client::DraftClient::is_desktop"
+    )]
+    pub draft_client: crate::draft_client::DraftClient,
     #[serde(deserialize_with = "crate::camp_id::deserialize_camp_id_string")]
     pub camp_id: String,
     pub pending_input_id: String,
@@ -202,6 +211,18 @@ pub fn recover_edit_sessions(database: &Database) -> Result<()> {
 }
 
 pub fn read_queue(database: &Database, camp_id: &str) -> Result<CampPendingInputsView> {
+    read_queue_for_client(
+        database,
+        camp_id,
+        &crate::draft_client::DraftClient::default(),
+    )
+}
+
+pub fn read_queue_for_client(
+    database: &Database,
+    camp_id: &str,
+    client: &crate::draft_client::DraftClient,
+) -> Result<CampPendingInputsView> {
     let connection = database.connection();
     let exists: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1)",
@@ -256,7 +277,17 @@ pub fn read_queue(database: &Database, camp_id: &str) -> Result<CampPendingInput
         camp_id: camp_id.to_string(),
         execution_active: has_nonterminal_execution(connection, camp_id)?,
         items,
-        edit_session: load_edit_session(connection, camp_id)?,
+        edit_session: load_edit_session(connection, camp_id)?.map(|mut session| {
+            if session.client_id != client.id() {
+                // Same Owner sees only the lease needed for an explicit
+                // takeover, never another editor's working document or refs.
+                session.foreign_client = true;
+                session.recovery_required = true;
+                session.working_attachments.clear();
+                session.working_quotes.clear();
+            }
+            session
+        }),
         submission_outcomes: Vec::new(),
     })
 }
@@ -323,7 +354,7 @@ fn load_edit_session(
     let stored = connection
         .query_row(
             "SELECT pending_input_id, edit_token, base_pending_revision, recovery_required,
-                    working_source_attachments_json
+                    working_source_attachments_json, client_id
              FROM pending_input_edit_session WHERE camp_id = ?1",
             [camp_id],
             |row| {
@@ -333,14 +364,24 @@ fn load_edit_session(
                     row.get::<_, i64>(2)?,
                     row.get::<_, bool>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()?;
     stored
         .map(
-            |(pending_input_id, edit_token, base_pending_revision, recovery_required, json)| {
+            |(
+                pending_input_id,
+                edit_token,
+                base_pending_revision,
+                recovery_required,
+                json,
+                client_id,
+            )| {
                 Ok(PendingInputEditSession {
+                    client_id,
+                    foreign_client: false,
                     working_quotes: load_quotes(connection, QuoteStorage::CampEdit, camp_id)?,
                     pending_input_id,
                     edit_token,
@@ -401,9 +442,52 @@ pub fn add_working_source_attachment(
     edit_token: &str,
     source_ref: LocalAttachmentSourceRef,
 ) -> Result<CampPendingInputsView> {
+    add_working_source_attachment_for_client(
+        database,
+        camp_id,
+        pending_input_id,
+        expected_revision,
+        edit_token,
+        source_ref,
+        &crate::draft_client::DraftClient::default(),
+    )
+}
+
+pub fn add_working_source_attachment_for_client(
+    database: &mut Database,
+    camp_id: &str,
+    pending_input_id: &str,
+    expected_revision: i64,
+    edit_token: &str,
+    source_ref: LocalAttachmentSourceRef,
+    client: &crate::draft_client::DraftClient,
+) -> Result<CampPendingInputsView> {
     let transaction = database
         .connection_mut()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    commit_working_source_attachment_in_transaction(
+        &transaction,
+        camp_id,
+        pending_input_id,
+        expected_revision,
+        edit_token,
+        source_ref,
+        client,
+    )?;
+    transaction.commit()?;
+    read_queue_for_client(database, camp_id, client)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_working_source_attachment_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    camp_id: &str,
+    pending_input_id: &str,
+    expected_revision: i64,
+    edit_token: &str,
+    source_ref: LocalAttachmentSourceRef,
+    client: &crate::draft_client::DraftClient,
+) -> Result<()> {
     let pending_revision = transaction
         .query_row(
             "SELECT revision FROM pending_camp_input
@@ -416,19 +500,19 @@ pub fn add_working_source_attachment(
         pending_revision == Some(expected_revision),
         "pending_input.changed"
     );
-    let session = load_edit_session(&transaction, camp_id)?;
+    let session = load_edit_session(transaction, camp_id)?;
     let owns = session.as_ref().is_some_and(|session| {
-        session.pending_input_id == pending_input_id
+        session.client_id == client.id()
+            && session.pending_input_id == pending_input_id
             && session.base_pending_revision == expected_revision
             && session.edit_token == edit_token
             && !session.recovery_required
     });
     anyhow::ensure!(owns, "pending_input.edit_fenced");
-    let mut refs = load_working_source_refs(&transaction, camp_id, pending_input_id, edit_token)?;
+    let mut refs = load_working_source_refs(transaction, camp_id, pending_input_id, edit_token)?;
     refs.push(source_ref);
-    store_working_source_refs(&transaction, camp_id, pending_input_id, edit_token, &refs)?;
-    transaction.commit()?;
-    read_queue(database, camp_id)
+    store_working_source_refs(transaction, camp_id, pending_input_id, edit_token, &refs)?;
+    Ok(())
 }
 
 fn reject(code: &str, message: &str) -> CommandHandlerResult {
@@ -454,6 +538,11 @@ pub fn edit_input(
         }
         let session = load_edit_session(transaction, &command.camp_id)?;
         let owns_session = session.as_ref().is_some_and(|session|
+            session.client_id == command.draft_client.id()
+                && session.pending_input_id == command.pending_input_id
+                && session.base_pending_revision == revision
+                && Some(session.edit_token.as_str()) == command.edit_token.as_deref());
+        let matches_current_lease = session.as_ref().is_some_and(|session|
             session.pending_input_id == command.pending_input_id
                 && session.base_pending_revision == revision
                 && Some(session.edit_token.as_str()) == command.edit_token.as_deref());
@@ -463,15 +552,15 @@ pub fn edit_input(
                     return Ok(reject("pending_input.edit_fenced", "The edit session changed; reload it first"));
                 }
                 let draft_revision = transaction.query_row(
-                    "SELECT revision FROM camp_composer_draft WHERE camp_id = ?1",
-                    [&command.camp_id], |row| row.get::<_, i64>(0),
+                    "SELECT revision FROM camp_composer_draft WHERE camp_id = ?1 AND client_id = ?2",
+                    params![command.camp_id, command.draft_client.sql_key()], |row| row.get::<_, i64>(0),
                 ).optional()?.unwrap_or(0);
                 if draft_revision != *expected_draft_revision {
                     return Ok(reject("draft_changed", "The Composer Draft changed; reload it first"));
                 }
                 let input = load_input(transaction, &command.pending_input_id, &command.camp_id)?;
-                crate::camp_attachment::restore_pending_draft(transaction, &command.camp_id, draft_revision, &input)?;
-                copy_quotes(transaction, QuoteStorage::CampPending, &command.pending_input_id, QuoteStorage::CampDraft, &command.camp_id)?;
+                crate::camp_attachment::restore_pending_draft(transaction, &command.camp_id, &command.draft_client, draft_revision, &input)?;
+                copy_quotes(transaction, QuoteStorage::CampPending, &command.pending_input_id, QuoteStorage::ClientCampDraft(&command.draft_client), &command.camp_id)?;
                 transaction.execute(
                     "UPDATE pending_camp_input SET state = 'cancelled', revision = revision + 1, updated_at = ?2 WHERE id = ?1",
                     params![command.pending_input_id, chrono::Utc::now().to_rfc3339()],
@@ -485,17 +574,17 @@ pub fn edit_input(
                 if matches!(command.action, PendingInputEditAction::Begin) && session.is_some() {
                     return Ok(reject("pending_input.edit_open", "Finish the existing edit before editing another input"));
                 }
-                if matches!(command.action, PendingInputEditAction::Takeover) && !owns_session {
+                if matches!(command.action, PendingInputEditAction::Takeover) && !matches_current_lease {
                     return Ok(reject("pending_input.edit_fenced", "The edit session changed; reload it first"));
                 }
                 let token = Uuid::new_v4().to_string();
                 transaction.execute(
-                    "INSERT INTO pending_input_edit_session(camp_id, pending_input_id, edit_token, base_pending_revision, recovery_required, working_source_attachments_json)
-                     VALUES (?1, ?2, ?3, ?4, 0, ?5) ON CONFLICT(camp_id) DO UPDATE SET
+                    "INSERT INTO pending_input_edit_session(camp_id, pending_input_id, edit_token, base_pending_revision, recovery_required, working_source_attachments_json, client_id)
+                     VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6) ON CONFLICT(camp_id) DO UPDATE SET
                      pending_input_id = excluded.pending_input_id, edit_token = excluded.edit_token,
                      base_pending_revision = excluded.base_pending_revision, recovery_required = 0,
-                     working_source_attachments_json = excluded.working_source_attachments_json",
-                    params![command.camp_id, command.pending_input_id, token, revision, source_attachments_json],
+                     working_source_attachments_json = excluded.working_source_attachments_json, client_id = excluded.client_id",
+                    params![command.camp_id, command.pending_input_id, token, revision, source_attachments_json, command.draft_client.id()],
                 )?;
                 copy_quotes(transaction, QuoteStorage::CampPending, &command.pending_input_id, QuoteStorage::CampEdit, &command.camp_id)?;
                 transaction.execute("UPDATE pending_input_edit_session SET quote_trash_json='[]' WHERE camp_id=?1", [&command.camp_id])?;
@@ -599,44 +688,43 @@ pub fn edit_input(
 
 pub(crate) fn insert_input(
     transaction: &Transaction<'_>,
-    camp_id: &str,
+    command: &crate::collaboration::SendUserCampDraftCommand,
     content: &StructuredCampMessageContent,
     source_attachments: &[LocalAttachmentSourceRef],
     reply_to: Option<&str>,
-    execution: &Option<ExecutionRequest>,
     user_id: &str,
 ) -> Result<CommandHandlerResult> {
+    let camp_id = &command.camp_id;
+    let client = &command.draft_client;
     let document = composer_document_from_content(content)?;
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     transaction.execute(
         "INSERT INTO pending_camp_input(id, camp_id, enqueue_sequence, structured_content_json,
          source_attachments_json, reply_to_camp_message_id,
-         execution_json, user_id, created_at, updated_at) VALUES (?1, ?2,
+         execution_json, user_id, created_at, updated_at, client_id) VALUES (?1, ?2,
          (SELECT COALESCE(MAX(enqueue_sequence), 0) + 1 FROM pending_camp_input WHERE camp_id = ?2),
-         ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+         ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)",
         params![
             id,
             camp_id,
             serialize_composer_document(&document)?,
             serialize_source_attachments(source_attachments)?,
             reply_to,
-            serde_json::to_string(execution)?,
+            serde_json::to_string(&command.execution)?,
             user_id,
-            now
+            now,
+            client.id()
         ],
     )?;
     copy_quotes(
         transaction,
-        QuoteStorage::CampDraft,
+        QuoteStorage::ClientCampDraft(client),
         camp_id,
         QuoteStorage::CampPending,
         &id,
     )?;
-    transaction.execute(
-        "DELETE FROM camp_composer_draft WHERE camp_id = ?1",
-        [camp_id],
-    )?;
+    crate::camp_attachment::consume_client_draft(transaction, camp_id, client)?;
     Ok(CommandHandlerResult::accepted(
         "pending_input.queued",
         json!({"pendingInputId": id}),
@@ -823,12 +911,22 @@ mod tests {
     }
 
     fn send_draft(database: &mut Database, camp_id: &str, revision: i64) -> CommandExecution {
+        send_draft_as(database, camp_id, revision, &Default::default())
+    }
+
+    fn send_draft_as(
+        database: &mut Database,
+        camp_id: &str,
+        revision: i64,
+        client: &crate::draft_client::DraftClient,
+    ) -> CommandExecution {
         CollaborationService::default()
             .send_user_camp_draft_with_managed_ingest(
                 database,
                 &envelope(
                     camp_id,
                     SendUserCampDraftCommand {
+                        draft_client: client.clone(),
                         camp_id: camp_id.to_string(),
                         draft_revision: revision,
                         execution: Some(ExecutionRequest {
@@ -901,6 +999,7 @@ mod tests {
             &envelope(
                 camp_id,
                 EditPendingCampInputCommand {
+                    draft_client: Default::default(),
                     camp_id: camp_id.to_string(),
                     pending_input_id: item.id.clone(),
                     expected_revision: item.revision,
@@ -922,6 +1021,7 @@ mod tests {
             &envelope(
                 &camp_id,
                 crate::message_quote::MutateQuoteDraftCommand {
+                    draft_client: Default::default(),
                     camp_id: camp_id.clone(),
                     conversation_id: None,
                     expected_revision: 0,
@@ -1083,10 +1183,76 @@ mod tests {
                 None,
                 PendingInputEditAction::Begin,
             );
-            let old_token = started.result.payload["editToken"]
+            let mut old_token = started.result.payload["editToken"]
                 .as_str()
                 .unwrap()
                 .to_string();
+            let editor = crate::draft_client::resolve_editor(&database, None).unwrap();
+            let client = crate::draft_client::DraftClient::verified_web(&editor.client_id).unwrap();
+            let foreign = read_queue_for_client(&database, &camp_id, &client)
+                .unwrap()
+                .edit_session
+                .unwrap();
+            assert!(foreign.foreign_client && foreign.recovery_required);
+            assert!(foreign.working_attachments.is_empty() && foreign.working_quotes.is_empty());
+            let remote_edit = |database: &mut Database, action, token: &str| {
+                edit_input(
+                    database,
+                    &envelope(
+                        &camp_id,
+                        EditPendingCampInputCommand {
+                            draft_client: client.clone(),
+                            camp_id: camp_id.clone(),
+                            pending_input_id: b.id.clone(),
+                            expected_revision: b.revision,
+                            edit_token: Some(token.to_owned()),
+                            action,
+                        },
+                    ),
+                )
+                .unwrap()
+            };
+            for action in [
+                PendingInputEditAction::Cancel,
+                PendingInputEditAction::Delete,
+                PendingInputEditAction::ReturnToComposer {
+                    expected_draft_revision: 0,
+                },
+            ] {
+                assert_eq!(
+                    remote_edit(&mut database, action, &old_token).result.code,
+                    "pending_input.edit_fenced"
+                );
+            }
+            let moved = remote_edit(&mut database, PendingInputEditAction::Takeover, &old_token);
+            let moved_token = moved.result.payload["editToken"].as_str().unwrap();
+            assert_ne!(moved_token, old_token);
+            assert_eq!(
+                edit(
+                    &mut database,
+                    &camp_id,
+                    b,
+                    Some(&old_token),
+                    PendingInputEditAction::Cancel
+                )
+                .result
+                .code,
+                "pending_input.edit_fenced"
+            );
+            // The Owner can explicitly recover from a closed tab. Taking over
+            // rotates the lease; it never imports another editor's local text.
+            old_token = edit(
+                &mut database,
+                &camp_id,
+                b,
+                Some(moved_token),
+                PendingInputEditAction::Takeover,
+            )
+            .result
+            .payload["editToken"]
+                .as_str()
+                .unwrap()
+                .to_owned();
             if legacy_failure {
                 legacy_retry_wait(
                     &database,
@@ -1697,45 +1863,50 @@ mod tests {
     // Owns the two-owner transaction: a pure function cannot prove FIFO, CAS or replay.
     #[test]
     fn returning_pending_input_overwrites_draft_and_releases_fifo_without_duplicate_publication() {
-        let (mut database, camp_id) = setup();
-        let first = send(&mut database, &camp_id, text("active source"));
-        let store = CampAttachmentStore::new(database.directory());
-        let draft = store.load_draft(&database, &camp_id).unwrap();
-        let draft = store
-            .save_content(
-                &mut database,
-                &camp_id,
-                draft.revision,
-                composer_document_from_content(&[
-                    Segment::MemberMention {
-                        agent_id: "agent_2".into(),
-                    },
-                    Segment::Text {
-                        text: "return this".into(),
-                    },
-                ])
-                .unwrap(),
-            )
-            .unwrap();
-        let draft = store
-            .start_reply(
-                &mut database,
-                &camp_id,
-                draft.revision,
-                first.result.payload["campMessageId"].as_str().unwrap(),
-            )
-            .unwrap();
-        let source = database.directory().join("return.txt");
-        std::fs::write(&source, "preserve source").unwrap();
-        let source_ref = observe_source_attachment(&source, "return.txt", None).unwrap();
-        let draft = store
-            .commit_source_attachment(&mut database, &camp_id, draft.revision, source_ref)
-            .unwrap();
-        let quoted = crate::message_quote::mutate_draft(
-            &mut database,
-            &envelope(
+        // Run the same transaction matrix for Desktop and Web; ownership differs
+        // at the SQLite key, not at the UI or authenticated Owner.
+        for client in [
+            crate::draft_client::DraftClient::default(),
+            crate::draft_client::DraftClient::verified_web(&"a".repeat(64)).unwrap(),
+        ] {
+            let (mut database, camp_id) = setup();
+            let first = send(&mut database, &camp_id, text("active source"));
+            let store = CampAttachmentStore::for_client(database.directory(), client.clone());
+            let draft = store.load_draft(&database, &camp_id).unwrap();
+            let draft = store
+                .save_content(
+                    &mut database,
+                    &camp_id,
+                    draft.revision,
+                    composer_document_from_content(&[
+                        Segment::MemberMention {
+                            agent_id: "agent_2".into(),
+                        },
+                        Segment::Text {
+                            text: "return this".into(),
+                        },
+                    ])
+                    .unwrap(),
+                )
+                .unwrap();
+            let draft = store
+                .start_reply(
+                    &mut database,
+                    &camp_id,
+                    draft.revision,
+                    first.result.payload["campMessageId"].as_str().unwrap(),
+                )
+                .unwrap();
+            let source = database.directory().join("return.txt");
+            std::fs::write(&source, "preserve source").unwrap();
+            let source_ref = observe_source_attachment(&source, "return.txt", None).unwrap();
+            let draft = store
+                .commit_source_attachment(&mut database, &camp_id, draft.revision, source_ref)
+                .unwrap();
+            let quote_command = envelope(
                 &camp_id,
                 crate::message_quote::MutateQuoteDraftCommand {
+                    draft_client: client.clone(),
                     camp_id: camp_id.clone(),
                     conversation_id: None,
                     expected_revision: draft.revision,
@@ -1753,134 +1924,195 @@ mod tests {
                         },
                     },
                 },
-            ),
-        )
-        .unwrap();
-        assert_eq!(quoted.result.status, CommandResultStatus::Applied);
-        let draft = store.load_draft(&database, &camp_id).unwrap();
-        send_draft(&mut database, &camp_id, draft.revision);
-        send(&mut database, &camp_id, text("next"));
-        let queue = read_queue(&database, &camp_id).unwrap();
-        let item = &queue.items[0];
-        let next = &queue.items[1];
-        let old = store.load_draft(&database, &camp_id).unwrap();
-        let old = store
-            .save_content(
+            );
+            let quoted = crate::message_quote::mutate_draft(&mut database, &quote_command).unwrap();
+            assert_eq!(quoted.result.status, CommandResultStatus::Applied);
+            let draft = store.load_draft(&database, &camp_id).unwrap();
+            send_draft_as(&mut database, &camp_id, draft.revision, &client);
+            send(&mut database, &camp_id, text("next"));
+            let queue = read_queue(&database, &camp_id).unwrap();
+            let item = &queue.items[0];
+            let next = &queue.items[1];
+            let mut untouched = Vec::new();
+            for other in [
+                crate::draft_client::DraftClient::default(),
+                crate::draft_client::DraftClient::verified_web(&"a".repeat(64)).unwrap(),
+                crate::draft_client::DraftClient::verified_web(&"b".repeat(64)).unwrap(),
+            ]
+            .into_iter()
+            .filter(|other| other != &client)
+            {
+                let other_store =
+                    CampAttachmentStore::for_client(database.directory(), other.clone());
+                let draft = other_store.load_draft(&database, &camp_id).unwrap();
+                let draft = other_store
+                    .save_content(
+                        &mut database,
+                        &camp_id,
+                        draft.revision,
+                        text_document("another client's unsent text"),
+                    )
+                    .unwrap();
+                let draft = other_store
+                    .commit_source_attachment(
+                        &mut database,
+                        &camp_id,
+                        draft.revision,
+                        observe_source_attachment(&source, "return.txt", None).unwrap(),
+                    )
+                    .unwrap();
+                let mut quote_command = quote_command.clone();
+                quote_command.command_id = Uuid::new_v4().to_string();
+                quote_command.payload.expected_revision = draft.revision;
+                quote_command.payload.draft_client = other;
+                assert_eq!(
+                    crate::message_quote::mutate_draft(&mut database, &quote_command)
+                        .unwrap()
+                        .result
+                        .status,
+                    CommandResultStatus::Applied
+                );
+                let expected =
+                    serde_json::to_value(other_store.load_draft(&database, &camp_id).unwrap())
+                        .unwrap();
+                untouched.push((other_store, expected));
+            }
+            let old = store.load_draft(&database, &camp_id).unwrap();
+            let old = store
+                .save_content(
+                    &mut database,
+                    &camp_id,
+                    old.revision,
+                    text_document("overwrite me"),
+                )
+                .unwrap();
+            let started = edit_input(
                 &mut database,
-                &camp_id,
-                old.revision,
-                text_document("overwrite me"),
+                &envelope(
+                    &camp_id,
+                    EditPendingCampInputCommand {
+                        draft_client: client.clone(),
+                        camp_id: camp_id.clone(),
+                        pending_input_id: item.id.clone(),
+                        expected_revision: item.revision,
+                        edit_token: None,
+                        action: PendingInputEditAction::Begin,
+                    },
+                ),
             )
             .unwrap();
-        let started = edit(
-            &mut database,
-            &camp_id,
-            item,
-            None,
-            PendingInputEditAction::Begin,
-        );
-        let token = started.result.payload["editToken"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let mut command = envelope(
-            &camp_id,
-            EditPendingCampInputCommand {
-                camp_id: camp_id.clone(),
-                pending_input_id: item.id.clone(),
-                expected_revision: item.revision,
-                edit_token: Some(token),
-                action: PendingInputEditAction::ReturnToComposer {
-                    expected_draft_revision: old.revision - 1,
-                },
-            },
-        );
-        assert_eq!(
-            edit_input(&mut database, &command).unwrap().result.code,
-            "draft_changed"
-        );
-        assert_eq!(read_queue(&database, &camp_id).unwrap().items.len(), 2);
-        assert_eq!(
-            store.load_draft(&database, &camp_id).unwrap().body,
-            "overwrite me"
-        );
-        command.command_id = Uuid::new_v4().to_string();
-        command.payload.action = PendingInputEditAction::ReturnToComposer {
-            expected_draft_revision: old.revision,
-        };
-        assert_eq!(
-            edit_input(&mut database, &command).unwrap().result.code,
-            "pending_input.returned_to_composer"
-        );
-        let restored = store.load_draft(&database, &camp_id).unwrap();
-        assert_eq!(restored.content, item.content);
-        assert_eq!(restored.attachments, item.attachments);
-        assert_eq!(restored.quotes, item.quotes);
-        assert_eq!(
-            restored
-                .reply_intent
-                .as_ref()
+            let token = started.result.payload["editToken"]
+                .as_str()
                 .unwrap()
-                .reply_to_camp_message_id,
-            item.reply_intent.as_ref().unwrap().reply_to_camp_message_id
-        );
-        assert_eq!(restored.revision, old.revision + 1);
-        assert!(restored.continuation_intent.is_none());
-        assert!(source.exists());
-        let remaining = read_queue(&database, &camp_id).unwrap();
-        assert_eq!(
-            remaining
-                .items
-                .iter()
-                .map(|entry| &entry.id)
-                .collect::<Vec<_>>(),
-            vec![&next.id]
-        );
-        assert!(remaining.edit_session.is_none());
-        complete_fixture_runs(&database);
-        assert_eq!(ready_heads(&database).unwrap()[0].pending_input_id, next.id);
-        assert_eq!(
-            publish(&mut database, &camp_id, &item.id, item.revision)
+                .to_string();
+            let mut command = envelope(
+                &camp_id,
+                EditPendingCampInputCommand {
+                    draft_client: client.clone(),
+                    camp_id: camp_id.clone(),
+                    pending_input_id: item.id.clone(),
+                    expected_revision: item.revision,
+                    edit_token: Some(token),
+                    action: PendingInputEditAction::ReturnToComposer {
+                        expected_draft_revision: old.revision - 1,
+                    },
+                },
+            );
+            assert_eq!(
+                edit_input(&mut database, &command).unwrap().result.code,
+                "draft_changed"
+            );
+            assert_eq!(read_queue(&database, &camp_id).unwrap().items.len(), 2);
+            assert_eq!(
+                store.load_draft(&database, &camp_id).unwrap().body,
+                "overwrite me"
+            );
+            command.command_id = Uuid::new_v4().to_string();
+            command.payload.action = PendingInputEditAction::ReturnToComposer {
+                expected_draft_revision: old.revision,
+            };
+            assert_eq!(
+                edit_input(&mut database, &command).unwrap().result.code,
+                "pending_input.returned_to_composer"
+            );
+            let restored = store.load_draft(&database, &camp_id).unwrap();
+            assert_eq!(restored.content, item.content);
+            assert_eq!(restored.attachments, item.attachments);
+            assert_eq!(restored.quotes, item.quotes);
+            assert_eq!(
+                restored
+                    .reply_intent
+                    .as_ref()
+                    .unwrap()
+                    .reply_to_camp_message_id,
+                item.reply_intent.as_ref().unwrap().reply_to_camp_message_id
+            );
+            assert_eq!(restored.revision, old.revision + 1);
+            assert!(restored.continuation_intent.is_none());
+            assert!(source.exists());
+            let remaining = read_queue(&database, &camp_id).unwrap();
+            assert_eq!(
+                remaining
+                    .items
+                    .iter()
+                    .map(|entry| &entry.id)
+                    .collect::<Vec<_>>(),
+                vec![&next.id]
+            );
+            assert!(remaining.edit_session.is_none());
+            complete_fixture_runs(&database);
+            assert_eq!(ready_heads(&database).unwrap()[0].pending_input_id, next.id);
+            assert_eq!(
+                publish(&mut database, &camp_id, &item.id, item.revision)
+                    .result
+                    .code,
+                "pending_input.not_ready"
+            );
+            let requeued = send_draft_as(&mut database, &camp_id, restored.revision, &client);
+            assert_eq!(requeued.result.code, "pending_input.queued");
+            let queue = read_queue(&database, &camp_id).unwrap();
+            assert_eq!(queue.items[0].id, next.id);
+            assert_ne!(queue.items[1].id, item.id);
+            assert_eq!(queue.items[1].content, item.content);
+            assert!(edit_input(&mut database, &command).unwrap().replayed);
+            let empty = store.load_draft(&database, &camp_id).unwrap();
+            assert!(
+                empty.content.segments.is_empty(),
+                "replay must not overwrite subsequent edits or submissions"
+            );
+            assert_eq!(
+                publish(&mut database, &camp_id, &next.id, next.revision)
+                    .result
+                    .status,
+                CommandResultStatus::Accepted
+            );
+            assert_eq!(
+                edit(
+                    &mut database,
+                    &camp_id,
+                    next,
+                    None,
+                    PendingInputEditAction::ReturnToComposer {
+                        expected_draft_revision: empty.revision
+                    }
+                )
                 .result
                 .code,
-            "pending_input.not_ready"
-        );
-        let requeued = send_draft(&mut database, &camp_id, restored.revision);
-        assert_eq!(requeued.result.code, "pending_input.queued");
-        let queue = read_queue(&database, &camp_id).unwrap();
-        assert_eq!(queue.items[0].id, next.id);
-        assert_ne!(queue.items[1].id, item.id);
-        assert_eq!(queue.items[1].content, item.content);
-        assert!(edit_input(&mut database, &command).unwrap().replayed);
-        let empty = store.load_draft(&database, &camp_id).unwrap();
-        assert!(
-            empty.content.segments.is_empty(),
-            "replay must not overwrite subsequent edits or submissions"
-        );
-        assert_eq!(
-            publish(&mut database, &camp_id, &next.id, next.revision)
-                .result
-                .status,
-            CommandResultStatus::Accepted
-        );
-        assert_eq!(
-            edit(
-                &mut database,
-                &camp_id,
-                next,
-                None,
-                PendingInputEditAction::ReturnToComposer {
-                    expected_draft_revision: empty.revision
-                }
-            )
-            .result
-            .code,
-            "pending_input.changed"
-        );
-        assert_eq!(
-            store.load_draft(&database, &camp_id).unwrap().revision,
-            empty.revision
-        );
+                "pending_input.changed"
+            );
+            assert_eq!(
+                store.load_draft(&database, &camp_id).unwrap().revision,
+                empty.revision
+            );
+            for (other_store, expected) in untouched {
+                assert_eq!(
+                    serde_json::to_value(other_store.load_draft(&database, &camp_id).unwrap())
+                        .unwrap(),
+                    expected,
+                    "withdrawal and replay must preserve other clients' content, refs, quotes and revision"
+                );
+            }
+        }
     }
 
     #[test]

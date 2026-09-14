@@ -199,6 +199,28 @@ app.whenReady().then(async () => {
     assert.ok(await run("document.querySelector('.general-lead-trigger').textContent.includes('已失效')"))
     assert.equal(await run("document.querySelector('.general-save-row button').disabled"), true)
 
+    await navigate('remote')
+    await run("window.settingsTest.state.holdHostStatus = true; dispatchEvent(new Event('focus'))")
+    await settle()
+    await click('[aria-label="远程访问"]')
+    await run('window.settingsTest.releaseHostStatus()'); await settle()
+    assert.equal(await run("document.querySelector('#remote-token').type"), 'password')
+    assert.equal(await run("document.querySelector('#remote-token').value"), 'fixture-token-1')
+    assert.ok(await run("document.querySelector('[aria-label=\"远程访问\"]').checked"), 'late status must not undo start')
+    await capture('host-web-enabled-day')
+    assert.equal(await run("document.querySelectorAll('.remote-token-actions button').length"), 2)
+    await click('[aria-label="远程访问"]')
+    assert.equal(await run("document.querySelector('[role=dialog]')===null"), true)
+    assert.equal(await run("document.querySelector('#remote-token').value"), 'fixture-token-1')
+    await run('window.settingsTest.state.loseHostStartReply = true')
+    await click('[aria-label="远程访问"]')
+    assert.ok(await run("document.querySelector('[aria-label=\"远程访问\"]').checked"))
+    assert.equal(await run("window.settingsTest.requests.filter(r => r.method === 'hostWeb.start').length"), 2, 'unknown reply must query status without repeating start')
+    await navigate('general'); await navigate('remote')
+    assert.equal(await run("document.querySelector('#remote-token').value"), 'fixture-token-1', 'remount rereads the current Host credential without rotating')
+    await click('[aria-label="远程访问"]')
+    assert.equal(await run("document.querySelector('[role=dialog]')===null"), true)
+
     await navigate('appearance')
     assert.deepEqual(await run("[...document.querySelector('#appearance-zoom').options].map(o=>Number(o.value))"), [25,33,50,67,75,80,90,100,110,125,150,175,200,250,300,400,500])
     assert.equal(await run("document.querySelectorAll('.motion-example').length"), 0)
@@ -261,12 +283,18 @@ app.whenReady().then(async () => {
     }
     for (const kind of ['feishu', 'dingtalk']) {
       const account = { ...savedAccount, accountId: `sample-${kind}`, brand: kind }
-      const connected = { status: 'connected', account }
+      const connected = { status: 'connected', sessionStatus: 'valid', account }
       const tab = `.channel-provider-tab:has(.channel-mark-${kind})`
       await updateChannel(kind, { connection: connected })
       await click(tab)
       assert.equal(await run("document.querySelectorAll('.channel-connection-actions button').length"), 1)
-      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '登录有效')
+      await updateChannel(kind, { connection: { status: 'connected', account } })
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录态待校验')
+      await updateChannel(kind, { connection: { ...connected, sessionStatus: 'unavailable' } })
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录态暂不可用')
+      assert.equal(await run('JSON.stringify(window.settingsTest.state.channels.channels.map(c => c.memberBots))'), savedBots)
+      await updateChannel(kind, { connection: connected })
       const requestCount = (await channelRequests()).length
       await run(`document.querySelector(${JSON.stringify(trigger)}).focus()`)
       await key('Enter')
@@ -288,14 +316,14 @@ app.whenReady().then(async () => {
       assert.equal(await run("document.querySelector('.channel-account-heading strong').textContent"), savedAccount.userName)
       await key('Escape')
       await waitFor("document.querySelector('.channel-qr-dialog') === null && !document.querySelector('.channel-connection-trigger').disabled")
-      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-account-heading .channel-connection-status').textContent"), '登录有效')
       assert.equal(await run("document.querySelector('.channel-settings [role=alert]')"), null)
 
       await click(trigger); await click(`${menu} [role=menuitem]:first-child`)
       await waitFor("document.querySelector('.channel-qr-dialog') !== null")
       await finishChannelAction(`${kind}_connection_error`)
       assert.equal(await run("document.querySelector('.channel-account-heading strong').textContent"), savedAccount.userName)
-      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录有效')
       assert.ok(await run("document.querySelector('.channel-settings [role=alert]') !== null"))
       await click(trigger); await click(`${menu} [role=menuitem]:first-child`)
       await finishChannelAction(null)
@@ -311,7 +339,7 @@ app.whenReady().then(async () => {
       await click(trigger)
       assert.equal((await channelRequests()).length, disconnectCount, 'busy state prevents duplicate disconnect')
       await finishChannelAction(`${kind}_connection_error`)
-      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录有效')
       await click(trigger); await click(`${menu} .is-danger`)
       await finishChannelAction(null)
       assert.equal(await run("document.querySelector('.channel-connection-actions button').textContent"), kind === 'feishu' ? '登录开放平台' : '连接钉钉')
@@ -333,7 +361,7 @@ app.whenReady().then(async () => {
       await updateChannel(kind, { hostStatus: 'unavailable' })
       await menuClosed()
       assert.ok(await run("document.querySelector('.channel-connection-trigger').disabled"))
-      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '已连接')
+      assert.equal(await run("document.querySelector('.channel-connection-status').textContent"), '登录有效')
       await updateChannel(kind, { hostStatus: 'ready' }); await menuClosed()
       await click(trigger)
       await click(`.channel-provider-tab:has(.channel-mark-${kind === 'feishu' ? 'dingtalk' : 'feishu'})`)
@@ -389,7 +417,7 @@ app.whenReady().then(async () => {
     for (const theme of ['day', 'night']) {
       await run(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
       window.setContentSize(1040, 700); window.webContents.setZoomFactor(1)
-      for (const page of ['general','appearance','notifications','runtime','channels','monitoring','diagnostics','about']) {
+      for (const page of ['general','remote','appearance','notifications','runtime','channels','monitoring','diagnostics','about']) {
         await navigate(page); await noOverflow(`${page}/${theme}/1040`); await capture(`${page}-${theme}-1040`)
         if (page === 'monitoring') {
           await selectMonitoringRange('30d'); await costHistoryFits(`${page}/30d/${theme}/1040`)

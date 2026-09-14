@@ -122,7 +122,8 @@ pub fn validate_member_avatar_update(current: Option<&str>, next: Option<&str>) 
     validate_new_member_avatar_ref(next)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ManagedMemberAvatarSummary {
     pub avatar_ref: String,
     pub source_width: u32,
@@ -278,9 +279,182 @@ pub fn import_managed_member_avatar(
         center_y: (f64::from(crop_y) + f64::from(crop_edge) / 2.0) / f64::from(source_height),
         size: f64::from(crop_edge) / f64::from(source_width.min(source_height)),
     };
+    publish_managed_member_avatar(
+        data_dir,
+        asset_id,
+        &source_png,
+        &icon_png,
+        source_width,
+        source_height,
+        crop,
+    )
+}
+
+/// Saves a normalized, cropped UI asset through the same compound storage used
+/// by member creation. Its content identity makes a lost save reply retryable.
+pub fn save_managed_member_avatar(
+    data_dir: &Path,
+    source_png: &[u8],
+    icon_png: &[u8],
+    source_width: u32,
+    source_height: u32,
+    crop: MemberAvatarCrop,
+) -> Result<ManagedMemberAvatarSummary> {
+    anyhow::ensure!(
+        source_png.len() <= NORMALIZED_SOURCE_BYTES && icon_png.len() <= ICON_BYTES,
+        "Avatar exceeds the managed asset limit"
+    );
+    validate_normalized_png(
+        source_png,
+        source_width,
+        source_height,
+        NORMALIZED_MAXIMUM_EDGE,
+    )?;
+    validate_normalized_png(icon_png, ICON_EDGE, ICON_EDGE, ICON_EDGE)?;
+    validate_crop(&crop, source_width, source_height)?;
+    let mut digest = Sha256::new();
+    digest.update(source_png);
+    digest.update(icon_png);
+    digest.update(serde_json::to_vec(&crop)?);
+    let hash = digest.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&hash[..16]);
+    let asset_id = Uuid::from_bytes(bytes);
+    Ok(publish_managed_member_avatar(
+        data_dir,
+        asset_id,
+        source_png,
+        icon_png,
+        source_width,
+        source_height,
+        crop,
+    )?)
+}
+
+fn validate_normalized_png(bytes: &[u8], width: u32, height: u32, maximum: u32) -> Result<()> {
+    anyhow::ensure!(
+        width > 0 && height > 0 && width <= maximum && height <= maximum,
+        "Avatar dimensions are invalid"
+    );
+    reject_animated_png(bytes)?;
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Png);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(maximum);
+    limits.max_image_height = Some(maximum);
+    limits.max_alloc = Some(MAXIMUM_DECODE_ALLOCATION);
+    reader.limits(limits);
+    let image = reader.decode()?;
+    anyhow::ensure!(
+        image.dimensions() == (width, height),
+        "Avatar dimensions do not match"
+    );
+    Ok(())
+}
+
+fn validate_crop(crop: &MemberAvatarCrop, width: u32, height: u32) -> Result<()> {
+    let half = crop.size * f64::from(width.min(height)) / 2.0;
+    anyhow::ensure!(
+        crop.center_x.is_finite()
+            && crop.center_y.is_finite()
+            && crop.size.is_finite()
+            && (0.12..=1.0).contains(&crop.size)
+            && (half / f64::from(width)..=1.0 - half / f64::from(width)).contains(&crop.center_x)
+            && (half / f64::from(height)..=1.0 - half / f64::from(height)).contains(&crop.center_y),
+        "Avatar crop is out of bounds"
+    );
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedMemberAvatarRendition {
+    pub base64: String,
+    pub media_type: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub crop: MemberAvatarCrop,
+}
+
+/// Reads only validated managed references and fixed manifest file names.
+pub fn read_managed_member_avatar(
+    data_dir: &Path,
+    avatar_ref: &str,
+    portrait: bool,
+) -> Result<Option<ManagedMemberAvatarRendition>> {
+    use base64::Engine;
+    let MemberAvatarReference::Managed(asset_id) = parse_member_avatar_ref(avatar_ref)? else {
+        return Ok(None);
+    };
+    let root = data_dir.join("member-avatars");
+    let directory = root.join(asset_id.hyphenated().to_string());
+    if !path_exists(&directory)? {
+        return Ok(None);
+    }
+    for path in [&root, &directory] {
+        let metadata = fs::symlink_metadata(path)?;
+        anyhow::ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "Avatar directory is invalid"
+        );
+    }
+    let manifest: AvatarManifestV1 = serde_json::from_slice(&read_existing_regular_file(
+        &directory.join("manifest.json"),
+        MANIFEST_BYTES,
+    )?)?;
+    anyhow::ensure!(
+        manifest.schema_version == 1 && manifest.asset_id == asset_id.hyphenated().to_string(),
+        "Avatar manifest is invalid"
+    );
+    validate_crop(
+        &manifest.icon_crop,
+        manifest.source.file.width,
+        manifest.source.file.height,
+    )?;
+    let (file, name, maximum) = if portrait {
+        (&manifest.source.file, "source.png", NORMALIZED_SOURCE_BYTES)
+    } else {
+        (&manifest.icon, "icon-192.png", ICON_BYTES)
+    };
+    anyhow::ensure!(
+        file.file == name && file.media_type == "image/png",
+        "Avatar rendition is invalid"
+    );
+    let bytes = read_existing_regular_file(&directory.join(name), maximum)?;
+    anyhow::ensure!(
+        file.byte_length == bytes.len() && sha256(&bytes) == file.sha256,
+        "Avatar content changed"
+    );
+    validate_normalized_png(
+        &bytes,
+        file.width,
+        file.height,
+        if portrait {
+            NORMALIZED_MAXIMUM_EDGE
+        } else {
+            ICON_EDGE
+        },
+    )?;
+    Ok(Some(ManagedMemberAvatarRendition {
+        base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        media_type: "image/png",
+        width: file.width,
+        height: file.height,
+        crop: manifest.icon_crop,
+    }))
+}
+
+fn publish_managed_member_avatar(
+    data_dir: &Path,
+    asset_id: Uuid,
+    source_png: &[u8],
+    icon_png: &[u8],
+    source_width: u32,
+    source_height: u32,
+    crop: MemberAvatarCrop,
+) -> std::result::Result<ManagedMemberAvatarSummary, MemberAvatarImportError> {
     let asset_id = asset_id.hyphenated().to_string();
-    let source_manifest = manifest_file("source.png", source_width, source_height, &source_png);
-    let icon_manifest = manifest_file("icon-192.png", ICON_EDGE, ICON_EDGE, &icon_png);
+    let source_manifest = manifest_file("source.png", source_width, source_height, source_png);
+    let icon_manifest = manifest_file("icon-192.png", ICON_EDGE, ICON_EDGE, icon_png);
     let root = data_dir.join("member-avatars");
     ensure_private_directory(&root)?;
     let final_directory = root.join(&asset_id);
@@ -292,6 +466,7 @@ pub fn import_managed_member_avatar(
                 &asset_id,
                 &source_manifest,
                 &icon_manifest,
+                &crop,
             ),
             Ok(true)
         ) {
@@ -309,8 +484,8 @@ pub fn import_managed_member_avatar(
     remove_scoped_temporary_path(&temporary_directory)?;
     create_private_directory(&temporary_directory)?;
     let write_result = (|| {
-        write_private_file(&temporary_directory.join("source.png"), &source_png)?;
-        write_private_file(&temporary_directory.join("icon-192.png"), &icon_png)?;
+        write_private_file(&temporary_directory.join("source.png"), source_png)?;
+        write_private_file(&temporary_directory.join("icon-192.png"), icon_png)?;
         let manifest = AvatarManifestV1 {
             schema_version: 1,
             asset_id: asset_id.clone(),
@@ -580,6 +755,7 @@ fn existing_asset_matches(
     asset_id: &str,
     expected_source: &AvatarManifestFile,
     expected_icon: &AvatarManifestFile,
+    expected_crop: &MemberAvatarCrop,
 ) -> std::result::Result<bool, MemberAvatarImportError> {
     let metadata = fs::symlink_metadata(directory)
         .map_err(|_| MemberAvatarImportError::invalid("Avatar asset could not be inspected"))?;
@@ -597,6 +773,7 @@ fn existing_asset_matches(
         || manifest.source.file.width != expected_source.width
         || manifest.source.file.height != expected_source.height
         || manifest.icon.sha256 != expected_icon.sha256
+        || &manifest.icon_crop != expected_crop
     {
         return Ok(false);
     }
@@ -748,6 +925,68 @@ mod tests {
         assert_eq!(manifest["source"]["metadataStripped"], true);
         assert_eq!(manifest["icon"]["width"], ICON_EDGE);
         assert_eq!(manifest["icon"]["height"], ICON_EDGE);
+
+        // Existing imported assets and normalized UI saves share the same reader.
+        let portrait = read_managed_member_avatar(&directory, &first.avatar_ref, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!((portrait.width, portrait.height), (400, 500));
+        let source = fs::read(
+            directory
+                .join("member-avatars")
+                .join(asset_id.to_string())
+                .join("source.png"),
+        )
+        .unwrap();
+        let icon = fs::read(
+            directory
+                .join("member-avatars")
+                .join(asset_id.to_string())
+                .join("icon-192.png"),
+        )
+        .unwrap();
+        let saved =
+            save_managed_member_avatar(&directory, &source, &icon, 400, 500, first.crop.clone())
+                .unwrap();
+        let repeated =
+            save_managed_member_avatar(&directory, &source, &icon, 400, 500, first.crop.clone())
+                .unwrap();
+        assert_eq!(saved, repeated);
+        assert_eq!(
+            read_managed_member_avatar(&directory, &saved.avatar_ref, false)
+                .unwrap()
+                .unwrap()
+                .width,
+            192
+        );
+        assert!(
+            save_managed_member_avatar(&directory, &source, &icon, 500, 400, first.crop.clone())
+                .is_err()
+        );
+        assert!(
+            save_managed_member_avatar(
+                &directory,
+                &source,
+                &icon,
+                400,
+                500,
+                MemberAvatarCrop {
+                    size: 2.0,
+                    ..first.crop.clone()
+                }
+            )
+            .is_err()
+        );
+        let saved_id = saved.avatar_ref.rsplit('/').next().unwrap();
+        fs::write(
+            directory
+                .join("member-avatars")
+                .join(saved_id)
+                .join("source.png"),
+            b"changed",
+        )
+        .unwrap();
+        assert!(read_managed_member_avatar(&directory, &saved.avatar_ref, true).is_err());
 
         write_test_png(&input, [96, 48, 24, 255]);
         let conflict = import_managed_member_avatar(&directory, asset_id, &input).unwrap_err();

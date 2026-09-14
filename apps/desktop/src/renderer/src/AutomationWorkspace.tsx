@@ -1,3 +1,5 @@
+import { useCampClient } from './camp-client'
+import { newCommandId } from '../../shared/command-id'
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
@@ -38,7 +40,10 @@ export function AutomationWorkspace({
   onNotify(message: string): void
   onLeaveGuardChange?(guard: AutomationLeaveGuard | null): void
 }): React.JSX.Element {
+  const client = useCampClient()
   const [automations, setAutomations] = useState<AutomationView[]>([])
+  const refreshGeneration = useRef(0)
+  useEffect(() => () => { refreshGeneration.current++ }, [client])
   const automationsRef = useRef<AutomationView[]>([])
   const [selectedId, setSelectedId] = useState<string | 'new' | null>(null)
   const selectedIdRef = useRef(selectedId)
@@ -107,13 +112,14 @@ export function AutomationWorkspace({
     : null
 
   const refresh = useCallback(async (quiet = false): Promise<boolean> => {
+    const request = ++refreshGeneration.current
     if (!quiet) setLoadState('loading')
     try {
       const loaded: AutomationView[] = []
       const seenCursors = new Set<string>()
       let cursor: string | null = null
       for (;;) {
-        const page: AutomationListPage = await window.rovai.request<AutomationListPage>('automations.list', {
+        const page: AutomationListPage = await client.request<AutomationListPage>('automations.list', {
           status: 'all', limit: 50, ...(cursor ? { cursor } : {})
         })
         loaded.push(...page.automations)
@@ -124,6 +130,7 @@ export function AutomationWorkspace({
         seenCursors.add(page.nextCursor)
         cursor = page.nextCursor
       }
+      if (request !== refreshGeneration.current) return false
       setAutomations(loaded)
       automationsRef.current = loaded
 
@@ -159,25 +166,27 @@ export function AutomationWorkspace({
       setIssue((current) => current?.kind === 'load' ? null : current)
       return true
     } catch (nextError) {
-      if (!quiet) {
+      if (!quiet && request === refreshGeneration.current) {
         setLoadState('error')
         setIssue({ kind: 'load', message: readErrorMessage(nextError) })
       }
       return false
     }
-  }, [])
+  }, [client])
 
   useEffect(() => {
     void refresh()
     const interval = window.setInterval(() => void refresh(true), 5_000)
-    const unsubscribe = window.rovai.onEvent((event) => {
+    const unsubscribe = client.onEvent?.((event) => {
       if (event.method === 'automations.updated') void refresh(true)
     })
+    const unsubscribeInvalidated = client.onInvalidated?.(() => void refresh(true))
     return () => {
       window.clearInterval(interval)
-      unsubscribe()
+      unsubscribe?.()
+      unsubscribeInvalidated?.()
     }
-  }, [refresh])
+  }, [client, refresh])
 
   useEffect(() => {
     setDeleteArmed(null)
@@ -220,8 +229,8 @@ export function AutomationWorkspace({
         setIssue((active) => active?.kind === 'save' || active?.kind === 'conflict' ? null : active)
       }
       try {
-        const result = await window.rovai.request<StoredCommandResult>('automations.update', {
-          commandId: crypto.randomUUID(),
+        const result = await client.request<StoredCommandResult>('automations.update', {
+          commandId: newCommandId(),
           command: {
             automationId,
             expectedVersion: savedVersions.current.get(automationId) ?? current.version,
@@ -361,8 +370,8 @@ export function AutomationWorkspace({
     setBusy('create')
     setIssue(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('automations.create', {
-        commandId: crypto.randomUUID(), command: draft
+      const result = await client.request<StoredCommandResult>('automations.create', {
+        commandId: newCommandId(), command: draft
       })
       const created = automationFromResult(result)
       replaceAutomation(created)
@@ -384,8 +393,8 @@ export function AutomationWorkspace({
     setBusy('run')
     setIssue(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('automations.run', {
-        commandId: crypto.randomUUID(), command: { automationId: current.automationId }
+      const result = await client.request<StoredCommandResult>('automations.run', {
+        commandId: newCommandId(), command: { automationId: current.automationId }
       })
       if (result.status === 'rejected') throw new Error(String(result.payload.message ?? '任务未能开始。'))
       const status = String(result.payload.status ?? '')
@@ -410,8 +419,8 @@ export function AutomationWorkspace({
       const command = enabled
         ? { automationId: current.automationId, expectedVersion: current.version, enabled: true }
         : { automationId: current.automationId, expectedVersion: current.version }
-      const result = await window.rovai.request<StoredCommandResult>(method, {
-        commandId: crypto.randomUUID(), command
+      const result = await client.request<StoredCommandResult>(method, {
+        commandId: newCommandId(), command
       })
       const updated = automationFromResult(result)
       replaceAutomation(updated)
@@ -429,8 +438,8 @@ export function AutomationWorkspace({
     setBusy('delete')
     setIssue(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('automations.delete', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('automations.delete', {
+        commandId: newCommandId(),
         command: { automationId: current.automationId, expectedVersion: current.version }
       })
       if (result.status === 'rejected') throw new Error(String(result.payload.message ?? '任务删除失败。'))

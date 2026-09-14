@@ -1,6 +1,9 @@
+import { creationPreferences, withHostConversationPreferences } from '../shared/host-general-preferences'
+import { createHostChannelHandler } from './host-channels'
 import { FilePreviewFrameNavigation } from './file-preview/file-preview-navigation'
 import { installWindowNavigation } from './window-navigation'
 import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { openHostWebLink } from './host-web-link'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
 import {
@@ -381,7 +384,7 @@ let currentUserProfile: CurrentUserProfileStore | null = null
 let onboarding: OnboardingStore | null = null
 let restorableLocations: RestorableLocationStore | null = null
 let navigationPreferences: NavigationPreferencesStore | null = null
-let automationSchedulerTimer: NodeJS.Timeout | null = null
+let desktopBackgroundTimer: NodeJS.Timeout | null = null
 let dailyAnalysis: DailyAnalysisService | null = null
 let evaluationHost: EvaluationHostService | null = null
 let localStoresReady = false
@@ -454,6 +457,7 @@ const channelSettings = new ChannelSettingsCoordinator({
   feishu: feishuChannelSettings,
   dingtalk: dingtalkChannelSettings
 })
+core.setChannelHandler(createHostChannelHandler(channelSettings))
 const channelHostLifecycle = new ChannelHostLifecycle({
   async start() {
     await channelSettings.start()
@@ -826,6 +830,7 @@ function createWindow(): void {
   window.once('ready-to-show', () => window.show())
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url)
+    else if (url.startsWith('http://')) void openHostWebLink(url, () => core.request('host.web.status'), value => shell.openExternal(value)).catch(() => undefined)
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event, url) => {
@@ -892,12 +897,11 @@ if (primaryInstance) void app.whenReady().then(async () => {
       console.warn('[rovai] Scheduled Automation resume boundary was not updated.', error)
     })
   })
-  automationSchedulerTimer = setInterval(() => {
-    void core.tickAutomationScheduler(new Date().toISOString()).catch(() => undefined)
+  desktopBackgroundTimer = setInterval(() => {
     void dailyAnalysis?.tick().catch(() => undefined)
     void evaluationHost?.tick().catch((error) => { console.warn('[rovai] Evaluation Host preparation failed:', error.message) })
   }, 500)
-  automationSchedulerTimer.unref()
+  desktopBackgroundTimer.unref()
   const userDataPath = app.getPath('userData')
   appearanceFilePath = join(userDataPath, 'appearance.json')
   const generalPreferencesPath = join(userDataPath, 'general-preferences.json')
@@ -1097,6 +1101,33 @@ ipcMain.handle('rovai:request', async (_event, method: CoreMethod, params?: unkn
 })
 
 ipcMain.handle('rovai:supervisor-get-snapshot', () => core.getSnapshot())
+
+ipcMain.handle('rovai:host-web', async (event, operation: unknown, value: unknown) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents
+    || event.senderFrame !== event.sender.mainFrame) {
+    throw new Error('Host controls require a local Desktop window')
+  }
+  if (operation === 'token' || operation === 'status' || operation === 'stop' || operation === 'rotate' || operation === 'loginTicket') {
+    return core.request(`host.web.${operation}`)
+  }
+  if (operation !== 'start' || !value || typeof value !== 'object') {
+    throw new Error('Unsupported Host Web operation')
+  }
+  const input = value as Record<string, unknown>
+  if (typeof input.listen !== 'string' || typeof input.allowInsecureLan !== 'boolean'
+    || (input.publicOrigin !== undefined && typeof input.publicOrigin !== 'string')
+    || Object.keys(input).some((key) => !['listen', 'publicOrigin', 'allowInsecureLan'].includes(key))) {
+    throw new Error('Invalid Host Web settings')
+  }
+  await hostGeneralPreferences().get()
+  // Assets are selected by Main, never by a renderer-supplied filesystem path.
+  return core.request('host.web.start', {
+    ...input,
+    uiDirectory: app.isPackaged
+      ? join(process.resourcesPath, 'web-ui')
+      : join(app.getAppPath(), 'out', 'web')
+  })
+})
 ipcMain.handle('rovai:supervisor-retry', () => {
   if (windowsBootstrap?.kind === 'blocked' && core.getSnapshot().capabilities.fullCoreRetry) {
     // sessionData must be bound before ready. Retry the same root in a fresh
@@ -1254,21 +1285,21 @@ ipcMain.handle('rovai:desktop-session-commit-location', async (_event, location:
   await restorableLocations.commit(validated)
 })
 
-ipcMain.handle('rovai:general-preferences-get', () => requireGeneralPreferences().get())
+ipcMain.handle('rovai:general-preferences-get', () => hostGeneralPreferences().get())
 
 ipcMain.handle('rovai:general-preferences-set-startup', (_event, mode: unknown) => {
   if (!isStartupLocationMode(mode)) throw new Error('Unsupported startup location mode')
-  return requireGeneralPreferences().setStartupLocationMode(mode as StartupLocationMode)
+  return hostGeneralPreferences().setStartupLocationMode(mode as StartupLocationMode)
 })
 
 ipcMain.handle('rovai:general-preferences-set-section', (_event, section: unknown) => {
   if (!isSettingsSection(section)) throw new Error('Unsupported settings section')
-  return requireGeneralPreferences().setLastSettingsSection(section as SettingsSection)
+  return hostGeneralPreferences().setLastSettingsSection(section as SettingsSection)
 })
 
 ipcMain.handle('rovai:general-preferences-set-execution-placement', (_event, placement: unknown) => {
   if (!isExecutionConsolePlacement(placement)) throw new Error('Unsupported execution console placement')
-  return requireGeneralPreferences().setExecutionConsolePlacement(
+  return hostGeneralPreferences().setExecutionConsolePlacement(
     placement as ExecutionConsolePlacement
   )
 })
@@ -1276,21 +1307,22 @@ ipcMain.handle('rovai:general-preferences-set-execution-placement', (_event, pla
 ipcMain.handle('rovai:general-preferences-set-new-conversation-defaults', (_event, defaults: unknown, enableOneClick: unknown = false) => {
   if (!isNewConversationDefaults(defaults)) throw new Error('Invalid default new conversation configuration')
   if (typeof enableOneClick !== 'boolean') throw new Error('Invalid one-click new conversation preference')
-  return requireGeneralPreferences().setNewConversationDefaults(defaults, enableOneClick)
+  return hostGeneralPreferences().setNewConversationDefaults(defaults, enableOneClick)
 })
 
 ipcMain.handle('rovai:general-preferences-set-one-click-new-conversation', (_event, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Invalid one-click new conversation preference')
-  return requireGeneralPreferences().setOneClickNewConversationEnabled(enabled)
+  return hostGeneralPreferences().setOneClickNewConversationEnabled(enabled)
 })
 
 ipcMain.handle('rovai:general-preferences-set-world-map', (_event, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Invalid world map preference')
-  return requireGeneralPreferences().setWorldMapEnabled(enabled)
+  return hostGeneralPreferences().setWorldMapEnabled(enabled)
 })
 
-ipcMain.handle('rovai:general-preferences-invalidate-new-conversation-defaults', () => {
-  return requireGeneralPreferences().invalidateNewConversationDefaults()
+ipcMain.handle('rovai:general-preferences-invalidate-new-conversation-defaults', (_event, expectedDefaults: unknown) => {
+  if (expectedDefaults !== undefined && expectedDefaults !== null && !isNewConversationDefaults(expectedDefaults)) throw new Error('Invalid expected default team')
+  return hostGeneralPreferences().invalidateNewConversationDefaults(expectedDefaults)
 })
 
 ipcMain.handle('rovai:channels-get', (event) => {
@@ -1552,7 +1584,11 @@ ipcMain.handle('rovai:member-avatar-select-source', async () => {
 
 ipcMain.handle(
   'rovai:member-avatar-save',
-  async (_event, input: SaveMemberAvatarAssetInput) => requireMemberAvatars().save(input)
+  async (_event, input: SaveMemberAvatarAssetInput) => core.request('memberAvatars.save', {
+    sourceBase64: Buffer.from(input.sourcePng).toString('base64'),
+    iconBase64: Buffer.from(input.iconPng).toString('base64'),
+    sourceWidth: input.sourceWidth, sourceHeight: input.sourceHeight, crop: input.crop
+  })
 )
 
 ipcMain.handle(
@@ -1568,7 +1604,8 @@ ipcMain.handle(
     ) {
       throw new Error('Unsupported member avatar read request')
     }
-    return requireMemberAvatars().read(avatarRef, rendition)
+    const image = await core.request<{ base64: string; mediaType: 'image/png'; width: number; height: number; crop: import('@contracts').MemberAvatarCrop } | null>('memberAvatars.read', { avatarRef, rendition })
+    return image ? { ...image, bytes: Uint8Array.from(Buffer.from(image.base64, 'base64')) } : null
   }
 )
 
@@ -2272,9 +2309,9 @@ const appQuitCoordinator = new AppQuitCoordinator({
     () => new MessageChannelMain()
   ),
   drain: async () => {
-    if (automationSchedulerTimer) {
-      clearInterval(automationSchedulerTimer)
-      automationSchedulerTimer = null
+    if (desktopBackgroundTimer) {
+      clearInterval(desktopBackgroundTimer)
+      desktopBackgroundTimer = null
     }
     appUpdates?.dispose()
     nativeTheme.removeListener('updated', publishAppearance)
@@ -2315,6 +2352,17 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   appQuitCoordinator.handleQuitRequest(event)
 })
+
+let sharedGeneralPreferences: ReturnType<typeof withHostConversationPreferences> | null = null
+function hostGeneralPreferences(): ReturnType<typeof withHostConversationPreferences> {
+  sharedGeneralPreferences ??= withHostConversationPreferences(requireGeneralPreferences(), async (method, params) => {
+    // Import legacy Desktop choices only while the Host has no saved record.
+    // Repeating this after a Core restart cannot overwrite newer Web choices.
+    await core.request('preferences.newConversation.initialize', creationPreferences(requireGeneralPreferences().get()))
+    return core.request(method, params)
+  })
+  return sharedGeneralPreferences
+}
 
 function requireGeneralPreferences(): GeneralPreferencesStore {
   if (!generalPreferences) throw new Error('General Preferences store is unavailable')

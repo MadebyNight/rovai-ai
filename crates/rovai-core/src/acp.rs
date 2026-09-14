@@ -2705,11 +2705,16 @@ impl AcpHost {
                 else {
                     return false;
                 };
-                let _ = child.force_terminate_tree();
-                matches!(
-                    tokio::time::timeout_at(deadline, child.wait()).await,
-                    Ok(Ok(_))
-                )
+                if self.capture_native_descendants(&mut child).is_err() {
+                    let _ = child.force_terminate_tree();
+                    return false;
+                }
+                let terminated = child.force_terminate_tree().is_ok();
+                terminated
+                    && matches!(
+                        tokio::time::timeout_at(deadline, child.wait()).await,
+                        Ok(Ok(_))
+                    )
             },
             async {
                 let Some(bridge) = &self.client_terminal_bridge else {
@@ -2725,36 +2730,60 @@ impl AcpHost {
         );
         let native_groups_reaped = match tokio::time::timeout_at(deadline, self.child.lock()).await
         {
-            Ok(child) => self.confirm_zcode_cleanup(&child, deadline).await,
+            Ok(child) => self.confirm_native_cleanup(&child, deadline).await,
             Err(_) => false,
         };
         host_reaped && terminals_reaped && native_groups_reaped
     }
 
-    async fn confirm_zcode_cleanup(
+    async fn confirm_native_cleanup(
         &self,
         child: &ManagedProcess,
         deadline: tokio::time::Instant,
     ) -> bool {
-        if self.adapter_kind != AdapterKind::ZcodeApp
-            || self.zcode_cleanup_confirmed.load(Ordering::Acquire)
+        #[cfg(target_os = "linux")]
         {
-            return true;
+            loop {
+                match child.captured_tree_is_empty() {
+                    Ok(true) => {
+                        if self.adapter_kind == AdapterKind::ZcodeApp {
+                            self.zcode_cleanup_confirmed.store(true, Ordering::Release);
+                            self.record_zcode_host_closed(true);
+                        }
+                        return true;
+                    }
+                    Err(_) => return false,
+                    Ok(false) => {}
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         }
-        let Some(root) = &self.private_config_root else {
-            return false;
-        };
-        let confirmed = crate::zcode::transport::confirm_owner_cleanup(child, root, deadline).await;
-        self.zcode_cleanup_confirmed
-            .store(confirmed, Ordering::Release);
-        self.record_zcode_host_closed(confirmed);
-        if !confirmed {
-            self.send_host_diagnostic(
+        #[cfg(not(target_os = "linux"))]
+        {
+            if self.adapter_kind != AdapterKind::ZcodeApp
+                || self.zcode_cleanup_confirmed.load(Ordering::Acquire)
+            {
+                return true;
+            }
+            let Some(root) = &self.private_config_root else {
+                return false;
+            };
+            let confirmed =
+                crate::zcode::transport::confirm_owner_cleanup(child, root, deadline).await;
+            self.zcode_cleanup_confirmed
+                .store(confirmed, Ordering::Release);
+            self.record_zcode_host_closed(confirmed);
+            if !confirmed {
+                self.send_host_diagnostic(
                 "ZCode managed process-tree cleanup remains unconfirmed; private evidence retained"
                     .to_string(),
             );
+            }
+            confirmed
         }
-        confirmed
     }
 
     fn record_zcode_host_closed(&self, confirmed: bool) {
@@ -2805,18 +2834,20 @@ impl AcpHost {
         self.alive.store(false, Ordering::Release);
         self.release_all_client_terminals().await;
         let mut child = self.child.lock().await;
+        let ownership_captured = self.capture_native_descendants(&mut child).is_ok();
         let _ = child.request_graceful_termination();
         if timeout(Duration::from_secs(3), child.wait()).await.is_err() {
             let _ = child.force_terminate_tree();
             let _ = timeout(Duration::from_secs(1), child.wait()).await;
         }
         let _ = child.force_terminate_tree();
-        let groups_reaped = self
-            .confirm_zcode_cleanup(
-                &child,
-                tokio::time::Instant::now() + Duration::from_millis(2500),
-            )
-            .await;
+        let groups_reaped = ownership_captured
+            && self
+                .confirm_native_cleanup(
+                    &child,
+                    tokio::time::Instant::now() + Duration::from_millis(2500),
+                )
+                .await;
         if groups_reaped
             && self.remove_private_config_root_on_shutdown
             && let Some(root) = self.private_config_root.as_ref()
@@ -2826,6 +2857,16 @@ impl AcpHost {
         if let Some(root) = self.detector_config_root.as_ref() {
             let _ = std::fs::remove_dir_all(root);
         }
+    }
+
+    fn capture_native_descendants(&self, _child: &mut ManagedProcess) -> std::io::Result<()> {
+        // On Linux explicit teardown uses pinned descendant identities, including
+        // ZCode's watcher. The watcher still handles unexpected native EOF; its
+        // group report is not the proof for an explicit pidfd-backed teardown.
+        #[cfg(target_os = "linux")]
+        return _child.capture_descendants();
+        #[cfg(not(target_os = "linux"))]
+        Ok(())
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value> {
@@ -3779,6 +3820,10 @@ impl AcpRuntime {
             .session_id()
             .await
             .context("ACP Session is not ready")?;
+        {
+            let mut child = self.host.child.lock().await;
+            self.host.capture_native_descendants(&mut child)?;
+        }
         self.host
             .fence_client_terminal_create(&session_id, &self.owner)
             .await;
@@ -3790,6 +3835,14 @@ impl AcpRuntime {
             .release_client_terminals_for_session(&session_id, &self.owner)
             .await;
         cancellation
+    }
+
+    pub(crate) fn preserve_zcode_host_after_cancel(&self) -> bool {
+        // A Linux shell can put foreground descendants in another process group.
+        // Native stop acknowledgement alone cannot prove that they exited. With
+        // no retained background work, close this Host using the captured pidfds.
+        // Hosts with older Session tasks keep the existing scoped cancellation.
+        !cfg!(target_os = "linux") || self.host.has_zcode_background_tasks()
     }
 
     pub async fn confirm_zcode_cancelled(&self) -> bool {
@@ -4726,7 +4779,11 @@ fn configure_runtime_command(
                     // Session. A custom provider cannot be selected later with
                     // session/set_model when session/new already rejected the
                     // product-account default for missing authentication.
-                    command.arg("--model").arg(&runtime.model.model_id);
+                    // RuntimeDefault is a Core selection sentinel. Omitting
+                    // --model preserves the user's native model/BYOK config.
+                    if runtime.model.source != "runtime_default" {
+                        command.arg("--model").arg(&runtime.model.model_id);
+                    }
                     command.arg("--permission-mode").arg(if legacy_read_only {
                         "dontAsk"
                     } else {
@@ -8235,6 +8292,47 @@ done
         assert!(error.to_string().contains("group or others"));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codebuddy_launch_preserves_native_default_and_explicit_model_selection() {
+        let root = std::env::temp_dir();
+        let workspace = AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().to_string());
+        for (source, model_id, expected) in [
+            ("runtime_default", "codebuddy-cli://runtime-default", None),
+            (
+                "runtime",
+                "custom-local:MiniMax-M3",
+                Some("custom-local:MiniMax-M3"),
+            ),
+        ] {
+            let mut runtime = frozen_kiro_runtime();
+            runtime.adapter_kind = AdapterKind::CodebuddyCli;
+            runtime.permissions.adapter_kind = AdapterKind::CodebuddyCli;
+            runtime.permissions.values = json!({"permission_mode":"bypassPermissions"});
+            runtime.model.source = source.to_string();
+            runtime.model.model_id = model_id.to_string();
+            let mut command = Command::new("/usr/bin/true");
+            configure_runtime_command(
+                &mut command,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &runtime,
+                false,
+                &BTreeMap::new(),
+                &root,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let arguments = command.as_std().get_args().collect::<Vec<_>>();
+            let selected = arguments
+                .windows(2)
+                .find(|pair| pair[0] == "--model")
+                .map(|pair| pair[1].to_str().unwrap());
+            assert_eq!(selected, expected);
+        }
     }
 
     #[test]

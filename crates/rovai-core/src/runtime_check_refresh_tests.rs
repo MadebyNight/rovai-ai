@@ -1,7 +1,7 @@
 //! Integration owner: live Check Manager + private database + synthetic programs.
 //! The capture seam never reads a developer's PATH, registry, shell or accounts.
 use super::*;
-use crate::{RuntimeCheckOutcome, RuntimeCheckTrigger, RuntimeLaunchPurpose};
+use crate::application::{RuntimeCheckOutcome, RuntimeCheckTrigger, RuntimeLaunchPurpose};
 use rovai_core::runtime_startup::{RuntimeEnvironmentVariable, RuntimeStartupConfiguration};
 use serde_json::{Value, json};
 use std::{
@@ -34,7 +34,7 @@ impl Fixture {
             rovai_core::runtime_discovery::runtime_visible_path(root.canonicalize().unwrap());
         let paths = Arc::new(StdMutex::new(Vec::new()));
         let captures = Arc::new(AtomicUsize::new(0));
-        let mut core = crate::tests::runtime_resolution_test_core(&root).unwrap();
+        let mut core = crate::application::tests::runtime_resolution_test_core(&root).unwrap();
         core.runtime_search_capture = Some({
             let paths = paths.clone();
             let captures = captures.clone();
@@ -51,7 +51,7 @@ impl Fixture {
         core.runtime_check_requests = requests;
         let core = Arc::new(core);
         let (shutdown, stopped) = oneshot::channel();
-        let manager = tokio::spawn(crate::process_runtime_check_manager(
+        let manager = tokio::spawn(crate::application::process_runtime_check_manager(
             core.clone(),
             receiver,
             stopped,

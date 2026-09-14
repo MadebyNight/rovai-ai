@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { createPortal } from 'react-dom'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { PanelToggleIcon } from './PanelToggleIcon'
+import { useMobileLayout } from './MobileLayout'
 import type { DesktopNavigation, NavigationState } from './desktop-navigation'
 import { navigationShortcut } from './desktop-navigation-input'
 import { primaryShortcutLabel } from './renderer-platform'
@@ -14,12 +15,15 @@ const emptySnapshot = (): NavigationState => EMPTY_HISTORY
 const noSubscription = (): (() => void) => () => undefined
 
 // Layout state stays below App so resizing does not rebuild the Camp or Composer children.
-export function NavigationShell({ platform, disabled = false, settings = false, navigation, className = '', children, ...attributes }: HTMLAttributes<HTMLDivElement> & {
+export function NavigationShell({ platform, disabled = false, settings = false, navigation, nativeWindowControls, browser = false, className = '', children, ...attributes }: HTMLAttributes<HTMLDivElement> & {
   platform: NodeJS.Platform
   disabled?: boolean
   settings?: boolean
+  browser?: boolean
+  nativeWindowControls?: Pick<import('@contracts').RovaiApi['windowControls'], 'onNavigationRequested'>
   navigation?: Pick<DesktopNavigation, 'getSnapshot' | 'subscribe' | 'back' | 'forward'>
 }): React.JSX.Element {
+  const mobile = useMobileLayout()
   const history = useSyncExternalStore(navigation?.subscribe ?? noSubscription, navigation?.getSnapshot ?? emptySnapshot, emptySnapshot)
   const input = useRef({ navigation, disabled, platform })
   input.current = { navigation, disabled, platform }
@@ -36,17 +40,17 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
       void input.current.navigation?.[action]()
     }
     const mouseup = (event: MouseEvent): void => {
-      if (event.button !== 3 && event.button !== 4) return
+      if (browser || (event.button !== 3 && event.button !== 4)) return
       // Windows uses WM_APPCOMMAND exclusively; handling its mouseup too would step twice.
-      if (input.current.platform === 'win32' && window.rovai.windowControls.onNavigationRequested) return
+      if (input.current.platform === 'win32' && nativeWindowControls?.onNavigationRequested) return
       if (event.defaultPrevented || !available()) return
       event.preventDefault()
       void input.current.navigation?.[event.button === 3 ? 'back' : 'forward']()
     }
     const preventDefaultNavigation = (event: MouseEvent): void => {
-      if (event.button === 3 || event.button === 4) event.preventDefault()
+      if (!browser && (event.button === 3 || event.button === 4)) event.preventDefault()
     }
-    const unsubscribe = window.rovai.windowControls.onNavigationRequested?.((direction) => {
+    const unsubscribe = nativeWindowControls?.onNavigationRequested?.((direction) => {
       if (available()) void input.current.navigation?.[direction]()
     })
     window.addEventListener('keydown', keydown)
@@ -58,7 +62,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
       window.removeEventListener('mouseup', mouseup)
       window.removeEventListener('auxclick', preventDefaultNavigation)
     }
-  }, [navigation])
+  }, [navigation, nativeWindowControls, browser])
   const [layout, setLayout] = useState<NavigationLayout>(() => {
     try { return parseNavigationLayout(window.localStorage.getItem(NAVIGATION_LAYOUT_KEY)) }
     catch { return parseNavigationLayout(null) }
@@ -71,9 +75,11 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
   const gesture = useRef<{ id: number; x: number; width: number; before: NavigationLayout; moved: boolean } | null>(null)
   const frame = useRef<number | null>(null)
   const maximum = navigationMaxWidth(viewport)
-  const fixedSettings = platform === 'darwin' && settings
-  const width = layout.collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
-  const label = layout.collapsed ? '展开导航侧栏' : '收起导航侧栏'
+  const fixedSettings = mobile || settings && (browser || platform === 'darwin')
+  // Web settings always expose their categories; ordinary-page layout stays saved.
+  const collapsed = layout.collapsed && !mobile && !(browser && settings)
+  const width = collapsed ? 0 : fixedSettings ? NAVIGATION_DEFAULT_WIDTH : clampNavigationWidth(layout.width, maximum)
+  const label = collapsed ? '展开导航侧栏' : '收起导航侧栏'
   const toggle = (): void => setLayout(current => fixedSettings && !current.collapsed ? current : { ...current, collapsed: !current.collapsed })
   const resizeTo = (value: number): void => setLayout({ width: clampNavigationWidth(value, maximum), collapsed: false })
   const cancelFrame = (): void => { if (frame.current !== null) cancelAnimationFrame(frame.current); frame.current = null }
@@ -104,10 +110,10 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
     try { window.localStorage.setItem(NAVIGATION_LAYOUT_KEY, JSON.stringify(layout)) } catch { /* Preferences may be unavailable; in-window layout still works. */ }
   }, [layout, resizing])
   useEffect(() => { if (disabled || fixedSettings) { finish(true); setMenuOpen(false) } }, [disabled, fixedSettings])
-  const control = fixedSettings && !layout.collapsed ? null : <div className="navigation-chrome-controls"><button className="navigation-collapse-button" type="button" disabled={disabled} title={label} aria-label={label} aria-expanded={!layout.collapsed} aria-controls="global-navigation" onClick={toggle}>
+  const control = fixedSettings && !collapsed ? null : <div className="navigation-chrome-controls"><button className="navigation-collapse-button" type="button" disabled={disabled} title={label} aria-label={label} aria-expanded={!layout.collapsed} aria-controls="global-navigation" onClick={toggle}>
     <PanelToggleIcon side="left" visible={!layout.collapsed} />
   </button>
-    {!layout.collapsed && !fixedSettings && navigation && <div className="navigation-history-controls" role="group" aria-label="浏览历史">
+    {!collapsed && !fixedSettings && navigation && <div className="navigation-history-controls" role="group" aria-label="浏览历史">
       {(['back', 'forward'] as const).map((direction) => {
         const text = direction === 'back' ? '后退' : '前进'
         const key = direction === 'back' ? '[' : ']'
@@ -121,8 +127,8 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
     </div>}
   </div>
   const shellStyle = useMemo(() => ({ ...attributes.style, '--rail-width': `${width}px` }) as CSSProperties, [attributes.style, width])
-  return <NavigationContext.Provider value={layout.collapsed}>
-    <div {...attributes} className={`app-shell navigation-shell ${className}${layout.collapsed ? ' navigation-collapsed' : ''}${resizing ? ' navigation-resizing' : ''}`} style={shellStyle}>
+  return <NavigationContext.Provider value={collapsed}>
+    <div {...attributes} className={`app-shell navigation-shell ${className}${collapsed ? ' navigation-collapsed' : ''}${resizing ? ' navigation-resizing' : ''}`} style={shellStyle}>
       {children}
       {!fixedSettings && <DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenu.Trigger asChild disabled={disabled}>
@@ -175,7 +181,7 @@ export function NavigationShell({ platform, disabled = false, settings = false, 
       </DropdownMenu.Root>}
       {!fixedSettings && <span id="navigation-resize-help" className="sr-only">方向键调宽，Shift 加速，Home 最窄，End 最宽，Enter 折叠，空格选择宽度。低于 200 像素完全收起；从左边缘拖出恢复。Escape 取消拖拽。</span>}
       {/* Electron applies drag regions in DOM order; keep this no-drag control after the sidebar and topbar drag regions. */}
-      {platform === 'win32' ? chromeSlot && createPortal(control, chromeSlot) : <div className="navigation-macos-control">{control}</div>}
+      {!browser && platform === 'win32' ? chromeSlot && createPortal(control, chromeSlot) : <div className={browser ? "navigation-browser-control" : "navigation-macos-control"}>{control}</div>}
     </div>
   </NavigationContext.Provider>
 }

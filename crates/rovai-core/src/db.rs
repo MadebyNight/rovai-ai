@@ -276,8 +276,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.58";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 102;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 104;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -704,6 +704,8 @@ struct CurrentMigrationState {
     v150: bool,
     v151: bool,
     v152: bool,
+    v153: bool,
+    v154: bool,
 }
 
 impl CurrentMigrationState {
@@ -725,6 +727,21 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if !self.v154 && contract == "v1.59" && schema == 103 {
+            let mut completed = *self;
+            completed.v154 = true;
+            return completed.admits(
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                classifier,
+            );
+        }
+        if self.v154
+            && (contract != CURRENT_DATA_CONTRACT_VERSION
+                || schema != CURRENT_PROJECTION_SCHEMA_VERSION)
+        {
+            return false;
+        }
         let through_v69 = self.v66 && self.v67 && self.v68 && self.v69;
         if !through_v69 {
             return false;
@@ -794,7 +811,9 @@ impl CurrentMigrationState {
             && self.v149
             && self.v150
             && self.v151
-            && self.v152;
+            && self.v152
+            && self.v153
+            && self.v154;
         let model_catalog_source = contract == "v1.58"
             && schema == 101
             && classifier == V147_CLASSIFIER_VERSION
@@ -809,7 +828,25 @@ impl CurrentMigrationState {
             && self.v150
             && self.v151
             && !self.v152;
-        if self.v152 && !current {
+        let client_draft_source = contract == "v1.58"
+            && schema == 102
+            && classifier == V147_CLASSIFIER_VERSION
+            && self.v142
+            && self.v143
+            && self.v144
+            && self.v145
+            && self.v146
+            && self.v147
+            && self.v148
+            && self.v149
+            && self.v150
+            && self.v151
+            && self.v152
+            && !self.v153;
+        if self.v153 && !current {
+            return false;
+        }
+        if self.v152 && !current && !client_draft_source {
             return false;
         }
         let startup_source = contract == "v1.58"
@@ -825,10 +862,11 @@ impl CurrentMigrationState {
             && self.v149
             && self.v150
             && !self.v151;
-        if self.v151 && !current && !model_catalog_source {
+        if self.v151 && !current && !model_catalog_source && !client_draft_source {
             return false;
         }
-        if self.v150 && !current && !model_catalog_source && !startup_source {
+        if self.v150 && !current && !model_catalog_source && !client_draft_source && !startup_source
+        {
             return false;
         }
         let dingtalk_names_source = contract == "v1.57"
@@ -846,6 +884,7 @@ impl CurrentMigrationState {
         if self.v149
             && !current
             && !model_catalog_source
+            && !client_draft_source
             && !startup_source
             && !dingtalk_names_source
         {
@@ -865,6 +904,7 @@ impl CurrentMigrationState {
         if self.v148
             && !current
             && !model_catalog_source
+            && !client_draft_source
             && !startup_source
             && !zcode_source
             && !dingtalk_names_source
@@ -937,6 +977,7 @@ impl CurrentMigrationState {
             && !self.v147;
         if current
             || model_catalog_source
+            || client_draft_source
             || startup_source
             || dingtalk_names_source
             || message_quotes_source
@@ -2637,6 +2678,22 @@ fn pending_fast_schema_matches(
             } else {
                 expected
             };
+            let expected = if state.v153
+                && matches!(*name, "pending_camp_input" | "pending_input_edit_session")
+            {
+                let before = if *name == "pending_camp_input" {
+                    "UNIQUE(camp_id, enqueue_sequence)"
+                } else {
+                    "FOREIGN KEY(camp_id, pending_input_id)"
+                };
+                expected.replacen(
+                    before,
+                    &format!("client_id TEXT NOT NULL DEFAULT 'desktop',{before}"),
+                    1,
+                )
+            } else {
+                expected
+            };
             if actual.as_deref().map(&normalized) != Some(normalized(&expected)) {
                 return Ok(false);
             }
@@ -2843,14 +2900,17 @@ pub(crate) fn classify_database_contract(
         return Ok(DatabaseContractClassification::Unknown(None));
     };
     let migrations = load_current_migration_state(connection)?;
+    let legacy_client_source = legacy_web_client_source(connection, &marker, migrations)?;
     let deployed_tool_source = marker.contract_version == "v1.52"
         && marker.projection_schema_version == 92
         && marker.classifier_version == V142_CLASSIFIER_VERSION;
-    if !migrations.admits(
-        &marker.contract_version,
-        marker.projection_schema_version,
-        &marker.classifier_version,
-    ) || (migrations.v135 && !migrations.v139 && !pi_runtime_v135_schema_matches(connection)?)
+    if (!legacy_client_source
+        && !migrations.admits(
+            &marker.contract_version,
+            marker.projection_schema_version,
+            &marker.classifier_version,
+        ))
+        || (migrations.v135 && !migrations.v139 && !pi_runtime_v135_schema_matches(connection)?)
         || (migrations.v136 && !migrations.v138 && !pi_runtime_v136_schema_matches(connection)?)
         || (migrations.v137 && !source_attachment_v137_schema_matches(connection)?)
         || (migrations.v138 && !pi_native_input_v138_schema_matches(connection)?)
@@ -2859,9 +2919,13 @@ pub(crate) fn classify_database_contract(
         || (migrations.v145 && !automation_v145_schema_matches(connection)?)
         || (migrations.v148 && !message_quote_v148_schema_matches(connection)?)
         || (migrations.v149 && !zcode_runtime_v149_schema_matches(connection)?)
-        || (migrations.v150 && !dingtalk_display_names_v150_schema_matches(connection)?)
+        || (migrations.v150
+            && !legacy_client_source
+            && !dingtalk_display_names_v150_schema_matches(connection)?)
         || (migrations.v151 && !runtime_startup_v151_schema_matches(connection)?)
         || (migrations.v152 && !model_catalog_v152_schema_matches(connection)?)
+        || (migrations.v153 && !client_draft_v153_schema_matches(connection)?)
+        || (migrations.v154 && !private_client_draft_v154_schema_matches(connection)?)
         || (migrations.v141
             && if deployed_tool_source {
                 !deployed_tool_v141_image_schema_matches(connection)?
@@ -2888,6 +2952,177 @@ pub(crate) fn classify_database_contract(
             marker,
         ))
     }
+}
+
+// The pushed Host preview used receipt 150 before main allocated that number.
+// Admit only its exact marker, prior chain and editor schema; never infer from a table name alone.
+fn legacy_web_client_source(
+    connection: &Connection,
+    marker: &DatabaseContractMarker,
+    mut state: CurrentMigrationState,
+) -> rusqlite::Result<bool> {
+    if marker.contract_version != "v1.59"
+        || marker.projection_schema_version != 100
+        || marker.classifier_version != V147_CLASSIFIER_VERSION
+        || !state.v150
+        || state.v151
+        || state.v152
+        || state.v153
+        || state.v154
+    {
+        return Ok(false);
+    }
+    state.v150 = false;
+    if !state.admits("v1.57", 99, V147_CLASSIFIER_VERSION)
+        || !client_draft_v153_schema_matches(connection)?
+    {
+        return Ok(false);
+    }
+    let old_names: i64 = connection.query_row("SELECT count(*) FROM pragma_table_info('dingtalk_account') WHERE name IN ('user_name','corp_name') AND type='TEXT' AND \"notnull\"=1", [], |r| r.get(0))?;
+    let startup: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='runtime_startup_setting')",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(old_names == 2 && !startup)
+}
+
+fn private_client_draft_v154_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let mut query = connection.prepare(
+        "SELECT name FROM pragma_table_info('single_chat_composer_draft') WHERE pk > 0 ORDER BY pk",
+    )?;
+    let keys = query
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if keys != ["conversation_id", "client_id"] {
+        return Ok(false);
+    }
+    for table in [
+        "single_chat_composer_draft",
+        "single_chat_pending_input",
+        "single_chat_pending_input_edit_session",
+    ] {
+        if connection.query_row(&format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name='client_id' AND type='TEXT' AND \"notnull\"=1 AND dflt_value=\"'desktop'\""), [], |r| r.get::<_, i64>(0))? != 1 { return Ok(false); }
+    }
+    Ok(true)
+}
+
+fn apply_private_client_draft_schema_v154(tx: &Transaction<'_>) -> Result<()> {
+    let triggers = {
+        let mut query = tx.prepare(
+            "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL",
+        )?;
+        query
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (name, _) in &triggers {
+        tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))?;
+    }
+    tx.execute_batch("CREATE TABLE single_chat_composer_draft_client (
+        conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+        client_id TEXT NOT NULL DEFAULT 'desktop',
+        revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+        source_attachments_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(source_attachments_json) AND json_type(source_attachments_json)='array'),
+        updated_at TEXT NOT NULL,
+        quotes_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(quotes_json) AND json_type(quotes_json)='array'),
+        quote_trash_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(quote_trash_json) AND json_type(quote_trash_json)='array'),
+        PRIMARY KEY(conversation_id,client_id));
+        INSERT INTO single_chat_composer_draft_client(conversation_id,revision,source_attachments_json,updated_at,quotes_json,quote_trash_json)
+          SELECT conversation_id,revision,source_attachments_json,updated_at,quotes_json,quote_trash_json FROM single_chat_composer_draft;
+        DROP TABLE single_chat_composer_draft;
+        ALTER TABLE single_chat_composer_draft_client RENAME TO single_chat_composer_draft;
+        ALTER TABLE single_chat_pending_input ADD COLUMN client_id TEXT NOT NULL DEFAULT 'desktop';
+        ALTER TABLE single_chat_pending_input_edit_session ADD COLUMN client_id TEXT NOT NULL DEFAULT 'desktop';")?;
+    for (_, sql) in triggers {
+        tx.execute_batch(&sql)?;
+    }
+    Ok(())
+}
+
+fn client_draft_v153_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let keys = {
+        let mut statement = connection.prepare("SELECT name, pk FROM pragma_table_info('camp_composer_draft') WHERE pk > 0 ORDER BY pk")?;
+        statement
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if keys != vec![("camp_id".to_owned(), 1), ("client_id".to_owned(), 2)] {
+        return Ok(false);
+    }
+    for table in [
+        "camp_composer_draft",
+        "prepared_attachment",
+        "pending_camp_input",
+        "pending_input_edit_session",
+    ] {
+        if connection.query_row(&format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name='client_id' AND type='TEXT' AND \"notnull\"=1 AND dflt_value=\"'desktop'\""), [], |r| r.get::<_, i64>(0))? != 1 {
+            return Ok(false);
+        }
+    }
+    let foreign_keys = {
+        let mut statement = connection.prepare("SELECT id, seq, \"from\", \"to\", on_delete FROM pragma_foreign_key_list('prepared_attachment') WHERE \"table\"='camp_composer_draft' ORDER BY id, seq")?;
+        statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if foreign_keys.len() != 2
+        || foreign_keys[0].0 != foreign_keys[1].0
+        || foreign_keys[0].1 != 0
+        || foreign_keys[1].1 != 1
+        || foreign_keys[0].2 != "camp_id"
+        || foreign_keys[0].3 != "camp_id"
+        || foreign_keys[1].2 != "client_id"
+        || foreign_keys[1].3 != "client_id"
+        || foreign_keys.iter().any(|key| key.4 != "CASCADE")
+    {
+        return Ok(false);
+    }
+    let identity_columns = table_columns(connection, "web_editor_identity")
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(identity_columns == ["client_id", "owner_id", "proof_digest"]
+        && connection.query_row("SELECT count(*) FROM pragma_table_info('web_editor_identity') WHERE \"notnull\"=1 AND (name!='client_id' OR pk=1)", [], |r| r.get::<_, i64>(0))? == 3
+        && connection.query_row("SELECT count(*) FROM sqlite_master WHERE name='web_editor_identity' AND replace(sql,' ','') LIKE '%CHECK(length(proof_digest)=32)%'", [], |r| r.get::<_, i64>(0))? == 1)
+}
+
+fn apply_model_catalog_schema_v152(transaction: &Transaction<'_>) -> Result<()> {
+    add_migration_column_if_missing(
+        transaction,
+        "adapter_capability_snapshot",
+        "model_catalog_succeeded_at",
+        "model_catalog_succeeded_at TEXT",
+    )?;
+    add_migration_column_if_missing(
+        transaction,
+        "agent_profile",
+        "default_runtime_generation",
+        "default_runtime_generation INTEGER",
+    )?;
+    // Never make old catalogs fresh at migration time. Legacy member identity
+    // is adopted only where the existing installation predates the saved row;
+    // unknown identity history must take the normal validation path once.
+    transaction.execute_batch(
+            "UPDATE adapter_capability_snapshot
+             SET model_catalog_succeeded_at = last_successful_probe_at
+             WHERE model_catalog_succeeded_at IS NULL;
+             UPDATE agent_profile SET default_runtime_generation = (
+                 SELECT installation.generation FROM adapter_installation installation
+                 JOIN adapter_capability_snapshot snapshot ON snapshot.installation_id = installation.id
+                 WHERE installation.id = agent_profile.default_runtime_installation_id
+                   AND installation.adapter_kind = agent_profile.selected_runtime_adapter_kind
+                   AND snapshot.probe_status = 'ready' AND snapshot.stale_at IS NULL
+                   AND julianday(installation.updated_at) <= julianday(agent_profile.updated_at)
+             ) WHERE default_runtime_generation IS NULL;"
+        )?;
+    Ok(())
 }
 
 fn model_catalog_v152_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -3303,7 +3538,7 @@ fn deployed_tool_v141_image_schema_matches(connection: &Connection) -> rusqlite:
         execution_epoch INTEGER NOT NULL, tool_call_id TEXT NOT NULL, source_key TEXT NOT NULL,
         source_path TEXT, content_blob_id TEXT REFERENCES managed_blob(id),
         display_name TEXT NOT NULL, media_type TEXT NOT NULL,
-        byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 20971520),
+        byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 20971530),
         ordinal INTEGER NOT NULL CHECK(ordinal >= 0), created_at TEXT NOT NULL,
         CHECK((source_path IS NOT NULL) != (content_blob_id IS NOT NULL)),
         UNIQUE(agent_run_id, execution_epoch, tool_call_id, source_key))";
@@ -3474,7 +3709,9 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 149),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 150),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 151),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 152)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 152),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 153),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 154)
         "#,
         [],
         |row| {
@@ -3562,6 +3799,8 @@ fn load_current_migration_state(
                 v150: row.get(80)?,
                 v151: row.get(81)?,
                 v152: row.get(82)?,
+                v153: row.get(83)?,
+                v154: row.get(84)?,
             })
         },
     )
@@ -6455,6 +6694,12 @@ impl Database {
             if !self.schema_migration_applied(152)? {
                 migration_step!("migration_152", self.migrate_model_catalog_v152());
             }
+            if !self.schema_migration_applied(153)? {
+                migration_step!("migration_153", self.migrate_client_drafts_v153());
+            }
+            if !self.schema_migration_applied(154)? {
+                migration_step!("migration_154", self.migrate_private_client_drafts_v154());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7106,6 +7351,12 @@ impl Database {
         if !self.schema_migration_applied(152)? {
             migration_step!("migration_152", self.migrate_model_catalog_v152());
         }
+        if !self.schema_migration_applied(153)? {
+            migration_step!("migration_153", self.migrate_client_drafts_v153());
+        }
+        if !self.schema_migration_applied(154)? {
+            migration_step!("migration_154", self.migrate_private_client_drafts_v154());
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
@@ -7123,36 +7374,9 @@ impl Database {
         {
             anyhow::bail!("Model catalog migration requires the exact v1.58/schema 101 source");
         }
-        add_migration_column_if_missing(
-            &transaction,
-            "adapter_capability_snapshot",
-            "model_catalog_succeeded_at",
-            "model_catalog_succeeded_at TEXT",
-        )?;
-        add_migration_column_if_missing(
-            &transaction,
-            "agent_profile",
-            "default_runtime_generation",
-            "default_runtime_generation INTEGER",
-        )?;
-        // Never make old catalogs fresh at migration time. Legacy member identity
-        // is adopted only where the existing installation predates the saved row;
-        // unknown identity history must take the normal validation path once.
-        transaction.execute_batch(
-            "UPDATE adapter_capability_snapshot
-             SET model_catalog_succeeded_at = last_successful_probe_at
-             WHERE model_catalog_succeeded_at IS NULL;
-             UPDATE agent_profile SET default_runtime_generation = (
-                 SELECT installation.generation FROM adapter_installation installation
-                 JOIN adapter_capability_snapshot snapshot ON snapshot.installation_id = installation.id
-                 WHERE installation.id = agent_profile.default_runtime_installation_id
-                   AND installation.adapter_kind = agent_profile.selected_runtime_adapter_kind
-                   AND snapshot.probe_status = 'ready' AND snapshot.stale_at IS NULL
-                   AND julianday(installation.updated_at) <= julianday(agent_profile.updated_at)
-             ) WHERE default_runtime_generation IS NULL;"
-        )?;
+        apply_model_catalog_schema_v152(&transaction)?;
         transaction.execute("UPDATE rovai_data_contract SET projection_schema_version=?1, updated_at=datetime('now') WHERE singleton=1",
-            [CURRENT_PROJECTION_SCHEMA_VERSION])?;
+            [102])?;
         transaction.execute(
             "INSERT INTO schema_migration VALUES(152, datetime('now'))",
             [],
@@ -7180,7 +7404,7 @@ impl Database {
         transaction.execute(
             "UPDATE rovai_data_contract SET contract_version=?1, projection_schema_version=?2,
             updated_at=datetime('now') WHERE singleton=1",
-            params![CURRENT_DATA_CONTRACT_VERSION, 101],
+            params!["v1.58", 101],
         )?;
         transaction.commit()?;
         Ok(())
@@ -21976,7 +22200,7 @@ impl Database {
                 content_blob_id TEXT REFERENCES managed_blob(id),
                 display_name TEXT NOT NULL,
                 media_type TEXT NOT NULL,
-                byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 20971520),
+                byte_size INTEGER NOT NULL CHECK(byte_size > 0 AND byte_size <= 20971530),
                 ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
                 created_at TEXT NOT NULL,
                 CHECK((source_path IS NOT NULL) != (content_blob_id IS NOT NULL)),
@@ -23717,6 +23941,149 @@ impl Database {
         result
     }
 
+    fn migrate_private_client_drafts_v154(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 103),
+                "Private Draft migration requires the exact v1.59/schema 103 source"
+            );
+            apply_private_client_draft_schema_v154(&tx)?;
+            tx.execute(
+                "INSERT INTO schema_migration VALUES(154, datetime('now'))",
+                [],
+            )?;
+            tx.execute("UPDATE rovai_data_contract SET projection_schema_version=?1,updated_at=datetime('now') WHERE singleton=1", [CURRENT_PROJECTION_SCHEMA_VERSION])?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "Private Draft migration failed schema admission"
+            );
+            anyhow::ensure!(
+                tx.query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                    .optional()?
+                    .is_none(),
+                "Private Draft migration found a foreign-key violation"
+            );
+            tx.commit()?;
+            Ok(())
+        })();
+        self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result
+    }
+
+    fn migrate_client_drafts_v153(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if !matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.58" && marker.projection_schema_version == 102)
+            {
+                anyhow::bail!("Client Draft migration requires the exact v1.58/schema 102 source");
+            }
+            let triggers = {
+                let mut statement = tx.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name")?;
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (name, _) in &triggers {
+                tx.execute_batch(&format!("DROP TRIGGER \"{}\";", name.replace('"', "\"\"")))?;
+            }
+            for table in ["camp_composer_draft", "prepared_attachment"] {
+                let sql: String = tx.query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get(0),
+                )?;
+                let definition =
+                    &sql[sql.find('(').context("Draft schema definition missing")?..];
+                let mut replacement = if table == "camp_composer_draft" {
+                    anyhow::ensure!(
+                        definition.contains(
+                            "camp_id TEXT PRIMARY KEY REFERENCES camp(id) ON DELETE CASCADE"
+                        ),
+                        "Unknown Draft identity schema"
+                    );
+                    definition.replace("camp_id TEXT PRIMARY KEY REFERENCES camp(id) ON DELETE CASCADE", "camp_id TEXT NOT NULL REFERENCES camp(id) ON DELETE CASCADE, client_id TEXT NOT NULL DEFAULT 'desktop'")
+                } else {
+                    let old = "camp_id TEXT NOT NULL\n                        REFERENCES camp_composer_draft(camp_id) ON DELETE CASCADE";
+                    anyhow::ensure!(definition.contains(old), "Unknown Prepared owner schema");
+                    definition.replace(
+                        old,
+                        "camp_id TEXT NOT NULL, client_id TEXT NOT NULL DEFAULT 'desktop'",
+                    )
+                };
+                if table == "camp_composer_draft" {
+                    let end = replacement
+                        .rfind(')')
+                        .context("Draft schema closing delimiter missing")?;
+                    replacement.insert_str(end, ", PRIMARY KEY(camp_id, client_id)");
+                } else {
+                    let end = replacement
+                        .rfind(')')
+                        .context("Prepared schema closing delimiter missing")?;
+                    replacement.insert_str(end, ", FOREIGN KEY(camp_id, client_id) REFERENCES camp_composer_draft(camp_id, client_id) ON DELETE CASCADE");
+                }
+                let columns = {
+                    let mut statement = tx.prepare(&format!("PRAGMA table_info('{table}')"))?;
+                    statement
+                        .query_map([], |row| row.get::<_, String>(1))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                        .join(",")
+                };
+                let indexes = {
+                    let mut statement = tx.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL")?;
+                    statement
+                        .query_map([table], |r| r.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                tx.execute_batch(&format!("CREATE TABLE {table}_client {replacement}; INSERT INTO {table}_client({columns}) SELECT {columns} FROM {table}; DROP TABLE {table}; ALTER TABLE {table}_client RENAME TO {table};"))?;
+                for index in indexes {
+                    tx.execute_batch(&index)?;
+                }
+            }
+            for (_, sql) in triggers {
+                tx.execute_batch(&sql)?;
+            }
+            tx.execute_batch(
+                "CREATE TABLE web_editor_identity (
+                client_id TEXT PRIMARY KEY NOT NULL,
+                owner_id TEXT NOT NULL,
+                proof_digest BLOB NOT NULL CHECK(length(proof_digest)=32)
+            );",
+            )?;
+            tx.execute_batch("ALTER TABLE pending_camp_input ADD COLUMN client_id TEXT NOT NULL DEFAULT 'desktop';
+                ALTER TABLE pending_input_edit_session ADD COLUMN client_id TEXT NOT NULL DEFAULT 'desktop';")?;
+            if tx
+                .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                .optional()?
+                .is_some()
+            {
+                anyhow::bail!("Client Draft migration found a foreign-key violation");
+            }
+            tx.execute("UPDATE rovai_data_contract SET contract_version=?1, projection_schema_version=?2, updated_at=datetime('now') WHERE singleton=1", params!["v1.59", 103])?;
+            tx.execute(
+                "INSERT INTO schema_migration VALUES(153, datetime('now'))",
+                [],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result
+    }
+
     fn migrate_dingtalk_display_names_v150(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
@@ -23775,6 +24142,85 @@ impl Database {
         result
     }
 
+    fn reconcile_web_client_migration_collision(&mut self) -> Result<bool> {
+        let classification = classify_database_contract(&self.connection)?;
+        if !matches!(classification, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.59" && marker.projection_schema_version == 100)
+        {
+            return Ok(false);
+        }
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<bool> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 100),
+                "Host preview source changed before reconciliation"
+            );
+            let triggers = {
+                let mut query = tx.prepare(
+                    "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL",
+                )?;
+                query
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (name, _) in &triggers {
+                tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))?;
+            }
+            expand_closed_set(
+                &tx,
+                "dingtalk_account",
+                "user_name TEXT NOT NULL",
+                "user_name TEXT",
+            )?;
+            expand_closed_set(
+                &tx,
+                "dingtalk_account",
+                "corp_name TEXT NOT NULL",
+                "corp_name TEXT",
+            )?;
+            for (_, sql) in triggers {
+                tx.execute_batch(&sql)?;
+            }
+            tx.execute_batch(
+                "UPDATE schema_migration SET version=153 WHERE version=150;
+                CREATE TABLE runtime_startup_setting (
+                    runtime_kind TEXT PRIMARY KEY NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision > 0),
+                    configuration_json TEXT NOT NULL CHECK(json_valid(configuration_json)),
+                    updated_at TEXT NOT NULL);
+                INSERT INTO schema_migration VALUES(150, datetime('now')), (151, datetime('now')), (152, datetime('now'));",
+            )?;
+            apply_model_catalog_schema_v152(&tx)?;
+            apply_private_client_draft_schema_v154(&tx)?;
+            tx.execute(
+                "INSERT INTO schema_migration VALUES(154, datetime('now'))",
+                [],
+            )?;
+            tx.execute("UPDATE rovai_data_contract SET contract_version=?1,projection_schema_version=?2,updated_at=datetime('now') WHERE singleton=1", params![CURRENT_DATA_CONTRACT_VERSION,CURRENT_PROJECTION_SCHEMA_VERSION])?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "Reconciled Host preview failed current schema admission"
+            );
+            anyhow::ensure!(
+                tx.query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                    .optional()?
+                    .is_none(),
+                "Host preview reconciliation found a foreign-key violation"
+            );
+            tx.commit()?;
+            Ok(true)
+        })();
+        self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result
+    }
+
     fn reconcile_deployed_tool_classifier_v141(&mut self) -> Result<bool> {
         if !matches!(classify_database_contract(&self.connection)?,
             DatabaseContractClassification::SupportedMigrationSource(ref marker)
@@ -23826,6 +24272,9 @@ impl Database {
     }
 
     fn reconcile_legacy_feishu_migration_collision(&mut self) -> Result<bool> {
+        if self.reconcile_web_client_migration_collision()? {
+            return Ok(true);
+        }
         if self.reconcile_deployed_tool_classifier_v141()? {
             return Ok(true);
         }
@@ -28561,6 +29010,7 @@ fn rebuild_table_to_v135_source_for_test(
 
 #[cfg(test)]
 fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v151_source_for_test(connection);
     connection.execute_batch("DROP TABLE IF EXISTS runtime_startup_setting; DELETE FROM schema_migration WHERE version IN (150,151);").unwrap();
     if !connection
         .query_row(
@@ -28634,6 +29084,180 @@ fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
     }
     transaction.execute_batch("DELETE FROM schema_migration WHERE version>=149; UPDATE rovai_data_contract SET contract_version='v1.56',projection_schema_version=98 WHERE singleton=1;").unwrap();
     transaction.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+}
+
+#[cfg(test)]
+fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v152_source_for_test(connection);
+    if connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=152)",
+            [],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap()
+    {
+        connection
+            .execute_batch(
+                "ALTER TABLE adapter_capability_snapshot DROP COLUMN model_catalog_succeeded_at;
+            ALTER TABLE agent_profile DROP COLUMN default_runtime_generation;
+            DELETE FROM schema_migration WHERE version=152;
+            UPDATE rovai_data_contract SET contract_version='v1.58',projection_schema_version=101;",
+            )
+            .unwrap();
+    }
+}
+
+#[cfg(test)]
+fn downgrade_current_schema_to_v153_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=154)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    let triggers = {
+        let mut query = tx
+            .prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL")
+            .unwrap();
+        query
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    for (name, _) in &triggers {
+        tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
+            .unwrap();
+    }
+    assert_eq!(
+        tx.query_row(
+            "SELECT count(*) FROM single_chat_composer_draft WHERE client_id!='desktop'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "historical fixture contains private Web drafts"
+    );
+    tx.execute_batch("CREATE TABLE single_chat_composer_draft_legacy (
+        conversation_id TEXT PRIMARY KEY REFERENCES conversation(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+        source_attachments_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(source_attachments_json) AND json_type(source_attachments_json)='array'),
+        updated_at TEXT NOT NULL,
+        quotes_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(quotes_json) AND json_type(quotes_json)='array'),
+        quote_trash_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(quote_trash_json) AND json_type(quote_trash_json)='array'));
+        INSERT INTO single_chat_composer_draft_legacy SELECT conversation_id,revision,source_attachments_json,updated_at,quotes_json,quote_trash_json FROM single_chat_composer_draft;
+        DROP TABLE single_chat_composer_draft;
+        ALTER TABLE single_chat_composer_draft_legacy RENAME TO single_chat_composer_draft;
+        ALTER TABLE single_chat_pending_input DROP COLUMN client_id;
+        ALTER TABLE single_chat_pending_input_edit_session DROP COLUMN client_id;
+        DELETE FROM schema_migration WHERE version=154;
+        UPDATE rovai_data_contract SET projection_schema_version=103 WHERE singleton=1;").unwrap();
+    for (_, sql) in triggers {
+        tx.execute_batch(&sql).unwrap();
+    }
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+}
+
+// Historical fixtures must remove the new ownership schema, not merely change
+// a version marker. Used by all earlier migration owners through v148 below.
+#[cfg(test)]
+fn downgrade_current_schema_to_v152_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v153_source_for_test(connection);
+    if !connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=153)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()
+    {
+        return;
+    }
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    let triggers = {
+        let mut statement = tx
+            .prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL")
+            .unwrap();
+        statement
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    for (name, _) in &triggers {
+        tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
+            .unwrap();
+    }
+    for table in ["camp_composer_draft", "prepared_attachment"] {
+        assert_eq!(
+            tx.query_row(
+                &format!("SELECT count(*) FROM {table} WHERE client_id!='desktop'"),
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0,
+            "historical fixture contains Web drafts"
+        );
+        let sql: String = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name=?1 AND type='table'",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut definition = sql[sql.find('(').unwrap()..]
+            .replace(", client_id TEXT NOT NULL DEFAULT 'desktop'", "");
+        if table == "camp_composer_draft" {
+            definition = definition
+                .replace(
+                    "camp_id TEXT NOT NULL REFERENCES camp(id)",
+                    "camp_id TEXT PRIMARY KEY REFERENCES camp(id)",
+                )
+                .replace(", PRIMARY KEY(camp_id, client_id)", "");
+        } else {
+            definition = definition.replace(", FOREIGN KEY(camp_id, client_id) REFERENCES camp_composer_draft(camp_id, client_id) ON DELETE CASCADE", "")
+                .replacen("camp_id TEXT NOT NULL", "camp_id TEXT NOT NULL\n                        REFERENCES camp_composer_draft(camp_id) ON DELETE CASCADE", 1);
+        }
+        let columns = table_columns(&tx, table)
+            .unwrap()
+            .into_iter()
+            .filter(|column| column != "client_id")
+            .collect::<Vec<_>>()
+            .join(",");
+        let indexes = {
+            let mut statement = tx.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND sql IS NOT NULL").unwrap();
+            statement
+                .query_map([table], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        tx.execute_batch(&format!("CREATE TABLE {table}_legacy {definition}; INSERT INTO {table}_legacy({columns}) SELECT {columns} FROM {table}; DROP TABLE {table}; ALTER TABLE {table}_legacy RENAME TO {table};")).unwrap();
+        for index in indexes {
+            tx.execute_batch(&index).unwrap();
+        }
+    }
+    tx.execute_batch("DROP TABLE web_editor_identity; ALTER TABLE pending_camp_input DROP COLUMN client_id; ALTER TABLE pending_input_edit_session DROP COLUMN client_id; DELETE FROM schema_migration WHERE version=153; UPDATE rovai_data_contract SET contract_version='v1.58',projection_schema_version=102 WHERE singleton=1;").unwrap();
+    for (_, sql) in triggers {
+        tx.execute_batch(&sql).unwrap();
+    }
+    tx.commit().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 }
 
@@ -31646,6 +32270,8 @@ mod tests {
             v150: version >= 150,
             v151: version >= 151,
             v152: version >= 152,
+            v153: version >= 153,
+            v154: version >= 154,
         }
     }
 
@@ -31752,8 +32378,15 @@ mod tests {
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                152,
+                154,
             ),
+            (
+                "v1.59/schema 103 before private client drafts",
+                "v1.59",
+                103,
+                153,
+            ),
+            ("v1.58/schema 102 before client drafts", "v1.58", 102, 152),
             (
                 "v1.58/schema 101 before independent catalog age",
                 "v1.58",
@@ -32217,7 +32850,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(152);
+        let current = migration_state_through(154);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -32608,7 +33241,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(152));
+        assert_eq!(state, migration_state_through(154));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -32718,6 +33351,8 @@ mod tests {
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
         database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(database.schema_migration_applied(144).unwrap());
 
@@ -32787,6 +33422,8 @@ mod tests {
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
         database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -32893,11 +33530,9 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rovai-catalog-migration-{}", Uuid::new_v4()));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v151_source_for_test(database.connection());
         database.connection().execute_batch(
-            r#"DELETE FROM schema_migration WHERE version=152;
-             UPDATE rovai_data_contract SET projection_schema_version=101;
-             ALTER TABLE adapter_capability_snapshot DROP COLUMN model_catalog_succeeded_at;
-             ALTER TABLE agent_profile DROP COLUMN default_runtime_generation;
+            r#"
              INSERT INTO adapter_installation(id,adapter_kind,executable_path,command_name,installation_class,source,auth_scope,enabled,generation,path_state,version,created_at,updated_at)
              VALUES('catalog-fixture','codex-cli','/fixture/codex','codex','managed_default','manual','default',1,7,'valid',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
              INSERT INTO adapter_capability_snapshot(installation_id,authentication_status,probe_status,permission_schema_version,permission_schema_digest,last_attempted_at,last_successful_probe_at)
@@ -32943,6 +33578,8 @@ mod tests {
             None,
             "unknown identity history is not grandfathered"
         );
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -32955,7 +33592,8 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rovai-startup-migration-{}", Uuid::new_v4()));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
-        database.connection().execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version>=151;
+        downgrade_current_schema_to_v151_source_for_test(database.connection());
+        database.connection().execute_batch("DROP TABLE runtime_startup_setting; DELETE FROM schema_migration WHERE version=151;
             UPDATE rovai_data_contract SET contract_version='v1.58',projection_schema_version=100 WHERE singleton=1;").unwrap();
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
@@ -32980,6 +33618,8 @@ mod tests {
             .unwrap();
         database.migrate_runtime_startup_v151().unwrap();
         database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(
             database
@@ -33040,6 +33680,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rovai-dingtalk-names-{}", Uuid::new_v4()));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v151_source_for_test(database.connection());
         let connection = database.connection();
         connection
             .execute_batch("PRAGMA foreign_keys=OFF;")
@@ -33176,6 +33817,182 @@ mod tests {
     }
 
     #[test]
+    fn v153_preserves_desktop_drafts_and_rolls_back_partial_editor_migration() {
+        // This migration owns a new composite FK plus durable editor proofs.
+        // A failed receipt must leave the v149 source usable; a pure schema
+        // comparison cannot prove preservation/rollback of existing drafts.
+        let directory =
+            std::env::temp_dir().join(format!("rovai-db-client-draft-test-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        let camp_id = "rvcamp_01h47kvsy5fk1shh6w1g60eecf";
+        crate::camp_attachment::insert_test_camp(&database, camp_id);
+        let store = crate::camp_attachment::CampAttachmentStore::new(&directory);
+        let draft = store
+            .save_body(&mut database, camp_id, "Desktop edit survives upgrade")
+            .unwrap();
+        downgrade_current_schema_to_v152_source_for_test(database.connection());
+        assert!(connection_has_admissible_data_contract(database.connection()).unwrap());
+        database.connection().execute_batch("CREATE TEMP TRIGGER reject_editor_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=153 BEGIN SELECT RAISE(ABORT, 'editor receipt fixture failure'); END;").unwrap();
+        assert!(
+            database
+                .migrate_client_drafts_v153()
+                .unwrap_err()
+                .to_string()
+                .contains("editor receipt fixture failure")
+        );
+        assert!(!database.schema_migration_applied(153).unwrap());
+        assert!(connection_has_admissible_data_contract(database.connection()).unwrap());
+        assert!(
+            !table_columns(database.connection(), "camp_composer_draft")
+                .unwrap()
+                .contains(&"client_id".to_owned())
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT body FROM camp_composer_draft WHERE camp_id=?1",
+                    [camp_id],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            draft.body
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_editor_receipt;")
+            .unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        let conversation_id = Uuid::new_v4().to_string();
+        database.connection().execute("INSERT INTO conversation(id,camp_id,agent_id,kind,created_at,updated_at) SELECT ?1,?2,id,'single_chat','2026-09-13T00:00:00Z','2026-09-13T00:00:00Z' FROM agent_profile ORDER BY id LIMIT 1", params![conversation_id,camp_id]).unwrap();
+        database.connection().execute("INSERT INTO single_chat_composer_draft(conversation_id,revision,updated_at) VALUES(?1,7,'2026-09-13T00:00:00Z')", [&conversation_id]).unwrap();
+        database.connection().execute_batch("CREATE TEMP TRIGGER reject_private_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=154 BEGIN SELECT RAISE(ABORT,'private receipt failure'); END;").unwrap();
+        assert!(
+            database
+                .migrate_private_client_drafts_v154()
+                .unwrap_err()
+                .to_string()
+                .contains("private receipt failure")
+        );
+        assert!(!database.schema_migration_applied(154).unwrap());
+        assert!(
+            !table_columns(database.connection(), "single_chat_composer_draft")
+                .unwrap()
+                .contains(&"client_id".into())
+        );
+        assert!(connection_has_admissible_data_contract(database.connection()).unwrap());
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_private_receipt;")
+            .unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
+        assert_eq!(database.connection().query_row("SELECT revision,updated_at,client_id FROM single_chat_composer_draft WHERE conversation_id=?1", [&conversation_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(), (7,"2026-09-13T00:00:00Z".into(),"desktop".into()));
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        assert_eq!(store.load_draft(&database, camp_id).unwrap(), draft);
+        drop(database);
+        let mut reopened = Database::open(&directory).unwrap();
+        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
+        // Same owner also verifies the already-pushed preview source: the old
+        // receipt 150 must be joined without rebuilding or discarding Web editors.
+        let editor = crate::draft_client::resolve_editor(&reopened, None).unwrap();
+        downgrade_current_schema_to_v153_source_for_test(reopened.connection());
+        reopened
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        let tx = reopened.connection().unchecked_transaction().unwrap();
+        let triggers = {
+            let mut query = tx
+                .prepare(
+                    "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL",
+                )
+                .unwrap();
+            query
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        for (name, _) in &triggers {
+            tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
+                .unwrap();
+        }
+        expand_closed_set(
+            &tx,
+            "dingtalk_account",
+            "user_name TEXT",
+            "user_name TEXT NOT NULL",
+        )
+        .unwrap();
+        expand_closed_set(
+            &tx,
+            "dingtalk_account",
+            "corp_name TEXT",
+            "corp_name TEXT NOT NULL",
+        )
+        .unwrap();
+        for (_, sql) in triggers {
+            tx.execute_batch(&sql).unwrap();
+        }
+        tx.execute_batch("DROP TABLE runtime_startup_setting;
+             ALTER TABLE adapter_capability_snapshot DROP COLUMN model_catalog_succeeded_at;
+             ALTER TABLE agent_profile DROP COLUMN default_runtime_generation; DELETE FROM schema_migration WHERE version IN (150,151,152);
+            UPDATE schema_migration SET version=150 WHERE version=153;
+            UPDATE rovai_data_contract SET contract_version='v1.59',projection_schema_version=100;").unwrap();
+        tx.commit().unwrap();
+        reopened
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .unwrap();
+        assert!(matches!(
+            classify_database_contract(reopened.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        reopened.connection().execute_batch("CREATE TEMP TRIGGER reject_preview_join BEFORE INSERT ON schema_migration WHEN NEW.version=151 BEGIN SELECT RAISE(ABORT,'preview receipt failure'); END;").unwrap();
+        assert!(reopened.reconcile_web_client_migration_collision().is_err());
+        assert!(matches!(
+            classify_database_contract(reopened.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        reopened
+            .connection()
+            .execute_batch("DROP TRIGGER reject_preview_join;")
+            .unwrap();
+        drop(reopened);
+        let reopened = Database::open(&directory).unwrap();
+        assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
+        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        let resumed = crate::draft_client::resolve_editor(
+            &reopened,
+            Some(crate::draft_client::EditorResume {
+                client_id: editor.client_id.clone(),
+                proof: editor.proof,
+            }),
+        )
+        .unwrap();
+        assert_eq!(resumed.client_id, editor.client_id);
+        reopened
+            .connection()
+            .execute_batch("DROP TABLE web_editor_identity;")
+            .unwrap();
+        assert!(matches!(
+            classify_database_contract(reopened.connection()).unwrap(),
+            DatabaseContractClassification::Unknown(_)
+        ));
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn v149_admits_zcode_atomically_and_preserves_existing_rows_and_triggers() {
         // Independent migration owner: receipt failure must roll back all seven
         // rebuilt closed sets, their dependent triggers, and the authority marker.
@@ -33246,13 +34063,17 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_zcode_receipt;")
             .unwrap();
         database.migrate_zcode_runtime_v149().unwrap();
-        database.migrate_dingtalk_display_names_v150().unwrap();
-        database.migrate_runtime_startup_v151().unwrap();
-        database.migrate_model_catalog_v152().unwrap();
-        assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(zcode_runtime_v149_schema_matches(database.connection()).unwrap());
         assert_eq!(snapshot(database.connection()), before);
         assert_eq!(triggers(database.connection()), before_triggers);
+        // Later migrations intentionally add columns; assert v149 preservation
+        // at its own boundary before advancing to the current schema.
+        database.migrate_dingtalk_display_names_v150().unwrap();
+        database.migrate_runtime_startup_v151().unwrap();
+        database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         let reopened = Database::open(&directory).unwrap();
         assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
@@ -34090,6 +34911,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.clone(),
                         draft_revision: draft.revision,
                         execution: None,
@@ -35873,6 +36695,8 @@ mod tests {
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
         database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let after: (String, String) = database.connection().query_row(
             "SELECT default_model_selection_json, runtime_binding_revision FROM agent_profile WHERE id = 'agent_1'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
@@ -36077,6 +36901,8 @@ mod tests {
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
         database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained: (i64, Option<String>) = database
             .connection()
@@ -36258,6 +37084,8 @@ mod tests {
         database.migrate_dingtalk_display_names_v150().unwrap();
         database.migrate_runtime_startup_v151().unwrap();
         database.migrate_model_catalog_v152().unwrap();
+        database.migrate_client_drafts_v153().unwrap();
+        database.migrate_private_client_drafts_v154().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained = database
             .connection()

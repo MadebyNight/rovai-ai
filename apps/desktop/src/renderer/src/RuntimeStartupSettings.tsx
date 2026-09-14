@@ -1,3 +1,5 @@
+import { newCommandId } from '../../shared/command-id'
+import { useCampClient } from './camp-client'
 import { useEffect, useId, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { AdapterKind, HealthStatus, RuntimeStartupConfiguration, RuntimeStartupInspection, RuntimeStartupSettings as StartupSettings } from '@contracts'
@@ -15,6 +17,7 @@ const INSPECTION_LABELS: Record<RuntimeStartupInspection['status'], string> = {
 export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }: {
   runtimeKind: AdapterKind; health: HealthStatus | null; onBack(): void; onReload(): Promise<void>
 }): React.JSX.Element {
+  const client = useCampClient()
   const [saved, setSaved] = useState<StartupSettings | null>(null)
   const [draft, setDraft] = useState<RuntimeStartupConfiguration>(EMPTY)
   const [rowIds, setRowIds] = useState<string[]>([])
@@ -38,7 +41,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
   const applySaved = (settings: StartupSettings): void => {
     setSaved(settings)
     setDraft(settings.configuration)
-    setRowIds(settings.configuration.environment.map(() => crypto.randomUUID()))
+    setRowIds(settings.configuration.environment.map(() => newCommandId()))
     setRevealed(new Set())
     setErrors({})
   }
@@ -48,12 +51,12 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
     let active = true
     setBusy('load')
     setError(null)
-    void window.rovai.request<StartupSettings>('runtime.startup.get', { runtimeKind }).then((settings) => {
+    void client.request<StartupSettings>('runtime.startup.get', { runtimeKind }).then((settings) => {
       if (active) { applySaved(settings); loaded.current = true }
     }).catch((nextError) => { if (active) setError(readErrorMessage(nextError)) })
       .finally(() => { if (active) setBusy(null) })
     return () => { active = false }
-  }, [runtimeKind, loadAttempt])
+  }, [client, runtimeKind, loadAttempt])
 
   useEffect(() => {
     return () => { sequence.current += 1 }
@@ -88,7 +91,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
     setError(null)
     setInspection(null)
     try {
-      const result = await window.rovai.request<RuntimeStartupInspection>(deep ? 'runtime.startup.check' : 'runtime.startup.inspect', {
+      const result = await client.request<RuntimeStartupInspection>(deep ? 'runtime.startup.check' : 'runtime.startup.inspect', {
         runtimeKind, configuration: normalizedStartupConfiguration(next)
       })
       if (sequence.current === request) setInspection(result)
@@ -103,7 +106,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
     setBusy('pick')
     setError(null)
     try {
-      const path = await window.rovai.selectRuntimeExecutable()
+      const path = await client.selectRuntimeExecutable?.()
       if (path) {
         const next = { ...state.current.draft, programPath: path }
         change(next)
@@ -119,7 +122,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
     setBusy('save')
     setError(null)
     try {
-      const settings = await window.rovai.request<StartupSettings>('runtime.startup.save', {
+      const settings = await client.request<StartupSettings>('runtime.startup.save', {
         runtimeKind, expectedRevision: saved.revision, configuration: next
       })
       applySaved(settings)
@@ -160,8 +163,8 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
           <button className="quiet-button" type="button" disabled={locked || draft.programPath === null}
             onClick={() => { const next = { ...draft, programPath: null }; change(next); void inspect(next) }}>恢复自动</button></div>
         <div className="runtime-startup-path">
-          <input id={`${id}-path`} value={displayedPath ?? ''} placeholder="自动检测" readOnly title={displayedPath ?? undefined} />
-          <button className="quiet-button" type="button" disabled={locked} onClick={() => void choose()}>选择文件<DialogControlIcon name="folder" /></button>
+          <input id={`${id}-path`} value={displayedPath ?? ''} placeholder={client.selectRuntimeExecutable ? "自动检测" : "Host 上的程序绝对路径"} readOnly={Boolean(client.selectRuntimeExecutable)} disabled={locked} onChange={(event) => change({ ...draft, programPath: event.target.value || null })} title={displayedPath ?? undefined} />
+          {client.selectRuntimeExecutable && <button className="quiet-button" type="button" disabled={locked} onClick={() => void choose()}>选择文件<DialogControlIcon name="folder" /></button>}
         </div>
         <div className="runtime-startup-inspection">
           <span role="status" className={`runtime-startup-result${status === 'authentication_required' || status === 'version_unverified' ? ' is-warning' : status === 'missing' || status === 'check_failed' ? ' is-error' : ''}`}>
@@ -173,7 +176,7 @@ export function RuntimeStartupSettings({ runtimeKind, health, onBack, onReload }
       </section>
       <section className="runtime-startup-section">
         <div className="runtime-startup-section-heading"><h2>环境变量</h2><button className="quiet-button" type="button" disabled={locked || draft.environment.length >= 128}
-          onClick={() => { setRowIds([...rowIds, crypto.randomUUID()]); change({ ...draft, environment: [...draft.environment, { name: '', value: '' }] }) }}><DialogControlIcon name="plus" />添加变量</button></div>
+          onClick={() => { setRowIds([...rowIds, newCommandId()]); change({ ...draft, environment: [...draft.environment, { name: '', value: '' }] }) }}><DialogControlIcon name="plus" />添加变量</button></div>
         {draft.environment.length > 0 && <div className="runtime-startup-environment">
           <div className="runtime-environment-labels" aria-hidden="true"><span>变量名</span><span>值</span></div>
           {draft.environment.map((variable, index) => <div key={rowIds[index]} className="runtime-environment-row">

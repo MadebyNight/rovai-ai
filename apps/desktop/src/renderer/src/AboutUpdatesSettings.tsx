@@ -30,7 +30,9 @@ export function AboutUpdatesSettingsView({
   actionError,
   onCheck,
   onDownload,
-  onInstall
+  onInstall,
+  product = 'desktop',
+  readOnly = false
 }: {
   snapshot: AppUpdateSnapshot | null
   canUpdate: boolean
@@ -40,8 +42,12 @@ export function AboutUpdatesSettingsView({
   onCheck(): void
   onDownload(): void
   onInstall(): void
+  product?: 'desktop' | 'server'
+  readOnly?: boolean
 }): React.JSX.Element {
-  const presentation = updatePresentation(snapshot, loading, loadError, actionError, canUpdate)
+  const presentation = product === 'server' && snapshot?.failureReason === 'restart_unconfirmed'
+    ? { tone: 'error', title: '尚未确认 Server 恢复连接', detail: '可以重试连接；如果持续无法连接，请检查运行 Server 的电脑。' }
+    : updatePresentation(snapshot, loading, loadError, actionError, canUpdate)
   const primaryAction = updatePrimaryAction(snapshot, loading, canUpdate)
   const release = snapshot?.availableRelease ?? null
   const downloading = snapshot?.status === 'downloading'
@@ -61,7 +67,7 @@ export function AboutUpdatesSettingsView({
       <SettingsPageHeader
         eyebrow="Settings / About & Updates"
         title="关于与更新"
-        description="自动检查新版本，下载与安装由你决定。"
+        description={readOnly ? '版本信息与更新日志。' : '自动检查新版本，下载与安装由你决定。'}
       />
 
       <div className="about-updates-body">
@@ -71,11 +77,11 @@ export function AboutUpdatesSettingsView({
           </div>
           <div className="about-identity">
             <svg className="about-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 L13.16 7.3 L17.76 8.84 L13.16 10.38 L12 15.68 L10.84 10.38 L6.24 8.84 L10.84 7.3 Z" fill="currentColor"/><path d="M3 20.96 Q12 15.96 21 20.96" fill="none" stroke="currentColor" strokeWidth="2.08" strokeLinecap="round"/><circle className="brand-rendezvous-point" data-brand-point="rendezvous" cx="12" cy="18.46" r="1.05" fill="currentColor"/></svg>
-            <div><strong>Rovai AI</strong><p><span>版本 {snapshot ? displayVersion(snapshot.currentVersion) : loading ? '读取中…' : '暂不可用'}</span><span>桌面应用</span></p></div>
+            <div><strong>Rovai AI</strong><p><span>版本 {snapshot ? displayVersion(snapshot.currentVersion) : loading ? '读取中…' : '暂不可用'}</span><span>{product === 'server' ? 'Server' : '桌面应用'}</span></p></div>
           </div>
         </section>
 
-        <section className="section-block about-updates-section" aria-labelledby="about-update-heading">
+        {!readOnly && <section className="section-block about-updates-section" aria-labelledby="about-update-heading">
           <div className="section-heading">
             <div><h2 id="about-update-heading">软件更新</h2><p>检查、下载与安装</p></div>
           </div>
@@ -83,7 +89,7 @@ export function AboutUpdatesSettingsView({
             <div className="about-update-control">
               <div>
                 <strong>{controlTitle(snapshot)}</strong>
-                <p>{controlDetail(snapshot)}</p>
+                <p>{product === 'server' && snapshot?.failureReason === 'restart_unconfirmed' ? '连接暂未恢复，尚不能确认更新结果。' : product === 'server' && snapshot?.status === 'installing' ? 'Server 正在重启，页面会自动恢复连接。' : controlDetail(snapshot)}</p>
               </div>
               <div className="about-update-actions">
                 {showManualCheck && (
@@ -150,15 +156,15 @@ export function AboutUpdatesSettingsView({
                     : '可以从官方发布页手动获取版本，或提交问题。'}</span>
                 </div>
                 <div className="about-update-fallback-actions">
-                  <a href="https://github.com/murray17/rovai-ai/releases/latest" target="_blank" rel="noreferrer noopener">官方 Releases</a>
+                  <a href={product === 'server' ? (release ? `https://github.com/murray17/rovai-ai/releases/tag/server-v${release.version}` : 'https://github.com/murray17/rovai-ai/releases') : 'https://github.com/murray17/rovai-ai/releases/latest'} target="_blank" rel="noreferrer noopener">官方 Releases</a>
                   <a href="https://github.com/murray17/rovai-ai/issues" target="_blank" rel="noreferrer noopener">获取支持</a>
                 </div>
               </div>
             )}
 
-            <p className="about-update-source">自动更新来自 Rovai AI 的正式 GitHub Release 通道。</p>
+            <p className="about-update-source">{product === 'server' ? '更新来自 Rovai AI 的 Server GitHub Release 通道。' : '自动更新来自 Rovai AI 的正式 GitHub Release 通道。'}</p>
           </div>
-        </section>
+        </section>}
 
         {release && (
           <section
@@ -200,6 +206,7 @@ function updatePrimaryAction(
 ): { kind: 'check' | 'download' | 'install'; label: string; disabled: boolean } {
   if (loading) return { kind: 'check', label: '读取中…', disabled: true }
   if (!snapshot) return { kind: 'check', label: '重试', disabled: !canUpdate }
+  if (snapshot.failureReason === 'restart_unconfirmed') return { kind: 'check', label: '重试连接', disabled: !canUpdate }
   switch (snapshot.status) {
     case 'checking':
       return { kind: 'check', label: '正在检查…', disabled: true }
@@ -318,6 +325,14 @@ function checkFailure(snapshot: AppUpdateSnapshot): {
   title: string
   detail: string
 } {
+  if (snapshot.failureReason === 'release_unpublished') return {
+    tone: 'error', pageLabel: '尚未发布', title: '尚无正式 Server 更新',
+    detail: 'Server 发布通道尚未提供安装包，发布后可重新检查。'
+  }
+  if (snapshot.failureReason === 'install_failed') return {
+    tone: 'error', pageLabel: '安装未完成', title: '上次更新未完成',
+    detail: `当前仍运行 ${displayVersion(snapshot.currentVersion)}，可以重新检查更新。`
+  }
   const retained = snapshot.availableRelease
     ? ` 已知的 ${displayRelease(snapshot)} 信息仍然保留。`
     : ''

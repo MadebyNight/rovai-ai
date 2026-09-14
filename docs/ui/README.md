@@ -49,6 +49,13 @@ Runtime 终态文件行与会话中的每 Run 文件变化卡片由
 
 MCP 与 Skills 的列表/详情、导入、启停和拖拽合同见 [Capability settings](components/capability-settings.md)。
 
+## Web 与 Mobile
+
+- [设置 · 远程连接交互稿](host-remote-connection.md)：正式设置菜单及同组件交互稿，含本机管理、地址发现、令牌重复读取与浏览器连接状态。
+- [Desktop/Web 宽屏对照稿](host-web-parity.md)：阶段 1–3 当前收敛入口，行为差异表、生产组件 fixture 与实际验收边界。
+- [Mobile WebUI](host-web-mobile.md)：已接入实际 Web 入口，复用正式业务页面；底部导航、左侧蓝点、连续 Run、六种计划与手机日期/时间面板。
+  Server 提供检查、下载与安装重启，Desktop 托管只读版本说明；macOS Chrome 自动验收与实体手机待验项目分别记录。
+
 ## 平台差异
 
 - [Windows Interaction Delta](windows-interaction-delta.md)

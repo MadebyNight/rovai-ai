@@ -5,6 +5,7 @@ import {
   type AppQuitPreparationResponse
 } from '../shared/app-lifecycle'
 import type {
+  NewConversationDefaults,
   AppearancePreferences,
   AppearanceSnapshot,
   AppUpdateSnapshot,
@@ -51,6 +52,14 @@ ipcRenderer.on(APP_PREPARE_QUIT_CHANNEL, (event) => {
 })
 
 const api: RovaiApi = {
+  hostWeb: {
+    loginTicket: () => ipcRenderer.invoke('rovai:host-web', 'loginTicket'),
+    token: () => ipcRenderer.invoke('rovai:host-web', 'token'),
+    status: () => ipcRenderer.invoke('rovai:host-web', 'status'),
+    start: (input) => ipcRenderer.invoke('rovai:host-web', 'start', input),
+    stop: () => ipcRenderer.invoke('rovai:host-web', 'stop'),
+    rotate: () => ipcRenderer.invoke('rovai:host-web', 'rotate')
+  },
   async request<T>(method: CoreMethod, params?: unknown): Promise<T> {
     const transport = await ipcRenderer.invoke(
       'rovai:request',
@@ -181,8 +190,8 @@ const api: RovaiApi = {
     setWorldMapEnabled(enabled: boolean) {
       return ipcRenderer.invoke('rovai:general-preferences-set-world-map', enabled)
     },
-    invalidateNewConversationDefaults() {
-      return ipcRenderer.invoke('rovai:general-preferences-invalidate-new-conversation-defaults')
+    invalidateNewConversationDefaults(expectedDefaults?: NewConversationDefaults | null) {
+      return ipcRenderer.invoke('rovai:general-preferences-invalidate-new-conversation-defaults', expectedDefaults)
     }
   },
   channels: {

@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: test-policy-and-command-routing
-last_updated: 2026-09-12
+last_updated: 2026-09-14
 ---
 
 # 测试与 Smoke Test
@@ -73,6 +73,60 @@ cargo test --workspace -- --list
 
 ## 测试层级
 
+### Linux Server ABI 与原生 OS
+
+`node --test scripts/lib/linux-server-abi.test.mjs` 拥有 ELF 导入版本的解析和兼容拒绝矩阵；构建必须检查实际包内
+所有 ELF。`scripts/smoke-linux-server.py` 拥有同归档、普通用户、无开发工具 PATH 的 Server OS seam，
+不调用 Runtime。Ubuntu 两个原生 runner 与 Debian 12 独立 VM 运行同一包，发布草稿依赖这些 gate。
+既有 `runtime_platform_admission::tests::registry_projects_the_complete_closed_matrix` 扩展 Linux 显式适配范围的 preview
+和 Cursor 阻断行，不新增重复 Rust owner。最小 Rust 验证为 `cargo test -p rovai-core --lib runtime_platform_admission::tests::`。
+
+
+### Codex 自定义 Provider 与 Server Runtime
+
+`managed_process::tests::linux_cancellation_reaps_captured_detached_children_after_parent_exit` 拥有 Linux pidfd
+取消回收边界：真实子进程 `setsid` 后，原父进程先退出，已捕获子进程仍须退出，另一个同 UID 对照进程须存活。
+修复前仅 killpg 会留下该子进程。既有 Unix stdio/PID owner 没有后代重挂靠状态，纯 parser 不能证明内核身份和
+信号语义，因此使用有握手、截止时间和清理的最小进程 fixture，不启动 Runtime/数据库。最小命令：
+`cargo test -p rovai-core --lib managed_process`（Linux）。Antigravity 则扩展既有
+`structured_runtime_failure_preserves_sanitized_provider_detail` 的 exit 0/1 输入矩阵，证明明确 ERROR 的语义和脱敏
+不会被非零退出码吞掉；无结构化终点仍由既有 process failure owner 负责，不新增重复测试。
+
+`acp::tests::codebuddy_launch_preserves_native_default_and_explicit_model_selection` 拥有 CodeBuddy 启动模型选择：
+RuntimeDefault 不得作为 `--model` 原生参数，显式模型仍须在 session/new 前传入。修复前传入内部 sentinel
+导致 BYOK 执行被拒绝。现有 launch owner 分别拥有 Kiro/Cursor 权限，未覆盖此模型边界；新 owner 仅检查命令
+构造，不创建进程或数据库。最小命令：`cargo test -p rovai-core --lib codebuddy_launch_preserves_native_default_and_explicit_model_selection`。
+
+`health::tests::codex_probe_requires_login_unless_native_provider_explicitly_waives_it` 拥有 Codex 原生认证进程边界：
+同一隔离 fixture 覆盖 OpenAI 登录成功、自定义 Provider 明确免登录，以及 true、缺失、类型错误、RPC 拒绝。
+既有 ACP Native Home owner 使用另一协议，不能证明 `account/read` 的语义。fixture 不修改环境或读取真实凭据，
+故意返回空 capability schema，确保认证通过不会自动变成 Ready。最小命令：
+`cargo test -p rovai-core --lib codex_probe_requires_login_unless_native_provider_explicitly_waives_it`。
+
+既有 `zcode::tests::official_bundle_layouts_reject_launchers_and_missing_resources` 增补官方 Linux 平面布局、
+缺失 App 资源和 kernel symlink 越界拒绝；同时检查 Linux 默认位置不纳入相对 Home，不新增重复 owner。
+最小命令：`cargo test -p rovai-core --lib zcode::tests::official_bundle_layouts_reject_launchers_and_missing_resources`。
+
+`node scripts/smoke-server-runtime.mjs /absolute/server-package codex-cli /absolute/new-fixture` 是显式调用模型的
+包内 HTTP 验收入口，也接受其他显式准入的 Linux Runtime。调用方须提供隔离 HOME 与私有原生 CLI 配置；脚本从新 data-dir
+派生 Skills/MCP 根，验证工具的公开投影、warm/cold continuation 和运行中取消。结果保留源码提交，任何未闭合
+断言均记失败，不能单独替代完整 Runtime 资格清单。
+
+### Web 文件资源开销与一致性
+
+`rovai-web::resources::content::tests::bounded_scan_preserves_digest_unicode_and_same_metadata_changes` 拥有分块
+读取的有界保留、UTF-8 跨块、稀疏行号与新鲜摘要校验。修复前每页保留整份文件；原有纯分页 parser owner
+没有文件 I/O 或跨请求摘要事实的 seam，因此该独立 owner 使用单一临时文件与固定修改时间，避免 Core/数据库 fixture。
+最小命令为 `cargo test -p rovai-web resources::content::tests::`。
+
+既有 `host-web.test.mjs` owner 扩展认证原始字节、相同大小/修改时间下的变化拒绝、上传取消/拒绝/重放清理与
+构建缓存边界。Node SQLite fixture 设置有界 busy timeout，避免与隔离 Host 的正常事务争抢造成偶发失败。
+`camp-adapter.test.ts` 和 `file-digest.test.ts` 分别验证空句柄轮询、Host 确认后的本地图片复用及浏览器摘要缓冲上限。
+手机实际 Host 用例检查上传后无原图回传、刷新后恢复 Host 读取；Run 文案由既有执行组件场景验证。
+`node scripts/measure-host-web-resources.mjs` 对独立 Host 执行 20 MiB / 80 页固定工作量，断言内容与行号一致并记录计时；
+`--legacy-json` 可对旧 Host 记录 Base64 膨胀并核对解码后的原始字节。可用 `ROVAI_HOST_BIN` / `ROVAI_WEB_UI` 选择包内产物。
+
+
 ### Pi Windows 工作目录
 
 `pi::host::tests::host_cwd_uses_safe_dos_spelling_and_rejects_extended_only_paths` 拥有 Pi 命令构造边界的
@@ -112,11 +166,11 @@ Electron 回归使用生产 adapter、CampWorkspace 与 CSS，验证空事件下
 
 ### Claude Code 无 Prompt 目录验证
 
-目录协议与进程生命周期由 Main 的 `health::claude_catalog_tests` owner 验证，正常门禁使用临时
+目录协议与进程生命周期由共享 Core library 的 `health::claude_catalog_tests` owner 验证，正常门禁使用临时
 可执行夹具，不启动真实模型。安装版手工验证使用显式 ignored 测试：
 
 ```bash
-cargo test -p rovai-core --bin rovai-core health::claude_catalog_tests::claude_catalog_real_runtime_smoke -- --ignored --nocapture
+cargo test -p rovai-core --lib health::claude_catalog_tests::claude_catalog_real_runtime_smoke -- --ignored --nocapture
 ```
 
 执行前遵守 [本地隔离流程](local-workflow.md)，确认实际 Claude 可执行入口与继承的配置；该命令只发送
@@ -159,6 +213,9 @@ DOCS_BASE_REF=<目标分支 base SHA> pnpm docs:check:ci
 | 仅普通 Library 模块 | `pnpm check:rust`、`pnpm test:rust:lib` |
 | 仅 `rovai-core` Main 或其专属模块 | `pnpm check:rust`、`pnpm test:rust:core` |
 | Cargo/Rust 配置、`src/lib.rs`、多 target、删除/重命名、未知 Rust 路径或分类失败 | `pnpm test:rust:workspace-default` |
+
+`test:rust:core` 保留为共享 library 回归的兼容入口：应用运行层与 Runtime Adapter 单测已随库化迁入
+library，薄 stdio main 不再重复编译这些测试。
 
 Main 专属模块由 staged `src/main.rs` 声明、但未由 staged `src/lib.rs` 导出的模块动态确定。
 脚本使用 NUL 分隔读取路径以支持空格等合法文件名；Git 读取、模块解析或分类失败都会 fail closed
@@ -305,6 +362,10 @@ Composer 续发目标的发布时点与草稿保护运行 `pnpm test:composer-co
 计算与队列调度验收；手动 Full check 的 Linux job 使用 `xvfb-run -a pnpm test:composer-continuation`。
 
 ### Core 可选功能启动回归
+
+Headless Host 的进程准入与 Unix 受控停止使用 `pnpm test:host-startup`；精确边界见
+[Host Lifecycle v1](../contracts/host-lifecycle-v1.md)。Windows console 停止另做原生验收；该测试不调用模型，
+不代替完整 Headless 执行、审批或平台安全验证。
 
 涉及 `run_core()` ready 边界、可选初始化或功能重试时，运行：
 
@@ -517,3 +578,28 @@ Vitest owner 负责，窗口/代际释放由 Main 既有 service owner 负责，
 `ROVAI_HTML_HISTORY_SAMPLE` 和 `ROVAI_HTML_CANVAS_SAMPLE` 可提供两份独立原稿，测试仅复制、核验摘要并验证实际正文与
 子画布联动；`ROVAI_KEEP_HTML_PREVIEW_FIXTURE=1` 保留临时资源和截图。详见
 [v1.58 记录](../versions/v1.58/html-preview-http.md)。
+
+### Web 标签页恢复
+
+续期的时间边界由 `rovai-web::auth` 既有生命周期 owner 和 `apps/web/src/client.test.ts` 使用可控时钟验证，
+不等待 30 天，也不提供生产调时接口。`authentication_reopen_preserves_renewals_and_never_resurrects_revocation`
+拥有私有认证文件的写失败、重开和撤销竞争；最小命令为 `cargo test -p rovai-web --lib auth::tests`。
+真实 Desktop Host/Server 重启扩展既有 HTTP/entry 测试，浏览器进程重开与双标签页由恢复 smoke 验证。
+
+`apps/web/src/client.test.ts` 拥有 Bearer/proof 恢复、复制材料 fork、过期重登及原命令恢复；`navigation-history.test.ts` 拥有浏览器历史适配的拒绝、刷新与跨 Desktop 上限的浏览器历史。现有 `host-web.test.mjs` 扩展真实 HTTP resume/fork 归属校验，现有 Rust Session 生命周期测试扩展 fork 继承到期时间、独立撤销与撤销后拒绝，不另建 SQLite fixture。
+
+构建 Host 与 Web 后，`node scripts/smoke-web-recovery.mjs` 运行真实 Host/生产 Web/隔离 Chrome 验收；只使用独立数据和默认队员，不调用模型。
+
+入口通过一次性 fragment 票据自动登录，检查立即清理地址、StrictMode 仅兑换一次、票据不进入恢复存储，以及刷新后原身份和草稿、复制标签页隔离；
+场景并行利用票据有效窗口后等待真实 120 秒到期并核对拒绝，整个 smoke 至少约两分钟。输出位置可用 `ROVAI_RECOVERY_OUTPUT` 指定。
+票据过期、替换、关闭／轮换和消费竞争的确定性输入矩阵扩展 Rust `auth` 的既有 Session 生命周期 owner，不新增 Core fixture。
+
+默认队伍回归由 `apps/web/src/preferences.test.ts` 覆盖浏览器本地旧值不遮蔽 Host、保存合并与迟到失效请求；
+既有 `scripts/lib/host-web.test.mjs` owner 覆盖本机/HTTP 双入口、一次性导入、并发字段保留、重启及损坏记录。
+`pnpm package:mac:daily` 后，`node scripts/smoke-web-preferences.mjs <输出目录>` 验证实际 Main 的旧偏好导入、
+Web 通用设置回显、跨端保存、创建弹窗默认勾选、一键 Pending 创建和刷新。脚本创建独立 userData/Skill/MCP 与 Chrome profile；
+仅 Runtime 可用性使用浏览器响应夹具，以免触发真实模型或修改用户 Runtime 配置。持久设置与 Camp 创建仍走实际包内 Host。
+截图通过正式主题选择控件切换日夜，并验证新建按钮中性色。该证据不代替真实 Runtime、Windows 或第二实体设备验收。
+
+真实 HTTP owner 验证本机签发与 HTTP 兑换接线、双客户端竞争、旧票据撤销，以及公共操作不能签发票据。
+Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。

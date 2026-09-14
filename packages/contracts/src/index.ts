@@ -410,7 +410,7 @@ export interface ProductRuntimeCatalogEntry {
   commandName: string
 }
 
-export type HostPlatformKey = 'macos-arm64' | 'macos-x64' | 'windows-x64'
+export type HostPlatformKey = 'macos-arm64' | 'macos-x64' | 'windows-x64' | 'linux-x64'
 
 export type RuntimePlatformAdmissionStatus = 'qualified' | 'preview' | 'not_qualified' | 'unsupported'
 
@@ -1330,6 +1330,8 @@ export type MessageQuoteAction =
   | { type: 'remove' | 'restore'; quoteId: string }
 
 export interface CampComposerDraftView {
+  /** Host-owned editor identity; independent of a short-lived authentication Session. */
+  draftId?: string
   quotes: MessageQuoteSnapshot[]
   campId: string
   body: string
@@ -1358,6 +1360,8 @@ export interface PendingCampInputView {
 }
 
 export interface PendingInputEditSession {
+  /** Same Owner may explicitly take over this lease; no foreign working state is exposed. */
+  foreignClient?: boolean
   workingQuotes: MessageQuoteSnapshot[]
   pendingInputId: string
   editToken: string
@@ -1527,6 +1531,7 @@ export type FilePreviewKind =
   | 'patch'
 
 export type FilePreviewCapability =
+  | 'download'
   | 'read'
   | 'read_child'
   | 'open_in_system'
@@ -1644,6 +1649,8 @@ export interface FilePreviewHtmlSite {
   origin: string
   entryUrl: string
   documentUrl: string
+  /** Browser-only opaque sandbox. Never grant allow-same-origin to this document. */
+  sandboxedDocument?: string
   contentGeneration: string
   contentVersion: FileContentVersion
 }
@@ -1663,6 +1670,9 @@ export interface FilePreviewExternalUpdateEvent {
 }
 
 export interface FilePreviewApi {
+  /** Browser image bytes resolved under the current, generation-bound parent. */
+  readChildImage?(request: { handleId: string; expectedGeneration: string; rawReference: string }): Promise<FilePreviewOperationResult<FilePreviewBinaryContent>>
+
   bindCamp(campId: string | null): Promise<void>
   open(request: OpenFilePreviewRequest): Promise<FilePreviewOperationResult<OpenFilePreviewResult>>
   restore(request: RestoreFilePreviewRequest): Promise<FilePreviewOperationResult<OpenFilePreviewResult>>
@@ -1676,6 +1686,7 @@ export interface FilePreviewApi {
   prepareHtml(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<FilePreviewHtmlDocument>>
   reload(request: { handleId: string; reopenToken: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<ResolvedFilePreview>>
   release(request: { handleId: string }): Promise<{ released: true }>
+  download?(request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<{ started: true }>>
   openInSystem(request: { handleId: string }): Promise<FilePreviewOperationResult<{ opened: true }>>
   revealInFolder(request: { handleId: string }): Promise<FilePreviewOperationResult<{ revealed: true }>>
   copyPath(request: { handleId: string; format: 'display' | 'absolute' }): Promise<FilePreviewOperationResult<{ copied: true }>>
@@ -2688,6 +2699,8 @@ export type AppUpdateStatus =
   | 'install_failed'
 
 export type AppUpdateFailureReason =
+  | 'release_unpublished'
+  | 'restart_unconfirmed'
   | 'network'
   | 'updater_unavailable'
   | 'invalid_release'
@@ -2737,6 +2750,7 @@ export type StartupLocationMode = 'last_location' | 'quick_chat'
 export type ExecutionConsolePlacement = 'bottom' | 'inspector'
 
 export type SettingsSection =
+  | 'remote'
   | 'general'
   | 'skills'
   | 'mcp'
@@ -2813,11 +2827,17 @@ export interface ChannelAccountView {
 }
 
 export interface ChannelConnectionView {
+  /** Latest runtime inspection; absent older snapshots are unknown. */
+  sessionStatus?: 'valid' | 'invalid' | 'unavailable' | 'unknown'
   status: ChannelConnectionStatus
   account: ChannelAccountView | null
 }
 
 export interface ChannelMemberBotView {
+  /** Durable Bot publication fact, even if a later connection/retry failed. */
+  published?: boolean
+  /** Live transport observation, independent of durable publication status. */
+  connectionStatus?: 'online' | 'offline' | 'unknown'
   agentId: string
   publicationStatus: ChannelPublicationStatus
   botDisplayName: string | null
@@ -2854,6 +2874,8 @@ export interface ChannelProviderView {
   hostStatus: ChannelHostStatus
   connection: ChannelConnectionView
   memberBots: ChannelMemberBotView[]
+  /** This provider's original publication progress; independent of other providers. */
+  provisioning?: MemberBotProvisioningView | null
   pendingBindingCount?: number
   bindingIssueCount?: number
 }
@@ -2968,7 +2990,7 @@ export interface GeneralPreferencesApi {
   setNewConversationDefaults(defaults: NewConversationDefaults, enableOneClick?: boolean): Promise<GeneralPreferencesSnapshot>
   setOneClickNewConversationEnabled(enabled: boolean): Promise<GeneralPreferencesSnapshot>
   setWorldMapEnabled(enabled: boolean): Promise<GeneralPreferencesSnapshot>
-  invalidateNewConversationDefaults(): Promise<GeneralPreferencesSnapshot>
+  invalidateNewConversationDefaults(expectedDefaults?: NewConversationDefaults | null): Promise<GeneralPreferencesSnapshot>
 }
 
 export type OnboardingStep = 'welcome' | 'member' | 'runtime'
@@ -3638,6 +3660,12 @@ export interface UpdateAutomationCommand {
 }
 
 export type CoreMethod =
+  | 'preferences.newConversation.get'
+  | 'preferences.newConversation.setDefaults'
+  | 'preferences.newConversation.setOneClick'
+  | 'preferences.newConversation.invalidate'
+  | 'preferences.newConversation.initialize'
+
   | 'health.check'
   | 'diagnostics.check'
   | 'monitoring.snapshot'
@@ -3658,6 +3686,8 @@ export type CoreMethod =
   | 'members.camps.list'
   | 'members.create'
   | 'members.update'
+  | 'memberAvatars.read'
+  | 'memberAvatars.save'
   | 'members.avatar.set'
   | 'members.runtime.set'
   | 'members.runtime.clear'
@@ -3846,7 +3876,33 @@ export type CoreMethod =
   | 'events.subscribe'
   | 'diagnostics.export'
 
+export type HostWebStatus = {
+  addresses?: { origin: string; interface: string; recommended: boolean }[]
+  listen?: string
+  enabled: boolean
+  origin?: string
+  sessions?: number
+  sessionLifetimeSeconds?: number
+}
+
+export type HostWebStartInput = {
+  listen: string
+  publicOrigin?: string
+  allowInsecureLan: boolean
+}
+
+export interface HostWebApi {
+  loginTicket(): Promise<{ ticket: string; expiresInSeconds: number }>
+  token(): Promise<{ administratorToken: string }>
+  status(): Promise<HostWebStatus>
+  start(input: HostWebStartInput): Promise<HostWebStatus & { administratorToken: string }>
+  stop(): Promise<HostWebStatus>
+  rotate(): Promise<HostWebStatus & { administratorToken: string }>
+}
+
 export interface RovaiApi {
+  /** Local Desktop owner only; absent on the public Web capability. */
+  hostWeb?: HostWebApi
   request<T>(method: CoreMethod, params?: unknown): Promise<T>
   onEvent(listener: (event: CoreEvent) => void): () => void
   appLifecycle: {

@@ -1,7 +1,7 @@
 ---
 document_type: current-decision-navigation
 authority: current-authority-and-rationale-routing
-last_updated: 2026-09-12
+last_updated: 2026-09-14
 ---
 
 # 当前规范与决定理由导航
@@ -11,6 +11,11 @@ last_updated: 2026-09-12
 本页先连接当前规范，再连接形成这些边界的重要理由。历史版本决定不证明代码已经实现；实现状态仍需检查代码、Migration、测试和当前版本验收。
 
 完整规范内核迁移对应关系见[当前决策权威覆盖](AUTHORITY-COVERAGE.md)，旧数字 ID 查找见[迁移映射](LEGACY-MAP.md)。
+
+## Linux Server 发布基线
+
+- 当前规范：[统一 Host](../architecture/unified-rust-host.md#命令事件与兼容性)、[Runtime Platform Admission v2](../contracts/runtime-platform-admission-v2.md)、[Server 验收](../development/server-preview.md#linux-的两个验收-gate)。
+- 理由来源：[V1.59-D06](../versions/v1.59/decisions.md#v1-59-d06)。
 
 ## Core data 与 Read Side
 
@@ -170,3 +175,13 @@ last_updated: 2026-09-12
 
 - 当前规范：[双轨执行评测](../architecture/execution-evaluation.md)、[Execution Evaluation v14](../contracts/execution-evaluation-v14.md)、[User Automation v5](../contracts/user-automation-v5.md)与[操作指南](../development/evaluation.md)。
 - 理由来源：[V1.58-D01](../versions/v1.58/decisions.md#v1-58-d01)。
+
+## 统一 Host 与 Web
+
+- 当前规范：[统一 Rust Host](../architecture/unified-rust-host.md)、[原生 Server 数据与分发](../architecture/unified-rust-host.md#原生-server-数据与分发)、[Host Lifecycle v2](../contracts/host-lifecycle-v2.md)、[Host Web v2](../contracts/host-web-v2.md)与[Server 开发预览](../development/server-preview.md)。
+- 理由来源：[V1.59-D01](../versions/v1.59/decisions.md#v1-59-d01)、[V1.59-D02](../versions/v1.59/decisions.md#v1-59-d02)。
+
+- 新对话默认队伍归属：[Host Web v2](../contracts/host-web-v2.md#shared-creation-preferences)、[Camp Activation](../architecture/camp-activation-lifecycle.md#component-authority)；理由见 [V1.59-D03](../versions/v1.59/decisions.md#v1-59-d03)。
+- Web HTML 附件预览：[统一 Host 的用户文件](../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../contracts/host-web-v2.md)、[文件查看器](../ui/components/file-preview.md)；理由见 [V1.59-D04](../versions/v1.59/decisions.md#v1-59-d04)。
+
+- 长期登录与普通 Session 续期：[Host Web v2](../contracts/host-web-v2.md#session-lifetime-and-renewal)、[统一 Host 身份与控制面](../architecture/unified-rust-host.md#身份与控制面)；理由见 [V1.59-D05](../versions/v1.59/decisions.md#v1-59-d05)。

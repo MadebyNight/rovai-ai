@@ -270,7 +270,14 @@ export class ExecutionWindowCache {
     }
   }
 }
-export const executionWindowCache = new ExecutionWindowCache()
+// Retain Camp history within one transport/Host connection. A replacement
+// Web client must never revive a window whose fetchers hold an old credential.
+const executionWindowCaches = new WeakMap<object, ExecutionWindowCache>()
+export function executionWindowCacheFor(client: object): ExecutionWindowCache {
+  let cache = executionWindowCaches.get(client)
+  if (!cache) { cache = new ExecutionWindowCache(); executionWindowCaches.set(client, cache) }
+  return cache
+}
 export function executionWindowPageSize(viewportHeight: number): number {
   return Math.max(12, Math.min(48, Math.ceil(viewportHeight / 36) + 8))
 }

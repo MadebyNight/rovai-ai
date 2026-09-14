@@ -1,3 +1,6 @@
+import { useCampClient } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
+import { newCommandId } from '../../shared/command-id'
 import { RunningText } from './RunningText'
 import { revealMessageQuote } from './message-quote-reveal'
 import { ReturnToLatest } from './ReturnToLatest'
@@ -534,6 +537,7 @@ function SingleChatPendingQueue({ snapshot, busyOutside, onRefresh, onNotify, on
   onNotify(message: string): void
   onReturnToComposer(item: SingleChatPendingInputView, editToken: string | null): Promise<void>
 }): React.JSX.Element | null {
+  const client = useCampClient()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const queue = snapshot.pendingInputs
@@ -545,8 +549,8 @@ function SingleChatPendingQueue({ snapshot, busyOutside, onRefresh, onNotify, on
     try {
       const editToken = session?.pendingInputId === item.id ? session.editToken : null
       if (remove) {
-        const result = await window.rovai.request<StoredCommandResult>('singleChat.pendingInputs.edit', {
-          commandId: crypto.randomUUID(), command: { campId: snapshot.conversation.campId,
+        const result = await client.request<StoredCommandResult>('singleChat.pendingInputs.edit', {
+          commandId: newCommandId(), command: { campId: snapshot.conversation.campId,
             conversationId: snapshot.conversation.id, pendingInputId: item.id,
             expectedRevision: item.revision, editToken, action: { type: 'delete' } }
         })
@@ -652,6 +656,8 @@ export function SingleChatPanel({
   onLeaveGuardChange?(guard: (() => CampLeavePreparation) | null): void
   onNotify?(message: string): void
 }): React.JSX.Element {
+  const client = useCampClient()
+  const mobile = useMobileLayout()
   const panelId = useId()
   const initialAgentId = members.find((member) => memberCanSingleChat(member) && member.isDefaultLead)?.agentId
     ?? members.find(memberCanSingleChat)?.agentId
@@ -683,7 +689,20 @@ export function SingleChatPanel({
   const [conversations, setConversations] = useState<SingleChatConversationView[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(initialAgentId)
   const [snapshot, setSnapshot] = useState<SingleChatSnapshot | null>(null)
-  const [bodyDrafts, setBodyDrafts] = useState<Record<string, string>>({})
+  const recoveryKey = `single-chat:${campId}`
+  const [bodyDrafts, updateBodyDrafts] = useState<Record<string, string>>(() => {
+    const saved = client.editingRecovery?.get(recoveryKey)
+    return saved && typeof saved === 'object' ? Object.fromEntries(Object.entries(saved).filter(([, value]) => typeof value === 'string')) : {}
+  })
+  const setBodyDrafts: typeof updateBodyDrafts = (next) => updateBodyDrafts(current => {
+    const value = typeof next === 'function' ? next(current) : next
+    client.editingRecovery?.set(recoveryKey, value)
+    return value
+  })
+  useEffect(() => client.onInvalidated?.(() => {
+    const saved = client.editingRecovery?.get(recoveryKey)
+    if (saved && typeof saved === 'object') updateBodyDrafts(Object.fromEntries(Object.entries(saved).filter(([, value]) => typeof value === 'string')))
+  }), [client, recoveryKey])
   const [quoteBusy, setQuoteBusy] = useState(false)
   const quoteTailRef = useRef<Promise<void>>(Promise.resolve())
   const quoteOperationCount = useRef(0)
@@ -833,7 +852,7 @@ export function SingleChatPanel({
         ) break
 
         try {
-          const loaded = await window.rovai.request<SingleChatSnapshot | null>(
+          const loaded = await client.request<SingleChatSnapshot | null>(
             'singleChat.get',
             { conversationId: currentRead.conversationId }
           )
@@ -886,7 +905,7 @@ export function SingleChatPanel({
   const refreshList = useCallback(async (): Promise<SingleChatConversationView[] | undefined> => {
     if (!visibleRef.current || campIdRef.current !== campId) return undefined
     try {
-      const nextConversations = await window.rovai.request<SingleChatConversationView[]>('singleChat.list', { campId })
+      const nextConversations = await client.request<SingleChatConversationView[]>('singleChat.list', { campId })
       if (!visibleRef.current || campIdRef.current !== campId) return undefined
       conversationsRef.current = nextConversations
       setConversations(nextConversations)
@@ -976,7 +995,7 @@ export function SingleChatPanel({
 
   useEffect(() => {
     if (!visible) return
-    return window.rovai.onEvent((event) => {
+    return client.onEvent?.((event) => {
       const target = singleChatChangeRefreshTarget(
         event,
         campId,
@@ -988,7 +1007,15 @@ export function SingleChatPanel({
         void refreshList().catch(() => undefined)
       }
     })
-  }, [campId, refreshCurrent, refreshList, visible])
+  }, [campId, client, refreshCurrent, refreshList, visible])
+
+  useEffect(() => {
+    if (!visible) return
+    return client.onInvalidated?.(() => {
+      void refreshList().catch(() => undefined)
+      void refreshCurrent().catch(() => undefined)
+    })
+  }, [client, refreshCurrent, refreshList, visible])
 
   useEffect(() => {
     if (!visible || !activeRun) return
@@ -998,10 +1025,10 @@ export function SingleChatPanel({
   }, [activeRun?.id, visible])
 
   useEffect(() => {
-    if (!visible || !focusPanel.current) return
+    if (!visible || (!mobile && !focusPanel.current)) return
     focusPanel.current = false
     panelRef.current?.focus({ preventScroll: true })
-  }, [visible])
+  }, [visible, mobile])
 
   useEffect(() => {
     if (!visible) return
@@ -1097,7 +1124,7 @@ export function SingleChatPanel({
     try {
       let result: StoredCommandResult
       try {
-        result = await window.rovai.request<StoredCommandResult>('singleChat.pendingInputs.edit', {
+        result = await client.request<StoredCommandResult>('singleChat.pendingInputs.edit', {
           commandId, command: { campId: current.conversation.campId,
             conversationId: item.conversationId, pendingInputId: item.id, expectedRevision: item.revision,
             editToken, action: { type: 'return_to_composer', expectedDraftRevision: current.draft.revision } }
@@ -1140,7 +1167,7 @@ export function SingleChatPanel({
       || sending || ending || quoteOperationCount.current > 0 || preparingAttachments.some((entry) => !entry.error)) {
       throw new Error('输入框正在处理变更，请稍后再试。')
     }
-    await performPendingReturn({ snapshot: current, item, editToken, commandId: crypto.randomUUID() })
+    await performPendingReturn({ snapshot: current, item, editToken, commandId: newCommandId() })
   }
 
   const acceptMutationSnapshot = (next: SingleChatSnapshot): void => {
@@ -1155,8 +1182,8 @@ export function SingleChatPanel({
       sequence: targetRequestSequenceRef.current
     }
   ): Promise<SingleChatSnapshot | null> => {
-    const result = await window.rovai.request<StoredCommandResult>('singleChat.open', {
-      commandId: crypto.randomUUID(),
+    const result = await client.request<StoredCommandResult>('singleChat.open', {
+      commandId: newCommandId(),
       command: { campId, agentId }
     })
     if (
@@ -1230,7 +1257,7 @@ export function SingleChatPanel({
       || ending
       || files.length === 0
     ) return
-    const pending = files.map((file) => ({ id: crypto.randomUUID(), name: file.name, error: null }))
+    const pending = files.map((file) => ({ id: newCommandId(), name: file.name, error: null }))
     setPreparingAttachments((current) => [...current, ...pending])
     setError(null)
     let current = snapshotRef.current?.conversation.agentId === agentId
@@ -1242,7 +1269,7 @@ export function SingleChatPanel({
       for (const [index, file] of files.entries()) {
         const item = pending[index]
         try {
-          const next = await window.rovai.singleChatAttachments.prepare(
+          const next = await client.singleChatAttachments.prepare(
             current.conversation.id,
             current.draft.revision,
             file
@@ -1369,7 +1396,7 @@ export function SingleChatPanel({
     ) return
     setError(null)
     try {
-      const next = await window.rovai.singleChatAttachments.remove(
+      const next = await client.singleChatAttachments.remove(
         current.conversation.id,
         current.draft.revision,
         attachmentId
@@ -1383,14 +1410,14 @@ export function SingleChatPanel({
   const mutateDraftQuote = (action: MessageQuoteAction): Promise<void> => {
     if (returningPendingRef.current) return Promise.reject(new Error('消息正在移回输入框，请稍后再试。'))
     const owner = snapshotRef.current?.conversation.id
-    const commandId = crypto.randomUUID()
+    const commandId = newCommandId()
     if (!owner) return Promise.reject(new Error('quote.owner_unavailable'))
     quoteOperationCount.current += 1
     setQuoteBusy(true)
     const operation = quoteTailRef.current.then(async () => {
       const current = snapshotRef.current
       if (!current || current.conversation.id !== owner || currentConversationIdRef.current !== owner) throw new Error('quote.owner_unavailable')
-      const next = await window.rovai.request<SingleChatSnapshot>('messageQuotes.mutateDraft', {
+      const next = await client.request<SingleChatSnapshot>('messageQuotes.mutateDraft', {
         commandId, command: { campId, conversationId: owner, expectedRevision: current.draft.revision, action }
       })
       acceptSnapshot(owner, next)
@@ -1421,8 +1448,8 @@ export function SingleChatPanel({
       if (!current) throw new Error('无法打开这段单聊。')
       if (!body && (current.draft.quotes?.length ?? 0) > 0) throw new Error('请填写这次的问题后再发送。')
       if (!body && current.draft.attachments.length === 0) return
-      const result = await window.rovai.request<StoredCommandResult>('singleChat.send', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('singleChat.send', {
+        commandId: newCommandId(),
         command: {
           campId,
           conversationId: current.conversation.id,
@@ -1454,8 +1481,8 @@ export function SingleChatPanel({
     setCancelling(true)
     setError(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('agentRuns.cancel', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('agentRuns.cancel', {
+        commandId: newCommandId(),
         command: { campId, agentRunId: run.id, expectedVersion: run.version }
       })
       if (result.status === 'rejected') throw new Error(resultMessage(result))
@@ -1474,8 +1501,8 @@ export function SingleChatPanel({
     setEnding(true)
     setError(null)
     try {
-      const result = await window.rovai.request<StoredCommandResult>('singleChat.end', {
-        commandId: crypto.randomUUID(),
+      const result = await client.request<StoredCommandResult>('singleChat.end', {
+        commandId: newCommandId(),
         command: singleChatEndCommand(target)
       })
       if (result.status === 'rejected') throw new Error(resultMessage(result))
@@ -1558,7 +1585,7 @@ export function SingleChatPanel({
   )
 
   return <>
-    {entryHost ? createPortal(entries, entryHost) : <div className="camp-detail-entry-fallback">{entries}</div>}
+    {!mobile && (entryHost ? createPortal(entries, entryHost) : <div className="camp-detail-entry-fallback">{entries}</div>)}
     <aside
       ref={panelRef}
       id={panelId}
@@ -1725,6 +1752,7 @@ export function SingleChatPanel({
                 void prepareFiles(files)
               }}
               onKeyDown={(event) => {
+                if (mobile) return
                 if (!shouldSubmitStructuredComposerOnEnter({
                   key: event.key,
                   shiftKey: event.shiftKey,

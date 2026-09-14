@@ -109,7 +109,7 @@ export function HtmlViewer({ tab, pathControl, updateAction }: {
     <div className="file-preview-content">
       {sourceMode && <HtmlPreviewSource key={preview.generation} file={tab.file} theme={resolvedTheme} />}
       {safe && <iframe hidden={sourceMode} ref={iframeRef} className="file-preview-html" title={`${tab.presentation.fileName} HTML 预览`}
-        src={preview.entryUrl} sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer"
+        src={preview.entryUrl} sandbox={preview.sandboxedDocument === undefined ? 'allow-scripts allow-same-origin' : 'allow-scripts'} referrerPolicy="no-referrer"
         onLoad={() => { load.current?.frameLoaded(); channel?.connect() }}
         onError={() => load.current?.failed('无法加载预览页面。')} />}
       {!sourceMode && documentFailed && <div className="file-preview-error file-preview-html-failure" role="alert">

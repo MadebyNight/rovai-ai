@@ -1,3 +1,5 @@
+import { useCampClient } from './camp-client'
+import { useMobileLayout } from './MobileLayout'
 import {
   useEffect,
   useMemo,
@@ -101,6 +103,8 @@ export function navigationPaginationControls(
 }
 
 export function CampNavigation({
+  settingsNavigation,
+  footer,
   view,
   state,
   disabled = false,
@@ -138,6 +142,8 @@ export function CampNavigation({
   onDelete,
   onError
 }: {
+  settingsNavigation?: React.ReactNode
+  footer?: React.ReactNode
   view: 'compose' | 'camp' | 'members' | 'automations' | 'memory' | 'settings'
   state: 'loading' | 'ready' | 'error'
   disabled?: boolean
@@ -175,6 +181,8 @@ export function CampNavigation({
   onDelete(camp: NavigationCampItem): Promise<void>
   onError(error: unknown): void
 }): JSX.Element {
+  const client = useCampClient()
+  const mobile = useMobileLayout()
   const navigationCollapsed = useNavigationCollapsed()
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<Set<string>>(() => new Set())
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(() => new Set())
@@ -234,7 +242,7 @@ export function CampNavigation({
     loadingGroupsRef.current = new Set(loadingGroupsRef.current).add(groupKey)
     setLoadingGroups(new Set(loadingGroupsRef.current))
     try {
-      await onGroupLimitChange(groupKey, currentCount + NAVIGATION_MORE_CAMPS_STEP)
+      await onGroupLimitChange(groupKey, currentCount + (mobile ? NAVIGATION_INITIAL_VISIBLE_CAMPS : NAVIGATION_MORE_CAMPS_STEP))
     } catch (error) {
       onError(error)
     } finally {
@@ -327,6 +335,11 @@ export function CampNavigation({
   return (
     <>
       <aside id="global-navigation" className={`unified-sidebar ${view === 'settings' ? 'settings-navigation-mode' : ''}${navigationCollapsed ? ' is-collapsed' : ''}`} inert={disabled || navigationCollapsed} aria-label={view === 'settings' ? '设置分类' : '全局导航'}>
+        {mobile && view !== 'settings' && <header className="mobile-page-heading"><h1>对话</h1><div>
+          <button className="mobile-icon-button" type="button" aria-label="选择工作目录" disabled={state !== 'ready'} onClick={onOpenProject}><NavigationIcon name="folder-open" /></button>
+          <button className="mobile-icon-button" type="button" aria-label="搜索对话" onClick={() => setPaletteOpen(true)}><NavigationIcon name="search" /></button>
+          <button className="mobile-icon-button" type="button" aria-label="新建对话" disabled={state !== 'ready' || creatingConversation} onClick={onNewConversation}><NavigationIcon name="circle-plus" /></button>
+        </div></header>}
         <div className="unified-sidebar-drag" aria-hidden="true" />
         <div className="unified-brand">
           <span className="rail-logo" role="img" aria-label="Rovai AI">
@@ -348,7 +361,8 @@ export function CampNavigation({
         </div>
         {view === 'settings'
           ? (
-              <SettingsSidebarNavigation
+              settingsNavigation ?? <SettingsSidebarNavigation
+                groups={SETTINGS_SIDEBAR_GROUPS.map(group => ({ ...group, items: group.items.filter(item => item.key !== 'channels' || client.channels) }))}
                 section={settingsSection}
                 updateBadge={updateBadge}
                 onSectionChange={onSettingsSectionChange}
@@ -506,6 +520,7 @@ export function CampNavigation({
         </section>
           </div>
       <div className="unified-sidebar-footer">
+        {footer}
         <div className="sidebar-settings-entry" role="group" aria-label="设置与应用更新">
           <button
             className="rail-button sidebar-settings-main"
@@ -609,19 +624,19 @@ export function CampNavigation({
   )
 }
 
-type SettingsSidebarItem = {
-  key: NavigationSettingsSection
+type SettingsSidebarItem<Section extends string> = {
+  key: Section
   icon: NavigationIconName
   label: string
 }
 
-type SettingsSidebarGroup = {
+export type SettingsSidebarGroup<Section extends string = NavigationSettingsSection> = {
   key: string
   label: string
-  items: SettingsSidebarItem[]
+  items: SettingsSidebarItem<Section>[]
 }
 
-const SETTINGS_SIDEBAR_GROUPS: SettingsSidebarGroup[] = [
+export const SETTINGS_SIDEBAR_GROUPS: SettingsSidebarGroup[] = [
   {
     key: 'application',
     label: '应用',
@@ -638,6 +653,7 @@ const SETTINGS_SIDEBAR_GROUPS: SettingsSidebarGroup[] = [
       { key: 'skills', icon: 'sparkles', label: 'Skills' },
       { key: 'mcp', icon: 'blocks', label: 'MCP' },
       { key: 'runtime', icon: 'cpu', label: '运行时' },
+      { key: 'remote', icon: 'monitor-smartphone', label: '远程连接' },
       { key: 'channels', icon: 'radio-tower', label: '渠道' }
     ]
   },
@@ -652,15 +668,17 @@ const SETTINGS_SIDEBAR_GROUPS: SettingsSidebarGroup[] = [
   }
 ]
 
-function SettingsSidebarNavigation({
+export function SettingsSidebarNavigation<Section extends string>({
+  groups,
   section,
   updateBadge,
   onSectionChange,
   onBack
 }: {
-  section: NavigationSettingsSection
+  groups: SettingsSidebarGroup<Section>[]
+  section: Section
   updateBadge: AppUpdateBadgePresentation | null
-  onSectionChange(section: NavigationSettingsSection): void
+  onSectionChange(section: Section): void
   onBack(): void
 }): JSX.Element {
   return (
@@ -676,7 +694,7 @@ function SettingsSidebarNavigation({
         </div>
       </div>
       <nav className="settings-sidebar-menu" aria-label="设置页面">
-        {SETTINGS_SIDEBAR_GROUPS.map((group) => {
+        {groups.map((group) => {
           const headingId = `settings-sidebar-group-${group.key}`
           return (
             <section className="settings-sidebar-group" aria-labelledby={headingId} key={group.key}>

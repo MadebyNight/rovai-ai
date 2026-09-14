@@ -14,6 +14,13 @@ export type NavigationTarget = Exclude<RestorableLocation, { kind: 'memory' }>
   | { kind: 'automations' }
 
 export type NavigationState = { entries: readonly NavigationTarget[]; index: number }
+/** Platform history stores page locators only; the shared coordinator owns leave guards. */
+export interface NavigationHistory {
+  initial: NavigationState | null
+  write(state: NavigationState, mode: 'push' | 'replace' | 'repair'): NavigationState
+  go(delta: number): Promise<boolean>
+  listen(apply: (state: NavigationState) => Promise<NavigationState | null>): () => void
+}
 export const MAX_NAVIGATION_ENTRIES = 50
 
 export function sameNavigationDestination(a: NavigationTarget, b: NavigationTarget): boolean {
@@ -38,11 +45,12 @@ export type NavigationTransaction = {
 export type NavigationIntent = { isCurrent(): boolean }
 type NavigationOperation =
   | { kind: 'push' | 'replace'; target: NavigationTarget }
-  | { kind: 'traverse'; index: number }
+  | { kind: 'traverse'; index: number; browserState?: NavigationState }
 
 /** Only displayed entries are committed. Pending cursor moves never own another entries array. */
 export function createDesktopNavigation<Context = undefined>(
-  apply: (target: NavigationTarget, transaction: NavigationTransaction, context?: Context) => Promise<void>
+  apply: (target: NavigationTarget, transaction: NavigationTransaction, context?: Context) => Promise<void>,
+  history?: NavigationHistory
 ) {
   let state: NavigationState = { entries: [], index: -1 }
   let pending: NavigationOperation | { kind: 'reservation' } | null = null
@@ -62,7 +70,7 @@ export function createDesktopNavigation<Context = undefined>(
   const navigate = async (operation: NavigationOperation, context?: Context): Promise<boolean> => {
     const request = invalidate()
     pending = operation
-    const target = operation.kind === 'traverse' ? state.entries[operation.index] : operation.target
+    const target = operation.kind === 'traverse' ? (operation.browserState ?? state).entries[operation.index] : operation.target
     const superseded = new Promise<void>(resolve => { supersede = resolve })
     let committed = false
     let committedRevision = -1
@@ -73,17 +81,20 @@ export function createDesktopNavigation<Context = undefined>(
         if (request !== generation || (committed && committedRevision !== entryRevision)) return false
         // Build from the latest committed entries so in-page repairs made during a slow
         // departure survive. A second commit (Camp preview -> full projection) replaces.
-        let entries = [...state.entries]
+        let entries = [...(state.entries.length ? state.entries : operation.kind === 'traverse' ? operation.browserState?.entries ?? [] : [])]
         let index = state.index
         if (!committed && operation.kind === 'push') {
-          entries = [...entries.slice(0, index + 1), resolvedTarget].slice(-MAX_NAVIGATION_ENTRIES)
+          const visited = [...entries.slice(0, index + 1), resolvedTarget]
+          entries = history ? visited : visited.slice(-MAX_NAVIGATION_ENTRIES)
           index = entries.length - 1
         } else {
           if (!committed && operation.kind === 'traverse') index = operation.index
           index = Math.max(0, index)
           entries[index] = resolvedTarget
         }
-        state = { entries, index }
+        let next: NavigationState = { entries, index }
+        if (history && operation.kind !== 'traverse') next = history.write(next, committed ? 'replace' : operation.kind)
+        state = next
         pending = null
         committedRevision = ++entryRevision
         committed = true
@@ -100,6 +111,12 @@ export function createDesktopNavigation<Context = undefined>(
   }
 
   return {
+    connect(): () => void {
+      return history?.listen(async next => await navigate({ kind: 'traverse', index: next.index, browserState: next }) ? state : null) ?? (() => undefined)
+    },
+    restore(): Promise<boolean> {
+      return history?.initial ? navigate({ kind: 'traverse', index: history.initial.index, browserState: history.initial }) : Promise.resolve(false)
+    },
     getSnapshot: (): NavigationState => state,
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener)
@@ -120,6 +137,7 @@ export function createDesktopNavigation<Context = undefined>(
           const entries = [...state.entries]
           entries[state.index] = target
           state = { entries, index: state.index }
+          history?.write(state, 'repair')
           ++entryRevision
           publish()
           return true
@@ -130,6 +148,7 @@ export function createDesktopNavigation<Context = undefined>(
       invalidate()
       ++entryRevision
       state = target ? { entries: [target], index: 0 } : { entries: [], index: -1 }
+      if (target && history) state = history.write(state, 'replace')
       publish()
     },
     push(target: NavigationTarget, context?: Context): Promise<boolean> {
@@ -143,10 +162,12 @@ export function createDesktopNavigation<Context = undefined>(
       return navigate({ kind: 'replace', target }, context)
     },
     back(): Promise<boolean> {
+      if (history) return history.go(-1)
       const index = pending?.kind === 'traverse' ? pending.index : state.index
       return index > 0 ? navigate({ kind: 'traverse', index: index - 1 }) : Promise.resolve(false)
     },
     forward(): Promise<boolean> {
+      if (history) return history.go(1)
       const index = pending?.kind === 'traverse' ? pending.index : state.index
       return index < state.entries.length - 1
         ? navigate({ kind: 'traverse', index: index + 1 }) : Promise.resolve(false)

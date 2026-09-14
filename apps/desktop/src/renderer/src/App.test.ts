@@ -1,3 +1,4 @@
+import { RemoteConnectionStatus } from './RemoteConnectionStatus'
 import { VISIBLE_PRODUCT_RUNTIMES } from './runtime-products'
 import { DEFAULT_APPEARANCE } from '../../shared/appearance'
 import { AgentRunFileChangesReviewSurface } from './FileChangesPreview'
@@ -705,7 +706,8 @@ describe('cold startup route presentation', () => {
       kind: 'camp',
       waiting: true,
       error: 'Core unavailable',
-      onRetry: () => undefined
+      onRetry: () => undefined,
+      onExportDiagnostics: async () => null
     }))
     expect(loading).toContain('data-startup-route="camp"')
     expect(loading).toContain('正在打开会话')
@@ -715,6 +717,11 @@ describe('cold startup route presentation', () => {
     expect(waiting).toContain('暂时无法打开会话')
     expect(waiting).toContain('重新打开')
     expect(waiting).toContain('导出诊断')
+    const browserWaiting = renderToStaticMarkup(createElement(StartupRouteLoading, {
+      kind: 'camp', waiting: true, error: 'Host unavailable', onRetry: () => undefined
+    }))
+    expect(browserWaiting).toContain('重新打开')
+    expect(browserWaiting).not.toContain('导出诊断')
   })
 })
 
@@ -3144,6 +3151,7 @@ describe('task event projections', () => {
       onAppearanceChange: async (preferences: import('@contracts').AppearancePreferences) => ({ ...preferences, resolvedTheme: 'day' as const })
     }
     const contentBySection: Record<NavigationSettingsSection, string> = {
+      remote: '远程连接',
       general: '通用',
       skills: 'Skills',
       mcp: 'MCP',
@@ -3156,7 +3164,7 @@ describe('task event projections', () => {
       about: '关于与更新'
     }
     for (const [section, heading] of Object.entries(contentBySection) as Array<[NavigationSettingsSection, string]>) {
-      const markup = renderToStaticMarkup(createElement(SettingsView, { ...baseProps, section }))
+      const markup = renderToStaticMarkup(createElement(SettingsView, { remoteConnection: createElement(RemoteConnectionStatus, { origin: 'http://fixture.invalid', state: 'live', onLogout: () => undefined }), preferencesApi: {} as import('@contracts').GeneralPreferencesApi, ...baseProps, section }))
       if (section === 'skills' || section === 'mcp') {
         expect(markup).toContain(`<h1>${heading}<span>`)
         expect(markup.match(/class="capability-library-heading"/g)).toHaveLength(1)
@@ -3169,7 +3177,7 @@ describe('task event projections', () => {
   })
 
   it('keeps only lightweight in-app reminder settings', () => {
-    const markup = renderToStaticMarkup(createElement(SettingsView, {
+    const markup = renderToStaticMarkup(createElement(SettingsView, { preferencesApi: {} as import('@contracts').GeneralPreferencesApi,
       appearance: { ...DEFAULT_APPEARANCE, preference: 'system', resolvedTheme: 'day' },
       health: null,
       agents: [],
@@ -3192,7 +3200,7 @@ describe('task event projections', () => {
   })
 
   it('describes theme and reading controls in the shared Appearance header', () => {
-    const markup = renderToStaticMarkup(createElement(SettingsView, {
+    const markup = renderToStaticMarkup(createElement(SettingsView, { preferencesApi: {} as import('@contracts').GeneralPreferencesApi,
       appearance: { ...DEFAULT_APPEARANCE, preference: 'night', resolvedTheme: 'night' },
       health: null,
       agents: [],
@@ -3213,7 +3221,7 @@ describe('task event projections', () => {
   })
 
   it('places the real Runtime rescan action in the shared page header', () => {
-    const markup = renderToStaticMarkup(createElement(SettingsView, {
+    const markup = renderToStaticMarkup(createElement(SettingsView, { preferencesApi: {} as import('@contracts').GeneralPreferencesApi,
       appearance: { ...DEFAULT_APPEARANCE, preference: 'system', resolvedTheme: 'day' },
       health: null,
       agents: [],
@@ -7059,7 +7067,7 @@ describe('task event projections', () => {
     expect(markup).toContain('新增队员')
   })
   it('does not expose a standalone context destination in settings navigation', () => {
-    const markup = renderToStaticMarkup(createElement(SettingsView, {
+    const markup = renderToStaticMarkup(createElement(SettingsView, { preferencesApi: {} as import('@contracts').GeneralPreferencesApi,
       appearance: { ...DEFAULT_APPEARANCE, preference: 'system', resolvedTheme: 'day' },
       health: null,
       agents: [],
@@ -7077,7 +7085,7 @@ describe('task event projections', () => {
   })
 
   it('renders the formal diagnostics center without prototype-only controls', () => {
-    const markup = renderToStaticMarkup(createElement(SettingsView, {
+    const markup = renderToStaticMarkup(createElement(SettingsView, { preferencesApi: {} as import('@contracts').GeneralPreferencesApi,
       appearance: { ...DEFAULT_APPEARANCE, preference: 'system', resolvedTheme: 'day' },
       health: null,
       agents: [],

@@ -1,7 +1,30 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import * as Popover from '@radix-ui/react-popover'
+import * as Dialog from '@radix-ui/react-dialog'
+import { useMobileLayout } from './MobileLayout'
 import { AutomationGlyph } from './AutomationControls'
 import './automation-schedule-pickers.css'
+
+// The same calendar/time fields and schedule validation serve both surfaces.
+function SchedulePopover({ open, onOpenChange, trigger, children, label, className, onOpenAutoFocus }: {
+  open: boolean; onOpenChange(open: boolean): void; trigger: ReactNode; children: ReactNode
+  label: string; className: string; onOpenAutoFocus(event: Event): void
+}): React.JSX.Element {
+  const mobile = useMobileLayout()
+  if (mobile) return <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
+    <Dialog.Portal><Dialog.Overlay className="mobile-sheet-overlay" />
+      <Dialog.Content className={`automation-schedule-popover mobile-schedule-sheet ${className}`} aria-describedby={undefined}>
+        <header className="mobile-sheet-heading"><Dialog.Title>{label}</Dialog.Title><Dialog.Close className="mobile-icon-button" aria-label="关闭日期时间选择">×</Dialog.Close></header>
+        {children}
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>
+  return <Popover.Root open={open} onOpenChange={onOpenChange}>
+    <Popover.Trigger asChild>{trigger}</Popover.Trigger>
+    <Popover.Portal><Popover.Content onCloseAutoFocus={(event) => event.preventDefault()} className={`automation-schedule-popover ${className}`} align="end" sideOffset={8} collisionPadding={12} aria-label={label} onOpenAutoFocus={onOpenAutoFocus}>{children}</Popover.Content></Popover.Portal>
+  </Popover.Root>
+}
 
 const presets = ['08:00', '09:00', '12:00', '17:30']
 const pad = (value: number): string => String(value).padStart(2, '0')
@@ -36,13 +59,11 @@ export function AutomationTimePicker({ value, onChange, disabled }: {
   const step = (unit: 'hour' | 'minute', amount: number): void => {
     commit(stepAutomationTime(normalizeAutomationTime(partsRef.current[0], partsRef.current[1]), unit, amount))
   }
-  return <Popover.Root open={open} onOpenChange={(next) => {
+  return <SchedulePopover open={open} onOpenChange={(next) => {
     if (next) updateParts(value.split(':'))
     else commit()
     setOpen(next)
-  }}>
-    <Popover.Trigger asChild><button type="button" className="automation-picker automation-schedule-value" aria-label={`时间：${value}`} disabled={disabled}><AutomationGlyph name="clock" /><span>{value}</span><AutomationGlyph name="chevron" /></button></Popover.Trigger>
-    <Popover.Portal><Popover.Content onCloseAutoFocus={(event) => event.preventDefault()} className="automation-schedule-popover automation-time-popover" align="end" sideOffset={8} collisionPadding={12} aria-label="选择运行时间" onOpenAutoFocus={(event) => { event.preventDefault(); hourInput.current?.focus(); hourInput.current?.select() }}>
+  }} trigger={<button type="button" className="automation-picker automation-schedule-value" aria-label={`时间：${value}`} disabled={disabled}><AutomationGlyph name="clock" /><span>{value}</span><AutomationGlyph name="chevron" /></button>} className="automation-time-popover" label="选择运行时间" onOpenAutoFocus={(event) => { event.preventDefault(); hourInput.current?.focus(); hourInput.current?.select() }}>
       <div className="automation-time-heading"><strong>选择时间</strong><span>24 小时制</span></div>
       <div className="automation-time-editor">
         {(['hour', 'minute'] as const).map((unit, index) => <div className="automation-time-column" key={unit}>
@@ -63,8 +84,7 @@ export function AutomationTimePicker({ value, onChange, disabled }: {
       <p className="automation-time-presets-label">快捷时间</p>
       <div className="automation-time-presets">{presets.map((preset) => <button type="button" key={preset} disabled={disabled} aria-pressed={normalizeAutomationTime(parts[0], parts[1]) === preset} onClick={() => { commit(preset); setOpen(false) }}>{preset}</button>)}</div>
       <div className="automation-time-footer"><span>可直接输入时间</span><button className="primary-button" type="button" disabled={disabled} onClick={() => { commit(); setOpen(false) }}>完成</button></div>
-    </Popover.Content></Popover.Portal>
-  </Popover.Root>
+  </SchedulePopover>
 }
 
 function localDate(value: string): Date {
@@ -100,12 +120,10 @@ export function AutomationDatePicker({ value, onChange, disabled }: {
     setFocusedDate(automationDateKey(date))
     if (date.getMonth() !== month.getMonth() || date.getFullYear() !== month.getFullYear()) setMonth(new Date(date.getFullYear(), date.getMonth(), 1, 12))
   }
-  return <Popover.Root open={open} onOpenChange={(next) => {
+  return <SchedulePopover open={open} onOpenChange={(next) => {
     if (next) { setMonth(new Date(safeDate.getFullYear(), safeDate.getMonth(), 1, 12)); setFocusedDate(automationDateKey(safeDate)) }
     setOpen(next)
-  }}>
-    <Popover.Trigger asChild><button type="button" className="automation-picker automation-schedule-value" aria-label={`日期：${value}`} disabled={disabled}><AutomationGlyph name="calendar" /><span>{Number.isNaN(selected.getTime()) ? '选择日期' : dateLabel(selected)}</span><AutomationGlyph name="chevron" /></button></Popover.Trigger>
-    <Popover.Portal><Popover.Content onCloseAutoFocus={(event) => event.preventDefault()} className="automation-schedule-popover automation-date-popover" align="end" sideOffset={8} collisionPadding={12} aria-label="选择运行日期" onOpenAutoFocus={(event) => { event.preventDefault(); buttons.current.get(automationDateKey(safeDate))?.focus() }}>
+  }} trigger={<button type="button" className="automation-picker automation-schedule-value" aria-label={`日期：${value}`} disabled={disabled}><AutomationGlyph name="calendar" /><span>{Number.isNaN(selected.getTime()) ? '选择日期' : dateLabel(selected)}</span><AutomationGlyph name="chevron" /></button>} className="automation-date-popover" label="选择运行日期" onOpenAutoFocus={(event) => { event.preventDefault(); buttons.current.get(automationDateKey(safeDate))?.focus() }}>
       <div className="automation-calendar-heading">
         <button type="button" aria-label="上个月" onClick={() => { const next = new Date(month.getFullYear(), month.getMonth() - 1, 1, 12); setMonth(next); setFocusedDate(automationDateKey(next)) }}><AutomationGlyph name="back" /></button>
         <strong aria-live="polite">{month.getFullYear()} 年 {month.getMonth() + 1} 月</strong>
@@ -121,6 +139,5 @@ export function AutomationDatePicker({ value, onChange, disabled }: {
           else if (event.key === 'PageUp' || event.key === 'PageDown') { event.preventDefault(); const next = new Date(day.getFullYear(), day.getMonth() + (event.key === 'PageUp' ? -1 : 1), 1, 12); moveFocus(next) }
         }}>{day.getDate()}</button>
       })}</div>
-    </Popover.Content></Popover.Portal>
-  </Popover.Root>
+  </SchedulePopover>
 }

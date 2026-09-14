@@ -1,3 +1,4 @@
+import { useCampClient } from './camp-client'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { McpRevealResult } from '@contracts'
 import { NewConversationQuickHelp } from './NewConversationQuickHelp'
@@ -7,6 +8,8 @@ const PRESERVE = '__ROVAI_PRESERVE_STORED_VALUE__'
 type Definition = Record<string, unknown> & {
   env?: Record<string, string>
   headers?: Record<string, string>
+  url?: string
+  args?: string[]
 }
 function entry(text: string): [string, Definition] {
   const entries = Object.entries(JSON.parse(text).mcpServers ?? {})
@@ -26,6 +29,11 @@ function sensitive(key: string, value: string): boolean {
 export function maskMcpJson(text: string): string | null {
   try {
     const [name, definition] = entry(text)
+    if (typeof definition.url === 'string' && definition.url !== MASK) {
+      if (definition.url === PRESERVE) definition.url = MASK
+      else { const url = new URL(definition.url); if (url.username || url.password || url.search) definition.url = MASK }
+    }
+    if (definition.args?.some(arg => arg === MASK || arg === PRESERVE || sensitive(arg, arg))) definition.args = definition.args.map(() => MASK)
     for (const field of ['env', 'headers'] as const) {
       for (const [key, value] of Object.entries(definition[field] ?? {})) {
         if (typeof value === 'string' && (value === PRESERVE || sensitive(key, value)))
@@ -41,6 +49,8 @@ export function materializeMcpDraft(text: string, preserved?: string | null): st
   if (!preserved) return text
   const [name, definition] = entry(text),
     [, stored] = entry(preserved)
+  if ((definition.url === MASK || definition.url === PRESERVE) && stored.url) definition.url = stored.url
+  if (definition.args) definition.args = definition.args.map((arg, index) => (arg === MASK || arg === PRESERVE) && stored.args?.[index] !== undefined ? stored.args[index] : arg)
   for (const field of ['env', 'headers'] as const) {
     for (const [key, value] of Object.entries(definition[field] ?? {})) {
       if ((value === MASK || value === PRESERVE) && Object.hasOwn(stored[field] ?? {}, key))
@@ -52,7 +62,7 @@ export function materializeMcpDraft(text: string, preserved?: string | null): st
 export function hasMcpSecrets(text: string): boolean {
   try {
     const [, definition] = entry(text)
-    return ['env', 'headers'].some((field) =>
+    return definition.url === MASK || definition.url === PRESERVE || Boolean(definition.args?.some(arg => arg === MASK || arg === PRESERVE)) || ['env', 'headers'].some((field) =>
       Object.entries((definition[field] ?? {}) as Record<string, string>).some(
         ([key, value]) =>
           typeof value === 'string' &&
@@ -86,6 +96,7 @@ export function McpJsonEditor({
   onConcealed(concealed: boolean): void
   onError(message: string | null): void
 }): React.JSX.Element {
+  const client = useCampClient()
   const [text, setText] = useState(() => maskMcpJson(value) ?? value)
   const latestText = useRef(text)
   latestText.current = text
@@ -189,7 +200,7 @@ export function McpJsonEditor({
     try {
       let original = source.current
       if (serverId) {
-        const result = await window.rovai.request<McpRevealResult>('mcp.servers.reveal', {
+        const result = await client.request<McpRevealResult>('mcp.servers.reveal', {
           serverId,
           expectedConfigDigest: configDigest
         })

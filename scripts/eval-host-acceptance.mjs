@@ -67,7 +67,6 @@ try {
   console.log(JSON.stringify({ stage: 'awaiting_real_schedule', automationId, due: { date: localDate, at }, root }))
   const deadline = Date.now() + 62 * 60_000
   while (Date.now() < deadline) {
-    await core.request('automations.schedulerTick', { epoch: 1, now: new Date().toISOString() })
     await host.tick()
     const automation = await core.request('automations.get', { automationId })
     const run = automation.lastRun

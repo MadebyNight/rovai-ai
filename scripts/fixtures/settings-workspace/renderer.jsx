@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CampNavigation } from '@renderer/CampNavigation'
 import { WindowDragStrip } from '@renderer/App'
+import { HostWebSettings } from '@renderer/HostWebSettings'
 import { GeneralSettings } from '@renderer/GeneralSettings'
 import { AppearanceSettings } from '@renderer/AppearanceSettings'
 import { NotificationSettings } from '@renderer/NotificationSettings'
@@ -17,7 +18,10 @@ import '@renderer/member-editor.css'
 const ignore = () => {}
 const clone = structuredClone
 const requests = []
+let releaseHostStatus
+let hostTokenGeneration = 1
 const state = {
+  hostWeb: { enabled: false }, holdHostStatus: false, loseHostStartReply: false,
   preferences: fixture.preferences(), notifications: fixture.notifications(),
   channels: fixture.channelsSnapshot(), executionWeb: fixture.executionWeb(),
   startup: {}, diagnostics: fixture.diagnosticsSnapshot(), scenario: 'normal', failure: null
@@ -53,6 +57,26 @@ const savePreference = key => async value => {
 Object.assign(window, { rovai: {
   selectRuntimeExecutable: async () => '/sample/custom/codex',
   platform: 'darwin', onEvent: () => () => {},
+  hostWeb: {
+    token: async () => ({ administratorToken: `fixture-token-${hostTokenGeneration}` }),
+    status: async () => {
+      await request('hostWeb.status')
+      const snapshot = clone(state.hostWeb)
+      if (state.holdHostStatus) {
+        state.holdHostStatus = false
+        return new Promise(resolve => { releaseHostStatus = () => resolve(snapshot) })
+      }
+      return snapshot
+    },
+    start: async params => {
+      await request('hostWeb.start', params)
+      state.hostWeb = { enabled: true, listen: params.listen, origin: 'http://127.0.0.1:' + params.listen.split(':').at(-1), addresses: [{ origin: 'http://127.0.0.1:' + params.listen.split(':').at(-1), interface: 'lo0', recommended: false }], sessions: 0 }
+      if (state.loseHostStartReply) { state.loseHostStartReply = false; throw new Error('启动结果未知') }
+      return { ...clone(state.hostWeb), administratorToken: `fixture-token-${hostTokenGeneration}` }
+    },
+    rotate: async () => { await request('hostWeb.rotate'); return { ...clone(state.hostWeb), administratorToken: `fixture-token-${++hostTokenGeneration}` } },
+    stop: async () => { await request('hostWeb.stop'); state.hostWeb = { enabled: false }; return clone(state.hostWeb) }
+  },
   generalPreferences: {
     get: async () => clone(state.preferences),
     setStartupLocationMode: savePreference('startupLocationMode'),
@@ -121,6 +145,7 @@ Object.assign(window, { rovai: {
 
 function Fixture() {
   const [page, setPage] = useState('general')
+  const [remotePort, setRemotePort] = useState(null)
   const [generation, setGeneration] = useState(0)
   const [roster, setRoster] = useState(fixture.largeRoster)
   const [appearance, setAppearance] = useState(fixture.appearance)
@@ -144,7 +169,8 @@ function Fixture() {
       onRemoveProject={async () => {}} onRename={async () => {}} onDelete={async () => {}} onError={error => { throw error }} />
     <main className="content settings-content">
       <div className="settings-workbench"><div className={`settings-panel settings-panel-${page}`} key={`${page}-${generation}`}>
-        {page === 'general' && <GeneralSettings agents={roster} initialPreferences={state.preferences} currentProjectLabel="rovai-ai" onPreferencesChange={ignore} />}
+        {page === 'general' && <GeneralSettings api={window.rovai.generalPreferences} windowControls={window.rovai.windowControls} agents={roster} initialPreferences={state.preferences} currentProjectLabel="rovai-ai" onPreferencesChange={ignore} />}
+        {page === 'remote' && <HostWebSettings portDraft={remotePort} onPortDraftChange={setRemotePort} api={window.rovai.hostWeb} />}
         {page === 'appearance' && <AppearanceSettings appearance={appearance} disabled={false} onChange={async value => { setAppearance(value); return value }} />}
         {page === 'notifications' && <NotificationSettings />}
         {page === 'runtime' && <RuntimeInstallationsPanel health={fixture.healthSnapshot()} installations={[]} onReload={async () => {}} />}
@@ -159,6 +185,7 @@ function Fixture() {
 }
 window.settingsTest = {
   requests, state,
+  releaseHostStatus: () => releaseHostStatus?.(),
   updateChannel: (kind, patch) => {
     Object.assign(state.channels.channels.find(channel => channel.kind === kind), patch)
     emitChannels()

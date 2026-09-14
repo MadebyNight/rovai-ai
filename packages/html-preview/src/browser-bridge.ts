@@ -11,6 +11,7 @@ export interface PreviewBridgeConfig {
   documentUrl: string
   map: HtmlInjectionMap
   documentError: string | null
+  browserDocument?: boolean
 }
 
 /** Serialized into a site-owned script. All runtime dependencies are arguments
@@ -83,7 +84,7 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
   const connectChild = (source: Window): void => {
     for (const child of children.keys()) if (!childWindow(child)) children.delete(child)
     if (children.size >= 64 && !children.has(source)) return
-    const id = crypto.randomUUID()
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
     children.set(source, { id, documentId: null })
     sendRaw(source, config.origin, 'connect', { connectionId: id })
   }
@@ -158,7 +159,7 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
       if (data.type === 'connect' && typeof data.connectionId === 'string' && data.connectionId.length <= 128) {
         connection = { id: data.connectionId, origin: event.origin }
         send('connected'); state(); send('find-ready')
-        if (event.origin !== config.origin) startServerDiagnostics()
+        if (event.origin !== config.origin && !config.browserDocument) startServerDiagnostics()
         diagnostics.forEach(diagnostic => send('diagnostic', { diagnostic }))
       } else if (connection && data.connectionId === connection.id && data.documentId === config.documentId) command(data)
       return

@@ -19,6 +19,7 @@ export type HostPlatformKey =
   | 'macos-arm64'
   | 'macos-x64'
   | 'windows-x64'
+  | 'linux-x64'
 
 export type RuntimePlatformAdmissionStatus =
   | 'qualified'
@@ -38,6 +39,12 @@ export interface RuntimePlatformAdmission {
 `qualified` 必须有非空 immutable evidence revision，且 `reasonCode = null`。`preview` 必须保留阻止正式资格化的
 closed reason code，且 `evidenceRevision = null`；它不能被统计或描述为 First-Class/qualified。
 `not_qualified` 与 `unsupported` 的 reason/evidence 规则沿用 v1。
+
+v1.59 的 Linux x64 Server OS 与 Runtime 资格独立。Server 在目标发行版启动不晋升 Adapter。
+Linux 按维护者确认的适配范围开放现有 14 个 Runtime 的 `preview`，显式排除 Cursor；DeepSeek Harness
+不在 Product Runtime Catalog 中，也不新增接入。reason 为 `runtime_platform.qualification_evidence_missing`，
+evidenceRevision 仍为 null，允许 discovery、安装和真实验收。未来新增 Adapter 不自动继承此范围。
+只有目标 Runtime 自己的发行版/版本/能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
 
 ## 2. Authority and projection
 

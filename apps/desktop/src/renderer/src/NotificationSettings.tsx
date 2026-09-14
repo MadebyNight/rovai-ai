@@ -1,3 +1,5 @@
+import { useCampClient } from './camp-client'
+import { newCommandId } from '../../shared/command-id'
 import { readErrorMessage } from './error-message'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NotificationPreference, StoredCommandResult } from '@contracts'
@@ -74,6 +76,7 @@ const NOTIFICATION_SCENARIOS: readonly NotificationScenario[] = [
 ]
 
 export function NotificationSettings(): React.JSX.Element {
+  const client = useCampClient()
   const [preference, setPreference] = useState<NotificationPreference | null>(null)
   const [loading, setLoading] = useState(true)
   const [savingKey, setSavingKey] = useState<NotificationPreferenceKey | null>(null)
@@ -105,7 +108,7 @@ export function NotificationSettings(): React.JSX.Element {
     setLoading(true)
     setError(null)
     try {
-      const next = await window.rovai.request<NotificationPreference>(
+      const next = await client.request<NotificationPreference>(
         'notifications.preference.get'
       )
       setPreference(assertPreference(next))
@@ -114,7 +117,7 @@ export function NotificationSettings(): React.JSX.Element {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [client])
 
   useEffect(() => {
     void load()
@@ -139,10 +142,10 @@ export function NotificationSettings(): React.JSX.Element {
     restorePreferenceInteraction(key)
 
     try {
-      const result = await window.rovai.request<StoredCommandResult>(
+      const result = await client.request<StoredCommandResult>(
         'notifications.preference.update',
         {
-          commandId: crypto.randomUUID(),
+          commandId: newCommandId(),
           command: {
             expectedVersion: preference.version,
             headsUpEnabled: next.headsUpEnabled,
@@ -172,7 +175,7 @@ export function NotificationSettings(): React.JSX.Element {
     } catch (nextError) {
       let message = errorMessage(nextError)
       try {
-        const current = await window.rovai.request<NotificationPreference>(
+        const current = await client.request<NotificationPreference>(
           'notifications.preference.get'
         )
         setPreference(assertPreference(current))

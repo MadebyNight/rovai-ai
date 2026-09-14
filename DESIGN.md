@@ -90,7 +90,7 @@ states. `system` is a preference resolver, not a third theme.
 
 ## Typography
 
-The body stack is the platform-native sans-serif stack declared in `styles.css`; no downloadable
+The body stack is the platform-native sans-serif stack declared in `packages/ui/src/theme.css`; no downloadable
 font is required. Monospace is reserved for commands, paths, timestamps, stable IDs, short status
 values and evidence.
 
@@ -106,8 +106,9 @@ values and evidence.
 ## Layout
 
 The desktop shell uses a default 270px navigation rail, a 50px top row (38px for Camp) and a flexible content column.
-macOS settings use a fixed 270px rail with no collapse, resize or history controls while expanded;
-when inherited layout is collapsed, only the expand button appears. Ordinary pages show back/forward
+macOS and Web settings use a fixed 270px rail without collapse, resize or history controls.
+macOS preserves an inherited collapsed rail with an expand button. Web settings always expand their categories
+and remove the native drag spacer above the brand; leaving settings restores the ordinary-page layout. Ordinary pages show back/forward
 beside the sidebar toggle while expanded, and only the expand button while collapsed.
 The global rail resizes from 200px to 420px within the window. Dragging below 200px or using the
 window-chrome toggle collapses it completely to 0px, without an icon strip. Restore through the toggle,
@@ -147,7 +148,7 @@ without extra focus outlines or halos; higher contrast preferences restore the s
 
 ## Components
 
-- **Buttons:** compact, direct and text-first. Primary actions use Steel by default. Conversation send, task creation and member invitation use
+- **Buttons:** compact, direct and text-first. Primary actions use Steel by default. Conversation send, new-conversation dialog creation, task creation and member invitation use
   the neutral `--conversation-action` family, as do first-run onboarding, teammate save, Memory, Automation and MCP/Skills actions. Teammate save and workspace creation entries use light tonal buttons. Home creation uses a quiet tonal entry; danger marks destructive actions and sidebar removal. Active buttons move down 1px; disabled controls retain legible content at
   reduced opacity. Floating return-to-latest icon controls keep their hit area stationary while pressed;
   their face uses a tonal change for feedback.

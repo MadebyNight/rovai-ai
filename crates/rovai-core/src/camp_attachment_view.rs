@@ -379,8 +379,13 @@ impl CampAttachmentViewStore {
         let canonical_data_dir = fs::canonicalize(data_dir)
             .context("runtime_camp_files_root_invalid: data_dir is unavailable")?;
         let instance_key = instance_key(&canonical_data_dir)?;
+        // Only the exact instance-bound standalone layout may live below the
+        // authority directory. Arbitrary nested roots remain rejected.
+        let server_root = crate::storage_layout::server_runtime_root(&canonical_data_dir)?;
+        let standalone =
+            normalize_existing_or_lexical(root)? == normalize_existing_or_lexical(&server_root)?;
         #[cfg(target_os = "macos")]
-        {
+        if !standalone {
             let home = dirs::home_dir()
                 .context("runtime_camp_files_root_invalid: current user Home is unavailable")?;
             let canonical_home = fs::canonicalize(home)
@@ -398,7 +403,7 @@ impl CampAttachmentViewStore {
             reject_overlap(root, &canonical_data_dir)?;
         }
         #[cfg(windows)]
-        {
+        if !standalone {
             let expected = canonical_data_dir.join("runtime-files");
             if normalize_existing_or_lexical(root)? != normalize_existing_or_lexical(&expected)? {
                 anyhow::bail!(
@@ -407,7 +412,9 @@ impl CampAttachmentViewStore {
             }
         }
         #[cfg(not(any(target_os = "macos", windows)))]
-        reject_overlap(root, &canonical_data_dir)?;
+        if !standalone {
+            reject_overlap(root, &canonical_data_dir)?;
+        }
         for managed_root in other_managed_roots {
             validate_normalized_absolute(managed_root, "runtime_camp_files_root_invalid")?;
             reject_existing_symlink_components(managed_root)?;
@@ -423,7 +430,9 @@ impl CampAttachmentViewStore {
         validate_current_user_local_root(&canonical_root)?;
         reject_nested_runtime_root_markers(&canonical_root)?;
         #[cfg(not(windows))]
-        reject_overlap(&canonical_root, &canonical_data_dir)?;
+        if !standalone {
+            reject_overlap(&canonical_root, &canonical_data_dir)?;
+        }
 
         let lock_path = canonical_root.join(ROOT_LOCK);
         let mut lock_file = private_open_read_write(&lock_path)?;
@@ -621,7 +630,7 @@ impl CampAttachmentViewStore {
             anyhow::bail!("camp_attachment_view_busy");
         }
         let current_revision: i64 = transaction.query_row(
-            "SELECT revision FROM camp_composer_draft WHERE camp_id = ?1",
+            "SELECT revision FROM camp_composer_draft WHERE client_id = 'desktop' AND camp_id = ?1",
             [camp_id],
             |row| row.get(0),
         )?;
@@ -812,7 +821,7 @@ impl CampAttachmentViewStore {
         }
         if operation.4 == "legacy" {
             let current_revision: i64 = transaction.query_row(
-                "SELECT revision FROM camp_composer_draft WHERE camp_id = ?1",
+                "SELECT revision FROM camp_composer_draft WHERE client_id = 'desktop' AND camp_id = ?1",
                 [&plan.camp_id],
                 |row| row.get(0),
             )?;
@@ -1029,7 +1038,7 @@ impl CampAttachmentViewStore {
             .context("camp_attachment_view_recovery_required: publish operation has no Draft revision")?;
         let current_revision = connection
             .query_row(
-                "SELECT revision FROM camp_composer_draft WHERE camp_id = ?1",
+                "SELECT revision FROM camp_composer_draft WHERE client_id = 'desktop' AND camp_id = ?1",
                 [&publication.camp_id],
                 |row| row.get::<_, i64>(0),
             )
@@ -5201,10 +5210,15 @@ fn path_entry_exists(path: &Path) -> Result<bool> {
     }
 }
 
-fn reject_existing_symlink_components(path: &Path) -> Result<()> {
+pub(crate) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
+        // A Windows drive prefix (including \\?\C:) is not a directory.
+        // Inspect the complete root after RootDir, then every actual ancestor.
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 anyhow::bail!(
@@ -5214,7 +5228,14 @@ fn reject_existing_symlink_components(path: &Path) -> Result<()> {
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect Runtime Files ancestor {}",
+                        current.display()
+                    )
+                });
+            }
         }
     }
     Ok(())
@@ -6022,6 +6043,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.to_string(),
                         draft_revision,
                         execution: None,
@@ -6083,6 +6105,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.to_string(),
                         draft_revision: draft.revision,
                         execution: None,
@@ -6791,6 +6814,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.clone(),
                         draft_revision: draft.revision,
                         execution: None,
@@ -6827,6 +6851,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.clone(),
                         draft_revision: draft.revision,
                         execution: None,
@@ -7304,6 +7329,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.clone(),
                         draft_revision: draft.revision,
                         execution: None,
@@ -7525,6 +7551,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: SendUserCampDraftCommand {
+                        draft_client: crate::draft_client::DraftClient::default(),
                         camp_id: camp_id.clone(),
                         draft_revision: draft.revision,
                         execution: None,

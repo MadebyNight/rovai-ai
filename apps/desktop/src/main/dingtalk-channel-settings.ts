@@ -328,6 +328,7 @@ export class DingTalkChannelSettingsService {
   #activeProvisioning: MemberBotProvisioningView | null = null
   #activeProvisioningAbort: AbortController | null = null
   #stopped = false
+  #sessionStatus: 'valid' | 'invalid' | 'unavailable' | 'unknown' = 'unknown'
   #sessionCheckGeneration = 0
   #sessionNeedsReconnect = false
   #nextRosterSweepAt = 0
@@ -388,6 +389,7 @@ export class DingTalkChannelSettingsService {
   async stop(): Promise<void> {
     this.#stopped = true
     this.#sessionCheckGeneration += 1
+    this.#sessionStatus = 'unknown'
     this.#activeQrAbort?.abort()
     this.#activeProvisioningAbort?.abort()
     this.#hostPump.stop()
@@ -401,6 +403,19 @@ export class DingTalkChannelSettingsService {
     this.#executionCardTails.clear()
   }
 
+  async #inspectDeveloperSession() {
+    const generation = this.#sessionCheckGeneration
+    try {
+      const identity = await this.#dependencies.developerSession.inspect()
+      if (generation === this.#sessionCheckGeneration) this.#sessionStatus = identity ? 'valid' : 'invalid'
+      return identity
+    } catch (error) {
+      if (generation === this.#sessionCheckGeneration) this.#sessionStatus = error instanceof Error
+        && error.message === 'dingtalk_developer_session_expired' ? 'invalid' : 'unavailable'
+      throw error
+    }
+  }
+
   async get(): Promise<DingTalkChannelSettingsState> {
     const snapshot = await this.#snapshot()
     const intents = new Map(snapshot.publicationIntents.map((intent) => [intent.agentId, intent]))
@@ -410,6 +425,7 @@ export class DingTalkChannelSettingsService {
         displayName: '钉钉',
         hostStatus: 'ready',
         connection: {
+          sessionStatus: this.#sessionNeedsReconnect ? 'invalid' : this.#sessionStatus,
           status: this.#sessionNeedsReconnect ? 'session_expired'
             : snapshot.account?.status === 'connected'
             ? 'connected'
@@ -430,6 +446,8 @@ export class DingTalkChannelSettingsService {
             ?? (intent?.state.startsWith('failed_') ? intent.failureCode : null)
           return {
             agentId: bot.agentId,
+            published: bot.status === 'published',
+            connectionStatus: this.#stream.has(bot.appKey) ? 'online' : 'offline',
             publicationStatus: failureCode
               ? 'failed'
               : bot.status === 'published' && this.#stream.has(bot.appKey)
@@ -459,6 +477,7 @@ export class DingTalkChannelSettingsService {
       this.#activeProvisioning.stage
     )) throw new Error('队员发布期间不能切换钉钉账号。')
     this.#sessionCheckGeneration += 1
+    this.#sessionStatus = 'unknown'
     const abort = new AbortController()
     const attemptId = randomUUID()
     this.#activeQrAbort = abort
@@ -603,6 +622,7 @@ export class DingTalkChannelSettingsService {
       this.#activeProvisioning.stage
     )) throw new Error('队员发布期间不能断开钉钉账号。')
     this.#sessionCheckGeneration += 1
+    this.#sessionStatus = 'unknown'
     const snapshot = await this.#snapshot()
     if (!snapshot.account || snapshot.account.status !== 'connected') return
     await this.#command('channels.dingtalk.account.disconnect', {
@@ -622,10 +642,13 @@ export class DingTalkChannelSettingsService {
     const snapshot = await this.#snapshot()
     const account = snapshot.account
     if (!account || account.status !== 'connected') throw new Error('请先连接钉钉开发者账号。')
-    const identity = await this.#dependencies.developerSession.inspect()
+    const identity = await this.#inspectDeveloperSession()
     if (!identity
       || identity.userIdDigest !== account.userIdDigest
-      || identity.corpId !== account.corpId) throw new Error('钉钉账号已变化，请重新连接。')
+      || identity.corpId !== account.corpId) {
+      this.#sessionStatus = 'invalid'
+      throw new Error('钉钉账号已变化，请重新连接。')
+    }
     const agent = await this.#dependencies.core.request<AgentProfile>('members.get', { agentId })
     const existing = snapshot.publicationIntents.find((intent) => intent.agentId === agentId)
     const existingBot = snapshot.memberBots.find((bot) => bot.agentId === agentId)
@@ -960,7 +983,7 @@ export class DingTalkChannelSettingsService {
   ): Promise<void> {
     let identity: DingTalkDeveloperIdentity | null
     try {
-      identity = await this.#dependencies.developerSession.inspect()
+      identity = await this.#inspectDeveloperSession()
     } catch (error) {
       if (error instanceof Error && error.message === 'dingtalk_legacy_session_requires_reconnect') {
         if (!this.#stopped && this.#sessionCheckGeneration === generation) {

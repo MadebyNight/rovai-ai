@@ -36,7 +36,7 @@ Theme Token → Shared Component → Surface Composition
 4. 主题切换只更新根 Token 与窗口背景；不得重新挂载页面、移动焦点，或改变 Camp、Tab、
    Draft、滚动、选择、Dialog、Core/IPC 事实。
 
-实现真源是 [`styles.css`](../../../apps/desktop/src/renderer/src/styles.css)、
+实现真源是 [`theme.css`](../../../packages/ui/src/theme.css)、
 [`theme.ts`](../../../apps/desktop/src/renderer/src/theme.ts)和主题测试。若文档与生产 Token
 不一致，必须报告文档—实现漂移，不得静默选边。
 
@@ -60,6 +60,10 @@ Theme Token → Shared Component → Surface Composition
 
 字体偏好不覆盖 HTML 文档自身样式或图片的独立缩放；整页缩放仍作用于应用窗口。
 主题切换、字号和疏密调整通过根属性与 CSS 变量应用；不以重新挂载页面实现变化。
+
+Web 使用同一外观页面、主题和阅读偏好模型，由浏览器入口显式注入当前 Host/Owner 作用域的本地偏好适配。
+整页缩放由浏览器菜单或快捷键控制；Web 外观页解释这一差异，不显示无法控制浏览器倍率的选择器。
+恢复外观默认值不重置浏览器保存的缩放。Desktop 仍使用上述原生 Chrome 档位。
 
 Main 原子保存 schema-v2 偏好，并串行处理连续更新。schema-v1 主题文件按原主题加默认阅读偏好读取，
 显式调整后升级；无效文件保持原字节并在内存使用安全默认值，保存失败不发布成功快照。

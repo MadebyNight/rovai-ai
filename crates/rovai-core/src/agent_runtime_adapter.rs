@@ -714,8 +714,44 @@ impl AgentRuntimeAdapterRegistry {
         kind: AdapterKind,
         platform: HostPlatformKey,
     ) -> RuntimePlatformAdmission {
+        if platform == HostPlatformKey::LinuxX64
+            && matches!(
+                kind,
+                AdapterKind::CodexCli
+                    | AdapterKind::ClaudeCodeCli
+                    | AdapterKind::Pi
+                    | AdapterKind::OpencodeCli
+                    | AdapterKind::CopilotCli
+                    | AdapterKind::KiroCli
+                    | AdapterKind::QoderCli
+                    | AdapterKind::CodebuddyCli
+                    | AdapterKind::QwenCode
+                    | AdapterKind::TraeCnCli
+                    | AdapterKind::KimiCodeCli
+                    | AdapterKind::GrokBuild
+                    | AdapterKind::ZcodeApp
+                    | AdapterKind::AntigravityApp
+            )
+        {
+            // This explicit evaluation scope excludes Cursor and never admits a
+            // future Adapter implicitly. Server OS success cannot qualify a
+            // Runtime; its own distribution/capability evidence is still needed.
+            return RuntimePlatformAdmission::preview(
+                kind,
+                platform,
+                RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing,
+            );
+        }
+        let unqualified = || {
+            RuntimePlatformAdmission::not_qualified(
+                kind,
+                platform,
+                RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing,
+            )
+        };
         if kind == AdapterKind::ZcodeApp {
             return match platform {
+                HostPlatformKey::LinuxX64 => unqualified(),
                 HostPlatformKey::MacosArm64 => RuntimePlatformAdmission::qualified(
                     kind,
                     platform,
@@ -748,11 +784,13 @@ impl AgentRuntimeAdapterRegistry {
                     HostPlatformKey::MacosArm64 => PI_MACOS_ARM64_EVIDENCE_REVISION,
                     HostPlatformKey::MacosX64 => PI_MACOS_X64_EVIDENCE_REVISION,
                     HostPlatformKey::WindowsX64 => PI_WINDOWS_X64_EVIDENCE_REVISION,
+                    HostPlatformKey::LinuxX64 => return unqualified(),
                 },
             );
         }
         if kind == AdapterKind::GrokBuild {
             return match platform {
+                HostPlatformKey::LinuxX64 => unqualified(),
                 HostPlatformKey::MacosArm64 => RuntimePlatformAdmission::qualified(
                     kind,
                     platform,
@@ -785,11 +823,13 @@ impl AgentRuntimeAdapterRegistry {
                     MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION,
                 )
             }
-            HostPlatformKey::WindowsX64 => RuntimePlatformAdmission::not_qualified(
-                kind,
-                platform,
-                RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing,
-            ),
+            HostPlatformKey::WindowsX64 | HostPlatformKey::LinuxX64 => {
+                RuntimePlatformAdmission::not_qualified(
+                    kind,
+                    platform,
+                    RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing,
+                )
+            }
         }
     }
 

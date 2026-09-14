@@ -2,18 +2,18 @@
 document_type: ui-component-contract
 authority: renderer-app-shell-navigation
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # App Shell 与统一侧栏
 
 ## 统一侧栏结构
 
-所有一级页面共享默认 270px rail；普通页面可调宽，macOS 设置页固定 270px。普通顶行为 50px，会话顶行为 38px。侧栏品牌字标为 `Rovai AI`，不带副标题或通知铃铛；
+所有一级页面共享默认 270px rail；普通页面可调宽，macOS 与 Web 设置页固定 270px。普通顶行为 50px，会话顶行为 38px。侧栏品牌字标为 `Rovai AI`，不带副标题或通知铃铛；
 普通侧栏在“新对话”后依次提供“队员”“记忆”“定时任务”一级入口，底部以“设置”为主入口；存在可操作 App 新版本时，其右侧可以出现独立的紧凑更新状态徽标。
 徽标只深链到“关于与更新”，不改变“设置”主入口恢复最后设置分类的语义。应用内普通提醒只在新动态
 到达时临时呈现，偏好位于“设置 → 提醒”。设置
-分类覆盖同一个侧栏槽位，不在内容区再增加第二列导航。macOS 设置沿用进入前的折叠状态，但不提供折叠与调宽入口；折叠时只显示展开按钮，展开后隐藏该按钮。Windows 继续使用普通布局操作。
+分类覆盖同一个侧栏槽位，不在内容区再增加第二列导航。macOS 设置沿用进入前的折叠状态，但不提供折叠与调宽入口；折叠时只显示展开按钮，展开后隐藏该按钮。Web 设置始终展开分类，不显示折叠、后退、前进三个按钮；去掉品牌上方原生拖拽区占位，品牌靠顶部排列。离开 Web 设置后恢复普通页面原来的宽度与折叠状态。Windows Desktop 继续使用普通布局操作。
 
 ### 调宽与完全折叠
 
@@ -21,7 +21,7 @@ last_updated: 2026-09-13
 - 展开范围 200–420px，上限随窗口宽度收敛，为内容列尽量保留 600px。200px 保留品牌、常用入口和项目操作，长标题省略。
 - 拖至小于 200px 直接收起到 0px；整个导航隐藏且 inert，不保留图标栏或空白列。导航组件与页面保持挂载，列表状态与草稿保留。
 - 收起后窗口左边缘保留不占布局宽度的命中区，向右拖至 200px 可展开；同一次手势可反向拖回。
-- 以下调宽与折叠入口只用于普通页面和 Windows 设置；macOS 设置不显示分隔手柄、调宽菜单或折叠入口。
+- 以下调宽与折叠入口只用于普通页面和 Windows Desktop 设置；macOS 与 Web 设置不显示分隔手柄、调宽菜单或折叠入口。
 - 顶部使用无填色的圆角小窗图标；折叠时内侧短竖线贴近左边缘，不使用箭头。macOS 位于红黄绿右侧，Windows 位于 File 左侧，均为 `no-drag`。
 - macOS 完全收起后为系统按钮和展开按钮保留顶部空间；Windows 的按钮属于独立菜单行，不进入 File/Edit/View/Window 的方向键循环。
 - 展开宽度与折叠状态保存为本机布局偏好。按钮恢复上次展开宽度；拖拽触发折叠时保留手势开始前的宽度。视口收缩只限制显示宽度。
@@ -112,8 +112,8 @@ Project 的“移除项目”菜单使用红字，确认标题为“从侧栏移
 x=82/y=5，后退 x=120、前进 x=152；按钮 30px，图标 17px，短箭头尖端为 5×5。
 标题和右侧会话入口保留现有 38px 顶栏布局，中心 y=19；窗口导航按钮中心 y=20。
 按钮可用性由游标派生，禁用保留位置，提供可访问名称、悬停快捷键提示和键盘焦点。
-无论首页还是设置，折叠后窗口左侧只显示展开按钮，不显示历史箭头或新增新对话图标。
-macOS 设置展开后不显示上述三个按钮，也不提供调宽操作；原侧栏中的新对话业务入口保留。
+普通页面和 Desktop 设置折叠后，窗口左侧只显示展开按钮，不显示历史箭头或新增新对话图标。
+macOS 与 Web 设置展开后不显示上述三个按钮，也不提供调宽操作；原侧栏中的新对话业务入口保留。
 
 快捷键复用 `shouldHandlePrimaryShortcut`：Mac 为 ⌘[ / ⌘]，Windows 为 Ctrl+[ / Ctrl+]。
 冒泡到稳定容器后才处理；输入框、编辑器、终端、IME、已消费事件和模态工作面不触发全局导航。
@@ -204,7 +204,7 @@ App 前台可见时使用约 20 秒低频安全刷新修复偶发丢失事件；
 设置侧栏分三组：
 
 - 应用：通用、外观、提醒；
-- 能力：Skills、MCP、运行时、渠道；
+- 能力：Skills、MCP、运行时、远程连接、渠道；Desktop 与 Web 共用此顺序，独立 Server 隐藏渠道。
 - 支持：运行监控、诊断与修复、关于与更新。
 
 返回 App 后恢复原一级页面；当前 Main Window Session 内记住最后设置分类，全新安装默认“通用”。更新
@@ -270,3 +270,7 @@ App Shell 在不抢夺焦点的全局浮层中短暂显示实际缩放比例，�
 ## Jump search and overlay closure
 
 ⌘K / Ctrl+K opens the title/project search or exact lookup by a complete Camp ID, with a small “跳转到对话” title, neutral selected result and “↑ ↓ 选择　↵ 打开　Esc 关闭” footer. Search input has no focus underline or frame; arrows and Enter retain their behavior and respect IME composition. Closing sidebar menus, rename/delete/removal dialogs or settings does not force focus back to the entry button, including after pin mutations. Shared DOM focus for keyboard input and menu navigation remains available.
+
+## Web 导航适配
+
+共享 BusinessApp 拥有导航目标、离开保护和页面状态切换。Desktop 的窗口内存历史与 Web 的浏览器 History API 分别通过适配接入同一协调器；Web 页面箭头、浏览器工具栏与原生鼠标历史操作经过同一页面恢复路径。拒绝离开时恢复浏览器游标，不改变已显示页面。历史仅保存 locator，不含输入正文或认证材料。Desktop 保留 50 条窗口记录上限，Web 保留本标签页实际浏览器历史，不截断浏览器仍可到达的站内条目。Web 控件从左侧 12px 开始，不预留 macOS traffic lights；浏览器操作系统仍独立决定快捷键文案。正常连接不占据侧栏状态行，连接失败及未确认命令保留明确反馈。
