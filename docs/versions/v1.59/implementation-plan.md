@@ -28,7 +28,28 @@ ExecutionWindow owner 验证新增 command 与原记录状态更新。真实隔�
 
 Mobile 修复普通主按钮颜色、执行中图标、时间线对齐、输入提示位置和退出按钮字距；Web / Mobile 标题统一为 `Rovai AI`。
 记忆页不再自动选中首条导致列表立即消失；支持多条列表、点选/返回、修订，治理操作靠近正文，版本记录按需展开。
-页面规则由 [Mobile WebUI](../../ui/host-web-mobile.md) 拥有。本批次完整验证、构建和安装记录完成后补入下方证据。
+页面规则由 [Mobile WebUI](../../ui/host-web-mobile.md) 拥有。
+
+功能提交 `7d497e25` 的 TypeScript、完整前端测试（Vitest 2025 / 199 文件；Node 317 通过、2 个既有平台跳过）、
+staged Rust 全 workspace（846 通过、6 个既有手动场景 ignored）、Clippy 和格式门禁通过。
+既有 Host / 渠道 / 时钟 3 组与 Mobile 3 组回归通过；[检查记录](evidence/web-mobile-recovery/checks.json)
+保留最初回归失败、测试脚本修正与最终范围。包级 App 曾出现一次 CDP 超时，串行复测使用原断言和超时通过；
+手机真实运行脚本误选隐藏的单聊按钮，定位后按 `#camp-message` 所属表单点击，未改产品来适应脚本。
+
+从该提交[构建](evidence/web-mobile-recovery/build.json) 0.2.6 arm64 daily 包并验证签名、架构和 Bundle ID。
+[包内恢复验收](evidence/web-mobile-recovery/validation.json)覆盖正常 App/Host 重启、浏览器重开、草稿归属和显式撤销；
+[真实标签页回归](evidence/web-mobile-recovery/sessions.json)使用包内 Host/Web 连续关闭并新开 40 次，另两个在线标签的
+身份与草稿不变，浏览器进程重开免登录，最终 Session 数保持 32。
+[手机正式入口](evidence/web-mobile-recovery/mobile.json)使用包内资源验证列表、记忆操作、按钮与设置；
+[真实 Runtime](evidence/web-mobile-recovery/runtime.json)由隔离打包 App 的 Host 托管，手机页面点击发送后，
+Codex command 在完成前已显示，宽屏切换同样可见，Run 最终成功。头像/多 Run/主题仍由
+[共享组件证据](evidence/web-mobile-recovery/execution.json)拥有，不能把示例数据当作真实执行。
+
+已[非终止安装](evidence/web-mobile-recovery/installation.json)到 `/Applications/Rovai AI.app`，
+备份为 `/Applications/Rovai AI.backup-before-recovery-7d497e25-20260914T101039Z.app`。
+安装器核对 App/Host/Core/CLI 摘要与全部 138 个 Web 文件；记录的五个日常 App/Helper/Host 进程均保持原 PID 和启动时间。
+当前进程继续运行原版，退出并从规范路径重新打开后启用新包；旧的持久认证格式兼容此次升级。
+本批次为 macOS arm64 与 Chrome 手机视口验收，未补齐 Windows/Linux 或实体手机资格；后续证据提交不改变功能包来源。
 
 ## 先前批次：同步 main 与本机安装
 
