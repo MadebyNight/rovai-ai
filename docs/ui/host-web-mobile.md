@@ -111,9 +111,10 @@ Server 更新入口指向现有[原生安装与更新流程](../development/serv
 
 ## 验证
 
-生产入口验证见 [Mobile 自动验收](../versions/v1.59/evidence/mobile-production/validation.json)，
-[执行组件验证](../versions/v1.59/evidence/mobile-production/execution-validation.json)和
-[独立 Server 验证](../versions/v1.59/evidence/mobile-production/server-validation.json)。
+生产入口验证见 [Mobile 自动验收](../versions/v1.59/evidence/mobile-compact/validation.json)，
+[执行组件验证](../versions/v1.59/evidence/mobile-compact/execution-validation.json)和
+[独立 Server 验证](../versions/v1.59/evidence/mobile-compact/server-validation.json)。
+最终紧凑稿的包级检查和本机安装交接见[验收记录](../versions/v1.59/evidence/mobile-compact/README.md)。
 
 `pnpm build:web` 后运行 `pnpm test:host-web-mobile`；需要本机已构建的 `rovai-host`、`rovai-server` 和 macOS Chrome。
 `ROVAI_MOBILE_OUTPUT=<绝对路径>` 可保留截图与 JSON。测试使用隔离数据根、Skill Library、MCP config 和浏览器目录，
