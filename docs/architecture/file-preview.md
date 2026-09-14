@@ -2,7 +2,7 @@
 document_type: architecture
 authority: file-preview-components-and-boundaries
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-15
 ---
 
 # File Preview Architecture
@@ -35,7 +35,7 @@ explicit local-link click
 
 - **Core** 拥有 Camp、Message、Attachment、Runtime Evidence 与当前文件身份映射；
 - **Desktop Main** 拥有宿主路径、原生选择器、Root Grant、只读文件能力、reopen token、HTML/asset token、watcher 和系统操作；
-- **Preload** 只暴露 [File Preview v12](../contracts/file-preview-v12.md) 的场景化方法；iframe 不获得 Preload；
+- **Preload** 只暴露 [File Preview v13](../contracts/file-preview-v13.md) 的场景化方法；iframe 不获得 Preload；
 - **Renderer** 拥有按 Camp 隔离的窗口内 Tab shell、布局与阅读状态，只把显式 Markdown link 分类为本地文件或 Web
   入口；inline-code 和正文不进入文件识别，也不读取磁盘。Tab shell 不拥有文件能力或当前文件事实。
 
@@ -102,11 +102,11 @@ binding generation 和 canonical 文件身份；复制始终使用重验后的 c
 ## 窗口文件能力
 
 每个成功预览在 Main 中映射为窗口级句柄。记录包含 `webContentsId + campId + sourceIdentity + canonicalPath +
-capabilityRoot + capabilities + contentVersion + contentGeneration`。TTL 为 30 分钟，每窗口最多 64 项；正常读取、
-刷新和系统动作延长 TTL，但没有 Renderer heartbeat。
+capabilityRoot + capabilities + contentVersion + contentGeneration`。逻辑句柄随预览 session 保留，不设空闲 TTL；
+底层描述符空闲 30 分钟可关闭。每窗口最多 64 项，满额先回收非可见、可恢复且无必要操作的最旧句柄。
 
 `previewKey` 由窗口、Camp 与已校验的 canonical path 摘要生成，仅用于 Renderer Tab 去重；不包含消息/Run 来源或行号，
-同一文件从不同入口打开仍激活现有 Tab。每次打开继续单独校验来源、创建来源绑定的 handle；去重不共享或升级权限。
+同一文件从不同入口打开仍激活现有 Tab。已有同一来源标签热命中直接复用；真正打开新来源时单独校验并创建来源绑定的 handle，去重不升级权限。
 `reopenToken` 在 Main 绑定各自原始来源链；刷新或句柄过期时重新验证来源、realpath 和文件身份并最多自动重试一次。子文件成功打开后获得
 独立 token，父 Tab 关闭不撤销子 Tab。若 `child_of_handle` 最终打开的是当前 Camp 业务工作区内的普通文件，Main 还会
 独立读取当前 Camp/workspace authority、重新 canonicalize 工作区根并签发相对工作区根的 `camp_workspace`
@@ -114,26 +114,26 @@ capabilityRoot + capabilities + contentVersion + contentGeneration`。TTL 为 30
 
 ## Camp 文件会话与恢复
 
-Renderer 维护最多 24 个 Camp 的窗口内 LRU session。它只保存 Tab 的稳定 Renderer ID、可重验业务 source、安全呈现、
-顺序、active ID 与 Pane 可见性；File Change 保存既有不可变 summary 和 selected evidence ID。Main handle、reopen token、
-Root Grant、challenge、HTML/asset token、Blob URL、正文、分页、尺寸、watcher 与旧 `previewKey` 都不进入快照。
-`authorized_root` 与未取得 Main 签发 `restoreRequest` 的 `child_of_handle` 只依赖旧 Camp 的短期能力，因此只恢复安全 shell
-并标记 unavailable。项目内子文件若已取得独立 `camp_workspace` 来源，Renderer 保存该来源而非临时 child 请求；父文件
-关闭、删除或不在快照中都不影响子文件下次重验。
+Renderer 的 `file-preview-session.ts` 保存最多 24 个 Camp 的轻量快照：稳定标签 ID、可重验来源、安全呈现、
+顺序、活动项、显隐和阅读位置。File Change 保存既有 summary、selected evidence ID 和位置，不复制 detail。
+`file-preview-resources.ts` 是窗口级资源所有者，`file-preview-controller.ts` 维护各 session 的正文、分页、Blob URL、
+句柄、资源映射、站点和加载请求。React 只订阅状态，通过稳定的预览容器显示当前 Camp；不常驻完整 Camp 或 Runtime。
 
-Camp route commit 先递增 Renderer scope generation、保存旧快照和撤销 Blob URL，再立即请求 Main `bindCamp`，随后恢复
-本地 shell。只有 bind 成功、Pane 仍可见且 active Tab 仍属于该 scope 时，Renderer 才经独立 `restore` wire 重验一个
-active 文件；其他普通文件保持 cold，首次激活才加载。Pane 隐藏只改变可见性；Tab 关闭才移出 session。Camp 永久删除
-清除对应快照，离开 effect 不能把它再次写回。
+最多 8 个热 Camp、128 MiB 不可见可重建内容、4 个 HTML 页面实例分别回收；集中配置与完整规则见
+[File Preview v13](../contracts/file-preview-v13.md)。保留不可重新取得内容，不通过普通回收丢弃临时唯一副本。
+24 个快照包含热 Camp。只有用户切回/打开/激活更新 LRU，后台完成和监听不更新。
 
-Main 的窗口绑定是 `{campId, bindingGeneration}`，不是裸 Camp ID。每次实际绑定变化创建新 generation；来源解析后、
-原生效果前、异步确认后和 handle 注册前都复核同一个绑定对象。旧 generation 释放时只删除自己的 handle、Grant、
-challenge、HTML token 与 watcher subscription，因而 A→B→A 的旧 A 完成或旧 A 清理都不能命中新 A。
+切 Camp 只切显示。热命中直接复用标签内容、Blob URL 和 iframe，不重读、不重验、不重新准备站点；冷恢复仅加载
+当前需要显示的标签。原请求继续归原 Camp/session/tab/generation，关闭、淘汰、代次替代才拒绝并释放迟到资源。
+HTML 保留页面和站点，隐藏时退出交互与焦点范围，接受有限实例继续执行作者脚本，不增加冻结或监控系统。
 
-`restore` 只接受 message、workspace、owner-scoped Attachment 与 Run Evidence 业务来源。它可以在完整重验后签发新的
-Preview handle，但不 reveal 目录、不打开系统格式、不显示确认或目录选择器，也不产生 authorization challenge；这些
-效果仍只属于明确用户激活的 `open`。Renderer 另以每 Tab request generation 拒绝同一 scope 内的晚到结果，并负责释放
-未采用的 handle 或 Blob URL。
+Main 将 `{campId, previewSessionId, bindingGeneration}` 与当前导航分开。来源读取检查存活 session；系统打开、
+目录选择等原生效果仍检查发起时导航。session 结束释放自己的 handle、Grant、challenge、token 与 watcher。
+`restore` 仍只接受可重验业务来源，不产生原生副作用。无法恢复的临时来源在热集合中保持能力；实际能力被撤销后
+保留 unavailable shell，不把项目外临时能力升级为业务来源。
+
+刷新用独立候选句柄/内容/映射，不原地修改旧记录。HTML 候选确认根文档已加载、通道已连接后一起切换，显示提交
+才释放旧版本；失败只释放候选。新旧共存纳入容量。读取新分页仍验证版本，旧缓存显示不经过验证路径。
 
 ## 读取与 generation
 
@@ -162,7 +162,7 @@ Root Grant 只服务“选择目录、打开文件夹、添加外部目录、浏
 每个打开 Tab 登记窗口、Camp、previewKey 与已验证 relative identity。事件经平台路径归一化后只发布匹配
 `previewKeys`；filename 缺失或只报告 root 时保守标记该 root 的全部订阅。
 
-事件不执行 read/stat，不改动 Viewer。最后一个订阅释放时关闭 watcher；Camp 切换、窗口销毁、来源撤销与退出
+事件不执行 read/stat，只标记已有标签有更新。最后一个订阅释放时关闭 watcher；session 回收、窗口销毁、来源撤销与退出
 分别清理自己的引用。watcher 失败后关闭 entry 并记录去路径诊断，不启动轮询。
 
 ## HTML 预览站点与 Markdown 资源
@@ -186,7 +186,7 @@ Renderer 的文档期限由当前根 `documentId` 拥有，重复握手及子 fr
 无响应显示非阻塞的未知状态。服务端诊断采用有界回放与文档订阅起点，按请求开始序号过滤旧记录和延迟旧请求，
 子页面不清空根页面诊断，新的导航不继承历史页已耗尽的展示额度。
 查找使用有界可见正文快照、现有 Worker 和高亮定位；源码独立读取未注入内容。完整 wire、限制和状态见
-[File Preview v12](../contracts/file-preview-v12.md)。
+[File Preview v13](../contracts/file-preview-v13.md)。
 
 Markdown 继续使用 `rovai-preview://asset/<tab-token>/<segments>`，在 app.ready 前注册 secure standard scheme，
 实际窗口 Session 安装 sender gate 与 protocol handler。token 绑定窗口、Camp、句柄、generation 和文档目录；
@@ -195,9 +195,8 @@ Markdown 继续使用 `rovai-preview://asset/<tab-token>/<segments>`，在 app.r
 ## 资源释放
 
 - Tab 关闭：handle、reopen token、asset token、HTML 站点的请求/诊断流/端口与 watcher subscription；
-- Pane 隐藏：保留 Tab 与阅读状态，句柄仍受 TTL；
-- Camp route commit：按 binding generation 释放旧 Camp 全部窗口能力、Grant、challenge 和订阅；Renderer 释放旧内容，
-  但把无能力 Tab shell 保存到对应 Camp 的有界窗口 session；
+- Pane 隐藏/Camp route commit：只改变显示，保留 session 资源和阅读状态；
+- LRU：按内容、HTML 实例、逻辑句柄、热 Camp、冷快照分别回收，不删除业务对象；
 - Camp 永久删除：清除该 Camp 的窗口 session，并阻止当前 route 离开 effect 把删除前 shell 写回；
 - webContents 销毁/应用退出：幂等释放对应或全部资源。
 

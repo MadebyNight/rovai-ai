@@ -1,5 +1,7 @@
+import { filePreviewRetentionLimits } from '../../file-preview-retention'
 import {
   isCampId,
+  type FilePreviewRetentionState,
   type LocalAttachmentOwnerLocator,
   type OpenFilePreviewRequest,
   type RestoreFilePreviewRequest
@@ -252,4 +254,24 @@ export function parseCopyPathRequest(value: unknown): {
     throw new Error('Unsupported file path format')
   }
   return { handleId: string(input.handleId, 128), format: input.format }
+}
+
+export function parseRetentionState(value: unknown): FilePreviewRetentionState {
+  const input = record(value)
+  if (!Array.isArray(input.sessions) || input.sessions.length > filePreviewRetentionLimits.snapshots
+    || !Array.isArray(input.handles) || input.handles.length > filePreviewRetentionLimits.handles * 2) throw new Error('Unsupported preview retention')
+  return {
+    sessions: input.sessions.map(value => { const item = record(value); return {
+      campId: campId(item.campId), previewSessionId: string(item.previewSessionId, 128)
+    } }),
+    handles: input.handles.map(value => {
+      const item = record(value)
+      if (!Number.isSafeInteger(item.lastUsed) || (item.lastUsed as number) < 0
+        || typeof item.visible !== 'boolean' || typeof item.busy !== 'boolean'
+        || typeof item.recoverable !== 'boolean') throw new Error('Unsupported preview retention')
+      return { handleId: string(item.handleId, 128), previewSessionId: string(item.previewSessionId, 128),
+        tabId: string(item.tabId, 512), lastUsed: item.lastUsed as number, visible: item.visible,
+        busy: item.busy, recoverable: item.recoverable }
+    })
+  }
 }

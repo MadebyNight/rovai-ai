@@ -1,3 +1,4 @@
+import { filePreviewRetentionLimits } from '../../file-preview-retention'
 import type {
   AgentRunFileChangesView,
   FilePreviewPathPresentation,
@@ -19,7 +20,23 @@ export interface FilePreviewPresentationHint {
   fileName: string
 }
 
+export interface FilePreviewReadingState {
+  scrollTop?: number
+  scrollLeft?: number
+  codeScrollTop?: number
+  codeScrollLeft?: number
+  pageOffsets?: number[]
+  pageIndex?: number
+  imageScale?: number | null
+  imageScrollTop?: number
+  imageScrollLeft?: number
+  htmlSourceMode?: boolean
+  htmlScrollTop?: number
+  htmlScrollLeft?: number
+}
+
 export interface FilePreviewFileTabSnapshot {
+  reading?: FilePreviewReadingState
   kind: 'file'
   id: string
   sourceRequest: RestorableFilePreviewRequest | null
@@ -27,6 +44,7 @@ export interface FilePreviewFileTabSnapshot {
 }
 
 export interface FilePreviewChangesTabSnapshot {
+  reading?: FilePreviewReadingState
   kind: 'file_change'
   id: string
   campId: string
@@ -42,7 +60,7 @@ export interface FilePreviewSessionSnapshot {
   paneVisible: boolean
 }
 
-const DEFAULT_SESSION_LIMIT = 24
+const DEFAULT_SESSION_LIMIT = filePreviewRetentionLimits.snapshots
 
 function copySnapshot(snapshot: FilePreviewSessionSnapshot): FilePreviewSessionSnapshot {
   return {
@@ -59,7 +77,8 @@ function copySnapshot(snapshot: FilePreviewSessionSnapshot): FilePreviewSessionS
           sourceRequest: tab.sourceRequest
             ? structuredClone(tab.sourceRequest)
             : null,
-          presentation: { ...tab.presentation }
+          presentation: { ...tab.presentation },
+          reading: tab.reading ? structuredClone(tab.reading) : undefined
         }),
     activeTabId: snapshot.activeTabId,
     paneVisible: snapshot.paneVisible
@@ -69,32 +88,48 @@ function copySnapshot(snapshot: FilePreviewSessionSnapshot): FilePreviewSessionS
 export class FilePreviewSessionStore {
   readonly #limit: number
   readonly #sessions = new Map<string, FilePreviewSessionSnapshot>()
+  readonly #usage = new Map<string, number>()
+  readonly #protected = new Set<string>()
+  readonly #discardListeners = new Set<(campId: string) => void>()
+  #sequence = 0
   readonly #skipNextSave = new Set<string>()
 
-  constructor(limit = DEFAULT_SESSION_LIMIT) {
+  constructor(limit: number = DEFAULT_SESSION_LIMIT) {
     this.#limit = Math.max(1, Math.trunc(limit))
   }
 
   get(campId: string): FilePreviewSessionSnapshot | null {
     const snapshot = this.#sessions.get(campId)
     if (!snapshot) return null
-    this.#sessions.delete(campId)
-    this.#sessions.set(campId, snapshot)
     return copySnapshot(snapshot)
   }
 
   set(campId: string, snapshot: FilePreviewSessionSnapshot): void {
     if (this.#skipNextSave.delete(campId)) return
-    this.#sessions.delete(campId)
     this.#sessions.set(campId, copySnapshot(snapshot))
     while (this.#sessions.size > this.#limit) {
-      const oldestCampId = this.#sessions.keys().next().value as string | undefined
+      const oldestCampId = [...this.#sessions.keys()].filter(id => !this.#protected.has(id))
+        .sort((a, b) => (this.#usage.get(a) ?? 0) - (this.#usage.get(b) ?? 0))[0]
       if (!oldestCampId) break
       this.#sessions.delete(oldestCampId)
     }
   }
 
+  touch(campId: string): void { this.#usage.set(campId, ++this.#sequence) }
+
+  protect(campIds: Iterable<string>): void {
+    this.#protected.clear()
+    for (const id of campIds) this.#protected.add(id)
+  }
+
+  onDiscard(listener: (campId: string) => void): () => void {
+    this.#discardListeners.add(listener)
+    return () => this.#discardListeners.delete(listener)
+  }
+
   discard(campId: string, preventNextSave = false): void {
+    for (const listener of this.#discardListeners) listener(campId)
+    this.#usage.delete(campId)
     this.#sessions.delete(campId)
     if (!preventNextSave) {
       this.#skipNextSave.delete(campId)
@@ -110,7 +145,10 @@ export class FilePreviewSessionStore {
   }
 
   clear(): void {
+    for (const id of this.#sessions.keys()) for (const listener of this.#discardListeners) listener(id)
     this.#sessions.clear()
+    this.#usage.clear()
+    this.#protected.clear()
     this.#skipNextSave.clear()
   }
 }

@@ -163,6 +163,7 @@ import {
   parseRestoreFilePreviewRequest,
   parsePageRequest,
   parseReloadRequest,
+  parseRetentionState,
   parseReopenRequest
 } from './file-preview/file-preview-ipc-input'
 
@@ -530,6 +531,10 @@ const filePreview = new FilePreviewService(
     },
     copyText(text) {
       clipboard.writeText(text)
+    },
+    publishResourcesReleased(webContentsId, handleIds) {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === webContentsId)
+        mainWindow.webContents.send('rovai:file-preview-resources-released', { handleIds })
     },
     publishExternalUpdate(notification) {
       if (
@@ -1138,6 +1143,9 @@ ipcMain.handle('rovai:supervisor-retry', () => {
   }
   return core.retryFullCore()
 })
+
+ipcMain.handle('rovai:file-preview-retention', (event, value: unknown) =>
+  filePreview.updateRetention(requireFilePreviewSender(event), parseRetentionState(value)))
 
 ipcMain.handle('rovai:file-preview-bind-camp', (event, value: unknown) =>
   filePreview.bindCamp(requireFilePreviewSender(event), parseFilePreviewCamp(value)))

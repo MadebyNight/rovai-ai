@@ -358,18 +358,18 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
             style={{ left: menu.left, top: menu.top }}
           >
             {tab.kind === 'file' && <>
-            {tab.file?.capabilities.includes('download') && <button role="menuitem" type="button" onClick={() => void runSystemAction(
+            {(tab.file?.capabilities ?? tab.retainedCapabilities)?.includes('download') && <button role="menuitem" type="button" onClick={() => void runSystemAction(
               () => download(tab.id), '已开始下载'
             )}>下载文件</button>}
-            {tab.file?.capabilities.includes('open_in_system') && <><button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
+            {(tab.file?.capabilities ?? tab.retainedCapabilities)?.includes('open_in_system') && <><button role="menuitem" type="button" disabled={!tab.file && !tab.sourceRequest} onClick={() => void runSystemAction(
               () => openInSystem(tab.id),
               '已交给系统默认应用打开'
             )}>使用默认应用打开</button>
-            <button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
+            <button role="menuitem" type="button" disabled={!tab.file && !tab.sourceRequest} onClick={() => void runSystemAction(
               () => revealInFolder(tab.id),
               '已在文件夹中定位'
             )}>{revealLabel}</button></>}
-            <button role="menuitem" type="button" disabled={!tab.file} onClick={() => void runSystemAction(
+            <button role="menuitem" type="button" disabled={!tab.file && !tab.sourceRequest} onClick={() => void runSystemAction(
               () => copyPath(tab.id),
               tab.presentation.pathPresentation === 'file_name_only' ? '已复制文件名' : '已复制完整路径'
             )}>{tab.presentation.pathPresentation === 'file_name_only' ? '复制文件名' : '复制完整路径'}</button>
@@ -379,10 +379,10 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
               disabled={!tab.file && !tab.sourceRequest}
               onClick={() => {
                 setMenu(null)
-                if (tab.file && tab.loadState === 'ready') void reload(tab.id)
+                if (tab.content && tab.loadState === 'ready') void reload(tab.id)
                 else void reopen(tab.id)
               }}
-            >{tab.file && tab.loadState === 'ready' ? '重新加载' : '重新打开'}</button>
+            >{tab.content && tab.loadState === 'ready' ? '重新加载' : '重新打开'}</button>
             {tab.content?.kind === 'html' && <button role="menuitem" type="button" onClick={() => {
               setMenu(null)
               activate(tab.id)

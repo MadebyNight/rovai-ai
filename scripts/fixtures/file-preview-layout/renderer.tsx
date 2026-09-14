@@ -832,6 +832,7 @@ Object.assign(window, { previewTest: {
     const viewer = element('.file-preview-code')
     const viewerScroller = viewer?.querySelector<HTMLElement>('.cm-scroller')
     return {
+      retainedHosts: [...document.querySelectorAll<HTMLElement>('.file-preview-retained-host:not([hidden])')].map(node => ({ width: node.getBoundingClientRect().width, paneWidth: node.querySelector('.file-preview-pane')?.getBoundingClientRect().width })),
       available: gridBounds.width, right: gridBounds.right,
       width: paneBounds?.width ?? 0,
       conversation: element('.timeline-pane')!.getBoundingClientRect().width,

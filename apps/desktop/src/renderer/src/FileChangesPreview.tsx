@@ -10,49 +10,21 @@ import { agentRunFileChangesSummaryLabel, agentRunFileChangeModeLabel, agentRunF
 
 type AgentRunFileChangesDetailStatus = 'loading' | 'ready' | 'error'
 
-export function FileChangesPreview({ tab }: { tab: FileChangesPreviewTabModel }): JSX.Element {
+export function FileChangesPreview({ tab, visible }: { tab: FileChangesPreviewTabModel; visible: boolean }): JSX.Element {
   const client = useCampClient()
   const { campId, changes, selectedEvidenceFileId } = tab
   const filePreview = useFilePreview()
-  const [detail, setDetail] = useState<AgentRunFileChangesDetailView | null>(null)
-  const [detailStatus, setDetailStatus] = useState<AgentRunFileChangesDetailStatus>('loading')
-  const [loadAttempt, setLoadAttempt] = useState(0)
+  const detail = tab.detail ?? null
+  const detailStatus = tab.detailStatus ?? 'loading'
   const [openCurrentStatus, setOpenCurrentStatus] = useState<'idle' | 'opening'>('idle')
   const [openCurrentError, setOpenCurrentError] = useState<string | null>(null)
-  const requestId = useRef(0)
-
   useEffect(() => setOpenCurrentError(null), [selectedEvidenceFileId])
-
+  const readDetail = () => client.request<AgentRunFileChangesDetailView>('agentRunFileChanges.get', {
+    campId, agentRunId: changes.agentRunId, executionEpoch: changes.executionEpoch
+  })
   useEffect(() => {
-    const currentRequest = ++requestId.current
-    setDetail(null)
-    setDetailStatus('loading')
-    void client.request<AgentRunFileChangesDetailView>(
-      'agentRunFileChanges.get',
-      {
-        campId,
-        agentRunId: changes.agentRunId,
-        executionEpoch: changes.executionEpoch
-      }
-    ).then((result) => {
-      if (currentRequest !== requestId.current) return
-      if (
-        result.schemaVersion !== 2
-        || result.card.agentRunId !== changes.agentRunId
-        || result.card.executionEpoch !== changes.executionEpoch
-      ) {
-        setDetailStatus('error')
-        return
-      }
-      setDetail(result)
-      setDetailStatus('ready')
-    }).catch(() => {
-      if (currentRequest === requestId.current) setDetailStatus('error')
-    })
-    return () => {
-      requestId.current += 1
-    }
-  }, [client, campId, changes.agentRunId, changes.executionEpoch, loadAttempt])
+    if (visible && !tab.detail && !tab.detailStatus) void filePreview.loadChanges(tab.id, readDetail)
+  }, [visible, tab.id, tab.detail, tab.detailStatus, client, filePreview.loadChanges])
 
   const openCurrentFile = async (): Promise<void> => {
     const file = changes.files.find((candidate) =>
@@ -90,7 +62,7 @@ export function FileChangesPreview({ tab }: { tab: FileChangesPreviewTabModel })
       onOpenCurrent={() => void openCurrentFile()}
       openCurrentStatus={openCurrentStatus}
       openCurrentError={openCurrentError}
-      onRetry={() => setLoadAttempt((attempt) => attempt + 1)}
+      onRetry={() => void filePreview.loadChanges(tab.id, readDetail, true)}
     />
   )
 }

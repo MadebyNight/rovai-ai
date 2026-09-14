@@ -66,3 +66,10 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 本轮产品模型已确认：单 Owner、可信自托管 Host。远程 Owner 与 Desktop 具有同一业务能力目标，
 可以直接选择 Host 有权访问的目录；不再要求本机目录预授权、一次性令牌展示或唯一手填访问地址。
 原 S1 同 UID 强隔离证明不再阻断交付，历史失败与已知风险保留，网络/浏览器防护和 Runtime 权限审批不变。
+
+
+## 文件预览保留增量
+
+2026-09-15 用户确认同窗口跨 Camp 直接复用预览，采用分层 LRU、64 个本机逻辑句柄容量回收和独立候选刷新；
+授权 worktree 实现、验证后 PR 合并 main。范围与取舍见 [V1.59-D07](decisions.md#v1-59-d07)，
+当前协议见 [File Preview v13](../../contracts/file-preview-v13.md)。本增量不改变其他 Server/Runtime 验收状态。

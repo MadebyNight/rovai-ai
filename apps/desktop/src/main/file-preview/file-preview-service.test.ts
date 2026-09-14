@@ -91,6 +91,55 @@ function request(rawReference: string): OpenFilePreviewRequest {
 }
 
 describe('FilePreviewService', () => {
+  it('reclaims background handles by user LRU, protecting visible and busy handles under concurrent allocation', async () => {
+    const { root, service, native } = await fixture()
+    native.publishResourcesReleased = vi.fn()
+    await Promise.all(Array.from({ length: 66 }, (_, i) => writeFile(join(root, `${i}.txt`), `file ${i}`)))
+    const files = []
+    for (let i = 0; i < 64; i++) {
+      const result = await service.open(1, request(`${i}.txt`))
+      if (!result.ok || result.value.kind !== 'file_preview') throw new Error('expected file')
+      files.push(result.value.file)
+    }
+    await service.updateRetention(1, { sessions: [{ campId: 'camp-1', previewSessionId: 'session-1' }],
+      handles: files.map((file, i) => ({ handleId: file.handleId, previewSessionId: 'session-1', tabId: `${i}`,
+        lastUsed: i, visible: i === 0, busy: i === 1, recoverable: true })) })
+    // Background I/O does not promote the user-action order.
+    await service.readText(1, { handleId: files[2].handleId, expectedGeneration: files[2].contentGeneration })
+    const results = await Promise.all([service.open(1, request('64.txt')), service.open(1, request('65.txt'))])
+    expect(results.every(result => result.ok)).toBe(true)
+    expect(service.handleCount).toBe(64)
+    expect(native.publishResourcesReleased).toHaveBeenNthCalledWith(1, 1, [files[2].handleId])
+    expect(native.publishResourcesReleased).toHaveBeenNthCalledWith(2, 1, [files[3].handleId])
+    expect((await service.readText(1, { handleId: files[0].handleId, expectedGeneration: files[0].contentGeneration })).ok).toBe(true)
+    expect((await service.readText(1, { handleId: files[1].handleId, expectedGeneration: files[1].contentGeneration })).ok).toBe(true)
+  })
+
+  it('retains Markdown resource tokens across Camp switches, idle descriptor retirement and failed refresh candidates', async () => {
+    const { root, service } = await fixture()
+    await writeFile(join(root, 'notes.md'), '![image](image.svg)')
+    await writeFile(join(root, 'image.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    const opened = await service.open(1, request('notes.md'))
+    if (!opened.ok || opened.value.kind !== 'file_preview') throw new Error('expected file')
+    const file = opened.value.file
+    const prepared = await service.prepareHtml(1, { handleId: file.handleId, expectedGeneration: file.contentGeneration })
+    if (!prepared.ok) throw new Error('expected markdown')
+    const url = `rovai-preview://asset/${prepared.value.tabToken}/image.svg`
+    await service.bindCamp(1, 'camp-2')
+    expect(service.authorizeHtmlAsset(1, 'GET', url)).toBe(true)
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60 * 60 * 1000)
+    try {
+      const candidate = await service.reload(1, { handleId: file.handleId, reopenToken: file.reopenToken, expectedGeneration: file.contentGeneration })
+      if (!candidate.ok) throw new Error('expected candidate')
+      await service.prepareHtml(1, { handleId: candidate.value.handleId, expectedGeneration: candidate.value.contentGeneration })
+      await service.release(1, { handleId: candidate.value.handleId })
+      expect(service.authorizeHtmlAsset(1, 'GET', url)).toBe(true)
+      expect((await service.serveHtmlAsset(new Request(url))).status).toBe(200)
+      expect((await service.readText(1, { handleId: file.handleId, expectedGeneration: file.contentGeneration })).ok).toBe(true)
+    } finally { clock.mockRestore() }
+  })
+
   it('projects desktop private-store exclusions into the HTTP resource service', async () => {
     const { root, service, native } = await fixture()
     const privateRoot = join(root, 'app-data')
@@ -139,14 +188,18 @@ describe('FilePreviewService', () => {
     expect(service.ownsHtmlPreviewOrigin(1,prepared.value.entryUrl)).toBe(true)
     const reloaded = await service.reload(1,{...input,reopenToken:file.reopenToken})
     if (!reloaded.ok) throw new Error('expected reload')
-    expect(service.ownsHtmlPreviewOrigin(1,prepared.value.entryUrl)).toBe(false)
-    expect((await service.prepareHtmlSite(1,input)).ok).toBe(false)
-    const next = await service.prepareHtmlSite(1,{handleId:file.handleId,expectedGeneration:reloaded.value.contentGeneration})
+    expect(service.ownsHtmlPreviewOrigin(1,prepared.value.entryUrl)).toBe(true)
+    expect(reloaded.value.handleId).not.toBe(file.handleId)
+    const next = await service.prepareHtmlSite(1,{handleId:reloaded.value.handleId,expectedGeneration:reloaded.value.contentGeneration})
     if (!next.ok) throw new Error('expected fresh site')
     expect(next.value.origin).not.toBe(prepared.value.origin)
     await service.bindCamp(1,'camp-2')
+    expect(service.ownsHtmlPreviewOrigin(1,next.value.entryUrl)).toBe(true)
+    await service.release(1, { handleId: reloaded.value.handleId })
     expect(service.ownsHtmlPreviewOrigin(1,next.value.entryUrl)).toBe(false)
-    expect((await service.prepareHtmlSite(1,{handleId:file.handleId,expectedGeneration:reloaded.value.contentGeneration})).ok).toBe(false)
+    expect(service.ownsHtmlPreviewOrigin(1,prepared.value.entryUrl)).toBe(true)
+    await service.updateRetention(1, { sessions: [], handles: [] })
+    expect(service.ownsHtmlPreviewOrigin(1,prepared.value.entryUrl)).toBe(false)
   })
 
   it('prepares HTML above the source budget without relaxing source reads or document protection', async () => {
@@ -631,7 +684,7 @@ describe('FilePreviewService', () => {
     expect(service.handleCount).toBe(1)
   })
 
-  it('rejects a late Camp result even after switching back to the same Camp id', async () => {
+  it('retains an in-flight file open across Camp switches', async () => {
     const { root, service, authority, native } = await fixture()
     await writeFile(join(root, 'notes.txt'), 'notes')
     type AuthorityResult = Awaited<ReturnType<FilePreviewSourceAuthority['resolve']>>
@@ -656,8 +709,8 @@ describe('FilePreviewService', () => {
       allowChildren: true
     })
 
-    expect(await opening).toMatchObject({ ok: false, error: { code: 'read_failed' } })
-    expect(service.handleCount).toBe(0)
+    expect(await opening).toMatchObject({ ok: true, value: { kind: 'file_preview' } })
+    expect(service.handleCount).toBe(1)
     expect(native.revealPath).not.toHaveBeenCalled()
     expect(native.openPath).not.toHaveBeenCalled()
   })
@@ -837,7 +890,7 @@ describe('FilePreviewService', () => {
     }
   })
 
-  it('releases all handles when the active Camp changes', async () => {
+  it('retains handles and watchers across navigation and releases them with the preview session', async () => {
     const { root, service, registry } = await fixture()
     await writeFile(join(root, 'one.txt'), 'one')
     await writeFile(join(root, 'two.txt'), 'two')
@@ -846,6 +899,9 @@ describe('FilePreviewService', () => {
     expect(service.handleCount).toBe(2)
     expect(registry.rootCount).toBe(1)
     await service.bindCamp(1, 'camp-2')
+    expect(service.handleCount).toBe(2)
+    expect(registry.rootCount).toBe(1)
+    await service.updateRetention(1, { sessions: [], handles: [] })
     expect(service.handleCount).toBe(0)
     expect(registry.rootCount).toBe(0)
   })
@@ -1015,6 +1071,7 @@ describe('FilePreviewService', () => {
     await vi.waitFor(() => expect(resolveSource).toHaveBeenCalledWith({
       kind: 'camp_workspace', campId: 'camp-1', rawReference: '.'
     }))
+    await service.updateRetention(1, { sessions: [], handles: [] })
     await service.bindCamp(1, 'camp-2')
     await service.bindCamp(1, 'camp-1')
     completeAuthority({

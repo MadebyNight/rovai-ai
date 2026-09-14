@@ -43,6 +43,7 @@ export function ReadonlyCodeViewer({
     startLine: number
     line: number
     endLine?: number
+    target?: FileLocationTarget
   } | null>(null)
   const [loadedLanguage, setLoadedLanguage] = useState<LoadedLanguage | null>(null)
   const languageSettled = loadedLanguage?.filename === fileName
@@ -88,23 +89,30 @@ export function ReadonlyCodeViewer({
     if (!targetLine) return
     const scheduled = scheduledTargetRef.current
     if (scheduled?.view === view && scheduled.text === text && scheduled.startLine === startLine
-      && scheduled.line === targetLine && scheduled.endLine === targetEndLine) return
-    scheduledTargetRef.current = { view, text, startLine, line: targetLine, endLine: targetEndLine }
+      && scheduled.line === targetLine && scheduled.endLine === targetEndLine && scheduled.target === target) return
     window.requestAnimationFrame(() => {
       if (viewRef.current !== view || !view.dom.isConnected) return
       view.requestMeasure({
-        read: targetScrollTop,
+        read: view => view.scrollDOM.clientHeight > 0 ? targetScrollTop(view) : null,
         write: (scrollTop) => {
           if (scrollTop === null || viewRef.current !== view || !view.dom.isConnected) return
+          scheduledTargetRef.current = { view, text, startLine, line: targetLine, endLine: targetEndLine, target }
           view.scrollDOM.scrollTop = scrollTop
         }
       })
     })
-  }, [startLine, targetEndLine, targetLine, targetScrollTop, text])
+  }, [startLine, target, targetEndLine, targetLine, targetScrollTop, text])
 
   useEffect(() => {
-    if (editor && languageSettled) scheduleTargetScroll(editor)
-  }, [editor, languageSettled, scheduleTargetScroll])
+    if (!editor || !languageSettled || !targetLine) return
+    // A retained document may finish loading while hidden. Apply its new explicit
+    // target once it has a measurable viewport, never on subsequent warm returns.
+    const position = (): void => scheduleTargetScroll(editor)
+    const observer = new ResizeObserver(position)
+    observer.observe(editor.scrollDOM)
+    position()
+    return () => observer.disconnect()
+  }, [editor, languageSettled, targetLine, scheduleTargetScroll])
 
   useLayoutEffect(() => {
     if (previousThemeRef.current === theme) return undefined

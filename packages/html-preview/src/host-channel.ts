@@ -50,7 +50,7 @@ export class HtmlPreviewHostChannel {
         this.#emit({ type: 'connected', documentId: data.documentId }); return
       }
       if (!this.#connected || data.documentId !== this.#documentId) return
-      if (['state', 'diagnostic', 'channel-unavailable', 'find-ready', 'find-invalidated', 'find-open', 'find-close', 'find-document', 'fragment-result', 'link'].includes(data.type)) this.#emit(data as HtmlPreviewMessage)
+      if (['state', 'diagnostic', 'channel-unavailable', 'find-ready', 'find-invalidated', 'find-open', 'find-close', 'find-document', 'fragment-result', 'reading-position', 'link'].includes(data.type)) this.#emit(data as HtmlPreviewMessage)
     }
     host.addEventListener('message', receive)
     // Wait for the bridge hello or iframe load; its initial about:blank still

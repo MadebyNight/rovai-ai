@@ -56,6 +56,7 @@ export async function feedbackAcceptance(window: BrowserWindow, userData: string
   await run('window.previewAcceptance.close(window.previewAcceptance.activeTabId)')
 
   await run(`window.previewAcceptance.activate(window.previewAcceptance.tabs.find(tab=>tab.file?.fileName==='errors.html').id)`)
+  await wait(() => run(`${stage}?.dataset.documentState==='loaded' && ${stage}?.textContent.includes('5 项问题')`))
   // The basic diagnostic case left details open; close it before testing disclosure.
   await run(`if(${stage}.querySelector('[aria-expanded="true"]')) ${stage}.querySelector('button.file-preview-html-feedback').click()`)
   const collapsed = await snapshot()
