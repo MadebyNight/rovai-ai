@@ -182,7 +182,7 @@ app.whenReady().then(async () => {
       assert.equal(entry.portraits.length, Math.min(count, 3), 'One avatar per running member, capped at three')
       assert.ok(entry.portraits.every(width => width === 20))
       assert.equal(entry.overflow, count > 3 ? `+${count - 3}` : null)
-      assert.equal(entry.totalBadge, false, 'Execution never restores the total-member count')
+      assert.equal(entry.totalBadge, count === 0, 'Idle execution restores the total-member count')
       assert.equal(entry.nestedButtons, 0)
       assert.equal(entry.height, 28)
       assert.equal(entry.fits, true)
@@ -192,7 +192,7 @@ app.whenReady().then(async () => {
         assert.equal(entry.arcs[0].length, entry.arcs[1].length)
         assert.ok(entry.arcs.every(arc => arc.pathLength === '100' && arc.dash === '24px, 76px'
           && arc.width === '1.65px' && arc.period === '4.8s'))
-      } else assert.equal(entry.text, '执行')
+      } else assert.equal(entry.text, '执行12')
       await capture(`execution-entry-${count}-day`)
     }
     await click('.camp-detail-heading button[aria-label="收起会话详情"]')
@@ -205,7 +205,7 @@ app.whenReady().then(async () => {
     await key('Enter')
     assert.equal((await entryState()).expanded, 'true')
     assert.equal(await run("document.activeElement === document.querySelector('.camp-detail-popover')"), true)
-    await entryCount(0)
+    assert.equal((await entryCount(0)).text, '执行12', 'Ending the last run restores the total-member count')
     await click('.camp-detail-heading button[aria-label="收起会话详情"]')
     await key('Enter')
     assert.equal((await entryState()).expanded, 'true', 'Idle execution entry still opens history')
@@ -533,7 +533,7 @@ app.whenReady().then(async () => {
     await capture('delivery-avatars-popover-night-1440')
 
     console.log(JSON.stringify({ ok: true, cases: ['0/1/2/3/5 running entry members and duplicate runs', 'two equal brand orbits',
-      'idle history without count', 'entry names and keyboard focus', 'collapsed running state',
+      'idle history with total member count', 'entry names and keyboard focus', 'collapsed running state',
       '12/20-member overflow', '176px steps and overlap', 'mouse wheel/trackpad', 'keyboard and long-name tooltip',
       'persistent outside pointer/focus', 'explicit close and Escape focus return',
       'selection and node retention', 'status refresh/reopen', 'Task navigation/repeated target', '8-member no overflow',

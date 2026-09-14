@@ -21,8 +21,9 @@ function CampDetailIcon({ tab }: { tab: CampDetailTab }): React.JSX.Element {
   </svg>
 }
 
-function CampExecutionEntry({ members, expanded, panelId, mobile = false, onSelect }: {
+function CampExecutionEntry({ members, memberCount, expanded, panelId, mobile = false, onSelect }: {
   members: readonly RunningCampMember[]
+  memberCount: number
   expanded: boolean
   panelId: string
   mobile?: boolean
@@ -40,7 +41,9 @@ function CampExecutionEntry({ members, expanded, panelId, mobile = false, onSele
   const showNames = !mobile && running && (hovered || focused) && !dismissed
   const avatarLimit = mobile ? 2 : 3
   const names = members.map(member => member.displayName).join('、')
-  const description = running ? `${members.length} 位队员正在执行：${names}` : '当前没有队员正在执行'
+  const description = running
+    ? `${members.length} 位队员正在执行：${names}`
+    : `共 ${memberCount} 位队员，当前没有队员正在执行`
 
   useEffect(() => {
     if (!running) return
@@ -68,6 +71,7 @@ function CampExecutionEntry({ members, expanded, panelId, mobile = false, onSele
   const face = <>
     {!mobile && <CampDetailIcon tab="execution" />}
     <span>执行</span>
+    {!mobile && !running && <small>{memberCount}</small>}
     {running && <>
       <span className="camp-execution-members" aria-hidden="true">
         {members.slice(0, avatarLimit).map(member => <MemberAvatar key={member.agentId} {...member} size="execution" decorative />)}
@@ -143,6 +147,7 @@ export function CampDetailEntries({
     <div className="camp-detail-entries" role="group" aria-label="当前会话详情入口">
       {showExecution && <CampExecutionEntry
         members={runningMembers}
+        memberCount={memberCount}
         expanded={visible && activeTab === 'execution'}
         panelId={panelId}
         onSelect={onSelect}
@@ -230,7 +235,7 @@ export function CampDetailPopover({
   const entries = mobile ? <>
     <div className="mobile-camp-tabs" role="group" aria-label="当前会话视图" hidden={secondary}>
       <button type="button" aria-pressed={!visible} onClick={onClose}>对话</button>
-      <CampExecutionEntry mobile members={runningMembers} expanded={visible && activeTab === 'execution'} panelId={panelId}
+      <CampExecutionEntry mobile members={runningMembers} memberCount={memberCount} expanded={visible && activeTab === 'execution'} panelId={panelId}
         onSelect={(tab, trigger) => { triggerRef.current = trigger; onOpen(tab) }} />
     </div>
     <DropdownMenu.Root modal={false}>

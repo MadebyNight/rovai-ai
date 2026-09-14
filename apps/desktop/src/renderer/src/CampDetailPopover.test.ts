@@ -55,15 +55,14 @@ describe('Camp execution entry', () => {
     if (count > 3) expect(markup).toContain(`+${count - 3}</span>`)
   })
 
-  it('removes avatars, orbit and all numeric badges when the last running member ends, while keeping history available', () => {
+  it('restores the total-member count when execution is idle while keeping history available', () => {
     const markup = render(0, true)
     expect(markup).toContain('aria-expanded="true"')
     expect(markup).toContain('aria-haspopup="dialog"')
-    expect(markup).toContain('当前没有队员正在执行')
-    expect(markup).toContain('<span>执行</span>')
+    expect(markup).toContain('执行，共 5 位队员，当前没有队员正在执行')
+    expect(markup).toContain('<span>执行</span><small>5</small>')
     expect(markup).not.toContain('camp-execution-members')
     expect(markup).not.toContain('camp-execution-orbits')
-    expect(markup).not.toContain('<small>')
     expect(markup).not.toContain('disabled')
   })
 
@@ -77,6 +76,7 @@ describe('Camp execution entry', () => {
     const entry = markup.split('data-detail="execution"')[1].split('</button>')[0]
     expect(entry.match(/class="member-avatar"/g) ?? []).toHaveLength(Math.min(count, 2))
     expect(entry.match(/pathLength="100"/g) ?? []).toHaveLength(count ? 2 : 0)
+    expect(entry).not.toContain('<small>')
     if (count > 2) expect(entry).toContain(`+${count - 2}</span>`)
     expect(markup).toContain('aria-label="会话更多操作"')
     expect(markup).not.toContain('mobile-camp-members')
