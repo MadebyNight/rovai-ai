@@ -10,8 +10,9 @@ on:
         options:
           - full
           - server
+          - server-updates
       server_target:
-        description: Native Server target (only for server scope)
+        description: Native Server target (server or server-updates scope)
         type: choice
         default: all
         options:
@@ -34,7 +35,7 @@ concurrency:
 
 jobs:
   linux-full:
-    if: inputs.scope != 'server'
+    if: inputs.scope == 'full'
     name: Linux full
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -71,7 +72,7 @@ jobs:
         run: xvfb-run -a pnpm test:desktop:integration
 
   rust-full:
-    if: inputs.scope != 'server'
+    if: inputs.scope == 'full'
     name: Rust full
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -102,7 +103,7 @@ jobs:
         run: "cargo test -p rovai-core --features slow-tests --lib slow_tests::"
 
   windows-full:
-    if: inputs.scope != 'server'
+    if: inputs.scope == 'full'
     name: Windows full
     runs-on: windows-2022
     timeout-minutes: 120
@@ -191,6 +192,30 @@ jobs:
           --target x86_64-pc-windows-msvc
           mcp::slow_tests::
 
+  server-updates:
+    name: Server update tests / ${{ matrix.target }}
+    if: inputs.scope == 'server-updates'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON('{"all":["macos-arm64","macos-x64","windows-x64","linux-x64"],"macos-arm64":["macos-arm64"],"macos-x64":["macos-x64"],"windows-x64":["windows-x64"],"linux-x64":["linux-x64"]}')[inputs.server_target || 'all'] }}
+    runs-on: ${{ fromJSON('{"macos-arm64":"macos-15","macos-x64":"macos-15-intel","windows-x64":"windows-2022","linux-x64":"ubuntu-22.04"}')[matrix.target] }}
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 3
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: server-${{ matrix.target }}
+      - name: Verify credentials and content versions
+        run: cargo test --locked -p rovai-web
+      - name: Verify updater and process handoff
+        run: cargo test --locked -p rovai-host --lib server_updates
+
   server-native:
     name: Server preview / ${{ matrix.target }}
     if: inputs.scope == 'server'
@@ -230,9 +255,9 @@ jobs:
         if: matrix.target == 'linux-x64'
         run: node --test scripts/lib/linux-server-abi.test.mjs
       - name: Verify credential state transitions
-        run: |
-          cargo test -p rovai-web
-          cargo test -p rovai-host --lib server_updates
+        run: cargo test -p rovai-web
+      - name: Verify Server updater state transitions
+        run: cargo test -p rovai-host --lib server_updates
       - name: Verify native process and private storage seams
         run: |
           cargo test -p rovai-core --lib managed_process

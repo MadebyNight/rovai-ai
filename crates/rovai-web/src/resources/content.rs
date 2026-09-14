@@ -278,7 +278,9 @@ mod tests {
         let fixed = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
         let write = |bytes: &[u8]| {
             std::fs::write(&fixture.0, bytes).unwrap();
-            std::fs::File::open(&fixture.0)
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&fixture.0)
                 .unwrap()
                 .set_times(std::fs::FileTimes::new().set_modified(fixed))
                 .unwrap();

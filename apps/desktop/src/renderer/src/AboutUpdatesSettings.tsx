@@ -67,7 +67,7 @@ export function AboutUpdatesSettingsView({
       <SettingsPageHeader
         eyebrow="Settings / About & Updates"
         title="关于与更新"
-        description={readOnly ? '版本信息与更新日志。' : '检查新版本，下载与安装由你决定。'}
+        description={readOnly ? '版本信息与更新日志。' : '自动检查新版本，下载与安装由你决定。'}
       />
 
       <div className="about-updates-body">

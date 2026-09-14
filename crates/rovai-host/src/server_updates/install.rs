@@ -294,6 +294,11 @@ impl Prepared {
         }
         // Portable packages and the Windows installer both have a directory entry.
         // Preserve the old program; rollback here is only a failed file switch, never data/schema rollback.
+        // Windows cannot rename a directory containing our open executable handle.
+        // The shared lease preflight above rejects other instances; loaded images
+        // still prevent the directory move if an instance starts during this switch.
+        #[cfg(windows)]
+        drop(program_lease);
         let backup = parent.join(format!(".rovai-previous-{}", rovai_web::new_token()?));
         switch_directory(&self.root, &self.incoming, &backup)?;
         Ok(self.root.join(program("rovai-server")))
@@ -393,10 +398,10 @@ fn program(name: &str) -> String {
     format!("{name}{}", if cfg!(windows) { ".exe" } else { "" })
 }
 fn switch_directory(root: &Path, incoming: &Path, backup: &Path) -> Result<()> {
-    fs::rename(root, backup)?;
+    fs::rename(root, backup).context("move current Server program to backup")?;
     if let Err(error) = fs::rename(incoming, root) {
         fs::rename(backup, root).context("restore program after failed switch")?;
-        return Err(error.into());
+        return Err(error).context("activate prepared Server program");
     }
     Ok(())
 }
@@ -622,7 +627,9 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(root.join("package-info")).unwrap(),
-            "new"
+            "new",
+            "{}",
+            fs::read_to_string(data.join("updates/last-failure.txt")).unwrap_or_default()
         );
         assert_eq!(
             fs::read_to_string(data.join("sentinel")).unwrap(),

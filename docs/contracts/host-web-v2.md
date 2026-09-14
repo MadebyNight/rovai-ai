@@ -445,8 +445,10 @@ The existing bundled native installer validates and extracts into an isolated st
 PATH modification disabled. The matching program/UI are copied to the program filesystem before shutdown.
 
 Installing requires a complete packaged installation with business data outside the program directory.
-Each running Server holds a shared lease on its executable; a program switch requires an exclusive lease,
-so another instance using the same files prevents replacement.
+Each running Server holds a shared lease on its executable; the updater must obtain an exclusive lease
+before a program switch, so another instance using the same files prevents replacement. Unix retains this
+lease across the move. Windows releases its own executable handle immediately before renaming the
+directory; operating-system image/handle restrictions remain the final gate if a process races the switch.
 Only after staging/preflight succeeds does the Host close HTTP and use the existing durable Core shutdown.
 An unsuccessful settlement never arms the program switch. Unix switches the managed revision link or
 portable program directory and execs the new Server; Windows uses a copied helper outside the locked
