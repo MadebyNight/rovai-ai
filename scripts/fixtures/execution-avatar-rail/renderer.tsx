@@ -120,16 +120,30 @@ function Fixture(): React.JSX.Element {
   const [count, setCount] = useState(12)
   const [recipientCount, setRecipientCount] = useState(0)
   const [revision, setRevision] = useState(0)
+  const [entryRunningCount, setEntryRunningCount] = useState<number | null>(null)
   const [open, setOpen] = useState(true)
   const [placement, setPlacement] = useState<ExecutionConsolePlacement>('inspector')
   const [entryHost, setEntryHost] = useState<HTMLElement | null>(null)
   const [theme, setTheme] = useState('day')
   const snapshot = snapshotFor(count, revision, recipientCount)
+  if (entryRunningCount !== null) {
+    snapshot.agentRuns = snapshot.agentRuns.map((run, index) => ({
+      ...run, status: index < entryRunningCount ? 'running' : 'waiting',
+      waitReason: index < entryRunningCount ? null : 'dependency', endedAt: null
+    }))
+    // Multiple runs of one member must still occupy a single entry avatar.
+    if (entryRunningCount > 0) snapshot.agentRuns.push({ ...snapshot.agentRuns[0], id: 'duplicate-entry-run' })
+  }
   return <div className="app-shell app-shell-camp">
     <aside style={{ gridRow: '1 / -1', padding: '48px 24px', background: 'var(--rail)', color: 'var(--rail-ink)' }}>
       <strong>Rovai AI · 隔离验收</strong>
       <p style={{ fontSize: 12, lineHeight: 1.7 }}>真实生产组件，模拟队员数据。<br />不调用模型，不访问日常 Camp。</p>
       <div style={{ display: 'grid', gap: 8 }}>
+        <label>入口运行人数 <select data-entry-running-count value={entryRunningCount ?? 'mixed'}
+          onChange={event => setEntryRunningCount(event.target.value === 'mixed' ? null : Number(event.target.value))}>
+          <option value="mixed">混合状态</option>
+          {[0, 1, 2, 3, 5].map(value => <option key={value} value={value}>{value}</option>)}
+        </select></label>
         {[0, 1, 8, 12, 20].map(value => <button key={value} className="quiet-button" data-count={value} onClick={() => setCount(value)}>{value} 位队员</button>)}
         {[0, 1, 2, 16, 48].map(value => <button key={`recipient-${value}`} className="quiet-button" data-recipient-count={value} onClick={() => setRecipientCount(value)}>{value} 位投递对象</button>)}
         <button className="quiet-button" data-refresh onClick={() => setRevision(value => value + 1)}>模拟状态刷新</button>

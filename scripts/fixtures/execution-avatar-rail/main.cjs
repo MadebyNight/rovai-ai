@@ -154,6 +154,106 @@ app.whenReady().then(async () => {
   try {
     await focusWindow()
     await settle()
+    const entryState = () => run(`(() => {
+      const entry = document.querySelector('.camp-execution-entry')
+      const rect = entry.getBoundingClientRect()
+      const arcs = [...entry.querySelectorAll('.camp-execution-orbits rect')]
+      return { text: entry.textContent, label: entry.getAttribute('aria-label'), expanded: entry.getAttribute('aria-expanded'),
+        portraits: [...entry.querySelectorAll('.member-avatar')].map(avatar => avatar.getBoundingClientRect().width),
+        overflow: entry.querySelector('.camp-execution-overflow')?.textContent ?? null,
+        totalBadge: !!entry.querySelector('small'), nestedButtons: entry.querySelectorAll('button').length,
+        height: rect.height, fits: rect.left >= 0 && rect.right <= innerWidth,
+        pageOverflow: document.documentElement.scrollWidth > innerWidth,
+        arcs: arcs.map(arc => ({ length: arc.getTotalLength(), pathLength: arc.getAttribute('pathLength'),
+          dash: getComputedStyle(arc).strokeDasharray, width: getComputedStyle(arc).strokeWidth,
+          stroke: getComputedStyle(arc).stroke, period: getComputedStyle(arc).animationDuration,
+          animations: arc.getAnimations().length })),
+        expectedColors: ['--brand', '--ember'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()),
+        tooltip: document.querySelector('.camp-execution-tooltip')?.textContent ?? null }
+    })()`)
+    const entryCount = async count => {
+      await run(`(() => { const select = document.querySelector('[data-entry-running-count]');
+        select.value = '${count}'; select.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+      await settle()
+      return entryState()
+    }
+    for (const count of [0, 1, 2, 3, 5]) {
+      const entry = await entryCount(count)
+      assert.equal(entry.portraits.length, Math.min(count, 3), 'One avatar per running member, capped at three')
+      assert.ok(entry.portraits.every(width => width === 20))
+      assert.equal(entry.overflow, count > 3 ? `+${count - 3}` : null)
+      assert.equal(entry.totalBadge, false, 'Execution never restores the total-member count')
+      assert.equal(entry.nestedButtons, 0)
+      assert.equal(entry.height, 28)
+      assert.equal(entry.fits, true)
+      assert.equal(entry.arcs.length, count > 0 ? 2 : 0)
+      if (count) {
+        assert.ok(entry.label.includes(`${count} 位队员正在执行`))
+        assert.equal(entry.arcs[0].length, entry.arcs[1].length)
+        assert.ok(entry.arcs.every(arc => arc.pathLength === '100' && arc.dash === '24px, 76px'
+          && arc.width === '1.65px' && arc.period === '4.8s'))
+      } else assert.equal(entry.text, '执行')
+      await capture(`execution-entry-${count}-day`)
+    }
+    await click('.camp-detail-heading button[aria-label="收起会话详情"]')
+    assert.equal((await entryState()).arcs.length, 2, 'Closing the popover does not end the running indicator')
+    await run("document.querySelector('.camp-execution-entry').blur(); document.querySelector('.camp-execution-entry').focus()")
+    await settle()
+    assert.ok((await entryState()).tooltip.includes('言川'), 'Keyboard focus exposes names beyond the three displayed avatars')
+    await key('Escape')
+    assert.equal((await entryState()).tooltip, null)
+    await key('Enter')
+    assert.equal((await entryState()).expanded, 'true')
+    assert.equal(await run("document.activeElement === document.querySelector('.camp-detail-popover')"), true)
+    await entryCount(0)
+    await click('.camp-detail-heading button[aria-label="收起会话详情"]')
+    await key('Enter')
+    assert.equal((await entryState()).expanded, 'true', 'Idle execution entry still opens history')
+    await entryCount(5)
+    await click('[data-theme-toggle]')
+    const nightEntry = await entryState()
+    assert.deepEqual(nightEntry.arcs.map(arc => arc.stroke), nightEntry.expectedColors.map(hex =>
+      `rgb(${[1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16)).join(', ')})`))
+    const orbitOffsets = async milliseconds => {
+      await run(`(() => {
+        document.querySelectorAll('.camp-execution-orbits rect').forEach(arc => {
+          const animation = arc.getAnimations()[0]; animation.pause(); animation.currentTime = ${milliseconds}
+        })
+      })()`)
+      await settle()
+      return run("[...document.querySelectorAll('.camp-execution-orbits rect')].map(arc => parseFloat(getComputedStyle(arc).strokeDashoffset))")
+    }
+    const startOffsets = await orbitOffsets(0)
+    const quarterOffsets = await orbitOffsets(1200)
+    assert.deepEqual(startOffsets, [0, 50])
+    assert.deepEqual(quarterOffsets, [-25, 25], 'Both arcs advance equally around the outline, half a loop apart')
+    await capture('execution-entry-5-night')
+    window.webContents.debugger.attach('1.3')
+    for (const [width, height] of [[1040, 700], [720, 460]]) {
+      await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
+      await settle()
+      const entry = await entryState()
+      assert.ok(entry.fits && !entry.pageOverflow)
+      await capture(`execution-entry-night-${width}`)
+    }
+    await window.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride')
+    window.webContents.setZoomFactor(2)
+    await settle()
+    assert.ok((await entryState()).fits && !(await entryState()).pageOverflow, 'Entry fits at actual 200% zoom')
+    await capture('execution-entry-night-200-percent')
+    window.webContents.setZoomFactor(1)
+    await settle()
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    await settle()
+    assert.ok((await entryState()).arcs.every(arc => arc.animations === 0), 'Reduced motion keeps stationary arcs')
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] })
+    await settle()
+    assert.ok((await entryState()).arcs.every(arc => arc.animations === 0), 'Forced colors keeps stationary arcs')
+    await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] })
+    await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false })
+    await settle()
+    await click('[data-theme-toggle]')
+    await entryCount('mixed')
     let value = await state()
     if (value.panel.height === 0) value = await click('.camp-detail-entry[data-detail="execution"]')
     value = await waitForState(value => value.panel.height > 0 && value.rail.height > 0, 'the initial execution popover')
@@ -321,7 +421,7 @@ app.whenReady().then(async () => {
     await click('.execution-disclosure.worked > summary')
     await assertExecutionWidth()
     await capture('avatar-rail-night-1440')
-    window.webContents.debugger.attach('1.3')
+    if (!window.webContents.debugger.isAttached()) window.webContents.debugger.attach('1.3')
     for (const [width, height] of [[1040, 700], [2560, 1440], [720, 460]]) {
       await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
       await settle()
@@ -432,7 +532,9 @@ app.whenReady().then(async () => {
     await assertRecipients(16)
     await capture('delivery-avatars-popover-night-1440')
 
-    console.log(JSON.stringify({ ok: true, cases: ['12/20-member overflow', '176px steps and overlap', 'mouse wheel/trackpad', 'keyboard and long-name tooltip',
+    console.log(JSON.stringify({ ok: true, cases: ['0/1/2/3/5 running entry members and duplicate runs', 'two equal brand orbits',
+      'idle history without count', 'entry names and keyboard focus', 'collapsed running state',
+      '12/20-member overflow', '176px steps and overlap', 'mouse wheel/trackpad', 'keyboard and long-name tooltip',
       'persistent outside pointer/focus', 'explicit close and Escape focus return',
       'selection and node retention', 'status refresh/reopen', 'Task navigation/repeated target', '8-member no overflow',
       'long prose containment', 'single-line command and full expanded output',

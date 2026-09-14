@@ -5,11 +5,12 @@ import { firstGrapheme } from './member-identity'
 import { identityColorToken } from './theme'
 import { useManagedAvatarUrl } from './use-managed-avatar'
 
-export type MemberAvatarSize = 'mention' | 'list' | 'workspace' | 'picker' | 'profile' | 'bust'
+export type MemberAvatarSize = 'execution' | 'mention' | 'list' | 'workspace' | 'picker' | 'profile' | 'bust'
 
 const MEMBER_AVATAR_PIXEL_SIZE: Readonly<
   Record<Exclude<MemberAvatarSize, 'bust'>, number>
 > = {
+  execution: 20,
   mention: 28,
   list: 32,
   workspace: 34,

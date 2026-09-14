@@ -1596,6 +1596,28 @@ html[data-rovai-platform="win32"] .bootstrap-shell-brand { padding-left: 20px; }
 .camp-detail-entry[aria-expanded="true"] { color: var(--ink); background: var(--surface-muted); }
 .camp-detail-entry[aria-expanded="true"] > span { font-weight: 650; }
 .camp-detail-entry-fallback { position: absolute; z-index: 20; top: 8px; right: 12px; }
+.camp-execution-entry { position: relative; }
+.camp-execution-entry[data-running="true"] { padding-inline: 8px; }
+.camp-execution-members { display: inline-flex; flex: none; align-items: center; margin-left: 2px; pointer-events: none; }
+.camp-execution-members .member-avatar { border: 1px solid var(--conversation-surface); }
+.camp-execution-members .member-avatar + .member-avatar { margin-left: -4px; }
+.camp-execution-members .member-avatar-fallback { font-size: 10px; font-weight: 600; }
+.camp-execution-entry[aria-expanded="true"] .member-avatar { border-color: var(--surface-muted); }
+.camp-execution-entry:hover .member-avatar { border-color: var(--surface-hover); }
+.camp-execution-overflow { margin-left: 4px; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.camp-execution-entry > .camp-execution-orbits { position: absolute; inset: 1px; width: calc(100% - 2px); height: calc(100% - 2px); overflow: visible; pointer-events: none; }
+.camp-execution-orbits rect { --orbit-phase: 0px; fill: none; stroke: var(--brand); stroke-width: 1.65px; stroke-linecap: round; stroke-dasharray: 24 76; stroke-dashoffset: var(--orbit-phase); animation: camp-execution-orbit 4.8s linear infinite; }
+.camp-execution-orbits .is-ember { --orbit-phase: 50px; stroke: var(--ember); }
+.camp-execution-orbits[data-paused="true"] rect { animation-play-state: paused; }
+@keyframes camp-execution-orbit { from { stroke-dashoffset: var(--orbit-phase); } to { stroke-dashoffset: calc(var(--orbit-phase) - 100px); } }
+.camp-execution-tooltip { position: fixed; z-index: 120; width: max-content; max-width: min(300px, calc(100vw - 24px)); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-raised); color: var(--ink); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; pointer-events: none; }
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .camp-execution-orbits rect { animation: none; }
+}
+@media (forced-colors: active) {
+  .camp-execution-orbits rect { stroke: ButtonText; }
+  .camp-execution-members .member-avatar { border-color: ButtonFace; }
+}
 .camp-detail-popover {
   position: absolute;
   z-index: 60;
