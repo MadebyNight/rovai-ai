@@ -86,7 +86,9 @@ Antigravity 登录后原生服务明确返回地区不符合资格，不能绕�
 既有测试扩展 exit 0/1 并通过。CodeBuddy 原生 MiniMax 调用成功，Server 启动却把 RuntimeDefault sentinel 作为
 模型 ID 传入；修复只对显式选择传 `--model`，构造测试先失败后通过。ZCode 原生内核连接成功，但版本探测
 被执行期 watcher 提前 SIGKILL；只读 `--version` 绕过 watcher 后同机 exit -9→0，实际执行期清理仍保留并通过回归。
-TRAE 已写入原生 BYOK 配置，仍缺其原生登录令牌；Kimi 按用户授权重试失败后跳过。以上阻塞不等于 Linux OS 不支持。
+TRAE 本机已写入 BYOK 配置但缺原生登录令牌；随后维护者确认已在其他机器实测，要求停止本机测试。
+TRAE Linux 标记通过（用户异机实测），不改写本机原失败记录，也不声称本机或未知版本已完成全轴验收。
+Kimi 按用户授权重试失败后跳过。其他阻塞不等于 Linux OS 不支持。
 
 这些是有限集成证据，`fullQualification=false`；Skills/MCP、权限与压缩等 First-Class 全轴尚未逐项闭合，
 14 项 Linux Runtime 均保留 Preview 与缺失资格原因。正式 Release 和实体手机资格尚未完成。

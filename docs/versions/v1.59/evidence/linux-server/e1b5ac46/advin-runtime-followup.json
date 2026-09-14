@@ -1717,5 +1717,13 @@
         "swapUsedKiB": 0
       }
     }
-  ]
+  ],
+  "userVerification": {
+    "runtime": "trae-cn-cli",
+    "linuxStatus": "passed",
+    "verificationSource": "user_reported_other_host",
+    "localTesting": "stopped_at_user_request",
+    "scope": "Linux support confirmed by maintainer on another machine; this host integration attempt remains failed in its original report",
+    "otherHostVersion": null
+  }
 }
