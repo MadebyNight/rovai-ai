@@ -536,7 +536,12 @@ impl AntigravityAppRuntimeAdapter {
         if was_interrupted {
             anyhow::bail!("Antigravity companion process was interrupted");
         }
-        if !status.success() {
+        // The native CLI exits nonzero for a definitive structured ERROR too.
+        // Let that result pass through the conversation checks below; an exit
+        // without a terminal event still uses the process-failure path.
+        let structured_error = matches!(&stdout, AntigravityStdoutCapture::Structured(capture)
+            if capture.final_result.as_ref().is_some_and(|result| result.status.eq_ignore_ascii_case("error")));
+        if !status.success() && !structured_error {
             let stderr_detail = String::from_utf8_lossy(&stderr.bytes).trim().to_string();
             let raw_detail = if stderr_detail.is_empty() {
                 read_known_antigravity_error_lines(&log_path).unwrap_or_default()
@@ -2327,16 +2332,15 @@ printf '%s\n' '{"event":"result","result":{"conversation_id":"0bdd2166-d420-40c6
     async fn structured_runtime_failure_preserves_sanitized_provider_detail() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = std::env::temp_dir().join(format!(
-            "rovai-antigravity-structured-failure-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let workspace = root.join("workspace");
-        std::fs::create_dir_all(&workspace).expect("workspace should be created");
-        let executable = root.join("fake-agy");
-        std::fs::write(
-            &executable,
-            r#"#!/bin/sh
+        for exit_code in [0, 1] {
+            let root = std::env::temp_dir().join(format!(
+                "rovai-antigravity-structured-failure-test-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let workspace = root.join("workspace");
+            std::fs::create_dir_all(&workspace).expect("workspace should be created");
+            let executable = root.join("fake-agy");
+            let script = r#"#!/bin/sh
 log_file=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--log-file" ]; then
@@ -2349,34 +2353,36 @@ session_id="0bdd2166-d420-40c6-94be-70b93eb290c5"
 echo "Created conversation $session_id" >> "$log_file"
 printf '%s\n' '{"event":"init","conversation_id":"0bdd2166-d420-40c6-94be-70b93eb290c5","init":{}}'
 printf '%s\n' '{"event":"result","result":{"conversation_id":"0bdd2166-d420-40c6-94be-70b93eb290c5","status":"ERROR","error":"quota exceeded; api_key=private-key"}}'
-"#,
-        )
-        .expect("fake Antigravity companion should be written");
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
-            .expect("fake Antigravity companion should be executable");
-        let adapter = AntigravityAppRuntimeAdapter::new(&root).expect("Adapter should initialize");
-        let mut request =
-            fake_antigravity_request(&workspace, &executable, uuid::Uuid::new_v4().to_string());
-        request
-            .runtime
-            .capabilities
-            .push("output.stream_json".to_string());
+"#;
+            std::fs::write(&executable, format!("{script}\nexit {exit_code}\n"))
+                .expect("fake Antigravity companion should be written");
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+                .expect("fake Antigravity companion should be executable");
+            let adapter =
+                AntigravityAppRuntimeAdapter::new(&root).expect("Adapter should initialize");
+            let mut request =
+                fake_antigravity_request(&workspace, &executable, uuid::Uuid::new_v4().to_string());
+            request
+                .runtime
+                .capabilities
+                .push("output.stream_json".to_string());
 
-        let error = adapter
-            .run(request)
-            .await
-            .expect_err("structured Runtime failure must remain a typed failure");
-        let delivered = error
-            .downcast_ref::<AntigravityDeliveredFailure>()
-            .expect("structured final should prove the delivered turn ended");
-        assert_eq!(delivered.error_code, "runtime_quota_exceeded");
-        assert_eq!(delivered.failure.origin, RuntimeFailureOrigin::Runtime);
-        assert_eq!(delivered.failure.phase, RuntimeFailurePhase::Terminal);
-        let detail = delivered.failure.detail.as_deref().expect("safe detail");
-        assert!(detail.contains("quota exceeded"));
-        assert!(detail.contains("api_key=[redacted]"));
-        assert!(!detail.contains("private-key"));
-        std::fs::remove_dir_all(root).expect("temporary root should be removed");
+            let error = adapter
+                .run(request)
+                .await
+                .expect_err("structured Runtime failure must remain a typed failure");
+            let delivered = error
+                .downcast_ref::<AntigravityDeliveredFailure>()
+                .expect("structured final should prove the delivered turn ended");
+            assert_eq!(delivered.error_code, "runtime_quota_exceeded");
+            assert_eq!(delivered.failure.origin, RuntimeFailureOrigin::Runtime);
+            assert_eq!(delivered.failure.phase, RuntimeFailurePhase::Terminal);
+            let detail = delivered.failure.detail.as_deref().expect("safe detail");
+            assert!(detail.contains("quota exceeded"));
+            assert!(detail.contains("api_key=[redacted]"));
+            assert!(!detail.contains("private-key"));
+            std::fs::remove_dir_all(root).expect("temporary root should be removed");
+        }
     }
 
     #[cfg(unix)]

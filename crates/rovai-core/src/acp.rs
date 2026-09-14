@@ -2705,11 +2705,16 @@ impl AcpHost {
                 else {
                     return false;
                 };
-                let _ = child.force_terminate_tree();
-                matches!(
-                    tokio::time::timeout_at(deadline, child.wait()).await,
-                    Ok(Ok(_))
-                )
+                if self.capture_native_descendants(&mut child).is_err() {
+                    let _ = child.force_terminate_tree();
+                    return false;
+                }
+                let terminated = child.force_terminate_tree().is_ok();
+                terminated
+                    && matches!(
+                        tokio::time::timeout_at(deadline, child.wait()).await,
+                        Ok(Ok(_))
+                    )
             },
             async {
                 let Some(bridge) = &self.client_terminal_bridge else {
@@ -2725,17 +2730,31 @@ impl AcpHost {
         );
         let native_groups_reaped = match tokio::time::timeout_at(deadline, self.child.lock()).await
         {
-            Ok(child) => self.confirm_zcode_cleanup(&child, deadline).await,
+            Ok(child) => self.confirm_native_cleanup(&child, deadline).await,
             Err(_) => false,
         };
         host_reaped && terminals_reaped && native_groups_reaped
     }
 
-    async fn confirm_zcode_cleanup(
+    async fn confirm_native_cleanup(
         &self,
         child: &ManagedProcess,
         deadline: tokio::time::Instant,
     ) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.adapter_kind != AdapterKind::ZcodeApp {
+            loop {
+                match child.captured_tree_is_empty() {
+                    Ok(true) => return true,
+                    Err(_) => return false,
+                    Ok(false) => {}
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
         if self.adapter_kind != AdapterKind::ZcodeApp
             || self.zcode_cleanup_confirmed.load(Ordering::Acquire)
         {
@@ -2805,18 +2824,20 @@ impl AcpHost {
         self.alive.store(false, Ordering::Release);
         self.release_all_client_terminals().await;
         let mut child = self.child.lock().await;
+        let ownership_captured = self.capture_native_descendants(&mut child).is_ok();
         let _ = child.request_graceful_termination();
         if timeout(Duration::from_secs(3), child.wait()).await.is_err() {
             let _ = child.force_terminate_tree();
             let _ = timeout(Duration::from_secs(1), child.wait()).await;
         }
         let _ = child.force_terminate_tree();
-        let groups_reaped = self
-            .confirm_zcode_cleanup(
-                &child,
-                tokio::time::Instant::now() + Duration::from_millis(2500),
-            )
-            .await;
+        let groups_reaped = ownership_captured
+            && self
+                .confirm_native_cleanup(
+                    &child,
+                    tokio::time::Instant::now() + Duration::from_millis(2500),
+                )
+                .await;
         if groups_reaped
             && self.remove_private_config_root_on_shutdown
             && let Some(root) = self.private_config_root.as_ref()
@@ -2826,6 +2847,16 @@ impl AcpHost {
         if let Some(root) = self.detector_config_root.as_ref() {
             let _ = std::fs::remove_dir_all(root);
         }
+    }
+
+    fn capture_native_descendants(&self, _child: &mut ManagedProcess) -> std::io::Result<()> {
+        // ZCode already owns detached groups through its native spawn ledger
+        // and EOF watcher; killing that watcher would discard its evidence.
+        #[cfg(target_os = "linux")]
+        if self.adapter_kind != AdapterKind::ZcodeApp {
+            return _child.capture_descendants();
+        }
+        Ok(())
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value> {
@@ -3779,6 +3810,10 @@ impl AcpRuntime {
             .session_id()
             .await
             .context("ACP Session is not ready")?;
+        {
+            let mut child = self.host.child.lock().await;
+            self.host.capture_native_descendants(&mut child)?;
+        }
         self.host
             .fence_client_terminal_create(&session_id, &self.owner)
             .await;

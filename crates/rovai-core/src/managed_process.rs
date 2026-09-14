@@ -26,6 +26,10 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 #[path = "managed_process/windows.rs"]
 mod windows;
 
+#[cfg(target_os = "linux")]
+#[path = "managed_process/linux.rs"]
+mod linux;
+
 #[cfg(unix)]
 pub type ManagedChildStdin = ChildStdin;
 #[cfg(unix)]
@@ -516,6 +520,10 @@ pub struct ManagedProcess {
     child: Child,
     #[cfg(unix)]
     process_group_id: Option<i32>,
+    #[cfg(target_os = "linux")]
+    linux_tree: linux::ProcessTree,
+    #[cfg(target_os = "linux")]
+    descendants_captured: bool,
     #[cfg(windows)]
     child: windows::WindowsManagedProcess,
     tree_termination_requested: bool,
@@ -534,9 +542,17 @@ impl ManagedProcess {
                 )
             })?;
             let process_group_id = child.id().and_then(|pid| i32::try_from(pid).ok());
+            #[cfg(target_os = "linux")]
+            let linux_tree = linux::ProcessTree::new(
+                process_group_id.context("managed process PID unavailable")?,
+            )?;
             Ok(Self {
                 child,
                 process_group_id,
+                #[cfg(target_os = "linux")]
+                linux_tree,
+                #[cfg(target_os = "linux")]
+                descendants_captured: false,
                 tree_termination_requested: false,
             })
         }
@@ -626,12 +642,17 @@ impl ManagedProcess {
     }
 
     pub fn request_graceful_termination(&mut self) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        let descendants = self.signal_captured_descendants(libc::SIGTERM);
         #[cfg(unix)]
         if let Some(process_group_id) = self.process_group_id.filter(|value| *value > 1) {
             // SAFETY: the process was created as the leader of a fresh group by
             // this module; the ID cannot name Rovai's own process group.
             let result = unsafe { libc::killpg(process_group_id, libc::SIGTERM) };
             if result == 0 {
+                #[cfg(target_os = "linux")]
+                return descendants;
+                #[cfg(not(target_os = "linux"))]
                 return Ok(());
             }
             return Err(io::Error::last_os_error());
@@ -660,15 +681,45 @@ impl ManagedProcess {
         self.child.tree_is_empty()
     }
 
+    /// Preserve descendants before a native cancellation protocol can sever
+    /// their ancestry. Adapters with their own owner ledger retain that ledger.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn capture_descendants(&mut self) -> io::Result<()> {
+        self.descendants_captured = true;
+        self.linux_tree.capture()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn signal_captured_descendants(&mut self, signal: i32) -> io::Result<()> {
+        if !self.descendants_captured {
+            return Ok(());
+        }
+        let capture = self.linux_tree.capture();
+        let signal = self.linux_tree.signal(signal);
+        capture.and(signal)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn captured_tree_is_empty(&self) -> io::Result<bool> {
+        if !self.descendants_captured {
+            return Ok(false);
+        }
+        self.linux_tree.is_empty()
+    }
+
     pub fn force_terminate_tree(&mut self) -> io::Result<()> {
         if self.tree_termination_requested {
             return Ok(());
         }
+        #[cfg(target_os = "linux")]
+        let descendants = self.signal_captured_descendants(libc::SIGKILL);
         #[cfg(unix)]
         if let Some(process_group_id) = self.process_group_id.filter(|value| *value > 1) {
             // SAFETY: the process group is created and owned by this instance.
             let result = unsafe { libc::killpg(process_group_id, libc::SIGKILL) };
             if result == 0 {
+                #[cfg(target_os = "linux")]
+                descendants?;
                 self.tree_termination_requested = true;
                 return Ok(());
             }
@@ -679,6 +730,8 @@ impl ManagedProcess {
         }
         #[cfg(unix)]
         {
+            #[cfg(target_os = "linux")]
+            descendants?;
             return match self.child.start_kill() {
                 Ok(()) => {
                     self.tree_termination_requested = true;
@@ -992,6 +1045,82 @@ mod tests {
         assert!(process.wait().await.unwrap().success());
         process.force_terminate_tree().unwrap();
         assert_eq!(bytes, b"managed");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_cancellation_reaps_captured_detached_children_after_parent_exit() {
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "setsid /bin/sleep 120 & printf '%s\\n' \"$!\"; read -r finish",
+        ]);
+        let spec = ManagedProcessLaunchSpec::capture(
+            &command,
+            ManagedProcessPurpose::RuntimeHost,
+            ManagedStdinPolicy::Piped,
+            ManagedWindowsArgvDialect::MicrosoftCrt,
+            "detached-cancellation:test",
+        )
+        .unwrap();
+        let mut process = ManagedProcess::spawn(spec).unwrap();
+        let mut reader = BufReader::new(process.take_stdout().unwrap());
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(3), reader.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        process.capture_descendants().unwrap();
+        let detached_pid: i32 = line.trim().parse().unwrap();
+        let detached = tokio::time::timeout(Duration::from_secs(3), async {
+            // The handshake observes the actual setsid boundary, not a sleep
+            // that assumes a scheduler has run the child by then.
+            while unsafe { libc::getsid(detached_pid) } != detached_pid {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(detached.is_ok());
+
+        let mut control = Command::new("/bin/sleep")
+            .arg("120")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        process
+            .take_stdin()
+            .unwrap()
+            .write_all(b"finish\n")
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), process.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            !process.captured_tree_is_empty().unwrap(),
+            "root exit does not reap a detached child"
+        );
+        process.force_terminate_tree().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !process.captured_tree_is_empty().unwrap() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("captured child must exit even after reparenting");
+        assert!(
+            control.try_wait().unwrap().is_none(),
+            "unrelated same-UID processes must survive"
+        );
+        control.kill().await.unwrap();
+        control.wait().await.unwrap();
     }
 
     #[cfg(windows)]

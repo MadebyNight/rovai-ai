@@ -234,6 +234,7 @@ jobs:
       - name: Verify native process and private storage seams
         run: |
           cargo test -p rovai-core --lib managed_process
+          cargo test -p rovai-core --lib antigravity::tests::
           cargo test -p rovai-core --lib core_data_dir_lock
           cargo test -p rovai-core --lib storage_layout
       - name: Verify packaged Host and shared Web lifecycle

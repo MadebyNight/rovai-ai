@@ -84,6 +84,14 @@ cargo test --workspace -- --list
 
 ### Codex 自定义 Provider 与 Server Runtime
 
+`managed_process::tests::linux_cancellation_reaps_captured_detached_children_after_parent_exit` 拥有 Linux pidfd
+取消回收边界：真实子进程 `setsid` 后，原父进程先退出，已捕获子进程仍须退出，另一个同 UID 对照进程须存活。
+修复前仅 killpg 会留下该子进程。既有 Unix stdio/PID owner 没有后代重挂靠状态，纯 parser 不能证明内核身份和
+信号语义，因此使用有握手、截止时间和清理的最小进程 fixture，不启动 Runtime/数据库。最小命令：
+`cargo test -p rovai-core --lib managed_process`（Linux）。Antigravity 则扩展既有
+`structured_runtime_failure_preserves_sanitized_provider_detail` 的 exit 0/1 输入矩阵，证明明确 ERROR 的语义和脱敏
+不会被非零退出码吞掉；无结构化终点仍由既有 process failure owner 负责，不新增重复测试。
+
 `health::tests::codex_probe_requires_login_unless_native_provider_explicitly_waives_it` 拥有 Codex 原生认证进程边界：
 同一隔离 fixture 覆盖 OpenAI 登录成功、自定义 Provider 明确免登录，以及 true、缺失、类型错误、RPC 拒绝。
 既有 ACP Native Home owner 使用另一协议，不能证明 `account/read` 的语义。fixture 不修改环境或读取真实凭据，

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { resolve, join, isAbsolute } from 'node:path'
 import { configureProductRuntime } from './configure-product-runtime.mjs'
 import { createConfiguredCampAndSend } from './lib/create-configured-camp.mjs'
@@ -66,12 +67,33 @@ async function execution(campId, agentRunId) {
   const page = await request('agentRunExecution.page', { campId, agentRunId, limit: 96 })
   return [...page.evidence, ...(page.activeEvidence ?? [])]
 }
+async function fixtureProcesses(program) {
+  const matches = []
+  for (const pid of await readdir('/proc')) {
+    if (!/^\d+$/.test(pid)) continue
+    try {
+      if ((await stat(`/proc/${pid}`)).uid !== process.getuid()) continue
+      const argv = (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0')
+      if (argv.includes(program)) matches.push(Number(pid))
+    } catch (error) {
+      if (!['ENOENT', 'EACCES', 'ESRCH'].includes(error.code)) throw error
+    }
+  }
+  return matches
+}
 async function send(campId, body) {
   const draft = await request('camp.composerDraft.get', { campId })
   const saved = await request('camp.composerDraft.save', { campId, expectedRevision: draft.revision, content: { version: 2, segments: [{ kind: 'text', text: body }] } })
   const sent = await request('camp.messages.send', { commandId: randomUUID(), campId, draftRevision: saved.revision, execution: { taskId: null, purpose: 'Linux Server Runtime acceptance', completionRole: 'required' } })
   assert.equal(sent.commandResult?.status, 'accepted')
   return sent.commandResult.payload.agentRunIds[0]
+}
+function binding(conversationId) {
+  const db = new DatabaseSync(join(data, 'rovai.sqlite'), { readOnly: true })
+  try {
+    db.exec('PRAGMA busy_timeout=5000')
+    return db.prepare('SELECT native_session_id, native_binding_id, native_binding_generation FROM conversation WHERE id = ?').get(conversationId)
+  } finally { db.close() }
 }
 async function waitRun(campId, id, marker) {
   const deadline = Date.now() + 150000
@@ -84,7 +106,9 @@ async function waitRun(campId, id, marker) {
     }
     if (run?.status === 'succeeded') {
       assert.ok(camp.messages.some(message => message.sourceAgentRunId === id && message.body.includes(marker)), 'Runtime final marker must be publicly projected')
-      runFacts.push({ id, status: run.status, conversationId: run.conversationId })
+      const native = binding(run.conversationId)
+      assert.ok(native?.native_session_id && native?.native_binding_id, 'Successful run must own a native binding')
+      runFacts.push({ id, status: run.status, conversationId: run.conversationId, nativeBinding: native })
       return { camp, run }
     }
     await pause(500)
@@ -97,7 +121,27 @@ try {
   const login = await fetch(origin + '/api/v1/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: administrator }) })
   assert.equal(login.status, 200); session = (await login.json()).token
   await request('health.check')
-  const installation = await configureProductRuntime(request, kind, ['agent_2'])
+  // An explicitly selected native account can be used without copying its
+  // credentials into the fixture or exposing unrelated CLIs through host HOME.
+  if (process.env.ROVAI_ACCEPTANCE_NATIVE_HOME) {
+    const nativeHome = process.env.ROVAI_ACCEPTANCE_NATIVE_HOME
+    const programPath = process.env.ROVAI_ACCEPTANCE_RUNTIME_BIN
+    assert.ok(isAbsolute(nativeHome) && programPath && isAbsolute(programPath))
+    const startup = await request('runtime.startup.get', { runtimeKind: kind })
+    await request('runtime.startup.save', { runtimeKind: kind, expectedRevision: startup.revision,
+      configuration: { programPath, environment: [{ name: 'HOME', value: nativeHome }] } })
+  }
+  const checkedRequest = async (operation, params) => {
+    const result = await request(operation, params)
+    if (operation === 'runtime.product.check' && result.outcome === 'stable_failure' && kind !== 'trae-cn-cli') {
+      const health = await request('health.check')
+      // Keep native diagnostics private; the public report only names the gate.
+      await writeFile(join(fixture, 'runtime-check.private.json'), JSON.stringify(health, null, 2), { mode: 0o600 })
+      throw new Error('Native Runtime availability check returned stable_failure; see private diagnostic')
+    }
+    return result
+  }
+  const installation = await configureProductRuntime(checkedRequest, kind, ['agent_2'])
   report.runtimeVersion = installation.snapshot.reportedVersion
   report.admission = installation.platformAdmission ?? null
   const profile = await request('members.get', { agentId: 'agent_2' })
@@ -118,26 +162,48 @@ try {
   checks.push('http_send_native_tool_write_read_and_final_projection')
   await waitRun(campId, await send(campId, 'Repeat the exact marker from your previous response. Do not use tools.'), marker)
   assert.equal(runFacts[1].conversationId, runFacts[0].conversationId)
+  assert.deepEqual(runFacts[1].nativeBinding, runFacts[0].nativeBinding)
   checks.push('warm_conversation_continuation')
   await stop(); await start()
   await waitRun(campId, await send(campId, 'Repeat the exact marker from this conversation again. Do not use tools.'), marker)
   assert.equal(runFacts[2].conversationId, runFacts[0].conversationId)
+  assert.deepEqual(runFacts[2].nativeBinding, runFacts[0].nativeBinding)
   checks.push('server_restart_persisted_auth_and_cold_conversation_continuation')
-  const cancelId = await send(campId, 'Use your shell tool to run sleep 120 in the foreground and wait for it to finish. Set its timeout to at least 150 seconds. Do not run it in the background and do not reply until the command finishes. Do not write files.')
+  const publicMarker = 'ROVAI_BUILTIN_' + randomUUID().replaceAll('-', '')
+  const builtin = await waitRun(campId, await send(campId, `Use the built-in rovai CLI to send a public Camp message containing exactly ${publicMarker}. Follow the CLI instructions already provided by Rovai. Do not write workspace files. A plain final answer alone is insufficient for this test.`), publicMarker)
+  const builtinEvidence = await execution(campId, builtin.run.id)
+  assert.ok(builtinEvidence.some(item => ['command', 'tool_call', 'tool_result'].includes(item.kind) && JSON.stringify(item.payload).includes('rovai')), 'Built-in public send must have native CLI execution evidence')
+  checks.push('builtin_cli_public_camp_message')
+  // Observe a real, uniquely identifiable child. Some native tools prohibit a
+  // standalone sleep, and some ACP versions expose command input only at the
+  // terminal update. Neither is evidence that HTTP cancellation failed.
+  const cancelProgram = join(project, 'cancel-probe.py')
+  const cancelStarted = join(project, 'cancel-started.txt')
+  const cancelFinished = join(project, 'cancel-finished.txt')
+  await writeFile(cancelProgram, `import pathlib, time\np = pathlib.Path(__file__).parent\n(p / 'cancel-started.txt').write_text('started')\ntime.sleep(120)\n(p / 'cancel-finished.txt').write_text('unexpected completion')\n`)
+  const cancelId = await send(campId, `Run python3 ${JSON.stringify(cancelProgram)} with your shell tool in the foreground, with a timeout of at least 150 seconds. This is an intentional process cancellation test. Do not modify the program, run it in the background, or reply until it finishes.`)
   const deadline = Date.now() + 60000
   let cancelRun, toolStarted = false
   while (Date.now() < deadline) {
     const camp = await request('camps.open', { campId, traceId: randomUUID() }); cancelRun = camp.agentRuns.find(run => run.id === cancelId)
     if (cancelRun?.status === 'running') {
       const evidence = await execution(campId, cancelId)
-      toolStarted = evidence.some(item => ['command', 'tool_call'].includes(item.kind) && JSON.stringify(item.payload).includes('sleep 120'))
+      const activeTool = evidence.some(item => ['command', 'tool_call'].includes(item.kind))
+      const processIds = await fixtureProcesses(cancelProgram)
+      const started = await readFile(cancelStarted, 'utf8').catch(error => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      toolStarted = activeTool && processIds.length > 0 && started === 'started'
+      if (toolStarted) report.cancellation = { nativeToolObserved: true, childProcessObserved: true,
+        commandInputProjected: evidence.some(item => JSON.stringify(item.payload).includes(cancelProgram)) }
       if (toolStarted) break
     }
     assert.ok(!cancelRun || !['succeeded', 'failed', 'cancelled'].includes(cancelRun.status), 'Cancellable tool must still be active')
     await pause(250)
   }
   assert.equal(cancelRun?.status, 'running')
-  assert.ok(toolStarted, 'Cancel only after the native sleep command appears in public execution evidence')
+  assert.ok(toolStarted, 'Cancel only after both native tool evidence and the real fixture child are observed')
   const cancel = await request('agentRuns.cancel', { commandId: randomUUID(), command: { campId, agentRunId: cancelId, expectedVersion: cancelRun.version } })
   assert.notEqual(cancel.status, 'rejected')
   for (let i = 0; i < 80; i++) {
@@ -146,6 +212,13 @@ try {
     await pause(250)
   }
   assert.equal(cancelRun.status, 'cancelled')
+  for (let i = 0; i < 40 && (await fixtureProcesses(cancelProgram)).length; i++) await pause(250)
+  assert.deepEqual(await fixtureProcesses(cancelProgram), [], 'Cancellation must reap the fixture child')
+  assert.equal(await readFile(cancelFinished, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }), null, 'Cancelled child must not finish its delayed write')
+  report.cancellation.childReaped = true
   checks.push('http_cancel_active_native_tool')
   await stop(); report.status = 'passed'
 } catch (error) {

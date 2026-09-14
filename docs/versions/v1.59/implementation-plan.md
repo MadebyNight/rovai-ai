@@ -40,7 +40,7 @@ cold continuation；取消场景未闭合，整体仍失败。Codex 原生 MiniM
 新开发机上的官方 ZCode 3.11.2 Linux AppImage 实测布局为 `zcode` + `resources/app.asar` +
 `resources/glm/zcode.cjs`。Rovai 补充该原生布局与常见安装位置，保持使用独立 Node 启动 bundled kernel，
 不启动 Electron GUI、不引入社区 CLI；缺失资源或越界 symlink 继续拒绝。
-新增修复尚须构建新包并在新主机复验，不能继承旧包的功能结论。
+新增修复已随 `e1b5ac46` 构建，并在新主机复验；下面只归属该来源包的实测证据。
 
 DMIT 使用独立账号与数据根，串行测试设置 1100 MiB cgroup 内存上限。Kiro 安装触发上限后已立即停止；
 当时系统可用内存约 1.59 GiB、swap 为 0、无 OOM。用户随后明确授权跳过 Kiro 继续轻量测试。
@@ -48,6 +48,38 @@ DMIT 使用独立账号与数据根，串行测试设置 1100 MiB cgroup 内存�
 与测试凭据均已删除，测试进程和 unit 为零，Xray active，swap 0，可用内存约 1667 MiB。
 新范围为 Rovai Server 及其余 Linux Runtime 逐项适配，排除 Cursor 与 DeepSeek Harness；具体访问资料仅存私有
 Obsidian 运维文档。新机验收、其他 Runtime 资格与手机实际连接仍待完成，正式 Release 尚未发布。
+
+### 新开发机与 e1b5ac46 同包验证
+
+[新包 CI](https://github.com/murray17/rovai-ai/actions/runs/34844158693)的原生构建及
+[Ubuntu 22.04](evidence/linux-server/e1b5ac46/ubuntu-22.04.json)、
+[Ubuntu 24.04](evidence/linux-server/e1b5ac46/ubuntu-24.04.json)、
+[Debian 12 VM](evidence/linux-server/e1b5ac46/debian-12.json)全部通过。
+[ABI 报告](evidence/linux-server/e1b5ac46/linux-abi.json)及
+[新开发机同包 Gate A](evidence/linux-server/e1b5ac46/advin-server-os.json)绑定 manifest
+`b42c13dfec8cdff9d6ed59baa4048adc4a3adf66f5de697936d4f8346c65116a`；主机为 Ubuntu 24.04.5、glibc 2.39、4 vCPU、7941 MiB RAM。
+Core 806 通过/6 既有忽略，后续平台准入与 ZCode 布局定向测试、Clippy、格式和文档门禁通过。
+
+[首轮 Server Runtime 证据](evidence/linux-server/e1b5ac46/advin-runtime-initial.json)保留所有失败：
+
+| Runtime | 首轮 Server 集成结果 |
+| --- | --- |
+| Codex 0.154.0 / Claude 2.1.270 / Pi 0.85.1 | 原生认证、工具写读、公开投影、warm/cold 精确 Native Binding、内置 CLI、HTTP 取消通过 |
+| OpenCode 1.18.30 | 前五项通过，取消前的公开命令输入匹配失败；不计取消通过 |
+| Qwen 0.23.3 | 前五项通过；原生 Shell 拒绝独立 sleep，随后转入后台，用例未完成有效取消 |
+| Copilot 1.0.83 / Grok 1.0.30 | 第一轮工具与公开回复通过；续接回复的标记文本校验失败 |
+| Kimi 1.50.0 | 原生 CLI 工具写读已通过；Server 检测反复 stable_failure，测试组触发 4 GiB 上限后停止 |
+| 其他已安装 Runtime | 后续批次另记，不能由安装或账号登录推断执行通过 |
+
+Kimi 首次停止时整机最低可用内存约 7.0 GiB、swap 0，无内核 OOM；所有测试进程与单元已退出。
+用户授权将这一次 Kimi 重试上限增至 5 GiB，仍保留整机 2 GiB 底线，失败则跳过。
+验收脚本增加稳定检测失败即停止、私有诊断保存，避免重复深检；重试 10.07 秒返回稳定检测失败，
+cgroup 峰值 598388736 字节，无 max/oom 计数增长，本轮跳过 Kimi。
+取消用例改为受控 Python 子进程，必须同时观察原生 Tool、真实子进程和启动标记，
+取消后检查子进程消失及延迟写入未发生；首次失败不被改写。
+
+这些是有限集成证据，`fullQualification=false`；Skills/MCP、权限与压缩等 First-Class 全轴尚未逐项闭合，
+14 项 Linux Runtime 均保留 Preview 与缺失资格原因。正式 Release 和实体手机资格尚未完成。
 
 ## 本轮：Mobile 执行文案与文件资源性能
 

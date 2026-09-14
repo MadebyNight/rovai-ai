@@ -3,7 +3,7 @@ document_type: contract
 contract: managed-runtime-process-v2
 status: accepted
 source_version: v1.58
-last_updated: 2026-09-11
+last_updated: 2026-09-14
 ---
 
 # Managed Runtime Process v2
@@ -128,6 +128,13 @@ Job handle 非 inheritable，并由 Core generation 独占。planned shutdown �
 Unix 直接启动目标进程并保留 process group、stdio、环境快照与退出回收语义；Windows 保留原子 Job、
 handle list 与受控 entrypoint。所有 Runtime/Probe/derived child 都不经过 Rovai 的 `sandbox-exec` 包装。
 Runtime 可以自行创建原生沙箱，其可用性由 Runtime 配置和实际宿主环境决定。
+
+Linux ACP Host 在原生 cancel、graceful stop 或强制回收之前，先由 Managed Process 捕获同 UID 后代的
+父子关系与启动身份，并持有 pidfd。原生取消使父进程退出或后代重新挂靠后，仍通过已捕获的 pidfd 终止后代；
+不得按进程名或裸 PID 补杀。根进程退出不能替代已捕获后代退出的确认，查询失败保持回收未确认。
+ZCode 继续由其原生 spawn ledger 和 EOF watcher 确认所有已登记组，不能提前杀死 watcher 丢失清理证据。
+这不是 cgroup/Windows Job 等价的强隔离：捕获前已脱离祖先链的未知进程、跨 UID 后代以及 Core 被强杀后的
+自动回收不由 Linux pidfd 捕获承诺。正式 Server 的 systemd unit 另外使用 control-group 终止策略。
 
 User Automation 的 `rovai app` 防误调用由 CLI 入口拥有，见 [User Automation v5](user-automation-v5.md)。
 该检查不形成同 UID 恶意进程隔离，不是 Managed Process 的启动前置条件。
