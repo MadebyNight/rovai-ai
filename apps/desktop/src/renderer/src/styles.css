@@ -8231,6 +8231,8 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
 .compact-dialog button:disabled, .compact-dialog input:disabled, .compact-dialog textarea:disabled { opacity: .52; cursor: not-allowed; }
 .compact-inline-error, .compact-field-error { display: block; margin: 0; color: var(--danger); font-size: 11.5px; line-height: 1.6; }
 .compact-inline-error { padding-top: 3px; }
+.new-camp-members-error { margin: -8px 0 0 96px; }
+.new-camp-dialog .member-trigger[aria-invalid="true"] { border-color: var(--danger); }
 .compact-inline-note { margin: -6px 0 0 96px; color: var(--attention); font-size: 11px; line-height: 1.5; }
 .compact-menu { z-index: 401; max-width: calc(100vw - 32px); max-height: min(360px, var(--radix-dropdown-menu-content-available-height)); min-width: 310px; overflow: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow-float); color: var(--ink); font-family: inherit; }
 .compact-option { display: flex; min-height: 46px; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 5px; font-size: 13px; cursor: pointer; user-select: none; }

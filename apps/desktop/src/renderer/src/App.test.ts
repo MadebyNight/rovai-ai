@@ -2622,7 +2622,7 @@ describe('task event projections', () => {
     })
   })
 
-  it('protects the last member, switches a removed Lead, and preserves a manual Lead', () => {
+  it('allows clearing the draft, switches a removed Lead, and preserves a manual Lead', () => {
     const removedLead = toggleCampMemberSelection({
       memberIds: ['agent-a', 'agent-b'],
       leadId: 'agent-a',
@@ -2631,8 +2631,7 @@ describe('task event projections', () => {
     })
     expect(removedLead).toEqual({
       memberIds: ['agent-b'],
-      leadId: 'agent-b',
-      blocked: false
+      leadId: 'agent-b'
     })
 
     expect(toggleCampMemberSelection({
@@ -2640,9 +2639,8 @@ describe('task event projections', () => {
       toggledMemberId: 'agent-b',
       stableMemberOrder: ['agent-a', 'agent-b']
     })).toEqual({
-      memberIds: ['agent-b'],
-      leadId: 'agent-b',
-      blocked: true
+      memberIds: [],
+      leadId: ''
     })
 
     expect(toggleCampMemberSelection({
@@ -2651,9 +2649,10 @@ describe('task event projections', () => {
       stableMemberOrder: ['agent-a', 'agent-b']
     })).toEqual({
       memberIds: ['agent-a', 'agent-b'],
-      leadId: 'agent-b',
-      blocked: false
+      leadId: 'agent-b'
     })
+    expect(toggleCampMemberSelection({ memberIds: [], leadId: '', toggledMemberId: 'agent-b', stableMemberOrder: ['agent-a', 'agent-b'] }))
+      .toEqual({ memberIds: ['agent-b'], leadId: 'agent-b' })
   })
 
   it('derives the initial Quick Chat preflight from the already loaded member order', () => {

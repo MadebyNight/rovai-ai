@@ -13,6 +13,8 @@ import type {
   WorkspaceSelection
 } from '@contracts'
 import { isNewConversationMemberAvailable, newConversationMemberStatus } from './new-conversation-availability'
+import { useMobileLayout } from './MobileLayout'
+import { NewConversationPicker } from './NewConversationPicker'
 import { NewConversationQuickHelp } from './NewConversationQuickHelp'
 import { MemberAvatar } from './MemberAvatar'
 import { NavigationIcon } from './NavigationIcon'
@@ -30,7 +32,7 @@ export function NewConversationDialog({
   projects,
   preflight,
   agents,
-  busy,
+  busy: creationBusy,
   projectAccessReady,
   onOpenChange,
   onChooseWorkspaceDirectory,
@@ -52,10 +54,14 @@ export function NewConversationDialog({
   onCreate(draft: CreateCampDraft, enableOneClick: boolean): Promise<void>
 }): React.JSX.Element {
   const client = useCampClient()
+  const mobile = useMobileLayout()
+  const [submitting, setSubmitting] = useState(false)
+  const busy = creationBusy || submitting
   const [workspace, setWorkspace] = useState<WorkspaceChoice | null>(initialWorkspace)
   const [gitInspectionStatus, setGitInspectionStatus] = useState<GitInspectionStatus>('idle')
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [memberMenuOpen, setMemberMenuOpen] = useState(false)
+  const [leadMenuOpen, setLeadMenuOpen] = useState(false)
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
   const [leadId, setLeadId] = useState('')
   const [optionalOpen, setOptionalOpen] = useState(false)
@@ -64,6 +70,7 @@ export function NewConversationDialog({
   const [enableOneClick, setEnableOneClick] = useState(false)
   const [memberError, setMemberError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const memberTriggerRef = useRef<HTMLButtonElement>(null)
   const projectTriggerRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
@@ -106,6 +113,7 @@ export function NewConversationDialog({
     setGitInspectionStatus(hasGitObservation(initialWorkspace) ? 'ready' : 'idle')
     setProjectMenuOpen(false)
     setMemberMenuOpen(false)
+    setLeadMenuOpen(false)
     setSelectedMemberIds(memberIds)
     setLeadId(recommendedLead)
     setOptionalOpen(false)
@@ -144,20 +152,23 @@ export function NewConversationDialog({
   const toggleMember = (agentId: string): void => {
     if (busy || !availableMembers.some((member) => member.agentId === agentId)) return
     setMemberError(null)
-    setSelectedMemberIds((current) => {
-      const next = toggleCampMemberSelection({
-        memberIds: current,
-        leadId,
-        toggledMemberId: agentId,
-        stableMemberOrder: preflight.presentMembers.map((member) => member.agentId)
-      })
-      if (next.blocked) {
-        setMemberError('至少选择 1 位队员')
-      } else {
-        setLeadId(next.leadId)
-      }
-      return next.memberIds
+    const next = toggleCampMemberSelection({
+      memberIds: selectedMemberIds,
+      leadId,
+      toggledMemberId: agentId,
+      stableMemberOrder: preflight.presentMembers.map((member) => member.agentId)
     })
+    setSelectedMemberIds(next.memberIds)
+    setLeadId(next.leadId)
+  }
+
+  const allMembersSelected = availableMembers.length > 0 && !hasUnavailableSelection
+    && selectedMemberIds.length === availableMembers.length
+  const toggleAllMembers = (): void => {
+    if (busy || availableMembers.length === 0) return
+    setSelectedMemberIds(allMembersSelected ? [] : availableMembers.map(member => member.agentId))
+    setLeadId(allMembersSelected ? '' : lead?.agentId ?? availableMembers[0].agentId)
+    setMemberError(null)
   }
 
   const chooseWorkspaceDirectory = async (): Promise<void> => {
@@ -189,12 +200,17 @@ export function NewConversationDialog({
     if (
       busy || submittingRef.current
       || projectSubmissionBlocked
-      || selectedMemberIds.length === 0
       || hasUnavailableSelection
-      || !lead
+      || (selectedMemberIds.length > 0 && !lead)
       || nameError
     ) return
+    if (selectedMemberIds.length === 0) {
+      setMemberError('请至少选择一位队员。')
+      memberTriggerRef.current?.focus()
+      return
+    }
     submittingRef.current = true
+    setSubmitting(true)
     setSubmitError(null)
     try {
       await onCreate({
@@ -208,6 +224,7 @@ export function NewConversationDialog({
       setSubmitError(errorMessage(error))
     } finally {
       submittingRef.current = false
+      setSubmitting(false)
     }
   }
 
@@ -248,14 +265,11 @@ export function NewConversationDialog({
               {attentionMessage && <p className="compact-inline-note" role="status">{attentionMessage}</p>}
               <div className="compact-row">
                 <span id="new-camp-workspace-label">工作目录</span>
-                <DropdownMenu.Root open={projectMenuOpen} onOpenChange={setProjectMenuOpen}>
-                  <DropdownMenu.Trigger asChild>
-                    <button ref={projectTriggerRef} className="compact-picker new-camp-picker-trigger" type="button" aria-labelledby="new-camp-workspace-label new-camp-workspace-value" aria-busy={!projectAccessReady} disabled={projectActionsDisabled}>
+                <NewConversationPicker mobile={mobile} open={projectMenuOpen} onOpenChange={setProjectMenuOpen} busy={busy} title="选择工作目录"
+                  trigger={<button ref={projectTriggerRef} className="compact-picker new-camp-picker-trigger" type="button" aria-labelledby="new-camp-workspace-label new-camp-workspace-value" aria-busy={!projectAccessReady} disabled={projectActionsDisabled}>
                       <WorkspaceIcon kind={workspace ? 'project' : 'quick-chat'} /><span id="new-camp-workspace-value">{projectLabel}</span><DialogControlIcon name="chevron" />
-                    </button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu workspace-menu" align="end" sideOffset={6} collisionPadding={12} aria-label="选择工作目录" loop>
+                    </button>}
+                  menu={<DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu workspace-menu" align="end" sideOffset={6} collisionPadding={12} aria-label="选择工作目录" loop>
                       <DropdownMenu.RadioGroup value={workspace?.projectPath ?? ''}>
                         <DropdownMenu.RadioItem className="compact-option" value="" disabled={projectActionsDisabled} onSelect={() => { setWorkspace(null); setProjectMenuOpen(false) }}>
                           <WorkspaceIcon kind="quick-chat" /><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check" /></DropdownMenu.ItemIndicator>
@@ -267,24 +281,27 @@ export function NewConversationDialog({
                       </DropdownMenu.RadioGroup>
                       <DropdownMenu.Separator className="compact-separator" />
                       <DropdownMenu.Item className="compact-option" disabled={projectActionsDisabled} onSelect={() => void chooseWorkspaceDirectory()}><DialogControlIcon name="plus" /><span>选择工作目录…</span></DropdownMenu.Item>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                    </DropdownMenu.Content>}>
+                  <button type="button" className="compact-option" aria-pressed={!workspace} disabled={projectActionsDisabled} onClick={() => { setWorkspace(null); setProjectMenuOpen(false) }}>
+                    <WorkspaceIcon kind="quick-chat" /><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span>{!workspace && <DialogControlIcon name="check" />}
+                  </button>
+                  {projects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} disabled={projectActionsDisabled} onClick={() => selectKnownWorkspace(project)}>
+                    <WorkspaceIcon kind="project" /><span>{project.name}<small>{project.projectPath}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check" />}
+                  </button>)}
+                  <button type="button" className="compact-option" disabled={projectActionsDisabled} onClick={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}><DialogControlIcon name="plus" /><span>选择工作目录…</span></button>
+                </NewConversationPicker>
               </div>
               {workspace && <div className="compact-row-detail"><span title={projectDetail}>{projectDetail}</span>{gitPresentation.kind === 'metadata' && <span className="compact-git">{gitPresentation.label}</span>}{gitPresentation.kind === 'loading' && <span role="status">{gitPresentation.label}</span>}</div>}
               {gitPresentation.kind === 'warning' && <div className="new-camp-workspace-warning" role="alert"><div><strong>{gitPresentation.label}</strong><span>{gitPresentation.detail}</span></div></div>}
               <div className="compact-row">
                 <span id="new-camp-members-label">队员</span>
-                <DropdownMenu.Root open={memberMenuOpen} onOpenChange={setMemberMenuOpen}>
-                  <DropdownMenu.Trigger asChild>
-                    <button className="compact-picker member-trigger" type="button" aria-labelledby="new-camp-members-label new-camp-members-value" disabled={busy || !preflight.presentMembers.length}>
+                <NewConversationPicker mobile={mobile} open={memberMenuOpen} onOpenChange={setMemberMenuOpen} busy={busy} title="选择队员" multiple
+                  trigger={<button ref={memberTriggerRef} className="compact-picker member-trigger" aria-invalid={Boolean(memberError)} aria-describedby={memberError ? 'new-camp-members-error' : undefined} type="button" aria-labelledby="new-camp-members-label new-camp-members-value" disabled={busy || !preflight.presentMembers.length}>
                       <span className="compact-avatar-stack">{selectedMembers.slice(0, 3).map((member) => <MemberAvatar key={member.agentId} agentId={member.agentId} avatarRef={profileById.get(member.agentId)?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative />)}</span>
-                      <span id="new-camp-members-value">{selectedMembers.length ? `${selectedMembers.length} 位队员` : '暂无可用队员'}</span><DialogControlIcon name="chevron" />
-                    </button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu roster-menu new-camp-member-grid" align="end" sideOffset={6} collisionPadding={12} aria-label="选择队员" onKeyDownCapture={navigateMemberGrid} loop>
-                      <div className="compact-menu-heading"><span>参与本次对话</span><button type="button" disabled={busy || availableMembers.length === 0 || (!hasUnavailableSelection && selectedMembers.length === availableMembers.length)} onClick={() => { setSelectedMemberIds(availableMembers.map((member) => member.agentId)); if (!lead) setLeadId(availableMembers[0]?.agentId ?? ''); setMemberError(null) }}>全选</button></div>
+                      <span id="new-camp-members-value">{selectedMembers.length ? `${selectedMembers.length} 位队员` : availableMembers.length ? '选择队员' : '暂无可用队员'}</span><DialogControlIcon name="chevron" />
+                    </button>}
+                  menu={<DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu roster-menu new-camp-member-grid" align="end" sideOffset={6} collisionPadding={12} aria-label="选择队员" onKeyDownCapture={navigateMemberGrid} loop>
+                      <div className="compact-menu-heading"><span>参与本次对话</span><DropdownMenu.Item asChild disabled={busy || availableMembers.length === 0} onSelect={event => { event.preventDefault(); toggleAllMembers() }}><button type="button" disabled={busy || availableMembers.length === 0}>{allMembersSelected ? '取消全选' : '全选'}</button></DropdownMenu.Item></div>
                       {preflight.presentMembers.map((member) => {
                         const profile = profileById.get(member.agentId)
                         return <DropdownMenu.CheckboxItem className="compact-option" key={member.agentId} checked={selectedMemberIds.includes(member.agentId)} disabled={busy || !isNewConversationMemberAvailable(member)} onCheckedChange={() => toggleMember(member.agentId)} onSelect={(event) => event.preventDefault()}>
@@ -293,24 +310,30 @@ export function NewConversationDialog({
                           <span className="compact-checkbox"><DropdownMenu.ItemIndicator><DialogControlIcon name="check" /></DropdownMenu.ItemIndicator></span>
                         </DropdownMenu.CheckboxItem>
                       })}
-                      {memberError && <div role="alert" className="compact-menu-error">{memberError}</div>}
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                    </DropdownMenu.Content>}>
+                  <div className="compact-menu-heading"><span role="status">已选 {selectedMembers.length} 位</span><button type="button" disabled={busy || availableMembers.length === 0} onClick={toggleAllMembers}>{allMembersSelected ? '取消全选' : '全选'}</button></div>
+                  {preflight.presentMembers.map(member => {
+                    const profile = profileById.get(member.agentId)
+                    const disabled = busy || !isNewConversationMemberAvailable(member)
+                    return <label className="compact-option new-camp-mobile-member" key={member.agentId} data-disabled={disabled ? '' : undefined}>
+                      <MemberAvatar agentId={member.agentId} avatarRef={profile?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative />
+                      <span className="new-camp-candidate-copy">{member.displayName}<small>{profile?.teamRole || '队员'} · <span className={isNewConversationMemberAvailable(member) ? 'compact-ready' : 'new-camp-candidate-unavailable'}>{newConversationMemberStatus(member)}</span></small></span>
+                      <input type="checkbox" aria-label={member.displayName} checked={selectedMemberIds.includes(member.agentId)} disabled={disabled} onChange={() => toggleMember(member.agentId)} />
+                    </label>
+                  })}
+                </NewConversationPicker>
               </div>
+              {memberError && <p id="new-camp-members-error" role="alert" className="compact-inline-error new-camp-members-error">{memberError}</p>}
               {availableMembers.length === 0 && <p className="new-camp-empty-note">暂无可用队员，请先在「队员」中配置 Agent 运行时。</p>}
               {hasUnavailableSelection && <p className="compact-inline-error" role="alert">所选队员已不可用，请重新选择。</p>}
               <div className="compact-row">
                 <span id="new-camp-lead-label">负责人</span>
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger asChild>
-                    <button className="compact-picker" type="button" aria-labelledby="new-camp-lead-label new-camp-lead-value" disabled={busy || selectedAvailableMembers.length === 0}>
+                <NewConversationPicker mobile={mobile} open={leadMenuOpen} onOpenChange={setLeadMenuOpen} busy={busy} title="选择负责人"
+                  trigger={<button className="compact-picker" type="button" aria-labelledby="new-camp-lead-label new-camp-lead-value" disabled={busy || selectedAvailableMembers.length === 0}>
                       {lead && <MemberAvatar agentId={lead.agentId} avatarRef={leadProfile?.avatarRef ?? null} displayName={lead.displayName} size="mention" decorative />}
                       <span id="new-camp-lead-value">{lead?.displayName ?? (selectedAvailableMembers.length ? '选择负责人' : '暂无可选负责人')}</span><DialogControlIcon name="chevron" />
-                    </button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu roster-menu" align="end" sideOffset={6} collisionPadding={12} aria-label="选择负责人" loop>
+                    </button>}
+                  menu={<DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu roster-menu" align="end" sideOffset={6} collisionPadding={12} aria-label="选择负责人" loop>
                       <DropdownMenu.Label className="compact-menu-heading">从已选队员中选择</DropdownMenu.Label>
                       <DropdownMenu.RadioGroup value={leadId} onValueChange={setLeadId}>
                         {selectedAvailableMembers.map((member) => {
@@ -321,9 +344,12 @@ export function NewConversationDialog({
                           </DropdownMenu.RadioItem>
                         })}
                       </DropdownMenu.RadioGroup>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                    </DropdownMenu.Content>}>
+                  {selectedAvailableMembers.map(member => <button type="button" className="compact-option" key={member.agentId} aria-pressed={leadId === member.agentId} disabled={busy} onClick={() => { setLeadId(member.agentId); setLeadMenuOpen(false) }}>
+                    <MemberAvatar agentId={member.agentId} avatarRef={profileById.get(member.agentId)?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative />
+                    <span>{member.displayName}<small>{profileById.get(member.agentId)?.teamRole || '队员'}</small></span>{leadId === member.agentId && <DialogControlIcon name="check" />}
+                  </button>)}
+                </NewConversationPicker>
               </div>
               <div className="compact-name-disclosure">
                 <button className="compact-text-button" type="button" aria-expanded={optionalOpen} aria-controls="new-camp-optional-panel" disabled={busy} onClick={() => setOptionalOpen((current) => !current)}><DialogControlIcon name={optionalOpen ? 'chevron' : 'plus'} />{optionalOpen ? '对话名称' : normalizedName ? `对话名称：${normalizedName}` : '添加对话名称'}<span>可选</span></button>
@@ -337,7 +363,7 @@ export function NewConversationDialog({
               <div className="new-camp-quick-setting">
                 <div className="new-camp-quick-row">
                   <label className="new-camp-quick-label">
-                    <input type="checkbox" checked={enableOneClick} disabled={busy || selectedAvailableMembers.length === 0} onChange={(event) => setEnableOneClick(event.target.checked)} />
+                    <input type="checkbox" checked={enableOneClick} disabled={busy} onChange={(event) => setEnableOneClick(event.target.checked)} />
                     <span>以后使用此队伍一键新建</span>
                   </label>
                   <NewConversationQuickHelp onOpenChange={setQuickHelpOpen} />
@@ -347,7 +373,7 @@ export function NewConversationDialog({
             </div>
             <footer className="compact-footer">
               <Dialog.Close asChild><button className="compact-cancel" type="button" disabled={busy}>取消</button></Dialog.Close>
-              <button className="compact-primary" type="submit" disabled={busy || projectSubmissionBlocked || selectedMembers.length === 0 || hasUnavailableSelection || !lead || Boolean(nameError)}>{busy ? '正在新建…' : '新建'}</button>
+              <button className="compact-primary" type="submit" disabled={busy || projectSubmissionBlocked || hasUnavailableSelection || (selectedMemberIds.length > 0 && !lead) || Boolean(nameError)}>{busy ? '正在新建…' : '新建'}</button>
             </footer>
           </form>
         </Dialog.Content>
@@ -514,7 +540,6 @@ export function toggleCampMemberSelection({
 }): {
   memberIds: string[]
   leadId: string
-  blocked: boolean
 } {
   if (!memberIds.includes(toggledMemberId)) {
     return {
@@ -522,15 +547,12 @@ export function toggleCampMemberSelection({
         (id) => id === toggledMemberId || memberIds.includes(id)
       ),
       leadId: leadId || toggledMemberId,
-      blocked: false
     }
   }
-  if (memberIds.length === 1) return { memberIds, leadId, blocked: true }
   const nextMemberIds = memberIds.filter((id) => id !== toggledMemberId)
   return {
     memberIds: nextMemberIds,
     leadId: leadId === toggledMemberId ? nextMemberIds[0] ?? '' : leadId,
-    blocked: false
   }
 }
 
