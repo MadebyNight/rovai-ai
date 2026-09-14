@@ -13,7 +13,31 @@ last_updated: 2026-09-14
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
 复用任务分支继续开发，当前已同步 main `42e1e6d1`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：同步 main 与 Web 执行入口
+## 本轮：长期 Token 与 30 天 Session
+
+2026-09-14 按用户确认补齐统一 Host 与浏览器认证持久化，默认 Session 30 天、有效期剩余不超过 7 天时续期。
+续期保持同一 Bearer 与编辑 ID；二维码继续兑换普通 Session。Desktop/Server 的正常退出、重启与升级保留未过期
+Session，主动登出仅撤销当前 Bearer，Token 重置和显式关闭 Web 撤销全部 Session。写盘失败不给出成功响应。
+浏览器持久认证不含长期 Token 或编辑证明，标签页草稿归属继续独立；新浏览器页通过已有 Bearer fork 新编辑身份。
+
+时间矩阵扩展既有 Rust Session 生命周期与浏览器客户端 owner，用可控时钟覆盖 7 天边界、30 天延期、实际过期、
+并发续期及网络失败。唯一新增 Rust 文件 seam 验证原子持久化、损坏拒绝、写失败、重启与撤销竞争，使用私有临时目录，
+没有 Core/SQLite/Runtime。进程验收扩展既有 Host HTTP、原生 Server 与浏览器恢复脚本。
+
+[浏览器记录](evidence/session-renewal/validation.json)验证真实 Chrome 进程重开、同标签页刷新、复制标签页隔离、
+Host 重启保留 Bearer/编辑身份、一次性扫码及真正两分钟票据过期。该两分钟检查为既有扫码 smoke；Session 的 30 天/7 天
+矩阵全部使用可控时钟。新页面从持久普通 Session fork 新编辑身份，截图确认不带入原标签页草稿。
+HTTP 验收同时覆盖已关闭状态的显式关闭、此前重置/关闭的 Session 重启后仍拒绝；原生 Server 默认/自定义目录、
+长期 Token 查询、重启 Session 恢复和终端受控退出通过 macOS 验收。Windows 控制台专项保留跳过，不冒充跨平台结果。
+
+旧版本仅驻留内存的 Host Session 无法事后补存，首次升级需要重新登录；旧 standalone Token 可以导入，旧 Desktop
+进程结束后无法恢复未持久化 Token。本版本成功保存后的正常重开、重启与升级按新合同保留。
+Web 构建、TypeScript、Clippy（workspace all-targets、零 warning）和文档三门禁通过；staged Rust 路由触发
+workspace default features：Core 805、CLI 35、Web 6 项通过，共 846，6 个既有手动场景保持 ignored。
+完整 `pnpm test` 通过（Vitest 2022 / 198 文件；Node 317 通过、2 个平台专项跳过）；随后补充旧恢复材料离线迁移
+与浏览器存储失败登出，认证定向套件最终 22 项通过。最终范围和来源摘要由 [检查记录](evidence/session-renewal/checks.json) 汇总。
+
+## 先前批次：同步 main 与 Web 执行入口
 
 2026-09-14 同步 main `42e1e6d1`，包含执行入口运行头像/双弧及会话横向溢出修复。
 宽屏 Web 复用 `CampDetailEntries` 与 `runningCampMembers`，不另建运行状态或动效实现；

@@ -1,6 +1,7 @@
 /** Non-secret document leases serialize tab ownership, including copied
  * sessionStorage. IndexedDB transactions work on HTTP LAN origins as well as
- * HTTPS. All credentials and editing content stay in this tab's sessionStorage. */
+ * HTTPS. This lease contains no credentials or editing content; it owns only
+ * the tab's editor and drafts, independently from browser authentication. */
 const DATABASE = 'rovai-web-tab-owners-v1'
 const LIFETIME = 30_000
 export const RECOVERY_KEY = 'rovai.web.session.v1'

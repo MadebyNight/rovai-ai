@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: unified-rust-host
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # 统一 Rust Host
@@ -38,19 +38,26 @@ Runtime 自身依赖单独声明。Automation 时钟迁 Host；日报、评测�
 
 macOS/Linux 本机传输为 UDS，Windows 为受保护 Named Pipe，另有可信身份、实例与代次握手。
 同一目录不能被两个 Host 抢占；不自动 attach、抢锁或双写。Desktop Web 默认关闭；关闭 Web 仅关闭
-网络入口、连接与 Session，Core 及任务继续。Desktop 主动退出和 Server 受控停止复用现行
+网络入口、连接并持久撤销全部 Session，保留长期登录 Token；Core 及任务继续。正常 Host 退出、重启与升级保留未过期 Session，
+不等同于显式关闭 Web。Desktop 主动退出和 Server 受控停止复用现行
 [Planned Shutdown](planned-shutdown.md)，客户端断开不取消已准入工作。
 
 ## 身份与控制面
 
 服务端从验证过的本机身份、Remote Session 或 Agent Built-in 上下文确定能力；不信任客户端自报用户身份。
-Web 管理令牌交换短期可撤销 opaque Bearer Session；不使用认证 Cookie。短期 Session 与编辑恢复材料保存在当前标签页 sessionStorage，启动先验证再恢复；管理令牌不持久化。
+Web 长期登录 Token 可重复兑换默认 30 天的可撤销 opaque Bearer Session；剩余不超过 7 天且有效时，
+客户端申请延期至续期成功起 30 天，不轮换 Bearer 或编辑身份。正常访问、续期和重启不更换长期 Token。
+Host 在准入的 Core data-dir 内持久保存私有认证文档，浏览器 IndexedDB 保存普通 Session；
+标签页的编辑证明、草稿与原命令另归 sessionStorage，启动先认证再恢复。不使用认证 Cookie、双 Token 或 OAuth。
 仅固定控制台 origin 的封闭 API 使用显式 Authorization；登录和认证 Fetch 拒绝重定向，SSE、图片、下载同样
-走认证 Fetch，必要时生成并释放 Blob URL。不把管理令牌、Bearer 或编辑证明写 URL、预览链接、日志或浏览器长期存储；
+走认证 Fetch，必要时生成并释放 Blob URL。不把管理令牌、Bearer 或编辑证明写 URL、预览链接或日志；浏览器长期存储只允许普通 Session 认证材料，
+不保存长期登录 Token 或编辑证明；
 扫码登录的一次性 fragment 票据按下述短期例外处理。
 
-管理令牌使用 256-bit 系统随机数，本机入口初始化、重复查看/复制或独立轮换。Host 为重复查看保留进程内原值；
-认证使用带类型区分摘要、恒定时间比较。Session 仍只存摘要，凭据不进入状态、日志或公开网络投影。
+长期登录 Token 使用 256-bit 系统随机数，本机入口初始化、重复查看/复制或显式重置。
+Desktop 与 Server 使用同一私有 `web-auth.json` 持久实现，原独立 `server-token` 仅作首次导入；Token 命令优先读取统一文档。
+Host 仅保存 Bearer 的带类型摘要、编辑 ID 和绝对到期时间，认证使用恒定时间比较。
+续期、撤销、重置和显式关闭在同一锁下先原子落盘再发布；损坏或写入失败不会静默重置。凭据不进入状态、日志或公开网络投影。
 过期、撤销、轮换和关闭 Web 撤销已有订阅。登录限流，Host/Origin 封闭校验，请求/上传/并发/订阅有界；
 实际网络接口自动展示并按同一 authority/origin 校验；外部代理 origin 可以显式补充。默认 loopback；LAN 明文必须显式开启并说明风险，不可信网络用
 HTTPS/VPN。普通地址分享不含凭据；显式扫码登录允许 URL fragment 携带 Host 签发的两分钟一次性票据，
@@ -74,8 +81,8 @@ HTTPS/VPN。普通地址分享不含凭据；显式扫码登录允许 URL fragme
 每个客户端草稿有独立身份与后端验证的归属，贯穿读取、保存、附件、队列与发送消费。
 作用域含 Host/Owner/client/Camp，私聊再含 Conversation。客户端提交 ID 不是授权；保留 revision、
 原子消费、命令幂等与 Core FIFO，不做跨端同步、实时合并或多人共编。
-短期认证 Session 与编辑身份分离；同页面同 Owner 重登保留编辑、原命令及 Core 验证的恢复证明。
-普通刷新沿用原编辑身份，浏览器标签页占用记录仅存随机文档标识；复制标签页由已认证 Host 分配独立编辑身份和 Session，不复制草稿或原命令。两个标签页各建独立编辑身份；细节见[Draft v13](../contracts/camp-composer-draft-v13.md)。
+可续期认证 Session 与标签页编辑身份分离；同页面同 Owner 重登保留编辑、原命令及 Core 验证的恢复证明。
+普通刷新沿用原编辑身份，浏览器标签页占用记录仅存随机文档标识；复制标签页由已认证 Host 分配独立编辑身份和 Session，不复制草稿或原命令。浏览器重开只有认证材料时同样新建编辑身份，不借用其他标签页草稿；细节见[Draft v13](../contracts/camp-composer-draft-v13.md)。
 
 Web 上传写 Host 临时文件后绑定当前客户端草稿，复用现行 source reference。
 失败或可确认未绑定文件由入口清理；绑定结果未知按原命令查询回执，不能证明未绑定就不删除。

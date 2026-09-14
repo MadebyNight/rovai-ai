@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: standalone-server-preview-operation
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # 原生 Server 安装与开发验收
@@ -69,7 +69,8 @@ rovai-server --data-dir /data/rovai token
 Windows 同一个参数接口：`rovai-server.exe --data-dir "D:\RovaiData"`。`token` 的 stdout 是秘密，供登录使用，
 不要接入日志采集。交互式终端启动成功后已直接显示当前 Token，可立即复制登录；展示不会轮换 Token。
 非交互启动或 stdout 重定向不显示 Token，仍可用上面的 `token` 命令查询。凭据不会进入 Server 文件日志。
-该私有令牌文件会随原数据根保留，浏览器 Session 仍按进程撤销。
+长期 Token 与普通 Session 保存在数据根的私有 `web-auth.json`；旧 `server-token` 只作首次导入，
+`token` 命令优先读取统一文档。正常重启与升级保留未过期 Session。
 
 启动摘要显示实际版本、就绪地址、访问范围、数据根与日志位置。默认前台运行，Ctrl-C 受控停止；
 终端挂断也进入受控关闭。普通诊断写入 `<data-dir>/logs/server.log`，需要同时在终端排障时使用
@@ -110,11 +111,14 @@ rovai-host run --data-dir <dataDir> --skill-library-root <skillLibraryRoot>
 参数须在同一条命令中传入。管理令牌由 `rovai-host token` 生成，是 64 位十六进制的 256-bit 随机值。
 启动命令从 stdin 读取一行；请通过操作系统提供的安全输入方式或受保护文件重定向传入，保留一份供
 登录使用。不要把令牌写在命令参数、环境变量、URL、聊天或日志中。`token` 的 stdout 是秘密输出，
-不应接入普通日志采集。重新启动时可换用新令牌；旧页面 Session 不跨进程存活。
+不应接入普通日志采集。首次启动导入统一私有认证文档；后续启动须传入原 Token，冲突不会覆盖存储。
+变更长期 Token 必须走显式重置，不能通过正常重启隐式轮换。
 
-管理者在控制台输入管理令牌后交换半小时 Session；页面刷新需要再次登录。当前页面只向固定控制台
-地址发送显式 Authorization，不使用认证 Cookie。应将完整控制台地址交给客户端，不能通过预览端口登录。
-登录后的单一 Owner 可以在浏览器选择 Host 有权访问的工作目录，无须目录预授权。同页面重新登录保留当前编辑；完整刷新会创建新编辑身份，尚无跨页面草稿恢复服务。
+管理者输入长期登录 Token 后兑换默认 30 天 Session；正常使用时剩余不超过 7 天会自动申请续期。
+页面只向固定控制台地址发送显式 Bearer，不使用认证 Cookie 或保存长期 Token 自动重登。
+应将完整控制台地址交给客户端，不能通过预览端口登录。浏览器 IndexedDB 保存普通 Session，
+标签页另存编辑证明和草稿；刷新保留原编辑，浏览器重开没有标签页编辑材料时新建独立编辑身份。
+登录后的单一 Owner 可以选择 Host 有权访问的工作目录，无须预授权。真正过期或撤销后仍可使用原长期 Token 手动登录。
 Web 与 Host 必须使用同一协议版本，当前为 [Host Web v2](../contracts/host-web-v2.md)。
 
 ## 网络与停止

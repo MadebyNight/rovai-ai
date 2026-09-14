@@ -80,7 +80,10 @@ pub fn run() -> Result<()> {
         Some(directory)
     };
     let paths = ServerPaths::prepare(&data_dir)?;
-    let token = paths.management_token(rovai_web::new_token)?;
+    let token = match rovai_web::stored_administrator_token(&paths.data_dir)? {
+        Some(token) => token,
+        None => paths.management_token(rovai_web::new_token)?,
+    };
     if matches!(cli.command, Some(Command::Token)) {
         println!("{token}");
         return Ok(());

@@ -5,12 +5,12 @@ authority: shared-host-web-transport
 status: accepted
 version: 2
 source_version: v1.59
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # Host Web v2
 
-v2 replaces [v1](host-web-v1.md) for new Web sessions. One Core, local management, tab-scoped browser Bearer credentials, bounded admission, CSP and invalidation SSE remain.
+v2 replaces [v1](host-web-v1.md) for new Web sessions. One Core, local management, renewable browser Bearer credentials and tab-scoped editors, bounded admission, CSP and invalidation SSE remain.
 The single-Owner model, directory access, local token rereading and multiple interface origins below supersede v1 restrictions.
 This contract admits the shared Camp write path; it does **not** qualify a platform for secure network release.
 Implementation and remaining acceptance evidence belong to the [version plan](../versions/v1.59/implementation-plan.md).
@@ -40,16 +40,36 @@ In Desktop, the Remote Access switch is that explicit choice: it starts the IPv4
 local/LAN selector, and shows local and remote addresses separately. The always-visible port is pending launch-form state:
 editing it does not restart or reconfigure the running service; the next start uses it. Stopping needs no second confirmation.
 
-Trusted local `host.web.token` returns `{administratorToken}` repeatedly without rotation or session revocation,
-including before the first listener start and after stop. The Host initializes a random token on the first local read
-or managed start; start reuses that token and returns it. Rotate returns a new token. The Host retains the administrator
-token in private process memory for local readback and subsequent listener starts, with no Debug/Serialize on the credential store; authentication continues to use a typed digest and
-constant-time comparison. Status, public HTTP operations, diagnostics and logs never include it. Rotation is a separate
-explicit local operation that changes the token and revokes sessions. Web stop closes the listener and revokes all
-browser sessions, but retains the administrator token for local viewing/copying and the next start in the same Host
-process. It is not persisted across Host process restarts. Desktop settings always shows the masked token field with
-visibility and copy actions; it has no refresh/regeneration button. Standalone startup accepts the Owner's
-token on stdin as before. Browser authentication keeps the short-lived Bearer Session and editing proof in current-tab `sessionStorage`; the administrator token is never saved there.
+Trusted local `host.web.token` returns `{administratorToken}` repeatedly without rotation or Session revocation,
+including before the first listener start and after explicit stop. This is a long-lived reusable login Token. Login,
+ordinary access, renewal, normal process restart and program upgrade never replace it. Desktop settings retain the
+masked Token, visibility and copy actions; the separate explicit local rotation operation remains available.
+Neither remote HTTP nor status/diagnostics/logs exposes the long Token. Browsers never persist it or use it for automatic login.
+
+Both Host entrances persist one private `web-auth.json` below the Core data directory, opened only after Core admission.
+It contains the local-readable long Token, typed Bearer digests, editor IDs and absolute UTC expiry milliseconds;
+it contains no raw Bearer, editor proof or QR ticket. Creation, renewal, logout, rotation and explicit Web disable
+publish an atomic private-file replacement under the registry mutex before returning success or changing live state.
+An invalid/unreadable document fails closed without replacing credentials. A write failure returns 503
+`session_storage_unavailable` on HTTP and leaves the prior committed authentication state intact.
+The standalone preview's `server-token` is a bootstrap input only when no unified document exists;
+`rovai-server token` reads the unified document first. An explicit bootstrap Token conflicting with stored state fails.
+Sessions from an older Host that never persisted them cannot survive its first upgrade. The old standalone long Token
+can be imported; an old Desktop process-only Token cannot be recovered after that process exits. The new persistence
+guarantee begins when this version commits the credentials; existing expired/legacy Sessions require manual login.
+
+| Action | Persistent Sessions | Long login Token | Unused QR ticket |
+| --- | --- | --- | --- |
+| Ordinary Host exit/restart or program upgrade | Preserve unexpired Sessions | Preserve | Invalidate |
+| Browser tab/window/process close | Preserve; reopening authenticates before business use | Never stored in browser | Never stored in browser |
+| Successful logout | Revoke only the current Bearer | Preserve | Preserve |
+| Explicit local Token reset | Revoke all | Replace | Invalidate |
+| Explicit Web disable | Revoke all before listener shutdown | Preserve | Invalidate |
+| True expiry | Reject access and renewal | Reusable for manual login | Independent short expiry |
+
+A failed logout stays visibly retryable; the browser does not claim remote revocation on network or persistence failure.
+A failed explicit disable leaves the listener enabled and reports failure. Ordinary shutdown ends streams and in-flight
+login grants without clearing the persisted Sessions. Re-enabling after explicit disable cannot restore revoked Sessions.
 
 ## Authentication and editor ownership
 
@@ -73,25 +93,61 @@ normal Bearer Session and original editor recovery path. Manual Token login and 
 
 `POST /api/v1/login` accepts `{ protocolVersion: 2, administratorToken, editor? }`.
 `editor`, when present, is exactly `{ clientId, proof }`. An incompatible protocol is rejected before issuing a session.
-The response contains `protocolVersion: 2`, `token`, `clientId`, `editorProof`, `ownerId`, `expiresInSeconds` `epoch` and `channels: "desktop" | "unsupported"`.
+The response contains `protocolVersion: 2`, `token`, `clientId`, `editorProof`, `ownerId`, `expiresInSeconds`, `expiresAt`, `serverTime`, `renewalWindowSeconds`, `epoch` and `channels: "desktop" | "unsupported"`.
 The browser checks the response protocol before mounting business pages or sending commands.
 
 Fresh login creates a Core-owned random 256-bit editor identity and an independent random recovery proof.
 Core persists only the proof digest, bound to the current Owner; the Host first verifies administrator authentication,
 a valid login ticket or an existing Bearer Session before resolving the editor. A client ID, Draft ID or proof alone never authenticates
 a Session. Another client's proof cannot resume the named editor. Reauthentication replaces that editor's old Session,
-including at session capacity. Rotation and Web shutdown fence an in-flight login as well as existing sessions.
+including at session capacity. Rotation and explicit Web disable fence an in-flight login as well as existing Sessions.
 
-Session expiry, reconnect and same-page reauthentication change authentication/connection generations, while retaining
-the editor identity, mounted Composer, unsent local edits and original outstanding command IDs. Host or Owner changes
-require a different editing/cache scope. Production Web currently has one fixed origin per page and refuses an Owner
-change in place. Separate tabs, including duplicated tabs, own separate editors. Current-tab `sessionStorage` saves the Bearer,
-Host/Owner/editor/proof binding, unsaved Composer and single-chat text, and original unresolved command/upload intents.
-Refresh validates `POST /api/v1/session` with `{ editor: { clientId, proof }, fork?: boolean }` before mounting business pages.
-Resume requires both the authenticated Session's client ID and the Core-verified proof. It returns the same editor and
-capabilities without rotating the Bearer. Expiry clears authentication while retaining editing and reconciliation materials
-for same-Owner login. Host/Owner mismatches fail explicitly. Administrator Tokens, Bearer Sessions and editor proofs never
-enter URLs, history entries, logs or localStorage; the only transient URL exception is the immediately removed scan ticket fragment above.
+### Session lifetime and renewal
+
+Ordinary Sessions, including QR exchanges, start with a 30-day lifetime. The same Bearer and editor binding are reused;
+there is no refresh Token, dual-Token protocol, OAuth or saved administrator Token auto-login.
+`expiresAt` and `serverTime` are UTC epoch milliseconds. `expiresInSeconds` is the floored remaining lifetime;
+`renewalWindowSeconds` is 604800. Login, resume/fork and renewal return this timing metadata.
+The browser derives its local deadline from the server's remaining duration, then revalidates with Host when necessary;
+Host time remains authoritative. Older protocol-v2 replies without timing do not enable renewal.
+
+`POST /api/v1/session/renew` authenticates the existing Bearer and accepts no replacement credential or editor.
+If `0 < expiresAt - now <= 7 days`, it durably extends expiry to the successful renewal's Host time plus 30 days.
+Outside the window it returns the unchanged expiry. At or after expiry, or after revocation, it returns 401
+`session_required`. The reply contains timing only; renewal never changes the Bearer, editor, proof, mounted Composer
+or connection generation. Concurrent renewals serialize: the first extends, the next observes the new expiry.
+Renewal and revocation use the same registry lock and private-file commit. Logout/reset/disable cannot be undone by a
+late renewal. Existing SSE streams observe the new deadline and stop on revocation or real expiry.
+
+The client checks on normal API use, foreground entry, online recovery and once a minute while the page is visible.
+Concurrent calls share one renewal request; a network/503 failure keeps a still-valid Session and retries no sooner than
+one minute. At a locally elapsed deadline it first asks Host to validate the existing Session, never silently logs in
+with a saved long Token. A 401 clears authentication but retains same-tab edits and original command IDs.
+
+### Browser authentication and tab drafts
+
+Durable browser IndexedDB `rovai-web-auth-v1` stores one ordinary Session candidate per origin: Bearer, Owner and expiry.
+It contains no editor proof, draft, command or long login Token. Same-tab `sessionStorage` keeps its own authentication
+snapshot separately from editor/proof, unsaved text and unresolved commands. Existing combined v1 snapshots migrate
+on successful recovery; the editor document becomes version 2 without a Bearer.
+
+Refresh with an existing tab editor validates `POST /api/v1/session` using
+`{ editor: { clientId, proof }, fork?: false }`. It requires both the Session's bound client ID and the Core-verified proof,
+and returns the same editor/capabilities/timing without rotating the Bearer. A fresh tab or browser process with only
+durable authentication sends `{ fork: true }`; Host creates a new Core editor and ordinary Session with the parent's
+remaining expiry. It cannot select or recover another tab's drafts. A copied tab supplies its inherited proof while
+requesting the same fork operation, then discards copied editing material.
+
+Updates/removal of the shared durable candidate are conditional IndexedDB transactions; a tab cannot erase or overwrite
+another tab's newer candidate on logout, renewal or reload. A successful login may replace the candidate; an active tab
+may fill an empty candidate slot. A local logged-out snapshot prevents that same tab from silently borrowing another tab's
+login on refresh. Other independent tabs retain their own Sessions. Closing a browser is not logout; if browser storage
+is cleared, manual login is required.
+
+Session expiry, reconnect and same-page reauthentication retain the editor, mounted Composer, unsent local edits and
+original outstanding command IDs. Host/Owner changes require a different editing/cache scope and are rejected in place.
+Bearer Sessions and editor proofs never enter URLs, history, logs or localStorage; the only transient URL exception is
+the immediately removed QR fragment above. Authentication persistence never creates cross-tab draft synchronization.
 
 A non-secret browser document lease prevents a copied sessionStorage snapshot from sharing live editing ownership.
 IndexedDB transactions serialize claims; a synchronous pagehide release marker allows normal reload to reclaim its editor.

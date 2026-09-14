@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: test-policy-and-command-routing
-last_updated: 2026-09-12
+last_updated: 2026-09-14
 ---
 
 # 测试与 Smoke Test
@@ -526,6 +526,11 @@ Vitest owner 负责，窗口/代际释放由 Main 既有 service owner 负责，
 [v1.58 记录](../versions/v1.58/html-preview-http.md)。
 
 ### Web 标签页恢复
+
+续期的时间边界由 `rovai-web::auth` 既有生命周期 owner 和 `apps/web/src/client.test.ts` 使用可控时钟验证，
+不等待 30 天，也不提供生产调时接口。`authentication_reopen_preserves_renewals_and_never_resurrects_revocation`
+拥有私有认证文件的写失败、重开和撤销竞争；最小命令为 `cargo test -p rovai-web --lib auth::tests`。
+真实 Desktop Host/Server 重启扩展既有 HTTP/entry 测试，浏览器进程重开与双标签页由恢复 smoke 验证。
 
 `apps/web/src/client.test.ts` 拥有 Bearer/proof 恢复、复制材料 fork、过期重登及原命令恢复；`navigation-history.test.ts` 拥有浏览器历史适配的拒绝、刷新与跨 Desktop 上限的浏览器历史。现有 `host-web.test.mjs` 扩展真实 HTTP resume/fork 归属校验，现有 Rust Session 生命周期测试扩展 fork 继承到期时间、独立撤销与撤销后拒绝，不另建 SQLite fixture。
 

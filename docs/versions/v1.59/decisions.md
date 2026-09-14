@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.59
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # v1.59 版本决定
@@ -107,3 +107,18 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 不把附件作为可访问 Session 存储的主应用同源页面执行。本轮也不为每份 HTML 增加远程可达的独立端口或预览代理；
 静态 shell 没有文件读取凭据，不扩大 Host 的公开资源能力。代价是 Web 当前只支持单文件 HTML 和 HTTP(S)
 依赖，本地多文件站点资源仍是实现缺口；Desktop 的既有不同源站点能力保持，不能据此宣称两端全部 HTML 能力相同。
+
+<a id="v1-59-d05"></a>
+## V1.59-D05：长期登录 Token 与可续期普通 Session
+
+- 状态：accepted
+- 日期：2026-09-14
+- 当前权威：[统一 Host 身份与控制面](../../architecture/unified-rust-host.md#身份与控制面)、[Host Web v2](../../contracts/host-web-v2.md#session-lifetime-and-renewal)、[Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)
+
+用户明确要求正常浏览器重开、Host 重启及升级后保持登录，而 30 分钟内存 Session 与只存标签页的认证无法满足。
+选择长期可重复登录 Token、默认 30 天普通 Bearer 和剩余 7 天内延期；仅延长到期时间，保留原编辑身份。
+扫码仍兑换相同普通 Session。此决定替代 D01/D02 中进程内 Token、短期 Session 与重启撤销的限制。
+
+不采用保存管理 Token 自动重登、双 Token 或 OAuth；这些方案分别扩大浏览器长期管理权限或引入本轮不需要的身份体系。
+代价是两端持久化、撤销提交与跨标签页竞争需要明确处理。浏览器持久认证只用于认证恢复，新标签页仍由 Host 分配
+新编辑身份；认证持久化不授权共享、合并或恢复其他标签页的草稿。撤销范围、故障与时间语义归当前协议拥有。

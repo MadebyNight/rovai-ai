@@ -1,7 +1,7 @@
 ---
 document_type: current-decision-navigation
 authority: current-authority-and-rationale-routing
-last_updated: 2026-09-12
+last_updated: 2026-09-14
 ---
 
 # 当前规范与决定理由导航
@@ -178,3 +178,5 @@ last_updated: 2026-09-12
 
 - 新对话默认队伍归属：[Host Web v2](../contracts/host-web-v2.md#shared-creation-preferences)、[Camp Activation](../architecture/camp-activation-lifecycle.md#component-authority)；理由见 [V1.59-D03](../versions/v1.59/decisions.md#v1-59-d03)。
 - Web HTML 附件预览：[统一 Host 的用户文件](../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../contracts/host-web-v2.md)、[文件查看器](../ui/components/file-preview.md)；理由见 [V1.59-D04](../versions/v1.59/decisions.md#v1-59-d04)。
+
+- 长期登录与普通 Session 续期：[Host Web v2](../contracts/host-web-v2.md#session-lifetime-and-renewal)、[统一 Host 身份与控制面](../architecture/unified-rust-host.md#身份与控制面)；理由见 [V1.59-D05](../versions/v1.59/decisions.md#v1-59-d05)。

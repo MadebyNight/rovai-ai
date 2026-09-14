@@ -1,26 +1,28 @@
 use rovai_core::application::{
     CoreService, HostControl, HostControlError, HostControlFuture, HostWebOperation,
 };
-use rovai_web::{WebConfig, WebServer, new_token};
+use rovai_web::{WebConfig, WebServer, WebSessions};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 pub struct WebControl {
     core: CoreService,
+    data_dir: PathBuf,
     channels: Option<Arc<crate::desktop_channels::DesktopChannels>>,
     state: Mutex<WebControlState>,
 }
 
 impl WebControl {
-    pub fn new(core: CoreService, desktop: bool) -> Arc<Self> {
+    pub fn new(core: CoreService, desktop: bool, data_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             channels: desktop
                 .then(|| Arc::new(crate::desktop_channels::DesktopChannels::new(core.clone()))),
             core,
+            data_dir,
             state: Mutex::new(WebControlState {
                 server: None,
-                administrator: None,
+                sessions: None,
             }),
         })
     }
@@ -32,7 +34,8 @@ impl WebControl {
             .start(
                 self.core.clone(),
                 config,
-                token,
+                &self.data_dir,
+                Some(token),
                 self.channels
                     .clone()
                     .map(|channels| channels as Arc<dyn rovai_web::ChannelHost>),
@@ -40,11 +43,22 @@ impl WebControl {
             .await
     }
 
-    pub async fn stop(&self) {
+    pub async fn shutdown(&self) {
         let mut state = self.state.lock().await;
         if let Some(server) = state.server.take() {
-            server.stop().await;
+            server.shutdown().await;
         }
+    }
+
+    pub async fn stop(&self) -> anyhow::Result<()> {
+        let mut state = self.state.lock().await;
+        // Commit revocation before taking the listener. A failed write keeps it
+        // enabled and reports failure instead of promising a durable logout.
+        state.credentials(&self.data_dir, None)?.close()?;
+        if let Some(server) = state.server.take() {
+            server.shutdown().await;
+        }
+        Ok(())
     }
 }
 
@@ -76,7 +90,16 @@ impl HostControl for WebControl {
                     .map(WebServer::status)
                     .unwrap_or_else(|| json!({"enabled":false,"sessions":0}))),
                 HostWebOperation::Token => {
-                    let token = self.state.lock().await.token()?;
+                    let token = self
+                        .state
+                        .lock()
+                        .await
+                        .credentials(&self.data_dir, None)
+                        .map_err(|_| HostControlError {
+                            code: "HOST_WEB_AUTH_UNAVAILABLE",
+                            message: "登录凭据无法读取或保存，请检查数据目录。".into(),
+                        })?
+                        .administrator_token();
                     Ok(json!({"administratorToken":token}))
                 }
                 HostWebOperation::LoginTicket => {
@@ -94,26 +117,33 @@ impl HostControl for WebControl {
                     let config: WebConfig =
                         serde_json::from_value(params).map_err(|_| invalid())?;
                     let mut state = self.state.lock().await;
-                    let token = state.token()?;
-                    let mut status = state.start(self.core.clone(), config, &token, self.channels.clone().map(|channels| channels as Arc<dyn rovai_web::ChannelHost>)).await.map_err(|_| HostControlError { code: "HOST_WEB_START_FAILED", message: "Web 服务未开启。请检查端口是否被占用、WebUI 是否已构建，以及局域网访问是否已明确开启。".into() })?;
+                    let mut status = state.start(self.core.clone(), config, &self.data_dir, None, self.channels.clone().map(|channels| channels as Arc<dyn rovai_web::ChannelHost>)).await.map_err(|_| HostControlError { code: "HOST_WEB_START_FAILED", message: "Web 服务未开启。请检查端口是否被占用、WebUI 是否已构建，以及局域网访问是否已明确开启。".into() })?;
                     // The closed, parent-owned pipe returns this only to the
                     // local manager. It is absent from status and diagnostics.
-                    status["administratorToken"] = json!(token);
+                    status["administratorToken"] = json!(
+                        state
+                            .sessions
+                            .as_ref()
+                            .expect("started credentials")
+                            .administrator_token()
+                    );
                     Ok(status)
                 }
                 HostWebOperation::Stop => {
-                    self.stop().await;
+                    self.stop().await.map_err(|_| HostControlError {
+                        code: "HOST_WEB_STOP_FAILED",
+                        message: "会话撤销未能保存，关闭操作未完成，请检查数据目录后重试。".into(),
+                    })?;
                     Ok(json!({"enabled":false,"sessions":0}))
                 }
                 HostWebOperation::Rotate => {
-                    let mut state = self.state.lock().await;
+                    let state = self.state.lock().await;
                     let server = state.server.as_ref().ok_or(HostControlError {
                         code: "HOST_WEB_DISABLED",
                         message: "请先开启 Web 服务。".into(),
                     })?;
                     let token = server.rotate().map_err(|_| invalid())?;
                     let mut status = server.status();
-                    state.administrator = Some(token.clone());
                     status["administratorToken"] = json!(token);
                     Ok(status)
                 }
@@ -122,25 +152,25 @@ impl HostControl for WebControl {
     }
 }
 
-// The local Host owns this credential across listener restarts. It is never
-// part of status, diagnostics, or remote HTTP; no Debug/Serialize is derived.
+// Credentials are opened lazily, after Core readiness / data-dir admission.
 struct WebControlState {
     server: Option<WebServer>,
-    administrator: Option<String>,
+    sessions: Option<Arc<WebSessions>>,
 }
 
 impl WebControlState {
-    fn token(&mut self) -> Result<String, HostControlError> {
-        if self.administrator.is_none() {
-            self.administrator = Some(new_token().map_err(|_| HostControlError {
-                code: "HOST_RANDOM_UNAVAILABLE",
-                message: "系统随机数暂不可用。".into(),
-            })?);
+    fn credentials(
+        &mut self,
+        data_dir: &std::path::Path,
+        bootstrap: Option<&str>,
+    ) -> anyhow::Result<Arc<WebSessions>> {
+        if self.sessions.is_none() {
+            self.sessions = Some(Arc::new(WebSessions::open(data_dir, bootstrap)?));
         }
         Ok(self
-            .administrator
+            .sessions
             .as_ref()
-            .expect("administrator initialized")
+            .expect("credentials initialized")
             .clone())
     }
 
@@ -148,13 +178,14 @@ impl WebControlState {
         &mut self,
         core: CoreService,
         config: WebConfig,
-        token: &str,
+        data_dir: &std::path::Path,
+        bootstrap: Option<&str>,
         channels: Option<Arc<dyn rovai_web::ChannelHost>>,
     ) -> anyhow::Result<Value> {
         anyhow::ensure!(self.server.is_none(), "Web service is already running");
-        let running = WebServer::start_with_channels(core, config, token, channels).await?;
+        let sessions = self.credentials(data_dir, bootstrap)?;
+        let running = WebServer::start_with_sessions(core, config, sessions, channels).await?;
         let status = running.status();
-        self.administrator = Some(token.to_owned());
         self.server = Some(running);
         Ok(status)
     }

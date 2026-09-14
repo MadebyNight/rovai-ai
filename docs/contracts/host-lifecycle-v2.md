@@ -5,7 +5,7 @@ authority: headless-host-startup-and-controlled-stop
 status: accepted
 version: 2
 source_version: v1.59
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # Host Lifecycle v2
@@ -34,7 +34,7 @@ Host 自动创建尚不存在的必要目录。切换 data-dir 选择另一实�
 | Runtime 文件 | `instances/<instance-key>/runtime-files/` |
 | Host 落盘日志 | `logs/server.log` |
 | 原生入口布局标识 | `server-layout.json` |
-| 管理令牌 | 私有 `server-token` 文件 |
+| 登录 Token / Web Sessions | 私有 `web-auth.json`；旧 `server-token` 仅在首次创建统一文档时导入 |
 
 不要求用户填写内部 `--skill-library-root`、`--mcp-config-path` 或 `--runtime-camp-files-root`。
 Runtime root 只允许精确实例 key 对应的根内位置；继续检查符号链接、其他受管目录重叠、本地目录所有权、
@@ -55,8 +55,9 @@ authority 继续按现行准入拒绝。曾建立 Runtime root 的实例若主�
 `rovai-server paths` 只输出推导路径，不启动或写数据库。`rovai-server [--data-dir ...] token` 输出本实例
 管理令牌，stdout 是秘密。交互式终端（stdin、stdout 均为 TTY）在 Core 与监听器就绪后直接显示当前有效令牌；
 仅展示，不轮换。非交互启动或 stdout 重定向默认不显示令牌，原 `token` 命令保留。凭据直接写人类终端输出，
-不经过 stderr 或文件日志管道，`--verbose` 也不改变这一点。令牌在独立 Server 重启、更新之间保留；Desktop
-令牌现有进程生命周期不变。Web Session 仍按现行短期认证与进程代次撤销。
+不经过 stderr 或文件日志管道，`--verbose` 也不改变这一点。长期登录 Token 与未过期普通 Session 在 Desktop/Server 正常重启、更新之间保留；
+明确退出登录、重置 Token 和显式关闭 Web 的撤销范围由 [Host Web v2](host-web-v2.md#authentication-and-editor-ownership) 及其生命周期表拥有。
+认证文档只在 Core 准入并拥有 data-dir 后打开；正常关闭结束网络流和扫码票据，不清除已提交的 Session。
 
 原生入口默认只输出简洁就绪摘要：编译版本、Ready、真实监听端口对应的可用地址、访问范围、数据根、
 日志文件与前台运行提示；不是把请求的 `:0` 或 `0.0.0.0` 当作可用地址。地址发现沿用 Web 的过滤规则。

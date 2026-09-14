@@ -9,8 +9,8 @@ mod uploads;
 mod workspaces;
 
 use anyhow::{Context, Result, ensure};
-pub use auth::new_token;
 use auth::{LOGIN_TICKET_LIFETIME, LoginFailure, SESSION_LIFETIME, Session, Sessions, TicketGrant};
+pub use auth::{Sessions as WebSessions, new_token, stored_administrator_token};
 use axum::{
     Json, Router,
     body::Body,
@@ -77,6 +77,21 @@ impl WebServer {
         administrator: &str,
         channels: Option<Arc<dyn ChannelHost>>,
     ) -> Result<Self> {
+        Self::start_with_sessions(
+            core,
+            config,
+            Arc::new(Sessions::new(administrator)?),
+            channels,
+        )
+        .await
+    }
+
+    pub async fn start_with_sessions(
+        core: CoreService,
+        config: WebConfig,
+        sessions: Arc<Sessions>,
+        channels: Option<Arc<dyn ChannelHost>>,
+    ) -> Result<Self> {
         ensure!(
             config.listen.ip().is_loopback() || config.allow_insecure_lan,
             "LAN HTTP must be explicitly enabled; use HTTPS or a trusted VPN on untrusted networks"
@@ -92,7 +107,6 @@ impl WebServer {
             assets.is_dir() && assets.join("index.html").is_file(),
             "Web UI build is missing index.html"
         );
-        let sessions = Arc::new(Sessions::new(administrator)?);
         let listener = TcpListener::bind(config.listen)
             .await
             .context("Web address could not be bound")?;
@@ -109,6 +123,7 @@ impl WebServer {
             uploads: Arc::new(Semaphore::new(4)),
             files: Arc::new(resources::Handles::default()),
         };
+        sessions.enable();
         let app = routes(state);
         let (shutdown, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -148,8 +163,8 @@ impl WebServer {
             json!({"ticket":self.sessions.login_ticket()?,"expiresInSeconds":LOGIN_TICKET_LIFETIME.as_secs()}),
         )
     }
-    pub async fn stop(mut self) {
-        self.sessions.close();
+    pub async fn shutdown(mut self) {
+        self.sessions.suspend();
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -164,7 +179,7 @@ impl WebServer {
 
 impl Drop for WebServer {
     fn drop(&mut self) {
-        self.sessions.close();
+        self.sessions.suspend();
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -180,6 +195,7 @@ fn routes(state: WebState) -> Router {
         .route("/events", get(events))
         .route("/logout", post(logout))
         .route("/session", post(resume_session))
+        .route("/session/renew", post(renew_session))
         .route("/workspaces", post(workspaces::browse))
         .route(
             "/uploads",
@@ -354,7 +370,11 @@ async fn finish_login(
         LoginGrant::Ticket(grant) => state.sessions.issue_ticket(grant, client_id.to_owned()),
     };
     match result {
-        Ok((token, session)) => Json(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"expiresInSeconds":SESSION_LIFETIME.as_secs(),"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }})).into_response(),
+        Ok((token, session)) => {
+            let mut response = state.sessions.timing(&session);
+            response.as_object_mut().expect("session timing").extend(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }}).as_object().expect("session response").clone());
+            Json(response).into_response()
+        }
         Err(failure) if ticket => ticket_failure(failure),
         Err(failure) => login_failure(failure),
     }
@@ -370,7 +390,8 @@ fn ticket_failure(failure: LoginFailure) -> Response {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionResume {
-    editor: EditorResume,
+    #[serde(default)]
+    editor: Option<EditorResume>,
     #[serde(default)]
     fork: bool,
 }
@@ -383,18 +404,30 @@ async fn resume_session(
     Extension(session): Extension<Arc<Session>>,
     Json(body): Json<SessionResume>,
 ) -> Response {
-    if body.editor.client_id != session.client_id {
+    // A browser reopened without a tab editor uses its persisted ordinary
+    // Bearer only to create a fresh editor. Restoring an existing editor always
+    // requires its Core proof; a caller cannot select another tab's drafts.
+    if body
+        .editor
+        .as_ref()
+        .is_some_and(|editor| editor.client_id != session.client_id)
+        || (!body.fork && body.editor.is_none())
+    {
         return error(StatusCode::UNAUTHORIZED, "editor_resume_denied");
     }
-    let identity = match state
-        .core
-        .request("host.editor.resolve", json!(body.editor))
-        .await
-    {
-        Ok(reply) if reply.error.is_none() => reply.result.unwrap_or(Value::Null),
-        _ => return error(StatusCode::UNAUTHORIZED, "editor_resume_denied"),
+    let identity = if let Some(editor) = body.editor {
+        match state
+            .core
+            .request("host.editor.resolve", json!(editor))
+            .await
+        {
+            Ok(reply) if reply.error.is_none() => reply.result.unwrap_or(Value::Null),
+            _ => return error(StatusCode::UNAUTHORIZED, "editor_resume_denied"),
+        }
+    } else {
+        Value::Null
     };
-    if *session.revoked.borrow() || session.expires_at <= std::time::Instant::now() {
+    if !state.sessions.is_live(&session) {
         return error(StatusCode::UNAUTHORIZED, "session_required");
     }
     let mut identity = if body.fork {
@@ -405,17 +438,23 @@ async fn resume_session(
     } else {
         identity
     };
+    let mut timing = state.sessions.timing(&session);
     if body.fork {
         let Some(client_id) = identity["clientId"].as_str() else {
             return error(StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable");
         };
         match state.sessions.fork(&session, client_id.to_owned()) {
-            Ok((token, _)) => {
+            Ok((token, child)) => {
+                timing = state.sessions.timing(&child);
                 identity["token"] = json!(token);
             }
             Err(failure) => return login_failure(failure),
         }
     }
+    identity
+        .as_object_mut()
+        .expect("Core identity")
+        .extend(timing.as_object().expect("session timing").clone());
     identity["editorProof"] = identity["proof"].take();
     identity
         .as_object_mut()
@@ -435,6 +474,10 @@ fn login_failure(failure: LoginFailure) -> Response {
         LoginFailure::Unauthorized => {
             error(StatusCode::UNAUTHORIZED, "invalid_administrator_token")
         }
+        LoginFailure::Storage => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "session_storage_unavailable",
+        ),
         LoginFailure::Throttled | LoginFailure::Capacity => {
             error(StatusCode::TOO_MANY_REQUESTS, "login_limited")
         }
@@ -444,9 +487,25 @@ fn login_failure(failure: LoginFailure) -> Response {
 async fn logout(
     State(state): State<WebState>,
     Extension(session): Extension<Arc<Session>>,
-) -> StatusCode {
-    state.sessions.revoke(&session);
-    StatusCode::NO_CONTENT
+) -> Response {
+    match state.sessions.revoke(&session) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "session_storage_unavailable",
+        ),
+    }
+}
+
+async fn renew_session(
+    State(state): State<WebState>,
+    Extension(session): Extension<Arc<Session>>,
+) -> Response {
+    match state.sessions.renew(&session) {
+        Ok(timing) => Json(timing).into_response(),
+        Err(LoginFailure::Unauthorized) => error(StatusCode::UNAUTHORIZED, "session_required"),
+        Err(failure) => login_failure(failure),
+    }
 }
 
 async fn capabilities(State(state): State<WebState>) -> Json<Value> {
@@ -495,7 +554,7 @@ async fn events(
     };
     let mut source = state.core.subscribe();
     let mut revoked = session.revoked.subscribe();
-    let expiry = tokio::time::Instant::from_std(session.expires_at);
+    let mut expiry = session.expires_at.subscribe();
     let stream = async_stream::stream! {
         let _permit = permit;
         let mut revision = 0u64;
@@ -503,11 +562,13 @@ async fn events(
         // reconnect and lag requires an authorized snapshot before showing live.
         yield Ok::<_, Infallible>(Event::default().event("resync").data(json!({"epoch":state.epoch,"revision":revision}).to_string()));
         loop {
-            if *revoked.borrow() { break; }
+            if !state.sessions.is_live(&session) { break; }
+            let remaining = Duration::from_millis((*expiry.borrow_and_update()).saturating_sub(state.sessions.now()));
             tokio::select! {
                 biased;
                 _ = revoked.changed() => break,
-                _ = tokio::time::sleep_until(expiry) => break,
+                _ = expiry.changed() => continue,
+                _ = tokio::time::sleep(remaining.min(Duration::from_secs(60))) => continue,
                 result = source.recv() => {
                     if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; }
                     revision += 1;

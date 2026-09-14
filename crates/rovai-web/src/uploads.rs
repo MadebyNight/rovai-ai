@@ -55,8 +55,7 @@ pub async fn upload(
         .collect::<String>();
     if hash != intent.sha256
         || contents.len() as u64 != intent.byte_size
-        || *session.revoked.borrow()
-        || session.expires_at <= std::time::Instant::now()
+        || !state.sessions.is_live(&session)
     {
         return error(StatusCode::BAD_REQUEST, "upload_changed_or_session_expired");
     }

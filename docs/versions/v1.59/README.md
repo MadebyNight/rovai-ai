@@ -20,6 +20,8 @@ last_updated: 2026-09-14
 Server 覆盖 macOS arm64/x64、Windows x64、Linux x64。交付依次为 Server 与宽屏 Web、Desktop 共用 Web、
 宽屏功能和多客户端回归、三平台正式验收与发布、Mobile UI。阶段 1 内先抽取 Core、回归旧入口，再验收真实
 Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](implementation-plan.md)。
+远程认证按最新确认使用长期登录 Token 与默认 30 天可续期 Session；Host 与浏览器正常重启保留认证，
+编辑身份与草稿仍按标签页隔离，精确边界见 [Host Web v2](../../contracts/host-web-v2.md#session-lifetime-and-renewal)。
 
 当前已抽取共享运行层，接入 Headless CLI、同 Host 的 Desktop/Web 管理及共享生产 Camp 页面；
 第五阶段按 2026-09-14 用户确认，将 [Mobile WebUI](../../ui/host-web-mobile.md)接入实际 Web 入口，复用现有业务与执行态；
@@ -44,7 +46,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | 前版生命周期冻结；本概览、实施计划与[版本索引](../README.md)建立唯一 current v1.59 |
-| Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host；[V1.59-D02](decisions.md#v1-59-d02)确定独立 Server 数据根和原生部署 |
+| Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host；[V1.59-D02](decisions.md#v1-59-d02)确定独立 Server 数据根和原生部署；[V1.59-D05](decisions.md#v1-59-d05)确定长期登录与普通 Session 续期 |
 | Contracts | 已更新 | [Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)拥有新入口与数据根，v1 保留兼容；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；Migration 153 保留旧 Desktop 数据和旧任务分支 150 草稿；154 隔离单聊 Draft/Pending 客户端 |
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机双弧本轮仅交付交互稿；Server 仅提供既有原生更新流程入口，自动更新 API 未交付 |

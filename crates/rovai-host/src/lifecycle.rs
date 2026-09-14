@@ -19,7 +19,7 @@ pub async fn run(
     core: CoreService,
     runner: CoreRunner,
     stop: impl Future<Output = Result<Duration>>,
-    ready: impl FnOnce(),
+    ready: impl Future<Output = Result<()>>,
 ) -> Result<()> {
     let mut task = CoreTask(tokio::spawn(runner.run()));
     tokio::pin!(stop);
@@ -33,7 +33,11 @@ pub async fn run(
         result = &mut stop => return stop_core(&core, &mut task, result).await,
     }
     tracing::info!("Host Core is ready");
-    ready();
+    tokio::select! {
+        result = ready => result?,
+        result = &mut stop => return stop_core(&core, &mut task, result).await,
+        result = &mut task.0 => { result.context("Core task failed during Host startup")??; bail!("Core stopped during Host startup"); }
+    }
     let stop_result = tokio::select! {
         result = &mut stop => result,
         result = &mut task.0 => {

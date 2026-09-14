@@ -197,8 +197,9 @@ fn run(
     // environment before Tokio starts and passes it to child launches explicitly.
     let environment = Arc::new(RuntimeSearchEnvironment::capture_initial());
     environment.activate_for_runtime_commands();
+    let data_dir = config.data_dir.clone();
     let (core, runner) = embedded(config, environment)?;
-    let control = web_control::WebControl::new(core.clone(), desktop);
+    let control = web_control::WebControl::new(core.clone(), desktop, data_dir);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -206,27 +207,35 @@ fn run(
     let result = runtime.block_on(async {
         if desktop {
             let result = runner.with_desktop_stdio(control.clone()).run().await;
-            control.stop().await;
+            control.shutdown().await;
             return result;
         }
         // Register listeners before starting Core, including during admission.
         let signals = signals::StopSignals::register()?;
-        let mut ready_web = None;
-        if let Some((config, token)) = web {
-            let status = control.start(config, &token).await?;
-            tracing::info!(
-                origin = status["origin"].as_str().unwrap_or_default(),
-                "Host Web listener started"
-            );
-            ready_web = Some((status, token));
-        }
-        let result = lifecycle::run(core, runner, signals.wait(), || {
-            if let (Some(console), Some((status, token))) = (console, &ready_web) {
-                console.ready(status, token);
-            }
-        })
+        let result = lifecycle::run(
+            core,
+            runner,
+            async {
+                let result = signals.wait().await;
+                control.shutdown().await;
+                result
+            },
+            async {
+                if let Some((config, token)) = web {
+                    let status = control.start(config, &token).await?;
+                    tracing::info!(
+                        origin = status["origin"].as_str().unwrap_or_default(),
+                        "Host Web listener started"
+                    );
+                    if let Some(console) = console {
+                        console.ready(&status, &token);
+                    }
+                }
+                Ok(())
+            },
+        )
         .await;
-        control.stop().await;
+        control.shutdown().await;
         result
     });
     // Host owns this runtime. On a hard stop it must also end all remaining Core

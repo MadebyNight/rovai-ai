@@ -9,7 +9,8 @@ pub(crate) mod windows_security;
 
 pub use private_storage::{
     WindowsBootstrapLayout, WindowsDataRootLayout, atomic_write_private_bytes,
-    prepare_private_directory, prepare_windows_bootstrap_root, prepare_windows_data_root,
+    open_private_read_file, prepare_private_directory, prepare_windows_bootstrap_root,
+    prepare_windows_data_root,
 };
 
 /// Closed identity for build targets Rovai can ship.

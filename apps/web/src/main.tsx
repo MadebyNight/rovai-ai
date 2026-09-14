@@ -1,3 +1,4 @@
+import { browserAuthStorage } from './auth-storage'
 import { acquireTabRecovery } from './tab-recovery'
 import { takeLoginTicket } from './login-ticket'
 import { StrictMode, useEffect, useState } from 'react'
@@ -17,7 +18,7 @@ import '../../desktop/src/renderer/src/member-editor.css'
 import './styles.css'
 import './mobile.css'
 
-const transport = new ConsoleClient(window.location.origin, fetch, sessionStorage)
+const transport = new ConsoleClient(window.location.origin, fetch, sessionStorage, browserAuthStorage(window.location.origin))
 document.documentElement.dataset.platform = browserPlatform()
 document.documentElement.dataset.rovaiSurface = 'web'
 const loginTheme = matchMedia('(prefers-color-scheme: dark)')
@@ -27,6 +28,7 @@ function applyLoginTheme(): void {
 }
 applyLoginTheme()
 let startupScanning = false
+let retryStartup: (() => Promise<boolean>) | null = null
 const recovery = (async () => {
   // Synchronous fragment removal happens before the first await. StrictMode
   // remounts subscribe to this one promise, never redeem the ticket twice.
@@ -34,7 +36,12 @@ const recovery = (async () => {
   let ticketError: unknown
   try { ticket = takeLoginTicket(); startupScanning = ticket !== null } catch (error) { ticketError = error }
   const owner = await acquireTabRecovery()
-  const restored = await transport.restore(owner.fork, owner.assert, ticket === null && !ticketError)
+  let restored = false
+  try { restored = await transport.restore(owner.fork, owner.assert, ticket === null && !ticketError) }
+  catch (error) {
+    if (ticket === null && !ticketError) retryStartup = () => transport.restore(owner.fork, owner.assert)
+    throw error
+  }
   if (ticketError) throw ticketError
   if (ticket !== null) {
     try { await transport.loginTicket(ticket) } finally { ticket = null }
@@ -79,11 +86,43 @@ function WebEntry() {
         setAdapter(current => current ?? createCampAdapter(transport, selectWorkspace))
         setAuthenticated(true)
       }
-    }).catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : '恢复失败，请重试。') })
+    }).catch(e => { if (!cancelled) setError(e instanceof TypeError ? '暂时无法连接，网络恢复后会重试。' : e instanceof Error ? e.message : '恢复失败，请重试。') })
       .finally(() => { if (!cancelled) { setRestoring(false); setScanning(false) } })
     return () => { cancelled = true }
   }, [])
+  useEffect(() => {
+    if (restoring || authenticated) return
+    let active = true, pending = false
+    const retry = async (): Promise<void> => {
+      if (!retryStartup || pending || document.visibilityState !== 'visible') return
+      pending = true
+      try {
+        const restored = await retryStartup()
+        retryStartup = null
+        if (active && restored && transport.authenticated) {
+          setAdapter(current => current ?? createCampAdapter(transport, selectWorkspace))
+          setAuthenticated(true); setError(null)
+        }
+      } catch { /* Keep credentials and the visible connection error for retry. */ }
+      finally { pending = false }
+    }
+    const timer = setInterval(() => { void retry() }, 30_000)
+    const online = (): void => { void retry() }
+    window.addEventListener('online', online)
+    return () => { active = false; clearInterval(timer); window.removeEventListener('online', online) }
+  }, [restoring, authenticated])
   useEffect(() => transport.onRecovered(() => adapter?.invalidate()), [adapter])
+  useEffect(() => {
+    if (!authenticated) return
+    const renew = (): void => {
+      if (document.visibilityState === 'visible') void transport.renewIfNeeded().catch(() => undefined)
+    }
+    renew()
+    const timer = setInterval(renew, 60_000)
+    window.addEventListener('online', renew)
+    document.addEventListener('visibilitychange', renew)
+    return () => { clearInterval(timer); window.removeEventListener('online', renew); document.removeEventListener('visibilitychange', renew) }
+  }, [authenticated])
   useEffect(() => {
     let active = true
     const scanned = (): void => {
@@ -105,6 +144,7 @@ function WebEntry() {
   const login = async (token: string): Promise<void> => {
     if (busy || restoring) return
     setBusy(true); setError(null)
+    retryStartup = null
     try {
       await transport.login(token)
       setAdapter(current => current ?? createCampAdapter(transport, selectWorkspace))
@@ -116,7 +156,7 @@ function WebEntry() {
   return <>
     {current && <CampClientProvider client={current.environment.client}>
       <CurrentUserProfileProvider api={current.profile}>
-        <BusinessApp environment={current.environment} remoteConnection={<RemoteConnectionStatus origin={transport.origin} state={authenticated ? connection : 'expired'} onLogout={() => void transport.logout().catch(() => undefined)} />} sidebarFooter={authenticated && connection === 'offline' ? <div className="web-connection" role="status">
+        <BusinessApp environment={current.environment} remoteConnection={<RemoteConnectionStatus origin={transport.origin} state={authenticated ? connection : 'expired'} onLogout={() => { setError(null); void transport.logout().catch(e => setError(e instanceof Error ? e.message : '退出未完成，请重试。')) }} />} sidebarFooter={authenticated && connection === 'offline' ? <div className="web-connection" role="status">
           <span>连接中断，编辑保留</span>
         </div> : undefined} />
       </CurrentUserProfileProvider>

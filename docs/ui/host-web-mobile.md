@@ -92,7 +92,8 @@ Desktop 保留初始 5 个、每次增加 10 个。此前交互稿将两端增�
 Server 更新入口指向现有[原生安装与更新流程](../development/server-preview.md#安装和启动)。当前没有 Web 下载、
 安装或重启 API，前稿的自动更新模拟状态没有进入产品。原生发布渠道仍以该开发文档记录为准，不据此宣称正式资产已发布。
 
-刷新、同 Owner 重新登录继续使用现有 Bearer Session、sessionStorage、标签页身份租约和独立草稿恢复。
+刷新、同 Owner 重新登录继续使用同一 Bearer Session、标签页身份租约和独立草稿恢复。
+认证独立持久化到浏览器 IndexedDB；30 天寿命、7 天续期与浏览器重开的编辑隔离复用 [Host Web v2](../contracts/host-web-v2.md#session-lifetime-and-renewal)，手机不另建认证流程。
 登录过期复用普通登录页与现有 toast；手机布局不生成新的认证或草稿身份，不改变扫码票据、撤销与幂等命令机制。
 
 ## 验证

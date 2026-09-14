@@ -1,3 +1,4 @@
+import { TAB_AUTH_KEY, type AuthStorage, type BrowserSession } from './auth-storage'
 import { browserEditingRecovery } from './editing-recovery'
 import { RECOVERY_KEY, type RecoveryStorage } from './tab-recovery'
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -221,11 +222,20 @@ export class InvalidationDecoder {
   }
 }
 
+type SessionResponse = { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown; expiresAt?: unknown; serverTime?: unknown; renewalWindowSeconds?: unknown }
+
 export class ConsoleClient {
   readonly origin: string
   #channels: 'desktop' | 'unsupported' = 'unsupported'
   get channels(): 'desktop' | 'unsupported' { return this.#channels }
   #token: string | null = null
+  #authStorage?: AuthStorage
+  #now: () => number
+  #expiresAt: number | null = null
+  #localExpiry: number | null = null
+  #renewalWindow = 7 * 24 * 60 * 60 * 1000
+  #renewal: Promise<void> | null = null
+  #retryRenewalAt = 0
   #generation = 0
   #lifetime = new AbortController()
   #fetch: typeof fetch
@@ -262,11 +272,13 @@ export class ConsoleClient {
     return () => { this.#authListeners.delete(listener) }
   }
 
-  constructor(origin: string, fetcher: typeof fetch = fetch, storage?: RecoveryStorage) {
+  constructor(origin: string, fetcher: typeof fetch = fetch, storage?: RecoveryStorage, authStorage?: AuthStorage, now: () => number = Date.now) {
     const parsed = new URL(origin)
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.origin !== origin) throw new Error('控制台地址无效。')
     this.origin = origin
     this.#storage = storage
+    this.#authStorage = authStorage
+    this.#now = now
     // Native Window.fetch requires its Window receiver even when retained by a
     // transport object. Node's implementation does not expose this constraint.
     this.#fetch = fetcher.bind(globalThis)
@@ -277,13 +289,29 @@ export class ConsoleClient {
     if (this.#restored) return this.authenticated
     this.#restored = true
     const raw = this.#storage?.getItem(RECOVERY_KEY)
-    if (!raw) return false
-    let saved: { version: number; origin: string; token: string | null; editor: { clientId: string; proof: string }; ownerId: string; pending?: Array<{ operation: WebOperation; params: unknown }>; uploads?: unknown[] }
-    try { saved = JSON.parse(raw) } catch { throw new Error('登录恢复材料损坏，请清除该标签页数据后重新登录。') }
+    type Recovery = { version: number; origin: string; token?: string | null; editor: { clientId: string; proof: string }; ownerId: string; pending?: Array<{ operation: WebOperation; params: unknown }>; uploads?: unknown[] }
+    let saved: Recovery | null = null
     const identity = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-    if (saved.version !== 1 || saved.origin !== this.origin || !identity(saved.editor?.clientId) || !identity(saved.editor?.proof) || typeof saved.ownerId !== 'string' || (saved.token !== null && !identity(saved.token))) throw new Error('登录恢复材料无效。')
-    if (fork) { this.#storage?.removeItem(RECOVERY_KEY); this.clearEditingRecovery() }
-    if (!fork) {
+    if (raw) {
+      try { saved = JSON.parse(raw) } catch { throw new Error('编辑恢复材料损坏，请清除该标签页数据后重新登录。') }
+      if (!saved || ![1, 2].includes(saved.version) || saved.origin !== this.origin || !identity(saved.editor?.clientId) || !identity(saved.editor?.proof) || typeof saved.ownerId !== 'string' || (saved.version === 1 && saved.token !== null && !identity(saved.token))) throw new Error('编辑恢复材料无效。')
+    }
+    const tabRaw = this.#storage?.getItem(TAB_AUTH_KEY)
+    let authentication: BrowserSession | null = null
+    if (tabRaw) {
+      try { authentication = JSON.parse(tabRaw) } catch { throw new Error('登录恢复材料损坏。') }
+    } else if (saved?.version === 1 && saved.token) {
+      // One-time migration of the old per-tab snapshot. The long login Token
+      // was never saved; only the existing ordinary Bearer can be recovered.
+      authentication = { version: 1, origin: this.origin, token: saved.token, ownerId: saved.ownerId, expiresAt: null }
+    } else if (!saved && authenticate) {
+      authentication = await this.#authStorage?.read() ?? null
+    }
+    if (authentication && (authentication.version !== 1 || authentication.origin !== this.origin || !identity(authentication.token) || typeof authentication.ownerId !== 'string'
+      || (authentication.expiresAt !== null && (!Number.isSafeInteger(authentication.expiresAt) || authentication.expiresAt <= 0)))) throw new Error('登录恢复材料无效。')
+    if (fork) { this.#storage?.removeItem(RECOVERY_KEY); this.#storage?.removeItem(TAB_AUTH_KEY); this.clearEditingRecovery() }
+    if (saved && !fork) {
+      if (saved.version === 1 && authentication) this.#storage?.setItem(TAB_AUTH_KEY, JSON.stringify(authentication))
       this.#editor = saved.editor; this.#ownerId = saved.ownerId
       for (const command of saved.pending ?? []) {
         const id = (command.params as { commandId?: string })?.commandId
@@ -293,22 +321,29 @@ export class ConsoleClient {
         const id = (intent as { commandId?: string })?.commandId
         if (typeof id === 'string') this.#pendingUploads.set(id, { intent, data: null, resolve: () => this.#notifyRecovered(), reject: () => this.#notifyRecovered() })
       }
-    }
-    if (!authenticate || !saved.token) { if (fork) this.#storage?.removeItem(RECOVERY_KEY); return false }
-    this.#token = saved.token
-    try {
-      const response = await this.#json<Record<string, unknown>>('session', { method: 'POST', body: JSON.stringify({ editor: saved.editor, fork }) })
-      if (response.ownerId !== saved.ownerId || (!fork && response.clientId !== saved.editor.clientId)) throw new Error('Host 或编辑归属已变化，无法恢复当前页面。')
-      this.#acceptSession({ ...response, token: fork ? response.token : saved.token }, false)
-      if (fork) this.clearEditingRecovery()
       this.#persistRecovery()
+    }
+    if (!authenticate || !authentication) return false
+    const source = authentication
+    const generation = this.#generation
+    const newEditor = fork || !saved
+    this.#token = source.token
+    try {
+      const response = await this.#json<SessionResponse>('session', { method: 'POST', body: JSON.stringify({ ...(saved ? { editor: saved.editor } : {}), fork: newEditor }) })
+      if (response.ownerId !== source.ownerId || (!newEditor && response.clientId !== saved?.editor.clientId)) throw new Error('Host 或编辑归属已变化，无法恢复当前页面。')
+      this.#acceptSession({ ...response, token: newEditor ? response.token : source.token })
+      await this.#saveAuthentication(source.token)
+      if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
+      this.#notifyAuthentication()
       await this.reconcilePending()
       return true
     } catch (error) {
-      // Expiry drops only authentication. Draft proof and original command IDs
-      // survive for reauthentication; a copied tab never inherits them.
+      if (generation !== this.#generation && !(error instanceof SessionRequired)) throw error
       this.#token = null
       if (error instanceof SessionRequired) { this.#persistRecovery(); return false }
+      // A network failure must not erase durable credentials or force another
+      // login. The same tab can retry / reload with its original editing scope.
+      this.#restored = false
       throw error
     }
   }
@@ -329,7 +364,7 @@ export class ConsoleClient {
 
   #persistRecovery(): void {
     if (!this.#storage || !this.#editor || !this.#ownerId) return
-    this.#storage.setItem(RECOVERY_KEY, JSON.stringify({ version: 1, origin: this.origin, token: this.#token, editor: this.#editor, ownerId: this.#ownerId,
+    this.#storage.setItem(RECOVERY_KEY, JSON.stringify({ version: 2, origin: this.origin, editor: this.#editor, ownerId: this.#ownerId,
       pending: [...this.#pending.values()].map(({ operation, params }) => ({ operation, params })), uploads: [...this.#pendingUploads.values()].map(({ intent }) => intent) }))
   }
 
@@ -345,7 +380,7 @@ export class ConsoleClient {
 
   async #login(path: 'login' | 'login-ticket', credential: { administratorToken: string } | { ticket: string }): Promise<void> {
     if (this.#assertTab) await this.#assertTab()
-    this.clear()
+    await this.#forgetAuthentication()
     const generation = this.#generation
     const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -353,12 +388,18 @@ export class ConsoleClient {
       signal: this.#lifetime.signal
     })
     if (!response.ok) throw new Error(response.status === 409 ? 'Web 与 Host 协议不兼容，请使用同一版本。' : response.status === 429 ? '登录暂受限，请稍后再试。' : response.status >= 500 ? '服务暂不可用，请稍后重试。' : path === 'login-ticket' ? '扫码登录未完成，二维码可能已过期或已使用。请在运行服务的 Desktop 重新生成，或使用登录 Token 登录。' : 'Token 无效，请检查后重试。')
-    const session = await response.json() as { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown }
+    const session = await response.json() as SessionResponse
     if (generation !== this.#generation) throw new SessionRequired()
-    this.#acceptSession(session)
+    try {
+      this.#acceptSession(session)
+      await this.#saveAuthentication()
+      if (generation !== this.#generation) throw new SessionRequired()
+      this.#notifyAuthentication()
+      void this.reconcilePending()
+    } catch (error) { if (generation === this.#generation) this.clear(); throw error }
   }
 
-  #acceptSession(session: { protocolVersion?: unknown; token?: unknown; clientId?: unknown; editorProof?: unknown; ownerId?: unknown; channels?: unknown }, reconcile = true): void {
+  #acceptSession(session: SessionResponse): void {
     if (session.protocolVersion !== 2) throw new Error('Web 与 Host 协议不兼容，请使用同一版本。')
     if (typeof session.token !== 'string' || !/^[a-f0-9]{64}$/.test(session.token)) throw new Error('会话响应无效。')
     if (typeof session.clientId !== 'string' || !/^[a-f0-9]{64}$/.test(session.clientId)
@@ -366,28 +407,95 @@ export class ConsoleClient {
       || typeof session.ownerId !== 'string') throw new Error('编辑归属响应无效。')
     if (this.#ownerId !== null && this.#ownerId !== session.ownerId) throw new Error('Owner 已变化，请先保存当前编辑并切换连接。')
     if (this.#editor !== null && this.#editor.clientId !== session.clientId) throw new Error('编辑归属已变化，无法把当前编辑转交给新的草稿身份。')
+    this.#acceptTiming(session)
     this.#editor = { clientId: session.clientId, proof: session.editorProof }
     this.#ownerId = session.ownerId
     this.#channels = session.channels === 'desktop' ? 'desktop' : 'unsupported'
     this.#token = session.token
+    this.#persistTabAuthentication()
     this.#persistRecovery()
-    if (reconcile) void this.reconcilePending()
-    for (const listener of this.#authListeners) listener()
   }
 
+  #notifyAuthentication(): void { for (const listener of this.#authListeners) listener() }
+
+  #acceptTiming(session: SessionResponse): void {
+    // Older protocol-v2 Hosts have no renewable Session metadata. They may
+    // still reconnect but cannot be treated as having a thirty-day lease.
+    if (session.expiresAt === undefined && session.serverTime === undefined) {
+      this.#expiresAt = this.#localExpiry = null
+      return
+    }
+    if (typeof session.expiresAt !== 'number' || !Number.isSafeInteger(session.expiresAt)
+      || typeof session.serverTime !== 'number' || !Number.isSafeInteger(session.serverTime)
+      || session.expiresAt <= session.serverTime || session.renewalWindowSeconds !== 7 * 24 * 60 * 60) throw new Error('会话有效期响应无效。')
+    this.#expiresAt = session.expiresAt
+    this.#localExpiry = this.#now() + session.expiresAt - session.serverTime
+    this.#renewalWindow = session.renewalWindowSeconds * 1000
+  }
+
+  #authentication(): BrowserSession | null {
+    return this.#token && this.#ownerId ? { version: 1, origin: this.origin, token: this.#token, ownerId: this.#ownerId, expiresAt: this.#expiresAt } : null
+  }
+  #persistTabAuthentication(): void { this.#storage?.setItem(TAB_AUTH_KEY, JSON.stringify(this.#authentication())) }
+  async #saveAuthentication(expectedToken?: string): Promise<void> {
+    const session = this.#authentication()
+    const generation = this.#generation
+    if (session) await this.#authStorage?.write(session, expectedToken, () => this.#generation === generation && this.#token === session.token)
+  }
+  async #forgetAuthentication(): Promise<void> {
+    const token = this.#token
+    try { this.clear() }
+    finally { if (token) await this.#authStorage?.remove(token) }
+  }
   clear(): void {
     this.#token = null
+    this.#expiresAt = this.#localExpiry = null
+    this.#retryRenewalAt = 0
+    this.#renewal = null
     this.#generation++
     this.#lifetime.abort()
     this.#lifetime = new AbortController()
-    this.#persistRecovery()
-    for (const listener of this.#authListeners) listener()
+    try {
+      this.#persistTabAuthentication()
+      this.#persistRecovery()
+    } finally { this.#notifyAuthentication() }
   }
 
   async logout(): Promise<void> {
     const generation = this.#generation
     try { await this.#authorized('logout', { method: 'POST' }) }
-    finally { if (generation === this.#generation) this.clear() }
+    catch (error) { if (generation !== this.#generation && !(error instanceof SessionRequired)) throw error; if (!(error instanceof SessionRequired)) throw new Error('退出未完成，请检查网络后重试。'); return }
+    if (generation === this.#generation) await this.#forgetAuthentication()
+  }
+
+  /** Called by ordinary requests and the visible-page activity timer. A failed
+   * renewal leaves a still-valid Session usable and retries after one minute. */
+  async renewIfNeeded(): Promise<void> {
+    if (!this.#token || this.#localExpiry === null || this.#localExpiry - this.#now() > this.#renewalWindow || this.#now() < this.#retryRenewalAt) return
+    if (this.#renewal) return this.#renewal
+    const generation = this.#generation
+    const token = this.#token
+    const renewal = (async () => {
+      try {
+        // Host is authoritative at expiry, including when the browser's clock
+        // moved. A 401 drops only authentication, never the tab's editing data.
+        if (this.#localExpiry !== null && this.#localExpiry <= this.#now()) {
+          const verified = await this.#json<SessionResponse>('session', { method: 'POST', body: JSON.stringify({ editor: this.#editor, fork: false }) })
+          this.#acceptTiming(verified)
+          if (this.#localExpiry === null || this.#localExpiry - this.#now() > this.#renewalWindow) return
+        }
+        const timing = await this.#json<SessionResponse>('session/renew', { method: 'POST' })
+        if (generation !== this.#generation) return
+        this.#acceptTiming(timing)
+        this.#persistTabAuthentication()
+        await this.#saveAuthentication(token)
+      } catch (error) {
+        if (generation === this.#generation) this.#retryRenewalAt = this.#now() + 60_000
+        if (error instanceof SessionRequired) throw error
+      }
+    })()
+    this.#renewal = renewal
+    try { await renewal } finally { if (this.#renewal === renewal) this.#renewal = null }
   }
 
   async request<T>(operation: WebOperation, params: unknown = {}): Promise<T> {
@@ -564,16 +672,17 @@ export class ConsoleClient {
     return this.#json('workspaces', { method: 'POST', body: JSON.stringify({ path, offset }) })
   }
 
-  async #json<T>(path: 'session' | 'channels' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
+  async #json<T>(path: 'session' | 'session/renew' | 'channels' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'avatars', options: RequestInit = {}): Promise<T> {
     const generation = this.#generation
     const result = await (await this.#authorized(path, options)).json() as T
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     return result
   }
 
-  async #authorized(path: 'session' | 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
+  async #authorized(path: 'session' | 'session/renew' | 'channels' | 'request' | 'events' | 'logout' | 'workspaces' | 'uploads' | 'uploads/reconcile' | 'files' | 'attachments' | 'avatars', options: RequestInit = {}): Promise<Response> {
     if (!this.#token) throw new SessionRequired()
     const generation = this.#generation
+    if (this.#localExpiry !== null && this.#localExpiry - this.#now() <= this.#renewalWindow && !['session', 'session/renew', 'logout'].includes(path)) await this.renewIfNeeded()
     if (this.#assertTab) await this.#assertTab()
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
     const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {
@@ -582,7 +691,7 @@ export class ConsoleClient {
       signal: options.signal ? AbortSignal.any([options.signal, this.#lifetime.signal]) : this.#lifetime.signal
     })
     if (generation !== this.#generation) throw new DOMException('Connection replaced', 'AbortError')
-    if (response.status === 401) { this.clear(); throw new SessionRequired() }
+    if (response.status === 401) { await this.#forgetAuthentication(); throw new SessionRequired() }
     if (!response.ok) {
       const error = await response.json().catch(() => ({})) as { error?: { code?: string } }
       throw new HttpRequestError(response.status, error.error?.code ?? 'connection_unavailable')

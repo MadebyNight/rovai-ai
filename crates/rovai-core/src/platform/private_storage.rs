@@ -178,7 +178,7 @@ pub(crate) fn open_private_append_file(path: &Path) -> Result<File> {
 
 /// Opens an existing private regular file without ever creating a replacement.
 #[cfg(any(unix, windows))]
-pub(crate) fn open_private_read_file(path: &Path) -> Result<File> {
+pub fn open_private_read_file(path: &Path) -> Result<File> {
     open_private_read_file_platform(path)
 }
 
