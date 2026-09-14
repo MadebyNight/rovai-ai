@@ -653,6 +653,7 @@ pub fn open_resolved_file_without_following(path: &Path) -> Result<File> {
     let mut file = crate::platform::windows_file_tree::open_volume_root_for_traversal(&root)?;
     let (leaf, parents) = names.split_last().context("resolved file has no leaf")?;
     for name in parents {
+        #[cfg(unix)]
         anyhow::ensure!(
             file.metadata()?.is_dir(),
             "resolved file parent is not a directory"
@@ -664,10 +665,22 @@ pub fn open_resolved_file_without_following(path: &Path) -> Result<File> {
         #[cfg(windows)]
         {
             file = open_child_without_following(&file, name)?;
+            // OPEN_REPARSE_POINT retains the node itself; inspect it before
+            // using it as the next directory rather than relying on traversal failure.
+            anyhow::ensure!(
+                inspect_open_node(&file)?.kind == OpenedNodeKind::Directory,
+                "resolved file parent is not a directory"
+            );
         }
     }
     file = open_child_without_following(&file, leaf)?;
+    #[cfg(unix)]
     anyhow::ensure!(file.metadata()?.is_file(), "resolved file is not regular");
+    #[cfg(windows)]
+    anyhow::ensure!(
+        inspect_open_node(&file)?.kind == OpenedNodeKind::RegularFile,
+        "resolved file is not regular"
+    );
     Ok(file)
 }
 

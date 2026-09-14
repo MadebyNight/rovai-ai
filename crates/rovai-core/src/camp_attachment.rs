@@ -3877,6 +3877,18 @@ mod windows_attachment_tests {
         )
         .unwrap_err();
         assert!(linked.to_string().contains("reparse point"), "{linked:#}");
+        assert_eq!(
+            linked.downcast_ref::<crate::local_attachment_snapshot::LocalAttachmentError>(),
+            Some(&crate::local_attachment_snapshot::LocalAttachmentError::Unsupported)
+        );
+        let linked_leaf = crate::local_attachment_snapshot::open_resolved_file_without_following(
+            &canonical.join("source/linked-outside"),
+        )
+        .unwrap_err();
+        assert!(
+            linked_leaf.to_string().contains("reparse point"),
+            "{linked_leaf:#}"
+        );
         let volume = canonical.ancestors().last().unwrap();
         assert!(crate::local_attachment_snapshot::open_source_without_following(volume).is_err());
         assert!(
