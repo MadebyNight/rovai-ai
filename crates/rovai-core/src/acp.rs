@@ -2742,10 +2742,16 @@ impl AcpHost {
         deadline: tokio::time::Instant,
     ) -> bool {
         #[cfg(target_os = "linux")]
-        if self.adapter_kind != AdapterKind::ZcodeApp {
+        {
             loop {
                 match child.captured_tree_is_empty() {
-                    Ok(true) => return true,
+                    Ok(true) => {
+                        if self.adapter_kind == AdapterKind::ZcodeApp {
+                            self.zcode_cleanup_confirmed.store(true, Ordering::Release);
+                            self.record_zcode_host_closed(true);
+                        }
+                        return true;
+                    }
                     Err(_) => return false,
                     Ok(false) => {}
                 }
@@ -2755,25 +2761,29 @@ impl AcpHost {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
-        if self.adapter_kind != AdapterKind::ZcodeApp
-            || self.zcode_cleanup_confirmed.load(Ordering::Acquire)
+        #[cfg(not(target_os = "linux"))]
         {
-            return true;
-        }
-        let Some(root) = &self.private_config_root else {
-            return false;
-        };
-        let confirmed = crate::zcode::transport::confirm_owner_cleanup(child, root, deadline).await;
-        self.zcode_cleanup_confirmed
-            .store(confirmed, Ordering::Release);
-        self.record_zcode_host_closed(confirmed);
-        if !confirmed {
-            self.send_host_diagnostic(
+            if self.adapter_kind != AdapterKind::ZcodeApp
+                || self.zcode_cleanup_confirmed.load(Ordering::Acquire)
+            {
+                return true;
+            }
+            let Some(root) = &self.private_config_root else {
+                return false;
+            };
+            let confirmed =
+                crate::zcode::transport::confirm_owner_cleanup(child, root, deadline).await;
+            self.zcode_cleanup_confirmed
+                .store(confirmed, Ordering::Release);
+            self.record_zcode_host_closed(confirmed);
+            if !confirmed {
+                self.send_host_diagnostic(
                 "ZCode managed process-tree cleanup remains unconfirmed; private evidence retained"
                     .to_string(),
             );
+            }
+            confirmed
         }
-        confirmed
     }
 
     fn record_zcode_host_closed(&self, confirmed: bool) {
@@ -2850,12 +2860,12 @@ impl AcpHost {
     }
 
     fn capture_native_descendants(&self, _child: &mut ManagedProcess) -> std::io::Result<()> {
-        // ZCode already owns detached groups through its native spawn ledger
-        // and EOF watcher; killing that watcher would discard its evidence.
+        // On Linux explicit teardown uses pinned descendant identities, including
+        // ZCode's watcher. The watcher still handles unexpected native EOF; its
+        // group report is not the proof for an explicit pidfd-backed teardown.
         #[cfg(target_os = "linux")]
-        if self.adapter_kind != AdapterKind::ZcodeApp {
-            return _child.capture_descendants();
-        }
+        return _child.capture_descendants();
+        #[cfg(not(target_os = "linux"))]
         Ok(())
     }
 
@@ -3825,6 +3835,14 @@ impl AcpRuntime {
             .release_client_terminals_for_session(&session_id, &self.owner)
             .await;
         cancellation
+    }
+
+    pub(crate) fn preserve_zcode_host_after_cancel(&self) -> bool {
+        // A Linux shell can put foreground descendants in another process group.
+        // Native stop acknowledgement alone cannot prove that they exited. With
+        // no retained background work, close this Host using the captured pidfds.
+        // Hosts with older Session tasks keep the existing scoped cancellation.
+        !cfg!(target_os = "linux") || self.host.has_zcode_background_tasks()
     }
 
     pub async fn confirm_zcode_cancelled(&self) -> bool {

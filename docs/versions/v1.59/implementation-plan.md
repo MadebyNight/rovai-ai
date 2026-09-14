@@ -90,6 +90,25 @@ TRAE 本机已写入 BYOK 配置但缺原生登录令牌；随后维护者确认
 TRAE Linux 标记通过（用户异机实测），不改写本机原失败记录，也不声称本机或未知版本已完成全轴验收。
 Kimi 按用户授权重试失败后跳过。其他阻塞不等于 Linux OS 不支持。
 
+[ae872240 原生回收复验](evidence/linux-server/ae872240/advin-runtime.json)：OpenCode 71.94 秒、Qoder 109.28 秒
+完成全部六项有限集成检查，真实取消子进程均已退出。两项 cgroup 峰值分别为 1515311104 / 1702301696 字节，
+整机最低可用内存分别约 5.8 / 5.6 GiB，无 swap 或 max/oom 事件。Antigravity 9.56 秒投影明确 terminal failure
+与地区资格原文，替代此前等待超时；调用仍不能记为通过。`ae872240` 的 Linux 进程边界回归通过，但
+[该 CI](https://github.com/murray17/rovai-ai/actions/runs/34851451019) 在异常上传的 fetch writer 上返回 EPIPE，后续 OS 矩阵未运行。
+验收客户端改为独立 HTTP 连接读取实际拒绝响应，仍要求 400/413 和临时文件清理；本地公开 HTTP 回归通过。
+包含 CodeBuddy/ZCode 修复的 [a5f25ba0 CI](https://github.com/murray17/rovai-ai/actions/runs/34852688532) 已通过原生进程、
+版本探测和包级生命周期检查；同一归档在 [Ubuntu 22.04](evidence/linux-server/a5f25ba0/ubuntu-22.04.json)、
+[Ubuntu 24.04](evidence/linux-server/a5f25ba0/ubuntu-24.04.json) 与 [Debian 12 VM](evidence/linux-server/a5f25ba0/debian-12.json)
+全部通过。[ABI](evidence/linux-server/a5f25ba0/linux-abi.json)三份 ELF 最高导入仍为 GLIBC_2.34，manifest SHA-256 为
+`b8bb92f16c3dbe7c87ac9dc0a238dc45858265f7b9cf99e4b7afe9e5c9a5a652`。
+
+[a5f25ba0 新机证据](evidence/linux-server/a5f25ba0/advin-runtime.json)中 CodeBuddy 2.150.0 的六项有限检查全部通过，
+66.40 秒、峰值 948539392 字节，无 max/oom/swap。ZCode 0.16.5 两轮前五项通过，但取消均留下独立进程组的
+Python 子进程。第二轮仅加私有信号观测：原生 ps 枚举 616 ms 超过内核的 500 ms 期限，随后只终止 Bash，
+Python 重新挂靠 PID 1；测试结束已由 cgroup 清理，无内存压力。Linux 显式 ZCode Host 回收改用取消前的 pidfd
+身份；无保留后台任务时取消关闭整个 Host，有后台任务时保留原有作用域取消。修复后真实复验待下一个包。
+[Advin 同包 Gate A](evidence/linux-server/a5f25ba0/advin-server-os.json)通过。
+
 这些是有限集成证据，`fullQualification=false`；Skills/MCP、权限与压缩等 First-Class 全轴尚未逐项闭合，
 14 项 Linux Runtime 均保留 Preview 与缺失资格原因。正式 Release 和实体手机资格尚未完成。
 

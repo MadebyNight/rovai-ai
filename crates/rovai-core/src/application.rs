@@ -11213,6 +11213,7 @@ impl Core {
                 && !self.planned_shutdown.launch_in_progress(&key).await
                 && let Some(adapter) = self.acp_adapter(AdapterKind::ZcodeApp)
                 && let Some(runtime) = adapter.get_agent_run(agent_run_id, execution_epoch).await
+                && runtime.preserve_zcode_host_after_cancel()
             {
                 if !runtime.confirm_zcode_cancelled().await || !flushed {
                     return RuntimeCancellationIngressFence::Unproven;
