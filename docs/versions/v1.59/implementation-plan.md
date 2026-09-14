@@ -19,8 +19,20 @@ last_updated: 2026-09-14
 同归档 Ubuntu 22.04/24.04、Debian 12 VM 的 Gate A 已接入，执行结果待本轮验证。
 Codex CLI、Claude Code 仅开放 preview，不预写 qualified；其余 Runtime 逐项记录上游安装/Provider/执行事实。
 DMIT Debian 12 / x86_64 / glibc 2.36 的测试使用独立账号、数据根及内存限制，保留既有代理服务；
-可用内存低于 512 MiB、持续新增 swap 或 OOM 时停止本次测试并等待用户处理。
-本节不宣称正式 Release、三 OS 或任一 Runtime 已验收通过；结果随实际证据补齐。
+可用内存低于 512 MiB、持续新增 swap、测试 cgroup 达到 1100 MiB 上限或 OOM 时停止本次测试并等待用户处理。
+
+`bda1ab83` 已通过本地 ABI 拒绝矩阵、Rust workspace/all-targets check、Core 单测 805 通过/6 既有忽略、
+格式与文档门禁；[Linux 原生与三 OS Run](https://github.com/murray17/rovai-ai/actions/runs/34839772567)正在执行。
+[DMIT 探测记录](evidence/linux-server/dmit-runtime-probes.json)只证明上游 CLI，不是 Rovai Runtime 资格：
+Codex 0.154.0、Claude Code 2.1.270、Pi 0.85.1 完成 MiniMax-M3 工具写入和读回；
+OpenCode 1.18.30、Copilot 1.0.83 同样完成工具写入和读回，但未满足提示要求的末尾换行，原严格断言保留失败。
+Qwen 0.23.3 的 Chat Completions 请求遇到 MiniMax HTTP 400（空 function parameters），CLI 仍返回成功，
+独立文件断言正确捕获失败；其他协议未复测，不能据此判定 Qwen 不支持 Linux。
+
+Kiro 安装触发测试 cgroup 内存上限，保护器立即终止安装并阻止后续测试。触发时系统可用内存
+仍约 1.59 GiB、swap 为 0；随后测试进程和临时 unit 均为零，Xray active、内核无 OOM。
+按用户要求保持远端暂停。Rovai 发布包尚未部署到 DMIT；Gate B 全链路、其余 Runtime、正式 Release
+均未完成，不将安装成功或上游工具成功晋升为 FirstClass。
 
 ## 本轮：Mobile 执行文案与文件资源性能
 
