@@ -11,9 +11,38 @@ last_updated: 2026-09-14
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，当前已同步 main `42e1e6d1`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+复用任务分支继续开发，当前已同步 main `0bfc35b0`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
 
-## 本轮：长期 Token 与 30 天 Session
+## 本轮：同步 main 与本机安装
+
+2026-09-14 按用户要求合入 main `0bfc35b0`，执行失败信息现在位于该 Run 执行记录末尾；Desktop、Web 和
+Mobile 共用同一组件。合并没有冲突，功能源码提交为 `4ffb6892`，包含此前 Mobile、Web 执行光圈与认证持久化改动。
+
+从该提交构建 0.2.6 arm64 daily App，App、Host、Core、CLI 的 ad-hoc 签名、架构与 Bundle ID 门禁通过。
+[构建来源](evidence/main-local-install/build.json)记录包内二进制摘要和 138 个 Web 文件。
+[包级验收](evidence/main-local-install/validation.json)使用全新隔离 userData / Skill Library / MCP，
+由真实 Electron Main 启动包内 Host、选择包内 WebUI，未启动真实 Runtime。
+覆盖 Desktop 就绪、普通 Token 登录、30 天有效期/7 天窗口元数据、窗口外续期不变、私有认证文件、
+刷新保留草稿与编辑身份；正常退出并重开隔离 App 后，长期 Token、原 Bearer、原编辑身份和草稿仍可恢复。
+Chrome 进程重开直接恢复普通 Session，手机 390×844 布局展示五项导航、新编辑不继承旧草稿且无横向溢出。
+显式关闭 Web 后 Core 继续就绪，重开后旧 Session 及续期请求被拒绝，原长期 Token 仍可重新登录。
+手机证据为 Chrome 视口模拟，不是实体设备；30 天/7 天时钟边界继续由此前可控时钟测试拥有。
+
+TypeScript、Desktop/Web 构建与完整 `pnpm test` 复验通过（Vitest 2024 / 198 文件；Node 317 通过、2 个既有平台跳过）。
+首轮与 Release 编译并行时，Evaluation Host 等待子进程完成的轮询超时；保留该失败，未改代码或放宽断言，
+定向 4 项及随后完整套件均通过，不将时序相关推测写成已确定的根因。
+`pnpm test:rust:pr` 通过：Core 基础 805 项、CLI 35 项、slow integration 310 项，共 1150 项；
+6 个既有手动场景保持 ignored。Clippy workspace all-targets、Rust 格式与文档门禁通过。
+完整命令、首轮失败与复测范围见[检查记录](evidence/main-local-install/checks.json)。
+
+已用专用 daily 安装器[非终止安装](evidence/main-local-install/installation.json)到 `/Applications/Rovai AI.app`，
+备份为 `/Applications/Rovai AI.backup-before-main-4ffb6892-20260914T084702Z.app`。
+App/Host/Core/CLI 摘要及全部 138 个 Web 文件与验收来源相同；安装前记录的六个 App/Helper/Host PID 和
+启动时间均保持不变，没有重启日常实例或修改日常 userData。当前进程仍运行旧版，用户退出后从规范路径打开才生效。
+此次从未持久保存认证的旧版升级，Web 需要重新登录一次；之后按新版长期 Token / Session 合同恢复。
+安装后的文档与证据提交不改变 `4ffb6892` 功能包，不代表 Windows/Linux 或实体手机资格已完成。
+
+## 先前批次：长期 Token 与 30 天 Session
 
 2026-09-14 按用户确认补齐统一 Host 与浏览器认证持久化，默认 Session 30 天、有效期剩余不超过 7 天时续期。
 续期保持同一 Bearer 与编辑 ID；二维码继续兑换普通 Session。Desktop/Server 的正常退出、重启与升级保留未过期
