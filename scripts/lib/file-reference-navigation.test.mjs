@@ -12,7 +12,7 @@ import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
 const source = join(root, 'scripts/fixtures/file-reference-navigation')
-test('message file links preserve range targets and reading anchors in the production Camp', { timeout: 60_000 }, async (t) => {
+test('message file links preserve reading anchors and production workspaces contain wide content', { timeout: 90_000 }, async (t) => {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-file-navigation-test-'))
   let child
@@ -29,7 +29,7 @@ test('message file links preserve range targets and reading anchors in the produ
     let output = ''
     child.stdout.on('data', chunk => { output += chunk.toString() })
     child.stderr.on('data', chunk => { output += chunk.toString() })
-    const timeout = setTimeout(() => child.kill('SIGKILL'), 45_000)
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 75_000)
     let code
     try { [code] = await closed } finally { clearTimeout(timeout) }
     assert.equal(code, 0, `File navigation regression failed:\n${output}`)

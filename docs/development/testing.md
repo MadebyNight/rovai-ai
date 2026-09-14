@@ -273,7 +273,9 @@ Approval/Recovery Dock，验证大屏中 481/480/450/420px 会话的容器断点
 真实鼠标覆盖已有选区下的普通/带位置 Markdown 文件链接点击、链接内拖选不打开及其后的再次单击，键盘激活保持可用。
 并逐帧检查打开/关闭、键盘调宽和持续拖动时
 阅读锚点偏移不超过 2px；还覆盖用户滚动后的可见消息回退、底部跟随、紧凑模式返回，以及旧
-`authorization_required` 结果不会调用目录选择器或泄露内部授权原因。相同环境变量可保留双主题截图
+`authorization_required` 结果不会调用目录选择器或泄露内部授权原因。宽度回归经过真实消息容器，覆盖宽屏断点、
+预览开合与拖窄后的长代码和宽表格独立滚动，并挂载首页验证最近对话长标题、时间与状态在双主题和缩放下不撑宽页面。
+相同环境变量可保留双主题截图
 和测量报告；手动 Full check 的 Linux job 使用 `xvfb-run -a pnpm test:file-reference-navigation`，不替代 Main 的来源、文件类型和系统动作测试。
 
 涉及 Preload 请求 transport 或 Renderer 错误读取时，除普通 Vitest 外还运行：

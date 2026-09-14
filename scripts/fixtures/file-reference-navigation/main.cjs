@@ -197,6 +197,65 @@ app.whenReady().then(async () => {
     assert.equal(after.chooseRootCalls, 0)
     assert.equal(after.notices.at(-1), '文件访问已失效')
   })
+  await check('production agent messages keep long code and tables inside the conversation through preview resizing', async () => {
+    await run('window.navigationTest.surface("wide-message")')
+    await run('window.navigationTest.bookmark()')
+    await click('[title="run_report.py:44-46"]')
+    await run('window.navigationTest.bottom()')
+    measurements.messageWidths = []
+    for (const [theme, width] of [['day', 1799], ['day', 1800], ['day', 2560], ['night', 2560]]) {
+      await run(`window.navigationTest.theme(${JSON.stringify(theme)})`)
+      const initial = await viewport(width)
+      assert.equal(initial.visible, true)
+      assert.deepEqual(initial.overflows, [], `Open preview at ${width}px`)
+      const narrow = await drag(Math.round(420 - initial.width))
+      closeTo(narrow.width, 420, 'Dragged conversation width')
+      assert.deepEqual(narrow.overflows, [], `Narrow conversation at ${width}px`)
+      await capture(`message-${theme}-${width}-420px`)
+      await run('window.navigationTest.scrollArtifacts()')
+      const scrolled = await state()
+      assert.deepEqual(scrolled.artifacts.map(item => item.tag), ['PRE', 'TABLE'])
+      for (const artifact of scrolled.artifacts) {
+        assert.equal(artifact.overflowX, 'auto')
+        assert.ok(artifact.scrollWidth > artifact.width && artifact.scrollLeft > 0, `${artifact.tag} retains its own scroll`)
+      }
+      assert.equal(scrolled.timelineScrollLeft, 0)
+      measurements.messageWidths.push({ theme, viewport: width, conversation: scrolled.width, artifacts: scrolled.artifacts })
+      const closed = await click('#toggle-preview')
+      assert.equal(closed.visible, false)
+      assert.deepEqual(closed.overflows, [], 'Closing preview lets the message expand within the conversation')
+      const reopened = await click('#toggle-preview')
+      assert.equal(reopened.visible, true)
+      assert.deepEqual(reopened.overflows, [], 'Reopening preview preserves the width constraint')
+      assert.equal(reopened.draft, '保留原有草稿')
+    }
+    window.webContents.setZoomFactor(2)
+    assert.deepEqual((await state()).overflows, [], 'Conversation at 200% zoom')
+    window.webContents.setZoomFactor(1)
+  })
+  await check('recent conversations contain long titles while keeping time and status visible', async () => {
+    await run('window.navigationTest.surface("home")')
+    for (const theme of ['day', 'night']) {
+      await run(`window.navigationTest.theme(${JSON.stringify(theme)})`)
+      for (const width of [1040, 1440, 2560]) {
+        const home = await viewport(width)
+        assert.deepEqual(home.overflows, [], `${theme} recent conversations at ${width}px`)
+        assert.equal(home.recentRows.length, 3)
+        for (const [index, row] of home.recentRows.entries()) {
+          assert.equal(row.fullTitle, row.title, 'The complete title remains available')
+          assert.equal(row.truncated, index < 2, 'Only long titles need truncation')
+          assert.equal(row.ellipsis, 'ellipsis')
+          assert.equal(row.timeVisible, true)
+          assert.equal(row.statusVisible, index < 2 ? true : null)
+        }
+        if (width === 1040) await capture(`recent-conversations-${theme}-1040px`)
+      }
+    }
+    await viewport(1040)
+    window.webContents.setZoomFactor(2)
+    assert.deepEqual((await state()).overflows, [], 'Recent conversations at 200% zoom')
+    window.webContents.setZoomFactor(1)
+  })
   const report = { ok: true, cases, measurements }
   writeFileSync(join(dirname(userData), 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
