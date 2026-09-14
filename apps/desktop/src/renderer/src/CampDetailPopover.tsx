@@ -19,8 +19,9 @@ function CampDetailIcon({ tab }: { tab: CampDetailTab }): React.JSX.Element {
   </svg>
 }
 
-function CampExecutionEntry({ members, expanded, panelId, onSelect }: {
+function CampExecutionEntry({ members, memberCount, expanded, panelId, onSelect }: {
   members: readonly RunningCampMember[]
+  memberCount: number
   expanded: boolean
   panelId: string
   onSelect(tab: CampDetailTab, trigger: HTMLButtonElement, keyboard: boolean): void
@@ -36,7 +37,9 @@ function CampExecutionEntry({ members, expanded, panelId, onSelect }: {
   const running = members.length > 0
   const showNames = running && (hovered || focused) && !dismissed
   const names = members.map(member => member.displayName).join('、')
-  const description = running ? `${members.length} 位队员正在执行：${names}` : '当前没有队员正在执行'
+  const description = running
+    ? `${members.length} 位队员正在执行：${names}`
+    : `共 ${memberCount} 位队员，当前没有队员正在执行`
 
   useEffect(() => {
     if (!running) return
@@ -90,6 +93,7 @@ function CampExecutionEntry({ members, expanded, panelId, onSelect }: {
     >
       <CampDetailIcon tab="execution" />
       <span>执行</span>
+      {!running && <small>{memberCount}</small>}
       {running && <>
         <span className="camp-execution-members" aria-hidden="true">
           {members.slice(0, 3).map(member => <MemberAvatar
@@ -139,6 +143,7 @@ export function CampDetailEntries({
     <div className="camp-detail-entries" role="group" aria-label="当前会话详情入口">
       {showExecution && <CampExecutionEntry
         members={runningMembers}
+        memberCount={memberCount}
         expanded={visible && activeTab === 'execution'}
         panelId={panelId}
         onSelect={onSelect}
