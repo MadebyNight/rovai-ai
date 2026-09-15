@@ -323,6 +323,12 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(css).toMatch(/\.resource-reference-icon\s*\{[^}]*stroke-width: 1\.7/)
   })
 
+  it('uses conditional logical margins for file references beside body text', () => {
+    expect(css).toMatch(/\.markdown-file-reference\.has-adjacent-text-before,[\s\S]*?\.message-file-reference\.has-adjacent-text-before\s*\{[^}]*margin-inline-start: 2px/)
+    expect(css).toMatch(/\.markdown-file-reference\.has-adjacent-text-after,[\s\S]*?\.message-file-reference\.has-adjacent-text-after\s*\{[^}]*margin-inline-end: 2px/)
+    expect(css).not.toMatch(/has-adjacent-text-(?:before|after)\s*\{[^}]*(?:margin-left|margin-right):/)
+  })
+
   it('uses quiet selected backgrounds for the active Camp and current Project', () => {
     expect(css).toMatch(/\.camp-nav-row\.selected\s*\{[^}]*background: var\(--surface-selected\)/)
     expect(css).toMatch(/\.project-heading-row\.current-project\s*\{[^}]*background: var\(--surface-selected\)/)

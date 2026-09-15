@@ -50,6 +50,32 @@ describe('message file-reference projection', () => {
     ])
   })
 
+  it.each([
+    ['Chinese text on both sides', '前[文件](docs/plan.md)后', true, true],
+    ['Latin text and a digit', 'A[文件](docs/plan.md)9', true, true],
+    ['inline code on both sides', '`前`[文件](docs/plan.md)`后`', true, true],
+    ['text only before the link', '前[文件](docs/plan.md)，', true, false],
+    ['text only after the link', '（[文件](docs/plan.md)后', false, true],
+    ['existing whitespace', '前 [文件](docs/plan.md) 后', false, false],
+    ['punctuation', '（[文件](docs/plan.md)）。', false, false],
+    ['newlines', '前\n[文件](docs/plan.md)\n后', false, false],
+    ['paragraph boundaries', '前\n\n[文件](docs/plan.md)\n\n后', false, false],
+    ['emoji', '🙂[文件](docs/plan.md)🙂', false, false]
+  ])('marks inline spacing for %s in plain user text', (_label, source, marginInlineStart, marginInlineEnd) => {
+    expect(projectMessageFileReferences(source)[0]).toMatchObject({
+      marginInlineStart,
+      marginInlineEnd
+    })
+  })
+
+  it('does not treat an adjacent file reference as body text', () => {
+    expect(projectMessageFileReferences('[前一份](docs/first.md)[后一份](docs/second.md)'))
+      .toMatchObject([
+        { marginInlineStart: false, marginInlineEnd: false },
+        { marginInlineStart: false, marginInlineEnd: false }
+      ])
+  })
+
   it('preserves URL, image, HTML, inline-code and fenced-code boundaries', () => {
     const source = [
       '![图片](src/image.png)',

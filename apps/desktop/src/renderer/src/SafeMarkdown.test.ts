@@ -73,6 +73,59 @@ describe('SafeMarkdown file preview references', () => {
     expect(markup).not.toContain('inline-code-file-reference')
   })
 
+  it.each([
+    ['Chinese text on both sides', '前[文件](docs/plan.md)后', true, true],
+    ['Latin text and a digit', 'A[文件](docs/plan.md)9', true, true],
+    ['formatted sibling text', '**前**[文件](docs/plan.md)*后*', true, true],
+    ['formatted text around the link', '**前[文件](docs/plan.md)后**', true, true],
+    ['inline code on both sides', '`前`[文件](docs/plan.md)`后`', true, true],
+    ['text only before the link', '前[文件](docs/plan.md)，', true, false],
+    ['text only after the link', '（[文件](docs/plan.md)后', false, true],
+    ['existing whitespace', '前 [文件](docs/plan.md) 后', false, false],
+    ['punctuation', '（[文件](docs/plan.md)）。', false, false],
+    ['a soft line break', '前\n[文件](docs/plan.md)\n后', false, false],
+    ['paragraph boundaries', '前\n\n[文件](docs/plan.md)\n\n后', false, false],
+    ['emoji', '🙂[文件](docs/plan.md)🙂', false, false]
+  ])('marks inline file-reference spacing for %s', (_label, source, marginInlineStart, marginInlineEnd) => {
+    const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      onFileReference: () => undefined,
+      children: source
+    }))
+    const className = /<a class="([^"]*markdown-file-reference[^"]*)"/u.exec(markup)?.[1] ?? ''
+    expect(className.includes('has-adjacent-text-before')).toBe(marginInlineStart)
+    expect(className.includes('has-adjacent-text-after')).toBe(marginInlineEnd)
+    if (marginInlineStart && marginInlineEnd) {
+      expect(markup.replace(/<[^>]*>/gu, '')).toBe(source.includes('A[') ? 'A文件9' : '前文件后')
+    }
+  })
+
+  it('keeps spacing markers scoped to message file references', () => {
+    const webMarkup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      onFileReference: () => undefined,
+      children: '前[官网](https://example.com)后'
+    }))
+    const documentMarkup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      onFileReference: () => undefined,
+      mode: 'document',
+      children: '前[文件](docs/plan.md)后'
+    }))
+
+    expect(webMarkup).toContain('class="markdown-web-reference"')
+    expect(webMarkup).not.toContain('has-adjacent-text-')
+    expect(documentMarkup).toContain('class="markdown-file-reference"')
+    expect(documentMarkup).not.toContain('has-adjacent-text-')
+  })
+
+  it('does not add body-text margins between adjacent file references', () => {
+    const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      onFileReference: () => undefined,
+      children: '[前一份](docs/first.md)[后一份](docs/second.md)'
+    }))
+
+    expect(markup.match(/class="markdown-file-reference"/gu)).toHaveLength(2)
+    expect(markup).not.toContain('has-adjacent-text-')
+  })
+
   it('keeps explicit web links clickable while prose and inline code remain inert', () => {
     const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
       onFileReference: () => undefined,

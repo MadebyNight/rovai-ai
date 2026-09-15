@@ -120,3 +120,32 @@ describe('file references without an opener', () => {
     expect(renderToStaticMarkup(createElement(FileReferenceText, { text: source }))).toBe(source)
   })
 })
+
+describe('plain user-message file-reference spacing', () => {
+  it('adds only logical margins and leaves the projected text untouched', () => {
+    for (const text of ['前[文件](docs/plan.md)后', '`前`[文件](docs/plan.md)`后`']) {
+      const markup = renderToStaticMarkup(createElement(FileReferenceText, {
+        text,
+        onActivate: () => undefined
+      }))
+
+      expect(markup).toContain('class="message-file-reference has-adjacent-text-before has-adjacent-text-after"')
+      expect(markup.replace(/<[^>]*>/gu, '')).toBe('前文件后')
+    }
+  })
+
+  it('does not mark existing whitespace, punctuation, newlines, or paragraph edges', () => {
+    for (const text of [
+      '前 [文件](docs/plan.md) 后',
+      '（[文件](docs/plan.md)）。',
+      '前\n[文件](docs/plan.md)\n后',
+      '前\n\n[文件](docs/plan.md)\n\n后'
+    ]) {
+      const markup = renderToStaticMarkup(createElement(FileReferenceText, {
+        text,
+        onActivate: () => undefined
+      }))
+      expect(markup).not.toContain('has-adjacent-text-')
+    }
+  })
+})

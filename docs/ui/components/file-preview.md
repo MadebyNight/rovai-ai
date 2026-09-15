@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-file-preview
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-15
 ---
 
 # Camp 文件预览区
@@ -15,6 +15,9 @@ last_updated: 2026-09-13
 长路径可自然换行，不让正文横向溢出。
 
 - Markdown 文件链接 `[label](target)` 只显示可点击的 label；target 仅用于解析/打开，不在正文中重复常驻展示。
+- 会话消息中的文件链接若与逻辑前侧或后侧的正文文字（Unicode 字母或数字）直接相邻，则仅在对应侧使用
+  `2px` 的 `margin-inline-start` / `margin-inline-end`；已有空白、标点、换行、段落边界或相邻文件链接不补。
+  判断在既有消息解析与缓存内完成，支持跨加粗、斜体和行内代码取得相邻可见字符，不插入空格或改写消息与复制内容。
 - inline-code 永远保持原生 `<code>`。`` `config.toml` ``、`` `src/App.tsx:20` ``、相对路径和绝对路径都不显示
   文件图标、不生成链接、不绑定点击，也不查询磁盘；代码块和混合正文同样保持原样。
 - 普通正文不扫描、不猜测本地路径。`src/App.tsx:20`、`/compact` 与 `docs/prototypes/demo/` 只有在显式 Markdown
