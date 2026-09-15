@@ -105,7 +105,7 @@ try {
   await writeFile(nonGit, generatedPreamble + `assert.equal(info.status,'not_started');cli(['send'],{publicOnly:true,body:'MISSION_NON_GIT_OK'});writeFileSync(join(output,'non-git-evidence.json'),JSON.stringify({cwd:process.cwd(),info}));\n`)
   const mission = await createMission('持久使命工作区验收', `执行 node ${shellQuote(lead)}。脚本通过 Rovai CLI 验证权限和交付，并将独立检查交给队员。无需修改脚本。`, project, members)
   report.mission = mission
-  assert.equal(db.prepare('SELECT count(*) n FROM agent_run WHERE camp_id=?').get(mission.campId).n, 0)
+  assert.equal(db.prepare('SELECT count(*) n FROM agent_run r JOIN camp_turn t ON t.id=r.camp_turn_id WHERE t.camp_id=?').get(mission.campId).n, 0)
   assert.equal(db.prepare('SELECT count(*) n FROM mission_workspace').get().n, 0)
   assert.equal((await client.request('missions.delivery', { missionId: mission.missionId })).workspace, null)
   report.cases.push('save creates Mission and main Camp without Run or worktree')

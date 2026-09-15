@@ -943,7 +943,7 @@ pub fn persist_public_a2a_message(
         .query_row(
             r#"
             SELECT status, cancel_requested_at, execution_budget_exhausted_at,
-                   execution_budget_deadline_at,
+                   CASE WHEN execution_budget_schema_version = 2 THEN execution_budget_deadline_at ELSE COALESCE(execution_budget_deadline_at, 'invalid') END,
                    execution_budget_max_agent_run_responsibilities,
                    execution_budget_max_accepted_a2a,
                    execution_budget_root_agent_run_responsibilities,
@@ -958,7 +958,7 @@ pub fn persist_public_a2a_message(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, i64>(6)?,
@@ -1013,13 +1013,12 @@ pub fn persist_public_a2a_message(
         allocated_run_responsibilities + requested_run_responsibilities;
     let next_responsibilities =
         root_agent_run_responsibilities + next_allocated_run_responsibilities;
-    let deadline = chrono::DateTime::parse_from_rfc3339(&deadline_at)
-        .context("CampTurn Execution Budget deadline is invalid")?
-        .with_timezone(&chrono::Utc);
+    let deadline_elapsed =
+        crate::execution_budget::execution_deadline_elapsed(deadline_at.as_deref(), budget_now)?;
     // Preserve recipient-free public narration after the execution deadline,
     // while keeping both ordinary dispatch and the independently-budgeted
     // Gather capture inside the frozen CampTurn deadline.
-    if budget_now >= deadline && (requested_accepted_a2a > 0 || captured_return_count > 0) {
+    if deadline_elapsed && (requested_accepted_a2a > 0 || captured_return_count > 0) {
         return Ok(rejected_with_details(
             if is_gather {
                 "gather.execution_budget_exceeded"
@@ -1072,7 +1071,7 @@ pub fn persist_public_a2a_message(
               AND status IN ('running', 'waiting')
               AND cancel_requested_at IS NULL
               AND execution_budget_exhausted_at IS NULL
-              AND execution_budget_deadline_at > ?4
+              AND (execution_budget_deadline_at > ?4 OR (execution_budget_deadline_at IS NULL AND execution_budget_schema_version = 2))
               AND accepted_a2a_allocated + ?2
                     <= execution_budget_max_accepted_a2a
               AND execution_budget_root_agent_run_responsibilities
@@ -2281,7 +2280,7 @@ fn process_dispatch_attempt(
         .query_row(
             r#"
             SELECT status, cancel_requested_at, execution_budget_exhausted_at,
-                   execution_budget_deadline_at
+                   CASE WHEN execution_budget_schema_version = 2 THEN execution_budget_deadline_at ELSE COALESCE(execution_budget_deadline_at, 'invalid') END
             FROM camp_turn WHERE id = ?1 AND camp_id = ?2
             "#,
             params![delivery.camp_turn_id, delivery.camp_id],
@@ -2290,17 +2289,23 @@ fn process_dispatch_attempt(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             },
         )
         .optional()?;
-    let turn_active = turn_state.as_ref().is_some_and(|state| {
-        matches!(state.0.as_str(), "running" | "waiting")
-            && state.1.is_none()
-            && state.2.is_none()
-            && state.3 > now
-    });
+    let turn_active = match turn_state.as_ref() {
+        Some(state) => {
+            matches!(state.0.as_str(), "running" | "waiting")
+                && state.1.is_none()
+                && state.2.is_none()
+                && !crate::execution_budget::execution_deadline_elapsed(
+                    state.3.as_deref(),
+                    chrono::DateTime::parse_from_rfc3339(&now)?.with_timezone(&chrono::Utc),
+                )?
+        }
+        None => false,
+    };
     if !turn_active {
         let outcome = terminal_dispatch(
             &transaction,

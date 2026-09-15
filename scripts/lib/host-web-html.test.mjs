@@ -42,7 +42,7 @@ test('Web HTML attachments render, remain isolated, expose original source and r
     await browser.click(`document.querySelector('.web-login button[type=submit]')`)
     await browser.wait(`document.querySelector('.web-login-overlay') === null`)
     await browser.click(`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('HTML attachment acceptance'))`)
-    await browser.wait(`document.querySelector('.conversation-controls .composer-file-input') !== null`)
+    await browser.wait(`document.querySelector('.conversation-controls .composer-file-input:not(:disabled)') !== null`)
     await browser.evaluate(`sessionStorage.setItem('acceptance-sentinel','private');window.htmlAcceptance=[];addEventListener('message',e=>{if(e.source===document.querySelector('.file-preview-html')?.contentWindow&&e.origin==='null'&&e.data?.type==='html-acceptance')window.htmlAcceptance.push(e.data)})`)
     await browser.setFiles('.conversation-controls .composer-file-input', [file])
     await browser.wait(`document.querySelector('.composer-attachment-card .attachment-open:not(:disabled)') !== null`)

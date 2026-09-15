@@ -9,7 +9,7 @@ import { digest } from '../../../../packages/evaluation/src/daily'
 
 type Core = { request<T>(method: CoreMethod, params?: unknown): Promise<T> }
 type Engine = { source: string; node: string; nodeDigest: string; sourceDigest: string }
-type Binding = { automationId: string; automationVersion: number; workspace: string; output: string; plan: string; planDigest: string; registeredAt: string }
+type Binding = { automationId: string; automationVersion: number; workspace: string; output: string; plan: string; planDigest: string; registeredAt: string; timeoutSeconds: number | null }
 type Job = {
   schemaVersion: 1; jobId: string; mode: 'gate' | 'weekly'; plan: string; planDigest: string; output: string
   automationId: string | null; campId: string | null; createdAt: string; endedAt: string | null
@@ -17,7 +17,7 @@ type Job = {
   directory: string | null; reason: string | null; engine: Engine | null
   executionPlanDigest?: string | null
 }
-type Live = { child: ChildProcess; job: Job; closed: Promise<void>; timer: NodeJS.Timeout }
+type Live = { child: ChildProcess; job: Job; closed: Promise<void>; timer: NodeJS.Timeout | undefined }
 const exec = promisify(execFile)
 const identifier = (value: unknown): string => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value)) throw new Error('Invalid evaluation identity')
@@ -108,6 +108,7 @@ export class EvaluationHostService {
 
   schedule(value: unknown): Promise<Binding> {
     return this.#exclusive(async () => {
+      if (this.#live.size) throw new Error('Wait for the active evaluation before changing its binding')
       const params = input(value, ['automationId', 'plan', 'output'])
       const automationId = identifier(params.automationId)
       const automation = await this.core.request<AutomationView | null>('automations.get', { automationId })
@@ -115,13 +116,18 @@ export class EvaluationHostService {
       const workspace = await realpath(automation.projectRef.path)
       const output = await this.#output(absolute(params.output), workspace)
       const plan = await realpath(absolute(params.plan)), frozen = await this.#plan(plan, 'weekly')
-      if (frozen.budget.wallSeconds > 2700) throw new Error('Scheduled evaluation allows at most 2700 seconds, leaving time within the existing one-hour Automation for analysis')
+      if (frozen.budget.wallSeconds !== null && frozen.budget.wallSeconds > 2700) throw new Error('Scheduled evaluation allows at most 2700 seconds, leaving time within the existing one-hour Automation for analysis')
       const engine = await this.#engine()
       const existing = await optionalJson<Binding[]>(join(this.root, 'schedules.json'), [])
       if (existing.some(binding => binding.automationId !== automationId && binding.output === output)) throw new Error('Evaluation output is already bound to another Automation')
-      const binding = { automationId, automationVersion: automation.version, workspace, output, plan, planDigest: frozen.planDigest, registeredAt: new Date().toISOString() }
+      if (existing.filter(item => item.automationId !== automationId).length >= 8) throw new Error('At most eight evaluation schedules are supported')
+      const timeoutSeconds = frozen.budget.wallSeconds === null ? null : 3600
+      const configured = await this.core.request<{ status: string; code: string; payload: { automationVersion: number } }>('automations.configureTimeLimit', {
+        commandId: randomUUID(), command: { automationId, expectedVersion: automation.version, timeoutSeconds }
+      })
+      if (configured.status !== 'applied') throw new Error(`Automation time-limit configuration failed: ${configured.code}`)
+      const binding = { automationId, automationVersion: configured.payload.automationVersion, workspace, output, plan, planDigest: frozen.planDigest, registeredAt: new Date().toISOString(), timeoutSeconds }
       const bindings = existing.filter(item => item.automationId !== automationId).concat(binding)
-      if (bindings.length > 8) throw new Error('At most eight evaluation schedules are supported')
       // The helper only waits for a receipt belonging to the current Camp. It
       // cannot submit a job, reach owner IPC, or treat an old report as current.
       await writeFile(join(output, 'wait-for-evaluation.mjs'), await readFile(join(engine.source, 'scripts/eval-wait.mjs')), { mode: 0o600 })
@@ -205,11 +211,12 @@ export class EvaluationHostService {
     if (await fileDigest(engine.node) !== engine.nodeDigest || await evaluationSourceDigest(engine.source) !== engine.sourceDigest) throw new Error('Evaluation installation changed; register it again before execution')
     return engine
   }
-  async #plan(path: string, mode: string): Promise<{ planDigest: string; budget: { wallSeconds: number } }> {
+  async #plan(path: string, mode: string): Promise<{ planDigest: string; budget: { wallSeconds: number | null } }> {
     const plan = await readJson<Record<string, unknown>>(path)
     const { planDigest, ...payload } = plan
-    const budget = plan.budget as { wallSeconds: number }
-    if (planDigest !== digest(payload) || plan.mode !== mode || !Number.isInteger(budget?.wallSeconds) || budget.wallSeconds < 60 || budget.wallSeconds > 86400) throw new Error('Expected an intact frozen evaluation plan with the requested mode and budget')
+    const budget = plan.budget as { wallSeconds: number | null }
+    const unbounded = mode === 'weekly' && budget?.wallSeconds === null && (plan.execution as { judgeSeconds?: number | null })?.judgeSeconds === null
+    if (planDigest !== digest(payload) || plan.mode !== mode || !unbounded && (typeof budget?.wallSeconds !== 'number' || !Number.isInteger(budget.wallSeconds) || budget.wallSeconds < 60 || budget.wallSeconds > 86400)) throw new Error('Expected an intact frozen evaluation plan with the requested mode and budget')
     return { planDigest: planDigest as string, budget }
   }
   async #output(path: string, workspace?: string): Promise<string> {
@@ -249,7 +256,7 @@ export class EvaluationHostService {
     child.stderr?.on('data', chunk => { log = (log + String(chunk)).slice(-65536) })
     let spawnError: string | null = null
     child.once('error', error => { spawnError = error.message })
-    const timer = setTimeout(() => { job.reason = 'host_budget_exhausted'; child.kill('SIGTERM') }, (frozen.budget.wallSeconds + 120) * 1000)
+    const timer = frozen.budget.wallSeconds === null ? undefined : setTimeout(() => { job.reason = 'host_budget_exhausted'; child.kill('SIGTERM') }, (frozen.budget.wallSeconds + 120) * 1000)
     const closed = new Promise<void>(resolveClose => {
       child.once('close', (code, signal) => {
         clearTimeout(timer)

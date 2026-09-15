@@ -152,7 +152,7 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 
 - 状态：accepted
 - 日期：2026-09-15
-- 当前权威：[文件预览架构](../../architecture/file-preview.md)、[File Preview v13](../../contracts/file-preview-v13.md)
+- 当前权威：[文件预览架构](../../architecture/file-preview.md)、[File Preview v14](../../contracts/file-preview-v14.md)
 
 切 Camp 销毁资源会重复打开、读取与重建页面，丢失阅读状态。用户确认将预览资源交给窗口会话，以分层容量
 回收代替导航销毁和固定时间过期；保持现有 Camp/Runtime 生命周期，不新增正文持久化。

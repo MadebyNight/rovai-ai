@@ -2,12 +2,40 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { mkdtemp, mkdir, writeFile, symlink, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { HtmlPreviewSite } from './site'
 import { createPreviewFileSource, previewRequestPath, PreviewResourceError } from './file-source'
 import { injectPreviewScript, originalPreviewPosition } from './document'
 
 const sites: HtmlPreviewSite[] = [], roots: string[] = []
+it('keeps an explicitly managed site usable beyond the default idle deadline until released', async () => {
+  const { root } = await fixture()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  let site: HtmlPreviewSite
+  try {
+    site = await HtmlPreviewSite.create({ hostOrigin: 'http://app.localhost:5555', generation: 'managed', entryPath: '/pages/index.html',
+      idleTimeoutMs: null, validate: async () => {}, openResource: createPreviewFileSource(root, join(root, 'pages/index.html'), true) })
+    sites.push(site)
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000)
+    expect(site.closed).toBe(false)
+  } finally { vi.useRealTimers() }
+  const cookie = await authenticate(site!)
+  expect((await read(site!, '/assets/data.json', { cookie })).status).toBe(200)
+  await site!.close(); await site!.close()
+  expect(site!.closed).toBe(true)
+})
+
+it.each([undefined, 100])('retains the idle deadline for unmanaged sites (%s)', async idleTimeoutMs => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const site = await HtmlPreviewSite.create({ hostOrigin: 'null', generation: 'idle', entryPath: '/index.html', idleTimeoutMs,
+      validate: async () => {}, openResource: async () => { throw new Error('unused') } })
+    sites.push(site)
+    await vi.advanceTimersByTimeAsync(idleTimeoutMs ?? 30 * 60 * 1000)
+    expect(site.closed).toBe(true)
+  } finally { vi.useRealTimers() }
+})
+
 afterEach(async () => { await Promise.all(sites.splice(0).map(site => site.close())); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 async function fixture(allowDependencies = true, spa = false, entryPath = '/pages/index.html') {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'preview-site-'))); roots.push(root)

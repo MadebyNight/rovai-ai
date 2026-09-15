@@ -94,6 +94,6 @@ Mission selector, workspace or version. Private Single Chat and stale/removed me
 See [Transport v25](builtin-tool-transport-v25.md), [context evidence v24](context-manifest-evidence-v24.md)
 and the [desktop UI contract](../ui/components/mission-board.md). Mobile has no Mission entry in v1.
 
-Migration 155 upgrades v1.59/schema 104 to schema 105, adding definition, activity, commission, PR,
+Migration 156 upgrades v1.59/schema 105 to schema 106, adding definition, activity, commission, PR,
 Host/workspace association and cleanup records plus context workspace evidence. Existing business data
 and frozen context bytes are retained; no workspace is created during migration.

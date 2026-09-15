@@ -39,7 +39,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Host Web v1（历史）](host-web-v1.md) | 同一 Core 的初始只读网络入口；新会话由 v2 替代 |
 | [Current User Profile v1（当前）](current-user-profile-v1.md) | Desktop 本地名称/头像、原子保存、历史作者与结构化提及投影；不改变 Core identity、正文或模型上下文 |
 | [Domain Command Result v1（当前）](domain-command-result-v1.md) | Domain Command 结果的事务、幂等回放、专用列唯一正文、内部 marker、新旧事件双读与 schema 95 回退边界 |
-| [Scheduled Automation v1（当前）](scheduled-automation-v1.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
+| [Scheduled Automation v2（当前）](scheduled-automation-v2.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
+| [Scheduled Automation v1（历史）](scheduled-automation-v1.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
 | [Single Chat v5（当前）](single-chat-v5.md) | 待发送消息原子移回普通输入框、覆盖草稿、释放 FIFO；旧编辑 session 兼容 |
 | [Single Chat v4（历史）](single-chat-v4.md) | v3 私有会话与注意力不变；Source Attachment Run 前宿主重检后原样投影 source path |
 | [Single Chat v3（历史）](single-chat-v3.md) | 本机单聊注意力、Run CampTurn ID 与精确私有审批投影；附件交付语义由 v4 替代 |
@@ -140,7 +141,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v13（当前）](file-preview-v13.md) | 窗口预览会话、分层 LRU、句柄容量回收、独立候选刷新与有限 HTML 后台保留 |
+| [File Preview v14（当前）](file-preview-v14.md) | 继承 v13 窗口保留与 LRU；受管 HTML 无空闲到期，页面通信与资源诊断分离、有限重连 |
+| [File Preview v13（历史）](file-preview-v13.md) | 窗口预览会话、分层 LRU、句柄容量回收、独立候选刷新与有限 HTML 后台保留 |
 | [File Preview v12（历史）](file-preview-v12.md) | HTML 正式迁移至隔离 HTTP 站点；默认交互与依赖加载、诊断、源码及可撤销生命周期 |
 | [File Preview v11（历史）](file-preview-v11.md) | 在 v10 基础上区分本地源附件与受管附件；源文件成功预览后显示实际路径，Managed/legacy 保持内部路径私有 |
 | [File Preview v10（历史）](file-preview-v10.md) | v9 来源、Files Changed 路由与成功后提交不变；项目根与项目外普通文件显示实际路径，同名 Tab 使用最短唯一目录后缀，复制普通文件返回 canonical 绝对路径 |
@@ -216,7 +218,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Runtime Usage Monitoring v2（历史）](runtime-usage-monitoring-v2.md) | 五表 clean break、内存 Usage 合并、稀疏 Token/Cache/Cost、Coverage、单 Snapshot 与有界刷新 |
 | [Runtime Monitoring v1（历史）](runtime-monitoring-v1.md) | Clean-break collection/enrollment、稀疏 Usage Observation、Native Session fact、三类查询、Coverage、Tool Duration 与 Cost layer |
 | [Diagnostics Center v1（当前）](diagnostics-center-v1.md) | `diagnostics.check` typed read model、三态分类、显式单项修复映射、Recovery 与集中脱敏的 `rovai-diagnostics-v5` |
-| [Execution Evaluation v14（当前）](execution-evaluation-v14.md) | 评分执行故障与任务失败、证据问题分开 |
+| [Execution Evaluation v15（当前）](execution-evaluation-v15.md) | Weekly 显式无时间上限、Core 冻结时间策略与独立评分故障 |
+| [Execution Evaluation v14（历史）](execution-evaluation-v14.md) | 评分执行故障与任务失败、证据问题分开 |
 | [Execution Evaluation v13](execution-evaluation-v13.md) | 每日分析有限引用 schema、已知零值与真实失败尝试保留 |
 | [Execution Evaluation v12（历史）](execution-evaluation-v12.md) | 每日跨日积压、全部工具终态与健康分析证据边界 |
 | [Execution Evaluation v11（历史）](execution-evaluation-v11.md) | 评分 2.7、执行声明分类与现有事件顺序投影 |
@@ -230,7 +233,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Execution Evaluation v3（历史）](execution-evaluation-v3.md) | 继承通用质量与双轨报告，适配当前 return lineage 与历史账本 |
 | [Execution Evaluation v2（历史）](execution-evaluation-v2.md) | 通用质量三维度、协作分项统计、关键 Gate、离线报告与分析完成记录 |
 | [Execution Evaluation v1（历史）](execution-evaluation-v1.md) | Gate 分流、冻结版本、真实规则与 Judge、有限迭代、每日统计与可比较趋势 |
-| [User Automation v5（当前）](user-automation-v5.md) | Agent CLI 防误调用、删除 Runtime OS denial；继承用户运输、Trace、评测宿主和平台准入 |
+| [User Automation v6（当前）](user-automation-v6.md) | Owner 绑定无时间上限 Weekly；继承用户运输、Trace、宿主清理与 Agent 防误调用 |
+| [User Automation v5（历史）](user-automation-v5.md) | Agent CLI 防误调用、删除 Runtime OS denial；继承用户运输、Trace、评测宿主和平台准入 |
 | [User Automation v4（历史）](user-automation-v4.md) | 继承 v3；开发者评测 CLI、宿主执行与按 AutomationRun 去重的定时绑定 |
 | [User Automation v3（历史）](user-automation-v3.md) | 继承 v2；受限只读 Trace 导出与 Host 日报准备配置，不授予 Agent 用户级 IPC |
 | [User Automation v2（历史）](user-automation-v2.md) | v1 transport、Trial 与安全投影不变；Camp 创建只做目录准入，Git observation 不扫描工作树且新 dirty 为 null |

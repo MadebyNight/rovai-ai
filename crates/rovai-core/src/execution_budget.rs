@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const CAMP_TURN_EXECUTION_BUDGET_SCHEMA_VERSION: i64 = 1;
+pub const UNBOUNDED_EXECUTION_BUDGET_SCHEMA_VERSION: i64 = 2;
 pub const PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS: i64 = 86_400;
 pub const PRODUCT_MAX_AGENT_RUN_RESPONSIBILITIES: i64 = 32;
 pub const PRODUCT_MAX_ACCEPTED_A2A: i64 = 16;
@@ -72,14 +73,15 @@ impl CampTurnExecutionBudgetExhaustionReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CampTurnExecutionBudgetRequest {
-    pub elapsed_seconds: i64,
+    #[serde(deserialize_with = "deserialize_required_time_limit")]
+    pub elapsed_seconds: Option<i64>,
     pub max_agent_run_responsibilities: i64,
     pub max_accepted_a2a: i64,
 }
 
 impl CampTurnExecutionBudgetRequest {
     pub fn validate(&self) -> Result<()> {
-        if self.elapsed_seconds < 1 {
+        if self.elapsed_seconds.is_some_and(|seconds| seconds < 1) {
             anyhow::bail!("Execution Budget elapsedSeconds must be positive");
         }
         if self.max_agent_run_responsibilities < 1 {
@@ -97,8 +99,8 @@ impl CampTurnExecutionBudgetRequest {
 pub struct FrozenCampTurnExecutionBudget {
     pub schema_version: i64,
     pub accepted_at: String,
-    pub deadline_at: String,
-    pub elapsed_seconds: i64,
+    pub deadline_at: Option<String>,
+    pub elapsed_seconds: Option<i64>,
     pub max_agent_run_responsibilities: i64,
     pub max_accepted_a2a: i64,
     pub root_agent_run_responsibilities: i64,
@@ -117,8 +119,8 @@ pub fn freeze_camp_turn_execution_budget(
     }
     let elapsed_seconds = requested
         .map(|budget| budget.elapsed_seconds)
-        .unwrap_or(PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS)
-        .min(PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS);
+        .unwrap_or(Some(PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS))
+        .map(|seconds| seconds.min(PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS));
     let max_agent_run_responsibilities = requested
         .map(|budget| budget.max_agent_run_responsibilities)
         .unwrap_or(PRODUCT_MAX_AGENT_RUN_RESPONSIBILITIES)
@@ -130,18 +132,45 @@ pub fn freeze_camp_turn_execution_budget(
     if root_agent_run_responsibilities > max_agent_run_responsibilities {
         anyhow::bail!("Execution Budget cannot admit every root AgentRun responsibility");
     }
-    let deadline_at = accepted_at
-        .checked_add_signed(Duration::seconds(elapsed_seconds))
-        .ok_or_else(|| anyhow::anyhow!("Execution Budget deadline overflow"))?;
+    let deadline_at = elapsed_seconds
+        .map(|seconds| {
+            accepted_at
+                .checked_add_signed(Duration::seconds(seconds))
+                .ok_or_else(|| anyhow::anyhow!("Execution Budget deadline overflow"))
+        })
+        .transpose()?;
     Ok(FrozenCampTurnExecutionBudget {
-        schema_version: CAMP_TURN_EXECUTION_BUDGET_SCHEMA_VERSION,
+        schema_version: if elapsed_seconds.is_none() {
+            UNBOUNDED_EXECUTION_BUDGET_SCHEMA_VERSION
+        } else {
+            CAMP_TURN_EXECUTION_BUDGET_SCHEMA_VERSION
+        },
         accepted_at: accepted_at.to_rfc3339(),
-        deadline_at: deadline_at.to_rfc3339(),
+        deadline_at: deadline_at.map(|deadline| deadline.to_rfc3339()),
         elapsed_seconds,
         max_agent_run_responsibilities,
         max_accepted_a2a,
         root_agent_run_responsibilities,
     })
+}
+
+// Explicit null opts out of a time limit. An omitted field remains an error;
+// omitting the entire request still selects the ordinary product defaults.
+pub fn deserialize_required_time_limit<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i64>::deserialize(deserializer)
+}
+
+pub fn execution_deadline_elapsed(deadline: Option<&str>, now: DateTime<Utc>) -> Result<bool> {
+    deadline
+        .map(|value| DateTime::parse_from_rfc3339(value).map(|deadline| now >= deadline))
+        .transpose()
+        .map(|elapsed| elapsed.unwrap_or(false))
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -175,7 +204,7 @@ mod tests {
         let accepted_at = Utc.with_ymd_and_hms(2026, 8, 3, 0, 0, 0).unwrap();
         let frozen = freeze_camp_turn_execution_budget(
             Some(&CampTurnExecutionBudgetRequest {
-                elapsed_seconds: PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS + 1,
+                elapsed_seconds: Some(PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS + 1),
                 max_agent_run_responsibilities: PRODUCT_MAX_AGENT_RUN_RESPONSIBILITIES + 1,
                 max_accepted_a2a: PRODUCT_MAX_ACCEPTED_A2A + 1,
             }),
@@ -185,7 +214,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             frozen.elapsed_seconds,
-            PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS
+            Some(PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS)
         );
         assert_eq!(
             frozen.max_agent_run_responsibilities,
@@ -193,7 +222,28 @@ mod tests {
         );
         assert_eq!(frozen.max_accepted_a2a, PRODUCT_MAX_ACCEPTED_A2A);
         assert_eq!(frozen.root_agent_run_responsibilities, 2);
-        assert_eq!(frozen.deadline_at, "2026-08-04T00:00:00+00:00");
+        assert_eq!(
+            frozen.deadline_at.as_deref(),
+            Some("2026-08-04T00:00:00+00:00")
+        );
+        let unbounded: CampTurnExecutionBudgetRequest = serde_json::from_value(serde_json::json!({"elapsedSeconds":null,"maxAgentRunResponsibilities":32,"maxAcceptedA2a":16})).unwrap();
+        let frozen = freeze_camp_turn_execution_budget(Some(&unbounded), accepted_at, 1).unwrap();
+        assert_eq!(frozen.schema_version, 2);
+        assert_eq!(frozen.elapsed_seconds, None);
+        assert_eq!(frozen.deadline_at, None);
+        assert!(
+            !execution_deadline_elapsed(
+                frozen.deadline_at.as_deref(),
+                accepted_at + Duration::days(7)
+            )
+            .unwrap()
+        );
+        assert!(
+            serde_json::from_value::<CampTurnExecutionBudgetRequest>(
+                serde_json::json!({"maxAgentRunResponsibilities":32,"maxAcceptedA2a":16})
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -201,7 +251,7 @@ mod tests {
         let accepted_at = Utc.with_ymd_and_hms(2026, 8, 3, 0, 0, 0).unwrap();
         let error = freeze_camp_turn_execution_budget(
             Some(&CampTurnExecutionBudgetRequest {
-                elapsed_seconds: 60,
+                elapsed_seconds: Some(60),
                 max_agent_run_responsibilities: 1,
                 max_accepted_a2a: 0,
             }),

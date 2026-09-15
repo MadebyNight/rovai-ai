@@ -181,7 +181,8 @@ export function treeDiff(before, after) {
 }
 
 export async function runCaptured(command, args, options = {}) {
-  const timeoutMs = options.timeoutMs ?? 120_000
+  const timeoutMs = options.timeoutMs === undefined ? 120_000 : options.timeoutMs
+  if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)) throw new Error('Process timeout must be a positive integer or null')
   const maxOutputBytes = options.maxOutputBytes ?? 1024 * 1024
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, {
@@ -201,7 +202,7 @@ export async function runCaptured(command, args, options = {}) {
     }
     child.stdout.on('data', (chunk) => { stdout = append(stdout, chunk) })
     child.stderr.on('data', (chunk) => { stderr = append(stderr, chunk) })
-    const timer = setTimeout(() => {
+    const timer = timeoutMs === null ? undefined : setTimeout(() => {
       timedOut = true
       child.kill('SIGTERM')
       setTimeout(() => child.exitCode === null && child.kill('SIGKILL'), 2_000).unref()

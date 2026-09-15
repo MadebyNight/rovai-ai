@@ -825,7 +825,7 @@ mod tests {
         );
         edit.command_id = Uuid::new_v4().to_string();
         edit.camp_id = Some(record.camp_id.clone());
-        db.connection().execute("UPDATE camp_member SET leave_requested_at=?2 WHERE camp_id=?1 AND agent_id='agent_1'",params![record.camp_id,chrono::Utc::now().to_rfc3339()]).unwrap();
+        db.connection().execute("UPDATE camp_member SET leave_requested_at=?2,leave_request_command_id='fixture-leave' WHERE camp_id=?1 AND agent_id='agent_1'",params![record.camp_id,chrono::Utc::now().to_rfc3339()]).unwrap();
         assert_eq!(
             service.update(&mut db, &edit).unwrap().result.code,
             "mission.forbidden"

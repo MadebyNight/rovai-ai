@@ -138,7 +138,7 @@ Object.assign(window, { rovai: {
       check(current.revision === revision, 'Ordinary attachment must use the current Draft revision')
       attachmentCalls.push({ owner: 'composer', file: file.name })
       if (pausePreparation) await new Promise<void>(resolve => { releasePreparation = resolve })
-      if (file.name === 'unreadable.txt') throw new Error('文件当前无法读取')
+      if (file.name === 'unreadable.txt') throw new Error('attachment_unreadable')
       const next = { ...current, revision: revision + 1, attachments: [...current.attachments, sourceAttachment(file)] }
       drafts.set(id, next)
       return structuredClone(next)
@@ -350,7 +350,7 @@ async function runPendingAttachmentCases(): Promise<string[]> {
   await until(() => pendingCards().length === 1 && !editor().textContent?.trim(), 'Attachment-only withdrawal clears old text and refs')
   document.querySelector<HTMLButtonElement>('.composer .attachment-remove')!.click()
   await until(() => drafts.get(campId)!.attachments.length === 0, 'The last source ref can be removed')
-  check(document.querySelector<HTMLButtonElement>('.composer-send')!.disabled, 'Empty text and empty attachments cannot send')
+  check(!Array.from(document.querySelectorAll<HTMLButtonElement>('.composer button[type=submit]')).some(button => !button.disabled), 'Empty text and empty attachments cannot send')
   cases.push('attachment-only withdrawal and empty-send guard remain intact')
   return cases
 }

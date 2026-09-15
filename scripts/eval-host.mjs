@@ -70,7 +70,7 @@ try {
     await validatePlanInputs(template, { products: false })
     const buildRoot = join(job.output, `build-${job.jobId}`)
     await mkdir(buildRoot, { mode: 0o700 })
-    const product = await buildProduct(template.products.candidate.repository, join(buildRoot, 'product'))
+    const product = await buildProduct(template.products.candidate.repository, join(buildRoot, 'product'), template.budget.wallSeconds === null ? { timeoutMs: null } : {})
     planPath = join(buildRoot, 'plan.json')
     await freezePlan({ schemaVersion: 1, mode: 'weekly', suite: template.suite.path, candidate: join(dirname(product.core), 'product.json'), team: template.team, repetitions: template.repetitions, budget: template.budget, execution: template.execution, judge: template.judge && { adapter: template.judge.adapter, configuration: template.judge.configuration } }, planPath)
   }

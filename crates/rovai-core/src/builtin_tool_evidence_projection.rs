@@ -94,7 +94,11 @@ fn project_input(operation: &str, input: &Value) -> Result<Value> {
         }
         "mission.status" => {
             insert_identifier(&mut projected, "status", input.get("status"));
-            insert_identifier(&mut projected, "sourceMessageId", input.get("sourceMessageId"));
+            insert_identifier(
+                &mut projected,
+                "sourceMessageId",
+                input.get("sourceMessageId"),
+            );
         }
         CAMP_MESSAGE_SEND_TOOL_NAME => {
             insert_string_array(&mut projected, "recipientAgentIds", input.get("to"));
@@ -341,7 +345,11 @@ fn project_result(operation: &str, result: &Value) -> Result<Value> {
             insert_semantic_text(&mut projected, "title", result.get("title"));
             insert_semantic_text(&mut projected, "description", result.get("description"));
             insert_enum(&mut projected, "status", result.get("status"));
-            insert_identifier(&mut projected, "sourceMessageId", result.get("sourceMessageId"));
+            insert_identifier(
+                &mut projected,
+                "sourceMessageId",
+                result.get("sourceMessageId"),
+            );
         }
         "mission.update" | "mission.status" => {
             insert_identifier(&mut projected, "missionId", result.get("missionId"));

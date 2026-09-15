@@ -581,6 +581,7 @@ export class FilePreviewService {
         + (parsed.query ? `?${parsed.query}` : '') + (parsed.fragment ? `#${encodeURIComponent(parsed.fragment)}` : '')
       site = await HtmlPreviewSite.create({
         generation: record.generation,
+        idleTimeoutMs: null,
         hostOrigin: this.#native.previewHostOrigin?.(webContentsId) ?? 'null',
         entryPath,
         validate,

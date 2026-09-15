@@ -31,7 +31,7 @@ last_updated: 2026-09-15
 - Git 文件系统 owner：固定基准、临时 index 保真实 index、未跟踪／忽略／二进制／特殊路径、冲突及恢复；
   纯 parser 矩阵不能证明 Git 行为，使用临时真实仓库。最小命令 `cargo test -p rovai-core --lib mission_workspace::tests`。
 - 已有 Context Evidence owner 扩展使命输入、once-per-binding ACK 和恢复负向分支；沿用唯一 golden，不复制 JSON 断言。
-- Migration 155 扩展现有数据库迁移 owner，保留所有受支持来源；运行定向 migration 与 admission 检查。
+- Migration 156 扩展现有数据库迁移 owner，保留所有受支持来源；运行定向 migration 与 admission 检查。
 
 真实模型只在隔离 Smoke 和已冻结 Gate 中运行。交互稿的 15 组 fixture 检查不构成以上产品验收。
 

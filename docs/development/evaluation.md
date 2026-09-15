@@ -8,7 +8,7 @@ last_updated: 2026-09-11
 
 **来源材料预检查：** Judge v12 将持久化用户材料作为独立来源段，调用前生成 `task-source-preflight-*.json`。`unavailable` 时检查缺失、摘要、范围或预算原因，不能以 Fixture 内容替代运行证据。评分 2.10 需以同一新标准重评整个比较集合，不能拼接旧版已通过项和新版单项分数。字段与边界见 [Semantic Judge Views v12](../contracts/semantic-judge-views-v12.md)。
 
-本页拥有开发者操作流程。判断规则见 [Execution Evaluation v14](../contracts/execution-evaluation-v14.md)，组件边界见[双轨架构](../architecture/execution-evaluation.md)，实际交付与未完成验收从[当前版本指针](../versions/README.md)进入。Node 使用仓库要求的版本，命令详情由 `pnpm eval:gate --help`、`pnpm eval:daily --help` 和 `rovai app --help` 提供。
+本页拥有开发者操作流程。判断规则见 [Execution Evaluation v15](../contracts/execution-evaluation-v15.md)，组件边界见[双轨架构](../architecture/execution-evaluation.md)，实际交付与未完成验收从[当前版本指针](../versions/README.md)进入。Node 使用仓库要求的版本，命令详情由 `pnpm eval:gate --help`、`pnpm eval:daily --help` 和 `rovai app --help` 提供。
 
 声明审计区分已支持、已证伪、未充分佐证与真正未知。未充分佐证是交付质量扣分，不是事实已被证明错误；评测器缺数据仍不能算队员失败。
 
@@ -83,7 +83,7 @@ API 凭据仅通过命名环境变量读取；不写进配置或报告。默认�
 
 ## 每周真实任务回归
 
-用户终端可以运行仓库 CLI，也可以通过已运行的 Desktop 提交宿主 job。旧的“定时 Agent 直接启动 Runner”路径在 macOS 曾遇到 nested `sandbox-exec` exit 71；现在由 App 宿主启动同一 Runner，Agent 读取对应报告。安装与授权边界见 [User Automation v5](../contracts/user-automation-v5.md)。
+用户终端可以运行仓库 CLI，也可以通过已运行的 Desktop 提交宿主 job。旧的“定时 Agent 直接启动 Runner”路径在 macOS 曾遇到 nested `sandbox-exec` exit 71；现在由 App 宿主启动同一 Runner，Agent 读取对应报告。安装与授权边界见 [User Automation v6](../contracts/user-automation-v6.md)。
 
 先通过既有界面创建绑定评测目录的 Automation，然后从用户终端注册执行器并绑定已冻结的 weekly plan。需要 Node >=24、仓库依赖和 Rust/Git 工具链；这些命令不安装软件。
 
@@ -102,11 +102,23 @@ rovai app eval status --job-id gate-change-01
 
 周回归汇总使用根目录 `trend-data.json` 中与本次 week／attempt 对应的 `hardPass`、`hardFail`、`unknown`，它们包含硬性验收与专项规则。若另列原始 `hardOutcome` 数量，须注明它不包含专项规则；不能忽略 `rules[].status = indeterminate`，也不能让 LLM 重新猜测分母。
 
-宿主每次从绑定模板重新构建当前指定源码并冻结实际执行计划；任务集、评分、Judge 和预算仍须与原模板一致。执行器、Case 或标准变化后重新注册／绑定，不悄悄升级标准。定时模板总预算最多 2700 秒，为现有一小时 Automation 留出分析时间。日报通过 Automation ID 排除该分析任务；回归 Core 本身使用独立数据库。
+宿主每次从绑定模板重新构建当前指定源码并冻结实际执行计划；任务集、评分、Judge 和预算仍须与原模板一致。执行器、Case 或标准变化后重新注册／绑定，不悄悄升级标准。有限时间模板仍最多 2700 秒；新无时间上限模板使用下述显式 null 配置，绑定时同时取消该 Automation 的一小时时限。日报通过 Automation ID 排除该分析任务；回归 Core 本身使用独立数据库。
 
 每周配置与 Gate 共用 schema，改为 `mode: weekly`，省略 `baseline`、`change`，保留 `candidate`、team、suite、Judge、重复数与预算。`eval:gate weekly --plan <frozen-plan.json> --output <weekly-history-root>` 按 UTC 周一分配 campaign；触发时间由 Automation 的设备本地时区决定，统计时区不改变触发时区。每周第一次尝试形成连续曲线，第二次尝试单列，不以最后一次成功替换失败点。JSON 保存每个版本、数量／分母和比较资格，缺周或环境变化断线。
 
 App 退出／休眠时沿用既有 Automation 补跑与并发策略，不另建常驻调度器。配置不等于真实运行；实际结果只由保留的报告证明。
+
+### 无时间上限 Weekly
+
+使用新的独立配置与输出文件，保留旧计划和失败证据。将 Weekly 的 `budget.wallSeconds`、
+`execution.judgeSeconds` 以及独立 Judge 配置的 `timeoutMilliseconds` 都设为 JSON `null`，随后重新构建、
+冻结计划。空字段或零值不会自动取消时限。该策略覆盖构建、合同检查、Case 和评分；Run/A2A 数量上限、
+最多两次 campaign 尝试以及人工停止和进程清理保持。普通 Gate 继续使用有限预算。
+
+部署包含此功能的新 App 后，在普通终端依次执行上述 `eval configure`、`eval schedule`，核对 `eval status`
+中绑定的 `timeoutSeconds: null`，再在既有 Weekly 上点击“立即运行”。保持 App 运行和电脑唤醒；无需重新
+创建任务，也不手工生成回执。当前 Camp 的 receipt 到终态之后才分析报告。绑定一次用于后续定时触发；
+源码、Case、Judge 或标准改变后需要重新登记/冻结/绑定。
 
 ## 每日 Trace 与分析 Agent
 
@@ -127,7 +139,7 @@ Main 先把规则统计、HTML／SVG 和分析输入写入指定工作区；每�
 
 在后续部署时设置实际时间，建议当地时间 08:00 给 Host 留出准备时间。Host 在 App 内每分钟检查，失败退避一小时；如果当天尚无完整输入，分析应诚实失败，不能把旧报告当成昨天。关闭对应 Automation 即停止准备。当前版本未提供外部后台常驻保证。
 
-离线演示可以使用已实际导出的文件：`eval:daily --config <json> --date YYYY-MM-DD --trace <trace.json>`；在线用户调用省略 `--trace`，配置还需指定 bundled `rovai` 可执行文件。配置为 `{ "timezone": "Asia/Shanghai", "output": "/private/daily", "cli": "/app/bin/rovai", "scope": { "campIds": [], "excludeCampIds": [], "excludeAutomationIds": [] } }`。手工导出入口是 `rovai app trace export`；完整口径见 [User Automation v5](../contracts/user-automation-v5.md)。
+离线演示可以使用已实际导出的文件：`eval:daily --config <json> --date YYYY-MM-DD --trace <trace.json>`；在线用户调用省略 `--trace`，配置还需指定 bundled `rovai` 可执行文件。配置为 `{ "timezone": "Asia/Shanghai", "output": "/private/daily", "cli": "/app/bin/rovai", "scope": { "campIds": [], "excludeCampIds": [], "excludeAutomationIds": [] } }`。手工导出入口是 `rovai app trace export`；完整口径见 [User Automation v6](../contracts/user-automation-v6.md)。
 
 ## 报告解读与维护
 
@@ -150,7 +162,7 @@ Main 先把规则统计、HTML／SVG 和分析输入写入指定工作区；每�
 
 ## 预算校准与订阅 CLI Judge
 
-十二个通用 Case 的时间上限已在 Suite 2.2.0 翻倍至 8／10 分钟；任务、评分及 A2A 限额保持。先按实际耗时校准，不能看候选分数后修改同一 campaign 的预算。`execution.maxParallelCases` 可设 1 或 2；基线／候选成对顺序执行，Case 间独立，启动前仍保留完整任务、Judge 和清理余量。定时宿主总预算上限仍为 45 分钟，无法容纳的任务明确 not_run；手动开发者 campaign 可设更长总预算。
+十二个通用 Case 的时间上限已在 Suite 2.2.0 翻倍至 8／10 分钟；任务、评分及 A2A 限额保持。先按实际耗时校准，不能看候选分数后修改同一 campaign 的预算。`execution.maxParallelCases` 可设 1 或 2；基线／候选成对顺序执行，Case 间独立，启动前仍保留完整任务、Judge 和清理余量。有限时间模板仍受 45 分钟宿主准入上限约束，无法容纳的任务明确 not_run；无时间上限 Weekly 不执行剩余时间预留判断。
 
 没有 API Key 时，可以用已登录的 Codex CLI 准备诊断 Judge：
 

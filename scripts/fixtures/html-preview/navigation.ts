@@ -74,6 +74,9 @@ export async function navigationAcceptance(window: BrowserWindow, userData: stri
   await run(`${stage}.querySelector('iframe').addEventListener('load',()=>window.previewUnauthenticatedLoad=true,{once:true})`)
   await activeFrame().executeJavaScript(`location.href='./blocked.html'`).catch(() => undefined)
   await wait(() => run('window.previewUnauthenticatedLoad === true'))
+  // The native load listener can precede React's delegated handler. Advance the
+  // controlled clock only once the new document's actual deadline is installed.
+  await wait(async () => { const state = await snapshot(); return state.document === 'loading' && state.channel === 'waiting' && state.pending > 0 })
   await run('window.previewTestClock.tick(60000)'); await pause()
   const unconfirmed = await snapshot()
   const response = await activeFrame().executeJavaScript('document.body.innerText')

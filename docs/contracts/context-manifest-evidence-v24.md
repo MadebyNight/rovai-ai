@@ -51,6 +51,6 @@ Direct and A2A preflight share the payload budget policy without creating files.
 the actual workspace, final materialization validates the environment, recomputes workspace evidence and
 the final payload budget, then freezes bytes. The workspace section is not silently truncated.
 
-Migration 155 admits new 24/24/6/RunFacts3 manifests. Existing frozen 22/22/4 and 23/23/5 input is accepted
+Migration 156 admits new 24/24/6/RunFacts3 manifests. Existing frozen 22/22/4 and 23/23/5 input is accepted
 only with exact frozen Delivery evidence and original payload digest; never relabeled or reformatted.
 Historical evidence remains readable. Model schema golden: `packages/contracts/fixtures/agent-run-context-v24.json`.

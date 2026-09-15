@@ -87,10 +87,10 @@ use rovai_core::{
         AUTOMATION_UPDATE_TOOL_NAME, AutomationCreateToolInput, AutomationGetToolInput,
         AutomationListQuery, AutomationListToolInput, AutomationProjectRef, AutomationRunListQuery,
         AutomationRunToolInput, AutomationService, AutomationUpdateToolInput,
-        AutomationVersionedToolInput, CloseAutomationCommand, CreateAutomationCommand,
-        DeleteAutomationCommand, RunAutomationCommand, UpdateAutomationCommand,
-        resolve_tool_automation_id, resolve_tool_member, resolve_tool_project,
-        schedule_from_tool_fields,
+        AutomationVersionedToolInput, CloseAutomationCommand, ConfigureAutomationTimeLimitCommand,
+        CreateAutomationCommand, DeleteAutomationCommand, RunAutomationCommand,
+        UpdateAutomationCommand, resolve_tool_automation_id, resolve_tool_member,
+        resolve_tool_project, schedule_from_tool_fields,
     },
     builtin_tool_evidence_projection::{
         BUILTIN_TOOL_EVIDENCE_PROJECTION_SCHEMA_VERSION, project_builtin_tool_invocation,
@@ -6279,6 +6279,21 @@ impl Core {
                     &self.output,
                     "automations.updated",
                     json!({ "reason": "created" }),
+                );
+                Ok(serde_json::to_value(execution.result)?)
+            }
+            "automations.configureTimeLimit" => {
+                let params: AutomationMutationParams<ConfigureAutomationTimeLimitCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                let execution = AutomationService::default().configure_time_limit(
+                    &mut database,
+                    &user_command_envelope(params.command_id, params.command),
+                )?;
+                emit(
+                    &self.output,
+                    "automations.updated",
+                    json!({"reason":"time_limit_configured"}),
                 );
                 Ok(serde_json::to_value(execution.result)?)
             }
