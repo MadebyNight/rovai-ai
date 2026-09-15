@@ -81,6 +81,10 @@ cargo test --workspace -- --list
 
 - `dsh_version_requires_the_first_acp_release` 拥有 CLI 最低版本边界：旧 rc 与 ACP 自报桥接版本不能取得准入。
   既有版本 owner 依赖其他 Runtime 的版本语义，不能证明本包的首个 ACP rc。
+- `dsh_native_configuration_fences_profile_and_credentials` 拥有原生配置变更 fence：此前遗漏
+  `profiles/acp/cordis.yml`，更换该 composition 的模型路由可能继续复用旧 Host；使用临时文件覆盖
+  profile/凭据/settings 变化、摘要稳定与不可读拒绝。已有权限 patch owner 不拥有配置输入摘要；
+  最小命令为 `cargo test -p rovai-core --lib dsh_native_configuration`，无需真实进程或数据库。
 - `dsh_observation_is_exact_consumed_once_and_never_infers_exit_from_text` 拥有官方 observer → ACP 的独立文件 seam：
   串 Session、重复消费、非零退出正文伪装成功、缺失用量字段。纯 ACP fixture 没有 DSH 的一次性观测文件，
   因此使用临时文件而非数据库/真实进程；Shell 与 usage 共用同一 owner。

@@ -181,7 +181,9 @@ DSH ACP 没有 system 字段，也不输出 Bash 的 canonical exit status。使
 
 接受上游 ACP 差异：无 session/load、additionalDirectories、手动 /compact 命令与 compact lifecycle；以 exact resume、
 原生持续系统层和原生工作区策略闭合对应行为。ACP used/size 只提供上下文占用；官方 committed
-assistant/message 的逐调用 usage 补充独立 Token/cache buckets，缺失字段及 cost 保持 unknown。
+assistant/message 与自动 compaction/summary 的逐调用 usage 补充独立 Token/cache buckets；摘要通过
+compaction/start 的原生 ID/owner turn 关联，不读取正文。空闲手动压缩无 active turn，不归入后续 Run；
+缺失字段及 cost 保持 unknown。
 SSE MCP、MCP resources/prompts 与 Client FS/Terminal bridge 未在该 profile 暴露；标准 stdio/HTTP 与原生工具负责实际执行。
 上游插件可实现的行为不因此标成 Unsupported；自动压缩与恢复、MCP/Skill scope 等仍按真实证据逐项验收。
 

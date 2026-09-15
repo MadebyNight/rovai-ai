@@ -169,6 +169,23 @@ fn classify_high_value_runtime_error(
     bool,
 ) {
     let runtime_name = runtime_display_name(runtime_kind);
+    if runtime_kind == AdapterKind::DeepseekHarness
+        && contains_any(
+            lower,
+            &[
+                "no api key for provider route",
+                "no credential for provider route",
+            ],
+        )
+    {
+        return (
+            RuntimeFailureOrigin::Runtime,
+            RuntimeFailurePhase::Authentication,
+            "runtime_authentication_required".to_string(),
+            "DeepSeek Harness 需要配置 Provider 凭据".to_string(),
+            false,
+        );
+    }
     if contains_any(
         lower,
         &[
@@ -695,6 +712,24 @@ mod tests {
 
     #[test]
     fn classifies_auth_quota_model_and_permission_failures_with_stable_codes() {
+        for detail in [
+            "ACP error -32603: turn failed: llm-deepseek: no API key for provider route",
+            "ACP error -32603: turn failed: llm-pi-ai: no credential for provider route",
+        ] {
+            let missing_dsh_key = public_runtime_failure_from_output(
+                AdapterKind::DeepseekHarness,
+                RuntimeFailureOrigin::Runtime,
+                RuntimeFailurePhase::Execution,
+                "runtime_prompt_runtime_error",
+                "DeepSeek Harness 未能完成运行",
+                Some(detail),
+                &[],
+                true,
+            );
+            assert_eq!(missing_dsh_key.code, "runtime_authentication_required");
+            assert_eq!(missing_dsh_key.phase, RuntimeFailurePhase::Authentication);
+            assert!(!missing_dsh_key.retryable);
+        }
         let cases = [
             (
                 "Authentication failed: token expired",

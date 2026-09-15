@@ -2747,6 +2747,14 @@ pub fn parse_acp_usage_message(
                 if record["schemaVersion"] != 1 || record["sessionId"] != params["sessionId"] {
                     continue;
                 }
+                let source = match record["sourceEvent"]
+                    .as_str()
+                    .unwrap_or("assistant/message")
+                {
+                    "assistant/message" => "native_assistant",
+                    "compaction/summary" => "native_compaction",
+                    _ => continue,
+                };
                 let usage = &record["usage"];
                 let fields = RuntimeUsageFields {
                     // DSH TokenUsage defines input/cache buckets as disjoint.
@@ -2762,8 +2770,8 @@ pub fn parse_acp_usage_message(
                     continue;
                 }
                 observations.push(ParsedRuntimeUsage {
-                    identity_suffix: format!("native_assistant:{seq}"),
-                    dialect_id: "dsh-committed-call-usage-v1".to_string(),
+                    identity_suffix: format!("{source}:{seq}"),
+                    dialect_id: "dsh-committed-call-usage-v2".to_string(),
                     source: "runtime_event".to_string(),
                     scope: "turn".to_string(),
                     counter_mode: RuntimeUsageCounterMode::Delta,
@@ -3801,10 +3809,12 @@ mod tests {
             "session/update",
             &json!({"sessionId":"dsh-session","update":{"sessionUpdate":"usage_update","_meta":{"dshUsage":[
                 {"schemaVersion":1,"sessionId":"wrong-session","seq":8,"turn":1,"usage":{"inputTokens":99}},
-                {"schemaVersion":1,"sessionId":"dsh-session","seq":9,"turn":1,"usage":{"inputTokens":20,"outputTokens":7,"cacheReadTokens":80}}
+                {"schemaVersion":1,"sessionId":"dsh-session","seq":9,"turn":1,"usage":{"inputTokens":20,"outputTokens":7,"cacheReadTokens":80}},
+                {"schemaVersion":1,"sessionId":"dsh-session","seq":10,"turn":1,"sourceEvent":"compaction/summary","usage":{"inputTokens":30,"outputTokens":5,"cacheWriteTokens":50}},
+                {"schemaVersion":1,"sessionId":"dsh-session","seq":11,"turn":1,"sourceEvent":"unknown","usage":{"inputTokens":999}}
             ]}}}),
         );
-        assert_eq!(dsh.len(), 1);
+        assert_eq!(dsh.len(), 2);
         assert_eq!(dsh[0].counter_mode, RuntimeUsageCounterMode::Delta);
         assert_eq!(
             dsh[0].input_semantics,
@@ -3815,6 +3825,10 @@ mod tests {
         assert_eq!(dsh[0].fields.cache_write_input_tokens, None);
         assert_eq!(dsh[0].fields.reasoning_output_tokens, None);
         assert!(dsh[0].cost.is_none());
+        assert_eq!(dsh[1].identity_suffix, "native_compaction:10");
+        assert_eq!(dsh[1].native_turn_id.as_deref(), Some("1"));
+        assert_eq!(dsh[1].fields.uncached_input_tokens, Some(30));
+        assert_eq!(dsh[1].fields.cache_write_input_tokens, Some(50));
 
         let opencode_cache_write: Value = serde_json::from_str(include_str!(
             "../tests/fixtures/runtime-usage/opencode-cache-write.json"

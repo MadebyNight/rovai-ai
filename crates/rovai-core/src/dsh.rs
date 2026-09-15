@@ -52,6 +52,10 @@ pub fn native_configuration_digest(cwd: &Path) -> Result<String> {
             .map(|p| p.join(".dsh"))
     })
     .context("DeepSeek Harness native Home is unavailable")?;
+    configuration_digest(&home, cwd)
+}
+
+fn configuration_digest(home: &Path, cwd: &Path) -> Result<String> {
     let mut entries = Vec::new();
     for path in [
         home.join("settings.yaml"),
@@ -59,6 +63,7 @@ pub fn native_configuration_digest(cwd: &Path) -> Result<String> {
         home.join(".env"),
         home.join("cordis.patch.yml"),
         home.join("profiles/acp/package.json"),
+        home.join("profiles/acp/cordis.yml"),
         home.join("profiles/acp/cordis.patch.yml"),
         cwd.join(".env"),
     ] {
@@ -342,6 +347,31 @@ fn private_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dsh_native_configuration_fences_profile_and_credentials() {
+        let root = std::env::temp_dir().join(format!("rovai-dsh-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("profiles/acp")).unwrap();
+        let mut previous = configuration_digest(&root, &root).unwrap();
+        // The old digest omitted the profile composition: changing its model
+        // route could silently reuse a Host with the previous configuration.
+        for (path, contents) in [
+            ("profiles/acp/cordis.yml", "fixture-profile-route"),
+            (".credentials.yaml", "fixture-private-key"),
+            ("settings.yaml", "fixture-provider-settings"),
+        ] {
+            fs::write(root.join(path), contents).unwrap();
+            let next = configuration_digest(&root, &root).unwrap();
+            assert_ne!(previous, next, "{path} must fence native configuration");
+            assert_eq!(next, configuration_digest(&root, &root).unwrap());
+            assert!(!next.contains(contents));
+            previous = next;
+        }
+        fs::remove_file(root.join("settings.yaml")).unwrap();
+        fs::create_dir(root.join("settings.yaml")).unwrap();
+        assert!(configuration_digest(&root, &root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn dsh_version_requires_the_first_acp_release() {

@@ -42,20 +42,35 @@ export function apply(ctx, config) {
     refresh()
     agent.ctx.on('tools/changed', refresh)
   })
+  // Automatic compaction has a durable owner turn on its start event. Idle
+  // manual compaction has turn=null and cannot be charged to a later AgentRun.
+  const compactionTurns = new Map()
   // Observe committed native per-call accounting, never prompt bodies or a
   // replayed Session total. ACP's occupancy gauge is a separate measurement.
   ctx.on('session/event', (session, event) => {
-    if (session.header.parentSession != null || event.type !== 'assistant/message' || !event.data.usage) return
+    if (session.header.parentSession != null) return
+    const compactionKey = JSON.stringify([session.id, event.data?.compactionId])
+    if (event.type === 'compaction/start') {
+      compactionTurns.set(compactionKey, event.data.turn)
+      return
+    }
+    if (event.type === 'compaction/end') {
+      compactionTurns.delete(compactionKey)
+      return
+    }
+    if (!['assistant/message', 'compaction/summary'].includes(event.type) || !event.data?.usage) return
+    const turn = event.type === 'compaction/summary' ? compactionTurns.get(compactionKey) : event.data.turn
+    if (event.type === 'compaction/summary' && !Number.isSafeInteger(turn)) return
     const usage = {}
     for (const field of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens']) {
       const value = event.data.usage[field]
       if (Number.isSafeInteger(value) && value >= 0) usage[field] = value
     }
-    if (!Number.isSafeInteger(event.seq) || !Number.isSafeInteger(event.data.turn)) throw new Error('rovai_dsh_usage_identity_invalid')
+    if (!Number.isSafeInteger(event.seq) || !Number.isSafeInteger(turn)) throw new Error('rovai_dsh_usage_identity_invalid')
     const key = createHash('sha256').update(session.id).digest('hex')
     const target = join(config.observationRoot, `${key}.usage-${event.seq}.json`)
     writeFileSync(`${target}.tmp`, JSON.stringify({ schemaVersion: 1, sessionId: session.id,
-      seq: event.seq, turn: event.data.turn, usage }), { mode: 0o600 })
+      seq: event.seq, turn, sourceEvent: event.type, usage }), { mode: 0o600 })
     renameSync(`${target}.tmp`, target)
   })
   // The official synchronous, immutable result observer precedes the durable

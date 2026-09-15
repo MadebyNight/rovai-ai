@@ -38,8 +38,9 @@ Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery
 逐项 Host、Session、Bootstrap、Compaction、Skill、MCP、权限、工具、CLI 与 Monitoring 结果见
 [DSH Parity Matrix](research/deepseek-harness-runtime/acp-0.1.5-parity.md)。该表记录真实通过项和未观测项，
 不从共享代码或普通 handshake 推断 qualified。
-真实官方模型已通过普通/续轮、命令输出、文件工具、Skills、全部 23 项 Built-in CLI 与原生压缩验证；
-余额耗尽后的 Missing-Send 和 Core 取消复测仍待完成。测试替代模型的证据单列，不混作真实 Provider 验收。
+真实官方模型已通过普通/续轮、命令输出、文件工具、Skills、全部 23 项 Built-in CLI 与原生压缩验证。
+按用户授权使用 MiniMax-M3 原生 BYOK 补齐完整冷恢复/取消/无效 ID fallback、Missing-Send、
+MCP 生命周期与安全、压缩后的 Skill/MCP/审批组合；测试替代模型的证据仍单列。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 

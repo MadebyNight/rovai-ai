@@ -3,15 +3,29 @@
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { prepareDshSmokeHome } from './lib/dsh-smoke-home.mjs'
 
 const executable = process.env.ROVAI_DEEPSEEK_HARNESS_BIN ?? 'dsh'
 const root = await mkdtemp(join(tmpdir(), 'rovai-dsh-native-parity-'))
 const project = join(root, 'project')
 await mkdir(project)
+await prepareDshSmokeHome(join(root, 'home'))
+const skillName = 'dsh-parity-continuity'
+const skillDirectory = join(project, '.dsh', 'skills', skillName)
+await mkdir(skillDirectory, { recursive: true })
+const skillPath = join(skillDirectory, 'SKILL.md')
+const mcpCalls = join(root, 'mcp-calls.txt')
+const mcpServers = [{ name: 'parity', command: process.execPath,
+  args: [resolve(import.meta.dirname, '../crates/rovai-core/tests/fixtures/mcp-smoke-server.mjs')],
+  env: [{ name: 'ROVAI_MCP_SMOKE_SOURCE', value: 'native-parity' },
+    { name: 'ROVAI_MCP_SMOKE_CALL_MARKER', value: mcpCalls }] }]
+const callCount = async () => (await readFile(mcpCalls, 'utf8').catch(error => {
+  if (error.code === 'ENOENT') return ''; throw error
+})).split('\n').filter(Boolean).length
 const plugin = resolve(import.meta.dirname, '../crates/rovai-core/src/dsh/bootstrap.mjs')
 const controlPlugin = join(root, 'compact-control.mjs')
 await writeFile(controlPlugin, `
@@ -88,30 +102,40 @@ async function startHost(automatic = false) {
   const patch = join(privateRoot, 'patch.json')
   await writeFile(patch, JSON.stringify([
     { id:'sandbox-policy', config:{ mode:'danger-full-access', workspaceRoot:project } },
-    { id:'approval', config:{ policy:'never' } },
+    { id:'approval', config:{ policy:'ask' } },
+    { id:'permission', disabled:true },
     { id:'compaction-basic', config:{ retainTokens:0, thresholdRatio:0.04, compactionRetries:0, maxTokens:2048, auto:automatic } },
-    { insert:[{ id:'rovai-bootstrap', name:plugin, config:{bindingRoot,observationRoot} },
+    { insert:[{ id:'rovai-bootstrap', name:plugin, config:{bindingRoot,observationRoot,approvalPolicy:'ask'} },
       { id:'parity-compact-control', name:controlPlugin, config:{request,response} }] }
   ]), { mode:0o600 })
   const child = spawn(executable, ['--profile','acp','--patch',patch], {
     cwd:project, env:{...process.env, DSH_HOME:join(root,'home'), DSH_AGENTS_HOME:join(root,'agents-home'), DSH_TELEMETRY_DISABLED:'1'},
     stdio:['pipe','pipe','pipe'], detached:process.platform !== 'win32'
   })
-  let sequence = 0, log = ''
+  let sequence = 0, log = '', approval = 'allow-once', approvalCount = 0
   const pending = new Map(), events = []
   const closed = new Promise(resolve => child.once('close', resolve))
   child.stderr.on('data', chunk => { log = `${log}${chunk}`.slice(-16384) })
   createInterface({input:child.stdout}).on('line',line=>{
     let message
     try {message=JSON.parse(line)} catch {return}
-    const waiting=pending.get(message.id)
+    const waiting=message.method ? undefined : pending.get(message.id)
     if(waiting){pending.delete(message.id);clearTimeout(waiting.timer);message.error?waiting.reject(new Error(JSON.stringify(message.error))):waiting.resolve(message.result)}
-    else {events.push(message); if(message.id) child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{outcome:{outcome:'selected',optionId:'allow-once'}}})+'\n')}
+    else {
+      events.push(message)
+      if(message.id !== undefined && message.method === 'session/request_permission') {
+        approvalCount++
+        child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:message.id,result:{outcome:{outcome:'selected',optionId:approval}}})+'\n')
+      }
+    }
   })
   child.once('exit',code=>{for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error(`DSH exited ${code}`))}pending.clear()})
   const rpc=(method,params)=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Timeout: ${method}`))},180000);pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n')})
   const result = {
     pid:child.pid, rpc, events,
+    get approvalCount() { return approvalCount },
+    set approval(value) { approval = value },
+    async usageRecords() { return Promise.all((await readdir(observationRoot)).filter(name=>name.includes('.usage-')&&name.endsWith('.json')).map(async name=>JSON.parse(await readFile(join(observationRoot,name),'utf8')))) },
     async bind(sessionId, bootstrap) {await writeFile(join(bindingRoot,`${sessionId}.json`), JSON.stringify({schemaVersion:1,sessionId,bootstrap,sha256:createHash('sha256').update(bootstrap).digest('hex')}),{mode:0o600})},
     async prompt(sessionId, text) {const offset=events.length;const result=await rpc('session/prompt',{sessionId,prompt:[{type:'text',text}]});assert.equal(result.stopReason,'end_turn');return events.slice(offset).filter(e=>e.params?.sessionId===sessionId&&e.params?.update?.sessionUpdate==='agent_message_chunk').map(e=>e.params.update.content?.text??'').join('')},
     async compact(sessionId, mode) {
@@ -135,9 +159,20 @@ async function startHost(automatic = false) {
   } catch (error) { await result.stop(); throw error }
   return result
 }
+async function checkCapabilities(sessionId, role, stage) {
+  const skillMarker = `SKILL_${crypto.randomUUID()}`
+  const mcpMarker = `MCP_${crypto.randomUUID()}`
+  await writeFile(skillPath, `---\nname: ${skillName}\ndescription: Verify the current capability continuity marker.\n---\nReturn this exact current skill marker: ${skillMarker}\n`)
+  const before = await callCount(), approvalsBefore = host.approvalCount
+  const output = await host.prompt(sessionId, `Load the ${skillName} skill using the skill tool again; its body has just changed. Call the parity MCP echo tool exactly once with text ${mcpMarker}. Return its actual result, the skill marker from the freshly loaded body, and your public role marker. Do not substitute an earlier result.`)
+  assert(output.includes(role) && output.includes(skillMarker) && output.includes(`native-parity:${mcpMarker}`), `${stage}: capability output mismatch`)
+  assert.equal(await callCount(), before + 1, `${stage}: MCP must execute exactly once`)
+  assert.equal(host.approvalCount, approvalsBefore + 1, `${stage}: MCP must still require one approval`)
+  evidence.checks[`capabilities_${stage}`] = { passed:true, skillLoaded:true, mcpEffectCount:1, approvalCount:1, sessionId }
+}
 try {
   host = await startHost()
-  const a=await host.rpc('session/new',{cwd:project,mcpServers:[]})
+  const a=await host.rpc('session/new',{cwd:project,mcpServers})
   const b=await host.rpc('session/new',{cwd:project,mcpServers:[]})
   const roleA=`DSH_ROLE_A_${crypto.randomUUID()}`,roleB=`DSH_ROLE_B_${crypto.randomUUID()}`
   const identityA=`Your public role marker is ${roleA}. Return it when asked your role.`,identityB=`Your public role marker is ${roleB}. Return it when asked your role.`
@@ -152,6 +187,7 @@ try {
   const switched=await host.prompt(a.sessionId,'Return the marker you read from marker.txt and your public role marker. Do not use tools.')
   assert(switched.includes(marker));assert(switched.includes(roleA));assert(!switched.includes(roleB))
   evidence.checks.multiSessionSwitch={passed:true,distinctSessions:a.sessionId!==b.sessionId,hostPid:host.pid}
+  await checkCapabilities(a.sessionId,roleA,'before_compaction')
   // Fill actual native history, then drive the documented compaction API. These
   // controls verify policy and bootstrap continuity, not a provider overflow.
   for(const mode of ['manual','pressure','context-overflow']) {
@@ -159,24 +195,27 @@ try {
     await host.prompt(a.sessionId,`Read this disposable history, then reply READY only.\n${filler}`)
     const compact=await host.compact(a.sessionId,mode)
     assert(compact.completed&&compact.after>compact.before,JSON.stringify(compact))
+    if(mode==='manual') assert.equal((await host.usageRecords()).filter(record=>record.sourceEvent==='compaction/summary').length,0,'idle manual usage must not be attributed to a later Run')
     const after=await host.prompt(a.sessionId,'Return your public role marker. Do not use tools.')
     assert(after.includes(roleA));assert(!after.includes(roleB))
     evidence.checks[`compaction_${mode}`]={...compact,bootstrapRetained:true,trigger:'official API control; native summarizer'}
+    await checkCapabilities(a.sessionId,roleA,mode)
   }
   await host.rpc('session/close',{sessionId:b.sessionId})
   await host.rpc('session/close',{sessionId:a.sessionId})
   const oldPid=host.pid
   await host.stop();host=await startHost()
-  await host.rpc('session/resume',{sessionId:a.sessionId,cwd:project,mcpServers:[]})
+  await host.rpc('session/resume',{sessionId:a.sessionId,cwd:project,mcpServers})
   await host.bind(a.sessionId,identityA)
   const restored=await host.prompt(a.sessionId,'Return your public role marker. Do not use tools.')
   assert(restored.includes(roleA));assert(!restored.includes(roleB))
   evidence.checks.compactedColdResume={passed:true,sessionId:a.sessionId,hostChanged:host.pid!==oldPid}
+  await checkCapabilities(a.sessionId,roleA,'cold_resume')
   await assert.rejects(host.rpc('session/resume',{sessionId:'missing-session',cwd:project,mcpServers:[]}))
   evidence.checks.invalidResume={rejected:true}
   await host.rpc('session/close',{sessionId:a.sessionId})
   await host.stop(); host = await startHost(true)
-  await host.rpc('session/resume',{sessionId:a.sessionId,cwd:project,mcpServers:[]})
+  await host.rpc('session/resume',{sessionId:a.sessionId,cwd:project,mcpServers})
   await host.bind(a.sessionId,identityA)
   const filler=Array.from({length:2500},(_,i)=>`Disposable automatic-compaction observation ${i}: item completed with fixed result ${i}.`).join('\n')
   await host.prompt(a.sessionId,`Read this disposable history, then reply READY only.\n${filler}`)
@@ -185,11 +224,26 @@ try {
   const afterPressure = await host.compact(a.sessionId,'snapshot')
   assert(automatic.includes(roleA)); assert(afterPressure.after > beforePressure.after)
   evidence.checks.automaticPressure={passed:true,bootstrapRetained:true,before:beforePressure.after,after:afterPressure.after}
+  await checkCapabilities(a.sessionId,roleA,'automatic_pressure')
   const beforeOverflow = await host.compact(a.sessionId,'arm-overflow')
   const retried = await host.prompt(a.sessionId,'Return your public role marker. Do not use tools.')
   const afterOverflow = await host.compact(a.sessionId,'snapshot')
   assert(retried.includes(roleA)); assert(afterOverflow.after > beforeOverflow.after)
   evidence.checks.automaticOverflowRetry={passed:true,bootstrapRetained:true,trigger:'one controlled CONTEXT_WINDOW_EXCEEDED at official llm/stream seam; real native compaction and retried model response'}
+  await checkCapabilities(a.sessionId,roleA,'automatic_overflow_retry')
+  const effectsBeforeDeny = await callCount(), approvalsBeforeDeny = host.approvalCount
+  host.approval = 'reject-once'
+  await host.prompt(a.sessionId, `Call the parity MCP echo tool exactly once with text DENIED_${crypto.randomUUID()}. If the tool is denied, report denial and do not retry or use another tool.`)
+  assert.equal(await callCount(), effectsBeforeDeny)
+  assert.equal(host.approvalCount, approvalsBeforeDeny + 1)
+  evidence.checks.permissionAfterCompaction = { denied:true, effectCount:0 }
+  host.approval = 'allow-once'
+  const summaryUsage = (await host.usageRecords()).filter(record=>record.sourceEvent==='compaction/summary')
+  assert(summaryUsage.length>=2,'automatic compaction summary usage was omitted')
+  assert(summaryUsage.every(record=>Number.isSafeInteger(record.turn)&&record.turn>=0&&Number.isSafeInteger(record.usage.inputTokens)))
+  assert.equal(new Set(summaryUsage.map(record=>record.seq)).size,summaryUsage.length)
+  evidence.checks.compactionUsage={passed:true,automaticSummaryCalls:summaryUsage.length,idleManualUsageExcluded:true,
+    observations:summaryUsage.map(({seq,turn,usage})=>({seq,turn,usage}))}
   for(const mode of ['cancelled','failed']) {
     const result = await host.compact(a.sessionId,mode)
     assert(result.rejected); assert.equal(result.before,result.after)

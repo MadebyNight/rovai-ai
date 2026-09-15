@@ -7,7 +7,8 @@ const ACP_ADAPTERS = new Set([
   'qwen-code',
   'trae-cn-cli',
   'kimi-code-cli',
-  'grok-build'
+  'grok-build',
+  'deepseek-harness'
 ])
 
 export function validateAcpRecoveryProtocolFixture(fixture) {

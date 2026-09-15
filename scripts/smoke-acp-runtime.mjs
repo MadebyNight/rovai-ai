@@ -222,6 +222,8 @@ try {
     let profile = await request('members.get', { agentId })
     const explicitModelId = specification.adapterKind === 'codebuddy-cli'
       ? process.env.ROVAI_CODEBUDDY_MODEL?.trim()
+      : specification.adapterKind === 'deepseek-harness'
+        ? process.env.ROVAI_DSH_MODEL?.trim()
       : specification.adapterKind === 'zcode-app'
         ? process.env.ROVAI_ZCODE_MODEL?.trim()
       : null

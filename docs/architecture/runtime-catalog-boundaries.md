@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-15
 ---
 
 # Runtime Catalog Boundaries
@@ -544,6 +544,9 @@ Windows x64 与 macOS arm64 分别以平台专属冻结证据标记 Qualified；
 分别记录；模型来自原生 grouped configOptions，保留 provider/model 的不透明 ID，reasoning 通过标准
 set_config_option 设置并核对。普通 Probe 使用该 Runtime 原生 Home、临时 cwd，不发送模型请求；
 认证字段沿用 ACP 握手语义，不证明 Key 可用、余额或模型生成成功。
+ACP composition 的 provider/model 是该入口自己的 native default，独立于交互入口的
+agent-default-model settings。BYOK 仍通过原生 llm-pi-ai providers 与 ACP profile patch 配置，
+Rovai 显式选模使用真实 catalog ID；产品不读取其他 Runtime 的凭据。
 
 共享 ACP Host/Fleet 拥有 resident_multi_session、租约、LRU 与停止。Run-local MCP evidence 与 Session 模型
 不进入进程兼容键；真实 MCP 定义、权限、cwd、原生 settings/credentials/profile 配置摘要变化会 fence 复用。
@@ -568,7 +571,9 @@ settings 文件不变。`never` 拒绝需要升级权限的请求，不表示 Co
 因此 `ask` 通过官方 pre-execute 进入原生 ACP Approval，只读通过官方 guard 拒绝这类未知副作用 Tool。
 read-only Run 只能收窄；不借用其他 Runtime Home 或扩张附件写权限。
 
-ACP usage_update 的 used/size 仅形成 context gauge。官方 committed assistant/message 的逐调用 usage
-通过私有 observer 按 Session/turn/seq 归属并一次性消费；input 为 uncached bucket，独立保留 cache read/write、
+ACP usage_update 的 used/size 仅形成 context gauge。官方 committed assistant/message 与自动
+compaction/summary 的逐调用 usage 通过私有 observer 按 Session/turn/seq 归属并一次性消费。摘要从
+compaction/start 的原生 compactionId/owner turn 取得归属，不收集正文；空闲手动压缩的 null turn 不归入
+后续 Run。input 为 uncached bucket，独立保留 cache read/write、
 output 与 reasoning。缺失字段与 cost 保持 unknown，不从占用或模型文本估算。逐轴差异、真实行为证据及
 尚未闭合项见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；preview 不构成 First-Class 声明。
