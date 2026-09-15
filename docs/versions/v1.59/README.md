@@ -72,4 +72,4 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 
 2026-09-15 用户确认同窗口跨 Camp 直接复用预览，采用分层 LRU、64 个本机逻辑句柄容量回收和独立候选刷新；
 授权 worktree 实现、验证后 PR 合并 main。范围与取舍见 [V1.59-D07](decisions.md#v1-59-d07)，
-当前协议见 [File Preview v13](../../contracts/file-preview-v13.md)。本增量不改变其他 Server/Runtime 验收状态。
+当前协议见 [File Preview v14](../../contracts/file-preview-v14.md)。本增量不改变其他 Server/Runtime 验收状态。

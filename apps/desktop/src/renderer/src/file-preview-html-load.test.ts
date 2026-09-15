@@ -11,6 +11,24 @@ function fixture() {
   return { state, publish, snapshot: () => snapshot! }
 }
 
+it('keeps document and page communication independent from recoverable server diagnostics', () => {
+  const { state, snapshot } = fixture()
+  state.connected('A'); state.state('A', 'loaded')
+  state.serverDiagnostics('A', 'unavailable')
+  expect(snapshot()).toMatchObject({ document: 'loaded', channel: 'connected', serverDiagnostics: 'unavailable', notice: null })
+  state.connecting(); state.connected('A')
+  expect(snapshot().serverDiagnostics).toBe('unavailable')
+  state.serverDiagnostics('A', 'connected')
+  expect(snapshot()).toMatchObject({ document: 'loaded', channel: 'connected', serverDiagnostics: 'connected' })
+  state.connected('B')
+  state.serverDiagnostics('A', 'unavailable')
+  expect(snapshot().serverDiagnostics).toBe('waiting')
+  state.serverDiagnostics('B', 'unavailable')
+  vi.advanceTimersByTime(12_000)
+  expect(snapshot()).toMatchObject({ document: 'unresponsive', channel: 'connected', serverDiagnostics: 'unavailable' })
+  state.close()
+})
+
 it('gives the next root document its own deadline without extending it for repeated handshakes', () => {
   const { state, snapshot } = fixture()
   state.connected('A'); state.state('A', 'loaded')

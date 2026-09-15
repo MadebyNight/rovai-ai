@@ -29,6 +29,7 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
   const diagnostics: HtmlPreviewDiagnostic[] = []
   const keys = new Map<string, number>()
   const abort = new AbortController()
+  let serverDiagnosticsState: 'waiting' | 'connected' | 'unavailable' = 'waiting'
   let indexes: { document: Document; index: ReturnType<typeof createIndex>; offset: number }[] = []
   const clean = (value: unknown, limit: number): string => {
     try { return String(value).slice(0, limit) } catch { return '未知错误' }
@@ -169,7 +170,10 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
       if (data.type === 'connect' && typeof data.connectionId === 'string' && data.connectionId.length <= 128) {
         connection = { id: data.connectionId, origin: event.origin }
         send('connected'); state(); send('find-ready')
-        if (event.origin !== config.origin && !config.browserDocument) startServerDiagnostics()
+        if (event.origin !== config.origin && !config.browserDocument) {
+          send('server-diagnostics', { state: serverDiagnosticsState })
+          startServerDiagnostics()
+        }
         diagnostics.forEach(diagnostic => send('diagnostic', { diagnostic }))
       } else if (connection && data.connectionId === connection.id && data.documentId === config.documentId) command(data)
       return
@@ -214,21 +218,55 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
     // One stream per root document: subframes relay their own errors to it.
     // A stream in every iframe would exhaust HTTP/1 browser connection slots.
     void (async () => {
-    try {
-      const response = await fetch(`${config.origin}/__rovai-preview/events?documentId=${encodeURIComponent(config.documentId)}`, { signal: abort.signal, credentials: 'same-origin', cache: 'no-store' })
-      if (!response.ok || !response.body) throw new Error('预览诊断通道不可用。')
-      const reader = response.body.getReader(), decoder = new TextDecoder()
-      let pending = ''
-      for (;;) {
-        const next = await reader.read()
-        if (next.done) break
-        pending += decoder.decode(next.value, { stream: true })
-        if (pending.length > 128 * 1024) throw new Error('诊断响应超过上限。')
-        const lines = pending.split('\n'); pending = lines.pop() ?? ''
-        for (const line of lines) if (line) add(JSON.parse(line) as HtmlPreviewDiagnostic)
+      // This allowance belongs to this document's lifetime, including successful
+      // reconnects and repeated host handshakes. It is not a background poller.
+      const retryDelays = [1000, 2000, 4000]
+      let retries = 0
+      while (!abort.signal.aborted) {
+        const attempt = new AbortController()
+        const stop = (): void => attempt.abort()
+        abort.signal.addEventListener('abort', stop, { once: true })
+        // Only connection establishment is timed. An idle healthy stream stays open.
+        const deadline = setTimeout(stop, 12_000)
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+        let revoked = false
+        try {
+          const response = await fetch(`${config.origin}/__rovai-preview/events?documentId=${encodeURIComponent(config.documentId)}`, { signal: attempt.signal, credentials: 'same-origin', cache: 'no-store' })
+          clearTimeout(deadline)
+          revoked = [403, 404, 410].includes(response.status)
+          reader = response.body?.getReader()
+          if (!response.ok || !reader) throw new Error('Diagnostic stream unavailable')
+          if (abort.signal.aborted) return
+          serverDiagnosticsState = 'connected'
+          send('server-diagnostics', { state: serverDiagnosticsState })
+          const decoder = new TextDecoder()
+          let pending = ''
+          for (;;) {
+            const next = await reader.read()
+            if (next.done) break
+            pending += decoder.decode(next.value, { stream: true })
+            if (pending.length > 128 * 1024) throw new Error('Diagnostic response exceeded limit')
+            const lines = pending.split('\n'); pending = lines.pop() ?? ''
+            for (const line of lines) if (line) add(JSON.parse(line) as HtmlPreviewDiagnostic)
+          }
+        } catch { /* HTTP diagnostics do not determine page communication or state. */ }
+        finally {
+          clearTimeout(deadline)
+          abort.signal.removeEventListener('abort', stop)
+          attempt.abort()
+          await reader?.cancel().catch(() => undefined)
+          reader?.releaseLock()
+        }
+        if (abort.signal.aborted) return
+        serverDiagnosticsState = 'unavailable'
+        send('server-diagnostics', { state: serverDiagnosticsState })
+        if (revoked || retries === retryDelays.length) return
+        await new Promise<void>(resolve => {
+          const stopWaiting = (): void => { clearTimeout(timer); resolve() }
+          const timer = setTimeout(() => { abort.signal.removeEventListener('abort', stopWaiting); resolve() }, retryDelays[retries++])
+          abort.signal.addEventListener('abort', stopWaiting, { once: true })
+        })
       }
-      if (!abort.signal.aborted) throw new Error('预览诊断通道已断开。')
-    } catch (error) { if (!abort.signal.aborted) { report('channel', error instanceof Error ? error.message : '预览诊断通道不可用。'); send('channel-unavailable') } }
     })()
   }
   addEventListener('pagehide', () => { abort.abort(); observer.disconnect(); children.clear(); indexes = []; connection = null }, { once: true })

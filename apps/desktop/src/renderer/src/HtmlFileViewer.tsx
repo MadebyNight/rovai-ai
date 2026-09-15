@@ -35,7 +35,7 @@ function HtmlPageViewer({ tab, pathControl, updateAction, candidate }: {
   const detailsId = useId()
   useHtmlFileFind(iframeRef, sourceMode || candidate ? null : channel)
   const { open, reload, toggleHtmlSource, resolvedTheme, completeHtmlRefresh, saveReading, displayed } = useFilePreview()
-  const [loadState, setLoadState] = useState<HtmlPreviewLoadSnapshot>({ documentId: null, document: 'loading', channel: 'waiting', failure: null, notice: null })
+  const [loadState, setLoadState] = useState<HtmlPreviewLoadSnapshot>({ documentId: null, document: 'loading', channel: 'waiting', serverDiagnostics: 'waiting', failure: null, notice: null })
   const { document: documentState, channel: channelState, failure } = loadState
   const load = useRef<HtmlPreviewLoadState | null>(null)
   const [diagnostics, setDiagnostics] = useState<HtmlPreviewDiagnostic[]>([])
@@ -47,7 +47,7 @@ function HtmlPageViewer({ tab, pathControl, updateAction, candidate }: {
 
   useEffect(() => {
     if (!channel || !preview) return
-    const state = new HtmlPreviewLoadState(setLoadState)
+    const state = new HtmlPreviewLoadState(setLoadState, preview.sandboxedDocument === undefined)
     load.current = state; setDiagnostics([]); setNotice(null); setDetailsOpen(false)
     let positionedDocument: string | null = null
     const unsubscribe = channel.subscribe(message => {
@@ -76,8 +76,10 @@ function HtmlPageViewer({ tab, pathControl, updateAction, candidate }: {
           if (index >= 0) return diagnostic.status != null && items[index].status == null ? items.map((item, offset) => offset === index ? diagnostic : item) : items
           return items.length >= 100 ? items : [...items, diagnostic]
         })
-      } else if (message.type === 'channel-unavailable') state.unavailable()
-      else if (message.type === 'fragment-result' && typeof message.found === 'boolean') setNotice(message.found ? null : '未找到指定的页内位置。')
+      } else if (message.type === 'server-diagnostics' && typeof message.documentId === 'string'
+        && (message.state === 'waiting' || message.state === 'connected' || message.state === 'unavailable')) {
+        state.serverDiagnostics(message.documentId, message.state)
+      } else if (message.type === 'fragment-result' && typeof message.found === 'boolean') setNotice(message.found ? null : '未找到指定的页内位置。')
       else if (message.type === 'link' && typeof message.href === 'string' && message.href.startsWith('file:') && message.href.length <= 4096 && current.current.file) {
         void open({ kind: 'child_of_handle', parentHandleId: current.current.file.handleId, rawReference: message.href, allowSystemOpen: true })
           .then(outcome => setNotice(outcome.kind === 'error' ? outcome.error.message : null))
@@ -97,26 +99,29 @@ function HtmlPageViewer({ tab, pathControl, updateAction, candidate }: {
   }, [candidate, tab.id, tab.file?.handleId, documentState, channelState, failure, completeHtmlRefresh, displayed])
 
   useEffect(() => { if (fragment) channel?.send('fragment', { fragment }) }, [channel, fragment])
-  if (!preview || !tab.file) return null
-  const safe = validPreviewOrigin(preview, window.location.origin)
+  const safe = Boolean(preview && validPreviewOrigin(preview, window.location.origin))
   const currentDiagnostics = loadState.documentId ? diagnostics : []
   const scriptFailed = currentDiagnostics.some(item => item.kind === 'script' || item.kind === 'promise')
   const resourceFailed = currentDiagnostics.some(item => item.kind === 'resource' || item.kind === 'policy')
   const documentFailed = documentState === 'failed' || !safe
   const hasProblem = documentFailed || Boolean(tab.refreshError) || currentDiagnostics.length > 0
     || channelState === 'unavailable' || documentState === 'unresponsive' || documentState === 'unconfirmed'
+  const diagnosticsUnavailable = loadState.serverDiagnostics === 'unavailable'
+  const hasDetails = hasProblem || diagnosticsUnavailable
+  useEffect(() => { if (!hasDetails) setDetailsOpen(false) }, [hasDetails])
+  if (!preview || !tab.file) return null
   const status = tab.isRefreshing ? '重新加载中…' : documentFailed ? '加载失败' : tab.refreshError ? '重新加载失败'
     : documentState === 'unconfirmed' || channelState === 'unavailable' ? '状态未确认'
       : documentState === 'unresponsive' ? '加载未完成' : documentState === 'loading' ? '加载中…' : ''
   const summary = [status, currentDiagnostics.length ? `${currentDiagnostics.length} 项问题` : ''].filter(Boolean).join(' · ')
-  const expanded = hasProblem && detailsOpen
-  const feedback = summary && (hasProblem ? <button type="button" className="file-preview-html-feedback is-problem"
+  const expanded = hasDetails && detailsOpen
+  const feedback = hasDetails ? <button type="button" className={`file-preview-html-feedback${hasProblem ? ' is-problem' : ''}`}
     aria-expanded={expanded} aria-controls={detailsId} onClick={() => setDetailsOpen(!detailsOpen)}>
-    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Z M8 5.5v4 M8 11.5v.5" /></svg>
-    {summary}
+    {hasProblem && <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Z M8 5.5v4 M8 11.5v.5" /></svg>}
+    {summary || '诊断详情'}
     <svg className="file-preview-html-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d={expanded ? 'm4 10 4-4 4 4' : 'm4 6 4 4 4-4'} /></svg>
-  </button> : <span className="file-preview-html-feedback">{summary}</span>)
-  return <div className="file-preview-html-stage" data-document-state={documentState} data-script-state={scriptFailed ? 'error' : 'no-error-observed'} data-resource-state={resourceFailed ? 'partial-failure' : 'no-error-observed'} data-channel-state={channelState}>
+  </button> : summary && <span className="file-preview-html-feedback">{summary}</span>
+  return <div className="file-preview-html-stage" data-document-state={documentState} data-script-state={scriptFailed ? 'error' : 'no-error-observed'} data-resource-state={resourceFailed ? 'partial-failure' : 'no-error-observed'} data-channel-state={channelState} data-server-diagnostics-state={loadState.serverDiagnostics}>
     <span className="sr-only" role="status">{summary}</span>
     {(pathControl || feedback || updateAction) && <div className={pathControl ? 'file-preview-path-row' : 'file-preview-html-feedback-row'}>
       {pathControl}
@@ -125,17 +130,18 @@ function HtmlPageViewer({ tab, pathControl, updateAction, candidate }: {
       {pathControl && <button type="button" className="file-preview-html-source-toggle" aria-pressed={sourceMode}
         onClick={() => toggleHtmlSource(tab.id)}>{sourceMode ? '交互预览' : '源码'}</button>}
     </div>}
-    {hasProblem && <div id={detailsId} className="file-preview-html-diagnostics" hidden={!expanded}>
+    {hasDetails && <div id={detailsId} className="file-preview-html-diagnostics" hidden={!expanded}>
       {tab.refreshError && <p role="alert">重新加载失败：{tab.refreshError}。已显示的内容会保留。</p>}
       {loadState.notice && <p className="file-preview-html-notice">{loadState.notice}</p>}
-      <p>文档：{documentState === 'loaded' ? '已加载' : documentState === 'failed' ? '加载失败' : documentState === 'unresponsive' ? '尚未完成加载' : documentState === 'unconfirmed' ? '无法确认' : '加载中'} · 脚本：{scriptFailed ? '已发现运行错误' : '尚未发现异常'} · 资源：{resourceFailed ? '部分资源失败' : '尚未发现失败'} · 诊断：{channelState === 'connected' ? '已连接' : channelState === 'waiting' ? '尚未响应' : '不可用'}</p>
+      {diagnosticsUnavailable && <p className="file-preview-html-notice">资源诊断连接中断，部分资源错误信息可能不完整</p>}
+      <p>文档：{documentState === 'loaded' ? '已加载' : documentState === 'failed' ? '加载失败' : documentState === 'unresponsive' ? '尚未完成加载' : documentState === 'unconfirmed' ? '无法确认' : '加载中'} · 脚本：{scriptFailed ? '已发现运行错误' : '尚未发现异常'} · 资源：{resourceFailed ? '部分资源失败' : '尚未发现失败'} · 页面通信：{channelState === 'connected' ? '已连接' : channelState === 'waiting' ? '尚未响应' : '不可用'} · 资源诊断：{loadState.serverDiagnostics === 'connected' ? '已连接' : loadState.serverDiagnostics === 'waiting' ? '连接中' : loadState.serverDiagnostics === 'not-applicable' ? '未启用' : '已中断'}</p>
       {currentDiagnostics.length > 0 && <ol>{currentDiagnostics.map((item, index) => <li key={index}>
         <strong>{labels[item.kind]}</strong>：{item.message}
         {item.resourceUrl && <div>{item.resourceUrl}{item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '（位置未知）'}</div>}
         {item.stack && <pre>{item.stack}</pre>}
       </li>)}</ol>}
       {currentDiagnostics.length === 100 && <p>已达到 100 项记录上限。</p>}
-      <button type="button" onClick={retry} disabled={tab.isRefreshing}>{tab.isRefreshing ? '重试中…' : '重试'}</button>
+      {hasProblem && <button type="button" onClick={retry} disabled={tab.isRefreshing}>{tab.isRefreshing ? '重试中…' : '重试'}</button>}
     </div>}
     {notice && <p className="file-preview-html-notice" role="status">{notice}</p>}
     <div className="file-preview-content">
