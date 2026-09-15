@@ -1,5 +1,6 @@
 import { useCampClient } from './camp-client'
 import { useMobileLayout } from './MobileLayout'
+import { useNavigationPressMenu } from './useNavigationPressMenu'
 import {
   useEffect,
   useMemo,
@@ -901,6 +902,7 @@ function CampGroup({
   onCamp(camp: NavigationCampItem): void
   onAction(kind: 'rename' | 'delete', camp: NavigationCampItem): void
 }): JSX.Element {
+  const mobile = useMobileLayout()
   const projectMenuLabels = projectNavigationMenuLabels(pinned)
   const projectMenuItems: SidebarActionMenuItem[] = []
   if (onTogglePin) {
@@ -925,12 +927,14 @@ function CampGroup({
       onSelect: onRemoveProject
     })
   }
+  const pressMenu = useNavigationPressMenu(mobile && !!pinTargetKey && projectMenuItems.length > 0)
   const contentId = `camp-group-content-${groupKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   const paginationControls = navigationPaginationControls(visibleCount, totalCount)
   return (
     <section className="camp-nav-group" data-group={groupKey}>
       <div className={`project-heading-row ${currentProject ? 'current-project' : ''}`} data-expanded={projectExpanded ? 'true' : 'false'}>
         <button
+          {...pressMenu.rowProps}
           className="project-select-row"
           type="button"
           title={label}
@@ -958,9 +962,10 @@ function CampGroup({
             label={`管理项目“${label}”`}
             triggerClassName="group-menu-trigger"
             items={projectMenuItems}
+            pressMenu={mobile ? pressMenu : undefined}
           />
         )}
-        <button className="group-create-button" type="button" aria-label={`在“${label}”中新建对话`} title="新建对话" disabled={createDisabled} onClick={onCreate}>＋</button>
+        <button className="group-create-button" type="button" aria-label={`在“${label}”中新建对话`} title="新建对话" disabled={createDisabled} onClick={onCreate}>{mobile ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg> : '＋'}</button>
       </div>
       <div id={contentId} className="camp-group-children" hidden={!projectExpanded}>
         {projectExpanded && camps.map((camp) => (
@@ -1007,6 +1012,8 @@ function CampRow({
   onCamp(camp: NavigationCampItem): void
   onAction(kind: 'rename' | 'delete', camp: NavigationCampItem): void
 }): JSX.Element {
+  const mobile = useMobileLayout()
+  const pressMenu = useNavigationPressMenu(mobile)
   const title = formatCampTitle(camp)
   const hasNewReply = camp.marker === 'unread_completed'
   const menuLabels = campNavigationMenuLabels(pinned)
@@ -1041,6 +1048,7 @@ function CampRow({
   return (
     <div className={`camp-nav-row${active ? ' selected' : ''}${opening ? ' opening' : ''}`}>
       <button
+        {...pressMenu.rowProps}
         className="camp-nav-open"
         type="button"
         aria-current={active ? 'page' : undefined}
@@ -1052,6 +1060,7 @@ function CampRow({
         <span className="camp-marker-slot" aria-hidden="true">
           {hasNewReply && <i className="task-dot camp-marker-unread_completed" />}
         </span>
+        {mobile && pinned && <span className="mobile-pinned-camp-icon"><NavigationIcon name="messages" /></span>}
         <span className="truncate">{title}</span>
         {hasNewReply && <span className="sr-only">有新回复</span>}
         {camp.activationState === 'pending' && <span className="camp-draft-badge">草稿</span>}
@@ -1064,6 +1073,7 @@ function CampRow({
         label={`管理“${title}”`}
         triggerClassName="camp-menu-trigger"
         items={menuItems}
+        pressMenu={mobile ? pressMenu : undefined}
       />
     </div>
   )
@@ -1083,32 +1093,35 @@ function SidebarActionMenu({
   target,
   label,
   triggerClassName,
-  items
+  items,
+  pressMenu
 }: {
   target: string
   label: string
   triggerClassName: string
   items: SidebarActionMenuItem[]
+  pressMenu?: ReturnType<typeof useNavigationPressMenu>
 }): JSX.Element {
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root key={pressMenu ? 'mobile' : 'desktop'} open={pressMenu?.open} onOpenChange={pressMenu?.setOpen}>
       <DropdownMenu.Trigger asChild>
         <button
-          className={`sidebar-menu-trigger ${triggerClassName}`}
+          className={`sidebar-menu-trigger ${triggerClassName}${pressMenu ? ' mobile-context-trigger' : ''}`}
           type="button"
           aria-label={label}
           title="更多操作"
           data-sidebar-menu-target={target}
         >
-          <svg className="more-icon" viewBox="0 0 24 24" aria-hidden="true">
+          {pressMenu ? '操作' : <svg className="more-icon" viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="5" cy="12" r="1.8" />
             <circle cx="12" cy="12" r="1.8" />
             <circle cx="19" cy="12" r="1.8" />
-          </svg>
+          </svg>}
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
+          {...pressMenu?.menuProps}
           className="sidebar-action-menu"
           aria-label={label}
           align="end"
