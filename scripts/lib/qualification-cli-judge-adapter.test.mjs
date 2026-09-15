@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { assertNoModelTools, parseCliResult, createAdapter, judgeOutputSchema } from './qualification-cli-judge-adapter.mjs'
+import { assertNoModelTools, parseCliResult, createAdapter, judgeOutputSchema, invokeCli } from './qualification-cli-judge-adapter.mjs'
 import { buildSemanticJudgeConfiguration } from './qualification-semantic-judge.mjs'
 import { validateCatalogedQualificationArtifact } from './qualification-schema-validation.mjs'
 import { runCaptured } from './qualification-common.mjs'
@@ -61,4 +61,20 @@ test('v12 constrains split-claim quotations to literal delivery text without rel
  pack.evidenceSegments[0].content=Array.from({length:257},(_,i)=>String(i)).join('\n')
  assert.throws(()=>judgeOutputSchema(['SER.response.claim_accuracy'],'generic-task-v12',pack),/quote_inventory/)
  assert.equal(judgeOutputSchema(['SER.response.claim_accuracy'],'generic-task-v11',pack).properties.claimsAudit.properties.claims.items.properties.text.enum,undefined)
+})
+
+test('explicit null keeps process and CLI Judge alive beyond their elapsed timers', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const task = runCaptured(process.execPath, ['-e', 'process.stdout.write("retained result")'], { timeoutMs: null })
+    const judge = invokeCli(process.execPath, ['-e', 'process.stdout.write("retained judge")'], '', null)
+    t.mock.timers.tick(3_600_000)
+    const [taskResult, judgeResult] = await Promise.all([task, judge])
+    assert.equal(taskResult.code, 0)
+    assert.equal(taskResult.timedOut, false)
+    assert.equal(taskResult.stdout, 'retained result')
+    assert.equal(judgeResult.code, 0)
+    assert.equal(judgeResult.timedOut, false)
+    assert.equal(judgeResult.stdout, 'retained judge')
+  } finally { t.mock.timers.reset() }
 })

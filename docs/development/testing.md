@@ -603,3 +603,22 @@ Web 通用设置回显、跨端保存、创建弹窗默认勾选、一键 Pendin
 
 真实 HTTP owner 验证本机签发与 HTTP 兑换接线、双客户端竞争、旧票据撤销，以及公共操作不能签发票据。
 Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
+
+
+### Weekly 无时间上限
+
+`automation::tests::owner_time_limit_is_frozen_per_occurrence_and_unbounded_runs_still_recover` 拥有 Owner 配置、
+冻结 occurrence、Core 时间到期与重启收口的跨模块持久化边界。修复前显式空时限无法配置且执行会被一小时
+截止；既有普通 Automation owner 没有时间策略切换。两个策略共享同一个隔离数据库，以显式未来时间验证，
+不启动 Runtime、不等待真实时长。最小命令：`cargo test -p rovai-core --lib owner_time_limit_is_frozen_per_occurrence`。
+其余输入矩阵扩展现有 execution_budget、Qualification 和 Host owner；不建立平行数据库 fixture。
+
+
+`db::tests::automation_time_limit_migration_preserves_definitions_and_rolls_back_with_its_receipt` 使用现有快速 schema
+夹具构造真实 schema 104 来源，验证新列与 receipt 同事务回滚、定义版本/Prompt/计划不变以及默认一小时。
+该边界需要 SQLite DDL 与准入记录，纯函数或无关历史迁移不能覆盖。最小命令：
+`cargo test -p rovai-core --lib automation_time_limit_migration`；原有来源矩阵继续保留全部旧输入。
+
+
+既有 `team_tool::tests::public_send_atomically_persists_one_message_and_canonical_deliveries` 扩展为有限/无限
+两种时间策略矩阵，保留全部原断言；证明 NULL 截止时间仍可登记、派发 A2A 并幂等重放，而不是只检查计时常量。

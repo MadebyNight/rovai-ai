@@ -30,12 +30,12 @@ export async function sourceFingerprint(repository) {
   return { commit: git.stdout.trim(), contentDigest: digestJson(files), files }
 }
 
-export async function buildProduct(repository, directory) {
+export async function buildProduct(repository, directory, { timeoutMs = 30 * 60_000 } = {}) {
   repository = resolve(repository); directory = resolve(directory)
   await mkdir(directory, { mode: 0o700 })
   const before = await sourceFingerprint(repository)
   const command = ['cargo', 'build', '--locked', '-p', 'rovai-core', '--bin', 'rovai-core', '--bin', 'rovai', '--target-dir', join(repository, 'target')]
-  const execution = await runCaptured(command[0], command.slice(1), { cwd: repository, timeoutMs: 30 * 60_000, maxOutputBytes: 16 * 1024 * 1024 })
+  const execution = await runCaptured(command[0], command.slice(1), { cwd: repository, timeoutMs, maxOutputBytes: 16 * 1024 * 1024 })
   await writePrivateJsonExclusive(join(directory, 'build-execution.json'), execution)
   if (execution.code !== 0 || execution.timedOut || execution.outputOverflow) throw new Error('Product build did not complete; build evidence retained')
   const after = await sourceFingerprint(repository)
@@ -66,8 +66,17 @@ export function selectCases(suite, change) {
 
 export function evaluationExecution(value = {}) {
   const configuration = { version: 1, maxParallelCases: 1, judgeSeconds: 2400, ...value }
-  if (Object.keys(configuration).some(key => !['version', 'maxParallelCases', 'judgeSeconds'].includes(key)) || configuration.version !== 1 || ![1, 2].includes(configuration.maxParallelCases) || !Number.isInteger(configuration.judgeSeconds) || configuration.judgeSeconds < 240 || configuration.judgeSeconds > 2400) throw new Error('Execution requires version 1, 1–2 parallel cases and a 240–2400 second Judge budget')
+  if (Object.keys(configuration).some(key => !['version', 'maxParallelCases', 'judgeSeconds'].includes(key)) || configuration.version !== 1 || ![1, 2].includes(configuration.maxParallelCases) || configuration.judgeSeconds !== null && (!Number.isInteger(configuration.judgeSeconds) || configuration.judgeSeconds < 240 || configuration.judgeSeconds > 2400)) throw new Error('Execution requires version 1, 1–2 parallel cases and a 240–2400 second Judge budget or explicit null')
   return configuration
+}
+
+// null is an explicit policy, never an accidental zero/default timeout.
+export function validateEvaluationTimeLimits({ mode, budget, execution }) {
+  const unbounded = mode === 'weekly' && budget?.wallSeconds === null
+  if (!unbounded && (!Number.isInteger(budget?.wallSeconds) || budget.wallSeconds < 60 || budget.wallSeconds > 86_400)) throw new Error('Use a 60–86400 second total budget, or explicit null for an unbounded weekly run')
+  if (Object.keys(budget).some(key => key !== 'wallSeconds')) throw new Error('Only wallSeconds is supported at campaign level; Run/A2A limits remain sealed in Case budgets')
+  if (unbounded !== (evaluationExecution(execution).judgeSeconds === null)) throw new Error('Unbounded weekly runs require an explicit null Judge budget')
+  return unbounded
 }
 
 // A worker owns the whole Case × repetition, including both paired arms.
@@ -86,9 +95,8 @@ export async function runCaseWorkers(items, parallelism, run) {
 export async function freezePlan(config, output) {
   if (config.schemaVersion !== 1 || !['gate', 'weekly'].includes(config.mode)) throw new Error('Expected Gate/weekly configuration schema 1')
   if (!Number.isInteger(config.repetitions) || config.repetitions < 1 || config.repetitions > 3) throw new Error('Freeze 1–3 repetitions before execution')
-  if (!Number.isInteger(config.budget?.wallSeconds) || config.budget.wallSeconds < 60 || config.budget.wallSeconds > 86_400) throw new Error('An explicit 60–86400 second total budget is required')
-  if (Object.keys(config.budget).some(key => key !== 'wallSeconds')) throw new Error('Only wallSeconds is supported at campaign level; per-case Run/A2A limits are sealed in Case budgets')
   const execution = evaluationExecution(config.execution)
+  const unbounded = validateEvaluationTimeLimits({ ...config, execution })
   const suitePath = resolve(config.suite)
   const suite = await json(suitePath)
   if (suite.partition !== 'regression') throw new Error('Routine Gate/weekly runs use the regression partition; holdout is reserved for independent acceptance')
@@ -126,6 +134,7 @@ export async function freezePlan(config, output) {
   if (judge) {
     const adapter = await import(pathToFileURL(judge.adapter).href)
     const configuration = await json(judge.configuration)
+    if (unbounded && configuration.timeoutMilliseconds !== null) throw new Error('Unbounded weekly runs require a Judge configuration with timeoutMilliseconds: null')
     if (scoring.version === '2.10.0' && !adapter.claimAuditProfiles?.includes('claim-audit-v6')) throw new Error('v12 scoring requires claim-audit-v6 support')
     if (scoring.version === '2.9.0' && !adapter.claimAuditProfiles?.includes('claim-audit-v5')) throw new Error('v11 scoring requires claim-audit-v5 support')
     if (['2.7.0', '2.8.0', '2.9.0', '2.10.0'].includes(scoring.version) && !adapter.claimAuditProfiles?.includes('claim-audit-v4')) throw new Error('v9 scoring requires claim-audit-v4 support')
@@ -272,12 +281,13 @@ function semanticItem(slot, id) { return slot.semanticItems?.find(item => item.c
 
 export async function validatePlanInputs(plan, { products = true } = {}) {
   validatePlanSeal(plan)
-  evaluationExecution(plan.execution)
+  validateEvaluationTimeLimits(plan)
   if (!plan.scoring || digestJson(plan.scoring) !== plan.scoringDigest || digestJson(await json(plan.scoringPath)) !== plan.scoringDigest) throw new Error('Scoring changed or is missing; freeze a new plan')
   validateScoring(plan.scoring, plan.cases)
   if (plan.evaluatorDigest !== await evaluatorDigest()) throw new Error('Evaluator changed after the plan was frozen')
   if (digestJson(await readFile(plan.change.document, 'utf8')) !== plan.change.documentDigest || digestJson(await json(plan.suite.path)) !== plan.suite.digest) throw new Error('Change document or suite changed after confirmation/freezing')
   if (plan.judge && (await digestFile(plan.judge.adapter) !== plan.judge.adapterDigest || await digestFile(plan.judge.configuration) !== plan.judge.configurationDigest)) throw new Error('Judge configuration changed after freezing')
+  if (plan.budget.wallSeconds === null && plan.judge && (await json(plan.judge.configuration)).timeoutMilliseconds !== null) throw new Error('Unbounded weekly Judge request limit must be null')
   if (products) for (const product of Object.values(plan.products)) await validateProduct(product)
   for (const item of plan.cases) await verifyStoredCaseSeal(item.directory, item.seal)
 }
@@ -295,12 +305,13 @@ export async function runPlan(planPath, outputRoot) {
     if (!attempts.length) await writePrivateJsonExclusive(campaignPath, campaign)
     const directory = join(output, `attempt-${String(attempts.length + 1).padStart(2, '0')}`)
     await mkdir(directory, { mode: 0o700 }); await writePrivateJsonExclusive(join(directory, 'plan.json'), plan)
-    const deadline = Date.now() + plan.budget.wallSeconds * 1000
+    const unbounded = plan.mode === 'weekly' && plan.budget.wallSeconds === null
+    const deadline = unbounded ? Infinity : Date.now() + plan.budget.wallSeconds * 1000
     const slots = [], contracts = {}
     for (const [arm, product] of Object.entries(plan.products)) {
       try {
         if (Date.now() >= deadline) throw new Error('Total budget exhausted')
-        const result = await runCurrentContractConformance({ repositoryRoot: product.repository, coreExecutable: product.core, outputDirectory: join(directory, `contracts-${arm}`), runId: `contract-${arm}-${Date.now()}`, timeoutMs: Math.min(20 * 60_000, deadline - Date.now()) })
+        const result = await runCurrentContractConformance({ repositoryRoot: product.repository, coreExecutable: product.core, outputDirectory: join(directory, `contracts-${arm}`), runId: `contract-${arm}-${Date.now()}`, timeoutMs: unbounded ? null : Math.min(20 * 60_000, deadline - Date.now()) })
         contracts[arm] = { status: result.benchmarkRun.outcome.hardOutcome === 'pass' ? 'passed' : result.benchmarkRun.outcome.hardOutcome === 'fail' ? 'failed' : 'indeterminate', locator: `contracts-${arm}/benchmark-run.json` }
       } catch (error) { contracts[arm] = { status: 'indeterminate', reason: error.message } }
     }
@@ -316,11 +327,11 @@ export async function runPlan(planPath, outputRoot) {
         if (contracts[arm]?.status !== 'passed') { slot.reason = 'Contract checks did not pass'; continue }
         const remaining = deadline - Date.now()
         const reserved = (item.budget.elapsedSeconds + 240 + (plan.judge ? executionConfiguration.judgeSeconds : 0)) * 1000
-        if (remaining < reserved) { slot.reason = 'Insufficient remaining campaign budget for a full trial and cleanup'; continue }
+        if (!unbounded && remaining < reserved) { slot.reason = 'Insufficient remaining campaign budget for a full trial and cleanup'; continue }
         try {
           const regressionConfig = join(directory, `${id}.json`)
-          await writePrivateJsonExclusive(regressionConfig, { schemaVersion: 1, temporaryRoot: join(directory, `runtime-${id}`), team: plan.team, fixture: item.fixture, product: plan.products[arm] })
-          const execution = await runCaptured(process.execPath, [join(root, 'scripts/qualification-runner.mjs'), '--mode', item.visibility, '--core', plan.products[arm].core, '--case', item.directory, '--expected-seal', item.seal, '--evidence-root', join(directory, 'trials'), '--trial-id', id, '--planned-slot-id', id, '--suite-id', `${plan.suite.id}:${plan.suite.version}`, '--regression-config', regressionConfig], { cwd: root, timeoutMs: Math.min(remaining, reserved), maxOutputBytes: 16 * 1024 * 1024 })
+          await writePrivateJsonExclusive(regressionConfig, { schemaVersion: 1, temporaryRoot: join(directory, `runtime-${id}`), team: plan.team, fixture: item.fixture, product: plan.products[arm], ...(unbounded ? { timeLimit: null } : {}) })
+          const execution = await runCaptured(process.execPath, [join(root, 'scripts/qualification-runner.mjs'), '--mode', item.visibility, '--core', plan.products[arm].core, '--case', item.directory, '--expected-seal', item.seal, '--evidence-root', join(directory, 'trials'), '--trial-id', id, '--planned-slot-id', id, '--suite-id', `${plan.suite.id}:${plan.suite.version}`, '--regression-config', regressionConfig], { cwd: root, timeoutMs: unbounded ? null : Math.min(remaining, reserved), maxOutputBytes: 16 * 1024 * 1024 })
           await writePrivateJsonExclusive(join(directory, `${id}-execution.json`), execution)
           if (execution.timedOut || execution.outputOverflow) throw new Error('Trial process did not produce complete retained evidence')
           const history = await loadQualificationResultHistory(trialDirectory)
@@ -344,7 +355,7 @@ export async function runPlan(planPath, outputRoot) {
             const caseEvaluation = join(directory, `${id}-evaluation.json`)
             await writePrivateJsonExclusive(caseEvaluation, plan.scoring.cases[item.id])
             slot.failureDomain = 'evaluator'
-            const judged = await runCaptured(process.execPath, [join(root, 'scripts/qualification-semantic-review.mjs'), '--evidence-dir', trialDirectory, '--case', item.directory, '--configuration', plan.judge.configuration, '--adapter', plan.judge.adapter, '--case-evaluation', caseEvaluation], { cwd: root, timeoutMs: Math.min(executionConfiguration.judgeSeconds * 1000, deadline - Date.now()), maxOutputBytes: 4 * 1024 * 1024 })
+            const judged = await runCaptured(process.execPath, [join(root, 'scripts/qualification-semantic-review.mjs'), '--evidence-dir', trialDirectory, '--case', item.directory, '--configuration', plan.judge.configuration, '--adapter', plan.judge.adapter, '--case-evaluation', caseEvaluation], { cwd: root, timeoutMs: unbounded ? null : Math.min(executionConfiguration.judgeSeconds * 1000, deadline - Date.now()), maxOutputBytes: 4 * 1024 * 1024 })
             await writePrivateJsonExclusive(join(directory, `${id}-judge-execution.json`), judged)
             if (judged.code !== 0 || judged.timedOut || judged.outputOverflow || judged.signal) { slot.judgeFailures = [{ code: judged.timedOut ? 'judge_process_timed_out' : 'judge_process_incomplete', attempts: null }]; throw new Error('Judge process did not finish with complete retained evidence') }
             const views = await read('semantic-judge-view-suite.json')

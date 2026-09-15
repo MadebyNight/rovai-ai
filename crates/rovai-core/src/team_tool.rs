@@ -820,7 +820,7 @@ impl TeamToolService {
                   AND camp_turn.status IN ('running', 'waiting')
                   AND camp_turn.cancel_requested_at IS NULL
                   AND camp_turn.execution_budget_exhausted_at IS NULL
-                  AND camp_turn.execution_budget_deadline_at > ?3
+                  AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
                   AND camp_member.status = 'active'
                   AND camp_member.leave_requested_at IS NULL
                   AND camp_member.version = CAST(
@@ -3083,9 +3083,16 @@ mod tests {
 
     #[test]
     fn public_send_atomically_persists_one_message_and_canonical_deliveries() {
-        let mut fixture = Fixture::new();
-        let service = TeamToolService::default();
-        let before_slots: i64 = fixture
+        for unbounded in [false, true] {
+            let mut fixture = Fixture::new();
+            if unbounded {
+                fixture.database.connection().execute(
+                "UPDATE camp_turn SET execution_budget_schema_version=2, execution_budget_deadline_at=NULL, execution_budget_elapsed_seconds=NULL WHERE id=(SELECT camp_turn_id FROM agent_run WHERE id=?1)",
+                [&fixture.source_run_id],
+            ).unwrap();
+            }
+            let service = TeamToolService::default();
+            let before_slots: i64 = fixture
             .database
             .connection()
             .query_row(
@@ -3094,96 +3101,96 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let invocation = fixture.public_send_invocation(
-            "public-send-union",
-            "Please inspect this @agent_2",
-            &["agent_2"],
-        );
-        let sent = service
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
-        assert_eq!(sent.result.code, "camp_message.send_accepted");
-        assert_eq!(sent.result.payload["visibility"], "camp_public");
-        assert_eq!(
-            sent.result.payload["effectiveRecipients"],
-            json!(["agent_2"])
-        );
-        assert_eq!(
-            sent.result.payload["deliveryIds"].as_array().unwrap().len(),
-            1
-        );
+            let invocation = fixture.public_send_invocation(
+                "public-send-union",
+                "Please inspect this @agent_2",
+                &["agent_2"],
+            );
+            let sent = service
+                .send_public_message(&mut fixture.database, &invocation)
+                .unwrap();
+            assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+            assert_eq!(sent.result.code, "camp_message.send_accepted");
+            assert_eq!(sent.result.payload["visibility"], "camp_public");
+            assert_eq!(
+                sent.result.payload["effectiveRecipients"],
+                json!(["agent_2"])
+            );
+            assert_eq!(
+                sent.result.payload["deliveryIds"].as_array().unwrap().len(),
+                1
+            );
 
-        let message_id = sent.result.payload["messageId"].as_str().unwrap();
-        let message: (String, String, String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
+            let message_id = sent.result.payload["messageId"].as_str().unwrap();
+            let message: (String, String, String, String) = fixture
+                .database
+                .connection()
+                .query_row(
+                    r#"
                 SELECT body, effective_recipient_ids_json,
                        recipient_presentation_json, source_operation_id
                 FROM camp_message WHERE id = ?1
                 "#,
-                [message_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(message.0, "Please inspect this @芝士");
-        assert_eq!(message.1, r#"["agent_2"]"#);
-        assert_eq!(
-            serde_json::from_str::<Value>(&message.2).unwrap()["inlineOrder"],
-            json!(["agent_2"])
-        );
-        assert!(!message.3.is_empty());
+                    [message_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(message.0, "Please inspect this @芝士");
+            assert_eq!(message.1, r#"["agent_2"]"#);
+            assert_eq!(
+                serde_json::from_str::<Value>(&message.2).unwrap()["inlineOrder"],
+                json!(["agent_2"])
+            );
+            assert!(!message.3.is_empty());
 
-        struct DeliveryAuditRow {
-            recipient_agent_id: String,
-            edge_kind: String,
-            target_parent_agent_run_id: Option<String>,
-            return_to_agent_run_id: Option<String>,
-            status: String,
-            dispatch_attempt_count: i64,
-            a2a_depth: i64,
-            target_agent_run_id: Option<String>,
-        }
-        let delivery = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
+            struct DeliveryAuditRow {
+                recipient_agent_id: String,
+                edge_kind: String,
+                target_parent_agent_run_id: Option<String>,
+                return_to_agent_run_id: Option<String>,
+                status: String,
+                dispatch_attempt_count: i64,
+                a2a_depth: i64,
+                target_agent_run_id: Option<String>,
+            }
+            let delivery = fixture
+                .database
+                .connection()
+                .query_row(
+                    r#"
                 SELECT recipient_agent_id, edge_kind,
                        target_parent_agent_run_id, return_to_agent_run_id,
                        status, dispatch_attempt_count,
                        a2a_depth, target_agent_run_id
                 FROM message_delivery WHERE message_id = ?1
                 "#,
-                [message_id],
-                |row| {
-                    Ok(DeliveryAuditRow {
-                        recipient_agent_id: row.get(0)?,
-                        edge_kind: row.get(1)?,
-                        target_parent_agent_run_id: row.get(2)?,
-                        return_to_agent_run_id: row.get(3)?,
-                        status: row.get(4)?,
-                        dispatch_attempt_count: row.get(5)?,
-                        a2a_depth: row.get(6)?,
-                        target_agent_run_id: row.get(7)?,
-                    })
-                },
-            )
-            .unwrap();
-        assert_eq!(delivery.recipient_agent_id, "agent_2");
-        assert_eq!(delivery.edge_kind, "forward");
-        assert_eq!(
-            delivery.target_parent_agent_run_id.as_deref(),
-            Some(fixture.source_run_id.as_str())
-        );
-        assert_eq!(delivery.return_to_agent_run_id, None);
-        assert_eq!(delivery.status, "running");
-        assert_eq!(delivery.dispatch_attempt_count, 1);
-        assert_eq!(delivery.a2a_depth, 1);
-        assert!(delivery.target_agent_run_id.is_some());
-        let after_slots: i64 = fixture
+                    [message_id],
+                    |row| {
+                        Ok(DeliveryAuditRow {
+                            recipient_agent_id: row.get(0)?,
+                            edge_kind: row.get(1)?,
+                            target_parent_agent_run_id: row.get(2)?,
+                            return_to_agent_run_id: row.get(3)?,
+                            status: row.get(4)?,
+                            dispatch_attempt_count: row.get(5)?,
+                            a2a_depth: row.get(6)?,
+                            target_agent_run_id: row.get(7)?,
+                        })
+                    },
+                )
+                .unwrap();
+            assert_eq!(delivery.recipient_agent_id, "agent_2");
+            assert_eq!(delivery.edge_kind, "forward");
+            assert_eq!(
+                delivery.target_parent_agent_run_id.as_deref(),
+                Some(fixture.source_run_id.as_str())
+            );
+            assert_eq!(delivery.return_to_agent_run_id, None);
+            assert_eq!(delivery.status, "running");
+            assert_eq!(delivery.dispatch_attempt_count, 1);
+            assert_eq!(delivery.a2a_depth, 1);
+            assert!(delivery.target_agent_run_id.is_some());
+            let after_slots: i64 = fixture
             .database
             .connection()
             .query_row(
@@ -3192,20 +3199,21 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(after_slots, before_slots + 1);
-        let replay = service
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        assert!(replay.replayed);
-        assert_eq!(replay.result.payload["messageId"], message_id);
+            assert_eq!(after_slots, before_slots + 1);
+            let replay = service
+                .send_public_message(&mut fixture.database, &invocation)
+                .unwrap();
+            assert!(replay.replayed);
+            assert_eq!(replay.result.payload["messageId"], message_id);
 
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(&source_run_id, fixture.source_epoch, "source completed");
-        let durable_replay = service
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        assert!(durable_replay.replayed);
-        assert_eq!(durable_replay.result.payload["messageId"], message_id);
+            let source_run_id = fixture.source_run_id.clone();
+            fixture.succeed_run(&source_run_id, fixture.source_epoch, "source completed");
+            let durable_replay = service
+                .send_public_message(&mut fixture.database, &invocation)
+                .unwrap();
+            assert!(durable_replay.replayed);
+            assert_eq!(durable_replay.result.payload["messageId"], message_id);
+        }
     }
 
     #[test]

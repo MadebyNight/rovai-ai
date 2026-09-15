@@ -1138,3 +1138,14 @@ Electron 验收使用独立 userData、真实生产预览组件及 Main 文件�
 HTML 跨 Camp 验收直接检查同一 iframe、页面内存标记和 `performance.timeOrigin`，确认保留实际页面。
 Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 310 通过；workspace Clippy 通过。
 此增量没有 Rust 改动，不把本机 fixture 结果声明为跨平台发布资格或应用进程内存上限证明。
+
+
+## Weekly 无时间上限
+
+- 已接入显式 null 的整轮、Case 和 Judge 时间策略，以及 Host/等待器和 Owner 配置的 Automation 时限。
+- 保留旧 seal、历史结果、数量限制、手动停止与恢复收口；普通有限计划默认行为保持。
+- Migration 155 从 schema 104 原位升级至 105，不清除 Camp、Run、输入或评测证据。
+- 本地验证：`pnpm test:rust:pr` 的 Library 809 项、CLI 35 项及 slow integration 310 项通过；6 项既有手工平台测试维持 ignored。
+- `pnpm test` 通过，包含 Vitest 2072 项与脚本 320 项（2 项既有 Windows 专项跳过）；宿主 4 项、类型检查及 Desktop 构建通过。
+- 无时限用例覆盖跨一周的 Core 结算、模拟跨一小时的进程/Judge timer、Host 绑定返回版本、取消、旧定义及历史回执保留和迁移失败回滚。
+- 新 App 安装、Owner 绑定及 12 Case 的真实回归尚未执行，不能宣称业务回归通过。

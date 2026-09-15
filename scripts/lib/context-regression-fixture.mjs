@@ -12,6 +12,7 @@ export function validateRegressionConfiguration(value) {
   if (value.temporaryRoot !== undefined && (typeof value.temporaryRoot !== 'string' || !isAbsolute(value.temporaryRoot))) throw new Error('Regression temporaryRoot must be an absolute, new directory')
   if (value.fixture && (!Array.isArray(value.fixture.campMessages) || !Array.isArray(value.fixture.memories))) throw new Error('Regression fixture must explicitly list messages and memories')
   if ((value.fixture?.campMessages.length ?? 0) > 100 || (value.fixture?.memories.length ?? 0) > 20) throw new Error('Regression fixture exceeds its bounded setup budget')
+  if (Object.hasOwn(value, 'timeLimit') && value.timeLimit !== null) throw new Error('Regression timeLimit accepts only explicit null; omit it to keep sealed Case limits')
   return value
 }
 

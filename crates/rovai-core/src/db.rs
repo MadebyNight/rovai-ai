@@ -277,7 +277,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 104;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 105;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -706,6 +706,7 @@ struct CurrentMigrationState {
     v152: bool,
     v153: bool,
     v154: bool,
+    v155: bool,
 }
 
 impl CurrentMigrationState {
@@ -727,19 +728,20 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v155 {
+            let mut previous = *self;
+            previous.v155 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v154
+                && previous.admits("v1.59", 104, classifier);
+        }
         if !self.v154 && contract == "v1.59" && schema == 103 {
             let mut completed = *self;
             completed.v154 = true;
-            return completed.admits(
-                CURRENT_DATA_CONTRACT_VERSION,
-                CURRENT_PROJECTION_SCHEMA_VERSION,
-                classifier,
-            );
+            return completed.admits(CURRENT_DATA_CONTRACT_VERSION, 104, classifier);
         }
-        if self.v154
-            && (contract != CURRENT_DATA_CONTRACT_VERSION
-                || schema != CURRENT_PROJECTION_SCHEMA_VERSION)
-        {
+        if self.v154 && (contract != CURRENT_DATA_CONTRACT_VERSION || schema != 104) {
             return false;
         }
         let through_v69 = self.v66 && self.v67 && self.v68 && self.v69;
@@ -799,7 +801,7 @@ impl CurrentMigrationState {
             return false;
         }
         let current = contract == CURRENT_DATA_CONTRACT_VERSION
-            && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            && schema == 104
             && classifier == V147_CLASSIFIER_VERSION
             && self.v142
             && self.v143
@@ -2926,6 +2928,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v152 && !model_catalog_v152_schema_matches(connection)?)
         || (migrations.v153 && !client_draft_v153_schema_matches(connection)?)
         || (migrations.v154 && !private_client_draft_v154_schema_matches(connection)?)
+        || (migrations.v155 && !automation_time_limit_v155_schema_matches(connection)?)
         || (migrations.v141
             && if deployed_tool_source {
                 !deployed_tool_v141_image_schema_matches(connection)?
@@ -2985,6 +2988,15 @@ fn legacy_web_client_source(
         |r| r.get(0),
     )?;
     Ok(old_names == 2 && !startup)
+}
+
+fn apply_automation_time_limit_schema_v155(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch("ALTER TABLE automation ADD COLUMN runtime_timeout_seconds INTEGER DEFAULT 3600 CHECK(runtime_timeout_seconds IS NULL OR runtime_timeout_seconds BETWEEN 60 AND 86400);")?;
+    Ok(())
+}
+
+fn automation_time_limit_v155_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('automation') WHERE name='runtime_timeout_seconds' AND type='INTEGER' AND dflt_value='3600' AND [notnull]=0)", [], |row| row.get(0))
 }
 
 fn private_client_draft_v154_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -3711,7 +3723,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 151),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 152),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 153),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 154)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 154),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 155)
         "#,
         [],
         |row| {
@@ -3801,6 +3814,7 @@ fn load_current_migration_state(
                 v152: row.get(82)?,
                 v153: row.get(83)?,
                 v154: row.get(84)?,
+                v155: row.get(85)?,
             })
         },
     )
@@ -6700,6 +6714,9 @@ impl Database {
             if !self.schema_migration_applied(154)? {
                 migration_step!("migration_154", self.migrate_private_client_drafts_v154());
             }
+            if !self.schema_migration_applied(155)? {
+                migration_step!("migration_155", self.migrate_automation_time_limit_v155());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7356,6 +7373,9 @@ impl Database {
         }
         if !self.schema_migration_applied(154)? {
             migration_step!("migration_154", self.migrate_private_client_drafts_v154());
+        }
+        if !self.schema_migration_applied(155)? {
+            migration_step!("migration_155", self.migrate_automation_time_limit_v155());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -23941,6 +23961,32 @@ impl Database {
         result
     }
 
+    fn migrate_automation_time_limit_v155(&mut self) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.59" && marker.projection_schema_version == 104),
+            "Automation time-limit migration requires the exact v1.59/schema 104 source"
+        );
+        apply_automation_time_limit_schema_v155(&tx)?;
+        tx.execute(
+            "INSERT INTO schema_migration VALUES(155, datetime('now'))",
+            [],
+        )?;
+        tx.execute("UPDATE rovai_data_contract SET projection_schema_version=?1,updated_at=datetime('now') WHERE singleton=1", [CURRENT_PROJECTION_SCHEMA_VERSION])?;
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&tx)?,
+                DatabaseContractClassification::Current(_)
+            ),
+            "Automation time-limit migration failed schema admission"
+        );
+        tx.commit()?;
+        Ok(())
+    }
+
     fn migrate_private_client_drafts_v154(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
@@ -23957,11 +24003,11 @@ impl Database {
                 "INSERT INTO schema_migration VALUES(154, datetime('now'))",
                 [],
             )?;
-            tx.execute("UPDATE rovai_data_contract SET projection_schema_version=?1,updated_at=datetime('now') WHERE singleton=1", [CURRENT_PROJECTION_SCHEMA_VERSION])?;
+            tx.execute("UPDATE rovai_data_contract SET projection_schema_version=?1,updated_at=datetime('now') WHERE singleton=1", [104])?;
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.projection_schema_version == 104
                 ),
                 "Private Draft migration failed schema admission"
             );
@@ -24196,8 +24242,9 @@ impl Database {
             )?;
             apply_model_catalog_schema_v152(&tx)?;
             apply_private_client_draft_schema_v154(&tx)?;
+            apply_automation_time_limit_schema_v155(&tx)?;
             tx.execute(
-                "INSERT INTO schema_migration VALUES(154, datetime('now'))",
+                "INSERT INTO schema_migration VALUES(154, datetime('now')), (155, datetime('now'))",
                 [],
             )?;
             tx.execute("UPDATE rovai_data_contract SET contract_version=?1,projection_schema_version=?2,updated_at=datetime('now') WHERE singleton=1", params![CURRENT_DATA_CONTRACT_VERSION,CURRENT_PROJECTION_SCHEMA_VERSION])?;
@@ -29110,7 +29157,22 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v154_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=155)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if applied {
+        connection.execute_batch("ALTER TABLE automation DROP COLUMN runtime_timeout_seconds; DELETE FROM schema_migration WHERE version=155; UPDATE rovai_data_contract SET projection_schema_version=104 WHERE singleton=1;").unwrap();
+    }
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v153_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v154_source_for_test(connection);
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=154)",
@@ -32272,6 +32334,7 @@ mod tests {
             v152: version >= 152,
             v153: version >= 153,
             v154: version >= 154,
+            v155: version >= 155,
         }
     }
 
@@ -32373,12 +32436,18 @@ mod tests {
     #[test]
     fn current_migration_state_admission_matrix() {
         let supported = [
+            (
+                "v1.59/schema 104 before optional time limits",
+                "v1.59",
+                104,
+                154,
+            ),
             ("v1.55/schema-97 before quotes", "v1.55", 97, 147),
             (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                154,
+                155,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -32850,7 +32919,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(154);
+        let current = migration_state_through(155);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -33226,6 +33295,69 @@ mod tests {
     }
 
     #[test]
+    fn automation_time_limit_migration_preserves_definitions_and_rolls_back_with_its_receipt() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-time-limit-migration-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v154_source_for_test(database.connection());
+        database.connection().execute_batch(r#"
+            INSERT INTO automation(id,version,name,prompt,enabled,member_id,project_ref_json,schedule_json,notify_channels_json,next_run_at,created_at,updated_at)
+            VALUES('kept-automation',7,'Weekly','Keep this exact prompt',1,'agent_1','{"kind":"quick_chat"}','{"kind":"manual"}','[]','kept-next','kept-created','kept-updated');
+            INSERT INTO automation_run(id,automation_id,automation_version,trigger_kind,scheduled_for,status,reason,prompt,member_id,project_ref_json,notify_channels_json,timeout_at,created_at,started_at,ended_at,updated_at)
+            VALUES('kept-run','kept-automation',6,'manual','kept-scheduled','failed','timeout','Original instruction','agent_1','{"kind":"quick_chat"}','[]','original-deadline','kept-created','kept-started','kept-ended','kept-updated');
+            CREATE TEMP TRIGGER reject_time_limit_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=155 BEGIN SELECT RAISE(ABORT,'time limit receipt failure'); END;
+        "#).unwrap();
+        assert!(
+            database
+                .migrate_automation_time_limit_v155()
+                .unwrap_err()
+                .to_string()
+                .contains("time limit receipt failure")
+        );
+        assert!(!automation_time_limit_v155_schema_matches(database.connection()).unwrap());
+        assert!(!database.schema_migration_applied(155).unwrap());
+        assert!(
+            matches!(classify_database_contract(database.connection()).unwrap(), DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.projection_schema_version==104)
+        );
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_time_limit_receipt")
+            .unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
+        let row: (i64,String,String,i64) = database.connection().query_row("SELECT version,prompt,next_run_at,runtime_timeout_seconds FROM automation WHERE id='kept-automation'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
+        assert_eq!(
+            row,
+            (7, "Keep this exact prompt".into(), "kept-next".into(), 3600)
+        );
+        let history: (i64,String,String,String) = database.connection().query_row("SELECT automation_version,prompt,status,timeout_at FROM automation_run WHERE id='kept-run'",[],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
+        assert_eq!(
+            history,
+            (
+                6,
+                "Original instruction".into(),
+                "failed".into(),
+                "original-deadline".into()
+            )
+        );
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::Current(_)
+        ));
+        assert!(
+            database
+                .connection()
+                .execute("UPDATE automation SET runtime_timeout_seconds=0", [])
+                .is_err()
+        );
+        database
+            .connection()
+            .execute("UPDATE automation SET runtime_timeout_seconds=NULL", [])
+            .unwrap();
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn database_contract_preflight_admits_current_and_rejects_future_store() {
         let directory =
             std::env::temp_dir().join(format!("rovai-current-contract-smoke-{}", Uuid::new_v4()));
@@ -33241,7 +33373,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(154));
+        assert_eq!(state, migration_state_through(155));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -33353,6 +33485,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(database.schema_migration_applied(144).unwrap());
 
@@ -33424,6 +33557,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -33580,6 +33714,7 @@ mod tests {
         );
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -33620,6 +33755,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(
             database
@@ -33893,6 +34029,7 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_private_receipt;")
             .unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert_eq!(database.connection().query_row("SELECT revision,updated_at,client_id FROM single_chat_composer_draft WHERE conversation_id=?1", [&conversation_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(), (7,"2026-09-13T00:00:00Z".into(),"desktop".into()));
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(store.load_draft(&database, camp_id).unwrap(), draft);
@@ -34073,6 +34210,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         let reopened = Database::open(&directory).unwrap();
@@ -36697,6 +36835,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let after: (String, String) = database.connection().query_row(
             "SELECT default_model_selection_json, runtime_binding_revision FROM agent_profile WHERE id = 'agent_1'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
@@ -36903,6 +37042,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained: (i64, Option<String>) = database
             .connection()
@@ -37086,6 +37226,7 @@ mod tests {
         database.migrate_model_catalog_v152().unwrap();
         database.migrate_client_drafts_v153().unwrap();
         database.migrate_private_client_drafts_v154().unwrap();
+        database.migrate_automation_time_limit_v155().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained = database
             .connection()

@@ -73,3 +73,15 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 2026-09-15 用户确认同窗口跨 Camp 直接复用预览，采用分层 LRU、64 个本机逻辑句柄容量回收和独立候选刷新；
 授权 worktree 实现、验证后 PR 合并 main。范围与取舍见 [V1.59-D07](decisions.md#v1-59-d07)，
 当前协议见 [File Preview v14](../../contracts/file-preview-v14.md)。本增量不改变其他 Server/Runtime 验收状态。
+
+
+## Weekly 无时间上限增量
+
+2026-09-15 用户要求取消 Weekly 时间预算，并授权独立分支实现、验证、PR 合入 main 后安装。
+新增显式 null 时间策略贯通构建、执行、Judge、宿主、等待器和指定 Automation；普通任务及旧计划保持。
+Migration 155/schema 105 原位保存定义策略，保留历史执行与模型输入；无需新增 Context 版本或二次上下文确认。
+当前合同为 [Execution Evaluation v15](../../contracts/execution-evaluation-v15.md)、
+[Scheduled Automation v2](../../contracts/scheduled-automation-v2.md)及 [User Automation v6](../../contracts/user-automation-v6.md)。
+架构与开发路由同步到当前合同。UI、Runtime Activity、平台兼容资格和根 README 无需改变；这次是显式执行
+策略修正，不增加独立长期决策。验证记录见[实施计划](implementation-plan.md#weekly-无时间上限)。
+真实 Weekly 结果仍须安装新 App、Owner 绑定后实际运行证明，不以设施测试替代。

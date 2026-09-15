@@ -3,7 +3,7 @@ import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { compareResults, evaluateCaseRules, selectCases, validatePlanSeal, POLICY, evaluationExecution, runCaseWorkers } from './context-evaluation.mjs'
+import { compareResults, evaluateCaseRules, selectCases, validatePlanSeal, POLICY, evaluationExecution, validateEvaluationTimeLimits, runCaseWorkers } from './context-evaluation.mjs'
 import { digestJson, runCaptured } from './qualification-common.mjs'
 import { validateRegressionConfiguration } from './context-regression-fixture.mjs'
 
@@ -96,6 +96,7 @@ test('case workers cap parallelism, preserve paired arm ordering and drain after
   assert.equal(evaluationExecution().maxParallelCases, 1)
   assert.throws(() => evaluationExecution({ maxParallelCases: 3 }))
   assert.throws(() => evaluationExecution({ judgeSeconds: 0 }))
+  assert.equal(evaluationExecution({ judgeSeconds: null }).judgeSeconds, null)
 })
 
 test('budget calibration keeps original task and verifier bytes, while sealing doubled time limits', async () => {
@@ -121,4 +122,11 @@ test('106 phase clarification preserves every functional requirement, verifier, 
   const old=JSON.parse(await readFile(`${before}/manifest.json`)), current=JSON.parse(await readFile(`${after}/manifest.json`))
   for(const key of ['requirements','verificationCatalog','allowedPaths','forbiddenPaths','budget']) assert.deepEqual(current[key],old[key])
   for(const dir of ['fixture','reference']) assert.deepEqual(await treeManifest(`${after}/${dir}`),await treeManifest(`${before}/${dir}`))
+})
+
+test('weekly unlimited time policy is explicit and cannot silently disable a Gate or partial layer', () => {
+  const unlimited = { mode: 'weekly', budget: { wallSeconds: null }, execution: { judgeSeconds: null } }
+  assert.equal(validateEvaluationTimeLimits(unlimited), true)
+  assert.equal(validateEvaluationTimeLimits({ mode: 'weekly', budget: { wallSeconds: 2700 } }), false)
+  for (const value of [{ ...unlimited, mode: 'gate' }, { ...unlimited, execution: {} }, { ...unlimited, budget: {} }, { ...unlimited, budget: { wallSeconds: 0 } }, { ...unlimited, budget: { wallSeconds: null, unknown: true } }]) assert.throws(() => validateEvaluationTimeLimits(value))
 })
