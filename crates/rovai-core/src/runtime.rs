@@ -1567,6 +1567,45 @@ impl ExecutionRuntimeService {
         }))
     }
 
+    /// Reserve the execution-preparing boundary only after the same admission used by claim.
+    /// Filesystem preparation runs outside SQLite; claim rechecks all fences before launch.
+    pub(crate) fn begin_workspace_preparation(
+        &self,
+        database: &mut Database,
+        candidate: &QueuedAgentRunCandidate,
+    ) -> Result<bool> {
+        let tx = database
+            .connection_mut()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let Some(run) = load_claimable_run(&tx, &candidate.agent_run_id)? else {
+            return Ok(false);
+        };
+        let envelope = CommandEnvelope {
+            command_id: Uuid::new_v4().to_string(),
+            actor: ActorRef::System {
+                component_id: "agent-run-scheduler".into(),
+            },
+            camp_id: Some(candidate.camp_id.clone()),
+            expected_versions: vec![],
+            execution_epoch: None,
+            payload: ClaimAgentRunCommand {
+                agent_run_id: candidate.agent_run_id.clone(),
+                expected_version: candidate.version,
+                lease_owner: "preparing".into(),
+                lease_seconds: 120,
+                workspace: None,
+                starting_git_observation: None,
+            },
+        };
+        if claim_admission_rejection(&tx, &run, &envelope)?.is_some() {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute("UPDATE agent_run SET workspace_preparing_at=COALESCE(workspace_preparing_at,?2) WHERE id=?1",params![run.id,chrono::Utc::now().to_rfc3339()])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn claim_agent_run(
         &self,
         database: &mut Database,
@@ -1598,115 +1637,12 @@ impl ExecutionRuntimeService {
             let Some(run) = run else {
                 return Ok(rejected("agent_run.not_found", "AgentRun does not exist"));
             };
-            if envelope.camp_id.as_deref() != Some(run.camp_id.as_str()) {
-                return Ok(rejected(
-                    "agent_run.camp_mismatch",
-                    "AgentRun is outside the Camp",
-                ));
-            }
-            if run.version != envelope.payload.expected_version {
-                return Ok(rejected(
-                    "agent_run.version_conflict",
-                    "AgentRun version is stale",
-                ));
-            }
-            if run.execution_budget_exhausted_at.is_some() {
-                return Ok(rejected(
-                    "agent_run.execution_budget_exhausted",
-                    "CampTurn Execution Budget is already exhausted",
-                ));
-            }
-            if !matches!(run.camp_turn_status.as_str(), "running" | "waiting")
-                || run.camp_turn_cancel_requested_at.is_some()
-            {
-                return Ok(rejected(
-                    "agent_run.turn_fenced",
-                    "CampTurn is no longer accepting AgentRun execution",
-                ));
+            if let Some(rejection) = claim_admission_rejection(transaction, &run, envelope)? {
+                return Ok(rejection);
             }
             let budget_now = camp_turn_execution_budget_now();
             let budget_now_text = budget_now.to_rfc3339();
             let audit_now_text = chrono::Utc::now().to_rfc3339();
-            let deadline = chrono::DateTime::parse_from_rfc3339(&run.execution_budget_deadline_at)
-                .context("CampTurn Execution Budget deadline is invalid")?
-                .with_timezone(&chrono::Utc);
-            if budget_now >= deadline {
-                let exhaustion = exhaust_camp_turn_execution_budget(
-                    transaction,
-                    &run.camp_turn_id,
-                    CampTurnExecutionBudgetExhaustionReason::Elapsed,
-                    &envelope.command_id,
-                    &audit_now_text,
-                    &envelope.actor,
-                    None,
-                )?;
-                return Ok(CommandHandlerResult::rejected(
-                    "agent_run.execution_budget_exhausted",
-                    json!({
-                        "message": "CampTurn Execution Budget deadline has elapsed",
-                        "reason": "elapsed",
-                        "campTurnId": run.camp_turn_id,
-                        "deadlineAt": run.execution_budget_deadline_at,
-                        "agentRunsFenced": exhaustion.agent_runs_fenced,
-                    }),
-                ));
-            }
-            let valid_state = run.status == "queued"
-                || (run.status == "waiting"
-                    && run.wait_reason.as_deref() == Some("runtime_recovery")
-                    && run.runtime_recovery_required);
-            if !valid_state || run.input_ready_at.is_none() || run.cancel_requested_at.is_some() {
-                return Ok(rejected(
-                    "agent_run.not_claimable",
-                    "AgentRun is not ready for execution",
-                ));
-            }
-            if run.status == "waiting"
-                && run.wait_reason.as_deref() == Some("runtime_recovery")
-                && has_accepted_runtime_input(transaction, &run.id)?
-            {
-                return Ok(rejected(
-                    "agent_run.accepted_input_requires_reconciliation",
-                    "An accepted Runtime input cannot be resent or assumed complete after restart",
-                ));
-            }
-            if !run.member_active {
-                return Ok(rejected(
-                    "agent_run.member_unavailable",
-                    "Agent is no longer an executable current Camp member",
-                ));
-            }
-            if !current_authorization_covers_snapshot(
-                &run.effective_config,
-                &run.current_default_capabilities,
-                &run.current_capability_overrides,
-            )? {
-                return Ok(rejected(
-                    "agent_run.authorization_revoked",
-                    "Current Camp authorization no longer covers the frozen AgentRun",
-                ));
-            }
-            if run.status == "waiting" && has_recovery_safety_blocker(transaction, &run.id)? {
-                return Ok(rejected(
-                    "agent_run.recovery_blocked",
-                    "Approval, Action or Runtime Delivery must settle before recovery",
-                ));
-            }
-            let other_active: i64 = transaction.query_row(
-                r#"
-                SELECT COUNT(*) FROM agent_run
-                WHERE conversation_id = ?1 AND id <> ?2
-                  AND status IN ('running', 'waiting')
-                "#,
-                params![run.conversation_id, run.id],
-                |row| row.get(0),
-            )?;
-            if other_active != 0 {
-                return Ok(rejected(
-                    "agent_run.conversation_busy",
-                    "Conversation already has an active AgentRun",
-                ));
-            }
 
             let frozen_workspace = match (&run.workspace, &envelope.payload.workspace) {
                 (Some(existing), Some(requested)) => {
@@ -5899,6 +5835,123 @@ fn pump_target_after_run_terminal(database: &mut Database, agent_run_id: &str) -
     Ok(())
 }
 
+fn claim_admission_rejection(
+    transaction: &Transaction<'_>,
+    run: &ClaimableRun,
+    envelope: &CommandEnvelope<ClaimAgentRunCommand>,
+) -> Result<Option<CommandHandlerResult>> {
+    if envelope.camp_id.as_deref() != Some(run.camp_id.as_str()) {
+        return Ok(Some(rejected(
+            "agent_run.camp_mismatch",
+            "AgentRun is outside the Camp",
+        )));
+    }
+    if run.version != envelope.payload.expected_version {
+        return Ok(Some(rejected(
+            "agent_run.version_conflict",
+            "AgentRun version is stale",
+        )));
+    }
+    if run.execution_budget_exhausted_at.is_some() {
+        return Ok(Some(rejected(
+            "agent_run.execution_budget_exhausted",
+            "CampTurn Execution Budget is already exhausted",
+        )));
+    }
+    if !matches!(run.camp_turn_status.as_str(), "running" | "waiting")
+        || run.camp_turn_cancel_requested_at.is_some()
+    {
+        return Ok(Some(rejected(
+            "agent_run.turn_fenced",
+            "CampTurn is no longer accepting AgentRun execution",
+        )));
+    }
+    let budget_now = camp_turn_execution_budget_now();
+    let audit_now_text = chrono::Utc::now().to_rfc3339();
+    let deadline = chrono::DateTime::parse_from_rfc3339(&run.execution_budget_deadline_at)
+        .context("CampTurn Execution Budget deadline is invalid")?
+        .with_timezone(&chrono::Utc);
+    if budget_now >= deadline {
+        let exhaustion = exhaust_camp_turn_execution_budget(
+            transaction,
+            &run.camp_turn_id,
+            CampTurnExecutionBudgetExhaustionReason::Elapsed,
+            &envelope.command_id,
+            &audit_now_text,
+            &envelope.actor,
+            None,
+        )?;
+        return Ok(Some(CommandHandlerResult::rejected(
+            "agent_run.execution_budget_exhausted",
+            json!({
+                "message": "CampTurn Execution Budget deadline has elapsed",
+                "reason": "elapsed",
+                "campTurnId": run.camp_turn_id,
+                "deadlineAt": run.execution_budget_deadline_at,
+                "agentRunsFenced": exhaustion.agent_runs_fenced,
+            }),
+        )));
+    }
+    let valid_state = run.status == "queued"
+        || (run.status == "waiting"
+            && run.wait_reason.as_deref() == Some("runtime_recovery")
+            && run.runtime_recovery_required);
+    if !valid_state || run.input_ready_at.is_none() || run.cancel_requested_at.is_some() {
+        return Ok(Some(rejected(
+            "agent_run.not_claimable",
+            "AgentRun is not ready for execution",
+        )));
+    }
+    if run.status == "waiting"
+        && run.wait_reason.as_deref() == Some("runtime_recovery")
+        && has_accepted_runtime_input(transaction, &run.id)?
+    {
+        return Ok(Some(rejected(
+            "agent_run.accepted_input_requires_reconciliation",
+            "An accepted Runtime input cannot be resent or assumed complete after restart",
+        )));
+    }
+    if !run.member_active {
+        return Ok(Some(rejected(
+            "agent_run.member_unavailable",
+            "Agent is no longer an executable current Camp member",
+        )));
+    }
+    if !current_authorization_covers_snapshot(
+        &run.effective_config,
+        &run.current_default_capabilities,
+        &run.current_capability_overrides,
+    )? {
+        return Ok(Some(rejected(
+            "agent_run.authorization_revoked",
+            "Current Camp authorization no longer covers the frozen AgentRun",
+        )));
+    }
+    if run.status == "waiting" && has_recovery_safety_blocker(transaction, &run.id)? {
+        return Ok(Some(rejected(
+            "agent_run.recovery_blocked",
+            "Approval, Action or Runtime Delivery must settle before recovery",
+        )));
+    }
+    let other_active: i64 = transaction.query_row(
+        r#"
+                SELECT COUNT(*) FROM agent_run
+                WHERE conversation_id = ?1 AND id <> ?2
+                  AND status IN ('running', 'waiting')
+                "#,
+        params![run.conversation_id, run.id],
+        |row| row.get(0),
+    )?;
+    if other_active != 0 {
+        return Ok(Some(rejected(
+            "agent_run.conversation_busy",
+            "Conversation already has an active AgentRun",
+        )));
+    }
+
+    Ok(None)
+}
+
 #[derive(Debug)]
 struct ClaimableRun {
     id: String,
@@ -6155,7 +6208,17 @@ fn workspace_matches_camp(
         [camp_id],
         |row| row.get::<_, String>(0),
     )?;
-    Ok(workspace["executionRoot"].as_str() == Some(project_path.as_str()))
+    let pending:bool=transaction.query_row("SELECT EXISTS(SELECT 1 FROM mission_workspace w JOIN mission m ON m.id=w.mission_id WHERE m.camp_id=?1 AND w.state<>'ready')",[camp_id],|r|r.get(0))?;
+    if pending {
+        return Ok(false);
+    }
+    let mission_directory = crate::mission_workspace::execution_directory(transaction, camp_id)?;
+    Ok(workspace["executionRoot"].as_str()
+        == Some(
+            mission_directory
+                .as_deref()
+                .unwrap_or(project_path.as_str()),
+        ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

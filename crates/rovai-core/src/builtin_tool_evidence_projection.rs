@@ -87,6 +87,15 @@ pub fn project_builtin_tool_invocation(
 fn project_input(operation: &str, input: &Value) -> Result<Value> {
     let mut projected = Map::new();
     match operation {
+        "mission.get" => {}
+        "mission.update" => {
+            insert_semantic_text(&mut projected, "title", input.get("title"));
+            insert_semantic_text(&mut projected, "description", input.get("description"));
+        }
+        "mission.status" => {
+            insert_identifier(&mut projected, "status", input.get("status"));
+            insert_identifier(&mut projected, "sourceMessageId", input.get("sourceMessageId"));
+        }
         CAMP_MESSAGE_SEND_TOOL_NAME => {
             insert_string_array(&mut projected, "recipientAgentIds", input.get("to"));
             insert_bool(
@@ -327,6 +336,17 @@ fn project_memory_mutation_input(projected: &mut Map<String, Value>, input: &Val
 fn project_result(operation: &str, result: &Value) -> Result<Value> {
     let mut projected = Map::new();
     match operation {
+        "mission.get" => {
+            insert_identifier(&mut projected, "missionId", result.get("missionId"));
+            insert_semantic_text(&mut projected, "title", result.get("title"));
+            insert_semantic_text(&mut projected, "description", result.get("description"));
+            insert_enum(&mut projected, "status", result.get("status"));
+            insert_identifier(&mut projected, "sourceMessageId", result.get("sourceMessageId"));
+        }
+        "mission.update" | "mission.status" => {
+            insert_identifier(&mut projected, "missionId", result.get("missionId"));
+            insert_bool(&mut projected, "changed", result.get("changed"));
+        }
         CAMP_MESSAGE_SEND_TOOL_NAME => {
             insert_enum(&mut projected, "status", result.get("status"));
             insert_identifier(&mut projected, "messageId", result.get("messageId"));

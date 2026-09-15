@@ -1434,6 +1434,8 @@ const EMPTY_LIVE_RUNTIME_EVENTS: LiveRuntimeEvent[] = []
 
 export function CampWorkspace({
   snapshot,
+  missionBoard = null,
+  missionPanel = null,
   initialComposerDraft = null,
   onInitialComposerDraftConsumed,
   openCoverage = null,
@@ -1488,6 +1490,8 @@ export function CampWorkspace({
   onNotifyError
 }: {
   snapshot: CampSnapshot
+  missionBoard?: React.ReactNode
+  missionPanel?: React.ReactNode
   initialComposerDraft?: CampComposerDraftView | null
   onInitialComposerDraftConsumed?(draft: CampComposerDraftView): void
   openCoverage?: CampOpenProjection['coverage'] | null
@@ -2352,7 +2356,9 @@ export function CampWorkspace({
       await draftCoordinator.waitForIdle()
       if (cancelled || epoch !== draftCoordinator.getEpoch()) return
       const localVersion = composerHandleRef.current?.getLocalVersion() ?? 0
-      const refreshed = await draftCoordinator.load()
+      const refreshed = await draftCoordinator.load(() => !cancelled
+        && composerHandleRef.current?.getLocalVersion() === localVersion
+        && !composerHandleRef.current?.isDirty())
       if (cancelled || draftCampId.current !== campId
         || epoch !== draftCoordinator.getEpoch()
         || composerHandleRef.current?.getLocalVersion() !== localVersion
@@ -4036,7 +4042,7 @@ export function CampWorkspace({
   ) : null
 
   return (
-    <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section className={`workspace-shell camp-workspace${missionPanel ? ' has-mission-panel' : ''}`} data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <section
@@ -4047,6 +4053,7 @@ export function CampWorkspace({
           onDragLeave={leaveAttachmentDropSurface}
           onDrop={dropAttachments}
         >
+          <div className="mission-secondary-panel" hidden={!missionPanel}>{missionPanel}</div>
           <div className={`camp-conversation-stage ${conversationFind.open ? 'conversation-find-open' : ''}`.trim()}>
             <div className={`conversation-floating-tools ${conversationFind.open ? 'find-open' : ''}`.trim()}>
               {conversationFind.open && (
@@ -4215,6 +4222,7 @@ export function CampWorkspace({
               )}
             >
               <div className="timeline-track">
+              {missionBoard}
               {!conversationFind.open && messageHistory?.hasEarlier && (
                 <div
                   className={`camp-history-loader is-${earlierMessageStatus}`}
@@ -4583,7 +4591,8 @@ export function CampWorkspace({
                                     onNotify={onNotify}
                                   />
                                 )}
-                                {displayBody.trim().length > 0 && (
+                                {campMessage.missionStart && <section className="mission-commission" aria-label="本次使命委托"><span>使命委托</span><h3>{campMessage.missionStart.title}</h3>{campMessage.missionStart.description && <p>{campMessage.missionStart.description}</p>}</section>}
+                                {!campMessage.missionStart && displayBody.trim().length > 0 && (
                                   campMessage.authorType === 'agent'
                                   && !campMessage.content?.some((segment) =>
                                     segment.kind === 'current_user_mention'
@@ -4722,7 +4731,7 @@ export function CampWorkspace({
                 }
                 return items
               })()}
-              {conversationTimeline.length === 0 && snapshot.agentRuns.length === 0 && (
+              {!missionBoard && conversationTimeline.length === 0 && snapshot.agentRuns.length === 0 && (
                 <EmptyCampWelcome
                   snapshot={snapshot}
                   projectName={projectName}

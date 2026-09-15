@@ -5,11 +5,18 @@ lifecycle: current
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
-model_context_change: false
+model_context_change: true
 last_updated: 2026-09-14
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
+
+## 桌面 Mission 增量
+
+2026-09-15 开发者确认[使命模型输入 revision 3](model-context-change-mission.md)，授权持久 Mission、
+Mission Camp、首次执行准备 Git worktree、固定基准累计 Diff、Agent Mission CLI 与桌面使命板实施。
+非 Git 使用原目录，无分支与 Diff；Mobile 暂不开放。实现与验证进行中，不以交互稿检查替代产品验收。
+实现范围及当前进度见[使命实施计划](mission-implementation.md)。
 
 前置：[v1.58](../v1.58/README.md)。前版未完成的评测验收保持原有事实，本版不把它们宣布为完成。
 用户确认统一 Rust Host 与共享 Axum Web 方向，并授权在独立 worktree 实施、验证后推送远程任务分支。

@@ -24,7 +24,10 @@ export const BUILTIN_CLI_NAMES: Readonly<Record<string, string>> = Object.freeze
   'automation.run': 'rovai automation run',
   'automation.close': 'rovai automation close',
   'automation.update': 'rovai automation update',
-  'automation.delete': 'rovai automation delete'
+  'automation.delete': 'rovai automation delete',
+  'mission.get': 'rovai mission get',
+  'mission.update': 'rovai mission update',
+  'mission.status': 'rovai mission status'
 })
 
 function record(value: unknown): Record<string, unknown> {

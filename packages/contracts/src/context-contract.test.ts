@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import fixture from '../fixtures/agent-run-context-v23.json'
+import fixture from '../fixtures/agent-run-context-v24.json'
 import { isCampId, type ContextManifestView } from './index'
 
 describe('AgentRun context contract', () => {
-  it('uses the shared frozen v23 fixture', () => {
-    const formatterVersion: ContextManifestView['formatterVersion'] = 23
+  it('uses the shared frozen v24 fixture', () => {
+    const formatterVersion: ContextManifestView['formatterVersion'] = 24
 
     expect(fixture.agentRunContextFormatterVersion).toBe(formatterVersion)
     expect(fixture.contextManifestFormatterVersion).toBe(formatterVersion)
-    expect(fixture.contextDeliveryProfileVersion).toBe(5)
-    expect(fixture.contextManifestVersion).toBe(23)
+    expect(fixture.contextDeliveryProfileVersion).toBe(6)
+    expect(fixture.contextManifestVersion).toBe(24)
     expect(fixture.messageProjectionAudience).toBe('agent_v1')
     expect(fixture.dynamicContextSectionOrder.slice(-2)).toEqual(['A2A_GUIDANCE?', 'CURRENT_INPUT'])
     expect(fixture.dynamicContextSectionOrder.at(-1)).toBe('CURRENT_INPUT')
@@ -102,13 +102,16 @@ describe('AgentRun context contract', () => {
       reason: 'history_budget',
     })
     expect(fixture.runFacts).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       requiredFields: ['campResources'],
       emptyOptionalProjection: 'camp_resources_only',
     })
     expect(fixture.contextManifestRunFactEvidence).toEqual([
-      'typedFactReferences', 'typedTaskReference', 'exactCompactJsonBytes', 'digest',
+      'typedFactReferences', 'typedTaskReference', 'typedMissionReference', 'exactCompactJsonBytes', 'digest',
     ])
+    expect(fixture.missionFactsFields).toEqual(['missionId', 'title', 'status'])
+    expect(fixture.missionStartCurrentInput).toEqual({kind:'mission_start', source:{type:'user'}, missionId:'mission_42'})
+    expect(fixture.dynamicContextSectionOrder).toContain('WORKSPACE?')
     expect(fixture.bootstrapRedeliveryEnvelopeVersion).toBe(2)
     expect(fixture.bootstrapRedeliveryFormatterVersion).toBe(2)
   })

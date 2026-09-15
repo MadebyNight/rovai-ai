@@ -4,6 +4,15 @@ Rovai-ai is a local multi-Agent workbench in which long-lived Agent identities c
 
 ## Domain Glossary
 
+**Mission**:
+A durable purpose and independently maintained business status for exactly one public Camp. The Camp retains ownership of membership, conversations, messages, drafts and execution. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision.
+_Avoid_: Task alias, Run state, separate chat store, lead-only definition
+
+**Mission Workspace**:
+The Git worktree association prepared by Core at the first admitted Mission Run's preparing boundary, reused for later Runs and recovery against one fixed initial commit. Non-Git Missions use their configured original directory and have no branch or Git Diff. Workspace facts are informational and acknowledged once per native binding; they grant no filesystem authority. See [Mission v1](docs/contracts/mission-v1.md).
+_Avoid_: per-Turn snapshot, Agent sandbox, directory inferred from a title
+
+
 **Gather**:
 A durable Default-Lead operation that publishes one shared public request, accepts one responsibility per canonical
 recipient, and schedules exactly one original-Lead completion after every GatherItem is terminal. It is not a private
@@ -1704,7 +1713,7 @@ The authoritative SQLite transaction that resolves exact Camp targets, validates
 _Avoid_: execution preflight, Runtime permission policy, disabled Composer, Renderer readiness guess, partial delivery, automatic Lead fallback
 
 **Execution Dispatch Check**:
-The scheduler-owned pre-launch boundary for one queued AgentRun. It performs a lightweight canonical Workspace safety check, validates the current Runtime state and executable identity against the frozen Run Runtime Configuration, obtains the existing verified Managed/legacy Camp Attachment read admission, and resolves trigger-Message Local Attachment Source Refs to their original executionRoot-contained paths or current `ROVAI_RUN_TMP`. A source validation or ordinary Run-local copy failure fails that AgentRun without removing its already-published Message or materializing a Managed attachment. Existing failed Managed/legacy verification keeps its bounded reconciliation behavior before Claim. The check then records the starting Git observation before claiming and starting the Run. Failure marks the queued Run failed and lets its CampTurn fail or wait for repair/retry without writing a false start observation.
+The scheduler-owned pre-launch boundary for one queued AgentRun. For a Mission, Core first creates or reuses its recorded workspace after execution admission, without changing the original Camp project binding. It performs a lightweight canonical Workspace safety check, validates the current Runtime state and executable identity against the frozen Run Runtime Configuration, obtains the existing verified Managed/legacy Camp Attachment read admission, and resolves trigger-Message Local Attachment Source Refs to their original executionRoot-contained paths or current `ROVAI_RUN_TMP`. A source validation or ordinary Run-local copy failure fails that AgentRun without removing its already-published Message or materializing a Managed attachment. Existing failed Managed/legacy verification keeps its bounded reconciliation behavior before Claim. The check then records the starting Git observation before claiming and starting the Run. Failure marks the queued Run failed and lets its CampTurn fail or wait for repair/retry without writing a false start observation.
 _Avoid_: message-send preflight, CampMessage admission, Git permission policy, Renderer readiness guess
 
 **Capability**:

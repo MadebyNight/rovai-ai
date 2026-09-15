@@ -678,6 +678,36 @@ fn configure_runtime_path(command: &mut TokioCommand) {
     }
 }
 
+/// Resolve host utilities through the same captured PATH used for Runtime commands.
+pub fn resolve_active_command_path(name: &str) -> Option<PathBuf> {
+    let command = Path::new(name);
+    if command.components().count() != 1 || command.file_name() != Some(OsStr::new(name)) {
+        return None;
+    }
+    let path = SCOPED_RUNTIME_COMMAND_PATH
+        .try_with(Clone::clone)
+        .ok()
+        .or_else(|| {
+            ACTIVE_RUNTIME_COMMAND_PATH
+                .get()
+                .and_then(|v| v.read().ok().map(|v| v.clone()))
+        })
+        .or_else(|| env::var_os("PATH"))?;
+    for directory in env::split_paths(&path).filter(|directory| directory.is_absolute()) {
+        for suffix in runtime_executable_suffixes() {
+            let mut filename = OsString::from(name);
+            filename.push(suffix);
+            let candidate = directory.join(filename);
+            if is_executable_file(&candidate)
+                && let Ok(canonical) = candidate.canonicalize()
+            {
+                return Some(canonical);
+            }
+        }
+    }
+    None
+}
+
 pub fn configure_active_runtime_command(command: &mut TokioCommand) {
     configure_runtime_path(command);
     let _ = SCOPED_RUNTIME_ENVIRONMENT.try_with(|(_, configuration)| {

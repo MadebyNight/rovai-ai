@@ -751,148 +751,15 @@ impl CollaborationService {
         envelope: &CommandEnvelope<CreateCampCommand>,
     ) -> Result<CommandExecution> {
         validate_project_path(&envelope.payload.project_path)?;
-        let normalized_name = normalize_camp_name(envelope.payload.name.as_deref().unwrap_or(""));
         let camp_id = CampId::new();
         self.gateway.execute(database, envelope, |transaction| {
-            if !matches!(envelope.actor, ActorRef::User { .. }) {
-                return Ok(rejected(
-                    "camp.user_required",
-                    "Only a User can create a Camp",
-                ));
-            }
-            if normalized_name.chars().count() > CAMP_NAME_MAX_SCALARS {
-                return Ok(rejected(
-                    "camp.name_too_long",
-                    "Camp name must not exceed 80 Unicode scalar values",
-                ));
-            }
-            if envelope.payload.collaboration_mode != CampCollaborationMode::Peer {
-                return Ok(rejected(
-                    "camp.unsupported_collaboration_mode",
-                    "This collaboration mode is not available",
-                ));
-            }
-            if envelope.payload.member_agent_ids.is_empty() {
-                return Ok(rejected(
-                    "camp.no_present_members",
-                    "At least one present member is required",
-                ));
-            }
-            let mut unique_member_ids = HashSet::new();
-            for member_id in &envelope.payload.member_agent_ids {
-                if !unique_member_ids.insert(member_id.as_str()) {
-                    return Ok(rejected(
-                        "camp.invalid_initial_member",
-                        "Initial Camp members must be distinct",
-                    ));
-                }
-                let presence = transaction
-                    .query_row(
-                        "SELECT profile_status FROM agent_profile WHERE id = ?1",
-                        [member_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?;
-                if presence.as_deref() != Some("present") {
-                    return Ok(CommandHandlerResult::rejected(
-                        "camp.invalid_initial_member",
-                        json!({
-                            "agentId": member_id,
-                            "message": "Every initial member must still be present",
-                        }),
-                    ));
-                }
-            }
-            if !unique_member_ids.contains(envelope.payload.default_lead_agent_id.as_str()) {
-                return Ok(rejected(
-                    "camp.invalid_default_lead",
-                    "Default Lead must belong to the selected member set",
-                ));
-            }
-            let now = chrono::Utc::now().to_rfc3339();
-            let (title, name_origin) = if normalized_name.is_empty() {
-                (DEFAULT_CAMP_TITLE.to_string(), CampNameOrigin::Default)
-            } else {
-                (normalized_name.clone(), CampNameOrigin::User)
-            };
-            transaction.execute(
-                r#"
-                INSERT INTO camp(
-                    id, title, name_origin, collaboration_mode,
-                    project_binding_kind, project_path,
-                    default_lead_agent_id, activation_state, last_message_sequence,
-                    version, created_at, updated_at
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6,
-                    ?7, ?8, 0, 1, ?9, ?9
-                )
-                "#,
-                params![
-                    camp_id,
-                    title,
-                    name_origin.as_str(),
-                    envelope.payload.collaboration_mode.as_str(),
-                    envelope.payload.project_binding_kind.as_str(),
-                    envelope.payload.project_path,
-                    envelope.payload.default_lead_agent_id,
-                    envelope.payload.activation_state.as_str(),
-                    now,
-                ],
-            )?;
-            for member_id in &envelope.payload.member_agent_ids {
-                transaction.execute(
-                    r#"
-                    INSERT INTO camp_member(
-                        camp_id, agent_id, status, capability_overrides_json,
-                        leave_requested_at, leave_request_command_id,
-                        pending_default_lead_successor_agent_id,
-                        version, joined_at, left_at
-                    ) VALUES (?1, ?2, 'active', '{}', NULL, NULL, NULL, 1, ?3, NULL)
-                    "#,
-                    params![camp_id, member_id, now],
-                )?;
-            }
-            if envelope.payload.activation_state == CampActivationState::Active {
-                append_domain_event(
-                    transaction,
-                    "camp.created",
-                    Some(camp_id.as_str()),
-                    Some(("camp", camp_id.as_str())),
-                    &envelope.actor,
-                    envelope.execution_epoch,
-                    &json!({
-                        "title": title,
-                        "nameOrigin": name_origin,
-                        "projectBindingKind": envelope.payload.project_binding_kind,
-                        "projectPath": envelope.payload.project_path,
-                        "collaborationMode": envelope.payload.collaboration_mode,
-                        "defaultLeadAgentId": envelope.payload.default_lead_agent_id,
-                        "memberCount": envelope.payload.member_agent_ids.len(),
-                    }),
-                )?;
-            }
-            let result_code = if envelope.payload.activation_state == CampActivationState::Pending {
-                "camp.pending_created"
-            } else {
-                "camp.created"
-            };
-            Ok(CommandHandlerResult::applied(
-                result_code,
-                json!({
-                    "campId": camp_id,
-                    "title": title,
-                    "activationState": envelope.payload.activation_state,
-                    "defaultLeadAgentId": envelope.payload.default_lead_agent_id,
-                    "collaborationMode": envelope.payload.collaboration_mode,
-                    "memberCount": envelope.payload.member_agent_ids.len(),
-                    "projectBindingKind": envelope.payload.project_binding_kind,
-                    "projectPath": envelope.payload.project_path,
-                }),
-                Some(EntityReference {
-                    entity_type: "camp".to_string(),
-                    entity_id: camp_id.to_string(),
-                }),
-            ))
+            create_camp_in_tx(
+                transaction,
+                &envelope.actor,
+                envelope.execution_epoch,
+                &envelope.payload,
+                &camp_id,
+            )
         })
     }
 
@@ -910,6 +777,16 @@ impl CollaborationService {
                 return Ok(rejected(
                     "camp.rename_user_required",
                     "Only a User can rename a Camp",
+                ));
+            }
+            if transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM mission WHERE camp_id=?1)",
+                [&envelope.payload.camp_id],
+                |r| r.get::<_, bool>(0),
+            )? {
+                return Ok(rejected(
+                    "mission.use_mission_update",
+                    "Rename a Mission through mission.update",
                 ));
             }
             if title.chars().count() > CAMP_NAME_MAX_SCALARS {
@@ -3442,9 +3319,247 @@ impl CollaborationService {
     }
 }
 
+pub(crate) fn create_camp_in_tx(
+    transaction: &Transaction<'_>,
+    actor: &ActorRef,
+    execution_epoch: Option<i64>,
+    command: &CreateCampCommand,
+    camp_id: &CampId,
+) -> Result<CommandHandlerResult> {
+    validate_project_path(&command.project_path)?;
+    let normalized_name = normalize_camp_name(command.name.as_deref().unwrap_or(""));
+    if !matches!(actor, ActorRef::User { .. }) {
+        return Ok(rejected(
+            "camp.user_required",
+            "Only a User can create a Camp",
+        ));
+    }
+    if normalized_name.chars().count() > CAMP_NAME_MAX_SCALARS {
+        return Ok(rejected(
+            "camp.name_too_long",
+            "Camp name must not exceed 80 Unicode scalar values",
+        ));
+    }
+    if command.collaboration_mode != CampCollaborationMode::Peer {
+        return Ok(rejected(
+            "camp.unsupported_collaboration_mode",
+            "This collaboration mode is not available",
+        ));
+    }
+    if command.member_agent_ids.is_empty() {
+        return Ok(rejected(
+            "camp.no_present_members",
+            "At least one present member is required",
+        ));
+    }
+    let mut unique_member_ids = HashSet::new();
+    for member_id in &command.member_agent_ids {
+        if !unique_member_ids.insert(member_id.as_str()) {
+            return Ok(rejected(
+                "camp.invalid_initial_member",
+                "Initial Camp members must be distinct",
+            ));
+        }
+        let presence = transaction
+            .query_row(
+                "SELECT profile_status FROM agent_profile WHERE id = ?1",
+                [member_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if presence.as_deref() != Some("present") {
+            return Ok(CommandHandlerResult::rejected(
+                "camp.invalid_initial_member",
+                json!({
+                    "agentId": member_id,
+                    "message": "Every initial member must still be present",
+                }),
+            ));
+        }
+    }
+    if !unique_member_ids.contains(command.default_lead_agent_id.as_str()) {
+        return Ok(rejected(
+            "camp.invalid_default_lead",
+            "Default Lead must belong to the selected member set",
+        ));
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let (title, name_origin) = if normalized_name.is_empty() {
+        (DEFAULT_CAMP_TITLE.to_string(), CampNameOrigin::Default)
+    } else {
+        (normalized_name.clone(), CampNameOrigin::User)
+    };
+    transaction.execute(
+        r#"
+        INSERT INTO camp(
+            id, title, name_origin, collaboration_mode,
+            project_binding_kind, project_path,
+            default_lead_agent_id, activation_state, last_message_sequence,
+            version, created_at, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6,
+            ?7, ?8, 0, 1, ?9, ?9
+        )
+        "#,
+        params![
+            camp_id,
+            title,
+            name_origin.as_str(),
+            command.collaboration_mode.as_str(),
+            command.project_binding_kind.as_str(),
+            command.project_path,
+            command.default_lead_agent_id,
+            command.activation_state.as_str(),
+            now,
+        ],
+    )?;
+    for member_id in &command.member_agent_ids {
+        transaction.execute(
+            r#"
+            INSERT INTO camp_member(
+                camp_id, agent_id, status, capability_overrides_json,
+                leave_requested_at, leave_request_command_id,
+                pending_default_lead_successor_agent_id,
+                version, joined_at, left_at
+            ) VALUES (?1, ?2, 'active', '{}', NULL, NULL, NULL, 1, ?3, NULL)
+            "#,
+            params![camp_id, member_id, now],
+        )?;
+    }
+    if command.activation_state == CampActivationState::Active {
+        append_domain_event(
+            transaction,
+            "camp.created",
+            Some(camp_id.as_str()),
+            Some(("camp", camp_id.as_str())),
+            actor,
+            execution_epoch,
+            &json!({
+                "title": title,
+                "nameOrigin": name_origin,
+                "projectBindingKind": command.project_binding_kind,
+                "projectPath": command.project_path,
+                "collaborationMode": command.collaboration_mode,
+                "defaultLeadAgentId": command.default_lead_agent_id,
+                "memberCount": command.member_agent_ids.len(),
+            }),
+        )?;
+    }
+    let result_code = if command.activation_state == CampActivationState::Pending {
+        "camp.pending_created"
+    } else {
+        "camp.created"
+    };
+    Ok(CommandHandlerResult::applied(
+        result_code,
+        json!({
+            "campId": camp_id,
+            "title": title,
+            "activationState": command.activation_state,
+            "defaultLeadAgentId": command.default_lead_agent_id,
+            "collaborationMode": command.collaboration_mode,
+            "memberCount": command.member_agent_ids.len(),
+            "projectBindingKind": command.project_binding_kind,
+            "projectPath": command.project_path,
+        }),
+        Some(EntityReference {
+            entity_type: "camp".to_string(),
+            entity_id: camp_id.to_string(),
+        }),
+    ))
+}
+
 struct QueuedCampMessage {
     camp_sequence: i64,
     agent_run_ids: Vec<String>,
+}
+
+pub(crate) fn admit_mission_start(
+    transaction: &Transaction<'_>,
+    actor: &ActorRef,
+    command_id: &str,
+    mission: &crate::mission::MissionRecord,
+) -> Result<CommandHandlerResult> {
+    let camp_id = &mission.camp_id;
+    let Some(lead) = &mission.default_lead_agent_id else {
+        return Ok(rejected(
+            "mission.lead_unavailable",
+            "Mission needs a current Default Lead",
+        ));
+    };
+    let address = CampMessageAddress::Explicit {
+        agent_ids: vec![lead.clone()],
+    };
+    let mut resolution = match resolve_address(transaction, camp_id, &address, actor)? {
+        AddressingOutcome::Resolved(value) => value,
+        AddressingOutcome::Rejected(result) => return Ok(result),
+    };
+    let now = chrono::Utc::now();
+    let now_text = now.to_rfc3339();
+    let created =
+        ensure_resolution_conversations(transaction, camp_id, &mut resolution, &now_text)?;
+    let configs = match prepare_agent_run_configs(transaction, &resolution)? {
+        Ok(value) => value,
+        Err(rejection) => {
+            delete_new_conversations(transaction, &created)?;
+            return Ok(rejection);
+        }
+    };
+    let budget = freeze_camp_turn_execution_budget(None, now, 1)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let message_id = Uuid::new_v4().to_string();
+    let turn_id = Uuid::new_v4().to_string();
+    let body = format!("开始使命：{}", mission.info.title);
+    let content = normalize_content(vec![StructuredCampMessageSegment::Text {
+        text: body.clone(),
+    }]);
+    let execution = ExecutionRequest {
+        task_id: None,
+        purpose: "Start the current Mission".into(),
+        completion_role: required_completion_role(),
+        budget: None,
+    };
+    let queued = queue_camp_message_and_runs(
+        transaction,
+        QueueCampMessageInput {
+            camp_message_id: &message_id,
+            camp_turn_id: Some(&turn_id),
+            automation_run_id: None,
+            camp_id,
+            body: &body,
+            structured_content: &content,
+            source_attachments: &[],
+            prepared_attachment_ids: &[],
+            legacy_attachment_publication_operation_id: None,
+            managed_attachment_ingest_intent_id: None,
+            consume_composer_draft: false,
+            draft_client: &DraftClient::default(),
+            draft_revision: 1,
+            address_mode: address.mode(),
+            reply_to_camp_message_id: None,
+            resolution: &resolution,
+            execution: Some(&execution),
+            task_admission: None,
+            frozen_execution_budget: Some(&budget),
+            effective_configs: Some(&configs),
+            workspace: None,
+            actor,
+            message_author: None,
+            execution_epoch: None,
+            command_id,
+            now: &now_text,
+            generated_camp_name: None,
+        },
+    )?;
+    transaction.execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,title,description,created_at,command_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![message_id,mission.info.mission_id,turn_id,mission.info.title,mission.info.description,now_text,command_id])?;
+    Ok(CommandHandlerResult::accepted(
+        "mission.started",
+        json!({"missionId":mission.info.mission_id,"campId":camp_id,"campMessageId":message_id,"campTurnId":turn_id,"agentRunIds":queued.agent_run_ids}),
+        Some(EntityReference {
+            entity_type: "mission".into(),
+            entity_id: mission.info.mission_id.clone(),
+        }),
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -4463,7 +4578,7 @@ fn active_address_target(
         .context("failed to resolve active Camp member Conversation")
 }
 
-fn actor_can_write_camp(
+pub(crate) fn actor_can_write_camp(
     connection: &Connection,
     actor: &ActorRef,
     execution_epoch: Option<i64>,
@@ -6411,6 +6526,34 @@ pub(crate) fn append_domain_event(
     execution_epoch: Option<i64>,
     payload: &Value,
 ) -> Result<()> {
+    if let Some(camp_id) = camp_id {
+        let kind = match event_type {
+            "camp.member_added" | "camp.member_removed" => Some("members"),
+            "camp.default_lead_changed" | "camp.default_lead_reconciled" => Some("lead"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let mission: Option<String> = transaction
+                .query_row("SELECT id FROM mission WHERE camp_id=?1", [camp_id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            if let Some(mission) = mission {
+                crate::mission::record_activity(
+                    transaction,
+                    &mission,
+                    kind,
+                    actor,
+                    execution_epoch,
+                    payload.clone(),
+                )?;
+                transaction.execute(
+                    "UPDATE mission SET updated_at=?2 WHERE id=?1",
+                    params![mission, chrono::Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+    }
     let (actor_type, actor_id, source_agent_run_id) = actor_parts(actor);
     transaction.execute(
         r#"

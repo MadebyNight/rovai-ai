@@ -113,6 +113,9 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
         | "memory.search"
         | "memory.read"
         | "single_chat.history"
+        | "mission.get"
+        | "mission.update"
+        | "mission.status"
         | "automation.list"
         | "automation.get"
         | "automation.create"
@@ -211,6 +214,9 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
         | "memory.search"
         | "memory.read"
         | "single_chat.history"
+        | "mission.get"
+        | "mission.update"
+        | "mission.status"
         | "automation.list"
         | "automation.get"
         | "automation.create"
@@ -662,7 +668,7 @@ mod tests {
         ))
         .unwrap();
         let documents = golden.as_object().unwrap();
-        assert_eq!(documents.len(), 23);
+        assert_eq!(documents.len(), builtin_tool_definitions().len());
         for definition in builtin_tool_definitions() {
             let operation = definition["name"].as_str().unwrap();
             let fixture = documents

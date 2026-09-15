@@ -1,5 +1,6 @@
 mod config;
 mod conversation_preferences;
+mod mission;
 mod transport;
 mod web_commands;
 pub use config::{CoreConfig, RemovedSkillProjectRoots};
@@ -2047,6 +2048,7 @@ struct Core {
     output: mpsc::UnboundedSender<String>,
     runtime_search_environment: RwLock<Arc<RuntimeSearchEnvironment>>,
     runtime_search_update: Mutex<()>,
+    mission_workspace_gate: Mutex<()>,
     #[cfg(test)]
     runtime_search_capture: Option<runtime_check_environment::TestSearchCapture>,
     runtime_discovery:
@@ -5613,6 +5615,93 @@ impl Core {
                         }?;
                     serde_json::to_value(output).map_err(Into::into)
                 }
+                "mission.get" | "mission.update" | "mission.status" => {
+                    crate::team_tool_catalog::validate_builtin_tool_input(
+                        &request.tool_name,
+                        &request.input,
+                    )
+                    .map_err(|_| {
+                        automation_tool_error(
+                            "mission.invalid_input",
+                            "Mission input does not match its schema",
+                        )
+                    })?;
+                    let actor = ActorRef::Agent {
+                        agent_id: authenticated_run.agent_id.clone(),
+                        source_agent_run_id: authenticated_run.agent_run_id.clone(),
+                    };
+                    if !crate::collaboration::actor_can_write_camp(
+                        database.connection(),
+                        &actor,
+                        Some(authenticated_run.execution_epoch),
+                        &authenticated_run.camp_id,
+                    )? {
+                        return Err(automation_tool_error(
+                            "mission.forbidden",
+                            "Current Camp membership is required",
+                        ));
+                    }
+                    let mission = crate::mission::mission_for_camp(
+                        database.connection(),
+                        &authenticated_run.camp_id,
+                    )?
+                    .ok_or_else(|| {
+                        automation_tool_error(
+                            "mission.current_unavailable",
+                            "The current public Camp has no Mission",
+                        )
+                    })?;
+                    if request.tool_name == "mission.get" {
+                        serde_json::to_value(mission.info).map_err(Into::into)
+                    } else {
+                        let service = crate::mission::MissionService::default();
+                        let execution = if request.tool_name == "mission.update" {
+                            let input: crate::mission::MissionUpdateInput =
+                                serde_json::from_value(request.input)?;
+                            if input.title.is_none() && input.description.is_none() {
+                                return Err(automation_tool_error(
+                                    "mission.content_required",
+                                    "Provide title or description",
+                                ));
+                            }
+                            service.update(
+                                &mut database,
+                                &agent_builtin_command_envelope(
+                                    request.runtime_tool_call_id,
+                                    &authenticated_run,
+                                    crate::mission::UpdateMissionCommand {
+                                        mission_id: mission.info.mission_id,
+                                        title: input.title,
+                                        description: input.description,
+                                        tags: None,
+                                    },
+                                ),
+                            )?
+                        } else {
+                            let input: crate::mission::MissionStatusInput =
+                                serde_json::from_value(request.input)?;
+                            service.status(
+                                &mut database,
+                                &agent_builtin_command_envelope(
+                                    request.runtime_tool_call_id,
+                                    &authenticated_run,
+                                    crate::mission::StatusMissionCommand {
+                                        mission_id: mission.info.mission_id,
+                                        status: input.status,
+                                        source_message_id: input.source_message_id,
+                                    },
+                                ),
+                            )?
+                        };
+                        evidence_replayed = execution.replayed;
+                        emit_navigation_invalidated(
+                            &self.output,
+                            "missions.agentUpdated",
+                            Some(&authenticated_run.camp_id),
+                        );
+                        command_execution_payload(execution)
+                    }
+                }
                 AUTOMATION_LIST_TOOL_NAME => {
                     let input = serde_json::from_value::<AutomationListToolInput>(request.input)
                         .map_err(|_| {
@@ -5693,7 +5782,7 @@ impl Core {
                     })?;
                     let execution = AutomationService::default().create(
                         &mut database,
-                        &automation_agent_envelope(
+                        &agent_builtin_command_envelope(
                             request.runtime_tool_call_id,
                             &authenticated_run,
                             CreateAutomationCommand {
@@ -5732,7 +5821,7 @@ impl Core {
                     let automation_service = AutomationService::default();
                     let execution = automation_service.run_now(
                         &mut database,
-                        &automation_agent_envelope(
+                        &agent_builtin_command_envelope(
                             request.runtime_tool_call_id,
                             &authenticated_run,
                             RunAutomationCommand { automation_id },
@@ -5782,7 +5871,7 @@ impl Core {
                     let execution = if request.tool_name == AUTOMATION_CLOSE_TOOL_NAME {
                         AutomationService::default().close(
                             &mut database,
-                            &automation_agent_envelope(
+                            &agent_builtin_command_envelope(
                                 request.runtime_tool_call_id,
                                 &authenticated_run,
                                 CloseAutomationCommand {
@@ -5794,7 +5883,7 @@ impl Core {
                     } else {
                         AutomationService::default().delete(
                             &mut database,
-                            &automation_agent_envelope(
+                            &agent_builtin_command_envelope(
                                 request.runtime_tool_call_id,
                                 &authenticated_run,
                                 DeleteAutomationCommand {
@@ -5883,7 +5972,7 @@ impl Core {
                     };
                     let execution = AutomationService::default().update(
                         &mut database,
-                        &automation_agent_envelope(
+                        &agent_builtin_command_envelope(
                             request.runtime_tool_call_id,
                             &authenticated_run,
                             UpdateAutomationCommand {
@@ -7847,6 +7936,19 @@ impl Core {
                     )?,
                 )?)
             }
+            "missions.cleanup.list"
+            | "missions.cleanup.retry"
+            | "missions.list"
+            | "missions.get"
+            | "missions.activity"
+            | "missions.delivery"
+            | "missions.changes"
+            | "missions.fileDiff"
+            | "missions.create"
+            | "missions.update"
+            | "missions.status"
+            | "missions.start"
+            | "missions.linkPr" => self.handle_mission(request).await,
             "camps.create" => {
                 let params: CreateCampParams = serde_json::from_value(request.params.clone())?;
                 let (project_binding_kind, requested_path) = match &params.workspace {
@@ -8250,6 +8352,7 @@ impl Core {
                 Ok(value)
             }
             "camps.delete" => {
+                let _mission_preparation = self.mission_workspace_gate.lock().await;
                 let params: UserCommandParams<DeleteCampCommand> =
                     serde_json::from_value(request.params.clone())?;
                 let camp_id = params.command.camp_id.clone();
@@ -8339,6 +8442,10 @@ impl Core {
                 drop(database);
                 if should_remove_attachments && let Some(camp_id) = deleted_camp_id {
                     self.forget_deleted_camp_runtimes(&camp_id).await;
+                    if let Err(error) = self.cleanup_mission_workspaces_locked(Some(&camp_id)).await
+                    {
+                        eprintln!("Mission cleanup pending: {error:#}");
+                    }
                     if let Err(error) = self.finish_camp_attachment_cleanup(cleanup.as_ref()).await
                     {
                         eprintln!(
@@ -10468,7 +10575,7 @@ impl Core {
             return;
         }
         let workspace = candidate.execution_workspace();
-        let workspace_path = match self.validate_dispatch_workspace(&candidate).await {
+        let _project_path = match self.validate_dispatch_workspace(&candidate).await {
             Ok(path) => path,
             Err(error) => {
                 self.reject_agent_run_dispatch(
@@ -10511,6 +10618,21 @@ impl Core {
                 return;
             }
         }
+        let workspace = match self.prepare_mission_workspace(&candidate).await {
+            Ok(Some(workspace)) => workspace,
+            Ok(None) => return,
+            Err(error) => {
+                self.reject_agent_run_dispatch(
+                    &output,
+                    &candidate,
+                    "workspace_unavailable",
+                    &error,
+                )
+                .await;
+                return;
+            }
+        };
+        let workspace_path = PathBuf::from(&workspace.execution_root);
         let starting_git_observation = Some(git::observe_git(&workspace_path).await);
         let (attachment_view_admission, attachment_authorization) = match self
             .verified_camp_attachment_admission(&candidate.camp_id, &workspace_path)
@@ -15885,6 +16007,7 @@ async fn run_core(
         output: output_tx.clone(),
         runtime_search_environment: RwLock::new(runtime_search_environment.clone()),
         runtime_search_update: Mutex::new(()),
+        mission_workspace_gate: Mutex::new(()),
         #[cfg(test)]
         runtime_search_capture: None,
         runtime_discovery: RwLock::new(
@@ -21686,6 +21809,12 @@ async fn process_agent_run_scheduler(
             },
             _ = mcp_cleanup_interval.tick() => {
                 core.cleanup_mcp_projections_best_effort().await;
+                let cleanup_core=Arc::clone(&core);
+                tokio::spawn(async move {
+                    if let Ok(_preparation)=cleanup_core.mission_workspace_gate.try_lock() {
+                        if let Err(error)=cleanup_core.cleanup_mission_workspaces_locked(None).await {eprintln!("Mission cleanup pending: {error:#}");}
+                    }
+                });
             },
             _ = pending_execution_interval.tick() => {
                 core.recover_pending_execution_intents().await;
@@ -22530,7 +22659,7 @@ fn automation_tool_error(code: &str, message: &str) -> anyhow::Error {
     .into()
 }
 
-fn automation_agent_envelope<P>(
+fn agent_builtin_command_envelope<P>(
     command_id: String,
     run: &AuthenticatedTeamToolRun,
     payload: P,
@@ -23270,6 +23399,7 @@ mod tests {
             runtime_usage_flush: Mutex::new(()),
             output,
             runtime_search_update: Mutex::new(()),
+            mission_workspace_gate: Mutex::new(()),
             runtime_search_capture: None,
             runtime_search_environment: RwLock::new(Arc::new(
                 RuntimeSearchEnvironment::for_test_paths(1, Vec::new()),

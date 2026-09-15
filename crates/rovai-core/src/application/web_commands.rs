@@ -49,6 +49,22 @@ pub(super) fn reconcile(
         }};
     }
     match query.operation.as_str() {
+        "missions.create" => {
+            let mut params: UserCommandParams<crate::mission::CreateMissionCommand> =
+                serde_json::from_value(query.params)?;
+            if params.command.project_binding_kind == ProjectBindingKind::QuickChat {
+                params.command.project_path =
+                    data_dir.join("quick-chat").to_string_lossy().into_owned();
+            }
+            receipt(
+                database,
+                user_command_envelope(params.command_id, params.command),
+            )
+        }
+        "missions.update" => user!(crate::mission::UpdateMissionCommand),
+        "missions.status" => user!(crate::mission::StatusMissionCommand),
+        "missions.start" => user!(crate::mission::StartMissionCommand),
+        "missions.linkPr" => user!(crate::mission::LinkMissionPrCommand),
         "camps.rename" => camp!(RenameCampCommand),
         "camps.delete" => camp!(DeleteCampCommand),
         "camps.discardPending" => camp!(DiscardPendingCampCommand),

@@ -86,13 +86,15 @@ export class DraftMutationCoordinator {
     return this.currentDraft
   }
 
-  load(): Promise<CampComposerDraftView> {
+  load(shouldAccept?: () => boolean): Promise<CampComposerDraftView> {
     const epoch = this.epoch
     const campId = this.requireCampId()
     const result = this.queue.then(async () => {
       this.assertActive(epoch, campId)
       const loaded = await this.bindings.load(campId)
       this.assertActive(epoch, campId)
+      // A background route read must not publish after local editing started.
+      if (shouldAccept && !shouldAccept()) return this.requireCurrentDraft()
       return this.acceptDraft(loaded, epoch, campId, 'load')
     })
     this.queue = result.then(() => undefined, () => undefined)
