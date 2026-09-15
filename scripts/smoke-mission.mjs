@@ -17,9 +17,12 @@ const coreExecutable = await realpath(resolve(coreArgument)), requestedOutput = 
 await mkdir(requestedOutput, { recursive: false, mode: 0o700 })
 const output = await realpath(requestedOutput)
 const dataDirectory = join(output, 'core-data'), skillLibraryRoot = join(output, 'skill-library')
+// Login-shell dotfiles on the developer machine can replace Core's candidate CLI PATH.
+// Keep the two-product acceptance channel independent of the installed daily CLI.
+const shellDirectory = join(output, 'shell')
 const source = join(output, 'project'), project = join(source, 'packages/app'), plain = join(output, 'plain')
-await Promise.all([mkdir(dataDirectory), mkdir(skillLibraryRoot), mkdir(project, { recursive: true }), mkdir(plain)])
-console.log(JSON.stringify({ channel: 'automatic_acceptance', coreExecutable, dataDirectory, skillLibraryRoot, output }))
+await Promise.all([mkdir(dataDirectory), mkdir(skillLibraryRoot), mkdir(shellDirectory), mkdir(project, { recursive: true }), mkdir(plain)])
+console.log(JSON.stringify({ channel: 'automatic_acceptance', coreExecutable, dataDirectory, skillLibraryRoot, shellDirectory, output }))
 const gitExecutable = execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim()
 const git = (cwd, ...args) => execFileSync(gitExecutable, ['-C', cwd, ...args], { encoding: 'utf8' }).trim()
 git(source, 'init', '-b', 'main'); git(source, 'config', 'user.name', 'Mission Fixture'); git(source, 'config', 'user.email', 'fixture@example.invalid')
@@ -32,7 +35,7 @@ const report = { schemaVersion: 1, startedAt: new Date().toISOString(), output, 
 let client, db
 function startCore() {
   const child = spawn(coreExecutable, [...coreDataDirectoryArguments(dataDirectory), '--skill-library-root', skillLibraryRoot,
-    '--mcp-config-path', join(dataDirectory, 'mcp.json')], { cwd: repository, stdio: ['pipe', 'pipe', 'pipe'] })
+    '--mcp-config-path', join(dataDirectory, 'mcp.json')], { cwd: repository, env: { ...process.env, ZDOTDIR: shellDirectory }, stdio: ['pipe', 'pipe', 'pipe'] })
   const pending = new Map(), errors = []; let id = 0, stopped = false
   child.stderr.on('data', chunk => { errors.push(String(chunk)); void writeFile(join(output, 'core-stderr.log'), errors.join('')) })
   const closed = once(child, 'close')
@@ -121,7 +124,7 @@ try {
   assert.equal(workspace.base_sha, baseSha); assert.equal(workspace.branch, `rovai/mission/${mission.missionId}`)
   assert.equal(workspace.worktree_path, `${source}-mission-${mission.missionId}`)
   assert.equal(workspace.working_directory, join(workspace.worktree_path, 'packages/app'))
-  assert(snapshot.agentRuns.every(run => run.workspace.executionRoot === workspace.working_directory))
+  assert(snapshot.agentRuns.every(run => run.workspace.path === workspace.working_directory))
   assert.equal(await readFile(join(project, 'tracked.txt'), 'utf8'), 'source dirty content\n')
   for (const file of ['lead-evidence.json', 'follower-evidence.json']) assert.equal(JSON.parse(await readFile(join(output, file))).cwd, workspace.working_directory)
   const manifests = snapshot.contextManifests

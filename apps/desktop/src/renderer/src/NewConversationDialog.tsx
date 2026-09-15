@@ -108,6 +108,8 @@ export function NewConversationDialog({
   const leadProfile = lead ? profileById.get(lead.agentId) : undefined
   const projectActionsDisabled = projectWorkspaceActionsDisabled(busy, projectAccessReady)
   const projectSubmissionBlocked = workspaceSubmissionBlocked(workspace, projectAccessReady)
+  const submissionBlocked = busy || projectSubmissionBlocked || availableMembers.length === 0
+    || hasUnavailableSelection || (selectedMemberIds.length > 0 && !lead) || Boolean(nameError)
 
   useEffect(() => {
     if (!open) {
@@ -209,11 +211,7 @@ export function NewConversationDialog({
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault()
     if (
-      busy || submittingRef.current
-      || projectSubmissionBlocked
-      || hasUnavailableSelection
-      || (selectedMemberIds.length > 0 && !lead)
-      || nameError
+      submissionBlocked || submittingRef.current
     ) return
     if (isMission && !normalizedName) { setSubmitError('请填写使命标题。'); nameInputRef.current?.focus(); return }
     if (selectedMemberIds.length === 0) {
@@ -389,8 +387,8 @@ export function NewConversationDialog({
             </div>
             <footer className="compact-footer">
               <Dialog.Close asChild><button className="compact-cancel" type="button" disabled={busy}>取消</button></Dialog.Close>
-              {isMission && <button className="compact-cancel mission-save" type="submit" value="save" disabled={busy || Boolean(nameError)}>保存使命</button>}
-              <button className="compact-primary" type="submit" value="start" disabled={busy || projectSubmissionBlocked || hasUnavailableSelection || (selectedMemberIds.length > 0 && !lead) || Boolean(nameError)}>{busy ? '正在新建…' : isMission ? '开始使命' : '新建'}</button>
+              {isMission && <button className="compact-cancel mission-save" type="submit" value="save" disabled={submissionBlocked}>保存使命</button>}
+              <button className="compact-primary" type="submit" value="start" disabled={submissionBlocked}>{busy ? '正在新建…' : isMission ? '开始使命' : '新建'}</button>
             </footer>
           </form>
         </Dialog.Content>

@@ -95,6 +95,9 @@ function FilePathButton({
 
 function SourceViewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   const { resolvedTheme } = useFilePreview()
+  // Reading samples are mutable snapshots. They may suppress an old target on a
+  // cold mount, but must not remove the current highlight on a theme/parent render.
+  const target = useMemo(() => tab.reading ? undefined : tab.file?.target, [tab.file?.target])
   const text = tab.content?.kind === 'page' ? tab.content.page.text
     : tab.content && 'text' in tab.content ? tab.content.text : ''
   const startLine = tab.content?.kind === 'page' ? tab.content.page.startLine : 1
@@ -104,7 +107,7 @@ function SourceViewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element 
       text={text}
       startLine={startLine}
       findScopeLabel={tab.content?.kind === 'page' ? '仅查找当前已加载页' : ''}
-      target={tab.reading ? undefined : tab.file?.target}
+      target={target}
       theme={resolvedTheme}
     />
   )
@@ -287,6 +290,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   const { open, resolvedTheme } = useFilePreview()
   const [linkError, setLinkError] = useState<string | null>(null)
   const file = tab.file
+  const headingTarget = useMemo(() => tab.reading ? undefined : file?.target?.heading, [file?.target])
   const api = useFilePreviewApi()
   const readImage = useCallback((rawReference: string) => {
     if (!file || !api.readChildImage) throw new Error('图片资源适配不可用。')
@@ -302,7 +306,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
         <SafeMarkdown
           mode="document"
           theme={resolvedTheme}
-          headingTarget={tab.reading ? undefined : file.target?.heading}
+          headingTarget={headingTarget}
           onHeadingTargetResult={(found) => setLinkError(found ? null : '未找到指定的标题，已保持在文件顶部。')}
           localImageContent={api.readChildImage && file.capabilities.includes('read_child') ? readImage : undefined}
           localImageUrl={file.capabilities.includes('preview_asset') ? (rawReference) => filePreviewAssetUrl(

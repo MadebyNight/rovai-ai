@@ -5409,6 +5409,13 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         "DELETE FROM message_attachment WHERE camp_id = ?1",
         [camp_id],
     )?;
+    // These Camp-owned rows would cascade when the Camp is removed, but their
+    // committed message references must be released before deleting messages.
+    // The separately prepared Camp attachment cleanup owns filesystem removal.
+    transaction.execute(
+        "DELETE FROM managed_attachment_ingest_intent WHERE camp_id = ?1",
+        [camp_id],
+    )?;
     transaction.execute(
         r#"
         DELETE FROM approval
@@ -8911,6 +8918,25 @@ mod slow_tests {
                 ),
             )
             .expect("Task should be created before deletion");
+        // An Agent-delivered file retains its committed message through the
+        // ingest intent, even after the ingest itself has finished.
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO managed_attachment_ingest_intent(
+                    id, camp_id, command_id, source_kind, state, reserved_bytes,
+                    plan_json, cleanup_state, committed_camp_message_id,
+                    created_at, updated_at, completed_at
+                )
+                SELECT 'delivered-file-before-delete', ?1, 'send-file-before-delete',
+                    'agent_workspace', 'committed', 0, '{}', 'none',
+                    trigger_camp_message_id, datetime('now'), datetime('now'), datetime('now')
+                FROM agent_run WHERE id = ?2
+                "#,
+                rusqlite::params![camp_id, agent_run_id],
+            )
+            .unwrap();
         let delete_version = camp_version(&database, &camp_id);
         let delete_envelope = user_envelope(
             "delete-camp",
@@ -8934,6 +8960,7 @@ mod slow_tests {
         assert_eq!(row_count(&database, "conversation"), 0);
         assert_eq!(row_count(&database, "camp_message"), 0);
         assert_eq!(row_count(&database, "message_delivery"), 0);
+        assert_eq!(row_count(&database, "managed_attachment_ingest_intent"), 0);
         assert_eq!(row_count(&database, "task"), 0);
         let foreign_key_violations: i64 = database
             .connection()

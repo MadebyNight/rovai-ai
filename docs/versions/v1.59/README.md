@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -15,7 +15,8 @@ last_updated: 2026-09-14
 
 2026-09-15 开发者确认[使命模型输入 revision 3](model-context-change-mission.md)，授权持久 Mission、
 Mission Camp、首次执行准备 Git worktree、固定基准累计 Diff、Agent Mission CLI 与桌面使命板实施。
-非 Git 使用原目录，无分支与 Diff；Mobile 暂不开放。实现与验证进行中，不以交互稿检查替代产品验收。
+非 Git 使用原目录，无分支与 Diff；Mobile 暂不开放。已实现并完成本机业务与隔离 App 验收，
+同步 main 后安装到日常 App。通用上下文评测按用户追加指令提前结束，完整 Gate 未完成。
 实现范围及当前进度见[使命实施计划](mission-implementation.md)。
 
 前置：[v1.58](../v1.58/README.md)。前版未完成的评测验收保持原有事实，本版不把它们宣布为完成。

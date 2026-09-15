@@ -2545,9 +2545,12 @@ fn process_dispatch_attempt(
     )?;
     let caller_runtime_basis =
         capture_run_runtime_basis(&transaction, &delivery.source_agent_run_id)?;
-    let workspace = AgentRunWorkspace::runtime_managed_path(
+    let mut workspace = AgentRunWorkspace::runtime_managed_path(
         caller_runtime_basis.workspace.execution_root.clone(),
     );
+    // A2A executes in the same resolved environment. Replacing this metadata with
+    // `shared` makes a persisted Mission worktree fail the preparing/recovery fence.
+    workspace.isolation = caller_runtime_basis.workspace.isolation.clone();
     workspace.validate()?;
     let current_conversation_boundary: i64 = transaction.query_row(
         "SELECT last_message_sequence FROM conversation WHERE id = ?1",

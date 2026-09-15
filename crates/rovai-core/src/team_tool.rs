@@ -6248,6 +6248,15 @@ mod tests {
         // Current and pre-upgrade frozen deliveries must consume exact bytes and original version axes.
         for frozen_version in [24, 23, 22] {
             let mut fixture = Fixture::new();
+            let expected_isolation = if frozen_version == 24 {
+                "git_worktree"
+            } else {
+                "shared"
+            };
+            fixture.database.connection().execute(
+                "UPDATE agent_run SET workspace_json=json_set(workspace_json,'$.isolation',?2) WHERE id=?1",
+                params![fixture.source_run_id, expected_isolation],
+            ).unwrap();
             fixture
                 .database
                 .connection()
@@ -6313,6 +6322,20 @@ Use this exact public input @agent_2";
             )
             .unwrap();
             let mut frozen_snapshot: Value = serde_json::from_str(&frozen_snapshot).unwrap();
+            let target_workspace: String = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT workspace_json FROM agent_run WHERE id=?1",
+                    [&target_run_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&target_workspace).unwrap()["isolation"],
+                expected_isolation,
+                "A2A must preserve the source worktree environment instead of freezing it as shared"
+            );
             if frozen_version < 24 {
                 // Ordinary v22/v23 input differs here only in the RunFacts schema
                 // tag. Seal those original bytes before exercising the upgrade reader.
