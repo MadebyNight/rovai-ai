@@ -425,6 +425,7 @@ function runtimeInstallation(kind: AdapterKind): AdapterInstallation {
 function runtimePermissionDefaults(kind: AdapterKind): Record<string, unknown> {
   switch (kind) {
     case 'codex-cli':
+    case 'deepseek-harness':
       return { sandbox_mode: 'danger-full-access', approval_policy: 'never' }
     case 'pi':
       return {}

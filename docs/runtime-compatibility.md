@@ -1,7 +1,7 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-10
+last_updated: 2026-09-15
 ---
 
 # Agent Runtime 兼容性清单
@@ -20,18 +20,26 @@ Context、Memory MCP transport、Bridge、Plugin 与 Runtime-native built-in MCP
 
 ## 当前 Product Runtime Catalog
 
-当前 closed `AdapterKind` 包含十四种 Product Runtime：Codex CLI、OpenCode、GitHub Copilot、
+当前 closed `AdapterKind` 包含十六种 Product Runtime：Codex CLI、OpenCode、GitHub Copilot、
 Claude Code、Antigravity、Kiro、Qoder、CodeBuddy、Qwen Code、TRAE CLI CN、Cursor Agent、Kimi Code、
-Grok Build 与 Pi Coding Agent。
+Grok Build、Pi Coding Agent、ZCode 与 DeepSeek Harness。
 Cursor 在三个目标平台均为 `not_qualified`；Pi、Kimi 在 macOS arm64、macOS x64 与 Windows x64 均为
 digest-bound `qualified`。Pi 三个平台分别绑定自己的 adapter-scoped evidence，不继承通用 macOS/Windows、
 Kimi 或 Grok 的平台结论。
 Grok Build 在 adapter-scoped 证据分别覆盖的 macOS arm64、macOS x64 与 Windows x64 均为 `qualified`；
 三个宿主平台各自绑定独立 evidence digest，不互相外推。
 Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery/check/AgentRun；Settings 的 Agent Runtime
-目录不展示该项。DeepSeek Harness 在 macOS arm64、macOS x64 与 Windows x64 的设置页均隐藏，
-不保留“待支持”占位行；它仍是未实现候选，不在这个目录中，也没有 Installation、Probe、成员选择、
-诊断或 AgentRun 语义。本次显示范围调整不改变任何 Runtime 的平台资格或实测证据。
+目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 为 preview，macOS x64、Windows x64 与 Linux x64
+为 not_qualified。Machine Ready、实现与 First-Class 资格分别记录。
+
+### 2026-09-15 DeepSeek Harness 0.1.5-rc.2 ACP
+
+固定官方 npm 发布包在隔离 DSH_HOME 与隔离 Core data/Skill/MCP 根验证；生产仍使用其原生配置。
+逐项 Host、Session、Bootstrap、Compaction、Skill、MCP、权限、工具、CLI 与 Monitoring 结果见
+[DSH Parity Matrix](research/deepseek-harness-runtime/acp-0.1.5-parity.md)。该表记录真实通过项和未观测项，
+不从共享代码或普通 handshake 推断 qualified。
+真实官方模型已通过普通/续轮、命令输出、文件工具、Skills、全部 23 项 Built-in CLI 与原生压缩验证；
+余额耗尽后的 Missing-Send 和 Core 取消复测仍待完成。测试替代模型的证据单列，不混作真实 Provider 验收。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 
@@ -1034,7 +1042,6 @@ ADR-0189 只允许 Runtime 设置页追加严格 presentation-only 的 Preview�
 | Runtime | 调研版本 / 状态 | 观察结果 | 当前边界 / 未接入原因 | 复核条件 |
 |---|---:|---|---|---|
 | Cursor Agent | 2025.09.18-7ae6800 | 支持 headless 与 resume；已验证入口会读取项目 `.cursor/mcp.json` | 尚无稳定的逐 Run additive channel 与同名证据 | 上游提供动态追加入口并完成 native preservation、同名与恢复复核 |
-| DeepSeek Harness | 未实现；三平台隐藏 | 设置页不展示；没有 executable、Adapter、Probe 或 capability 结论 | 未接入候选，不属于 Product Runtime Catalog，也不保留 Preview 占位行 | 取得明确入口和协议后，完成 Adapter、认证、Session、终态、取消、Approval、Tool ID、MCP、Activity、Migration 与真实 AgentRun 准入 |
 
 ## 后续准入规则
 

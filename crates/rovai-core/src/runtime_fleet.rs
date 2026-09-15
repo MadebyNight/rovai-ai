@@ -1699,6 +1699,23 @@ impl AgentRuntimeFleetManager {
         self.invalidate_member(agent_id).await;
     }
 
+    /// Release native Session locks held by an obsolete configuration before
+    /// a resumable Runtime starts its replacement Host in the same reuse scope.
+    /// Active leases retain their normal retirement boundary.
+    pub(crate) async fn retire_incompatible_hosts(
+        &self,
+        adapter_kind: AdapterKind,
+        compatibility: &RuntimeCompatibilityKey,
+    ) {
+        self.invalidate_matching(|entry| {
+            entry.adapter_kind == adapter_kind
+                && entry.compatibility.reuse_scope == compatibility.reuse_scope
+                && entry.compatibility.runtime_compatibility_digest
+                    != compatibility.runtime_compatibility_digest
+        })
+        .await;
+    }
+
     pub(crate) async fn invalidate_adapter(&self, adapter_kind: AdapterKind) {
         self.invalidate_matching(|entry| entry.adapter_kind == adapter_kind)
             .await;
@@ -2603,6 +2620,26 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(camp_a_again.host.process_id(), "host-a");
+            fleet
+                .release("run-a2", 1, FleetReleaseDisposition::Reusable)
+                .await;
+            let mut changed = request("run-a3", "camp-a", "agent-c");
+            fleet
+                .retire_incompatible_hosts(changed.adapter_kind, &changed.compatibility)
+                .await;
+            assert!(camp_a.host.is_healthy());
+            changed.compatibility.runtime_compatibility_digest = "digest-2".to_string();
+            fleet
+                .retire_incompatible_hosts(changed.adapter_kind, &changed.compatibility)
+                .await;
+            assert!(
+                !camp_a.host.is_healthy(),
+                "obsolete idle Host must release native Session locks"
+            );
+            assert!(
+                camp_b.host.is_healthy(),
+                "another Camp must retain its Host"
+            );
             fleet.shutdown_all().await;
         }
     }

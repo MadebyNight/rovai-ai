@@ -231,6 +231,8 @@ function runtimeParametersFor(
       return <KimiRuntimeParameters {...props} />
     case 'grok-build':
       return <GrokRuntimeParameters {...props} />
+    case 'deepseek-harness':
+      return <div className="runtime-parameter-form">{modelFieldsFor('deepseek-harness', props)}<PermissionSelect {...props} fieldKey="sandbox_mode" label="文件系统访问" /><PermissionSelect {...props} fieldKey="approval_policy" label="审批策略" /></div>
     case 'zcode-app':
       return <div className="runtime-parameter-form">{modelFieldsFor('zcode-app', props)}<PermissionSelect {...props} fieldKey="permission_mode" label="权限模式" /></div>
     case 'antigravity-app':
@@ -384,6 +386,7 @@ function modelFieldsFor(
     case 'qoder-cli':
     case 'codebuddy-cli':
     case 'qwen-code':
+    case 'deepseek-harness':
       return <ModelFields {...props} optionKey="reasoning_effort" optionLabel="推理强度" />
     case 'kiro-cli':
     case 'pi':

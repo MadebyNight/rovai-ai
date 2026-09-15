@@ -66,6 +66,7 @@ const allRuntimeSpecifications = [
   ['trae-cn-cli', 'TRAE'],
   ['kimi-code-cli', 'Kimi Code'],
   ['grok-build', 'Grok Build'],
+  ['deepseek-harness', 'DeepSeek Harness'],
   ['zcode-app', 'ZCode']
 ].map(([adapterKind, label]) => ({ adapterKind, label, slug: adapterKind.replaceAll('-', '_') }))
 const defaultRuntimeSpecifications = allRuntimeSpecifications
@@ -683,7 +684,7 @@ async function startVerificationRun(coreClient, specification, resumed) {
         'Growth topic: Practice concise handoffs.',
         'Avatar: none (use the product default).'
       ]
-  const body = ['kimi-code-cli', 'grok-build'].includes(specification.adapterKind)
+  const body = ['kimi-code-cli', 'grok-build', 'deepseek-harness'].includes(specification.adapterKind)
     ? [
         'This is an automated Built-in CLI qualification. Act immediately; do not plan, inspect files, or explain.',
         ...confirmedMemberCard,
@@ -1150,7 +1151,7 @@ assert_fix_input() {
 }
 
 STEP=version
-"$CLI" --version | grep -q 'contract-v23 ipc-v2'
+"$CLI" --version | grep -q 'contract-v24 ipc-v2'
 
 STEP=exact_help
 root_help="$("$CLI" --help)"

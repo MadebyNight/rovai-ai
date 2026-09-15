@@ -1535,7 +1535,7 @@ impl AcpHost {
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) if !line.trim().is_empty() => {
-                        let message = match serde_json::from_str::<Value>(&line) {
+                        let mut message = match serde_json::from_str::<Value>(&line) {
                             Ok(message) => message,
                             Err(error) => {
                                 let reason =
@@ -1549,6 +1549,16 @@ impl AcpHost {
                                 continue;
                             }
                         };
+                        if host.adapter_kind == AdapterKind::DeepseekHarness
+                            && let Some(root) = host.private_config_root.as_deref()
+                            && let Err(error) = crate::dsh::enrich_message(root, &mut message)
+                        {
+                            host.send_host_diagnostic(format!(
+                                "DSH structured observation failed: {error}"
+                            ));
+                            host.protocol_violated.store(true, Ordering::Release);
+                            break;
+                        }
                         // Serialize routing + queue insertion with cancellation's
                         // unbind + ingress barrier so a terminal file event cannot
                         // be stranded behind the barrier that freezes its Run card.
@@ -3369,7 +3379,10 @@ pub(crate) fn build_acp_new_session_params(
         "cwd": cwd,
         "mcpServers": mcp_servers,
     });
-    if adapter_kind != AdapterKind::CursorAgent {
+    if !matches!(
+        adapter_kind,
+        AdapterKind::CursorAgent | AdapterKind::DeepseekHarness
+    ) {
         params["additionalDirectories"] = json!(additional_directories);
     }
     if let Some(rules) = native_rules {
@@ -3390,7 +3403,10 @@ pub(crate) fn build_acp_resume_session_params(
         "cwd": cwd,
         "mcpServers": mcp_servers,
     });
-    if adapter_kind != AdapterKind::CursorAgent {
+    if !matches!(
+        adapter_kind,
+        AdapterKind::CursorAgent | AdapterKind::DeepseekHarness
+    ) {
         // Grok Build 1.x rejects session/resume whenever
         // additionalDirectories is non-empty.
         params["additionalDirectories"] = if adapter_kind == AdapterKind::GrokBuild {
@@ -3425,6 +3441,20 @@ impl AcpRuntime {
             workspace_access,
             active_observation: Mutex::new(None),
         })
+    }
+
+    pub(crate) async fn bind_dsh_bootstrap(&self, session_id: &str, bootstrap: &str) -> Result<()> {
+        if self.host.adapter_kind != AdapterKind::DeepseekHarness {
+            bail!("DSH Bootstrap requires the DSH Adapter");
+        }
+        crate::dsh::bind_bootstrap(
+            self.host
+                .private_config_root
+                .as_deref()
+                .context("DSH private Host missing")?,
+            session_id,
+            bootstrap,
+        )
     }
 
     pub(crate) async fn session_continuation(
@@ -3485,7 +3515,7 @@ impl AcpRuntime {
             .run_tmp();
         let additional_directories =
             session_additional_directories(self.attachment_access_root.as_deref(), Some(run_tmp))?;
-        let mcp_servers = if !matches!(
+        let mut mcp_servers: Vec<Value> = if !matches!(
             self.host.adapter_kind,
             AdapterKind::CopilotCli
                 | AdapterKind::KiroCli
@@ -3504,6 +3534,11 @@ impl AcpRuntime {
             // additive configuration channel rather than ACP session fields.
             Vec::new()
         };
+        if self.host.adapter_kind == AdapterKind::DeepseekHarness {
+            for server in &mut mcp_servers {
+                crate::dsh::resolve_mcp_command(server, &self.execution_root)?;
+            }
+        }
         let continuation = self
             .session_continuation(existing_session_id, capabilities)
             .await;
@@ -4269,6 +4304,18 @@ impl AcpCliRuntimeAdapter {
         let spawn_private_runtime_dir = self.private_runtime_dir.clone();
         let spawn_incoming = self.incoming.clone();
         let spawn_compaction_policy = self.compaction_detector_policy;
+        let compatibility = if self.kind == AdapterKind::ZcodeApp {
+            RuntimeCompatibilityKey::camp(camp_id, agent_id, runtime_compatibility_digest)
+        } else {
+            RuntimeCompatibilityKey::member(camp_id, agent_id, runtime_compatibility_digest)
+        };
+        if self.kind == AdapterKind::DeepseekHarness {
+            // DSH persists exact Sessions but holds a native lock while the
+            // previous Host owns them. Reap obsolete idle Hosts before resume.
+            self.fleet
+                .retire_incompatible_hosts(self.kind, &compatibility)
+                .await;
+        }
         let fleet_lease = self
             .fleet
             .acquire(
@@ -4276,21 +4323,7 @@ impl AcpCliRuntimeAdapter {
                     agent_run_id: agent_run_id.to_string(),
                     execution_epoch,
                     adapter_kind: self.kind,
-                    compatibility: if self.kind == AdapterKind::ZcodeApp {
-                        // Official app-server switches exact member Sessions;
-                        // its attachment authorization is Camp-scoped.
-                        RuntimeCompatibilityKey::camp(
-                            camp_id,
-                            agent_id,
-                            runtime_compatibility_digest,
-                        )
-                    } else {
-                        RuntimeCompatibilityKey::member(
-                            camp_id,
-                            agent_id,
-                            runtime_compatibility_digest,
-                        )
-                    },
+                    compatibility,
                 },
                 move || async move {
                     let host = AcpHost::spawn(
@@ -4477,7 +4510,7 @@ pub(crate) fn runtime_compatibility_digest(
     // official configuration, not member Session preferences, fence the process.
     let excludes_runtime_config_digest = matches!(
         frozen_runtime.adapter_kind,
-        AdapterKind::TraeCnCli | AdapterKind::ZcodeApp
+        AdapterKind::TraeCnCli | AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness
     );
     let excludes_mcp_projection_digest = matches!(
         frozen_runtime.adapter_kind,
@@ -4485,6 +4518,7 @@ pub(crate) fn runtime_compatibility_digest(
             | AdapterKind::KimiCodeCli
             | AdapterKind::GrokBuild
             | AdapterKind::ZcodeApp
+            | AdapterKind::DeepseekHarness
     );
     let runtime_config_digest =
         (!excludes_runtime_config_digest).then_some(frozen_runtime.config_digest.as_str());
@@ -4523,6 +4557,10 @@ pub(crate) fn runtime_compatibility_digest(
             json!(GROK_NATIVE_RULES_REVISION),
         );
     }
+    if frozen_runtime.adapter_kind == AdapterKind::DeepseekHarness {
+        compatibility["dshNativeConfigurationDigest"] =
+            json!(crate::dsh::native_configuration_digest(&execution_root)?);
+    }
     if frozen_runtime.adapter_kind == AdapterKind::ZcodeApp {
         compatibility["zcodeNativeConfigurationDigest"] =
             json!(crate::zcode::NativeConfig::load(&execution_root)?.digest);
@@ -4536,7 +4574,10 @@ pub(crate) fn freeze_native_session_compatibility(
 ) -> Result<FrozenAgentRuntimeConfig> {
     if !matches!(
         frozen_runtime.adapter_kind,
-        AdapterKind::TraeCnCli | AdapterKind::GrokBuild | AdapterKind::ZcodeApp
+        AdapterKind::TraeCnCli
+            | AdapterKind::GrokBuild
+            | AdapterKind::ZcodeApp
+            | AdapterKind::DeepseekHarness
     ) {
         return Ok(frozen_runtime);
     }
@@ -4566,6 +4607,10 @@ pub(crate) fn freeze_native_session_compatibility(
         "model": &frozen_runtime.model,
         "permissions": &frozen_runtime.permissions,
     });
+    if adapter_kind == AdapterKind::DeepseekHarness {
+        compatibility["dshNativeConfigurationDigest"] =
+            json!(crate::dsh::native_configuration_digest(&execution_root)?);
+    }
     if is_grok {
         let compatibility = compatibility
             .as_object_mut()
@@ -4584,7 +4629,11 @@ pub(crate) fn freeze_native_session_compatibility(
             json!(crate::zcode::NativeConfig::load(&execution_root)?.digest);
     }
     let compatibility_digest = canonical_json_digest(&compatibility)?;
-    let compatibility_flow = if is_grok || adapter_kind == AdapterKind::ZcodeApp {
+    let compatibility_flow = if is_grok
+        || matches!(
+            adapter_kind,
+            AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness
+        ) {
         "resume"
     } else {
         "history-restore"
@@ -4615,7 +4664,7 @@ fn prepare_private_host_config(
     adapter_kind: AdapterKind,
 ) -> Result<Option<PreparedPrivateHostConfig>> {
     let (root, remove_on_shutdown) = match adapter_kind {
-        AdapterKind::KiroCli => (
+        AdapterKind::KiroCli | AdapterKind::DeepseekHarness => (
             private_runtime_dir
                 .join("acp-host")
                 .join(uuid::Uuid::new_v4().to_string()),
@@ -4873,6 +4922,16 @@ fn configure_runtime_command(
             // Kimi's native default when it is unset. The provider overlay is
             // process-local and must not replace Kimi's state/config home.
             configure_kimi_model_environment(command)?;
+        }
+        AdapterKind::DeepseekHarness => {
+            crate::dsh::configure_host(
+                command,
+                private_config_root.context("DSH Host private directory is missing")?,
+                Path::new(&workspace.execution_root),
+                &runtime.permissions.values,
+                workspace.access == "read_only",
+                &external_mcp_servers.keys().cloned().collect::<Vec<_>>(),
+            )?;
         }
         AdapterKind::GrokBuild => {
             let permission_mode = values
@@ -6003,6 +6062,7 @@ pub fn automatically_allows_permission_requests(
         | AdapterKind::Pi
         | AdapterKind::ClaudeCodeCli
         | AdapterKind::AntigravityApp
+        | AdapterKind::DeepseekHarness
         | AdapterKind::ZcodeApp => false,
     }
 }
@@ -6588,6 +6648,13 @@ pub fn public_acp_shell_command(
 }
 
 pub fn public_acp_tool_kind(adapter_kind: AdapterKind, update: &Value) -> Option<String> {
+    if adapter_kind == AdapterKind::DeepseekHarness
+        && update["kind"] == "other"
+        && let Some(kind) = crate::dsh::tool_kind(update["title"].as_str().unwrap_or_default())
+    {
+        return Some(kind.to_string());
+    }
+
     update
         .get("kind")
         .and_then(Value::as_str)
@@ -11012,6 +11079,15 @@ while IFS= read -r ignored; do :; done
         }
 
         let interactive = [
+            (
+                AdapterKind::DeepseekHarness,
+                json!({"approval_policy": "ask"}),
+            ),
+            // Native `never` rejects escalation; it is not an ACP bypass mode.
+            (
+                AdapterKind::DeepseekHarness,
+                json!({"approval_policy": "never"}),
+            ),
             (AdapterKind::OpencodeCli, json!({"permission": "ask"})),
             (AdapterKind::CopilotCli, json!({"allow_all": "off"})),
             (AdapterKind::KiroCli, json!({"trust_all_tools": "off"})),

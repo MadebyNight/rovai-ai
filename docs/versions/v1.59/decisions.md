@@ -162,3 +162,36 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 
 逻辑句柄满额先回收后台可重建资源；刷新以独立候选准备、成功显示后替换，避免旧正文配新句柄或先拆旧站点。
 新旧共存也计容量，无安全空间就保留旧版本并报告失败。不采用无限扩容或通用事务框架。
+
+
+<a id="v1-59-d08"></a>
+## V1.59-D08：DeepSeek Harness 使用官方 ACP 与原生系统层
+
+- 状态：accepted
+- 日期：2026-09-15
+- 当前权威：[Runtime Catalog Boundaries](../../architecture/runtime-catalog-boundaries.md#deepseek-harness-acp)、[Runtime Platform Admission v2](../../contracts/runtime-platform-admission-v2.md)
+
+用户要求按 Runtime checklist 接入内置 ACP 的 dsh 0.1.5-rc.2，并逐项对照 host warm、bootstrap、compact。
+采用共享 ACP Host/Fleet，官方 profile/patch 与 systemPrompt 扩展承载冻结 Bootstrap；保留原生 Home、Provider、
+模型、Skills、MCP 和 sandbox/approval，不建立独立 Runtime 进程池或另一套配置。
+
+DSH ACP 没有 system 字段，也不输出 Bash 的 canonical exit status。使用官方 systemPrompt 与 tools/result
+扩展点分别提供高权限 Bootstrap 和一次性结构化结果；拒绝用户消息伪装系统提示、结果文本猜测和 vendor 日志反推。
+代价是必须随 Host 管理私有绑定/观测文件，并测试丢失、串 Session、重复消费与 shutdown。
+
+接受上游 ACP 差异：无 session/load、additionalDirectories、手动 /compact 命令与 compact lifecycle；以 exact resume、
+原生持续系统层和原生工作区策略闭合对应行为。ACP used/size 只提供上下文占用；官方 committed
+assistant/message 的逐调用 usage 补充独立 Token/cache buckets，缺失字段及 cost 保持 unknown。
+SSE MCP、MCP resources/prompts 与 Client FS/Terminal bridge 未在该 profile 暴露；标准 stdio/HTTP 与原生工具负责实际执行。
+上游插件可实现的行为不因此标成 Unsupported；自动压缩与恢复、MCP/Skill scope 等仍按真实证据逐项验收。
+
+原生交互式 permission preset 会覆盖冻结参数并拒绝其表中不存在的合法组合；仅在受管 ACP Host 关闭该
+插件，保留原生 sandbox/approval 服务与用户设置文件。MCP 缺失副作用注解时，ask 要求原生 Approval，
+只读拒绝调用；同名原生 Server 的全部 Tool 使用官方 scoped restriction 遮蔽。配置变化由共享 Fleet
+退役旧 idle Host 后恢复，避免旧进程的 Session 文件锁迫使正常续接退化成 fresh Session。
+
+本次在 macOS arm64 开放带 qualification_evidence_missing 的 preview，evidenceRevision=null；其他平台
+not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。代码接通、机器 Ready 与 First-Class 三种结论分开，
+未验证项见 [Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。没有提前晋升 qualified。
+Migration 155 将 v1.59/schema 104 原位升级到 105，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
+Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。

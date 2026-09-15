@@ -1,5 +1,5 @@
 import readline from 'node:readline'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, appendFileSync } from 'node:fs'
 
 const lines = readline.createInterface({
   input: process.stdin,
@@ -41,6 +41,7 @@ lines.on('line', (line) => {
     return
   }
   if (message.method === 'tools/call') {
+    if (process.env.ROVAI_MCP_SMOKE_CALL_MARKER) appendFileSync(process.env.ROVAI_MCP_SMOKE_CALL_MARKER, 'called\n', { mode: 0o600 })
     reply(message.id, {
       content: [{
         type: 'text',

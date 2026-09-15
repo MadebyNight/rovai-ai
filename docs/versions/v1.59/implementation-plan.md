@@ -39,7 +39,7 @@ JSON、原生选项、请求身份、提交禁用与摘要聚焦语义保留；�
 
 本地 ABI 拒绝矩阵、Rust workspace/all-targets check、Core 单测 805 通过/6 既有忽略、格式与文档门禁
 对应原始 `bda1ab83`。后续依维护者的新范围将现有 14 项 Linux Runtime 显式开放 preview（排除 Cursor），
-完整资格证据仍待逐项闭合；DeepSeek Harness 不在目录且不新增。
+完整资格证据仍待逐项闭合；DeepSeek Harness 不属于本批 Linux 适配范围；后续 ACP 增量单独记录。
 [初轮 DMIT 探测](evidence/linux-server/dmit-runtime-probes.json)与[续测及清理记录](evidence/linux-server/dmit-final-probes.json)
 保留每次失败和协议切换结果：Codex 0.154.0、Claude Code 2.1.270、Pi 0.85.1、Grok 1.0.30 完成 MiniMax-M3
 工具写入/读回；Qwen 0.23.3 改用原生 Anthropic Provider 后通过。OpenCode 1.18.30、Copilot 1.0.83 工具链成功，
@@ -618,7 +618,7 @@ Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当�
 合并基线通过 TypeScript 与 Rust workspace default：Core 799 通过/6 既有忽略、CLI 35、Web 4。
 Task/Memory/Automation/Skills/MCP、单聊和资源适配现已接入同一业务入口；以下记录使用本轮重新执行的证据。
 Migration 153 保留上游 150/151/152；旧任务分支的客户端草稿 150 通过精确 schema 检查和原子迁移升级，
-保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，当前 schema 104。
+保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，该步骤目标为 schema 104；后续 DSH 闭集迁移 155 推进到 schema 105。
 
 本轮管理资源与 Host 时钟增量的 Core library：803 通过／6 既有忽略；Desktop 时钟适配 20 项、共享 Web build 通过。
 Rust 调度循环在两入口自行运行；原 Host pipe/HTTP owner 与新增无浏览器时钟 seam 共 2 项通过，
@@ -1138,3 +1138,12 @@ Electron 验收使用独立 userData、真实生产预览组件及 Main 文件�
 HTML 跨 Camp 验收直接检查同一 iframe、页面内存标记和 `performance.timeOrigin`，确认保留实际页面。
 Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 310 通过；workspace Clippy 通过。
 此增量没有 Rust 改动，不把本机 fixture 结果声明为跨平台发布资格或应用进程内存上限证明。
+
+
+## DeepSeek Harness ACP 接入增量
+
+按 [V1.59-D08](decisions.md#v1-59-d08)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
+工作树分支 `rovai/dsh-acp-runtime`：共享 Host/Fleet、exact resume、managed system prompt、原生权限、模型目录、
+Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 155 保留现有 Runtime/Skill 行及 trigger，
+从 v1.59/schema 104 升至 105。现有模型上下文合同和 Root README 的正式支持声明不变。
+逐项验收与 platform preview 缺口只由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。

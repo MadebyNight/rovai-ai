@@ -20,6 +20,7 @@ const runtime = {
     requireSilentHost: true,
     continuationName: 'HistoryRestore'
   },
+  'deepseek-harness': { label: 'DeepSeek Harness', permissionValues: { sandbox_mode: 'danger-full-access', approval_policy: 'ask' }, requireSilentHost: false, continuationName: 'ACP session/resume' },
   'grok-build': {
     label: 'Grok Build',
     permissionMode: 'default',
@@ -95,7 +96,7 @@ try {
       permissions: {
         adapterKind,
         schemaVersion: installation.snapshot.permissionSchemaVersion,
-        values: { permission_mode: runtime.permissionMode }
+        values: runtime.permissionValues ?? { permission_mode: runtime.permissionMode }
       }
     }
   })
@@ -244,12 +245,12 @@ try {
   const cancelResult = adapterKind === 'grok-build'
     ? await cancelRunningRun(client, campId, cancelRunId)
     : await cancelRunningTool(client, campId, cancelRunId)
-  await new Promise((resolveWait) => setTimeout(resolveWait, 1_000))
+  await new Promise((resolveWait) => setTimeout(resolveWait, adapterKind === 'deepseek-harness' ? 32_000 : 1_000))
   const cancelledFile = await readFile(cancelPath, 'utf8').catch((error) => {
     if (error?.code === 'ENOENT') return null
     throw error
   })
-  if (!['cancelled', 'failed'].includes(cancelResult.run.status) || cancelledFile !== null) {
+  if (!(adapterKind === 'deepseek-harness' ? ['cancelled'] : ['cancelled', 'failed']).includes(cancelResult.run.status) || cancelledFile !== null) {
     throw new Error(`Post-restore cancel did not fail closed: ${JSON.stringify({
       run: cancelResult.run,
       cancelledFile
@@ -334,7 +335,9 @@ try {
 } finally {
   await client?.stop()
   await removeEphemeralRuntimeCampFilesRoot(dataDir)
-  await rm(fixtureRoot, { recursive: true, force: true })
+  if (process.env.ROVAI_KEEP_ACP_RUNTIME_FIXTURE !== '1') {
+    await rm(fixtureRoot, { recursive: true, force: true })
+  }
 }
 
 function startCore(dataDirectory) {
@@ -344,7 +347,8 @@ function startCore(dataDirectory) {
   let stopping = false
   const child = spawn(join(root, 'target', 'debug', 'rovai-core'), [
     ...coreDataDirectoryArguments(dataDirectory),
-    '--skill-library-root', join(dataDirectory, 'managed-skill-library')
+    '--skill-library-root', join(dataDirectory, 'managed-skill-library'),
+    '--mcp-config-path', join(dataDirectory, 'managed-mcp.json')
   ], {
     cwd: root,
     env: {
@@ -493,7 +497,10 @@ async function cancelRunningTool(client, campId, agentRunId) {
         actions
       })}`)
     }
-    if (!cancellationRequested && resolvedApprovals.size > 0 && run) {
+    const runningTool = client.events.some(event => event.method === 'runtime.action'
+      && event.params?.agentRunId === agentRunId && event.params?.payload?.status === 'in_progress'
+      && String(event.params?.payload?.input ?? '').includes('sleep 30'))
+    if (!cancellationRequested && (resolvedApprovals.size > 0 || runningTool) && run) {
       const turn = snapshot.turns.find((candidate) => candidate.id === run.campTurnId)
       if (!turn) throw new Error(`Cancel smoke has no CampTurn: ${JSON.stringify(run)}`)
       await requestCampTurnCancellation(client, campId, turn)

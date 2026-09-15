@@ -1,0 +1,481 @@
+{
+  "schemaVersion": 1,
+  "runtime": "deepseek-harness",
+  "runtimeVersion": "0.1.5-rc.2",
+  "platform": "macos-arm64",
+  "date": "2026-09-15",
+  "baseCommit": "19d1ce088b676e2f5cd39c4a29b8e2ac7f4697db",
+  "admission": "preview",
+  "firstClass": false,
+  "notice": "Sanitized research evidence; does not qualify a platform. Native-provider runs and final controlled MCP/Fleet/safety validation are separate worktree checkpoints; this is not a final-commit qualification digest.",
+  "nativeProvider": {
+    "basic": {
+      "modelCount": 4,
+      "model": "deepseek-harness://runtime-default",
+      "hostInstanceId": "7c4d1344-0ad2-47d5-8048-814cf5aefefb",
+      "nativeSessionId": "b218b53d-1168-4004-bb56-03af6724a497"
+    },
+    "fileOperations": [
+      {
+        "name": "read",
+        "agentRunId": "c3b16c71-9c49-41b6-b9f1-b3b774be1c99",
+        "runStatus": "succeeded",
+        "fileEffect": "passed",
+        "typedProjection": "passed",
+        "typedOperationCount": 1,
+        "fileLinkMatchesExpected": true,
+        "diffChangeKind": null
+      },
+      {
+        "name": "add",
+        "agentRunId": "f20896ea-ff72-4792-a93d-d5d5baac1d14",
+        "runStatus": "succeeded",
+        "fileEffect": "passed",
+        "typedProjection": "passed",
+        "typedOperationCount": 1,
+        "fileLinkMatchesExpected": true,
+        "diffChangeKind": null
+      },
+      {
+        "name": "edit",
+        "agentRunId": "11ec0b2c-931c-4b61-ad16-6548a2b4a1fc",
+        "runStatus": "succeeded",
+        "fileEffect": "passed",
+        "typedProjection": "passed",
+        "typedOperationCount": 1,
+        "fileLinkMatchesExpected": true,
+        "diffChangeKind": "update"
+      },
+      {
+        "name": "edit_empty",
+        "agentRunId": "9940b517-29cc-4582-9ceb-35ac93c572b9",
+        "runStatus": "succeeded",
+        "fileEffect": "passed",
+        "typedProjection": "passed",
+        "typedOperationCount": 1,
+        "fileLinkMatchesExpected": true,
+        "diffChangeKind": null
+      }
+    ],
+    "commandOutput": {
+      "outcome": "succeeded",
+      "nativeSessionContinued": true,
+      "warmHostReused": true
+    },
+    "commandOutputMatrix": [
+      {
+        "name": "stdout",
+        "runStatus": "succeeded",
+        "toolStatus": "completed",
+        "toolCallId": "call_00_xmUT4pKOyLcsRwrjYf5k6778",
+        "approvalCount": 0,
+        "outputBytes": 33,
+        "projectionTruncated": false
+      },
+      {
+        "name": "stderr",
+        "runStatus": "succeeded",
+        "toolStatus": "completed",
+        "toolCallId": "call_00_0jamCYZWZyYp7eZfbRaN5611",
+        "approvalCount": 0,
+        "outputBytes": 42,
+        "projectionTruncated": false
+      },
+      {
+        "name": "mixed",
+        "runStatus": "succeeded",
+        "toolStatus": "completed",
+        "toolCallId": "call_00_ET_Bpa7VKGQoUeB9juyVDOL1381",
+        "approvalCount": 0,
+        "outputBytes": 87,
+        "projectionTruncated": false
+      },
+      {
+        "name": "empty",
+        "runStatus": "succeeded",
+        "toolStatus": "completed",
+        "toolCallId": "call_00_ET_PdOBlEaIYvvymrstvOz61409",
+        "approvalCount": 0,
+        "outputBytes": 11,
+        "projectionTruncated": false
+      },
+      {
+        "name": "nonzero",
+        "runStatus": "succeeded",
+        "toolStatus": "failed",
+        "toolCallId": "call_00_ET_mOpwMp1iMGDLspV7UlX22060",
+        "approvalCount": 0,
+        "outputBytes": 57,
+        "projectionTruncated": false
+      },
+      {
+        "name": "large",
+        "runStatus": "succeeded",
+        "toolStatus": "completed",
+        "toolCallId": "call_00_tzu3pxqPRzv9FcsmRPo50575",
+        "approvalCount": 0,
+        "outputBytes": 4055,
+        "projectionTruncated": true
+      }
+    ],
+    "nativeCompactionAndResume": {
+      "multiSessionSwitch": {
+        "passed": true,
+        "distinctSessions": true
+      },
+      "compaction_manual": {
+        "mode": "manual",
+        "completed": true,
+        "before": 0,
+        "after": 1,
+        "nodes": 8,
+        "bootstrapRetained": true,
+        "trigger": "official API control; native summarizer"
+      },
+      "compaction_pressure": {
+        "mode": "pressure",
+        "completed": true,
+        "before": 1,
+        "after": 2,
+        "nodes": 6,
+        "bootstrapRetained": true,
+        "trigger": "official API control; native summarizer"
+      },
+      "compaction_context-overflow": {
+        "mode": "context-overflow",
+        "completed": true,
+        "before": 2,
+        "after": 3,
+        "nodes": 8,
+        "bootstrapRetained": true,
+        "trigger": "official API control; native summarizer"
+      },
+      "compactedColdResume": {
+        "passed": true,
+        "sessionId": "9733deaa-1d95-4612-a223-d0179b00fe92",
+        "hostChanged": true
+      },
+      "invalidResume": {
+        "rejected": true
+      },
+      "automaticPressure": {
+        "passed": true,
+        "bootstrapRetained": true,
+        "before": 3,
+        "after": 4
+      },
+      "automaticOverflowRetry": {
+        "passed": true,
+        "bootstrapRetained": true,
+        "trigger": "one controlled CONTEXT_WINDOW_EXCEEDED at official llm/stream seam; real native compaction and retried model response"
+      },
+      "compaction_cancelled": {
+        "rejected": true,
+        "before": 5,
+        "after": 5,
+        "noFalseCompletion": true
+      },
+      "compaction_failed": {
+        "rejected": true,
+        "before": 5,
+        "after": 5,
+        "noFalseCompletion": true
+      }
+    },
+    "skills": {
+      "ok": true,
+      "importedDefaultEnabled": true,
+      "importedDefaultAllGroups": true,
+      "duplicateImportIdempotent": true,
+      "sourceIndependent": true,
+      "gitignoreUnchanged": true,
+      "projectOwnedConflictPreserved": true,
+      "restartRecovered": true,
+      "importedHardDeleted": true,
+      "runtimes": [
+        {
+          "adapterKind": "deepseek-harness",
+          "reportedVersion": "0.1.5-rc.2",
+          "nativeRoot": ".dsh/skills",
+          "groupKey": "dsh",
+          "cliOperationsMessageLocalAttention": true,
+          "agentRunId": "59d28714-8685-4173-9111-87e91454cd4e"
+        }
+      ]
+    },
+    "builtinCli": {
+      "ok": true,
+      "contractVersion": 24,
+      "ipcProtocolVersion": 2,
+      "operationCountPerRuntime": 22,
+      "expectedOperations": [
+        "automation.close",
+        "automation.create",
+        "automation.delete",
+        "automation.get",
+        "automation.list",
+        "automation.run",
+        "automation.update",
+        "camp.list",
+        "camp.message.send",
+        "camp.read",
+        "camp.search",
+        "history.search",
+        "member.create",
+        "memory.read",
+        "memory.search",
+        "memory.view",
+        "memory.write",
+        "team.create_task",
+        "team.gather",
+        "team.get_task",
+        "team.list_tasks",
+        "team.update_task"
+      ],
+      "results": [
+        {
+          "adapterKind": "deepseek-harness",
+          "reportedVersion": "0.1.5-rc.2",
+          "sourceAgentRunId": "3b8cf07e-b4a1-4ee1-b0a9-60e20a56303e",
+          "resumedAgentRunId": "6ac7994a-a9bd-4e6f-8951-6d4b49dfb945",
+          "gatherCapturedReturnVerified": true,
+          "fullRunEvidenceCount": 70,
+          "legacySendFlagRejected": true,
+          "legacySendJsonRejected": true,
+          "exactAddressingVerifiedInSuccessorRun": true,
+          "staleVersionConflict": true,
+          "initialLeaseFenced": true,
+          "resumedLeaseFenced": true,
+          "logicalConversationContinued": true,
+          "nativeSessionContinued": true
+        }
+      ]
+    },
+    "mcpBeforeSessionLockFix": {
+      "passedTransportAndVisibility": true,
+      "exactResumeQualified": false,
+      "note": "Configuration updates worked but revealed native Session lock conflicts; fixed afterward in shared Fleet."
+    },
+    "usageRunSummaries": [
+      {
+        "agent_run_id": "b3c9faaa-2f83-4521-a8b2-449e33d27c11",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 9196,
+        "cache_read_tokens": 768,
+        "cache_write_tokens": null,
+        "output_tokens": 114,
+        "reasoning_output_tokens": 104,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "671d605a-8211-41fd-a43a-9120c58ec6da",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 596,
+        "cache_read_tokens": 20224,
+        "cache_write_tokens": null,
+        "output_tokens": 122,
+        "reasoning_output_tokens": 44,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "afd624e1-9062-4d9e-a156-df9e2f6c76cf",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 656,
+        "cache_read_tokens": 20992,
+        "cache_write_tokens": null,
+        "output_tokens": 122,
+        "reasoning_output_tokens": 14,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "7186f636-a8a1-4f4a-b35f-ee51bf5789b6",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 487,
+        "cache_read_tokens": 22016,
+        "cache_write_tokens": null,
+        "output_tokens": 123,
+        "reasoning_output_tokens": 6,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "244c3d28-93a0-4569-a3a9-31b49654980d",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 554,
+        "cache_read_tokens": 22912,
+        "cache_write_tokens": null,
+        "output_tokens": 168,
+        "reasoning_output_tokens": 0,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "df507971-a659-4066-afb6-77036f285f0a",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 517,
+        "cache_read_tokens": 23808,
+        "cache_write_tokens": null,
+        "output_tokens": 80,
+        "reasoning_output_tokens": 0,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "e8bc552c-df10-4c5c-9b02-cd8289b1cadd",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 559,
+        "cache_read_tokens": 24576,
+        "cache_write_tokens": null,
+        "output_tokens": 147,
+        "reasoning_output_tokens": 21,
+        "cost_amount_decimal": null
+      },
+      {
+        "agent_run_id": "9935a103-3e63-43ad-a37f-bd1cce196d96",
+        "usage_source": "runtime_event",
+        "usage_quality": "runtime_reported",
+        "input_semantics": "exclusive_buckets",
+        "uncached_input_tokens": 21614,
+        "cache_read_tokens": 25728,
+        "cache_write_tokens": null,
+        "output_tokens": 264,
+        "reasoning_output_tokens": 74,
+        "cost_amount_decimal": null
+      }
+    ]
+  },
+  "controlledModel": {
+    "mcp": {
+      "ok": true,
+      "modelSource": "scripted MCP-only acceptance fixture; no provider generation",
+      "semantics": "Runtime-native config is preserved; Codex skips collisions, Grok skips active native collisions and adds distinct per-Run servers, while other additive adapters give Rovai the whole-definition precedence",
+      "results": [
+        {
+          "adapterKind": "deepseek-harness",
+          "lifecycle": {
+            "updateObserved": true,
+            "oldHostFenced": true,
+            "adjacentAssignmentIsolated": true,
+            "unassignedNativeRestored": true,
+            "reassignedObserved": true,
+            "deletedNativeRestored": true,
+            "agentRunIds": [
+              "985d09db-50a9-43a8-8e15-47ffbe30db7f",
+              "29981a50-ad00-402c-bc04-72bb566b51bb",
+              "e2c62b7f-e488-4495-bf63-9767b3cc30c2",
+              "191cc9d0-1a5c-40ef-a3cb-9098472af70f",
+              "33889113-7086-4986-8648-24baaf5bb6a1"
+            ]
+          },
+          "safety": {
+            "allowOnceEffectCount": 1,
+            "denyNoEffect": true,
+            "cancelNoEffect": true,
+            "readOnlyNoEffect": true
+          },
+          "reportedVersion": "0.1.5-rc.2",
+          "modelId": "runtime_default",
+          "runtimeNames": [
+            "rovai_smoke",
+            "rovai_smoke_http",
+            "rovai_smoke_stdio"
+          ],
+          "results": [
+            "rovai-projection:deepseek_harness",
+            "rovai-projection-http:deepseek_harness-http",
+            "rovai-projection-stdio:deepseek_harness-stdio"
+          ],
+          "agentRunId": "b97de246-95d0-46d6-8927-7e1df88e8923",
+          "durationMs": 57692
+        }
+      ]
+    }
+  },
+  "blocked": [
+    {
+      "case": "Core cold-resume cancel and invalid-binding fallback full smoke",
+      "reason": "Insufficient Balance on rerun; earlier run verified Core restart exact resume and post-resume write, then exposed a late test cancellation trigger."
+    },
+    {
+      "case": "Missing-Send zero-send, accepted-send suppression, tool-to-final",
+      "reason": "Insufficient Balance before first reply."
+    },
+    {
+      "case": "Provider rerun after MCP/Fleet/safety fixes",
+      "reason": "Insufficient Balance; controlled-model real DSH fixture passed separately."
+    }
+  ],
+  "privateLogSha256": {
+    "core": "d8b172e9d81a91a890c22b62d498dcccc892dbfea540828fcadf164905be682d",
+    "command3": "812c4e59c278964ccce0a083c8b848ddca1443a8622eefc7109a5e1fb5767692",
+    "native7": "20965d1f583bcae2baf3126ed42a476908e77f8c971672d75ca02807265d18df",
+    "skills3": "67dcf7a42de1fcbffdb3ed19c1071b96fb9da79c46c80ad56c766805c5ef595e",
+    "builtin2": "13d177796cc734e4ff27c3ec0070a6f5db92dfa942bc0aaf2649474456239e83",
+    "mcp2": "0a73c6f528a47e7e6578532e49fa8e12697a39e3364b9e375d14852a346c3432",
+    "mcp4-scripted": "a77dc5d6218843ed7dfa454d87f5946568e0db45997c9c23f8de8861954f97fe"
+  },
+  "localVerification": {
+    "rustLib": {
+      "passed": 812,
+      "failed": 0,
+      "ignored": 6
+    },
+    "rustCli": {
+      "passed": 35,
+      "failed": 0
+    },
+    "acpTerminalSeams": {
+      "passed": 3,
+      "failed": 0
+    },
+    "dshOfficialExtensionOwner": {
+      "passed": 1,
+      "failed": 0
+    },
+    "nodeProtocolAndUiSeams": {
+      "passed": 8,
+      "failed": 0
+    },
+    "workspaceAllTargetsCheck": true,
+    "clippyDenyWarnings": true,
+    "rustfmt": true,
+    "typecheck": true,
+    "desktopAndWebBuild": true,
+    "documentationTestsAndDiffGovernance": true,
+    "vitest": {
+      "latestFullRun": {
+        "passedSuites": 203,
+        "failedSuites": 1,
+        "passedTests": 2066,
+        "failedTests": 6,
+        "failureFile": "apps/desktop/src/main/core-client.test.ts"
+      },
+      "isolatedTimingRerun": {
+        "files": [
+          "apps/desktop/src/main/core-client.test.ts",
+          "apps/desktop/src/main/evaluation-host.test.ts"
+        ],
+        "passedTests": 25,
+        "failedTests": 0
+      },
+      "commandOptions": "--maxWorkers=1 --testTimeout=15000 --expect.poll.timeout=15000 for isolated rerun; full run uses maxWorkers=2",
+      "limitation": "Default full-run timing gates were not uniformly green under local concurrent load. No timing test was modified or disabled."
+    },
+    "rustSlow": {
+      "passed": 310,
+      "failed": 0
+    },
+    "rustPrCommandPassed": true
+  }
+}

@@ -1,0 +1,455 @@
+//! DeepSeek Harness's official ACP profile plus a scoped system-prompt section.
+//! Transport, process ownership, approvals and LRU remain in the shared ACP host.
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{fs, path::Path};
+use tokio::process::Command;
+
+use crate::{agent_profile::AdapterKind, command::canonical_json_digest};
+
+pub const MINIMUM_VERSION: &str = "0.1.5-rc.2";
+pub const BOOTSTRAP_REVISION: &str = "dsh-system-prompt-v1";
+const BOOTSTRAP_PLUGIN: &str = include_str!("dsh/bootstrap.mjs");
+
+pub fn supported_version(version: Option<&str>) -> bool {
+    let Some(version) = version.map(str::trim) else {
+        return false;
+    };
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let version = version.split_once('+').map_or(version, |(core, _)| core);
+    let (core, suffix) = version.split_once('-').unwrap_or((version, ""));
+    let numbers = core
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<std::result::Result<Vec<_>, _>>();
+    let Ok(numbers) = numbers else {
+        return false;
+    };
+    if numbers.len() != 3 {
+        return false;
+    }
+    let numbers = [numbers[0], numbers[1], numbers[2]];
+    numbers > [0, 1, 5]
+        || (numbers == [0, 1, 5]
+            && (suffix.is_empty()
+                || suffix
+                    .strip_prefix("rc.")
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .is_some_and(|v| v >= 2)))
+}
+
+/// Observe only this Runtime's native configuration. Values never enter argv,
+/// prompts or diagnostics; changes invalidate process and Native Binding reuse.
+pub fn native_configuration_digest(cwd: &Path) -> Result<String> {
+    let home = crate::runtime_discovery::runtime_environment_variable(
+        AdapterKind::DeepseekHarness,
+        "DSH_HOME",
+    )
+    .map(std::path::PathBuf::from)
+    .or_else(|| {
+        crate::runtime_discovery::runtime_home_directory(AdapterKind::DeepseekHarness)
+            .map(|p| p.join(".dsh"))
+    })
+    .context("DeepSeek Harness native Home is unavailable")?;
+    let mut entries = Vec::new();
+    for path in [
+        home.join("settings.yaml"),
+        home.join(".credentials.yaml"),
+        home.join(".env"),
+        home.join("cordis.patch.yml"),
+        home.join("profiles/acp/package.json"),
+        home.join("profiles/acp/cordis.patch.yml"),
+        cwd.join(".env"),
+    ] {
+        let digest = match fs::read(&path) {
+            Ok(bytes) => Some(format!("{:x}", Sha256::digest(bytes))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => bail!("dsh_native_configuration_unreadable"),
+        };
+        entries.push((path, digest));
+    }
+    canonical_json_digest(&json!({"revision": BOOTSTRAP_REVISION, "home": home, "files": entries}))
+}
+
+pub fn configure_host(
+    command: &mut Command,
+    root: &Path,
+    cwd: &Path,
+    permissions: &Value,
+    read_only: bool,
+    mcp_server_names: &[String],
+) -> Result<()> {
+    let sandbox = permissions
+        .get("sandbox_mode")
+        .and_then(Value::as_str)
+        .context("DSH sandbox_mode missing")?;
+    let approval = permissions
+        .get("approval_policy")
+        .and_then(Value::as_str)
+        .context("DSH approval_policy missing")?;
+    if !matches!(
+        sandbox,
+        "read-only" | "workspace-write" | "danger-full-access"
+    ) || !matches!(approval, "ask" | "never")
+    {
+        bail!("DSH permission configuration invalid");
+    }
+    let binding_root = root.join("bindings");
+    fs::create_dir_all(&binding_root)?;
+    private_directory(&binding_root)?;
+    let observation_root = root.join("observations");
+    fs::create_dir_all(&observation_root)?;
+    private_directory(&observation_root)?;
+    let plugin_path = root.join("bootstrap.mjs");
+    fs::write(&plugin_path, BOOTSTRAP_PLUGIN)?;
+    private_file(&plugin_path)?;
+    let patch = json!([
+        {"id":"sandbox-policy","config":{"mode":if read_only {"read-only"} else {sandbox},"workspaceRoot":cwd}},
+        {"id":"approval","config":{"policy":if read_only {"never"} else {approval}}},
+        // The interactive preset service seeds native settings over the two
+        // independent knobs, and rejects valid pairs absent from its preset
+        // table. ACP has no permission-mode control; this Host's frozen knobs
+        // own the policy. Preserve the native settings file untouched.
+        {"id":"permission","disabled":true},
+        {"insert":[{"id":"rovai-bootstrap","name":plugin_path,"config":{"bindingRoot":binding_root,"observationRoot":observation_root,"mcpServerNames":mcp_server_names,"readOnly":read_only || sandbox == "read-only","approvalPolicy":if read_only {"never"} else {approval}}}]}
+    ]);
+    let patch_path = root.join("rovai.patch.json");
+    fs::write(&patch_path, serde_json::to_vec(&patch)?)?;
+    private_file(&patch_path)?;
+    command
+        .args(["--profile", "acp", "--patch"])
+        .arg(patch_path);
+    Ok(())
+}
+
+/// Supplement ACP only with an exact, one-shot observation from the official
+/// tools/result seam. Missing or mismatched evidence fails the Host rather than
+/// reporting an unobserved successful shell exit. No result-text parsing.
+pub fn enrich_message(root: &Path, message: &mut Value) -> Result<()> {
+    if message["method"] != "session/update" {
+        return Ok(());
+    }
+    let Some(params) = message.get_mut("params") else {
+        return Ok(());
+    };
+    let session_id = params["sessionId"]
+        .as_str()
+        .context("dsh_session_id_missing")?
+        .to_string();
+    let update = &mut params["update"];
+    if update["sessionUpdate"] == "usage_update" {
+        let prefix = format!("{:x}.usage-", Sha256::digest(session_id.as_bytes()));
+        let mut observations = Vec::new();
+        let mut files = Vec::new();
+        for entry in fs::read_dir(root.join("observations"))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with(&prefix) || !name.ends_with(".json") {
+                continue;
+            }
+            if observations.len() >= 1024 {
+                bail!("dsh_usage_observation_budget_exceeded");
+            }
+            let observation: Value = serde_json::from_slice(&fs::read(entry.path())?)?;
+            if observation["schemaVersion"] != 1
+                || observation["sessionId"] != session_id
+                || !observation["seq"].is_u64()
+                || !observation["turn"].is_u64()
+            {
+                bail!("dsh_usage_observation_mismatch");
+            }
+            observations.push(observation);
+            files.push(entry.path());
+        }
+        observations.sort_by_key(|value| value["seq"].as_u64());
+        update["_meta"]["dshUsage"] = json!(observations);
+        for file in files {
+            fs::remove_file(file)?;
+        }
+        return Ok(());
+    }
+    if update["sessionUpdate"] == "tool_call" {
+        if let Some(kind) = tool_kind(update["title"].as_str().unwrap_or_default()) {
+            update["kind"] = json!(kind);
+        }
+        return Ok(());
+    }
+    if update["sessionUpdate"] != "tool_call_update"
+        || !matches!(update["status"].as_str(), Some("completed" | "failed"))
+    {
+        return Ok(());
+    }
+    let call_id = update["toolCallId"]
+        .as_str()
+        .context("dsh_tool_call_id_missing")?;
+    let key = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&json!([session_id, call_id]))?)
+    );
+    let path = root.join("observations").join(format!("{key}.json"));
+    let observation: Value =
+        serde_json::from_slice(&fs::read(&path).context("dsh_tool_observation_missing")?)?;
+    if observation["schemaVersion"] != 1
+        || observation["sessionId"] != session_id
+        || observation["callId"] != call_id
+        || !observation["isError"].is_boolean()
+    {
+        bail!("dsh_tool_observation_mismatch");
+    }
+    let tool = observation["tool"]
+        .as_str()
+        .context("dsh_tool_name_missing")?;
+    if let Some(kind) = tool_kind(tool) {
+        update["kind"] = json!(kind);
+    }
+    if let Some(path) = observation["path"].as_str() {
+        update["locations"] = json!([{"path":path}]);
+    }
+    if matches!(tool, "bash" | "pwsh") {
+        update["rawOutput"] = json!({
+            "exitCode": observation["exitCode"], "signal": observation["signal"],
+            "timedOut": observation["timedOut"], "aborted": observation["aborted"]
+        });
+        if observation["isError"] == true
+            || observation["timedOut"] == true
+            || observation["aborted"] == true
+            || observation["signal"].is_string()
+            || observation["exitCode"]
+                .as_i64()
+                .is_some_and(|code| code != 0)
+        {
+            update["status"] = json!("failed");
+        }
+    }
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+pub fn tool_kind(name: &str) -> Option<&'static str> {
+    match name {
+        "bash" | "pwsh" => Some("execute"),
+        "read" | "read_image" | "glob" | "grep" | "skill" => Some("read"),
+        "write" => Some("write"),
+        "edit" => Some("edit"),
+        "web_search" => Some("search"),
+        "web_fetch" => Some("fetch"),
+        _ => None,
+    }
+}
+
+pub fn resolve_mcp_command(server: &mut Value, cwd: &Path) -> Result<()> {
+    let Some(command) = server["command"].as_str() else {
+        return Ok(());
+    };
+    let entry = Path::new(command);
+    if entry.is_absolute() {
+        return Ok(());
+    }
+    if entry.components().count() != 1 {
+        server["command"] = json!(cwd.join(entry));
+        return Ok(());
+    }
+    let mut runtime = Command::new("dsh");
+    crate::runtime_discovery::configure_runtime_command(AdapterKind::DeepseekHarness, &mut runtime);
+    let path = server["env"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|e| e["name"] == "PATH"))
+        .and_then(|entry| entry["value"].as_str())
+        .map(std::ffi::OsString::from)
+        .or_else(|| {
+            runtime
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "PATH")
+                .and_then(|(_, value)| value.map(std::ffi::OsString::from))
+        })
+        .or_else(|| std::env::var_os("PATH"))
+        .context("dsh_mcp_path_unavailable")?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = if directory.is_absolute() {
+            directory.join(entry)
+        } else {
+            cwd.join(directory).join(entry)
+        };
+        if candidate.is_file() && {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                candidate.metadata()?.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        } {
+            server["command"] = json!(candidate);
+            return Ok(());
+        }
+    }
+    bail!("dsh_mcp_command_unresolved");
+}
+
+pub fn bind_bootstrap(root: &Path, session_id: &str, bootstrap: &str) -> Result<()> {
+    if session_id.is_empty()
+        || session_id.len() > 128
+        || !session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || bootstrap.trim().is_empty()
+    {
+        bail!("dsh_bootstrap_binding_invalid");
+    }
+    let directory = root.join("bindings");
+    let path = directory.join(format!("{session_id}.json"));
+    let payload = serde_json::to_vec(
+        &json!({"schemaVersion":1,"sessionId":session_id,"bootstrap":bootstrap,"sha256":format!("{:x}",Sha256::digest(bootstrap.as_bytes()))}),
+    )?;
+    // An existing binding owns immutable bytes for its Native Session. A later
+    // member identity edit must not hot-rewrite that Session's self identity.
+    if path.exists() {
+        return Ok(());
+    }
+    let temporary = directory.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+    fs::write(&temporary, payload)?;
+    private_file(&temporary)?;
+    fs::rename(&temporary, &path)?;
+    Ok(())
+}
+
+fn private_directory(path: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = path;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+fn private_file(path: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = path;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dsh_version_requires_the_first_acp_release() {
+        for value in [
+            None,
+            Some("0.1.0-rc.5"),
+            Some("0.1.5-rc.1"),
+            Some("0.1.5-beta.8"),
+            Some("0.0.1"),
+            Some("invalid"),
+        ] {
+            assert!(!supported_version(value), "{value:?}");
+        }
+        for value in [
+            "0.1.5-rc.2",
+            "0.1.5-rc.10",
+            "0.1.5-rc.2+build.1",
+            "0.1.5",
+            "0.1.6",
+        ] {
+            assert!(supported_version(Some(value)), "{value}");
+        }
+    }
+
+    #[test]
+    fn dsh_observation_is_exact_consumed_once_and_never_infers_exit_from_text() {
+        let root =
+            std::env::temp_dir().join(format!("rovai-dsh-observation-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("observations")).unwrap();
+        let key = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&json!(["session-a", "call-a"])).unwrap())
+        );
+        let file = root.join("observations").join(format!("{key}.json"));
+        let mut message = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-a","status":"completed","content":[{"type":"content","content":{"type":"text","text":"[exit code: 0]"}}]}}});
+        fs::write(&file,serde_json::to_vec(&json!({"schemaVersion":1,"sessionId":"session-b","callId":"call-a","tool":"bash","isError":false,"exitCode":7})).unwrap()).unwrap();
+        assert!(enrich_message(&root, &mut message).is_err());
+        assert!(file.exists());
+        fs::write(&file,serde_json::to_vec(&json!({"schemaVersion":1,"sessionId":"session-a","callId":"call-a","tool":"bash","isError":false,"exitCode":7})).unwrap()).unwrap();
+        enrich_message(&root, &mut message).unwrap();
+        assert_eq!(message["params"]["update"]["status"], "failed");
+        assert_eq!(message["params"]["update"]["kind"], "execute");
+        assert_eq!(message["params"]["update"]["rawOutput"]["exitCode"], 7);
+        assert!(!file.exists());
+        assert!(enrich_message(&root, &mut message).is_err());
+        let mut unknown = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"tool_call","title":"unknown_tool","kind":"other"}}});
+        enrich_message(&root, &mut unknown).unwrap();
+        assert_eq!(unknown["params"]["update"]["kind"], "other");
+        let prefix = format!("{:x}.usage-12.json", Sha256::digest(b"session-a"));
+        fs::write(root.join("observations").join(prefix), serde_json::to_vec(&json!({"schemaVersion":1,"sessionId":"session-a","seq":12,"turn":1,"usage":{"inputTokens":20,"cacheReadTokens":80,"outputTokens":3}})).unwrap()).unwrap();
+        let mut usage = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"usage_update","used":100,"size":1000}}});
+        enrich_message(&root, &mut usage).unwrap();
+        assert_eq!(
+            usage.pointer("/params/update/_meta/dshUsage/0/usage/inputTokens"),
+            Some(&json!(20))
+        );
+        enrich_message(&root, &mut usage).unwrap();
+        assert_eq!(
+            usage.pointer("/params/update/_meta/dshUsage"),
+            Some(&json!([]))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn frozen_permissions_replace_interactive_presets_without_rewriting_native_home() {
+        let root =
+            std::env::temp_dir().join(format!("rovai-dsh-permissions-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for sandbox in ["read-only", "workspace-write", "danger-full-access"] {
+            for approval in ["ask", "never"] {
+                let mut command = Command::new("dsh");
+                configure_host(
+                    &mut command,
+                    &root,
+                    &root,
+                    &json!({"sandbox_mode":sandbox,"approval_policy":approval}),
+                    false,
+                    &[],
+                )
+                .unwrap();
+                let patch: Value =
+                    serde_json::from_slice(&fs::read(root.join("rovai.patch.json")).unwrap())
+                        .unwrap();
+                assert_eq!(patch[0]["config"]["mode"], sandbox);
+                assert_eq!(patch[1]["config"]["policy"], approval);
+                assert_eq!(patch[2], json!({"id":"permission","disabled":true}));
+                assert!(
+                    command
+                        .as_std()
+                        .get_envs()
+                        .all(|(key, _)| key != "DSH_HOME")
+                );
+            }
+        }
+        let mut command = Command::new("dsh");
+        configure_host(
+            &mut command,
+            &root,
+            &root,
+            &json!({"sandbox_mode":"danger-full-access","approval_policy":"ask"}),
+            true,
+            &[],
+        )
+        .unwrap();
+        let patch: Value =
+            serde_json::from_slice(&fs::read(root.join("rovai.patch.json")).unwrap()).unwrap();
+        assert_eq!(patch[0]["config"]["mode"], "read-only");
+        assert_eq!(patch[1]["config"]["policy"], "never");
+        fs::remove_dir_all(root).unwrap();
+    }
+}

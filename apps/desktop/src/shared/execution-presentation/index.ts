@@ -444,6 +444,7 @@ export function runtimeAdapterDisplayLabel(kind: string): string {
     'cursor-agent': 'Cursor Agent',
     'kimi-code-cli': 'Kimi',
     'grok-build': 'Grok',
+    'deepseek-harness': 'DSH',
     'zcode-app': 'ZCode',
     'antigravity-app': 'Antigravity'
   } as Record<string, string>)[kind] ?? kind

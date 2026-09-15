@@ -904,8 +904,10 @@ async fn discover_runtime_version_scoped(
                 && (observation.runtime_kind != AdapterKind::CursorAgent
                     || is_cursor_agent_version(&version)) =>
         {
-            if observation.runtime_kind == AdapterKind::GrokBuild
-                && !grok_build_minimum_version_satisfied(Some(&version))
+            if (observation.runtime_kind == AdapterKind::GrokBuild
+                && !grok_build_minimum_version_satisfied(Some(&version)))
+                || (observation.runtime_kind == AdapterKind::DeepseekHarness
+                    && !crate::dsh::supported_version(Some(&version)))
             {
                 observation.diagnostic_code = Some("runtime_version_below_minimum".to_string());
             }

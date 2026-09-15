@@ -1724,6 +1724,17 @@ fn eligible_mask(runtime: AdapterKind, runtime_version: Option<&str>) -> i64 {
                 0
             }
         }
+        AdapterKind::DeepseekHarness => {
+            if crate::dsh::supported_version(runtime_version) {
+                ELIGIBLE_UNCACHED_INPUT
+                    | ELIGIBLE_CACHE_READ
+                    | ELIGIBLE_CACHE_WRITE
+                    | ELIGIBLE_OUTPUT
+                    | ELIGIBLE_REASONING_OUTPUT
+            } else {
+                0
+            }
+        }
         AdapterKind::AntigravityApp
         | AdapterKind::CursorAgent
         | AdapterKind::KimiCodeCli
@@ -2721,6 +2732,74 @@ pub fn parse_acp_usage_message(
     method: &str,
     params: &Value,
 ) -> Vec<ParsedRuntimeUsage> {
+    if adapter_kind == AdapterKind::DeepseekHarness && method == "session/update" {
+        let update = &params["update"];
+        if update["sessionUpdate"] != "usage_update" {
+            return Vec::new();
+        }
+        let mut observations = Vec::new();
+        if let Some(records) = update.pointer("/_meta/dshUsage").and_then(Value::as_array) {
+            for record in records {
+                let (Some(seq), Some(turn)) = (record["seq"].as_u64(), record["turn"].as_u64())
+                else {
+                    continue;
+                };
+                if record["schemaVersion"] != 1 || record["sessionId"] != params["sessionId"] {
+                    continue;
+                }
+                let usage = &record["usage"];
+                let fields = RuntimeUsageFields {
+                    // DSH TokenUsage defines input/cache buckets as disjoint.
+                    input_tokens: integer_at_any(usage, &["/inputTokens"]),
+                    uncached_input_tokens: integer_at_any(usage, &["/inputTokens"]),
+                    output_tokens: integer_at_any(usage, &["/outputTokens"]),
+                    cache_read_input_tokens: integer_at_any(usage, &["/cacheReadTokens"]),
+                    cache_write_input_tokens: integer_at_any(usage, &["/cacheWriteTokens"]),
+                    reasoning_output_tokens: integer_at_any(usage, &["/reasoningTokens"]),
+                    ..Default::default()
+                };
+                if fields.is_empty() {
+                    continue;
+                }
+                observations.push(ParsedRuntimeUsage {
+                    identity_suffix: format!("native_assistant:{seq}"),
+                    dialect_id: "dsh-committed-call-usage-v1".to_string(),
+                    source: "runtime_event".to_string(),
+                    scope: "turn".to_string(),
+                    counter_mode: RuntimeUsageCounterMode::Delta,
+                    input_semantics: RuntimeInputSemantics::ExclusiveBuckets,
+                    native_session_id: string_at_any(params, &["/sessionId"]),
+                    native_turn_id: Some(turn.to_string()),
+                    fields,
+                    cost: None,
+                    occurred_at: None,
+                });
+            }
+        }
+        if let (Some(used), Some(size)) = (
+            integer_at_any(update, &["/used"]),
+            integer_at_any(update, &["/size"]),
+        ) {
+            observations.push(ParsedRuntimeUsage {
+                identity_suffix: "context_occupancy".to_string(),
+                dialect_id: "dsh-acp-context-gauge-v1".to_string(),
+                source: "runtime_event".to_string(),
+                scope: "session".to_string(),
+                counter_mode: RuntimeUsageCounterMode::Gauge,
+                input_semantics: RuntimeInputSemantics::Unknown,
+                native_session_id: string_at_any(params, &["/sessionId"]),
+                native_turn_id: None,
+                fields: RuntimeUsageFields {
+                    context_used_tokens: Some(used),
+                    context_size_tokens: Some(size),
+                    ..Default::default()
+                },
+                cost: None,
+                occurred_at: None,
+            });
+        }
+        return observations;
+    }
     if adapter_kind == AdapterKind::ZcodeApp && method == "session/update" {
         let update = &params["update"];
         let usage = &update["_meta"]["zcodeUsage"];
@@ -3700,6 +3779,42 @@ mod tests {
                 "Context-only ACP usage_update must not be stored as Token Usage"
             );
         }
+
+        let gauge = parse_acp_usage_message(
+            AdapterKind::DeepseekHarness,
+            Some("0.1.5-rc.2"),
+            "session/update",
+            &json!({"sessionId":"dsh-session","update":{"sessionUpdate":"usage_update","used":720,"size":1000}}),
+        );
+        assert_eq!(gauge[0].counter_mode, RuntimeUsageCounterMode::Gauge);
+        assert_eq!(gauge[0].fields.context_used_tokens, Some(720));
+        assert_eq!(gauge[0].fields.input_tokens, None);
+        assert_eq!(gauge[0].fields.cache_read_input_tokens, None);
+        assert!(gauge[0].cost.is_none());
+        assert_eq!(
+            eligible_mask(AdapterKind::DeepseekHarness, Some("0.1.5-rc.2")) & ELIGIBLE_COST,
+            0
+        );
+        let dsh = parse_acp_usage_message(
+            AdapterKind::DeepseekHarness,
+            Some("0.1.5-rc.2"),
+            "session/update",
+            &json!({"sessionId":"dsh-session","update":{"sessionUpdate":"usage_update","_meta":{"dshUsage":[
+                {"schemaVersion":1,"sessionId":"wrong-session","seq":8,"turn":1,"usage":{"inputTokens":99}},
+                {"schemaVersion":1,"sessionId":"dsh-session","seq":9,"turn":1,"usage":{"inputTokens":20,"outputTokens":7,"cacheReadTokens":80}}
+            ]}}}),
+        );
+        assert_eq!(dsh.len(), 1);
+        assert_eq!(dsh[0].counter_mode, RuntimeUsageCounterMode::Delta);
+        assert_eq!(
+            dsh[0].input_semantics,
+            RuntimeInputSemantics::ExclusiveBuckets
+        );
+        assert_eq!(dsh[0].fields.uncached_input_tokens, Some(20));
+        assert_eq!(dsh[0].fields.cache_read_input_tokens, Some(80));
+        assert_eq!(dsh[0].fields.cache_write_input_tokens, None);
+        assert_eq!(dsh[0].fields.reasoning_output_tokens, None);
+        assert!(dsh[0].cost.is_none());
 
         let opencode_cache_write: Value = serde_json::from_str(include_str!(
             "../tests/fixtures/runtime-usage/opencode-cache-write.json"

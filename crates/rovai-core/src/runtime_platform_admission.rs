@@ -8,7 +8,7 @@ use crate::{agent_profile::AdapterKind, platform::HostPlatformKey};
 /// that evidence even when their Adapter identity exists in the Product Catalog.
 /// Every register revision receives a new digest.
 pub const MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION: &str =
-    "sha256:8a8f57f92fdfcef1568e97a736d6452b198c9639368342d007694ca64a8338cc";
+    "sha256:1a8c16fbbc632529921028d01d240d88dee674fc158869c3c36aea9f6dc94817";
 
 /// Immutable digest of the sanitized, adapter-scoped Windows x64 evidence.
 /// The source qualifies only the Runtime rows named in that evidence; shared
@@ -281,7 +281,10 @@ mod tests {
             for platform in HostPlatformKey::ALL {
                 if platform == HostPlatformKey::LinuxX64 {
                     let admission = registry.platform_admission(runtime_kind, platform);
-                    let preview = runtime_kind != AdapterKind::CursorAgent;
+                    let preview = !matches!(
+                        runtime_kind,
+                        AdapterKind::CursorAgent | AdapterKind::DeepseekHarness
+                    );
                     assert_eq!(
                         admission.status(),
                         if preview {
@@ -348,7 +351,7 @@ mod tests {
                 assert_eq!(admission.blocker_code(), None);
             } else if !matches!(
                 runtime_kind,
-                AdapterKind::CursorAgent | AdapterKind::ZcodeApp
+                AdapterKind::CursorAgent | AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness
             ) {
                 assert!(admission.is_qualified());
                 assert!(admission.allows_runtime_use());
@@ -410,6 +413,7 @@ mod tests {
                     | AdapterKind::Pi
                     | AdapterKind::GrokBuild
                     | AdapterKind::ZcodeApp
+                    | AdapterKind::DeepseekHarness
             )
         }) {
             for platform in [HostPlatformKey::MacosArm64, HostPlatformKey::MacosX64] {
@@ -449,6 +453,18 @@ mod tests {
                     HostPlatformKey::WindowsX64 | HostPlatformKey::LinuxX64 => unreachable!(),
                 })
             );
+        }
+        for platform in HostPlatformKey::ALL {
+            let dsh = registry.platform_admission(AdapterKind::DeepseekHarness, platform);
+            assert_eq!(
+                dsh.status(),
+                if platform == HostPlatformKey::MacosArm64 {
+                    RuntimePlatformAdmissionStatus::Preview
+                } else {
+                    RuntimePlatformAdmissionStatus::NotQualified
+                }
+            );
+            assert!(dsh.evidence_revision().is_none());
         }
         let grok_arm =
             registry.platform_admission(AdapterKind::GrokBuild, HostPlatformKey::MacosArm64);

@@ -44,7 +44,8 @@ try {
 
   core = spawn(join(root, 'target', 'debug', 'rovai-core'), [
     ...coreDataDirectoryArguments(dataDir),
-    '--skill-library-root', join(dataDir, 'managed-skill-library')
+    '--skill-library-root', join(dataDir, 'managed-skill-library'),
+    '--mcp-config-path', join(dataDir, 'mcp.json')
   ], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -172,6 +173,11 @@ try {
       adapterKind: 'grok-build',
       permissionValues: { permission_mode: process.env.ROVAI_GROK_PERMISSION_MODE ?? 'default' },
       token: 'ROVAI_GROK_ACP_OK'
+    },
+    {
+      adapterKind: 'deepseek-harness',
+      permissionValues: { sandbox_mode: 'danger-full-access', approval_policy: process.env.ROVAI_DSH_APPROVAL_POLICY ?? 'ask' },
+      token: 'ROVAI_DSH_ACP_OK'
     },
     {
       adapterKind: 'antigravity-app',
@@ -1200,7 +1206,7 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
     },
     {
       name: 'large',
-      command: `Write-Output 'ROVAI_${stem}_LARGE_BEGIN'; [Console]::Out.Write(('0123456789abcdef' * 8192))`,
+      command: `Write-Output 'ROVAI_${stem}_LARGE_BEGIN'; [Console]::Out.Write(('ROVAI_${stem}_LARGE_BEGIN:0123456789abcdef' * 4096))`,
       status: 'completed',
       markers: [`ROVAI_${stem}_LARGE_BEGIN`]
     }
@@ -1237,7 +1243,7 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
     },
     {
       name: 'large',
-      command: `printf '%s\\n' 'ROVAI_${stem}_LARGE_BEGIN'; /usr/bin/yes '0123456789abcdef' | /usr/bin/head -c 131072`,
+      command: `printf '%s\\n' 'ROVAI_${stem}_LARGE_BEGIN'; /usr/bin/yes 'ROVAI_${stem}_LARGE_BEGIN:0123456789abcdef' | /usr/bin/head -c 131072`,
       status: 'completed',
       markers: [`ROVAI_${stem}_LARGE_BEGIN`]
     }
@@ -1327,7 +1333,8 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
       toolStatus: terminal.params.payload.status,
       toolCallId: [...toolCallIds][0],
       approvalCount: resolvedApprovals.size,
-      outputBytes: Buffer.byteLength(output)
+      outputBytes: Buffer.byteLength(output),
+      projectionTruncated: terminal.params.payload._rovaiTruncated === true
     })
   }
   return results

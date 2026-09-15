@@ -185,3 +185,10 @@ missing 使用默认；损坏或不可读使用内存默认/规范化结果、�
 - [First-run Onboarding](first-run-onboarding.md)
 - [Bootstrap Shell UI](../ui/components/bootstrap-shell.md)
 - [V1.31 Decisions](../versions/v1.31/decisions.md)
+
+
+### DeepSeek Harness 闭集迁移
+
+Migration 155 只接受精确 v1.59/schema 104 和完整旧 receipt/schema，扩充 Runtime 与 Skill group 闭集后发布
+schema 105。重建保留原行、索引与跨表 trigger，检查受影响表及入向外键；receipt/schema 与数据在同一事务提交。
+新闭集的 metadata 与 receipt 共同参与准入，失败回滚到可重试的旧来源，不重新分配既有自定义 Skills。

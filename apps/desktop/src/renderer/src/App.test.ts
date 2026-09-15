@@ -7163,7 +7163,7 @@ describe('task event projections', () => {
       onOpenRuntimeSettings: () => undefined
     }))
 
-    expect(VISIBLE_PRODUCT_RUNTIMES).toEqual(['claude-code-cli', 'codex-cli', 'copilot-cli', 'opencode-cli', 'kiro-cli', 'qoder-cli', 'codebuddy-cli', 'qwen-code', 'trae-cn-cli', 'kimi-code-cli', 'grok-build', 'zcode-app', 'antigravity-app', 'pi'])
+    expect(VISIBLE_PRODUCT_RUNTIMES).toEqual(['claude-code-cli', 'codex-cli', 'copilot-cli', 'opencode-cli', 'kiro-cli', 'qoder-cli', 'codebuddy-cli', 'qwen-code', 'trae-cn-cli', 'kimi-code-cli', 'grok-build', 'deepseek-harness', 'zcode-app', 'antigravity-app', 'pi'])
     expect(markup).toContain('member-runtime-picker')
     expect(markup).toContain('aria-label="Agent 运行时，暂不配置"')
     expect(markup).toContain('aria-haspopup="menu"')
@@ -7382,7 +7382,7 @@ describe('task event projections', () => {
     expect(markup).toContain('Claude Code')
     expect(markup).toContain('Antigravity')
     expect(markup).toContain('TRAE CLI')
-    expect(markup).not.toContain('DeepSeek Harness')
+    expect(markup).toContain('DeepSeek Harness')
     expect(markup).not.toContain('Cursor Agent')
     expect(markup).not.toContain('待支持')
     expect(markup).not.toContain('尚未开放')
@@ -7399,9 +7399,9 @@ describe('task event projections', () => {
     expect(markup).not.toContain('尚未检查')
     expect(markup).not.toContain('已检查')
     expect(markup).not.toMatch(/稳定|测试|实验性/)
-    expect(markup.match(/class="runtime-product-logo"/g)).toHaveLength(14)
-    expect(markup.match(/class="quiet-button runtime-product-check"/g)).toHaveLength(12)
-    expect(markup.match(/检查状态/g)).toHaveLength(12)
+    expect(markup.match(/class="runtime-product-logo"/g)).toHaveLength(15)
+    expect(markup.match(/class="quiet-button runtime-product-check"/g)).toHaveLength(13)
+    expect(markup.match(/检查状态/g)).toHaveLength(13)
     expect(markup).toContain('Claude Code 登录指南')
     expect(markup).toContain('Antigravity 安装指南')
     expect(markup).toContain('aria-expanded="false"')
@@ -7441,8 +7441,8 @@ describe('task event projections', () => {
           ? `<strong>Codex CLI</strong><small title="${subtitle}">${subtitle}</small>`
           : '<strong>Codex CLI</strong></div>')
         expect(versionMarkup).toContain('status-available">可用</span>')
-        expect(versionMarkup.match(/检查状态/g)).toHaveLength(14)
-        expect(versionMarkup).not.toContain('DeepSeek Harness')
+        expect(versionMarkup.match(/检查状态/g)).toHaveLength(15)
+        expect(versionMarkup).toContain('DeepSeek Harness')
         expect(versionMarkup).not.toMatch(/测试|试运行|实验性/)
         expect(versionMarkup).toContain('<strong>ZCode</strong></div>')
       }
@@ -7477,8 +7477,8 @@ describe('task event projections', () => {
       onReload: async () => undefined
     }))
 
-    expect(markup.match(/Windows 尚未验证/g)).toHaveLength(14)
-    expect(markup.match(/不可检查/g)).toHaveLength(14)
+    expect(markup.match(/Windows 尚未验证/g)).toHaveLength(15)
+    expect(markup.match(/不可检查/g)).toHaveLength(15)
     expect(markup).not.toContain('检查状态')
     expect(markup).toContain('当前平台尚无可检测 Runtime')
     expect(markup).toContain('这不是本机安装、登录或扫描故障')
@@ -7616,6 +7616,7 @@ function runtimeAdmissionRows(
     'cursor-agent',
     'kimi-code-cli',
     'grok-build',
+    'deepseek-harness',
     'zcode-app',
     'antigravity-app'
   ]

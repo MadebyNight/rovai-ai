@@ -41,8 +41,7 @@ closed reason code，且 `evidenceRevision = null`；它不能被统计或描述
 `not_qualified` 与 `unsupported` 的 reason/evidence 规则沿用 v1。
 
 v1.59 的 Linux x64 Server OS 与 Runtime 资格独立。Server 在目标发行版启动不晋升 Adapter。
-Linux 按维护者确认的适配范围开放现有 14 个 Runtime 的 `preview`，显式排除 Cursor；DeepSeek Harness
-不在 Product Runtime Catalog 中，也不新增接入。reason 为 `runtime_platform.qualification_evidence_missing`，
+Linux 按维护者确认的适配范围开放原有 14 个 Runtime 的 `preview`，显式排除 Cursor 与后续新增的 DeepSeek Harness。reason 为 `runtime_platform.qualification_evidence_missing`，
 evidenceRevision 仍为 null，允许 discovery、安装和真实验收。未来新增 Adapter 不自动继承此范围。
 只有目标 Runtime 自己的发行版/版本/能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
 
@@ -95,3 +94,11 @@ No fallback Runtime or synthetic default may be created after failure.
 - [Runtime Launch and Verification v31](runtime-launch-and-verification-v31.md)
 - [Runtime Catalog Boundaries](../architecture/runtime-catalog-boundaries.md)
 - [Runtime compatibility register](../runtime-compatibility.md)
+
+
+## DeepSeek Harness 增量准入
+
+`deepseek-harness` 的 macos-arm64 行为 `preview`，reasonCode 为
+`runtime_platform.qualification_evidence_missing`，evidenceRevision=null；macos-x64、windows-x64 与 linux-x64
+保持 not_qualified。普通 Settings/成员选择按 Core 现有投影展示，不能以 initialize 成功、共享 ACP 实现或另一
+Runtime 的证据代替该行资格。取舍见 [V1.59-D08](../versions/v1.59/decisions.md#v1-59-d08)。

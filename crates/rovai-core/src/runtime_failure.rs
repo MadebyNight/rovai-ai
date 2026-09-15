@@ -229,6 +229,7 @@ fn classify_high_value_runtime_error(
             "quota exceeded",
             "quota exhausted",
             "insufficient quota",
+            "insufficient balance",
             "credit balance",
             "insufficient credits",
             "billing limit",
@@ -314,6 +315,7 @@ fn runtime_display_name(runtime_kind: AdapterKind) -> &'static str {
         AdapterKind::CursorAgent => "Cursor Agent",
         AdapterKind::KimiCodeCli => "Kimi Code",
         AdapterKind::GrokBuild => "Grok Build",
+        AdapterKind::DeepseekHarness => "DeepSeek Harness",
         AdapterKind::AntigravityApp => "Antigravity",
         AdapterKind::ZcodeApp => "ZCode",
     }
@@ -699,6 +701,12 @@ mod tests {
                 "runtime_authentication_required",
                 RuntimeFailurePhase::Authentication,
                 true,
+            ),
+            (
+                "ACP error -32603: Internal error: turn failed: Insufficient Balance",
+                "runtime_quota_exceeded",
+                RuntimeFailurePhase::Terminal,
+                false,
             ),
             (
                 "Quota exceeded for this account",
