@@ -147,7 +147,8 @@ function pageFrame(kind: string, feedback: boolean) {
 }
 
 function noAuthority() {
-  check(calls.every(call => call === 'desktopSession.getStartupSnapshot'), `Pre-ready authority calls: ${calls.join(', ')}`)
+  // Preview retention is a Main-owned cache update and does not access Core authority.
+  check(calls.every(call => ['desktopSession.getStartupSnapshot', 'filePreview.updateRetention'].includes(call)), `Pre-ready authority calls: ${calls.join(', ')}`)
 }
 
 Object.assign(window, { startupTest: {

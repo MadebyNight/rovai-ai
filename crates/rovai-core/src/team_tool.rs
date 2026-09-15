@@ -6246,7 +6246,7 @@ mod tests {
     #[cfg(feature = "slow-tests")]
     fn public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes() {
         // Current and pre-upgrade frozen deliveries must consume exact bytes and original version axes.
-        for frozen_version in [23, 22] {
+        for frozen_version in [24, 23, 22] {
             let mut fixture = Fixture::new();
             fixture
                 .database
@@ -6313,16 +6313,52 @@ Use this exact public input @agent_2";
             )
             .unwrap();
             let mut frozen_snapshot: Value = serde_json::from_str(&frozen_snapshot).unwrap();
-            if frozen_version == 22 {
+            if frozen_version < 24 {
+                // Ordinary v22/v23 input differs here only in the RunFacts schema
+                // tag. Seal those original bytes before exercising the upgrade reader.
                 let mut old_profile = crate::context_delivery::CONTEXT_DELIVERY_PROFILE_V5;
-                old_profile.profile_version = 4;
-                let selection = &mut frozen_snapshot["frozenContext"]["manifestSelection"];
-                selection["contextManifestVersion"] = json!(22);
-                selection["contextDeliveryProfileVersion"] = json!(4);
+                old_profile.profile_version = if frozen_version == 22 { 4 } else { 5 };
+                let frozen = &mut frozen_snapshot["frozenContext"];
+                let original_facts = frozen["manifestSelection"]["runFactPayload"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                let legacy_facts =
+                    original_facts.replacen("\"schemaVersion\":3", "\"schemaVersion\":2", 1);
+                assert_ne!(legacy_facts, original_facts);
+                let payload = frozen["renderedPayload"]
+                    .as_str()
+                    .unwrap()
+                    .replace(&original_facts, &legacy_facts);
+                let digest = format!("sha256:{:x}", Sha256::digest(payload.as_bytes()));
+                frozen["renderedPayload"] = json!(payload);
+                frozen["runtimePayload"] = frozen["renderedPayload"].clone();
+                frozen["renderedPayloadDigest"] = json!(digest);
+                frozen["runtimePayloadDigest"] = frozen["renderedPayloadDigest"].clone();
+                let selection = &mut frozen["manifestSelection"];
+                selection["contextManifestVersion"] = json!(frozen_version);
+                selection["runFactsSchemaVersion"] = json!(2);
+                selection["runFactPayload"] = json!(legacy_facts);
+                selection["runFactDigest"] = json!(format!(
+                    "sha256:{:x}",
+                    Sha256::digest(legacy_facts.as_bytes())
+                ));
+                selection["contextDeliveryProfileVersion"] = json!(old_profile.profile_version);
                 selection["contextDeliveryProfileJson"] =
                     serde_json::to_value(old_profile).unwrap();
                 selection["contextDeliveryProfileDigest"] =
                     json!(old_profile.canonical_digest().unwrap());
+                for key in [
+                    "workspaceFact",
+                    "workspaceFactDigest",
+                    "workspaceFactIncluded",
+                ] {
+                    selection.as_object_mut().unwrap().remove(key);
+                }
+                selection["currentInputSource"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("missionStart");
                 fixture
                     .database
                     .connection()
@@ -6426,7 +6462,13 @@ Use this exact public input @agent_2";
                 (
                     frozen_version,
                     frozen_version,
-                    if frozen_version == 22 { 4 } else { 5 }
+                    if frozen_version == 22 {
+                        4
+                    } else if frozen_version == 23 {
+                        5
+                    } else {
+                        6
+                    }
                 )
             );
             // Reopening a materialized legacy manifest is a read-only replay, not a new render.

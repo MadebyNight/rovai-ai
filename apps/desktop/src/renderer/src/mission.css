@@ -396,3 +396,5 @@ button.mission-tag { cursor: pointer; }
 .mission-drawer-preview-tabs { display: flex; min-width: 0; align-items: center; border-bottom: 1px solid var(--line); }
 .mission-drawer-preview-tabs > .file-preview-tabs { flex: 1; min-width: 0; }
 .new-camp-dialog .mission-source-input { width: 100%; min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
+/* Retained previews share the Mission drawer's visible layer without remounting. */
+.app-shell:has(.mission-drawer) > .file-preview-retained-host { z-index: 21; }

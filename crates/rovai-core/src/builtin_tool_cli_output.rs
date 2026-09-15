@@ -358,13 +358,12 @@ pub fn validate_schema(value: &Value, schema: &Value) -> Result<()> {
         bail!("value does not match any oneOf variant");
     }
     if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        if variants
+        if !variants
             .iter()
             .any(|variant| validate_schema(value, variant).is_ok())
         {
-            return Ok(());
+            bail!("value does not match any anyOf variant");
         }
-        bail!("value does not match any anyOf variant");
     }
     if let Some(variants) = schema.get("allOf").and_then(Value::as_array) {
         for variant in variants {
@@ -423,19 +422,20 @@ pub fn validate_schema(value: &Value, schema: &Value) -> Result<()> {
             bail!("number is higher than maximum");
         }
     }
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        let object = value.as_object().context("schema expects an object")?;
+        for key in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(key) {
+                bail!("schema requires property {key}");
+            }
+        }
+    }
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
         let object = value.as_object().context("schema expects an object")?;
         if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
             for key in object.keys() {
                 if !properties.contains_key(key) {
                     bail!("schema rejects extra property {key}");
-                }
-            }
-        }
-        if let Some(required) = schema.get("required").and_then(Value::as_array) {
-            for key in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(key) {
-                    bail!("schema requires property {key}");
                 }
             }
         }

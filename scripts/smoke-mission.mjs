@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, writeFile, readFile, access } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, access, realpath } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { resolve, join, dirname, isAbsolute } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -13,8 +13,9 @@ import { configureProductRuntime } from './configure-product-runtime.mjs'
 const [coreArgument, outputArgument] = process.argv.slice(2)
 assert(coreArgument && outputArgument && isAbsolute(coreArgument) && isAbsolute(outputArgument),
   'Usage: node scripts/smoke-mission.mjs <absolute-core> <new-absolute-output-directory>')
-const coreExecutable = resolve(coreArgument), output = resolve(outputArgument), repository = resolve(import.meta.dirname, '..')
-await mkdir(output, { recursive: false, mode: 0o700 })
+const coreExecutable = await realpath(resolve(coreArgument)), requestedOutput = resolve(outputArgument), repository = resolve(import.meta.dirname, '..')
+await mkdir(requestedOutput, { recursive: false, mode: 0o700 })
+const output = await realpath(requestedOutput)
 const dataDirectory = join(output, 'core-data'), skillLibraryRoot = join(output, 'skill-library')
 const source = join(output, 'project'), project = join(source, 'packages/app'), plain = join(output, 'plain')
 await Promise.all([mkdir(dataDirectory), mkdir(skillLibraryRoot), mkdir(project, { recursive: true }), mkdir(plain)])
@@ -37,7 +38,8 @@ function startCore() {
   const closed = once(child, 'close')
   child.once('close', (code, signal) => { if (!stopped) for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error(`Core exited ${code}/${signal}: ${errors.slice(-4).join('')}`)) } })
   createInterface({ input: child.stdout }).on('line', line => {
-    const value = JSON.parse(line); if (!value.id) return
+    const value = JSON.parse(line); if (value.kind === 'core_startup') { errors.push(JSON.stringify(value)); void writeFile(join(output, 'startup.log'), errors.join('\n')) }
+    if (!value.id) return
     const entry = pending.get(value.id); if (!entry) return
     pending.delete(value.id); clearTimeout(entry.timer)
     value.error ? entry.reject(new Error(`${entry.method}: ${JSON.stringify(value.error)}`)) : entry.resolve(value.result)
@@ -110,7 +112,8 @@ try {
   assert.equal((await client.request('missions.delivery', { missionId: mission.missionId })).workspace, null)
   report.cases.push('save creates Mission and main Camp without Run or worktree')
   const startId = crypto.randomUUID(), startParams = { commandId: startId, command: { missionId: mission.missionId } }
-  const started = await client.request('missions.start', startParams); applied(started)
+  const started = await client.request('missions.start', startParams)
+  assert.equal(started.status, 'accepted', JSON.stringify(started))
   assert.deepEqual(await client.request('missions.start', startParams), started)
   const snapshot = await waitForIdle(mission.campId, 2)
   await writeFile(join(output, 'first-snapshot.json'), JSON.stringify(snapshot, null, 2))
