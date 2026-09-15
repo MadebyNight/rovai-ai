@@ -156,6 +156,20 @@ impl DomainCommand for CreateAutomationCommand {
     const TYPE: &'static str = "automation.create";
 }
 
+// Owner Host configuration; deliberately absent from the Agent CLI catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConfigureAutomationTimeLimitCommand {
+    pub automation_id: String,
+    pub expected_version: i64,
+    #[serde(deserialize_with = "crate::execution_budget::deserialize_required_time_limit")]
+    pub timeout_seconds: Option<i64>,
+}
+impl sealed::Sealed for ConfigureAutomationTimeLimitCommand {}
+impl DomainCommand for ConfigureAutomationTimeLimitCommand {
+    const TYPE: &'static str = "automation.configure_time_limit";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAutomationCommand {
@@ -505,6 +519,7 @@ struct AutomationRecord {
     next_run_at: Option<String>,
     created_at: String,
     updated_at: String,
+    runtime_timeout_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -577,6 +592,37 @@ impl AutomationService {
                 serde_json::to_value(view)?,
                 Some(entity("automation", &automation_id)),
             ))
+        })
+    }
+
+    pub fn configure_time_limit(
+        &self,
+        database: &mut Database,
+        envelope: &CommandEnvelope<ConfigureAutomationTimeLimitCommand>,
+    ) -> Result<CommandExecution> {
+        let command = &envelope.payload;
+        self.gateway.execute(database, envelope, |transaction| {
+            if !matches!(envelope.actor, ActorRef::User { .. }) {
+                return Ok(rejected("automation.actor_forbidden", "Time-limit configuration requires the local user"));
+            }
+            let Some(current) = load_automation_record(transaction, &command.automation_id)? else {
+                return Ok(rejected("automation.not_found", "Automation does not exist"));
+            };
+            if current.version != command.expected_version {
+                return Ok(CommandHandlerResult::rejected("command.version_conflict", json!({"currentVersion": current.version})));
+            }
+            if command.timeout_seconds.is_some_and(|seconds| !(60..=86_400).contains(&seconds)) {
+                return Ok(rejected("automation.time_limit_invalid", "Use 60–86400 seconds or explicit null"));
+            }
+            if automation_has_active_run(transaction, &current.id)? {
+                return Ok(rejected("automation.active_run", "Wait for the active occurrence before changing its time limit"));
+            }
+            if current.runtime_timeout_seconds != command.timeout_seconds {
+                transaction.execute("UPDATE automation SET runtime_timeout_seconds=?2, version=version+1, updated_at=?3 WHERE id=?1",
+                    params![command.automation_id, command.timeout_seconds, timestamp(Utc::now())])?;
+            }
+            let version: i64 = transaction.query_row("SELECT version FROM automation WHERE id=?1", [&command.automation_id], |row| row.get(0))?;
+            Ok(CommandHandlerResult::applied("automation.time_limit_configured", json!({"automationId":command.automation_id, "automationVersion":version, "timeoutSeconds":command.timeout_seconds}), Some(entity("automation", &command.automation_id))))
         })
     }
 
@@ -1237,7 +1283,9 @@ fn claim_occurrence_in_tx(
             record.member_id,
             serde_json::to_string(&record.project_ref)?,
             serde_json::to_string(&record.notify_channels)?,
-            timestamp(now + Duration::seconds(AUTOMATION_RUNTIME_TIMEOUT_SECONDS)),
+            record
+                .runtime_timeout_seconds
+                .map(|seconds| timestamp(now + Duration::seconds(seconds))),
             now_text,
         ],
     )?;
@@ -1245,6 +1293,7 @@ fn claim_occurrence_in_tx(
         transaction,
         ScheduledAutomationAdmissionInput {
             automation_run_id: run_id.clone(),
+            unbounded_time: record.runtime_timeout_seconds.is_none(),
             automation_name: record.name.clone(),
             prompt: record.prompt.clone(),
             member_id: record.member_id.clone(),
@@ -1875,13 +1924,13 @@ fn load_automation_record(
     automation_id: &str,
 ) -> Result<Option<AutomationRecord>> {
     connection.query_row(
-        "SELECT id, version, name, prompt, enabled, member_id, project_ref_json, schedule_json, notify_channels_json, next_run_at, created_at, updated_at FROM automation WHERE id = ?1",
+        "SELECT id, version, name, prompt, enabled, member_id, project_ref_json, schedule_json, notify_channels_json, next_run_at, created_at, updated_at, runtime_timeout_seconds FROM automation WHERE id = ?1",
         [automation_id],
         |row| Ok((
             row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?,
             row.get::<_, String>(3)?, row.get::<_, bool>(4)?, row.get::<_, String>(5)?,
             row.get::<_, String>(6)?, row.get::<_, String>(7)?, row.get::<_, String>(8)?,
-            row.get::<_, Option<String>>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?,
+            row.get::<_, Option<String>>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?, row.get::<_, Option<i64>>(12)?,
         )),
     ).optional()?.map(|row| Ok(AutomationRecord {
         id: row.0,
@@ -1896,6 +1945,7 @@ fn load_automation_record(
         next_run_at: row.9,
         created_at: row.10,
         updated_at: row.11,
+        runtime_timeout_seconds: row.12,
     })).transpose()
 }
 
@@ -2382,6 +2432,103 @@ mod tests {
             .unwrap();
         transaction.commit().unwrap();
         message_id
+    }
+
+    // Owns the persisted configuration/occurrence/expiry/recovery seam. Both
+    // policies share one isolated database; no Runtime or wall-clock wait.
+    #[test]
+    fn owner_time_limit_is_frozen_per_occurrence_and_unbounded_runs_still_recover() {
+        let (mut database, directory, quick_chat_path) = test_database();
+        let service = AutomationService::default();
+        for (label, limit) in [("bounded", Some(60)), ("unbounded", None)] {
+            let (id, _) = create_manual_automation(
+                &service,
+                &mut database,
+                &format!("create-{label}"),
+                "Evaluate the retained evidence.",
+            );
+            let command = user_command(
+                &format!("limit-{label}"),
+                ConfigureAutomationTimeLimitCommand {
+                    automation_id: id.clone(),
+                    expected_version: 1,
+                    timeout_seconds: limit,
+                },
+            );
+            let configured = service
+                .configure_time_limit(&mut database, &command)
+                .unwrap();
+            assert_eq!(configured.result.code, "automation.time_limit_configured");
+            assert!(
+                service
+                    .configure_time_limit(&mut database, &command)
+                    .unwrap()
+                    .replayed
+            );
+            let run = service
+                .run_now(
+                    &mut database,
+                    &user_command(
+                        &format!("run-{label}"),
+                        RunAutomationCommand {
+                            automation_id: id.clone(),
+                        },
+                    ),
+                    CURRENT_USER_ID,
+                    &quick_chat_path,
+                )
+                .unwrap();
+            let run_id = run.result.payload["runId"].as_str().unwrap();
+            let (timeout, deadline, elapsed, schema): (Option<String>, Option<String>, Option<i64>, i64) = database.connection().query_row(
+                "SELECT run.timeout_at, turn.execution_budget_deadline_at, turn.execution_budget_elapsed_seconds, turn.execution_budget_schema_version FROM automation_run run JOIN camp_turn turn ON turn.id=run.camp_turn_id WHERE run.id=?1", [run_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
+            assert_eq!(timeout.is_none(), limit.is_none());
+            assert_eq!(deadline.is_none(), limit.is_none());
+            assert_eq!(elapsed.is_none(), limit.is_none());
+            assert_eq!(schema, if limit.is_none() { 2 } else { 1 });
+            let active_change = service
+                .configure_time_limit(
+                    &mut database,
+                    &user_command(
+                        &format!("active-{label}"),
+                        ConfigureAutomationTimeLimitCommand {
+                            automation_id: id.clone(),
+                            expected_version: 2,
+                            timeout_seconds: Some(120),
+                        },
+                    ),
+                )
+                .unwrap();
+            assert_eq!(active_change.result.code, "automation.active_run");
+            let future = Utc::now() + Duration::days(7);
+            assert_eq!(
+                settle_one_run(&mut database, run_id, future).unwrap(),
+                limit.is_some()
+            );
+            if limit.is_none() {
+                let expired = crate::runtime::ExecutionRuntimeService::default()
+                    .expire_elapsed_camp_turn_execution_budgets(&mut database, future, future, 100)
+                    .unwrap();
+                assert!(expired.is_empty());
+                service.recover_interrupted(&mut database).unwrap();
+            }
+            let reason: String = database
+                .connection()
+                .query_row(
+                    "SELECT reason FROM automation_run WHERE id=?1",
+                    [run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                reason,
+                if limit.is_none() {
+                    "interrupted"
+                } else {
+                    "timeout"
+                }
+            );
+        }
+        remove_test_database(database, directory);
     }
 
     fn create_manual_automation(

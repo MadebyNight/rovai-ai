@@ -1731,8 +1731,8 @@ export interface CampTurnView {
 export interface CampTurnExecutionBudgetView {
   schemaVersion: 1
   acceptedAt: string
-  deadlineAt: string
-  elapsedSeconds: number
+  deadlineAt: string | null
+  elapsedSeconds: number | null
   maxAgentRunResponsibilities: number
   maxAcceptedA2a: number
   allocatedAgentRunResponsibilities: number
@@ -3709,6 +3709,7 @@ export type CoreMethod =
   | 'automations.runs.list'
   | 'automations.create'
   | 'automations.update'
+  | 'automations.configureTimeLimit'
   | 'automations.close'
   | 'automations.delete'
   | 'automations.run'

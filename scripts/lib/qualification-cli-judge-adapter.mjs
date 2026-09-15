@@ -32,7 +32,7 @@ export function invokeCli(executable, args, input, timeoutMs) {
     const child = spawn(executable, args, { env: environment(), stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = '', stderr = '', timedOut = false, overflow = false
     const kill = () => { child.kill('SIGTERM'); setTimeout(() => child.exitCode === null && child.kill('SIGKILL'), 2000).unref() }
-    const timer = setTimeout(() => { timedOut = true; kill() }, timeoutMs)
+    const timer = timeoutMs === null ? undefined : setTimeout(() => { timedOut = true; kill() }, timeoutMs)
     child.stdout.on('data', bytes => { stdout += bytes; if (Buffer.byteLength(stdout) > 2 * 1024 * 1024) { overflow = true; stdout = stdout.slice(-1024 * 1024); kill() } })
     child.stderr.on('data', bytes => { stderr = (stderr + bytes).slice(-8192) })
     child.stdin.on('error', () => {})
@@ -121,6 +121,7 @@ export async function prepareCliJudge({ executable, model, directory }) {
 
 export function createAdapter(configuration, { evidenceDirectory } = {}) {
   if (configuration.cli?.modelVersionPolicy !== 'catalog_bound_alias' || configuration.cli.settingsDigest !== digestJson(CLI_SETTINGS) || configuration.decodingParameters?.reasoningEffort !== 'medium' || Object.keys(configuration.decodingParameters).some(key => key !== 'reasoningEffort')) throw new Error('Judge CLI requires its frozen supported configuration')
+  if (configuration.timeoutMilliseconds !== null && (!Number.isSafeInteger(configuration.timeoutMilliseconds) || configuration.timeoutMilliseconds <= 1000)) throw new Error('Judge timeout must exceed 1000 milliseconds or be explicit null')
   return { assurance, capabilities, claimAuditProfile, claimAuditProfiles, async invokeReplica(request) {
     if (digestJson(request.capabilities) !== digestJson(capabilities)) throw new Error('Judge model capabilities changed')
     const cli = configuration.cli
@@ -136,7 +137,7 @@ export function createAdapter(configuration, { evidenceDirectory } = {}) {
     await writePrivateJsonExclusive(join(directory, 'request.json'), { startedAt: new Date().toISOString(), requestedModel: configuration.snapshotId, modelVersionPolicy: cli.modelVersionPolicy, inputDigest: digestJson({ systemPrompt: request.systemPrompt, input }), configurationDigest: digestJson(configuration), toolCapabilityProbe: cli.probeDigest })
     const args = argumentsFor(configuration, cwd, { developer_instructions: request.systemPrompt })
     args.splice(args.length - 1, 0, '--output-schema', schemaPath)
-    const execution = await invokeCli(cli.executable, args, input, configuration.timeoutMilliseconds - 1000)
+    const execution = await invokeCli(cli.executable, args, input, configuration.timeoutMilliseconds === null ? null : configuration.timeoutMilliseconds - 1000)
     await writePrivateJsonExclusive(join(directory, 'execution.json'), execution)
     const { value, usage } = parseCliResult(execution, cli.outputLimitBytes)
     await writePrivateJsonExclusive(join(directory, 'response.json'), { completedAt: new Date().toISOString(), requestedModel: configuration.snapshotId, observedSnapshot: null, modelVersionPolicy: cli.modelVersionPolicy, usage, value })

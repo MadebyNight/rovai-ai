@@ -3009,8 +3009,17 @@ impl CollaborationService {
         )?;
         let accepted_at =
             chrono::DateTime::parse_from_rfc3339(&input.now)?.with_timezone(&chrono::Utc);
-        let frozen_execution_budget = freeze_camp_turn_execution_budget(None, accepted_at, 1)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let time_policy = input
+            .unbounded_time
+            .then_some(CampTurnExecutionBudgetRequest {
+                elapsed_seconds: None,
+                max_agent_run_responsibilities:
+                    crate::execution_budget::PRODUCT_MAX_AGENT_RUN_RESPONSIBILITIES,
+                max_accepted_a2a: crate::execution_budget::PRODUCT_MAX_ACCEPTED_A2A,
+            });
+        let frozen_execution_budget =
+            freeze_camp_turn_execution_budget(time_policy.as_ref(), accepted_at, 1)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let camp_message_id = Uuid::new_v4().to_string();
         let camp_turn_id = Uuid::new_v4().to_string();
         let content = normalize_content(vec![StructuredCampMessageSegment::Text {
@@ -3467,6 +3476,7 @@ pub(crate) struct ExternalChannelAdmissionResult {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ScheduledAutomationAdmissionInput {
+    pub unbounded_time: bool,
     pub automation_run_id: String,
     pub automation_name: String,
     pub prompt: String,
@@ -5175,10 +5185,10 @@ pub(crate) fn exhaust_camp_turn_execution_budget(
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<i64>>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
-                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             },
         )
@@ -7350,7 +7360,7 @@ mod slow_tests {
                             purpose: "验证原子预算".to_string(),
                             completion_role: "required".to_string(),
                             budget: Some(CampTurnExecutionBudgetRequest {
-                                elapsed_seconds: 300,
+                                elapsed_seconds: Some(300),
                                 max_agent_run_responsibilities: 3,
                                 max_accepted_a2a: 2,
                             }),
@@ -7386,7 +7396,7 @@ mod slow_tests {
             .find(|turn| turn.id == camp_turn_id)
             .unwrap();
         assert_eq!(turn.execution_budget.schema_version, 1);
-        assert_eq!(turn.execution_budget.elapsed_seconds, 300);
+        assert_eq!(turn.execution_budget.elapsed_seconds, Some(300));
         assert_eq!(turn.execution_budget.max_agent_run_responsibilities, 3);
         assert_eq!(turn.execution_budget.max_accepted_a2a, 2);
         assert_eq!(
@@ -7397,8 +7407,10 @@ mod slow_tests {
         assert_eq!(turn.execution_budget.exhausted_at, None);
         let accepted_at =
             chrono::DateTime::parse_from_rfc3339(&turn.execution_budget.accepted_at).unwrap();
-        let deadline_at =
-            chrono::DateTime::parse_from_rfc3339(&turn.execution_budget.deadline_at).unwrap();
+        let deadline_at = chrono::DateTime::parse_from_rfc3339(
+            turn.execution_budget.deadline_at.as_deref().unwrap(),
+        )
+        .unwrap();
         assert_eq!((deadline_at - accepted_at).num_seconds(), 300);
 
         drop(database);
@@ -7429,7 +7441,7 @@ mod slow_tests {
                             purpose: "验证 root admission".to_string(),
                             completion_role: "required".to_string(),
                             budget: Some(CampTurnExecutionBudgetRequest {
-                                elapsed_seconds: 300,
+                                elapsed_seconds: Some(300),
                                 max_agent_run_responsibilities: 1,
                                 max_accepted_a2a: 0,
                             }),

@@ -9,7 +9,7 @@ last_updated: 2026-09-11
 # User Automation Architecture
 
 本文说明普通用户终端自动化与 Runtime Diagnostic Trial 的长期组件边界。字段、命令、错误和 bundle 以
-[User Automation v5](../contracts/user-automation-v5.md)为准；决定理由见
+[User Automation v6](../contracts/user-automation-v6.md)为准；决定理由见
 [v1.21 决策](../versions/v1.21/decisions.md)。
 
 ## 进程结构

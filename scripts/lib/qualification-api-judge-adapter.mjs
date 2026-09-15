@@ -16,8 +16,8 @@ export function createAdapter(configuration, { evidenceDirectory, fetchImplement
   if (typeof model !== 'string' || !model || configuration.api?.modelVersionPolicy !== 'pinned_snapshot') throw new Error('Judge requires a declared pinned model snapshot')
   const keyEnv = configuration.api?.keyEnvironmentVariable ?? 'OPENAI_API_KEY'
   if (!/^[A-Z][A-Z0-9_]+$/.test(keyEnv)) throw new Error('Invalid Judge credential environment variable name')
-  const timeoutMs = configuration.timeoutMilliseconds ?? 120_000
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error('Judge timeout must be bounded by 120 seconds')
+  const timeoutMs = configuration.timeoutMilliseconds === undefined ? 120_000 : configuration.timeoutMilliseconds
+  if (timeoutMs !== null && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000)) throw new Error('Judge timeout must be bounded by 120 seconds')
   return { assurance, capabilities, async invokeReplica(request) {
     if (digestJson(request.capabilities) !== digestJson(capabilities)) throw new Error('Judge model tools must remain disabled')
     const id = `${request.judgeView}-${request.replica}-${randomUUID()}`
@@ -37,7 +37,7 @@ export function createAdapter(configuration, { evidenceDirectory, fetchImplement
     try {
       const key = process.env[keyEnv]
       if (!key) throw new Error('judge.credentials_unavailable')
-      const response = await fetchImplementation(endpoint, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify(requestBody), signal: AbortSignal.timeout(timeoutMs) })
+      const response = await fetchImplementation(endpoint, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify(requestBody), signal: timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs) })
       if (!response.ok) throw new Error(`judge.http_${response.status}`)
       const bytes = await response.arrayBuffer()
       if (bytes.byteLength > 1024 * 1024) throw new Error('judge.response_too_large')
