@@ -2,7 +2,11 @@ import { useMemo, useRef, type JSX, type ReactNode } from 'react'
 import type { FileLocationTarget } from '@contracts'
 import { parseFileReference } from '../../file-preview-reference'
 import { FileReferenceIcon } from './FilePreviewTabIcon'
-import { projectMessageFileReferences, projectMessageInlineCodes } from './safe-markdown-model'
+import {
+  fileReferenceSpacingClassName,
+  projectMessageFileReferences,
+  projectMessageInlineCodes
+} from './safe-markdown-model'
 
 export const FILE_REFERENCE_FRAGMENT = '#rovai-file-reference='
 export type FileReferenceActivation = (rawReference: string, source: HTMLElement, target?: FileLocationTarget) => void
@@ -86,7 +90,10 @@ export function FileReferenceText({
     }
     output.push(
       <FileReferenceLink
-        className="message-file-reference"
+        className={[
+          'message-file-reference',
+          fileReferenceSpacingClassName(part)
+        ].filter(Boolean).join(' ')}
         rawReference={part.rawReference}
         key={`${part.start}:${part.rawReference}`}
         onActivate={onActivate}

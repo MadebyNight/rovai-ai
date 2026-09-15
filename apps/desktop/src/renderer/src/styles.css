@@ -1851,6 +1851,10 @@ html.file-preview-resizing .file-preview-pane { pointer-events: none; }
   vertical-align: baseline;
   cursor: pointer;
 }
+.safe-markdown .markdown-file-reference.has-adjacent-text-before,
+.message-file-reference.has-adjacent-text-before { margin-inline-start: 2px; }
+.safe-markdown .markdown-file-reference.has-adjacent-text-after,
+.message-file-reference.has-adjacent-text-after { margin-inline-end: 2px; }
 .safe-markdown .markdown-file-reference:hover,
 .safe-markdown .markdown-web-reference:hover,
 .message-file-reference:hover,
