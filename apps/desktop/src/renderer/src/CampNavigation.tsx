@@ -586,7 +586,7 @@ export function CampNavigation({
                   </AppDialogBody>
                   <AppDialogFooter>
                     <Dialog.Close asChild><button className="quiet-button" type="button" disabled={actionBusy}>取消</button></Dialog.Close>
-                    <button className="primary-button" type="submit" disabled={!renameTitle.trim() || actionBusy}>{actionBusy ? '保存中…' : '保存名称'}</button>
+                    <button className="primary-button conversation-primary-button" type="submit" disabled={!renameTitle.trim() || actionBusy}>{actionBusy ? '保存中…' : '保存名称'}</button>
                   </AppDialogFooter>
                 </form>
               </>

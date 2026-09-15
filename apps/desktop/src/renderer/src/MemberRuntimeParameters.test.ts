@@ -106,7 +106,7 @@ describe('member runtime parameters', () => {
     }))
 
     expect(markup).toContain('onboarding-model-parameter-form')
-    expect(markup).toContain('模型策略')
+    expect(markup).toContain('<span>模型</span>')
     expect(markup).not.toContain('文件系统访问')
     expect(markup).not.toContain('审批策略')
     expect(markup).not.toContain('danger-full-access')
@@ -252,7 +252,7 @@ describe('member runtime parameters', () => {
     }))
 
     expect(markup).toContain('模型、模型参数与 Agent 运行时原生权限。')
-    expect(markup).toContain('模型策略')
+    expect(markup).toContain('<span>模型</span>')
     expect(markup).not.toContain('审批模式')
     expect(markup).not.toContain('partial_managed')
   })
@@ -297,7 +297,7 @@ describe('member runtime parameters', () => {
       onChange: () => undefined
     }))
 
-    expect(markup).toContain('模型策略')
+    expect(markup).toContain('<span>模型</span>')
     expect(markup).toContain('Runtime Model')
     expect(markup).not.toContain('推理强度')
     expect(markup).toContain('自动允许全部工具')

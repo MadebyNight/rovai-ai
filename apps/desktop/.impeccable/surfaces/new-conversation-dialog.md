@@ -1,5 +1,5 @@
 ---
-version: 9
+version: 10
 slug: "new-conversation-dialog"
 primary_target: "apps/desktop/src/renderer/src/NewConversationDialog.tsx"
 related_targets:
@@ -25,6 +25,8 @@ teammate and Lead pickers use a second Radix sheet with a back button. Teammates
 68px rows and a fixed “完成” action. Closing a picker or pressing Escape preserves the parent
 form and restores the originating picker focus without reopening the name keyboard. Desktop
 retains its existing geometry and menus. Both presentations share one draft and submission path.
+Selected teammate checkboxes use the neutral `conversation-action` token and its paired contrast:
+black in Day and light in Night, matching the create action. Disabled candidates keep their muted treatment.
 
 Header: title “新对话” and an accessibly named close button. Keep the description available to
 assistive technology without repeating it visually. Use the paired dialog label and field tokens,

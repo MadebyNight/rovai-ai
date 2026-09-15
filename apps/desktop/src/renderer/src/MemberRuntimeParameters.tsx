@@ -571,7 +571,7 @@ function RuntimeModelPicker({
 
   return (
     <div className="field-label runtime-model-field">
-      <span>模型策略</span>
+      <span>模型</span>
       <RuntimeModelSearch
         open={open}
         onOpenChange={(nextOpen) => {
