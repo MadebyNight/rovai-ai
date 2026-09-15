@@ -5,9 +5,9 @@
   "platform": "macos-arm64",
   "date": "2026-09-15",
   "baseCommit": "19d1ce088b676e2f5cd39c4a29b8e2ac7f4697db",
-  "admission": "preview",
-  "firstClass": false,
-  "notice": "Sanitized research evidence; does not qualify a platform. Native-provider runs and final controlled MCP/Fleet/safety validation are separate worktree checkpoints; this is not a final-commit qualification digest.",
+  "admission": "qualified",
+  "firstClass": true,
+  "notice": "Sanitized research evidence supporting macOS arm64 qualification only. The adapter-scoped immutable artifact owns platform admission; native-provider and controlled fault-injection results remain separately identified.",
   "nativeProvider": {
     "basic": {
       "modelCount": 4,
@@ -402,12 +402,7 @@
       ]
     }
   },
-  "blocked": [
-    {
-      "case": "production idle eviction",
-      "reason": "Observing the real 30-minute Fleet TTL; concurrent Host, switch-back, Core crash and exact recovery have passed."
-    }
-  ],
+  "blocked": [],
   "privateLogSha256": {
     "core": "d8b172e9d81a91a890c22b62d498dcccc892dbfea540828fcadf164905be682d",
     "command3": "812c4e59c278964ccce0a083c8b848ddca1443a8622eefc7109a5e1fb5767692",
@@ -426,7 +421,8 @@
     "minimax-native3": "d61e72cff48c8f30c6b4bf832c99531662df21e4fd25df6f7ee4440eb5c59fce",
     "minimax-keyless2-error": "eb39c74127be9cb965888b65757e775b53bc9a56eb89a50729f4eff4472e5505",
     "minimax-usage2": "5ae2818a32cd574f5382a9e961585f36f845b2c5d2b14ea824f833c46d55e485",
-    "minimax-usage3": "ce21495ab72a54a20bdf0ee8c1f8b1098b73a083b5e8af6e1780513acd653e36"
+    "minimax-usage3": "ce21495ab72a54a20bdf0ee8c1f8b1098b73a083b5e8af6e1780513acd653e36",
+    "minimax-fleet4": "6a99d3b0a142cdbc66c26aaecc1a7e3d15ded2c914b8681dc402d5cda1f8a245"
   },
   "localVerification": {
     "rustLib": {
@@ -874,6 +870,37 @@
       },
       "exactColdResume": true,
       "noReplay": true
+    },
+    "fleet": {
+      "runtime": "deepseek-harness",
+      "version": "0.1.5-rc.2",
+      "checks": {
+        "concurrency": {
+          "passed": true,
+          "distinctHosts": true,
+          "distinctSessions": true,
+          "exactSwitchBack": true
+        },
+        "coreCrash": {
+          "passed": true,
+          "descendantsReaped": 2
+        },
+        "crashRecovery": {
+          "passed": true,
+          "exactSession": true
+        },
+        "idleEviction": {
+          "passed": true,
+          "elapsedMs": 1845641,
+          "descendantsReaped": 1,
+          "exactResume": true
+        },
+        "plannedShutdown": {
+          "passed": true,
+          "descendantsReaped": 1
+        }
+      }
     }
-  }
+  },
+  "qualificationArtifact": "qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json"
 }

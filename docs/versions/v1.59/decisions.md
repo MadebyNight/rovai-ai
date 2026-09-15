@@ -192,8 +192,9 @@ SSE MCP、MCP resources/prompts 与 Client FS/Terminal bridge 未在该 profile 
 只读拒绝调用；同名原生 Server 的全部 Tool 使用官方 scoped restriction 遮蔽。配置变化由共享 Fleet
 退役旧 idle Host 后恢复，避免旧进程的 Session 文件锁迫使正常续接退化成 fresh Session。
 
-本次在 macOS arm64 开放带 qualification_evidence_missing 的 preview，evidenceRevision=null；其他平台
-not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。代码接通、机器 Ready 与 First-Class 三种结论分开，
-未验证项见 [Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。没有提前晋升 qualified。
+本次先以 preview 执行真实验收；在 14 个核心能力轴闭合后，macOS arm64 取得 First-Class 并晋升 qualified，
+绑定 [DSH 专属归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json) 的不可变摘要。
+其他平台仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
+[Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。机器 Ready 仍是独立检查。
 Migration 155 将 v1.59/schema 104 原位升级到 105，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
 Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。

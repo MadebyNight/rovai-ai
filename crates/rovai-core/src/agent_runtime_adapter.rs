@@ -30,10 +30,10 @@ use crate::{
     mcp::McpServerDefinition,
     platform::HostPlatformKey,
     runtime_platform_admission::{
-        GROK_BUILD_MACOS_ARM64_EVIDENCE_REVISION, GROK_BUILD_MACOS_X64_EVIDENCE_REVISION,
-        GROK_BUILD_WINDOWS_X64_EVIDENCE_REVISION, MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION,
-        PI_MACOS_ARM64_EVIDENCE_REVISION, PI_MACOS_X64_EVIDENCE_REVISION,
-        PI_WINDOWS_X64_EVIDENCE_REVISION, RuntimePlatformAdmission,
+        DSH_MACOS_ARM64_EVIDENCE_REVISION, GROK_BUILD_MACOS_ARM64_EVIDENCE_REVISION,
+        GROK_BUILD_MACOS_X64_EVIDENCE_REVISION, GROK_BUILD_WINDOWS_X64_EVIDENCE_REVISION,
+        MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION, PI_MACOS_ARM64_EVIDENCE_REVISION,
+        PI_MACOS_X64_EVIDENCE_REVISION, PI_WINDOWS_X64_EVIDENCE_REVISION, RuntimePlatformAdmission,
         RuntimePlatformAdmissionReasonCode, WINDOWS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION,
         ZCODE_MACOS_ARM64_EVIDENCE_REVISION, ZCODE_WINDOWS_X64_EVIDENCE_REVISION,
     },
@@ -756,10 +756,10 @@ impl AgentRuntimeAdapterRegistry {
         };
         if kind == AdapterKind::DeepseekHarness {
             return if platform == HostPlatformKey::MacosArm64 {
-                RuntimePlatformAdmission::preview(
+                RuntimePlatformAdmission::qualified(
                     kind,
                     platform,
-                    RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing,
+                    DSH_MACOS_ARM64_EVIDENCE_REVISION,
                 )
             } else {
                 unqualified()

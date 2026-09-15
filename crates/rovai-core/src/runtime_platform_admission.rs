@@ -8,7 +8,7 @@ use crate::{agent_profile::AdapterKind, platform::HostPlatformKey};
 /// that evidence even when their Adapter identity exists in the Product Catalog.
 /// Every register revision receives a new digest.
 pub const MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION: &str =
-    "sha256:5d942eedea95745808a2444537844393f3bc7d7bd34deecb4e54afce9574a052";
+    "sha256:cf1a83f166e2823077a715d01a1cb84b8b881927e04e87f60ca23558a4983bc5";
 
 /// Immutable digest of the sanitized, adapter-scoped Windows x64 evidence.
 /// The source qualifies only the Runtime rows named in that evidence; shared
@@ -30,6 +30,9 @@ pub const PI_MACOS_X64_EVIDENCE_REVISION: &str =
     "sha256:5dc85386653d2170979d34b6c32bd3df72707b63deff394174775dd2eca64301";
 pub const PI_WINDOWS_X64_EVIDENCE_REVISION: &str =
     "sha256:2dec32c61673793e06c80e9c55fb9631473a418cb773b309f9e075216b3362b8";
+
+pub const DSH_MACOS_ARM64_EVIDENCE_REVISION: &str =
+    "sha256:1ffbc11ca99a2430212153bea02b6982ba03df9952ad299c66c99a2cf94c14c5";
 
 pub const ZCODE_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:4c4134d5f68f0633e02d3ade061725d5ff5cfc372d85c345fae10b71ad2badc2";
@@ -186,6 +189,13 @@ mod tests {
     #[test]
     fn platform_evidence_revisions_bind_their_frozen_source_bytes() {
         for (revision, bytes) in [
+            (
+                DSH_MACOS_ARM64_EVIDENCE_REVISION,
+                include_bytes!(
+                    "../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json"
+                )
+                .as_slice(),
+            ),
             (
                 ZCODE_MACOS_ARM64_EVIDENCE_REVISION,
                 include_bytes!("../../../qualification/runtime-platform/macos-arm64-zcode-v1.json")
@@ -459,12 +469,22 @@ mod tests {
             assert_eq!(
                 dsh.status(),
                 if platform == HostPlatformKey::MacosArm64 {
-                    RuntimePlatformAdmissionStatus::Preview
+                    RuntimePlatformAdmissionStatus::Qualified
                 } else {
                     RuntimePlatformAdmissionStatus::NotQualified
                 }
             );
-            assert!(dsh.evidence_revision().is_none());
+            assert_eq!(
+                dsh.evidence_revision(),
+                (platform == HostPlatformKey::MacosArm64)
+                    .then_some(DSH_MACOS_ARM64_EVIDENCE_REVISION)
+            );
+            assert_eq!(dsh.is_qualified(), platform == HostPlatformKey::MacosArm64);
+            assert_eq!(
+                dsh.reason_code(),
+                (platform != HostPlatformKey::MacosArm64)
+                    .then_some(RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing)
+            );
         }
         let grok_arm =
             registry.platform_admission(AdapterKind::GrokBuild, HostPlatformKey::MacosArm64);

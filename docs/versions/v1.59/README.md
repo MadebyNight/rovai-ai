@@ -59,9 +59,9 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机对话/执行双入口、更多菜单与紧凑间距已按最终稿接入；执行彩环最多显示 2 个头像及 +N，Run 文案由同一共享状态驱动；Server 更新 API 与共享更新页已接入，Desktop 托管只读版本说明；真实 Release 和各平台升级验收分别记录 |
 | Runtime Activity | 已更新 | DeepSeek Harness 复用共享 ACP Activity，按官方结构化结果补 shell 退出与文件路径；其他 Adapter 分类不变 |
-| Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升 |
+| Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升；DSH 的 macOS arm64 以独立验收摘要取得 qualified |
 | Documentation routing | 已更新 | 文档、架构与决定导航增加统一 Host 入口 |
-| Root README | 确认无需更新 | 当前尚未交付新增支持平台，不提前增加可用性声明 |
+| Root README | 已更新 | DeepSeek Harness 的 macOS arm64 验收闭合后增加正式支持行；未新增其他平台声明 |
 
 本轮产品模型已确认：单 Owner、可信自托管 Host。远程 Owner 与 Desktop 具有同一业务能力目标，
 可以直接选择 Host 有权访问的目录；不再要求本机目录预授权、一次性令牌展示或唯一手填访问地址。
@@ -78,7 +78,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 ## DeepSeek Harness Runtime 增量
 
 2026-09-15 用户授权在独立 worktree 按 Runtime checklist 接入 dsh 0.1.5-rc.2。新增 `deepseek-harness` 与
-`dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 preview，其他平台未取得资格。
+`dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 的 14 轴验收闭合并取得独立 digest-bound qualified，其他平台未取得资格。
 Migration 155 扩充闭集，当前 v1.59/schema 105；保留 schema 104 原位升级及此前受支持来源。
 Bootstrap 使用已有 managed delivery，模型可见内容、Context/Manifest 与版本轴不变。
-决策见 [V1.59-D08](decisions.md#v1-59-d08)，逐项执行状态与不足见 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。
+决策见 [V1.59-D08](decisions.md#v1-59-d08)，逐项执行证据与上游差异见 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。

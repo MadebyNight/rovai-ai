@@ -29,18 +29,20 @@ Kimi 或 Grok 的平台结论。
 Grok Build 在 adapter-scoped 证据分别覆盖的 macOS arm64、macOS x64 与 Windows x64 均为 `qualified`；
 三个宿主平台各自绑定独立 evidence digest，不互相外推。
 Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery/check/AgentRun；Settings 的 Agent Runtime
-目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 为 preview，macOS x64、Windows x64 与 Linux x64
+目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 为 qualified，macOS x64、Windows x64 与 Linux x64
 为 not_qualified。Machine Ready、实现与 First-Class 资格分别记录。
 
 ### 2026-09-15 DeepSeek Harness 0.1.5-rc.2 ACP
 
 固定官方 npm 发布包在隔离 DSH_HOME 与隔离 Core data/Skill/MCP 根验证；生产仍使用其原生配置。
 逐项 Host、Session、Bootstrap、Compaction、Skill、MCP、权限、工具、CLI 与 Monitoring 结果见
-[DSH Parity Matrix](research/deepseek-harness-runtime/acp-0.1.5-parity.md)。该表记录真实通过项和未观测项，
-不从共享代码或普通 handshake 推断 qualified。
+[DSH Parity Matrix](research/deepseek-harness-runtime/acp-0.1.5-parity.md)。14 个核心能力轴均已闭合，macOS arm64 绑定
+[DSH 专属资格证据](../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json) 的独立 SHA-256；
+不从共享代码或普通 handshake 推断其他平台资格。
 真实官方模型已通过普通/续轮、命令输出、文件工具、Skills、全部 23 项 Built-in CLI 与原生压缩验证。
 按用户授权使用 MiniMax-M3 原生 BYOK 补齐完整冷恢复/取消/无效 ID fallback、Missing-Send、
-MCP 生命周期与安全、压缩后的 Skill/MCP/审批组合；测试替代模型的证据仍单列。
+MCP 生命周期与安全、压缩后的 Skill/MCP/审批组合；生产 30 分钟空闲回收、Core crash 与正常 shutdown
+均无残留进程；自动摘要用量与普通调用按 Run 独立对账，cold resume 无重复归属。测试替代模型的证据仍单列。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 

@@ -1145,5 +1145,5 @@ Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 
 按 [V1.59-D08](decisions.md#v1-59-d08)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
 工作树分支 `rovai/dsh-acp-runtime`：共享 Host/Fleet、exact resume、managed system prompt、原生权限、模型目录、
 Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 155 保留现有 Runtime/Skill 行及 trigger，
-从 v1.59/schema 104 升至 105。现有模型上下文合同和 Root README 的正式支持声明不变。
-逐项验收与 platform preview 缺口只由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
+从 v1.59/schema 104 升至 105。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
+Root README 增加对应的正式支持行；其余平台保持 not_qualified。逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。

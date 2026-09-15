@@ -1,6 +1,6 @@
 ---
 document_type: research-evidence
-status: in-progress
+status: completed
 last_updated: 2026-09-15
 ---
 
@@ -43,7 +43,8 @@ last_updated: 2026-09-15
 
 ### 当前结论
 
-已实现官方 ACP 接入，macOS arm64 开放 **preview**，尚未达到 First-Class。其余平台保持 not_qualified。
+官方 ACP 接入已达到 **macOS arm64 First-Class / qualified**，14 个核心能力轴均已闭合。其余平台保持 not_qualified。
+平台资格绑定独立的 [DSH 验收归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json)，不沿用其他 Runtime 的摘要。
 2026-09-15 的固定发布包先使用官方 DeepSeek Flash 验证普通回复、warm continuation、文件/命令工具、
 Skills、全部 23 项 Built-in CLI 和原生压缩。官方余额耗尽后，按用户明确授权读取既有 MiniMax BYOK Key，
 仅传入隔离 DSH 验收进程，通过官方 llm-pi-ai/Anthropic-compatible 路由继续运行 MiniMax-M3。
@@ -51,13 +52,13 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 脱敏结果和私有原始日志摘要见 [机器可读证据](acp-0.1.5-evidence.json)。原始日志、数据库、原生 Home 和
 凭据留在仓库外；受控模型只产生确定的工具请求，工具执行、权限和 Session 仍由实际 DSH/Core 负责。
 
-下表的 `NotObserved` 表示该轴仍有清单要求未取得完整证据，不能由其中的通过项推导整轴已完成。
-Implementation 均指当前代码；缺失的行为验收不是上游 Unsupported。
+下表逐轴记录当前实现和真实验收；协议未暴露的入口单列为差异，由 [V1.59-D08](../../versions/v1.59/decisions.md#v1-59-d08)接受。
+受控 overflow 是错误注入后调用真实原生 summarizer/retry，不宣称自然耗尽 Provider 窗口。
 
-| 能力轴 | 当前证据 / 实现 | 已核对结果 | 未闭合项或明确差异 |
+| 能力轴 | 当前证据 / 实现 | 已核对结果 | 明确差异与范围 |
 | --- | --- | --- | --- |
 | Auth / Provider / Model | Verified / Implemented | 原生配置与 grouped catalog；官方 Flash 与 MiniMax-M3 BYOK 真实生成；标准 set_config_option | ACP profile 的默认模型独立于交互入口；缺 Key 归 authentication、不自动重试；Ready 不证明余额 |
-| Host / Fleet / LRU | NotObserved / Implemented | 真实同 Host warm；同进程 A→B→A；同成员并发独立 Host、exact 切回；Core crash 后进程树退出并 exact 恢复 | 正在观察生产 30 分钟 idle eviction；共享 Fleet 的 LRU/租约/退役回归已通过 |
+| Host / Fleet / LRU | Verified / Implemented | 真实同 Host warm；同进程 A→B→A；同成员并发独立 Host、exact 切回；Core crash 后进程树退出并 exact 恢复 | 生产 30 分钟 idle eviction 后进程退出、新 Host exact resume；正常 shutdown 无残留；共享 LRU/租约/退役回归通过 |
 | Native Session / Continuation | Verified / Implemented | warm、Core cold、压缩后新 Host exact resume；MCP 更新 exact；无效持久 ID 仅一条 continuity lost 并创建替代 Session | 不用 session/load；冷恢复没有历史 Action/Approval 重放 |
 | Bootstrap / Context | Verified / Implemented | 官方 systemPrompt section 每模型步按 exact Session 装配冻结字节；A/B/A、cold、compaction 保留正确身份；测试覆盖子代理不继承成员自身份、缺失/损坏绑定拒绝 | 相比 Grok 的 _meta.rules，使用受管官方 Cordis 插件；ContextManifest/Bootstrap 内容格式不变 |
 | Compaction continuity | Verified / Implemented | manual、压力、overflow、自动阈值、overflow retry、fail/cancel、压缩后 cold resume；每阶段重新加载随机 Skill marker、实际 MCP 调用与一条审批；压缩后 deny 零副作用 | overflow 使用一次受控错误触发真实 native retry；无 ACP /compact/lifecycle，采用持续 System 层 |
@@ -69,7 +70,7 @@ Implementation 均指当前代码；缺失的行为验收不是上游 Unsupporte
 | Built-in rovai CLI | Verified / Implemented | contract-v24 全 23 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
 | Usage / Cache / Cost | Verified / Implemented | 8 个真实 Run 的逐调用入库；新增真实 Core warm/自动压缩/cold 三轮对账与独立原生 observer 的五类 Token 桶完全一致，无重放计数；context gauge 分开 | cache write/cost 未报告，保持 NULL；MiniMax 未报告 reasoning 也保持 NULL；空闲 manual summary 不归入后续 Run |
 | Retry / Queue / Cancel / Cleanup | Verified / Implemented | 共享 accepted-input/queue/lease；余额/缺 Key 不盲重试；真实 pending-approval 取消及运行中 Shell 严格 cancelled；32 秒无晚到文件；Core crash、正常停止清理进程树 | Native compact fail/cancel 保持 generation；idle 回收的专属结果见 Host 轴 |
-| Ready / Version / Platform | NotObserved / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 105/closed catalogs/选择器接通 | macOS arm64 preview/evidenceRevision=null；其他平台无本次真实证据 |
+| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 105/closed catalogs/选择器接通 | macOS arm64 qualified，DSH 独立 digest；其他平台无本次真实证据，保持 not_qualified |
 
 ### 关键行为与其他 ACP Runtime 的区别
 
@@ -153,4 +154,4 @@ DSH 官方扩展点 Node owner 通过；Missing-Send protocol、Runtime picker �
 204 个测试文件、2072 项全部通过。早期并行负载下出现 evaluation-host/CoreClient 的时序超时，
 隔离复跑 25 项通过后降低测试进程并发完成全量；没有修改或禁用这些测试。上述本地门禁不能替代
 真实 Runtime 行为证据。
-本次不更新任何 DSH 平台资格 digest，不把既有 Runtime 的资格证据转用到 DSH。
+本次新增 DSH 专属 macOS arm64 平台资格 digest；安装、认证、模型与机器 Ready 仍按每台机器独立检查。

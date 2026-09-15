@@ -27,7 +27,7 @@ last_updated: 2026-09-15
 | Settings Runtime Preview Catalog | Renderer 内受审查的静态 presentation rows | Runtime 设置页中的名称、图标、`待支持`文案和 disabled 状态 | Contracts、Core request、数据库、成员选择、诊断、Probe、AgentRun 或支持数量 |
 
 Product Runtime Catalog 当前包含十六种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
-Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64 为 Runtime Platform preview，其他平台保持 not_qualified。
+Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64 以独立证据取得 qualified，其他平台保持 not_qualified。
 产品目录的机器可判数量、全量检查、诊断分母和
 普通执行仍只来自逐平台 Admission。Cursor 虽保留 closed identity 和历史 reader，但未完成产品资格前不进入
 Settings Runtime Preview Catalog；隐藏该 row 不删除持久 identity，也不改变未准入状态。普通成员 Runtime
@@ -505,7 +505,7 @@ Client FS 是否可执行。
 
 Preview row 必须同时满足：明确“待支持/尚未接入 AgentRun”、无可点击检查或配置入口、不会进入成员页
 或诊断，并在键盘和辅助技术中表现为不可执行状态。此处的 Settings Preview row 不等于可执行 Adapter 的
-Runtime Platform preview。当前没有可见 Settings Preview row；DeepSeek Harness 的可执行 preview 由 Core 平台矩阵投影，不保留 Renderer-only 占位入口。
+Runtime Platform preview。当前没有可见 Settings Preview row；DeepSeek Harness 的可执行准入由 Core 平台矩阵投影，不保留 Renderer-only 占位入口。
 
 未来接入时不得把 preview identity 写入 Migration 或原地解释为 Installation。实现必须删除 preview row，
 再按完整可执行准入增加新的 AdapterKind 和逐平台 Admission；用户从未保存过 preview 选择，因此没有 preview-to-product
@@ -576,4 +576,4 @@ compaction/summary 的逐调用 usage 通过私有 observer 按 Session/turn/seq
 compaction/start 的原生 compactionId/owner turn 取得归属，不收集正文；空闲手动压缩的 null turn 不归入
 后续 Run。input 为 uncached bucket，独立保留 cache read/write、
 output 与 reasoning。缺失字段与 cost 保持 unknown，不从占用或模型文本估算。逐轴差异、真实行为证据及
-尚未闭合项见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；preview 不构成 First-Class 声明。
+平台范围见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；macOS arm64 的 14 轴闭合证据支持 First-Class，其他平台不外推。
