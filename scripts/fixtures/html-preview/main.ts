@@ -5,6 +5,7 @@ import { FilePreviewFrameNavigation } from '../../../apps/desktop/src/main/file-
 import { FilePreviewService } from '../../../apps/desktop/src/main/file-preview/file-preview-service'
 import { navigationAcceptance } from './navigation'
 import { feedbackAcceptance } from './feedback'
+import { lifecycleAcceptance } from './lifecycle'
 
 const [renderer, userData, root, preload] = process.argv.slice(2)
 app.setPath('userData', userData)
@@ -37,6 +38,11 @@ app.whenReady().then(async () => {
   for (let n = 0; n < 50 && !await run('Boolean(window.previewAcceptance)'); n++) await new Promise(resolve => setTimeout(resolve, 40))
   if (process.env.ROVAI_HTML_PREVIEW_SCENARIO === 'navigation') {
     const cases = await navigationAcceptance(window, userData)
+    console.log(JSON.stringify({ htmlPreviewAcceptance: true, ok: cases.every(result => result.ok), cases, errors }))
+    await service.closeAll(); window.destroy(); app.exit(cases.every(result => result.ok) ? 0 : 1); return
+  }
+  if (process.env.ROVAI_HTML_PREVIEW_SCENARIO === 'lifecycle') {
+    const cases = await lifecycleAcceptance(window, userData)
     console.log(JSON.stringify({ htmlPreviewAcceptance: true, ok: cases.every(result => result.ok), cases, errors }))
     await service.closeAll(); window.destroy(); app.exit(cases.every(result => result.ok) ? 0 : 1); return
   }

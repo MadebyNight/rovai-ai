@@ -16,7 +16,8 @@ export interface HtmlPreviewSiteOptions {
   openResource(path: string, signal: AbortSignal): Promise<PreviewResource>
   /** Navigation-only fallback; absent means an ordinary static site. */
   spaEntryPath?: string
-  idleTimeoutMs?: number
+  /** null delegates lifetime to the owner; undefined keeps the standalone default. */
+  idleTimeoutMs?: number | null
 }
 
 const COOKIE = '__Host-rovai-preview'
@@ -86,6 +87,8 @@ export class HtmlPreviewSite {
 
   #touch(): void {
     if (this.#timer) clearTimeout(this.#timer)
+    this.#timer = null
+    if (this.closed || this.#options.idleTimeoutMs === null) return
     this.#timer = setTimeout(() => { void this.close() }, this.#options.idleTimeoutMs ?? 30 * 60 * 1000)
     this.#timer.unref()
   }

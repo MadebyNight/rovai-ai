@@ -202,6 +202,23 @@ describe('FilePreviewService', () => {
     expect(service.ownsHtmlPreviewOrigin(1,prepared.value.entryUrl)).toBe(false)
   })
 
+  it('keeps a retained HTML site alive without requests across the idle deadline', async () => {
+    const { root, service } = await fixture()
+    await writeFile(join(root, 'index.html'), '<h1>retained</h1>')
+    const opened = await service.open(1, request('index.html'))
+    if (!opened.ok || opened.value.kind !== 'file_preview') throw new Error('expected file')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const prepared = await service.prepareHtmlSite(1, { handleId: opened.value.file.handleId, expectedGeneration: opened.value.file.contentGeneration })
+      if (!prepared.ok) throw new Error('expected site')
+      await service.bindCamp(1, 'camp-2')
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000)
+      expect(service.ownsHtmlPreviewOrigin(1, prepared.value.entryUrl)).toBe(true)
+      await service.release(1, { handleId: opened.value.file.handleId })
+      expect(service.ownsHtmlPreviewOrigin(1, prepared.value.entryUrl)).toBe(false)
+    } finally { vi.useRealTimers() }
+  })
+
   it('prepares HTML above the source budget without relaxing source reads or document protection', async () => {
     const { root, service } = await fixture()
     const html = '<h1>大文件网页</h1>' + ' '.repeat(4 * 1024 * 1024)
