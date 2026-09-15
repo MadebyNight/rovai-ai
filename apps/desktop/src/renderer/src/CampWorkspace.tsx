@@ -8514,11 +8514,12 @@ function RunExecutionContent({
         item.kind === 'diagnostic' ? item.diagnostic : latest, null)
     : null
   const completeEvidence = selectCompleteExecutionEvidence(effectiveTruncatedEvidence)
+  const initialFeedback = executionInitialFeedback(run.status, processItems, Boolean(finalBody))
   const feedback = run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
     : run.failure?.code === 'runtime_network_interrupted' ? '正在恢复连接'
       : activeRetryDiagnostic
         ? `等待 Claude Code 自动重试（${activeRetryDiagnostic.attempt}/${activeRetryDiagnostic.maxAttempts}）`
-        : executionInitialFeedback(run.status, processItems, Boolean(finalBody))
+        : initialFeedback
   const sequenceByKey = useMemo(() => new Map<string, number>((displayedEvidence ?? []).flatMap(item => [
     [`narration:${item.id}`, item.sequence] as const,
     [`tool:${item.canonical?.operationId ?? item.id}`, item.sequence] as const
@@ -8723,7 +8724,7 @@ function RunExecutionContent({
         && liveTailToolGroupKey === null
         && feedback
         && (
-          <div className="process-action current" role="status">
+          <div className={`process-action current${feedback === initialFeedback ? ' is-initial-feedback' : ''}`} role="status">
             <span className="process-spinner" aria-hidden="true" />
             <RunningText text={feedback} />
           </div>

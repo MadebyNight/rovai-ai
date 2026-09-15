@@ -1,5 +1,5 @@
 ---
-version: 13
+version: 14
 slug: "member-workspace"
 primary_target: "apps/desktop/src/renderer/src/MemberManagement.tsx"
 related_targets:
@@ -174,8 +174,8 @@ Creation includes the selected image in the existing create command. Existing id
 successive existing commands with receipt versions; partial success explicitly distinguishes committed text
 from an unsaved image, retains the remaining draft and never claims an atomic transaction.
 
-Keep Runtime/model/permission dropdown geometry, colors, borders, menu, selection, options and behavior unchanged; only remove extra focus outlines/halos. The Runtime picker shows the existing product icons in its trigger and keyboard-accessible menu. Model
-strategy's Runtime-default caption is “默认”; the underlying `runtime_default` mode and Runtime-native fields,
+Keep Runtime/model/permission dropdown geometry, colors, borders, menu, selection, options and behavior unchanged; only remove extra focus outlines/halos. The Runtime picker shows the existing product icons in its trigger and keyboard-accessible menu. The model
+field is labeled “模型” and its Runtime-default caption is “默认”; the underlying `runtime_default` mode and Runtime-native fields,
 raw choices, defaults, platform admission, model discovery and recovery remain unchanged. Do not introduce
 an additional Runtime parameters heading in this continuous form.
 

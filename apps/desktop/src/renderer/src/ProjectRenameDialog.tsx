@@ -68,7 +68,7 @@ export function ProjectRenameDialog({ project, onClose, onSave }: {
               }}>使用目录名</button>
             : undefined}>
             <Dialog.Close asChild><button className="quiet-button" type="button" disabled={busy}>取消</button></Dialog.Close>
-            <button className="primary-button" type="submit" disabled={Boolean(validationError) || busy}>{busy ? '保存中…' : '保存名称'}</button>
+            <button className="primary-button conversation-primary-button" type="submit" disabled={Boolean(validationError) || busy}>{busy ? '保存中…' : '保存名称'}</button>
           </AppDialogFooter>
         </form>
       </AppDialogContent>
