@@ -6,14 +6,14 @@ import { ResourceReferenceIcon } from './FilePreviewTabIcon'
 import { remarkRepairCjkUrlTail } from './remark-repair-cjk-url-tail'
 import { parseFileReference } from '../../file-preview-reference'
 import { MarkdownCodeBlock } from './MarkdownCodeBlock'
+import {
+  fileReferenceSpacingClassName,
+  visitMarkdownFileReferences,
+  type MarkdownNode
+} from './safe-markdown-model'
 import type { FilePreviewBinaryContent, FilePreviewOperationResult, ResolvedTheme } from '@contracts'
 
-type MarkdownTreeNode = {
-  type?: string
-  children?: MarkdownTreeNode[]
-  url?: string
-  data?: { hProperties?: Record<string, string> }
-}
+type MarkdownTreeNode = MarkdownNode
 
 const LeadingMarkdownContentContext = createContext<ReactNode>(null)
 
@@ -77,21 +77,34 @@ function scrollToMarkdownHeading(root: HTMLElement, target: string): boolean {
   return Boolean(heading)
 }
 
-function remarkFileLinks(): (tree: MarkdownTreeNode) => void {
+function fileLinkTransformer(addInlineSpacing: boolean): (tree: MarkdownTreeNode) => void {
   return (tree) => {
-    const visit = (node: MarkdownTreeNode): void => {
-      if (!Array.isArray(node.children)) return
-      for (const child of node.children) {
-        if (child.type === 'link' && typeof child.url === 'string' && parseFileReference(child.url)) {
-          child.url = `${FILE_REFERENCE_FRAGMENT}${encodeURIComponent(child.url)}`
-          continue
+    visitMarkdownFileReferences(tree, (node, spacing) => {
+      if (typeof node.url !== 'string') return
+      node.url = `${FILE_REFERENCE_FRAGMENT}${encodeURIComponent(node.url)}`
+      if (addInlineSpacing) {
+        const className = fileReferenceSpacingClassName(spacing)
+        if (className) {
+          const existingClassName = node.data?.hProperties?.className
+          node.data = {
+            ...node.data,
+            hProperties: {
+              ...node.data?.hProperties,
+              className: [existingClassName, className].filter(Boolean).join(' ')
+            }
+          }
         }
-        if (!['link', 'inlineCode', 'code', 'html', 'definition', 'image', 'imageReference', 'linkReference']
-          .includes(child.type ?? '')) visit(child)
       }
-    }
-    visit(tree)
+    })
   }
+}
+
+function remarkFileLinks(): (tree: MarkdownTreeNode) => void {
+  return fileLinkTransformer(false)
+}
+
+function remarkMessageFileLinks(): (tree: MarkdownTreeNode) => void {
+  return fileLinkTransformer(true)
 }
 
 export function SafeMarkdown({
@@ -165,7 +178,7 @@ export function SafeMarkdown({
         remarkPlugins={[
           [remarkGfm, { singleTilde: false }],
           remarkRepairCjkUrlTail,
-          ...(fileReferencesEnabled ? [remarkFileLinks] : []),
+          ...(fileReferencesEnabled ? [mode === 'message' ? remarkMessageFileLinks : remarkFileLinks] : []),
           [remarkLeadingContent, { enabled: hasLeadingContent, inline: inlineLeadingContent }]
         ]}
         skipHtml
@@ -197,7 +210,7 @@ export function SafeMarkdown({
               return <div className="markdown-table-scroll"><table>{tableChildren}</table></div>
             }
           } : {}),
-          a({ href, children: linkChildren }) {
+          a({ href, children: linkChildren, className: linkClassName }) {
             if (href?.startsWith(FILE_REFERENCE_FRAGMENT) && fileReferencesEnabled) {
               let rawReference: string
               try {
@@ -208,7 +221,7 @@ export function SafeMarkdown({
               if (!parseFileReference(rawReference)) return <code className="markdown-inert-link">{linkChildren}</code>
               return (
                 <FileReferenceLink
-                  className="markdown-file-reference"
+                  className={['markdown-file-reference', linkClassName].filter(Boolean).join(' ')}
                   rawReference={rawReference}
                   onActivate={(reference, source, target) => callbacks.current.onFileReference?.(reference, source, target)}
                 >
