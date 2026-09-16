@@ -11,6 +11,19 @@ import {
 import { prepareIsolatedPiAgentDir } from './lib/pi-smoke-config.mjs'
 
 const root = resolve(import.meta.dirname, '..')
+const builtinTransportSource = await readFile(
+  join(root, 'crates', 'rovai-core', 'src', 'builtin_tool_transport.rs'),
+  'utf8'
+)
+const builtinCliContractVersion = builtinTransportSource.match(
+  /BUILTIN_TOOL_CONTRACT_VERSION: u32 = (\d+);/u
+)?.[1]
+const builtinCliCapability = builtinTransportSource.match(
+  /BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "([^"]+)";/u
+)?.[1]
+if (!builtinCliContractVersion || !builtinCliCapability) {
+  throw new Error('Current Built-in CLI transport constants were not found')
+}
 const coreExecutable = resolve(
   process.env.ROVAI_BUILTIN_CLI_CORE_EXECUTABLE ?? join(root, 'target', 'debug', 'rovai-core')
 )
@@ -487,9 +500,9 @@ function assertBuiltinCliCapability(label, installation, allowDeferred = false) 
     return
   }
   if (snapshot?.probeStatus !== 'ready'
-      || !snapshot.capabilities.includes('builtin_cli.transport.v24')
+      || !snapshot.capabilities.includes(builtinCliCapability)
       || !snapshot.models.length) {
-    throw new Error(`${label} is not ready for Built-in CLI v23: ${JSON.stringify(snapshot)}`)
+    throw new Error(`${label} is not ready for Built-in CLI v${builtinCliContractVersion}: ${JSON.stringify(snapshot)}`)
   }
 }
 
@@ -1084,7 +1097,7 @@ function verificationScript(input) {
     action: 'add',
     scope: 'companion',
     kind: 'preference',
-    body: `Remember that ${input.adapterKind} completed Built-in CLI transport v23 qualification.`,
+    body: `Remember that ${input.adapterKind} completed Built-in CLI transport v${builtinCliContractVersion} qualification.`,
     retrievalKeys: [`cli-${input.slug.slice(0, 18)}`]
   })
   const hearth = JSON.stringify({
