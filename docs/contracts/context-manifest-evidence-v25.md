@@ -18,7 +18,8 @@ Agent Output Projection 3 and receipt 1 remain unchanged.
 
 ## Mission input
 
-Mission facts contain only `{missionId,title,status}`. Description is read through `rovai mission get`.
+Mission facts contain `{missionId,title,status}` plus the optional fixed `updateNotice` defined by
+[Run Facts v4](run-facts-v4.md). Description is read through `rovai mission get`.
 Only an explicit start proven by the persisted commission record projects
 `{"kind":"mission_start","source":{"type":"user"},"missionId":"…"}` as CURRENT_INPUT. The internal
 input evidence binds Mission, Camp, command and commission. User-authored lookalike JSON remains ordinary
@@ -35,6 +36,12 @@ Rovai Mission Contract
 
 Ordinary Camp and Single Chat Charter text is unchanged. Mission guidance does not grant private chats
 Mission tools, require a get every Turn or impose a lead-only update policy.
+
+Core keeps the definition revision and each Agent conversation's baseline/last-successful-read watermark as
+internal selection state. First entry never emits a notice. A later definition change emits the fixed notice
+until a successful `mission get`; no version or changed-field list enters model bytes or the Agent tool API.
+The baseline is committed atomically with the first persisted context/preflight so a failed selection cannot
+silently acknowledge Mission details.
 
 ## Workspace evidence
 
@@ -58,3 +65,5 @@ published attachment-path schema or the previously installed Mission preview. Fr
 published 24/24/5 and Mission-preview 24/24/6 inputs remain readable only with their original evidence;
 they are never relabeled or reformatted. Model schema golden:
 `packages/contracts/fixtures/agent-run-context-v25.json`.
+Migration 158/schema 108 adds only the internal Mission definition-read state and does not rewrite any frozen
+manifest or change the Run Facts schema number.

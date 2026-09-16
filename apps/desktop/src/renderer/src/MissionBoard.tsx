@@ -19,7 +19,7 @@ type MissionActions = {
   busyId: string | null
 }
 const Actions = createContext<MissionActions | null>(null)
-function useMissionActions(): MissionActions {
+export function useMissionActions(): MissionActions {
   const actions = useContext(Actions)
   if (!actions) throw new Error('Mission interaction owner is unavailable')
   return actions
@@ -53,8 +53,15 @@ export function MissionInteractionProvider({ missions, agents, onChanged, onDele
     setPosition({ id: m.missionId, kind, x: kind === 'menu' && event.type === 'contextmenu' ? event.clientX : rect.left, y: kind === 'menu' && event.type === 'contextmenu' ? event.clientY : rect.bottom, origin: event.currentTarget })
   }
   async function change(m: MissionRecord, kind: 'status' | 'update', fields: object) {
-    await missionCommand(client, kind === 'status' ? 'missions.status' : 'missions.update', { missionId: m.missionId, ...fields })
-    await onChanged(m.campId)
+    try {
+      await missionCommand(client, kind === 'status' ? 'missions.status' : 'missions.update', { missionId: m.missionId, ...fields })
+      await onChanged(m.campId)
+    } catch (error) {
+      if (error instanceof MissionCommandRejected && error.result.code === 'mission.details_version_conflict') {
+        try { await onChanged(m.campId) } catch { /* The conflict payload still carries the authoritative fields. */ }
+      }
+      throw error
+    }
   }
   const report = (promise: Promise<unknown>) => { void promise.catch(error => onError(missionError(error))) }
   async function start(m: MissionRecord) {
@@ -71,6 +78,7 @@ export function MissionInteractionProvider({ missions, agents, onChanged, onDele
   }
   return <MissionPeopleProvider agents={agents}><Actions.Provider value={actions}>{children}
     <MissionContextMenu key={`${position?.id}:${position?.x}:${position?.y}`} m={selected} position={position?.kind === 'menu' ? position : null} catalog={catalog} onClose={() => setPosition(null)}
+      onEdit={() => { if (selected) setEditing(selected); setPosition(null) }}
       onStatus={status => { if (selected) actions.status(selected, status) }}
       onLead={id => { if (selected) report((async () => {
         const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: selected.campId })
@@ -91,19 +99,38 @@ export function MissionInteractionProvider({ missions, agents, onChanged, onDele
   </Actions.Provider></MissionPeopleProvider>
 }
 
-function MissionEdit({ mission, onSave, onClose }: { mission: MissionRecord; onSave(patch: {title?: string; description?: string}): Promise<void>; onClose(): void }) {
+function MissionEdit({ mission, onSave, onClose }: { mission: MissionRecord; onSave(patch: {title?: string; description?: string; expectedDetailsVersion: number}): Promise<void>; onClose(): void }) {
+  const [baseline, setBaseline] = useState({ title: mission.title, description: mission.description, version: mission.detailsVersion })
   const [title, setTitle] = useState(mission.title), [description, setDescription] = useState(mission.description), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const id = useId()
+  const normalizedTitle = title.trim()
+  const changed = normalizedTitle !== baseline.title || description !== baseline.description
+  const titleError = !normalizedTitle ? '请填写使命标题。' : [...normalizedTitle].length > 200 ? '使命标题最多 200 个字符。' : ''
+  const descriptionError = [...description].length > 12000 ? '使命描述最多 12,000 个字符。' : ''
+  const invalid = !!titleError || !!descriptionError
   async function save() {
-    const patch = { ...(title.trim() !== mission.title ? { title: title.trim() } : {}), ...(description !== mission.description ? { description } : {}) }
-    if (!Object.keys(patch).length) { onClose(); return }
+    if (!changed || invalid) return
+    const patch = { ...(normalizedTitle !== baseline.title ? { title: normalizedTitle } : {}), ...(description !== baseline.description ? { description } : {}), expectedDetailsVersion: baseline.version }
     setBusy(true); setError('')
-    try { await onSave(patch); onClose() } catch (error) { setError(missionError(error)) } finally { setBusy(false) }
+    try { await onSave(patch); onClose() } catch (error) {
+      if (error instanceof MissionCommandRejected && error.result.code === 'mission.details_version_conflict') {
+        const latestTitle = error.result.payload.currentTitle, latestDescription = error.result.payload.currentDescription, latestVersion = error.result.payload.currentDetailsVersion
+        if (typeof latestTitle === 'string' && typeof latestDescription === 'string' && typeof latestVersion === 'number') {
+          setBaseline({ title: latestTitle, description: latestDescription, version: latestVersion })
+          setTitle(latestTitle); setDescription(latestDescription)
+          setError('使命刚刚被修改，已载入最新内容。请重新编辑后保存。')
+        } else setError(missionError(error))
+      } else setError(missionError(error))
+    } finally { setBusy(false) }
   }
-  return <CompactDialog title="编辑使命" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" disabled={busy} onClick={onClose}>取消</button><button className="compact-primary" form={id} disabled={busy || !title.trim() || [...title.trim()].length > 200 || [...description].length > 12000}>保存</button></>}>
+  return <CompactDialog title="编辑使命" className="mission-edit-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" disabled={busy} onClick={onClose}>取消</button><button className="compact-primary" form={id} disabled={busy || invalid || !changed}>{busy ? '正在保存…' : '保存'}</button></>}>
     <form id={id} onSubmit={event => { event.preventDefault(); void save() }} className="mission-definition-fields">
-      <input aria-label="使命标题" placeholder="使命标题" value={title} onChange={e => setTitle(e.target.value)} disabled={busy} autoFocus/>
-      <textarea aria-label="使命描述" placeholder="描述希望完成的使命…" value={description} onChange={e => setDescription(e.target.value)} disabled={busy} rows={6}/>
+      <label htmlFor={`${id}-title`}>使命标题</label>
+      <input id={`${id}-title`} placeholder="使命标题" value={title} onChange={e => setTitle(e.target.value)} disabled={busy} aria-invalid={!!titleError} aria-describedby={titleError ? `${id}-title-error` : undefined} autoFocus/>
+      {titleError && <p id={`${id}-title-error`} role="alert" className="compact-inline-error">{titleError}</p>}
+      <label htmlFor={`${id}-description`}>使命描述 <span>可选</span></label>
+      <textarea id={`${id}-description`} placeholder="描述希望完成的使命…" value={description} onChange={e => setDescription(e.target.value)} disabled={busy} aria-invalid={!!descriptionError} aria-describedby={descriptionError ? `${id}-description-error` : undefined} rows={6}/>
+      {descriptionError && <p id={`${id}-description-error`} role="alert" className="compact-inline-error">{descriptionError}</p>}
       {error && <p role="alert" className="compact-inline-error">{error}</p>}
     </form>
   </CompactDialog>

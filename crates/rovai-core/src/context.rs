@@ -664,6 +664,8 @@ impl ContextService {
         )?;
         let a2a_count = count_a2a_runs(database, &snapshot.camp_turn_id)?;
         let collaboration_state_section = collaboration_changed.then_some(collaboration_state);
+        let mission_details_baseline =
+            mission_details_baseline(database.context_connection(), &snapshot)?;
         let run_facts =
             build_run_facts(database, &snapshot, requires_new_native_session, a2a_count)?;
         let rendered_run_facts = render_run_facts(&run_facts)?;
@@ -914,6 +916,11 @@ impl ContextService {
             .map(|omitted| omitted.sequence_end);
         let transaction = database.connection_mut().transaction()?;
         revalidate_snapshot_for_manifest(&transaction, &snapshot, expected_binding_generation)?;
+        persist_mission_details_baseline(
+            &transaction,
+            &snapshot,
+            mission_details_baseline.as_ref(),
+        )?;
         let revalidated_skill_resolution = resolve_current_input_skills(
             &transaction,
             &snapshot.skill_selection_snapshot,
@@ -1216,6 +1223,12 @@ impl ContextService {
             || snapshot.native_collaboration_state_digest.as_deref()
                 != Some(collaboration_state_digest.as_str()))
         .then_some(collaboration_state);
+        let mission_details_baseline = mission_details_baseline(transaction, &snapshot)?;
+        persist_mission_details_baseline(
+            transaction,
+            &snapshot,
+            mission_details_baseline.as_ref(),
+        )?;
         let run_facts = build_run_facts(
             transaction,
             &snapshot,
@@ -5768,25 +5781,86 @@ fn mission_facts(
     }
     let row = connection
         .query_row(
-            "SELECT id,title,status FROM mission WHERE camp_id=?1",
-            [&snapshot.camp_id],
+            "SELECT m.id,m.title,m.status,
+                    CASE WHEN r.conversation_id IS NOT NULL
+                              AND m.details_version > COALESCE(r.last_read_details_version,r.baseline_details_version)
+                         THEN 1 ELSE 0 END
+             FROM mission m
+             LEFT JOIN mission_details_read r
+               ON r.conversation_id=?2 AND r.mission_id=m.id
+             WHERE m.camp_id=?1",
+            params![snapshot.camp_id, snapshot.conversation_id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
                 ))
             },
         )
         .optional()?;
-    row.map(|(mission_id, title, status)| {
+    row.map(|(mission_id, title, status, changed)| {
         Ok(crate::mission::MissionFacts {
             mission_id,
             title,
             status: serde_json::from_value(json!(status))?,
+            update_notice: changed.then(|| {
+                "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT.".to_string()
+            }),
         })
     })
     .transpose()
+}
+
+#[derive(Debug)]
+struct MissionDetailsBaseline {
+    mission_id: String,
+    details_version: i64,
+}
+
+fn mission_details_baseline(
+    connection: &Connection,
+    snapshot: &RunSnapshot,
+) -> Result<Option<MissionDetailsBaseline>> {
+    if snapshot.invocation_kind == "single_chat" {
+        return Ok(None);
+    }
+    connection
+        .query_row(
+            "SELECT id,details_version FROM mission WHERE camp_id=?1",
+            [&snapshot.camp_id],
+            |row| {
+                Ok(MissionDetailsBaseline {
+                    mission_id: row.get(0)?,
+                    details_version: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn persist_mission_details_baseline(
+    connection: &Connection,
+    snapshot: &RunSnapshot,
+    baseline: Option<&MissionDetailsBaseline>,
+) -> Result<()> {
+    let Some(baseline) = baseline else {
+        return Ok(());
+    };
+    connection.execute(
+        "INSERT OR IGNORE INTO mission_details_read(
+            conversation_id,mission_id,baseline_details_version,last_read_details_version,updated_at
+         ) VALUES(?1,?2,?3,NULL,?4)",
+        params![
+            snapshot.conversation_id,
+            baseline.mission_id,
+            baseline.details_version,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
 }
 #[derive(Default)]
 struct PreparedWorkspaceFact {
@@ -11762,7 +11836,7 @@ mod slow_tests {
     #[test]
     fn accepted_input_advances_only_current_binding_and_restart_blocks_redelivery() {
         let mut fixture = fixture();
-        fixture.database.connection().execute("INSERT INTO mission(id,camp_id,title,description,status,source_branch,created_at,updated_at) VALUES('rvm_context',?1,'Shared Mission','full description stays out of facts','in_progress','HEAD','now','now')",[&fixture.camp_id]).unwrap();
+        fixture.database.connection().execute("INSERT INTO mission(id,camp_id,title,description,status,details_version,created_at,updated_at) VALUES('rvm_context',?1,'Shared Mission','full description stays out of facts','in_progress',1,'now','now')",[&fixture.camp_id]).unwrap();
         let snapshot =
             load_run_snapshot(&fixture.database, &fixture.run_id, fixture.execution_epoch)
                 .unwrap()
@@ -11938,6 +12012,37 @@ mod slow_tests {
                 .unwrap()
                 .len(),
             3
+        );
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE mission SET title='Changed Mission',details_version=2 WHERE id='rvm_context'",
+                [],
+            )
+            .unwrap();
+        let changed = mission_facts(fixture.database.connection(), &snapshot)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            changed.update_notice.as_deref(),
+            Some(
+                "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT."
+            )
+        );
+        crate::mission::mark_details_read(
+            fixture.database.connection(),
+            "rvm_context",
+            &fixture.run_id,
+            2,
+        )
+        .unwrap();
+        assert!(
+            mission_facts(fixture.database.connection(), &snapshot)
+                .unwrap()
+                .unwrap()
+                .update_notice
+                .is_none()
         );
         let conversation_after_accept: (i64, String, i64) = fixture
             .database

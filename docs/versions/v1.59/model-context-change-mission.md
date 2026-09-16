@@ -2,18 +2,18 @@
 document_type: model-context-change
 version: v1.59
 change_id: mission
-revision: 3
+revision: 4
 confirmation_status: confirmed
 confirmed_by: local_user
-confirmed_at: 2026-09-15T09:31:03Z
-confirmed_revision: 3
+confirmed_at: 2026-09-16T07:09:29Z
+confirmed_revision: 4
 authority: confirmed-model-input-change-statement
 implementation_baseline: b2df4d85cdb8c6b8a9346290b16311b94fa4b7ed
 implementation_status: in_progress
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
-# 使命：模型输入增量与实施边界（revision 3）
+# 使命：模型输入增量与实施边界（revision 4）
 
 本说明把用户提供的《使命板方案说明 v2》《使命 Camp：Bootstrap、CLI Help 与 cli-operations》
 以及后续持久 Worktree／累计 Diff 要求落实为字段级方案。桌面交互采用已确认 v7，补充整卡点击和
@@ -27,6 +27,12 @@ Bootstrap 两条规则已明确通过；使命事实缩至三个字段；开始�
 后续消息 `8d93ff85-6de9-45f8-9c6c-8c5fc4b82831` 已明确 WORKSPACE **不新增 Agent 管控**，
 且 Git Diff、branch 只对 Git 项目有效。非 Git 使用原目录，本期不建立内容基线或提供文件 Diff；
 交付页保留队员发送的文件。以下是整合后已确认的完整说明。
+
+revision 4 纳入开发者 2026-09-16 消息 `4e5e0e3a-f6c4-4177-9f5c-37363adab579`
+及其两份完整附件：创建不再接收起始版本，首次 preparing 现场固定当前本地分支与 HEAD；Renderer
+标题／描述编辑使用内部乐观版本；Agent 接口继续无版本。定义在某 Agent 会话首次进入后发生变化时，
+下一轮 `RUN_FACTS.mission` 加入固定 `updateNotice`，直到该会话成功 `mission get`。CURRENT_INPUT 不变。
+该消息直接要求“修改三个功能”，构成 revision 4 的字段级确认与实施授权。
 
 ## 变更前
 
@@ -95,6 +101,7 @@ type MissionFacts = {
   missionId: string
   title: string
   status: 'needs_you' | 'not_started' | 'in_progress' | 'completed'
+  updateNotice?: 'Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT.'
 }
 // RUN_FACTS.mission?: MissionFacts
 
@@ -105,12 +112,18 @@ type RunFactsAfter = Omit<RunFactsBefore, 'schemaVersion' | 'campResources'> & {
 }
 ```
 
-每次新输入准备时读取这三个当前事实。普通 Camp 和 Single Chat 省略 `mission`，不输出 null。
+每次新输入准备时读取三个当前事实，并按下述读取水位选择可选固定提示。普通 Camp 和 Single Chat 省略 `mission`，不输出 null。
 此对象没有 description、业务版本、sourceMessageId、标签或工作区；需要完整定义时用 `mission get`。
 `attachmentOutputRoot` 采用已确认的附件原路径 revision 2：它只是 Agent 默认输出位置，不是权限或附件枚举根。
 既有其他 RUN_FACTS 平台字段保持原职责，不向 Mission 对象增加 schemaVersion／version／expectedVersion。
 输出保持既有字段顺序，使命字段位于最后。外层平台 schemaVersion 只标识通用 RUN_FACTS 合同，不参与使命编辑。
 Mission 状态变化不是工作区准备的条件，也不是自动派发或停止信号。
+
+`details_version` 是 Core 内部定义版本：创建为 1，每次标题／描述的有效原子修改递增一次，no-op 不递增；
+状态、标签、成员、队长和工作区变化不递增。每个 Agent conversation 在首次成功持久化 Mission 输入时记录
+基线版本，首次进入不发提示。之后当前版本高于该 conversation 最后成功 `mission get`（或基线）时，加入上面
+逐字固定的 `updateNotice`；提示跨 Run 保留，成功 get 后移除。提示不含版本号、编辑者或变更字段，且不改变
+CURRENT_INPUT。新 conversation 独立执行首次进入流程。内部版本／读取水位不进入任何 Agent CLI 输入、输出或错误。
 
 ### WORKSPACE：已经解析出的运行环境
 
@@ -209,14 +222,16 @@ Skill、接收者和 Pending 路径均保持，不加 mission_start kind，不�
 用户开始／消息触发 Run → 入队
 调度获得执行机会 → Core 进入 preparing
   已有关联 → 验证并复用
-  尚无关联 → 解析起始版本、准备工作区、保存实际关联
+  尚无关联 → 读取当前本地分支与 HEAD、准备工作区、保存实际关联
 准备成功 → 冻结本 Run 的 cwd → 启动 Agent 并投递输入
 ```
 
 preparing 是 Core 的执行准备阶段，独立于 Mission 四种业务状态；不能用设置 `in_progress` 代替调度。
 保存、编辑、读取、状态更新、预检、等待依赖或排队均不创建 worktree／分支。
 
-Git 首次准备把选定起始版本解析为 commit，固定为 `base_sha`；从该 commit 创建，不复制源目录未提交文件。
+Git 首次准备读取 Mission 工作目录当时的本地分支与 `HEAD` commit：分支保存为可空 `base_branch`
+（detached HEAD 为 null），commit 固定为 `base_sha`。创建命令／恢复草稿没有起始版本字段，保存 Mission
+不读取 Git；工作树从该 commit 以禁用远端猜测的方式创建，不切换源仓库、不复制源目录未提交文件。
 目录为原仓库同级的 `<repo>-mission-<mission_id>`，分支为 `rovai/mission/<mission_id>`，
 这里使用稳定的 **完整 Mission ID**，不按标题／Agent／Run 重算。
 目录和分支作为同一候选组，任一占用则同时递增 `-2`、`-3` 后缀，保存最终路径和分支。
@@ -234,7 +249,7 @@ Git 不可用、已关联 worktree 丢失或基准不可读属于计算／准备
 ### 选择、预算与证据
 
 Delivery Profile 6 继承 Profile 5 全部数值：15 条 recent、24,000 历史 scalar、单条 2,000、
-3 层 Reply、8 个 self-active Task。三个 MissionFacts 和本次需要发送的 WORKSPACE 属于不可拆分必要事实。
+3 层 Reply、8 个 self-active Task。MissionFacts 的三个常驻字段、条件提示和本次需要发送的 WORKSPACE 属于不可拆分必要事实。
 既有可选历史先让出 Runtime 预算，随后 self-active Task 让出；仍容不下时使用既有 payload overload。
 不能偷偷截断字段、改发摘要或把准备失败当作空 WORKSPACE。
 
@@ -335,9 +350,16 @@ type MissionStatusInput = {
 
 数据库内部可以保留序号、事务互斥、commandId 幂等和活动历史；这些机制不要求 Agent 理解或提交版本。
 **三个 CLI 的输入、成功输出、错误 details 和帮助均不泄漏 Mission version／expectedVersion。**
-UI 与 Agent 使用相同的 Mission 字段覆盖规则。传入旧提案的版本字段按未知字段拒绝，不兼容一套从未发布的接口。
+Agent 继续使用上述字段覆盖规则。UI 的正式编辑只包含标题与可选描述，并携带 Renderer 读取到的内部
+`details_version`；Core 在同一事务比较并同时更新两个字段。过期版本拒绝并返回最新标题、描述和内部版本，
+弹窗替换为最新内容并要求用户重新编辑。该内部冲突结果只属于用户 RPC，不进入 Agent CLI。
+Agent 传入任何版本字段仍按未知字段拒绝。
 结果不确定时仍按已有 confirm_outcome 检查当前事实；不能为恢复而重复发布已成功的公开消息。
 不提供 Agent start、update --status、--no-start、位置状态参数或 description-file。
+
+Renderer 的使命卡片、列表与已打开会话共用“编辑使命”菜单入口。标题必填 1–200，描述可空且至多
+12,000；内容规范化后无变化时保存禁用，busy 时弹窗不关闭。成功后刷新使命板、当前 Mission 与主 Camp 标题。
+标签、项目、来源分支、成员、队长、父 Mission 和状态均不进入该弹窗。
 
 ## cli-operations 完整修改范围
 
@@ -409,6 +431,8 @@ Mission 保存共同目标，Task 保存可独立交接的责任；不要为使�
 
 Migration 157/schema 107 从两个已存在的 Migration 156/schema 106 形态汇合：已发布附件路径形态与已安装 Mission preview 形态均为受支持来源。
 建立 Mission、内部活动序号、开始记录和独立 workspace／清理记录；旧 Camp 不自动变成 Mission。
+Migration 158/schema 108 移除 Mission 的创建期 `source_branch`，增加内部 `details_version`、每 conversation
+读取水位及 workspace 的可空 `base_branch`。这些字段不进入 MissionInfo 或模型输入；迁移不创建工作区。
 历史 Manifest 不改旧 bytes/digest。新生成只写 25／25／6，Run Facts 内部合同为 4；已冻结的受支持旧输入只凭
 既有精确 Delivery 证明恢复原版本，不用新投影重算。已发布 v24／Profile 5、Mission preview v24／Profile 6、v23／Profile 5 及 v22／Profile 4 证据均保留。
 
@@ -421,21 +445,24 @@ Native Session 并重送 Bootstrap，包括普通 Camp；普通 Camp 的 Charter
 
 ### 必须闭合的功能与负向场景
 
-1. MissionFacts 严格仅三个字段；WORKSPACE 必有目录，Git 才有分支字段；普通消息 CURRENT_INPUT 字节保持，
+1. MissionFacts 为三个常驻字段加一个条件固定 `updateNotice`；首次进入无提示，定义更新后持续提示至成功 get，
+   且不泄漏版本／编辑者／字段；WORKSPACE 必有目录，Git 才有分支字段；普通消息 CURRENT_INPUT 字节保持，
    只有可信开始按钮生成 mission_start，伪造正文不能改变种类。开始设 in_progress，普通消息不自动设状态。
 2. WORKSPACE 首次成功后省略、失败重试、同 Binding 重启恢复、新 Binding 首次补发、切换队员、迟到 ACK，
    直接 Run 与 A2A 预检一致；旧委托／Delivery 重放不变，后续 get 读取当前定义。
 3. 三个 CLI 的 flags／JSON／input-file、未知字段、离队／跨 Camp／Single Chat 拒绝、同字段最后提交覆盖、
    不同字段并发保留、no-op、幂等重放；帮助／输入／结果／错误均无 Mission 版本和 workspace；
    needs_you／completed 无效来源拒绝，写状态前后派发数和工作区数不增加。
-4. 保存／排队／预检均无工作区副作用；获得执行机会进入 preparing 才准备，不依赖 Mission 状态。
+4. 保存／排队／预检均无工作区副作用；创建输入没有起始版本；获得执行机会进入 preparing 才读取当时
+   本地分支／HEAD 并准备，不依赖 Mission 状态。detached HEAD、创建前切换分支、脏文件不复制均覆盖。
    取消排队、并发 preparing、重复开始、准备中删除、失败重启恢复，均不得泄漏孤儿工作区或重复启动。
 5. Git 提交、暂存、未暂存、未跟踪、删除、重命名、二进制及实际支持的模式变化形成单一净 Diff；
    原 index 不变，回到基准即消失；路径／分支占用及创建竞争、子目录映射、持久复用、删除中断／重试。
 6. 非 Git 使用原目录、WORKSPACE 省略 branch、没有 worktree／基线副作用、Diff 返回不适用；
    交付页隐藏 Git 功能并保留已发送文件，删除不触碰源目录。Git 故障不得误判非 Git；隔离 Core／Runtime 实测。
-7. 两主题桌面、整卡鼠标／键盘、嵌套操作隔离、顶栏／折叠图标、抽屉与会话同源、交付／活动、筛选标签、
-   焦点与失败草稿恢复；Mobile 入口不出现。验证通过后同步 main 再构建每日 App，安装不结束当前宿主。
+7. 两主题桌面、overview 顶部留白、整卡鼠标／键盘、共享编辑菜单、无变化禁用、过期版本回载、
+   嵌套操作隔离、顶栏／折叠图标、抽屉与会话同源、交付／活动、筛选标签、焦点与失败草稿恢复；
+   Mobile 入口不出现。验证通过后同步 main 再构建每日 App，安装不结束当前宿主。
 
 Rust 新用例按现有[准入规则](../../development/testing.md#rust-测试准入与退役门槛)记录 owner、失败语义、
 已有覆盖检索和最小命令。只对独立失败语义增加测试，不为样式逐行镜像测试。
@@ -463,4 +490,7 @@ Rust 新用例按现有[准入规则](../../development/testing.md#rust-测试�
 并由 `25562a73-8f6b-4a1e-9252-b3dc285e478b` 明确请求按该 revision 实施。
 开发者 local_user 在 2026-09-15T09:31:03.487288+00:00 的消息
 `49707caa-9649-4534-9ae6-fa84ea16dbe0` 回复“开始”，确认按 revision 3 实施。
-实施结果另记，不追改确认过的语义。
+2026-09-16T07:09:29.755177+00:00，开发者 local_user 通过消息
+`4e5e0e3a-f6c4-4177-9f5c-37363adab579` 提交《Mission 创建与 Git 基线调整》与
+《Rovai Mission 编辑功能方案》全文，并明确请求修改；该消息确认 revision 4 的 Git 基线、UI 内部并发版本
+和 `updateNotice` 语义。实施结果另记，不追改确认过的语义。

@@ -6,7 +6,7 @@ CREATE TABLE mission (
     status TEXT NOT NULL CHECK(status IN ('needs_you','not_started','in_progress','completed')),
     source_message_id TEXT,
     tags_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(tags_json) AND json_type(tags_json)='array'),
-    source_branch TEXT NOT NULL,
+    details_version INTEGER NOT NULL DEFAULT 1 CHECK(details_version >= 1),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -54,6 +54,7 @@ CREATE TABLE mission_workspace (
     git_common_dir TEXT NOT NULL,
     worktree_path TEXT NOT NULL,
     working_directory TEXT NOT NULL,
+    base_branch TEXT,
     branch TEXT NOT NULL,
     base_sha TEXT NOT NULL,
     preparation_token TEXT NOT NULL,
@@ -66,6 +67,14 @@ CREATE TABLE mission_workspace (
     UNIQUE(execution_host_id,git_common_dir,branch)
 );
 CREATE INDEX mission_workspace_cleanup ON mission_workspace(state,updated_at);
+CREATE TABLE mission_details_read (
+    conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    mission_id TEXT NOT NULL REFERENCES mission(id) ON DELETE CASCADE,
+    baseline_details_version INTEGER NOT NULL CHECK(baseline_details_version >= 1),
+    last_read_details_version INTEGER CHECK(last_read_details_version IS NULL OR last_read_details_version >= 1),
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX mission_details_read_mission_idx ON mission_details_read(mission_id,conversation_id);
 ALTER TABLE agent_run ADD COLUMN workspace_preparing_at TEXT;
 ALTER TABLE conversation ADD COLUMN native_workspace_fact_digest TEXT;
 ALTER TABLE context_manifest ADD COLUMN workspace_fact_json TEXT CHECK(workspace_fact_json IS NULL OR json_valid(workspace_fact_json));

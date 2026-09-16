@@ -5,6 +5,7 @@ import { DialogControlIcon } from './AppDialog'
 import { Icon } from './MissionControls'
 import { PanelToggleIcon } from './PanelToggleIcon'
 import { useFilePreview } from './FilePreviewContext'
+import { useMissionActions } from './MissionBoard'
 
 export function MissionHeader({ mission, drawer, projectName, camp, openRequest, onExpand, onFold, onClose, onFocusApprovals, detailEntryHostRef }: {
   mission: MissionRecord; drawer: boolean; projectName: string | null; camp: CampSnapshot; openRequest: number
@@ -12,6 +13,7 @@ export function MissionHeader({ mission, drawer, projectName, camp, openRequest,
   detailEntryHostRef(host: HTMLDivElement | null): void
 }): React.JSX.Element {
   const preview = useFilePreview()
+  const actions = useMissionActions()
   const activitySelected = preview.paneVisible && preview.activeTab?.kind === 'mission_activity'
   // Presentation changes do not remount this header or reset the selected tab.
   useLayoutEffect(() => { preview.openMissionActivity(mission.missionId) }, [mission.missionId, openRequest, preview.openMissionActivity])
@@ -25,9 +27,9 @@ export function MissionHeader({ mission, drawer, projectName, camp, openRequest,
         {drawer ? <Icon name="expand"/> : <PanelToggleIcon side="right" visible/>}
       </button>
     </div>}
-    conversationActions={<button className="mission-activity-entry" aria-pressed={activitySelected} onClick={() => {
+    conversationActions={<><button className="mission-activity-entry" aria-pressed={activitySelected} onClick={() => {
       if (activitySelected && preview.activeTabId) preview.close(preview.activeTabId)
       else preview.openMissionActivity(mission.missionId)
-    }}><Icon name="history"/><span>活动</span></button>}
+    }}><Icon name="history"/><span>活动</span></button><button className="mission-icon-button mission-session-actions" aria-label={`${mission.title}的操作`} onClick={event => actions.menu(mission, event)}><Icon name="more"/></button></>}
   />
 }

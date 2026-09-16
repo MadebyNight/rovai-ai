@@ -4,7 +4,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
   const until = async (condition: () => unknown, message: string): Promise<void> => {
     for (let i = 0; i < 180; ++i) { await frames(); if (condition()) return }
-    throw new Error(message)
+    throw new Error(`${message}${qa.errors.length ? `\n${qa.errors.join('\n')}` : ''}`)
   }
   const button = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
     .find(el => el.getAttribute('aria-label') === label || el.textContent?.trim() === label)!
@@ -25,6 +25,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(lanes.length === 4 && new Set(lanes.map(n => n.clientHeight)).size === 1, 'Four equal lanes')
   check(!document.querySelector('.mission-column header button'), 'No create control in status lanes')
   check(document.querySelector('.mission-page-header h1')?.textContent === '使命板', 'Board page title')
+  check(parseFloat(getComputedStyle(document.querySelector('.mission-board-page')!).paddingTop) >= 30, 'Board title keeps overview-page top spacing')
   document.documentElement.style.zoom = '2'; await frames()
   check(card.clientWidth >= 170 && card.scrollWidth <= card.clientWidth + 1, 'Zoom keeps readable cards without overlapping content')
   const boardScroll = document.querySelector<HTMLElement>('.mission-board-scroll')!
@@ -46,12 +47,31 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   button('项目筛选').click()
   cases.push('filters share multi-select checkboxes; only project and tags have search')
 
+  document.querySelector<HTMLButtonElement>('.mission-card-actions')!.click()
+  const editAction = () => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '编辑使命')
+  await until(editAction, 'Mission actions expose edit first')
+  editAction()!.click()
+  await until(() => document.querySelector('.mission-edit-dialog'), 'Edit dialog opens')
+  check(document.querySelector('label[for$="-title"]')?.textContent === '使命标题', 'Edit fields have visible labels')
+  check(button('保存').disabled, 'Unchanged Mission cannot be saved')
+  const editing = qa.items[0]
+  editing.title = '另一处刚更新的标题'; editing.detailsVersion += 1
+  fill(document.querySelector<HTMLInputElement>('.mission-edit-dialog input')!, '第一次编辑')
+  button('保存').click()
+  await until(() => document.querySelector('.mission-edit-dialog [role=alert]')?.textContent?.includes('最新内容'), 'Conflict loads latest details')
+  check((document.querySelector('.mission-edit-dialog input') as HTMLInputElement).value === '另一处刚更新的标题', 'Conflict replaces stale fields')
+  fill(document.querySelector<HTMLInputElement>('.mission-edit-dialog input')!, '基于最新内容编辑')
+  button('保存').click()
+  await until(() => !document.querySelector('.mission-edit-dialog'), 'Fresh edit saves')
+  check(editing.title === '基于最新内容编辑' && editing.detailsVersion === 3, 'Edit advances internal details version once')
+  cases.push('edit is shared by card actions and reloads latest details after an optimistic conflict')
+
   const previewFits = () => {
     const anchor = document.querySelector('.mission-preview-body')?.getBoundingClientRect()
     const pane = visiblePreview()?.getBoundingClientRect()
     return anchor && pane && Math.abs(anchor.x - pane.x) < 2 && Math.abs(anchor.right - pane.right) < 2
   }
-  card.click()
+  document.querySelector<HTMLElement>('.mission-board-card')!.click()
   await until(() => document.querySelector('.mission-drawer #camp-message[contenteditable="true"]') && tab('活动'), 'Card opens the real Camp Composer and activity')
   await until(previewFits, 'Preview stays aligned after drawer entrance')
   const editor = document.getElementById('camp-message')!

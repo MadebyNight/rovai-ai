@@ -43,6 +43,8 @@ pub struct MissionFacts {
     pub mission_id: String,
     pub title: String,
     pub status: MissionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +65,7 @@ pub struct MissionRecord {
     pub camp_id: String,
     pub project_path: String,
     pub project_binding_kind: ProjectBindingKind,
-    pub source_branch: String,
+    pub details_version: i64,
     pub tags: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -83,13 +85,8 @@ pub struct CreateMissionCommand {
     pub project_binding_kind: ProjectBindingKind,
     pub member_agent_ids: Vec<String>,
     pub default_lead_agent_id: String,
-    #[serde(default = "default_source")]
-    pub source_branch: String,
     #[serde(default)]
     pub tags: Vec<String>,
-}
-fn default_source() -> String {
-    "HEAD".into()
 }
 impl sealed::Sealed for CreateMissionCommand {}
 impl DomainCommand for CreateMissionCommand {
@@ -113,6 +110,8 @@ pub struct UpdateMissionCommand {
     pub title: Option<String>,
     pub description: Option<String>,
     pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub expected_details_version: Option<i64>,
 }
 impl sealed::Sealed for UpdateMissionCommand {}
 impl DomainCommand for UpdateMissionCommand {
@@ -232,12 +231,6 @@ impl MissionService {
         let input = &envelope.payload;
         validate_content(Some(&input.title), Some(&input.description))?;
         let tags = normalize_tags(&input.tags)?;
-        ensure!(
-            !input.source_branch.trim().is_empty()
-                && input.source_branch.len() <= 1024
-                && !input.source_branch.contains('\0'),
-            "mission.invalid_source_branch"
-        );
         self.gateway.execute(database, envelope, |tx| {
             let mission_id = format!("rvm_{}", Uuid::now_v7().simple());
             let camp_id = CampId::new();
@@ -249,8 +242,8 @@ impl MissionService {
             }, &camp_id)?;
             if created.status == CommandResultStatus::Rejected { return Ok(created); }
             let now = chrono::Utc::now().to_rfc3339();
-            tx.execute("INSERT INTO mission(id,camp_id,title,description,status,tags_json,source_branch,created_at,updated_at) VALUES(?1,?2,?3,?4,'not_started',?5,?6,?7,?7)",
-                params![mission_id,camp_id,input.title.trim(),input.description,serde_json::to_string(&tags)?,input.source_branch,now])?;
+            tx.execute("INSERT INTO mission(id,camp_id,title,description,status,tags_json,details_version,created_at,updated_at) VALUES(?1,?2,?3,?4,'not_started',?5,1,?6,?6)",
+                params![mission_id,camp_id,input.title.trim(),input.description,serde_json::to_string(&tags)?,now])?;
             record_activity(tx, &mission_id, "created", &envelope.actor, envelope.execution_epoch,
                 json!({"title":input.title.trim(),"description":input.description,"status":"not_started","tags":tags}))?;
             Ok(CommandHandlerResult::applied("mission.created", json!({"missionId":mission_id,"campId":camp_id}),
@@ -275,6 +268,23 @@ impl MissionService {
             if !can_edit(tx, envelope, &current)? || (tags.is_some() && !matches!(envelope.actor, ActorRef::User { .. })) {
                 return Ok(reject("mission.forbidden"));
             }
+            let edits_details = input.title.is_some() || input.description.is_some();
+            if edits_details && matches!(envelope.actor, ActorRef::User { .. }) {
+                let Some(expected) = input.expected_details_version else {
+                    return Ok(reject("mission.details_version_required"));
+                };
+                if expected != current.details_version {
+                    return Ok(CommandHandlerResult::rejected(
+                        "mission.details_version_conflict",
+                        json!({
+                            "missionId": current.info.mission_id,
+                            "currentTitle": current.info.title,
+                            "currentDescription": current.info.description,
+                            "currentDetailsVersion": current.details_version,
+                        }),
+                    ));
+                }
+            }
             let title = input.title.as_deref().map(str::trim).unwrap_or(&current.info.title);
             let description = input.description.as_deref().unwrap_or(&current.info.description);
             let next_tags = tags.as_ref().unwrap_or(&current.tags);
@@ -283,8 +293,9 @@ impl MissionService {
             if description != current.info.description { changes.insert("description".into(), json!(description)); }
             if next_tags != &current.tags { changes.insert("tags".into(), json!(next_tags)); }
             if changes.is_empty() { return Ok(mutation(&input.mission_id, false)); }
-            tx.execute("UPDATE mission SET title=?2,description=?3,tags_json=?4,updated_at=?5 WHERE id=?1",
-                params![input.mission_id,title,description,serde_json::to_string(next_tags)?,chrono::Utc::now().to_rfc3339()])?;
+            let details_changed = title != current.info.title || description != current.info.description;
+            tx.execute("UPDATE mission SET title=?2,description=?3,tags_json=?4,details_version=details_version+?5,updated_at=?6 WHERE id=?1",
+                params![input.mission_id,title,description,serde_json::to_string(next_tags)?,i64::from(details_changed),chrono::Utc::now().to_rfc3339()])?;
             if changes.contains_key("title") {
             tx.execute("UPDATE camp SET title=?2,name_origin='user',version=version+1,updated_at=?3 WHERE id=?1",
                 params![current.camp_id,title.chars().take(80).collect::<String>(),chrono::Utc::now().to_rfc3339()])?;
@@ -383,9 +394,34 @@ pub(crate) fn mission_for_camp(
         .transpose()
 }
 
+pub(crate) fn mark_details_read(
+    connection: &Connection,
+    mission_id: &str,
+    agent_run_id: &str,
+    details_version: i64,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO mission_details_read(
+            conversation_id,mission_id,baseline_details_version,last_read_details_version,updated_at
+         )
+         SELECT conversation_id,?2,?3,?3,?4 FROM agent_run WHERE id=?1
+         ON CONFLICT(conversation_id) DO UPDATE SET
+            mission_id=excluded.mission_id,
+            last_read_details_version=excluded.last_read_details_version,
+            updated_at=excluded.updated_at",
+        params![
+            agent_run_id,
+            mission_id,
+            details_version,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
 fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord>> {
-    let row = connection.query_row("SELECT m.id,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.source_branch,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
-        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,Option<String>>(12)?))).optional()?;
+    let row = connection.query_row("SELECT m.id,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
+        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?,r.get::<_,i64>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,Option<String>>(12)?))).optional()?;
     let Some((
         mission_id,
         camp_id,
@@ -394,7 +430,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         status,
         source_message_id,
         tags,
-        source_branch,
+        details_version,
         created_at,
         updated_at,
         project_path,
@@ -433,7 +469,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         camp_id,
         project_path,
         project_binding_kind: serde_json::from_value(json!(binding))?,
-        source_branch,
+        details_version,
         tags: serde_json::from_str(&tags)?,
         created_at,
         updated_at,
@@ -563,7 +599,6 @@ mod tests {
             project_binding_kind: ProjectBindingKind::Directory,
             member_agent_ids: vec!["agent_1".into(), "agent_2".into()],
             default_lead_agent_id: "agent_1".into(),
-            source_branch: "HEAD".into(),
             tags: vec![" UI ".into(), "ui".into()],
         });
         let created = service.create(&mut db, &create).unwrap();
@@ -593,7 +628,10 @@ mod tests {
                 .unwrap(),
             0
         );
-        for (title, description) in [(Some("new".into()), None), (None, Some("next".into()))] {
+        for (title, description, expected_details_version) in [
+            (Some("new".into()), None, 1),
+            (None, Some("next".into()), 2),
+        ] {
             service
                 .update(
                     &mut db,
@@ -602,6 +640,7 @@ mod tests {
                         title,
                         description,
                         tags: None,
+                        expected_details_version: Some(expected_details_version),
                     }),
                 )
                 .unwrap();
@@ -609,6 +648,7 @@ mod tests {
         let record = service.get(&db, &id).unwrap().unwrap();
         assert_eq!(record.info.title, "new");
         assert_eq!(record.info.description, "next");
+        assert_eq!(record.details_version, 3);
         let before = service.activity(&db, &id, None).unwrap().len();
         assert_eq!(
             service
@@ -618,7 +658,8 @@ mod tests {
                         mission_id: id.clone(),
                         title: Some("new".into()),
                         description: None,
-                        tags: None
+                        tags: None,
+                        expected_details_version: Some(3),
                     })
                 )
                 .unwrap()
@@ -626,6 +667,21 @@ mod tests {
                 .payload["changed"],
             false
         );
+        assert_eq!(service.get(&db, &id).unwrap().unwrap().details_version, 3);
+        let stale = service
+            .update(
+                &mut db,
+                &command(UpdateMissionCommand {
+                    mission_id: id.clone(),
+                    title: Some("stale".into()),
+                    description: Some("stale".into()),
+                    tags: None,
+                    expected_details_version: Some(2),
+                }),
+            )
+            .unwrap();
+        assert_eq!(stale.result.code, "mission.details_version_conflict");
+        assert_eq!(stale.result.payload["currentDetailsVersion"], 3);
         assert_eq!(service.activity(&db, &id, None).unwrap().len(), before);
         let mut invalid = create.clone();
         invalid.command_id = Uuid::new_v4().to_string();
@@ -748,6 +804,7 @@ mod tests {
             title: Some("member edit".into()),
             description: None,
             tags: None,
+            expected_details_version: None,
         });
         edit.actor = ActorRef::Agent {
             agent_id: "agent_1".into(),
@@ -763,6 +820,7 @@ mod tests {
             service.get(&db, &id).unwrap().unwrap().info.description,
             "next"
         );
+        assert_eq!(service.get(&db, &id).unwrap().unwrap().details_version, 4);
         let frozen: (String, String) = db
             .connection()
             .query_row(

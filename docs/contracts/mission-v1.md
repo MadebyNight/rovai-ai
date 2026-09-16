@@ -4,7 +4,7 @@ contract: mission-v1
 authority: mission-lifecycle-workspace-and-delivery
 status: accepted
 version: 1
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # Mission v1
@@ -24,9 +24,13 @@ queued/running/waiting Run prevents a duplicate commission. A replay uses the sa
 Ordinary messages retain ordinary input semantics and can schedule Runs without changing Mission status.
 
 All current Camp members and the user may edit title/description/status. There is no lead-only policy
-or model-visible revision. Patches preserve omitted fields; the last committed edit wins on a shared
-field. Equal values are a no-op. Definition, tags, roster, lead and status changes do not schedule or
-cancel execution. Completed Missions retain their workspaces and running Agents.
+or model-visible revision. Agent patches preserve omitted fields; the last committed Agent edit wins on
+a shared field. The Renderer carries an internal `details_version` only for atomic title/description edits:
+creation starts at 1, one effective title/description transaction advances it once, equal values do not,
+and a stale user edit is rejected with the latest title/description/version for an explicit retry. Tags,
+status, membership and lead changes do not advance it. The version is absent from MissionInfo, Agent CLI
+inputs/results/errors and model context. Definition, tags, roster, lead and status changes do not schedule
+or cancel execution. Completed Missions retain their workspaces and running Agents.
 
 Agent transitions to `needs_you` or `completed` require `sourceMessageId`: an existing, non-tombstoned,
 durably published message in the same public Camp. Publish the complete explanation first, then set
@@ -44,9 +48,12 @@ Only Core prepares the workspace, when an admitted Run receives an execution opp
 preparing. Queue admission and context preflight perform no worktree filesystem mutation. The claim
 rechecks cancellation, membership, configuration, execution and budget fences after preparation.
 
-For Git projects, resolve the selected starting ref to a commit once and retain that `base_sha`.
-Create branch `rovai/mission/<mission_id>` and sibling directory `<repo>-mission-<mission_id>` from
-that commit, without copying dirty files from the original project. A project subdirectory maps to
+For Git projects, the first preparing phase reads the configured directory's current local branch and
+current `HEAD` commit. Persist the branch as nullable `base_branch` (null for detached HEAD) and retain the
+commit as `base_sha`. Create branch `rovai/mission/<mission_id>` and sibling directory
+`<repo>-mission-<mission_id>` from that exact commit with remote guessing disabled, without switching the
+source checkout or copying dirty files. Mission creation accepts no starting ref and performs no Git read.
+A project subdirectory maps to
 the same relative subdirectory in the repository-wide worktree. Parent/child Missions remain siblings.
 If either path or branch is occupied, try the paired suffix `-2`, `-3`, etc. A creation race is retried
 only when it is a name collision; other errors are explicit.
@@ -92,8 +99,10 @@ files with their source message. It never manufactures files from narrative clai
 Agent CLI exposes only `mission get|update|status` in the authenticated current public Camp, with no
 Mission selector, workspace or version. Private Single Chat and stale/removed membership are rejected.
 See [Transport v26](builtin-tool-transport-v26.md), [context evidence v25](context-manifest-evidence-v25.md)
-and the [desktop UI contract](../ui/components/mission-board.md). Mobile has no Mission entry in v1.
+and the [desktop UI contract](../ui/components/mission-board.md). A successful `mission get` advances only
+the calling Agent conversation's internal definition-read watermark. Mobile has no Mission entry in v1.
 
-Migration 157 upgrades either admitted v1.59/schema 106 predecessor to schema 107, adding any missing
-definition, activity, commission, PR, Host/workspace association, cleanup records and context workspace
-evidence. Existing business data and frozen context bytes are retained; no workspace is created during migration.
+Migration 157 upgrades either admitted v1.59/schema 106 predecessor with Mission/context workspace
+evidence. Migration 158/schema 108 removes the obsolete creation-time source ref, adds internal definition
+revision/read watermarks and nullable workspace `base_branch`. No migration creates a workspace or changes
+frozen context bytes.

@@ -2,6 +2,8 @@
 mod attachment_paths;
 #[path = "db_mission_context.rs"]
 mod mission_context;
+#[path = "db_mission_details.rs"]
+mod mission_details;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -282,7 +284,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 107;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 108;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -714,6 +716,7 @@ struct CurrentMigrationState {
     v155: bool,
     v156: bool,
     v157: bool,
+    v158: bool,
 }
 
 impl CurrentMigrationState {
@@ -735,6 +738,14 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v158 {
+            let mut previous = *self;
+            previous.v158 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 108
+                && self.v157
+                && previous.admits("v1.59", 107, classifier);
+        }
         if self.v157 {
             let mut previous = *self;
             previous.v157 = false;
@@ -2952,6 +2963,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v153 && !client_draft_v153_schema_matches(connection)?)
         || (migrations.v154 && !private_client_draft_v154_schema_matches(connection)?)
         || (migrations.v155 && !automation_time_limit_v155_schema_matches(connection)?)
+        || (migrations.v158 && !mission_details::schema_matches(connection)?)
         || (migrations.v157 && !mission_context::schema_matches(connection)?)
         || (migrations.v156
             && !migrations.v157
@@ -3779,7 +3791,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 154),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 155),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 156),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 157)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 157),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 158)
         "#,
         [],
         |row| {
@@ -3872,6 +3885,7 @@ fn load_current_migration_state(
                 v155: row.get(85)?,
                 v156: row.get(86)?,
                 v157: row.get(87)?,
+                v158: row.get(88)?,
             })
         },
     )
@@ -6780,6 +6794,9 @@ impl Database {
             if !self.schema_migration_applied(157)? {
                 migration_step!("migration_157", self.migrate_mission_context_v157());
             }
+            if !self.schema_migration_applied(158)? {
+                migration_step!("migration_158", self.migrate_mission_details_v158());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7445,6 +7462,9 @@ impl Database {
         }
         if !self.schema_migration_applied(157)? {
             migration_step!("migration_157", self.migrate_mission_context_v157());
+        }
+        if !self.schema_migration_applied(158)? {
+            migration_step!("migration_158", self.migrate_mission_details_v158());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -32504,6 +32524,7 @@ mod tests {
             v155: version >= 155,
             v156: version >= 156,
             v157: version >= 157,
+            v158: version >= 158,
         }
     }
 
@@ -32628,7 +32649,7 @@ mod tests {
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                157,
+                158,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -33100,7 +33121,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(157);
+        let current = migration_state_through(158);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -33554,7 +33575,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(157));
+        assert_eq!(state, migration_state_through(158));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -33917,7 +33938,6 @@ mod tests {
                         project_binding_kind: crate::collaboration::ProjectBindingKind::Directory,
                         member_agent_ids: vec!["agent_1".into()],
                         default_lead_agent_id: "agent_1".into(),
-                        source_branch: "HEAD".into(),
                         tags: vec![],
                     },
                 },
@@ -33925,7 +33945,7 @@ mod tests {
             .unwrap();
         let camp = result.result.payload["campId"].as_str().unwrap();
         let mission = result.result.payload["missionId"].as_str().unwrap();
-        database.connection().execute("INSERT INTO mission_workspace VALUES('cleanup',?1,?2,?3,'/fixture/repo','/fixture/repo','/fixture/repo/.git','/fixture/worktree','/fixture/worktree','rovai/mission/fixture','base','ownership','ready',NULL,'created','updated')",rusqlite::params![mission,camp,host]).unwrap();
+        database.connection().execute("INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,diagnostic,created_at,updated_at) VALUES('cleanup',?1,?2,?3,'/fixture/repo','/fixture/repo','/fixture/repo/.git','/fixture/worktree','/fixture/worktree','main','rovai/mission/fixture','base','ownership','ready',NULL,'created','updated')",rusqlite::params![mission,camp,host]).unwrap();
         crate::collaboration::delete_camp_aggregate(database.connection(), camp).unwrap();
         assert_eq!(
             database
@@ -34006,7 +34026,6 @@ mod tests {
                         project_binding_kind: crate::collaboration::ProjectBindingKind::Directory,
                         member_agent_ids: vec!["agent_1".into()],
                         default_lead_agent_id: "agent_1".into(),
-                        source_branch: "HEAD".into(),
                         tags: vec!["compatibility".into()],
                     },
                 },

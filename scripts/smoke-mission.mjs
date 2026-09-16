@@ -75,7 +75,7 @@ async function setRuntime(agentId) {
 }
 async function createMission(title, description, path, members) {
   const payload = applied(await command('missions.create', { title, description, projectPath: path, projectBindingKind: 'directory',
-    memberAgentIds: members, defaultLeadAgentId: members[0], sourceBranch: 'main', tags: ['验收'] }))
+    memberAgentIds: members, defaultLeadAgentId: members[0], tags: ['验收'] }))
   return { missionId: payload.missionId, campId: payload.campId }
 }
 async function waitForIdle(campId, minimumRuns) {

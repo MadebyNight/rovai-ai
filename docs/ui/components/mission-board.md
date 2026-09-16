@@ -13,12 +13,14 @@ not duplicate Mission Camps. Mobile has no Mission entry; a Mission deep link di
 
 Cards open from their entire surface, including keyboard activation; nested avatar/menu controls keep
 their own actions. Show all member avatars with the lead first, project followed by tags, and a plain
-relative timestamp such as “昨天”. Right-click shows only 状态、查看队员、队长、标签、删除. Click opens
+relative timestamp such as “昨天”. Card, list and opened-Mission menus share this order: 编辑使命、状态、
+查看队员、队长、标签、删除. Click opens
 submenus; chevrons use the existing 16px icon rhythm. Tags use a lightweight search/create/check popover.
 Status/tag/project filters use matching icon triggers and neutral filled multi-select checkboxes. No selection
 means all, without an extra “all” option. Project and tag pickers have search; status does not. Search and the
 low-frequency board/list menu share the toolbar without vertical separators. The page uses the white home
-surface in Day and its Night equivalent, a title/subtitle aligned with shell controls, and four equally tall,
+surface in Day and its Night equivalent. Its title/subtitle use the same 34px overview-page top inset as
+Memory and Scheduled Automation, align with shell controls, and lead into four equally tall,
 very light neutral rounded lanes, including empty lanes. List mode groups and folds rows by status.
 Lanes retain at least 200px at narrow widths or increased zoom; the board scrolls horizontally rather than squeezing card content.
 Tags reuse the eight stable identity colors, independent of Mission status.
@@ -30,6 +32,12 @@ Both paths stay on the board without opening the new Camp. Creation buttons reta
 No independent-workspace checkbox is offered; Core decides from the selected project. Failed/uncertain
 creation retains its draft and command identity for safe retry.
 
+Edit opens a focused dialog matching creation's field treatment. Only title and optional description are
+present, with visible labels, Cancel and Save. Save is disabled until normalized content differs and validates
+against 1–200 title / 12,000 description limits. It submits the internal revision captured when opened.
+A stale edit stays open, replaces both fields with the latest definition and asks the user to edit again.
+Success closes the dialog and refreshes the board, opened Mission, conversation title and main Camp title.
+
 Card opening shows a right conversation drawer with Activity selected in the shared file preview. The left
 edge supports pointer and keyboard resizing, a width menu, cancellation and double-click expansion. It
 defaults to 1040px, leaving at least 64px of board when possible, with a 640px minimum. Releasing within
@@ -39,7 +47,7 @@ Composer and preview owner stay mounted across these changes.
 
 The drawer hides the conversation title and places close/expand at the left. Full presentation shows
 project › conversation title, preceded by return-to-board and fold-to-drawer. Both use one full-width
-AppHeader with 执行、任务、队员、单聊、活动 and the preview toggle on the right. Drawer runs do not
+AppHeader with 执行、任务、队员、单聊、活动, the shared Mission menu and the preview toggle on the right. Drawer runs do not
 automatically open the execution inspector or overlay; explicit execution entry remains available.
 
 The timeline begins with a read-only 使命 card: title, description clamped to three lines with overflow

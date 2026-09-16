@@ -40,7 +40,7 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { 
     {data && <>
       <div className="mission-delivery-section">
         <div className="mission-evidence-row"><span>目录</span><code>{data.workingDirectory}</code></div>
-        {data.git && data.workspace && <><div className="mission-evidence-row"><Icon name="branch"/><code>{data.workspace.branch}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div></>}
+        {data.git && data.workspace && <><div className="mission-evidence-row"><Icon name="branch"/><code>{data.workspace.branch}</code></div><div className="mission-evidence-row"><span>来源</span><code>{data.workspace.baseBranch ?? 'detached HEAD'}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div></>}
         {data.workspace?.diagnostic && <p className="mission-load-error" role="alert">{data.workspace.diagnostic}</p>}
       </div>
       {data.git && <MissionChanges mission={mission} revision={revision}/>}

@@ -113,7 +113,7 @@ last_updated: 2026-09-11
 - AgentRun 仍冻结 workspace 路径及起止 Git capability、HEAD 与 branch observation 作为既有终态审计事实；历史 boolean dirty 保留读取，新 observation 不采集 dirty。这些 per-Run audit facts 不参与
   文件变化卡片归约，也不成为 Project/导航身份。导航继续按规范目录路径分组，不引入 Project 表或 Repository
   Scope。
-- Mission 累计 Git Diff 由独立的 [Mission v1](../contracts/mission-v1.md) 拥有：持久 worktree 的首次 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence，也不更新基准。非 Git Mission 使用原目录，不提供 branch 或 Git Diff；删除 Mission 才回收关联 worktree，分支保留，独立清理记录负责重试。
+- Mission 累计 Git Diff 由独立的 [Mission v1](../contracts/mission-v1.md) 拥有：首个 preparing 读取源工作树当时的本地分支与 HEAD，持久 worktree 的固定 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence，也不更新基准。非 Git Mission 使用原目录，不提供 branch 或 Git Diff；删除 Mission 才回收关联 worktree，分支保留，独立清理记录负责重试。
 - **Quick Chat / 快速对话** 是应用受管 workspace 的规范领域与产品分组术语，不是 Camp 或 Project。Rust variant 使用 `QuickChat`，存储与 IPC 值使用 `quick_chat`，JavaScript/TypeScript property 使用 `quickChat`，CSS/test identifier 与受管目录名使用 `quick-chat`。旧称只允许存在于历史快照和迁移证据；当前代码、合同与投影不保留 alias、deprecated field、dual read 或旧 wire value 翻译。
 
 <a id="camp-composer"></a>

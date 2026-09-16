@@ -71,7 +71,7 @@ impl Core {
             );
             saved
         } else {
-            let Some(repository) = git.inspect(source, &mission.source_branch).await? else {
+            let Some(repository) = git.inspect(source).await? else {
                 return Ok(Some(execution));
             };
             let workspace = select_candidate(&git, &repository, &mission, &host, 1).await?;
@@ -93,6 +93,7 @@ impl Core {
                         let repository = GitRepository {
                             root,
                             common_dir: workspace.git_common_dir.clone().into(),
+                            base_branch: workspace.base_branch.clone(),
                             base_sha: workspace.base_sha.clone(),
                             relative_directory: relative,
                         };
@@ -443,6 +444,7 @@ async fn select_candidate(
                 .to_str()
                 .context("mission.invalid_path")?
                 .into(),
+            base_branch: repository.base_branch.clone(),
             branch,
             base_sha: repository.base_sha.clone(),
             preparation_token: uuid::Uuid::new_v4().to_string(),

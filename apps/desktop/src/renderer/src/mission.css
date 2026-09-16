@@ -367,7 +367,6 @@ button.mission-tag { cursor: pointer; }
 .mission-unread-dot { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--info); vertical-align: middle; }
 
 
-.new-camp-dialog .mission-source-input { width: 100%; min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
 /* Retained previews share the Mission drawer's visible layer without remounting. */
 .app-shell:has(.mission-drawer) > .file-preview-retained-host { z-index: 21; }
 
@@ -439,7 +438,7 @@ button.mission-tag { cursor: pointer; }
 .mission-filter-options .compact-option:focus-visible { outline: 1px solid var(--ink); outline-offset: -2px; }
 
 .content.mission-board-content, .content.mission-active-content { grid-column: 2; grid-row: 1 / -1; padding: 0; background: var(--home-surface); }
-.mission-board-page { --mission-lane: color-mix(in srgb,var(--ink) 1.2%,var(--home-surface)); --mission-lane-line: color-mix(in srgb,var(--line) 50%,var(--home-surface)); padding: 5px 28px 24px; background: var(--home-surface); }
+.mission-board-page { --mission-lane: color-mix(in srgb,var(--ink) 1.2%,var(--home-surface)); --mission-lane-line: color-mix(in srgb,var(--line) 50%,var(--home-surface)); padding: 34px 28px 24px; background: var(--home-surface); }
 .mission-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 0 17px; margin-bottom: 14px; border: 0; }
 .mission-page-header h1 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 620; }
 .mission-page-header p { margin: 7px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.42; }
@@ -484,6 +483,11 @@ button.mission-tag { cursor: pointer; }
 .mission-activity-entry > svg { width: 14px; height: 14px; }
 .mission-activity-entry:hover { color: var(--ink); background: var(--neutral-hover); }
 .mission-activity-entry[aria-pressed="true"] { color: var(--ink); background: var(--neutral-selected); }
+.mission-session-actions { flex: 0 0 28px; }
+.mission-definition-fields > label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-weight: 550; }
+.mission-definition-fields > label:not(:first-child) { margin-top: 4px; }
+.mission-definition-fields > label > span { font-weight: 400; }
+.mission-edit-dialog .mission-definition-fields { gap: 6px; }
 .mission-preview-slot { position: relative; }
 .mission-preview-slot > .file-preview-tabs { --file-preview-tabs-end-padding: 6px; height: 38px; flex: 0 0 38px; padding-block: 5px; border-bottom: 1px solid var(--line); }
 .mission-preview-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }

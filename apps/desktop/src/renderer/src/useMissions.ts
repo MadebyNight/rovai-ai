@@ -13,17 +13,24 @@ export function missionError(error: unknown): string {
     'mission.not_found': '此使命已被删除。',
     'mission.workspace_cleanup_pending': '工作区正在清理，暂时不能运行。',
     'mission.content_required': '请填写要修改的内容。',
+    'mission.details_version_required': '使命内容版本缺失，请刷新后重试。',
+    'mission.details_version_conflict': '使命内容刚刚发生变化，请基于最新内容重新编辑。',
     'mission.invalid_title': '使命标题需要 1 至 200 个字符。',
     'mission.description_too_long': '使命描述最多 12000 个字符。'
   }
   return Object.entries(reasons).find(([code]) => message.includes(code))?.[1] ?? message
 }
 
-export class MissionCommandRejected extends Error {}
+export class MissionCommandRejected extends Error {
+  constructor(public readonly result: StoredCommandResult) {
+    super(missionError(result.code || '操作未完成'))
+    this.name = 'MissionCommandRejected'
+  }
+}
 
 export async function missionCommand(client: CampClient, method: CoreMethod, command: unknown, commandId = newCommandId()): Promise<StoredCommandResult> {
   const result = await client.request<StoredCommandResult>(method, { commandId, command })
-  if (result.status === 'rejected') throw new MissionCommandRejected(missionError(result.code ?? '操作未完成'))
+  if (result.status === 'rejected') throw new MissionCommandRejected(result)
   return result
 }
 

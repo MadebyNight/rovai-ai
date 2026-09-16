@@ -56,7 +56,7 @@ export function NewConversationDialog({
   onOpenChange(open: boolean): void
   onChooseWorkspaceDirectory(): Promise<WorkspaceSelection | null>
   onWorkspaceSelected(workspace: WorkspaceSelection): Promise<void>
-  onCreate(draft: CreateCampDraft, enableOneClick: boolean, mission?: {description:string; sourceBranch:string; start:boolean}): Promise<void>
+  onCreate(draft: CreateCampDraft, enableOneClick: boolean, mission?: {description:string; start:boolean}): Promise<void>
 }): React.JSX.Element {
   const client = useCampClient()
   const mobile = useMobileLayout()
@@ -72,7 +72,6 @@ export function NewConversationDialog({
   const [optionalOpen, setOptionalOpen] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [sourceBranch, setSourceBranch] = useState('HEAD')
   const isMission = purpose === 'mission'
   const startSubmitRef = useRef<HTMLButtonElement>(null)
   const [quickHelpOpen, setQuickHelpOpen] = useState(false)
@@ -131,7 +130,6 @@ export function NewConversationDialog({
     setOptionalOpen(false)
     setName('')
     setDescription('')
-    setSourceBranch('HEAD')
     setEnableOneClick(false)
     setQuickHelpOpen(false)
     setMemberError(null)
@@ -230,7 +228,7 @@ export function NewConversationDialog({
         memberAgentIds: selectedMemberIds,
         defaultLeadAgentId: leadId,
         collaborationMode: 'peer'
-      }, enableOneClick, isMission ? {description, sourceBranch, start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'start'} : undefined)
+      }, enableOneClick, isMission ? {description, start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'start'} : undefined)
     } catch (error) {
       setSubmitError(errorMessage(error))
     } finally {
@@ -274,7 +272,7 @@ export function NewConversationDialog({
           <form className="compact-form" onSubmit={(event) => void submit(event)}>
             <div className="compact-body camp-fields">
               {attentionMessage && <p className="compact-inline-note" role="status">{attentionMessage}</p>}
-              {recovery && !busy && <p className="compact-inline-note" role="status">上次创建结果尚未确认。<button type="button" className="mission-source-link" onClick={() => { setName(recovery.title); setDescription(recovery.description); setSourceBranch(recovery.sourceBranch); setWorkspace(recovery.projectBindingKind === 'directory' ? {name:projects.find(p=>p.projectPath===recovery.projectPath)?.name ?? recovery.projectPath,projectPath:recovery.projectPath} : null); setSelectedMemberIds(recovery.memberAgentIds); setLeadId(recovery.defaultLeadAgentId); setSubmitError(null) }}>恢复上次内容以重试</button></p>}
+              {recovery && !busy && <p className="compact-inline-note" role="status">上次创建结果尚未确认。<button type="button" className="mission-source-link" onClick={() => { setName(recovery.title); setDescription(recovery.description); setWorkspace(recovery.projectBindingKind === 'directory' ? {name:projects.find(p=>p.projectPath===recovery.projectPath)?.name ?? recovery.projectPath,projectPath:recovery.projectPath} : null); setSelectedMemberIds(recovery.memberAgentIds); setLeadId(recovery.defaultLeadAgentId); setSubmitError(null) }}>恢复上次内容以重试</button></p>}
               {isMission && <><input ref={nameInputRef} className="automation-name-input" aria-label="使命标题" placeholder="使命标题" value={name} disabled={busy} onChange={event=>setName(event.target.value)} aria-invalid={!!nameError} autoComplete="off"/><textarea className="automation-prompt-input" aria-label="使命描述" placeholder="告诉队员，这次要完成什么…" rows={3} value={description} disabled={busy} onChange={event=>setDescription(event.target.value)}/>{nameError && <p className="compact-inline-error" role="alert">{nameError}</p>}</>}
               <div className="compact-row">
                 <span id="new-camp-workspace-label">工作目录</span>
@@ -374,7 +372,6 @@ export function NewConversationDialog({
                 </div>}
               </div>
               }
-              {isMission && workspace && hasGitObservation(workspace) && workspace.gitObservation.state==='git_valid' && <div className="compact-row"><label htmlFor="mission-source-branch">起始版本</label><input id="mission-source-branch" className="mission-source-input" value={sourceBranch} onChange={event=>setSourceBranch(event.target.value)} disabled={busy} placeholder="HEAD" /></div>}
               <div className="new-camp-quick-setting">
                 <div className="new-camp-quick-row">
                   <label className="new-camp-quick-label">

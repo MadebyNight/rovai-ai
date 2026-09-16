@@ -258,7 +258,8 @@ impl Database {
                 tx.execute_batch(include_str!("mission_schema.sql"))?;
             }
             tx.execute_batch(GUARDS)?;
-            tx.execute_batch("INSERT INTO schema_migration VALUES(157,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=107,updated_at=datetime('now') WHERE singleton=1;")?;
+            mission_details::apply_schema(&tx)?;
+            tx.execute_batch("INSERT INTO schema_migration VALUES(157,datetime('now')); INSERT INTO schema_migration VALUES(158,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=108,updated_at=datetime('now') WHERE singleton=1;")?;
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
@@ -274,6 +275,7 @@ impl Database {
                     "mission_activity",
                     "mission_start",
                     "mission_pr",
+                    "mission_details_read",
                 ],
             )?;
             tx.commit()?;
@@ -303,6 +305,8 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
         .execute_batch("PRAGMA foreign_keys=OFF;")
         .unwrap();
     let tx = connection.unchecked_transaction().unwrap();
+    tx.execute_batch("DROP TABLE IF EXISTS mission_details_read; DELETE FROM schema_migration WHERE version=158;")
+        .unwrap();
     let guard: String = tx
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE name='context_manifest_version_immutable'",

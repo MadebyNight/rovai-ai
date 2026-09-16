@@ -3778,9 +3778,9 @@ export function BusinessApp({
   const missionSource = (messageId: string): void => {
     setNotificationFocus({ requestId: ++notificationFocusSequence.current, kind: 'camp_message', campTurnId: null, messageId, active: true })
   }
-  async function createMission(draft: Omit<CreateCampRequest, 'commandId' | 'activationState'>, saveTeam: boolean, definition?: {description: string; sourceBranch: string; start: boolean}): Promise<void> {
+  async function createMission(draft: Omit<CreateCampRequest, 'commandId' | 'activationState'>, saveTeam: boolean, definition?: {description: string; start: boolean}): Promise<void> {
     if (!definition) throw new Error('缺少使命定义')
-    const command: MissionCreate = { title: draft.name ?? '', description: definition.description, sourceBranch: definition.sourceBranch, memberAgentIds: draft.memberAgentIds, defaultLeadAgentId: draft.defaultLeadAgentId, projectBindingKind: draft.workspace ? 'directory' : 'quick_chat', projectPath: draft.workspace?.projectPath ?? '', tags: [] }
+    const command: MissionCreate = { title: draft.name ?? '', description: definition.description, memberAgentIds: draft.memberAgentIds, defaultLeadAgentId: draft.defaultLeadAgentId, projectBindingKind: draft.workspace ? 'directory' : 'quick_chat', projectPath: draft.workspace?.projectPath ?? '', tags: [] }
     // Unknown transport outcomes retry the exact command. A different draft cannot
     // accidentally create a second Mission while the first result is unresolved.
     const pending = missionCreation.current

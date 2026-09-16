@@ -28,6 +28,7 @@ pub struct MissionWorkspace {
     pub git_common_dir: String,
     pub worktree_path: String,
     pub working_directory: String,
+    pub base_branch: Option<String>,
     pub branch: String,
     pub base_sha: String,
     #[serde(skip)]
@@ -39,6 +40,7 @@ pub struct MissionWorkspace {
 pub struct GitRepository {
     pub root: PathBuf,
     pub common_dir: PathBuf,
+    pub base_branch: Option<String>,
     pub base_sha: String,
     pub relative_directory: PathBuf,
 }
@@ -118,7 +120,7 @@ impl MissionGit {
             .trim_end_matches(['\r', '\n'])
             .to_string())
     }
-    pub async fn inspect(&self, directory: &Path, source: &str) -> Result<Option<GitRepository>> {
+    pub async fn inspect(&self, directory: &Path) -> Result<Option<GitRepository>> {
         let output = self
             .output(
                 directory,
@@ -151,17 +153,34 @@ impl MissionGit {
             .await?,
         )?;
         let base_sha = self
-            .text(
-                directory,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--end-of-options",
-                    &format!("{source}^{{commit}}"),
-                ],
-            )
+            .text(directory, &["rev-parse", "--verify", "HEAD^{commit}"])
             .await
             .context("mission.base_unavailable")?;
+        let branch = self
+            .output(
+                directory,
+                &[
+                    "symbolic-ref".into(),
+                    "--quiet".into(),
+                    "--short".into(),
+                    "HEAD".into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        let base_branch = if branch.status.success() {
+            Some(
+                String::from_utf8(branch.stdout.bytes)
+                    .context("mission.invalid_git_text")?
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string(),
+            )
+        } else if branch.status.code() == Some(1) {
+            None
+        } else {
+            bail!("mission.git_unavailable: {}", branch.stderr.lossy_text());
+        };
         let relative_directory = fs::canonicalize(directory)?
             .strip_prefix(&root)
             .context("mission.project_outside_repository")?
@@ -169,6 +188,7 @@ impl MissionGit {
         Ok(Some(GitRepository {
             root,
             common_dir,
+            base_branch,
             base_sha,
             relative_directory,
         }))
@@ -701,7 +721,7 @@ pub fn has_git_marker(path: &Path) -> bool {
     })
 }
 pub fn load_workspaces(connection: &Connection, mission_id: &str) -> Result<Vec<MissionWorkspace>> {
-    let mut stmt=connection.prepare("SELECT id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,branch,base_sha,preparation_token,state,diagnostic FROM mission_workspace WHERE mission_id=?1 ORDER BY created_at,id")?;
+    let mut stmt=connection.prepare("SELECT id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,diagnostic FROM mission_workspace WHERE mission_id=?1 ORDER BY created_at,id")?;
     Ok(stmt
         .query_map([mission_id], |r| {
             Ok(MissionWorkspace {
@@ -714,17 +734,18 @@ pub fn load_workspaces(connection: &Connection, mission_id: &str) -> Result<Vec<
                 git_common_dir: r.get(6)?,
                 worktree_path: r.get(7)?,
                 working_directory: r.get(8)?,
-                branch: r.get(9)?,
-                base_sha: r.get(10)?,
-                preparation_token: r.get(11)?,
-                state: r.get(12)?,
-                diagnostic: r.get(13)?,
+                base_branch: r.get(9)?,
+                branch: r.get(10)?,
+                base_sha: r.get(11)?,
+                preparation_token: r.get(12)?,
+                state: r.get(13)?,
+                diagnostic: r.get(14)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 pub fn persist_plan(connection: &Connection, workspace: &MissionWorkspace) -> Result<()> {
-    connection.execute("INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'preparing',?13,?13)",params![workspace.id,workspace.mission_id,workspace.camp_id,workspace.execution_host_id,workspace.source_directory,workspace.repository_root,workspace.git_common_dir,workspace.worktree_path,workspace.working_directory,workspace.branch,workspace.base_sha,workspace.preparation_token,chrono::Utc::now().to_rfc3339()])?;
+    connection.execute("INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'preparing',?14,?14)",params![workspace.id,workspace.mission_id,workspace.camp_id,workspace.execution_host_id,workspace.source_directory,workspace.repository_root,workspace.git_common_dir,workspace.worktree_path,workspace.working_directory,workspace.base_branch,workspace.branch,workspace.base_sha,workspace.preparation_token,chrono::Utc::now().to_rfc3339()])?;
     Ok(())
 }
 pub fn execution_directory(connection: &Connection, camp_id: &str) -> Result<Option<String>> {
@@ -981,11 +1002,7 @@ mod tests {
         fs::write(repo.join("src/keep.txt"), "keep\n").unwrap();
         git.bytes(&repo, &["add", "."]).await.unwrap();
         git.bytes(&repo, &["commit", "-m", "base"]).await.unwrap();
-        let repository = git
-            .inspect(&repo.join("src"), "HEAD")
-            .await
-            .unwrap()
-            .unwrap();
+        let repository = git.inspect(&repo.join("src")).await.unwrap().unwrap();
         let path = root.join("app-mission-rvm_test");
         let workspace = MissionWorkspace {
             id: "ws".into(),
@@ -997,6 +1014,7 @@ mod tests {
             git_common_dir: repository.common_dir.to_str().unwrap().into(),
             worktree_path: path.to_str().unwrap().into(),
             working_directory: path.join("src").to_str().unwrap().into(),
+            base_branch: repository.base_branch.clone(),
             branch: "rovai/mission/rvm_test".into(),
             base_sha: repository.base_sha.clone(),
             preparation_token: Uuid::new_v4().to_string(),
@@ -1097,7 +1115,7 @@ mod tests {
         assert!(git.validate(&workspace).await.is_err());
         let non_git = repo.root.parent().unwrap().join("plain");
         fs::create_dir(&non_git).unwrap();
-        assert!(git.inspect(&non_git, "HEAD").await.unwrap().is_none());
+        assert!(git.inspect(&non_git).await.unwrap().is_none());
     }
     #[tokio::test]
     async fn fixed_base_diff_is_final_net_content_without_mutating_real_index() {

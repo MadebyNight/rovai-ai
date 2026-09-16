@@ -5546,7 +5546,14 @@ impl Core {
                         )
                     })?;
                     if request.tool_name == "mission.get" {
-                        serde_json::to_value(mission.info).map_err(Into::into)
+                        let output = serde_json::to_value(&mission.info)?;
+                        crate::mission::mark_details_read(
+                            database.connection(),
+                            &mission.info.mission_id,
+                            &authenticated_run.agent_run_id,
+                            mission.details_version,
+                        )?;
+                        Ok(output)
                     } else {
                         let service = crate::mission::MissionService::default();
                         let execution = if request.tool_name == "mission.update" {
@@ -5568,6 +5575,7 @@ impl Core {
                                         title: input.title,
                                         description: input.description,
                                         tags: None,
+                                        expected_details_version: None,
                                     },
                                 ),
                             )?

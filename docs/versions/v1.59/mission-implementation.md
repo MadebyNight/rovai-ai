@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.59
 status: completed
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # 桌面使命实施
@@ -21,6 +21,18 @@ last_updated: 2026-09-15
 | 桌面 | 已实现并验收 | 真正导航、列表／看板、抽屉、会话板、交付／活动、普通会话状态复用 |
 | 验证与安装 | 已安装；通用评测提前结束 | 常规门禁、隔离执行／UI、同步 main 与 daily 安装完成；按用户追加指令停止通用评测 |
 
+## 2026-09-16 定义编辑与 Git 基线修订
+
+用户随后移除创建期“起始版本”，要求首个 preparing 读取当时源工作树的本地分支与 HEAD；同时正式加入
+标题／描述编辑及 Agent 定义更新提示。Migration 158/schema 108 删除 `source_branch`，新增内部
+`details_version`、conversation 读取水位和 workspace `base_branch`。Renderer 用内部版本拒绝旧弹窗覆盖，
+Agent `mission get|update` 仍无版本且保持字段后提交覆盖。Run Facts 4 只在首次进入后定义发生变化、且当前
+conversation 尚未成功 get 时增加逐字固定 `updateNotice`；CURRENT_INPUT 与 WORKSPACE shape 不变。
+
+创建／恢复 UI 不再展示或提交起始版本；卡片、列表与打开的 Mission 共享编辑菜单。使命板标题采用 Memory／
+Scheduled Automation 相同的 34px 顶部留白。定向验证包括 `cargo check -p rovai-core --lib`、`pnpm typecheck`
+和 8 段生产组件 Mission 桌面验收；按用户先前指令未运行 Rust 测试，本增量也未执行安装。
+
 ## 测试准入
 
 现有 `collaboration`、`runtime`、`context`、`db` owner 已检索；没有 Mission 领域与持久 worktree owner。
@@ -37,7 +49,7 @@ last_updated: 2026-09-15
 
 ## 主线整合与验收
 
-已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
+已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；本次定义编辑与基线修订继续到 Migration 158/schema 108。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
 
 随后整合 `243eb748`（#399 文件链接间距）。这次整合只改 Renderer／UI 文档；冻结的 Core／Skill
 内容指纹 `57adf680f418ab212392d3c79e533cc76e830d22ad34d82c99abf12e430d69d2` 保持不变。

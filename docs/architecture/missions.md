@@ -2,7 +2,7 @@
 document_type: architecture
 authority: mission-architecture
 status: accepted
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # Missions
@@ -17,9 +17,15 @@ outside the SQLite lock. It serializes preparation and deletion, persists associ
 rechecks claim fences before launching the Runtime. Non-Git projects retain their original cwd. A worktree
 is retained throughout Mission life; independent orphan cleanup records survive deletion and restart.
 
-`MissionGit` uses the Host-resolved Git executable and verified ownership to create/reuse/clean worktrees.
+`MissionGit` reads the source checkout's current local branch and `HEAD` only when the first admitted Run
+enters preparing. It uses that fixed commit, the Host-resolved Git executable and verified ownership to create/reuse/clean worktrees.
 It computes cumulative changes against a fixed initial commit with a temporary index. Git and actual files
 are the authority, not Agent narratives. The worktree is an execution location, not an Agent capability.
+
+User definition edits use an internal optimistic revision so stale dialogs cannot overwrite newer title or
+description. Agent updates remain field patches with last-commit-wins semantics and never see that revision.
+Each Agent conversation also keeps an internal successful-read watermark: after its first Mission entry,
+a newer definition adds one exact `updateNotice` to Mission Run Facts until `mission get` succeeds.
 
 Context materialization projects compact identity/status and trusted start intent. The actual workspace
 snapshot has its own dynamic section and acceptance marker, fenced to the native binding/generation.
