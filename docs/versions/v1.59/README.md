@@ -5,8 +5,8 @@ lifecycle: current
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
-model_context_change: false
-last_updated: 2026-09-14
+model_context_change: true
+last_updated: 2026-09-15
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -85,3 +85,15 @@ Migration 155/schema 105 原位保存定义策略，保留历史执行与模型�
 架构与开发路由同步到当前合同。UI、Runtime Activity、平台兼容资格和根 README 无需改变；这次是显式执行
 策略修正，不增加独立长期决策。验证记录见[实施计划](implementation-plan.md#weekly-无时间上限)。
 真实 Weekly 结果仍须安装新 App、Owner 绑定后实际运行证明，不以设施测试替代。
+
+## Agent 附件原路径引用增量
+
+用户在 2026-09-16 审阅 revision 1 后给出最终修订：所有新增 Agent 附件原地登记，取消复制、
+链接、staging、预分配、外部请求编号和双根模型上下文。默认永久输出目录只用于生成最终交付，
+Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位置，外部/跨 Camp 源只保留引用语义。
+[已确认 revision 2](model-context-change-editable-attachments.md)记录精确字段与确认消息，
+[实施计划](editable-attachments-implementation.md)保留原 worktree 与 PR/main 合并交付顺序。
+当前在原 worktree 实施并验证；Migration 156/schema 106 保留旧记录，新增 Formatter/Manifest 24、Run Facts 3、CLI 25/Output 3。
+当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v24](../../contracts/context-manifest-evidence-v24.md)、
+[File Preview v15](../../contracts/file-preview-v15.md)；理由见 [V1.59-D08](decisions.md#v1-59-d08)。
+运行活动分类、平台资格、根 README 无需变化；不能由方案确认推断 Gate 或 PR 已完成。

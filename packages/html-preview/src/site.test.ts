@@ -214,6 +214,18 @@ it('excludes private host stores even inside a broad root while retaining the ex
     expect(resource.size).toBeGreaterThan(0)
     await resource.file.close()
   }
+  const output = join(privateRoot, 'attachments', 'camp')
+  await mkdir(output, { recursive: true })
+  const delivered = join(output, 'index.html')
+  await writeFile(delivered, '<link href="theme.css">')
+  await writeFile(join(output, 'theme.css'), 'body{color:red}')
+  await symlink(join(privateRoot, 'credentials.json'), join(output, 'escape.json'))
+  const explicit = createPreviewFileSource(output, delivered, true, [privateRoot], true)
+  const style = await explicit('theme.css', signal)
+  await style.file.close()
+  await expect(explicit('escape.json', signal)).rejects.toMatchObject({ status: 403 })
+  await expect(explicit('../../credentials.json', signal)).rejects.toMatchObject({ status: 403 })
+
 })
 
 it('injects before author execution without modifying source bytes or original line mapping', () => {

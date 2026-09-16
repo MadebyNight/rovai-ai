@@ -487,6 +487,15 @@ impl CampAttachmentViewStore {
         };
         self.remove_orphan_camp_directories(database, &camp_ids)?;
         for camp_id in camp_ids {
+            // Startup recovery is for actual historical records. An ordinary
+            // source-reference Camp must not acquire an empty legacy View tree.
+            let has_legacy_records: bool = database.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM message_attachment WHERE camp_id=?1) OR EXISTS(SELECT 1 FROM camp_attachment_view_entry WHERE camp_id=?1) OR EXISTS(SELECT 1 FROM camp_attachment_view WHERE camp_id=?1 AND generation>0)",
+                [&camp_id], |row| row.get(0),
+            )?;
+            if !has_legacy_records {
+                continue;
+            }
             if let Err(error) = self.reconcile_camp(database, attachment_store, &camp_id) {
                 let Some(error_code) =
                     fail_closed_camp_reconciliation_error(database.connection(), &camp_id)?
@@ -1683,17 +1692,23 @@ impl CampAttachmentViewStore {
                 },
             )
             .optional()?;
-        let Some((previous_view_state, attachment_relative_path, root_identity_digest)) = view
-        else {
-            return Ok(None);
-        };
-        if root_identity_digest != self.root_identity_digest
-            || attachment_relative_path != camp_attachment_root_relative(camp_id)
+        let previous_view_state = if let Some((
+            state,
+            attachment_relative_path,
+            root_identity_digest,
+        )) = view
         {
-            anyhow::bail!(
-                "camp_attachment_view_integrity_failed: Camp cleanup root identity is invalid"
-            );
-        }
+            if root_identity_digest != self.root_identity_digest
+                || attachment_relative_path != camp_attachment_root_relative(camp_id)
+            {
+                anyhow::bail!(
+                    "camp_attachment_view_integrity_failed: Camp cleanup root identity is invalid"
+                );
+            }
+            Some(state)
+        } else {
+            None
+        };
         let cleanup_relative_path = PathBuf::from("camps").join(camp_id);
         validate_root_relative_path(&cleanup_relative_path)?;
         let camp_root = self.camp_root(camp_id)?;
@@ -1737,7 +1752,7 @@ impl CampAttachmentViewStore {
             "#,
             params![camp_id, operation_id, now],
         )?;
-        if changed != 1 {
+        if previous_view_state.is_some() && changed != 1 {
             anyhow::bail!("camp_attachment_view_busy");
         }
         transaction.commit()?;
@@ -1770,10 +1785,6 @@ impl CampAttachmentViewStore {
             )
             .optional()?
             .flatten();
-        let Some(previous_state) = previous_state else {
-            transaction.commit()?;
-            return Ok(());
-        };
         transaction.execute(
             r#"
             UPDATE camp_attachment_view_operation
@@ -1792,7 +1803,7 @@ impl CampAttachmentViewStore {
             "#,
             params![cleanup.camp_id, cleanup.operation_id, previous_state, now],
         )?;
-        if changed != 1 {
+        if previous_state.is_some() && changed != 1 {
             anyhow::bail!("camp_attachment_view_recovery_required");
         }
         transaction.commit()?;
@@ -1883,6 +1894,7 @@ impl CampAttachmentViewStore {
         if relative != expected_relative {
             anyhow::bail!("camp_attachment_view_recovery_required: cleanup path changed");
         }
+        crate::storage_layout::remove_camp_attachment_output(&self.root, &cleanup.camp_id)?;
         let camp_root = self.root.join(&relative);
         if path_entry_exists(&camp_root)? {
             let expected_identity = operation
@@ -7365,6 +7377,17 @@ mod tests {
     #[test]
     fn camp_delete_cleanup_journal_rolls_back_or_recovers_from_the_business_commit() {
         let (mut database, data_dir, camp_id, view) = fixture();
+        let output = crate::storage_layout::CampOutputDirectory::prepare(&database, &camp_id)
+            .unwrap()
+            .output_root;
+        fs::write(output.join("unpublished.txt"), b"edited current contents").unwrap();
+        let external = data_dir.join("external-source.txt");
+        fs::write(&external, b"external").unwrap();
+        let sibling = output.parent().unwrap().join("unrelated-output");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(sibling.join("keep.txt"), b"another camp").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external, output.join("external-link")).unwrap();
         let cancelled = view
             .prepare_camp_delete_cleanup(&mut database, &camp_id, &Uuid::new_v4().to_string())
             .unwrap()
@@ -7480,6 +7503,29 @@ mod tests {
         // use Camp absence as the durable outcome and finish the exact tree.
         view.reconcile(&mut database, &CampAttachmentStore::new(&data_dir))
             .unwrap();
+        assert!(!output.exists());
+        assert_eq!(fs::read(&external).unwrap(), b"external");
+        assert!(sibling.join("keep.txt").exists());
+        #[cfg(unix)]
+        {
+            // A replaced owned root is unlinked, never followed into another Camp.
+            std::os::unix::fs::symlink(&sibling, &output).unwrap();
+            crate::storage_layout::remove_camp_attachment_output(
+                database.runtime_camp_files_root(),
+                &camp_id,
+            )
+            .unwrap();
+            assert!(fs::symlink_metadata(&output).is_err());
+            assert!(sibling.join("keep.txt").exists());
+        }
+        fs::write(&output, b"root replaced with a file").unwrap();
+        crate::storage_layout::remove_camp_attachment_output(
+            database.runtime_camp_files_root(),
+            &camp_id,
+        )
+        .unwrap();
+        assert!(!output.exists());
+        fs::remove_dir_all(&sibling).unwrap();
         assert!(!view.camp_root(&camp_id).unwrap().exists());
         assert_eq!(
             database

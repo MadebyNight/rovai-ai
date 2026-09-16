@@ -21,8 +21,8 @@ use crate::{
     camp_attachment_view::{
         CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION, CampAttachmentViewReceiptV2,
         RUNTIME_ATTACHMENT_AUTH_RECEIPT_VERSION, load_camp_attachment_view_receipt,
-        resolve_camp_attachment_root, resolve_published_attachment_path,
-        runtime_camp_root_attachment_auth_receipt, validate_frozen_camp_attachment_view_receipt,
+        resolve_published_attachment_path, runtime_camp_root_attachment_auth_receipt,
+        validate_frozen_camp_attachment_view_receipt,
     },
     camp_content::{
         AGENT_MESSAGE_PROJECTION_AUDIENCE, StructuredCampMessageContent, mentions_current_user,
@@ -193,7 +193,7 @@ pub struct PreparedContext {
 pub struct PiRuntimeAttachment {
     pub attachment_id: String,
     pub path: String,
-    pub content_digest: String,
+    pub content_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -791,7 +791,7 @@ impl ContextService {
         let referenced_attachment_ids =
             final_referenced_attachment_ids(&attachment_refs, &shared_conversation);
         let (camp_attachment_view_receipt, camp_attachment_view_receipt_digest) =
-            load_camp_attachment_view_receipt(
+            load_optional_legacy_view_receipt(
                 database.connection(),
                 &snapshot.camp_id,
                 referenced_attachment_ids,
@@ -1012,9 +1012,14 @@ impl ContextService {
                 serde_json::to_string(&a2a_guidance.evidence)?,
                 a2a_guidance.evidence_digest,
                 CONTEXT_MANIFEST_VERSION,
-                2_i64,
-                CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION,
-                serde_json::to_string(&camp_attachment_view_receipt)?,
+                3_i64,
+                camp_attachment_view_receipt
+                    .as_ref()
+                    .map(|_| CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION),
+                camp_attachment_view_receipt
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
                 camp_attachment_view_receipt_digest,
                 CONTEXT_FORMATTER_VERSION,
                 blob.id,
@@ -1305,7 +1310,7 @@ impl ContextService {
         let referenced_attachment_ids =
             final_referenced_attachment_ids(&attachment_refs, &shared_conversation);
         let (camp_attachment_view_receipt, camp_attachment_view_receipt_digest) =
-            load_camp_attachment_view_receipt(
+            load_optional_legacy_view_receipt(
                 transaction,
                 &snapshot.camp_id,
                 referenced_attachment_ids,
@@ -1418,8 +1423,8 @@ impl ContextService {
             "a2aGuidanceEvidence": a2a_guidance.evidence.clone(),
             "a2aGuidanceEvidenceDigest": a2a_guidance.evidence_digest.clone(),
             "contextManifestVersion": CONTEXT_MANIFEST_VERSION,
-            "runFactsSchemaVersion": 2,
-            "campAttachmentViewReceiptVersion": CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION,
+            "runFactsSchemaVersion": 3,
+            "campAttachmentViewReceiptVersion": camp_attachment_view_receipt.as_ref().map(|_| CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION),
             "campAttachmentViewReceipt": camp_attachment_view_receipt,
             "campAttachmentViewReceiptDigest": camp_attachment_view_receipt_digest,
         });
@@ -1767,21 +1772,12 @@ impl ContextService {
                 if delivery_evidence.0 != manifest_id {
                     anyhow::bail!("Runtime Input Delivery belongs to another ContextManifest");
                 }
-                let manifest_view_receipt_digest = delivery_evidence
-                    .3
-                    .as_deref()
-                    .context("ContextManifest has no Camp Attachment View receipt")?;
-                validate_manifest_view_receipt(
+                let (attachment_auth, attachment_auth_digest) = optional_legacy_runtime_auth(
+                    &transaction,
                     &target.camp_id,
                     delivery_evidence.2.as_deref(),
-                    manifest_view_receipt_digest,
+                    delivery_evidence.3.as_deref(),
                 )?;
-                let (attachment_auth, attachment_auth_digest) =
-                    runtime_camp_root_attachment_auth_receipt(
-                        &transaction,
-                        &target.camp_id,
-                        manifest_view_receipt_digest,
-                    )?;
                 let runtime_payload_digest =
                     runtime_payload_digest.unwrap_or(delivery_evidence.1.as_str());
                 let runtime_request_digest = canonical_json_digest(&json!({
@@ -1824,8 +1820,13 @@ impl ContextService {
                             .map(|_| BOOTSTRAP_REDELIVERY_ENVELOPE_VERSION),
                         bootstrap_redelivery_revision
                             .map(|_| BOOTSTRAP_REDELIVERY_FORMATTER_VERSION),
-                        RUNTIME_ATTACHMENT_AUTH_RECEIPT_VERSION,
-                        serde_json::to_string(&attachment_auth)?,
+                        attachment_auth
+                            .as_ref()
+                            .map(|_| RUNTIME_ATTACHMENT_AUTH_RECEIPT_VERSION),
+                        attachment_auth
+                            .as_ref()
+                            .map(serde_json::to_string)
+                            .transpose()?,
                         attachment_auth_digest,
                         runtime_request_digest,
                     ],
@@ -1908,19 +1909,15 @@ impl ContextService {
         if row.5 != "running" || row.6 != execution_epoch {
             anyhow::bail!("AgentRun or Native Binding changed before input delivery");
         }
-        if !matches!((row.10, row.11), (22, 22) | (23, 23)) {
+        if !matches!((row.10, row.11), (22, 22) | (23, 23) | (24, 24)) {
             anyhow::bail!("Legacy ContextManifest cannot be dispatched");
         }
-        let manifest_view_receipt_digest = row
-            .13
-            .as_deref()
-            .context("ContextManifest has no Camp Attachment View receipt")?;
-        validate_manifest_view_receipt(&row.7, row.12.as_deref(), manifest_view_receipt_digest)?;
         let (runtime_attachment_auth_receipt, runtime_attachment_auth_receipt_digest) =
-            runtime_camp_root_attachment_auth_receipt(
+            optional_legacy_runtime_auth(
                 &transaction,
                 &row.7,
-                manifest_view_receipt_digest,
+                row.12.as_deref(),
+                row.13.as_deref(),
             )?;
         let runtime_payload_digest = runtime_payload_digest.unwrap_or(row.0.as_str());
         let runtime_request_digest = canonical_json_digest(&json!({
@@ -1974,8 +1971,13 @@ impl ContextService {
                 bootstrap_redelivery_revision.and(bootstrap_evidence_id),
                 bootstrap_redelivery_revision.map(|_| BOOTSTRAP_REDELIVERY_ENVELOPE_VERSION),
                 bootstrap_redelivery_revision.map(|_| BOOTSTRAP_REDELIVERY_FORMATTER_VERSION),
-                RUNTIME_ATTACHMENT_AUTH_RECEIPT_VERSION,
-                serde_json::to_string(&runtime_attachment_auth_receipt)?,
+                runtime_attachment_auth_receipt
+                    .as_ref()
+                    .map(|_| RUNTIME_ATTACHMENT_AUTH_RECEIPT_VERSION),
+                runtime_attachment_auth_receipt
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
                 runtime_attachment_auth_receipt_digest,
                 runtime_request_digest,
             ],
@@ -3365,19 +3367,9 @@ struct ConversationModeFact {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CampResourcesFact {
-    camp_id: String,
-    published_attachment_root: String,
-    access: &'static str,
-    scope: &'static str,
-    mutability: &'static str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct RunFacts {
     schema_version: i64,
-    camp_resources: CampResourcesFact,
+    attachment_output_root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversation_mode: Option<ConversationModeFact>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3431,17 +3423,12 @@ fn build_run_facts<R: ContextReadConnection>(
     requires_new_native_session: bool,
     a2a_run_count: i64,
 ) -> Result<RunFacts> {
-    let published_attachment_root =
-        resolve_camp_attachment_root(database.context_connection(), &snapshot.camp_id)?;
     let mut facts = RunFacts {
-        schema_version: 2,
-        camp_resources: CampResourcesFact {
-            camp_id: snapshot.camp_id.clone(),
-            published_attachment_root,
-            access: "enumerate_and_read",
-            scope: "current_camp",
-            mutability: "read_only",
-        },
+        schema_version: 3,
+        attachment_output_root: crate::storage_layout::resolve_attachment_output_root(
+            database.context_connection(),
+            &snapshot.camp_id,
+        )?,
         conversation_mode: (snapshot.invocation_kind == "single_chat").then_some(
             ConversationModeFact {
                 kind: "single_chat",
@@ -3590,7 +3577,7 @@ struct SharedMessageAttachment {
     name: String,
     media_type: String,
     path: String,
-    content_digest: String,
+    content_digest: Option<String>,
     legacy_view_backed: bool,
 }
 
@@ -3869,7 +3856,8 @@ struct SharedMessageAttachmentEvidence {
     name: String,
     media_type: String,
     path: String,
-    content_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -3964,7 +3952,7 @@ impl RenderedRunFacts {
 
 fn render_run_facts(run_facts: &RunFacts) -> Result<RenderedRunFacts> {
     let mut references = vec![RunFactRef {
-        fact: "camp_resources",
+        fact: "attachment_output_root",
         task_id: None,
     }];
     if let Some(task_context) = run_facts.task_context.as_ref() {
@@ -4396,9 +4384,25 @@ fn project_shared_message<R: ContextReadConnection>(
             attachment_id,
             name,
             media_type,
-            content_digest,
+            content_digest: Some(content_digest),
             legacy_view_backed,
         });
+    }
+    if sender_type == "agent" {
+        for source in
+            load_agent_message_source_refs(database.context_connection(), Some(&message_id))?
+        {
+            attachments.push(SharedMessageAttachment {
+                attachment_id: source.id,
+                name: source.display_name,
+                media_type: source
+                    .media_type
+                    .unwrap_or_else(|| "application/octet-stream".into()),
+                path: source.source_path,
+                content_digest: None,
+                legacy_view_backed: false,
+            });
+        }
     }
     let quotes = load_quotes(
         database.context_connection(),
@@ -5405,7 +5409,8 @@ fn load_current_input_body<R: ContextReadConnection>(
 struct CampAttachmentRef {
     attachment_id: String,
     path: String,
-    content_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_digest: Option<String>,
     #[serde(skip)]
     legacy_view_backed: bool,
 }
@@ -5433,6 +5438,52 @@ fn resolve_context_attachment_path(
             false,
         ))),
         _ => anyhow::bail!("Context Attachment has an unsupported storage model"),
+    }
+}
+
+fn load_agent_message_source_refs(
+    connection: &Connection,
+    message_id: Option<&str>,
+) -> Result<Vec<crate::local_attachment_source::LocalAttachmentSourceRef>> {
+    let json: Option<String> = connection.query_row(
+        "SELECT source_attachments_json FROM camp_message WHERE id = ?1 AND author_type = 'agent'",
+        [message_id], |row| row.get(0),
+    ).optional()?;
+    json.map(|value| crate::local_attachment_source::parse_source_attachments(&value))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+fn load_optional_legacy_view_receipt(
+    connection: &Connection,
+    camp_id: &str,
+    ids: Vec<String>,
+) -> Result<(Option<CampAttachmentViewReceiptV2>, Option<String>)> {
+    if ids.is_empty() {
+        return Ok((None, None));
+    }
+    let (receipt, digest) = load_camp_attachment_view_receipt(connection, camp_id, ids)?;
+    Ok((Some(receipt), Some(digest)))
+}
+
+fn optional_legacy_runtime_auth(
+    connection: &Connection,
+    camp_id: &str,
+    receipt_json: Option<&str>,
+    digest: Option<&str>,
+) -> Result<(
+    Option<crate::camp_attachment_view::RuntimeAttachmentAuthReceiptV1>,
+    Option<String>,
+)> {
+    match (receipt_json, digest) {
+        (None, None) => Ok((None, None)),
+        (Some(receipt_json), Some(digest)) => {
+            validate_manifest_view_receipt(camp_id, Some(receipt_json), digest)?;
+            let (receipt, digest) =
+                runtime_camp_root_attachment_auth_receipt(connection, camp_id, digest)?;
+            Ok((Some(receipt), Some(digest)))
+        }
+        _ => anyhow::bail!("Legacy Attachment receipt is incomplete"),
     }
 }
 
@@ -5496,8 +5547,19 @@ fn load_current_attachment_refs<R: ContextReadConnection>(
         attachments.push(CampAttachmentRef {
             path,
             attachment_id,
-            content_digest,
+            content_digest: Some(content_digest),
             legacy_view_backed,
+        });
+    }
+    for source in load_agent_message_source_refs(
+        database.context_connection(),
+        current_input.source_camp_message_id.as_deref(),
+    )? {
+        attachments.push(CampAttachmentRef {
+            attachment_id: source.id,
+            path: source.source_path,
+            content_digest: None,
+            legacy_view_backed: false,
         });
     }
     Ok(attachments)
@@ -5990,10 +6052,10 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !matches!(row.15, 22 | 23) {
+    if !matches!(row.15, 22 | 23 | 24) {
         anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
     }
-    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22 | 23) {
+    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22 | 23 | 24) {
         anyhow::bail!("Gather completion requires a Gather-capable context formatter");
     }
     if row.31 != AGENT_MESSAGE_PROJECTION_AUDIENCE {
@@ -6237,16 +6299,32 @@ fn validate_frozen_view_receipt(
         .manifest_selection
         .as_object()
         .context("Frozen Delivery Context has no manifest selection")?;
-    if !matches!(
-        selection
-            .get("contextManifestVersion")
-            .and_then(Value::as_i64),
-        Some(22 | 23)
-    ) || selection.get("runFactsSchemaVersion") != Some(&json!(2))
-        || selection.get("campAttachmentViewReceiptVersion")
-            != Some(&json!(CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION))
+    let version = selection
+        .get("contextManifestVersion")
+        .and_then(Value::as_i64);
+    if !matches!(version, Some(22 | 23 | 24))
+        || selection.get("runFactsSchemaVersion")
+            != Some(&json!(if version == Some(24) { 3 } else { 2 }))
     {
-        anyhow::bail!("Frozen Delivery Context uses an obsolete Attachment View contract");
+        anyhow::bail!("Frozen Delivery Context uses an obsolete Attachment contract");
+    }
+    if version == Some(24)
+        && selection
+            .get("campAttachmentViewReceipt")
+            .is_none_or(Value::is_null)
+        && selection
+            .get("campAttachmentViewReceiptDigest")
+            .is_none_or(Value::is_null)
+        && selection
+            .get("campAttachmentViewReceiptVersion")
+            .is_none_or(Value::is_null)
+    {
+        return Ok(());
+    }
+    if selection.get("campAttachmentViewReceiptVersion")
+        != Some(&json!(CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION))
+    {
+        anyhow::bail!("Frozen Delivery Context uses an invalid legacy Attachment receipt");
     }
     let receipt_value = selection
         .get("campAttachmentViewReceipt")
@@ -6427,20 +6505,30 @@ fn materialize_frozen_delivery_context(
     let run_facts_schema_version = required("runFactsSchemaVersion")?
         .as_i64()
         .context("Frozen Delivery Context Run Facts schema version is invalid")?;
-    let camp_attachment_view_receipt_version = required("campAttachmentViewReceiptVersion")?
-        .as_i64()
-        .context("Frozen Delivery Context View receipt version is invalid")?;
-    let camp_attachment_view_receipt_json = json_text("campAttachmentViewReceipt")?;
-    let camp_attachment_view_receipt_digest = required("campAttachmentViewReceiptDigest")?
-        .as_str()
-        .context("Frozen Delivery Context View receipt digest is invalid")?;
-    if !matches!(context_manifest_version, 22 | 23)
-        || run_facts_schema_version != 2
-        || camp_attachment_view_receipt_version != CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION
-        || canonical_json_digest(required("campAttachmentViewReceipt")?)?
-            != camp_attachment_view_receipt_digest
+    let camp_attachment_view_receipt_version =
+        required("campAttachmentViewReceiptVersion")?.as_i64();
+    let receipt_value = required("campAttachmentViewReceipt")?;
+    let camp_attachment_view_receipt_json = (!receipt_value.is_null())
+        .then(|| serde_json::to_string(receipt_value))
+        .transpose()?;
+    let camp_attachment_view_receipt_digest = required("campAttachmentViewReceiptDigest")?.as_str();
+    if !matches!(
+        (context_manifest_version, run_facts_schema_version),
+        (22 | 23, 2) | (24, 3)
+    ) {
+        anyhow::bail!("Frozen Delivery Context version evidence is inconsistent");
+    }
+    if let Some(digest) = camp_attachment_view_receipt_digest {
+        if camp_attachment_view_receipt_version != Some(CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION)
+            || canonical_json_digest(receipt_value)? != digest
+        {
+            anyhow::bail!("Frozen Delivery Context View evidence is inconsistent");
+        }
+    } else if context_manifest_version != 24
+        || camp_attachment_view_receipt_version.is_some()
+        || !receipt_value.is_null()
     {
-        anyhow::bail!("Frozen Delivery Context View evidence is inconsistent");
+        anyhow::bail!("Frozen Delivery Context View evidence is incomplete");
     }
 
     let manifest_id = Uuid::new_v4().to_string();
@@ -7062,18 +7150,10 @@ mod slow_tests {
     };
 
     fn test_run_facts() -> RunFacts {
-        let camp_id = "rvcamp_01h47kvsy5fk1shh6w1g60eecf";
         RunFacts {
-            schema_version: 2,
-            camp_resources: CampResourcesFact {
-                camp_id: camp_id.to_string(),
-                published_attachment_root: format!(
-                    "/tmp/runtime-files/camps/{camp_id}/attachments"
-                ),
-                access: "enumerate_and_read",
-                scope: "current_camp",
-                mutability: "read_only",
-            },
+            schema_version: 3,
+            attachment_output_root: "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf"
+                .to_string(),
             conversation_mode: None,
             task_context: None,
             session_continuity: None,
@@ -7771,8 +7851,7 @@ mod slow_tests {
                         task_id: None,
                         files: Vec::new(),
                     },
-                    frozen_files: Vec::new(),
-                    managed_attachment_ingest_intent_id: None,
+                    source_files: Vec::new(),
                 },
                 &run_id,
                 execution_epoch,
@@ -9177,7 +9256,7 @@ mod slow_tests {
             .unwrap();
         assert!(manifest_schema.contains("run_fact_payload_json"));
         assert!(!manifest_schema.contains("run_notice_"));
-        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23)"));
+        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24)"));
         assert!(manifest_schema.contains("message_projection_audience TEXT NOT NULL"));
         assert!(manifest_schema.contains("a2a_guidance_evidence_json TEXT NOT NULL"));
         let contract: (String, i64, i64) = reopened
@@ -10494,18 +10573,16 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(delivery.status, "prepared");
-        let receipt: Value = fixture
+        let receipt: Option<String> = fixture
             .database
             .connection()
             .query_row(
                 "SELECT camp_attachment_view_receipt_json FROM context_manifest WHERE id = ?1",
                 [&materialized.manifest_id],
-                |row| row.get::<_, String>(0),
+                |row| row.get(0),
             )
-            .map(|receipt| serde_json::from_str(&receipt).unwrap())
             .unwrap();
-        assert_eq!(receipt["catalogRevision"], -1);
-        assert_eq!(receipt["referencedEntries"], json!([]));
+        assert_eq!(receipt, None);
         assert_eq!(
             fixture
                 .database
@@ -15017,22 +15094,22 @@ mod slow_tests {
         assert_eq!(
             serde_json::to_value(rendered.references).unwrap(),
             json!([
-                {"fact":"camp_resources"},
+                {"fact":"attachment_output_root"},
                 {"fact":"task_context","taskId":"task-1"}
             ])
         );
         assert_eq!(
             rendered.payload_json,
-            "{\"schemaVersion\":2,\"campResources\":{\"campId\":\"rvcamp_01h47kvsy5fk1shh6w1g60eecf\",\"publishedAttachmentRoot\":\"/tmp/runtime-files/camps/rvcamp_01h47kvsy5fk1shh6w1g60eecf/attachments\",\"access\":\"enumerate_and_read\",\"scope\":\"current_camp\",\"mutability\":\"read_only\"},\"taskContext\":{\"taskId\":\"task-1\",\"referenceMode\":\"frozen\",\"laterChangesRetargetRun\":false}}"
+            "{\"schemaVersion\":3,\"attachmentOutputRoot\":\"/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf\",\"taskContext\":{\"taskId\":\"task-1\",\"referenceMode\":\"frozen\",\"laterChangesRetargetRun\":false}}"
         );
         assert_eq!(rendered.digest, sha256_text(&rendered.payload_json));
     }
 
     #[test]
-    fn run_facts_v2_always_includes_camp_resources_and_omits_other_absent_fields() {
+    fn run_facts_v3_always_includes_output_root_and_omits_other_absent_fields() {
         let facts = RunFacts {
-            schema_version: 2,
-            camp_resources: test_run_facts().camp_resources,
+            schema_version: 3,
+            attachment_output_root: test_run_facts().attachment_output_root,
             conversation_mode: None,
             task_context: Some(TaskContextFact {
                 task_id: "task-1".to_string(),
@@ -15068,14 +15145,8 @@ mod slow_tests {
         assert_eq!(
             serde_json::from_str::<Value>(&rendered.payload_json).unwrap(),
             json!({
-                "schemaVersion": 2,
-                "campResources": {
-                    "campId": "rvcamp_01h47kvsy5fk1shh6w1g60eecf",
-                    "publishedAttachmentRoot": "/tmp/runtime-files/camps/rvcamp_01h47kvsy5fk1shh6w1g60eecf/attachments",
-                    "access": "enumerate_and_read",
-                    "scope": "current_camp",
-                    "mutability": "read_only",
-                },
+                "schemaVersion": 3,
+                "attachmentOutputRoot": "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf",
                 "taskContext": {
                     "taskId": "task-1",
                     "referenceMode": "frozen",
@@ -15110,7 +15181,7 @@ mod slow_tests {
         assert_eq!(rendered.references.len(), 6);
 
         let non_gather_budget = RunFacts {
-            schema_version: 2,
+            schema_version: 3,
             delegation: Some(DelegationFact {
                 new_a2a_dispatch_allowed: false,
                 new_a2a_target_contact_allowed: false,
@@ -15130,7 +15201,7 @@ mod slow_tests {
         assert!(
             camp_resources_only
                 .payload_json
-                .contains("\"schemaVersion\":2")
+                .contains("\"schemaVersion\":3")
         );
         let shared_conversation = SharedConversation {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),

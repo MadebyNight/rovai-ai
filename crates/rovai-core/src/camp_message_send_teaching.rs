@@ -1,6 +1,6 @@
 pub const CAMP_MESSAGE_SEND_SUMMARY: &str = "Publish one public Camp message. Use --public-only when the message must not address any Agent; it prevents Agent addressing, creates no Agent Delivery, and wakes no Agent. Without --public-only, --to may schedule Agents. Agent addressing schedules concrete continuing work, not CC; never use it for acknowledgement, agreement, thanks, closure, standby, no-new-information, or repeated conclusions. Ordinary public messages are already visible to the Principal. Use --to-principal only for a new unresolved Principal decision, answer, or action, or an explicitly requested important-result notification. Always inspect agentAddressingMode, effectiveRecipients, and deliveryIds. A successful send proves only that its message and effects were committed; it does not prove recipient work has started or completed.";
 
-pub const CAMP_MESSAGE_SEND_FILE_HELP: &str = "Attach a local file or directory readable by the active Runtime to this message; repeat to preserve attachment order. Use this only for recipient-facing files the recipient needs. Do not attach temporary, intermediate, cache, log, or diagnostic files.";
+pub const CAMP_MESSAGE_SEND_FILE_HELP: &str = "Attach a recipient-facing file or directory at its actual path; repeat to preserve attachment order. Rovai references the current file without copying or changing permissions. Temporary files may become unavailable when their source is cleaned up.";
 
 pub const CAMP_MESSAGE_SEND_BODY_HELP: &str = "For multiline Markdown, pass real newline characters.\nDirect --body values are literal: \\n inside ordinary shell quotes is text, not a line break.\nJSON stdin/heredoc and JSON --input-file decode \\n escapes.";
 
@@ -81,7 +81,7 @@ mod tests {
         }
         assert_eq!(
             CAMP_MESSAGE_SEND_FILE_HELP,
-            "Attach a local file or directory readable by the active Runtime to this message; repeat to preserve attachment order. Use this only for recipient-facing files the recipient needs. Do not attach temporary, intermediate, cache, log, or diagnostic files."
+            "Attach a recipient-facing file or directory at its actual path; repeat to preserve attachment order. Rovai references the current file without copying or changing permissions. Temporary files may become unavailable when their source is cleaned up."
         );
     }
 

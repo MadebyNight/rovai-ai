@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, realpath, writeFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, realpath, writeFile, rm, mkdir, readdir, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -16,16 +16,18 @@ test('Web HTML attachments render, remain isolated, expose original source and r
   if (!await access(executable).then(() => true, () => false)) { t.skip('Chrome unavailable'); return }
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-web-html-')))
   const dataDir = join(fixture, 'core')
+  const uploadScratch = join(fixture, 'uploads')
+  await mkdir(uploadScratch)
   const host = launchHost(process.env.ROVAI_HOST_BIN ?? join(repository, 'target/debug/rovai-host'), [
     ...coreDataDirectoryArguments(dataDir), '--skill-library-root', join(dataDir, 'skills'), '--mcp-config-path', join(dataDir, 'mcp.json')
-  ], { cwd: repository })
+  ], { cwd: repository, env: { ...process.env, TMPDIR: uploadScratch, TMP: uploadScratch, TEMP: uploadScratch } })
   let browser
   try {
     await within(host.ready)
     const profiles = await host.request('members.list')
     await host.request('camps.create', { commandId: crypto.randomUUID(), name: 'HTML attachment acceptance', workspace: null, memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId, collaborationMode: 'peer' })
     const service = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: join(repository, 'out/web') })
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Interactive attachment</title><style>body{margin:0;background:rgb(236,238,239)}button{position:absolute;left:20px;top:60px;width:200px;height:40px}h1{font:24px sans-serif}</style></head><body><h1>Rendered HTML</h1><button id="run">Run interaction</button><p id="result"></p><script>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Interactive attachment</title><link rel="stylesheet" href="./theme.css"><style>body{margin:0}button{position:absolute;left:20px;top:60px;width:200px;height:40px}h1{font:24px sans-serif}</style></head><body><h1>Rendered HTML</h1><button id="run">Run interaction</button><p id="result"></p><script>
       let parentBlocked=false, storageBlocked=false;
       try { parent.sessionStorage.getItem('acceptance-sentinel'); } catch { parentBlocked=true; }
       try { sessionStorage.setItem('preview-test','forbidden'); } catch { storageBlocked=true; }
@@ -34,6 +36,8 @@ test('Web HTML attachments render, remain isolated, expose original source and r
     </script></body></html>`
     const file = join(fixture, 'interactive.html'); await writeFile(file, html)
     browser = await launchAcceptanceBrowser({ executable, args: ['--headless=new', `--user-data-dir=${join(fixture, 'chrome')}`, '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', 'about:blank'] })
+    const listen = `window.htmlAcceptance=[];addEventListener('message',e=>{if(e.source===document.querySelector('.file-preview-html')?.contentWindow&&e.origin==='null'&&e.data?.type==='html-acceptance')window.htmlAcceptance.push(e.data)})`
+    await browser.send('Page.addScriptToEvaluateOnNewDocument', { source: listen })
     await browser.send('Page.navigate', { url: service.origin })
     await browser.wait(`document.querySelector('#administrator-token') !== null`)
     assert.equal(await browser.evaluate(`document.querySelector('#administrator-token').placeholder`), '输入 64 位的 Token')
@@ -43,9 +47,13 @@ test('Web HTML attachments render, remain isolated, expose original source and r
     await browser.wait(`document.querySelector('.web-login-overlay') === null`)
     await browser.click(`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('HTML attachment acceptance'))`)
     await browser.wait(`document.querySelector('.conversation-controls .composer-file-input:not(:disabled)') !== null`)
-    await browser.evaluate(`sessionStorage.setItem('acceptance-sentinel','private');window.htmlAcceptance=[];addEventListener('message',e=>{if(e.source===document.querySelector('.file-preview-html')?.contentWindow&&e.origin==='null'&&e.data?.type==='html-acceptance')window.htmlAcceptance.push(e.data)})`)
+    await browser.evaluate(`sessionStorage.setItem('acceptance-sentinel','private')`)
     await browser.setFiles('.conversation-controls .composer-file-input', [file])
     await browser.wait(`document.querySelector('.composer-attachment-card .attachment-open:not(:disabled)') !== null`)
+    const uploads = (await readdir(uploadScratch)).filter(name => name.startsWith('rovai-web-upload-'))
+    assert.equal(uploads.length, 1)
+    const stylesheet = join(uploadScratch, uploads[0], 'theme.css')
+    await writeFile(stylesheet, 'body{background:rgb(236,238,239)}')
     await browser.click(`document.querySelector('.composer-attachment-card .attachment-open')`)
     await browser.wait(`document.querySelector('.file-preview-html-stage')?.dataset.documentState==='loaded' && window.htmlAcceptance.length>0`)
     const actual = await browser.evaluate('window.htmlAcceptance.at(-1)')
@@ -78,17 +86,22 @@ test('Web HTML attachments render, remain isolated, expose original source and r
     assert.equal(await browser.evaluate(`document.querySelector('.file-preview-html-source').textContent.includes('data-rovai-preview-diagnostic')`), false)
     await toggleSource('交互预览')
     assert.equal(await browser.evaluate(`window.htmlAcceptance.at(-1).clicked`), 'INTERACTION_OK', 'source toggle preserves iframe interaction state')
+    await writeFile(`${stylesheet}.tmp`, 'body{background:rgb(210,220,230)}')
+    await rename(`${stylesheet}.tmp`, stylesheet)
+    await browser.evaluate('window.beforeAcceptanceReload = true')
     await browser.send('Page.reload')
+    await browser.wait('window.beforeAcceptanceReload !== true')
     await browser.wait(`document.querySelector('.composer-attachment-card .attachment-open:not(:disabled)') !== null`)
     assert.equal(await browser.evaluate(`document.querySelector('.web-login-overlay')===null`), true)
     // Composer drafts restore their exact attachment locator; file tabs may be
     // reopened explicitly without changing editor ownership or requiring Token.
     if (!await browser.evaluate(`document.querySelector('.file-preview-html')!==null`)) await browser.click(`document.querySelector('.composer-attachment-card .attachment-open')`)
     await browser.wait(`document.querySelector('.file-preview-html-stage')?.dataset.documentState==='loaded'`)
+    await browser.wait(`window.htmlAcceptance.at(-1)?.color==='rgb(210, 220, 230)'`)
     await browser.click(`document.querySelector('[aria-label="关闭 interactive.html"]')`)
     await browser.wait(`document.querySelector('.file-preview-html')===null`)
     assert.deepEqual(browser.errors, [])
-    console.log(JSON.stringify({ rendered: true, realClick: true, originalSource: true, isolated: true, refresh: true, released: true }))
+    console.log(JSON.stringify({ rendered: true, realClick: true, originalSource: true, isolated: true, refresh: true, relativeCss: true, replacementSave: true, released: true }))
   } catch (error) {
     if (browser) console.log(JSON.stringify(await browser.evaluate(`({samples:window.htmlAcceptance,frame:document.querySelector('.file-preview-html')?.getBoundingClientRect().toJSON()})`).catch(()=>null)))
     if (browser) await browser.capture('/tmp/rovai-web-html-failure.png').catch(() => {})

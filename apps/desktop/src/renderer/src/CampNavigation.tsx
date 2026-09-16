@@ -595,7 +595,7 @@ export function CampNavigation({
               <>
                 <AppDialogHeader
                   title="删除对话？"
-                  description="此操作不可撤销。"
+                  description="删除此 Camp 将同时删除其保存的附件文件，包括已编辑内容；原始工作区文件和外部引用文件不受影响。"
                   icon="trash"
                   closeDisabled={actionBusy}
                 />
