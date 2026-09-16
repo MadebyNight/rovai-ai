@@ -231,11 +231,40 @@ function runtimeParametersFor(
       return <KimiRuntimeParameters {...props} />
     case 'grok-build':
       return <GrokRuntimeParameters {...props} />
+    case 'deepseek-harness':
+      return <DeepseekHarnessRuntimeParameters {...props} />
     case 'zcode-app':
       return <div className="runtime-parameter-form">{modelFieldsFor('zcode-app', props)}<PermissionSelect {...props} fieldKey="permission_mode" label="权限模式" /></div>
     case 'antigravity-app':
       return <AntigravityRuntimeParameters {...props} />
   }
+}
+
+function DeepseekHarnessRuntimeParameters(props: RuntimeParameterProps): React.JSX.Element {
+  return (
+    <div className="runtime-parameter-form">
+      {modelFieldsFor('deepseek-harness', props)}
+      <PermissionSelect
+        {...props}
+        fieldKey="sandbox_mode"
+        label="sandbox_mode"
+        choiceDescriptions={{
+          'read-only': '仅允许读取文件',
+          'workspace-write': '允许写入当前工作区',
+          'danger-full-access': '不限制文件系统访问'
+        }}
+      />
+      <PermissionSelect
+        {...props}
+        fieldKey="approval_policy"
+        label="approval_policy"
+        choiceDescriptions={{
+          ask: '需要确认时由 DSH 发起询问',
+          never: '不询问；需要升级权限时由 DSH 拒绝'
+        }}
+      />
+    </div>
+  )
 }
 
 function PiRuntimeParameters(props: RuntimeParameterProps): React.JSX.Element {
@@ -384,6 +413,7 @@ function modelFieldsFor(
     case 'qoder-cli':
     case 'codebuddy-cli':
     case 'qwen-code':
+    case 'deepseek-harness':
       return <ModelFields {...props} optionKey="reasoning_effort" optionLabel="推理强度" />
     case 'kiro-cli':
     case 'pi':
@@ -695,10 +725,12 @@ function PermissionSelect({
   disabled,
   onChange,
   fieldKey,
-  label
+  label,
+  choiceDescriptions
 }: RuntimeParameterProps & {
   fieldKey: string
   label: string
+  choiceDescriptions?: Record<string, string>
 }): React.JSX.Element {
   const descriptor = permissionDescriptor(snapshot.permissionOptions, fieldKey)
   if (!descriptor) {
@@ -716,7 +748,10 @@ function PermissionSelect({
       choices={[
         ...(!currentValue ? [{ value: '', label: '请选择' }] : []),
         ...(invalid ? [{ value: currentValue, label: `已失效 · ${currentValue}`, disabled: true }] : []),
-        ...descriptor.choices
+        ...descriptor.choices.map((choice) => ({
+          ...choice,
+          description: choiceDescriptions?.[choice.value]
+        }))
       ]}
     />
   )

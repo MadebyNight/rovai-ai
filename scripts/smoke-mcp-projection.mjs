@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { configureProductRuntime } from './configure-product-runtime.mjs'
+import { prepareDshSmokeHome } from './lib/dsh-smoke-home.mjs'
 import { createConfiguredCampAndSend, composerDocumentForAddress } from './lib/create-configured-camp.mjs'
 import {
   coreDataDirectoryArguments,
@@ -26,6 +27,7 @@ const fixtureRoot = await realpath(await mkdtemp(join(tmpdir(), 'rovai-mcp-proje
 const projectRoot = join(fixtureRoot, 'project')
 const dataDir = join(fixtureRoot, 'data')
 const grokHome = join(fixtureRoot, 'grok-home')
+const dshHome = join(fixtureRoot, 'dsh-home')
 const grokSourceHome = process.env.GROK_HOME?.trim() || join(homedir(), '.grok')
 const grokNativeStdioMarker = join(fixtureRoot, 'grok-native-stdio-started')
 const grokNativeHttpNameMarker = join(fixtureRoot, 'grok-native-http-name-started')
@@ -54,6 +56,7 @@ const allAdapters = [
   'trae-cn-cli',
   'kimi-code-cli',
   'grok-build',
+  'deepseek-harness',
   'zcode-app'
 ]
 const adapters = selected.length === 1 && selected[0] === 'all' ? allAdapters : selected
@@ -71,6 +74,15 @@ try {
   nativeHttp = await startMcpHttpServer('runtime-native-http')
   await prepareProject(nativeHttp.url)
   if (grokSelected) await prepareGrokHome()
+  if (adapters.includes('deepseek-harness')) {
+    const nativeRows = [serverName, projectedHttpServerName, projectedStdioServerName].map((serverName, index) => ({
+        id: `native-mcp-${index}`, name: '@deepseek-ai/dsh-mcp-client',
+        config: { serverName, transport: 'stdio', command: process.execPath, args: [fixture],
+          env: { ROVAI_MCP_SMOKE_SOURCE: 'runtime-native' }, failOnStartupError: true }
+      }))
+    if (process.env.ROVAI_DSH_SCRIPTED_MCP === '1') nativeRows.push({ id: 'acceptance-scripted-model', name: join(root, 'scripts/lib/dsh-scripted-mcp-provider.mjs') })
+    await prepareDshSmokeHome(dshHome, [{ insert: nativeRows }])
+  }
   await prepareRovaiConfig(projectedHttp.url)
   core = startCore()
   await core.request('health.check')
@@ -89,7 +101,7 @@ try {
         ]
       : adapterKind === 'grok-build'
         ? [`rovai-projection-stdio:${adapterMarker}-stdio`]
-      : ['kimi-code-cli', 'zcode-app'].includes(adapterKind)
+      : ['kimi-code-cli', 'zcode-app', 'deepseek-harness'].includes(adapterKind)
         ? [
             `rovai-projection:${adapterMarker}`,
             `rovai-projection-http:${adapterMarker}-http`,
@@ -108,7 +120,7 @@ try {
             `rovai-projection-http:${adapterMarker}-http`,
             `runtime-native-http:${adapterMarker}-stdio`
           ]
-      : ['kimi-code-cli', 'zcode-app'].includes(adapterKind)
+      : ['kimi-code-cli', 'zcode-app', 'deepseek-harness'].includes(adapterKind)
         ? [
             `runtime-native:${adapterMarker}`,
             `runtime-native:${adapterMarker}-http`,
@@ -125,6 +137,7 @@ try {
     )
     for (const marker of expected) {
       assert(result.output.includes(marker), `${adapterKind} did not return the projected marker ${marker}: ${JSON.stringify(result)}`)
+      if (adapterKind === 'deepseek-harness') assert(result.toolOutput.includes(marker), `DSH omitted actual MCP Tool evidence for ${marker}`)
     }
     for (const marker of forbidden) {
       assert(!result.output.includes(marker), `${adapterKind} silently used the same-name Runtime-native MCP ${marker}: ${JSON.stringify(result)}`)
@@ -134,7 +147,7 @@ try {
       assert(await pathExists(grokNativeHttpNameMarker), 'grok-build did not preserve the second native same-name MCP server')
     }
     const expectedServers = adapterKind === 'codex-cli'
-      || ['kimi-code-cli', 'grok-build', 'zcode-app'].includes(adapterKind)
+      || ['kimi-code-cli', 'grok-build', 'zcode-app', 'deepseek-harness'].includes(adapterKind)
       ? [serverName, projectedHttpServerName, projectedStdioServerName]
       : [serverName]
     const exposures = expectedServers.map((name) => result.exposure?.servers?.find((server) => server.name === name))
@@ -150,7 +163,8 @@ try {
       )
     }
     let lifecycle = null
-    if (adapterKind === 'zcode-app') {
+    let safety = null
+    if (['zcode-app', 'deepseek-harness'].includes(adapterKind)) {
       // Use the same Camp so a missing compatibility fence would actually reuse
       // the resident Host. A neighbouring member has no Rovai assignments.
       const mutate = async (method, params) => {
@@ -158,27 +172,67 @@ try {
         const mutation = await core.request(method, { expectedConfigDigest: config.configDigest, ...params })
         assert(mutation.status === 'ok', `${method} failed: ${JSON.stringify(mutation)}`)
       }
-      const probe = (body, agentId = 'agent_1') => runProjectedTool(core.request, workspace, adapterKind,
-        adapterMarker, core.events, { campId: result.campId, agentId, body })
-      const call = `Call the MCP server named ${serverName} echo tool exactly once with text lifecycle. Return its actual result. Do not use other tools.`
+      const probe = (body, agentId = 'agent_1', options = {}) => runProjectedTool(core.request, workspace, adapterKind,
+        adapterMarker, core.events, { campId: result.campId, agentId,
+          body: body.replace('text lifecycle.', `text lifecycle_${crypto.randomUUID()}.`), ...options })
+      const call = `Call the MCP server named ${serverName} echo tool exactly once with text lifecycle. This is a fresh request: actually call the tool with the current text, never reuse a previous result. Return its actual result. If denied, report denial without retrying. Do not use other tools.`
+      const assertSource = (run, expected, forbidden, label) => {
+        const observed = adapterKind === 'deepseek-harness' ? run.toolOutput : run.output
+        assert(observed.includes(expected) && (!forbidden || !observed.includes(forbidden)), `${adapterKind} ${label}: ${JSON.stringify({ output:run.output, toolOutput:run.toolOutput })}`)
+      }
       await mutate('mcp.servers.update', { serverId, definitionJson: JSON.stringify({ mcpServers: {
         [serverName]: { command: process.execPath, args: [fixture], env: { ROVAI_MCP_SMOKE_SOURCE: 'rovai-updated' } }
       } }) })
       const updated = await probe(call)
-      assert(updated.output.includes('rovai-updated:lifecycle'), 'ZCode MCP update did not take effect')
-      assert(updated.hostInstanceId !== result.hostInstanceId, 'ZCode reused stale MCP Host')
+      assertSource(updated, 'rovai-updated:lifecycle', null, 'MCP update did not take effect')
+      assert(updated.hostInstanceId !== result.hostInstanceId, `${adapterKind} reused stale MCP Host`)
+      if (adapterKind === 'deepseek-harness') assert(updated.nativeThreadId === result.nativeThreadId, 'DSH lost exact Session on MCP update')
       await configureProductRuntime(core.request, adapterKind, ['agent_2'])
       const adjacent = await probe(call, 'agent_2')
-      assert(adjacent.output.includes('runtime-native:lifecycle') && !adjacent.output.includes('rovai-updated:'), 'Assigned ZCode MCP leaked to an adjacent member')
+      assertSource(adjacent, 'runtime-native:lifecycle', 'rovai-updated:', 'adjacent member did not call its native MCP')
       await mutate('mcp.assignments.set', { serverId, agentId: 'agent_1', assigned: false })
       const unassigned = await probe(call)
-      assert(unassigned.output.includes('runtime-native:lifecycle') && !unassigned.output.includes('rovai-updated:'), 'ZCode retained removed assignment')
+      assertSource(unassigned, 'runtime-native:lifecycle', 'rovai-updated:', 'removed assignment remained visible')
       await mutate('mcp.assignments.set', { serverId, agentId: 'agent_1', assigned: true })
       const reassigned = await probe(call)
-      assert(reassigned.output.includes('rovai-updated:lifecycle'), 'ZCode reassignment did not take effect')
+      assertSource(reassigned, 'rovai-updated:lifecycle', null, 'reassignment did not take effect')
+      if (adapterKind === 'deepseek-harness') {
+        const callMarker = join(fixtureRoot, 'dsh-mcp-calls')
+        await mutate('mcp.servers.update', { serverId, definitionJson: JSON.stringify({ mcpServers: {
+          [serverName]: { command: process.execPath, args: [fixture], env: { ROVAI_MCP_SMOKE_SOURCE: 'rovai-updated', ROVAI_MCP_SMOKE_CALL_MARKER: callMarker } }
+        } }) })
+        const permissions = async (sandbox_mode, approval_policy) => {
+          const member = await core.request('members.get', { agentId: 'agent_1' })
+          const changed = await core.request('members.runtime.set', { commandId: crypto.randomUUID(), command: {
+            agentId: 'agent_1', expectedVersion: member.version, adapterKind,
+            model: member.runtimeConfiguration.model,
+            permissions: { ...member.runtimeConfiguration.permissions, values: { sandbox_mode, approval_policy } }
+          } })
+          assert(changed.status === 'applied', 'DSH permission change failed')
+        }
+        const count = async () => (await readFile(callMarker, 'utf8').catch(error => { if(error.code === 'ENOENT') return ''; throw error })).split('\n').filter(Boolean).length
+        await permissions('danger-full-access', 'ask')
+        const ask = await probe(call, 'agent_1')
+        assert(ask.approvalCount === 0 && await count() === 1,
+          'Rovai synthesized an Approval that DSH did not request for MCP')
+        await permissions('read-only', 'ask')
+        const readOnlyAsk = await probe(call, 'agent_1')
+        assert(readOnlyAsk.approvalCount === 0 && await count() === 2,
+          'Rovai overrode DSH native MCP behavior under read-only/ask')
+        await permissions('read-only', 'never')
+        const readOnlyNever = await probe(call, 'agent_1')
+        assert(readOnlyNever.approvalCount === 0 && await count() === 3,
+          'Rovai overrode DSH native MCP behavior under read-only/never')
+        await permissions('danger-full-access', 'never')
+        safety = {
+          authority: 'runtime-native',
+          syntheticApprovalCount: ask.approvalCount + readOnlyAsk.approvalCount + readOnlyNever.approvalCount,
+          nativeMcpEffects: await count()
+        }
+      }
       await mutate('mcp.servers.delete', { serverId })
       const deleted = await probe(call)
-      assert(deleted.output.includes('runtime-native:lifecycle') && !deleted.output.includes('rovai-updated:'), 'ZCode retained deleted MCP')
+      assertSource(deleted, 'runtime-native:lifecycle', 'rovai-updated:', 'deleted MCP remained visible')
       lifecycle = { updateObserved: true, oldHostFenced: true, adjacentAssignmentIsolated: true,
         unassignedNativeRestored: true, reassignedObserved: true, deletedNativeRestored: true,
         agentRunIds: [updated, adjacent, unassigned, reassigned, deleted].map((run) => run.agentRunId) }
@@ -186,6 +240,7 @@ try {
     results.push({
       adapterKind,
       lifecycle,
+      safety,
       reportedVersion: runtime.snapshot.reportedVersion,
       modelId: selectedModel(adapterKind) ?? runtime.memberRuntimeDefaults?.model?.modelId ?? 'runtime_default',
       runtimeNames: exposures.map((exposure) => exposure.runtimeName),
@@ -197,6 +252,7 @@ try {
 
   console.log(JSON.stringify({
     ok: true,
+    modelSource: process.env.ROVAI_DSH_SCRIPTED_MCP === '1' ? 'scripted MCP-only acceptance fixture; no provider generation' : 'native provider',
     semantics: 'Runtime-native config is preserved; Codex skips collisions, Grok skips active native collisions and adds distinct per-Run servers, while other additive adapters give Rovai the whole-definition precedence',
     results
   }, null, 2))
@@ -390,7 +446,7 @@ async function runProjectedTool(request, workspace, adapterKind, adapterMarker, 
           `Call the assigned MCP server named \`${projectedStdioServerName}\` and its \`echo\` tool exactly once with text \`${adapterMarker}-stdio\`.`,
           'Return exactly that tool result. The other two assigned definitions collide with active native servers and must remain skipped.'
         ]
-    : ['kimi-code-cli', 'zcode-app'].includes(adapterKind)
+    : ['kimi-code-cli', 'zcode-app', 'deepseek-harness'].includes(adapterKind)
       ? [
           `Call the assigned MCP server named \`${serverName}\` and its \`echo\` tool exactly once with text \`${adapterMarker}\`.`,
           `Call the assigned HTTP MCP server named \`${projectedHttpServerName}\` and its \`echo\` tool exactly once with text \`${adapterMarker}-http\`.`,
@@ -432,7 +488,21 @@ async function runProjectedTool(request, workspace, adapterKind, adapterMarker, 
         && !resolvedApprovals.has(value.id)
         && candidate.actions.some((action) => action.id === value.actionId && action.agentRunId === agentRunId)
     )) {
-      const option = approval.options.find((value) => value.kind === 'allow_once')
+      if (options.approval === 'cancel') {
+        const run = candidate.agentRuns.find(value => value.id === agentRunId)
+        let turn = candidate.turns.find(value => value.id === run.campTurnId)
+        for(let attempt = 0; attempt < 5; attempt++) {
+          const cancelled = await request('campTurns.cancel', { commandId: crypto.randomUUID(), command: { campId: created.payload.campId, campTurnId: turn.id, expectedVersion: turn.version } })
+          if(cancelled.status !== 'rejected') break
+          assert(cancelled.code === 'command.version_conflict' && attempt < 4, 'DSH MCP cancellation was rejected')
+          turn = (await request('camps.snapshot', { campId: created.payload.campId })).turns.find(value => value.id === turn.id)
+        }
+        resolvedApprovals.add(approval.id)
+        continue
+      }
+      const option = options.approval === 'deny'
+        ? approval.options.find(value => ['deny', 'cancel'].includes(value.kind))
+        : approval.options.find((value) => value.kind === 'allow_once')
         ?? approval.options.find((value) => value.kind === 'allow_session')
       if (!option) throw new Error(`${adapterKind} MCP request has no exact allow option: ${JSON.stringify(approval)}`)
       const resolution = await request('action.approvals.resolve', {
@@ -461,6 +531,7 @@ async function runProjectedTool(request, workspace, adapterKind, adapterMarker, 
         .slice(-20)
         .map((event) => ({ method: event.method, params: event.params }))
     }
+    if (options.approval === 'cancel' && run?.status === 'cancelled') return candidate
     if (run?.status === 'failed' || run?.status === 'cancelled') {
       throw new Error(`${adapterKind} same-name MCP AgentRun failed: ${JSON.stringify(lastState)}`)
     }
@@ -480,9 +551,13 @@ async function runProjectedTool(request, workspace, adapterKind, adapterMarker, 
     agentRunId,
     conversationId: run?.conversationId,
     output,
+    toolOutput: events.filter(event => event.method === 'runtime.action' && event.params?.agentRunId === agentRunId)
+      .map(event => event.params?.payload?.output ?? '').filter(value => typeof value === 'string').join('\n'),
     exposure: manifest?.mcpExposure,
     hostInstanceId: started?.params?.hostInstanceId,
-    nativeThreadId: started?.params?.nativeThreadId,
+    nativeThreadId: events.find(event => event.method === 'agent_run.native_session_bound' && event.params?.agentRunId === agentRunId)?.params?.nativeThreadId ?? started?.params?.nativeThreadId,
+    approvalCount: resolvedApprovals.size,
+    runStatus: run?.status,
     lastState
   }
 }
@@ -576,7 +651,8 @@ function startCore() {
   const coreExecutable = process.env.ROVAI_CORE_EXECUTABLE
     ? resolve(process.env.ROVAI_CORE_EXECUTABLE)
     : join(root, 'target', 'debug', 'rovai-core')
-  const coreEnvironment = { ...process.env, GROK_HOME: grokHome }
+  const coreEnvironment = { ...process.env, GROK_HOME: grokHome,
+    ...(adapters.includes('deepseek-harness') ? { DSH_HOME: dshHome } : {}) }
   const child = spawn(coreExecutable, [
     ...coreDataDirectoryArguments(dataDir),
     '--skill-library-root', join(dataDir, 'managed-skill-library'),

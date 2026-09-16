@@ -1399,6 +1399,7 @@ async fn acp_probe_at(
             | AdapterKind::QwenCode
             | AdapterKind::TraeCnCli
             | AdapterKind::GrokBuild
+            | AdapterKind::DeepseekHarness
             | AdapterKind::CursorAgent
             | AdapterKind::KimiCodeCli
             | AdapterKind::ZcodeApp
@@ -1566,8 +1567,10 @@ async fn acp_probe_at(
             session_result: None,
         };
     }
-    if kind == AdapterKind::GrokBuild
-        && !grok_build_minimum_version_satisfied(reported_version.as_deref())
+    if (kind == AdapterKind::GrokBuild
+        && !grok_build_minimum_version_satisfied(reported_version.as_deref()))
+        || (kind == AdapterKind::DeepseekHarness
+            && !crate::dsh::supported_version(reported_version.as_deref()))
     {
         return AcpCapabilityProbe {
             result: agent_probe_result(
@@ -1578,10 +1581,21 @@ async fn acp_probe_at(
                 AgentRuntimeProbeStatus::MissingCapabilities,
                 Vec::new(),
                 vec![format!(
-                    "runtime.version>={GROK_BUILD_MINIMUM_VERSION_LABEL}"
+                    "runtime.version>={}",
+                    if kind == AdapterKind::DeepseekHarness {
+                        crate::dsh::MINIMUM_VERSION
+                    } else {
+                        GROK_BUILD_MINIMUM_VERSION_LABEL
+                    }
                 )],
                 Some(format!(
-                    "Grok Build >= {GROK_BUILD_MINIMUM_VERSION_LABEL} is required."
+                    "{} >= {} is required.",
+                    kind.display_name(),
+                    if kind == AdapterKind::DeepseekHarness {
+                        crate::dsh::MINIMUM_VERSION
+                    } else {
+                        GROK_BUILD_MINIMUM_VERSION_LABEL
+                    }
                 )),
                 probed_at,
             ),
@@ -1617,7 +1631,9 @@ async fn acp_probe_at(
             } else {
                 AgentRuntimeProbeStatus::MissingCapabilities
             };
-            let detail = if kind == AdapterKind::ZcodeApp && missing.is_empty() {
+            let detail = if matches!(kind, AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness)
+                && missing.is_empty()
+            {
                 Some("Native configuration and basic connection checked in a temporary workspace; no prompt sent. Model generation, balance and advanced capabilities were not tested. Native initialization may access the network and write state.".to_string())
             } else {
                 (!missing.is_empty()).then(|| {
@@ -2391,6 +2407,9 @@ pub fn configure_acp_command(command: &mut Command, kind: AdapterKind, allow_all
         AdapterKind::KimiCodeCli => {
             command.arg("acp");
         }
+        AdapterKind::DeepseekHarness => {
+            command.args(["--profile", "acp"]);
+        }
         AdapterKind::GrokBuild => {
             configure_grok_acp_command(command, None);
         }
@@ -2486,10 +2505,30 @@ fn acp_observed_capabilities(
             .to_string(),
         );
     }
+    if kind == AdapterKind::DeepseekHarness {
+        capabilities.retain(|capability| capability != "workspace.additional_roots");
+        if let Some(session) = session
+            && crate::agent_runtime_adapter::acp_model_catalog_from_session(session).is_ok()
+        {
+            capabilities.push("dsh.model_catalog".to_string());
+        }
+    }
     capabilities
 }
 
 fn acp_required_capabilities(kind: AdapterKind) -> Vec<String> {
+    if kind == AdapterKind::DeepseekHarness {
+        return [
+            "acp.initialize",
+            "session.new",
+            "session.resume",
+            "dsh.model_catalog",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    }
+
     if kind == AdapterKind::ZcodeApp {
         // Probe observations, distinct from AdapterCapabilitySnapshot support.
         return [
@@ -2582,6 +2621,7 @@ fn additive_acp_mcp_verified(kind: AdapterKind) -> bool {
             | AdapterKind::QwenCode
             | AdapterKind::TraeCnCli
             | AdapterKind::GrokBuild
+            | AdapterKind::DeepseekHarness
     )
 }
 
@@ -3462,6 +3502,7 @@ pub fn find_adapter(kind: AdapterKind) -> Option<PathBuf> {
         AdapterKind::CursorAgent => (&["ROVAI_CURSOR_BIN"][..], "cursor-agent"),
         AdapterKind::KimiCodeCli => (&["ROVAI_KIMI_BIN"][..], "kimi"),
         AdapterKind::GrokBuild => (&["ROVAI_GROK_BIN"][..], "grok"),
+        AdapterKind::DeepseekHarness => (&["ROVAI_DEEPSEEK_HARNESS_BIN"][..], "dsh"),
         AdapterKind::ZcodeApp => {
             return rovai_core::zcode::default_executables()
                 .into_iter()

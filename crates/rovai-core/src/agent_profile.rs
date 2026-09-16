@@ -51,6 +51,7 @@ pub enum AdapterKind {
     CursorAgent,
     KimiCodeCli,
     GrokBuild,
+    DeepseekHarness,
     ZcodeApp,
     AntigravityApp,
 }
@@ -99,7 +100,7 @@ impl MissingSendRecoveryMode {
 }
 
 impl AdapterKind {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::CodexCli,
         Self::Pi,
         Self::OpencodeCli,
@@ -114,6 +115,7 @@ impl AdapterKind {
         Self::CursorAgent,
         Self::KimiCodeCli,
         Self::GrokBuild,
+        Self::DeepseekHarness,
         Self::ZcodeApp,
     ];
 
@@ -132,6 +134,7 @@ impl AdapterKind {
             Self::CursorAgent => "cursor-agent",
             Self::KimiCodeCli => "kimi-code-cli",
             Self::GrokBuild => "grok-build",
+            Self::DeepseekHarness => "deepseek-harness",
             Self::ZcodeApp => "zcode-app",
             Self::AntigravityApp => "antigravity-app",
         }
@@ -152,6 +155,7 @@ impl AdapterKind {
             Self::CursorAgent => "cursor-agent",
             Self::KimiCodeCli => "kimi",
             Self::GrokBuild => "grok",
+            Self::DeepseekHarness => "dsh",
             Self::ZcodeApp => "ZCode",
             Self::AntigravityApp => "agy",
         }
@@ -168,6 +172,7 @@ impl AdapterKind {
             Self::Pi => &["pi"],
             Self::KimiCodeCli => &["kimi"],
             Self::GrokBuild => &["grok"],
+            Self::DeepseekHarness => &["dsh"],
             Self::ZcodeApp => &["ZCode"],
             Self::CodexCli => &["codex"],
             Self::OpencodeCli => &["opencode"],
@@ -197,6 +202,7 @@ impl AdapterKind {
             Self::CursorAgent => "Cursor Agent",
             Self::KimiCodeCli => "Kimi Code",
             Self::GrokBuild => "Grok Build",
+            Self::DeepseekHarness => "DeepSeek Harness",
             Self::ZcodeApp => "ZCode",
             Self::AntigravityApp => "Antigravity",
         }
@@ -215,6 +221,7 @@ impl AdapterKind {
                 | Self::CursorAgent
                 | Self::KimiCodeCli
                 | Self::GrokBuild
+                | Self::DeepseekHarness
                 | Self::ZcodeApp
         )
     }
@@ -234,6 +241,7 @@ impl AdapterKind {
             Self::CursorAgent => "ROVAI_CURSOR_BIN",
             Self::KimiCodeCli => "ROVAI_KIMI_BIN",
             Self::GrokBuild => "ROVAI_GROK_BIN",
+            Self::DeepseekHarness => "ROVAI_DEEPSEEK_HARNESS_BIN",
             Self::ZcodeApp => "ROVAI_ZCODE_BIN",
             Self::AntigravityApp => "ROVAI_ANTIGRAVITY_BIN",
         }
@@ -259,6 +267,7 @@ impl AdapterKind {
             | Self::CursorAgent
             | Self::KimiCodeCli
             | Self::GrokBuild
+            | Self::DeepseekHarness
             | Self::ZcodeApp
             | Self::AntigravityApp => PublicOutputMode::ExplicitSendOnly,
         }
@@ -281,6 +290,7 @@ impl AdapterKind {
             | Self::TraeCnCli
             | Self::KimiCodeCli
             | Self::GrokBuild
+            | Self::DeepseekHarness
             | Self::ZcodeApp
             | Self::AntigravityApp => MissingSendRecoveryMode::IfNoAcceptedSend,
             Self::CursorAgent => MissingSendRecoveryMode::Disabled,
@@ -306,6 +316,7 @@ impl FromStr for AdapterKind {
             "cursor-agent" => Ok(Self::CursorAgent),
             "kimi-code-cli" => Ok(Self::KimiCodeCli),
             "grok-build" => Ok(Self::GrokBuild),
+            "deepseek-harness" => Ok(Self::DeepseekHarness),
             "zcode-app" => Ok(Self::ZcodeApp),
             "antigravity-app" => Ok(Self::AntigravityApp),
             _ => anyhow::bail!("unsupported Adapter kind: {value}"),
@@ -3864,7 +3875,8 @@ fn provisional_runtime_protocol(adapter_kind: AdapterKind) -> &'static str {
         | AdapterKind::TraeCnCli
         | AdapterKind::CursorAgent
         | AdapterKind::KimiCodeCli
-        | AdapterKind::GrokBuild => "acp-v1",
+        | AdapterKind::GrokBuild
+        | AdapterKind::DeepseekHarness => "acp-v1",
         AdapterKind::ZcodeApp => crate::zcode::PROTOCOL,
     }
 }
@@ -5484,6 +5496,7 @@ mod slow_tests {
                 AdapterKind::CursorAgent,
                 AdapterKind::KimiCodeCli,
                 AdapterKind::GrokBuild,
+                AdapterKind::DeepseekHarness,
                 AdapterKind::ZcodeApp,
             ]
         );

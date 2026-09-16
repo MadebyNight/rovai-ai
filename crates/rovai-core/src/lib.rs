@@ -50,6 +50,7 @@ pub mod current_user;
 pub mod database_admission;
 pub mod db;
 pub mod diagnostics;
+pub mod dsh;
 pub mod execution_budget;
 pub mod execution_evidence;
 pub(crate) mod execution_text;

@@ -136,6 +136,34 @@ describe('member runtime parameters', () => {
     expect(markup).not.toContain('高风险')
   })
 
+  it('keeps DSH native permission names primary and adds concise explanations', () => {
+    const installation = runtimeInstallation('deepseek-harness')
+    const markup = renderToStaticMarkup(createElement(MemberRuntimeParameters, {
+      adapterKind: 'deepseek-harness',
+      installation,
+      draft: {
+        model: { mode: 'runtime_default' },
+        permissions: {
+          adapterKind: 'deepseek-harness',
+          schemaVersion: 1,
+          values: { sandbox_mode: 'workspace-write', approval_policy: 'ask' }
+        }
+      },
+      disabled: false,
+      onChange: () => undefined
+    }))
+
+    expect(markup).toContain('>sandbox_mode</label>')
+    expect(markup).toContain('>workspace-write</strong>')
+    expect(markup).toContain('允许写入当前工作区')
+    expect(markup).toContain('aria-label="sandbox_mode，workspace-write，允许写入当前工作区"')
+    expect(markup).toContain('>approval_policy</label>')
+    expect(markup).toContain('>ask</strong>')
+    expect(markup).toContain('需要确认时由 DSH 发起询问')
+    expect(markup).not.toContain('文件系统访问')
+    expect(markup).not.toContain('审批策略')
+  })
+
   it('shows model-specific parameters only for an explicit model', () => {
     const installation = runtimeInstallation('codex-cli')
     const markup = renderToStaticMarkup(createElement(MemberRuntimeParameters, {
@@ -427,6 +455,7 @@ function runtimeInstallation(kind: AdapterKind): AdapterInstallation {
 function runtimePermissionDefaults(kind: AdapterKind): Record<string, unknown> {
   switch (kind) {
     case 'codex-cli':
+    case 'deepseek-harness':
       return { sandbox_mode: 'danger-full-access', approval_policy: 'never' }
     case 'pi':
       return {}
@@ -470,9 +499,13 @@ function runtimePermissionOptions(kind: AdapterKind): PermissionOptionDescriptor
     label: key,
     description: '',
     valueType: 'enum',
-    choices: key === 'allow_all' || key === 'trust_all_tools' || key === 'dangerously_skip_permissions'
-      ? [{ value: 'off', label: 'off' }, { value: 'on', label: 'on' }]
-      : [{ value: String(value), label: String(value) }],
+    choices: kind === 'deepseek-harness'
+      ? (key === 'sandbox_mode'
+          ? ['read-only', 'workspace-write', 'danger-full-access']
+          : ['ask', 'never']).map(value => ({ value, label: value }))
+      : key === 'allow_all' || key === 'trust_all_tools' || key === 'dangerously_skip_permissions'
+        ? [{ value: 'off', label: 'off' }, { value: 'on', label: 'on' }]
+        : [{ value: String(value), label: String(value) }],
     recommendedValue: value,
     scope: 'run',
     risk: 'elevated',

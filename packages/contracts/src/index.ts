@@ -38,6 +38,7 @@ export type AdapterKind =
   | 'kimi-code-cli'
   | 'grok-build'
   | 'zcode-app'
+  | 'deepseek-harness'
   | 'antigravity-app'
 
 export type RuntimeOptionScope = 'run' | 'session' | 'host'
@@ -3176,6 +3177,7 @@ export type SkillDeliveryGroupKey =
   | 'kimi'
   | 'grok'
   | 'zcode'
+  | 'dsh'
 
 export interface SkillRiskSummary {
   executableFileCount: number

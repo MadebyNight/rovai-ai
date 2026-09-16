@@ -717,7 +717,8 @@ const SKILL_DELIVERY_GROUP_DISPLAY_RANK: Record<SkillDeliveryGroupKey, number> =
   zcode: 15,
   grok: 11,
   antigravity: 12,
-  pi: 13
+  pi: 13,
+  dsh: 16
 }
 
 export function skillDeliveryGroupsForDisplay(

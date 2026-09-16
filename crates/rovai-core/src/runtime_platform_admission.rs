@@ -8,7 +8,7 @@ use crate::{agent_profile::AdapterKind, platform::HostPlatformKey};
 /// that evidence even when their Adapter identity exists in the Product Catalog.
 /// Every register revision receives a new digest.
 pub const MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION: &str =
-    "sha256:8a8f57f92fdfcef1568e97a736d6452b198c9639368342d007694ca64a8338cc";
+    "sha256:ff18daa828cc7592362fcfd276af2415acf000e73e162808595a2f48ddec9844";
 
 /// Immutable digest of the sanitized, adapter-scoped Windows x64 evidence.
 /// The source qualifies only the Runtime rows named in that evidence; shared
@@ -30,6 +30,9 @@ pub const PI_MACOS_X64_EVIDENCE_REVISION: &str =
     "sha256:5dc85386653d2170979d34b6c32bd3df72707b63deff394174775dd2eca64301";
 pub const PI_WINDOWS_X64_EVIDENCE_REVISION: &str =
     "sha256:2dec32c61673793e06c80e9c55fb9631473a418cb773b309f9e075216b3362b8";
+
+pub const DSH_MACOS_ARM64_EVIDENCE_REVISION: &str =
+    "sha256:017f63a62ceb33a8c03e881e9ace29b9710cb94006f87a2def529c6a31276394";
 
 pub const ZCODE_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:4c4134d5f68f0633e02d3ade061725d5ff5cfc372d85c345fae10b71ad2badc2";
@@ -187,6 +190,13 @@ mod tests {
     fn platform_evidence_revisions_bind_their_frozen_source_bytes() {
         for (revision, bytes) in [
             (
+                DSH_MACOS_ARM64_EVIDENCE_REVISION,
+                include_bytes!(
+                    "../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json"
+                )
+                .as_slice(),
+            ),
+            (
                 ZCODE_MACOS_ARM64_EVIDENCE_REVISION,
                 include_bytes!("../../../qualification/runtime-platform/macos-arm64-zcode-v1.json")
                     .as_slice(),
@@ -281,7 +291,10 @@ mod tests {
             for platform in HostPlatformKey::ALL {
                 if platform == HostPlatformKey::LinuxX64 {
                     let admission = registry.platform_admission(runtime_kind, platform);
-                    let preview = runtime_kind != AdapterKind::CursorAgent;
+                    let preview = !matches!(
+                        runtime_kind,
+                        AdapterKind::CursorAgent | AdapterKind::DeepseekHarness
+                    );
                     assert_eq!(
                         admission.status(),
                         if preview {
@@ -348,7 +361,7 @@ mod tests {
                 assert_eq!(admission.blocker_code(), None);
             } else if !matches!(
                 runtime_kind,
-                AdapterKind::CursorAgent | AdapterKind::ZcodeApp
+                AdapterKind::CursorAgent | AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness
             ) {
                 assert!(admission.is_qualified());
                 assert!(admission.allows_runtime_use());
@@ -410,6 +423,7 @@ mod tests {
                     | AdapterKind::Pi
                     | AdapterKind::GrokBuild
                     | AdapterKind::ZcodeApp
+                    | AdapterKind::DeepseekHarness
             )
         }) {
             for platform in [HostPlatformKey::MacosArm64, HostPlatformKey::MacosX64] {
@@ -448,6 +462,28 @@ mod tests {
                     HostPlatformKey::MacosX64 => PI_MACOS_X64_EVIDENCE_REVISION,
                     HostPlatformKey::WindowsX64 | HostPlatformKey::LinuxX64 => unreachable!(),
                 })
+            );
+        }
+        for platform in HostPlatformKey::ALL {
+            let dsh = registry.platform_admission(AdapterKind::DeepseekHarness, platform);
+            assert_eq!(
+                dsh.status(),
+                if platform == HostPlatformKey::MacosArm64 {
+                    RuntimePlatformAdmissionStatus::Qualified
+                } else {
+                    RuntimePlatformAdmissionStatus::NotQualified
+                }
+            );
+            assert_eq!(
+                dsh.evidence_revision(),
+                (platform == HostPlatformKey::MacosArm64)
+                    .then_some(DSH_MACOS_ARM64_EVIDENCE_REVISION)
+            );
+            assert_eq!(dsh.is_qualified(), platform == HostPlatformKey::MacosArm64);
+            assert_eq!(
+                dsh.reason_code(),
+                (platform != HostPlatformKey::MacosArm64)
+                    .then_some(RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing)
             );
         }
         let grok_arm =

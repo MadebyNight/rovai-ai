@@ -169,6 +169,23 @@ fn classify_high_value_runtime_error(
     bool,
 ) {
     let runtime_name = runtime_display_name(runtime_kind);
+    if runtime_kind == AdapterKind::DeepseekHarness
+        && contains_any(
+            lower,
+            &[
+                "no api key for provider route",
+                "no credential for provider route",
+            ],
+        )
+    {
+        return (
+            RuntimeFailureOrigin::Runtime,
+            RuntimeFailurePhase::Authentication,
+            "runtime_authentication_required".to_string(),
+            "DeepSeek Harness 需要配置 Provider 凭据".to_string(),
+            false,
+        );
+    }
     if contains_any(
         lower,
         &[
@@ -229,6 +246,7 @@ fn classify_high_value_runtime_error(
             "quota exceeded",
             "quota exhausted",
             "insufficient quota",
+            "insufficient balance",
             "credit balance",
             "insufficient credits",
             "billing limit",
@@ -314,6 +332,7 @@ fn runtime_display_name(runtime_kind: AdapterKind) -> &'static str {
         AdapterKind::CursorAgent => "Cursor Agent",
         AdapterKind::KimiCodeCli => "Kimi Code",
         AdapterKind::GrokBuild => "Grok Build",
+        AdapterKind::DeepseekHarness => "DeepSeek Harness",
         AdapterKind::AntigravityApp => "Antigravity",
         AdapterKind::ZcodeApp => "ZCode",
     }
@@ -693,12 +712,36 @@ mod tests {
 
     #[test]
     fn classifies_auth_quota_model_and_permission_failures_with_stable_codes() {
+        for detail in [
+            "ACP error -32603: turn failed: llm-deepseek: no API key for provider route",
+            "ACP error -32603: turn failed: llm-pi-ai: no credential for provider route",
+        ] {
+            let missing_dsh_key = public_runtime_failure_from_output(
+                AdapterKind::DeepseekHarness,
+                RuntimeFailureOrigin::Runtime,
+                RuntimeFailurePhase::Execution,
+                "runtime_prompt_runtime_error",
+                "DeepSeek Harness 未能完成运行",
+                Some(detail),
+                &[],
+                true,
+            );
+            assert_eq!(missing_dsh_key.code, "runtime_authentication_required");
+            assert_eq!(missing_dsh_key.phase, RuntimeFailurePhase::Authentication);
+            assert!(!missing_dsh_key.retryable);
+        }
         let cases = [
             (
                 "Authentication failed: token expired",
                 "runtime_authentication_required",
                 RuntimeFailurePhase::Authentication,
                 true,
+            ),
+            (
+                "ACP error -32603: Internal error: turn failed: Insufficient Balance",
+                "runtime_quota_exceeded",
+                RuntimeFailurePhase::Terminal,
+                false,
             ),
             (
                 "Quota exceeded for this account",
