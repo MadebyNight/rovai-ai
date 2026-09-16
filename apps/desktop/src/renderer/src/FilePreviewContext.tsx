@@ -93,7 +93,7 @@ export function FilePreviewProvider({ campId, resolvedTheme, api: providedApi, c
     return () => { window.removeEventListener('beforeunload', dispose); release() }
   }, [resources])
   return <FilePreviewApiContext.Provider value={api}><FilePreviewContext.Provider value={value}>
-    <FilePreviewLayoutProvider campId={campId} visible={!!campId && value.paneVisible}>
+    <FilePreviewLayoutProvider campId={campId} visible={!!campId && value.paneVisible} activityMode={value.activeTab?.kind === 'mission_activity'}>
       <FileFindProvider activeTabId={value.activeTabId} visible={!!campId && value.paneVisible}>
         <PreviewHostContext.Provider value={registerAnchor}>{children}</PreviewHostContext.Provider>
         {createPortal(<PreviewDeck resources={resources} anchor={anchor} resolvedTheme={resolvedTheme} missionActivity={missionActivity} />, deckHost)}

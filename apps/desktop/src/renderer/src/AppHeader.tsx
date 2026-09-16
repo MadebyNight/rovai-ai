@@ -45,7 +45,7 @@ export function AppHeader({
   </div>
   return (
     <header
-      className={`topbar camp-topbar ${previewTabsInPane ? 'mission-session-header' : previewVisible ? `has-file-preview ${previewLayout?.className ?? ''}` : ''}`.trim()}
+      className={`topbar camp-topbar ${leading ? 'mission-session-header ' : ''}${!previewTabsInPane && previewVisible ? `has-file-preview ${previewLayout?.className ?? ''}` : ''}`.trim()}
       style={previewVisible && !previewTabsInPane ? previewLayout?.style : undefined}
     >
       <div className="topbar-conversation-context">

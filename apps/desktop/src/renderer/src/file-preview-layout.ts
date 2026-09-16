@@ -3,7 +3,20 @@ export const MIN_CONVERSATION_WIDTH = 420
 export const MIN_FILE_PREVIEW_WIDTH = 420
 export const FILE_PREVIEW_CLOSE_THRESHOLD = 320
 export const FILE_PREVIEW_SPLIT_MIN_WIDTH = MIN_CONVERSATION_WIDTH + MIN_FILE_PREVIEW_WIDTH + 1
+export const DEFAULT_MISSION_ACTIVITY_WIDTH = 320
+export const MIN_MISSION_ACTIVITY_WIDTH = 300
+export const MISSION_ACTIVITY_CLOSE_THRESHOLD = 220
 export const FILE_PREVIEW_RATIO_STORAGE_KEY = 'rovai.file-preview.preferred-ratio'
+
+export function filePreviewSplitMinWidth(activityMode: boolean): number {
+  return MIN_CONVERSATION_WIDTH
+    + (activityMode ? MIN_MISSION_ACTIVITY_WIDTH : MIN_FILE_PREVIEW_WIDTH)
+    + 1
+}
+
+export function filePreviewCloseThreshold(activityMode: boolean): number {
+  return activityMode ? MISSION_ACTIVITY_CLOSE_THRESHOLD : FILE_PREVIEW_CLOSE_THRESHOLD
+}
 
 export function filePreviewRatioFromStoredValue(value: string | null): number {
   const ratio = Number(value)

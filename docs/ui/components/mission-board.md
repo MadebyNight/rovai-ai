@@ -40,33 +40,44 @@ A stale edit stays open, replaces both fields with the latest definition and ask
 Success closes the dialog and refreshes the board, opened Mission, conversation title and main Camp title.
 
 Card opening shows a right conversation drawer with Activity selected in the shared file preview. The left
-edge supports pointer and keyboard resizing, a width menu, cancellation and double-click expansion. It
-defaults to 1040px, leaving at least 64px of board when possible, with a 640px minimum. Releasing within
-48px of the main workspace's left edge expands to the full conversation; folding restores the previous
-drawer width. This is workspace presentation, not operating-system fullscreen. The same CampWorkspace,
-Composer and preview owner stay mounted across these changes.
+edge supports pointer and keyboard resizing, cancellation and double-click expansion. It defaults to
+1040px with a 640px minimum, and appears as a 12px-inset rounded floating surface over the board.
+Dragging its edge within 48px of the main workspace's left edge expands to the full conversation
+immediately on pointer movement, without waiting for release; folding restores the previous drawer width.
+When a visible preview and the message area no longer fit while the drawer is shrinking, the preview is
+hidden first and its tabs/read state are retained, so the message area never disappears as an accidental
+result of resizing. This is workspace presentation, not operating-system fullscreen. The same
+CampWorkspace, Composer and preview owner stay mounted across these changes.
 
 The drawer hides the conversation title and places close/expand at the left. Full presentation shows
 project › conversation title, preceded by return-to-board and fold-to-drawer. Both use one full-width
-AppHeader with 执行、任务、队员、单聊、活动, the shared Mission menu and the preview toggle on the right. Drawer runs do not
-automatically open the execution inspector or overlay; explicit execution entry remains available.
+AppHeader with 执行、任务、队员、单聊、活动 in the message column and the preview toggle at the far
+right. There is no Mission ellipsis action in the conversation header. Drawer runs do not automatically
+open the execution inspector or overlay; explicit execution entry remains available.
 
 The timeline begins with a read-only 使命 card: title, description clamped to three lines with overflow
 expansion, roster, tags and read-only status. It has no edit, context menu, or detail/delivery/activity links.
 An unstarted Mission has a 36px neutral primary 开始使命 action below the card (black in Day).
+Starting schedules the Mission and changes its status without inserting a visible user-authored message;
+the timeline remains unchanged until a teammate publishes a message.
 
 Activity is a real closeable preview tab containing delivery and Mission history in one scrolling document.
-Clicking the Activity entry activates or reopens it; clicking while it is selected and visible closes it.
+Clicking the Activity entry opens or restores it when absent/hidden; when its tab already exists in the
+visible preview, the same entry closes that tab even if another file is currently selected.
 Closing selects an adjacent remaining file; closing the last tab also hides the preview. Hiding the whole
 preview retains all tabs and reading state. Activity acquires no file handle and remains scoped to its Camp.
-In Mission conversations the shared preview tab strip sits below the full-width conversation header.
-Compact preview replacement and source-message navigation preserve the conversation and draft.
+In Mission conversations the shared preview tab strip occupies the preview column of the same header,
+with the same low-contrast divider continuing through the body. Activity defaults to a narrow 320px
+column (300px stable minimum); ordinary files retain the normal preview ratio and 420px stable minimum.
+After an automatic resize-driven hide, the far-right toggle can still reopen an intentionally selected
+compact preview. Compact preview and source-message navigation preserve the conversation and draft.
 
 Delivery shows the actual directory and, for Git, associated branch/base and cumulative changes. It has no
 “工作区信息” wrapper or explanatory net-change subtitle. Overview loads file Diff on demand, preserving
 binary/type/rename/Git-mode information and explicit computation failures. Agent files reuse AttachmentCard,
 file preview and source-message navigation. Activity displays actual Mission history. Deletion identifies
 the associated workspace and retained branch; failed cleanup remains visible and retryable.
+The cumulative Diff dialog uses the wide desktop reading surface rather than the standard compact-dialog width.
 
 Business and ownership rules are defined by [Mission v1](../../contracts/mission-v1.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and

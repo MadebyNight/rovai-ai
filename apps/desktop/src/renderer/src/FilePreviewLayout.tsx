@@ -14,21 +14,24 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  DEFAULT_MISSION_ACTIVITY_WIDTH,
   DEFAULT_FILE_PREVIEW_RATIO,
-  FILE_PREVIEW_CLOSE_THRESHOLD,
   FILE_PREVIEW_RATIO_STORAGE_KEY,
-  FILE_PREVIEW_SPLIT_MIN_WIDTH,
   MIN_CONVERSATION_WIDTH,
   MIN_FILE_PREVIEW_WIDTH,
+  MIN_MISSION_ACTIVITY_WIDTH,
+  filePreviewCloseThreshold,
   filePreviewDragWidth,
   filePreviewRatioForWidth,
   filePreviewRatioFromStoredValue,
+  filePreviewSplitMinWidth,
   filePreviewWidthForRatio,
   maximumFilePreviewWidth
 } from './file-preview-layout'
 
 interface FilePreviewLayoutValue {
   visible: boolean
+  activityMode: boolean
   compact: boolean
   width: number
   availableWidth: number
@@ -57,16 +60,19 @@ function readPreferredRatio(): number {
 export function FilePreviewLayoutProvider({
   campId,
   visible,
+  activityMode = false,
   children
 }: {
   campId: string | null
   visible: boolean
+  activityMode?: boolean
   children: ReactNode
 }): React.JSX.Element {
   const [workspace, setWorkspace] = useState<HTMLDivElement | null>(null)
   const [availableWidth, setAvailableWidth] = useState(0)
   const availableWidthRef = useRef(0)
   const [preferredRatio, setPreferredRatio] = useState(readPreferredRatio)
+  const [activityWidth, setActivityWidth] = useState(DEFAULT_MISSION_ACTIVITY_WIDTH)
   const [dragWidth, setDragWidth] = useState<number | null>(null)
   const [snapping, setSnapping] = useState(false)
   const snapTimer = useRef<number | null>(null)
@@ -92,7 +98,8 @@ export function FilePreviewLayoutProvider({
     }
   }, [workspace])
 
-  useEffect(cancelResize, [campId, visible, cancelResize])
+  useEffect(cancelResize, [activityMode, campId, visible, cancelResize])
+  useEffect(() => setActivityWidth(DEFAULT_MISSION_ACTIVITY_WIDTH), [campId])
   useEffect(() => () => {
     if (snapTimer.current !== null) window.clearTimeout(snapTimer.current)
   }, [])
@@ -111,21 +118,42 @@ export function FilePreviewLayoutProvider({
   }, [])
 
   const commitWidth = useCallback((width: number): void => {
+    if (activityMode) {
+      setActivityWidth(Math.max(
+        MIN_MISSION_ACTIVITY_WIDTH,
+        Math.min(width, maximumFilePreviewWidth(availableWidthRef.current))
+      ))
+      setDragWidth(null)
+      return
+    }
     const ratio = filePreviewRatioForWidth(availableWidthRef.current, width)
     if (ratio !== null) saveRatio(ratio)
-  }, [saveRatio])
+  }, [activityMode, saveRatio])
 
-  const resetRatio = useCallback(() => saveRatio(DEFAULT_FILE_PREVIEW_RATIO), [saveRatio])
+  const resetRatio = useCallback(() => {
+    if (activityMode) {
+      setActivityWidth(DEFAULT_MISSION_ACTIVITY_WIDTH)
+      setDragWidth(null)
+      return
+    }
+    saveRatio(DEFAULT_FILE_PREVIEW_RATIO)
+  }, [activityMode, saveRatio])
   const previewWidth = useCallback((width: number): void => {
     if (!Number.isFinite(width)) return
     setSnapping(false)
     setDragWidth(filePreviewDragWidth(availableWidthRef.current, width))
   }, [])
 
-  const compact = availableWidth < FILE_PREVIEW_SPLIT_MIN_WIDTH
-  const width = dragWidth ?? filePreviewWidthForRatio(availableWidth, preferredRatio)
+  const compact = availableWidth < filePreviewSplitMinWidth(activityMode)
+  const width = dragWidth ?? (activityMode
+    ? Math.min(
+        activityWidth,
+        Math.max(MIN_MISSION_ACTIVITY_WIDTH, maximumFilePreviewWidth(availableWidth))
+      )
+    : filePreviewWidthForRatio(availableWidth, preferredRatio))
   const value = useMemo<FilePreviewLayoutValue>(() => ({
     visible,
+    activityMode,
     compact,
     width,
     availableWidth,
@@ -133,7 +161,7 @@ export function FilePreviewLayoutProvider({
     className: [
       compact ? 'file-preview-compact' : '',
       dragWidth !== null ? 'is-file-preview-resizing' : '',
-      dragWidth !== null && width < FILE_PREVIEW_CLOSE_THRESHOLD ? 'is-file-preview-close-armed' : '',
+      dragWidth !== null && width < filePreviewCloseThreshold(activityMode) ? 'is-file-preview-close-armed' : '',
       snapping ? 'is-file-preview-snapping' : ''
     ].filter(Boolean).join(' '),
     style: { '--file-preview-width': `${Math.round(width)}px` } as CSSProperties,
@@ -143,7 +171,7 @@ export function FilePreviewLayoutProvider({
     commitWidth,
     cancelResize,
     resetRatio
-  }), [availableWidth, cancelResize, commitWidth, compact, dragWidth, previewWidth, resetRatio, snapping, visible, width, workspace])
+  }), [activityMode, availableWidth, cancelResize, commitWidth, compact, dragWidth, previewWidth, resetRatio, snapping, visible, width, workspace])
 
   return <FilePreviewLayoutContext.Provider value={value}>{children}</FilePreviewLayoutContext.Provider>
 }
@@ -223,7 +251,7 @@ export function FilePreviewResizeHandle({ onClose }: { onClose(): void }): React
   if (!layout?.visible || layout.compact) return null
 
   const maximum = maximumFilePreviewWidth(layout.availableWidth)
-  const closeArmed = layout.resizing && layout.width < FILE_PREVIEW_CLOSE_THRESHOLD
+  const closeArmed = layout.resizing && layout.width < filePreviewCloseThreshold(layout.activityMode)
   const atConversationMinimum = layout.width >= maximum
   const hint = closeArmed ? '松开关闭文件预览'
     : atConversationMinimum ? `会话区已达最小宽度 ${MIN_CONVERSATION_WIDTH}px`
@@ -261,20 +289,20 @@ export function FilePreviewResizeHandle({ onClose }: { onClose(): void }): React
   }
 
   // One rail belongs to the shell grid, spanning the shared header and the body without clipping.
-  const shell = layout.workspace?.closest('.app-shell-camp')
+  const shell = layout.workspace?.closest('.mission-workspace-host, .app-shell-camp')
   const handle = <div
     className={`file-preview-resize-handle${shell ? ' is-shell-divider' : ''}${layout.resizing ? ' is-resizing' : ''}${closeArmed ? ' is-close-armed' : ''}`}
     style={layout.style}
     role="separator"
     aria-label="调整文件预览宽度"
     aria-orientation="vertical"
-    aria-valuemin={layout.resizing ? 0 : MIN_FILE_PREVIEW_WIDTH}
+    aria-valuemin={layout.resizing ? 0 : layout.activityMode ? MIN_MISSION_ACTIVITY_WIDTH : MIN_FILE_PREVIEW_WIDTH}
     aria-valuemax={Math.round(maximum)}
     aria-valuenow={Math.round(layout.width)}
     aria-valuetext={hint}
     aria-describedby={hintId}
     tabIndex={0}
-    title="拖动调整 · 双击恢复 44/56 · 方向键调整 · Delete 关闭"
+    title={layout.activityMode ? '拖动调整 · 双击恢复 320px · 方向键调整 · Delete 关闭' : '拖动调整 · 双击恢复 44/56 · 方向键调整 · Delete 关闭'}
     onPointerDown={(event) => {
       if (event.button !== 0 || gestureRef.current) return
       const workspace = layout.workspace
@@ -306,7 +334,7 @@ export function FilePreviewResizeHandle({ onClose }: { onClose(): void }): React
       releaseGesture()
       if (layout.availableWidth !== gesture.availableWidth || !moved) {
         layout.cancelResize()
-      } else if (width < FILE_PREVIEW_CLOSE_THRESHOLD) {
+      } else if (width < filePreviewCloseThreshold(layout.activityMode)) {
         closePreview()
       } else {
         layout.commitWidth(width)

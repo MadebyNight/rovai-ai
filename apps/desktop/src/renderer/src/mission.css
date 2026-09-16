@@ -253,25 +253,25 @@ button.mission-tag { cursor: pointer; }
 .mission-file-kind { flex: 0 0 auto; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
 .mission-file-kind.is-added { color: var(--success); }.mission-file-kind.is-deleted { color: var(--danger); }
 .mission-file-binary { color: var(--muted); font-size: 10.5px; }
-.mission-changed-file > .mission-icon:last-child { width: 12px; height: 12px; flex-basis: 12px; transform: rotate(-90deg); }
+.mission-changed-file > .mission-icon:last-child { width: 12px; height: 12px; flex-basis: 12px; transform: none; }
 .mission-query-stamp { margin: 10px 0 0; color: var(--faint); font-size: 10.5px; }
 .mission-diff-state { display: flex; justify-content: center; gap: 8px; padding: 36px 12px; color: var(--muted); font-size: 12px; }
 .mission-diff-error { padding: 16px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .mission-diff-error strong { color: var(--danger); font-weight: 500; }.mission-diff-error p { margin: 7px 0; }.mission-diff-error button { height: 30px; background: var(--neutral-hover); }
 .mission-diff-empty { display: grid; justify-items: center; gap: 6px; padding: 26px 12px; color: var(--muted); font-size: 12px; }
 .mission-diff-empty strong { color: var(--ink); font-weight: 500; }.mission-diff-empty p { margin: 0; font-size: 11px; }
-.mission-diff-dialog { width: min(1040px,calc(100vw - 56px)); height: min(720px,calc(100vh - 56px)); }
-.mission-diff-dialog .compact-header { flex: 0 0 auto; padding: 17px 20px; }
+.compact-dialog.mission-diff-dialog { width: min(1320px,calc(100vw - 64px)); height: min(820px,calc(100vh - 64px)); max-height: calc(100vh - 64px); }
+.mission-diff-dialog .compact-header { flex: 0 0 auto; padding: 18px 22px; }
 .mission-diff-dialog .compact-body { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0; overflow: hidden; }
-.mission-diff-dialog .compact-footer { padding: 10px 20px; border-top: 1px solid var(--line); }
+.mission-diff-dialog .compact-footer { padding: 12px 20px; border-top: 1px solid var(--line); }
 .mission-diff-dialog-baseline { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .mission-diff-dialog-baseline .mission-diff-counts { margin-left: auto; }
 .mission-diff-layout { display: flex; flex: 1; min-height: 0; }
-.mission-diff-file-list { flex: 0 0 240px; min-width: 0; overflow: auto; padding: 8px; border-right: 1px solid var(--line); }
-.mission-diff-file-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; margin-bottom: 3px; padding: 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.mission-diff-file-list { flex: 0 0 280px; min-width: 0; overflow: auto; padding: 12px 10px; border-right: 1px solid var(--line); }
+.mission-diff-file-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; margin-bottom: 3px; padding: 10px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .mission-diff-file-list button[aria-current="true"] { color: var(--ink); background: var(--neutral-selected); }.mission-diff-file-list button:hover { background: var(--neutral-hover); }
 .mission-diff-reading { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; overflow: auto; }
-.mission-diff-reading > header { display: flex; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.mission-diff-reading > header { display: flex; gap: 12px; padding: 15px 20px; border-bottom: 1px solid var(--line); }
 .mission-diff-reading > header strong { min-width: 0; flex: 1; font: 12px/1.5 ui-monospace,monospace; overflow-wrap: anywhere; }.mission-diff-reading > header span { color: var(--muted); font-size: 11px; }
 .mission-diff-reading .agent-run-file-review-blocks { flex: 1; padding: 0; min-height: 0; overflow: auto; }
 .mission-diff-reading .agent-run-file-review-block { border: 0; border-radius: 0; min-width: 100%; width: max-content; }
@@ -286,7 +286,7 @@ button.mission-tag { cursor: pointer; }
 .mission-cleanup-notice { padding: 0 24px 10px; }.mission-cleanup-notice button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--attention); font-size: 11px; cursor: pointer; }
 .mission-cleanup-list section { padding-block: 8px 16px; }.mission-cleanup-list h3 { font-size: 13px; font-weight: 500; }.mission-cleanup-list p { color: var(--muted); font-size: 12px; line-height: 1.7; }.mission-cleanup-list section > div { display: grid; gap: 5px; margin-bottom: 10px; font-size: 11px; overflow-wrap: anywhere; }.mission-cleanup-list small { color: var(--muted); font-size: 11px; }
 :is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags,.mission-changed-file,.mission-diff-file-list button):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
-@media(max-width:1190px) { .mission-toolbar { gap: 6px; }.mission-filter-group { gap: 0; }.mission-filter { padding-inline: 6px; }.mission-search { width: 150px; }.mission-filter .mission-filter-value { max-width: 70px; }.mission-diff-file-list { flex-basis: 210px; } }
+@media(max-width:1190px) { .mission-toolbar { gap: 6px; }.mission-filter-group { gap: 0; }.mission-filter { padding-inline: 6px; }.mission-search { width: 150px; }.mission-filter .mission-filter-value { max-width: 70px; }.mission-diff-file-list { flex-basis: 240px; } }
 @media(max-width:760px) { .mission-toolbar { flex-wrap: wrap; flex-basis: auto; }.mission-filter-group { flex: 1 1 100%; }.mission-search { margin-left: 0; flex: 1; }.mission-diff-file-list { flex-basis: 170px; }.mission-full-properties { flex-wrap: wrap; }.mission-diff-dialog-baseline { flex-wrap: wrap; } }
 .compact-menu .compact-option > .mission-state-glyph { flex: 0 0 14px; }
 .compact-menu:is(.mission-action-menu,.mission-action-submenu,.mission-filter-menu,.mission-status-menu) .compact-option > span.mission-state-glyph { flex: 0 0 14px; }
@@ -368,7 +368,7 @@ button.mission-tag { cursor: pointer; }
 
 
 /* Retained previews share the Mission drawer's visible layer without remounting. */
-.app-shell:has(.mission-drawer) > .file-preview-retained-host { z-index: 21; }
+.app-shell:has(.mission-drawer) > .file-preview-retained-host { z-index: 21; border-bottom-right-radius: 14px; overflow: hidden; }
 
 /* Mission board, conversation drawer and shared activity preview. */
 .mission-filter { min-height: 30px; padding: 0 8px; gap: 6px; border-radius: 6px; color: var(--muted); }
@@ -467,12 +467,18 @@ button.mission-tag { cursor: pointer; }
 .mission-start-row { display: flex; justify-content: flex-end; margin: -12px 0 24px; padding: 0; border: 0; }
 .mission-start { height: 36px; padding-inline: 16px; font-size: 12px; }
 .mission-active-content { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
-.mission-full { display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; flex-direction: column; background: var(--conversation-surface); }
-.mission-active-content > .mission-drawer { top: 0; width: var(--mission-drawer-width,1040px); }
+.mission-full { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; flex-direction: column; background: var(--conversation-surface); }
+.mission-active-content > .mission-drawer { top: 12px; right: 12px; bottom: 12px; width: var(--mission-drawer-width,1040px); border: 1px solid var(--line); border-radius: 14px; background: var(--conversation-surface); box-shadow: var(--shadow-float); }
+.mission-drawer > .camp-topbar { border-radius: 14px 14px 0 0; }
+.mission-drawer > .camp-workspace { border-radius: 0 0 14px 14px; overflow: hidden; }
 .mission-workspace-host > .camp-workspace { flex: 1; min-height: 0; }
 .mission-session-header { height: 40px; min-height: 40px; flex: 0 0 40px; container: mission-header / inline-size; }
-.camp-topbar.mission-session-header .topbar-conversation-context { height: 40px; padding: 0 8px 0 12px; gap: 6px; }
-.mission-session-header .file-preview-toggle-group { position: static; flex: 0 0 auto; gap: 3px; }
+.camp-topbar.mission-session-header .topbar-conversation-context { height: 40px; padding: 0 10px; gap: 4px; }
+.mission-session-header .file-preview-toggle-group { top: 6px; right: 8px; gap: 3px; }
+.mission-session-header.has-file-preview { --file-preview-tabs-end-padding: 72px; }
+.mission-session-header > .file-preview-tabs { height: 40px; padding-block: 6px; }
+.mission-session-header:not(.has-file-preview) .topbar-conversation-context { padding-right: 48px; }
+.mission-session-header .camp-detail-entry > small { display: none; }
 .mission-session-header .context-breadcrumb[hidden] { display: none; }
 .mission-session-header :is(.context-project,.context-sep) { display: inline; }
 .mission-session-leading { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; margin-right: 2px; -webkit-app-region: no-drag; }
@@ -483,7 +489,6 @@ button.mission-tag { cursor: pointer; }
 .mission-activity-entry > svg { width: 14px; height: 14px; }
 .mission-activity-entry:hover { color: var(--ink); background: var(--neutral-hover); }
 .mission-activity-entry[aria-pressed="true"] { color: var(--ink); background: var(--neutral-selected); }
-.mission-session-actions { flex: 0 0 28px; }
 .mission-definition-fields > label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-weight: 550; }
 .mission-definition-fields > label:not(:first-child) { margin-top: 4px; }
 .mission-definition-fields > label > span { font-weight: 400; }
@@ -491,18 +496,22 @@ button.mission-tag { cursor: pointer; }
 .mission-preview-slot { position: relative; }
 .mission-preview-slot > .file-preview-tabs { --file-preview-tabs-end-padding: 6px; height: 38px; flex: 0 0 38px; padding-block: 5px; border-bottom: 1px solid var(--line); }
 .mission-preview-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
-.mission-activity-document { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px 32px; overflow: auto; overscroll-behavior: contain; }
+.mission-activity-document { flex: 1; min-width: 0; min-height: 0; padding: 20px 18px 28px; overflow: auto; overscroll-behavior: contain; }
 .mission-activity-document > :is(.mission-delivery-panel,.mission-activity-panel) { padding: 0; overflow: visible; }
 .mission-activity-document > .mission-activity-panel { margin-top: 28px; }
+.mission-activity-document .mission-evidence-row { column-gap: 8px; }
+.mission-activity-document .mission-evidence-row code { font-size: 10.5px; line-height: 1.65; }
+.mission-activity-document .mission-changed-file { padding-block: 8px; column-gap: 6px; }
+.mission-activity-document .mission-changed-path strong { font-size: 11px; }
+.mission-activity-document .mission-file-kind { font-size: 10px; }
 .file-preview-tab-activate > .mission-icon { width: 14px; height: 14px; flex: 0 0 14px; }
 .file-preview-compact .mission-preview-slot .file-preview-return { display: inline-flex; }
-.app-shell:has(.mission-full) > .file-preview-resize-handle.is-shell-divider { top: 40px; height: calc(100% - 40px); }
+.mission-workspace-host > .file-preview-resize-handle.is-shell-divider { position: absolute; z-index: 24; top: 0; right: var(--file-preview-width); bottom: 0; height: auto; margin: 0; }
 .mission-drawer { animation: none; }
 .mission-drawer.is-resizing { transition: none; }
-.mission-drawer-resize-handle { position: absolute; z-index: 45; top: 0; bottom: 0; left: -5px; width: 10px; cursor: col-resize; touch-action: none; outline: none; -webkit-app-region: no-drag; }
-.mission-drawer-resize-handle::after { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; width: 1px; background: transparent; }
+.mission-drawer-resize-handle { position: absolute; z-index: 45; top: 12px; bottom: 12px; left: -6px; width: 12px; cursor: col-resize; touch-action: none; outline: none; -webkit-app-region: no-drag; }
+.mission-drawer-resize-handle::after { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; width: 1px; border-radius: 1px; background: transparent; }
 .mission-drawer-resize-handle:hover::after,.mission-drawer-resize-handle:focus-visible::after,.mission-drawer.is-resizing .mission-drawer-resize-handle::after { background: var(--resize-line); }
-.mission-drawer-expand-tip { position: absolute; top: 48px; left: 17px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; white-space: nowrap; font-size: 11px; color: var(--ink); background: var(--home-surface); box-shadow: var(--shadow-float); pointer-events: none; }
 html.mission-drawer-resizing,html.mission-drawer-resizing * { cursor: col-resize !important; user-select: none !important; }
 html.mission-drawer-resizing :is(.file-preview-retained-host,iframe) { pointer-events: none; }
 :is(.mission-description-toggle,.mission-group-heading,.mission-create-options,.mission-session-leading button,.mission-activity-entry):focus-visible { outline: 1px solid var(--ink); outline-offset: 1px; }

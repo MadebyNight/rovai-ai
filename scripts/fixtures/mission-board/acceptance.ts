@@ -68,7 +68,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   cases.push('edit is shared by card actions and reloads latest details after an optimistic conflict')
 
   const previewFits = () => {
-    const anchor = document.querySelector('.mission-preview-body')?.getBoundingClientRect()
+    const anchor = document.querySelector('.mission-workspace-host .file-preview-anchor')?.getBoundingClientRect()
     const pane = visiblePreview()?.getBoundingClientRect()
     return anchor && pane && Math.abs(anchor.x - pane.x) < 2 && Math.abs(anchor.right - pane.right) < 2
   }
@@ -79,6 +79,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(document.querySelector('.mission-session-header .context-breadcrumb')?.hasAttribute('hidden'), 'Drawer hides title')
   check(!document.querySelector('.mission-intro button:not(.mission-description-toggle)'), 'Mission intro is read-only')
   check(!document.querySelector('.camp-execution-drawer'), 'Opening running Mission does not open execution')
+  const drawerHeader = document.querySelector('.mission-session-header')!.getBoundingClientRect()
+  const preview = visiblePreview()!.getBoundingClientRect()
+  const previewToggle = button('收起文件预览').getBoundingClientRect()
+  const detailEntries = [...document.querySelectorAll<HTMLElement>('.mission-session-header .camp-detail-entry')]
+  check(Math.abs(preview.width - 320) <= 1, 'Activity uses the narrow 320px preview width')
+  check(detailEntries.length === 4 && detailEntries.every(entry => entry.getBoundingClientRect().right <= preview.left + 1), 'Four Camp tools stay in the message area')
+  check(drawerHeader.right - previewToggle.right <= 10, 'Preview toggle stays at the far right')
+  check(!document.querySelector('.mission-session-actions'), 'Mission conversation has no ellipsis action')
+  check(parseFloat(getComputedStyle(document.querySelector('.mission-drawer')!).borderRadius) >= 12, 'Mission drawer uses the approved rounded floating surface')
   editor.focus(); document.execCommand('insertText', false, '使命会话草稿')
   await frames()
   button('展开为完整会话').click()
@@ -95,14 +104,18 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !tab('活动') && !visiblePreview(), 'Second Activity click closes last tab and preview')
   button('活动').click()
   await until(() => document.querySelector('.mission-delivery-file') && visiblePreview(), 'Activity reopens')
+  document.querySelector<HTMLButtonElement>('.mission-changed-file')!.click()
+  await until(() => document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog opens')
+  const diffDialogWidth = document.querySelector('.mission-diff-dialog')!.getBoundingClientRect().width
+  check(Math.abs(diffDialogWidth - 1320) <= 1, `Cumulative diff dialog uses the approved desktop width (${diffDialogWidth}px)`)
+  document.querySelector<HTMLButtonElement>('.mission-diff-dialog .compact-close')!.click()
+  await until(() => !document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog closes')
   document.querySelector<HTMLButtonElement>('.mission-delivery-file .attachment-open')!.click()
   await until(() => visiblePreview()?.textContent?.includes('交互核对'), 'Delivery opens shared file viewer')
   const fileReader = visiblePreview()!.querySelector('.file-preview-content')!
   check(document.querySelectorAll('[role=tab]').length === 2, 'File and activity are siblings')
   button('活动').click()
-  await until(() => tab('活动')?.getAttribute('aria-selected') === 'true', 'Toolbar activates existing activity')
-  button('活动').click()
-  await until(() => !tab('活动') && visiblePreview()?.textContent?.includes('交互核对'), 'Closing activity selects remaining file')
+  await until(() => !tab('活动') && visiblePreview()?.textContent?.includes('交互核对'), 'Activity toggle closes its inactive tab and retains the file')
   check(fileReader.isConnected, 'File reader survives activity switch')
   document.querySelector<HTMLButtonElement>('.file-preview-tab-close')!.click()
   await until(() => !visiblePreview(), 'Closing last file hides preview')
@@ -113,7 +126,10 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const handle = document.querySelector<HTMLElement>('.mission-drawer-resize-handle')!
   handle.focus(); handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
   await until(() => Math.round(document.querySelector('.mission-drawer')!.getBoundingClientRect().width) === 640, 'Keyboard minimum width')
-  check(!!document.querySelector('.workspace-grid.file-preview-compact'), 'Narrow drawer uses compact preview')
+  await until(() => !visiblePreview(), 'Narrowing past the split limit hides preview first')
+  check(getComputedStyle(document.querySelector('.mission-drawer .timeline-pane')!).display !== 'none', 'Narrow drawer preserves the message area')
+  button('展开文件预览').click()
+  await until(() => visiblePreview() && tab('活动') && document.querySelector('.workspace-grid.file-preview-compact'), 'Explicit preview reopen remains available at narrow width')
   button('查看来源').click()
   await until(() => !visiblePreview(), 'Source navigation returns to compact conversation')
   check(document.getElementById('camp-message') === editor, 'Source link keeps Composer')
@@ -121,7 +137,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-full'), 'Keyboard expansion')
   button('返回使命板').click()
   await until(() => !document.querySelector('.mission-workspace-host'), 'Return to board')
-  cases.push('keyboard resize, compact preview and source navigation preserve conversation state')
+  cases.push('drawer resize hides preview before messages; explicit compact preview and source navigation preserve state')
 
   document.querySelector<HTMLButtonElement>('.mission-view-trigger')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
   await until(() => document.querySelector('[role=menuitemradio]'), 'View menu')
@@ -146,7 +162,14 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const created = qa.items.find((m: any) => m.title === '无描述使命')
   check(created.description === '' && created.status === 'not_started', 'Default create does not start')
   check(!qa.calls.some((c: any) => c.method === 'missions.start' && c.p.command?.missionId === created.missionId), 'No start request on default create')
+  Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(card => card.textContent?.includes('无描述使命'))!.click()
+  await until(() => document.querySelector('.mission-drawer .mission-start'), 'Created Mission opens with a start action')
+  button('开始使命').click()
+  await until(() => created.status === 'in_progress' && !document.querySelector('.mission-start'), 'Start advances the Mission')
+  check(!document.querySelector(`[data-message-id="${created.missionId}-mission-start"]`) && !document.querySelector('.mission-commission'), 'Start does not insert a visible user-authored message')
+  button('关闭使命抽屉').click()
+  await until(() => !document.querySelector('.mission-workspace-host'), 'Started Mission returns to the board')
   check(qa.errors.length === 0, qa.errors.join('\n'))
-  cases.push('optional description and default creation remain on board without starting')
+  cases.push('optional description, default creation and start-without-visible-user-message match the approved flow')
   return { ok: true, cases }
 }

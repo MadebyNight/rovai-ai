@@ -66,7 +66,14 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
   Object.assign(m!,c,{detailsVersion:m!.detailsVersion+(detailsChanged?1:0),updatedAt:new Date().toISOString()});delete (m! as any).expectedDetailsVersion;changed();return applied({missionId:m!.missionId,changed:detailsChanged||c.tags!==undefined})
  }
  if(method==='missions.status'){m!.status=c.status;changed();return applied({missionId:m!.missionId,changed:true})}
- if(method==='missions.start'){m!.status='in_progress';changed();return applied({missionId:m!.missionId,campId:m!.campId})}
+ if(method==='missions.start'){
+  m!.status='in_progress'
+  const s=snapshot(m!),sequence=Math.max(0,...s.messages.map((message:any)=>message.sequence))+1
+  const trigger={...structuredClone(s.messages[0]),id:`${m!.missionId}-mission-start`,sequence,authorType:'user',authorId:'local_user',sourceAgentRunId:null,body:'开始使命',content:{schemaVersion:1,segments:[{kind:'text',text:'开始使命'}]},attachments:[],missionStart:{missionId:m!.missionId,title:m!.title,description:m!.description},createdAt:new Date().toISOString()}
+  s.messages.push(trigger)
+  s.coverage.messages={...s.coverage.messages,totalCount:s.messages.length,loadedCount:s.messages.length,newestLoadedSequence:sequence}
+  changed();return applied({missionId:m!.missionId,campId:m!.campId})
+ }
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
  if(method==='missions.delivery' && query.has('nonGit'))return {campId:m!.campId,workingDirectory:'/workspace/plain',git:false,workspace:null,pullRequests:[],files:[]}
  if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:'ready',diagnostic:null},pullRequests:[],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}

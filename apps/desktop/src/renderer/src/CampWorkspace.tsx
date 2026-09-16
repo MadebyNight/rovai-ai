@@ -2056,10 +2056,14 @@ export function CampWorkspace({
   )
   const visibleCampMessages = useMemo(() => {
     const messages = new Map<string, CampMessageView>()
-    for (const message of anchoredMessages) messages.set(message.id, message)
-    for (const message of snapshot.messages) messages.set(message.id, message)
+    for (const message of anchoredMessages) {
+      if (!message.missionStart) messages.set(message.id, message)
+    }
+    for (const message of snapshot.messages) {
+      if (!message.missionStart) messages.set(message.id, message)
+    }
     for (const message of optimisticMessages) {
-      if (!messages.has(message.id)) messages.set(message.id, message)
+      if (!message.missionStart && !messages.has(message.id)) messages.set(message.id, message)
     }
     return [...messages.values()].sort((left, right) =>
       left.sequence - right.sequence || left.id.localeCompare(right.id)
@@ -4598,8 +4602,7 @@ export function CampWorkspace({
                                     onNotify={onNotify}
                                   />
                                 )}
-                                {campMessage.missionStart && <section className="mission-commission" aria-label="本次使命委托"><span>使命委托</span><h3>{campMessage.missionStart.title}</h3>{campMessage.missionStart.description && <p>{campMessage.missionStart.description}</p>}</section>}
-                                {!campMessage.missionStart && displayBody.trim().length > 0 && (
+                                {displayBody.trim().length > 0 && (
                                   campMessage.authorType === 'agent'
                                   && !campMessage.content?.some((segment) =>
                                     segment.kind === 'current_user_mention'

@@ -4055,7 +4055,7 @@ export function BusinessApp({
           <CampWorkspace
             key={activeCampId}
             missionBoard={activeMission ? <MissionIntro mission={activeMission} projects={displayNavigation?.projects ?? []}/> : null}
-            previewTabsInPane={!!activeMission}
+            previewTabsInPane={false}
             suppressExecutionAutoOpen={missionDrawer}
             snapshot={visibleCampSnapshot}
             initialComposerDraft={campSnapshotState.initialComposerDraft}
