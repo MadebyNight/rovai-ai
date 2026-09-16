@@ -171,16 +171,14 @@ Tabs 下在 ready 的项目内或项目外普通文件上始终显示一行路�
 基准的相对路径，包括只有 `README.md` 的项目根文件；项目外文件使用 canonical 绝对路径，canonical 目标
 位于用户主目录时可使用 `~/`。两者使用一致的字体、颜色和交互，不追加项目内外说明、Badge 或特殊状态颜色。
 
-用户 Local Attachment Source Ref 成功打开后采用同一行路径与相同交互。Managed/legacy Attachment 不显示路径行，
-Viewer 直接紧接 Tabs。呈现类型和显示值只信 Main 在成功打开 canonical 文件后签发的语义，不从卡片 metadata、
-存储位置或文件名回推路径。
+所有可解析的本机附件，包括用户 Source Ref、新 Agent 引用与 Managed/legacy，成功打开后采用同一路径行。
+远程位置标为服务器路径，只提供复制等适用操作。位置来自已授权解析结果，不从文件名猜测，不为显示额外读取全文。
 
 路径使用平台路径分隔符从左侧自然排列。空间不足时从目录中部省略，优先保留末尾目录和文件名，不产生水平滚动。
 未省略的显示值进入 title、可访问名称与 hover/focus tooltip。路径本身是可聚焦的“在 Finder／文件资源管理器中显示”
 入口；鼠标或键盘激活时使用当前文件 handle 重验并定位，不重新解析可见文本。Tab 右键菜单不新增按钮组，项目内外
 普通文件的原复制入口改为“复制完整路径”，固定复制重验后的 canonical 绝对路径，不复制 `~/`、省略文本或项目
-相对路径。源附件同样复制重验后的完整路径；Managed/legacy Attachment 保留“复制文件名”，Main 拒绝通过其 handle
-复制 absolute 内部路径。
+相对路径。新旧附件采用同一完整路径规则，开放展示不改变旧文件的读取校验或权限。
 
 路径与 Tabs 间无线，路径与正文间保留一条语义 divider。路径隐藏时同时移除高度、分隔线和空占位；文件处于
 opening、missing、unavailable 或 error 时隐藏路径行，避免把上次成功呈现重复为当前文件事实。若文件发生外部更新，
@@ -191,7 +189,7 @@ Viewer 不显示右上角复制按钮、整行工具栏或 `Ready` 状态。除 
 - Markdown 继续通过 `SafeMarkdown` 渲染安全 GFM，并在文件预览中显式使用 document 模式；超出 4 MiB 显示分页原文；
   行长随预览容器变化：小于 960px 时正文区域最大 780px，960px 起整体可到 1120px、普通正文最大 860px，
   1200px 起普通正文最大 930px。代码和表格使用更宽的内容轨道，并在自身区域横向滚动；窗口宽度不代替容器宽度。
-- HTML 默认交互预览。Desktop 在不同源 HTTP(S) iframe 中执行，采用独立的 32 MiB 网页上限；超过网页上限使用分页原文。Web 复用同一 Viewer、源码切换、查找与诊断，使用可信内容的同来源 sandbox，允许脚本、原生浏览器存储、表单、新窗口和原生弹窗；与工作台共享来源和存储，具体边界见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，保留 Host 的 20 MiB 文件读取上限；当前支持单文件 HTML 和 HTTP(S) 依赖，本地多文件站点依赖尚未接通。初始化失败明确显示失败和重试，源码查看读取未注入原稿；
+- HTML 默认交互预览。Desktop 在不同源 HTTP(S) iframe 中执行，采用独立的 32 MiB 网页上限；超过网页上限使用分页原文。Web 复用同一 Viewer、源码切换、查找与诊断，使用可信内容的同来源 sandbox，允许脚本、原生浏览器存储、表单、新窗口和原生弹窗；与工作台共享来源和存储，具体边界见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，保留 Host 的 20 MiB 文件读取上限；相对资源沿用 [File Preview v15](../../contracts/file-preview-v15.md) 的既有来源能力，HTTP(S) 依赖保持。初始化失败明确显示失败和重试，源码查看读取未注入原稿；
 - 代码/文本通过同一个只读 CodeMirror 6 Viewer 显示行号、搜索、定位、选择与系统复制，大文件分页；
 - 图片/SVG 提供适应、原始尺寸、缩放和重置，不把 SVG 注入宿主 DOM；
 - Diff/Patch 按文件和 hunk 展示，解析失败回退文本。
@@ -250,11 +248,11 @@ HTML 原生解析文档/资源相对路径与站点根相对路径，自动加�
 才显示／激活目标 Tab 和预览 Pane。文件已移动、删除、无权或读取失败时，当前页只显示红色 Toast `无法打开该文件`，不创建失败预览页、不切换
 当前 Tab、不替换已有 ready 内容，也不抢焦点；不支持应用内预览的类型同样不从这类入口启动系统应用或显示目录。
 精确事务与资源清理边界见
-[File Preview v14](../../contracts/file-preview-v14.md)。
+[File Preview v15](../../contracts/file-preview-v15.md)。
 
 首次打开与恢复使用 cold/opening/ready/missing/unavailable/error；快速成功直接显示正文，耗时后才显示轻量 Loading。
 无法形成当前可读内容时，正文只显示水平、垂直居中的 32px 通用文件轮廓，图标下方相隔 12px 显示一句 13px 常规
-公开文案。错误码到文案的 closed mapping 由 [File Preview v14](../../contracts/file-preview-v14.md) 继承的 v8 失败呈现拥有。
+公开文案。错误码到文案的 closed mapping 由 [File Preview v15](../../contracts/file-preview-v15.md) 继承的 v8 失败呈现拥有。
 该状态不显示路径、尺寸、标题、卡片、边框、按钮、技术详情或内部能力名称；错误内容区之外的 Tabs、Viewer 布局和
 其他 Camp 界面沿用既有视觉，不以本状态为理由重做。
 历史 Attachment 初始 availability 为 unknown；预览、打开或显示所在位置的结果只更新当前卡片为 available、missing、
@@ -278,7 +276,7 @@ macOS/Windows 复用同一 DOM、reducer、Viewer 和主题 token，只投影 `�
 不弹窗、不遮挡页面，也不提供会重建页面的诊断重试按钮。详情说明“资源诊断连接中断，部分资源错误信息可能不完整”。
 页面消息通信继续负责文档、脚本、查找与滚动；诊断恢复后清除对应提示，真实脚本和资源错误继续保留。
 
-Managed/legacy 等无路径附件不创建空路径行，也不显示内部路径；源码从既有文件 Tab 菜单的“查看源码／交互预览”
+没有已解析位置的内容不创建空路径行；源码仍可从既有文件 Tab 菜单的“查看源码／交互预览”
 切换。只有加载、问题或文件更新时才在预览顶部出现临时反馈行，正常状态下网页直接承接 Tab 栏。
 
 脚本异常保留已经渲染的内容，不能声称异常后的代码已经恢复。缺失 CSS/图片、网络或浏览器策略失败不覆盖整个
@@ -290,4 +288,10 @@ Managed/legacy 等无路径附件不创建空路径行，也不显示内部路�
 重试在详情与文档失败页中均有明确的进行中状态并禁用重复提交；等待期间保留旧页面及诊断。重试失败显示
 “重新加载失败”，展开可读具体原因；成功后按新 generation 重建页面并收起详情。源码切换使用既有只读源码阅读器
 与网页查找模式，交互 iframe 保持挂载，保留输入、滚动和脚本状态。详情最多 100 项，按文本呈现；未知位置明确
-标注，不显示注入后的伪源码位置。窗口、Tab、Camp、刷新与失效上下文清理见 [File Preview v14](../../contracts/file-preview-v14.md)。
+标注，不显示注入后的伪源码位置。窗口、Tab、Camp、刷新与失效上下文清理见 [File Preview v15](../../contracts/file-preview-v15.md)。
+
+## 消息附件位置与图像刷新
+
+消息标签以文件名为主，hover 展示完整实际路径，右键菜单提供“复制完整路径”及适用的本机定位。
+图像大图/显式刷新或从外部编辑器返回时可读取当前内容；失败保留已加载图像并说明原因。
+不因刷新清空其他 Camp 缓存，不增加全 Camp 内容扫描。

@@ -585,7 +585,7 @@ export class FilePreviewService {
         hostOrigin: this.#native.previewHostOrigin?.(webContentsId) ?? 'null',
         entryPath,
         validate,
-        openResource: createPreviewFileSource(record.canonicalRoot, record.canonicalPath, record.allowChildren, this.#native.previewProtectedRoots?.())
+        openResource: createPreviewFileSource(record.canonicalRoot, record.canonicalPath, record.allowChildren, this.#native.previewProtectedRoots?.(), record.request.kind === 'attachment')
       })
       this.#record(webContentsId, request.handleId, request.expectedGeneration)
       if (this.#htmlPreparations.get(record.handleId) !== preparation) throw new FilePreviewAccessError('read_failed', '预览请求已经过期。')
@@ -1516,6 +1516,18 @@ export class FilePreviewService {
       displayReference,
       expiresAt: pending.expiresAt
     }
+  }
+
+  /** End existing file leases before an explicitly requested Camp deletion. */
+  async releaseCamp(campId: string): Promise<void> {
+    const closing: Promise<void>[] = []
+    for (const [webContentsId, sessions] of this.#sessionBindings) {
+      const binding = sessions.get(campId)
+      if (!binding) continue
+      sessions.delete(campId)
+      closing.push(this.#releaseCamp(webContentsId, campId, binding.generation))
+    }
+    await Promise.all(closing)
   }
 
   async #releaseCamp(

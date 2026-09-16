@@ -305,7 +305,7 @@ describe('FilePreviewService', () => {
       .toMatchObject({ ok: false, error: { code: 'source_not_authorized' } })
     expect(native.copyText).toHaveBeenCalledTimes(1)
     canShowPath = true
-    expect(file.capabilities).not.toContain('read_child')
+    expect(file.capabilities).toContain('read_child')
     expect(native.selectRoot).not.toHaveBeenCalled()
     await service.bindCamp(2, 'camp-2')
     await service.bindCamp(2, 'camp-1')
@@ -923,7 +923,7 @@ describe('FilePreviewService', () => {
     expect(registry.rootCount).toBe(0)
   })
 
-  it('keeps managed attachment paths private through the Core authority', async () => {
+  it('shows the actual managed attachment path and releases it before Camp deletion', async () => {
     const { root, native, registry } = await fixture()
     const file = join(root, 'payload.md')
     await writeFile(file, 'attachment')
@@ -933,7 +933,7 @@ describe('FilePreviewService', () => {
           attachmentId: 'attachment-1',
           path: file,
           displayName: 'Design Notes.md',
-          kind: 'file', mediaType: 'text/markdown', openRisk: 'normal', canShowPath: false
+          kind: 'file', mediaType: 'text/markdown', openRisk: 'normal', canShowPath: true
         } as T
       }
     })
@@ -947,18 +947,20 @@ describe('FilePreviewService', () => {
     expect(opened.ok && opened.value.kind === 'file_preview'
       ? opened.value.file
       : { fileName: basename(file) }).toMatchObject({
-      displayPath: 'Design Notes.md',
-      pathPresentation: 'file_name_only',
+      displayPath: await realpath(file),
+      pathPresentation: 'external',
       fileName: 'Design Notes.md'
     })
     if (opened.ok && opened.value.kind === 'file_preview') {
       const file = opened.value.file
-      expect(previewPathIsVisible(file)).toBe(false)
-      expect(await service.copyPath(1, { handleId: file.handleId, format: 'absolute' })).toMatchObject({ ok: false })
-      expect(native.copyText).not.toHaveBeenCalled()
+      expect(previewPathIsVisible(file)).toBe(true)
+      expect(await service.copyPath(1, { handleId: file.handleId, format: 'absolute' })).toMatchObject({ ok: true })
       expect(await service.copyPath(1, { handleId: file.handleId, format: 'display' })).toMatchObject({ ok: true })
-      expect(native.copyText).toHaveBeenCalledWith('Design Notes.md')
+      expect(native.copyText).toHaveBeenCalledWith(await realpath(join(root, 'payload.md')))
     }
+    await service.releaseCamp('camp-1')
+    expect(service.handleCount).toBe(0)
+    expect(registry.rootCount).toBe(0)
     await service.closeAll()
   })
 

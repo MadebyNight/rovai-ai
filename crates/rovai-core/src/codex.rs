@@ -20,9 +20,6 @@ use rovai_core::{
         AgentRuntimeAdapterRegistry, McpProjectionCapability, SkillDiscoveryCapability,
     },
     builtin_tool_transport::{BUILTIN_TOOL_CONTRACT_VERSION, builtin_tool_catalog_digest},
-    camp_attachment_view::{
-        CAMP_ATTACHMENT_VIEW_CONTRACT_VERSION, CampAttachmentRuntimeAuthorization,
-    },
     command::canonical_json_digest,
     managed_process::{
         ManagedChildStderr, ManagedChildStdin, ManagedChildStdout, ManagedProcess,
@@ -35,6 +32,7 @@ use rovai_core::{
         RuntimeCompactionDisplayEvent, RuntimeCompactionDisplayPhase,
     },
     runtime_search_operation,
+    storage_layout::CampOutputDirectory,
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -1623,7 +1621,7 @@ impl CodexCliRuntimeAdapter {
 pub(crate) fn runtime_compatibility_digest(
     frozen_runtime: &FrozenAgentRuntimeConfig,
     cwd: &Path,
-    attachment_authorization: &CampAttachmentRuntimeAuthorization,
+    attachment_authorization: &CampOutputDirectory,
 ) -> Result<String> {
     let cwd = cwd
         .canonicalize()
@@ -1636,12 +1634,7 @@ pub(crate) fn runtime_compatibility_digest(
         "executionRoot": cwd,
         "builtinToolContractVersion": BUILTIN_TOOL_CONTRACT_VERSION,
         "builtinToolCatalogDigest": builtin_tool_catalog_digest()?,
-        "campAttachmentViewContractVersion": CAMP_ATTACHMENT_VIEW_CONTRACT_VERSION,
-        "campAttachmentRoot": attachment_authorization.attachment_root,
-        "campAttachmentVisibilityMode": attachment_authorization.visibility_mode.as_str(),
-        "campAttachmentGeneration": attachment_authorization
-            .visibility_mode
-            .compatibility_generation(attachment_authorization.generation),
+        "attachmentOutputRoot": attachment_authorization.output_root,
     }))
 }
 

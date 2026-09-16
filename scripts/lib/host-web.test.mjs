@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtemp, realpath, rm, mkdir, rename, writeFile, readdir, readFile as readAssetFile, cp, utimes } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, mkdir, rename, writeFile, readdir, readFile as readAssetFile, cp, utimes, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { launchHost, within } from './host-test-client.mjs'
@@ -325,6 +325,8 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const preview = await previewResponse.json()
     assert.equal(preview.ok, true, JSON.stringify(preview))
     const file = preview.value.file
+    assert.match(file.displayPath, /^服务器：/)
+    assert.ok(file.absolutePath)
     const readFile = session => authorized(session, 'files', { method: 'POST', body: JSON.stringify({ action: 'readText', request: { handleId: file.handleId, expectedGeneration: file.contentGeneration } }) }).then(response => response.json())
     assert.equal((await readFile(first)).value.text, new TextDecoder().decode(input))
     assert.equal((await readFile(second)).ok, false)
@@ -467,12 +469,32 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(htmlFile.kind, 'html')
     assert.equal(htmlFile.mime, 'text/html')
     const htmlRead = { handleId: htmlFile.handleId, expectedGeneration: htmlFile.contentGeneration }
-    assert.equal((await fileCall(first, 'readHtml', htmlRead)).value.text, htmlText)
+    const htmlDocument = (await fileCall(first, 'readHtml', htmlRead)).value
+    assert.equal(htmlDocument.text, htmlText)
+    assert.match(htmlDocument.resourceBasePath, /^\/preview-assets\/[a-f0-9]{64}\/$/)
+    const cssPath = join(workspace, 'style.css')
+    await writeFile(cssPath, 'body { color: red }')
+    const cssUrl = origin + htmlDocument.resourceBasePath + 'style.css?version=1'
+    const resource = await fetch(cssUrl, { headers: { Origin: 'null' } })
+    assert.equal(resource.status, 200)
+    assert.equal(resource.headers.get('access-control-allow-origin'), '*')
+    assert.match(resource.headers.get('content-security-policy'), /sandbox allow-scripts;/)
+    assert.equal(await resource.text(), 'body { color: red }')
+    const replacement = join(workspace, 'edited.css')
+    await writeFile(replacement, 'body { color: blue }'); await rename(replacement, cssPath)
+    assert.equal(await (await fetch(cssUrl, { headers: { Origin: 'null' } })).text(), 'body { color: blue }')
+    assert.equal((await fetch(cssUrl, { headers: { Origin: 'https://other.invalid' } })).status, 403)
+    if (process.platform !== 'win32') {
+      const secret = join(fixture, 'outside.css'); await writeFile(secret, 'outside')
+      await symlink(secret, join(workspace, 'escape.css'))
+      assert.equal((await fetch(origin + htmlDocument.resourceBasePath + 'escape.css')).status, 404)
+    }
     assert.equal((await fileCall(first, 'readText', htmlRead)).value.text, htmlText)
     assert.equal((await fileCall(second, 'readHtml', htmlRead)).ok, false)
     assert.equal((await fileCall(first, 'readHtml', { ...htmlRead, expectedGeneration: 'obsolete' })).ok, false)
     await fileCall(first, 'release', { handleId: htmlFile.handleId })
     assert.equal((await fileCall(first, 'readHtml', htmlRead)).ok, false)
+    assert.equal((await fetch(cssUrl)).status, 404, 'release revokes relative resource access')
     const shell = await fetch(`${origin}/preview.html`)
     assert.equal(shell.status, 200)
     assert.match(shell.headers.get('content-security-policy'), /sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals;/)

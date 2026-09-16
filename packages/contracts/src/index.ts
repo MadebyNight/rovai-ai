@@ -1554,6 +1554,7 @@ export interface ResolvedFilePreview {
   previewKey: string
   restoreRequest?: RestoreFilePreviewRequest
   displayPath: string
+  absolutePath?: string
   pathPresentation: FilePreviewPathPresentation
   fileName: string
   size: number
@@ -2042,11 +2043,11 @@ export interface NativeSessionBootstrapEvidenceView {
 export interface CampAttachmentRefView {
   attachmentId: string
   path: string
-  contentDigest: string
+  contentDigest?: string
 }
 
 export interface RunFactRefView {
-  fact: 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
+  fact: 'attachment_output_root' | 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
   taskId?: string
 }
 
@@ -2100,7 +2101,7 @@ export interface ContextManifestView {
   mcpProjectionDigest: string
   selfActiveTaskEvidence: unknown
   selfActiveTaskEvidenceDigest: string
-  formatterVersion: 22 | 23
+  formatterVersion: 22 | 23 | 24
   renderedPayloadDigest: string
   delivery: RuntimeInputDeliveryView | null
   createdAt: string
@@ -3810,6 +3811,7 @@ export type CoreMethod =
   | 'channels.executionConsole.webSnapshot'
   | 'channels.deliveries.settle'
   | 'camp.attachments.desktopOpenTarget'
+  | 'camp.attachments.location'
   | 'app.info'
   | 'camps.creationPreflight'
   | 'workspaces.validate'

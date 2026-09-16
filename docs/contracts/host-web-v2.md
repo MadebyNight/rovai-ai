@@ -34,8 +34,9 @@ or an existing browser Session. Generating a login QR is a separate local creden
 `origin` is the first advertised address and is omitted when discovery is empty; starting the listener does not require
 an advertised address. Interface discovery does not guarantee remote reachability.
 The listener accepts its actual interface authorities and optional explicit reverse-proxy `publicOrigin`; an Origin
-header must match the same authority's complete origin. Arbitrary Host, cross-origin requests and query parameters are
-rejected; there is no credentialed CORS. LAN HTTP requires an explicit enable choice, with HTTPS/VPN for untrusted networks.
+header must match the same authority's complete origin. Arbitrary Host, cross-origin business requests and API query parameters are
+rejected; there is no credentialed CORS. Sandboxed preview resources have the narrow, handle-bound exception specified by
+[File Preview v15](file-preview-v15.md); the resource transport does not include the editing Session; trusted same-origin HTML can still access parent login materials. LAN HTTP requires an explicit enable choice, with HTTPS/VPN for untrusted networks.
 In Desktop, the Remote Access switch is that explicit choice: it starts the IPv4 wildcard listener without a separate
 local/LAN selector, and shows local and remote addresses separately. The always-visible port is pending launch-form state:
 editing it does not restart or reconfigure the running service; the next start uses it. Stopping needs no second confirmation.
@@ -249,8 +250,8 @@ The static `/preview.html` receives those document bytes through a channel bound
 parent/source window, preview ID and generation. Connection challenges and document IDs continue fencing messages;
 bootstrap, commands and diagnostics use the actual target origin, never the opaque `null` origin or wildcard.
 Both the response CSP and iframe use `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"`.
-Only this preview response permits `form-action http: https:` and inline author scripts; the workspace/API CSP stays
-unchanged. No top-navigation or popup-escape permission is added. Desktop-hosted Web and standalone Server Web
+The preview shell permits `form-action http: https:` while retaining author script support; the workspace/API CSP
+and existing resource response policy stay unchanged. No top-navigation or popup-escape permission is added. Desktop-hosted Web and standalone Server Web
 use the same Rust implementation; native Desktop preview and local CSS/JS resource loading are unchanged.
 This accepts trusted HTML sharing the Host page's origin: attachments may access the parent and same-origin login
 materials, and do not have per-attachment storage isolation. localStorage and sessionStorage are the visiting
@@ -259,8 +260,8 @@ write or original HTML modification is introduced. The bootstrap does not explic
 Bearer, editor proof or file handles in the preview URL or document; this is not a credential-isolation guarantee.
 Closing the file destroys its iframe; reopening/refresh reads and
 reauthorizes the source again. Source mode reads the original document, never injected bridge code (up to 4 MiB
-whole HTML source, otherwise the existing paged reader). The current Web adapter supports self-contained HTML
-and HTTP(S) dependencies; it does not serve a Host directory as a multi-file website or proxy local relative assets.
+whole HTML source, otherwise the existing paged reader). The Web adapter preserves the existing handle-bound relative-resource capability specified by
+[File Preview v15](file-preview-v15.md), alongside HTTP(S) dependencies. This policy change does not alter CSS/JS loading.
 Missing resources retain visible diagnostics. Standalone SVG stays text or download.
 UTF-8 text above 2 MiB is paged (256 KiB pages, 20 MiB read bound); byte offsets preserve
 Unicode scalars. Child links retain the Core-authorized parent source; project children receive independent workspace

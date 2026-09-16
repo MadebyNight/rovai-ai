@@ -138,9 +138,9 @@ pub(crate) fn runtime_subsystem_id(kind: AdapterKind) -> String {
 
 fn shared_execution_subsystem_ids(kind: AdapterKind) -> &'static [&'static str] {
     if kind == AdapterKind::Pi {
-        &["skills", "attachments", "builtin-tools"]
+        &["skills", "builtin-tools"]
     } else {
-        &["skills", "mcp", "attachments", "builtin-tools"]
+        &["skills", "mcp", "builtin-tools"]
     }
 }
 

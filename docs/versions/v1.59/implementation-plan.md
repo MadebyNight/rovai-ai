@@ -380,7 +380,7 @@ HTML 子帧使用独立 CDP target 检查，未放宽它的 opaque sandbox。
 
 ## 本轮：HTML 附件预览与正式登录页
 
-以下记录保留该批次的验证事实；不透明来源策略随后由 [V1.59-D08](decisions.md#v1-59-d08)取代。
+以下记录保留该批次的验证事实；不透明来源策略随后由 [V1.59-D09](decisions.md#v1-59-d09)取代。
 
 Web 的 HTML/HTM 不再强制标为普通文本。正式文件查看器复用 Desktop 的交互视图、源码读取、查找与诊断；
 认证 Host 读取后把文档交给无凭据静态 shell，响应 CSP 和 iframe 都使用不含 `allow-same-origin` 的 sandbox。

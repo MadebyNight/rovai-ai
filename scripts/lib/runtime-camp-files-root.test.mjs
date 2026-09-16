@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -56,6 +56,12 @@ test('removes only a marked Runtime Files Root owned by a temporary data directo
     instanceKey: basename(dirname(root)),
     platform: process.platform === 'darwin' ? 'macos' : process.platform
   }))
+  const output = join(dirname(root), 'attachments', 'camp')
+  await mkdir(output, { recursive: true })
+  await writeFile(join(output, 'unpublished.txt'), 'ordinary edited output')
+  const external = join(fixture, 'keep.txt')
+  await writeFile(external, 'external')
+  await symlink(external, join(output, 'external-link'))
   await chmod(join(root, 'camps', 'camp'), 0o100)
   await chmod(join(root, 'camps'), 0o100)
 
@@ -65,6 +71,8 @@ test('removes only a marked Runtime Files Root owned by a temporary data directo
       temporaryDirectory
     }), true)
     await assert.rejects(access(root), { code: 'ENOENT' })
+    await assert.rejects(access(output), { code: 'ENOENT' })
+    await access(external)
 
     await mkdir(root, { recursive: true })
     await writeFile(join(root, '.runtime-camp-files-root.json'), JSON.stringify({

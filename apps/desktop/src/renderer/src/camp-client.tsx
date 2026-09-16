@@ -34,6 +34,7 @@ export type CampClient = Pick<RovaiApi,
   onInvalidated?: (listener: () => void) => () => void
   /** Optional host shortcut; browsers retain their own tab/window shortcuts. */
   onClosePreviewRequested?: RovaiApi['windowControls']['onCloseTabRequested']
+  attachmentLocation?: (locator: import('@contracts').LocalAttachmentOwnerLocator) => Promise<{ path: string; location: 'local' | 'server' } | null>
   attachments: (RovaiApi['attachments'] & { kind: 'native' }) | {
     kind: 'download'
     download: RovaiApi['attachments']['open']

@@ -28,9 +28,6 @@ use rovai_core::{
         acp_runtime_model_id_from_session, write_kiro_additive_agent_config,
     },
     builtin_tool_transport::{BUILTIN_TOOL_CONTRACT_VERSION, builtin_tool_catalog_digest},
-    camp_attachment_view::{
-        CAMP_ATTACHMENT_VIEW_CONTRACT_VERSION, CampAttachmentRuntimeAuthorization,
-    },
     command::canonical_json_digest,
     compaction::{CompactionDetectorPolicy, CompactionObserverLease},
     managed_process::{
@@ -46,6 +43,7 @@ use rovai_core::{
     },
     runtime_discovery::{RuntimeLaunchPurpose, runtime_launch_allowed},
     runtime_search_operation,
+    storage_layout::CampOutputDirectory,
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -4458,7 +4456,7 @@ pub(crate) fn runtime_compatibility_digest(
     permission_semantics: PermissionSemantics,
     external_mcp_servers: &BTreeMap<String, McpServerDefinition>,
     mcp_projection_digest: &str,
-    attachment_authorization: &CampAttachmentRuntimeAuthorization,
+    attachment_authorization: &CampOutputDirectory,
 ) -> Result<String> {
     let execution_root = PathBuf::from(&workspace.execution_root)
         .canonicalize()
@@ -4503,12 +4501,7 @@ pub(crate) fn runtime_compatibility_digest(
         "builtinToolCatalogDigest": builtin_tool_catalog_digest()?,
         "externalMcpServers": external_mcp_servers,
         "mcpProjectionDigest": mcp_projection_compatibility_digest,
-        "campAttachmentViewContractVersion": CAMP_ATTACHMENT_VIEW_CONTRACT_VERSION,
-        "campAttachmentRoot": attachment_authorization.attachment_root,
-        "campAttachmentVisibilityMode": attachment_authorization.visibility_mode.as_str(),
-        "campAttachmentGeneration": attachment_authorization
-            .visibility_mode
-            .compatibility_generation(attachment_authorization.generation),
+        "attachmentOutputRoot": attachment_authorization.output_root,
     });
     if is_grok {
         let compatibility = compatibility
@@ -10664,14 +10657,9 @@ while IFS= read -r ignored; do :; done
             std::env::temp_dir().join(format!("rovai-trae-compatibility-{}", uuid::Uuid::new_v4()));
         let attachments = root.join("attachments");
         std::fs::create_dir_all(&attachments).unwrap();
-        let attachment_authorization = CampAttachmentRuntimeAuthorization {
+        let attachment_authorization = CampOutputDirectory {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
-            attachment_root: attachments,
-            root_identity_digest: "sha256:root".to_string(),
-            generation: 1,
-            catalog_digest: "sha256:catalog".to_string(),
-            visibility_mode:
-                rovai_core::camp_attachment_view::CampAttachmentVisibilityMode::GenerationFencedV1,
+            output_root: attachments,
         };
         let executable = root.join("traecli");
         make_executable(&executable, "#!/bin/sh\nexit 0\n");
@@ -10698,12 +10686,7 @@ while IFS= read -r ignored; do :; done
             "builtinToolCatalogDigest": builtin_tool_catalog_digest().unwrap(),
             "externalMcpServers": BTreeMap::<String, McpServerDefinition>::new(),
             "mcpProjectionDigest": None::<&str>,
-            "campAttachmentViewContractVersion": CAMP_ATTACHMENT_VIEW_CONTRACT_VERSION,
-            "campAttachmentRoot": attachment_authorization.attachment_root,
-            "campAttachmentVisibilityMode": attachment_authorization.visibility_mode.as_str(),
-            "campAttachmentGeneration": attachment_authorization
-                .visibility_mode
-                .compatibility_generation(attachment_authorization.generation),
+            "attachmentOutputRoot": attachment_authorization.output_root,
         }))
         .unwrap();
         assert_eq!(first, legacy_digest);

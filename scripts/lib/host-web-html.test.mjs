@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, realpath, readFile, writeFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, realpath, readFile, writeFile, rm, mkdir, readdir, rename } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -17,10 +17,12 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
   if (!await access(executable).then(() => true, () => false)) { t.skip('Chrome unavailable'); return }
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-web-html-')))
   const dataDir = join(fixture, 'core')
+  const uploadScratch = join(fixture, 'uploads')
+  await mkdir(uploadScratch)
   console.log(JSON.stringify({ channel: 'automatic_acceptance', dataDir, skillLibraryRoot: join(dataDir, 'skills'), browserProfile: join(fixture, 'chrome'), runtime: false }))
   const host = launchHost(process.env.ROVAI_HOST_BIN ?? join(repository, 'target/debug/rovai-host'), [
     ...coreDataDirectoryArguments(dataDir), '--skill-library-root', join(dataDir, 'skills'), '--mcp-config-path', join(dataDir, 'mcp.json')
-  ], { cwd: repository })
+  ], { cwd: repository, env: { ...process.env, TMPDIR: uploadScratch, TMP: uploadScratch, TEMP: uploadScratch } })
   let browser
   let submittedForm = ''
   const formServer = createServer(async (request, response) => {
@@ -36,7 +38,7 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
     const profiles = await host.request('members.list')
     await host.request('camps.create', { commandId: crypto.randomUUID(), name: 'HTML attachment acceptance', workspace: null, memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId, collaborationMode: 'peer' })
     const service = await host.request('host.web.start', { listen: '127.0.0.1:0', uiDirectory: join(repository, 'out/web') })
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Interactive attachment</title><style>body{margin:0;background:rgb(236,238,239)}button{position:absolute;left:20px;top:60px;width:200px;height:40px}h1{font:24px sans-serif}</style></head><body><h1>Rendered HTML</h1><button id="run">Run interaction</button><p id="result"></p><form action="${formOrigin}/submit" method="post" target="form-result"><input name="value" value="native-form"><button id="submit" style="top:120px">Submit form</button></form><iframe name="form-result" hidden></iframe><script>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Interactive attachment</title><link rel="stylesheet" href="./theme.css"><style>body{margin:0}button{position:absolute;left:20px;top:60px;width:200px;height:40px}h1{font:24px sans-serif}</style></head><body><h1>Rendered HTML</h1><button id="run">Run interaction</button><p id="result"></p><form action="${formOrigin}/submit" method="post" target="form-result"><input name="value" value="native-form"><button id="submit" style="top:120px">Submit form</button></form><iframe name="form-result" hidden></iframe><script>
       const visits=Number(localStorage.getItem('preview-visits')||0)+1;
       localStorage.setItem('preview-visits',String(visits));
       sessionStorage.setItem('preview-session','native-session');
@@ -45,6 +47,8 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
     </script></body></html>`
     const file = join(fixture, 'interactive.html'); await writeFile(file, html)
     browser = await launchAcceptanceBrowser({ executable, args: ['--headless=new', `--user-data-dir=${join(fixture, 'chrome')}`, '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', 'about:blank'] })
+    const listen = `window.htmlAcceptance=[];addEventListener('message',e=>{if(e.source===document.querySelector('.file-preview-html')?.contentWindow&&e.origin===location.origin&&e.data?.type==='html-acceptance')window.htmlAcceptance.push(e.data)})`
+    await browser.send('Page.addScriptToEvaluateOnNewDocument', { source: listen })
     await browser.send('Page.navigate', { url: service.origin })
     await browser.wait(`document.querySelector('#administrator-token') !== null`)
     assert.equal(await browser.evaluate(`document.querySelector('#administrator-token').placeholder`), '输入 64 位的 Token')
@@ -54,9 +58,13 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
     await browser.wait(`document.querySelector('.web-login-overlay') === null`)
     await browser.click(`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('HTML attachment acceptance'))`)
     await browser.wait(`document.querySelector('.conversation-controls .composer-file-input:not(:disabled)') !== null`)
-    await browser.evaluate(`sessionStorage.setItem('acceptance-sentinel','private');window.htmlAcceptance=[];addEventListener('message',e=>{if(e.source===document.querySelector('.file-preview-html')?.contentWindow&&e.origin===location.origin&&e.data?.type==='html-acceptance')window.htmlAcceptance.push(e.data)})`)
+    await browser.evaluate(`sessionStorage.setItem('acceptance-sentinel','private')`)
     await browser.setFiles('.conversation-controls .composer-file-input', [file])
     await browser.wait(`document.querySelector('.composer-attachment-card .attachment-open:not(:disabled)') !== null`)
+    const uploads = (await readdir(uploadScratch)).filter(name => name.startsWith('rovai-web-upload-'))
+    assert.equal(uploads.length, 1)
+    const stylesheet = join(uploadScratch, uploads[0], 'theme.css')
+    await writeFile(stylesheet, 'body{background:rgb(236,238,239)}')
     await browser.click(`document.querySelector('.composer-attachment-card .attachment-open')`)
     await browser.wait(`document.querySelector('.file-preview-html-stage')?.dataset.documentState==='loaded' && window.htmlAcceptance.length>0`)
     const actual = await browser.evaluate('window.htmlAcceptance.at(-1)')
@@ -109,6 +117,8 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
     assert.equal(await browser.evaluate(`document.querySelector('.file-preview-html-source').textContent.includes('data-rovai-preview-diagnostic')`), false)
     await toggleSource('交互预览')
     assert.equal(await browser.evaluate(`window.htmlAcceptance.at(-1).clicked`), 'INTERACTION_OK', 'source toggle preserves iframe interaction state')
+    await writeFile(`${stylesheet}.tmp`, 'body{background:rgb(210,220,230)}')
+    await rename(`${stylesheet}.tmp`, stylesheet)
     await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await browser.evaluate('window.previewReloadMarker=true')
     await browser.send('Page.reload')
@@ -119,6 +129,7 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
     // reopened explicitly without changing editor ownership or requiring Token.
     if (!await browser.evaluate(`document.querySelector('.file-preview-html')!==null`)) await browser.click(`document.querySelector('.composer-attachment-card .attachment-open')`)
     await browser.wait(`document.querySelector('.file-preview-html-stage')?.dataset.documentState==='loaded'`)
+    await browser.wait(`window.htmlAcceptance.at(-1)?.color==='rgb(210, 220, 230)'`)
     assert.equal(await browser.evaluate(`localStorage.getItem('preview-visits')`), '2', 'native localStorage survives a page refresh at phone width')
     assert.equal(await browser.evaluate(`document.querySelector('.file-preview-html').contentWindow.sessionStorage.getItem('preview-session')`), 'native-session')
     assert.equal(await browser.evaluate(`document.querySelector('.file-preview-html-stage').dataset.channelState`), 'connected')
@@ -126,7 +137,7 @@ test('trusted Web HTML uses native storage, forms, popups and modals while prese
     await browser.click(`document.querySelector('[aria-label="关闭 interactive.html"]')`)
     await browser.wait(`document.querySelector('.file-preview-html')===null`)
     assert.deepEqual(browser.errors, [])
-    console.log(JSON.stringify({ rendered: true, realClick: true, originalSource: true, nativeStorage: true, form: true, popup: true, modal: true, mobileWidth: true, refresh: true, released: true }))
+    console.log(JSON.stringify({ rendered: true, realClick: true, originalSource: true, nativeStorage: true, form: true, popup: true, modal: true, mobileWidth: true, relativeCss: true, replacementSave: true, refresh: true, released: true }))
   } catch (error) {
     if (browser) console.log(JSON.stringify(await browser.evaluate(`({samples:window.htmlAcceptance,search:document.querySelector('input[aria-label="查找文件内容"]')?.value,active:document.activeElement?.outerHTML,frame:document.querySelector('.file-preview-html')?.getBoundingClientRect().toJSON()})`).catch(()=>null)))
     if (browser) await browser.capture('/tmp/rovai-web-html-failure.png').catch(() => {})
