@@ -24,7 +24,9 @@ export function apply(ctx) {
     if (!calls.length) throw new Error('scripted MCP provider received an unsupported request')
     for (const [index, match] of calls.entries()) {
       const name = `mcp__${match[1]}__echo`
-      if (!options.tools.some(tool => tool.name === name)) throw new Error('scripted MCP provider cannot see requested tool')
+      if (!options.tools.some(tool => tool.name === name)) {
+        throw new Error(`scripted MCP provider cannot see requested tool ${name}; visible tools: ${options.tools.map(tool => tool.name).sort().join(', ')}`)
+      }
       const id = randomUUID(), args = JSON.stringify({ text: match[2] })
       yield { type: 'block-start', index, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index, id, name, argumentsDelta: args }

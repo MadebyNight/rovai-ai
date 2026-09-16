@@ -1,23 +1,16 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { Buffer } from 'node:buffer'
 
 export const name = 'rovai-bootstrap'
 export const inject = ['systemPrompt', 'tools']
+const MAX_OBSERVED_FILE_CONTENT_BYTES = 2 * 1024 * 1024
 
 // A normal DSH prompt section is assembled before every model step, including
 // the step after native compaction. Variables are substituted only once, so
 // braces inside user-authored identity text remain literal.
 export function apply(ctx, config) {
-  // DSH's MCP bridge does not carry read-only annotations into ToolDefinition.
-  // Unknown external effects cannot bypass the frozen file/approval policy.
-  ctx.tools.guard(exec => config.readOnly && exec.name.startsWith('mcp__')
-    ? 'Rovai read-only policy blocks MCP tools with undeclared effects.' : undefined)
-  ctx.on('tools/pre-execute', async (exec, next) => {
-    const decision = await next()
-    if (decision.kind !== 'allow' || !exec.name.startsWith('mcp__') || config.approvalPolicy !== 'ask') return decision
-    return { kind: 'ask', reason: 'Allow this MCP tool once? Its effects are not declared by the DSH bridge.' }
-  })
   // DSH's documented MCP namespace normalization (0.1.5). A Session's
   // scoped MCP must replace the entire inherited server, including native-only
   // tools. The official restriction seam leaves scoped registrations visible.
@@ -74,15 +67,20 @@ export function apply(ctx, config) {
     renameSync(`${target}.tmp`, target)
   })
   // The official synchronous, immutable result observer precedes the durable
-  // tool/result event. ACP currently drops the shell's canonical exit status.
-  // Preserve only the structured status, scoped to an exact root Session/call;
-  // stdout and tool arguments remain on ACP. Core consumes each file once.
+  // tool/result event. ACP currently drops the shell's canonical exit status
+  // and write/edit before/after state. Preserve only those structured facts,
+  // scoped to an exact root Session/call; stdout and tool arguments remain on
+  // ACP. Core consumes each file once.
   ctx.on('tools/result', (exec, result) => {
     const sessionId = exec.agent?.session.id
     if (exec.parent || !sessionId || exec.agent.session.header.parentSession != null) return
     const callId = exec.callId
     const key = createHash('sha256').update(JSON.stringify([sessionId, callId])).digest('hex')
     const value = result.isError ? null : result.value
+    const hasCompleteFileState = ['write', 'edit'].includes(exec.name)
+      && typeof value?.before === 'string' && typeof value?.after === 'string'
+      && Buffer.byteLength(value.before, 'utf8') <= MAX_OBSERVED_FILE_CONTENT_BYTES
+      && Buffer.byteLength(value.after, 'utf8') <= MAX_OBSERVED_FILE_CONTENT_BYTES
     const status = {
       schemaVersion: 1, sessionId, callId, tool: exec.name,
       isError: result.isError,
@@ -91,7 +89,8 @@ export function apply(ctx, config) {
       exitCode: Number.isSafeInteger(value?.exitCode) ? value.exitCode : null,
       signal: typeof value?.signal === 'string' ? value.signal : null,
       timedOut: value?.timedOut === true,
-      aborted: value?.aborted === true
+      aborted: value?.aborted === true,
+      ...(hasCompleteFileState ? { before: value.before, after: value.after } : {})
     }
     const target = join(config.observationRoot, `${key}.json`)
     writeFileSync(`${target}.tmp`, JSON.stringify(status), { mode: 0o600 })

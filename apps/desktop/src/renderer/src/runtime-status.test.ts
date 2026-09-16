@@ -96,6 +96,19 @@ describe('Runtime user status projection', () => {
     expect(result.detail).not.toContain('最近一次 Runtime 验证未完成')
   })
 
+  it('states the minimum supported DSH version on shared desktop and mobile surfaces', () => {
+    const result = runtimeAvailabilityPresentation({
+      ...availability('incompatible', 'deepseek-harness'),
+      reportedVersion: '0.1.5-rc.1'
+    })
+
+    expect(result).toEqual({
+      status: 'version_unsupported',
+      label: '版本不支持',
+      detail: '当前版本 0.1.5-rc.1 不受支持，请更新后重试。\nDeepSeek Harness 需要 0.1.5-rc.2 或更高版本。'
+    })
+  })
+
   it('keeps an unsaved editor selection in product availability state', () => {
     const agent = {
       ...profile({

@@ -11,6 +11,7 @@ use crate::{agent_profile::AdapterKind, command::canonical_json_digest};
 pub const MINIMUM_VERSION: &str = "0.1.5-rc.2";
 pub const BOOTSTRAP_REVISION: &str = "dsh-system-prompt-v1";
 const BOOTSTRAP_PLUGIN: &str = include_str!("dsh/bootstrap.mjs");
+const MAX_OBSERVED_FILE_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 
 pub fn supported_version(version: Option<&str>) -> bool {
     let Some(version) = version.map(str::trim) else {
@@ -82,7 +83,6 @@ pub fn configure_host(
     root: &Path,
     cwd: &Path,
     permissions: &Value,
-    read_only: bool,
     mcp_server_names: &[String],
 ) -> Result<()> {
     let sandbox = permissions
@@ -110,14 +110,14 @@ pub fn configure_host(
     fs::write(&plugin_path, BOOTSTRAP_PLUGIN)?;
     private_file(&plugin_path)?;
     let patch = json!([
-        {"id":"sandbox-policy","config":{"mode":if read_only {"read-only"} else {sandbox},"workspaceRoot":cwd}},
-        {"id":"approval","config":{"policy":if read_only {"never"} else {approval}}},
+        {"id":"sandbox-policy","config":{"mode":sandbox,"workspaceRoot":cwd}},
+        {"id":"approval","config":{"policy":approval}},
         // The interactive preset service seeds native settings over the two
         // independent knobs, and rejects valid pairs absent from its preset
         // table. ACP has no permission-mode control; this Host's frozen knobs
         // own the policy. Preserve the native settings file untouched.
         {"id":"permission","disabled":true},
-        {"insert":[{"id":"rovai-bootstrap","name":plugin_path,"config":{"bindingRoot":binding_root,"observationRoot":observation_root,"mcpServerNames":mcp_server_names,"readOnly":read_only || sandbox == "read-only","approvalPolicy":if read_only {"never"} else {approval}}}]}
+        {"insert":[{"id":"rovai-bootstrap","name":plugin_path,"config":{"bindingRoot":binding_root,"observationRoot":observation_root,"mcpServerNames":mcp_server_names}}]}
     ]);
     let patch_path = root.join("rovai.patch.json");
     fs::write(&patch_path, serde_json::to_vec(&patch)?)?;
@@ -212,6 +212,7 @@ pub fn enrich_message(root: &Path, message: &mut Value) -> Result<()> {
     if let Some(path) = observation["path"].as_str() {
         update["locations"] = json!([{"path":path}]);
     }
+    append_observed_file_diff(update, &observation, tool);
     if matches!(tool, "bash" | "pwsh") {
         update["rawOutput"] = json!({
             "exitCode": observation["exitCode"], "signal": observation["signal"],
@@ -235,12 +236,48 @@ pub fn enrich_message(root: &Path, message: &mut Value) -> Result<()> {
 pub fn tool_kind(name: &str) -> Option<&'static str> {
     match name {
         "bash" | "pwsh" => Some("execute"),
-        "read" | "read_image" | "glob" | "grep" | "skill" => Some("read"),
+        "read" | "read_image" => Some("read"),
         "write" => Some("write"),
         "edit" => Some("edit"),
-        "web_search" => Some("search"),
+        "glob" | "grep" => Some("file_search"),
+        "web_search" => Some("web_search"),
         "web_fetch" => Some("fetch"),
+        "skill" => Some("tool"),
         _ => None,
+    }
+}
+
+fn append_observed_file_diff(update: &mut Value, observation: &Value, tool: &str) {
+    if !matches!(tool, "write" | "edit") {
+        return;
+    }
+    let (Some(path), Some(before), Some(after)) = (
+        observation["path"].as_str(),
+        observation["before"].as_str(),
+        observation["after"].as_str(),
+    ) else {
+        return;
+    };
+    if before == after
+        || before.len() > MAX_OBSERVED_FILE_CONTENT_BYTES
+        || after.len() > MAX_OBSERVED_FILE_CONTENT_BYTES
+    {
+        return;
+    }
+    let block = json!({"type":"diff","path":path,"oldText":before,"newText":after});
+    match update.get_mut("content") {
+        Some(Value::Array(blocks)) => {
+            if !blocks.contains(&block) {
+                blocks.push(block);
+            }
+        }
+        Some(Value::Null) => update["content"] = json!([block]),
+        None => {
+            if let Some(update) = update.as_object_mut() {
+                update.insert("content".to_string(), json!([block]));
+            }
+        }
+        Some(_) => {}
     }
 }
 
@@ -433,10 +470,73 @@ mod tests {
             usage.pointer("/params/update/_meta/dshUsage"),
             Some(&json!([]))
         );
+
+        let write_key = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&json!(["session-a", "call-write"])).unwrap())
+        );
+        let write_file = root.join("observations").join(format!("{write_key}.json"));
+        fs::write(
+            &write_file,
+            serde_json::to_vec(&json!({
+                "schemaVersion":1,"sessionId":"session-a","callId":"call-write",
+                "tool":"edit","isError":false,"path":"/workspace/example.txt",
+                "before":"old\n","after":"new\n"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut write = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-write","status":"completed","content":[]}}});
+        enrich_message(&root, &mut write).unwrap();
+        assert_eq!(
+            write.pointer("/params/update/content/0"),
+            Some(
+                &json!({"type":"diff","path":"/workspace/example.txt","oldText":"old\n","newText":"new\n"})
+            )
+        );
+        assert_eq!(
+            write.pointer("/params/update/locations/0/path"),
+            Some(&json!("/workspace/example.txt"))
+        );
+
+        let fallback_key = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&json!(["session-a", "call-fallback"])).unwrap())
+        );
+        fs::write(
+            root.join("observations")
+                .join(format!("{fallback_key}.json")),
+            serde_json::to_vec(&json!({
+                "schemaVersion":1,"sessionId":"session-a","callId":"call-fallback",
+                "tool":"write","isError":false,"path":"/workspace/large.txt",
+                "before":"","after":"x".repeat(MAX_OBSERVED_FILE_CONTENT_BYTES + 1)
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut fallback = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-fallback","status":"completed","content":[]}}});
+        enrich_message(&root, &mut fallback).unwrap();
+        assert_eq!(fallback.pointer("/params/update/content"), Some(&json!([])));
+        assert_eq!(
+            fallback.pointer("/params/update/locations/0/path"),
+            Some(&json!("/workspace/large.txt"))
+        );
+        for (tool, kind) in [
+            ("bash", Some("execute")),
+            ("read_image", Some("read")),
+            ("glob", Some("file_search")),
+            ("grep", Some("file_search")),
+            ("web_search", Some("web_search")),
+            ("web_fetch", Some("fetch")),
+            ("skill", Some("tool")),
+            ("unknown", None),
+        ] {
+            assert_eq!(tool_kind(tool), kind, "{tool}");
+        }
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn frozen_permissions_replace_interactive_presets_without_rewriting_native_home() {
+    fn frozen_permissions_preserve_native_values_without_rewriting_native_home() {
         let root =
             std::env::temp_dir().join(format!("rovai-dsh-permissions-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -448,7 +548,6 @@ mod tests {
                     &root,
                     &root,
                     &json!({"sandbox_mode":sandbox,"approval_policy":approval}),
-                    false,
                     &[],
                 )
                 .unwrap();
@@ -458,6 +557,12 @@ mod tests {
                 assert_eq!(patch[0]["config"]["mode"], sandbox);
                 assert_eq!(patch[1]["config"]["policy"], approval);
                 assert_eq!(patch[2], json!({"id":"permission","disabled":true}));
+                assert!(patch[3]["insert"][0]["config"].get("readOnly").is_none());
+                assert!(
+                    patch[3]["insert"][0]["config"]
+                        .get("approvalPolicy")
+                        .is_none()
+                );
                 assert!(
                     command
                         .as_std()
@@ -466,20 +571,6 @@ mod tests {
                 );
             }
         }
-        let mut command = Command::new("dsh");
-        configure_host(
-            &mut command,
-            &root,
-            &root,
-            &json!({"sandbox_mode":"danger-full-access","approval_policy":"ask"}),
-            true,
-            &[],
-        )
-        .unwrap();
-        let patch: Value =
-            serde_json::from_slice(&fs::read(root.join("rovai.patch.json")).unwrap()).unwrap();
-        assert_eq!(patch[0]["config"]["mode"], "read-only");
-        assert_eq!(patch[1]["config"]["policy"], "never");
         fs::remove_dir_all(root).unwrap();
     }
 }

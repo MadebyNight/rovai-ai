@@ -10,17 +10,15 @@ test('DSH official prompt seam binds immutable root identity per session and fai
   const root = mkdtempSync(join(tmpdir(), 'rovai-dsh-host-test-'))
   try {
     const variables = new Map(), sections = [], events = new Map()
-    let denied = [], guard
-    apply({ tools: { guard: fn => { guard = fn }, schemas: () => ['mcp__fixture__echo', 'mcp__fixture__native_only', 'read'].map(name => ({ name })) }, systemPrompt: {
+    let denied = []
+    apply({ tools: { schemas: () => ['mcp__fixture__echo', 'mcp__fixture__native_only', 'read'].map(name => ({ name })) }, systemPrompt: {
       variable: (key, fn) => variables.set(key, fn), section: section => sections.push(section)
-    }, on: (name, fn) => events.set(name, fn) }, { bindingRoot: root, observationRoot: root, mcpServerNames: ['fixture'], readOnly: true, approvalPolicy: 'ask' })
+    }, on: (name, fn) => events.set(name, fn) }, { bindingRoot: root, observationRoot: root, mcpServerNames: ['fixture'] })
     events.get('agent/created')({ agent: { session: { header: {} }, ctx: {
       tools: { restrict: ({ deny }) => { denied = deny; return () => {} } }, on: () => {}
     } } })
     assert.deepEqual(denied, ['mcp__fixture__echo', 'mcp__fixture__native_only'])
-    assert(guard({ name: 'mcp__fixture__echo' }))
-    assert.equal(guard({ name: 'read' }), undefined)
-    assert.equal((await events.get('tools/pre-execute')({ name: 'mcp__fixture__echo' }, async () => ({kind:'allow'}))).kind, 'ask')
+    assert.equal(events.has('tools/pre-execute'), false)
     const bootstrap = 'Member A: {{literal}}'
     const binding = { schemaVersion: 1, sessionId: 'session-a', bootstrap,
       sha256: createHash('sha256').update(bootstrap).digest('hex') }
@@ -41,6 +39,14 @@ test('DSH official prompt seam binds immutable root identity per session and fai
     assert.equal(result.exitCode, 7)
     assert.equal(result.sessionId, 'session-a')
     assert.equal(JSON.stringify(result).includes('private body'), false)
+    events.get('tools/result')({ name: 'edit', callId: 'edit-call', agent: { session: { id: 'session-a', header: {} } } },
+      { isError: false, value: { path: '/workspace/example.txt', before: 'old\n', after: 'new\n', output: 'private output' } })
+    const editKey = createHash('sha256').update(JSON.stringify(['session-a', 'edit-call'])).digest('hex')
+    const edit = JSON.parse(readFileSync(join(root, `${editKey}.json`), 'utf8'))
+    assert.deepEqual({ path: edit.path, before: edit.before, after: edit.after }, {
+      path: '/workspace/example.txt', before: 'old\n', after: 'new\n'
+    })
+    assert.equal(JSON.stringify(edit).includes('private output'), false)
     events.get('session/event')({ id: 'session-a', header: {} }, { type: 'assistant/message', seq: 12,
       data: { turn: 2, usage: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 90 }, message: { content: 'private reply' } } })
     const usageFile = readdirSync(root).find(name => name.includes('.usage-'))

@@ -8,7 +8,7 @@ use crate::{agent_profile::AdapterKind, platform::HostPlatformKey};
 /// that evidence even when their Adapter identity exists in the Product Catalog.
 /// Every register revision receives a new digest.
 pub const MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION: &str =
-    "sha256:cf1a83f166e2823077a715d01a1cb84b8b881927e04e87f60ca23558a4983bc5";
+    "sha256:a1a494ae2ee32c7cfd2e86095415b349941dd6c392643bc50b7837dba7125a11";
 
 /// Immutable digest of the sanitized, adapter-scoped Windows x64 evidence.
 /// The source qualifies only the Runtime rows named in that evidence; shared
@@ -32,7 +32,7 @@ pub const PI_WINDOWS_X64_EVIDENCE_REVISION: &str =
     "sha256:2dec32c61673793e06c80e9c55fb9631473a418cb773b309f9e075216b3362b8";
 
 pub const DSH_MACOS_ARM64_EVIDENCE_REVISION: &str =
-    "sha256:1ffbc11ca99a2430212153bea02b6982ba03df9952ad299c66c99a2cf94c14c5";
+    "sha256:fd79b55006fa70b02e76b059f1fb0989157ef78d7f685d9ef4e6b7b09eac2fd3";
 
 pub const ZCODE_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:4c4134d5f68f0633e02d3ade061725d5ff5cfc372d85c345fae10b71ad2badc2";
@@ -192,7 +192,7 @@ mod tests {
             (
                 DSH_MACOS_ARM64_EVIDENCE_REVISION,
                 include_bytes!(
-                    "../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json"
+                    "../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json"
                 )
                 .as_slice(),
             ),

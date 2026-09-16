@@ -1036,6 +1036,28 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       ) === index)
     const matchingDiff = reportedDiffs.find((entry) => entry.path === pathSuffix)
     const reportedDiff = reportedDiffs.length === 1 ? reportedDiffs[0] : matchingDiff
+    if (adapterKind === 'deepseek-harness') {
+      const expectedDiff = ({
+        edit: { changeKind: 'update', additions: 1, deletions: 1 },
+        edit_empty: { changeKind: 'update', additions: 1, deletions: 0 }
+      })[testCase.name]
+      if (expectedDiff && !isDeepStrictEqual(reportedDiff, { path: pathSuffix, ...expectedDiff })) {
+        throw new Error(`DeepSeek Harness ${testCase.name} did not project the native Before/After as a common Diff: ${JSON.stringify({
+          expected: { path: pathSuffix, ...expectedDiff },
+          reportedDiffs,
+          history: relevantHistory
+        })}`)
+      }
+      if (testCase.name === 'add'
+          && reportedDiff
+          && reportedDiff.additions === 0
+          && reportedDiff.deletions === 0) {
+        throw new Error(`DeepSeek Harness add invented an empty Diff instead of using file-level fallback: ${JSON.stringify({
+          reportedDiffs,
+          history: relevantHistory
+        })}`)
+      }
+    }
     const fileChanges = snapshot.agentRunFileChanges.filter((entry) => entry.agentRunId === agentRunId)
     const output = snapshot.messages.find((message) => message.sourceAgentRunId === agentRunId)?.body ?? null
     const presentation = testCase.name === 'read'
@@ -1059,6 +1081,8 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       typedOperationCount,
       expectedTypedOperationCount,
       diffChangeKind: reportedDiff?.changeKind ?? null,
+      diffAdditions: reportedDiff?.additions ?? null,
+      diffDeletions: reportedDiff?.deletions ?? null,
       fileLinkTarget,
       fileLinkMatchesExpected: fileLinkTarget === pathSuffix,
       presentation: testCase.name === 'read' && !typedProjectionObserved

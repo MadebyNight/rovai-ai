@@ -36,6 +36,17 @@ function publicFailureDetail(
     : failure.summary
 }
 
+function incompatibleRuntimeDetail(availability: ProductRuntimeAvailability): string {
+  const fallback = availability.reportedVersion
+    ? `当前版本 ${availability.reportedVersion} 不受支持，请更新后重试。`
+    : '当前版本或必要能力不受支持，请更新后重试。'
+  const detail = publicFailureDetail(availability, fallback)
+  if (availability.runtimeKind !== 'deepseek-harness' || detail.includes('0.1.5-rc.2')) {
+    return detail
+  }
+  return `${detail}\nDeepSeek Harness 需要 0.1.5-rc.2 或更高版本。`
+}
+
 const STATUS_LABELS: Record<RuntimeUserStatus, string> = {
   unconfigured: '未配置 Agent 运行时',
   checking: '正在检查…',
@@ -124,12 +135,7 @@ export function runtimeAvailabilityPresentation(
     case 'incompatible':
       return presentation(
         'version_unsupported',
-        publicFailureDetail(
-          availability,
-          availability.reportedVersion
-            ? `当前版本 ${availability.reportedVersion} 不受支持，请更新后重试。`
-            : '当前版本或必要能力不受支持，请更新后重试。'
-        )
+        incompatibleRuntimeDetail(availability)
       )
     case 'disabled':
       return presentation('unavailable', '该 Agent 运行时已停用。')

@@ -212,17 +212,23 @@ try {
         }
         const count = async () => (await readFile(callMarker, 'utf8').catch(error => { if(error.code === 'ENOENT') return ''; throw error })).split('\n').filter(Boolean).length
         await permissions('danger-full-access', 'ask')
-        const allowed = await probe(call, 'agent_1')
-        assert(allowed.approvalCount === 1 && await count() === 1, 'DSH allow-once did not execute exactly one MCP effect')
-        const denied = await probe(call, 'agent_1', { approval: 'deny' })
-        assert(denied.approvalCount >= 1 && await count() === 1, 'DSH denied MCP produced an effect')
-        const cancelled = await probe(call, 'agent_1', { approval: 'cancel' })
-        assert(cancelled.runStatus === 'cancelled' && cancelled.approvalCount >= 1 && await count() === 1, 'DSH cancelled MCP produced an effect')
+        const ask = await probe(call, 'agent_1')
+        assert(ask.approvalCount === 0 && await count() === 1,
+          'Rovai synthesized an Approval that DSH did not request for MCP')
+        await permissions('read-only', 'ask')
+        const readOnlyAsk = await probe(call, 'agent_1')
+        assert(readOnlyAsk.approvalCount === 0 && await count() === 2,
+          'Rovai overrode DSH native MCP behavior under read-only/ask')
         await permissions('read-only', 'never')
-        await probe(call, 'agent_1')
-        assert(await count() === 1, 'DSH read-only MCP produced an effect')
+        const readOnlyNever = await probe(call, 'agent_1')
+        assert(readOnlyNever.approvalCount === 0 && await count() === 3,
+          'Rovai overrode DSH native MCP behavior under read-only/never')
         await permissions('danger-full-access', 'never')
-        safety = { allowOnceEffectCount: 1, denyNoEffect: true, cancelNoEffect: true, readOnlyNoEffect: true }
+        safety = {
+          authority: 'runtime-native',
+          syntheticApprovalCount: ask.approvalCount + readOnlyAsk.approvalCount + readOnlyNever.approvalCount,
+          nativeMcpEffects: await count()
+        }
       }
       await mutate('mcp.servers.delete', { serverId })
       const deleted = await probe(call)

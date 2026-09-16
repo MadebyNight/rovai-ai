@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # Runtime Catalog Boundaries
@@ -552,7 +552,8 @@ Rovai 显式选模使用真实 catalog ID；产品不读取其他 Runtime 的凭
 不进入进程兼容键；真实 MCP 定义、权限、cwd、原生 settings/credentials/profile 配置摘要变化会 fence 复用。
 新会话与 cold resume 使用精确 sessionId；DSH 不支持 session/load 或额外 additionalDirectories。
 DSH 的持久 Session 有进程锁；同一复用范围的配置变化先由共享 Fleet 回收不兼容的 idle Host，
-再启动 replacement 并 exact resume。活动 Host 只标记退役，不能抢占其 Run。
+确认原进程已经退出后再启动 replacement 并 exact resume。活动 Host 只标记退役，不能抢占其 Run；replacement
+等待该 Run 正常结束和旧 Host 确认回收。回收失败会阻断新 Host，不能并行争用锁或退化为 fresh Session。
 
 Bootstrap 沿用已有 managed_system_prompt 交付模式与完整冻结字节。Core 写入 Host 私有目录中按 Native
 Session 绑定的文件，官方 systemPrompt section/variable 在每个模型步骤读取，校验 Session 与 SHA-256；
@@ -560,16 +561,23 @@ Session 绑定的文件，官方 systemPrompt section/variable 在每个模型�
 原生 compaction 保留系统层，因此不增加文本 detector，也不把普通 assistant 文本当压缩完成信号。
 
 原生 tools/result 的同步只读 observer 为同一 Session/call 写入一次性结构化观测；Core 在共享 ACP ingress
-关联后消费。只补已知工具类型、文件路径与 shell exit/signal/timeout，不改变 Runtime 的模型可见结果。
-缺失或身份不匹配时停止该 Host；未知工具维持 other，不从自然语言猜测结果。临时文件随 Host 回收。
+关联后消费。只补已知工具类型、文件路径、shell exit/signal/timeout，以及官方 write/edit 结果已经给出的完整
+before/after，不改变 Runtime 的模型可见结果。完整文件状态被翻译为标准 ACP terminal Diff，继续由通用
+Runtime Diff、Files Changed 与 Diff Card 消费；缺失、超限、无变化或不可用时只保留路径级活动，不伪造计数。
+缺失 observer、身份不匹配或重复消费时停止该 Host；未知工具维持 other，不从自然语言猜测结果。临时文件随 Host 回收。
+
+工具名只在协议入口归一为通用语义：`bash/pwsh → execute`、`read/read_image → read`、`write → write`、
+`edit → edit`、`glob/grep → file_search`、`web_search → web_search`、`web_fetch → fetch`、`skill → tool`；
+未知名称继续保持 unknown/other，不建立 DSH 专属展示。
 
 Skills 使用 `.dsh/skills` 与原生项目/用户来源追加；MCP 使用标准 session/new/resume 的 scoped stdio/HTTP
 参数。stdio command 按冻结 Runtime PATH 解析为绝对路径；官方 scoped tools restriction 隐藏被覆盖原生
 同名 Server 的全部 Tool，避免原生独有 Tool 穿透 whole-definition 替换。
-权限使用原生 sandbox_mode 与 approval_policy，关闭会重写这两个独立参数的交互式 preset 插件，原生
-settings 文件不变。`never` 拒绝需要升级权限的请求，不表示 Core 自动放行。DSH MCP 未保留副作用声明，
-因此 `ask` 通过官方 pre-execute 进入原生 ACP Approval，只读通过官方 guard 拒绝这类未知副作用 Tool。
-read-only Run 只能收窄；不借用其他 Runtime Home 或扩张附件写权限。
+权限使用原生 `sandbox_mode` 与 `approval_policy`，只关闭会重写这两个独立参数的交互式 preset 插件，原生
+settings 文件不变。队员页、持久值与 Host patch 使用同一原生名称和值；Workspace access 不覆盖它们。
+DSH 原生 sandbox/approval 拥有决定权：Core 只展示并原样返回 Runtime 实际发出的审批请求与选项，不按 MCP
+工具名、副作用注解或 read-only 状态合成 allow/deny/ask。当前 DSH 未为某个 MCP 调用发出审批时，Rovai 不增加
+第二层 guard；同名遮蔽仍只是 MCP 配置投影。不借用其他 Runtime Home，也不扩张附件写权限。
 
 ACP usage_update 的 used/size 仅形成 context gauge。官方 committed assistant/message 与自动
 compaction/summary 的逐调用 usage 通过私有 observer 按 Session/turn/seq 归属并一次性消费。摘要从

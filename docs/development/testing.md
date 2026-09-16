@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: test-policy-and-command-routing
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # 测试与 Smoke Test
@@ -77,7 +77,7 @@ cargo test --workspace -- --list
 
 新增 owner 均使用临时目录，不读取真实凭据、不启动模型；最小命令为
 `cargo test -p rovai-core --lib dsh` 和
-`cargo test -p rovai-core --lib frozen_permissions_replace_interactive_presets_without_rewriting_native_home`。
+`cargo test -p rovai-core --lib frozen_permissions_preserve_native_values_without_rewriting_native_home`。
 
 - `dsh_version_requires_the_first_acp_release` 拥有 CLI 最低版本边界：旧 rc 与 ACP 自报桥接版本不能取得准入。
   既有版本 owner 依赖其他 Runtime 的版本语义，不能证明本包的首个 ACP rc。
@@ -86,17 +86,23 @@ cargo test --workspace -- --list
   profile/凭据/settings 变化、摘要稳定与不可读拒绝。已有权限 patch owner 不拥有配置输入摘要；
   最小命令为 `cargo test -p rovai-core --lib dsh_native_configuration`，无需真实进程或数据库。
 - `dsh_observation_is_exact_consumed_once_and_never_infers_exit_from_text` 拥有官方 observer → ACP 的独立文件 seam：
-  串 Session、重复消费、非零退出正文伪装成功、缺失用量字段。纯 ACP fixture 没有 DSH 的一次性观测文件，
-  因此使用临时文件而非数据库/真实进程；Shell 与 usage 共用同一 owner。
-- `frozen_permissions_replace_interactive_presets_without_rewriting_native_home` 拥有六种参数组合和 read-only
-  收窄：原生 preset 曾覆盖 Host 参数并拒绝 full/ask、read-only/never；只检查实际 patch 和 Command 构造。
+  串 Session、重复消费、非零退出正文伪装成功、完整 before/after 转标准 Diff、大文件路径级回退和缺失用量字段。
+  纯 ACP fixture 没有 DSH 的一次性观测文件，因此使用临时文件而非数据库/真实进程；Shell、文件与 usage 共用同一 owner。
+- `frozen_permissions_preserve_native_values_without_rewriting_native_home` 拥有六种原生参数组合：原生 preset 曾覆盖
+  Host 参数并拒绝 full/ask、read-only/never；测试要求 `sandbox_mode`/`approval_policy` 原样进入 patch，Workspace
+  access 不收窄或改名，并确认 bootstrap 不再携带自造 MCP guard 配置。
 - `dsh_catalog_migration_preserves_rows_and_rolls_back_with_its_receipt` 拥有新增 v1.59/schema 104 → 105 入口：
   旧闭集拒绝新 Adapter/Skill，扩集须保留现有行/约束并与 receipt 原子回滚。SQLite 的 DDL、trigger 与 FK
   不能由字符串解析证明，因此采用一次隔离事务及重启验证；已有 migration owner 不覆盖这个 source schema。
 
 共享 Fleet、ACP approval、Monitoring、quota 分类、闭集和历史升级继续扩展既有测试，不新增重复 owner。
+`warm_hosts_never_cross_camp_compatibility_keys` 同时拥有 DSH native lock replacement：idle/busy 都必须等待确认回收，
+busy Run 不被抢占，回收失败阻断 replacement。
 `node --test scripts/lib/dsh-host.test.mjs` 拥有官方扩展点的 Bootstrap/父子身份、完整 Server 遮蔽、MCP
-权限与最小结构化 observer 合同。真实验证入口与隔离参数见
+配置投影和最小结构化 observer 合同；它明确断言没有 Core `tools/pre-execute` 安全层，且不保存完整工具输出。
+`scripts/smoke-mcp-projection.mjs` 断言 DSH 三组权限下 synthetic Approval 为 0；
+`scripts/smoke-acp-runtime.mjs` 的现有文件矩阵断言 edit `+1/-1`、空文件 edit `+1/-0`，新增缺 before 时不伪造空 Diff。
+真实验证入口与隔离参数见
 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。受控模型只用于明确标注的协议和权限
 实验，不替代真实模型/Built-in CLI 验收。
 

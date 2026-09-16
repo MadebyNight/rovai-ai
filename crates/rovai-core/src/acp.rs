@@ -4311,10 +4311,12 @@ impl AcpCliRuntimeAdapter {
         };
         if self.kind == AdapterKind::DeepseekHarness {
             // DSH persists exact Sessions but holds a native lock while the
-            // previous Host owns them. Reap obsolete idle Hosts before resume.
+            // previous Host owns them. Reap obsolete idle Hosts before resume;
+            // an active Host retires at its normal Run boundary, and the
+            // replacement waits for that reap before it starts.
             self.fleet
                 .retire_incompatible_hosts(self.kind, &compatibility)
-                .await;
+                .await?;
         }
         let fleet_lease = self
             .fleet
@@ -4929,7 +4931,6 @@ fn configure_runtime_command(
                 private_config_root.context("DSH Host private directory is missing")?,
                 Path::new(&workspace.execution_root),
                 &runtime.permissions.values,
-                workspace.access == "read_only",
                 &external_mcp_servers.keys().cloned().collect::<Vec<_>>(),
             )?;
         }

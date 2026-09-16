@@ -1,7 +1,7 @@
 ---
 document_type: research-evidence
 status: completed
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # DeepSeek Harness 0.1.5-rc.2 ACP 接入对照
@@ -23,9 +23,9 @@ last_updated: 2026-09-15
 | Compaction continuity | System Prompt 每模型步装配；ACP 不暴露 commands/compact lifecycle | native_system_prompt_preserved；分别验证压缩与压缩后恢复 | DocumentationOnly / NotImplemented | 无 ACP /compact 命令或原生完成事件，不添加文本 detector |
 | Skills | 官方 filesystem provider 支持 project/custom/user 目录与 watch | 复用 Skill delivery group，原生 .dsh/skills 路由 | DocumentationOnly / NotImplemented | 与原生目录追加，不建立第二套设置 |
 | External MCP | session/new/resume 支持 stdio 与 HTTP；stdio command 必须绝对路径 | PreparedMcpProjection 经标准 session 参数；解析冻结 PATH 的命令入口 | DocumentationOnly / NotImplemented | SSE、MCP resources/prompts 无原生消费者 |
-| Tool / Action / Output | committed tool_call、tool_call_update、稳定 callId、kind=other | 共享 ACP action；只按已知 dsh tool name/input 映射命令与文件 | DocumentationOnly / NotImplemented | generic kind 需 Adapter 显式映射 |
+| Tool / Action / Output | committed tool_call、tool_call_update、稳定 callId、kind=other；官方 tools/result 含结构化 shell/file 结果 | 共享 ACP action；已知 dsh tool name 归一通用语义，observer 只补协议丢失的 shell 终态、path 与完整 before/after | DocumentationOnly / NotImplemented | generic kind 需 Adapter 显式映射；不建立专属展示 |
 | Narration / Final / Missing-Send | committed message/thought 分离；prompt stopReason 为终态 | 共享 ACP final、私有 thinking、zero-send recovery | DocumentationOnly / NotImplemented | 非原始 token stream |
-| Permission / Approval / Workspace | 原生 sandbox-policy read-only/workspace-write/danger-full-access；approval ask/never | 冻结 Host 权限，read-only 收窄，exact allow/reject；原生 FS/Shell | DocumentationOnly / NotImplemented | 无 session mode；拒绝非空 additionalDirectories |
+| Permission / Approval / Workspace | 原生 sandbox-policy read-only/workspace-write/danger-full-access；approval ask/never | 原名原值冻结 Host 权限；只承载 DSH 实际请求的 exact option，不合成 Core 安全策略 | DocumentationOnly / NotImplemented | 无 session mode；拒绝非空 additionalDirectories |
 | Built-in rovai CLI | 原生 Bash/PowerShell 可继承进程环境 | 共享 bundled CLI、Run lease 与 process-stable tmp | NotObserved / NotImplemented | 不能以 MCP 成功替代 CLI smoke |
 | Usage / Cache / Cost | ACP usage_update 只输出 used/size 的当前占用 | 映射 context gauge；token/cache/cost 不从占用估算 | DocumentationOnly / NotImplemented | 原生日志有用量不代表 ACP 已公开可归属账单 |
 | Retry / Queue / Cancel / Cleanup | prompt/cancel/close 等待 Agent、updates、descendants、persistence | 共享 accepted-input fencing、取消与受管进程回收 | DocumentationOnly / NotImplemented | 原生重试保持唯一 owner |
@@ -44,12 +44,14 @@ last_updated: 2026-09-15
 ### 当前结论
 
 官方 ACP 接入已达到 **macOS arm64 First-Class / qualified**，14 个核心能力轴均已闭合。其余平台保持 not_qualified。
-平台资格绑定独立的 [DSH 验收归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json)，不沿用其他 Runtime 的摘要。
+平台资格绑定独立的 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)；
+它引用但不改写 v1 的 14 轴历史验收，不沿用其他 Runtime 的摘要。
 2026-09-15 的固定发布包先使用官方 DeepSeek Flash 验证普通回复、warm continuation、文件/命令工具、
 Skills、全部 23 项 Built-in CLI 和原生压缩。官方余额耗尽后，按用户明确授权读取既有 MiniMax BYOK Key，
 仅传入隔离 DSH 验收进程，通过官方 llm-pi-ai/Anthropic-compatible 路由继续运行 MiniMax-M3。
 Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和压缩后的能力组合均已补齐。
-脱敏结果和私有原始日志摘要见 [机器可读证据](acp-0.1.5-evidence.json)。原始日志、数据库、原生 Home 和
+原 14 轴脱敏结果和私有原始日志摘要见 [机器可读证据](acp-0.1.5-evidence.json)，2026-09-16 收敛复验见
+[增量机器可读证据](acp-0.1.5-convergence-evidence.json)。原始日志、数据库、原生 Home 和
 凭据留在仓库外；受控模型只产生确定的工具请求，工具执行、权限和 Session 仍由实际 DSH/Core 负责。
 
 下表逐轴记录当前实现和真实验收；协议未暴露的入口单列为差异，由 [V1.59-D08](../../versions/v1.59/decisions.md#v1-59-d08)接受。
@@ -58,15 +60,15 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 | 能力轴 | 当前证据 / 实现 | 已核对结果 | 明确差异与范围 |
 | --- | --- | --- | --- |
 | Auth / Provider / Model | Verified / Implemented | 原生配置与 grouped catalog；官方 Flash 与 MiniMax-M3 BYOK 真实生成；标准 set_config_option | ACP profile 的默认模型独立于交互入口；缺 Key 归 authentication、不自动重试；Ready 不证明余额 |
-| Host / Fleet / LRU | Verified / Implemented | 真实同 Host warm；同进程 A→B→A；同成员并发独立 Host、exact 切回；Core crash 后进程树退出并 exact 恢复 | 生产 30 分钟 idle eviction 后进程退出、新 Host exact resume；正常 shutdown 无残留；共享 LRU/租约/退役回归通过 |
+| Host / Fleet / LRU | Verified / Implemented | 真实同 Host warm；同进程 A→B→A；同成员并发独立 Host、exact 切回；Core crash 后进程树退出并 exact 恢复 | 配置不兼容时 idle Host 先确认回收；busy Host 等当前 Run 结束再回收，replacement 在锁释放后启动；失败阻断新 Host；共享 LRU/租约/退役回归通过 |
 | Native Session / Continuation | Verified / Implemented | warm、Core cold、压缩后新 Host exact resume；MCP 更新 exact；无效持久 ID 仅一条 continuity lost 并创建替代 Session | 不用 session/load；冷恢复没有历史 Action/Approval 重放 |
 | Bootstrap / Context | Verified / Implemented | 官方 systemPrompt section 每模型步按 exact Session 装配冻结字节；A/B/A、cold、compaction 保留正确身份；测试覆盖子代理不继承成员自身份、缺失/损坏绑定拒绝 | 相比 Grok 的 _meta.rules，使用受管官方 Cordis 插件；ContextManifest/Bootstrap 内容格式不变 |
 | Compaction continuity | Verified / Implemented | manual、压力、overflow、自动阈值、overflow retry、fail/cancel、压缩后 cold resume；每阶段重新加载随机 Skill marker、实际 MCP 调用与一条审批；压缩后 deny 零副作用 | overflow 使用一次受控错误触发真实 native retry；无 ACP /compact/lifecycle，采用持续 System 层 |
 | Skills | Verified / Implemented | 实际读取 .dsh/skills 的随机 marker 与 cli-operations；导入、冲突保留、删除、禁用/重启投影复核 | 沿用共享 group 与原生目录追加；不是独立 Skill 设置 |
-| External MCP | Verified / Implemented | 最终真实模型通过 stdio/HTTP、同名覆盖、更新、相邻隔离、取消分配/重分配/删除、原生恢复、exact Session；allow 一次、deny/cancel/read-only 零副作用 | 断言实际 Tool output 与副作用计数；相邻回合使用新 nonce，不能以复述历史结果充当调用；无 SSE/resources/prompts |
-| Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断 | 官方 tools/result 补 ACP 丢失的 exit metadata；未知工具保持 other；不从结果正文猜状态 |
+| External MCP | Verified / Implemented | 真实模型通过 stdio/HTTP、同名覆盖、更新、相邻隔离、取消分配/重分配/删除、原生恢复、exact Session；脚本化复验三组权限均为 0 个 Core 合成审批，副作用由 DSH 原生工具层决定 | whole-definition 遮蔽属于配置投影；Rovai 不按工具名、read-only 或副作用注解再造安全结论；无 SSE/resources/prompts |
+| Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断；真实 MiniMax edit 为 update +1/-1，空文件 edit 为 +1/-0 | observer 只补 shell metadata 与官方 before/after；完整状态变为标准 ACP Diff，新增缺 before 时保持路径级回退；未知工具保持 other |
 | Narration / Final / Missing-Send | Verified / Implemented | ACP committed public/thought 分流、end_turn 唯一终态；真实 zero-send 发布、accepted-send suppression、tool→final 三组通过 | 不把进程退出或日志末尾当 final；通用 ACP recovery 保留原生 public text |
-| Permission / Approval / Workspace | Verified / Implemented | 六组合冻结 patch；真实 write/Bash 在 workspace-write 内写成功、越界拒绝，read-only 均拒绝；MCP allow/deny/cancel；Shell 取消后 32 秒无迟到文件 | 原生 workspace-write 允许部分 OS 临时区，越界测试目标位于临时区外；不支持 additionalDirectories |
+| Permission / Approval / Workspace | Verified / Implemented | 六组合原名原值冻结 patch；真实 write/Bash 的 workspace-write/read-only 边界由 DSH 决定；Shell 取消后 32 秒无迟到文件；MCP 不产生 Core 合成审批 | `sandbox_mode`/`approval_policy` 从队员页到 Host 保持一致；Runtime 未请求审批时 Core 不阻断或二次询问；不支持 additionalDirectories |
 | Built-in rovai CLI | Verified / Implemented | contract-v24 全 23 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
 | Usage / Cache / Cost | Verified / Implemented | 8 个真实 Run 的逐调用入库；新增真实 Core warm/自动压缩/cold 三轮对账与独立原生 observer 的五类 Token 桶完全一致，无重放计数；context gauge 分开 | cache write/cost 未报告，保持 NULL；MiniMax 未报告 reasoning 也保持 NULL；空闲 manual summary 不归入后续 Run |
 | Retry / Queue / Cancel / Cleanup | Verified / Implemented | 共享 accepted-input/queue/lease；余额/缺 Key 不盲重试；真实 pending-approval 取消及运行中 Shell 严格 cancelled；32 秒无晚到文件；Core crash、正常停止清理进程树 | Native compact fail/cancel 保持 generation；idle 回收的专属结果见 Host 轴 |
@@ -76,7 +78,8 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 
 1. **Host warm**：共用 ACP/Fleet 的 member-scoped resident multi-session 策略，与 Grok/Kimi 路线一致。
    DSH 原生 Session 存储持进程锁；实际 MCP 更新最初出现旧 Host 占锁。现在共享 Fleet 先退役同范围不兼容的
-   idle Host，再启动 replacement exact resume；真实与受控完整生命周期验证均不再丢失 Session。Run-local MCP 证据
+   idle Host并等待确认回收，再启动 replacement exact resume；busy Host 不抢占当前 Run，而是在其结束后回收并唤醒等待的
+   replacement；回收失败时新 Host 不启动。真实与受控完整生命周期验证均不再丢失 Session。Run-local MCP 证据
    和可变模型选项不进入进程兼容键，真实配置/权限/目录/原生输入摘要变化仍会 fence。
 2. **Bootstrap**：DSH ACP 没有可用 system 字段。使用官方 Cordis systemPrompt 扩展点，按 exact Native
    Session 读取 0600 私有绑定，SHA-256 校验，变量仅展开一次。不会把 Charter/Identity 放进用户消息，
@@ -87,13 +90,20 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
    调用 MCP 并触发审批；最后 deny 没有副作用。ACP 不暴露人工 compact 命令，因此该入口
    仍是原生能力，不伪造 UI 成功或使用 token 降幅推断完成。
 4. **工具与用量**：DSH ACP 把 Bash 非零退出也报告为 completed，且 usage_update 只有占用率。官方只读
-   tools/result 与 committed session/event observer 分别提供结构化退出状态和逐调用用量，Core 以
-   Session/call 或 Session/turn/seq 关联并消费，私有文件随 Host 回收。stdout/参数继续使用 ACP。
+   tools/result 与 committed session/event observer 分别提供结构化退出状态、write/edit 完整 before/after 和逐调用用量，
+   Core 以 Session/call 或 Session/turn/seq 关联并消费，私有文件随 Host 回收。完整文件状态被注入标准 ACP terminal
+   Diff，通用 Evidence/Files Changed/Diff Card 继续拥有展示；缺失或超限只作路径回退。stdout/参数继续使用 ACP。
    自动压缩摘要也提供结构化 usage，通过 committed compaction/start 的 compactionId/owner turn 关联；
    不收集摘要正文，空闲手动压缩的 null turn 不归入后续 Run，未知字段保持 NULL。
+   工具名在 ingress 仅归一为共享语义：bash/pwsh→execute，read/read_image→read，write→write，edit→edit，
+   glob/grep→file_search，web_search→web_search，web_fetch→fetch，skill→tool；未知名称不猜测。
 5. **MCP 与权限**：MCP 采用 RovaiWins whole-definition（与 Grok NativeWinsSkip 不同）；scope-local
-   server 覆盖同名原生全部 Tool，包括 native-only Tool。交互式 preset 不参与受管 Host；`never` 是拒绝
-   escalation，`ask` 通过原生 ACP Approval。MCP 没有副作用声明时，ask 询问、只读拒绝，不能从工具名称猜安全性。
+   server 覆盖同名原生全部 Tool，包括 native-only Tool。交互式 preset 不参与受管 Host；`never` 与 `ask` 原样交给
+   DSH。只有 DSH 发出原生 `session/request_permission` 时才显示通用审批并原样返回选项。0.1.5-rc.2 的普通 MCP
+   ToolDefinition 没有触发该请求，因此 read-only/ask/never 下的 MCP 结果均由 DSH 原生层决定，Core 不根据名称猜安全性。
+6. **队员页与版本提示**：权限主名称和选项逐字显示原生 snake_case/value，中文只作次级解释；保存值不转换。
+   共享 Desktop/Mobile 可用性投影在不兼容时明确提示“DeepSeek Harness 需要 0.1.5-rc.2 或更高版本”，不新增
+   DSH 专属页面或移动端分支。
 
 ### 复跑入口与隔离
 

@@ -2581,18 +2581,18 @@ fn dsh_permission_options() -> Vec<PermissionOptionDescriptor> {
     [
         (
             "sandbox_mode",
-            "File and command sandbox",
+            "sandbox_mode",
             vec![
-                choice("read-only", "Read only"),
-                choice("workspace-write", "Workspace write"),
-                choice("danger-full-access", "Full access"),
+                choice("read-only", "read-only"),
+                choice("workspace-write", "workspace-write"),
+                choice("danger-full-access", "danger-full-access"),
             ],
             "danger-full-access",
         ),
         (
             "approval_policy",
-            "Native approval policy",
-            vec![choice("ask", "Ask"), choice("never", "Never")],
+            "approval_policy",
+            vec![choice("ask", "ask"), choice("never", "never")],
             "never",
         ),
     ]
@@ -3384,6 +3384,18 @@ mod tests {
         for (kind, values) in expected {
             assert_eq!(registry.member_permission_defaults(kind), values);
         }
+        let dsh = dsh_permission_options();
+        assert_eq!(
+            dsh.iter()
+                .map(|descriptor| descriptor.label.as_str())
+                .collect::<Vec<_>>(),
+            ["sandbox_mode", "approval_policy"]
+        );
+        assert!(
+            dsh.iter()
+                .flat_map(|descriptor| &descriptor.choices)
+                .all(|choice| choice.label == choice.value)
+        );
     }
 
     #[test]
@@ -4663,6 +4675,7 @@ mod tests {
             AdapterKind::TraeCnCli,
             AdapterKind::KimiCodeCli,
             AdapterKind::GrokBuild,
+            AdapterKind::DeepseekHarness,
         ] {
             let capability = registry.mcp_projection(kind);
             assert!(capability.supports_stdio);

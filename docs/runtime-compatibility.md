@@ -1,7 +1,7 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # Agent Runtime 兼容性清单
@@ -37,12 +37,19 @@ Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery
 固定官方 npm 发布包在隔离 DSH_HOME 与隔离 Core data/Skill/MCP 根验证；生产仍使用其原生配置。
 逐项 Host、Session、Bootstrap、Compaction、Skill、MCP、权限、工具、CLI 与 Monitoring 结果见
 [DSH Parity Matrix](research/deepseek-harness-runtime/acp-0.1.5-parity.md)。14 个核心能力轴均已闭合，macOS arm64 绑定
-[DSH 专属资格证据](../qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json) 的独立 SHA-256；
+[DSH v2 增量资格证据](../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 的独立 SHA-256；
+v1 归档继续保存原 14 轴历史验收，不被改写。
 不从共享代码或普通 handshake 推断其他平台资格。
 真实官方模型已通过普通/续轮、命令输出、文件工具、Skills、全部 23 项 Built-in CLI 与原生压缩验证。
 按用户授权使用 MiniMax-M3 原生 BYOK 补齐完整冷恢复/取消/无效 ID fallback、Missing-Send、
 MCP 生命周期与安全、压缩后的 Skill/MCP/审批组合；生产 30 分钟空闲回收、Core crash 与正常 shutdown
 均无残留进程；自动摘要用量与普通调用按 Run 独立对账，cold resume 无重复归属。测试替代模型的证据仍单列。
+
+2026-09-16 收敛复验保持同一官方 `0.1.5-rc.2`：权限名和值从 UI 到 Host 原样传递，Core 不再为 MCP
+按工具名、read-only 或副作用注解合成 Approval；脚本化原生 MCP 三组权限均观测到 0 个 synthetic Approval，
+副作用由 DSH 原生层决定。配置不兼容时 shared Fleet 对 idle/busy Host 都等待确认回收再启动 replacement，
+回收失败阻断新 Host。真实 MiniMax-M3 文件矩阵确认 edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；
+新增缺少完整 Before 时保留路径级文件活动，不伪造 Diff。该增量不扩大平台范围。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 
