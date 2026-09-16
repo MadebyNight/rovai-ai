@@ -259,7 +259,7 @@ export function NewConversationDialog({
             <Dialog.Title>新对话</Dialog.Title>
             <Dialog.Close asChild><button ref={closeButtonRef} className="compact-close" type="button" aria-label="关闭新对话" disabled={busy}><DialogControlIcon name="close" /></button></Dialog.Close>
           </header>
-          <Dialog.Description id="new-camp-dialog-description" className="sr-only">选择工作目录、队员与负责人。对话名称可选。</Dialog.Description>
+          <Dialog.Description id="new-camp-dialog-description" className="sr-only">选择工作目录、队员与队长。对话名称可选。</Dialog.Description>
           <form className="compact-form" onSubmit={(event) => void submit(event)}>
             <div className="compact-body camp-fields">
               {attentionMessage && <p className="compact-inline-note" role="status">{attentionMessage}</p>}
@@ -327,13 +327,13 @@ export function NewConversationDialog({
               {availableMembers.length === 0 && <p className="new-camp-empty-note">暂无可用队员，请先在「队员」中配置 Agent 运行时。</p>}
               {hasUnavailableSelection && <p className="compact-inline-error" role="alert">所选队员已不可用，请重新选择。</p>}
               <div className="compact-row">
-                <span id="new-camp-lead-label">负责人</span>
-                <NewConversationPicker mobile={mobile} open={leadMenuOpen} onOpenChange={setLeadMenuOpen} busy={busy} title="选择负责人"
+                <span id="new-camp-lead-label">队长</span>
+                <NewConversationPicker mobile={mobile} open={leadMenuOpen} onOpenChange={setLeadMenuOpen} busy={busy} title="选择队长"
                   trigger={<button className="compact-picker" type="button" aria-labelledby="new-camp-lead-label new-camp-lead-value" disabled={busy || selectedAvailableMembers.length === 0}>
                       {lead && <MemberAvatar agentId={lead.agentId} avatarRef={leadProfile?.avatarRef ?? null} displayName={lead.displayName} size="mention" decorative />}
-                      <span id="new-camp-lead-value">{lead?.displayName ?? (selectedAvailableMembers.length ? '选择负责人' : '暂无可选负责人')}</span><DialogControlIcon name="chevron" />
+                      <span id="new-camp-lead-value">{lead?.displayName ?? (selectedAvailableMembers.length ? '选择队长' : '暂无可选队长')}</span><DialogControlIcon name="chevron" />
                     </button>}
-                  menu={<DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu roster-menu" align="end" sideOffset={6} collisionPadding={12} aria-label="选择负责人" loop>
+                  menu={<DropdownMenu.Content onCloseAutoFocus={(event) => event.preventDefault()} className="compact-menu roster-menu" align="end" sideOffset={6} collisionPadding={12} aria-label="选择队长" loop>
                       <DropdownMenu.Label className="compact-menu-heading">从已选队员中选择</DropdownMenu.Label>
                       <DropdownMenu.RadioGroup value={leadId} onValueChange={setLeadId}>
                         {selectedAvailableMembers.map((member) => {

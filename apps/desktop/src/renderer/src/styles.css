@@ -612,6 +612,7 @@ html[data-rovai-platform="win32"] .unified-sidebar-drag {
 .camp-nav-row.selected .camp-nav-open { color: var(--conversation-action); font-weight: 500; }
 .camp-marker-slot { display: block; width: 7px; height: 7px; flex: 0 0 7px; }
 .camp-marker-slot .task-dot { display: block; width: 7px; height: 7px; border: 0; border-radius: 50%; background: var(--conversation-unread); }
+.pinned-camp-icon { display: none; }
 .camp-loading-spinner { width: 12px; height: 12px; flex: 0 0 12px; margin-left: auto; border: 2px solid color-mix(in srgb, var(--info) 24%, transparent); border-top-color: var(--info); border-radius: 50%; background: transparent; animation: camp-marker-spin 700ms linear infinite; }
 .camp-nav-open .truncate { min-width: 0; flex: 1 1 auto; }
 .camp-draft-badge { flex: 0 0 auto; color: var(--faint); font-size: 11px; font-weight: 500; letter-spacing: .02em; }
