@@ -4255,7 +4255,7 @@ describe('task event projections', () => {
     ])
   })
 
-  it('presents the saved model, localized effort and model strategy without inventing Runtime defaults', () => {
+  it('presents the saved model, catalog effort label and model strategy without inventing Runtime defaults', () => {
     const installation = codexInstallation()
     installation.snapshot!.models = [{
       id: 'gpt-5.6-sol',
@@ -4267,7 +4267,10 @@ describe('task event projections', () => {
         key: 'reasoning_effort',
         label: 'Reasoning effort',
         valueType: 'enum',
-        values: [{ value: 'xhigh', label: 'Extra high' }],
+        values: [
+          { value: 'xhigh', label: 'Extra high' },
+          { value: 'ultra', label: 'Ultra' }
+        ],
         defaultValue: 'high',
         scope: 'run'
       }]
@@ -4283,9 +4286,24 @@ describe('task event projections', () => {
       permissions: { adapterKind: 'codex-cli', schemaVersion: 1, values: {} }
     }, installation)).toEqual({
       model: 'GPT-5.6 Sol',
-      effort: { label: '推理强度', value: '极高' },
+      effort: { label: '推理强度', value: 'Extra high' },
       strategy: '固定模型',
-      summary: 'GPT-5.6 Sol · 推理强度 极高'
+      summary: 'GPT-5.6 Sol · 推理强度 Extra high'
+    })
+
+    expect(memberRuntimeConfigurationPresentation({
+      adapterKind: 'codex-cli',
+      model: {
+        mode: 'explicit',
+        modelId: 'gpt-5.6-sol',
+        options: { reasoning_effort: 'ultra' }
+      },
+      permissions: { adapterKind: 'codex-cli', schemaVersion: 1, values: {} }
+    }, installation)).toEqual({
+      model: 'GPT-5.6 Sol',
+      effort: { label: '推理强度', value: 'Ultra' },
+      strategy: '固定模型',
+      summary: 'GPT-5.6 Sol · 推理强度 Ultra'
     })
 
     expect(memberRuntimeConfigurationPresentation(
@@ -4308,11 +4326,26 @@ describe('task event projections', () => {
       permissions: { adapterKind: 'claude-code-cli', schemaVersion: 1, values: {} }
     }, null)).toEqual({
       model: 'claude-sonnet-4-6',
-      effort: { label: '思考强度', value: '高' },
+      effort: { label: '思考强度', value: 'high' },
       strategy: '固定模型',
-      summary: 'claude-sonnet-4-6 · 思考强度 高'
+      summary: 'claude-sonnet-4-6 · 思考强度 high'
     })
   })
+
+  it.each(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])(
+    'keeps the raw effort value when the model catalog has no label for %s',
+    (value) => {
+      expect(memberRuntimeConfigurationPresentation({
+        adapterKind: 'claude-code-cli',
+        model: {
+          mode: 'explicit',
+          modelId: 'claude-sonnet-4-6',
+          options: { effort: value }
+        },
+        permissions: { adapterKind: 'claude-code-cli', schemaVersion: 1, values: {} }
+      }, null).effort).toEqual({ label: '思考强度', value })
+    }
+  )
 
   it('keeps concurrent Runtime approvals in one dock directly above the composer', () => {
     const profiles = [{
