@@ -736,6 +736,7 @@ impl AgentRuntimeAdapterRegistry {
                     | AdapterKind::GrokBuild
                     | AdapterKind::ZcodeApp
                     | AdapterKind::AntigravityApp
+                    | AdapterKind::DeepseekHarness
             )
         {
             // This explicit evaluation scope excludes Cursor and never admits a
