@@ -21826,8 +21826,9 @@ async fn process_agent_run_scheduler(
                 core.cleanup_mcp_projections_best_effort().await;
                 let cleanup_core=Arc::clone(&core);
                 tokio::spawn(async move {
-                    if let Ok(_preparation)=cleanup_core.mission_workspace_gate.try_lock() {
-                        if let Err(error)=cleanup_core.cleanup_mission_workspaces_locked(None).await {eprintln!("Mission cleanup pending: {error:#}");}
+                    if let Ok(_preparation)=cleanup_core.mission_workspace_gate.try_lock()
+                        && let Err(error)=cleanup_core.cleanup_mission_workspaces_locked(None).await {
+                        eprintln!("Mission cleanup pending: {error:#}");
                     }
                 });
             },

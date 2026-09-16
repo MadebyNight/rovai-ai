@@ -357,13 +357,12 @@ pub fn validate_schema(value: &Value, schema: &Value) -> Result<()> {
         }
         bail!("value does not match any oneOf variant");
     }
-    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        if !variants
+    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array)
+        && !variants
             .iter()
             .any(|variant| validate_schema(value, variant).is_ok())
-        {
-            bail!("value does not match any anyOf variant");
-        }
+    {
+        bail!("value does not match any anyOf variant");
     }
     if let Some(variants) = schema.get("allOf").and_then(Value::as_array) {
         for variant in variants {

@@ -6214,10 +6214,10 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !matches!(row.15, 22 | 23 | 24) {
+    if !matches!(row.15, 22..=24) {
         anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
     }
-    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22 | 23 | 24) {
+    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22..=24) {
         anyhow::bail!("Gather completion requires a Gather-capable context formatter");
     }
     if row.31 != AGENT_MESSAGE_PROJECTION_AUDIENCE {
@@ -6474,7 +6474,7 @@ fn validate_frozen_view_receipt(
         selection
             .get("contextManifestVersion")
             .and_then(Value::as_i64),
-        Some(22 | 23 | 24)
+        Some(22..=24)
     ) || selection.get("runFactsSchemaVersion")
         != Some(&json!(
             if selection.get("contextManifestVersion") == Some(&json!(24)) {
@@ -6715,7 +6715,7 @@ fn materialize_frozen_delivery_context(
     let camp_attachment_view_receipt_digest = required("campAttachmentViewReceiptDigest")?
         .as_str()
         .context("Frozen Delivery Context View receipt digest is invalid")?;
-    if !matches!(context_manifest_version, 22 | 23 | 24)
+    if !matches!(context_manifest_version, 22..=24)
         || run_facts_schema_version != if context_manifest_version == 24 { 3 } else { 2 }
         || camp_attachment_view_receipt_version != CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION
         || canonical_json_digest(required("campAttachmentViewReceipt")?)?

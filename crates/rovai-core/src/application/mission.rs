@@ -333,11 +333,11 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
-                if execution.result.status == CommandResultStatus::Applied {
-                    if let Some(camp_id) = execution.result.payload["campId"].as_str() {
-                        self.attachment_views
-                            .ensure_empty_camp_ready(&mut database, camp_id)?;
-                    }
+                if execution.result.status == CommandResultStatus::Applied
+                    && let Some(camp_id) = execution.result.payload["campId"].as_str()
+                {
+                    self.attachment_views
+                        .ensure_empty_camp_ready(&mut database, camp_id)?;
                 }
                 emit_navigation_invalidated(
                     &self.output,
