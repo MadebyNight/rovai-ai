@@ -172,7 +172,7 @@ try {
     || value?.memberGrid !== true
     || value?.primary !== '新建'
     || value?.primaryEnabled !== true
-    || value?.description !== '选择工作目录、队员与负责人。对话名称可选。'
+    || value?.description !== '选择工作目录、队员与队长。对话名称可选。'
     || value?.collaborationRemoved !== true
     || value?.saysRecommended !== false
     || value?.optionalShell !== true
@@ -229,12 +229,12 @@ try {
   await pressKey(cdp, 'ArrowDown')
   await waitForExpression(
     cdp,
-    `Boolean(document.querySelector('.compact-menu[aria-label="选择负责人"]'))`,
+    `Boolean(document.querySelector('.compact-menu[aria-label="选择队长"]'))`,
     5_000
   )
   const leadMenuInspection = await cdp.send('Runtime.evaluate', {
     expression: `(() => {
-      const menu = document.querySelector('.compact-menu[aria-label="选择负责人"]')
+      const menu = document.querySelector('.compact-menu[aria-label="选择队长"]')
       const options = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])]
       return {
         count: options.length,
@@ -272,11 +272,11 @@ try {
     throw new Error(`Lead picker arrow navigation did not move focus: ${JSON.stringify(leadMenuValue)}`)
   }
   if (leadMenuValue.count > 1) {
-    await evaluate(cdp, `[...document.querySelectorAll('.compact-menu[aria-label="选择负责人"] [role=menuitemradio]')].find(option => option.textContent === ${JSON.stringify(navigatedLeadLabel)}).click()`)
+    await evaluate(cdp, `[...document.querySelectorAll('.compact-menu[aria-label="选择队长"] [role=menuitemradio]')].find(option => option.textContent === ${JSON.stringify(navigatedLeadLabel)}).click()`)
   } else {
     await pressKey(cdp, 'Escape')
   }
-  await waitForExpression(cdp, `document.querySelector('.compact-menu[aria-label="选择负责人"]') === null`, 5_000)
+  await waitForExpression(cdp, `document.querySelector('.compact-menu[aria-label="选择队长"]') === null`, 5_000)
   await waitForExpression(
     cdp,
     `document.activeElement?.matches('button[aria-labelledby~="new-camp-lead-label"]') === true`,

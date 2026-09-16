@@ -2819,6 +2819,7 @@ describe('task event projections', () => {
     expect(markup).toContain('data-navigation-icon="brain"')
     expect(markup).toContain('data-navigation-icon="settings"')
     expect(markup).toContain('id="pinned-heading">置顶')
+    expect(markup).toContain('class="pinned-camp-icon"')
     expect(markup).toContain('快速对话讨论')
     expect(markup).toContain('rovai-ai')
     expect(markup).toContain(longTitle)
