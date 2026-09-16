@@ -380,6 +380,8 @@ HTML 子帧使用独立 CDP target 检查，未放宽它的 opaque sandbox。
 
 ## 本轮：HTML 附件预览与正式登录页
 
+以下记录保留该批次的验证事实；不透明来源策略随后由 [V1.59-D09](decisions.md#v1-59-d09)取代。
+
 Web 的 HTML/HTM 不再强制标为普通文本。正式文件查看器复用 Desktop 的交互视图、源码读取、查找与诊断；
 认证 Host 读取后把文档交给无凭据静态 shell，响应 CSP 和 iframe 都使用不含 `allow-same-origin` 的 sandbox。
 保留原读取限额、编辑归属和 generation 校验；当前单文件 HTML 与 HTTP(S) 依赖可用，本地多文件站点依赖尚未接通。
@@ -618,7 +620,8 @@ Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当�
 合并基线通过 TypeScript 与 Rust workspace default：Core 799 通过/6 既有忽略、CLI 35、Web 4。
 Task/Memory/Automation/Skills/MCP、单聊和资源适配现已接入同一业务入口；以下记录使用本轮重新执行的证据。
 Migration 153 保留上游 150/151/152；旧任务分支的客户端草稿 150 通过精确 schema 检查和原子迁移升级，
-保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，该步骤目标为 schema 104；后续 DSH 闭集迁移 155 推进到 schema 105。
+保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，该步骤目标为 schema 104；
+随后 Automation 155 和附件路径 156 依次推进到 schema 106，DSH 闭集迁移 157 最终推进到 schema 107。
 
 本轮管理资源与 Host 时钟增量的 Core library：803 通过／6 既有忽略；Desktop 时钟适配 20 项、共享 Web build 通过。
 Rust 调度循环在两入口自行运行；原 Host pipe/HTTP owner 与新增无浏览器时钟 seam 共 2 项通过，
@@ -1142,10 +1145,10 @@ Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 
 
 ## DeepSeek Harness ACP 接入增量
 
-按 [V1.59-D08](decisions.md#v1-59-d08)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
+按 [V1.59-D10](decisions.md#v1-59-d10)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
 工作树分支 `rovai/dsh-acp-runtime`：共享 Host/Fleet、exact resume、managed system prompt、原生权限、模型目录、
-Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 155 保留现有 Runtime/Skill 行及 trigger，
-从 v1.59/schema 104 升至 105。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
+Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 157 保留现有 Runtime/Skill 行及 trigger，
+从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
 Root README 增加对应的正式支持行；其余平台保持 not_qualified。逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
 
 2026-09-16 收敛项已实现：队员页显示并保存 DSH 原生 `sandbox_mode`/`approval_policy`；Core 删除 MCP 名称/只读
@@ -1153,3 +1156,34 @@ Root README 增加对应的正式支持行；其余平台保持 not_qualified。
 回收失败阻断；observer 把官方 write/edit Before/After 归一为标准 ACP Diff，新增缺 Before 与大文件走通用路径级回退。
 真实 MiniMax-M3 文件矩阵已得到 edit `+1/-1` 与空文件 edit `+1/-0`；脚本化 MCP 更新/exact resume/隔离矩阵得到
 0 个 synthetic Approval。最低版本错误和权限说明由 Desktop/Mobile 共用组件呈现；没有 DSH 专属 Command、文件或 Diff UI。
+
+## Weekly 无时间上限
+
+- 已接入显式 null 的整轮、Case 和 Judge 时间策略，以及 Host/等待器和 Owner 配置的 Automation 时限。
+- 保留旧 seal、历史结果、数量限制、手动停止与恢复收口；普通有限计划默认行为保持。
+- Migration 155 从 schema 104 原位升级至 105，不清除 Camp、Run、输入或评测证据。
+- 本地验证：`pnpm test:rust:pr` 的 Library 809 项、CLI 35 项及 slow integration 310 项通过；6 项既有手工平台测试维持 ignored。
+- `pnpm test` 通过，包含 Vitest 2072 项与脚本 320 项（2 项既有 Windows 专项跳过）；宿主 4 项、类型检查及 Desktop 构建通过。
+- 无时限用例覆盖跨一周的 Core 结算、模拟跨一小时的进程/Judge timer、Host 绑定返回版本、取消、旧定义及历史回执保留和迁移失败回滚。
+- 新 App 安装、Owner 绑定及 12 Case 的真实回归尚未执行，不能宣称业务回归通过。
+
+## 本轮：可信 Web HTML 原生浏览器能力
+
+2026-09-16 按用户确认，iframe 与统一 Rust Host 的 `/preview.html` 响应采用
+`allow-scripts allow-same-origin allow-forms allow-popups allow-modals`，仅预览壳允许 HTTP(S) 表单提交。
+Web 描述符与握手/命令使用实际来源，保留窗口、预览 ID、generation、challenge/document 校验。
+原生 Storage 归访问设备浏览器；同来源主页面及登录材料不再与可信附件隔离，理由见 [V1.59-D09](decisions.md#v1-59-d09)。
+
+集成主线 `f41ad4aa` 的附件来源改动后，保留已有相对资源入口、CSP、来源检查与替换保存能力；
+只调整静态预览壳的权限。Desktop 原生 `file:` 宿主的既有消息通道保持，HTML 原文件没有被重写。
+
+已验证 TypeScript、Web/Desktop 构建、文档门禁，以及 CI 的 204 个 Vitest 文件 / 2108 项测试。
+`test:host-web-html` 使用隔离 Rust Host 与 Chrome，覆盖原生 localStorage/sessionStorage、同来源读取、
+刷新后存储保留、手机宽度、表单、新窗口、原生弹窗、查找、资源诊断、源码、相对 CSS 与替换保存；
+`test:host-web` 的 4 项和 `test:html-preview` 的 4 项通过。实际浏览器证据来自 macOS，窄屏模拟不计为实体手机、
+Windows 或 Linux 实机验收；本轮不安装或发布产品。
+
+合入上述主线后，扩展 Node 套件为 317 通过、2 项 Windows 专项跳过、3 失败：当前合同 profile 仍引用已改名的
+`attachment_send_commits_managed_v2_and_dispatches_without_projection_gate`；合同指纹断言仍为 schema 105，
+而 Core 已为 106；Windows release verifier 仍声明 Built-in v24，而 Core 已为 v25。
+这些相关文件与主线相同、本分支未修改，作为主线遗留检查记录，不计为本次预览验证通过。

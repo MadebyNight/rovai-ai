@@ -1,3 +1,5 @@
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { AttachmentLocationItems, useAttachmentLocation } from './attachment-location'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { useCampClient, type CampClient } from './camp-client'
@@ -235,6 +237,10 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
   const [failed, setFailed] = useState(false)
   const [availability, setAvailability] = useState<CampMessageAttachmentView['availability']>(initialAvailability)
   const [open, setOpen] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [refreshRevision, setRefreshRevision] = useState(0)
+  const fileLocation = useAttachmentLocation(source.kind === 'attachment' ? source.locator : undefined)
   const tile = useRef<HTMLElement>(null)
   const hadCachedPayload = useRef(false)
   const committedUrl = useRef<string | null>(null)
@@ -276,9 +282,11 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
     let started = false
 
     const markUnavailable = (): void => {
-      imagePayloadCache.delete(cacheKey)
-      setUrl(null)
-      setFailed(true)
+      if (!committedUrl.current) {
+        imagePayloadCache.delete(cacheKey)
+        setUrl(null)
+        setFailed(true)
+      } else setNotice('源文件暂不可用，保留已加载的图片。')
     }
 
     const install = async (payload: ImagePayload): Promise<boolean> => {
@@ -296,6 +304,7 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
       }
       imagePayloadCache.put(cacheKey, payload)
       setFailed(false)
+      setNotice(null)
       setUrl(candidateUrl)
       return true
     }
@@ -303,7 +312,7 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
     const load = (refresh: boolean): void => {
       if (started) return
       started = true
-      const request = refresh
+      const request = refresh || refreshRevision > 0
         ? fetchImagePayload(source, client, (next) => { if (active) setAvailability(next) })
         : getOrLoadImagePayload(source, client, (next) => { if (active) setAvailability(next) })
       void request.then((payload) => {
@@ -312,7 +321,10 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
         setAvailability('available')
         return install(payload)
       }).catch(() => {
-        if (active && !hadCachedPayload.current) setFailed(true)
+        if (active) {
+          if (!committedUrl.current) setFailed(true)
+          else setNotice('刷新失败，保留已加载的图片。')
+        }
       })
     }
 
@@ -322,7 +334,18 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
     if (observer && tile.current) observer.observe(tile.current)
     else load(hadCachedPayload.current)
     return () => { active = false; observer?.disconnect() }
-  }, [cacheKey, createOwnedUrl, releaseOwnedUrl, source.kind, client, imagePayloadCache])
+  }, [cacheKey, createOwnedUrl, releaseOwnedUrl, source.kind, client, imagePayloadCache, refreshRevision])
+
+  useEffect(() => {
+    if (source.kind !== 'attachment') return
+    const refreshVisible = (): void => {
+      const bounds = tile.current?.getBoundingClientRect()
+      if (document.visibilityState === 'visible' && bounds && bounds.bottom > 0 && bounds.top < window.innerHeight
+        && bounds.right > 0 && bounds.left < window.innerWidth) setRefreshRevision(value => value + 1)
+    }
+    window.addEventListener('focus', refreshVisible)
+    return () => window.removeEventListener('focus', refreshVisible)
+  }, [cacheKey, source.kind])
 
   const unavailableLabel = availability === 'missing'
     ? '图片已丢失'
@@ -334,17 +357,32 @@ function ImageTile({ source }: { source: GalleryImage }): JSX.Element {
   const loading = !url && !failed
 
   return (
-    <figure className="image-tile" ref={tile}>
+    <figure className="image-tile" ref={tile} title={fileLocation.label}
+      onMouseEnter={fileLocation.inspect} onFocus={fileLocation.inspect}
+      onContextMenu={source.kind === 'attachment' ? event => { event.preventDefault(); fileLocation.inspect(); setMenu({ x: event.clientX, y: event.clientY }) } : undefined}>
       <button type="button" className="image-tile-preview"
         disabled={!url}
         aria-label={`查看大图 ${source.image.displayName}`}
         aria-busy={loading}
-        onClick={() => setOpen(true)}>
+        onClick={() => { setOpen(true); if (source.kind === 'attachment') setRefreshRevision(value => value + 1) }}
+        onKeyDown={event => { if (source.kind === 'attachment' && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) { event.preventDefault(); fileLocation.inspect(); const bounds = event.currentTarget.getBoundingClientRect(); setMenu({ x: bounds.left, y: bounds.bottom }) } }}>
         {url ? <img src={url} alt={source.image.displayName} />
           : <span className="image-tile-placeholder">
               {failed ? unavailableLabel : '正在读取图片…'}
             </span>}
       </button>
+      {notice && <figcaption className="image-tile-notice" role="status">{notice}</figcaption>}
+      {source.kind === 'attachment' && <DropdownMenu.Root open={menu !== null} onOpenChange={value => { if (!value) setMenu(null) }}>
+        <DropdownMenu.Trigger asChild><span className="attachment-context-anchor" style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }} /></DropdownMenu.Trigger>
+        <DropdownMenu.Portal><DropdownMenu.Content className="attachment-context-menu" aria-label={`附件操作：${source.image.displayName}`} onCloseAutoFocus={event => event.preventDefault()}>
+          <DropdownMenu.Label className="attachment-context-menu-label">{source.image.displayName}</DropdownMenu.Label>
+          <AttachmentLocationItems path={fileLocation.location?.path} label={fileLocation.label} onNotify={setNotice} />
+          {client.attachments.kind === 'native' && <DropdownMenu.Item className="attachment-context-menu-item attachment-context-menu-text" onSelect={() => {
+            if (client.attachments.kind === 'native') void client.attachments.reveal(source.locator).then(result => { if (result.error) setNotice('无法显示此附件所在位置。') }).catch(() => setNotice('无法显示此附件所在位置。'))
+          }}>在文件夹中显示</DropdownMenu.Item>}
+          <DropdownMenu.Item className="attachment-context-menu-item attachment-context-menu-text" onSelect={() => setRefreshRevision(value => value + 1)}>刷新图片</DropdownMenu.Item>
+        </DropdownMenu.Content></DropdownMenu.Portal>
+      </DropdownMenu.Root>}
       {url && (
         <Dialog.Root open={open} onOpenChange={setOpen}>
           <Dialog.Portal>

@@ -892,8 +892,9 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       path: createdPath,
       prompt: [
         'This is an isolated local file-operation acceptance test.',
-        `Use the native file Write or file editing tool exactly once to create the new file ${createdPath} with exactly ${createdText.trimEnd()} and a trailing newline.`,
-        `The exact content expressed as a JSON string is ${JSON.stringify(createdText)}.`,
+        `Use the native file Write tool exactly once to create the new file ${createdPath}.`,
+        `Set its content argument to the exact JSON-decoded string ${JSON.stringify(createdText)}.`,
+        'The final character of the content argument MUST be one line feed (U+000A, byte 0A). Do not trim or omit it, and do not write the two literal characters backslash+n.',
         'Do not read, list, search, use shell, or call another tool. Then reply exactly FILE_ADD_DONE.'
       ].join('\n'),
       expectedText: createdText,
@@ -916,8 +917,9 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       path: emptyPath,
       prompt: [
         'This is an isolated local file-operation acceptance test.',
-        `The file ${emptyPath} already exists and is empty. Use native file tools to set it to exactly ${emptyEditedText.trimEnd()} and a trailing newline.`,
-        `The exact content expressed as a JSON string is ${JSON.stringify(emptyEditedText)}.`,
+        `The file ${emptyPath} already exists and is empty. Use native file tools to set its complete content.`,
+        `When calling Write, set its content argument to the exact JSON-decoded string ${JSON.stringify(emptyEditedText)}.`,
+        'The final character of the content argument MUST be one line feed (U+000A, byte 0A). Do not trim or omit it, and do not write the two literal characters backslash+n.',
         'If your native Write or Edit tool requires reading the file first, use the native file Read tool once before writing.',
         'Do not list, search, use shell, or call unrelated tools. Then reply exactly FILE_EMPTY_EDIT_DONE.'
       ].join('\n'),
@@ -1092,6 +1094,20 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       live,
       history: relevantHistory
     })
+  }
+  const expectedTextByName = new Map(cases.map((testCase) => [testCase.name, testCase.expectedText]))
+  const failedFileEffects = results.filter((result) => result.fileEffect !== 'passed')
+  if (failedFileEffects.length > 0) {
+    throw new Error(`${adapterKind} file-operation matrix did not produce the requested file contents: ${JSON.stringify(
+      failedFileEffects.map((result) => ({
+        name: result.name,
+        runStatus: result.runStatus,
+        expectedPath: result.expectedPath,
+        expectedText: expectedTextByName.get(result.name),
+        observedText: result.observedText,
+        output: result.output
+      }))
+    )}`)
   }
   return results
 }

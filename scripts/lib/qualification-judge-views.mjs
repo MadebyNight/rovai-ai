@@ -1829,6 +1829,8 @@ function classifyReplicaError(error) {
 }
 
 async function withTimeout(promise, timeoutMilliseconds) {
+  if (timeoutMilliseconds === null) return promise
+  if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 1) throw new Error('Judge timeout must be positive or explicit null')
   let timeout
   try {
     return await Promise.race([

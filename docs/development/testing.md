@@ -91,7 +91,7 @@ cargo test --workspace -- --list
 - `frozen_permissions_preserve_native_values_without_rewriting_native_home` 拥有六种原生参数组合：原生 preset 曾覆盖
   Host 参数并拒绝 full/ask、read-only/never；测试要求 `sandbox_mode`/`approval_policy` 原样进入 patch，Workspace
   access 不收窄或改名，并确认 bootstrap 不再携带自造 MCP guard 配置。
-- `dsh_catalog_migration_preserves_rows_and_rolls_back_with_its_receipt` 拥有新增 v1.59/schema 104 → 105 入口：
+- `dsh_catalog_migration_preserves_rows_and_rolls_back_with_its_receipt` 拥有新增 v1.59/schema 106 → 107 入口：
   旧闭集拒绝新 Adapter/Skill，扩集须保留现有行/约束并与 receipt 原子回滚。SQLite 的 DDL、trigger 与 FK
   不能由字符串解析证明，因此采用一次隔离事务及重启验证；已有 migration owner 不覆盖这个 source schema。
 
@@ -101,7 +101,8 @@ busy Run 不被抢占，回收失败阻断 replacement。
 `node --test scripts/lib/dsh-host.test.mjs` 拥有官方扩展点的 Bootstrap/父子身份、完整 Server 遮蔽、MCP
 配置投影和最小结构化 observer 合同；它明确断言没有 Core `tools/pre-execute` 安全层，且不保存完整工具输出。
 `scripts/smoke-mcp-projection.mjs` 断言 DSH 三组权限下 synthetic Approval 为 0；
-`scripts/smoke-acp-runtime.mjs` 的现有文件矩阵断言 edit `+1/-1`、空文件 edit `+1/-0`，新增缺 before 时不伪造空 Diff。
+`scripts/smoke-acp-runtime.mjs` 的现有文件矩阵对最终 UTF-8 内容作逐字节、fail-closed 断言，并断言 edit `+1/-1`、
+空文件 edit `+1/-0`，新增缺 before 时不伪造空 Diff。
 真实验证入口与隔离参数见
 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。受控模型只用于明确标注的协议和权限
 实验，不替代真实模型/Built-in CLI 验收。
@@ -636,3 +637,49 @@ Web 通用设置回显、跨端保存、创建弹窗默认勾选、一键 Pendin
 
 真实 HTTP owner 验证本机签发与 HTTP 兑换接线、双客户端竞争、旧票据撤销，以及公共操作不能签发票据。
 Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
+
+
+### Weekly 无时间上限
+
+`automation::tests::owner_time_limit_is_frozen_per_occurrence_and_unbounded_runs_still_recover` 拥有 Owner 配置、
+冻结 occurrence、Core 时间到期与重启收口的跨模块持久化边界。修复前显式空时限无法配置且执行会被一小时
+截止；既有普通 Automation owner 没有时间策略切换。两个策略共享同一个隔离数据库，以显式未来时间验证，
+不启动 Runtime、不等待真实时长。最小命令：`cargo test -p rovai-core --lib owner_time_limit_is_frozen_per_occurrence`。
+其余输入矩阵扩展现有 execution_budget、Qualification 和 Host owner；不建立平行数据库 fixture。
+
+
+`db::tests::automation_time_limit_migration_preserves_definitions_and_rolls_back_with_its_receipt` 使用现有快速 schema
+夹具构造真实 schema 104 来源，验证新列与 receipt 同事务回滚、定义版本/Prompt/计划不变以及默认一小时。
+该边界需要 SQLite DDL 与准入记录，纯函数或无关历史迁移不能覆盖。最小命令：
+`cargo test -p rovai-core --lib automation_time_limit_migration`；原有来源矩阵继续保留全部旧输入。
+
+
+既有 `team_tool::tests::public_send_atomically_persists_one_message_and_canonical_deliveries` 扩展为有限/无限
+两种时间策略矩阵，保留全部原断言；证明 NULL 截止时间仍可登记、派发 A2A 并幂等重放，而不是只检查计时常量。
+
+
+### 原路径 Agent 附件（v1.59）
+
+新增 `db::attachment_paths::tests::attachment_path_schema_and_receipt_commit_atomically` 拥有 schema 105→106
+的 SQLite DDL/迁移回执原子边界；注入最后回执写入失败时，表重建和版本号必须一起回滚，重试成功后拒绝
+仅保留同名空触发器的半成品 schema。该失败不属于旧 v155 Automation 迁移；需要真实 SQLite transaction，
+纯函数无法证明 DDL 回滚。最小命令：`cargo test -p rovai-core --lib attachment_path_schema_and_receipt`。
+原有受支持来源、冻结 ContextManifest 和 FK 迁移测试全部保留，升级链补接 v156。
+
+删除 CLI `send_attachments` 的 7 个 active tests，随同删除的生产模块一起退出：
+`body_only_and_empty_files_do_not_require_attachment_roots`、
+`mixed_sources_keep_order_names_and_frozen_bytes_until_transport_finishes`、
+`invalid_sources_and_promotion_collision_publish_nothing_and_cleanup_owned_staging`、
+`quota_includes_internal_sources_but_directory_limit_is_not_per_file_limit`、
+`original_links_special_files_and_import_parent_redirects_are_rejected`、
+`ipc_failure_cleans_unsent_snapshots_but_retains_unconfirmed_dispatches`、
+`ipc_retry_reuses_snapshot_when_original_source_has_disappeared`。
+这些断言拥有已取消的 CLI 冻结/导入/清理合同；新发布允许源链接并不创建链接，目录也不再递归扫描以执行快照大小限额。
+传输结果不确定、同一内部请求重放、大小受限 IPC 与当前 lease 仍由 CLI transport 和 Core invocation 的既有 owner 保留。
+
+改写既有 `team_tool::tests::attachment_send_keeps_source_path_and_dispatches_without_projection_gate`，
+覆盖工作区、外部只读源、Run 临时源、默认输出、目录、跨 Camp 原路径、替换保存及源消失后内部重放；
+扩展既有 Camp 删除 journal、Pi 当前图片、Desktop file preview、Host HTTP/Chrome HTML 和临时实例清理 owner。
+定向验证：`cargo test -p rovai-core --lib attachment_send_keeps_source_path`、
+`cargo test -p rovai-core --bin rovai`、`node --test scripts/lib/host-web-html.test.mjs scripts/lib/host-web.test.mjs`；
+完整 Core library 与 Context slow suite 继续执行，不用删除旧迁移测试换取通过。

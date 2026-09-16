@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, fs, path::Path};
+use std::{error::Error, fmt, fs, io::Read, path::Path};
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
@@ -387,6 +387,75 @@ pub fn observe_source_attachment(
             .flatten(),
         observed_byte_size: (kind == LocalAttachmentKind::File).then_some(metadata.len()),
     })
+}
+
+/// Registers the actual path; no source content or permissions are changed.
+pub fn observe_agent_source_attachments(
+    paths: &[String],
+    execution_root: &Path,
+) -> Result<Vec<LocalAttachmentSourceRef>> {
+    paths
+        .iter()
+        .map(|requested| {
+            let requested = Path::new(requested);
+            let path = if requested.is_absolute() {
+                requested.to_path_buf()
+            } else {
+                execution_root.join(requested)
+            };
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("Attachment path must name a file or directory")?;
+            let mut source = observe_source_attachment(&path, name, None)?;
+            if source.kind == LocalAttachmentKind::File {
+                let mut prefix = Vec::new();
+                fs::File::open(&path)?.take(4096).read_to_end(&mut prefix)?;
+                source.media_type = Some(
+                    crate::local_attachment_snapshot::inspect_prefix(
+                        &prefix,
+                        source.observed_byte_size.unwrap_or(0),
+                    )
+                    .media_type,
+                );
+            }
+            Ok(source)
+        })
+        .collect()
+}
+
+/// Identity reuse is scoped to records in this Camp, without scanning any files.
+pub fn reuse_camp_source_attachment_ids(
+    connection: &rusqlite::Connection,
+    camp_id: &str,
+    sources: &[LocalAttachmentSourceRef],
+) -> Result<Vec<LocalAttachmentSourceRef>> {
+    let mut result: Vec<LocalAttachmentSourceRef> = Vec::with_capacity(sources.len());
+    for source in sources {
+        if result
+            .iter()
+            .any(|previous| previous.source_path == source.source_path)
+        {
+            anyhow::bail!("Attachment path is duplicated");
+        }
+        let existing: Option<String> = connection
+            .query_row(
+                "SELECT json_extract(attachment.value, '$.id')
+             FROM camp_message AS message, json_each(message.source_attachments_json) AS attachment
+             WHERE message.camp_id = ?1
+               AND json_extract(attachment.value, '$.sourcePath') = ?2
+             ORDER BY message.sequence LIMIT 1",
+                params![camp_id, source.source_path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut source = source.clone();
+        if let Some(id) = existing {
+            source.id = id;
+        }
+        result.push(source);
+    }
+    Ok(result)
 }
 
 pub fn validate_source_attachments(

@@ -9,7 +9,6 @@ use uuid::Uuid;
 use crate::{
     agent_identity::parse_agent_id,
     agent_profile::resolve_frozen_runtime,
-    camp_attachment_publication::AuthorityAttachment,
     camp_content::{
         StructuredCampMessageSegment, canonical_content_digest, normalize_content,
         render_current_plain_text,
@@ -35,8 +34,8 @@ use crate::{
         settle_completion_for_agent_run, settle_item_from_agent_run_terminal,
         settle_item_from_delivery_terminal, validate_completion_retry,
     },
-    managed_attachment::{
-        CommitManagedAttachmentIngest, ManagedAttachmentIngestSource, ManagedAttachmentService,
+    local_attachment_source::{
+        LocalAttachmentSourceRef, reuse_camp_source_attachment_ids, serialize_source_attachments,
     },
     runtime::AgentRunWorkspace,
     runtime_basis::capture_run_runtime_basis,
@@ -571,8 +570,7 @@ pub struct SendPublicA2aMessage<'a> {
     pub agent_addressing_mode: AgentAddressingMode,
     pub mention_user: bool,
     pub task_id: Option<&'a str>,
-    pub attachments: &'a [AuthorityAttachment],
-    pub managed_attachment_ingest_intent_id: Option<&'a str>,
+    pub source_files: &'a [LocalAttachmentSourceRef],
     pub operation: PublicA2aOperation<'a>,
 }
 
@@ -943,7 +941,7 @@ pub fn persist_public_a2a_message(
         .query_row(
             r#"
             SELECT status, cancel_requested_at, execution_budget_exhausted_at,
-                   execution_budget_deadline_at,
+                   CASE WHEN execution_budget_schema_version = 2 THEN execution_budget_deadline_at ELSE COALESCE(execution_budget_deadline_at, 'invalid') END,
                    execution_budget_max_agent_run_responsibilities,
                    execution_budget_max_accepted_a2a,
                    execution_budget_root_agent_run_responsibilities,
@@ -958,7 +956,7 @@ pub fn persist_public_a2a_message(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, i64>(6)?,
@@ -1013,13 +1011,12 @@ pub fn persist_public_a2a_message(
         allocated_run_responsibilities + requested_run_responsibilities;
     let next_responsibilities =
         root_agent_run_responsibilities + next_allocated_run_responsibilities;
-    let deadline = chrono::DateTime::parse_from_rfc3339(&deadline_at)
-        .context("CampTurn Execution Budget deadline is invalid")?
-        .with_timezone(&chrono::Utc);
+    let deadline_elapsed =
+        crate::execution_budget::execution_deadline_elapsed(deadline_at.as_deref(), budget_now)?;
     // Preserve recipient-free public narration after the execution deadline,
     // while keeping both ordinary dispatch and the independently-budgeted
     // Gather capture inside the frozen CampTurn deadline.
-    if budget_now >= deadline && (requested_accepted_a2a > 0 || captured_return_count > 0) {
+    if deadline_elapsed && (requested_accepted_a2a > 0 || captured_return_count > 0) {
         return Ok(rejected_with_details(
             if is_gather {
                 "gather.execution_budget_exceeded"
@@ -1072,7 +1069,7 @@ pub fn persist_public_a2a_message(
               AND status IN ('running', 'waiting')
               AND cancel_requested_at IS NULL
               AND execution_budget_exhausted_at IS NULL
-              AND execution_budget_deadline_at > ?4
+              AND (execution_budget_deadline_at > ?4 OR (execution_budget_deadline_at IS NULL AND execution_budget_schema_version = 2))
               AND accepted_a2a_allocated + ?2
                     <= execution_budget_max_accepted_a2a
               AND execution_budget_root_agent_run_responsibilities
@@ -1106,6 +1103,8 @@ pub fn persist_public_a2a_message(
         |row| row.get(0),
     )?;
 
+    let source_files =
+        reuse_camp_source_attachment_ids(transaction, request.camp_id, request.source_files)?;
     let message_id = Uuid::new_v4().to_string();
     let content = structured_content_from_inline_addressing(
         request.body,
@@ -1148,11 +1147,11 @@ pub fn persist_public_a2a_message(
             tombstoned_at, version, created_at, updated_at,
             effective_recipient_ids_json, recipient_set_digest,
             recipient_presentation_json, source_operation_id,
-            agent_addressing_mode
+            agent_addressing_mode, source_attachments_json
         ) VALUES (
             ?1, ?2, ?3, 'agent', ?4, ?5, ?6, ?7, ?8,
             ?9, ?10, ?11, ?12, ?5,
-            NULL, 1, ?13, ?13, ?10, ?14, ?15, ?16, ?17
+            NULL, 1, ?13, ?13, ?10, ?14, ?15, ?16, ?17, ?18
         )
         "#,
         params![
@@ -1177,34 +1176,9 @@ pub fn persist_public_a2a_message(
             } else {
                 Some(request.agent_addressing_mode.as_str())
             },
+            serialize_source_attachments(&source_files)?,
         ],
     )?;
-    if request.attachments.is_empty() != request.managed_attachment_ingest_intent_id.is_none() {
-        anyhow::bail!("Agent attachment ingest identity does not match the frozen files");
-    }
-    if let Some(intent_id) = request.managed_attachment_ingest_intent_id {
-        let committed_attachment_ids = ManagedAttachmentService.commit_ingest(
-            transaction,
-            CommitManagedAttachmentIngest {
-                intent_id,
-                camp_id: request.camp_id,
-                camp_message_id: &message_id,
-                expected_source: ManagedAttachmentIngestSource::AgentWorkspace,
-                created_by_type: "agent",
-                created_by_id: request.author_agent_id,
-                now: &now,
-            },
-        )?;
-        if committed_attachment_ids
-            != request
-                .attachments
-                .iter()
-                .map(|attachment| attachment.attachment_id.clone())
-                .collect::<Vec<_>>()
-        {
-            anyhow::bail!("Agent attachment ingest plan changed before CampMessage commit");
-        }
-    }
     index_camp_message(
         transaction,
         &message_id,
@@ -1531,6 +1505,9 @@ pub fn persist_public_a2a_message(
             "recipientSetDigest": recipient_set_digest,
             "deliveryIds": delivery_ids,
             "allocatedAgentRunResponsibilities": next_responsibilities,
+            "attachments": source_files.iter().map(|source| json!({
+                "attachmentId": source.id, "path": source.source_path,
+            })).collect::<Vec<_>>(),
         }),
         Some(EntityReference {
             entity_type: "camp_message".to_string(),
@@ -2281,7 +2258,7 @@ fn process_dispatch_attempt(
         .query_row(
             r#"
             SELECT status, cancel_requested_at, execution_budget_exhausted_at,
-                   execution_budget_deadline_at
+                   CASE WHEN execution_budget_schema_version = 2 THEN execution_budget_deadline_at ELSE COALESCE(execution_budget_deadline_at, 'invalid') END
             FROM camp_turn WHERE id = ?1 AND camp_id = ?2
             "#,
             params![delivery.camp_turn_id, delivery.camp_id],
@@ -2290,17 +2267,23 @@ fn process_dispatch_attempt(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             },
         )
         .optional()?;
-    let turn_active = turn_state.as_ref().is_some_and(|state| {
-        matches!(state.0.as_str(), "running" | "waiting")
-            && state.1.is_none()
-            && state.2.is_none()
-            && state.3 > now
-    });
+    let turn_active = match turn_state.as_ref() {
+        Some(state) => {
+            matches!(state.0.as_str(), "running" | "waiting")
+                && state.1.is_none()
+                && state.2.is_none()
+                && !crate::execution_budget::execution_deadline_elapsed(
+                    state.3.as_deref(),
+                    chrono::DateTime::parse_from_rfc3339(&now)?.with_timezone(&chrono::Utc),
+                )?
+        }
+        None => false,
+    };
     if !turn_active {
         let outcome = terminal_dispatch(
             &transaction,

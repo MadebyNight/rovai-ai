@@ -89,7 +89,7 @@ macOS 时钟接口依据 [Apple mach_time.h](https://github.com/apple/darwin-xnu
 
 ## References
 
-- [Scheduled Automation v1](../contracts/scheduled-automation-v1.md)
+- [Scheduled Automation v2](../contracts/scheduled-automation-v2.md)
 - [Built-in Tool Runtime](builtin-tool-runtime.md)
 - [Collaboration admission invariants](foundational-invariants.md#collaboration-admission)
 - [Runtime recovery and shutdown](foundational-invariants.md#runtime-recovery-shutdown)

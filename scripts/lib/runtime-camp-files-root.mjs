@@ -99,6 +99,9 @@ export async function removeEphemeralRuntimeCampFilesRoot(
     throw new Error('Refusing to clean a Runtime Files Root with a mismatched ownership marker')
   }
 
+  // The validated ephemeral instance owns both legacy Runtime files and ordinary
+  // output files. rm unlinks symlinks; it never follows them into an external source.
+  await rm(join(dirname(root), 'attachments'), { recursive: true, force: true })
   await makeTreeRemovableWithoutFollowingLinks(root)
   await rm(root, { recursive: true, force: false })
   try {

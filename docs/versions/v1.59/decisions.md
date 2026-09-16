@@ -96,6 +96,8 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 <a id="v1-59-d04"></a>
 ## V1.59-D04：Web HTML 附件使用共享查看器与不透明源沙箱
 
+不透明源与存储隔离部分已由 [V1.59-D09](#v1-59-d09)取代；保留下述原始理由用于追溯。
+
 - 状态：accepted
 - 日期：2026-09-13
 - 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md)、[文件查看器](../../ui/components/file-preview.md)
@@ -165,7 +167,41 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 
 
 <a id="v1-59-d08"></a>
-## V1.59-D08：DeepSeek Harness 使用官方 ACP 与原生系统层
+## V1.59-D08：Agent 附件使用实际路径，默认输出与文件归属分开
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[附件架构](../../architecture/camp-published-attachment-view.md)、[Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[File Preview v15](../../contracts/file-preview-v15.md)
+
+用户最终否决复制一次、tmp/rename、预分配和双根上下文的 revision 1。选择所有新 send 原路径登记，
+复用已有 Source Ref，不建立另一套 Managed 系统。永久输出目录只给 Agent 一个正常生成交付文件的位置。
+代价是临时源可被清理，跨 Camp 引用会随拥有者删除失效；明确接受，不用引用计数、自动复制或文件保活补偿。
+
+历史受管记录保持原位和原校验；新发布与普通 Run 不经过旧 publication gate。位置展示不等于更改文件权限。
+此决定替代 V1.32-D01 的新增 CLI 快照流程及 V1.40-D01 中 Agent 继续受管的部分；用户输入规则保持。
+Web 本地相对资源补入已有句柄下的临时资源能力，仍运行于不透明源沙箱；这补齐 D04 的多文件缺口，
+不采用另起端口或通用预览代理。模型可见字段完整确认见[revision 2](model-context-change-editable-attachments.md)。
+
+
+<a id="v1-59-d09"></a>
+## V1.59-D09：可信 Web HTML 使用同来源原生浏览器能力
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)、[文件查看器](../../ui/components/file-preview.md)
+
+D04 及 D08 延续的不透明来源使作者初始化代码读取 localStorage 即抛 SecurityError，本机和手机均不能通过重试恢复。
+用户明确选择可信 HTML 下的可用性：iframe 与预览响应同步开放脚本、来源、表单、新窗口和原生弹窗，消息桥改用
+实际来源并保留窗口与预览身份匹配；不扩大工作台/API 策略或增加顶层导航权限。
+
+代价是附件可以访问同来源主页面及登录材料，不再提供来源或每附件存储隔离。Storage 归访问设备浏览器，
+不写入 Server 数据根、不修改源 HTML。这替代 D04 的隔离保证；共享 Viewer、认证源读取及统一 Rust Host 保留。
+不选择 Storage 模拟或按附件能力检测，因为它们不能提供完整原生行为并增加状态系统；也不建立独立预览服务器，
+避免增加远程部署入口和生命周期。Desktop 原生预览与 CSS/JS 资源加载均不扩入本轮。
+
+
+<a id="v1-59-d10"></a>
+## V1.59-D10：DeepSeek Harness 使用官方 ACP 与原生系统层
 
 - 状态：accepted
 - 日期：2026-09-15
@@ -202,11 +238,16 @@ Workspace access 不再替换这些值。DSH 的 sandbox/approval 是唯一安�
 正在执行时只标记退役，等待当前 Run 正常结束并确认回收，再以新 Host exact resume；回收失败则阻断 replacement，
 不退化为 fresh Session，也不建立 DSH 专属进程池。
 
+0.1.5-rc.2 的 ACP app 可在同级 Loader entry 尚未 settle 时先开放 stdio，原生 MCP 因而可能缺席首个模型步。
+受管 patch 让 ACP entry 额外依赖 Bootstrap 发布的 readiness service；Bootstrap 等所有已配置的官方
+`@deepseek-ai/dsh-mcp-client` entry 完成 Cordis lifecycle 后才发布该 service。该顺序不使用固定延时、不重放 prompt，
+不改变 MCP 的原生连接失败、重连、工具或审批语义；工具表变更监听使用上游 `tools/change` 事件。
+
 本次先以 preview 执行真实验收；在 14 个核心能力轴闭合后，macOS arm64 取得 First-Class 并晋升 qualified。
 2026-09-16 的原生权限、锁顺序与通用 Diff 收敛由
 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 绑定新的不可变摘要；
 v1 继续作为此前 14 轴验收的历史证据，不被改写。
 其他平台仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
 [Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。机器 Ready 仍是独立检查。
-Migration 155 将 v1.59/schema 104 原位升级到 105，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
+Migration 157 将 v1.59/schema 106 原位升级到 107，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
 Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。

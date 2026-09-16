@@ -59,12 +59,26 @@
       "reassignReplacedNativeDefinition": true,
       "deleteRestoredNativeDefinition": true
     },
+    "nativeMcpStartup": {
+      "status": "passed",
+      "rootCause": "DSH 0.1.5-rc.2 can expose ACP stdio while a sibling native MCP Loader entry is still completing connect, tools/list and registration",
+      "readinessSignal": "official Cordis Loader entry lifecycle",
+      "fixedDelayMilliseconds": null,
+      "promptRetryUsed": false,
+      "preFixImmediateFailures": 5,
+      "preFixIterations": 30,
+      "postFixImmediatePasses": 30,
+      "postFixIterations": 30,
+      "fullMcpLifecycleSmokePassed": true,
+      "toolRegistryEvent": "tools/change"
+    },
     "realProviderFileMatrix": {
       "status": "passed",
       "provider": "MiniMax official Anthropic-compatible endpoint",
       "model": "MiniMax-M3",
       "modelId": "[\"minimax-smoke\",\"MiniMax-M3\"]",
       "credentialUse": "User-authorized acceptance only; injected into an isolated DSH child environment and excluded from argv, repository and logs",
+      "contentAssertion": "byte-exact expected UTF-8 content; any mismatch fails the smoke process",
       "cases": [
         {
           "name": "read",

@@ -299,66 +299,94 @@ pub(crate) struct PreparedPiPromptImage {
 }
 
 pub(crate) fn prepare_prompt_images(
-    attachments: &[(PathBuf, String)],
+    attachments: &[(PathBuf, Option<String>)],
 ) -> Result<Vec<PreparedPiPromptImage>> {
     let mut images = Vec::new();
     let mut total_bytes = 0usize;
     for (path, expected_digest) in attachments {
-        if !path.is_absolute() {
-            bail!("Pi attachment path is not absolute");
-        }
-        let metadata = std::fs::symlink_metadata(path).with_context(|| {
-            format!("Pi attachment metadata is unavailable: {}", path.display())
-        })?;
-        if metadata.file_type().is_symlink() {
-            bail!("Pi attachment is not a non-symlink regular file");
-        }
-        if metadata.is_dir() {
-            continue;
-        }
-        if !metadata.is_file() {
-            bail!("Pi attachment is not a non-symlink regular file");
-        }
-        let mut prefix = [0u8; 12];
-        let mut file = File::open(path)
-            .with_context(|| format!("Pi attachment cannot be opened: {}", path.display()))?;
-        let prefix_len = file
-            .read(&mut prefix)
-            .context("Pi attachment MIME prefix cannot be read")?;
-        let Some(mime_type) = sniff_pi_image_mime(&prefix[..prefix_len]) else {
-            continue;
+        let prepared = prepare_prompt_image(path, expected_digest.as_deref());
+        let image = match prepared {
+            Ok(Some(image)) => image,
+            Ok(None) => continue,
+            Err(_) if expected_digest.is_none() => continue,
+            Err(error) => return Err(error),
         };
-        let byte_length = usize::try_from(metadata.len())
-            .context("Pi prompt image size cannot be represented")?;
-        if byte_length == 0 || byte_length > PI_PROMPT_IMAGE_MAX_BYTES {
-            bail!("Pi prompt image exceeds its per-image limit");
-        }
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("Pi prompt image cannot be read: {}", path.display()))?;
-        if bytes.len() != byte_length || sniff_pi_image_mime(&bytes) != Some(mime_type) {
-            bail!("Pi prompt image changed during MIME validation");
-        }
-        let digest = sha256_bytes(&bytes);
-        if expected_digest != &format!("sha256:{digest}") {
-            bail!("Pi prompt image bytes differ from the authorized attachment digest");
-        }
-        total_bytes = total_bytes
-            .checked_add(byte_length)
-            .context("Pi prompt image aggregate size overflow")?;
-        if total_bytes > PI_PROMPT_IMAGE_TOTAL_MAX_BYTES {
+        let next_total = total_bytes.saturating_add(image.byte_length);
+        if next_total > PI_PROMPT_IMAGE_TOTAL_MAX_BYTES {
+            if expected_digest.is_none() {
+                continue;
+            }
             bail!("Pi prompt images exceed their aggregate limit");
         }
-        images.push(PreparedPiPromptImage {
-            wire: PiPromptImage {
-                r#type: "image".to_string(),
-                data: BASE64_STANDARD.encode(&bytes),
-                mime_type: mime_type.to_string(),
-            },
-            content_digest: digest,
-            byte_length,
-        });
+        total_bytes = next_total;
+        images.push(image);
     }
     Ok(images)
+}
+
+// Inline image delivery is optional for mutable sources. Their exact paths are
+// already in the input, so one missing or unreadable image cannot reject a Run.
+fn prepare_prompt_image(
+    path: &Path,
+    expected_digest: Option<&str>,
+) -> Result<Option<PreparedPiPromptImage>> {
+    if !path.is_absolute() {
+        bail!("Pi attachment path is not absolute");
+    }
+    let metadata = match if expected_digest.is_some() {
+        std::fs::symlink_metadata(path)
+    } else {
+        std::fs::metadata(path)
+    } {
+        Ok(metadata) => metadata,
+        Err(_) if expected_digest.is_none() => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Pi attachment metadata is unavailable: {}", path.display())
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        bail!("Pi attachment is not a non-symlink regular file");
+    }
+    if metadata.is_dir() {
+        return Ok(None);
+    }
+    if !metadata.is_file() {
+        bail!("Pi attachment is not a non-symlink regular file");
+    }
+    let mut prefix = [0u8; 12];
+    let mut file = File::open(path)
+        .with_context(|| format!("Pi attachment cannot be opened: {}", path.display()))?;
+    let prefix_len = file
+        .read(&mut prefix)
+        .context("Pi attachment MIME prefix cannot be read")?;
+    let Some(mime_type) = sniff_pi_image_mime(&prefix[..prefix_len]) else {
+        return Ok(None);
+    };
+    let byte_length =
+        usize::try_from(metadata.len()).context("Pi prompt image size cannot be represented")?;
+    if byte_length == 0 || byte_length > PI_PROMPT_IMAGE_MAX_BYTES {
+        bail!("Pi prompt image exceeds its per-image limit");
+    }
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("Pi prompt image cannot be read: {}", path.display()))?;
+    if bytes.len() != byte_length || sniff_pi_image_mime(&bytes) != Some(mime_type) {
+        bail!("Pi prompt image changed during MIME validation");
+    }
+    let digest = sha256_bytes(&bytes);
+    if expected_digest.is_some_and(|expected| expected != format!("sha256:{digest}")) {
+        bail!("Pi prompt image bytes differ from the authorized attachment digest");
+    }
+    Ok(Some(PreparedPiPromptImage {
+        wire: PiPromptImage {
+            r#type: "image".to_string(),
+            data: BASE64_STANDARD.encode(&bytes),
+            mime_type: mime_type.to_string(),
+        },
+        content_digest: digest,
+        byte_length,
+    }))
 }
 
 fn sniff_pi_image_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -2934,9 +2962,13 @@ done
         std::fs::write(&text, b"ordinary file").unwrap();
         std::fs::write(&gif, gif_bytes).unwrap();
         let images = prepare_prompt_images(&[
-            (png, format!("sha256:{}", sha256_bytes(png_bytes))),
-            (text, format!("sha256:{}", sha256_bytes(b"ordinary file"))),
-            (gif, format!("sha256:{}", sha256_bytes(gif_bytes))),
+            (png, Some(format!("sha256:{}", sha256_bytes(png_bytes)))),
+            (
+                text,
+                Some(format!("sha256:{}", sha256_bytes(b"ordinary file"))),
+            ),
+            (root.join("missing.png"), None),
+            (gif, None),
         ])
         .unwrap();
         assert_eq!(images.len(), 2);

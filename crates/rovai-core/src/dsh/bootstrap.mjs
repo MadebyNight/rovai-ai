@@ -4,13 +4,28 @@ import { createHash } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 
 export const name = 'rovai-bootstrap'
-export const inject = ['systemPrompt', 'tools']
+export const inject = ['loader', 'systemPrompt', 'tools']
+export const readinessService = 'rovaiDshReady'
 const MAX_OBSERVED_FILE_CONTENT_BYTES = 2 * 1024 * 1024
+const DSH_MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+
+// The ACP app can claim stdio while sibling Loader entries are still starting.
+// Hold its injected readiness service until every configured native MCP client
+// has completed the official Cordis entry lifecycle. Session-scoped ACP MCP
+// clients are mounted later by DSH itself and are intentionally not involved.
+async function awaitNativeMcpReadiness(ctx) {
+  const entries = [...ctx.loader.entries()]
+    .filter(entry => !entry.disabled && entry.options.name === DSH_MCP_CLIENT)
+  await Promise.all(entries.map(async entry => {
+    await entry.refresh()
+    await entry._await()
+  }))
+}
 
 // A normal DSH prompt section is assembled before every model step, including
 // the step after native compaction. Variables are substituted only once, so
 // braces inside user-authored identity text remain literal.
-export function apply(ctx, config) {
+export async function apply(ctx, config) {
   // DSH's documented MCP namespace normalization (0.1.5). A Session's
   // scoped MCP must replace the entire inherited server, including native-only
   // tools. The official restriction seam leaves scoped registrations visible.
@@ -33,7 +48,7 @@ export function apply(ctx, config) {
       } finally { refreshing = false }
     }
     refresh()
-    agent.ctx.on('tools/changed', refresh)
+    agent.ctx.on('tools/change', refresh)
   })
   // Automatic compaction has a durable owner turn on its start event. Idle
   // manual compaction has turn=null and cannot be charged to a later AgentRun.
@@ -113,4 +128,6 @@ export function apply(ctx, config) {
     return binding.bootstrap
   })
   ctx.systemPrompt.section({ name: 'rovai:bootstrap', order: 11000, text: '{{rovai_bootstrap}}' })
+  await awaitNativeMcpReadiness(ctx)
+  ctx.provide(readinessService, Object.freeze({ ready: true }))
 }

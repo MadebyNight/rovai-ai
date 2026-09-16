@@ -15,7 +15,6 @@ use crate::{
         AUTOMATION_UPDATE_TOOL_NAME,
     },
     camp_attachment::MAX_PREPARED_ATTACHMENTS,
-    camp_attachment_publication::AuthorityAttachment,
     camp_history::{
         CAMP_LIST_TOOL_NAME, CAMP_READ_TOOL_NAME, CAMP_SEARCH_TOOL_NAME, HISTORY_SEARCH_TOOL_NAME,
     },
@@ -36,6 +35,7 @@ use crate::{
     db::Database,
     execution_budget::{PRODUCT_MAX_ACCEPTED_A2A, camp_turn_execution_budget_now},
     gather::GATHER_TOOL_NAME,
+    local_attachment_source::LocalAttachmentSourceRef,
     member_studio::MEMBER_CREATE_TOOL_NAME,
     message_delivery::{
         AgentAddressingMode, CAMP_MESSAGE_SEND_MAX_BODY_BYTES, CAMP_MESSAGE_SEND_TOOL_NAME,
@@ -192,8 +192,7 @@ pub struct CampMessageSendInvocation {
     pub binding_credential: String,
     pub runtime_tool_call_id: String,
     pub input: CampMessageSendInput,
-    pub frozen_files: Vec<AuthorityAttachment>,
-    pub managed_attachment_ingest_intent_id: Option<String>,
+    pub source_files: Vec<LocalAttachmentSourceRef>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -596,7 +595,7 @@ impl TeamToolService {
                     "maxItems": MAX_PREPARED_ATTACHMENTS,
                     "uniqueItems": true,
                     "items": {"type": "string", "minLength": 1},
-                    "description": "Optional local file or directory path readable by the active Runtime. Repeat to preserve attachment order. Pass the existing path directly; Rovai privately snapshots paths outside the current AgentRun workspace and ROVAI_RUN_TMP before sending."
+                    "description": "Optional local file or directory paths to attach, in order. Pass each actual path directly. Rovai registers a reference without copying, moving, linking or changing permissions. Later reads use the current file at that path. Temporary files may become unavailable when their source is cleaned up."
                 }
             }
         })
@@ -820,7 +819,7 @@ impl TeamToolService {
                   AND camp_turn.status IN ('running', 'waiting')
                   AND camp_turn.cancel_requested_at IS NULL
                   AND camp_turn.execution_budget_exhausted_at IS NULL
-                  AND camp_turn.execution_budget_deadline_at > ?3
+                  AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
                   AND camp_member.status = 'active'
                   AND camp_member.leave_requested_at IS NULL
                   AND camp_member.version = CAST(
@@ -1147,10 +1146,10 @@ impl TeamToolService {
                 .replay_if_recorded(database, &replay_envelope)?
                 .context("recorded public send disappeared before replay");
         }
-        if invocation.input.files.len() != invocation.frozen_files.len() {
+        if invocation.input.files.len() != invocation.source_files.len() {
             return Err(invocation_error(
                 "message.invalid_input",
-                "Every requested file must have one frozen Authority attachment",
+                "Every requested file must have one source path reference",
             ));
         }
 
@@ -1242,10 +1241,7 @@ impl TeamToolService {
                     agent_addressing_mode: envelope.payload.agent_addressing_mode,
                     mention_user: envelope.payload.mention_user,
                     task_id: envelope.payload.task_id.as_deref(),
-                    attachments: &invocation.frozen_files,
-                    managed_attachment_ingest_intent_id: invocation
-                        .managed_attachment_ingest_intent_id
-                        .as_deref(),
+                    source_files: &invocation.source_files,
                     operation: PublicA2aOperation::Send,
                 },
             )
@@ -1423,8 +1419,7 @@ impl TeamToolService {
                     agent_addressing_mode: AgentAddressingMode::Automatic,
                     mention_user: false,
                     task_id: None,
-                    attachments: &[],
-                    managed_attachment_ingest_intent_id: None,
+                    source_files: &[],
                     operation: PublicA2aOperation::Gather {
                         gather_id: &gather_id,
                         initiator_conversation_id: &initiator_conversation_id,
@@ -2047,6 +2042,7 @@ mod tests {
     };
     use crate::{
         camp_attachment::CampAttachmentStore,
+        camp_attachment_publication::AuthorityAttachment,
         camp_attachment_publication::CampAttachmentPublicationCoordinator,
         camp_attachment_view::CampAttachmentViewStore,
         collaboration::{
@@ -2058,7 +2054,6 @@ mod tests {
             CharterDeliveryMode, ContextService, DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
             MaterializeContextRequest,
         },
-        managed_attachment::ManagedAttachmentStore,
         managed_blob::ManagedBlobStore,
         memory::{
             AcceptHearthReviewItemCommand, CreateMemoryCommand, ForgetMemoryCommand,
@@ -2377,24 +2372,23 @@ mod tests {
                     task_id: None,
                     files: Vec::new(),
                 },
-                frozen_files: Vec::new(),
-                managed_attachment_ingest_intent_id: None,
+                source_files: Vec::new(),
             }
         }
 
-        fn prepare_managed_agent_attachment(
+        fn prepare_agent_source_attachment(
             &mut self,
             invocation: &mut CampMessageSendInvocation,
             file_name: &str,
             bytes: &[u8],
         ) -> String {
-            self.prepare_managed_agent_attachments(invocation, &[(file_name, bytes)])
+            self.prepare_agent_source_attachments(invocation, &[(file_name, bytes)])
                 .into_iter()
                 .next()
                 .unwrap()
         }
 
-        fn prepare_managed_agent_attachments(
+        fn prepare_agent_source_attachments(
             &mut self,
             invocation: &mut CampMessageSendInvocation,
             files: &[(&str, &[u8])],
@@ -2409,36 +2403,17 @@ mod tests {
                 .iter()
                 .map(|(file_name, _)| (*file_name).to_string())
                 .collect();
-            let command_id = TeamToolService::default()
-                .binding_command_id(
-                    &invocation.native_binding_id,
-                    &invocation.binding_credential,
-                    &invocation.runtime_tool_call_id,
+            invocation.source_files =
+                crate::local_attachment_source::observe_agent_source_attachments(
+                    &invocation.input.files,
+                    &workspace,
                 )
                 .unwrap();
-            let store = ManagedAttachmentStore::for_database(&self.database);
-            let plan = store
-                .begin_agent_ingest(
-                    &mut self.database,
-                    &self.camp_id,
-                    &command_id,
-                    invocation.input.files.len(),
-                )
-                .unwrap()
-                .unwrap();
-            let prepared = store
-                .materialize_agent(&plan, &invocation.input.files, &workspace, &run_tmp)
-                .unwrap();
-            store
-                .record_promoted(&mut self.database, &prepared)
-                .unwrap();
-            let attachment_ids = prepared
-                .attachments()
+            let attachment_ids = invocation
+                .source_files
                 .iter()
-                .map(|attachment| attachment.attachment_id.clone())
+                .map(|source| source.id.clone())
                 .collect();
-            invocation.frozen_files = prepared.attachments();
-            invocation.managed_attachment_ingest_intent_id = Some(prepared.intent_id().to_string());
             attachment_ids
         }
 
@@ -2808,8 +2783,7 @@ mod tests {
                 agent_addressing_mode: AgentAddressingMode::Automatic,
                 mention_user: false,
                 task_id: None,
-                attachments: &[],
-                managed_attachment_ingest_intent_id: None,
+                source_files: &[],
                 operation: PublicA2aOperation::Send,
             },
         )
@@ -3083,9 +3057,16 @@ mod tests {
 
     #[test]
     fn public_send_atomically_persists_one_message_and_canonical_deliveries() {
-        let mut fixture = Fixture::new();
-        let service = TeamToolService::default();
-        let before_slots: i64 = fixture
+        for unbounded in [false, true] {
+            let mut fixture = Fixture::new();
+            if unbounded {
+                fixture.database.connection().execute(
+                "UPDATE camp_turn SET execution_budget_schema_version=2, execution_budget_deadline_at=NULL, execution_budget_elapsed_seconds=NULL WHERE id=(SELECT camp_turn_id FROM agent_run WHERE id=?1)",
+                [&fixture.source_run_id],
+            ).unwrap();
+            }
+            let service = TeamToolService::default();
+            let before_slots: i64 = fixture
             .database
             .connection()
             .query_row(
@@ -3094,96 +3075,96 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let invocation = fixture.public_send_invocation(
-            "public-send-union",
-            "Please inspect this @agent_2",
-            &["agent_2"],
-        );
-        let sent = service
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
-        assert_eq!(sent.result.code, "camp_message.send_accepted");
-        assert_eq!(sent.result.payload["visibility"], "camp_public");
-        assert_eq!(
-            sent.result.payload["effectiveRecipients"],
-            json!(["agent_2"])
-        );
-        assert_eq!(
-            sent.result.payload["deliveryIds"].as_array().unwrap().len(),
-            1
-        );
+            let invocation = fixture.public_send_invocation(
+                "public-send-union",
+                "Please inspect this @agent_2",
+                &["agent_2"],
+            );
+            let sent = service
+                .send_public_message(&mut fixture.database, &invocation)
+                .unwrap();
+            assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+            assert_eq!(sent.result.code, "camp_message.send_accepted");
+            assert_eq!(sent.result.payload["visibility"], "camp_public");
+            assert_eq!(
+                sent.result.payload["effectiveRecipients"],
+                json!(["agent_2"])
+            );
+            assert_eq!(
+                sent.result.payload["deliveryIds"].as_array().unwrap().len(),
+                1
+            );
 
-        let message_id = sent.result.payload["messageId"].as_str().unwrap();
-        let message: (String, String, String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
+            let message_id = sent.result.payload["messageId"].as_str().unwrap();
+            let message: (String, String, String, String) = fixture
+                .database
+                .connection()
+                .query_row(
+                    r#"
                 SELECT body, effective_recipient_ids_json,
                        recipient_presentation_json, source_operation_id
                 FROM camp_message WHERE id = ?1
                 "#,
-                [message_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(message.0, "Please inspect this @芝士");
-        assert_eq!(message.1, r#"["agent_2"]"#);
-        assert_eq!(
-            serde_json::from_str::<Value>(&message.2).unwrap()["inlineOrder"],
-            json!(["agent_2"])
-        );
-        assert!(!message.3.is_empty());
+                    [message_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(message.0, "Please inspect this @芝士");
+            assert_eq!(message.1, r#"["agent_2"]"#);
+            assert_eq!(
+                serde_json::from_str::<Value>(&message.2).unwrap()["inlineOrder"],
+                json!(["agent_2"])
+            );
+            assert!(!message.3.is_empty());
 
-        struct DeliveryAuditRow {
-            recipient_agent_id: String,
-            edge_kind: String,
-            target_parent_agent_run_id: Option<String>,
-            return_to_agent_run_id: Option<String>,
-            status: String,
-            dispatch_attempt_count: i64,
-            a2a_depth: i64,
-            target_agent_run_id: Option<String>,
-        }
-        let delivery = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
+            struct DeliveryAuditRow {
+                recipient_agent_id: String,
+                edge_kind: String,
+                target_parent_agent_run_id: Option<String>,
+                return_to_agent_run_id: Option<String>,
+                status: String,
+                dispatch_attempt_count: i64,
+                a2a_depth: i64,
+                target_agent_run_id: Option<String>,
+            }
+            let delivery = fixture
+                .database
+                .connection()
+                .query_row(
+                    r#"
                 SELECT recipient_agent_id, edge_kind,
                        target_parent_agent_run_id, return_to_agent_run_id,
                        status, dispatch_attempt_count,
                        a2a_depth, target_agent_run_id
                 FROM message_delivery WHERE message_id = ?1
                 "#,
-                [message_id],
-                |row| {
-                    Ok(DeliveryAuditRow {
-                        recipient_agent_id: row.get(0)?,
-                        edge_kind: row.get(1)?,
-                        target_parent_agent_run_id: row.get(2)?,
-                        return_to_agent_run_id: row.get(3)?,
-                        status: row.get(4)?,
-                        dispatch_attempt_count: row.get(5)?,
-                        a2a_depth: row.get(6)?,
-                        target_agent_run_id: row.get(7)?,
-                    })
-                },
-            )
-            .unwrap();
-        assert_eq!(delivery.recipient_agent_id, "agent_2");
-        assert_eq!(delivery.edge_kind, "forward");
-        assert_eq!(
-            delivery.target_parent_agent_run_id.as_deref(),
-            Some(fixture.source_run_id.as_str())
-        );
-        assert_eq!(delivery.return_to_agent_run_id, None);
-        assert_eq!(delivery.status, "running");
-        assert_eq!(delivery.dispatch_attempt_count, 1);
-        assert_eq!(delivery.a2a_depth, 1);
-        assert!(delivery.target_agent_run_id.is_some());
-        let after_slots: i64 = fixture
+                    [message_id],
+                    |row| {
+                        Ok(DeliveryAuditRow {
+                            recipient_agent_id: row.get(0)?,
+                            edge_kind: row.get(1)?,
+                            target_parent_agent_run_id: row.get(2)?,
+                            return_to_agent_run_id: row.get(3)?,
+                            status: row.get(4)?,
+                            dispatch_attempt_count: row.get(5)?,
+                            a2a_depth: row.get(6)?,
+                            target_agent_run_id: row.get(7)?,
+                        })
+                    },
+                )
+                .unwrap();
+            assert_eq!(delivery.recipient_agent_id, "agent_2");
+            assert_eq!(delivery.edge_kind, "forward");
+            assert_eq!(
+                delivery.target_parent_agent_run_id.as_deref(),
+                Some(fixture.source_run_id.as_str())
+            );
+            assert_eq!(delivery.return_to_agent_run_id, None);
+            assert_eq!(delivery.status, "running");
+            assert_eq!(delivery.dispatch_attempt_count, 1);
+            assert_eq!(delivery.a2a_depth, 1);
+            assert!(delivery.target_agent_run_id.is_some());
+            let after_slots: i64 = fixture
             .database
             .connection()
             .query_row(
@@ -3192,20 +3173,21 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(after_slots, before_slots + 1);
-        let replay = service
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        assert!(replay.replayed);
-        assert_eq!(replay.result.payload["messageId"], message_id);
+            assert_eq!(after_slots, before_slots + 1);
+            let replay = service
+                .send_public_message(&mut fixture.database, &invocation)
+                .unwrap();
+            assert!(replay.replayed);
+            assert_eq!(replay.result.payload["messageId"], message_id);
 
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(&source_run_id, fixture.source_epoch, "source completed");
-        let durable_replay = service
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        assert!(durable_replay.replayed);
-        assert_eq!(durable_replay.result.payload["messageId"], message_id);
+            let source_run_id = fixture.source_run_id.clone();
+            fixture.succeed_run(&source_run_id, fixture.source_epoch, "source completed");
+            let durable_replay = service
+                .send_public_message(&mut fixture.database, &invocation)
+                .unwrap();
+            assert!(durable_replay.replayed);
+            assert_eq!(durable_replay.result.payload["messageId"], message_id);
+        }
     }
 
     #[test]
@@ -3221,12 +3203,12 @@ mod tests {
     }
 
     #[test]
-    fn attachment_send_commits_managed_v2_and_dispatches_without_projection_gate() {
+    fn attachment_send_keeps_source_path_and_dispatches_without_projection_gate() {
         let mut fixture = Fixture::new();
         let service = TeamToolService::default();
         let mut invocation =
             fixture.public_send_invocation("attachment-send-real-identities", "", &["agent_2"]);
-        let attachment_id = fixture.prepare_managed_agent_attachment(
+        let attachment_id = fixture.prepare_agent_source_attachment(
             &mut invocation,
             "frozen-agent-file.txt",
             b"file",
@@ -3256,36 +3238,136 @@ mod tests {
             )
             .unwrap();
         assert_eq!(body, "");
-        let managed: (String, String, i64) = fixture
+        let source_json: String = fixture
             .database
             .connection()
             .query_row(
-                r#"
-                SELECT managed.state, managed.root_relative_payload_path,
-                       COUNT(reference.attachment_id)
-                FROM managed_attachment AS managed
-                JOIN camp_message_attachment_ref AS reference
-                  ON reference.camp_id = managed.camp_id
-                 AND reference.attachment_id = managed.id
-                WHERE managed.id = ?1 AND reference.camp_message_id = ?2
-                "#,
-                params![attachment_id, message_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(managed.0, "available");
-        assert!(managed.1.contains("/.managed-v2/"));
-        assert_eq!(managed.2, 1);
-        let legacy_rows: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT COUNT(*) FROM message_attachment WHERE camp_message_id = ?1",
+                "SELECT source_attachments_json FROM camp_message WHERE id=?1",
                 [&message_id],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(legacy_rows, 0);
+        let sources: Vec<crate::local_attachment_source::LocalAttachmentSourceRef> =
+            serde_json::from_str(&source_json).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, attachment_id);
+        let path = fixture.directory.join("workspace/frozen-agent-file.txt");
+        assert_eq!(sources[0].source_path, path.to_string_lossy());
+        assert_eq!(
+            sent.result.payload["attachments"][0]["path"],
+            path.to_string_lossy().as_ref()
+        );
+        let managed_count: i64 = fixture.database.connection().query_row(
+            "SELECT (SELECT count(*) FROM managed_attachment)+(SELECT count(*) FROM message_attachment)", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(managed_count, 0, "publishing must not make a managed copy");
+        // Replacement save changes bytes and size while preserving identity and location.
+        let replacement = path.with_extension("tmp");
+        std::fs::write(&replacement, b"edited replacement").unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        let mut again = fixture.public_send_invocation("same-path-after-edit", "edited", &[]);
+        again.input.files = vec![path.to_string_lossy().into_owned()];
+        again.source_files = crate::local_attachment_source::observe_agent_source_attachments(
+            &again.input.files,
+            &fixture.directory.join("workspace"),
+        )
+        .unwrap();
+        let resent = service
+            .send_public_message(&mut fixture.database, &again)
+            .unwrap();
+        assert_eq!(
+            resent.result.payload["attachments"][0]["attachmentId"],
+            attachment_id
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"edited replacement");
+        // External, temporary, default-output and directory sources use the same
+        // public send boundary; none enters the historical ingest/view tables.
+        let output = crate::storage_layout::CampOutputDirectory::prepare(
+            &fixture.database,
+            &fixture.camp_id,
+        )
+        .unwrap()
+        .output_root;
+        let external = fixture.directory.join("external/report.txt");
+        let temporary = fixture.directory.join("run-tmp/report.txt");
+        let permanent = output.join("report.txt");
+        let directory = fixture.directory.join("site");
+        for file in [&external, &temporary, &permanent] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, b"original source").unwrap();
+        }
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("index.html"), b"<link href='./style.css'>").unwrap();
+        std::fs::write(directory.join("style.css"), b"body{color:red}").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o444)).unwrap();
+        }
+        let mut variants = fixture.public_send_invocation("all-source-locations", "", &[]);
+        variants.input.files = [&external, &temporary, &permanent, &directory]
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        variants.source_files = crate::local_attachment_source::observe_agent_source_attachments(
+            &variants.input.files,
+            &fixture.directory.join("workspace"),
+        )
+        .unwrap();
+        let published = service
+            .send_public_message(&mut fixture.database, &variants)
+            .unwrap();
+        assert_eq!(
+            published.result.payload["attachments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        for (index, expected) in variants.input.files.iter().enumerate() {
+            assert_eq!(
+                published.result.payload["attachments"][index]["path"],
+                expected.as_str()
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&external).unwrap().permissions().mode() & 0o777,
+                0o444
+            );
+        }
+        let mut other = Fixture::new();
+        let mut forward = other.public_send_invocation("cross-camp-reference", "", &[]);
+        forward.input.files = vec![external.to_string_lossy().into_owned()];
+        forward.source_files = crate::local_attachment_source::observe_agent_source_attachments(
+            &forward.input.files,
+            &other.directory.join("workspace"),
+        )
+        .unwrap();
+        let forwarded = service
+            .send_public_message(&mut other.database, &forward)
+            .unwrap();
+        assert_eq!(
+            forwarded.result.payload["attachments"][0]["path"],
+            published.result.payload["attachments"][0]["path"]
+        );
+        assert_ne!(
+            forwarded.result.payload["attachments"][0]["attachmentId"],
+            published.result.payload["attachments"][0]["attachmentId"]
+        );
+        assert_eq!(std::fs::read(&external).unwrap(), b"original source");
+        let count: i64 = fixture.database.connection().query_row("SELECT (SELECT count(*) FROM managed_attachment)+(SELECT count(*) FROM message_attachment)", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0);
+        // Internal transport replay does not require the source to remain readable.
+        std::fs::remove_file(&path).unwrap();
+        again.source_files.clear();
+        let replay = service
+            .send_public_message(&mut fixture.database, &again)
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.result.payload, resent.result.payload);
         let gate: (String, i64, Option<String>, Option<String>) = fixture
             .database
             .connection()
@@ -3316,7 +3398,7 @@ mod tests {
         );
         let four_mib = vec![b'a'; 4 * 1024 * 1024];
         let three_mib = vec![b'b'; 3 * 1024 * 1024];
-        let attachment_ids = fixture.prepare_managed_agent_attachments(
+        let attachment_ids = fixture.prepare_agent_source_attachments(
             &mut invocation,
             &[
                 ("one.bin", four_mib.as_slice()),
@@ -3375,8 +3457,15 @@ mod tests {
         );
         assert_eq!(state.2, None);
         assert_eq!(state.3, None);
-        assert_eq!(state.4, 4);
-        assert_eq!(state.5, 0, "v2 send must not enter legacy Camp publication");
+        assert_eq!(state.4, 0);
+        assert_eq!(
+            sent.result.payload["attachments"].as_array().unwrap().len(),
+            4
+        );
+        assert_eq!(
+            state.5, 0,
+            "new send must not enter legacy Camp publication"
+        );
         assert_eq!(
             fixture
                 .database
@@ -6235,7 +6324,7 @@ mod tests {
     #[cfg(feature = "slow-tests")]
     fn public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes() {
         // Current and pre-upgrade frozen deliveries must consume exact bytes and original version axes.
-        for frozen_version in [23, 22] {
+        for frozen_version in [24, 23, 22] {
             let mut fixture = Fixture::new();
             fixture
                 .database
@@ -6302,16 +6391,62 @@ Use this exact public input @agent_2";
             )
             .unwrap();
             let mut frozen_snapshot: Value = serde_json::from_str(&frozen_snapshot).unwrap();
-            if frozen_version == 22 {
-                let mut old_profile = crate::context_delivery::CONTEXT_DELIVERY_PROFILE_V5;
-                old_profile.profile_version = 4;
-                let selection = &mut frozen_snapshot["frozenContext"]["manifestSelection"];
-                selection["contextManifestVersion"] = json!(22);
-                selection["contextDeliveryProfileVersion"] = json!(4);
-                selection["contextDeliveryProfileJson"] =
-                    serde_json::to_value(old_profile).unwrap();
-                selection["contextDeliveryProfileDigest"] =
-                    json!(old_profile.canonical_digest().unwrap());
+            if frozen_version < 24 {
+                use sha2::{Digest, Sha256};
+                let hash = |text: &str| format!("sha256:{:x}", Sha256::digest(text.as_bytes()));
+                let (receipt, receipt_digest) =
+                    crate::camp_attachment_view::load_camp_attachment_view_receipt(
+                        fixture.database.connection(),
+                        &fixture.camp_id,
+                        Vec::<String>::new(),
+                    )
+                    .unwrap();
+                let legacy_root = fixture
+                    .database
+                    .runtime_camp_files_root()
+                    .join(&receipt.attachment_root_relative_path);
+                let frozen = &mut frozen_snapshot["frozenContext"];
+                let selection = &mut frozen["manifestSelection"];
+                selection["contextManifestVersion"] = json!(frozen_version);
+                selection["runFactsSchemaVersion"] = json!(2);
+                selection["campAttachmentViewReceiptVersion"] = json!(2);
+                selection["campAttachmentViewReceipt"] = serde_json::to_value(receipt).unwrap();
+                selection["campAttachmentViewReceiptDigest"] = json!(receipt_digest);
+                if frozen_version == 22 {
+                    let mut old_profile = crate::context_delivery::CONTEXT_DELIVERY_PROFILE_V5;
+                    old_profile.profile_version = 4;
+                    selection["contextDeliveryProfileVersion"] = json!(4);
+                    selection["contextDeliveryProfileJson"] =
+                        serde_json::to_value(old_profile).unwrap();
+                    selection["contextDeliveryProfileDigest"] =
+                        json!(old_profile.canonical_digest().unwrap());
+                }
+                let current_json = selection["runFactPayload"].as_str().unwrap().to_string();
+                let mut facts: Value = serde_json::from_str(&current_json).unwrap();
+                facts
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("attachmentOutputRoot");
+                facts["schemaVersion"] = json!(2);
+                facts["campResources"] = json!({"campId":fixture.camp_id,"publishedAttachmentRoot":legacy_root,"access":"enumerate_and_read","scope":"current_camp","mutability":"read_only"});
+                let legacy_json = serde_json::to_string(&facts).unwrap();
+                selection["runFactPayload"] = json!(legacy_json);
+                selection["runFactDigest"] = json!(hash(&legacy_json));
+                for reference in selection["runFactRefs"].as_array_mut().unwrap() {
+                    if reference["fact"] == "attachment_output_root" {
+                        reference["fact"] = json!("camp_resources");
+                    }
+                }
+                for (payload, digest) in [
+                    ("renderedPayload", "renderedPayloadDigest"),
+                    ("runtimePayload", "runtimePayloadDigest"),
+                ] {
+                    let previous = frozen[payload].as_str().unwrap();
+                    assert!(previous.contains(&current_json));
+                    let legacy = previous.replace(&current_json, &legacy_json);
+                    frozen[digest] = json!(hash(&legacy));
+                    frozen[payload] = json!(legacy);
+                }
                 fixture
                     .database
                     .connection()

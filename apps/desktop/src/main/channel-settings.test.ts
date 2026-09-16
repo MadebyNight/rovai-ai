@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -3694,7 +3694,7 @@ describe('channel settings service', () => {
     await service.stop()
   })
 
-  it('settles an attachment upload independently without resending its body', async () => {
+  it.each(['legacy', 'source_ref'])('settles a %s attachment upload independently using its current content rules', async (storage) => {
     const directory = await mkdtemp(join(tmpdir(), 'rovai-channel-attachment-'))
     const path = join(directory, 'result.png')
     const bytes = Buffer.from('verified image bytes')
@@ -3705,6 +3705,12 @@ describe('channel settings service', () => {
       if ('image' in input) throw new LarkChannelError('upload_failed', 'upload failed')
       return { messageId: 'om_body' }
     })
+    const currentBytes = storage === 'source_ref' ? Buffer.from('edited image with a different size') : bytes
+    if (storage === 'source_ref') {
+      await writeFile(`${path}.new`, currentBytes)
+      await rename(`${path}.new`, path)
+    }
+    const targets: unknown[] = []
     const settlements: Array<Record<string, unknown>> = []
     let delivered = false
     const service = new ChannelSettingsService({
@@ -3738,12 +3744,16 @@ describe('channel settings service', () => {
             recipientOpenId: null,
             payload: {
               kind: 'agent_attachment', campId: 'camp-1', attachmentId: 'attachment-1',
-              attachmentKind: 'image', fileName: 'result.png', size: bytes.byteLength,
-              contentDigest, requiresBodyDelivery: true, ordinal: 0
+              attachmentKind: 'image', fileName: 'result.png',
+              ...(storage === 'source_ref'
+                ? { storage, sourceCampMessageId: 'message-1' }
+                : { size: bytes.byteLength, contentDigest }),
+              requiresBodyDelivery: true, ordinal: 0
             }
           }] }
         }
         if (method === 'camp.attachments.desktopOpenTarget') {
+          targets.push(rawParams)
           return {
             attachmentId: 'attachment-1', displayName: 'result.png', kind: 'file',
             mediaType: 'image/png', path, openRisk: 'normal'
@@ -3764,6 +3774,11 @@ describe('channel settings service', () => {
       expect(harness.createMessage).toHaveBeenCalledTimes(1)
       expect(harness.send.mock.calls.filter(([, input]) => 'markdown' in input)).toHaveLength(0)
       expect(harness.send.mock.calls.filter(([, input]) => 'image' in input)).toHaveLength(1)
+      const imageCall = harness.send.mock.calls.find(([, input]) => 'image' in input)
+      expect(imageCall?.[1]).toEqual({ image: { source: currentBytes } })
+      expect(targets).toEqual([storage === 'source_ref'
+        ? { owner: 'message', campId: 'camp-1', attachmentRefId: 'attachment-1', messageId: 'message-1' }
+        : { campId: 'camp-1', attachmentId: 'attachment-1' }])
       expect(settlements).toEqual(expect.arrayContaining([
         expect.objectContaining({ deliveryId: 'delivery-body', outcome: 'sent' }),
         expect.objectContaining({

@@ -22,6 +22,8 @@ it('injects the shared bridge into authorized HTML without resaving source or in
   const config = JSON.parse(/\)\((\{"previewId".*?\}),function/u.exec(script)![1])
   expect(config.map.length).toBe(tag[0].length)
   expect(config.browserDocument).toBe(true)
+  expect(config.origin).toBe(location.origin)
+  expect(preview.origin).toBe(location.origin)
   expect(preview.sandboxedDocument).not.toContain('handle-not-for-the-frame')
   expect(preview.entryUrl).not.toContain('handle-not-for-the-frame')
 })

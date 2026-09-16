@@ -54,7 +54,7 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 [增量机器可读证据](acp-0.1.5-convergence-evidence.json)。原始日志、数据库、原生 Home 和
 凭据留在仓库外；受控模型只产生确定的工具请求，工具执行、权限和 Session 仍由实际 DSH/Core 负责。
 
-下表逐轴记录当前实现和真实验收；协议未暴露的入口单列为差异，由 [V1.59-D08](../../versions/v1.59/decisions.md#v1-59-d08)接受。
+下表逐轴记录当前实现和真实验收；协议未暴露的入口单列为差异，由 [V1.59-D10](../../versions/v1.59/decisions.md#v1-59-d10)接受。
 受控 overflow 是错误注入后调用真实原生 summarizer/retry，不宣称自然耗尽 Provider 窗口。
 
 | 能力轴 | 当前证据 / 实现 | 已核对结果 | 明确差异与范围 |
@@ -65,14 +65,14 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 | Bootstrap / Context | Verified / Implemented | 官方 systemPrompt section 每模型步按 exact Session 装配冻结字节；A/B/A、cold、compaction 保留正确身份；测试覆盖子代理不继承成员自身份、缺失/损坏绑定拒绝 | 相比 Grok 的 _meta.rules，使用受管官方 Cordis 插件；ContextManifest/Bootstrap 内容格式不变 |
 | Compaction continuity | Verified / Implemented | manual、压力、overflow、自动阈值、overflow retry、fail/cancel、压缩后 cold resume；每阶段重新加载随机 Skill marker、实际 MCP 调用与一条审批；压缩后 deny 零副作用 | overflow 使用一次受控错误触发真实 native retry；无 ACP /compact/lifecycle，采用持续 System 层 |
 | Skills | Verified / Implemented | 实际读取 .dsh/skills 的随机 marker 与 cli-operations；导入、冲突保留、删除、禁用/重启投影复核 | 沿用共享 group 与原生目录追加；不是独立 Skill 设置 |
-| External MCP | Verified / Implemented | 真实模型通过 stdio/HTTP、同名覆盖、更新、相邻隔离、取消分配/重分配/删除、原生恢复、exact Session；脚本化复验三组权限均为 0 个 Core 合成审批，副作用由 DSH 原生工具层决定 | whole-definition 遮蔽属于配置投影；Rovai 不按工具名、read-only 或副作用注解再造安全结论；无 SSE/resources/prompts |
+| External MCP | Verified / Implemented | 真实模型通过 stdio/HTTP、同名覆盖、更新、相邻隔离、取消分配/重分配/删除、原生恢复、exact Session；脚本化复验三组权限均为 0 个 Core 合成审批，副作用由 DSH 原生工具层决定；原生 MCP 首轮零延时压力复验 30/30 | whole-definition 遮蔽属于配置投影；0.1.5-rc.2 的 ACP stdio 可早于同级 Loader settle，受管 Host 以官方 entry lifecycle 作启动门闩，不使用 sleep 或重放 prompt；无 SSE/resources/prompts |
 | Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断；真实 MiniMax edit 为 update +1/-1，空文件 edit 为 +1/-0 | observer 只补 shell metadata 与官方 before/after；完整状态变为标准 ACP Diff，新增缺 before 时保持路径级回退；未知工具保持 other |
 | Narration / Final / Missing-Send | Verified / Implemented | ACP committed public/thought 分流、end_turn 唯一终态；真实 zero-send 发布、accepted-send suppression、tool→final 三组通过 | 不把进程退出或日志末尾当 final；通用 ACP recovery 保留原生 public text |
 | Permission / Approval / Workspace | Verified / Implemented | 六组合原名原值冻结 patch；真实 write/Bash 的 workspace-write/read-only 边界由 DSH 决定；Shell 取消后 32 秒无迟到文件；MCP 不产生 Core 合成审批 | `sandbox_mode`/`approval_policy` 从队员页到 Host 保持一致；Runtime 未请求审批时 Core 不阻断或二次询问；不支持 additionalDirectories |
 | Built-in rovai CLI | Verified / Implemented | contract-v24 全 23 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
 | Usage / Cache / Cost | Verified / Implemented | 8 个真实 Run 的逐调用入库；新增真实 Core warm/自动压缩/cold 三轮对账与独立原生 observer 的五类 Token 桶完全一致，无重放计数；context gauge 分开 | cache write/cost 未报告，保持 NULL；MiniMax 未报告 reasoning 也保持 NULL；空闲 manual summary 不归入后续 Run |
 | Retry / Queue / Cancel / Cleanup | Verified / Implemented | 共享 accepted-input/queue/lease；余额/缺 Key 不盲重试；真实 pending-approval 取消及运行中 Shell 严格 cancelled；32 秒无晚到文件；Core crash、正常停止清理进程树 | Native compact fail/cancel 保持 generation；idle 回收的专属结果见 Host 轴 |
-| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 105/closed catalogs/选择器接通 | macOS arm64 qualified，DSH 独立 digest；其他平台无本次真实证据，保持 not_qualified |
+| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 107/closed catalogs/选择器接通 | macOS arm64 qualified，DSH 独立 digest；其他平台无本次真实证据，保持 not_qualified |
 
 ### 关键行为与其他 ACP Runtime 的区别
 
@@ -83,7 +83,10 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
    和可变模型选项不进入进程兼容键，真实配置/权限/目录/原生输入摘要变化仍会 fence。
 2. **Bootstrap**：DSH ACP 没有可用 system 字段。使用官方 Cordis systemPrompt 扩展点，按 exact Native
    Session 读取 0600 私有绑定，SHA-256 校验，变量仅展开一次。不会把 Charter/Identity 放进用户消息，
-   不依赖模型复述，不修改 Shared Bootstrap 或 Manifest 字节。
+   不依赖模型复述，不修改 Shared Bootstrap 或 Manifest 字节。0.1.5-rc.2 的 ACP app 会在同级 Loader entry
+   尚未全部启动时先开放 stdio；Bootstrap 因此同时发布一个仅用于 Host 启动排序的 Cordis service，等所有已配置的
+   官方 `@deepseek-ai/dsh-mcp-client` entry 完成原生 lifecycle 后才允许 ACP entry 激活。它不轮询工具名、不等待固定时长，
+   也不重试已接受的用户输入。
 3. **Compact**：策略是 native_system_prompt_preserved，类似 Pi 的持续系统层。生产没有文字 detector 或
    compact 后重发；原生下一模型步自然重新装配。原生实测 generation 0→1→2→3，cold resume 后自动压力
    3→4、受控 overflow 加真实重试 4→5；失败与取消保持 5→5。七个能力检查点均实际加载新 Skill 内容、
@@ -101,6 +104,7 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
    server 覆盖同名原生全部 Tool，包括 native-only Tool。交互式 preset 不参与受管 Host；`never` 与 `ask` 原样交给
    DSH。只有 DSH 发出原生 `session/request_permission` 时才显示通用审批并原样返回选项。0.1.5-rc.2 的普通 MCP
    ToolDefinition 没有触发该请求，因此 read-only/ask/never 下的 MCP 结果均由 DSH 原生层决定，Core 不根据名称猜安全性。
+   原生工具注册/注销事件使用上游实际的 `tools/change`，使同名 scope restriction 随原生 MCP 重连或变更重新计算。
 6. **队员页与版本提示**：权限主名称和选项逐字显示原生 snake_case/value，中文只作次级解释；保存值不转换。
    共享 Desktop/Mobile 可用性投影在不兼容时明确提示“DeepSeek Harness 需要 0.1.5-rc.2 或更高版本”，不新增
    DSH 专属页面或移动端分支。
@@ -156,9 +160,10 @@ DSH 生成验证。协议地址见 [MiniMax Anthropic-compatible 文档](https:/
 
 已通过 `cargo check --workspace --all-targets`、`cargo clippy --workspace --all-targets -- -D warnings`、
 `cargo fmt --all -- --check`、TypeScript typecheck、Web/Electron desktop build、文档治理 10 项测试及
-带明确 base 的 `docs:check:ci`。Rust 主测试 813 项通过、6 项保留原有 ignore；CLI 35 项通过；新增 Adapter
+带明确 base 的 `docs:check:ci`。Rust 主测试 816 项通过、6 项保留原有 ignore；CLI 35 项通过；新增 Adapter
 纳入既有 ACP Tool/Diff/Output owner 后，3 项定向回归通过；slow-tests 全部 310 项通过，`pnpm test:rust:pr` 完整通过。
-DSH 官方扩展点 Node owner 通过；Missing-Send protocol、Runtime picker 和 configured Camp 共 9 项通过；后续 DSH observer 与 Missing-Send 定向 7 项再次通过。
+DSH 官方扩展点 Node owner 2 项通过；原生 MCP 启动竞态修复后零延时 30/30 与完整生命周期 smoke 通过；
+Missing-Send protocol、Runtime picker 和 configured Camp 共 9 项通过；后续 DSH observer 与 Missing-Send 定向 7 项再次通过。
 
 最终 Vitest 使用 `--maxWorkers=1 --testTimeout=15000 --expect.poll.timeout=15000` 全量复跑：
 204 个测试文件、2072 项全部通过。早期并行负载下出现 evaluation-host/CoreClient 的时序超时，

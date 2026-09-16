@@ -4,20 +4,24 @@ import { mkdtempSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { apply } from '../../crates/rovai-core/src/dsh/bootstrap.mjs'
+import { apply, readinessService } from '../../crates/rovai-core/src/dsh/bootstrap.mjs'
 
 test('DSH official prompt seam binds immutable root identity per session and fails closed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'rovai-dsh-host-test-'))
   try {
-    const variables = new Map(), sections = [], events = new Map()
+    const variables = new Map(), sections = [], events = new Map(), provided = new Map()
     let denied = []
-    apply({ tools: { schemas: () => ['mcp__fixture__echo', 'mcp__fixture__native_only', 'read'].map(name => ({ name })) }, systemPrompt: {
+    await apply({ loader: { entries: () => [] }, tools: { schemas: () => ['mcp__fixture__echo', 'mcp__fixture__native_only', 'read'].map(name => ({ name })) }, systemPrompt: {
       variable: (key, fn) => variables.set(key, fn), section: section => sections.push(section)
-    }, on: (name, fn) => events.set(name, fn) }, { bindingRoot: root, observationRoot: root, mcpServerNames: ['fixture'] })
+    }, provide: (key, value) => provided.set(key, value), on: (name, fn) => events.set(name, fn) },
+    { bindingRoot: root, observationRoot: root, mcpServerNames: ['fixture'] })
+    assert.deepEqual(provided.get(readinessService), { ready: true })
+    let toolChangeEvent
     events.get('agent/created')({ agent: { session: { header: {} }, ctx: {
-      tools: { restrict: ({ deny }) => { denied = deny; return () => {} } }, on: () => {}
+      tools: { restrict: ({ deny }) => { denied = deny; return () => {} } }, on: name => { toolChangeEvent = name }
     } } })
     assert.deepEqual(denied, ['mcp__fixture__echo', 'mcp__fixture__native_only'])
+    assert.equal(toolChangeEvent, 'tools/change')
     assert.equal(events.has('tools/pre-execute'), false)
     const bootstrap = 'Member A: {{literal}}'
     const binding = { schemaVersion: 1, sessionId: 'session-a', bootstrap,
@@ -70,4 +74,31 @@ test('DSH official prompt seam binds immutable root identity per session and fai
     observe({ type:'compaction/summary', seq:19, data:{compactionId:'auto-1',usage:{inputTokens:999}} })
     assert.equal(readdirSync(root).filter(name=>name.includes('.usage-')).length,2)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('DSH bootstrap publishes ACP readiness only after native MCP entries settle', async () => {
+  let release
+  const activation = new Promise(resolve => { release = resolve })
+  const calls = []
+  const nativeMcp = {
+    disabled: false,
+    options: { name: '@deepseek-ai/dsh-mcp-client' },
+    async refresh() { calls.push('refresh'); await activation },
+    async _await() { calls.push('await') }
+  }
+  let ready = false
+  const pending = apply({
+    loader: { entries: () => [nativeMcp] },
+    tools: { schemas: () => [] },
+    systemPrompt: { variable: () => {}, section: () => {} },
+    on: () => {},
+    provide: key => { assert.equal(key, readinessService); ready = true }
+  }, { bindingRoot: '/unused', observationRoot: '/unused', mcpServerNames: [] })
+  await Promise.resolve()
+  assert.equal(ready, false)
+  assert.deepEqual(calls, ['refresh'])
+  release()
+  await pending
+  assert.equal(ready, true)
+  assert.deepEqual(calls, ['refresh', 'await'])
 })

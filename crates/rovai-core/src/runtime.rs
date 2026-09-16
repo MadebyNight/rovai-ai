@@ -1270,7 +1270,7 @@ impl ExecutionRuntimeService {
               AND camp_turn.status IN ('running', 'waiting')
               AND camp_turn.cancel_requested_at IS NULL
               AND camp_turn.execution_budget_exhausted_at IS NULL
-              AND camp_turn.execution_budget_deadline_at > ?1
+              AND (camp_turn.execution_budget_deadline_at > ?1 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
               AND NOT (
                   agent_run.status = 'waiting'
                   AND agent_run.wait_reason = 'runtime_recovery'
@@ -1416,7 +1416,7 @@ impl ExecutionRuntimeService {
                   AND camp_turn.status IN ('running', 'waiting')
                   AND camp_turn.cancel_requested_at IS NULL
                   AND camp_turn.execution_budget_exhausted_at IS NULL
-                  AND camp_turn.execution_budget_deadline_at > ?3
+                  AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
                 "#,
                 params![agent_run_id, execution_epoch, now],
                 |row| {
@@ -1627,10 +1627,7 @@ impl ExecutionRuntimeService {
             let budget_now = camp_turn_execution_budget_now();
             let budget_now_text = budget_now.to_rfc3339();
             let audit_now_text = chrono::Utc::now().to_rfc3339();
-            let deadline = chrono::DateTime::parse_from_rfc3339(&run.execution_budget_deadline_at)
-                .context("CampTurn Execution Budget deadline is invalid")?
-                .with_timezone(&chrono::Utc);
-            if budget_now >= deadline {
+            if crate::execution_budget::execution_deadline_elapsed(run.execution_budget_deadline_at.as_deref(), budget_now)? {
                 let exhaustion = exhaust_camp_turn_execution_budget(
                     transaction,
                     &run.camp_turn_id,
@@ -1766,7 +1763,7 @@ impl ExecutionRuntimeService {
                         AND camp_turn.status IN ('running', 'waiting')
                         AND camp_turn.cancel_requested_at IS NULL
                         AND camp_turn.execution_budget_exhausted_at IS NULL
-                        AND camp_turn.execution_budget_deadline_at > ?9
+                        AND (camp_turn.execution_budget_deadline_at > ?9 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
                   )
                 "#,
                 params![
@@ -1896,7 +1893,7 @@ impl ExecutionRuntimeService {
                         AND camp_turn.status IN ('running', 'waiting')
                         AND camp_turn.cancel_requested_at IS NULL
                         AND camp_turn.execution_budget_exhausted_at IS NULL
-                        AND camp_turn.execution_budget_deadline_at > ?5
+                        AND (camp_turn.execution_budget_deadline_at > ?5 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
                   )
                 "#,
                 params![
@@ -1995,10 +1992,10 @@ impl ExecutionRuntimeService {
                 ));
             }
             let budget_now = camp_turn_execution_budget_now();
-            let deadline = chrono::DateTime::parse_from_rfc3339(&run.execution_budget_deadline_at)?
-                .with_timezone(&chrono::Utc);
-            if budget_now >= deadline
-                || !matches!(run.camp_turn_status.as_str(), "running" | "waiting")
+            if crate::execution_budget::execution_deadline_elapsed(
+                run.execution_budget_deadline_at.as_deref(),
+                budget_now,
+            )? || !matches!(run.camp_turn_status.as_str(), "running" | "waiting")
                 || run.camp_turn_cancel_requested_at.is_some()
                 || run.execution_budget_exhausted_at.is_some()
             {
@@ -2128,9 +2125,10 @@ impl ExecutionRuntimeService {
                 ));
             }
             let budget_now = camp_turn_execution_budget_now();
-            let deadline = chrono::DateTime::parse_from_rfc3339(&run.execution_budget_deadline_at)?
-                .with_timezone(&chrono::Utc);
-            if budget_now >= deadline {
+            if crate::execution_budget::execution_deadline_elapsed(
+                run.execution_budget_deadline_at.as_deref(),
+                budget_now,
+            )? {
                 return Ok(rejected(
                     "agent_run.network_recovery_stopped",
                     "CampTurn Execution Budget deadline has elapsed",
@@ -2958,7 +2956,7 @@ impl ExecutionRuntimeService {
                       AND camp_turn.status IN ('running', 'waiting')
                       AND camp_turn.cancel_requested_at IS NULL
                       AND camp_turn.execution_budget_exhausted_at IS NULL
-                      AND camp_turn.execution_budget_deadline_at > ?3
+                      AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
                     "#,
                     params![
                         envelope.payload.conversation_id,
@@ -5916,7 +5914,7 @@ struct ClaimableRun {
     camp_turn_status: String,
     camp_turn_cancel_requested_at: Option<String>,
     execution_budget_exhausted_at: Option<String>,
-    execution_budget_deadline_at: String,
+    execution_budget_deadline_at: Option<String>,
     version: i64,
     member_active: bool,
     current_default_capabilities: Value,
@@ -5938,7 +5936,7 @@ fn load_claimable_run(transaction: &Transaction<'_>, run_id: &str) -> Result<Opt
                    agent_run.version, camp_turn.status,
                    camp_turn.cancel_requested_at,
                    camp_turn.execution_budget_exhausted_at,
-                   camp_turn.execution_budget_deadline_at,
+                   CASE WHEN camp_turn.execution_budget_schema_version = 2 THEN camp_turn.execution_budget_deadline_at ELSE COALESCE(camp_turn.execution_budget_deadline_at, 'invalid') END,
                    CASE WHEN camp_member.status = 'active'
                              AND camp_member.leave_requested_at IS NULL
                              AND agent_profile.profile_status = 'present'
@@ -5975,7 +5973,7 @@ fn load_claimable_run(transaction: &Transaction<'_>, run_id: &str) -> Result<Opt
                     row.get::<_, String>(14)?,
                     row.get::<_, Option<String>>(15)?,
                     row.get::<_, Option<String>>(16)?,
-                    row.get::<_, String>(17)?,
+                    row.get::<_, Option<String>>(17)?,
                     row.get::<_, i64>(18)?,
                     row.get::<_, String>(19)?,
                     row.get::<_, String>(20)?,
@@ -9579,7 +9577,7 @@ mod tests {
                             purpose: "验证持久化 deadline".to_string(),
                             completion_role: "required".to_string(),
                             budget: Some(CampTurnExecutionBudgetRequest {
-                                elapsed_seconds: 60,
+                                elapsed_seconds: Some(60),
                                 max_agent_run_responsibilities: 1,
                                 max_accepted_a2a: 0,
                             }),

@@ -109,7 +109,7 @@ function attachmentAuthorityTarget(
     displayName: target.displayName,
     openRisk: target.openRisk,
     canShowPath: target.canShowPath,
-    allowChildren: false
+    allowChildren: true
   }
 }
 

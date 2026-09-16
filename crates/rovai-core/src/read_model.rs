@@ -303,8 +303,8 @@ pub struct CampTurnView {
 pub struct CampTurnExecutionBudgetView {
     pub schema_version: i64,
     pub accepted_at: String,
-    pub deadline_at: String,
-    pub elapsed_seconds: i64,
+    pub deadline_at: Option<String>,
+    pub elapsed_seconds: Option<i64>,
     pub max_agent_run_responsibilities: i64,
     pub max_accepted_a2a: i64,
     pub allocated_agent_run_responsibilities: i64,
@@ -619,7 +619,8 @@ pub struct NativeSessionBootstrapEvidenceView {
 pub struct CampAttachmentRefView {
     pub attachment_id: String,
     pub path: String,
-    pub content_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -3,7 +3,7 @@ document_type: ui-interaction-draft
 authority: desktop-web-interaction-parity-review
 status: draft
 target_version: v1.59
-last_updated: 2026-09-12
+last_updated: 2026-09-16
 ---
 
 # Desktop 对照的宽屏 Web 交互验收稿
@@ -27,7 +27,7 @@ G 不得改写为“Web 不支持”。下面列出的 Host 操作是需要逐�
 | Composer 与引用/待发送 · G | 结构化 Mention、回复、引用、附件、revision 校验、待发送编辑与冲突反馈 | 独立草稿、revision、发送及原子移回普通输入框已接通；旧会话显式接管，附件在普通 Composer 中继续上传 | `StructuredMentionComposer`、`CampWorkspace`、`PendingCampInputs`、草稿协调器 | 草稿独立身份及后端归属；现有 draft/pending 服务绑定 client 与 Camp，发送原子消费 | P：缓存与输入焦点属客户端；不跨端同步草稿 | 两标签页不同内容/附件互不覆盖；伪造归属失败；陈旧 revision 不消费新内容；断网按原回执核对 |
 | 私聊 · G | Camp 内独立 Conversation、私有终端与待发送队列 | 生产页面显式注入客户端；独立 Draft/引用/Pending/上传通过 Core 与 HTTP 回归，双浏览器正文/附件及重新登录保留通过 | `SingleChatPanel`、共享 Composer/附件/执行组件 | Conversation 范围的草稿/资源/事件鉴权，open/get/send/end、pending 与回执 | 无第二套私聊规则；客户端状态隔离 | 私聊与公共草稿不串；其他客户端不能读取不属于自己的编辑内容；结束与取消沿用 Core |
 | 执行、停止与审批 · G | 执行台、工具详情、原生选项、提交中、恢复与停止反馈 | 已复用生产执行台和 Host 审批选项；实际浏览器发送、原生审批、产物阅读和停止通过；两入口相同真实场景、执行中 Web 开关与 Host 强杀恢复已验证 | `RunExecutionDisclosure`、`ExecutionToolGroup`、`ApprovalDock`、恢复提示 | 授权 run/evidence、`agentRuns.cancel`、`campTurns.cancel`、`action.approvals.resolve` 与 command result | P：Web 连接状态；不改写 Runtime 原生选项、不放宽权限 | 真 Runtime 请求审批；两客户端竞争只有一个有效决议；丢回执不重派发；停止和恢复有实际结果 |
-| 附件、产物与文件预览 · G/P | source ref、拖放、文件 Tabs、Markdown/代码/图片阅读、系统打开/定位 | source 上传、授权预览/下载、UTF-8 分页、相对文件/图片和变化提示已接通；真实页面相对文件/图片、末行引用及授权 HTTP 分页/变化回归通过 | `AttachmentCard`、`ImageGallery`、`FilePreviewProvider/Pane/Tabs`、`SafeMarkdown` | 临时上传→草稿绑定；未知绑定回执；按资源 locator 授权读取/下载/失效；复用 Core 引用交接 | P：浏览器上传/下载替代系统打开/定位；HTML 复用共享交互预览与源码，使用 opaque sandbox；本地多文件站点依赖仍为 G | 未绑定清理、未知绑定不误删、失效提示、越权/路径穿越拒绝；源文件不因发送失败或移除引用误删 |
+| 附件、产物与文件预览 · G/P | source ref、拖放、文件 Tabs、Markdown/代码/图片阅读、系统打开/定位 | source 上传、授权预览/下载、UTF-8 分页、相对文件/图片和变化提示已接通；真实页面相对文件/图片、末行引用及授权 HTTP 分页/变化回归通过 | `AttachmentCard`、`ImageGallery`、`FilePreviewProvider/Pane/Tabs`、`SafeMarkdown` | 临时上传→草稿绑定；未知绑定回执；按资源 locator 授权读取/下载/失效；复用 Core 引用交接 | P：浏览器上传/下载替代系统打开/定位；HTML 复用共享交互预览与源码，使用可信同来源 sandbox 与客户端原生存储；相对资源沿用既有句柄来源能力 | 未绑定清理、未知绑定不误删、失效提示、越权/路径穿越拒绝；源文件不因发送失败或移除引用误删 |
 | 队员/Runtime · G/P | 完整名册、身份表单、原生 Runtime 模型/权限、保存冲突与检查反馈 | 已复用正式名册和 Runtime 表单；浏览器检测/配置、内置肖像与上传/裁剪/保存头像通过 | `MembersView`、`MemberSidebar`、`MemberIdentityEditor`、`MemberRuntimeForm/Parameters` | 成员创建/更新/运行绑定/移除与版本；Runtime 发现/检测/模型目录的安全 DTO | P：在 Host 检测和认证 Runtime；浏览器不能选择自己机器的可执行文件冒充 Host 安装 | 配置后真实创建/发送；检查失败和版本冲突保留编辑；秘密配置不因表单复用而公开 |
 | Task · G | 创建/编辑/指派/状态与验收标准、审计及关联执行 | 正式 TaskPanel 与原授权动作接通；真实浏览器新建/编辑/取消及 Core 读回通过 | `TaskPanel`、`TaskTimelineCard`、任务字段和审计组件 | `tasks.create/update/get/list` 与版本、指派准入、事件刷新 | 无业务差异 | 每项原动作、冲突/失败态、刷新与执行关联；不是“列表有数据”即完成 |
 | Memory · G/P | Library、详情、版本、治理/删除、review 与导出 | 正式 Memory 页面与原查询/变更/review/导出已接入；浏览器新建/修订/停止沿用和读回通过 | `MemoryLibrary` 及内部表单/抽屉 | 原 Memory 查询、变更、review 和导出服务的授权适配 | P：导出下载替代本机保存/定位 | 按原动作逐项验收，含并发变更、scope、错误和刷新 |

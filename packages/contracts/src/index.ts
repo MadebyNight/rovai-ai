@@ -1555,6 +1555,7 @@ export interface ResolvedFilePreview {
   previewKey: string
   restoreRequest?: RestoreFilePreviewRequest
   displayPath: string
+  absolutePath?: string
   pathPresentation: FilePreviewPathPresentation
   fileName: string
   size: number
@@ -1650,7 +1651,7 @@ export interface FilePreviewHtmlSite {
   origin: string
   entryUrl: string
   documentUrl: string
-  /** Browser-only opaque sandbox. Never grant allow-same-origin to this document. */
+  /** Trusted Web HTML bootstrapped at the host origin, sharing native browser storage. */
   sandboxedDocument?: string
   contentGeneration: string
   contentVersion: FileContentVersion
@@ -1732,8 +1733,8 @@ export interface CampTurnView {
 export interface CampTurnExecutionBudgetView {
   schemaVersion: 1
   acceptedAt: string
-  deadlineAt: string
-  elapsedSeconds: number
+  deadlineAt: string | null
+  elapsedSeconds: number | null
   maxAgentRunResponsibilities: number
   maxAcceptedA2a: number
   allocatedAgentRunResponsibilities: number
@@ -2043,11 +2044,11 @@ export interface NativeSessionBootstrapEvidenceView {
 export interface CampAttachmentRefView {
   attachmentId: string
   path: string
-  contentDigest: string
+  contentDigest?: string
 }
 
 export interface RunFactRefView {
-  fact: 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
+  fact: 'attachment_output_root' | 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
   taskId?: string
 }
 
@@ -2101,7 +2102,7 @@ export interface ContextManifestView {
   mcpProjectionDigest: string
   selfActiveTaskEvidence: unknown
   selfActiveTaskEvidenceDigest: string
-  formatterVersion: 22 | 23
+  formatterVersion: 22 | 23 | 24
   renderedPayloadDigest: string
   delivery: RuntimeInputDeliveryView | null
   createdAt: string
@@ -3711,6 +3712,7 @@ export type CoreMethod =
   | 'automations.runs.list'
   | 'automations.create'
   | 'automations.update'
+  | 'automations.configureTimeLimit'
   | 'automations.close'
   | 'automations.delete'
   | 'automations.run'
@@ -3811,6 +3813,7 @@ export type CoreMethod =
   | 'channels.executionConsole.webSnapshot'
   | 'channels.deliveries.settle'
   | 'camp.attachments.desktopOpenTarget'
+  | 'camp.attachments.location'
   | 'app.info'
   | 'camps.creationPreflight'
   | 'workspaces.validate'

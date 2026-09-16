@@ -9,7 +9,7 @@ use tokio::process::Command;
 use crate::{agent_profile::AdapterKind, command::canonical_json_digest};
 
 pub const MINIMUM_VERSION: &str = "0.1.5-rc.2";
-pub const BOOTSTRAP_REVISION: &str = "dsh-system-prompt-v1";
+pub const BOOTSTRAP_REVISION: &str = "dsh-native-mcp-readiness-v2";
 const BOOTSTRAP_PLUGIN: &str = include_str!("dsh/bootstrap.mjs");
 const MAX_OBSERVED_FILE_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -117,6 +117,10 @@ pub fn configure_host(
         // table. ACP has no permission-mode control; this Host's frozen knobs
         // own the policy. Preserve the native settings file untouched.
         {"id":"permission","disabled":true},
+        // DSH's ACP app may accept stdio before sibling Loader entries finish.
+        // The bootstrap publishes this service only after configured native MCP
+        // clients complete their official entry lifecycle.
+        {"id":"acp","inject":["acpAppStartup","rovaiDshReady"]},
         {"insert":[{"id":"rovai-bootstrap","name":plugin_path,"config":{"bindingRoot":binding_root,"observationRoot":observation_root,"mcpServerNames":mcp_server_names}}]}
     ]);
     let patch_path = root.join("rovai.patch.json");
@@ -557,9 +561,13 @@ mod tests {
                 assert_eq!(patch[0]["config"]["mode"], sandbox);
                 assert_eq!(patch[1]["config"]["policy"], approval);
                 assert_eq!(patch[2], json!({"id":"permission","disabled":true}));
-                assert!(patch[3]["insert"][0]["config"].get("readOnly").is_none());
+                assert_eq!(
+                    patch[3],
+                    json!({"id":"acp","inject":["acpAppStartup","rovaiDshReady"]})
+                );
+                assert!(patch[4]["insert"][0]["config"].get("readOnly").is_none());
                 assert!(
-                    patch[3]["insert"][0]["config"]
+                    patch[4]["insert"][0]["config"]
                         .get("approvalPolicy")
                         .is_none()
                 );

@@ -21,15 +21,15 @@ export class HtmlPreviewHostChannel {
     this.#connectionId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join(''); this.#documentId = null; this.#connected = false
     this.#emit({ type: 'connecting' })
     this.frame()?.postMessage({ protocol: 'rovai-html-preview-v1', previewId: this.preview.previewId,
-      generation: this.preview.generation, type: 'connect', connectionId: this.#connectionId }, this.preview.origin === 'null' ? '*' : this.preview.origin)
+      generation: this.preview.generation, type: 'connect', connectionId: this.#connectionId }, this.preview.origin)
   }
   send(type: string, data: Record<string, unknown> = {}): void {
     if (!this.#connected) return
     this.frame()?.postMessage({ ...data, protocol: 'rovai-html-preview-v1', previewId: this.preview.previewId,
-      generation: this.preview.generation, documentId: this.#documentId, connectionId: this.#connectionId, type }, this.preview.origin === 'null' ? '*' : this.preview.origin)
+      generation: this.preview.generation, documentId: this.#documentId, connectionId: this.#connectionId, type }, this.preview.origin)
   }
   attach(host: Window): () => void {
-    if (!validPreviewOrigin(this.preview, host.location.origin)) throw new Error('预览站点未与主应用隔离。')
+    if (!validPreviewOrigin(this.preview, host.location.origin)) throw new Error('预览站点通信来源无效。')
     const receive = (event: MessageEvent<unknown>): void => {
       if (event.source !== this.frame() || event.origin !== this.preview.origin) return
       const data = event.data as Record<string, unknown> | null
@@ -40,7 +40,7 @@ export class HtmlPreviewHostChannel {
         if (this.#initialized) return
         this.#initialized = true
         this.frame()?.postMessage({ protocol: 'rovai-html-preview-v1', type: 'initialize',
-          previewId: this.preview.previewId, generation: this.preview.generation, html: this.preview.sandboxedDocument }, '*')
+          previewId: this.preview.previewId, generation: this.preview.generation, html: this.preview.sandboxedDocument }, this.preview.origin)
         return
       }
       if (data.type === 'hello') { this.connect(); return }
@@ -53,8 +53,8 @@ export class HtmlPreviewHostChannel {
       if (['state', 'diagnostic', 'server-diagnostics', 'find-ready', 'find-invalidated', 'find-open', 'find-close', 'find-document', 'fragment-result', 'reading-position', 'link'].includes(data.type)) this.#emit(data as HtmlPreviewMessage)
     }
     host.addEventListener('message', receive)
-    // Wait for the bridge hello or iframe load; its initial about:blank still
-    // has the host origin and cannot receive a preview-origin challenge.
+    // Wait for the bridge hello or iframe load; the initial about:blank
+    // has no preview document or bridge to authenticate.
     this.#emit({ type: 'connecting' })
     return () => { host.removeEventListener('message', receive); this.#connectionId = ''; this.#connected = false; this.#documentId = null }
   }

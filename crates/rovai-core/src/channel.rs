@@ -10345,6 +10345,36 @@ fn materialize_agent_attachments(
             now,
         )?;
     }
+    let sources: String = transaction.query_row(
+        "SELECT source_attachments_json FROM camp_message WHERE id = ?1 AND camp_id = ?2",
+        params![message_id, camp_id],
+        |row| row.get(0),
+    )?;
+    for (ordinal, source) in crate::local_attachment_source::parse_source_attachments(&sources)?
+        .into_iter()
+        .enumerate()
+    {
+        if source.kind != crate::local_attachment_source::LocalAttachmentKind::File {
+            continue;
+        }
+        insert_attachment_delivery(
+            transaction,
+            request_id,
+            &format!("agent_attachment:{message_id}:{ordinal}:{}", source.id),
+            target_app_id,
+            agent_id,
+            message_id,
+            ordinal as i64,
+            &json!({
+                "kind": "agent_attachment", "sourceCampMessageId": message_id, "sourceAgentId": agent_id,
+                "campId": camp_id, "attachmentId": source.id, "ordinal": ordinal,
+                "attachmentKind": if source.media_type.as_deref().is_some_and(|mime| mime.starts_with("image/")) { "image" } else { "file" },
+                "fileName": source.display_name, "mediaType": source.media_type,
+                "storage": "source_ref", "requiresBodyDelivery": requires_body_delivery,
+            }),
+            now,
+        )?;
+    }
     Ok(())
 }
 

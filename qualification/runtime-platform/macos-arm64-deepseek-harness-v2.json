@@ -45,6 +45,11 @@
       "result": "passed",
       "detail": "Whole-definition projection, Host update/fencing, exact Session resume, adjacent assignment isolation, unassign/reassign/delete and native definition restoration passed with the real DSH/Core protocol path and a deterministic model provider."
     },
+    "nativeMcpStartup": {
+      "result": "passed",
+      "detail": "DSH 0.1.5-rc.2 may expose ACP stdio before a sibling native MCP Loader entry finishes. The managed ACP entry now waits on a Bootstrap readiness service published after the official MCP entry lifecycle settles; no fixed delay or prompt replay is used. The pre-fix zero-delay diagnostic failed 5/30, the post-fix diagnostic passed 30/30, and the full projection lifecycle passed.",
+      "toolRegistryEvent": "tools/change"
+    },
     "genericToolAndDiff": {
       "result": "passed",
       "detail": "Known DSH tools map at ingress to shared execute/read/write/edit/file-search/web-search/fetch/tool semantics. The official tools/result observer contributes only exact structured facts. Complete write/edit Before/After becomes a standard ACP terminal Diff; missing, unchanged or oversized state remains path-only.",
@@ -60,30 +65,30 @@
       "detail": "Desktop and Mobile share the same native permission selector and incompatible-version projection. Unsupported DSH reports a minimum of 0.1.5-rc.2. No DSH-specific Command, file-change or Diff UI was introduced."
     },
     "regression": {
-      "rustLibraryFunctional": "812 passed; 6 existing manual Runtime smokes ignored; the pre-seal run's only failure was the expected stale documentation digest gate",
+      "rustLibraryFunctional": "816 passed; 6 existing manual Runtime smokes ignored; 0 failed after integration with current main",
       "postSealEvidenceDigestOwner": "passed",
       "rendererFocused": "2 files, 55 tests passed",
       "typecheck": "passed",
-      "nodeObserver": "1 passed",
-      "scriptedMcpProjection": "passed",
-      "realProviderFileOperationMatrix": "passed",
+      "nodeObserver": "2 passed",
+      "scriptedMcpProjection": "passed, including native MCP startup readiness and the complete replacement/isolation lifecycle",
+      "realProviderFileOperationMatrix": "passed with byte-exact fail-closed content assertions",
       "rustfmt": "passed",
       "documentationGovernance": "passed"
     }
   },
   "evidenceSourceSha256": {
     "qualification/runtime-platform/macos-arm64-deepseek-harness-v1.json": "1ffbc11ca99a2430212153bea02b6982ba03df9952ad299c66c99a2cf94c14c5",
-    "docs/research/deepseek-harness-runtime/acp-0.1.5-convergence-evidence.json": "9850b3b043c09f603e28be5e38679b40c5d502ded34b47a3a74a64e1a07d2ef4"
+    "docs/research/deepseek-harness-runtime/acp-0.1.5-convergence-evidence.json": "a12a0d461d62fde1dd3a2ec86da4c07ba757c64ae9c72c440cab8519b67ee80a"
   },
   "implementationSourceSha256": {
-    "crates/rovai-core/src/dsh.rs": "c40c50dbaf670bff44abb760d98e54360e4a62946242a4d2262858ee3bb3894b",
-    "crates/rovai-core/src/dsh/bootstrap.mjs": "5bfb8e386c73d920ab15c63f649f741184cedcacda825f6f17aafc9ac7374e43",
-    "crates/rovai-core/src/acp.rs": "eb0f154b8e26e45440550a964d714c47b24f4afd8ac1991bc24c51aa29e58f20",
+    "crates/rovai-core/src/dsh.rs": "22b5b29749e81e913199fca1c07cf8bf2541987d7609eacb4f37b9867d6c4570",
+    "crates/rovai-core/src/dsh/bootstrap.mjs": "f1907f9d9f0e5bb54a2edfaae00e89de78598b80abc1e202f323b5410f0d05bb",
+    "crates/rovai-core/src/acp.rs": "c943218606b488afa58fa48433cdd7d9ab1b676e24505758d8198b2ae8ce54bb",
     "crates/rovai-core/src/runtime_fleet.rs": "5746d717ae66e52b2a9963665e02f80625e73be857d31a09901cb4ba9dca0f4b",
     "crates/rovai-core/src/agent_runtime_adapter.rs": "7fb53c50619e55d654bef6714bbcb3c7412514c9a577d17feaf024cb49afd776",
-    "scripts/lib/dsh-host.test.mjs": "1a02ecd90c3e6ea8211c87f71646b6c5b793aae45bc97df13da7845ee4467568",
+    "scripts/lib/dsh-host.test.mjs": "3dd0e38e7648be9e40728283bed6ce2055b4b985ada8342f409cfe3f56e44330",
     "scripts/smoke-mcp-projection.mjs": "42d1eccf5e3810092d5967a175a90473770e0c41f74864f78f0620443be8693d",
-    "scripts/smoke-acp-runtime.mjs": "836c07acbc7bd2ac7a33014bb8cb05751a1d3f9ad4d6a4934f20a738675f9652",
+    "scripts/smoke-acp-runtime.mjs": "883ee0f20b88dd087b3804bb2d8464e6397cfb0a588429879158ee2c2d9da58c",
     "apps/desktop/src/renderer/src/MemberRuntimeParameters.tsx": "b915a9cfad4c0544c92659e41b828439ca5816b0fb0be4bcdd09b1118d501abf",
     "apps/desktop/src/renderer/src/RuntimeParameterSelect.tsx": "fa1b4b63396807d8d92b5f842b47212078730d99d8e23671c9631a500e2bb59b",
     "apps/desktop/src/renderer/src/runtime-status.ts": "e5d3067cc3abe91a4118b94de88389360a4c1627c4baf53df1f1d120bd86f000"
@@ -98,7 +103,7 @@
   "qualificationBasis": {
     "type": "incremental-target-host-golden-flows",
     "decision": "The v1 14-axis qualification remains the stable base; this v2 artifact binds the 2026-09-16 native-authority, Host-lock and common-Diff convergence without expanding platform scope.",
-    "versionDecision": "docs/versions/v1.59/decisions.md#v1-59-d08"
+    "versionDecision": "docs/versions/v1.59/decisions.md#v1-59-d10"
   },
   "notQualified": [
     {

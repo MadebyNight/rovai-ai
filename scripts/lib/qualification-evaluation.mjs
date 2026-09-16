@@ -1263,10 +1263,9 @@ export function inspectFrozenExecutionBudget(value, contract) {
   }
   const acceptedAtMs = Date.parse(budget.acceptedAt)
   const deadlineAtMs = Date.parse(budget.deadlineAt)
-  if (budget.schemaVersion !== 1
+  const unbounded = budget.schemaVersion === 2 && budget.deadlineAt === null && budget.elapsedSeconds === null
+  if (!(unbounded || budget.schemaVersion === 1 && Number.isFinite(deadlineAtMs) && Number.isInteger(budget.elapsedSeconds) && budget.elapsedSeconds > 0)
       || !Number.isFinite(acceptedAtMs)
-      || !Number.isFinite(deadlineAtMs)
-      || !Number.isInteger(budget.elapsedSeconds)
       || !Number.isInteger(budget.maxAgentRunResponsibilities)
       || !Number.isInteger(budget.maxAcceptedA2a)
       || !Number.isInteger(budget.rootAgentRunResponsibilities)) {

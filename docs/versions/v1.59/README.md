@@ -5,7 +5,7 @@ lifecycle: current
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
-model_context_change: false
+model_context_change: true
 last_updated: 2026-09-16
 ---
 
@@ -79,10 +79,42 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 
 2026-09-15 用户授权在独立 worktree 按 Runtime checklist 接入 dsh 0.1.5-rc.2。新增 `deepseek-harness` 与
 `dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 的 14 轴验收闭合并取得独立 digest-bound qualified，其他平台未取得资格。
-Migration 155 扩充闭集，当前 v1.59/schema 105；保留 schema 104 原位升级及此前受支持来源。
+Migration 157 扩充闭集，当前 v1.59/schema 107；保留 schema 106 原位升级及此前受支持来源。
 Bootstrap 使用已有 managed delivery，模型可见内容、Context/Manifest 与版本轴不变。
 2026-09-16 进一步收敛到 Runtime 通用架构：DSH 原生 `sandbox_mode`/`approval_policy` 从队员页到 Host 原样传递，
 Core 不为 MCP 合成第二层安全策略；配置变化时 shared Fleet 先确认旧 Host 释放 Session 锁，busy Run 正常结束后
 再 replacement；官方 write/edit Before/After 只被翻译成标准 ACP terminal Diff，缺失时保持路径级回退。
+ACP 启动额外等待已配置的原生 MCP Loader entry 完成，避免 0.1.5-rc.2 提前开放 stdio 时首轮工具表缺项；
+该门闩使用原生 lifecycle，不采用固定延时或 prompt 重试。
 Desktop 与 Mobile 共用原生权限文案和“需要 0.1.5-rc.2 或更高版本”的不兼容提示。
-决策见 [V1.59-D08](decisions.md#v1-59-d08)，逐项执行证据与上游差异见 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。
+决策见 [V1.59-D10](decisions.md#v1-59-d10)，逐项执行证据与上游差异见 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。
+
+## Weekly 无时间上限增量
+
+2026-09-15 用户要求取消 Weekly 时间预算，并授权独立分支实现、验证、PR 合入 main 后安装。
+新增显式 null 时间策略贯通构建、执行、Judge、宿主、等待器和指定 Automation；普通任务及旧计划保持。
+Migration 155/schema 105 原位保存定义策略，保留历史执行与模型输入；无需新增 Context 版本或二次上下文确认。
+当前合同为 [Execution Evaluation v15](../../contracts/execution-evaluation-v15.md)、
+[Scheduled Automation v2](../../contracts/scheduled-automation-v2.md)及 [User Automation v6](../../contracts/user-automation-v6.md)。
+架构与开发路由同步到当前合同。UI、Runtime Activity、平台兼容资格和根 README 无需改变；这次是显式执行
+策略修正，不增加独立长期决策。验证记录见[实施计划](implementation-plan.md#weekly-无时间上限)。
+真实 Weekly 结果仍须安装新 App、Owner 绑定后实际运行证明，不以设施测试替代。
+
+## Agent 附件原路径引用增量
+
+用户在 2026-09-16 审阅 revision 1 后给出最终修订：所有新增 Agent 附件原地登记，取消复制、
+链接、staging、预分配、外部请求编号和双根模型上下文。默认永久输出目录只用于生成最终交付，
+Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位置，外部/跨 Camp 源只保留引用语义。
+[已确认 revision 2](model-context-change-editable-attachments.md)记录精确字段与确认消息，
+[实施计划](editable-attachments-implementation.md)保留原 worktree 与 PR/main 合并交付顺序。
+当前在原 worktree 实施并验证；Migration 156/schema 106 保留旧记录，新增 Formatter/Manifest 24、Run Facts 3、CLI 25/Output 3。
+当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v24](../../contracts/context-manifest-evidence-v24.md)、
+[File Preview v15](../../contracts/file-preview-v15.md)；理由见 [V1.59-D08](decisions.md#v1-59-d08)。
+运行活动分类、平台资格、根 README 无需变化；不能由方案确认推断 Gate 或 PR 已完成。
+
+## Web HTML 原生存储兼容增量
+
+2026-09-16 用户确认可信 HTML 的同来源预览策略，Desktop 托管 Web 与独立 Server Web 复用统一 Rust 实现。
+原生存储归访问设备的浏览器，允许表单、新窗口和原生弹窗；接受同来源工作台及登录材料可被附件访问的取舍。
+当前权威与范围见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，理由见
+[V1.59-D09](decisions.md#v1-59-d09)。不修改 Desktop 原生预览、HTML 源文件或资源加载，不新增存储/预览服务。

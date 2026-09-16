@@ -381,7 +381,9 @@ async function runTrial(options, registerCleanup) {
       wallTimeMs: Date.now(),
       monotonicMs: performance.now()
     }
-    const caseBudget = caseRecord.contract.manifest.budget
+    const caseBudget = regression && Object.hasOwn(regression, 'timeLimit')
+      ? { ...caseRecord.contract.manifest.budget, elapsedSeconds: null }
+      : caseRecord.contract.manifest.budget
     const dispatchResponse = await dispatchQualificationPrompt(core.request, {
       commandId,
       campId,
@@ -955,6 +957,7 @@ async function runTrial(options, registerCleanup) {
     dispatchBoundary,
     budget: {
       contract: caseRecord.contract.manifest.budget,
+      timeLimit: regression && Object.hasOwn(regression, 'timeLimit') ? null : caseRecord.contract.manifest.budget.elapsedSeconds,
       frozen: dispatchBoundary?.executionBudget ?? null,
       event: budgetEvent,
       watchdogEvent: budgetWatchdogEvent,
@@ -1282,7 +1285,7 @@ async function observeTrial({
     if (!integrityIssues.some((issue) => issue.code === code)) integrityIssues.push({ code, detail })
   }
   const clockToleranceMs = 2_000
-  const fallbackDeadlineMonotonic = runnerClockAnchor.monotonicMs + budget.elapsedSeconds * 1000
+  const fallbackDeadlineMonotonic = budget.elapsedSeconds === null ? Infinity : runnerClockAnchor.monotonicMs + budget.elapsedSeconds * 1000
   const frozenDeadlineMs = Date.parse(frozenBudget?.deadlineAt)
   const runnerDeadlineMonotonic = Number.isFinite(frozenDeadlineMs)
     ? runnerClockAnchor.monotonicMs + (frozenDeadlineMs - runnerClockAnchor.wallTimeMs)

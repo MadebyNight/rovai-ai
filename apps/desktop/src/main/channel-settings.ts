@@ -2361,13 +2361,15 @@ export class ChannelSettingsService {
         const attachmentId = requiredPayloadString(delivery.payload, 'attachmentId')
         const target = await this.#dependencies!.core.request<DesktopAttachmentTarget | null>(
           'camp.attachments.desktopOpenTarget',
-          { campId, attachmentId }
+          delivery.payload.storage === 'source_ref'
+            ? { owner: 'message', campId, attachmentRefId: attachmentId, messageId: requiredPayloadString(delivery.payload, 'sourceCampMessageId') }
+            : { campId, attachmentId }
         )
         if (!target || target.kind !== 'file' || target.attachmentId !== attachmentId) {
           throw new Error('channel_attachment_unavailable')
         }
         const bytes = await readFile(target.path)
-        verifyAttachmentBytes(delivery.payload, bytes)
+        if (delivery.payload.storage !== 'source_ref') verifyAttachmentBytes(delivery.payload, bytes)
         const sent = delivery.payload.attachmentKind === 'image'
           ? await managed.channel.send(delivery.chatId, { image: { source: bytes } }, replyOptions)
           : await managed.channel.send(delivery.chatId, {

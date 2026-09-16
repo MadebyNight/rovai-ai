@@ -180,6 +180,11 @@ test('frozen Core budget preserves the sealed Case projection and exact deadline
     budget: frozen,
     issues: []
   })
+  const unbounded = { ...frozen, schemaVersion: 2, deadlineAt: null, elapsedSeconds: null }
+  assert.deepEqual(inspectFrozenExecutionBudget(unbounded, { ...contract, elapsedSeconds: null }), { budget: unbounded, issues: [] })
+  for (const invalid of [{ ...unbounded, schemaVersion: 1 }, { ...unbounded, elapsedSeconds: 0 }, { ...unbounded, deadlineAt: frozen.deadlineAt }]) {
+    assert.ok(inspectFrozenExecutionBudget(invalid, { ...contract, elapsedSeconds: null }).issues.some(issue => issue.code === 'execution_budget.frozen_contract_invalid'))
+  }
   const mismatch = inspectFrozenExecutionBudget({
     ...frozen,
     deadlineAt: '2026-08-03T00:14:59.000Z',

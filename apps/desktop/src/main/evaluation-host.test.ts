@@ -35,11 +35,21 @@ export async function runPlan(planFile, directory) {
 }
 `)
   let automation = { automationId: 'automation-1', version: 1, enabled: true, schedule: { kind: 'once' }, projectRef: { kind: 'directory', path: workspace } } as AutomationView
+  let timeoutSeconds: number | null = 3600
   let runs: unknown[] = []
   const calls: string[] = []
   const service = new EvaluationHostService(join(root, 'owner'), { async request<T>(method: CoreMethod, params?: unknown): Promise<T> {
     calls.push(method)
     if (method === 'automations.get') return automation as T
+    if (method === 'automations.configureTimeLimit') {
+      const command = (params as { command: { expectedVersion: number; timeoutSeconds: number | null } }).command
+      expect(command.expectedVersion).toBe(automation.version)
+      if (timeoutSeconds !== command.timeoutSeconds) {
+        timeoutSeconds = command.timeoutSeconds
+        automation = { ...automation, version: automation.version + 1 }
+      }
+      return { status: 'applied', payload: { automationVersion: automation.version, timeoutSeconds: command.timeoutSeconds } } as T
+    }
     if (method === 'automations.runs.list') {
       const limit = (params as { limit: number }).limit
       if (limit < 1 || limit > 50) throw new Error('Automation history limit must be between 1 and 50')
@@ -83,9 +93,12 @@ it('binds an existing Automation and consumes each accepted run once, exposing o
   const f = await fixture()
   try {
     await f.service.configure({ source: f.source, node: process.execPath })
-    const plan = await f.plan(), output = join(f.workspace, 'reports')
+    const plan = await f.plan('weekly', { budget: { wallSeconds: null }, execution: { judgeSeconds: null } }), output = join(f.workspace, 'reports')
     await expect(f.service.schedule({ automationId: 'automation-1', plan, output: join(f.root, 'outside') })).rejects.toThrow('inside')
-    await f.service.schedule({ automationId: 'automation-1', plan, output })
+    const binding = await f.service.schedule({ automationId: 'automation-1', plan, output })
+    expect(binding.timeoutSeconds).toBeNull()
+    expect(binding.automationVersion).toBe(2)
+    expect(f.calls).toContain('automations.configureTimeLimit')
     const now = new Date(Date.now() + 1000)
     f.setRuns([{ runId: 'auto-run-1', campId: 'camp-1', status: 'running', createdAt: now.toISOString() }])
     f.consumeOnce() // Core consumes once schedules without an owner version change.
@@ -108,7 +121,7 @@ it('stops the actual worker and its detached descendant on cancellation, retaini
   try {
     await f.service.configure({ source: f.source, node: process.execPath })
     const output = join(f.workspace, 'long')
-    await f.service.start({ jobId: 'cancel-1', plan: await f.plan('gate', { pause: true }), output }, 'gate')
+    await f.service.start({ jobId: 'cancel-1', plan: await f.plan('weekly', { pause: true, budget: { wallSeconds: null }, execution: { judgeSeconds: null } }), output }, 'weekly')
     await expect.poll(async () => readFile(join(output, 'fixture-child.pid'), 'utf8').catch(() => null)).not.toBeNull()
     const pid = Number(await readFile(join(output, 'fixture-child.pid'), 'utf8'))
     await f.service.cancel({ jobId: 'cancel-1' })
