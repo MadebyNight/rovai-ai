@@ -814,57 +814,6 @@ pub async fn attachment(
     result.unwrap_or_else(|_| error(StatusCode::NOT_FOUND, "attachment_unavailable"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    // Owns UTF-8/byte offsets at the new HTTP paging seam. The Desktop reader
-    // cannot exercise this Rust boundary; no database or real file is needed.
-    #[test]
-    fn page_boundaries_preserve_scalars_and_progress() {
-        let base = std::env::temp_dir().join("workspace");
-        for reference in ["./a%20b.md#L3", "./a%20b.md:3:2", "`./a%20b.md:3-5`"] {
-            assert_eq!(
-                reference_path(reference, &base).unwrap(),
-                base.join("a b.md")
-            );
-        }
-        let uri = url::Url::from_file_path(base.join("a b.md")).unwrap();
-        assert_eq!(
-            reference_path(uri.as_str(), &base).unwrap(),
-            base.join("a b.md")
-        );
-        #[cfg(windows)]
-        {
-            for reference in [
-                r"C:\external\a%20b.md:3:2",
-                "C:/external/a%20b.md#L3",
-                "file:///C:/external/a%20b.md",
-            ] {
-                assert_eq!(
-                    reference_path(reference, &base).unwrap(),
-                    PathBuf::from(r"C:\external\a b.md")
-                );
-            }
-            assert_eq!(
-                reference_path(r"C:\external\a%2520b.md", &base).unwrap(),
-                PathBuf::from(r"C:\external\a%20b.md")
-            );
-            assert!(reference_path(r"\\remote\share\a.md", &base).is_err());
-            assert!(reference_path("C:relative.md", &base).is_err());
-        }
-        assert!(reference_path("https://example.com/a.md", &base).is_err());
-        assert!(reference_path("file://example.com/a.md", &base).is_err());
-        let text = "a你好\n🌸z";
-        assert_eq!(page_range(text, 0, 3).unwrap(), (0, 1));
-        assert_eq!(page_range(text, 1, 1).unwrap(), (1, 4));
-        assert_eq!(page_range(text, 7, 3).unwrap(), (7, 8));
-        assert_eq!(page_range(text, 8, 1).unwrap(), (8, 12));
-        assert_eq!(page_range(text, 13, 1).unwrap(), (13, 13));
-        assert!(page_range(text, 2, 5).is_err());
-        assert!(page_range(text, u64::MAX, 1).is_err());
-    }
-}
-
 // A sandbox document receives only this handle-scoped resource capability. It
 // cannot use the editing Session or turn a path into a new file capability.
 pub async fn preview_asset(
@@ -960,4 +909,55 @@ pub async fn preview_asset(
     }
     .await;
     result.unwrap_or_else(|_| error(StatusCode::NOT_FOUND, "preview_resource_unavailable"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Owns UTF-8/byte offsets at the new HTTP paging seam. The Desktop reader
+    // cannot exercise this Rust boundary; no database or real file is needed.
+    #[test]
+    fn page_boundaries_preserve_scalars_and_progress() {
+        let base = std::env::temp_dir().join("workspace");
+        for reference in ["./a%20b.md#L3", "./a%20b.md:3:2", "`./a%20b.md:3-5`"] {
+            assert_eq!(
+                reference_path(reference, &base).unwrap(),
+                base.join("a b.md")
+            );
+        }
+        let uri = url::Url::from_file_path(base.join("a b.md")).unwrap();
+        assert_eq!(
+            reference_path(uri.as_str(), &base).unwrap(),
+            base.join("a b.md")
+        );
+        #[cfg(windows)]
+        {
+            for reference in [
+                r"C:\external\a%20b.md:3:2",
+                "C:/external/a%20b.md#L3",
+                "file:///C:/external/a%20b.md",
+            ] {
+                assert_eq!(
+                    reference_path(reference, &base).unwrap(),
+                    PathBuf::from(r"C:\external\a b.md")
+                );
+            }
+            assert_eq!(
+                reference_path(r"C:\external\a%2520b.md", &base).unwrap(),
+                PathBuf::from(r"C:\external\a%20b.md")
+            );
+            assert!(reference_path(r"\\remote\share\a.md", &base).is_err());
+            assert!(reference_path("C:relative.md", &base).is_err());
+        }
+        assert!(reference_path("https://example.com/a.md", &base).is_err());
+        assert!(reference_path("file://example.com/a.md", &base).is_err());
+        let text = "a你好\n🌸z";
+        assert_eq!(page_range(text, 0, 3).unwrap(), (0, 1));
+        assert_eq!(page_range(text, 1, 1).unwrap(), (1, 4));
+        assert_eq!(page_range(text, 7, 3).unwrap(), (7, 8));
+        assert_eq!(page_range(text, 8, 1).unwrap(), (8, 12));
+        assert_eq!(page_range(text, 13, 1).unwrap(), (13, 13));
+        assert!(page_range(text, 2, 5).is_err());
+        assert!(page_range(text, u64::MAX, 1).is_err());
+    }
 }

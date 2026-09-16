@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: unified-rust-host
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # 统一 Rust Host
@@ -124,7 +124,8 @@ Ubuntu 24.04 必须安装和运行同一份归档，记录其 source SHA、manif
 Server OS（Gate A）与 Runtime（Gate B）分别保存资格：前者证明安装、Web、持久化、互斥和受控停止；
 后者由每个 Adapter 的实际认证、执行、权限、内置工具和恢复证据拥有。OS 通过不得自动开放其他 Runtime。
 Linux 适配范围经维护者扩大为现有 Runtime 中除 Cursor 之外的 14 项，当前均仅开放有缺失理由的 preview；
-后续新增的 DeepSeek Harness 不属于该 Linux preview 范围。未来 Adapter 不自动纳入。完整资格和机器上的安装/认证可用性仍为独立事实。
+后续新增的 DeepSeek Harness 不属于该 Linux preview 范围，并在独立闭合目标主机证据后取得 Linux x64 qualified。
+未来 Adapter 不自动纳入。完整资格和机器上的安装/认证可用性仍为独立事实。
 后续发行版属于兼容目标，实际支持范围随验收证据推进；不承诺 Debian 11、Alpine/musl 或 Linux ARM64。
 Linux Desktop、额外 CPU 架构、三平台一键服务安装器不在本轮。
 同版 Host/Web 配对发布，数据库升级与回退遵守 authority 准入，不能用旧程序打开新 schema。

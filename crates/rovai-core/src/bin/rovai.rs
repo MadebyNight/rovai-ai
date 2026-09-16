@@ -2292,7 +2292,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_help_surface_covers_all_twenty_three_operations_and_no_family_aliases() {
+    fn exact_help_surface_covers_the_current_catalog_and_no_family_aliases() {
         let exact_paths: &[&[&str]] = &[
             &["send", "--help"],
             &["gather", "--help"],

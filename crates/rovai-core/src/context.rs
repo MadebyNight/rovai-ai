@@ -6052,10 +6052,10 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !matches!(row.15, 22 | 23 | 24) {
+    if !matches!(row.15, 22..=24) {
         anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
     }
-    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22 | 23 | 24) {
+    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22..=24) {
         anyhow::bail!("Gather completion requires a Gather-capable context formatter");
     }
     if row.31 != AGENT_MESSAGE_PROJECTION_AUDIENCE {
@@ -6302,7 +6302,7 @@ fn validate_frozen_view_receipt(
     let version = selection
         .get("contextManifestVersion")
         .and_then(Value::as_i64);
-    if !matches!(version, Some(22 | 23 | 24))
+    if !matches!(version, Some(22..=24))
         || selection.get("runFactsSchemaVersion")
             != Some(&json!(if version == Some(24) { 3 } else { 2 }))
     {
