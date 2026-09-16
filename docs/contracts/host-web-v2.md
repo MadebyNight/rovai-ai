@@ -5,7 +5,7 @@ authority: shared-host-web-transport
 status: accepted
 version: 2
 source_version: v1.59
-last_updated: 2026-09-14
+last_updated: 2026-09-16
 ---
 
 # Host Web v2
@@ -245,11 +245,19 @@ octet-stream response with an encoded original filename; credentials never enter
 The resource adapter supports bounded UTF-8 text/Markdown, PNG/JPEG/WebP and interactive HTML/HTM documents.
 HTML uses the shared viewer and diagnostic/find bridge. Its bytes are read by authenticated POST `readHtml`, with
 exact-source reauthorization, editor ownership, content-generation validation and the existing 20 MiB read bound.
-A credential-free static `/preview.html` receives only those document bytes through a parent/window/generation-bound
-message channel. Both the response CSP and iframe enforce `sandbox allow-scripts`, without `allow-same-origin`;
-HTML cannot access the Host page, its sessionStorage or authenticated transport. Only this static shell permits
-inline author scripts; the main WebUI retains its stricter CSP. No management Token, Bearer, editor proof or file
-handle enters the preview URL or document. Closing the file destroys its iframe; reopening/refresh reads and
+The static `/preview.html` receives those document bytes through a channel bound to the actual HTTP(S) origin,
+parent/source window, preview ID and generation. Connection challenges and document IDs continue fencing messages;
+bootstrap, commands and diagnostics use the actual target origin, never the opaque `null` origin or wildcard.
+Both the response CSP and iframe use `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"`.
+Only this preview response permits `form-action http: https:` and inline author scripts; the workspace/API CSP stays
+unchanged. No top-navigation or popup-escape permission is added. Desktop-hosted Web and standalone Server Web
+use the same Rust implementation; native Desktop preview and local CSS/JS resource loading are unchanged.
+This accepts trusted HTML sharing the Host page's origin: attachments may access the parent and same-origin login
+materials, and do not have per-attachment storage isolation. localStorage and sessionStorage are the visiting
+browser's native storage, with normal origin/tab lifetimes; no storage shim, capability detection, Server data-dir
+write or original HTML modification is introduced. The bootstrap does not explicitly include management Token,
+Bearer, editor proof or file handles in the preview URL or document; this is not a credential-isolation guarantee.
+Closing the file destroys its iframe; reopening/refresh reads and
 reauthorizes the source again. Source mode reads the original document, never injected bridge code (up to 4 MiB
 whole HTML source, otherwise the existing paged reader). The current Web adapter supports self-contained HTML
 and HTTP(S) dependencies; it does not serve a Host directory as a multi-file website or proxy local relative assets.

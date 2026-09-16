@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.59
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # v1.59 版本决定
@@ -96,6 +96,8 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 <a id="v1-59-d04"></a>
 ## V1.59-D04：Web HTML 附件使用共享查看器与不透明源沙箱
 
+不透明源与存储隔离部分已由 [V1.59-D08](#v1-59-d08)取代；保留下述原始理由用于追溯。
+
 - 状态：accepted
 - 日期：2026-09-13
 - 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md)、[文件查看器](../../ui/components/file-preview.md)
@@ -162,3 +164,20 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 
 逻辑句柄满额先回收后台可重建资源；刷新以独立候选准备、成功显示后替换，避免旧正文配新句柄或先拆旧站点。
 新旧共存也计容量，无安全空间就保留旧版本并报告失败。不采用无限扩容或通用事务框架。
+
+
+<a id="v1-59-d08"></a>
+## V1.59-D08：可信 Web HTML 使用同来源原生浏览器能力
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)、[文件查看器](../../ui/components/file-preview.md)
+
+D04 的不透明来源使作者初始化代码读取 localStorage 即抛 SecurityError，本机和手机均不能通过重试恢复。
+用户明确选择可信 HTML 下的可用性：iframe 与预览响应同步开放脚本、来源、表单、新窗口和原生弹窗，消息桥改用
+实际来源并保留窗口与预览身份匹配；不扩大工作台/API 策略或增加顶层导航权限。
+
+代价是附件可以访问同来源主页面及登录材料，不再提供来源或每附件存储隔离。Storage 归访问设备浏览器，
+不写入 Server 数据根、不修改源 HTML。这替代 D04 的隔离保证；共享 Viewer、认证源读取及统一 Rust Host 保留。
+不选择 Storage 模拟或按附件能力检测，因为它们不能提供完整原生行为并增加状态系统；也不建立独立预览服务器，
+避免增加远程部署入口和生命周期。Desktop 原生预览与 CSS/JS 资源加载均不扩入本轮。

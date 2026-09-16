@@ -5,7 +5,7 @@ version: 14
 status: accepted
 authority: desktop-file-preview-wire
 source_version: v1.59
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # File Preview v14
@@ -30,7 +30,7 @@ last_updated: 2026-09-15
 ```
 
 宿主只接收当前已认证根文档的状态；断开或恢复不修改页面通信、已确认文档状态、焦点或 iframe。
-无 HTTP 诊断流的 Web 不透明源预览不启动连接，也不因缺少该流显示故障。
+无 HTTP 诊断流的 Web 静态壳预览不启动连接，也不因缺少该流显示故障。
 HTTP 断流不再发送含糊的 `channel-unavailable`，不写入永久问题列表；恢复清除对应暂态故障，保留真实脚本和资源错误。
 辅助故障仅进入默认折叠的中性详情，文案与呈现见[文件预览区](../ui/components/file-preview.md#html-运行反馈)。
 

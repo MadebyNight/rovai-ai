@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: unified-rust-host
-last_updated: 2026-09-14
+last_updated: 2026-09-16
 ---
 
 # 统一 Rust Host
@@ -99,7 +99,15 @@ Agent Managed 与 legacy 机制不变，不建对象存储、附件目录库或�
 复用当前客户端的有界 File 缓存；刷新、内容变化或缓存淘汰恢复 Host 读取。空句柄不启动文件更新轮询。
 静态服务只挂应用构建产物。长期缓存只准入构建清单中带内容哈希且字节校验相符的文件，入口及私有响应仍不缓存。
 具体字段和边界由 [Host Web v2](../contracts/host-web-v2.md#workspaces-uploads-and-resources) 拥有。
-HTML/HTM 附件复用共享交互查看器，由认证 POST 读取后交给无凭据静态预览壳；响应 CSP 与 iframe 均采用不含 `allow-same-origin` 的 `sandbox allow-scripts`，隔离主页面和 Session 存储。Web 当前支持单文件 HTML 与 HTTP(S) 依赖，本地多文件站点资源尚未接通；源码模式保留原稿。SVG 独立文件仍以文本或下载处理。精确读取和消息通道边界见 [Host Web v2](../contracts/host-web-v2.md)。
+HTML/HTM 附件复用共享交互查看器，由认证 POST 读取后交给同来源静态预览壳。Desktop 托管 Web 和独立
+Server Web 共用该 Rust 路径；响应 CSP 与 iframe 均采用
+`sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"`，仅预览响应允许 HTTP(S)
+表单提交，工作台与 API 的策略保持不变，不增加顶层导航权限。
+可信 HTML 可以访问同来源主页面及登录材料，不再承诺附件与工作台隔离，也不提供每份附件独享的存储。
+localStorage/sessionStorage 由访问设备的浏览器原生管理，遵循来源及标签页作用域，不写 Server 数据根、不修改
+原 HTML，也不模拟或检测 Storage。消息通道使用实际来源，继续匹配发送窗口、预览 ID、generation、challenge
+和 document。Web 当前支持单文件 HTML 与 HTTP(S) 依赖，本地多文件站点资源尚未接通；源码模式保留原稿。
+Desktop 原生不同源预览不变，SVG 独立文件仍以文本或下载处理。精确边界见 [Host Web v2](../contracts/host-web-v2.md)。
 
 ## 命令、事件与兼容性
 

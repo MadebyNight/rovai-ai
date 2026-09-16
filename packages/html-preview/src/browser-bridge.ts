@@ -19,6 +19,7 @@ export interface PreviewBridgeConfig {
 export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: typeof createFileFindDomIndex, parseDiagnostic: typeof parseHtmlPreviewDiagnostic): void {
   const protocol = 'rovai-html-preview-v1'
   const nativePost = window.postMessage
+  // Native Desktop can host from file: (opaque parent); Web always uses its actual HTTP(S) origin.
   const post = (target: Window, origin: string, data: unknown): void => nativePost.call(target, data, { targetOrigin: origin === 'null' ? '*' : origin })
   const sendRaw = (target: Window, origin: string, type: string, data: Record<string, unknown> = {}): void => post(target, origin, {
     protocol, previewId: config.previewId, generation: config.generation, documentId: config.documentId, type, ...data
@@ -209,7 +210,7 @@ export function previewBrowserBridge(config: PreviewBridgeConfig, createIndex: t
   else ready()
   // Parent challenges the actual current WindowProxy. A late old-document hello
   // cannot establish a connection or contribute diagnostics to a new document.
-  sendRaw(parent, '*', 'hello')
+  sendRaw(parent, config.browserDocument ? config.hostOrigin : '*', 'hello')
   if (config.documentError) report('document', config.documentError, config.documentUrl)
   let serverDiagnosticsStarted = false
   function startServerDiagnostics(): void {

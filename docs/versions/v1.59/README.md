@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: false
-last_updated: 2026-09-14
+last_updated: 2026-09-16
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -85,3 +85,11 @@ Migration 155/schema 105 原位保存定义策略，保留历史执行与模型�
 架构与开发路由同步到当前合同。UI、Runtime Activity、平台兼容资格和根 README 无需改变；这次是显式执行
 策略修正，不增加独立长期决策。验证记录见[实施计划](implementation-plan.md#weekly-无时间上限)。
 真实 Weekly 结果仍须安装新 App、Owner 绑定后实际运行证明，不以设施测试替代。
+
+
+## Web HTML 原生存储兼容增量
+
+2026-09-16 用户确认可信 HTML 的同来源预览策略，Desktop 托管 Web 与独立 Server Web 复用统一 Rust 实现。
+原生存储归访问设备的浏览器，允许表单、新窗口和原生弹窗；接受同来源工作台及登录材料可被附件访问的取舍。
+当前权威与范围见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，理由见
+[V1.59-D08](decisions.md#v1-59-d08)。不修改 Desktop 原生预览、HTML 源文件或资源加载，不新增存储/预览服务。

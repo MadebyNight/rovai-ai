@@ -6,8 +6,8 @@ import { parseHtmlPreviewDiagnostic } from '../../../packages/html-preview/src/p
 import type { ConsoleClient } from './client'
 import { newCommandId } from '../../desktop/src/shared/command-id'
 
-/** The iframe receives only already-authorized document bytes, never transport,
- * Session or file handles. Source reads stay on the existing Host API. */
+/** Only authorized document bytes are passed to the preview; source reads stay on
+ * the Host API. Trusted HTML shares the browser origin and its native storage. */
 export async function createBrowserHtmlPreview(transport: Pick<ConsoleClient, 'files'>, request: { handleId: string; expectedGeneration: string }): Promise<FilePreviewOperationResult<FilePreviewHtmlSite>> {
   const result = await transport.files<FilePreviewOperationResult<FilePreviewTextContent>>('readHtml', request)
   if (!result.ok) return result
@@ -19,7 +19,7 @@ export async function createBrowserHtmlPreview(transport: Pick<ConsoleClient, 'f
   // Use the same non-reserializing injection and bounded diagnostic/find bridge
   // as Desktop. The browser sandbox has no service-side diagnostic stream.
   const initial = injectPreviewScript(result.value.text, '')
-  const config = { previewId, generation, documentId: newCommandId(), origin: 'null', hostOrigin: location.origin,
+  const config = { previewId, generation, documentId: newCommandId(), origin: location.origin, hostOrigin: location.origin,
     documentUrl: entryUrl, documentError: null, browserDocument: true, map: initial.map }
   const scriptUrl = (): string => {
     const source = `(${previewBrowserBridge.toString()})(${JSON.stringify(config)},${createFileFindDomIndex.toString()},${parseHtmlPreviewDiagnostic.toString()});`
@@ -33,6 +33,6 @@ export async function createBrowserHtmlPreview(transport: Pick<ConsoleClient, 'f
     injected = injectPreviewScript(result.value.text, scriptUrl())
   }
   if (config.map.length !== injected.map.length) throw new Error('无法建立 HTML 预览。')
-  return { ok: true, value: { previewId, generation, origin: 'null', entryUrl, documentUrl: entryUrl,
+  return { ok: true, value: { previewId, generation, origin: location.origin, entryUrl, documentUrl: entryUrl,
     sandboxedDocument: injected.html, contentGeneration: generation, contentVersion: result.value.contentVersion } }
 }
