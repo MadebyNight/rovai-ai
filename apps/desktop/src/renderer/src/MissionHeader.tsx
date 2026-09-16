@@ -3,7 +3,6 @@ import type { CampSnapshot, MissionRecord } from '@contracts'
 import { AppHeader } from './AppHeader'
 import { DialogControlIcon } from './AppDialog'
 import { Icon } from './MissionControls'
-import { PanelToggleIcon } from './PanelToggleIcon'
 import { useFilePreview } from './FilePreviewContext'
 import { useMissionActions } from './MissionBoard'
 
@@ -23,8 +22,8 @@ export function MissionHeader({ mission, drawer, projectName, camp, openRequest,
       <button className="file-preview-toggle" aria-label={drawer ? '关闭使命抽屉' : '返回使命板'} title={drawer ? '关闭使命抽屉' : '返回使命板'} onClick={onClose}>
         {drawer ? <DialogControlIcon name="close"/> : <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m9 4-6 6 6 6M3 10h14"/></svg>}
       </button>
-      <button className="file-preview-toggle" aria-label={drawer ? '展开为完整会话' : '折叠为使命抽屉'} title={drawer ? '展开为完整会话' : '折叠为使命抽屉'} onClick={drawer ? onExpand : onFold}>
-        {drawer ? <Icon name="expand"/> : <PanelToggleIcon side="right" visible/>}
+      <button className="file-preview-toggle" aria-label={drawer ? '展开为完整会话' : '折叠到右侧抽屉'} title={drawer ? '展开为完整会话' : '折叠到右侧抽屉'} onClick={drawer ? onExpand : onFold}>
+        <Icon name={drawer ? 'expand' : 'collapse'}/>
       </button>
     </div>}
     conversationActions={<><button className="mission-activity-entry" aria-pressed={activitySelected} onClick={() => {
