@@ -1697,8 +1697,11 @@ function shellLeasePrelude(includeRunTmp) {
 }
 
 function shellContextPrivacyAssertion() {
-  return process.platform === 'win32'
-    ? ': Windows private-file DACL is verified by the Core platform acceptance suite.'
+  if (process.platform === 'win32') {
+    return ': Windows private-file DACL is verified by the Core platform acceptance suite.'
+  }
+  return process.platform === 'linux'
+    ? 'test "$(stat -c \'%a\' "$CONTEXT")" = "600"'
     : 'test "$(stat -f \'%Lp\' "$CONTEXT")" = "600"'
 }
 
