@@ -100,7 +100,9 @@ impl Drop for OwnedTestDatabase {
 }
 
 fn unique_directory(kind: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("rovai-{kind}-{}", Uuid::new_v4()))
+    std::fs::canonicalize(std::env::temp_dir())
+        .expect("test temp directory should resolve")
+        .join(format!("rovai-{kind}-{}", Uuid::new_v4()))
 }
 
 fn build_template(kind: &str, seed_runtime: bool) -> TestDatabaseTemplate {

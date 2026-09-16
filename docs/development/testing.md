@@ -622,3 +622,30 @@ Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
 
 既有 `team_tool::tests::public_send_atomically_persists_one_message_and_canonical_deliveries` 扩展为有限/无限
 两种时间策略矩阵，保留全部原断言；证明 NULL 截止时间仍可登记、派发 A2A 并幂等重放，而不是只检查计时常量。
+
+
+### 原路径 Agent 附件（v1.59）
+
+新增 `db::attachment_paths::tests::attachment_path_schema_and_receipt_commit_atomically` 拥有 schema 105→106
+的 SQLite DDL/迁移回执原子边界；注入最后回执写入失败时，表重建和版本号必须一起回滚，重试成功后拒绝
+仅保留同名空触发器的半成品 schema。该失败不属于旧 v155 Automation 迁移；需要真实 SQLite transaction，
+纯函数无法证明 DDL 回滚。最小命令：`cargo test -p rovai-core --lib attachment_path_schema_and_receipt`。
+原有受支持来源、冻结 ContextManifest 和 FK 迁移测试全部保留，升级链补接 v156。
+
+删除 CLI `send_attachments` 的 7 个 active tests，随同删除的生产模块一起退出：
+`body_only_and_empty_files_do_not_require_attachment_roots`、
+`mixed_sources_keep_order_names_and_frozen_bytes_until_transport_finishes`、
+`invalid_sources_and_promotion_collision_publish_nothing_and_cleanup_owned_staging`、
+`quota_includes_internal_sources_but_directory_limit_is_not_per_file_limit`、
+`original_links_special_files_and_import_parent_redirects_are_rejected`、
+`ipc_failure_cleans_unsent_snapshots_but_retains_unconfirmed_dispatches`、
+`ipc_retry_reuses_snapshot_when_original_source_has_disappeared`。
+这些断言拥有已取消的 CLI 冻结/导入/清理合同；新发布允许源链接并不创建链接，目录也不再递归扫描以执行快照大小限额。
+传输结果不确定、同一内部请求重放、大小受限 IPC 与当前 lease 仍由 CLI transport 和 Core invocation 的既有 owner 保留。
+
+改写既有 `team_tool::tests::attachment_send_keeps_source_path_and_dispatches_without_projection_gate`，
+覆盖工作区、外部只读源、Run 临时源、默认输出、目录、跨 Camp 原路径、替换保存及源消失后内部重放；
+扩展既有 Camp 删除 journal、Pi 当前图片、Desktop file preview、Host HTTP/Chrome HTML 和临时实例清理 owner。
+定向验证：`cargo test -p rovai-core --lib attachment_send_keeps_source_path`、
+`cargo test -p rovai-core --bin rovai`、`node --test scripts/lib/host-web-html.test.mjs scripts/lib/host-web.test.mjs`；
+完整 Core library 与 Context slow suite 继续执行，不用删除旧迁移测试换取通过。

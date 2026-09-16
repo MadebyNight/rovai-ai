@@ -99,7 +99,7 @@ Agent Managed 与 legacy 机制不变，不建对象存储、附件目录库或�
 复用当前客户端的有界 File 缓存；刷新、内容变化或缓存淘汰恢复 Host 读取。空句柄不启动文件更新轮询。
 静态服务只挂应用构建产物。长期缓存只准入构建清单中带内容哈希且字节校验相符的文件，入口及私有响应仍不缓存。
 具体字段和边界由 [Host Web v2](../contracts/host-web-v2.md#workspaces-uploads-and-resources) 拥有。
-HTML/HTM 附件复用共享交互查看器，由认证 POST 读取后交给无凭据静态预览壳；响应 CSP 与 iframe 均采用不含 `allow-same-origin` 的 `sandbox allow-scripts`，隔离主页面和 Session 存储。Web 当前支持单文件 HTML 与 HTTP(S) 依赖，本地多文件站点资源尚未接通；源码模式保留原稿。SVG 独立文件仍以文本或下载处理。精确读取和消息通道边界见 [Host Web v2](../contracts/host-web-v2.md)。
+HTML/HTM 附件复用共享交互查看器，由认证 POST 读取后交给无凭据静态预览壳；响应 CSP 与 iframe 均采用不含 `allow-same-origin` 的 `sandbox allow-scripts`，隔离主页面和 Session 存储。Web 通过已有预览句柄的短期资源能力接通来源目录内依赖，并支持 HTTP(S) 依赖；源码模式保留原稿。资源边界见 [File Preview v15](../contracts/file-preview-v15.md)。SVG 独立文件仍以文本或下载处理。精确读取和消息通道边界见 [Host Web v2](../contracts/host-web-v2.md)。
 
 ## 命令、事件与兼容性
 

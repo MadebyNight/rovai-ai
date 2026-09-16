@@ -45,7 +45,7 @@ const MIME: Record<string, string> = {
 }
 
 /** A projection of an already admitted file capability, never a grant API. */
-export function createPreviewFileSource(root: string, entry: string, allowDependencies: boolean, protectedRoots: readonly string[] = []) {
+export function createPreviewFileSource(root: string, entry: string, allowDependencies: boolean, protectedRoots: readonly string[] = [], explicitRoot = false) {
   // A broad workspace must not turn the host's private stores into web assets.
   // An explicitly admitted entry (e.g. a managed attachment) remains readable.
   const protectedPaths = Promise.all(protectedRoots.map(async path => {
@@ -61,7 +61,8 @@ export function createPreviewFileSource(root: string, entry: string, allowDepend
     try {
       const canonical = await realpath(candidate)
       if ((candidate !== entry || canonical !== entry) && (await protectedPaths).some(protectedRoot =>
-        previewPathWithin(protectedRoot, candidate) || previewPathWithin(protectedRoot, canonical))) {
+        (previewPathWithin(protectedRoot, candidate) || previewPathWithin(protectedRoot, canonical))
+          && !(explicitRoot && root !== protectedRoot && previewPathWithin(protectedRoot, root) && previewPathWithin(root, canonical)))) {
         throw new PreviewResourceError(403, '主应用的私有数据不能作为网页资源加载。')
       }
       if (!mime) throw new PreviewResourceError(415, '不支持这个资源类型。')

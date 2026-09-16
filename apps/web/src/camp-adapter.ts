@@ -47,6 +47,10 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
       if (!(WEB_OPERATIONS as readonly string[]).includes(method)) return Promise.reject(new Error(`尚未开放此 Web 操作：${method}`))
       return transport.request<T>(method as WebOperation, params)
     },
+    attachmentLocation: async locator => {
+      const path = await transport.files<string | null>('attachmentLocation', locator)
+      return typeof path === 'string' ? { path, location: 'server' } : null
+    },
     onInvalidated: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     singleChatAttachments: {
       prepare: async (conversationId, revision, file) => {
@@ -62,6 +66,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
   }
   const fileListeners = new Set<(event: FilePreviewExternalUpdateEvent) => void>()
   const names = new Map<string, string>()
+  const paths = new Map<string, string>()
   const sources = new Map<string, RestoreFilePreviewRequest>()
   let watchTimer: ReturnType<typeof setInterval> | null = null
   let watchGeneration = 0
@@ -91,6 +96,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     const result = await transport.files<FilePreviewOperationResult<OpenFilePreviewResult>>(action, request)
     if (result.ok && result.value.kind === 'file_preview') {
       names.set(result.value.file.handleId, result.value.file.displayPath)
+      if (result.value.file.absolutePath) paths.set(result.value.file.handleId, result.value.file.absolutePath)
       const source = result.value.file.restoreRequest ?? (request && typeof request === 'object' && 'kind' in request
         ? restorableFilePreviewRequest(request as RestoreFilePreviewRequest) : null)
       if (source) sources.set(result.value.file.handleId, source)
@@ -129,7 +135,7 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
       return result.value.kind === 'file_preview' ? { ok: true, value: result.value.file }
         : { ok: false, error: { code: 'read_failed', message: '未能准备新预览。', retryable: true } }
     },
-    release: async request => { names.delete(request.handleId); sources.delete(request.handleId); syncWatch(); return transport.files('release', request) },
+    release: async request => { names.delete(request.handleId); paths.delete(request.handleId); sources.delete(request.handleId); syncWatch(); return transport.files('release', request) },
     download: async request => {
       const result = await transport.fileBytes('download', request)
       if (!result.ok) return result
@@ -140,8 +146,8 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
     },
     openInSystem: unimplemented, revealInFolder: unimplemented,
     copyPath: async request => {
-      const name = names.get(request.handleId)
-      if (!name || request.format !== 'display') return { ok: false, error: { code: 'source_not_authorized', message: '此入口只提供页面显示的路径。', retryable: false } }
+      const name = paths.get(request.handleId) ?? (request.format === 'display' ? names.get(request.handleId) : undefined)
+      if (!name) return { ok: false, error: { code: 'source_not_authorized', message: '此入口只提供页面显示的路径。', retryable: false } }
       if (!await writeClipboardText(name)) return { ok: false, error: { code: 'read_failed', message: '未能复制路径，请重试。', retryable: true } }
       return { ok: true, value: { copied: true } }
     },

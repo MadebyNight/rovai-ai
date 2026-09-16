@@ -4,7 +4,7 @@ export interface HtmlInjectionMap { line: number; column: number; length: number
 
 /** Insert one blocking diagnostic script, without serializing the author's DOM
  * or moving their scripts. No newlines are inserted into the original document. */
-export function injectPreviewScript(html: string, scriptPath: string): { html: string; map: HtmlInjectionMap } {
+export function injectPreviewScript(html: string, scriptPath: string, baseUrl?: string): { html: string; map: HtmlInjectionMap } {
   const tree = parse(html, { sourceCodeLocationInfo: true })
   let head: number | undefined, htmlStart: number | undefined, doctype = 0, firstScript = Infinity
   const visit = (node: DefaultTreeAdapterMap['node']): void => {
@@ -19,7 +19,8 @@ export function injectPreviewScript(html: string, scriptPath: string): { html: s
   visit(tree)
   const offset = Math.min(head ?? htmlStart ?? doctype, firstScript)
   const prefix = html.slice(0, offset)
-  const tag = `<script src="${scriptPath}" data-rovai-preview-diagnostic></script>`
+  const base = baseUrl ? `<base href="${baseUrl.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')}">` : ''
+  const tag = base + `<script src="${scriptPath}" data-rovai-preview-diagnostic></script>`
   return { html: prefix + tag + html.slice(offset), map: {
     line: prefix.split(/\r\n|\r|\n/u).length, column: (prefix.match(/[^\r\n]*$/u)?.[0].length ?? 0) + 1, length: tag.length
   } }

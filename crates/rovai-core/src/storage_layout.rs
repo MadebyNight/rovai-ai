@@ -149,6 +149,77 @@ pub fn server_runtime_root(canonical_data_dir: &Path) -> Result<PathBuf> {
         .join("runtime-files"))
 }
 
+/// The existing platform layout owns the instance identity. Output files are
+/// ordinary siblings of legacy runtime storage, never an import destination.
+pub fn camp_attachment_output_root(runtime_files_root: &Path, camp_id: &str) -> Result<PathBuf> {
+    crate::camp_id::CampId::parse(camp_id)?;
+    Ok(runtime_files_root
+        .parent()
+        .context("Runtime storage has no instance directory")?
+        .join("attachments")
+        .join(camp_id))
+}
+
+pub fn resolve_attachment_output_root(
+    connection: &rusqlite::Connection,
+    camp_id: &str,
+) -> Result<String> {
+    let runtime_root: String =
+        connection.query_row("SELECT rovai_runtime_camp_files_root()", [], |row| {
+            row.get(0)
+        })?;
+    Ok(
+        camp_attachment_output_root(Path::new(&runtime_root), camp_id)?
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct CampOutputDirectory {
+    pub camp_id: String,
+    pub output_root: PathBuf,
+}
+
+impl CampOutputDirectory {
+    pub fn prepare(database: &crate::db::Database, camp_id: &str) -> Result<Self> {
+        ensure!(
+            database.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1)",
+                [camp_id],
+                |row| row.get::<_, bool>(0),
+            )?,
+            "Camp no longer exists"
+        );
+        let output_root = camp_attachment_output_root(database.runtime_camp_files_root(), camp_id)?;
+        crate::camp_attachment_view::reject_existing_symlink_components(&output_root)?;
+        std::fs::create_dir_all(&output_root)?;
+        Ok(Self {
+            camp_id: camp_id.to_string(),
+            output_root,
+        })
+    }
+}
+
+/// Only the Camp's computed output directory is owned. Source refs are never traversed.
+pub fn remove_camp_attachment_output(runtime_files_root: &Path, camp_id: &str) -> Result<()> {
+    let root = camp_attachment_output_root(runtime_files_root, camp_id)?;
+    crate::camp_attachment_view::reject_existing_symlink_components(
+        root.parent().context("Output root has no parent")?,
+    )?;
+    match std::fs::symlink_metadata(&root) {
+        // remove_dir_all unlinks root symlinks without following them on both
+        // Unix and Windows (where directory symlinks need directory removal).
+        Ok(metadata) if metadata.is_dir() || metadata.file_type().is_symlink() => {
+            std::fs::remove_dir_all(root)?
+        }
+        Ok(_) => std::fs::remove_file(root)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

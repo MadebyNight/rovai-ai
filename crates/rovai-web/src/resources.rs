@@ -9,9 +9,22 @@ use std::{collections::HashMap, sync::Mutex};
 
 #[derive(Default)]
 pub struct Handles(Mutex<HashMap<String, Handle>>);
+impl Handles {
+    pub fn release_camp(&self, camp_id: &str) {
+        // Handles keep authorization and analysis, never an open descriptor.
+        // Existing bounded reads close their own descriptors; revoked resource
+        // tokens cannot start another read while deletion settles.
+        self.0
+            .lock()
+            .expect("file registry poisoned")
+            .retain(|_, handle| handle.source["campId"] != camp_id);
+    }
+}
 #[derive(Clone)]
 struct Handle {
     client: String,
+    session: Arc<Session>,
+    preview_token: String,
     source: Value,
     path: PathBuf,
     anchor_path: PathBuf,
@@ -166,7 +179,7 @@ async fn resolve(state: &WebState, client: &DraftClient, source: &Value) -> Resu
                 .as_str()
                 .context("source_not_authorized")?
                 .to_owned(),
-            allow_children: false,
+            allow_children: true,
         });
     }
     ensure!(
@@ -321,9 +334,7 @@ async fn metadata(
         )
     };
     let preview_key = preview_key(handle);
-    let (display_path, presentation) = if handle.source["kind"] == "attachment" {
-        (handle.name.clone(), "file_name_only")
-    } else if let Some(relative) = handle
+    let (display_path, presentation) = if let Some(relative) = handle
         .project_root
         .as_ref()
         .and_then(|root| handle.path.strip_prefix(root).ok())
@@ -336,7 +347,7 @@ async fn metadata(
         (handle.path.to_string_lossy().into_owned(), "external")
     };
     let mut result = json!({"handleId":handle_id,"reopenToken":handle.token,"previewKey":preview_key,
-        "displayPath":display_path,"pathPresentation":presentation,"fileName":handle.name,"size":content.size,"mime":mime,"extension":extension,"kind":kind,
+        "displayPath":format!("服务器：{display_path}"),"absolutePath":handle.path,"pathPresentation":presentation,"fileName":handle.name,"size":content.size,"mime":mime,"extension":extension,"kind":kind,
         "hasExternalUpdate":false,"contentVersion":version,"contentGeneration":generation,"capabilities":["read","download"]});
     if let Some(restore) = &handle.restore {
         result["restoreRequest"] = restore.clone();
@@ -359,7 +370,7 @@ pub async fn files(
     let Ok(_permit) = state.uploads.clone().try_acquire_owned() else {
         return Json(failure("read_failed"));
     };
-    let result = file_operation(&state, &client, body, Arc::new(_permit)).await;
+    let result = file_operation(&state, &client, &session, body, Arc::new(_permit)).await;
     Json(result.unwrap_or_else(|error| {
         failure(match error.to_string().as_str() {
             "file_too_large" => "file_too_large",
@@ -374,10 +385,14 @@ pub async fn files(
 async fn file_operation(
     state: &WebState,
     client: &DraftClient,
+    session: &Arc<Session>,
     body: FileRequest,
     permit: Arc<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<Value> {
     let request = body.request;
+    if body.action == "attachmentLocation" {
+        return core_value(state, client, "camp.attachments.location", request).await;
+    }
     if body.action == "updates" {
         let handles: Vec<_> = state
             .files
@@ -469,6 +484,8 @@ async fn file_operation(
                 path,
                 name,
                 restore,
+                preview_token: new_token()?,
+                session: session.clone(),
                 token: new_token()?,
                 version: Value::Null,
                 analysis: None,
@@ -496,6 +513,8 @@ async fn file_operation(
                 root: resolved.root,
                 allow_children: resolved.allow_children,
                 name: resolved.name,
+                preview_token: new_token()?,
+                session: session.clone(),
                 token: new_token()?,
                 version: Value::Null,
                 analysis: None,
@@ -642,7 +661,17 @@ async fn file_operation(
             }
             let text = std::str::from_utf8(&bytes).context("decode_failed")?;
             Ok(
-                json!({"ok":true,"value":{"text":text,"contentGeneration":generation,"contentVersion":version}}),
+                json!({"ok":true,"value":{"text":text,"contentGeneration":generation,"contentVersion":version,
+                    "resourceBasePath": if body.action == "readHtml" && handle.allow_children {
+                        let relative = handle.path.strip_prefix(&handle.root)?.parent().context("source_not_authorized")?;
+                        let mut base = url::Url::parse("http://preview.invalid/")?;
+                        { let mut segments = base.path_segments_mut().map_err(|_| anyhow::anyhow!("source_not_authorized"))?;
+                          segments.push("preview-assets").push(&handle.preview_token);
+                          for part in relative.components() { segments.push(part.as_os_str().to_str().context("source_not_authorized")?); }
+                          segments.push(""); }
+                        Some(base.path().to_owned())
+                    } else { None }
+                }}),
             )
         }
         _ => anyhow::bail!("source_not_authorized"),
@@ -834,4 +863,101 @@ mod tests {
         assert!(page_range(text, 2, 5).is_err());
         assert!(page_range(text, u64::MAX, 1).is_err());
     }
+}
+
+// A sandbox document receives only this handle-scoped resource capability. It
+// cannot use the editing Session or turn a path into a new file capability.
+pub async fn preview_asset(
+    State(state): State<WebState>,
+    Path((token, relative)): Path<(String, String)>,
+) -> Response {
+    let result = async {
+        let handle = state
+            .files
+            .0
+            .lock()
+            .expect("file registry poisoned")
+            .values()
+            .find(|handle| handle.preview_token == token && handle.allow_children)
+            .cloned()
+            .context("source_not_authorized")?;
+        ensure!(
+            state.sessions.is_live(&handle.session),
+            "source_not_authorized"
+        );
+        let client = DraftClient::verified_web(&handle.client)?;
+        reauthorize(&state, &client, &handle).await?;
+        // Axum decodes the route once. Do not give encoded separators, dot
+        // segments, absolute paths or Windows syntax another interpretation.
+        ensure!(
+            relative.len() <= 8192
+                && !relative.is_empty()
+                && relative.split('/').all(|part| !part.is_empty()
+                    && part != "."
+                    && part != ".."
+                    && !part
+                        .chars()
+                        .any(|c| c == '\\' || c == ':' || c.is_control())),
+            "outside_authorized_root"
+        );
+        let candidate = handle.root.join(&relative);
+        let path = tokio::fs::canonicalize(&candidate)
+            .await
+            .context("file_not_found")?;
+        ensure!(path.starts_with(&handle.root), "outside_authorized_root");
+        let mime = match path
+            .extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "html" | "htm" => "text/html; charset=utf-8",
+            "css" => "text/css; charset=utf-8",
+            "js" | "mjs" => "text/javascript; charset=utf-8",
+            "json" | "map" => "application/json",
+            "txt" => "text/plain; charset=utf-8",
+            "svg" => "image/svg+xml",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "avif" => "image/avif",
+            "ico" => "image/x-icon",
+            "woff" => "font/woff",
+            "woff2" => "font/woff2",
+            "ttf" => "font/ttf",
+            "otf" => "font/otf",
+            "wasm" => "application/wasm",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "ogg" => "audio/ogg",
+            _ => anyhow::bail!("source_not_authorized"),
+        };
+        let permit = state.uploads.clone().try_acquire_owned()?;
+        let (bytes, _, _) = content(&path, Some(Arc::new(permit))).await?;
+        ensure!(
+            tokio::fs::canonicalize(&candidate).await? == path,
+            "outside_authorized_root"
+        );
+        ensure!(
+            state.sessions.is_live(&handle.session),
+            "source_not_authorized"
+        );
+        ensure!(
+            state
+                .files
+                .0
+                .lock()
+                .expect("file registry poisoned")
+                .values()
+                .any(|current| current.preview_token == token),
+            "source_not_authorized"
+        );
+        Ok::<_, anyhow::Error>(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+    }
+    .await;
+    result.unwrap_or_else(|_| error(StatusCode::NOT_FOUND, "preview_resource_unavailable"))
 }

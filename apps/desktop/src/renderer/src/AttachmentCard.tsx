@@ -1,3 +1,4 @@
+import { AttachmentLocationItems, useAttachmentLocation } from './attachment-location'
 import { useCampClient } from './camp-client'
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -93,6 +94,7 @@ export function AttachmentCard({
   const formatLabel = attachmentFormatLabel(attachment.displayName, attachment.kind)
   const rendererPlatform = typeof window === 'undefined' ? 'darwin' : client.platform
   const locatorKey = localAttachmentLocatorKey(locator)
+  const fileLocation = useAttachmentLocation(locator)
   useEffect(() => {
     if (attachment.previewKind !== 'image') return
     if (timeline && attachment.availability === 'unknown') return
@@ -176,6 +178,7 @@ export function AttachmentCard({
     : '使用系统应用打开'
   const hasImagePreview = attachment.previewKind === 'image' && previewUrl !== null
   const showAttachmentContextMenu = (x: number, y: number): void => {
+    fileLocation.inspect()
     setContextAnchor({ x, y })
     setContextMenuOpen(true)
   }
@@ -219,7 +222,7 @@ export function AttachmentCard({
               )}
           <span className="attachment-copy">
             <span className="attachment-title-line">
-              <strong title={attachment.displayName}>{baseName}</strong>
+              <strong title={fileLocation.label ?? attachment.displayName}>{baseName}</strong>
               <FileExtensionLabel>{formatLabel}</FileExtensionLabel>
             </span>
             {detailLabel && <small>{detailLabel}</small>}
@@ -240,6 +243,9 @@ export function AttachmentCard({
     <div
       className={`attachment-card ${presentation === 'composer' ? 'composer-attachment-card' : presentation} ${composerImage ? 'composer-image-attachment' : ''} type-${displayClassification.agentDisplayType} ${availabilityLabel ? `attachment-availability-${availability}` : ''}`}
       aria-label={availabilityLabel ? `${attachment.displayName}：${availabilityLabel}` : undefined}
+      onMouseEnter={fileLocation.inspect}
+      onFocus={fileLocation.inspect}
+      title={fileLocation.label}
       data-context-open={contextMenuOpen ? 'true' : undefined}
       onContextMenu={contextMenuAvailable && !disabled
         ? (event) => {
@@ -305,6 +311,7 @@ export function AttachmentCard({
                         <strong>{attachment.displayName}</strong>
                         <small>{attachment.kind === 'directory' ? '文件夹' : attachmentTypeLabel(attachment.mediaType)}</small>
                       </DropdownMenu.Label>
+                      <AttachmentLocationItems path={fileLocation.location?.path} label={fileLocation.label} onNotify={onNotify} />
                       <DropdownMenu.Item
                         className="attachment-context-menu-item"
                         disabled={disabled || attachmentAction !== null}

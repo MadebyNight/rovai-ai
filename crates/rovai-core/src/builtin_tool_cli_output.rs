@@ -55,6 +55,14 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
                     "uniqueItems": true,
                     "items": {"type": "string"}
                 },
+                "attachments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["attachmentId", "path"],
+                        "properties": {"attachmentId": {"type": "string"}, "path": {"type": "string"}}
+                    }
+                },
                 "deliveryIds": {
                     "type": "array",
                     "maxItems": 16,
@@ -152,7 +160,8 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
         .as_object()
         .context("Canonical Operation Result must be an object")?;
     match operation {
-        "camp.message.send" => Ok(json!({
+        "camp.message.send" => {
+            let mut projected = json!({
             "messageId": object
                 .get("messageId")
                 .context("camp.message.send result has no messageId")?,
@@ -165,7 +174,15 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
             "deliveryIds": object
                 .get("deliveryIds")
                 .context("camp.message.send result has no deliveryIds")?,
-        })),
+            });
+            if let Some(attachments) = object
+                .get("attachments")
+                .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+            {
+                projected["attachments"] = attachments.clone();
+            }
+            Ok(projected)
+        }
         "team.gather" => Ok(json!({
             "gatherId": object
                 .get("gatherId")

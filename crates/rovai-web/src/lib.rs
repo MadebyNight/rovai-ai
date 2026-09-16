@@ -234,6 +234,10 @@ fn routes(state: WebState) -> Router {
         .route("/api/v1/login-ticket", post(redeem_login_ticket))
         .route("/", get(index))
         .route("/preview.html", get(preview_shell))
+        .route(
+            "/preview-assets/{token}/{*path}",
+            get(resources::preview_asset),
+        )
         .route("/assets/{*path}", get(asset))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
@@ -251,13 +255,21 @@ async fn boundary(State(state): State<WebState>, req: Request, next: Next) -> Re
         .and_then(|value| value.to_str().ok());
     let origin = req.headers().get(header::ORIGIN);
     let preview_shell = req.uri().path() == "/preview.html";
-    let mut response = if !state
-        .network
-        .allows(host, origin.and_then(|value| value.to_str().ok()))
+    let preview_asset = req.uri().path().starts_with("/preview-assets/")
+        && matches!(
+            *req.method(),
+            axum::http::Method::GET | axum::http::Method::HEAD
+        );
+    let checked_origin = if preview_asset && origin.is_some_and(|v| v == "null") {
+        None
+    } else {
+        origin.and_then(|v| v.to_str().ok())
+    };
+    let mut response = if !state.network.allows(host, checked_origin)
         || origin.is_some_and(|value| value.to_str().is_err())
     {
         error(StatusCode::FORBIDDEN, "origin_not_allowed")
-    } else if req.uri().query().is_some() {
+    } else if req.uri().query().is_some() && !preview_asset {
         // Credentials and API parameters have no URL representation.
         error(StatusCode::BAD_REQUEST, "query_not_allowed")
     } else {
@@ -274,11 +286,17 @@ async fn boundary(State(state): State<WebState>, req: Request, next: Next) -> Re
         }),
     );
     headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"));
-    if preview_shell && response.status().is_success() {
+    if (preview_shell || preview_asset) && response.status().is_success() {
         // Only this credential-free bootstrap gets executable content. CSP sandbox
         // also isolates direct navigation, independent of the parent's iframe flags.
         response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(
-            "sandbox allow-scripts; default-src 'none'; script-src http: https: data: 'unsafe-inline' 'unsafe-eval'; style-src http: https: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data:; connect-src http: https: ws: wss:; frame-src http: https: data:; frame-ancestors 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"));
+            "sandbox allow-scripts; default-src 'none'; script-src http: https: data: 'unsafe-inline' 'unsafe-eval'; style-src http: https: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data:; connect-src http: https: ws: wss:; frame-src http: https: data:; frame-ancestors 'self'; object-src 'none'; base-uri http: https:; form-action 'none'"));
+    }
+    if preview_asset {
+        response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        );
     }
     let headers = response.headers_mut();
     headers.insert(
@@ -560,6 +578,13 @@ async fn request(
     let Ok(_permit) = state.requests.clone().try_acquire_owned() else {
         return error(StatusCode::TOO_MANY_REQUESTS, "request_capacity");
     };
+    if matches!(
+        body.operation,
+        operations::Operation::CampDelete | operations::Operation::CampDiscardPending
+    ) && let Some(camp_id) = body.params["command"]["campId"].as_str()
+    {
+        state.files.release_camp(camp_id);
+    }
     match tokio::time::timeout(
         body.operation.timeout(),
         state.core.request_for_editor(body.operation.method(), body.params, rovai_core::draft_client::DraftClient::verified_web(&session.client_id).expect("Host-created editor identity")),

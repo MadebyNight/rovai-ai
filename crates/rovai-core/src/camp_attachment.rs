@@ -338,6 +338,25 @@ pub struct DesktopAttachmentTarget {
     pub can_show_path: bool,
 }
 
+pub fn attachment_location(
+    database: &Database,
+    store: &CampAttachmentStore,
+    locator: &LocalAttachmentOwnerLocator,
+    client: &crate::draft_client::DraftClient,
+) -> Result<Option<PathBuf>> {
+    if let Some(source) = crate::local_attachment_source::load_source_attachment_for_client(
+        database, locator, client,
+    )? {
+        return Ok(Some(PathBuf::from(source.source_path)));
+    }
+    if !legacy_attachment_belongs_to_owner(database, locator)? {
+        return Ok(None);
+    }
+    Ok(store
+        .desktop_open_candidate(database, locator.camp_id(), locator.attachment_ref_id())?
+        .map(|candidate| candidate.path))
+}
+
 pub fn preview_source_attachment(
     source_ref: &LocalAttachmentSourceRef,
 ) -> Result<Option<AttachmentPreviewSource>> {
@@ -2028,7 +2047,7 @@ impl CampAttachmentStore {
             media_type: candidate.media_type,
             path: candidate.path,
             open_risk,
-            can_show_path: false,
+            can_show_path: true,
         })
     }
 
@@ -4135,7 +4154,7 @@ mod slow_tests {
         assert_eq!(target.kind, "file");
         assert_eq!(target.open_risk, DesktopAttachmentOpenRisk::Normal);
         assert_eq!(target.path, authority_path);
-        assert!(!target.can_show_path);
+        assert!(target.can_show_path);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
