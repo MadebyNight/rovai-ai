@@ -4,7 +4,7 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # v1.59 实施与验收
@@ -1151,3 +1151,24 @@ Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 
 - `pnpm test` 通过，包含 Vitest 2072 项与脚本 320 项（2 项既有 Windows 专项跳过）；宿主 4 项、类型检查及 Desktop 构建通过。
 - 无时限用例覆盖跨一周的 Core 结算、模拟跨一小时的进程/Judge timer、Host 绑定返回版本、取消、旧定义及历史回执保留和迁移失败回滚。
 - 新 App 安装、Owner 绑定及 12 Case 的真实回归尚未执行，不能宣称业务回归通过。
+
+## 本轮：可信 Web HTML 原生浏览器能力
+
+2026-09-16 按用户确认，iframe 与统一 Rust Host 的 `/preview.html` 响应采用
+`allow-scripts allow-same-origin allow-forms allow-popups allow-modals`，仅预览壳允许 HTTP(S) 表单提交。
+Web 描述符与握手/命令使用实际来源，保留窗口、预览 ID、generation、challenge/document 校验。
+原生 Storage 归访问设备浏览器；同来源主页面及登录材料不再与可信附件隔离，理由见 [V1.59-D09](decisions.md#v1-59-d09)。
+
+集成主线 `f41ad4aa` 的附件来源改动后，保留已有相对资源入口、CSP、来源检查与替换保存能力；
+只调整静态预览壳的权限。Desktop 原生 `file:` 宿主的既有消息通道保持，HTML 原文件没有被重写。
+
+已验证 TypeScript、Web/Desktop 构建、文档门禁，以及 CI 的 204 个 Vitest 文件 / 2108 项测试。
+`test:host-web-html` 使用隔离 Rust Host 与 Chrome，覆盖原生 localStorage/sessionStorage、同来源读取、
+刷新后存储保留、手机宽度、表单、新窗口、原生弹窗、查找、资源诊断、源码、相对 CSS 与替换保存；
+`test:host-web` 的 4 项和 `test:html-preview` 的 4 项通过。实际浏览器证据来自 macOS，窄屏模拟不计为实体手机、
+Windows 或 Linux 实机验收；本轮不安装或发布产品。
+
+合入上述主线后，扩展 Node 套件为 317 通过、2 项 Windows 专项跳过、3 失败：当前合同 profile 仍引用已改名的
+`attachment_send_commits_managed_v2_and_dispatches_without_projection_gate`；合同指纹断言仍为 schema 105，
+而 Core 已为 106；Windows release verifier 仍声明 Built-in v24，而 Core 已为 v25。
+这些相关文件与主线相同、本分支未修改，作为主线遗留检查记录，不计为本次预览验证通过。
