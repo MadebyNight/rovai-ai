@@ -4,7 +4,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
   const until = async (condition: () => unknown, message: string): Promise<void> => {
     for (let i = 0; i < 180; ++i) { await frames(); if (condition()) return }
-    throw new Error(`${message}${qa.errors.length ? `\n${qa.errors.join('\n')}` : ''}`)
+    throw new Error(`${message}${qa.errors.length ? `\n${qa.errors.join('\n')}` : ''}\n${JSON.stringify({ drawer: !!document.querySelector('.mission-drawer'), full: !!document.querySelector('.mission-full'), focus: document.activeElement?.outerHTML.slice(0, 300), feedback: [...document.querySelectorAll('[role=alert],.toast')].map(node => node.textContent), recentMethods: qa.calls.slice(-12).map((call:any) => call.method) })}`)
   }
   const button = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
     .find(el => el.getAttribute('aria-label') === label || el.textContent?.trim() === label)!
@@ -130,8 +130,30 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(getComputedStyle(document.querySelector('.mission-drawer .timeline-pane')!).display !== 'none', 'Narrow drawer preserves the message area')
   button('展开文件预览').click()
   await until(() => visiblePreview() && tab('活动') && document.querySelector('.workspace-grid.file-preview-compact'), 'Explicit preview reopen remains available at narrow width')
+  const source = document.querySelector<HTMLElement>(`[data-message-id="${qa.sourceMessageId(qa.items[0].missionId)}"]`)!
+  const scrollIntoView = source.scrollIntoView.bind(source)
+  let sourceScrollCount = 0
+  source.scrollIntoView = options => { ++sourceScrollCount; scrollIntoView(options) }
   button('查看来源').click()
   await until(() => !visiblePreview(), 'Source navigation returns to compact conversation')
+  await until(() => document.activeElement === source, 'Source message receives focus')
+  await frames()
+  editor.focus()
+  for (let refresh = 0; refresh < 3; ++refresh) {
+    const previousReads = qa.calls.filter((call:any) => call.method === 'camps.open').length
+    qa.refreshCamp(qa.items[0].campId)
+    await until(() => qa.calls.filter((call:any) => call.method === 'camps.open').length > previousReads, 'Source regression refresh reaches the conversation')
+    await frames(); await frames()
+    check(sourceScrollCount === 1, 'Snapshot refresh must not replay source positioning')
+    check(document.activeElement === editor, 'Snapshot refresh must not steal focus back from the Composer')
+  }
+  await new Promise(resolve => setTimeout(resolve, 1900))
+  check(!source.classList.contains('notification-focus-target'), 'Source highlight ends after one pulse')
+  button('展开文件预览').click()
+  await until(() => visiblePreview() && tab('活动'), 'Activity can reopen for a second source request')
+  button('查看来源').click()
+  await until(() => sourceScrollCount === 2 && document.activeElement === source && !visiblePreview(), 'A second explicit click may focus the source again')
+  source.scrollIntoView = scrollIntoView
   check(document.getElementById('camp-message') === editor, 'Source link keeps Composer')
   handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
   await until(() => document.querySelector('.mission-full'), 'Keyboard expansion')
@@ -171,5 +193,25 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !document.querySelector('.mission-workspace-host'), 'Started Mission returns to the board')
   check(qa.errors.length === 0, qa.errors.join('\n'))
   cases.push('optional description, default creation and start-without-visible-user-message match the approved flow')
+
+  const notifiedMission = qa.items.find((item:any) => item.missionId === 'mission-0')
+  const firstSource = qa.admitMissionNotification(notifiedMission.missionId)
+  await until(() => document.querySelector('.notification-heads-up-open'), 'Mission notification appears')
+  document.querySelector<HTMLButtonElement>('.notification-heads-up-open')!.click()
+  await until(() => document.querySelector('.mission-drawer') && document.activeElement?.getAttribute('data-message-id') === firstSource, 'Mission notification opens the board and drawer at its exact source')
+  check(!document.querySelector('.mission-board-page')?.hasAttribute('hidden'), 'Mission board remains visible behind the notified drawer')
+  const notifiedEditor = document.getElementById('camp-message')
+  button('展开为完整会话').click()
+  await until(() => document.querySelector('.mission-full'), 'Notified Mission can expand')
+  qa.admitMissionNotification(notifiedMission.missionId, 'open_camp')
+  await until(() => document.querySelector('.notification-heads-up-open'), 'Same-Mission notification appears')
+  document.querySelector<HTMLButtonElement>('.notification-heads-up-open')!.click()
+  await until(() => document.querySelector('.mission-drawer'), 'Same-Mission notification restores the drawer from full presentation')
+  check(document.getElementById('camp-message') === notifiedEditor, 'Same-Mission notification preserves the mounted Composer')
+  check(!document.querySelector('.mission-board-page')?.hasAttribute('hidden'), 'Same-Mission notification also shows the board')
+  button('关闭使命抽屉').click()
+  await until(() => !document.querySelector('.mission-workspace-host'), 'Notified drawer closes back to the board')
+  check(qa.errors.length === 0, qa.errors.join('\n'))
+  cases.push('notifications open Mission drawers over the board, including the already active full Mission, and retain exact message focus')
   return { ok: true, cases }
 }

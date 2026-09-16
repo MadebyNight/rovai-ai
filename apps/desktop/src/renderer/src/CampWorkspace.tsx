@@ -129,7 +129,7 @@ import { runtimeReadinessLabel } from './runtime-status'
 import { runtimeEditorInstallation } from './MemberRuntimeParameters'
 import { SafeMarkdown } from './SafeMarkdown'
 import { FilePreviewPane } from './FilePreviewPane'
-import { FilePreviewResizeHandle, FilePreviewWorkspace } from './FilePreviewLayout'
+import { FilePreviewResizeHandle, FilePreviewWorkspace, useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { useOptionalFilePreview } from './FilePreviewContext'
 import {
   agentRunFileChangeHasReviewableDiff,
@@ -1431,6 +1431,15 @@ export function QuickChatWorkspace({
 
 const EMPTY_CAMP_MESSAGES: CampMessageView[] = []
 const EMPTY_LIVE_RUNTIME_EVENTS: LiveRuntimeEvent[] = []
+
+// Subscribe to split geometry in this leaf so resizing does not rerender the timeline.
+function RevealNotificationConversation({ active, onHidePreview }: { active: boolean; onHidePreview?(): void }): null {
+  const layout = useOptionalFilePreviewLayout()
+  useLayoutEffect(() => {
+    if (active && layout?.compact && layout.visible) onHidePreview?.()
+  }, [active, layout?.compact, layout?.visible, onHidePreview])
+  return null
+}
 
 export function CampWorkspace({
   snapshot,
@@ -4057,6 +4066,9 @@ export function CampWorkspace({
     <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
+        <RevealNotificationConversation active={!!notificationFocus?.active
+          && (notificationFocus.kind === 'camp_message' || notificationFocus.kind === 'camp_turn')}
+          onHidePreview={filePreview?.hidePane} />
         <section
           className="timeline-pane"
           tabIndex={-1}

@@ -279,6 +279,7 @@ type ActivateCampOptions = {
   reconcileDefaultLead?: boolean
   initializeComposerDraft?: boolean
   preserveNotificationFocus?: boolean
+  missionPresentation?: 'drawer'
   suppressErrors?: boolean
   anchoredMessages?: readonly CampMessageView[]
 }
@@ -1699,6 +1700,9 @@ export function BusinessApp({
       }
       setActiveCampId(campId)
       setCampSnapshot(snapshot, entryPreview, initialComposerDraft)
+      if (snapshot.camp.missionId && options.missionPresentation) {
+        setMissionPresentation(options.missionPresentation)
+      }
       setView('camp')
     }
     if (previewSnapshot) {
@@ -1771,6 +1775,9 @@ export function BusinessApp({
     if (target?.kind !== 'camp' || target.campId !== campId) return false
     if (viewRef.current === 'camp' && activeCampIdRef.current === campId) {
       if (options.anchoredMessages?.length) setNotificationAnchor({ campId, messages: options.anchoredMessages })
+      if (campSnapshotRef.current?.camp.missionId && options.missionPresentation) {
+        setMissionPresentation(options.missionPresentation)
+      }
       return true
     }
     return activated
@@ -2931,6 +2938,7 @@ export function BusinessApp({
         const activated = await activateCamp(action.campId, {
           memberPrepared: true,
           preserveNotificationFocus: target !== null,
+          missionPresentation: 'drawer',
           reconcileDefaultLead: true,
           suppressErrors: true,
           anchoredMessages
@@ -2993,7 +3001,8 @@ export function BusinessApp({
   }, [])
 
   const completeNotificationNavigation = useCallback((requestId: number): void => {
-    if (!notificationPresentationRef.current?.complete(requestId)) return
+    // Direct source links also use focus requests, without a notification waiter.
+    notificationPresentationRef.current?.complete(requestId)
     setNotificationFocus((current) => current?.requestId === requestId ? null : current)
   }, [])
 

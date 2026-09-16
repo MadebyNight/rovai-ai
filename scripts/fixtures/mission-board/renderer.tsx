@@ -11,7 +11,7 @@ import {DEFAULT_APPEARANCE} from '../../../apps/desktop/src/shared/appearance'
 import {applyAppearanceSnapshot} from '../../../apps/desktop/src/renderer/src/theme'
 import '../../../apps/desktop/src/renderer/src/styles.css'
 import '../../../apps/web/src/mobile.css'
-import type {MissionRecord, CampOpenProjection} from '@contracts'
+import type {MissionRecord, CampOpenProjection, NotificationEpisodeChange, NotificationEpisodeView, NotificationActionView} from '@contracts'
 
 // UI-only acceptance: production BusinessApp/components, deterministic memory adapter.
 const query=new URLSearchParams(location.search), theme=query.get('theme')==='night'?'night':'day'
@@ -23,6 +23,10 @@ const items:MissionRecord[]=[
  ['需要核对窄窗口的目录布局','needs_you',['交互','体验优化']],['补齐使命工作区恢复路径','in_progress',['Core']],['更新首次使用引导文案','not_started',['文案']],['使命累计变更回归测试','completed',['测试']]
 ].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:[],hasUnread:i===0}))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
+// Hidden Electron acceptance windows still model an attentive foreground user.
+Object.defineProperty(document, 'hasFocus', { value: () => true })
+const notificationJournal: NotificationEpisodeChange[] = []
+let notificationSequence = 0
 const snapshots=new Map(),drafts=new Map()
 function snapshot(m:MissionRecord):CampOpenProjection {
  if(snapshots.has(m.campId)) return snapshots.get(m.campId)
@@ -39,6 +43,28 @@ const prefs={...DEFAULT_GENERAL_PREFERENCES,newConversationDefaults:{memberAgent
 const navigationPrefs={schemaVersion:4,pins:[],removedProjects:[],projectOrder:projects.map(p=>p.projectKey),projectNames:{}}
 const changed=()=>events.forEach(fn=>fn({method:'navigation.invalidated',params:{}}))
 const applied=(payload:any={})=>({status:'applied',code:'ok',payload})
+function admitMissionNotification(missionId: string, kind: 'open_camp_message' | 'open_camp' = 'open_camp_message'): string {
+ const mission = items.find(item => item.missionId === missionId)!
+ const s = snapshot(mission) as any, n = ++notificationSequence
+ const messageId = `mission-notification-message-${n}`
+ const source = { ...structuredClone(s.messages[1]), id: messageId, sequence: Math.max(...s.messages.map((message:any) => message.sequence)) + 1,
+  body: `使命通知来源 ${n}`, content: [{ kind: 'text', text: `使命通知来源 ${n}` }], attachments: [] }
+ s.messages.push(source); s.throughGlobalSequence += 1
+ s.coverage.messages = { ...s.coverage.messages, totalCount: s.messages.length, loadedCount: s.messages.length, newestLoadedSequence: source.sequence }
+ const semantic = kind === 'open_camp_message' ? 'user_mention' : 'turn_incomplete'
+ const action: NotificationActionView = { actionId: `mission-action-${n}`, kind, available: true,
+  campId: mission.campId, campTurnId: null, messageId: kind === 'open_camp_message' ? messageId : null, approvalId: null, acknowledgementId: `mission-occurrence-${n}`,
+  observedEpisodeVersion: n, singleChat: null }
+ const episode: NotificationEpisodeView = { id: `mission-episode-${n}`, kind: 'collaboration', episodeVersion: n,
+  attentionRevision: n, changeSequence: n, camp: { id: mission.campId, title: mission.title }, campTurnId: null,
+  primarySemantic: semantic, unread: true, resolved: false, satisfied: false, pendingApprovalCount: 0, mentionCount: 1,
+  unacknowledgedMentionCount: 1, mention: null, reasons: [], primaryAction: action, secondaryActions: [], createdAt: now, updatedAt: now }
+ notificationJournal.push({ changeSequence: n, episodeId: episode.id, episodeVersion: n, attentionRevision: n, operation: 'upsert',
+  changeCause: 'occurrence_admitted', headsUpSignal: { semantic, admittedAttentionRevision: n, action, mention: null },
+  headsUpInvalidation: null, changedAt: now, episode })
+ events.forEach(fn => fn({ method: 'notification_episode.changed', params: {} }))
+ return messageId
+}
 const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.add(fn);return()=>events.delete(fn)},request:async(method:string,p:any={})=>{
  calls.push({method,p});const c=p.command??p,m=items.find(m=>m.missionId===c.missionId||m.campId===c.campId)
  if(method==='missions.list')return structuredClone(items)
@@ -50,14 +76,15 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='navigation.findCamp')return items.find(m=>m.campId===p.campId)?{...snapshot(items.find(m=>m.campId===p.campId)!).camp}:null
  if(method==='camps.exists')return !!m
  if(method==='camps.open'||method==='camps.enter')return structuredClone(snapshot(m!))
+ if(method==='camp.messages.around')return {schemaVersion:1,campId:c.campId,anchorMessageId:c.messageId,sourceAvailable:true,messages:structuredClone(snapshot(m!).messages)}
  if(method==='navigation.campViewed')return {campId:c.campId,lastSeenGlobalSequence:c.throughGlobalSequence}
  if(method==='camp.composerDraft.get'){if(!drafts.has(c.campId))drafts.set(c.campId,{...structuredClone(initialDraft),campId:c.campId,body:'',content:{schemaVersion:1,segments:[]},attachments:[]});return structuredClone(drafts.get(c.campId))}
  if(method==='camp.composerDraft.save'){const d=drafts.get(c.campId);Object.assign(d,{content:c.content,body:c.content.segments.map((s:any)=>s.text??'').join(''),revision:d.revision+1});return structuredClone(d)}
  if(method==='camp.pendingInputs.get')return {campId:c.campId,executionActive:false,items:[],editSession:null,submissionOutcomes:[]}
- if(method==='notifications.inbox')return {schemaVersion:7,episodes:[],unreadCount:0,throughGlobalSequence:10,hasMore:false,nextCursor:null}
- if(method==='notifications.preference.get')return {schemaVersion:1,version:1,enabled:false,headsUpEnabled:false,soundEnabled:false,kinds:{}}
- if(method==='notifications.changesSince')return {schemaVersion:7,episodes:[],throughGlobalSequence:10,hasMore:false}
- if(method==='notifications.acknowledgeVisibleSources')return applied()
+ if(method==='notifications.inbox')return {schemaVersion:7,items:[],unreadCount:0,throughChangeSequence:notificationSequence,nextCursor:null}
+ if(method==='notifications.preference.get')return {version:1,updatedAt:now,headsUpEnabled:true,approvalHeadsUpEnabled:true,userMentionHeadsUpEnabled:true,turnCompletedHeadsUpEnabled:true,turnIncompleteHeadsUpEnabled:true}
+ if(method==='notifications.changesSince')return {schemaVersion:7,requestedAfterChangeSequence:c.afterChangeSequence,nextChangeSequence:notificationSequence,throughChangeSequence:notificationSequence,retainedFloorChangeSequence:0,hasMore:false,resetRequired:false,changes:notificationJournal.filter(change=>change.changeSequence>c.afterChangeSequence)}
+ if(method==='notifications.acknowledgeVisibleSources'||method==='notifications.acknowledge')return applied()
  if(method==='events.subscribe')return {schemaVersion:1,events:[],throughGlobalSequence:10}
  if(method==='workspaces.inspect')return {name:'rovai-ai',projectPath:p.path,gitObservation:{state:'git_valid',branch:'main',head:'a'.repeat(40),repositoryRoot:p.path,objectFormat:'sha1',dirty:false,reason:null}}
  if(method==='missions.update'){
@@ -86,7 +113,9 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
 }}
 const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}},generalPreferences:new Proxy({}, {get:(_,key)=>async(...args:any[])=>{if(key==='setNewConversationDefaults')prefs.newConversationDefaults=args[0];return prefs}}),navigationPreferences:new Proxy({}, {get:()=>async()=>navigationPrefs})}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
-;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance}
+;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,admitMissionNotification,
+ sourceMessageId:(missionId:string)=>snapshot(items.find(item=>item.missionId===missionId)!).messages[1].id,
+ refreshCamp:(campId:string)=>events.forEach(fn=>fn({method:'camp.pendingInputs.changed',params:{campId,reason:'published'}}))}
 window.addEventListener('error',e=>(window as any).missionQA.errors.push(String(e.error?.stack??e.message)))
 window.addEventListener('unhandledrejection',e=>(window as any).missionQA.errors.push(String(e.reason)))
 createRoot(document.getElementById('root')!).render(<CampClientProvider client={client as any}><CurrentUserProfileContext.Provider value={{profile:{displayName:'维护者',avatarDataUrl:null},update:async()=>{}} as any}><BusinessApp environment={environment}/></CurrentUserProfileContext.Provider></CampClientProvider>)

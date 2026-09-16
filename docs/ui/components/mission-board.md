@@ -49,6 +49,11 @@ hidden first and its tabs/read state are retained, so the message area never dis
 result of resizing. This is workspace presentation, not operating-system fullscreen. The same
 CampWorkspace, Composer and preview owner stay mounted across these changes.
 
+Opening a Mission notification on Desktop/wide Web shows the board with that Mission's drawer open,
+including when the same Mission was already expanded to a full conversation. The notification still
+targets its exact message, turn, approval or private conversation through the shared notification flow.
+Message/turn targeting hides a compact preview first, retaining its tabs and reading state so the target is visible.
+
 The drawer hides the conversation title and places close/expand at the left. Full presentation shows
 project › conversation title, preceded by return-to-board and fold-to-drawer. Both use one full-width
 AppHeader with 执行、任务、队员、单聊、活动 in the message column and the preview toggle at the far
@@ -77,6 +82,10 @@ Delivery shows the actual directory and, for Git, associated branch/base and cum
 binary/type/rename/Git-mode information and explicit computation failures. Agent files reuse AttachmentCard,
 file preview and source-message navigation. Activity displays actual Mission history. Deletion identifies
 the associated workspace and retained branch; failed cleanup remains visible and retryable.
+Each explicit source-link click positions and highlights its message once. After presentation, clear that
+focus request even when there is no notification acknowledgement waiter; snapshot updates must not replay
+the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
+such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 The cumulative Diff dialog uses the wide desktop reading surface rather than the standard compact-dialog width.
 
 Business and ownership rules are defined by [Mission v1](../../contracts/mission-v1.md), not this presentation
