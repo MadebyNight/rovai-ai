@@ -18,10 +18,13 @@ const builtinTransportSource = await readFile(
 const builtinCliContractVersion = builtinTransportSource.match(
   /BUILTIN_TOOL_CONTRACT_VERSION: u32 = (\d+);/u
 )?.[1]
+const builtinCliIpcVersion = builtinTransportSource.match(
+  /BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = (\d+);/u
+)?.[1]
 const builtinCliCapability = builtinTransportSource.match(
   /BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "([^"]+)";/u
 )?.[1]
-if (!builtinCliContractVersion || !builtinCliCapability) {
+if (!builtinCliContractVersion || !builtinCliIpcVersion || !builtinCliCapability) {
   throw new Error('Current Built-in CLI transport constants were not found')
 }
 const coreExecutable = resolve(
@@ -261,7 +264,7 @@ try {
 
   const results = []
   for (const specification of runtimeSpecifications) {
-    process.stderr.write(`\n[builtin-cli] ${specification.adapterKind}: full 23-operation Run\n`)
+    process.stderr.write(`\n[builtin-cli] ${specification.adapterKind}: full ${expectedOperations.length}-operation Run\n`)
     const source = await startVerificationRun(core, specification, false)
     const sourceSnapshot = await waitForRun(core, specification.campId, source.agentRunId, {
       marker: specification.successMarker,
@@ -722,7 +725,7 @@ async function startVerificationRun(coreClient, specification, resumed) {
       taskId: null,
       purpose: resumed
         ? `Verify ${specification.adapterKind} resume/process reuse receives a new active CLI lease.`
-        : `Verify ${specification.adapterKind} executes all 23 CLI-only built-in operations.`,
+        : `Verify ${specification.adapterKind} executes all ${expectedOperations.length} CLI-only built-in operations.`,
       completionRole: 'required'
     }
   })
@@ -1164,7 +1167,7 @@ assert_fix_input() {
 }
 
 STEP=version
-"$CLI" --version | grep -q 'contract-v24 ipc-v2'
+"$CLI" --version | grep -q 'contract-v${builtinCliContractVersion} ipc-v${builtinCliIpcVersion}'
 
 STEP=exact_help
 root_help="$("$CLI" --help)"
