@@ -2,7 +2,7 @@
 document_type: development-checklist
 authority: development-procedure
 status: proposed
-last_updated: 2026-08-24
+last_updated: 2026-09-16
 ---
 
 # Agent Runtime 一等接入与准入 Checklist
@@ -159,9 +159,9 @@ Compaction 的目标是保持 Context 合同，不是机械地监听某个事件
 
 ### 3.10 Permission、Approval 与 Workspace
 
-- [ ] Product default 使用该 Runtime 已验证的原生最高权限；read-only Run 按 Rovai 规则收窄。
-- [ ] Runtime-native Approval、Core-managed Approval 或 Sandbox 最终投影到同一 Action Safety 语义。
-- [ ] allow-once 只产生一次副作用；deny 和 cancel 后目标副作用均未发生。
+- [ ] Product default 使用该 Runtime 已验证的原生最高权限；若 Runtime 自己拥有 sandbox/read-only 配置，UI、持久化和 Host 必须传递原名原值，不能由 Workspace access 静默改写。
+- [ ] 每个 Runtime 明确唯一审批权威：Runtime-native 请求只由 Core 承载和原样返回；Core-managed Runtime 才由 Core 决策，不能叠加两层安全判断。
+- [ ] Runtime 实际提供 allow-once/deny/cancel 时，分别验证一次副作用和零副作用；不能因上游没有发出 Approval 而合成选项或伪造通过。
 - [ ] Workspace、Attachment、Skill resource 和临时目录边界真实限制 Runtime Tool，不只记录在 digest 中。
 - [ ] 未知 mutation、未知 Tool shape 和 Approval bridge 失败全部 fail closed。
 

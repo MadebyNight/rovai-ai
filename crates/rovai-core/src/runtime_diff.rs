@@ -1459,6 +1459,7 @@ mod tests {
             AdapterKind::CursorAgent,
             AdapterKind::KimiCodeCli,
             AdapterKind::GrokBuild,
+            AdapterKind::DeepseekHarness,
         ] {
             let payload = json!({
                 "runtimeDiff": {

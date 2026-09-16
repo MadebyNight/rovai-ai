@@ -23,7 +23,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 const SETTLEMENT_GRACE: Duration = Duration::from_secs(5);
 const CONTEXT_ENV: &str = "ROVAI_APP_AUTOMATION_CONTEXT";
-const ADAPTER_KINDS: [&str; 14] = [
+const ADAPTER_KINDS: [&str; 15] = [
     "codex-cli",
     "opencode-cli",
     "copilot-cli",
@@ -36,6 +36,7 @@ const ADAPTER_KINDS: [&str; 14] = [
     "cursor-agent",
     "kimi-code-cli",
     "grok-build",
+    "deepseek-harness",
     "zcode-app",
     "antigravity-app",
 ];

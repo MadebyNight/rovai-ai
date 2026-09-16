@@ -491,6 +491,7 @@ struct ProcessEntry {
     idle_since: Option<Instant>,
     last_used_sequence: u64,
     retire_after_run: bool,
+    retirement: Option<Arc<FleetStopCompletion>>,
 }
 
 #[derive(Default)]
@@ -553,6 +554,11 @@ impl FleetState {
             if processes.is_empty() {
                 self.resident_processes_by_bucket.remove(residency_bucket);
             }
+        }
+        if let Some(retirement) = &entry.retirement
+            && retirement.result().is_none()
+        {
+            retirement.complete(true);
         }
         Some(entry)
     }
@@ -816,6 +822,7 @@ impl FleetState {
             idle_since: None,
             last_used_sequence: sequence,
             retire_after_run: false,
+            retirement: None,
         });
         self.process_by_run
             .insert(run_lease.clone(), reservation_id.clone());
@@ -1436,7 +1443,7 @@ impl AgentRuntimeFleetManager {
             .host
             .shutdown_and_reap_until(Instant::now() + stop_timeout)
             .await;
-        let committed = if reaped {
+        let (committed, failed_retirement) = if reaped {
             let _operation = operations.lock().await;
             let mut state = state.lock().await;
             match state.processes.get(&launch.process_id) {
@@ -1448,19 +1455,26 @@ impl AgentRuntimeFleetManager {
                             .is_some_and(|current| Arc::ptr_eq(current, &launch.completion)) =>
                 {
                     state.remove_process(&launch.process_id);
-                    true
+                    (true, None)
                 }
-                None => true,
-                _ => false,
+                None => (true, None),
+                Some(entry) => (false, entry.retirement.clone()),
             }
         } else {
             let _operation = operations.lock().await;
-            state
-                .lock()
-                .await
-                .restore_stopping_resident_capacity(&launch.process_id, &launch.completion);
-            false
+            let mut state = state.lock().await;
+            let retirement = state
+                .processes
+                .get(&launch.process_id)
+                .and_then(|entry| entry.retirement.clone());
+            state.restore_stopping_resident_capacity(&launch.process_id, &launch.completion);
+            (false, retirement)
         };
+        if let Some(retirement) = failed_retirement
+            && retirement.result().is_none()
+        {
+            retirement.complete(false);
+        }
         if committed && let Some(records) = &owner_records {
             records.remove(launch.host.process_id());
         }
@@ -1697,6 +1711,62 @@ impl AgentRuntimeFleetManager {
 
     pub(crate) async fn invalidate_runtime_config(&self, agent_id: &str) {
         self.invalidate_member(agent_id).await;
+    }
+
+    /// Release native Session locks held by an obsolete configuration before
+    /// a resumable Runtime starts its replacement Host in the same reuse scope.
+    /// Active leases retain their normal retirement boundary.
+    pub(crate) async fn retire_incompatible_hosts(
+        &self,
+        adapter_kind: AdapterKind,
+        compatibility: &RuntimeCompatibilityKey,
+    ) -> Result<()> {
+        let (plans, retirements) = {
+            let _operation = self.operations.lock().await;
+            let mut state = self.state.lock().await;
+            let matches = state
+                .processes
+                .iter()
+                .filter(|(_, entry)| {
+                    entry.adapter_kind == adapter_kind
+                        && entry.compatibility.reuse_scope == compatibility.reuse_scope
+                        && entry.compatibility.runtime_compatibility_digest
+                            != compatibility.runtime_compatibility_digest
+                })
+                .map(|(process_id, entry)| (process_id.clone(), entry.state))
+                .collect::<Vec<_>>();
+            let mut plans = Vec::new();
+            let mut retirements = Vec::new();
+            for (process_id, process_state) in matches {
+                if matches!(
+                    process_state,
+                    FleetProcessState::IdleWarm
+                        | FleetProcessState::Stopping
+                        | FleetProcessState::Starting
+                ) {
+                    plans.push(state.plan_stop(&process_id));
+                } else if let Some(entry) = state.processes.get_mut(&process_id) {
+                    entry.retire_after_run = true;
+                    let retirement = entry
+                        .retirement
+                        .get_or_insert_with(|| Arc::new(FleetStopCompletion::new()))
+                        .clone();
+                    retirements.push(retirement);
+                }
+            }
+            (plans, retirements)
+        };
+        for plan in plans {
+            if !self.dispatch_stop_plan(plan).wait().await {
+                bail!("Runtime Host could not release its native Session lock");
+            }
+        }
+        for retirement in retirements {
+            if !retirement.wait().await {
+                bail!("Runtime Host could not release its native Session lock");
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn invalidate_adapter(&self, adapter_kind: AdapterKind) {
@@ -1971,6 +2041,7 @@ mod tests {
                 idle_since: None,
                 last_used_sequence: 0,
                 retire_after_run: false,
+                retirement: None,
             },
         );
         host
@@ -2568,12 +2639,15 @@ mod tests {
         for camp_scope in [false, true] {
             let request = |run: &str, camp: &str, agent: &str| {
                 let mut request = acquire_request(run, camp);
+                request.adapter_kind = AdapterKind::DeepseekHarness;
                 if camp_scope {
                     request.compatibility = RuntimeCompatibilityKey::camp(camp, agent, "digest-1");
                 }
                 request
             };
-            let fleet = AgentRuntimeFleetManager::new(test_config(Duration::from_secs(1)));
+            let fleet = Arc::new(AgentRuntimeFleetManager::new(test_config(
+                Duration::from_secs(1),
+            )));
             let camp_a = fleet
                 .acquire(request("run-a1", "camp-a", "agent-a"), || async {
                     Ok(fake_host("host-a"))
@@ -2603,8 +2677,130 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(camp_a_again.host.process_id(), "host-a");
+            fleet
+                .release("run-a2", 1, FleetReleaseDisposition::Reusable)
+                .await;
+            let mut changed = request("run-a3", "camp-a", "agent-c");
+            fleet
+                .retire_incompatible_hosts(changed.adapter_kind, &changed.compatibility)
+                .await
+                .unwrap();
+            assert!(camp_a.host.is_healthy());
+            changed.compatibility.runtime_compatibility_digest = "digest-2".to_string();
+            fleet
+                .retire_incompatible_hosts(changed.adapter_kind, &changed.compatibility)
+                .await
+                .unwrap();
+            assert!(
+                !camp_a.host.is_healthy(),
+                "obsolete idle Host must release native Session locks"
+            );
+            assert!(
+                camp_b.host.is_healthy(),
+                "another Camp must retain its Host"
+            );
+            let busy = fleet
+                .acquire(changed.clone(), || async {
+                    Ok(fake_host("host-a-replacement"))
+                })
+                .await
+                .unwrap();
+            let mut next = changed.clone();
+            next.compatibility.runtime_compatibility_digest = "digest-3".to_string();
+            let retirement = {
+                let fleet = fleet.clone();
+                tokio::spawn(async move {
+                    fleet
+                        .retire_incompatible_hosts(next.adapter_kind, &next.compatibility)
+                        .await
+                })
+            };
+            loop {
+                let retirement_is_waiting_for_release =
+                    fleet.state.lock().await.processes.values().any(|entry| {
+                        entry.adapter_kind == AdapterKind::DeepseekHarness
+                            && entry.compatibility.runtime_compatibility_digest == "digest-2"
+                            && entry.retire_after_run
+                            && entry.retirement.is_some()
+                    });
+                if retirement_is_waiting_for_release {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                !retirement.is_finished(),
+                "replacement must wait while the old Host is executing"
+            );
+            assert!(busy.host.is_healthy());
+            assert!(
+                fleet
+                    .release("run-a3", 1, FleetReleaseDisposition::Reusable)
+                    .await
+            );
+            retirement.await.unwrap().unwrap();
+            assert!(
+                !busy.host.is_healthy(),
+                "replacement may proceed only after the old Host releases its Session lock"
+            );
             fleet.shutdown_all().await;
         }
+
+        let fleet = Arc::new(AgentRuntimeFleetManager::new(test_config(
+            Duration::from_millis(5),
+        )));
+        let mut active = acquire_request("run-lock-timeout", "camp-lock-timeout");
+        active.adapter_kind = AdapterKind::DeepseekHarness;
+        let slow_host = Arc::new(FakeRuntimeProcessHost {
+            process_id: "host-lock-timeout".to_string(),
+            shutdown_delay: Duration::from_millis(100),
+            reaped: std::sync::atomic::AtomicBool::new(false),
+            shutdown_calls: std::sync::atomic::AtomicUsize::new(0),
+            zcode_background: AtomicBool::new(false),
+        });
+        fleet
+            .acquire(active.clone(), {
+                let slow_host = slow_host.clone();
+                move || async move { Ok(RuntimeProcessHost::Fake(slow_host)) }
+            })
+            .await
+            .unwrap();
+        let mut replacement = active;
+        replacement.compatibility.runtime_compatibility_digest = "digest-2".to_string();
+        let retirement = {
+            let fleet = fleet.clone();
+            tokio::spawn(async move {
+                fleet
+                    .retire_incompatible_hosts(replacement.adapter_kind, &replacement.compatibility)
+                    .await
+            })
+        };
+        loop {
+            let waiting = fleet.state.lock().await.processes.values().any(|entry| {
+                entry.adapter_kind == AdapterKind::DeepseekHarness
+                    && entry.retire_after_run
+                    && entry.retirement.is_some()
+            });
+            if waiting {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !fleet
+                .release("run-lock-timeout", 1, FleetReleaseDisposition::Reusable)
+                .await,
+            "a failed Host stop must not be reported as lock release"
+        );
+        assert_eq!(
+            retirement
+                .await
+                .unwrap()
+                .expect_err("replacement must fail when the native lock cannot be released")
+                .to_string(),
+            "Runtime Host could not release its native Session lock"
+        );
+        assert!(!slow_host.reaped.load(std::sync::atomic::Ordering::Acquire));
     }
 
     // Unique Fleet boundary: a foreground-free Host can retain native work.

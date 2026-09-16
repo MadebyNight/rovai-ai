@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-16
 ---
 
 # Runtime Catalog Boundaries
@@ -26,8 +26,8 @@ last_updated: 2026-09-13
 | Product Runtime Availability | Core 对某一 Product Runtime 的 discovery、静态身份或 deep-verification snapshot | light ready、checking、legacy installed unverified、ready、needs login、not installed、incompatible、transient failure 等当前机器状态 | 新产品身份、把静态可尝试误作深检 Ready 或静默 Runtime fallback |
 | Settings Runtime Preview Catalog | Renderer 内受审查的静态 presentation rows | Runtime 设置页中的名称、图标、`待支持`文案和 disabled 状态 | Contracts、Core request、数据库、成员选择、诊断、Probe、AgentRun 或支持数量 |
 
-Product Runtime Catalog 当前包含十四种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
-Renderer 当前不展示 Settings Preview row；DeepSeek Harness 在三个目标平台均隐藏，仍是未接入候选。
+Product Runtime Catalog 当前包含十六种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
+Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64 以独立证据取得 qualified，其他平台保持 not_qualified。
 产品目录的机器可判数量、全量检查、诊断分母和
 普通执行仍只来自逐平台 Admission。Cursor 虽保留 closed identity 和历史 reader，但未完成产品资格前不进入
 Settings Runtime Preview Catalog；隐藏该 row 不删除持久 identity，也不改变未准入状态。普通成员 Runtime
@@ -505,8 +505,7 @@ Client FS 是否可执行。
 
 Preview row 必须同时满足：明确“待支持/尚未接入 AgentRun”、无可点击检查或配置入口、不会进入成员页
 或诊断，并在键盘和辅助技术中表现为不可执行状态。此处的 Settings Preview row 不等于可执行 Adapter 的
-Runtime Platform preview（如 ZCode）。当前没有可见 Settings Preview row；DeepSeek Harness 在
-macOS arm64、macOS x64 与 Windows x64 全部隐藏，不保留“待支持”占位入口。
+Runtime Platform preview。当前没有可见 Settings Preview row；DeepSeek Harness 的可执行准入由 Core 平台矩阵投影，不保留 Renderer-only 占位入口。
 
 未来接入时不得把 preview identity 写入 Migration 或原地解释为 Installation。实现必须删除 preview row，
 再按完整可执行准入增加新的 AdapterKind 和逐平台 Admission；用户从未保存过 preview 选择，因此没有 preview-to-product
@@ -537,3 +536,54 @@ warm resume 不刷新 MCP，所以集合变化不能沿用旧 Host。协议、Fi
 Windows x64 与 macOS arm64 分别以平台专属冻结证据标记 Qualified；macOS x64 同时开放为可执行 Preview，
 没有 Intel Mac 真机资格。管理页不显示测试、试运行或实验性标签，保留机器检查、错误和具体能力限制；
 平台晋升不等于完整 First-Class Checklist 已完成，证据与尚未覆盖范围见[当前实施记录](../versions/v1.57/implementation-plan.md)。
+
+
+## DeepSeek Harness ACP
+
+`deepseek-harness` 使用 `dsh --profile acp`，最低版本 `0.1.5-rc.2`。CLI 版本与 ACP agentInfo 的桥接版本
+分别记录；模型来自原生 grouped configOptions，保留 provider/model 的不透明 ID，reasoning 通过标准
+set_config_option 设置并核对。普通 Probe 使用该 Runtime 原生 Home、临时 cwd，不发送模型请求；
+认证字段沿用 ACP 握手语义，不证明 Key 可用、余额或模型生成成功。
+ACP composition 的 provider/model 是该入口自己的 native default，独立于交互入口的
+agent-default-model settings。BYOK 仍通过原生 llm-pi-ai providers 与 ACP profile patch 配置，
+Rovai 显式选模使用真实 catalog ID；产品不读取其他 Runtime 的凭据。
+
+共享 ACP Host/Fleet 拥有 resident_multi_session、租约、LRU 与停止。Run-local MCP evidence 与 Session 模型
+不进入进程兼容键；真实 MCP 定义、权限、cwd、原生 settings/credentials/profile 配置摘要变化会 fence 复用。
+新会话与 cold resume 使用精确 sessionId；DSH 不支持 session/load 或额外 additionalDirectories。
+DSH 的持久 Session 有进程锁；同一复用范围的配置变化先由共享 Fleet 回收不兼容的 idle Host，
+确认原进程已经退出后再启动 replacement 并 exact resume。活动 Host 只标记退役，不能抢占其 Run；replacement
+等待该 Run 正常结束和旧 Host 确认回收。回收失败会阻断新 Host，不能并行争用锁或退化为 fresh Session。
+
+Bootstrap 沿用已有 managed_system_prompt 交付模式与完整冻结字节。Core 写入 Host 私有目录中按 Native
+Session 绑定的文件，官方 systemPrompt section/variable 在每个模型步骤读取，校验 Session 与 SHA-256；
+子代理不继承 Camp 成员自身份。没有新增 Context section、字段、选择规则或 formatter/manifest 版本轴。
+原生 compaction 保留系统层，因此不增加文本 detector，也不把普通 assistant 文本当压缩完成信号。
+
+原生 tools/result 的同步只读 observer 为同一 Session/call 写入一次性结构化观测；Core 在共享 ACP ingress
+关联后消费。只补已知工具类型、文件路径、shell exit/signal/timeout，以及官方 write/edit 结果已经给出的完整
+文件状态，不改变 Runtime 的模型可见结果。`write` 要求 `after` 为受限字符串，`before` 可以是受限字符串或显式
+`null`；后者证明文件此前不存在，并转换为标准 ACP Diff 的 `oldText: null`。`edit` 的 `before`/`after` 都必须是
+受限字符串。完整文件状态继续由通用 Runtime Diff、Files Changed 与 Diff Card 消费；缺少字段（不同于显式
+`null`）、类型错误、超限、无变化或不可用时只保留路径级活动，不伪造计数。
+缺失 observer、身份不匹配或重复消费时停止该 Host；未知工具维持 other，不从自然语言猜测结果。临时文件随 Host 回收。
+
+工具名只在协议入口归一为通用语义：`bash/pwsh → execute`、`read/read_image → read`、`write → write`、
+`edit → edit`、`glob/grep → file_search`、`web_search → web_search`、`web_fetch → fetch`、`skill → tool`；
+未知名称继续保持 unknown/other，不建立 DSH 专属展示。
+
+Skills 使用 `.dsh/skills` 与原生项目/用户来源追加；MCP 使用标准 session/new/resume 的 scoped stdio/HTTP
+参数。stdio command 按冻结 Runtime PATH 解析为绝对路径；官方 scoped tools restriction 隐藏被覆盖原生
+同名 Server 的全部 Tool，避免原生独有 Tool 穿透 whole-definition 替换。
+权限使用原生 `sandbox_mode` 与 `approval_policy`，只关闭会重写这两个独立参数的交互式 preset 插件，原生
+settings 文件不变。队员页、持久值与 Host patch 使用同一原生名称和值；Workspace access 不覆盖它们。
+DSH 原生 sandbox/approval 拥有决定权：Core 只展示并原样返回 Runtime 实际发出的审批请求与选项，不按 MCP
+工具名、副作用注解或 read-only 状态合成 allow/deny/ask。当前 DSH 未为某个 MCP 调用发出审批时，Rovai 不增加
+第二层 guard；同名遮蔽仍只是 MCP 配置投影。不借用其他 Runtime Home，也不扩张附件写权限。
+
+ACP usage_update 的 used/size 仅形成 context gauge。官方 committed assistant/message 与自动
+compaction/summary 的逐调用 usage 通过私有 observer 按 Session/turn/seq 归属并一次性消费。摘要从
+compaction/start 的原生 compactionId/owner turn 取得归属，不收集正文；空闲手动压缩的 null turn 不归入
+后续 Run。input 为 uncached bucket，独立保留 cache read/write、
+output 与 reasoning。缺失字段与 cost 保持 unknown，不从占用或模型文本估算。逐轴差异、真实行为证据及
+平台范围见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；macOS arm64 的 14 轴闭合证据支持 First-Class，其他平台不外推。

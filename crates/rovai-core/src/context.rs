@@ -101,7 +101,7 @@ pub const fn charter_delivery_mode_for_adapter(adapter_kind: AdapterKind) -> Cha
         AdapterKind::CodexCli | AdapterKind::ClaudeCodeCli | AdapterKind::GrokBuild => {
             CharterDeliveryMode::NativeAppend
         }
-        AdapterKind::Pi => CharterDeliveryMode::ManagedSystemPrompt,
+        AdapterKind::Pi | AdapterKind::DeepseekHarness => CharterDeliveryMode::ManagedSystemPrompt,
         AdapterKind::OpencodeCli
         | AdapterKind::CopilotCli
         | AdapterKind::AntigravityApp
@@ -7386,7 +7386,7 @@ mod tests {
                 AdapterKind::CodexCli | AdapterKind::ClaudeCodeCli | AdapterKind::GrokBuild
             ) {
                 CharterDeliveryMode::NativeAppend
-            } else if adapter_kind == AdapterKind::Pi {
+            } else if matches!(adapter_kind, AdapterKind::Pi | AdapterKind::DeepseekHarness) {
                 CharterDeliveryMode::ManagedSystemPrompt
             } else {
                 CharterDeliveryMode::FirstPayload

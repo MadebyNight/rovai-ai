@@ -131,7 +131,9 @@ impl Database {
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
-                    DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.projection_schema_version == 106
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.59"
+                            && marker.projection_schema_version == 106
                 ),
                 "Attachment path schema admission failed"
             );
@@ -147,6 +149,7 @@ impl Database {
 
 #[cfg(test)]
 pub(super) fn downgrade_for_test(connection: &Connection) {
+    super::downgrade_current_schema_to_v156_source_for_test(connection);
     if !connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=156)",
@@ -286,7 +289,9 @@ mod tests {
         assert!(schema_matches(database.connection()).unwrap());
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
-            DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.projection_schema_version == 106
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59"
+                    && marker.projection_schema_version == 106
         ));
         // A lookalike trigger name must not admit a partial schema.
         database.connection().execute_batch("DROP TRIGGER context_manifest_v24_only_insert; CREATE TRIGGER context_manifest_v24_only_insert BEFORE INSERT ON context_manifest BEGIN SELECT 1; END;").unwrap();

@@ -46,6 +46,49 @@ test('execution cards keep their first line anchored and expanded tool groups re
       '--no-default-browser-check', '--remote-debugging-port=0',
       ...(process.platform === 'linux' ? ['--no-sandbox'] : []), 'about:blank'
     ] })
+    await browser.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440, height: 920, deviceScaleFactor: 1, mobile: false
+    })
+    await browser.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+    await browser.send('Page.navigate', {
+      url: `http://127.0.0.1:${server.address().port}/index.html?${new URLSearchParams({ mode: 'inspector', theme: 'day', windowed: '1' })}`
+    })
+    await browser.wait(`!!window.executionTransition`)
+    await browser.click(`document.querySelector('.camp-execution-entry')`)
+    await browser.wait(`!!document.querySelector('.run-pulse-chip')`)
+    await browser.click(`document.querySelector('.run-pulse-chip')`)
+    await browser.wait(`!!document.querySelector('.process-action.current .running-text')`)
+    const initialWindowFrame = await browser.evaluate(`(() => {
+      const rect = element => element?.getBoundingClientRect().toJSON() ?? null
+      return {
+        card: rect(document.querySelector('.execution-process-stage')),
+        text: rect(document.querySelector('.process-action.current .running-text > span:not(.running-text-highlight)')),
+        historyLoader: Boolean(document.querySelector('.execution-history-loader'))
+      }
+    })()`)
+    await browser.capture(join(fixture, 'day-inspector-initial-window.png'))
+    await browser.evaluate(`window.executionTransition.resolveWindow()`)
+    await browser.wait(`window.executionTransition.windowReady()`)
+    await pause(80)
+    const settledWindowFrame = await browser.evaluate(`(() => {
+      const rect = element => element?.getBoundingClientRect().toJSON() ?? null
+      return {
+        card: rect(document.querySelector('.execution-process-stage')),
+        text: rect(document.querySelector('.process-action.current .running-text > span:not(.running-text-highlight)')),
+        historyLoader: Boolean(document.querySelector('.execution-history-loader'))
+      }
+    })()`)
+    const windowFrames = [initialWindowFrame, settledWindowFrame]
+    report.push({ label: 'day/inspector/initial-window-load', states: windowFrames })
+    assert.equal(initialWindowFrame.historyLoader, false,
+      'day/inspector initial window: live connection feedback must not stack a redundant history loader')
+    for (const [element, keys] of [['card', ['y', 'height']], ['text', ['x', 'y']]]) {
+      for (const key of keys) {
+        const values = windowFrames.map(frame => frame[element][key])
+        assert.ok(Math.max(...values) - Math.min(...values) <= 1,
+          `day/inspector initial window: ${element}.${key} jumps: ${values}`)
+      }
+    }
     for (const theme of ['day', 'night']) {
       for (const mode of ['bottom', 'inspector', 'mobile']) {
         const label = `${theme}/${mode}`

@@ -71,7 +71,7 @@ last_updated: 2026-09-16
 ## Mission
 
 - 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v1](../contracts/mission-v1.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v25](../contracts/context-manifest-evidence-v25.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
-- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)。
+- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D12](../versions/v1.59/decisions.md#v1-59-d12)。
 
 ## Single Chat
 
@@ -193,3 +193,5 @@ last_updated: 2026-09-16
 - 长期登录与普通 Session 续期：[Host Web v2](../contracts/host-web-v2.md#session-lifetime-and-renewal)、[统一 Host 身份与控制面](../architecture/unified-rust-host.md#身份与控制面)；理由见 [V1.59-D05](../versions/v1.59/decisions.md#v1-59-d05)。
 
 - 当前 Agent 附件原路径发布、默认输出与归属理由：[V1.59-D08](../versions/v1.59/decisions.md#v1-59-d08)。
+
+- DeepSeek Harness ACP 接入：[Runtime Catalog Boundaries](../architecture/runtime-catalog-boundaries.md#deepseek-harness-acp)、[平台准入](../contracts/runtime-platform-admission-v2.md#deepseek-harness-增量准入)；理由：[V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。

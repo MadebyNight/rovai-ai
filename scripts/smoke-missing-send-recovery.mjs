@@ -33,6 +33,7 @@ const allSpecifications = [
   ['trae-cn-cli', 'TRAE'],
   ['kimi-code-cli', 'Kimi Code'],
   ['grok-build', 'Grok Build'],
+  ['deepseek-harness', 'DeepSeek Harness'],
   ['zcode-app', 'ZCode']
 ].map(([adapterKind, label]) => ({
   adapterKind,

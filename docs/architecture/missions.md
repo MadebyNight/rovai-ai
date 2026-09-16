@@ -42,4 +42,4 @@ No Mission business version is taught to Agents; field patches use last-committe
 Desktop/wide Web share Mission navigation and the existing CampWorkspace. Drawer and full conversation
 preserve one mounted composer/preview owner. Mobile is intentionally outside this increment. Protocol and
 failure behavior live in [Mission v1](../contracts/mission-v1.md); UI in [Mission board](../ui/components/mission-board.md).
-Reasons for the durable workspace and simplified model interface: [V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10).
+Reasons for the durable workspace and simplified model interface: [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11).

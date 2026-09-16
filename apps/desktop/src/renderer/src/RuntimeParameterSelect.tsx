@@ -1,7 +1,12 @@
 import { useId } from 'react'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 
-export type RuntimeParameterChoice = { value: string; label: string; disabled?: boolean }
+export type RuntimeParameterChoice = {
+  value: string
+  label: string
+  description?: string
+  disabled?: boolean
+}
 
 export function RuntimePickerCheck(): React.JSX.Element {
   return <svg aria-hidden="true" viewBox="0 0 16 16"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg>
@@ -27,8 +32,9 @@ export function RuntimeParameterSelect({ label, value, choices, defaultChoice, d
     <Menu.Root>
       <Menu.Trigger asChild>
         <button id={id} type="button" className="runtime-model-picker-trigger" disabled={disabled}
-          aria-label={`${label}，${selected?.label ?? value}`} title={selected?.label ?? value}>
-          <span><strong>{selected?.label ?? value}</strong></span><RuntimePickerChevron />
+          aria-label={[label, selected?.label ?? value, selected?.description].filter(Boolean).join('，')}
+          title={[selected?.label ?? value, selected?.description].filter(Boolean).join('\n')}>
+          <span><strong>{selected?.label ?? value}</strong>{selected?.description && <small>{selected.description}</small>}</span><RuntimePickerChevron />
         </button>
       </Menu.Trigger>
       <Menu.Portal><Menu.Content className="runtime-model-picker-menu runtime-parameter-picker-menu"
@@ -43,9 +49,10 @@ export function RuntimeParameterSelect({ label, value, choices, defaultChoice, d
 }
 
 function Choice({ choice, disabled }: { choice: RuntimeParameterChoice; disabled: boolean }): React.JSX.Element {
-  return <Menu.RadioItem className="runtime-model-picker-item" value={choice.value} textValue={choice.label}
-    disabled={disabled || choice.disabled} title={choice.label}>
-    <span className="runtime-model-picker-copy"><strong>{choice.label}</strong></span>
+  return <Menu.RadioItem className="runtime-model-picker-item" value={choice.value}
+    textValue={[choice.label, choice.description].filter(Boolean).join(' ')}
+    disabled={disabled || choice.disabled} title={[choice.label, choice.description].filter(Boolean).join('\n')}>
+    <span className="runtime-model-picker-copy"><strong>{choice.label}</strong>{choice.description && <small>{choice.description}</small>}</span>
     <Menu.ItemIndicator className="runtime-model-picker-check"><RuntimePickerCheck /></Menu.ItemIndicator>
   </Menu.RadioItem>
 }

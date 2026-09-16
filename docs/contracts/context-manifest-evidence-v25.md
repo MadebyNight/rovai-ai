@@ -61,11 +61,13 @@ Direct and A2A preflight share the payload budget policy without creating files.
 the actual workspace, final materialization validates the environment, recomputes workspace evidence and
 the final payload budget, then freezes bytes. The workspace section is not silently truncated.
 
-Migration 157 admits new 25/25/6/RunFacts4 manifests after either supported schema-106 predecessor: the
-published attachment-path schema or the previously installed Mission preview. Frozen 22/22/4, 23/23/5,
+Migration 158 admits new 25/25/6/RunFacts4 manifests after Migration 157 has applied the DSH closed-set
+expansion to either supported schema-106 predecessor: the published attachment-path schema or the previously
+installed Mission preview. Frozen 22/22/4, 23/23/5,
 published 24/24/5 and Mission-preview 24/24/6 inputs remain readable only with their original evidence;
 they are never relabeled or reformatted. Model schema golden:
 `packages/contracts/fixtures/agent-run-context-v25.json`.
-Migration 158/schema 108 introduced the internal Mission definition revision. Migration 159/schema 109 replaces
-read acknowledgement with accepted-delivery watermarks on Conversation and ContextManifest; it does not rewrite
-any frozen manifest or change the Run Facts schema number.
+Migration 159/schema 109 introduces the internal Mission definition revision. Migration 160/schema 110 replaces
+read acknowledgement with accepted-delivery watermarks on Conversation and ContextManifest and converges the
+deployed Mission-preview lineage with DSH; it does not rewrite any frozen manifest or change the Run Facts schema
+number.

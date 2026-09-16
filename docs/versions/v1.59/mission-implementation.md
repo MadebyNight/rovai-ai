@@ -24,7 +24,7 @@ last_updated: 2026-09-16
 ## 2026-09-16 定义编辑与 Git 基线修订
 
 用户随后移除创建期“起始版本”，要求首个 preparing 读取当时源工作树的本地分支与 HEAD；同时正式加入
-标题／描述编辑及 Agent 定义更新提示。Migration 158/schema 108 删除 `source_branch`，新增内部
+标题／描述编辑及 Agent 定义更新提示。Migration 159/schema 109 删除 `source_branch`，新增内部
 `details_version`、当时的 conversation 读取水位和 workspace `base_branch`。Renderer 用内部版本拒绝旧弹窗覆盖，
 Agent `mission get|update` 仍无版本且保持字段后提交覆盖。该读取确认语义随后由下一节的 accepted 投递水位取代；
 `CURRENT_INPUT` 与 WORKSPACE shape 始终不变。
@@ -35,7 +35,7 @@ Scheduled Automation 相同的 34px 顶部留白。定向验证包括 `cargo che
 
 ## 2026-09-16 稳定编号与 accepted 更新水位
 
-用户纠正了 UUID 外泄命名并替换读取确认语义。Migration 159/schema 109 为 Mission 分配删除后不复用的
+用户纠正了 UUID 外泄命名并替换读取确认语义。Migration 160/schema 110 为 Mission 分配删除后不复用的
 数字号；界面使用 `M-018`，新 Git 关联使用 `rovai/mission/018` 与 `<repo>-mission-018`。内部 UUID 继续作为
 关系主键。Mission 活动、开始记录和开始消息不再复制标题／描述；旧弹窗冲突通过重新读取最新投影恢复。
 
@@ -53,13 +53,18 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 - Git 文件系统 owner：固定基准、临时 index 保真实 index、未跟踪／忽略／二进制／特殊路径、冲突及恢复；
   纯 parser 矩阵不能证明 Git 行为，使用临时真实仓库。最小命令 `cargo test -p rovai-core --lib mission_workspace::tests`。
 - 已有 Context Evidence owner 扩展使命输入、once-per-binding ACK 和恢复负向分支；沿用唯一 golden，不复制 JSON 断言。
-- Migration 157 扩展受支持来源的 admission 矩阵，同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106。独立 Mission migration owner 证明事务回滚、既有历史保留、删除 Camp 后清理记录继续存在并可跨重启读取；旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_cleanup_survives_camp_deletion`。
+- Migration 158 扩展受支持来源的 admission 矩阵，在 DSH 157 后同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106；Migration 160 另行覆盖已部署 Mission 157–159/schema 109 与 DSH 的原位收敛。独立 Mission migration owner 证明事务回滚、既有历史保留、删除 Camp 后清理记录继续存在并可跨重启读取；旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_cleanup_survives_camp_deletion`。
 
 真实模型只在隔离 Smoke 和已冻结 Gate 中运行。交互稿的 15 组 fixture 检查不构成以上产品验收。
 
 ## 主线整合与验收
 
-已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；定义编辑与基线修订到 Migration 158/schema 108，稳定编号与 accepted 水位继续到 Migration 159/schema 109。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
+已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文曾在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；定义编辑与基线修订曾推进到 Migration 158/schema 108，稳定编号与 accepted 水位曾推进到 Migration 159/schema 109。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
+
+随后整合 `origin/main` 的 `e6d7f0cf` 时，主线已把 Migration 157/schema 107 分配给 DSH。最终序列保留
+DSH 157，将 Mission context／definition／delivery 顺延到 158–160，当前 schema 110；已安装的 Mission
+157–159/schema 109 被精确识别为旧 preview，只能通过 Migration 160 补齐 DSH 并收敛，不改写 Mission
+业务行、已冻结 Context 或既有工作区。
 
 随后整合 `243eb748`（#399 文件链接间距）。这次整合只改 Renderer／UI 文档；冻结的 Core／Skill
 内容指纹 `57adf680f418ab212392d3c79e533cc76e830d22ad34d82c99abf12e430d69d2` 保持不变。

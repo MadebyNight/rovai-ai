@@ -44,7 +44,8 @@ try {
 
   core = spawn(join(root, 'target', 'debug', 'rovai-core'), [
     ...coreDataDirectoryArguments(dataDir),
-    '--skill-library-root', join(dataDir, 'managed-skill-library')
+    '--skill-library-root', join(dataDir, 'managed-skill-library'),
+    '--mcp-config-path', join(dataDir, 'mcp.json')
   ], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -174,6 +175,11 @@ try {
       token: 'ROVAI_GROK_ACP_OK'
     },
     {
+      adapterKind: 'deepseek-harness',
+      permissionValues: { sandbox_mode: 'danger-full-access', approval_policy: process.env.ROVAI_DSH_APPROVAL_POLICY ?? 'ask' },
+      token: 'ROVAI_DSH_ACP_OK'
+    },
+    {
       adapterKind: 'antigravity-app',
       permissionValues: {
         mode: 'accept-edits',
@@ -216,6 +222,8 @@ try {
     let profile = await request('members.get', { agentId })
     const explicitModelId = specification.adapterKind === 'codebuddy-cli'
       ? process.env.ROVAI_CODEBUDDY_MODEL?.trim()
+      : specification.adapterKind === 'deepseek-harness'
+        ? process.env.ROVAI_DSH_MODEL?.trim()
       : specification.adapterKind === 'zcode-app'
         ? process.env.ROVAI_ZCODE_MODEL?.trim()
       : null
@@ -884,8 +892,9 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       path: createdPath,
       prompt: [
         'This is an isolated local file-operation acceptance test.',
-        `Use the native file Write or file editing tool exactly once to create the new file ${createdPath} with exactly ${createdText.trimEnd()} and a trailing newline.`,
-        `The exact content expressed as a JSON string is ${JSON.stringify(createdText)}.`,
+        `Use the native file Write tool exactly once to create the new file ${createdPath}.`,
+        `Set its content argument to the exact JSON-decoded string ${JSON.stringify(createdText)}.`,
+        'The final character of the content argument MUST be one line feed (U+000A, byte 0A). Do not trim or omit it, and do not write the two literal characters backslash+n.',
         'Do not read, list, search, use shell, or call another tool. Then reply exactly FILE_ADD_DONE.'
       ].join('\n'),
       expectedText: createdText,
@@ -908,8 +917,9 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       path: emptyPath,
       prompt: [
         'This is an isolated local file-operation acceptance test.',
-        `The file ${emptyPath} already exists and is empty. Use native file tools to set it to exactly ${emptyEditedText.trimEnd()} and a trailing newline.`,
-        `The exact content expressed as a JSON string is ${JSON.stringify(emptyEditedText)}.`,
+        `The file ${emptyPath} already exists and is empty. Use native file tools to set its complete content.`,
+        `When calling Write, set its content argument to the exact JSON-decoded string ${JSON.stringify(emptyEditedText)}.`,
+        'The final character of the content argument MUST be one line feed (U+000A, byte 0A). Do not trim or omit it, and do not write the two literal characters backslash+n.',
         'If your native Write or Edit tool requires reading the file first, use the native file Read tool once before writing.',
         'Do not list, search, use shell, or call unrelated tools. Then reply exactly FILE_EMPTY_EDIT_DONE.'
       ].join('\n'),
@@ -1028,6 +1038,20 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       ) === index)
     const matchingDiff = reportedDiffs.find((entry) => entry.path === pathSuffix)
     const reportedDiff = reportedDiffs.length === 1 ? reportedDiffs[0] : matchingDiff
+    if (adapterKind === 'deepseek-harness') {
+      const expectedDiff = ({
+        add: { changeKind: 'add', additions: 1, deletions: 0 },
+        edit: { changeKind: 'update', additions: 1, deletions: 1 },
+        edit_empty: { changeKind: 'update', additions: 1, deletions: 0 }
+      })[testCase.name]
+      if (expectedDiff && !isDeepStrictEqual(reportedDiff, { path: pathSuffix, ...expectedDiff })) {
+        throw new Error(`DeepSeek Harness ${testCase.name} did not project the native Before/After as a common Diff: ${JSON.stringify({
+          expected: { path: pathSuffix, ...expectedDiff },
+          reportedDiffs,
+          history: relevantHistory
+        })}`)
+      }
+    }
     const fileChanges = snapshot.agentRunFileChanges.filter((entry) => entry.agentRunId === agentRunId)
     const output = snapshot.messages.find((message) => message.sourceAgentRunId === agentRunId)?.body ?? null
     const presentation = testCase.name === 'read'
@@ -1051,6 +1075,8 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       typedOperationCount,
       expectedTypedOperationCount,
       diffChangeKind: reportedDiff?.changeKind ?? null,
+      diffAdditions: reportedDiff?.additions ?? null,
+      diffDeletions: reportedDiff?.deletions ?? null,
       fileLinkTarget,
       fileLinkMatchesExpected: fileLinkTarget === pathSuffix,
       presentation: testCase.name === 'read' && !typedProjectionObserved
@@ -1060,6 +1086,20 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       live,
       history: relevantHistory
     })
+  }
+  const expectedTextByName = new Map(cases.map((testCase) => [testCase.name, testCase.expectedText]))
+  const failedFileEffects = results.filter((result) => result.fileEffect !== 'passed')
+  if (failedFileEffects.length > 0) {
+    throw new Error(`${adapterKind} file-operation matrix did not produce the requested file contents: ${JSON.stringify(
+      failedFileEffects.map((result) => ({
+        name: result.name,
+        runStatus: result.runStatus,
+        expectedPath: result.expectedPath,
+        expectedText: expectedTextByName.get(result.name),
+        observedText: result.observedText,
+        output: result.output
+      }))
+    )}`)
   }
   return results
 }
@@ -1200,7 +1240,7 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
     },
     {
       name: 'large',
-      command: `Write-Output 'ROVAI_${stem}_LARGE_BEGIN'; [Console]::Out.Write(('0123456789abcdef' * 8192))`,
+      command: `Write-Output 'ROVAI_${stem}_LARGE_BEGIN'; [Console]::Out.Write(('ROVAI_${stem}_LARGE_BEGIN:0123456789abcdef' * 4096))`,
       status: 'completed',
       markers: [`ROVAI_${stem}_LARGE_BEGIN`]
     }
@@ -1237,7 +1277,7 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
     },
     {
       name: 'large',
-      command: `printf '%s\\n' 'ROVAI_${stem}_LARGE_BEGIN'; /usr/bin/yes '0123456789abcdef' | /usr/bin/head -c 131072`,
+      command: `printf '%s\\n' 'ROVAI_${stem}_LARGE_BEGIN'; /usr/bin/yes 'ROVAI_${stem}_LARGE_BEGIN:0123456789abcdef' | /usr/bin/head -c 131072`,
       status: 'completed',
       markers: [`ROVAI_${stem}_LARGE_BEGIN`]
     }
@@ -1327,7 +1367,8 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
       toolStatus: terminal.params.payload.status,
       toolCallId: [...toolCallIds][0],
       approvalCount: resolvedApprovals.size,
-      outputBytes: Buffer.byteLength(output)
+      outputBytes: Buffer.byteLength(output),
+      projectionTruncated: terminal.params.payload._rovaiTruncated === true
     })
   }
   return results

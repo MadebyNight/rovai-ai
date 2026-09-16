@@ -1,6 +1,6 @@
 ---
 title: "Rovai AI × DeepSeek Harness 运行时接入 Research Brief"
-status: "pre-implementation"
+status: "archived"
 reviewed_at: "2026-08-14"
 target_repo: "murray17/rovai-ai"
 upstream_repo: "deepseek-ai/deepseek-harness"
@@ -10,6 +10,9 @@ target_adapter: "deepseek-harness"
 ---
 
 # Rovai AI × DeepSeek Harness 运行时接入 Research Brief
+
+当前接入与验收见 [0.1.5-rc.2 ACP Parity Matrix](acp-0.1.5-parity.md)。本文保留
+2026-08-14、0.1.0-rc.5 的实现前研究，不代表当前 Adapter、能力或平台准入状态。
 
 > 本文研究对象是 DeepSeek AI 官方仓库 [`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)，不是其他同名的协议适配库、模型包装器或第三方 Coding TUI。
 >

@@ -2082,6 +2082,7 @@ struct Core {
     cursor_agent: AcpCliRuntimeAdapter,
     kimi_code_cli: AcpCliRuntimeAdapter,
     grok_build: AcpCliRuntimeAdapter,
+    deepseek_harness: AcpCliRuntimeAdapter,
     zcode_app: AcpCliRuntimeAdapter,
     runtime_fleet: Arc<AgentRuntimeFleetManager>,
     builtin_tool_leases: Arc<BuiltinToolLeaseRegistry>,
@@ -2428,6 +2429,7 @@ fn runtime_display_name(kind: AdapterKind) -> &'static str {
         AdapterKind::CursorAgent => "Cursor Agent",
         AdapterKind::KimiCodeCli => "Kimi Code",
         AdapterKind::GrokBuild => "Grok Build",
+        AdapterKind::DeepseekHarness => "DeepSeek Harness",
         AdapterKind::AntigravityApp => "Antigravity",
         AdapterKind::ZcodeApp => "ZCode",
     }
@@ -4599,6 +4601,13 @@ impl Core {
         {
             return Some(AgentRunRuntime::Acp(runtime));
         }
+        if let Some(runtime) = self
+            .deepseek_harness
+            .get_agent_run(agent_run_id, execution_epoch)
+            .await
+        {
+            return Some(AgentRunRuntime::Acp(runtime));
+        }
         self.grok_build
             .get_agent_run(agent_run_id, execution_epoch)
             .await
@@ -4715,6 +4724,7 @@ impl Core {
             self.cursor_agent.shutdown_all(),
             self.kimi_code_cli.shutdown_all(),
             self.grok_build.shutdown_all(),
+            self.deepseek_harness.shutdown_all(),
             self.zcode_app.shutdown_all(),
             self.claude_code_cli.shutdown_all(),
             self.antigravity_app.shutdown_all(),
@@ -4737,6 +4747,7 @@ impl Core {
                 self.cursor_agent.shutdown_all(),
                 self.kimi_code_cli.shutdown_all(),
                 self.grok_build.shutdown_all(),
+                self.deepseek_harness.shutdown_all(),
                 self.zcode_app.shutdown_all(),
                 self.claude_code_cli.shutdown_all(),
                 self.antigravity_app.shutdown_all(),
@@ -4763,6 +4774,7 @@ impl Core {
             rovai_core::agent_profile::AdapterKind::CursorAgent => Some(&self.cursor_agent),
             rovai_core::agent_profile::AdapterKind::KimiCodeCli => Some(&self.kimi_code_cli),
             rovai_core::agent_profile::AdapterKind::GrokBuild => Some(&self.grok_build),
+            AdapterKind::DeepseekHarness => Some(&self.deepseek_harness),
             rovai_core::agent_profile::AdapterKind::ZcodeApp => Some(&self.zcode_app),
             rovai_core::agent_profile::AdapterKind::CodexCli
             | rovai_core::agent_profile::AdapterKind::Pi
@@ -9853,6 +9865,7 @@ impl Core {
             | rovai_core::agent_profile::AdapterKind::CursorAgent
             | rovai_core::agent_profile::AdapterKind::KimiCodeCli
             | rovai_core::agent_profile::AdapterKind::GrokBuild
+            | rovai_core::agent_profile::AdapterKind::DeepseekHarness
             | rovai_core::agent_profile::AdapterKind::ZcodeApp) => {
                 let probe =
                     health::acp_capability_probe_at_for_purpose(executable_path, kind, purpose)
@@ -9869,8 +9882,11 @@ impl Core {
                         initialize_result: probe.initialize_result,
                         session_result: probe.session_result,
                         attempted_at,
-                        last_error: if kind == AdapterKind::ZcodeApp
-                            && probe.result.status == health::AgentRuntimeProbeStatus::Ready
+                        last_error: if matches!(
+                            kind,
+                            AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness
+                        ) && probe.result.status
+                            == health::AgentRuntimeProbeStatus::Ready
                         {
                             None // Successful connection detail is not an error.
                         } else {
@@ -14752,6 +14768,27 @@ impl Core {
         self.bind_prepared_native_session(execution, &binding_credential, &session_id)
             .await
             .context("failed to bind ACP Native Session")?;
+        if execution.runtime.adapter_kind == AdapterKind::DeepseekHarness {
+            let bootstrap = {
+                let mut database = self.database.lock().await;
+                ContextService.prepare_session_bootstrap(
+                    &mut database,
+                    &ManagedBlobStore::new(&self.data_dir),
+                    &execution.agent_run_id,
+                    execution.execution_epoch,
+                    CharterDeliveryMode::ManagedSystemPrompt,
+                )?
+            };
+            if bootstrap.native_binding_id != binding_credential.native_binding_id
+                || bootstrap.native_binding_generation
+                    != binding_credential.native_binding_generation
+            {
+                anyhow::bail!("DSH Bootstrap does not match its Native Binding");
+            }
+            runtime
+                .bind_dsh_bootstrap(&session_id, &bootstrap.payload)
+                .await?;
+        }
         self.establish_acp_compaction_observer_best_effort(execution, &runtime, &session_id)
             .await;
         let Some((prepared_context, delivery)) = self
@@ -15015,6 +15052,7 @@ impl Core {
             | rovai_core::agent_profile::AdapterKind::CursorAgent
             | rovai_core::agent_profile::AdapterKind::KimiCodeCli
             | rovai_core::agent_profile::AdapterKind::GrokBuild
+            | rovai_core::agent_profile::AdapterKind::DeepseekHarness
             | rovai_core::agent_profile::AdapterKind::ZcodeApp) => {
                 if let Some(adapter) = self.acp_adapter(kind) {
                     adapter
@@ -16036,6 +16074,15 @@ async fn run_core(
             runtime_fleet.clone(),
             compaction_detector_policies
                 .policy_for(AdapterKind::KimiCodeCli)
+                .unwrap_or(CompactionDetectorPolicy::Disabled),
+        ),
+        deepseek_harness: AcpCliRuntimeAdapter::deferred(
+            rovai_core::agent_profile::AdapterKind::DeepseekHarness,
+            acp_tx.clone(),
+            data_dir.join("runtime/deepseek-harness"),
+            runtime_fleet.clone(),
+            compaction_detector_policies
+                .policy_for(AdapterKind::DeepseekHarness)
                 .unwrap_or(CompactionDetectorPolicy::Disabled),
         ),
         grok_build: AcpCliRuntimeAdapter::deferred(
@@ -23422,6 +23469,15 @@ mod tests {
                     .policy_for(AdapterKind::KimiCodeCli)
                     .unwrap_or(CompactionDetectorPolicy::Disabled),
             )?,
+            deepseek_harness: AcpCliRuntimeAdapter::new(
+                AdapterKind::DeepseekHarness,
+                acp_tx.clone(),
+                data_dir.join("runtime/deepseek-harness"),
+                runtime_fleet.clone(),
+                compaction_detector_policies
+                    .policy_for(AdapterKind::DeepseekHarness)
+                    .unwrap_or(CompactionDetectorPolicy::Disabled),
+            )?,
             grok_build: AcpCliRuntimeAdapter::new(
                 AdapterKind::GrokBuild,
                 acp_tx.clone(),
@@ -26490,7 +26546,7 @@ done
             .into_iter()
             .filter(|adapter_kind| adapter_kind.uses_acp())
             .collect::<Vec<_>>();
-        assert_eq!(acp_adapters.len(), 11);
+        assert_eq!(acp_adapters.len(), 12);
         for adapter_kind in acp_adapters {
             let expected_output = format!("{} terminal output", adapter_kind.as_str());
             let (event_type, payload) = normalize_acp_event(

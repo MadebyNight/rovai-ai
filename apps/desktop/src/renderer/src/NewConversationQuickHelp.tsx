@@ -112,7 +112,7 @@ export function NewConversationQuickHelp({
           >
             {children ?? (
               <>
-                保存所选队员和负责人，下次点击「新对话」直接创建。
+                保存所选队员和队长，下次点击「新对话」直接创建。
                 <br />
                 可在「设置 → 通用」关闭。
               </>

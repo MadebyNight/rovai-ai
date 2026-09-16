@@ -44,6 +44,7 @@ const requestedAdapters = adapterSelection === 'all'
       'trae-cn-cli',
       'kimi-code-cli',
       'grok-build',
+  'deepseek-harness',
       'zcode-app'
     ]
   : adapterSelection.split(',').map((value) => value.trim()).filter(Boolean)
@@ -61,6 +62,7 @@ const supportedAdapters = new Set([
   'trae-cn-cli',
   'kimi-code-cli',
   'grok-build',
+  'deepseek-harness',
   'zcode-app'
 ])
 const allDeliveryGroups = [
@@ -70,6 +72,7 @@ const allDeliveryGroups = [
   'codex',
   'copilot',
   'cursor',
+  'dsh',
   'grok',
   'kimi',
   'kiro',
@@ -852,6 +855,7 @@ function groupRoot(groupKey) {
   if (groupKey === 'trae') return '.trae/skills'
   if (groupKey === 'kimi') return '.kimi-code/skills'
   if (groupKey === 'grok') return '.grok/skills'
+  if (groupKey === 'dsh') return '.dsh/skills'
   if (groupKey === 'zcode') return '.zcode/skills'
   throw new Error(`Unknown Skill delivery group: ${groupKey}`)
 }
@@ -870,6 +874,7 @@ function deliveryGroup(adapterKind) {
   if (adapterKind === 'trae-cn-cli') return 'trae'
   if (adapterKind === 'kimi-code-cli') return 'kimi'
   if (adapterKind === 'grok-build') return 'grok'
+  if (adapterKind === 'deepseek-harness') return 'dsh'
   if (adapterKind === 'zcode-app') return 'zcode'
   throw new Error(`Unknown Skill smoke Adapter: ${adapterKind}`)
 }

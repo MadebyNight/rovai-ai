@@ -114,9 +114,11 @@ See [Transport v26](builtin-tool-transport-v26.md), [context evidence v25](conte
 and the [desktop UI contract](../ui/components/mission-board.md). `mission get` is a pure current-state read;
 it does not acknowledge or suppress update notices. Mobile has no Mission entry in v1.
 
-Migration 157 upgrades either admitted v1.59/schema 106 predecessor with Mission/context workspace
-evidence. Migration 158/schema 108 removes the obsolete creation-time source ref, adds internal definition
-revision and nullable workspace `base_branch`. Migration 159/schema 109 adds the stable Mission number,
-removes stored commission definition bodies and the read-watermark table, scrubs definition bodies from
-Mission activity/domain-event facts, and adds accepted-delivery watermarks to Conversation/ContextManifest.
-No migration creates or renames a workspace or changes frozen context bytes.
+Migration 157/schema 107 first applies the mainline DSH closed-set expansion to either admitted
+v1.59/schema 106 predecessor. Migration 158 adds Mission/context workspace evidence; Migration 159/schema 109
+removes the obsolete creation-time source ref, adds internal definition revision and nullable workspace
+`base_branch`. Migration 160/schema 110 adds the stable Mission number, removes stored commission definition
+bodies and the read-watermark table, scrubs definition bodies from Mission activity/domain-event facts, and
+adds accepted-delivery watermarks to Conversation/ContextManifest. A deployed Mission preview that already
+uses receipts 157–159/schema 109 is admitted only for Migration 160, which adds the missing DSH schema and
+converges both lineages. No migration creates or renames a workspace or changes frozen context bytes.

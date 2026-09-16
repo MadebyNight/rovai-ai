@@ -284,7 +284,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 109;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 110;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -718,6 +718,7 @@ struct CurrentMigrationState {
     v157: bool,
     v158: bool,
     v159: bool,
+    v160: bool,
 }
 
 impl CurrentMigrationState {
@@ -739,6 +740,14 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v160 {
+            let mut previous = *self;
+            previous.v160 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 110
+                && self.v159
+                && previous.admits("v1.59", 109, classifier);
+        }
         if self.v159 {
             let mut previous = *self;
             previous.v159 = false;
@@ -2949,6 +2958,21 @@ pub(crate) fn classify_database_contract(
     let deployed_tool_source = marker.contract_version == "v1.52"
         && marker.projection_schema_version == 92
         && marker.classifier_version == V142_CLASSIFIER_VERSION;
+    let dsh_schema_matches = migrations.v157 && dsh_runtime_v157_schema_matches(connection)?;
+    let mission_context_schema_matches =
+        migrations.v158 && mission_context::schema_matches(connection)?;
+    let mission_details_schema_matches =
+        migrations.v159 && mission_details::v159_schema_matches(connection)?;
+    let mission_delivery_schema_matches =
+        (migrations.v159 || migrations.v160) && mission_details::v160_schema_matches(connection)?;
+    // The Mission preview shipped 157-159 before main assigned 157 to DSH. Admit
+    // that exact physical schema only as a source for migration 160, which adds
+    // DSH and converges both lineages on the same current schema.
+    let legacy_mission_preview = migrations.v159
+        && !migrations.v160
+        && !dsh_schema_matches
+        && mission_context_schema_matches
+        && mission_delivery_schema_matches;
     if (!legacy_client_source
         && !migrations.admits(
             &marker.contract_version,
@@ -2972,11 +2996,13 @@ pub(crate) fn classify_database_contract(
         || (migrations.v153 && !client_draft_v153_schema_matches(connection)?)
         || (migrations.v154 && !private_client_draft_v154_schema_matches(connection)?)
         || (migrations.v155 && !automation_time_limit_v155_schema_matches(connection)?)
-        || (migrations.v159 && !mission_details::v159_schema_matches(connection)?)
-        || (migrations.v158
-            && !migrations.v159
-            && !mission_details::v158_schema_matches(connection)?)
-        || (migrations.v157 && !mission_context::schema_matches(connection)?)
+        || (migrations.v157 && !dsh_schema_matches && !legacy_mission_preview)
+        || (migrations.v158 && !mission_context_schema_matches)
+        || (migrations.v159
+            && !migrations.v160
+            && !legacy_mission_preview
+            && !mission_details_schema_matches)
+        || (migrations.v160 && !mission_delivery_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3260,6 +3286,73 @@ fn dingtalk_display_names_v150_schema_matches(connection: &Connection) -> rusqli
             .iter()
             .any(|(column, kind, required)| column == name && kind == "TEXT" && !required)
     }))
+}
+
+const DSH_RUNTIME_TABLES: [&str; 5] = [
+    "adapter_installation",
+    "agent_profile",
+    "bootstrap_redelivery_requirement",
+    "compaction_detector_policy",
+    "native_session_compaction_observer_lease",
+];
+const DSH_SKILL_TABLES: [&str; 2] = ["skill_group_assignment", "skill_projection_observation"];
+
+fn dsh_runtime_v157_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    for (tables, token) in [
+        (&DSH_RUNTIME_TABLES[..], "'deepseek-harness'"),
+        (&DSH_SKILL_TABLES[..], "'dsh'"),
+    ] {
+        for table in tables {
+            let sql: String = connection.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )?;
+            if !sql.contains(token) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn apply_dsh_runtime_schema_v157(tx: &Transaction<'_>) -> Result<()> {
+    rewrite_dsh_runtime_closed_sets(tx, false)
+}
+
+fn rewrite_dsh_runtime_closed_sets(tx: &Transaction<'_>, reverse: bool) -> Result<()> {
+    let triggers = {
+        let mut statement = tx.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL ORDER BY name")?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (name, _) in &triggers {
+        tx.execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))?;
+    }
+    for (tables, old, new) in [
+        (
+            &DSH_RUNTIME_TABLES[..],
+            "'grok-build'",
+            "'grok-build', 'deepseek-harness'",
+        ),
+        (&DSH_SKILL_TABLES[..], "'grok'", "'grok', 'dsh'"),
+    ] {
+        for table in tables {
+            expand_closed_set(
+                tx,
+                table,
+                if reverse { new } else { old },
+                if reverse { old } else { new },
+            )?;
+        }
+    }
+    for (_, sql) in triggers {
+        tx.execute_batch(&sql)?;
+    }
+    Ok(())
 }
 
 fn zcode_runtime_v149_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -3805,7 +3898,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 156),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 157),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 158),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 159)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 159),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 160)
         "#,
         [],
         |row| {
@@ -3900,6 +3994,7 @@ fn load_current_migration_state(
                 v157: row.get(87)?,
                 v158: row.get(88)?,
                 v159: row.get(89)?,
+                v160: row.get(90)?,
             })
         },
     )
@@ -6806,13 +6901,16 @@ impl Database {
                 migration_step!("migration_156", self.migrate_attachment_paths_v156());
             }
             if !self.schema_migration_applied(157)? {
-                migration_step!("migration_157", self.migrate_mission_context_v157());
+                migration_step!("migration_157", self.migrate_dsh_runtime_v157());
             }
             if !self.schema_migration_applied(158)? {
-                migration_step!("migration_158", self.migrate_mission_details_v158());
+                migration_step!("migration_158", self.migrate_mission_context_v158());
             }
             if !self.schema_migration_applied(159)? {
-                migration_step!("migration_159", self.migrate_mission_delivery_v159());
+                migration_step!("migration_159", self.migrate_mission_details_v159());
+            }
+            if !self.schema_migration_applied(160)? {
+                migration_step!("migration_160", self.migrate_mission_delivery_v160());
             }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
@@ -7478,13 +7576,16 @@ impl Database {
             migration_step!("migration_156", self.migrate_attachment_paths_v156());
         }
         if !self.schema_migration_applied(157)? {
-            migration_step!("migration_157", self.migrate_mission_context_v157());
+            migration_step!("migration_157", self.migrate_dsh_runtime_v157());
         }
         if !self.schema_migration_applied(158)? {
-            migration_step!("migration_158", self.migrate_mission_details_v158());
+            migration_step!("migration_158", self.migrate_mission_context_v158());
         }
         if !self.schema_migration_applied(159)? {
-            migration_step!("migration_159", self.migrate_mission_delivery_v159());
+            migration_step!("migration_159", self.migrate_mission_details_v159());
+        }
+        if !self.schema_migration_applied(160)? {
+            migration_step!("migration_160", self.migrate_mission_delivery_v160());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -24185,6 +24286,49 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_dsh_runtime_v157(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.contract_version == "v1.59" && marker.projection_schema_version == 106),
+                "DSH migration requires the exact v1.59/schema 106 source"
+            );
+            apply_dsh_runtime_schema_v157(&tx)?;
+            tx.execute(
+                "INSERT INTO schema_migration VALUES(157, datetime('now'))",
+                [],
+            )?;
+            tx.execute(
+                "UPDATE rovai_data_contract SET projection_schema_version=107,updated_at=datetime('now') WHERE singleton=1",
+                [],
+            )?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.59"
+                            && marker.projection_schema_version == 107
+                ),
+                "DSH migration failed source schema admission"
+            );
+            validate_migration_foreign_keys(
+                &tx,
+                &DSH_RUNTIME_TABLES
+                    .iter()
+                    .chain(DSH_SKILL_TABLES.iter())
+                    .copied()
+                    .collect::<Vec<_>>(),
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        self.connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result
+    }
+
     fn migrate_private_client_drafts_v154(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
@@ -29357,6 +29501,28 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v156_source_for_test(connection: &Connection) {
+    let dsh_applied = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=157)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap();
+    if dsh_applied {
+        connection
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        let tx = connection.unchecked_transaction().unwrap();
+        // Only test fixtures use this reverse path; never delete user assignments.
+        rewrite_dsh_runtime_closed_sets(&tx, true).unwrap();
+        tx.execute_batch("DELETE FROM schema_migration WHERE version=157; UPDATE rovai_data_contract SET projection_schema_version=106 WHERE singleton=1").unwrap();
+        tx.commit().unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    }
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v154_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v155_source_for_test(connection);
     let applied: bool = connection
@@ -29374,6 +29540,7 @@ fn downgrade_current_schema_to_v154_source_for_test(connection: &Connection) {
 #[cfg(test)]
 fn downgrade_current_schema_to_v155_source_for_test(connection: &Connection) {
     mission_context::downgrade_for_test(connection);
+    downgrade_current_schema_to_v156_source_for_test(connection);
     attachment_paths::downgrade_for_test(connection);
 }
 
@@ -32546,6 +32713,7 @@ mod tests {
             v157: version >= 157,
             v158: version >= 158,
             v159: version >= 159,
+            v160: version >= 160,
         }
     }
 
@@ -32647,6 +32815,15 @@ mod tests {
     #[test]
     fn current_migration_state_admission_matrix() {
         let supported = [
+            ("v1.59/schema 106 before DSH", "v1.59", 106, 156),
+            ("v1.59/schema 107 before Mission context", "v1.59", 107, 157),
+            ("v1.59/schema 108 before Mission details", "v1.59", 108, 158),
+            (
+                "v1.59/schema 109 before Mission delivery convergence",
+                "v1.59",
+                109,
+                159,
+            ),
             (
                 "v1.59/schema 105 before attachment paths",
                 "v1.59",
@@ -32670,7 +32847,7 @@ mod tests {
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                158,
+                160,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -33142,7 +33319,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(158);
+        let current = migration_state_through(160);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -33596,7 +33773,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(158));
+        assert_eq!(state, migration_state_through(160));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -33615,6 +33792,86 @@ mod tests {
 
         drop(database);
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
+    }
+
+    #[test]
+    fn dsh_catalog_migration_preserves_rows_and_rolls_back_with_its_receipt() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-dsh-migration-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v156_source_for_test(database.connection());
+        assert!(
+            matches!(classify_database_contract(database.connection()).unwrap(), DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.projection_schema_version == 106)
+        );
+        let before: String = database
+            .connection()
+            .query_row(
+                "SELECT group_concat(id || ':' || version, ',') FROM agent_profile ORDER BY id",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let assignments: i64 = database
+            .connection()
+            .query_row("SELECT count(*) FROM skill_group_assignment", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        database.connection().execute_batch("CREATE TEMP TRIGGER fail_dsh_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=157 BEGIN SELECT RAISE(ABORT,'dsh rollback fixture'); END;").unwrap();
+        assert!(
+            database
+                .migrate_dsh_runtime_v157()
+                .unwrap_err()
+                .to_string()
+                .contains("dsh rollback fixture")
+        );
+        assert!(!dsh_runtime_v157_schema_matches(database.connection()).unwrap());
+        assert!(connection_has_admissible_data_contract(database.connection()).unwrap());
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER fail_dsh_receipt")
+            .unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.projection_schema_version == 107
+        ));
+        assert_eq!(
+            before,
+            database
+                .connection()
+                .query_row(
+                    "SELECT group_concat(id || ':' || version, ',') FROM agent_profile ORDER BY id",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            assignments,
+            database
+                .connection()
+                .query_row("SELECT count(*) FROM skill_group_assignment", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap()
+        );
+        assert!(
+            database
+                .connection()
+                .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                .optional()
+                .unwrap()
+                .is_none()
+        );
+        database.migrate_mission_context_v158().unwrap();
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        drop(database);
+        assert!(
+            connection_has_current_data_contract(Database::open(&directory).unwrap().connection())
+                .unwrap()
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -33710,7 +33967,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert!(database.schema_migration_applied(144).unwrap());
 
@@ -33784,7 +34042,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -33884,26 +34143,28 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }
 
-    // Migration 157 owns atomic schema/receipt admission and durable cleanup after
+    // Migration 158 owns atomic schema/receipt admission and durable cleanup after
     // Camp cascade. SQL state and restart identity require this isolated DB owner.
     #[test]
     fn mission_migration_is_atomic_and_cleanup_survives_camp_deletion() {
         let mut database = crate::test_support::seeded_runtime_database_owned();
         downgrade_current_schema_to_v155_source_for_test(database.connection());
         database.migrate_attachment_paths_v156().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
         let history: i64 = database
             .connection()
             .query_row("SELECT count(*) FROM event_log", [], |r| r.get(0))
             .unwrap();
-        database.connection().execute_batch("CREATE TEMP TRIGGER reject_mission_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=157 BEGIN SELECT RAISE(ABORT,'mission receipt failure'); END;").unwrap();
+        database.connection().execute_batch("CREATE TEMP TRIGGER reject_mission_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=158 BEGIN SELECT RAISE(ABORT,'mission receipt failure'); END;").unwrap();
         assert!(
             database
-                .migrate_mission_context_v157()
+                .migrate_mission_context_v158()
                 .unwrap_err()
                 .to_string()
                 .contains("mission receipt failure")
         );
-        assert!(!database.schema_migration_applied(157).unwrap());
+        assert!(database.schema_migration_applied(157).unwrap());
+        assert!(!database.schema_migration_applied(158).unwrap());
         assert_eq!(
             database
                 .connection()
@@ -33923,7 +34184,7 @@ mod tests {
             .connection()
             .execute_batch("DROP TRIGGER reject_mission_receipt;")
             .unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(
             database
@@ -34056,7 +34317,8 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        preview.migrate_mission_context_v157().unwrap();
+        preview.migrate_dsh_runtime_v157().unwrap();
+        preview.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(preview.connection()).unwrap());
         assert_eq!(
             preview
@@ -34069,6 +34331,47 @@ mod tests {
                 .unwrap(),
             "preview upgrade"
         );
+    }
+
+    #[test]
+    fn deployed_mission_preview_converges_with_dsh_at_migration_160() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-mission-dsh-join-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        let tx = database.connection().unchecked_transaction().unwrap();
+        rewrite_dsh_runtime_closed_sets(&tx, true).unwrap();
+        tx.execute_batch(
+            "DELETE FROM schema_migration WHERE version=160;
+             UPDATE rovai_data_contract
+             SET projection_schema_version=109,updated_at=datetime('now')
+             WHERE singleton=1;",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .unwrap();
+
+        assert!(!dsh_runtime_v157_schema_matches(database.connection()).unwrap());
+        assert!(mission_details::v160_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.projection_schema_version == 109
+        ));
+
+        database.migrate_mission_delivery_v160().unwrap();
+        assert!(dsh_runtime_v157_schema_matches(database.connection()).unwrap());
+        assert!(database.schema_migration_applied(160).unwrap());
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -34130,7 +34433,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -34173,7 +34477,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(
             database
@@ -34449,7 +34754,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert_eq!(database.connection().query_row("SELECT revision,updated_at,client_id FROM single_chat_composer_draft WHERE conversation_id=?1", [&conversation_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(), (7,"2026-09-13T00:00:00Z".into(),"desktop".into()));
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         assert_eq!(store.load_draft(&database, camp_id).unwrap(), draft);
@@ -34632,7 +34938,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         let reopened = Database::open(&directory).unwrap();
@@ -35748,6 +36055,7 @@ mod tests {
                     | SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
+                    | SkillDeliveryGroupKey::Dsh
             )
         }) {
             for (skill_id, revision_id) in [
@@ -35963,6 +36271,7 @@ mod tests {
                     | SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
+                    | SkillDeliveryGroupKey::Dsh
             )
         }) {
             for (skill_id, revision_id) in [
@@ -36143,6 +36452,7 @@ mod tests {
                     | SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
+                    | SkillDeliveryGroupKey::Dsh
             )
         }) {
             for (skill_id, revision_id) in [
@@ -36501,6 +36811,7 @@ mod tests {
                 SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
+                    | SkillDeliveryGroupKey::Dsh
             )
         }) {
             for (skill_id, revision_id) in [
@@ -37259,7 +37570,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let after: (String, String) = database.connection().query_row(
             "SELECT default_model_selection_json, runtime_binding_revision FROM agent_profile WHERE id = 'agent_1'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
@@ -37468,7 +37780,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained: (i64, Option<String>) = database
             .connection()
@@ -37654,7 +37967,8 @@ mod tests {
         database.migrate_private_client_drafts_v154().unwrap();
         database.migrate_automation_time_limit_v155().unwrap();
         database.migrate_attachment_paths_v156().unwrap();
-        database.migrate_mission_context_v157().unwrap();
+        database.migrate_dsh_runtime_v157().unwrap();
+        database.migrate_mission_context_v158().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let retained = database
             .connection()

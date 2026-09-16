@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-member-identity
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-16
 ---
 
 # 队员身份与图像
@@ -51,6 +51,12 @@ last_updated: 2026-09-13
 文件系统访问、审批、权限模式等字段继续服从原 Runtime schema、原始选项和默认值；可用性、模型缓存和
 平台冻结状态仍来自 Core。视觉排序不改变初始选择：默认模型不写入显式模型 ID，选择固定模型也不自动填入
 推理强度；选择“跟随模型默认值”删除对应 override。
+
+DeepSeek Harness 的两个权限字段以原生名称作为主标签：`sandbox_mode` 与 `approval_policy`。选项也逐字显示
+`read-only | workspace-write | danger-full-access` 和 `ask | never`；中文解释只放在同一选项的次级说明中。
+触发器、菜单、持久化值与最终 Host 配置使用同一个原生 value，不重命名为“安全模式”“自动模式”或其他
+Rovai 概念。该表单由 Desktop 与 Mobile 共用；版本不兼容也复用同一状态投影，并明确显示最低版本
+`0.1.5-rc.2`，不建立移动端专属文案分支。
 
 ## 当前用户个人资料
 

@@ -1,6 +1,7 @@
 //! Reconcile the published attachment-path schema and the deployed Mission preview.
-//! Both used migration 156/schema 106. Their frozen evidence stays readable; all new
-//! contexts use v25/Profile 6/RunFacts 4 after the single atomic v157 transition.
+//! Both used migration 156/schema 106. Their frozen evidence stays readable; DSH first
+//! advances to schema 107, then all new contexts use v25/Profile 6/RunFacts 4 after the
+//! single atomic v158 transition.
 use super::*;
 
 const CURRENT_FACT_BRANCH: &str = "(context_manifest_version = 25 AND formatter_version = 25 AND run_facts_schema_version = 4 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
@@ -175,7 +176,7 @@ pub(super) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> 
 }
 
 impl Database {
-    pub(super) fn migrate_mission_context_v157(&mut self) -> Result<()> {
+    pub(super) fn migrate_mission_context_v158(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
             let tx = self
@@ -183,8 +184,8 @@ impl Database {
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
             anyhow::ensure!(
                 matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
-                if marker.contract_version=="v1.59" && marker.projection_schema_version==106),
-                "Mission context migration requires an admitted v1.59/schema 106 source"
+                if marker.contract_version=="v1.59" && marker.projection_schema_version==107),
+                "Mission context migration requires an admitted v1.59/schema 107 source"
             );
             let preview = mission_v156_schema_matches(&tx)?;
             let schema: String = tx.query_row(
@@ -195,11 +196,11 @@ impl Database {
             let mut next = schema
                 .replace(
                     "CREATE TABLE \"context_manifest\"",
-                    "CREATE TABLE context_manifest_v157",
+                    "CREATE TABLE context_manifest_v158",
                 )
                 .replace(
                     "CREATE TABLE context_manifest (",
-                    "CREATE TABLE context_manifest_v157 (",
+                    "CREATE TABLE context_manifest_v158 (",
                 )
                 .replace(
                     "formatter_version IN (20, 21, 22, 23, 24)",
@@ -227,7 +228,7 @@ impl Database {
                 &format!("{CURRENT_FACT_BRANCH}\n OR\n (context_manifest_version = 19"),
             );
             anyhow::ensure!(
-                next.contains("CREATE TABLE context_manifest_v157")
+                next.contains("CREATE TABLE context_manifest_v158")
                     && next.contains(CURRENT_FACT_BRANCH)
                     && next.contains(PATH_FACT_BRANCH),
                 "Mission context source schema mismatch"
@@ -235,7 +236,7 @@ impl Database {
             let objects = migration_schema_objects(&tx, "context_manifest", true)?;
             tx.execute_batch(&next)?;
             drop_rebuild_triggers(&tx, &objects)?;
-            tx.execute_batch("INSERT INTO context_manifest_v157 SELECT * FROM context_manifest; DROP TABLE context_manifest; ALTER TABLE context_manifest_v157 RENAME TO context_manifest;")?;
+            tx.execute_batch("INSERT INTO context_manifest_v158 SELECT * FROM context_manifest; DROP TABLE context_manifest; ALTER TABLE context_manifest_v158 RENAME TO context_manifest;")?;
             restore_rebuild_schema_objects(
                 &tx,
                 "context_manifest",
@@ -259,10 +260,10 @@ impl Database {
             }
             tx.execute_batch(GUARDS)?;
             mission_details::apply_schema(&tx)?;
-            tx.execute_batch("INSERT INTO schema_migration VALUES(157,datetime('now')); INSERT INTO schema_migration VALUES(158,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=108,updated_at=datetime('now') WHERE singleton=1;")?;
+            tx.execute_batch("INSERT INTO schema_migration VALUES(158,datetime('now')); INSERT INTO schema_migration VALUES(159,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=109,updated_at=datetime('now') WHERE singleton=1;")?;
             anyhow::ensure!(
                 matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
-                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 108),
+                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 109),
                 "Mission context migration failed source admission"
             );
             validate_migration_foreign_keys(
@@ -282,7 +283,7 @@ impl Database {
         let restore = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
         result?;
         restore?;
-        self.migrate_mission_delivery_v159()
+        self.migrate_mission_delivery_v160()
     }
 }
 
@@ -290,7 +291,7 @@ impl Database {
 pub(super) fn downgrade_for_test(connection: &Connection) {
     if !connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=157)",
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=158)",
             [],
             |r| r.get::<_, bool>(0),
         )
@@ -307,10 +308,10 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
         "DROP TABLE IF EXISTS mission_number_sequence;
         ALTER TABLE conversation DROP COLUMN mission_details_delivered_version;
         ALTER TABLE context_manifest DROP COLUMN mission_details_version;
-        DELETE FROM schema_migration WHERE version=159;",
+        DELETE FROM schema_migration WHERE version=160;",
     )
     .unwrap();
-    tx.execute_batch("DROP TABLE IF EXISTS mission_details_read; DELETE FROM schema_migration WHERE version=158;")
+    tx.execute_batch("DROP TABLE IF EXISTS mission_details_read; DELETE FROM schema_migration WHERE version=159;")
         .unwrap();
     let guard: String = tx
         .query_row(
@@ -372,7 +373,7 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
         &[],
     );
     tx.execute_batch(attachment_paths::GUARDS).unwrap();
-    tx.execute_batch("DELETE FROM schema_migration WHERE version=157; UPDATE rovai_data_contract SET projection_schema_version=106 WHERE singleton=1;").unwrap();
+    tx.execute_batch("DELETE FROM schema_migration WHERE version=158; UPDATE rovai_data_contract SET projection_schema_version=107 WHERE singleton=1;").unwrap();
     tx.commit().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 }

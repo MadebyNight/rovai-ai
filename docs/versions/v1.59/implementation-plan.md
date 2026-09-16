@@ -56,7 +56,7 @@ JSON、原生选项、请求身份、提交禁用与摘要聚焦语义保留；�
 
 本地 ABI 拒绝矩阵、Rust workspace/all-targets check、Core 单测 805 通过/6 既有忽略、格式与文档门禁
 对应原始 `bda1ab83`。后续依维护者的新范围将现有 14 项 Linux Runtime 显式开放 preview（排除 Cursor），
-完整资格证据仍待逐项闭合；DeepSeek Harness 不在目录且不新增。
+完整资格证据仍待逐项闭合；DeepSeek Harness 不属于本批 Linux 适配范围；后续 ACP 增量单独记录。
 [初轮 DMIT 探测](evidence/linux-server/dmit-runtime-probes.json)与[续测及清理记录](evidence/linux-server/dmit-final-probes.json)
 保留每次失败和协议切换结果：Codex 0.154.0、Claude Code 2.1.270、Pi 0.85.1、Grok 1.0.30 完成 MiniMax-M3
 工具写入/读回；Qwen 0.23.3 改用原生 Anthropic Provider 后通过。OpenCode 1.18.30、Copilot 1.0.83 工具链成功，
@@ -637,7 +637,8 @@ Windows/Linux 实机、容器、Mobile 和正式发布仍不纳入本轮。当�
 合并基线通过 TypeScript 与 Rust workspace default：Core 799 通过/6 既有忽略、CLI 35、Web 4。
 Task/Memory/Automation/Skills/MCP、单聊和资源适配现已接入同一业务入口；以下记录使用本轮重新执行的证据。
 Migration 153 保留上游 150/151/152；旧任务分支的客户端草稿 150 通过精确 schema 检查和原子迁移升级，
-保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，当前 schema 104。
+保留 editor proof、草稿及回执。Migration 154 继续将私聊 Draft、Pending 来源／编辑绑定客户端，该步骤目标为 schema 104；
+随后 Automation 155 和附件路径 156 依次推进到 schema 106，DSH 闭集迁移 157 最终推进到 schema 107。
 
 本轮管理资源与 Host 时钟增量的 Core library：803 通过／6 既有忽略；Desktop 时钟适配 20 项、共享 Web build 通过。
 Rust 调度循环在两入口自行运行；原 Host pipe/HTTP owner 与新增无浏览器时钟 seam 共 2 项通过，
@@ -1158,6 +1159,20 @@ HTML 跨 Camp 验收直接检查同一 iframe、页面内存标记和 `performan
 Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 310 通过；workspace Clippy 通过。
 此增量没有 Rust 改动，不把本机 fixture 结果声明为跨平台发布资格或应用进程内存上限证明。
 
+
+## DeepSeek Harness ACP 接入增量
+
+按 [V1.59-D10](decisions.md#v1-59-d10)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
+工作树分支 `rovai/dsh-acp-runtime`：共享 Host/Fleet、exact resume、managed system prompt、原生权限、模型目录、
+Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 157 保留现有 Runtime/Skill 行及 trigger，
+从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
+Root README 增加对应的正式支持行；其余平台保持 not_qualified。逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
+
+2026-09-16 收敛项已实现：队员页显示并保存 DSH 原生 `sandbox_mode`/`approval_policy`；Core 删除 MCP 名称/只读
+推断和二次询问，只承载 DSH 原生请求；shared Fleet 的 DSH replacement 同时覆盖 idle 先回收、busy Run 后回收、
+回收失败阻断；observer 把官方 write/edit Before/After 归一为标准 ACP Diff，新增缺 Before 与大文件走通用路径级回退。
+真实 MiniMax-M3 文件矩阵已得到 edit `+1/-1` 与空文件 edit `+1/-0`；脚本化 MCP 更新/exact resume/隔离矩阵得到
+0 个 synthetic Approval。最低版本错误和权限说明由 Desktop/Mobile 共用组件呈现；没有 DSH 专属 Command、文件或 Diff UI。
 
 ## Weekly 无时间上限
 

@@ -1067,7 +1067,7 @@ function CampRow({
         <span className="camp-marker-slot" aria-hidden="true">
           {hasNewReply && <i className="task-dot camp-marker-unread_completed" />}
         </span>
-        {mobile && pinned && <span className="mobile-pinned-camp-icon"><NavigationIcon name="messages" /></span>}
+        {pinned && <span className="pinned-camp-icon" aria-hidden="true"><NavigationIcon name="messages" /></span>}
         <span className="truncate">{title}</span>
         {hasNewReply && <span className="sr-only">有新回复</span>}
         {camp.activationState === 'pending' && <span className="camp-draft-badge">草稿</span>}

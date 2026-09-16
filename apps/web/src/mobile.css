@@ -45,8 +45,8 @@ html[data-mobile-web="true"] .camp-nav-open .camp-marker-slot {
 }
 html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row .camp-marker-slot { left: 2px; }
 html[data-mobile-web="true"] .camp-marker-slot .task-dot { display: block; width: 6px; height: 6px; flex: none; margin: 0; }
-html[data-mobile-web="true"] .mobile-pinned-camp-icon { flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
-html[data-mobile-web="true"] .mobile-pinned-camp-icon > svg { width: 20px; height: 20px; }
+html[data-mobile-web="true"] .pinned-camp-icon { display: inline-flex; flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
+html[data-mobile-web="true"] .pinned-camp-icon > svg { width: 20px; height: 20px; }
 html[data-mobile-web="true"] :is(.camp-marker-unread_completed, .mobile-unread-dot) { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mobile-unread); }
 html[data-mobile-web="true"] :is(.camp-menu-trigger, .section-create-button, .project-create-button, .sidebar-group-create) { opacity: 1; min-width: 44px; min-height: 44px; }
 html[data-mobile-web="true"] .navigation-section-title { min-height: 36px; margin: 0 0 3px; padding: 0; color: var(--ink); }

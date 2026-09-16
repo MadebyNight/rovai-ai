@@ -438,11 +438,13 @@ Mission 保存共同目标，Task 保存可独立交接的责任；不要为使�
 | Agent Output／IPC／Envelope／Receipt | 3／2／1／1 | 采用已发布附件投影，既有包装与错误恢复机制不变 |
 | Run Facts | 4 | 合并必需 attachmentOutputRoot 与使命公开会话可选 mission；平台封装版本不作为 Mission 业务版本 |
 
-Migration 157/schema 107 从两个已存在的 Migration 156/schema 106 形态汇合：已发布附件路径形态与已安装 Mission preview 形态均为受支持来源。
-建立 Mission、内部活动序号、开始记录和独立 workspace／清理记录；旧 Camp 不自动变成 Mission。
-Migration 158/schema 108 移除 Mission 的创建期 `source_branch`，增加内部 `details_version` 及 workspace
-的可空 `base_branch`。Migration 159/schema 109 增加稳定数字号，移除历史正文／读取水位，增加 Conversation
-已投递版本与 Manifest 冻结版本。这些字段不进入 MissionInfo 或模型输入；迁移不创建或重命名工作区。
+Migration 157/schema 107 先把主线 DSH 闭集扩展应用到两个已存在的 Migration 156/schema 106 形态；
+Migration 158 再汇合已发布附件路径形态与已安装 Mission preview 形态，建立 Mission、内部活动序号、
+开始记录和独立 workspace／清理记录；旧 Camp 不自动变成 Mission。Migration 159/schema 109 移除
+Mission 的创建期 `source_branch`，增加内部 `details_version` 及 workspace 的可空 `base_branch`。
+Migration 160/schema 110 增加稳定数字号，移除历史正文／读取水位，增加 Conversation 已投递版本与
+Manifest 冻结版本；既有 Mission 157–159/schema 109 preview 在该步原位补齐 DSH 并收敛。这些字段不进入
+MissionInfo 或模型输入；迁移不创建或重命名工作区。
 历史 Manifest 不改旧 bytes/digest。新生成只写 25／25／6，Run Facts 内部合同为 4；已冻结的受支持旧输入只凭
 既有精确 Delivery 证明恢复原版本，不用新投影重算。已发布 v24／Profile 5、Mission preview v24／Profile 6、v23／Profile 5 及 v22／Profile 4 证据均保留。
 

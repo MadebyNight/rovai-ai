@@ -1,7 +1,7 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-10
+last_updated: 2026-09-16
 ---
 
 # Agent Runtime 兼容性清单
@@ -20,18 +20,39 @@ Context、Memory MCP transport、Bridge、Plugin 与 Runtime-native built-in MCP
 
 ## 当前 Product Runtime Catalog
 
-当前 closed `AdapterKind` 包含十四种 Product Runtime：Codex CLI、OpenCode、GitHub Copilot、
+当前 closed `AdapterKind` 包含十六种 Product Runtime：Codex CLI、OpenCode、GitHub Copilot、
 Claude Code、Antigravity、Kiro、Qoder、CodeBuddy、Qwen Code、TRAE CLI CN、Cursor Agent、Kimi Code、
-Grok Build 与 Pi Coding Agent。
+Grok Build、Pi Coding Agent、ZCode 与 DeepSeek Harness。
 Cursor 在三个目标平台均为 `not_qualified`；Pi、Kimi 在 macOS arm64、macOS x64 与 Windows x64 均为
 digest-bound `qualified`。Pi 三个平台分别绑定自己的 adapter-scoped evidence，不继承通用 macOS/Windows、
 Kimi 或 Grok 的平台结论。
 Grok Build 在 adapter-scoped 证据分别覆盖的 macOS arm64、macOS x64 与 Windows x64 均为 `qualified`；
 三个宿主平台各自绑定独立 evidence digest，不互相外推。
 Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery/check/AgentRun；Settings 的 Agent Runtime
-目录不展示该项。DeepSeek Harness 在 macOS arm64、macOS x64 与 Windows x64 的设置页均隐藏，
-不保留“待支持”占位行；它仍是未实现候选，不在这个目录中，也没有 Installation、Probe、成员选择、
-诊断或 AgentRun 语义。本次显示范围调整不改变任何 Runtime 的平台资格或实测证据。
+目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 为 qualified，macOS x64、Windows x64 与 Linux x64
+为 not_qualified。Machine Ready、实现与 First-Class 资格分别记录。
+
+### 2026-09-15 DeepSeek Harness 0.1.5-rc.2 ACP
+
+固定官方 npm 发布包在隔离 DSH_HOME 与隔离 Core data/Skill/MCP 根验证；生产仍使用其原生配置。
+逐项 Host、Session、Bootstrap、Compaction、Skill、MCP、权限、工具、CLI 与 Monitoring 结果见
+[DSH Parity Matrix](research/deepseek-harness-runtime/acp-0.1.5-parity.md)。14 个核心能力轴均已闭合，macOS arm64 绑定
+[DSH v2 增量资格证据](../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 的独立 SHA-256；
+v1 归档继续保存原 14 轴历史验收，不被改写。
+不从共享代码或普通 handshake 推断其他平台资格。
+真实官方模型已通过普通/续轮、命令输出、文件工具、Skills、全部 23 项 Built-in CLI 与原生压缩验证。
+按用户授权使用 MiniMax-M3 原生 BYOK 补齐完整冷恢复/取消/无效 ID fallback、Missing-Send、
+MCP 生命周期与安全、压缩后的 Skill/MCP/审批组合；生产 30 分钟空闲回收、Core crash 与正常 shutdown
+均无残留进程；自动摘要用量与普通调用按 Run 独立对账，cold resume 无重复归属。测试替代模型的证据仍单列。
+
+2026-09-16 收敛复验保持同一官方 `0.1.5-rc.2`：权限名和值从 UI 到 Host 原样传递，Core 不再为 MCP
+按工具名、read-only 或副作用注解合成 Approval；脚本化原生 MCP 三组权限均观测到 0 个 synthetic Approval，
+副作用由 DSH 原生层决定。配置不兼容时 shared Fleet 对 idle/busy Host 都等待确认回收再启动 replacement，
+回收失败阻断新 Host。真实 MiniMax-M3 文件矩阵确认 write 新建返回的显式 `before:null` 会形成标准 add `+1/-0`，
+edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；真实开发 Camp 也显示“新增”、`+3/-0` 和完整行级 Diff。
+缺少 before（不同于显式 null）、类型错误、超限或不可信状态仍保留路径级文件活动。该后续修复记录在
+[新增文件增量证据](research/deepseek-harness-runtime/acp-0.1.5-create-diff-evidence.json)；已绑定 digest 的 v2 资格归档
+保持为修复前的不可变证据，本次不扩大平台范围。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 
@@ -1034,7 +1055,6 @@ ADR-0189 只允许 Runtime 设置页追加严格 presentation-only 的 Preview�
 | Runtime | 调研版本 / 状态 | 观察结果 | 当前边界 / 未接入原因 | 复核条件 |
 |---|---:|---|---|---|
 | Cursor Agent | 2025.09.18-7ae6800 | 支持 headless 与 resume；已验证入口会读取项目 `.cursor/mcp.json` | 尚无稳定的逐 Run additive channel 与同名证据 | 上游提供动态追加入口并完成 native preservation、同名与恢复复核 |
-| DeepSeek Harness | 未实现；三平台隐藏 | 设置页不展示；没有 executable、Adapter、Probe 或 capability 结论 | 未接入候选，不属于 Product Runtime Catalog，也不保留 Preview 占位行 | 取得明确入口和协议后，完成 Adapter、认证、Session、终态、取消、Approval、Tool ID、MCP、Activity、Migration 与真实 AgentRun 准入 |
 
 ## 后续准入规则
 

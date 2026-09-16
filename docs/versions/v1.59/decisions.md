@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.59
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # v1.59 版本决定
@@ -200,8 +200,60 @@ D04 及 D08 延续的不透明来源使作者初始化代码读取 localStorage 
 避免增加远程部署入口和生命周期。Desktop 原生预览与 CSS/JS 资源加载均不扩入本轮。
 
 <a id="v1-59-d10"></a>
+## V1.59-D10：DeepSeek Harness 使用官方 ACP 与原生系统层
 
-## V1.59-D10：使命复用 Camp，以首次执行基准保留长期工作区
+- 状态：accepted
+- 日期：2026-09-15
+- 当前权威：[Runtime Catalog Boundaries](../../architecture/runtime-catalog-boundaries.md#deepseek-harness-acp)、[Runtime Platform Admission v2](../../contracts/runtime-platform-admission-v2.md)
+
+用户要求按 Runtime checklist 接入内置 ACP 的 dsh 0.1.5-rc.2，并逐项对照 host warm、bootstrap、compact。
+采用共享 ACP Host/Fleet，官方 profile/patch 与 systemPrompt 扩展承载冻结 Bootstrap；保留原生 Home、Provider、
+模型、Skills、MCP 和 sandbox/approval，不建立独立 Runtime 进程池或另一套配置。
+
+DSH ACP 没有 system 字段，也不输出 Bash 的 canonical exit status 或文件工具的完整 Diff。使用官方 systemPrompt 与
+tools/result 扩展点分别提供高权限 Bootstrap 和一次性结构化结果；拒绝用户消息伪装系统提示、结果文本猜测和
+vendor 日志反推。observer 只保留 exact Session/call 的 shell 终态、canonical path、逐调用 usage、compaction owner，
+以及官方 write/edit 结果中的完整 before/after；完整文件状态被翻译为标准 ACP terminal Diff，缺失、超限或无变化时
+保持文件级回退，不复制 stdout、参数或完整结果。
+代价是必须随 Host 管理私有绑定/观测文件，并测试丢失、串 Session、重复消费与 shutdown。
+
+接受上游 ACP 差异：无 session/load、additionalDirectories、手动 /compact 命令与 compact lifecycle；以 exact resume、
+原生持续系统层和原生工作区策略闭合对应行为。ACP used/size 只提供上下文占用；官方 committed
+assistant/message 与自动 compaction/summary 的逐调用 usage 补充独立 Token/cache buckets；摘要通过
+compaction/start 的原生 ID/owner turn 关联，不读取正文。空闲手动压缩无 active turn，不归入后续 Run；
+缺失字段及 cost 保持 unknown。
+SSE MCP、MCP resources/prompts 与 Client FS/Terminal bridge 未在该 profile 暴露；标准 stdio/HTTP 与原生工具负责实际执行。
+上游插件可实现的行为不因此标成 Unsupported；自动压缩与恢复、MCP/Skill scope 等仍按真实证据逐项验收。
+
+原生交互式 permission preset 会覆盖冻结参数并拒绝其表中不存在的合法组合；仅在受管 ACP Host 关闭该
+插件，保留原生 sandbox/approval 服务与用户设置文件。队员页、持久化和 Host patch 逐字使用原生
+`sandbox_mode = read-only | workspace-write | danger-full-access` 与 `approval_policy = ask | never`；
+Workspace access 不再替换这些值。DSH 的 sandbox/approval 是唯一安全决定者：Core 只承载 Runtime 实际发出的
+审批请求和原生选项，不按 MCP 工具名、副作用注解或 read-only 状态合成第二层 allow/deny/ask。当前 0.1.5-rc.2
+没有为普通 MCP 调用发出审批时，该调用是否执行完全服从 DSH 原生结果。
+
+同名原生 Server 的全部 Tool 仍使用官方 scoped restriction 遮蔽；这是 MCP whole-definition 配置投影，不是安全
+审批。配置变化由共享 Fleet 处理 DSH 的 Session 文件锁：旧 Host 空闲时必须确认回收后才启动 replacement；旧 Host
+正在执行时只标记退役，等待当前 Run 正常结束并确认回收，再以新 Host exact resume；回收失败则阻断 replacement，
+不退化为 fresh Session，也不建立 DSH 专属进程池。
+
+0.1.5-rc.2 的 ACP app 可在同级 Loader entry 尚未 settle 时先开放 stdio，原生 MCP 因而可能缺席首个模型步。
+受管 patch 让 ACP entry 额外依赖 Bootstrap 发布的 readiness service；Bootstrap 等所有已配置的官方
+`@deepseek-ai/dsh-mcp-client` entry 完成 Cordis lifecycle 后才发布该 service。该顺序不使用固定延时、不重放 prompt，
+不改变 MCP 的原生连接失败、重连、工具或审批语义；工具表变更监听使用上游 `tools/change` 事件。
+
+本次先以 preview 执行真实验收；在 14 个核心能力轴闭合后，macOS arm64 取得 First-Class 并晋升 qualified。
+2026-09-16 的原生权限、锁顺序与通用 Diff 收敛由
+[DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 绑定新的不可变摘要；
+v1 继续作为此前 14 轴验收的历史证据，不被改写。
+其他平台仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
+[Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。机器 Ready 仍是独立检查。
+Migration 157 将 v1.59/schema 106 原位升级到 107，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
+Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。
+
+<a id="v1-59-d11"></a>
+
+## V1.59-D11：使命复用 Camp，以首次执行基准保留长期工作区
 
 - 状态：accepted
 - 日期：2026-09-15
@@ -218,9 +270,9 @@ D04 及 D08 延续的不透明来源使作者初始化代码读取 localStorage 
 读写不暴露版本。采用字段补丁与最后提交覆盖，接受同字段并发编辑的后写覆盖，避免模型理解版本冲突协议。
 Renderer 编辑使用内部乐观版本防止旧弹窗覆盖新定义，但该机制不进入模型或 Agent CLI。工作环境描述不增加 Agent 管控。
 
-<a id="v1-59-d11"></a>
+<a id="v1-59-d12"></a>
 
-## V1.59-D11：使命用稳定数字命名，更新提醒以 Runtime accepted 为送达
+## V1.59-D12：使命用稳定数字命名，更新提醒以 Runtime accepted 为送达
 
 - 状态：accepted
 - 日期：2026-09-16

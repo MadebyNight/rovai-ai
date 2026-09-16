@@ -51,7 +51,7 @@ pub(super) fn apply_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn v158_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+pub(super) fn v159_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
     Ok(!has_column(connection, "mission", "source_branch")?
         && contains_schema(
             connection,
@@ -96,7 +96,7 @@ pub(super) fn apply_delivery_schema(connection: &Connection) -> Result<()> {
     )?;
     if !has_column(connection, "mission", "number")? {
         connection.execute_batch(
-            "CREATE TABLE mission_v159 (
+            "CREATE TABLE mission_v160 (
                 id TEXT PRIMARY KEY NOT NULL,
                 number INTEGER NOT NULL UNIQUE CHECK(number >= 1),
                 camp_id TEXT NOT NULL UNIQUE REFERENCES camp(id) ON DELETE CASCADE,
@@ -114,10 +114,10 @@ pub(super) fn apply_delivery_schema(connection: &Connection) -> Result<()> {
                        source_message_id,tags_json,details_version,created_at,updated_at
                 FROM mission
             )
-            INSERT INTO mission_v159(id,number,camp_id,title,description,status,source_message_id,tags_json,details_version,created_at,updated_at)
+            INSERT INTO mission_v160(id,number,camp_id,title,description,status,source_message_id,tags_json,details_version,created_at,updated_at)
             SELECT id,number,camp_id,title,description,status,source_message_id,tags_json,details_version,created_at,updated_at FROM ranked;
             DROP TABLE mission;
-            ALTER TABLE mission_v159 RENAME TO mission;
+            ALTER TABLE mission_v160 RENAME TO mission;
             CREATE INDEX mission_updated_idx ON mission(updated_at DESC,id DESC);",
         )?;
     }
@@ -128,17 +128,17 @@ pub(super) fn apply_delivery_schema(connection: &Connection) -> Result<()> {
         || has_column(connection, "mission_start", "description")?
     {
         connection.execute_batch(
-            "CREATE TABLE mission_start_v159 (
+            "CREATE TABLE mission_start_v160 (
                 message_id TEXT PRIMARY KEY NOT NULL REFERENCES camp_message(id) ON DELETE CASCADE,
                 mission_id TEXT NOT NULL REFERENCES mission(id) ON DELETE CASCADE,
                 camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,
                 command_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
-            INSERT INTO mission_start_v159(message_id,mission_id,camp_turn_id,command_id,created_at)
+            INSERT INTO mission_start_v160(message_id,mission_id,camp_turn_id,command_id,created_at)
             SELECT message_id,mission_id,camp_turn_id,command_id,created_at FROM mission_start;
             DROP TABLE mission_start;
-            ALTER TABLE mission_start_v159 RENAME TO mission_start;",
+            ALTER TABLE mission_start_v160 RENAME TO mission_start;",
         )?;
     }
     if !has_column(
@@ -176,7 +176,7 @@ pub(super) fn apply_delivery_schema(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn v159_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+pub(super) fn v160_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
     Ok(contains_schema(
         connection,
         "mission",
@@ -201,7 +201,7 @@ pub(super) fn v159_schema_matches(connection: &Connection) -> rusqlite::Result<b
 }
 
 impl Database {
-    pub(super) fn migrate_mission_details_v158(&mut self) -> Result<()> {
+    pub(super) fn migrate_mission_details_v159(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
             let tx = self
@@ -209,17 +209,17 @@ impl Database {
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
             anyhow::ensure!(
                 matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
-                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 107),
-                "Mission details migration requires an admitted v1.59/schema 107 source"
+                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 108),
+                "Mission details migration requires an admitted v1.59/schema 108 source"
             );
             apply_schema(&tx)?;
             tx.execute_batch(
-                "INSERT INTO schema_migration VALUES(158,datetime('now'));
-                 UPDATE rovai_data_contract SET projection_schema_version=108,updated_at=datetime('now') WHERE singleton=1;",
+                "INSERT INTO schema_migration VALUES(159,datetime('now'));
+                 UPDATE rovai_data_contract SET projection_schema_version=109,updated_at=datetime('now') WHERE singleton=1;",
             )?;
             anyhow::ensure!(
                 matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
-                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 108),
+                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 109),
                 "Mission details migration failed source admission"
             );
             validate_migration_foreign_keys(
@@ -235,7 +235,7 @@ impl Database {
         Ok(())
     }
 
-    pub(super) fn migrate_mission_delivery_v159(&mut self) -> Result<()> {
+    pub(super) fn migrate_mission_delivery_v160(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
             let tx = self
@@ -243,13 +243,21 @@ impl Database {
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
             anyhow::ensure!(
                 matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
-                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 108),
-                "Mission delivery migration requires an admitted v1.59/schema 108 source"
+                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 109),
+                "Mission delivery migration requires an admitted v1.59/schema 109 source"
             );
+            let dsh_present = dsh_runtime_v157_schema_matches(&tx)?;
+            if !dsh_present {
+                anyhow::ensure!(
+                    v160_schema_matches(&tx)?,
+                    "Mission/DSH convergence requires the deployed Mission preview schema"
+                );
+                apply_dsh_runtime_schema_v157(&tx)?;
+            }
             apply_delivery_schema(&tx)?;
             tx.execute_batch(
-                "INSERT INTO schema_migration VALUES(159,datetime('now'));
-                 UPDATE rovai_data_contract SET projection_schema_version=109,updated_at=datetime('now') WHERE singleton=1;",
+                "INSERT INTO schema_migration VALUES(160,datetime('now'));
+                 UPDATE rovai_data_contract SET projection_schema_version=110,updated_at=datetime('now') WHERE singleton=1;",
             )?;
             anyhow::ensure!(
                 matches!(
@@ -258,15 +266,15 @@ impl Database {
                 ),
                 "Mission delivery migration failed schema admission"
             );
-            validate_migration_foreign_keys(
-                &tx,
-                &[
-                    "mission",
-                    "mission_start",
-                    "mission_activity",
-                    "mission_workspace",
-                ],
-            )?;
+            let mut tables = vec![
+                "mission",
+                "mission_start",
+                "mission_activity",
+                "mission_workspace",
+            ];
+            tables.extend(DSH_RUNTIME_TABLES);
+            tables.extend(DSH_SKILL_TABLES);
+            validate_migration_foreign_keys(&tx, &tables)?;
             tx.commit()?;
             Ok(())
         })();

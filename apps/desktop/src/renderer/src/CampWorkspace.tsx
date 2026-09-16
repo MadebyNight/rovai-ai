@@ -8618,7 +8618,12 @@ function RunExecutionContent({
   ])), [displayedEvidence])
   const narrationByKey = useMemo(() => new Map((displayedEvidence ?? []).map(item => [`narration:${item.id}`, item])), [displayedEvidence])
   const earlierLoadError = windowPage.direction === 'newer' ? null : windowPage.error
-  const earlierLoading = windowPage.loading && windowPage.direction !== 'newer'
+  // A live Run already presents its connection/thinking feedback. Stacking the
+  // empty initial history-page loader above it makes the card 50px taller until
+  // the first window request settles, then visibly moves that feedback upward.
+  const earlierLoading = windowPage.loading
+    && windowPage.direction !== 'newer'
+    && (!nonTerminal || windowPage.evidence.length > 0)
 
   return (
     <ExecutionContentContext.Provider value={windowedEvidence ? windowPage.contentCache : null}>
@@ -9005,6 +9010,7 @@ function runtimeAdapterLabel(kind: string): string {
     'cursor-agent': 'Cursor Agent',
     'kimi-code-cli': 'Kimi Code',
     'grok-build': 'Grok Build',
+    'deepseek-harness': 'DeepSeek Harness',
     'zcode-app': 'ZCode',
     'antigravity-app': 'Antigravity'
   } as Record<string, string>)[kind] ?? kind

@@ -19,7 +19,7 @@ test('ACP recovery fixture validates tool then identified final chunks', () => {
   assert.equal(result.identifiedChunkCount, 3)
 })
 
-for (const adapterKind of ['kimi-code-cli', 'grok-build']) {
+for (const adapterKind of ['kimi-code-cli', 'grok-build', 'deepseek-harness']) {
   test(`${adapterKind} recovery uses generic ACP assistant text without MiniMax cleanup`, () => {
     const expectedFinal = '<think>provider reasoning</think>\nPUBLIC'
     const result = validateAcpRecoveryProtocolFixture({

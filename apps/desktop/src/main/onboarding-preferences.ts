@@ -29,6 +29,7 @@ const ADAPTER_KINDS = new Set<AdapterKind>([
   'cursor-agent',
   'kimi-code-cli',
   'grok-build',
+  'deepseek-harness',
   'zcode-app',
   'antigravity-app'
 ])
