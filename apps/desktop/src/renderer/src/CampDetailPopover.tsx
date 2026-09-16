@@ -21,9 +21,9 @@ function CampDetailIcon({ tab }: { tab: CampDetailTab }): React.JSX.Element {
   </svg>
 }
 
-function CampExecutionEntry({ members, memberCount, expanded, panelId, mobile = false, onSelect }: {
+function CampExecutionEntry({ members, executionCount, expanded, panelId, mobile = false, onSelect }: {
   members: readonly RunningCampMember[]
-  memberCount: number
+  executionCount: number
   expanded: boolean
   panelId: string
   mobile?: boolean
@@ -43,7 +43,7 @@ function CampExecutionEntry({ members, memberCount, expanded, panelId, mobile = 
   const names = members.map(member => member.displayName).join('、')
   const description = running
     ? `${members.length} 位队员正在执行：${names}`
-    : `共 ${memberCount} 位队员，当前没有队员正在执行`
+    : `共 ${executionCount} 位队员有执行记录，当前没有队员正在执行`
 
   useEffect(() => {
     if (!running) return
@@ -71,7 +71,7 @@ function CampExecutionEntry({ members, memberCount, expanded, panelId, mobile = 
   const face = <>
     {!mobile && <CampDetailIcon tab="execution" />}
     <span>执行</span>
-    {!mobile && !running && <small>{memberCount}</small>}
+    {!mobile && !running && <small>{executionCount}</small>}
     {running && <>
       <span className="camp-execution-members" aria-hidden="true">
         {members.slice(0, avatarLimit).map(member => <MemberAvatar key={member.agentId} {...member} size="execution" decorative />)}
@@ -126,6 +126,7 @@ export function CampDetailEntries({
   panelId,
   showExecution,
   runningMembers,
+  executionCount,
   taskCount,
   memberCount,
   onSelect
@@ -135,6 +136,7 @@ export function CampDetailEntries({
   panelId: string
   showExecution: boolean
   runningMembers: readonly RunningCampMember[]
+  executionCount: number
   taskCount: number
   memberCount: number
   onSelect(tab: CampDetailTab, trigger: HTMLButtonElement, keyboard: boolean): void
@@ -147,7 +149,7 @@ export function CampDetailEntries({
     <div className="camp-detail-entries" role="group" aria-label="当前会话详情入口">
       {showExecution && <CampExecutionEntry
         members={runningMembers}
-        memberCount={memberCount}
+        executionCount={executionCount}
         expanded={visible && activeTab === 'execution'}
         panelId={panelId}
         onSelect={onSelect}
@@ -178,6 +180,7 @@ export function CampDetailPopover({
   visible,
   showExecution,
   runningMembers,
+  executionCount,
   taskCount,
   memberCount,
   onOpen,
@@ -191,6 +194,7 @@ export function CampDetailPopover({
   visible: boolean
   showExecution: boolean
   runningMembers: readonly RunningCampMember[]
+  executionCount: number
   taskCount: number
   memberCount: number
   onOpen(tab: CampDetailTab): void
@@ -235,7 +239,7 @@ export function CampDetailPopover({
   const entries = mobile ? <>
     <div className="mobile-camp-tabs" role="group" aria-label="当前会话视图" hidden={secondary}>
       <button type="button" aria-pressed={!visible} onClick={onClose}>对话</button>
-      <CampExecutionEntry mobile members={runningMembers} memberCount={memberCount} expanded={visible && activeTab === 'execution'} panelId={panelId}
+      <CampExecutionEntry mobile members={runningMembers} executionCount={executionCount} expanded={visible && activeTab === 'execution'} panelId={panelId}
         onSelect={(tab, trigger) => { triggerRef.current = trigger; onOpen(tab) }} />
     </div>
     <DropdownMenu.Root modal={false}>
@@ -266,6 +270,7 @@ export function CampDetailPopover({
     panelId={panelId}
     showExecution={showExecution}
     runningMembers={runningMembers}
+    executionCount={executionCount}
     taskCount={taskCount}
     memberCount={memberCount}
     onSelect={(tab, trigger, keyboard) => {

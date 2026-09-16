@@ -2302,7 +2302,7 @@ describe('task event projections', () => {
       activeTab: 'tasks', visible: true, panelId: 'camp-details', showExecution,
       runningMembers: Array.from({ length: runningCount }, (_, index) => ({
         agentId: `agent-${index}`, displayName: `队员 ${index + 1}`, avatarRef: null
-      })), taskCount: 4, memberCount: 3, onSelect: () => undefined
+      })), executionCount: 2, taskCount: 4, memberCount: 3, onSelect: () => undefined
     }))
     const running = entries(true, 2)
     expect(running.indexOf('data-detail="execution"')).toBeLessThan(running.indexOf('data-detail="tasks"'))
@@ -2310,7 +2310,10 @@ describe('task event projections', () => {
     expect(running).toContain('aria-label="执行，2 位队员正在执行：队员 1、队员 2"')
     expect(running).toMatch(/data-detail="tasks" aria-expanded="true"/)
     expect(running).toContain('aria-controls="camp-details"')
-    expect(entries(true, 0)).not.toContain('camp-execution-orbits')
+    const idle = entries(true, 0)
+    expect(idle).not.toContain('camp-execution-orbits')
+    expect(idle).toContain('<span>执行</span><small>2</small>')
+    expect(idle).toContain('<span>队员</span><small>3</small>')
     expect(entries(false, 2)).not.toContain('data-detail="execution"')
   })
 
@@ -4436,7 +4439,7 @@ describe('task event projections', () => {
     expect(markup).toContain('aria-expanded="true"')
     expect(markup).not.toContain('class="approval-card')
     expect((markup.match(/class="camp-detail-entry(?: [^"]*)?"/g) ?? []).length).toBe(4)
-    expect(markup).toContain('>执行</span><small>2</small></button>')
+    expect(markup).toContain('>执行</span><small>0</small></button>')
     expect(markup).toContain('>任务</span><small>0</small>')
     expect(markup).toContain('>队员</span><small>2</small>')
     expect(markup).toContain('>单聊</span><small>0</small>')
