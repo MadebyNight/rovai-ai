@@ -217,3 +217,20 @@ D04 及 D08 延续的不透明来源使作者初始化代码读取 localStorage 
 用户确认 Agent 只接收简短身份/状态、必要时的固定定义更新提示与首次成功投递的工作环境；Agent 使命
 读写不暴露版本。采用字段补丁与最后提交覆盖，接受同字段并发编辑的后写覆盖，避免模型理解版本冲突协议。
 Renderer 编辑使用内部乐观版本防止旧弹窗覆盖新定义，但该机制不进入模型或 Agent CLI。工作环境描述不增加 Agent 管控。
+
+<a id="v1-59-d11"></a>
+
+## V1.59-D11：使命用稳定数字命名，更新提醒以 Runtime accepted 为送达
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v1](../../contracts/mission-v1.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+
+内部 UUID 适合关联但不适合用户识别或 Git 路径。Mission 因此另获全局单调、删除后不复用的数字号；界面、
+分支和 worktree 只使用最少三位的数字表示，内部关系仍使用 UUID。已经持久关联的旧工作区不在迁移中重命名，
+避免移动正在使用的工作树或破坏恢复证据。
+
+Mission 只保留最新标题、描述和详情版本；活动、开始记录与开始消息不复制正文，只保留变化／引用事实。
+更新提示表示 Runtime 已收到新定义这一事实，而不是 Agent 是否调用过读取工具。因此 ContextManifest 冻结本次
+详情版本，只有当前 binding 的 Runtime Input `accepted` 才推进 Conversation 水位；`mission get` 保持纯读取。
+这避免“读过但下一轮输入未送达”与“输入已经送达却被要求额外调用 get”两种错误确认。

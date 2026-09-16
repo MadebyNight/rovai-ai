@@ -62,6 +62,7 @@ pub struct MissionInfo {
 pub struct MissionRecord {
     #[serde(flatten)]
     pub info: MissionInfo,
+    pub number: i64,
     pub camp_id: String,
     pub project_path: String,
     pub project_binding_kind: ProjectBindingKind,
@@ -233,6 +234,8 @@ impl MissionService {
         let tags = normalize_tags(&input.tags)?;
         self.gateway.execute(database, envelope, |tx| {
             let mission_id = format!("rvm_{}", Uuid::now_v7().simple());
+            tx.execute("INSERT INTO mission_number_sequence DEFAULT VALUES", [])?;
+            let number = tx.last_insert_rowid();
             let camp_id = CampId::new();
             let created = create_camp_in_tx(tx, &envelope.actor, envelope.execution_epoch, &CreateCampCommand {
                 name: Some(input.title.trim().chars().take(80).collect()),
@@ -242,11 +245,11 @@ impl MissionService {
             }, &camp_id)?;
             if created.status == CommandResultStatus::Rejected { return Ok(created); }
             let now = chrono::Utc::now().to_rfc3339();
-            tx.execute("INSERT INTO mission(id,camp_id,title,description,status,tags_json,details_version,created_at,updated_at) VALUES(?1,?2,?3,?4,'not_started',?5,1,?6,?6)",
-                params![mission_id,camp_id,input.title.trim(),input.description,serde_json::to_string(&tags)?,now])?;
+            tx.execute("INSERT INTO mission(id,number,camp_id,title,description,status,tags_json,details_version,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'not_started',?6,1,?7,?7)",
+                params![mission_id,number,camp_id,input.title.trim(),input.description,serde_json::to_string(&tags)?,now])?;
             record_activity(tx, &mission_id, "created", &envelope.actor, envelope.execution_epoch,
-                json!({"title":input.title.trim(),"description":input.description,"status":"not_started","tags":tags}))?;
-            Ok(CommandHandlerResult::applied("mission.created", json!({"missionId":mission_id,"campId":camp_id}),
+                json!({"status":"not_started","tagsChanged":!tags.is_empty()}))?;
+            Ok(CommandHandlerResult::applied("mission.created", json!({"missionId":mission_id,"missionNumber":number,"campId":camp_id}),
                 Some(EntityReference { entity_type: "mission".into(), entity_id: mission_id })))
         })
     }
@@ -276,12 +279,7 @@ impl MissionService {
                 if expected != current.details_version {
                     return Ok(CommandHandlerResult::rejected(
                         "mission.details_version_conflict",
-                        json!({
-                            "missionId": current.info.mission_id,
-                            "currentTitle": current.info.title,
-                            "currentDescription": current.info.description,
-                            "currentDetailsVersion": current.details_version,
-                        }),
+                        json!({"missionId": current.info.mission_id}),
                     ));
                 }
             }
@@ -289,14 +287,14 @@ impl MissionService {
             let description = input.description.as_deref().unwrap_or(&current.info.description);
             let next_tags = tags.as_ref().unwrap_or(&current.tags);
             let mut changes = serde_json::Map::new();
-            if title != current.info.title { changes.insert("title".into(), json!(title)); }
-            if description != current.info.description { changes.insert("description".into(), json!(description)); }
-            if next_tags != &current.tags { changes.insert("tags".into(), json!(next_tags)); }
+            if title != current.info.title { changes.insert("titleChanged".into(), json!(true)); }
+            if description != current.info.description { changes.insert("descriptionChanged".into(), json!(true)); }
+            if next_tags != &current.tags { changes.insert("tagsChanged".into(), json!(true)); }
             if changes.is_empty() { return Ok(mutation(&input.mission_id, false)); }
             let details_changed = title != current.info.title || description != current.info.description;
             tx.execute("UPDATE mission SET title=?2,description=?3,tags_json=?4,details_version=details_version+?5,updated_at=?6 WHERE id=?1",
                 params![input.mission_id,title,description,serde_json::to_string(next_tags)?,i64::from(details_changed),chrono::Utc::now().to_rfc3339()])?;
-            if changes.contains_key("title") {
+            if changes.contains_key("titleChanged") {
             tx.execute("UPDATE camp SET title=?2,name_origin='user',version=version+1,updated_at=?3 WHERE id=?1",
                 params![current.camp_id,title.chars().take(80).collect::<String>(),chrono::Utc::now().to_rfc3339()])?;
             }
@@ -394,36 +392,12 @@ pub(crate) fn mission_for_camp(
         .transpose()
 }
 
-pub(crate) fn mark_details_read(
-    connection: &Connection,
-    mission_id: &str,
-    agent_run_id: &str,
-    details_version: i64,
-) -> Result<()> {
-    connection.execute(
-        "INSERT INTO mission_details_read(
-            conversation_id,mission_id,baseline_details_version,last_read_details_version,updated_at
-         )
-         SELECT conversation_id,?2,?3,?3,?4 FROM agent_run WHERE id=?1
-         ON CONFLICT(conversation_id) DO UPDATE SET
-            mission_id=excluded.mission_id,
-            last_read_details_version=excluded.last_read_details_version,
-            updated_at=excluded.updated_at",
-        params![
-            agent_run_id,
-            mission_id,
-            details_version,
-            chrono::Utc::now().to_rfc3339(),
-        ],
-    )?;
-    Ok(())
-}
-
 fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord>> {
-    let row = connection.query_row("SELECT m.id,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
-        r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?,r.get::<_,i64>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,Option<String>>(12)?))).optional()?;
+    let row = connection.query_row("SELECT m.id,m.number,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
+        r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,r.get::<_,Option<String>>(13)?))).optional()?;
     let Some((
         mission_id,
+        number,
         camp_id,
         title,
         description,
@@ -453,6 +427,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
     let has_unread = connection.query_row(&unread_sql, [&camp_id], |r| r.get(0))?;
     Ok(Some(MissionRecord {
         has_unread,
+        number,
         info: MissionInfo {
             mission_id,
             title,
@@ -612,9 +587,26 @@ mod tests {
             created.result.payload
         );
         let record = service.get(&db, &id).unwrap().unwrap();
+        let number: i64 = db
+            .connection()
+            .query_row("SELECT number FROM mission WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(number, 1);
         assert_eq!(record.info.title.chars().count(), 130);
         assert_eq!(record.tags, vec!["UI"]);
         assert_eq!(record.info.status, MissionStatus::NotStarted);
+        assert_eq!(
+            service
+                .activity(&db, &id, None)
+                .unwrap()
+                .into_iter()
+                .find(|activity| activity.kind == "created")
+                .unwrap()
+                .changes,
+            json!({"status":"not_started","tagsChanged":true})
+        );
         assert_eq!(
             db.connection()
                 .query_row("SELECT COUNT(*) FROM agent_run", [], |r| r.get::<_, i64>(0))
@@ -649,6 +641,20 @@ mod tests {
         assert_eq!(record.info.title, "new");
         assert_eq!(record.info.description, "next");
         assert_eq!(record.details_version, 3);
+        let updated = service
+            .activity(&db, &id, None)
+            .unwrap()
+            .into_iter()
+            .filter(|activity| activity.kind == "updated")
+            .map(|activity| activity.changes)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            updated,
+            vec![
+                json!({"descriptionChanged": true}),
+                json!({"titleChanged": true}),
+            ]
+        );
         let before = service.activity(&db, &id, None).unwrap().len();
         assert_eq!(
             service
@@ -681,7 +687,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stale.result.code, "mission.details_version_conflict");
-        assert_eq!(stale.result.payload["currentDetailsVersion"], 3);
+        assert_eq!(stale.result.payload, json!({"missionId": id}));
         assert_eq!(service.activity(&db, &id, None).unwrap().len(), before);
         let mut invalid = create.clone();
         invalid.command_id = Uuid::new_v4().to_string();
@@ -821,15 +827,15 @@ mod tests {
             "next"
         );
         assert_eq!(service.get(&db, &id).unwrap().unwrap().details_version, 4);
-        let frozen: (String, String) = db
+        let retained_body_columns: i64 = db
             .connection()
             .query_row(
-                "SELECT title,description FROM mission_start WHERE mission_id=?1",
-                [&id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                "SELECT COUNT(*) FROM pragma_table_info('mission_start') WHERE name IN ('title','description')",
+                [],
+                |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(frozen, ("new".into(), "next".into()));
+        assert_eq!(retained_body_columns, 0);
         let mut state = CommandEnvelope {
             command_id: Uuid::new_v4().to_string(),
             actor: edit.actor.clone(),
@@ -854,6 +860,15 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
+        let start_body: String = db
+            .connection()
+            .query_row(
+                "SELECT body FROM camp_message WHERE id=?1",
+                [&source],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(start_body, "开始使命");
         state.command_id = Uuid::new_v4().to_string();
         state.payload.source_message_id = Some(source.clone());
         let status = service.status(&mut db, &state).unwrap();

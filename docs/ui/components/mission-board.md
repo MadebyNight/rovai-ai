@@ -12,7 +12,8 @@ Missions, independently of unread messages and running Agents. Ordinary project/
 not duplicate Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user to desktop.
 
 Cards open from their entire surface, including keyboard activation; nested avatar/menu controls keep
-their own actions. Show all member avatars with the lead first, project followed by tags, and a plain
+their own actions. The metadata label uses the stable public number (`M-018`), never an opaque ID suffix.
+Show all member avatars with the lead first, project followed by tags, and a plain
 relative timestamp such as “昨天”. Card, list and opened-Mission menus share this order: 编辑使命、状态、
 查看队员、队长、标签、删除. Click opens
 submenus; chevrons use the existing 16px icon rhythm. Tags use a lightweight search/create/check popover.

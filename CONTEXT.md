@@ -5,7 +5,7 @@ Rovai-ai is a local multi-Agent workbench in which long-lived Agent identities c
 ## Domain Glossary
 
 **Mission**:
-A durable purpose and independently maintained business status for exactly one public Camp. The Camp retains ownership of membership, conversations, messages, drafts and execution. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision.
+A durable purpose and independently maintained business status for exactly one public Camp. Core keeps an opaque internal ID plus a stable, monotonically allocated public number; display, Mission Git branch and worktree names derive from the number. The Camp retains ownership of membership, conversations, messages, drafts and execution. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision. Only the latest title and description are retained.
 _Avoid_: Task alias, Run state, separate chat store, lead-only definition
 
 **Mission Workspace**:

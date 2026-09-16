@@ -19,6 +19,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   document.querySelector<HTMLButtonElement>('button[title="使命板"]')!.click()
   await until(() => document.querySelector('.mission-board-card'), 'The Mission board must load')
   const card = document.querySelector<HTMLElement>('.mission-board-card')!
+  check(card.querySelector('.mission-card-meta > span')?.textContent === 'M-018', 'Mission card uses the stable display number')
   check(card.querySelectorAll('.mission-avatar-item').length === 4, 'All members appear on the card')
   check(card.querySelector('.mission-card-project')?.nextElementSibling?.classList.contains('mission-tags'), 'Tags follow the project')
   const lanes = [...document.querySelectorAll<HTMLElement>('.mission-column')]

@@ -284,7 +284,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 108;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 109;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -717,6 +717,7 @@ struct CurrentMigrationState {
     v156: bool,
     v157: bool,
     v158: bool,
+    v159: bool,
 }
 
 impl CurrentMigrationState {
@@ -738,6 +739,14 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v159 {
+            let mut previous = *self;
+            previous.v159 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 109
+                && self.v158
+                && previous.admits("v1.59", 108, classifier);
+        }
         if self.v158 {
             let mut previous = *self;
             previous.v158 = false;
@@ -2963,7 +2972,10 @@ pub(crate) fn classify_database_contract(
         || (migrations.v153 && !client_draft_v153_schema_matches(connection)?)
         || (migrations.v154 && !private_client_draft_v154_schema_matches(connection)?)
         || (migrations.v155 && !automation_time_limit_v155_schema_matches(connection)?)
-        || (migrations.v158 && !mission_details::schema_matches(connection)?)
+        || (migrations.v159 && !mission_details::v159_schema_matches(connection)?)
+        || (migrations.v158
+            && !migrations.v159
+            && !mission_details::v158_schema_matches(connection)?)
         || (migrations.v157 && !mission_context::schema_matches(connection)?)
         || (migrations.v156
             && !migrations.v157
@@ -3792,7 +3804,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 155),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 156),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 157),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 158)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 158),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 159)
         "#,
         [],
         |row| {
@@ -3886,6 +3899,7 @@ fn load_current_migration_state(
                 v156: row.get(86)?,
                 v157: row.get(87)?,
                 v158: row.get(88)?,
+                v159: row.get(89)?,
             })
         },
     )
@@ -6797,6 +6811,9 @@ impl Database {
             if !self.schema_migration_applied(158)? {
                 migration_step!("migration_158", self.migrate_mission_details_v158());
             }
+            if !self.schema_migration_applied(159)? {
+                migration_step!("migration_159", self.migrate_mission_delivery_v159());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7465,6 +7482,9 @@ impl Database {
         }
         if !self.schema_migration_applied(158)? {
             migration_step!("migration_158", self.migrate_mission_details_v158());
+        }
+        if !self.schema_migration_applied(159)? {
+            migration_step!("migration_159", self.migrate_mission_delivery_v159());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -32525,6 +32545,7 @@ mod tests {
             v156: version >= 156,
             v157: version >= 157,
             v158: version >= 158,
+            v159: version >= 159,
         }
     }
 

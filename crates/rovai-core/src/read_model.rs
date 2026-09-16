@@ -2577,7 +2577,7 @@ fn hydrate_message_views(
             } else {
                 None
             };
-            let mission_start=transaction.query_row("SELECT mission_id,title,description FROM mission_start WHERE message_id=?1",[&row.id],|r|Ok(serde_json::json!({"missionId":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"description":r.get::<_,String>(2)?}))).optional()?;
+            let mission_start=transaction.query_row("SELECT s.mission_id,m.title,m.description FROM mission_start s JOIN mission m ON m.id=s.mission_id WHERE s.message_id=?1",[&row.id],|r|Ok(serde_json::json!({"missionId":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"description":r.get::<_,String>(2)?}))).optional()?;
             Ok(CampMessageView {
                 mission_start,
                 quotes: load_quotes(transaction, QuoteStorage::CampMessage, &row.id)?,

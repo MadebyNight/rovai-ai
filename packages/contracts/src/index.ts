@@ -4005,7 +4005,7 @@ export interface RovaiApi {
 
 export type MissionStatus = 'needs_you' | 'not_started' | 'in_progress' | 'completed'
 export interface MissionInfo { missionId: string; title: string; description: string; status: MissionStatus; sourceMessageId: string | null }
-export interface MissionRecord extends MissionInfo { hasUnread: boolean; campId: string; projectPath: string; projectBindingKind: ProjectBindingKind; detailsVersion: number; tags: string[]; createdAt: string; updatedAt: string; memberAgentIds: string[]; defaultLeadAgentId: string | null; runningAgentIds: string[] }
+export interface MissionRecord extends MissionInfo { number: number; hasUnread: boolean; campId: string; projectPath: string; projectBindingKind: ProjectBindingKind; detailsVersion: number; tags: string[]; createdAt: string; updatedAt: string; memberAgentIds: string[]; defaultLeadAgentId: string | null; runningAgentIds: string[] }
 export interface MissionCreate { title: string; description: string; projectPath: string; projectBindingKind: ProjectBindingKind; memberAgentIds: string[]; defaultLeadAgentId: string; tags: string[] }
 export interface MissionActivity { id: number; kind: string; actorType: string; actorId: string; changes: Record<string, unknown>; createdAt: string }
 export interface MissionWorkspace { id: string; missionId: string; campId: string; executionHostId: string; sourceDirectory: string; repositoryRoot: string; gitCommonDir: string; worktreePath: string; workingDirectory: string; baseBranch: string | null; branch: string; baseSha: string; state: 'preparing' | 'ready' | 'cleanup_pending' | 'cleanup_failed'; diagnostic: string | null }

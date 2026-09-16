@@ -261,11 +261,9 @@ impl Database {
             mission_details::apply_schema(&tx)?;
             tx.execute_batch("INSERT INTO schema_migration VALUES(157,datetime('now')); INSERT INTO schema_migration VALUES(158,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=108,updated_at=datetime('now') WHERE singleton=1;")?;
             anyhow::ensure!(
-                matches!(
-                    classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
-                ),
-                "Mission context migration failed schema admission"
+                matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 108),
+                "Mission context migration failed source admission"
             );
             validate_migration_foreign_keys(
                 &tx,
@@ -284,7 +282,7 @@ impl Database {
         let restore = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
         result?;
         restore?;
-        Ok(())
+        self.migrate_mission_delivery_v159()
     }
 }
 
@@ -305,6 +303,13 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
         .execute_batch("PRAGMA foreign_keys=OFF;")
         .unwrap();
     let tx = connection.unchecked_transaction().unwrap();
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS mission_number_sequence;
+        ALTER TABLE conversation DROP COLUMN mission_details_delivered_version;
+        ALTER TABLE context_manifest DROP COLUMN mission_details_version;
+        DELETE FROM schema_migration WHERE version=159;",
+    )
+    .unwrap();
     tx.execute_batch("DROP TABLE IF EXISTS mission_details_read; DELETE FROM schema_migration WHERE version=158;")
         .unwrap();
     let guard: String = tx

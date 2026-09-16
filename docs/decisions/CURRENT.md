@@ -71,7 +71,7 @@ last_updated: 2026-09-16
 ## Mission
 
 - 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v1](../contracts/mission-v1.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v25](../contracts/context-manifest-evidence-v25.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
-- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。
+- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)。
 
 ## Single Chat
 

@@ -2,18 +2,18 @@
 document_type: model-context-change
 version: v1.59
 change_id: mission
-revision: 4
+revision: 5
 confirmation_status: confirmed
 confirmed_by: local_user
-confirmed_at: 2026-09-16T07:09:29Z
-confirmed_revision: 4
+confirmed_at: 2026-09-16T09:07:30Z
+confirmed_revision: 5
 authority: confirmed-model-input-change-statement
 implementation_baseline: b2df4d85cdb8c6b8a9346290b16311b94fa4b7ed
 implementation_status: in_progress
 last_updated: 2026-09-16
 ---
 
-# 使命：模型输入增量与实施边界（revision 4）
+# 使命：模型输入增量与实施边界（revision 5）
 
 本说明把用户提供的《使命板方案说明 v2》《使命 Camp：Bootstrap、CLI Help 与 cli-operations》
 以及后续持久 Worktree／累计 Diff 要求落实为字段级方案。桌面交互采用已确认 v7，补充整卡点击和
@@ -31,8 +31,14 @@ Bootstrap 两条规则已明确通过；使命事实缩至三个字段；开始�
 revision 4 纳入开发者 2026-09-16 消息 `4e5e0e3a-f6c4-4177-9f5c-37363adab579`
 及其两份完整附件：创建不再接收起始版本，首次 preparing 现场固定当前本地分支与 HEAD；Renderer
 标题／描述编辑使用内部乐观版本；Agent 接口继续无版本。定义在某 Agent 会话首次进入后发生变化时，
-下一轮 `RUN_FACTS.mission` 加入固定 `updateNotice`，直到该会话成功 `mission get`。CURRENT_INPUT 不变。
+下一轮 `RUN_FACTS.mission` 加入固定 `updateNotice`。revision 5 将其消除条件改为包含该版本的 Runtime Input
+成功 accepted；`mission get` 保持纯读取。CURRENT_INPUT 不变。
 该消息直接要求“修改三个功能”，构成 revision 4 的字段级确认与实施授权。
+
+revision 5 纳入开发者随后对稳定数字号与更新提醒的明确修订：内部 UUID 不再用于 UI、分支或 worktree
+命名；Mission 不保留历史标题／描述正文；`mission get` 不再确认已读。每次 ContextManifest 冻结当前
+`details_version`，只有包含该版本的 Runtime Input 在当前 binding 上 `accepted` 才推进会话已投递水位。
+该修订替代下文 revision 4 的读取水位、委托正文快照和完整 UUID 命名结论，其他输入 shape 不变。
 
 ## 变更前
 
@@ -112,7 +118,7 @@ type RunFactsAfter = Omit<RunFactsBefore, 'schemaVersion' | 'campResources'> & {
 }
 ```
 
-每次新输入准备时读取三个当前事实，并按下述读取水位选择可选固定提示。普通 Camp 和 Single Chat 省略 `mission`，不输出 null。
+每次新输入准备时读取三个当前事实，并按下述投递水位选择可选固定提示。普通 Camp 和 Single Chat 省略 `mission`，不输出 null。
 此对象没有 description、业务版本、sourceMessageId、标签或工作区；需要完整定义时用 `mission get`。
 `attachmentOutputRoot` 采用已确认的附件原路径 revision 2：它只是 Agent 默认输出位置，不是权限或附件枚举根。
 既有其他 RUN_FACTS 平台字段保持原职责，不向 Mission 对象增加 schemaVersion／version／expectedVersion。
@@ -120,10 +126,11 @@ type RunFactsAfter = Omit<RunFactsBefore, 'schemaVersion' | 'campResources'> & {
 Mission 状态变化不是工作区准备的条件，也不是自动派发或停止信号。
 
 `details_version` 是 Core 内部定义版本：创建为 1，每次标题／描述的有效原子修改递增一次，no-op 不递增；
-状态、标签、成员、队长和工作区变化不递增。每个 Agent conversation 在首次成功持久化 Mission 输入时记录
-基线版本，首次进入不发提示。之后当前版本高于该 conversation 最后成功 `mission get`（或基线）时，加入上面
-逐字固定的 `updateNotice`；提示跨 Run 保留，成功 get 后移除。提示不含版本号、编辑者或变更字段，且不改变
-CURRENT_INPUT。新 conversation 独立执行首次进入流程。内部版本／读取水位不进入任何 Agent CLI 输入、输出或错误。
+状态、标签、成员、队长和工作区变化不递增。首次进入不发提示；包含当前版本的 Runtime Input 成功 accepted
+后，Conversation 记录该已投递版本。之后当前版本高于已投递版本时加入上面逐字固定的 `updateNotice`；提示
+跨 Run 保留，直到包含该版本的新输入 accepted。`mission get` 是纯读取，不推进水位。提示不含版本号、编辑者
+或变更字段，且不改变 CURRENT_INPUT。新 conversation 独立执行首次进入流程。内部版本／投递水位不进入任何
+Agent CLI 输入、输出或错误。
 
 ### WORKSPACE：已经解析出的运行环境
 
@@ -159,7 +166,7 @@ type WorkspaceFacts = {
 Git 使命示例：
 
 ```json
-{"workingDirectory":"/Projects/app-mission-mission_42","branch":"rovai/mission/mission_42"}
+{"workingDirectory":"/Projects/app-mission-042","branch":"rovai/mission/042"}
 ```
 
 非 Git 使命示例：
@@ -205,10 +212,10 @@ Core 校验 missionId 属于本轮真实 Camp；用户文本中写同样的 JSON
   进入队列不创建工作区。重复 commandId 不新增 Run；已有正在推进的 Run 时，不再创建第二个开始委托。
 - 该输入表示用户开始当前 Mission。Agent 使用 `mission get` 读取完整的**当前定义**再开展工作；不要求
   每轮 get，也不把描述自动塞回 RUN_FACTS。若队列等待期间有人更新定义，get 读最新内容，不制造版本冲突。
-- 主 Camp 留一条用户操作产生的委托卡，界面保留点击当时的标题／描述快照作为历史；内部快照可带序号，
-  不向 Agent 暴露并发版本。历史模型正文确定性地呈现 `开始使命：<当时标题>`，不重放完整使命描述。
+- 主 Camp 留一条用户操作产生的委托卡和 Mission 引用，不复制标题／描述。界面联查当前 Mission 定义；
+  消息正文只表示“开始使命”，不通过 Camp 历史形成旧标题或旧描述。
 - 对已准备的 Input Delivery，重试仍使用原始 mission_start 引用及投递 bytes；之后的 get 是独立的当前状态
-  查询，不谎称其查询结果被冻结在点击时。旧委托卡不随 Mission 后续编辑改变。
+  查询，不谎称其查询结果被冻结在点击时。委托卡随当前 Mission 定义投影更新，不保存旧正文。
 
 **用户发消息，包括使命中的第一条消息，完全沿用普通 CURRENT_INPUT。** source、message、引用、附件、
 Skill、接收者和 Pending 路径均保持，不加 mission_start kind，不拼使命描述，不多发一条启动消息。
@@ -232,8 +239,9 @@ preparing 是 Core 的执行准备阶段，独立于 Mission 四种业务状态�
 Git 首次准备读取 Mission 工作目录当时的本地分支与 `HEAD` commit：分支保存为可空 `base_branch`
 （detached HEAD 为 null），commit 固定为 `base_sha`。创建命令／恢复草稿没有起始版本字段，保存 Mission
 不读取 Git；工作树从该 commit 以禁用远端猜测的方式创建，不切换源仓库、不复制源目录未提交文件。
-目录为原仓库同级的 `<repo>-mission-<mission_id>`，分支为 `rovai/mission/<mission_id>`，
-这里使用稳定的 **完整 Mission ID**，不按标题／Agent／Run 重算。
+目录为原仓库同级的 `<repo>-mission-<number>`，分支为 `rovai/mission/<number>`。`number` 是删除后不复用
+的全局单调 Mission 数字号，小于 1000 时至少补齐三位；不按标题／Agent／Run 重算。内部完整 Mission ID
+继续作为关系主键，但不进入这些用户可见／Git 名称。
 目录和分支作为同一候选组，任一占用则同时递增 `-2`、`-3` 后缀，保存最终路径和分支。
 先复用确认过的关联；只对名称占用或创建竞争继续尝试，其他错误明确返回。
 同一 Mission 的并发 preparing 通过 Core 的同一准备归属协调，只创建一次，不把同名目录当自己的工作区。
@@ -257,7 +265,8 @@ Direct materialization 和 A2A preflight 使用同一选择／预算函数。预
 以真实解析结果做最终预算检查，再冻结与投递。排队时不能通过“预检”提前创建文件系统对象。
 
 MissionFacts 归既有 `run_fact_payload_json`／digest 和 fact reference 证据，不再新增完整 mission_context 列。
-新 Manifest 保存 `workspace_fact_json`、`workspace_fact_digest`、`workspace_fact_included` 及内部来源关联：
+新 Manifest 保存 `workspace_fact_json`、`workspace_fact_digest`、`workspace_fact_included`、本轮内部
+`mission_details_version` 及来源关联：
 未发生 workspace 投影的普通／私有会话为 NULL／NULL／false；Mission 保存准备时快照，included 决定是否
 真的出现在 Prompt 中。同一会话后续省略时仍可证明使用了哪份环境和哪次先前 accepted Delivery。
 这些内部列、源 Mission 的序号、binding generation 不进入模型 JSON。
@@ -431,8 +440,9 @@ Mission 保存共同目标，Task 保存可独立交接的责任；不要为使�
 
 Migration 157/schema 107 从两个已存在的 Migration 156/schema 106 形态汇合：已发布附件路径形态与已安装 Mission preview 形态均为受支持来源。
 建立 Mission、内部活动序号、开始记录和独立 workspace／清理记录；旧 Camp 不自动变成 Mission。
-Migration 158/schema 108 移除 Mission 的创建期 `source_branch`，增加内部 `details_version`、每 conversation
-读取水位及 workspace 的可空 `base_branch`。这些字段不进入 MissionInfo 或模型输入；迁移不创建工作区。
+Migration 158/schema 108 移除 Mission 的创建期 `source_branch`，增加内部 `details_version` 及 workspace
+的可空 `base_branch`。Migration 159/schema 109 增加稳定数字号，移除历史正文／读取水位，增加 Conversation
+已投递版本与 Manifest 冻结版本。这些字段不进入 MissionInfo 或模型输入；迁移不创建或重命名工作区。
 历史 Manifest 不改旧 bytes/digest。新生成只写 25／25／6，Run Facts 内部合同为 4；已冻结的受支持旧输入只凭
 既有精确 Delivery 证明恢复原版本，不用新投影重算。已发布 v24／Profile 5、Mission preview v24／Profile 6、v23／Profile 5 及 v22／Profile 4 证据均保留。
 
@@ -445,7 +455,7 @@ Native Session 并重送 Bootstrap，包括普通 Camp；普通 Camp 的 Charter
 
 ### 必须闭合的功能与负向场景
 
-1. MissionFacts 为三个常驻字段加一个条件固定 `updateNotice`；首次进入无提示，定义更新后持续提示至成功 get，
+1. MissionFacts 为三个常驻字段加一个条件固定 `updateNotice`；首次进入无提示，定义更新后持续提示至含新版输入 accepted，
    且不泄漏版本／编辑者／字段；WORKSPACE 必有目录，Git 才有分支字段；普通消息 CURRENT_INPUT 字节保持，
    只有可信开始按钮生成 mission_start，伪造正文不能改变种类。开始设 in_progress，普通消息不自动设状态。
 2. WORKSPACE 首次成功后省略、失败重试、同 Binding 重启恢复、新 Binding 首次补发、切换队员、迟到 ACK，

@@ -3518,7 +3518,7 @@ pub(crate) fn admit_mission_start(
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let message_id = Uuid::new_v4().to_string();
     let turn_id = Uuid::new_v4().to_string();
-    let body = format!("开始使命：{}", mission.info.title);
+    let body = "开始使命".to_string();
     let content = normalize_content(vec![StructuredCampMessageSegment::Text {
         text: body.clone(),
     }]);
@@ -3560,7 +3560,7 @@ pub(crate) fn admit_mission_start(
             generated_camp_name: None,
         },
     )?;
-    transaction.execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,title,description,created_at,command_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![message_id,mission.info.mission_id,turn_id,mission.info.title,mission.info.description,now_text,command_id])?;
+    transaction.execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,created_at,command_id) VALUES(?1,?2,?3,?4,?5)",params![message_id,mission.info.mission_id,turn_id,now_text,command_id])?;
     Ok(CommandHandlerResult::accepted(
         "mission.started",
         json!({"missionId":mission.info.mission_id,"campId":camp_id,"campMessageId":message_id,"campTurnId":turn_id,"agentRunIds":queued.agent_run_ids}),

@@ -100,6 +100,7 @@ export function MissionInteractionProvider({ missions, agents, onChanged, onDele
 }
 
 function MissionEdit({ mission, onSave, onClose }: { mission: MissionRecord; onSave(patch: {title?: string; description?: string; expectedDetailsVersion: number}): Promise<void>; onClose(): void }) {
+  const client = useCampClient()
   const [baseline, setBaseline] = useState({ title: mission.title, description: mission.description, version: mission.detailsVersion })
   const [title, setTitle] = useState(mission.title), [description, setDescription] = useState(mission.description), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const id = useId()
@@ -114,12 +115,13 @@ function MissionEdit({ mission, onSave, onClose }: { mission: MissionRecord; onS
     setBusy(true); setError('')
     try { await onSave(patch); onClose() } catch (error) {
       if (error instanceof MissionCommandRejected && error.result.code === 'mission.details_version_conflict') {
-        const latestTitle = error.result.payload.currentTitle, latestDescription = error.result.payload.currentDescription, latestVersion = error.result.payload.currentDetailsVersion
-        if (typeof latestTitle === 'string' && typeof latestDescription === 'string' && typeof latestVersion === 'number') {
-          setBaseline({ title: latestTitle, description: latestDescription, version: latestVersion })
-          setTitle(latestTitle); setDescription(latestDescription)
+        try {
+          const latest = (await client.request<MissionRecord[]>('missions.list')).find(candidate => candidate.missionId === mission.missionId)
+          if (!latest) throw new Error('Mission no longer exists')
+          setBaseline({ title: latest.title, description: latest.description, version: latest.detailsVersion })
+          setTitle(latest.title); setDescription(latest.description)
           setError('使命刚刚被修改，已载入最新内容。请重新编辑后保存。')
-        } else setError(missionError(error))
+        } catch { setError('使命刚刚被修改，但最新内容加载失败。请关闭后重试。') }
       } else setError(missionError(error))
     } finally { setBusy(false) }
   }
@@ -162,7 +164,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     }
     return <article key={m.missionId} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)}
       onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); e.currentTarget.querySelector<HTMLButtonElement>('.mission-card-actions')?.click() } }}>
-      <div className="mission-card-meta"><span>{m.missionId.slice(-8)}</span><button className="mission-icon-button mission-card-actions" aria-label={`${m.title}的操作`} onClick={e => actions.menu(m, e)}><Icon name="more"/></button></div>
+      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><button className="mission-icon-button mission-card-actions" aria-label={`${m.title}的操作`} onClick={e => actions.menu(m, e)}><Icon name="more"/></button></div>
       <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.hasUnread && <span className="mission-unread-dot" aria-label="有未读消息"/>}{m.title}</h3></button>
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-card-footer"><MissionAvatars m={m} onClick={e => actions.roster(m, e)}/><time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>

@@ -664,9 +664,7 @@ impl ContextService {
         )?;
         let a2a_count = count_a2a_runs(database, &snapshot.camp_turn_id)?;
         let collaboration_state_section = collaboration_changed.then_some(collaboration_state);
-        let mission_details_baseline =
-            mission_details_baseline(database.context_connection(), &snapshot)?;
-        let run_facts =
+        let (run_facts, mission_details_version) =
             build_run_facts(database, &snapshot, requires_new_native_session, a2a_count)?;
         let rendered_run_facts = render_run_facts(&run_facts)?;
         let bootstrap_redelivery_revision = pending_redelivery_revision(
@@ -916,11 +914,6 @@ impl ContextService {
             .map(|omitted| omitted.sequence_end);
         let transaction = database.connection_mut().transaction()?;
         revalidate_snapshot_for_manifest(&transaction, &snapshot, expected_binding_generation)?;
-        persist_mission_details_baseline(
-            &transaction,
-            &snapshot,
-            mission_details_baseline.as_ref(),
-        )?;
         let revalidated_skill_resolution = resolve_current_input_skills(
             &transaction,
             &snapshot.skill_selection_snapshot,
@@ -968,14 +961,15 @@ impl ContextService {
                 camp_attachment_view_receipt_digest,
                 formatter_version,
                 rendered_payload_blob_id, rendered_payload_digest, created_at,
-                workspace_fact_json,workspace_fact_digest,workspace_fact_included
+                workspace_fact_json,workspace_fact_digest,workspace_fact_included,
+                mission_details_version
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
                 ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
                 ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50,
-                ?51, ?52, ?53, ?54
+                ?51, ?52, ?53, ?54, ?55
             )
             "#,
             params![
@@ -1045,6 +1039,7 @@ impl ContextService {
                     .transpose()?,
                 workspace_fact.digest,
                 i64::from(workspace_fact.included),
+                mission_details_version,
             ],
         )?;
         let persisted_manifest_id = if inserted != 1 {
@@ -1223,13 +1218,7 @@ impl ContextService {
             || snapshot.native_collaboration_state_digest.as_deref()
                 != Some(collaboration_state_digest.as_str()))
         .then_some(collaboration_state);
-        let mission_details_baseline = mission_details_baseline(transaction, &snapshot)?;
-        persist_mission_details_baseline(
-            transaction,
-            &snapshot,
-            mission_details_baseline.as_ref(),
-        )?;
-        let run_facts = build_run_facts(
+        let (run_facts, mission_details_version) = build_run_facts(
             transaction,
             &snapshot,
             requires_new_native_session,
@@ -1457,6 +1446,7 @@ impl ContextService {
             "workspaceFact": workspace_fact.value,
             "workspaceFactDigest": workspace_fact.digest,
             "workspaceFactIncluded": workspace_fact.included,
+            "missionDetailsVersion": mission_details_version,
             "campAttachmentViewReceiptVersion": camp_attachment_view_receipt.as_ref().map(|_| CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION),
             "campAttachmentViewReceipt": camp_attachment_view_receipt,
             "campAttachmentViewReceiptDigest": camp_attachment_view_receipt_digest,
@@ -2307,6 +2297,10 @@ fn acknowledge_input_delivery_transaction(
                 native_charter_digest = ?4,
                 native_collaboration_state_digest = ?5,
                 native_workspace_fact_digest = COALESCE((SELECT workspace_fact_digest FROM context_manifest WHERE agent_run_id=?8 AND workspace_fact_included=1),native_workspace_fact_digest),
+                mission_details_delivered_version = CASE
+                    WHEN ?9 IS NULL THEN mission_details_delivered_version
+                    ELSE MAX(COALESCE(mission_details_delivered_version,0),?9)
+                END,
                 version = version + 1, updated_at = ?6
             WHERE id = ?1 AND native_binding_id = ?2
               AND native_binding_generation = ?7
@@ -2321,6 +2315,7 @@ fn acknowledge_input_delivery_transaction(
                 now,
                 row.native_binding_generation,
                 row.agent_run_id,
+                row.mission_details_version,
             ],
         )?;
         if marker_updated != 1 {
@@ -3469,10 +3464,14 @@ fn build_run_facts<R: ContextReadConnection>(
     snapshot: &RunSnapshot,
     requires_new_native_session: bool,
     a2a_run_count: i64,
-) -> Result<RunFacts> {
+) -> Result<(RunFacts, Option<i64>)> {
+    let selected_mission = selected_mission_facts(database.context_connection(), snapshot)?;
+    let mission_details_version = selected_mission
+        .as_ref()
+        .map(|selected| selected.details_version);
     let mut facts = RunFacts {
         schema_version: 4,
-        mission: mission_facts(database.context_connection(), snapshot)?,
+        mission: selected_mission.map(|selected| selected.facts),
         attachment_output_root: crate::storage_layout::resolve_attachment_output_root(
             database.context_connection(),
             &snapshot.camp_id,
@@ -3573,7 +3572,7 @@ fn build_run_facts<R: ContextReadConnection>(
                 .then_some(false),
         });
     }
-    Ok(facts)
+    Ok((facts, mission_details_version))
 }
 
 fn a2a_task_context_fact(invocation_kind: &str, task_id: Option<&str>) -> Option<TaskContextFact> {
@@ -5772,22 +5771,27 @@ fn mission_start_evidence(
     let value=connection.query_row("SELECT command_id,mission_id FROM mission_start WHERE message_id=?1 AND camp_turn_id=?2",params![input.source_camp_message_id,snapshot.camp_turn_id],|r|Ok(json!({"commandId":r.get::<_,String>(0)?,"missionId":r.get::<_,String>(1)?,"campId":snapshot.camp_id}))).optional()?;
     Ok(Some(value.context("mission.start_evidence_missing")?))
 }
-fn mission_facts(
+struct SelectedMissionFacts {
+    facts: crate::mission::MissionFacts,
+    details_version: i64,
+}
+
+fn selected_mission_facts(
     connection: &Connection,
     snapshot: &RunSnapshot,
-) -> Result<Option<crate::mission::MissionFacts>> {
+) -> Result<Option<SelectedMissionFacts>> {
     if snapshot.invocation_kind == "single_chat" {
         return Ok(None);
     }
     let row = connection
         .query_row(
             "SELECT m.id,m.title,m.status,
-                    CASE WHEN r.conversation_id IS NOT NULL
-                              AND m.details_version > COALESCE(r.last_read_details_version,r.baseline_details_version)
-                         THEN 1 ELSE 0 END
+                    CASE WHEN c.mission_details_delivered_version IS NOT NULL
+                              AND m.details_version > c.mission_details_delivered_version
+                         THEN 1 ELSE 0 END,
+                    m.details_version
              FROM mission m
-             LEFT JOIN mission_details_read r
-               ON r.conversation_id=?2 AND r.mission_id=m.id
+             JOIN conversation c ON c.id=?2 AND c.camp_id=m.camp_id
              WHERE m.camp_id=?1",
             params![snapshot.camp_id, snapshot.conversation_id],
             |r| {
@@ -5796,71 +5800,32 @@ fn mission_facts(
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     r.get::<_, bool>(3)?,
+                    r.get::<_, i64>(4)?,
                 ))
             },
         )
         .optional()?;
-    row.map(|(mission_id, title, status, changed)| {
-        Ok(crate::mission::MissionFacts {
-            mission_id,
-            title,
-            status: serde_json::from_value(json!(status))?,
-            update_notice: changed.then(|| {
-                "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT.".to_string()
-            }),
+    row.map(|(mission_id, title, status, changed, details_version)| {
+        Ok(SelectedMissionFacts {
+            facts: crate::mission::MissionFacts {
+                mission_id,
+                title,
+                status: serde_json::from_value(json!(status))?,
+                update_notice: changed.then(|| {
+                    "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT.".to_string()
+                }),
+            },
+            details_version,
         })
     })
     .transpose()
 }
 
-#[derive(Debug)]
-struct MissionDetailsBaseline {
-    mission_id: String,
-    details_version: i64,
-}
-
-fn mission_details_baseline(
+fn mission_facts(
     connection: &Connection,
     snapshot: &RunSnapshot,
-) -> Result<Option<MissionDetailsBaseline>> {
-    if snapshot.invocation_kind == "single_chat" {
-        return Ok(None);
-    }
-    connection
-        .query_row(
-            "SELECT id,details_version FROM mission WHERE camp_id=?1",
-            [&snapshot.camp_id],
-            |row| {
-                Ok(MissionDetailsBaseline {
-                    mission_id: row.get(0)?,
-                    details_version: row.get(1)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
-}
-
-fn persist_mission_details_baseline(
-    connection: &Connection,
-    snapshot: &RunSnapshot,
-    baseline: Option<&MissionDetailsBaseline>,
-) -> Result<()> {
-    let Some(baseline) = baseline else {
-        return Ok(());
-    };
-    connection.execute(
-        "INSERT OR IGNORE INTO mission_details_read(
-            conversation_id,mission_id,baseline_details_version,last_read_details_version,updated_at
-         ) VALUES(?1,?2,?3,NULL,?4)",
-        params![
-            snapshot.conversation_id,
-            baseline.mission_id,
-            baseline.details_version,
-            chrono::Utc::now().to_rfc3339(),
-        ],
-    )?;
-    Ok(())
+) -> Result<Option<crate::mission::MissionFacts>> {
+    Ok(selected_mission_facts(connection, snapshot)?.map(|selected| selected.facts))
 }
 #[derive(Default)]
 struct PreparedWorkspaceFact {
@@ -6859,6 +6824,10 @@ fn materialize_frozen_delivery_context(
     let run_facts_schema_version = required("runFactsSchemaVersion")?
         .as_i64()
         .context("Frozen Delivery Context Run Facts schema version is invalid")?;
+    let mission_details_version = optional_i64("missionDetailsVersion")?;
+    if mission_details_version.is_some_and(|version| version < 1) {
+        anyhow::bail!("Frozen Delivery Context Mission details version is invalid");
+    }
     let camp_attachment_view_receipt_version =
         required("campAttachmentViewReceiptVersion")?.as_i64();
     let receipt_value = required("campAttachmentViewReceipt")?;
@@ -6938,14 +6907,15 @@ fn materialize_frozen_delivery_context(
             camp_attachment_view_receipt_digest,
             formatter_version,
             rendered_payload_blob_id, rendered_payload_digest, created_at,
-            workspace_fact_json,workspace_fact_digest,workspace_fact_included
+            workspace_fact_json,workspace_fact_digest,workspace_fact_included,
+            mission_details_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
             ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
             ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50,
-            ?51, ?52, ?53, ?54
+            ?51, ?52, ?53, ?54, ?55
         )
         "#,
         params![
@@ -7007,6 +6977,7 @@ fn materialize_frozen_delivery_context(
                 .transpose()?,
             workspace_fact.digest,
             i64::from(workspace_fact.included),
+            mission_details_version,
         ],
     )?;
     for camp in &history_camps {
@@ -7227,6 +7198,7 @@ struct DeliveryTargetRow {
     status: String,
     native_input_id: Option<String>,
     bootstrap_redelivery_revision: Option<i64>,
+    mission_details_version: Option<i64>,
 }
 
 impl DeliveryTargetRow {
@@ -7262,7 +7234,8 @@ fn load_delivery_target(
                    context_manifest.collaboration_state_included,
                    camp_turn.camp_id, runtime_input_delivery.status,
                    runtime_input_delivery.native_input_id,
-                   runtime_input_delivery.bootstrap_redelivery_revision
+                   runtime_input_delivery.bootstrap_redelivery_revision,
+                   context_manifest.mission_details_version
             FROM runtime_input_delivery
             JOIN context_manifest
               ON context_manifest.id = runtime_input_delivery.context_manifest_id
@@ -7294,6 +7267,7 @@ fn load_delivery_target(
                     status: row.get(13)?,
                     native_input_id: row.get(14)?,
                     bootstrap_redelivery_revision: row.get(15)?,
+                    mission_details_version: row.get(16)?,
                 })
             },
         )
@@ -11836,20 +11810,40 @@ mod slow_tests {
     #[test]
     fn accepted_input_advances_only_current_binding_and_restart_blocks_redelivery() {
         let mut fixture = fixture();
-        fixture.database.connection().execute("INSERT INTO mission(id,camp_id,title,description,status,details_version,created_at,updated_at) VALUES('rvm_context',?1,'Shared Mission','full description stays out of facts','in_progress',1,'now','now')",[&fixture.camp_id]).unwrap();
+        fixture.database.connection().execute("INSERT INTO mission(id,number,camp_id,title,description,status,details_version,created_at,updated_at) VALUES('rvm_context',1,?1,'Shared Mission','full description stays out of facts','in_progress',1,'now','now')",[&fixture.camp_id]).unwrap();
         let snapshot =
             load_run_snapshot(&fixture.database, &fixture.run_id, fixture.execution_epoch)
                 .unwrap()
                 .unwrap();
         let ordinary = load_current_input(&fixture.database, &snapshot).unwrap();
         assert!(ordinary.payload.get("kind").is_none());
-        fixture.database.connection().execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,command_id,title,description,created_at) VALUES(?1,'rvm_context',?2,'start-command','Shared Mission','initial definition','now')",params![snapshot.trigger_camp_message_id,snapshot.camp_turn_id]).unwrap();
+        fixture.database.connection().execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,command_id,created_at) VALUES(?1,'rvm_context',?2,'start-command','now')",params![snapshot.trigger_camp_message_id,snapshot.camp_turn_id]).unwrap();
         assert_eq!(
             load_current_input(&fixture.database, &snapshot)
                 .unwrap()
                 .as_payload(&[], &[]),
             json!({"kind":"mission_start","source":{"type":"user"},"missionId":"rvm_context"})
         );
+        assert!(
+            mission_facts(fixture.database.connection(), &snapshot)
+                .unwrap()
+                .unwrap()
+                .update_notice
+                .is_none(),
+            "a new Conversation receives the current definition without an update notice"
+        );
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE conversation SET mission_details_delivered_version=1 WHERE id=?1",
+                [&snapshot.conversation_id],
+            )
+            .unwrap();
+        fixture.database.connection().execute(
+            "UPDATE mission SET title='Changed Mission',details_version=2 WHERE id='rvm_context'",
+            [],
+        ).unwrap();
         let store = ManagedBlobStore::new(&fixture.directory);
         let service = ContextService;
         let prepared = service
@@ -11911,6 +11905,9 @@ mod slow_tests {
                 .rendered_payload
                 .contains("full description stays out of facts")
         );
+        assert!(prepared.rendered_payload.contains(
+            "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT."
+        ));
         assert!(
             prepared.rendered_payload.find("[RUN_FACTS]").unwrap()
                 < prepared.rendered_payload.find("[WORKSPACE]").unwrap()
@@ -11996,6 +11993,16 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(marker_after, prepared.camp_message_boundary_sequence);
+        let delivered_version: i64 = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT mission_details_delivered_version FROM conversation WHERE id=?1",
+                [&execution.conversation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivered_version, 2);
         assert!(
             !prepare_workspace_fact(&fixture.database, &snapshot, false, false)
                 .unwrap()
@@ -12013,30 +12020,6 @@ mod slow_tests {
                 .len(),
             3
         );
-        fixture
-            .database
-            .connection()
-            .execute(
-                "UPDATE mission SET title='Changed Mission',details_version=2 WHERE id='rvm_context'",
-                [],
-            )
-            .unwrap();
-        let changed = mission_facts(fixture.database.connection(), &snapshot)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            changed.update_notice.as_deref(),
-            Some(
-                "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT."
-            )
-        );
-        crate::mission::mark_details_read(
-            fixture.database.connection(),
-            "rvm_context",
-            &fixture.run_id,
-            2,
-        )
-        .unwrap();
         assert!(
             mission_facts(fixture.database.connection(), &snapshot)
                 .unwrap()

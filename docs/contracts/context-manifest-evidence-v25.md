@@ -37,11 +37,12 @@ Rovai Mission Contract
 Ordinary Camp and Single Chat Charter text is unchanged. Mission guidance does not grant private chats
 Mission tools, require a get every Turn or impose a lead-only update policy.
 
-Core keeps the definition revision and each Agent conversation's baseline/last-successful-read watermark as
-internal selection state. First entry never emits a notice. A later definition change emits the fixed notice
-until a successful `mission get`; no version or changed-field list enters model bytes or the Agent tool API.
-The baseline is committed atomically with the first persisted context/preflight so a failed selection cannot
-silently acknowledge Mission details.
+Core keeps the definition revision and each Agent conversation's last successfully delivered Mission detail
+version as internal selection state. First entry never emits a notice. Each new manifest freezes the current
+version without adding it to model bytes. A later definition change emits the fixed notice until a Runtime Input
+carrying that version is accepted on the current binding/generation. Prepared, rejected, unknown or late inputs
+cannot advance a successor. `mission get` has no acknowledgement side effect, and no version or changed-field
+list enters model bytes or the Agent tool API.
 
 ## Workspace evidence
 
@@ -65,5 +66,6 @@ published attachment-path schema or the previously installed Mission preview. Fr
 published 24/24/5 and Mission-preview 24/24/6 inputs remain readable only with their original evidence;
 they are never relabeled or reformatted. Model schema golden:
 `packages/contracts/fixtures/agent-run-context-v25.json`.
-Migration 158/schema 108 adds only the internal Mission definition-read state and does not rewrite any frozen
-manifest or change the Run Facts schema number.
+Migration 158/schema 108 introduced the internal Mission definition revision. Migration 159/schema 109 replaces
+read acknowledgement with accepted-delivery watermarks on Conversation and ContextManifest; it does not rewrite
+any frozen manifest or change the Run Facts schema number.

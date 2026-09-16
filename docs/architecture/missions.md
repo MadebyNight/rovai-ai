@@ -7,8 +7,8 @@ last_updated: 2026-09-16
 
 # Missions
 
-Mission is the durable purpose of a public team Camp. Core owns its definition, independent business
-status, history and execution workspace. Camp remains the sole owner of conversation, membership, lead,
+Mission is the durable purpose of a public team Camp. Core owns its opaque identity, stable public number,
+latest definition, independent business status, activity facts and execution workspace. Camp remains the sole owner of conversation, membership, lead,
 drafts, published files and execution. Renderer does not create a parallel conversation model.
 
 `MissionService` applies atomic commands through the existing gateway. The scheduler enters preparing
@@ -24,10 +24,14 @@ are the authority, not Agent narratives. The worktree is an execution location, 
 
 User definition edits use an internal optimistic revision so stale dialogs cannot overwrite newer title or
 description. Agent updates remain field patches with last-commit-wins semantics and never see that revision.
-Each Agent conversation also keeps an internal successful-read watermark: after its first Mission entry,
-a newer definition adds one exact `updateNotice` to Mission Run Facts until `mission get` succeeds.
+Only the latest title/description are retained; activity and start evidence keep field-change/reference facts,
+not historical definition bodies. Each Agent conversation keeps the latest Mission detail version successfully
+delivered to Runtime. After its first accepted Mission input, a newer definition adds one exact `updateNotice`
+to Mission Run Facts until an input carrying that version is accepted. `mission get` is a pure read.
 
-Context materialization projects compact identity/status and trusted start intent. The actual workspace
+The opaque ID remains the relational key. A monotonic integer is the human/Git naming identity: UI renders
+`M-018`, while the paired branch and sibling worktree use `rovai/mission/018` and `<repo>-mission-018`.
+Deleted numbers are never reused; collision suffixes do not change the number. Context materialization projects compact identity/status and trusted start intent. The actual workspace
 snapshot has its own dynamic section and acceptance marker, fenced to the native binding/generation.
 No Mission business version is taught to Agents; field patches use last-committed values.
 

@@ -11,15 +11,18 @@ last_updated: 2026-09-16
 
 ## Identity and lifecycle
 
-A Mission owns a stable `rvm_<UUIDv7>` identity and exactly one main public Camp. Its definition is
-`missionId`, `title`, `description`, `status`, and nullable `sourceMessageId`. Status is one of
+A Mission owns a stable internal `rvm_<UUIDv7>` identity, one monotonically allocated positive `number`,
+and exactly one main public Camp. Numbers are never reused. Renderer formats the number with a minimum
+three digits (`M-018`); it does not expose an ID suffix. Its definition is `missionId`, `title`, `description`,
+`status`, and nullable `sourceMessageId`. Status is one of
 `needs_you`, `not_started`, `in_progress`, `completed`; it is independent of Task and AgentRun status.
 The main Camp owns membership, lead, messages, drafts, execution, attachments and unread state.
 There is no ordinary-Camp conversion operation. Mission Camps are excluded from ordinary navigation.
 
 Saving atomically creates an active Camp and a `not_started` Mission. It does not create a Run, Git
 branch or worktree. Start is a user command: after execution admission it sets `in_progress` and
-persists a public commission message with an immutable title/description snapshot. An already active
+persists a public commission message plus a Mission reference, without copying title or description.
+The commission card resolves the current definition. An already active
 queued/running/waiting Run prevents a duplicate commission. A replay uses the same command result.
 Ordinary messages retain ordinary input semantics and can schedule Runs without changing Mission status.
 
@@ -27,7 +30,7 @@ All current Camp members and the user may edit title/description/status. There i
 or model-visible revision. Agent patches preserve omitted fields; the last committed Agent edit wins on
 a shared field. The Renderer carries an internal `details_version` only for atomic title/description edits:
 creation starts at 1, one effective title/description transaction advances it once, equal values do not,
-and a stale user edit is rejected with the latest title/description/version for an explicit retry. Tags,
+and a stale user edit is rejected; Renderer reloads the latest Mission projection before an explicit retry. Tags,
 status, membership and lead changes do not advance it. The version is absent from MissionInfo, Agent CLI
 inputs/results/errors and model context. Definition, tags, roster, lead and status changes do not schedule
 or cancel execution. Completed Missions retain their workspaces and running Agents.
@@ -37,10 +40,12 @@ durably published message in the same public Camp. Publish the complete explanat
 status using its ID. Retrying status does not require publishing the explanation again. Manual user
 status changes may omit the source. Status changes never substitute for a public answer.
 
-Title is 1–200 Unicode scalars after trimming; description is at most 12,000. User tags are trimmed,
+Title is 1–200 Unicode scalars after trimming; description is at most 12,000. Only their latest values and
+current `details_version` are stored. Activity records `titleChanged` / `descriptionChanged` boolean facts,
+never historical definition text; creation and start evidence also omit definition bodies. User tags are trimmed,
 case-insensitively deduplicated, at most 30 entries and 24 scalars each. User PR associations accept
-HTTP(S) URLs without embedded credentials. Activity stores actual definition/status/roster/lead/PR
-changes. Historical commission cards are never regenerated from the latest definition.
+HTTP(S) URLs without embedded credentials. Other activity retains the minimum status/roster/lead/PR facts
+needed for presentation. There is no definition restore path.
 
 ## Workspace preparation
 
@@ -50,9 +55,10 @@ rechecks cancellation, membership, configuration, execution and budget fences af
 
 For Git projects, the first preparing phase reads the configured directory's current local branch and
 current `HEAD` commit. Persist the branch as nullable `base_branch` (null for detached HEAD) and retain the
-commit as `base_sha`. Create branch `rovai/mission/<mission_id>` and sibling directory
-`<repo>-mission-<mission_id>` from that exact commit with remote guessing disabled, without switching the
+commit as `base_sha`. Create branch `rovai/mission/<number>` and sibling directory
+`<repo>-mission-<number>` from that exact commit with remote guessing disabled, without switching the
 source checkout or copying dirty files. Mission creation accepts no starting ref and performs no Git read.
+A number below 1000 is zero-padded to three digits; larger numbers are not truncated.
 A project subdirectory maps to
 the same relative subdirectory in the repository-wide worktree. Parent/child Missions remain siblings.
 If either path or branch is occupied, try the paired suffix `-2`, `-3`, etc. A creation race is retried
@@ -99,10 +105,12 @@ files with their source message. It never manufactures files from narrative clai
 Agent CLI exposes only `mission get|update|status` in the authenticated current public Camp, with no
 Mission selector, workspace or version. Private Single Chat and stale/removed membership are rejected.
 See [Transport v26](builtin-tool-transport-v26.md), [context evidence v25](context-manifest-evidence-v25.md)
-and the [desktop UI contract](../ui/components/mission-board.md). A successful `mission get` advances only
-the calling Agent conversation's internal definition-read watermark. Mobile has no Mission entry in v1.
+and the [desktop UI contract](../ui/components/mission-board.md). `mission get` is a pure current-state read;
+it does not acknowledge or suppress update notices. Mobile has no Mission entry in v1.
 
 Migration 157 upgrades either admitted v1.59/schema 106 predecessor with Mission/context workspace
 evidence. Migration 158/schema 108 removes the obsolete creation-time source ref, adds internal definition
-revision/read watermarks and nullable workspace `base_branch`. No migration creates a workspace or changes
-frozen context bytes.
+revision and nullable workspace `base_branch`. Migration 159/schema 109 adds the stable Mission number,
+removes stored commission definition bodies and the read-watermark table, scrubs definition bodies from
+Mission activity/domain-event facts, and adds accepted-delivery watermarks to Conversation/ContextManifest.
+No migration creates or renames a workspace or changes frozen context bytes.

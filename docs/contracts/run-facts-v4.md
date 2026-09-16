@@ -38,10 +38,10 @@ Mission facts remain limited to identity, title, status and the conditional fixe
 workspace identity and change history are absent. Workspace is a separate sibling section under
 [ContextManifest v25](context-manifest-evidence-v25.md). Private Single Chat does not receive Mission facts.
 
-The first Mission input for an Agent conversation has no notice and records its internal definition baseline
-only when context persistence succeeds. A later input includes the notice when the current internal definition
-revision is newer than that conversation's last successful `mission get` (or its baseline). The exact notice
-persists across Runs until `mission get` succeeds. It contains no revision, editor or changed-field metadata;
-`CURRENT_INPUT` is unchanged.
+The first Mission input for an Agent conversation has no notice. An accepted Runtime Input records the Mission
+detail version frozen in its manifest. A later input includes the notice when the current internal definition
+revision is newer than that conversation's last successfully delivered version. The exact notice persists until
+an input carrying the newer version is accepted on the current binding/generation; `mission get` is unrelated.
+It contains no revision, editor or changed-field metadata; `CURRENT_INPUT` is unchanged.
 
 Frozen Run Facts v2 and both published Run Facts v3 shapes retain their exact stored payload and evidence.

@@ -1,5 +1,9 @@
+CREATE TABLE mission_number_sequence (
+    number INTEGER PRIMARY KEY AUTOINCREMENT
+);
 CREATE TABLE mission (
     id TEXT PRIMARY KEY NOT NULL,
+    number INTEGER NOT NULL UNIQUE CHECK(number >= 1),
     camp_id TEXT NOT NULL UNIQUE REFERENCES camp(id) ON DELETE CASCADE,
     title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 200),
     description TEXT NOT NULL CHECK(length(description) <= 12000),
@@ -26,8 +30,6 @@ CREATE TABLE mission_start (
     mission_id TEXT NOT NULL REFERENCES mission(id) ON DELETE CASCADE,
     camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,
     command_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 CREATE TABLE mission_pr (
@@ -67,19 +69,13 @@ CREATE TABLE mission_workspace (
     UNIQUE(execution_host_id,git_common_dir,branch)
 );
 CREATE INDEX mission_workspace_cleanup ON mission_workspace(state,updated_at);
-CREATE TABLE mission_details_read (
-    conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
-    mission_id TEXT NOT NULL REFERENCES mission(id) ON DELETE CASCADE,
-    baseline_details_version INTEGER NOT NULL CHECK(baseline_details_version >= 1),
-    last_read_details_version INTEGER CHECK(last_read_details_version IS NULL OR last_read_details_version >= 1),
-    updated_at TEXT NOT NULL
-);
-CREATE INDEX mission_details_read_mission_idx ON mission_details_read(mission_id,conversation_id);
 ALTER TABLE agent_run ADD COLUMN workspace_preparing_at TEXT;
 ALTER TABLE conversation ADD COLUMN native_workspace_fact_digest TEXT;
+ALTER TABLE conversation ADD COLUMN mission_details_delivered_version INTEGER CHECK(mission_details_delivered_version IS NULL OR mission_details_delivered_version >= 1);
 ALTER TABLE context_manifest ADD COLUMN workspace_fact_json TEXT CHECK(workspace_fact_json IS NULL OR json_valid(workspace_fact_json));
 ALTER TABLE context_manifest ADD COLUMN workspace_fact_digest TEXT;
 ALTER TABLE context_manifest ADD COLUMN workspace_fact_included INTEGER NOT NULL DEFAULT 0 CHECK(workspace_fact_included IN (0,1));
+ALTER TABLE context_manifest ADD COLUMN mission_details_version INTEGER CHECK(mission_details_version IS NULL OR mission_details_version >= 1);
 CREATE TRIGGER mission_workspace_binding_reset AFTER UPDATE OF native_binding_id,native_binding_generation ON conversation
 WHEN OLD.native_binding_id IS NOT NEW.native_binding_id OR OLD.native_binding_generation IS NOT NEW.native_binding_generation
 BEGIN UPDATE conversation SET native_workspace_fact_digest=NULL WHERE id=NEW.id; END;

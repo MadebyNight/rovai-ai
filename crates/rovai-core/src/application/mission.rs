@@ -414,11 +414,9 @@ async fn select_candidate(
         } else {
             format!("-{suffix}")
         };
-        let branch = format!("rovai/mission/{}{suffix}", mission.info.mission_id);
-        let path = parent.join(format!(
-            "{name}-mission-{}{suffix}",
-            mission.info.mission_id
-        ));
+        let mission_number = format!("{:03}", mission.number);
+        let branch = format!("rovai/mission/{mission_number}{suffix}");
+        let path = parent.join(format!("{name}-mission-{mission_number}{suffix}"));
         if !git.candidate_available(repository, &path, &branch).await? {
             continue;
         }

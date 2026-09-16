@@ -101,8 +101,8 @@ Migration 155/schema 105 原位保存定义策略，保留历史执行与模型�
 Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位置，外部/跨 Camp 源只保留引用语义。
 [已确认 revision 2](model-context-change-editable-attachments.md)记录精确字段与确认消息，
 [实施计划](editable-attachments-implementation.md)保留原 worktree 与 PR/main 合并交付顺序。
-当前已与 Mission 增量在 Migration 157/schema 107 汇合，并由 Mission 定义编辑／Git 基线修订推进到
-Migration 158/schema 108；Formatter/Manifest 25、Run Facts 4、CLI 26/Output 3
+当前已与 Mission 增量在 Migration 157/schema 107 汇合，由 Mission 定义编辑／Git 基线修订推进到
+Migration 158/schema 108，并由稳定数字号与 accepted 投递水位推进到 Migration 159/schema 109；Formatter/Manifest 25、Run Facts 4、CLI 26/Output 3
 同时保留附件输出路径和 Mission 事实。两个既存 schema 106 来源均可升级且保留旧记录。
 当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v25](../../contracts/context-manifest-evidence-v25.md)、
 [File Preview v15](../../contracts/file-preview-v15.md)；理由见 [V1.59-D08](decisions.md#v1-59-d08)。

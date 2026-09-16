@@ -98,7 +98,7 @@ function activityText(item: MissionActivity): string {
   if (item.kind === 'pull_request') return `${item.changes.removed ? '移除了' : '关联了'} Pull Request`
   if (item.kind === 'members') return '更新了队员'
   if (item.kind === 'lead') return '调整了队长'
-  const fields = Object.keys(item.changes).map(key => ({title:'标题',description:'使命描述',tags:'标签'}[key] ?? key))
+  const fields = Object.keys(item.changes).map(key => ({titleChanged:'标题',descriptionChanged:'使命描述',tagsChanged:'标签'}[key] ?? key))
   return `更新了${fields.join('、')}`
 }
 export function MissionActivityPanel({ mission, agents, onSource }: {mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void}) {
