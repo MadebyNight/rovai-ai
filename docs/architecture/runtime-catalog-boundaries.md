@@ -562,8 +562,10 @@ Session 绑定的文件，官方 systemPrompt section/variable 在每个模型�
 
 原生 tools/result 的同步只读 observer 为同一 Session/call 写入一次性结构化观测；Core 在共享 ACP ingress
 关联后消费。只补已知工具类型、文件路径、shell exit/signal/timeout，以及官方 write/edit 结果已经给出的完整
-before/after，不改变 Runtime 的模型可见结果。完整文件状态被翻译为标准 ACP terminal Diff，继续由通用
-Runtime Diff、Files Changed 与 Diff Card 消费；缺失、超限、无变化或不可用时只保留路径级活动，不伪造计数。
+文件状态，不改变 Runtime 的模型可见结果。`write` 要求 `after` 为受限字符串，`before` 可以是受限字符串或显式
+`null`；后者证明文件此前不存在，并转换为标准 ACP Diff 的 `oldText: null`。`edit` 的 `before`/`after` 都必须是
+受限字符串。完整文件状态继续由通用 Runtime Diff、Files Changed 与 Diff Card 消费；缺少字段（不同于显式
+`null`）、类型错误、超限、无变化或不可用时只保留路径级活动，不伪造计数。
 缺失 observer、身份不匹配或重复消费时停止该 Host；未知工具维持 other，不从自然语言猜测结果。临时文件随 Host 回收。
 
 工具名只在协议入口归一为通用语义：`bash/pwsh → execute`、`read/read_image → read`、`write → write`、

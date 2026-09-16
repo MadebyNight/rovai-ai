@@ -48,8 +48,11 @@ MCP 生命周期与安全、压缩后的 Skill/MCP/审批组合；生产 30 分�
 2026-09-16 收敛复验保持同一官方 `0.1.5-rc.2`：权限名和值从 UI 到 Host 原样传递，Core 不再为 MCP
 按工具名、read-only 或副作用注解合成 Approval；脚本化原生 MCP 三组权限均观测到 0 个 synthetic Approval，
 副作用由 DSH 原生层决定。配置不兼容时 shared Fleet 对 idle/busy Host 都等待确认回收再启动 replacement，
-回收失败阻断新 Host。真实 MiniMax-M3 文件矩阵确认 edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；
-新增缺少完整 Before 时保留路径级文件活动，不伪造 Diff。该增量不扩大平台范围。
+回收失败阻断新 Host。真实 MiniMax-M3 文件矩阵确认 write 新建返回的显式 `before:null` 会形成标准 add `+1/-0`，
+edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；真实开发 Camp 也显示“新增”、`+3/-0` 和完整行级 Diff。
+缺少 before（不同于显式 null）、类型错误、超限或不可信状态仍保留路径级文件活动。该后续修复记录在
+[新增文件增量证据](research/deepseek-harness-runtime/acp-0.1.5-create-diff-evidence.json)；已绑定 digest 的 v2 资格归档
+保持为修复前的不可变证据，本次不扩大平台范围。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 

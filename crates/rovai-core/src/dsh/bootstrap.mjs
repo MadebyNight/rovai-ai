@@ -92,10 +92,14 @@ export async function apply(ctx, config) {
     const callId = exec.callId
     const key = createHash('sha256').update(JSON.stringify([sessionId, callId])).digest('hex')
     const value = result.isError ? null : result.value
-    const hasCompleteFileState = ['write', 'edit'].includes(exec.name)
-      && typeof value?.before === 'string' && typeof value?.after === 'string'
-      && Buffer.byteLength(value.before, 'utf8') <= MAX_OBSERVED_FILE_CONTENT_BYTES
-      && Buffer.byteLength(value.after, 'utf8') <= MAX_OBSERVED_FILE_CONTENT_BYTES
+    const isBoundedFileContent = content => typeof content === 'string'
+      && Buffer.byteLength(content, 'utf8') <= MAX_OBSERVED_FILE_CONTENT_BYTES
+    // Native write uses null to prove that the target did not exist. Missing
+    // before is still incomplete; edit always requires two string states.
+    const hasCompleteFileState = isBoundedFileContent(value?.after)
+      && (exec.name === 'write'
+        ? value?.before === null || isBoundedFileContent(value?.before)
+        : exec.name === 'edit' && isBoundedFileContent(value?.before))
     const status = {
       schemaVersion: 1, sessionId, callId, tool: exec.name,
       isError: result.isError,

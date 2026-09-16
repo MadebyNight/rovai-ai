@@ -51,6 +51,29 @@ test('DSH official prompt seam binds immutable root identity per session and fai
       path: '/workspace/example.txt', before: 'old\n', after: 'new\n'
     })
     assert.equal(JSON.stringify(edit).includes('private output'), false)
+    events.get('tools/result')({ name: 'write', callId: 'write-create', agent: { session: { id: 'session-a', header: {} } } },
+      { isError: false, value: { path: '/workspace/created.txt', before: null, after: 'created\n' } })
+    const createKey = createHash('sha256').update(JSON.stringify(['session-a', 'write-create'])).digest('hex')
+    const create = JSON.parse(readFileSync(join(root, `${createKey}.json`), 'utf8'))
+    assert.deepEqual({ path: create.path, before: create.before, after: create.after }, {
+      path: '/workspace/created.txt', before: null, after: 'created\n'
+    })
+    for (const [name, callId, value] of [
+      ['write', 'write-missing-before', { path: '/workspace/missing-before.txt', after: 'created\n' }],
+      ['write', 'write-missing-after', { path: '/workspace/missing-after.txt', before: null }],
+      ['write', 'write-malformed-before', { path: '/workspace/malformed-before.txt', before: 0, after: 'created\n' }],
+      ['edit', 'edit-null-before', { path: '/workspace/invalid-edit.txt', before: null, after: 'changed\n' }],
+      ['edit', 'edit-malformed-after', { path: '/workspace/malformed-edit.txt', before: 'old\n', after: null }],
+      ['write', 'write-oversized', { path: '/workspace/oversized.txt', before: null, after: 'x'.repeat(2 * 1024 * 1024 + 1) }]
+    ]) {
+      events.get('tools/result')({ name, callId, agent: { session: { id: 'session-a', header: {} } } },
+        { isError: false, value })
+      const observationKey = createHash('sha256').update(JSON.stringify(['session-a', callId])).digest('hex')
+      const fallback = JSON.parse(readFileSync(join(root, `${observationKey}.json`), 'utf8'))
+      assert.equal(fallback.path, value.path)
+      assert.equal(Object.hasOwn(fallback, 'before'), false)
+      assert.equal(Object.hasOwn(fallback, 'after'), false)
+    }
     events.get('session/event')({ id: 'session-a', header: {} }, { type: 'assistant/message', seq: 12,
       data: { turn: 2, usage: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 90 }, message: { content: 'private reply' } } })
     const usageFile = readdirSync(root).find(name => name.includes('.usage-'))

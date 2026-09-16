@@ -11448,6 +11448,34 @@ while IFS= read -r ignored; do :; done
         assert!(!completion.result_data.to_string().contains("before"));
         assert!(!completion.result_data.to_string().contains("after"));
 
+        let created = completed_action(
+            AdapterKind::DeepseekHarness,
+            &json!({
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "tool-create",
+                    "status": "completed",
+                    "kind": "write",
+                    "content": [{
+                        "type": "diff",
+                        "path": "src/created.ts",
+                        "oldText": null,
+                        "newText": "created\n"
+                    }]
+                }
+            }),
+        )
+        .unwrap()
+        .expect("terminal ACP create should complete");
+        assert_eq!(
+            created.public_file_changes,
+            Some(json!([{
+                "path": "src/created.ts",
+                "oldText": null,
+                "newText": "created\n"
+            }]))
+        );
+
         let failed = completed_action(
             AdapterKind::CursorAgent,
             &json!({

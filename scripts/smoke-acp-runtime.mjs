@@ -1040,21 +1040,13 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
     const reportedDiff = reportedDiffs.length === 1 ? reportedDiffs[0] : matchingDiff
     if (adapterKind === 'deepseek-harness') {
       const expectedDiff = ({
+        add: { changeKind: 'add', additions: 1, deletions: 0 },
         edit: { changeKind: 'update', additions: 1, deletions: 1 },
         edit_empty: { changeKind: 'update', additions: 1, deletions: 0 }
       })[testCase.name]
       if (expectedDiff && !isDeepStrictEqual(reportedDiff, { path: pathSuffix, ...expectedDiff })) {
         throw new Error(`DeepSeek Harness ${testCase.name} did not project the native Before/After as a common Diff: ${JSON.stringify({
           expected: { path: pathSuffix, ...expectedDiff },
-          reportedDiffs,
-          history: relevantHistory
-        })}`)
-      }
-      if (testCase.name === 'add'
-          && reportedDiff
-          && reportedDiff.additions === 0
-          && reportedDiff.deletions === 0) {
-        throw new Error(`DeepSeek Harness add invented an empty Diff instead of using file-level fallback: ${JSON.stringify({
           reportedDiffs,
           history: relevantHistory
         })}`)

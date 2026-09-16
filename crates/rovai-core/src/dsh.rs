@@ -9,7 +9,7 @@ use tokio::process::Command;
 use crate::{agent_profile::AdapterKind, command::canonical_json_digest};
 
 pub const MINIMUM_VERSION: &str = "0.1.5-rc.2";
-pub const BOOTSTRAP_REVISION: &str = "dsh-native-mcp-readiness-v2";
+pub const BOOTSTRAP_REVISION: &str = "dsh-create-file-diff-v3";
 const BOOTSTRAP_PLUGIN: &str = include_str!("dsh/bootstrap.mjs");
 const MAX_OBSERVED_FILE_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -255,15 +255,21 @@ fn append_observed_file_diff(update: &mut Value, observation: &Value, tool: &str
     if !matches!(tool, "write" | "edit") {
         return;
     }
-    let (Some(path), Some(before), Some(after)) = (
-        observation["path"].as_str(),
-        observation["before"].as_str(),
-        observation["after"].as_str(),
-    ) else {
+    let Some(path) = observation["path"].as_str() else {
         return;
     };
-    if before == after
-        || before.len() > MAX_OBSERVED_FILE_CONTENT_BYTES
+    // An explicit null is DSH's complete pre-state for a newly created file.
+    // Absence and malformed values remain path-only; edit never accepts null.
+    let before = match (tool, observation.get("before")) {
+        ("write", Some(Value::Null)) => None,
+        ("write" | "edit", Some(Value::String(before))) => Some(before.as_str()),
+        _ => return,
+    };
+    let Some(after) = observation.get("after").and_then(Value::as_str) else {
+        return;
+    };
+    if before.is_some_and(|before| before == after)
+        || before.is_some_and(|before| before.len() > MAX_OBSERVED_FILE_CONTENT_BYTES)
         || after.len() > MAX_OBSERVED_FILE_CONTENT_BYTES
     {
         return;
@@ -502,6 +508,89 @@ mod tests {
             write.pointer("/params/update/locations/0/path"),
             Some(&json!("/workspace/example.txt"))
         );
+
+        let create_key = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&json!(["session-a", "call-create"])).unwrap())
+        );
+        fs::write(
+            root.join("observations").join(format!("{create_key}.json")),
+            serde_json::to_vec(&json!({
+                "schemaVersion":1,"sessionId":"session-a","callId":"call-create",
+                "tool":"write","isError":false,"path":"/workspace/created.txt",
+                "before":null,"after":"created\n"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut create = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-create","status":"completed","content":[]}}});
+        enrich_message(&root, &mut create).unwrap();
+        assert_eq!(
+            create.pointer("/params/update/content/0"),
+            Some(
+                &json!({"type":"diff","path":"/workspace/created.txt","oldText":null,"newText":"created\n"})
+            )
+        );
+        assert_eq!(
+            create.pointer("/params/update/locations/0/path"),
+            Some(&json!("/workspace/created.txt"))
+        );
+
+        for (call_id, tool, observation) in [
+            (
+                "call-write-missing-before",
+                "write",
+                json!({"path":"/workspace/missing-before.txt","after":"created\n"}),
+            ),
+            (
+                "call-write-missing-after",
+                "write",
+                json!({"path":"/workspace/missing-after.txt","before":null}),
+            ),
+            (
+                "call-write-malformed-before",
+                "write",
+                json!({"path":"/workspace/malformed-before.txt","before":0,"after":"created\n"}),
+            ),
+            (
+                "call-edit-null-before",
+                "edit",
+                json!({"path":"/workspace/invalid-edit.txt","before":null,"after":"changed\n"}),
+            ),
+            (
+                "call-edit-malformed-after",
+                "edit",
+                json!({"path":"/workspace/malformed-edit.txt","before":"old\n","after":null}),
+            ),
+        ] {
+            let key = format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&json!(["session-a", call_id])).unwrap())
+            );
+            let mut status = json!({
+                "schemaVersion":1,"sessionId":"session-a","callId":call_id,
+                "tool":tool,"isError":false
+            });
+            status.as_object_mut().unwrap().extend(
+                observation
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+            fs::write(
+                root.join("observations").join(format!("{key}.json")),
+                serde_json::to_vec(&status).unwrap(),
+            )
+            .unwrap();
+            let mut fallback = json!({"method":"session/update","params":{"sessionId":"session-a","update":{"sessionUpdate":"tool_call_update","toolCallId":call_id,"status":"completed","content":[]}}});
+            enrich_message(&root, &mut fallback).unwrap();
+            assert_eq!(fallback.pointer("/params/update/content"), Some(&json!([])));
+            assert_eq!(
+                fallback.pointer("/params/update/locations/0/path"),
+                observation.get("path")
+            );
+        }
 
         let fallback_key = format!(
             "{:x}",

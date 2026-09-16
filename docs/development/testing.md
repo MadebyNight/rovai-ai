@@ -86,7 +86,8 @@ cargo test --workspace -- --list
   profile/凭据/settings 变化、摘要稳定与不可读拒绝。已有权限 patch owner 不拥有配置输入摘要；
   最小命令为 `cargo test -p rovai-core --lib dsh_native_configuration`，无需真实进程或数据库。
 - `dsh_observation_is_exact_consumed_once_and_never_infers_exit_from_text` 拥有官方 observer → ACP 的独立文件 seam：
-  串 Session、重复消费、非零退出正文伪装成功、完整 before/after 转标准 Diff、大文件路径级回退和缺失用量字段。
+  串 Session、重复消费、非零退出正文伪装成功、write 显式 `before:null` 转 add Diff、edit 双字符串转 update Diff，
+  以及缺少 before、edit null 和大文件的路径级回退与缺失用量字段。
   纯 ACP fixture 没有 DSH 的一次性观测文件，因此使用临时文件而非数据库/真实进程；Shell、文件与 usage 共用同一 owner。
 - `frozen_permissions_preserve_native_values_without_rewriting_native_home` 拥有六种原生参数组合：原生 preset 曾覆盖
   Host 参数并拒绝 full/ask、read-only/never；测试要求 `sandbox_mode`/`approval_policy` 原样进入 patch，Workspace
@@ -99,10 +100,12 @@ cargo test --workspace -- --list
 `warm_hosts_never_cross_camp_compatibility_keys` 同时拥有 DSH native lock replacement：idle/busy 都必须等待确认回收，
 busy Run 不被抢占，回收失败阻断 replacement。
 `node --test scripts/lib/dsh-host.test.mjs` 拥有官方扩展点的 Bootstrap/父子身份、完整 Server 遮蔽、MCP
-配置投影和最小结构化 observer 合同；它明确断言没有 Core `tools/pre-execute` 安全层，且不保存完整工具输出。
+配置投影和最小结构化 observer 合同；它明确区分 write 的显式 null 与缺失 before，拒绝 edit null/超限状态，
+断言没有 Core `tools/pre-execute` 安全层，且不保存其他完整工具输出。
 `scripts/smoke-mcp-projection.mjs` 断言 DSH 三组权限下 synthetic Approval 为 0；
-`scripts/smoke-acp-runtime.mjs` 的现有文件矩阵对最终 UTF-8 内容作逐字节、fail-closed 断言，并断言 edit `+1/-1`、
-空文件 edit `+1/-0`，新增缺 before 时不伪造空 Diff。
+`scripts/smoke-acp-runtime.mjs` 的现有文件矩阵对最终 UTF-8 内容作逐字节、fail-closed 断言，并断言 add `+1/-0`、
+edit `+1/-1`、空文件 edit `+1/-0`；内容不匹配时即使 Diff 正确也必须失败。缺失、类型错误、超限或不可信
+状态仍由 owner fixture 断言为路径级回退。
 真实验证入口与隔离参数见
 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。受控模型只用于明确标注的协议和权限
 实验，不替代真实模型/Built-in CLI 验收。

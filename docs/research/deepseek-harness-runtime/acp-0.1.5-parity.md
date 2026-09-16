@@ -51,7 +51,8 @@ Skills、全部 23 项 Built-in CLI 和原生压缩。官方余额耗尽后，�
 仅传入隔离 DSH 验收进程，通过官方 llm-pi-ai/Anthropic-compatible 路由继续运行 MiniMax-M3。
 Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和压缩后的能力组合均已补齐。
 原 14 轴脱敏结果和私有原始日志摘要见 [机器可读证据](acp-0.1.5-evidence.json)，2026-09-16 收敛复验见
-[增量机器可读证据](acp-0.1.5-convergence-evidence.json)。原始日志、数据库、原生 Home 和
+[增量机器可读证据](acp-0.1.5-convergence-evidence.json)，随后新建文件空前态修复见
+[新增文件增量证据](acp-0.1.5-create-diff-evidence.json)。原始日志、数据库、原生 Home 和
 凭据留在仓库外；受控模型只产生确定的工具请求，工具执行、权限和 Session 仍由实际 DSH/Core 负责。
 
 下表逐轴记录当前实现和真实验收；协议未暴露的入口单列为差异，由 [V1.59-D10](../../versions/v1.59/decisions.md#v1-59-d10)接受。
@@ -66,7 +67,7 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 | Compaction continuity | Verified / Implemented | manual、压力、overflow、自动阈值、overflow retry、fail/cancel、压缩后 cold resume；每阶段重新加载随机 Skill marker、实际 MCP 调用与一条审批；压缩后 deny 零副作用 | overflow 使用一次受控错误触发真实 native retry；无 ACP /compact/lifecycle，采用持续 System 层 |
 | Skills | Verified / Implemented | 实际读取 .dsh/skills 的随机 marker 与 cli-operations；导入、冲突保留、删除、禁用/重启投影复核 | 沿用共享 group 与原生目录追加；不是独立 Skill 设置 |
 | External MCP | Verified / Implemented | 真实模型通过 stdio/HTTP、同名覆盖、更新、相邻隔离、取消分配/重分配/删除、原生恢复、exact Session；脚本化复验三组权限均为 0 个 Core 合成审批，副作用由 DSH 原生工具层决定；原生 MCP 首轮零延时压力复验 30/30 | whole-definition 遮蔽属于配置投影；0.1.5-rc.2 的 ACP stdio 可早于同级 Loader settle，受管 Host 以官方 entry lifecycle 作启动门闩，不使用 sleep 或重放 prompt；无 SSE/resources/prompts |
-| Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断；真实 MiniMax edit 为 update +1/-1，空文件 edit 为 +1/-0 | observer 只补 shell metadata 与官方 before/after；完整状态变为标准 ACP Diff，新增缺 before 时保持路径级回退；未知工具保持 other |
+| Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断；真实 MiniMax add 为 +1/-0、edit 为 update +1/-1、空文件 edit 为 +1/-0 | observer 只补 shell metadata 与官方完整文件状态；write 显式 `before:null` 变为标准 ACP add Diff，缺字段/类型错误/超限保持路径级回退；edit 必须是 string/string；未知工具保持 other |
 | Narration / Final / Missing-Send | Verified / Implemented | ACP committed public/thought 分流、end_turn 唯一终态；真实 zero-send 发布、accepted-send suppression、tool→final 三组通过 | 不把进程退出或日志末尾当 final；通用 ACP recovery 保留原生 public text |
 | Permission / Approval / Workspace | Verified / Implemented | 六组合原名原值冻结 patch；真实 write/Bash 的 workspace-write/read-only 边界由 DSH 决定；Shell 取消后 32 秒无迟到文件；MCP 不产生 Core 合成审批 | `sandbox_mode`/`approval_policy` 从队员页到 Host 保持一致；Runtime 未请求审批时 Core 不阻断或二次询问；不支持 additionalDirectories |
 | Built-in rovai CLI | Verified / Implemented | contract-v24 全 23 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
@@ -93,9 +94,10 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
    调用 MCP 并触发审批；最后 deny 没有副作用。ACP 不暴露人工 compact 命令，因此该入口
    仍是原生能力，不伪造 UI 成功或使用 token 降幅推断完成。
 4. **工具与用量**：DSH ACP 把 Bash 非零退出也报告为 completed，且 usage_update 只有占用率。官方只读
-   tools/result 与 committed session/event observer 分别提供结构化退出状态、write/edit 完整 before/after 和逐调用用量，
-   Core 以 Session/call 或 Session/turn/seq 关联并消费，私有文件随 Host 回收。完整文件状态被注入标准 ACP terminal
-   Diff，通用 Evidence/Files Changed/Diff Card 继续拥有展示；缺失或超限只作路径回退。stdout/参数继续使用 ACP。
+   tools/result 与 committed session/event observer 分别提供结构化退出状态、write/edit 完整文件状态和逐调用用量，
+   Core 以 Session/call 或 Session/turn/seq 关联并消费，私有文件随 Host 回收。write 的 `before:null` 明确表示目标
+   此前不存在，转换为 `oldText:null`；write 的 string/string 和 edit 的 string/string 形成标准 ACP terminal Diff。
+   通用 Evidence/Files Changed/Diff Card 继续拥有展示；字段缺失、类型错误或超限只作路径回退。stdout/参数继续使用 ACP。
    自动压缩摘要也提供结构化 usage，通过 committed compaction/start 的 compactionId/owner turn 关联；
    不收集摘要正文，空闲手动压缩的 null turn 不归入后续 Run，未知字段保持 NULL。
    工具名在 ingress 仅归一为共享语义：bash/pwsh→execute，read/read_image→read，write→write，edit→edit，
@@ -170,3 +172,9 @@ Missing-Send protocol、Runtime picker 和 configured Camp 共 9 项通过；后
 隔离复跑 25 项通过后降低测试进程并发完成全量；没有修改或禁用这些测试。上述本地门禁不能替代
 真实 Runtime 行为证据。
 本次新增 DSH 专属 macOS arm64 平台资格 digest；安装、认证、模型与机器 Ready 仍按每台机器独立检查。
+
+随后补齐 write 新建文件的显式 `before:null`：Node observer 2 项、DSH Rust owner 5 项、ACP null Diff owner、
+平台证据 revision owner、TypeScript typecheck、文档治理 10 项及带 merge-base 的差异门禁均通过；Rust library
+最终 816 项通过、6 项既有 manual Runtime smoke 保持 ignored。真实 MiniMax 文件矩阵同时通过 byte-exact 文件
+结果与 add `+1/-0`、edit `+1/-1`、空文件 edit `+1/-0` 投影；真实开发 Camp 的通用 Files Changed/Diff Card
+显示新增文件 `+3/-0` 和完整行级 Diff。没有新增 DSH 专属 UI，也未改变其他 Runtime。
