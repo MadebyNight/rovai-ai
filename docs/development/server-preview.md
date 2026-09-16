@@ -176,7 +176,8 @@ pnpm smoke:host-web-runtime
 并验证执行中关闭 Web、重新登录后继续停止运行。`ROVAI_HOST_BIN` 和 `ROVAI_WEB_UI` 可以指向匹配的独立包。
 
 独立的 `pnpm test:host-web-html` 使用隔离 Rust Host 和 macOS Chrome，验证正式 Web 页面上传 HTML、
-交互预览、原稿源码切换、刷新恢复、资源错误和 opaque sandbox 的主页面/存储隔离；不启动 Electron 或模型。
+交互预览、原稿源码切换、刷新恢复、资源错误和可信同来源下的原生 Storage、表单、新窗口及原生弹窗；
+同时验证桌面宽度和手机宽度的消息通信，不将窄屏模拟计为实体手机验收；不启动 Electron 或模型。
 运行前完成 `cargo build -p rovai-host` 与 `pnpm build:web`，其他 OS 的浏览器验收单独记录。
 
 ## 更新、备份与既有 Mac 包演练

@@ -4,14 +4,13 @@
   "agentRunContextFormatterVersion": 24,
   "contextManifestVersion": 24,
   "contextManifestFormatterVersion": 24,
-  "contextDeliveryProfileVersion": 6,
+  "contextDeliveryProfileVersion": 5,
   "messageProjectionAudience": "agent_v1",
   "dynamicContextSectionOrder": [
     "COLLABORATION_STATE?",
     "SELF_ACTIVE_TASKS?",
     "SHARED_CONVERSATION?",
     "RUN_FACTS",
-    "WORKSPACE?",
     "A2A_GUIDANCE?",
     "CURRENT_INPUT"
   ],
@@ -254,24 +253,17 @@
   "runFacts": {
     "schemaVersion": 3,
     "requiredFields": [
-      "campResources"
+      "attachmentOutputRoot"
     ],
     "optionalFields": [
       "taskContext",
       "sessionContinuity",
       "externalEffect",
       "gather",
-      "delegation",
-      "mission"
+      "delegation"
     ],
-    "campResources": {
-      "campId": "rvcamp_01h47kvsy5fk1shh6w1g60eecf",
-      "publishedAttachmentRoot": "/Users/test/.rovai/instances/v1-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/runtime-files/camps/rvcamp_01h47kvsy5fk1shh6w1g60eecf/attachments",
-      "access": "enumerate_and_read",
-      "scope": "current_camp",
-      "mutability": "read_only"
-    },
-    "emptyOptionalProjection": "camp_resources_only"
+    "emptyOptionalProjection": "attachment_output_root_only",
+    "attachmentOutputRoot": "/Users/test/.rovai/instances/v1-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf"
   },
   "campAttachmentViewReceipt": {
     "schemaVersion": 2,
@@ -319,7 +311,6 @@
   "contextManifestRunFactEvidence": [
     "typedFactReferences",
     "typedTaskReference",
-    "typedMissionReference",
     "exactCompactJsonBytes",
     "digest"
   ],
@@ -330,29 +321,5 @@
     "indivisible": true,
     "optionalOverBodyBudget": "quote_message_over_body_budget",
     "requiredOrigin": "complete_or_explicit_overload"
-  },
-  "sessionCharterRevision": 7,
-  "runFactsSchemaVersion": 3,
-  "missionFactsFields": [
-    "missionId",
-    "title",
-    "status"
-  ],
-  "workspaceFields": [
-    "workingDirectory",
-    "branch?"
-  ],
-  "missionStartCurrentInput": {
-    "kind": "mission_start",
-    "source": {
-      "type": "user"
-    },
-    "missionId": "mission_42"
-  },
-  "contextManifestWorkspaceEvidence": [
-    "exactCompactJsonBytes",
-    "digest",
-    "included",
-    "nativeBindingGeneration"
-  ]
+  }
 }

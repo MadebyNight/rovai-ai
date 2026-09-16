@@ -1,134 +1,71 @@
 ---
 document_type: architecture
 architecture: camp-attachments
-authority: user-source-refs-agent-managed-artifacts-and-legacy-view
+authority: live-source-references-and-legacy-attachment-reads
 status: accepted
-last_updated: 2026-09-11
+last_updated: 2026-09-16
 ---
 
-# Camp Attachments：用户 Source Refs、Agent Managed Artifacts 与 Legacy View
+# Camp Attachments：原路径引用、默认输出与历史读取
 
-本架构区分三条不能混写的生命周期：Desktop 新用户输入使用弱持久 source refs；Agent 产物继续使用 Managed v2；
-历史 Prepared/Message Attachment 与 Published View 只做兼容。字段和动作合同见
-[Camp Attachment v9](../contracts/camp-attachment-v9.md)，旧 publication 对象见
-[Camp Published Attachment View v4](../contracts/camp-published-attachment-view-v4.md)。
+新用户输入和新 Agent 发布复用 `LocalAttachmentSourceRef`；历史 Managed/Prepared/Message Attachment 保留原位读取。
+[Camp Attachment v10](../contracts/camp-attachment-v10.md) 拥有当前合同；
+[V1.59-D08](../versions/v1.59/decisions.md#v1-59-d08) 解释从复制快照转为原路径的选择。
 
-## 当前组件边界
-
-```text
-Desktop native path ─────────────────────┐
-Desktop bytes/Blob -> OS Temp path ──────┤
-                                         v
-                              LocalAttachmentSourceRef[]
-                                  owner JSON only
-                  ┌──────────────────────┼──────────────────────┐
-                  v                      v                      v
-               Composer              Pending               Message
-                                          |                    |
-                                          └──── publish ───────┘
-                                                               |
-                                                               v
-                                             Core source resolver
-                                      host recheck -> stored source path
-
-Agent `rovai send --file` -> existing private ingress -> Managed v2 artifact
-historical Prepared/message_attachment -> existing legacy compatibility only
-```
-
-`LocalAttachmentSourceRef` is not an entity. Core generates its UUID and stores its absolute source path only inside the
-owning JSON. Composer, Pending, Pending Edit and Message do not own or move the referenced physical file. The path is
-public/view-private but dispatch-visible: Renderer and public/history Views do not receive it, while the target Runtime,
-Agent and potentially its model Provider do through `CURRENT_INPUT.attachments`. Renderer receives only a pathless
-attachment View without a storage-model discriminator. After an explicit successful source-file preview,
-Main may separately issue a canonical display path under [File Preview v11](../contracts/file-preview-v11.md); Managed and
-legacy internal paths remain private.
-
-## Desktop user-input path
-
-Preload first asks `webUtils.getPathForFile`. A real local path goes directly to Core; a pathless File/Blob is written once
-under `app.getPath('temp')` and then behaves like any other source path. Core observes the current kind and display metadata,
-but does not calculate content digest, freeze bytes or copy into `camp-attachments`/`.managed-v2`.
-
-The owner array moves only through SQLite transactions:
+## 发布和身份
 
 ```text
-Composer -- direct accepted --> CampMessage
-Composer -- Camp busy -------> Pending -- accepted head --> CampMessage
-Pending -- Begin/Takeover ---> working refs -- Save ------> Pending
-                                      ├────── Cancel -----> discard working refs
-                                      └────── Delete -----> cancel Pending
+Desktop native path ──────────────┐
+Desktop bytes / Web upload       │
+  -> existing temporary source ──┤
+Agent send --file actual path ───┤
+                                 v
+                  LocalAttachmentSourceRef in owner JSON
+                                 |
+                     transaction -> CampMessage
+                                 |
+                   actual path -> later current reads
 ```
 
-Immediate and Pending publication validate only current existence, readability and unchanged file/directory kind. Immediate
-failure preserves the exact Draft and creates no Message. Pending failure records the exact attachment error on the FIFO head,
-marks it `needs_repair` and blocks later entries. A successful Message keeps the source refs; publication never materializes
-Managed v2.
+CLI 只传指定路径，Core 在锁外观察此对象，提交前再次核对 Run/lease，沿用原消息事务和内部命令防重复。
+没有 CLI import、Core staging/复制、Runtime View 内容副本、只读化或首次摘要。
+既有 `source_attachments_json` 明确选择新读取语义；旧关系表选择旧读取语义，不猜测目录名字。
+同 Camp 相同 sourcePath 可复用附件 ID，内容编辑不换身份；跨 Camp 分别保存引用，物理文件仍为同一份。
+目录仅保存位置，不遍历整树分配身份。失败不删除源文件。
 
-Source paths intentionally have weak durability. Later modification affects later reads; move/delete/permission loss or OS
-Temp cleanup can make them unavailable. Rovai does not restore, search by name or freeze them after publication.
+用户 Composer/Pending/单聊的 owner、发布前重检、编辑隔离和弱持久性保持原合同；
+Agent 新发布直接使用消息 source refs，不建立另一个资产实体或内容版本库。
 
-## Runtime projection
+## 默认输出与 Runtime
 
-All Adapters continue to receive only `CURRENT_INPUT.attachments: string[]`. A single Core module loads source refs from the
-trigger CampMessage and resolves them before Context formatting:
+`storage_layout` 在已有 instanceKey 下统一推导 `attachments/<campId>/`，是旧 runtime-files 的同级目录。
+Windows 位于 CoreDataDir，Server 完整归属自己的 data-dir，Desktop 根不变。
+Host 准备普通目录，Agent 可用正常名称直接生成长期交付，再 send 原地登记。Run Temp 仍可被清理。
 
-```text
-stored Source Ref
-  -> spawn_blocking host recheck
-       fs::metadata + File::open or fs::read_dir
-  -> exact stored source path
-  -> CURRENT_INPUT.attachments
-```
+Run Facts 只投影顶层 attachmentOutputRoot，含义是默认输出位置；不代表清单、读取根或权限授予。
+现有 Runtime additional directories 接入它，遵循原生模式。文件内容不参与 Bootstrap 或会话兼容摘要。
+普通 Run、新建 Camp、自动任务和新发布不依赖旧 View 的状态或回执。
 
-The recheck proves current existence, host readability and unchanged file/directory kind. `fs::metadata` follows a top-level
-symlink; a directory is opened but its entries are not enumerated, so nested symlinks, dangling symlinks and special nodes do
-not cause pre-Context rejection. Workspace and non-workspace paths use exactly the same operation. Core does not canonicalize,
-compare with executionRoot, create a symlink, copy content or create `ROVAI_RUN_TMP/source-attachments`.
+## 读取与预览
 
-Host readability does not promise Runtime readability. Projection neither changes the Agent working directory nor widens
-Runtime/OS permissions or read roots. A Runtime access failure is reported by its native file tool only if the Agent attempts
-the read; Core adds no Runtime preflight, retry, synthetic attachment error, copy, upload or fallback. Generic Run Temp and the
-exact Camp attachment root continue serving their other existing owners and are not changed by this projection.
+模型仍收到 `CURRENT_INPUT.attachments: string[]`。用户 Source Ref 保持原 Run 前宿主重检；新 Agent 引用
+直接投影记录位置，单个源失效由实际读取报告。History 为 Agent 外部源返回路径，列表从记录读取。
+路径元数据查询复用 exact owner 授权，不读取全文；本机可显示/复制/定位所有已解析位置，远程标为服务器路径。
+新文件读取当前内容，包括替换保存；旧文件仍按历史合同验证，展示路径不会改变旧权限。
 
-## Read and action paths
+Desktop/Web 复用现有预览缓存与更新反馈，候选刷新失败保留旧内容，切 Camp 不冷加载。
+HTML 按真实来源目录解析资源；Web 资源能力绑定已有句柄、Session 和源记录，每次限制在授权目录，
+不授予页面业务凭据，iframe 和直接资源导航均保持 CSP 沙箱。细节见 [File Preview v15](../contracts/file-preview-v15.md)。
 
-Camp Open, timeline, around/thread/history and Agent history tools read SQLite metadata only. Source refs and Managed/legacy
-rows project into one stable display shape with `availability = unknown`; they do not trigger `stat`, directory enumeration,
-digest verification or background watching.
+## 归属与生命周期
 
-An explicit preview/open/reveal request supplies an owner locator for Composer, Pending, Pending Edit or Message. Core proves
-ownership, resolves the private path and checks current existence/readability/kind. The result updates only the active Renderer
-card. It is not persisted and does not turn availability into a global state system.
+Camp 拥有它的默认输出目录及历史自有附件，不拥有任意 sourcePath。删除 Camp 通过已有停止/释放/清理协调，
+精确删除自有目录（包括未发布和已编辑内容），失败写入既有 cleanup operation 并重试。
+Run 结束、消息删除、预览关闭/LRU 不删除永久输出。外部原文件不删除；跨 Camp 引用在拥有者删除后可失效。
+不增加引用计数、保活、迁移、回收站、全盘路径/内容去重或无引用垃圾扫描。
 
-## Agent Managed v2 and legacy compatibility
+## 历史兼容
 
-Agent file ingress, Agent-produced artifacts and already-compatible Managed data retain the Managed v2 contract: private
-staging, digest/receipt, opaque Camp payload, ordered message refs and existing cleanup/reconciliation. This lifecycle does not
-apply to new Desktop user inputs.
-
-Migration 137 leaves every existing `prepared_attachment`, physical `camp-attachments` payload, `message_attachment`,
-`managed_attachment` and `camp_message_attachment_ref` unchanged. A Composer with old Prepared rows is a mutually exclusive
-legacy Draft: it can edit text, remove old attachments, send directly or be discarded, but cannot accept source refs or enter
-the new attachment Pending flow. Removing the last old attachment naturally returns the Draft to source-ref mode.
-
-Legacy Published View mutation gates, generations and recovery continue only for their existing data. New user source refs
-never enter them. Camp deletion still applies existing cleanup to Rovai-owned Agent/legacy data, but it never deletes referenced
-native paths or OS Temp source files.
-
-## Complexity boundary
-
-The user path ends at `source path + owner JSON + Pending Queue + Context path projection`. It adds no attachment entity, binding table,
-long-term user attachment directory, Managed materialization, digest, ingest intent, staging/promote, catalog, availability
-monitor, Runtime policy, external-root grant, delivery mode, fallback, copy budget/quota or new cross-cutting
-security/redaction framework.
-
-## References
-
-- [Camp Attachment v9](../contracts/camp-attachment-v9.md)
-- [Camp Composer Draft v12](../contracts/camp-composer-draft-v12.md)
-- [Pending Camp Input v3](../contracts/pending-camp-input-v3.md)
-- [Camp Open Projection v19](../contracts/camp-open-projection-v19.md)
-- [File Preview v5](../contracts/file-preview-v5.md)
-- [Camp Published Attachment View v4](../contracts/camp-published-attachment-view-v4.md)
-- [V1.40-D01](../versions/v1.40/decisions.md#v1-40-d01)
-- [V1.58-D06](../versions/v1.58/decisions.md#v1-58-d06)
+只有访问历史记录时进入 Managed/legacy 定位、必要恢复和原完整性校验。历史文件不迁移、不批量 chmod，
+消息引用与已冻结 Context 不重写。数据库 Migration 156 仅放宽新 Context 的明确版本/可选旧回执组合，
+保留原约束分支；新记录不为适配旧表制造摘要。用户旧 Prepared Draft 的原互斥兼容流程保持。

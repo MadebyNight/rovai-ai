@@ -93,3 +93,23 @@ Migration 155/schema 105 原位保存定义策略，保留历史执行与模型�
 架构与开发路由同步到当前合同。UI、Runtime Activity、平台兼容资格和根 README 无需改变；这次是显式执行
 策略修正，不增加独立长期决策。验证记录见[实施计划](implementation-plan.md#weekly-无时间上限)。
 真实 Weekly 结果仍须安装新 App、Owner 绑定后实际运行证明，不以设施测试替代。
+
+## Agent 附件原路径引用增量
+
+用户在 2026-09-16 审阅 revision 1 后给出最终修订：所有新增 Agent 附件原地登记，取消复制、
+链接、staging、预分配、外部请求编号和双根模型上下文。默认永久输出目录只用于生成最终交付，
+Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位置，外部/跨 Camp 源只保留引用语义。
+[已确认 revision 2](model-context-change-editable-attachments.md)记录精确字段与确认消息，
+[实施计划](editable-attachments-implementation.md)保留原 worktree 与 PR/main 合并交付顺序。
+当前已与 Mission 增量在 Migration 157/schema 107 汇合；Formatter/Manifest 25、Run Facts 4、CLI 26/Output 3
+同时保留附件输出路径和 Mission 事实。两个既存 schema 106 来源均可升级且保留旧记录。
+当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v25](../../contracts/context-manifest-evidence-v25.md)、
+[File Preview v15](../../contracts/file-preview-v15.md)；理由见 [V1.59-D08](decisions.md#v1-59-d08)。
+运行活动分类、平台资格、根 README 无需变化；不能由方案确认推断 Gate 或 PR 已完成。
+
+## Web HTML 原生存储兼容增量
+
+2026-09-16 用户确认可信 HTML 的同来源预览策略，Desktop 托管 Web 与独立 Server Web 复用统一 Rust 实现。
+原生存储归访问设备的浏览器，允许表单、新窗口和原生弹窗；接受同来源工作台及登录材料可被附件访问的取舍。
+当前权威与范围见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，理由见
+[V1.59-D09](decisions.md#v1-59-d09)。不修改 Desktop 原生预览、HTML 源文件或资源加载，不新增存储/预览服务。

@@ -628,7 +628,8 @@ pub struct NativeSessionBootstrapEvidenceView {
 pub struct CampAttachmentRefView {
     pub attachment_id: String,
     pub path: String,
-    pub content_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -4,8 +4,8 @@ pub const NATIVE_SESSION_BOOTSTRAP_CONTRACT_VERSION: &str = "native_session_boot
 pub const BOOTSTRAP_FORMATTER_VERSION: i64 = 3;
 pub const SESSION_CHARTER_REVISION: i64 = 7;
 pub const CODEX_SESSION_GUIDANCE_REVISION: i64 = 1;
-pub const AGENT_RUN_CONTEXT_FORMATTER_VERSION: i64 = 24;
-pub const CONTEXT_MANIFEST_VERSION: i64 = 24;
+pub const AGENT_RUN_CONTEXT_FORMATTER_VERSION: i64 = 25;
+pub const CONTEXT_MANIFEST_VERSION: i64 = 25;
 
 pub(crate) fn native_binding_context_contract() -> Value {
     json!({
@@ -23,7 +23,7 @@ mod tests {
 
     fn shared_fixture() -> Value {
         serde_json::from_str(include_str!(
-            "../../../packages/contracts/fixtures/agent-run-context-v24.json"
+            "../../../packages/contracts/fixtures/agent-run-context-v25.json"
         ))
         .expect("shared AgentRun context fixture must be valid JSON")
     }

@@ -4776,6 +4776,7 @@ export function CampWorkspace({
               visible={inspectorVisible}
               showExecution={executionPlacement === 'inspector'}
               runningMembers={runningMembers}
+              executionCount={executionProcesses.length}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
               memberCount={campInspectorMembers(snapshot.members).length}
               singleChatVisible={singleChatVisible}
@@ -8987,15 +8988,7 @@ function runtimeEffortValueLabel(
   value: string,
   choices: Array<{ value: string; label: string }>
 ): string {
-  const commonLabels: Record<string, string> = {
-    minimal: '最低',
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '极高',
-    max: '最高'
-  }
-  return commonLabels[value] ?? choices.find((choice) => choice.value === value)?.label ?? value
+  return choices.find((choice) => choice.value === value)?.label ?? value
 }
 
 export function executionDrawerTitle(

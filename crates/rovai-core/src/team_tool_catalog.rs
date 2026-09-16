@@ -223,9 +223,10 @@ fn camp_read_attachment_schema() -> Value {
             "attachmentId": {"type": "string"},
             "name": {"type": "string"},
             "kind": {"type": "string"},
-            "fileCount": {"type": "integer", "minimum": 0},
-            "mediaType": {"type": "string"},
-            "byteSize": {"type": "integer", "minimum": 0}
+            "fileCount": {"type": ["integer", "null"], "minimum": 0},
+            "mediaType": {"type": ["string", "null"]},
+            "byteSize": {"type": ["integer", "null"], "minimum": 0},
+            "path": {"type": "string"}
         }
     })
 }

@@ -91,9 +91,9 @@ files with their source message. It never manufactures files from narrative clai
 
 Agent CLI exposes only `mission get|update|status` in the authenticated current public Camp, with no
 Mission selector, workspace or version. Private Single Chat and stale/removed membership are rejected.
-See [Transport v25](builtin-tool-transport-v25.md), [context evidence v24](context-manifest-evidence-v24.md)
+See [Transport v26](builtin-tool-transport-v26.md), [context evidence v25](context-manifest-evidence-v25.md)
 and the [desktop UI contract](../ui/components/mission-board.md). Mobile has no Mission entry in v1.
 
-Migration 156 upgrades v1.59/schema 105 to schema 106, adding definition, activity, commission, PR,
-Host/workspace association and cleanup records plus context workspace evidence. Existing business data
-and frozen context bytes are retained; no workspace is created during migration.
+Migration 157 upgrades either admitted v1.59/schema 106 predecessor to schema 107, adding any missing
+definition, activity, commission, PR, Host/workspace association, cleanup records and context workspace
+evidence. Existing business data and frozen context bytes are retained; no workspace is created during migration.

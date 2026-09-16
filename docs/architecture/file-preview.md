@@ -2,7 +2,7 @@
 document_type: architecture
 authority: file-preview-components-and-boundaries
 status: accepted
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # File Preview Architecture
@@ -35,7 +35,7 @@ explicit local-link click
 
 - **Core** 拥有 Camp、Message、Attachment、Runtime Evidence 与当前文件身份映射；
 - **Desktop Main** 拥有宿主路径、原生选择器、Root Grant、只读文件能力、reopen token、HTML/asset token、watcher 和系统操作；
-- **Preload** 只暴露 [File Preview v14](../contracts/file-preview-v14.md) 的场景化方法；iframe 不获得 Preload；
+- **Preload** 只暴露 [File Preview v15](../contracts/file-preview-v15.md) 的场景化方法；iframe 不获得 Preload；
 - **Renderer** 拥有按 Camp 隔离的窗口内 Tab shell、布局与阅读状态，只把显式 Markdown link 分类为本地文件或 Web
   入口；inline-code 和正文不进入文件识别，也不读取磁盘。Tab shell 不拥有文件能力或当前文件事实。
 
@@ -54,8 +54,7 @@ Main 对 root 和目标分别 realpath，拒绝特殊文件，并把一次可信
 及 `child_of_handle` 使用同一规则；绝对路径、Home 相对路径、file URI 与 symlink 最终指向的具体文件没有第二次授权交互。
 
 附件入口使用 composer、pending、pending_edit 或 message 的 exact owner locator。Core 在每次显式
-preview/open/reveal 时解析私有 source path 或既有 Managed/legacy path，并返回当前 availability。附件卡片不提交、
-接收或推断绝对路径；成功的源文件预览另由 Main 签发路径呈现。SQLite 历史读取不预先 stat 附件，动作结果只更新
+preview/open/reveal 时解析私有 source path 或既有 Managed/legacy path，并返回当前 availability。附件卡片按 exact owner 懒加载实际位置，不自行猜测路径；已解析的本机路径可展示、完整复制和定位。SQLite 历史读取不预先 stat 附件，动作结果只更新
 当前 Renderer 卡片且不持久化。
 
 目录不取得文件读取能力：仅在来源已校验的明确用户激活中交给系统文件管理器显示，不创建 Tab、handle 或 watcher。
@@ -89,11 +88,10 @@ Main 在来源校验、path resolution、realpath、普通文件检查和 classi
 canonical 绝对路径，位于 canonical Home 内时可投影为 `~/`。Renderer 只使用 Main 签发的
 `project_relative | external | file_name_only` 呈现，不从字符串反推项目归属或文件身份。
 
-Core 的内部 Attachment target 用 canShowPath 区分 Local Attachment Source Ref 和 Managed/legacy storage。
-源引用成功打开后遵循同一 canonical 路径规则，项目根由所属 Camp 的独立 workspace authority 提供，不能使用
-附件父目录替代。无 workspace 时仍可显示有效源目标的绝对路径；OS Temp source 也只呈现实际打开的位置。
-Managed/legacy 附件只签发 authority 给出的安全文件名，即使存储位于项目内也不显示内部路径。普通附件卡片 View
-仍无路径和存储类型；这一呈现选择由 Core/Main 完成，不由 Renderer 猜测。
+Core 的内部 Attachment target 对已定位的本机附件允许路径展示，Source Ref、Managed 与 legacy 均适用。
+Preview bar 展示当前实际读取位置，消息标签保持文件名；完整路径悬停和复制不受视觉截断影响。
+Web 标明服务器位置，不提供本机文件管理器操作。旧存储权限与内容校验保持原规则。
+位置查询复用 owner/record 解析，不为展示读取全文或验证发布摘要。
 
 路径行的系统定位、Tab 菜单的系统打开与复制完整路径都以当前句柄记录为输入。Main 在操作前重验来源、
 binding generation 和 canonical 文件身份；复制始终使用重验后的 canonical 绝对路径。可见 `displayPath`
@@ -120,7 +118,7 @@ Renderer 的 `file-preview-session.ts` 保存最多 24 个 Camp 的轻量快照�
 句柄、资源映射、站点和加载请求。React 只订阅状态，通过稳定的预览容器显示当前 Camp；不常驻完整 Camp 或 Runtime。
 
 最多 8 个热 Camp、128 MiB 不可见可重建内容、4 个 HTML 页面实例分别回收；集中配置与完整规则见
-[File Preview v14](../contracts/file-preview-v14.md)。保留不可重新取得内容，不通过普通回收丢弃临时唯一副本。
+[File Preview v15](../contracts/file-preview-v15.md)。保留不可重新取得内容，不通过普通回收丢弃临时唯一副本。
 24 个快照包含热 Camp。只有用户切回/打开/激活更新 LRU，后台完成和监听不更新。
 
 切 Camp 只切显示。热命中直接复用标签内容、Blob URL 和 iframe，不重读、不重验、不重新准备站点；冷恢复仅加载
@@ -167,10 +165,13 @@ Root Grant 只服务“选择目录、打开文件夹、添加外部目录、浏
 
 ## HTML 预览站点与 Markdown 资源
 
-HTML 正式链路为：已有文件能力 → Electron-free 预览站点 → 实际 HTTP 文档 → 不同源 iframe。
+Desktop 原生 HTML 正式链路为：已有文件能力 → Electron-free 预览站点 → 实际 HTTP 文档 → 不同源 iframe。
 共享 `packages/html-preview` 拥有静态资源映射、实例、响应、注入位置映射、诊断和浏览器宿主通道；Desktop Main
 拥有 loopback 生命周期适配、文件来源与窗口绑定。Renderer 只接收 descriptor，不接收磁盘根或通用文件接口。
-共享接口可用于普通浏览器和未来 WebUI/MobileUI，远程部署与离线运行不在本次范围。
+WebUI/MobileUI 复用 Viewer 和浏览器通道；其 HTML 根文档由统一 Rust Host 认证读取后在同来源静态壳中运行。
+Web 按可信 HTML 使用原生 Storage、表单、弹窗和新窗口，不提供附件与工作台的来源或登录材料隔离；
+精确权限与取舍由 [Host Web v2](../contracts/host-web-v2.md#workspaces-uploads-and-resources)拥有。
+下述独立 `.localhost` 站点和不同源保证仅适用于 Desktop 原生预览。
 
 每实例使用独立 `.localhost` origin，并以入口 capability 兑换 HttpOnly partitioned cookie；Host、来源、cookie、
 现有 authority、generation、文件身份与路径范围共同验证，随机端口不是授权。资源保留原文、相对位置和查询参数，
@@ -188,7 +189,7 @@ Renderer 的文档期限由当前根 `documentId` 拥有，重复握手及子 fr
 无响应显示非阻塞的未知状态。服务端诊断采用有界回放与文档订阅起点，按请求开始序号过滤旧记录和延迟旧请求，
 子页面不清空根页面诊断，新的导航不继承历史页已耗尽的展示额度。
 查找使用有界可见正文快照、现有 Worker 和高亮定位；源码独立读取未注入内容。完整 wire、限制和状态见
-[File Preview v14](../contracts/file-preview-v14.md)。
+[File Preview v15](../contracts/file-preview-v15.md)。
 
 Markdown 继续使用 `rovai-preview://asset/<tab-token>/<segments>`，在 app.ready 前注册 secure standard scheme，
 实际窗口 Session 安装 sender gate 与 protocol handler。token 绑定窗口、Camp、句柄、generation 和文档目录；

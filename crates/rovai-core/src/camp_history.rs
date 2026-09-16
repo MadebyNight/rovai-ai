@@ -2075,11 +2075,12 @@ fn load_attachments(
     transaction: &Transaction<'_>,
     message_id: &str,
 ) -> Result<(Vec<Value>, usize)> {
-    let source_attachments_json = transaction.query_row(
-        "SELECT source_attachments_json FROM camp_message WHERE id = ?1",
-        [message_id],
-        |row| row.get::<_, String>(0),
-    )?;
+    let (source_attachments_json, author_type, camp_id): (String, String, String) = transaction
+        .query_row(
+            "SELECT source_attachments_json, author_type, camp_id FROM camp_message WHERE id = ?1",
+            [message_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
     let source_attachments = parse_source_attachments(&source_attachments_json)?;
     let legacy_count = transaction.query_row(
         r#"
@@ -2094,7 +2095,22 @@ fn load_attachments(
     let mut attachments = source_attachments
         .into_iter()
         .take(MAX_ATTACHMENTS)
-        .map(|source_ref| json!(source_ref.history_view()))
+        .map(|source_ref| {
+            let mut view = json!(source_ref.history_view());
+            if author_type == "agent" {
+                view["path"] = json!(source_ref.source_path);
+                view["fileCount"] = if source_ref.kind
+                    == crate::local_attachment_source::LocalAttachmentKind::File
+                {
+                    json!(1)
+                } else {
+                    Value::Null
+                };
+                view["byteSize"] = json!(source_ref.observed_byte_size);
+                view["mediaType"] = json!(source_ref.media_type);
+            }
+            view
+        })
         .collect::<Vec<_>>();
     let legacy_limit = MAX_ATTACHMENTS.saturating_sub(attachments.len());
     if legacy_limit == 0 {
@@ -2159,14 +2175,31 @@ fn load_attachments(
                 } else {
                     ("file".to_string(), 1)
                 };
-                Ok(json!({
+                let mut view = json!({
                     "attachmentId": attachment_id,
                     "name": truncate_metadata(name),
                     "kind": kind,
                     "fileCount": file_count,
                     "mediaType": truncate_metadata(media_type),
                     "byteSize": byte_size,
-                }))
+                });
+                let path = if storage_model == "managed_v2" {
+                    crate::managed_attachment::resolve_managed_attachment_path(
+                        transaction,
+                        &camp_id,
+                        &attachment_id,
+                    )
+                } else {
+                    crate::camp_attachment_view::resolve_published_attachment_path(
+                        transaction,
+                        &camp_id,
+                        &attachment_id,
+                    )
+                };
+                if let Ok(path) = path {
+                    view["path"] = json!(path);
+                }
+                Ok(view)
             },
         )
         .collect::<Result<Vec<_>>>()?;

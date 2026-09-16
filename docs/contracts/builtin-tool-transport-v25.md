@@ -1,29 +1,18 @@
 ---
 document_type: protocol-contract
 contract: builtin-tool-transport-v25
-authority: builtin-tool-transport
-status: accepted
 version: 25
-last_updated: 2026-09-15
+status: accepted
+authority: builtin-tool-transport
+last_updated: 2026-09-16
 ---
 
 # Built-in Tool Transport v25
 
-Inherits [v24](builtin-tool-transport-v24.md): authentication, fencing, command replay, IPC 2, Envelope 1,
-Agent Output Projection 2 and command receipts are unchanged. Contract / CLI command version is 25;
-Runtime capability is `builtin_cli.transport.v25`. The catalog adds three closed Mission operations:
+继承 [v24](builtin-tool-transport-v24.md) 的命令、认证、IPC 2 和 Envelope 1。
+Contract/CLI version=25，capability=`builtin_cli.transport.v25`，Agent Output Projection=3。
 
-| CLI | Input | Output |
-| --- | --- | --- |
-| `rovai mission get` | `{}` | `{missionId,title,description,status,sourceMessageId}` |
-| `rovai mission update` | `{title?,description?}`, at least one | `{missionId,changed}` |
-| `rovai mission status` | `{status,sourceMessageId?}` | `{missionId,changed}` |
-
-All operations resolve only the authenticated current public Camp's Mission. Inputs never accept Mission
-ID, workspace or version. Current members, including non-leads, may edit; removed/stale membership and
-private Single Chat are rejected. Status is a four-value enum. For Agent `needs_you`/`completed`, sourceMessageId
-must identify an already published, non-tombstoned public explanation in that Camp. Field limits and status,
-no-op and retry behavior are owned by [Mission v1](mission-v1.md). Editing never schedules or stops a Run.
-
-The existing CLI input-source, help, error and unknown-outcome recovery contracts apply. `cli-operations`
-routes Mission separately from Task and points to operation help; it does not require repetitive reads.
+变更仅为 [Send v20](camp-message-send-v20.md) 的 files 描述与有序实际路径结果，以及
+[Camp History v6](camp-history-v6.md) 的附件位置及 nullable 观察元数据。CLI 不再执行 `.send-import`。
+命令数量、参数、内部 requestId 和运输重试不变；没有 attachment allocate 或面向 Agent 的请求编号。
+Session Charter revision 6、Bootstrap v3/Formatter 3 不变。

@@ -133,6 +133,14 @@ function Fixture(): React.JSX.Element {
     }))
     // Multiple runs of one member must still occupy a single entry avatar.
     if (entryRunningCount > 0) snapshot.agentRuns.push({ ...snapshot.agentRuns[0], id: 'duplicate-entry-run' })
+    // Keep one roster-only member so the entry proves it counts execution history, not the roster.
+    const rosterOnlyAgent = agents.find(agent => !snapshot.members.some(member => member.agentId === agent.agentId))
+    if (rosterOnlyAgent) snapshot.members.push({
+      agentId: rosterOnlyAgent.agentId, displayName: rosterOnlyAgent.displayName,
+      avatarRef: rosterOnlyAgent.avatarRef, teamRole: rosterOnlyAgent.teamRole, accent: '',
+      membershipStatus: 'active', leaveRequestedAt: null, profilePresence: 'present',
+      memberOrder: snapshot.members.length, isDefaultLead: false, version: 1
+    })
   }
   return <div className="app-shell app-shell-camp">
     <aside style={{ gridRow: '1 / -1', padding: '48px 24px', background: 'var(--rail)', color: 'var(--rail-ink)' }}>

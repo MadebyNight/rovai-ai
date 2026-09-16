@@ -301,6 +301,7 @@ const allowedMethods = new Set<CoreMethod>([
   'tasks.update',
   'tasks.list',
   'tasks.get',
+  'camp.attachments.location',
   'camp.composerDraft.get',
   'camp.pendingInputs.get',
   'camp.pendingInputs.edit',
@@ -1099,6 +1100,10 @@ ipcMain.handle('rovai:request', async (_event, method: CoreMethod, params?: unkn
     }
   }
   try {
+    if ((method === 'camps.delete' || method === 'camps.discardPending') && params && typeof params === 'object') {
+      const command = (params as { command?: { campId?: unknown } }).command
+      if (typeof command?.campId === 'string') await filePreview.releaseCamp(command.campId)
+    }
     return { kind: 'value', value: await core.request(method, params) }
   } catch (error) {
     if (error instanceof RovaiRequestError) {

@@ -31,13 +31,13 @@ last_updated: 2026-09-15
 - Git 文件系统 owner：固定基准、临时 index 保真实 index、未跟踪／忽略／二进制／特殊路径、冲突及恢复；
   纯 parser 矩阵不能证明 Git 行为，使用临时真实仓库。最小命令 `cargo test -p rovai-core --lib mission_workspace::tests`。
 - 已有 Context Evidence owner 扩展使命输入、once-per-binding ACK 和恢复负向分支；沿用唯一 golden，不复制 JSON 断言。
-- Migration 156 扩展受支持来源的 admission 矩阵。独立 Mission migration owner 证明事务回滚、既有历史保留、删除 Camp 后清理记录继续存在并可跨重启读取；旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_cleanup_survives_camp_deletion`。
+- Migration 157 扩展受支持来源的 admission 矩阵，同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106。独立 Mission migration owner 证明事务回滚、既有历史保留、删除 Camp 后清理记录继续存在并可跨重启读取；旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_cleanup_survives_camp_deletion`。
 
 真实模型只在隔离 Smoke 和已冻结 Gate 中运行。交互稿的 15 组 fixture 检查不构成以上产品验收。
 
 ## 主线整合与验收
 
-已整合 `origin/main` 的 `3f06e213`（#397、#398）。主线 Migration 155 保留；Mission 顺延到 Migration 156 / schema 106。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
+已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
 
 随后整合 `243eb748`（#399 文件链接间距）。这次整合只改 Renderer／UI 文档；冻结的 Core／Skill
 内容指纹 `57adf680f418ab212392d3c79e533cc76e830d22ad34d82c99abf12e430d69d2` 保持不变。
@@ -56,8 +56,8 @@ last_updated: 2026-09-15
 
 这轮实际执行发现并修复两条生命周期回归，均扩展既有 owner，没有新增平行测试：
 
-- `team_tool::tests::public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes` 增加当前 v24
-  A2A 工作区类型传递；修复前接收 Run 的类型被重置为 shared，preparing 拒绝冻结输入。v22／v23 仍验证原有恢复。
+- `team_tool::tests::public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes` 增加当前 v25
+  A2A 工作区类型传递；修复前接收 Run 的类型被重置为 shared，preparing 拒绝冻结输入。v22／v23／两种 v24 仍验证原有恢复。
 - `collaboration::slow_tests::camp_rename_lead_change_and_quiescent_delete_are_versioned` 增加已经提交的
   Agent 文件 ingest intent；修复前删除其 Camp Message 触发外键错误。Camp 删除现在先移除随 Camp 清理的
   ingest intent，文件系统仍归原有清理 journal。最小命令为该名称的 `cargo test -p rovai-core --features slow-tests --lib`。

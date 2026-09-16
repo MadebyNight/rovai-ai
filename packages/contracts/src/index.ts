@@ -1555,6 +1555,7 @@ export interface ResolvedFilePreview {
   previewKey: string
   restoreRequest?: RestoreFilePreviewRequest
   displayPath: string
+  absolutePath?: string
   pathPresentation: FilePreviewPathPresentation
   fileName: string
   size: number
@@ -1650,7 +1651,7 @@ export interface FilePreviewHtmlSite {
   origin: string
   entryUrl: string
   documentUrl: string
-  /** Browser-only opaque sandbox. Never grant allow-same-origin to this document. */
+  /** Trusted Web HTML bootstrapped at the host origin, sharing native browser storage. */
   sandboxedDocument?: string
   contentGeneration: string
   contentVersion: FileContentVersion
@@ -2043,12 +2044,12 @@ export interface NativeSessionBootstrapEvidenceView {
 export interface CampAttachmentRefView {
   attachmentId: string
   path: string
-  contentDigest: string
+  contentDigest?: string
 }
 
 export interface RunFactRefView {
   missionId?: string
-  fact: 'camp_resources' | 'mission' | 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
+  fact: 'camp_resources' | 'attachment_output_root' | 'mission' | 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
   taskId?: string
 }
 
@@ -2105,7 +2106,7 @@ export interface ContextManifestView {
   mcpProjectionDigest: string
   selfActiveTaskEvidence: unknown
   selfActiveTaskEvidenceDigest: string
-  formatterVersion: 22 | 23 | 24
+  formatterVersion: 22 | 23 | 24 | 25
   renderedPayloadDigest: string
   delivery: RuntimeInputDeliveryView | null
   createdAt: string
@@ -3829,6 +3830,7 @@ export type CoreMethod =
   | 'channels.executionConsole.webSnapshot'
   | 'channels.deliveries.settle'
   | 'camp.attachments.desktopOpenTarget'
+  | 'camp.attachments.location'
   | 'app.info'
   | 'camps.creationPreflight'
   | 'workspaces.validate'

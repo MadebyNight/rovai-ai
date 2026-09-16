@@ -21,6 +21,7 @@ describe('Camp detail popover dismissal', () => {
       visible: true,
       showExecution: true,
       runningMembers: [],
+      executionCount: 2,
       taskCount: 2,
       memberCount: 3,
       onOpen: () => undefined,
@@ -39,7 +40,7 @@ describe('Camp execution entry', () => {
   }))
   const render = (count: number, visible = false): string => renderToStaticMarkup(createElement(CampDetailEntries, {
     activeTab: 'execution', visible, panelId: 'details', showExecution: true,
-    runningMembers: members.slice(0, count), taskCount: 4, memberCount: members.length,
+    runningMembers: members.slice(0, count), executionCount: 2, taskCount: 4, memberCount: members.length,
     onSelect: () => undefined
   })).split('</button>')[0]
 
@@ -55,12 +56,12 @@ describe('Camp execution entry', () => {
     if (count > 3) expect(markup).toContain(`+${count - 3}</span>`)
   })
 
-  it('restores the total-member count when execution is idle while keeping history available', () => {
+  it('restores the executed-member count when execution is idle while keeping history available', () => {
     const markup = render(0, true)
     expect(markup).toContain('aria-expanded="true"')
     expect(markup).toContain('aria-haspopup="dialog"')
-    expect(markup).toContain('执行，共 5 位队员，当前没有队员正在执行')
-    expect(markup).toContain('<span>执行</span><small>5</small>')
+    expect(markup).toContain('执行，共 2 位队员有执行记录，当前没有队员正在执行')
+    expect(markup).toContain('<span>执行</span><small>2</small>')
     expect(markup).not.toContain('camp-execution-members')
     expect(markup).not.toContain('camp-execution-orbits')
     expect(markup).not.toContain('disabled')
@@ -70,7 +71,8 @@ describe('Camp execution entry', () => {
     const markup = renderToStaticMarkup(createElement(MobileLayoutProvider, { value: true, children:
       createElement(CampDetailPopover, {
         activeTab: 'execution', visible: false, showExecution: true, runningMembers: members.slice(0, count),
-        taskCount: 4, memberCount: 5, onOpen: () => undefined, onClose: () => undefined, children: null
+        executionCount: 2, taskCount: 4, memberCount: 5,
+        onOpen: () => undefined, onClose: () => undefined, children: null
       })
     }))
     const entry = markup.split('data-detail="execution"')[1].split('</button>')[0]

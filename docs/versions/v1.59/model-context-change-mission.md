@@ -98,15 +98,17 @@ type MissionFacts = {
 }
 // RUN_FACTS.mission?: MissionFacts
 
-type RunFactsAfter = Omit<RunFactsBefore, 'schemaVersion'> & {
-  schemaVersion: 3
+type RunFactsAfter = Omit<RunFactsBefore, 'schemaVersion' | 'campResources'> & {
+  schemaVersion: 4
+  attachmentOutputRoot: string
   mission?: MissionFacts
 }
 ```
 
 每次新输入准备时读取这三个当前事实。普通 Camp 和 Single Chat 省略 `mission`，不输出 null。
 此对象没有 description、业务版本、sourceMessageId、标签或工作区；需要完整定义时用 `mission get`。
-既有 RUN_FACTS 平台字段保持原职责，不向 Mission 对象增加 schemaVersion／version／expectedVersion。
+`attachmentOutputRoot` 采用已确认的附件原路径 revision 2：它只是 Agent 默认输出位置，不是权限或附件枚举根。
+既有其他 RUN_FACTS 平台字段保持原职责，不向 Mission 对象增加 schemaVersion／version／expectedVersion。
 输出保持既有字段顺序，使命字段位于最后。外层平台 schemaVersion 只标识通用 RUN_FACTS 合同，不参与使命编辑。
 Mission 状态变化不是工作区准备的条件，也不是自动派发或停止信号。
 
@@ -399,16 +401,16 @@ Mission 保存共同目标，Task 保存可独立交接的责任；不要为使�
 | --- | --- | --- |
 | Bootstrap Contract／Formatter | v3／3 | 包装和证据格式不变 |
 | Session Charter revision | 7 | Mission 条件追加块纳入兼容摘要 |
-| AgentRun Formatter／Manifest | 24／24 | mission_start 变体、WORKSPACE 条件投递及其证据 |
+| AgentRun Formatter／Manifest | 25／25 | 合并 attachmentOutputRoot、mission_start 变体、WORKSPACE 条件投递及其证据 |
 | Delivery Profile | 6 | 简短使命事实和需要发送的 WORKSPACE 参与必要输入预算 |
-| Built-in Tool Contract／CLI Command | 25／25 | 三个新增操作、schema、help、作用域 |
-| Agent Output／IPC／Envelope／Receipt | 2／2／1／1 | 既有包装、错误恢复和投影机制不变 |
-| Run Facts | 3 | 使命公开会话增加可选 mission；平台封装版本不作为 Mission 业务版本 |
+| Built-in Tool Contract／CLI Command | 26／26 | 保留附件原路径行为并增加三个 Mission 操作、schema、help、作用域 |
+| Agent Output／IPC／Envelope／Receipt | 3／2／1／1 | 采用已发布附件投影，既有包装与错误恢复机制不变 |
+| Run Facts | 4 | 合并必需 attachmentOutputRoot 与使命公开会话可选 mission；平台封装版本不作为 Mission 业务版本 |
 
-新增 Migration 从当前序列的下一个空位分配，实施时记录实际编号；不得复用已发布编号。
+Migration 157/schema 107 从两个已存在的 Migration 156/schema 106 形态汇合：已发布附件路径形态与已安装 Mission preview 形态均为受支持来源。
 建立 Mission、内部活动序号、开始记录和独立 workspace／清理记录；旧 Camp 不自动变成 Mission。
-历史 Manifest 的 workspace 列为 NULL／NULL／false，不改旧 bytes/digest。新生成只写 24／24／6，Run Facts 内部合同为 3；已冻结的受支持旧输入只凭
-既有精确 Delivery 证明恢复原版本，不用新投影重算。当前 v23／Profile 5 及既有 v22／Profile 4 证据保留。
+历史 Manifest 不改旧 bytes/digest。新生成只写 25／25／6，Run Facts 内部合同为 4；已冻结的受支持旧输入只凭
+既有精确 Delivery 证明恢复原版本，不用新投影重算。已发布 v24／Profile 5、Mission preview v24／Profile 6、v23／Profile 5 及 v22／Profile 4 证据均保留。
 
 Binding compatibility 使用现有版本摘要机制。Charter／Formatter 版本变化会使之后新输入重新建立兼容
 Native Session 并重送 Bootstrap，包括普通 Camp；普通 Camp 的 Charter 正文和原有事实／历史选择语义保持，平台 RUN_FACTS 外层 schemaVersion 随通用合同升级；MissionFacts 本身无任何版本字段。

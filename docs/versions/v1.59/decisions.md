@@ -96,6 +96,8 @@ fragment 携带两分钟一次性票据，禁止长期管理 Token 和已有浏�
 <a id="v1-59-d04"></a>
 ## V1.59-D04：Web HTML 附件使用共享查看器与不透明源沙箱
 
+不透明源与存储隔离部分已由 [V1.59-D09](#v1-59-d09)取代；保留下述原始理由用于追溯。
+
 - 状态：accepted
 - 日期：2026-09-13
 - 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md)、[文件查看器](../../ui/components/file-preview.md)
@@ -165,11 +167,45 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 
 <a id="v1-59-d08"></a>
 
-## V1.59-D08：使命复用 Camp，以首次执行基准保留长期工作区
+## V1.59-D08：Agent 附件使用实际路径，默认输出与文件归属分开
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[附件架构](../../architecture/camp-published-attachment-view.md)、[Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[File Preview v15](../../contracts/file-preview-v15.md)
+
+用户最终否决复制一次、tmp/rename、预分配和双根上下文的 revision 1。选择所有新 send 原路径登记，
+复用已有 Source Ref，不建立另一套 Managed 系统。永久输出目录只给 Agent 一个正常生成交付文件的位置。
+代价是临时源可被清理，跨 Camp 引用会随拥有者删除失效；明确接受，不用引用计数、自动复制或文件保活补偿。
+
+历史受管记录保持原位和原校验；新发布与普通 Run 不经过旧 publication gate。位置展示不等于更改文件权限。
+此决定替代 V1.32-D01 的新增 CLI 快照流程及 V1.40-D01 中 Agent 继续受管的部分；用户输入规则保持。
+Web 本地相对资源补入已有句柄下的临时资源能力，仍运行于不透明源沙箱；这补齐 D04 的多文件缺口，
+不采用另起端口或通用预览代理。模型可见字段完整确认见[revision 2](model-context-change-editable-attachments.md)。
+
+<a id="v1-59-d09"></a>
+
+## V1.59-D09：可信 Web HTML 使用同来源原生浏览器能力
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[统一 Host 的用户文件](../../architecture/unified-rust-host.md#草稿与用户文件)、[Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)、[文件查看器](../../ui/components/file-preview.md)
+
+D04 及 D08 延续的不透明来源使作者初始化代码读取 localStorage 即抛 SecurityError，本机和手机均不能通过重试恢复。
+用户明确选择可信 HTML 下的可用性：iframe 与预览响应同步开放脚本、来源、表单、新窗口和原生弹窗，消息桥改用
+实际来源并保留窗口与预览身份匹配；不扩大工作台/API 策略或增加顶层导航权限。
+
+代价是附件可以访问同来源主页面及登录材料，不再提供来源或每附件存储隔离。Storage 归访问设备浏览器，
+不写入 Server 数据根、不修改源 HTML。这替代 D04 的隔离保证；共享 Viewer、认证源读取及统一 Rust Host 保留。
+不选择 Storage 模拟或按附件能力检测，因为它们不能提供完整原生行为并增加状态系统；也不建立独立预览服务器，
+避免增加远程部署入口和生命周期。Desktop 原生预览与 CSS/JS 资源加载均不扩入本轮。
+
+<a id="v1-59-d10"></a>
+
+## V1.59-D10：使命复用 Camp，以首次执行基准保留长期工作区
 
 - 状态：accepted
 - 日期：2026-09-15
-- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v1](../../contracts/mission-v1.md)、[ContextManifest v24](../../contracts/context-manifest-evidence-v24.md)
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v1](../../contracts/mission-v1.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
 
 使命需要跨多轮、恢复和队员切换保持连续，但已有 Camp 已经拥有消息、草稿、成员及执行。因此使命作为
 独立业务定义关联唯一 Camp，避免第二套会话生命周期。业务状态由当前成员显式维护，不从 Run 终态推断。

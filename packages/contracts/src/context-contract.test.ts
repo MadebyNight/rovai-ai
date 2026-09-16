@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import fixture from '../fixtures/agent-run-context-v24.json'
+import fixture from '../fixtures/agent-run-context-v25.json'
 import { isCampId, type ContextManifestView } from './index'
 
 describe('AgentRun context contract', () => {
-  it('uses the shared frozen v24 fixture', () => {
-    const formatterVersion: ContextManifestView['formatterVersion'] = 24
+  it('uses the shared frozen v25 fixture', () => {
+    const formatterVersion: ContextManifestView['formatterVersion']= 25
 
     expect(fixture.agentRunContextFormatterVersion).toBe(formatterVersion)
     expect(fixture.contextManifestFormatterVersion).toBe(formatterVersion)
     expect(fixture.contextDeliveryProfileVersion).toBe(6)
-    expect(fixture.contextManifestVersion).toBe(24)
+    expect(fixture.contextManifestVersion).toBe(25)
     expect(fixture.messageProjectionAudience).toBe('agent_v1')
     expect(fixture.dynamicContextSectionOrder.slice(-2)).toEqual(['A2A_GUIDANCE?', 'CURRENT_INPUT'])
     expect(fixture.dynamicContextSectionOrder.at(-1)).toBe('CURRENT_INPUT')
@@ -102,9 +102,9 @@ describe('AgentRun context contract', () => {
       reason: 'history_budget',
     })
     expect(fixture.runFacts).toMatchObject({
-      schemaVersion: 3,
-      requiredFields: ['campResources'],
-      emptyOptionalProjection: 'camp_resources_only',
+      schemaVersion: 4,
+      requiredFields: ['attachmentOutputRoot'],
+      emptyOptionalProjection: 'attachment_output_root_only',
     })
     expect(fixture.contextManifestRunFactEvidence).toEqual([
       'typedFactReferences', 'typedTaskReference', 'typedMissionReference', 'exactCompactJsonBytes', 'digest',
