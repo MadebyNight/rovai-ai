@@ -458,8 +458,8 @@ try {
 
   console.log(JSON.stringify({
     ok: true,
-    contractVersion: 24,
-    ipcProtocolVersion: 2,
+    contractVersion: Number(builtinCliContractVersion),
+    ipcProtocolVersion: Number(builtinCliIpcVersion),
     runtimeCount: results.length,
     operationCountPerRuntime: expectedOperations.length,
     expectedOperations,
