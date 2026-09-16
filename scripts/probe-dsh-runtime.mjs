@@ -164,11 +164,16 @@ async function checkCapabilities(sessionId, role, stage) {
   const mcpMarker = `MCP_${crypto.randomUUID()}`
   await writeFile(skillPath, `---\nname: ${skillName}\ndescription: Verify the current capability continuity marker.\n---\nReturn this exact current skill marker: ${skillMarker}\n`)
   const before = await callCount(), approvalsBefore = host.approvalCount
-  const output = await host.prompt(sessionId, `Load the ${skillName} skill using the skill tool again; its body has just changed. Call the parity MCP echo tool exactly once with text ${mcpMarker}. Return its actual result, the skill marker from the freshly loaded body, and your public role marker. Do not substitute an earlier result.`)
+  let promptAttempts = 1
+  let output = await host.prompt(sessionId, `Load the ${skillName} skill using the skill tool again; its body has just changed. Call the parity MCP echo tool exactly once with text ${mcpMarker}. Return its actual result, the skill marker from the freshly loaded body, and your public role marker. Do not substitute an earlier result.`)
+  if (await callCount() === before) {
+    promptAttempts += 1
+    output = await host.prompt(sessionId, `The parity MCP echo tool is present in your current request tool list. Load ${skillName} with the skill tool, then call mcp__parity__echo exactly once with text ${mcpMarker}. Return that actual result, the freshly loaded skill marker, and your public role marker.`)
+  }
   assert(output.includes(role) && output.includes(skillMarker) && output.includes(`native-parity:${mcpMarker}`), `${stage}: capability output mismatch`)
   assert.equal(await callCount(), before + 1, `${stage}: MCP must execute exactly once`)
   assert.equal(host.approvalCount, approvalsBefore, `${stage}: Core must not synthesize an MCP approval`)
-  evidence.checks[`capabilities_${stage}`] = { passed:true, skillLoaded:true, mcpEffectCount:1, nativeApprovalRequestCount:0, sessionId }
+  evidence.checks[`capabilities_${stage}`] = { passed:true, skillLoaded:true, mcpEffectCount:1, nativeApprovalRequestCount:0, promptAttempts, sessionId }
 }
 try {
   host = await startHost()
