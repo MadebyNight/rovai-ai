@@ -578,6 +578,38 @@ app
         await capture('member-create-saved')
       }
     )
+    await check(
+      'boolean Runtime permissions use the neutral action colors in both themes',
+      async () => {
+        await click('.member-sidebar-select', '咕咕巡夜人')
+        const expected = {
+          day: {
+            track: 'rgb(43, 43, 44)',
+            thumb: 'rgb(255, 255, 255)'
+          },
+          night: {
+            track: 'rgb(229, 229, 231)',
+            thumb: 'rgb(23, 23, 25)'
+          }
+        }
+        for (const theme of ['day', 'night']) {
+          await run(`window.memberFixture.theme('${theme}')`)
+          await settle()
+          await run(
+            'Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => undefined)))'
+          )
+          const colors = await run(`(() => {
+            const control = document.querySelector('${active}.runtime-parameter-switch input:checked')
+            return {
+              track: getComputedStyle(control).backgroundColor,
+              thumb: getComputedStyle(control, '::after').backgroundColor
+            }
+          })()`)
+          assert.deepEqual(colors, expected[theme])
+          await capture(`member-runtime-switch-${theme}`)
+        }
+      }
+    )
     await check('day/night, minimum window, 2K and zoom geometry', async () => {
       await click('.member-sidebar-select', '芝士鉴定士')
       for (const theme of ['day', 'night']) {
