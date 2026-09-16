@@ -10,8 +10,25 @@ last_updated: 2026-09-16
 # v1.59 实施与验收
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
-当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，当前已同步 main `0bfc35b0`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+本批增量从 `main` 的 `eb850265` 建立仓库同级工作树 `rovai-ai-mobile-project-start`，分支为
+`rovai/mobile-project-start`。验收只使用隔离 data-dir、Skill Library、MCP config 和浏览器 profile。
+
+## 当前批次：手机会话入口与项目目录
+
+2026-09-16 按确认交互稿修正手机会话列表几何：新动态点与标题共用垂直中心，项目内会话和置顶会话保持各自图标槽，
+选中灰底覆盖与普通会话一致的完整行宽。WebUI / MobileUI 的工作区选择改称“选择项目目录”，默认提供位置导航、
+文件夹列表与当前目录确认，完整路径和系统根位置按需展开，不再用 Host 概念解释用户动作。
+
+普通手机空 Camp 移除品牌图形和四项配置标签，只保留开始标题与默认折叠的“起步建议”；三个建议展开后仍调用共享草稿填充，
+不会直接发送。宽屏空 Camp、首次使用欢迎、Composer、消息区和 Rust Host 合同保持现状。
+
+验证通过 `pnpm typecheck`、定向 App Vitest 175 项、`pnpm build:desktop`（含 Web）、文档测试与两项文档治理门禁。
+`pnpm test:host-web-mobile` 三项完整通过：390px 生产手机入口断言提醒点／标题中心、完整选中行、目录文案与按需路径、
+空 Camp 折叠状态；共享执行夹具与独立 Server 手机设置回归同时通过。浏览器测试使用 `eb850265` 未改动的既有
+debug Host / Server 二进制和当前 Web 构建，隔离 data-dir、Skill Library、MCP config 与 Chrome profile，未启动 Runtime；
+仍不把 Chrome 手机视口当作实体手机验收。
+`pnpm test:host-web-live` 也以 1440px 实际 Desktop／Web 双入口完整通过，覆盖宽屏目录跳转、共享 Camp 与管理写入，
+并确认浏览器无原生桥接；同样不包含真实 Runtime 或第二台实体设备。
 
 ## 当前批次：审批 Dock 与手机适配
 

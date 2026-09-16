@@ -50,7 +50,13 @@ export async function exerciseBrowserManagement({ web, read, fixture, capture, o
   await web.wait(`document.querySelector('[aria-label="保存队员信息"]:not(:disabled)')!==null`)
   await web.click(`document.querySelector('[aria-label="保存队员信息"]')`)
   await web.wait(`document.querySelector('[aria-label="保存队员信息"]').disabled`)
-  const updatedMember = (await read('members.list')).find(item=>item.agentId===member.agentId)
+  let updatedMember
+  for (let attempt = 0; attempt < 50; attempt++) {
+    updatedMember = (await read('members.list')).find(item=>item.agentId===member.agentId)
+    if (updatedMember?.avatarRef && updatedMember.avatarRef !== member.avatarRef) break
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  assert.ok(updatedMember, 'managed member remains available after profile save')
   assert.notEqual(updatedMember.avatarRef, member.avatarRef, 'browser crop/upload/profile save must persist the managed avatar')
   assert.ok(updatedMember.avatarRef)
   await web.wait(`Boolean(document.querySelector('.member-portrait img')?.naturalWidth) || [...document.querySelectorAll('.member-avatar img')].some(e=>e.src.startsWith('blob:') && e.naturalWidth>0)`)
@@ -91,11 +97,14 @@ export async function exerciseBrowserManagement({ web, read, fixture, capture, o
   await web.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent==='Skills')`)
   await click('导入')
   await click('选择文件夹')
+  await web.wait(`document.querySelector('[aria-label="输入完整路径"]:not(:disabled)')!==null`)
+  await web.click(`document.querySelector('[aria-label="输入完整路径"]')`)
   await web.wait(`document.querySelector('#host-workspace-path:not(:disabled)')!==null`)
   await fill('#host-workspace-path', skillPath)
   await click('前往')
   await web.wait(`document.querySelector('[role=dialog] .primary-button:not(:disabled)')!==null`)
   await web.click(`document.querySelector('[role=dialog] .primary-button')`)
+  await web.wait(`document.querySelector('.web-workspace-picker')===null`)
   await click('导入 Skill')
   await web.wait(`[...document.querySelectorAll('.capability-detail-heading h2')].some(e=>e.getClientRects().length>0 && e.textContent==='browser-fixture')`)
   assert.ok((await read('skills.list')).some(item=>item.name==='browser-fixture'))

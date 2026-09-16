@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -34,6 +34,8 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 当前已抽取共享运行层，接入 Headless CLI、同 Host 的 Desktop/Web 管理及共享生产 Camp 页面；
 第五阶段按 2026-09-14 用户确认，将 [Mobile WebUI](../../ui/host-web-mobile.md)接入实际 Web 入口，复用现有业务与执行态；
 已具备手机展示与操作适配，真实设备验收仍未完成。其他平台原生 Server 验收独立记录；Docker 完全移出当前任务。
+2026-09-16 的手机入口增量进一步对齐会话行提醒与选中背景，弱化项目目录选择中的 Host 术语，并精简普通空 Camp；
+它不改变首次使用欢迎、宽屏交互或统一 Host 数据边界。
 用户已通过 [Desktop/Web 行为差异与宽屏对照稿](../../ui/host-web-parity.md)及[组件/API 复用说明](frontend-reuse.md)的方向评审，
 直接按共享 Camp、真实写入闭环、双入口一致、逐页复用管理能力推进。Core 已接入独立编辑归属、source 上传、
 发送、审批、单聊独立草稿及正式管理页；macOS 两入口真实 Codex 执行、执行中关闭 Web、强杀恢复和
