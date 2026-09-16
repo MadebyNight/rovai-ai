@@ -4760,6 +4760,7 @@ export function CampWorkspace({
               visible={inspectorVisible}
               showExecution={executionPlacement === 'inspector'}
               runningMembers={runningMembers}
+              executionCount={executionProcesses.length}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
               memberCount={campInspectorMembers(snapshot.members).length}
               singleChatVisible={singleChatVisible}
