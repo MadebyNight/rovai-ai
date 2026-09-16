@@ -19,8 +19,12 @@ is retained throughout Mission life; independent orphan cleanup records survive 
 
 `MissionGit` reads the source checkout's current local branch and `HEAD` only when the first admitted Run
 enters preparing. It uses that fixed commit, the Host-resolved Git executable and verified ownership to create/reuse/clean worktrees.
-It computes cumulative changes against a fixed initial commit with a temporary index. Git and actual files
-are the authority, not Agent narratives. The worktree is an execution location, not an Agent capability.
+It computes cumulative changes against a fixed initial commit with an independent temporary index. Opening
+the cumulative-change browser establishes a bounded, expiring process-local snapshot containing the file-ID
+to old/new-path mapping and that index. A single-file request resolves only through this snapshot and runs a
+path-scoped Diff; it never rediscovers the full change list. Refresh replaces the snapshot, and closing the
+browser releases it. Git and actual files are the authority, not Agent narratives. The worktree is an execution
+location, not an Agent capability; the snapshot stores neither patch history nor historical file content.
 
 User definition edits use an internal optimistic revision so stale dialogs cannot overwrite newer title or
 description. Agent updates remain field patches with last-commit-wins semantics and never see that revision.

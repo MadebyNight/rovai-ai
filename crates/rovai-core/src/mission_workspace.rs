@@ -11,7 +11,8 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::process::Command;
 use uuid::Uuid;
@@ -643,23 +644,30 @@ impl MissionGit {
         );
         parse_changes(&output.stdout.bytes)
     }
-    pub async fn changes(&self, workspace: &MissionWorkspace) -> Result<Vec<MissionChangedFile>> {
+    pub async fn changes_snapshot(
+        &self,
+        workspace: &MissionWorkspace,
+    ) -> Result<MissionDiffSnapshot> {
         self.validate(workspace).await?;
         let temporary = self.temporary_index(workspace).await?;
-        self.changes_with_index(workspace, &temporary.index).await
+        let files = self.changes_with_index(workspace, &temporary.index).await?;
+        Ok(MissionDiffSnapshot::new(workspace, temporary, files))
     }
     pub async fn file_diff(
         &self,
         workspace: &MissionWorkspace,
+        snapshot: &MissionDiffSnapshot,
         file_id: &str,
     ) -> Result<MissionFileDiff> {
         self.validate(workspace).await?;
-        let temporary = self.temporary_index(workspace).await?;
-        let files = self.changes_with_index(workspace, &temporary.index).await?;
-        let file = files
-            .into_iter()
-            .find(|file| file.id == file_id)
-            .context("mission.file_no_longer_changed")?;
+        ensure!(
+            snapshot.matches(workspace),
+            "mission.changes_refresh_required"
+        );
+        let file = snapshot
+            .file(file_id)
+            .cloned()
+            .context("mission.changes_refresh_required")?;
         if file.binary {
             return Ok(MissionFileDiff {
                 file,
@@ -683,7 +691,7 @@ impl MissionGit {
             .output(
                 Path::new(&workspace.worktree_path),
                 &args,
-                Some(&temporary.index),
+                Some(snapshot.index()),
                 None,
             )
             .await?;
@@ -695,6 +703,123 @@ impl MissionGit {
         let patch = String::from_utf8(output.stdout.bytes).context("mission.diff_not_utf8")?;
         let hunks = parse_hunks(&patch)?;
         Ok(MissionFileDiff { file, patch, hunks })
+    }
+}
+
+const MISSION_DIFF_SNAPSHOT_LIMIT: usize = 12;
+const MISSION_DIFF_SNAPSHOT_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// One current-workspace view of the Mission change list. The snapshot keeps the
+/// private index and exact rename paths together, so a file request never needs
+/// to rediscover every changed path.
+#[derive(Clone)]
+pub struct MissionDiffSnapshot {
+    workspace_id: String,
+    worktree_path: String,
+    files: Arc<Vec<MissionChangedFile>>,
+    file_indices: Arc<BTreeMap<String, usize>>,
+    temporary_index: Arc<TemporaryIndex>,
+}
+impl MissionDiffSnapshot {
+    fn new(
+        workspace: &MissionWorkspace,
+        temporary_index: TemporaryIndex,
+        files: Vec<MissionChangedFile>,
+    ) -> Self {
+        let file_indices = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (file.id.clone(), index))
+            .collect();
+        Self {
+            workspace_id: workspace.id.clone(),
+            worktree_path: workspace.worktree_path.clone(),
+            files: Arc::new(files),
+            file_indices: Arc::new(file_indices),
+            temporary_index: Arc::new(temporary_index),
+        }
+    }
+    pub fn files(&self) -> &[MissionChangedFile] {
+        &self.files
+    }
+    fn file(&self, file_id: &str) -> Option<&MissionChangedFile> {
+        self.file_indices
+            .get(file_id)
+            .and_then(|index| self.files.get(*index))
+    }
+    fn index(&self) -> &Path {
+        &self.temporary_index.index
+    }
+    fn matches(&self, workspace: &MissionWorkspace) -> bool {
+        self.workspace_id == workspace.id && self.worktree_path == workspace.worktree_path
+    }
+}
+
+struct CachedMissionDiffSnapshot {
+    snapshot: MissionDiffSnapshot,
+    last_used: Instant,
+    sequence: u64,
+}
+
+/// Process-local, bounded browsing state. It contains no historical patch text;
+/// replacing or releasing an entry drops its independent temporary Git index.
+#[derive(Default)]
+pub struct MissionDiffSnapshotCache {
+    entries: BTreeMap<String, CachedMissionDiffSnapshot>,
+    sequence: u64,
+}
+impl MissionDiffSnapshotCache {
+    pub fn insert(&mut self, mission_id: String, snapshot: MissionDiffSnapshot) {
+        self.prune_expired();
+        self.sequence = self.sequence.wrapping_add(1);
+        self.entries.insert(
+            mission_id,
+            CachedMissionDiffSnapshot {
+                snapshot,
+                last_used: Instant::now(),
+                sequence: self.sequence,
+            },
+        );
+        while self.entries.len() > MISSION_DIFF_SNAPSHOT_LIMIT {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.sequence)
+                .map(|(mission_id, _)| mission_id.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+    pub fn get(
+        &mut self,
+        mission_id: &str,
+        workspace: &MissionWorkspace,
+    ) -> Option<MissionDiffSnapshot> {
+        self.prune_expired();
+        let matches = self
+            .entries
+            .get(mission_id)
+            .is_some_and(|entry| entry.snapshot.matches(workspace));
+        if !matches {
+            self.entries.remove(mission_id);
+            return None;
+        }
+        let entry = self.entries.get_mut(mission_id)?;
+        self.sequence = self.sequence.wrapping_add(1);
+        entry.last_used = Instant::now();
+        entry.sequence = self.sequence;
+        Some(entry.snapshot.clone())
+    }
+    pub fn release(&mut self, mission_id: &str) -> bool {
+        self.entries.remove(mission_id).is_some()
+    }
+    fn prune_expired(&mut self) {
+        let now = Instant::now();
+        self.entries.retain(|_, entry| {
+            now.saturating_duration_since(entry.last_used) < MISSION_DIFF_SNAPSHOT_TTL
+        });
     }
 }
 
@@ -1162,7 +1287,8 @@ mod tests {
             .unwrap();
         let before = fs::read(&index).unwrap();
         let head = git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap();
-        let files = git.changes(&workspace).await.unwrap();
+        let snapshot = git.changes_snapshot(&workspace).await.unwrap();
+        let files = snapshot.files();
         for name in [
             "edit.txt",
             "renamed.txt",
@@ -1190,21 +1316,37 @@ mod tests {
         );
         let edit = files.iter().find(|f| f.path == "edit.txt").unwrap();
         assert_eq!((edit.additions, edit.deletions), (Some(1), Some(1)));
-        let diff = git.file_diff(&workspace, &edit.id).await.unwrap();
+        let diff = git
+            .file_diff(&workspace, &snapshot, &edit.id)
+            .await
+            .unwrap();
         assert!(diff.patch.contains("-original\n+final"));
         assert!(!diff.patch.contains("staged"));
         assert_eq!(diff.hunks[0].lines[0].old_line, Some(1));
+        let renamed = files.iter().find(|f| f.path == "renamed.txt").unwrap();
+        let renamed_diff = git
+            .file_diff(&workspace, &snapshot, &renamed.id)
+            .await
+            .unwrap();
+        assert!(renamed_diff.patch.contains("a/rename.txt"));
+        assert!(renamed_diff.patch.contains("b/renamed.txt"));
         assert_eq!(fs::read(&index).unwrap(), before);
         assert_eq!(git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap(), head);
         fs::write(cwd.join("edit.txt"), "original\n").unwrap();
         assert!(
-            !git.changes(&workspace)
+            !git.changes_snapshot(&workspace)
                 .await
                 .unwrap()
+                .files()
                 .iter()
                 .any(|f| f.path == "edit.txt")
         );
-        assert!(git.file_diff(&workspace, &edit.id).await.is_err());
+        let refreshed = git.changes_snapshot(&workspace).await.unwrap();
+        assert!(
+            git.file_diff(&workspace, &refreshed, &edit.id)
+                .await
+                .is_err()
+        );
         git.cleanup(&workspace).await.unwrap();
     }
 }

@@ -2049,6 +2049,7 @@ struct Core {
     runtime_search_environment: RwLock<Arc<RuntimeSearchEnvironment>>,
     runtime_search_update: Mutex<()>,
     mission_workspace_gate: Mutex<()>,
+    mission_diff_snapshots: Mutex<crate::mission_workspace::MissionDiffSnapshotCache>,
     #[cfg(test)]
     runtime_search_capture: Option<runtime_check_environment::TestSearchCapture>,
     runtime_discovery:
@@ -7847,6 +7848,7 @@ impl Core {
             | "missions.delivery"
             | "missions.changes"
             | "missions.fileDiff"
+            | "missions.diffSession.release"
             | "missions.create"
             | "missions.update"
             | "missions.status"
@@ -15924,6 +15926,9 @@ async fn run_core(
         runtime_search_environment: RwLock::new(runtime_search_environment.clone()),
         runtime_search_update: Mutex::new(()),
         mission_workspace_gate: Mutex::new(()),
+        mission_diff_snapshots: Mutex::new(
+            crate::mission_workspace::MissionDiffSnapshotCache::default(),
+        ),
         #[cfg(test)]
         runtime_search_capture: None,
         runtime_discovery: RwLock::new(
@@ -23317,6 +23322,9 @@ mod tests {
             output,
             runtime_search_update: Mutex::new(()),
             mission_workspace_gate: Mutex::new(()),
+            mission_diff_snapshots: Mutex::new(
+                crate::mission_workspace::MissionDiffSnapshotCache::default(),
+            ),
             runtime_search_capture: None,
             runtime_search_environment: RwLock::new(Arc::new(
                 RuntimeSearchEnvironment::for_test_paths(1, Vec::new()),

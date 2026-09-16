@@ -243,8 +243,12 @@ impl Core {
                     MissionService::default().list(&database)?,
                 )?)
             }
-            "missions.get" | "missions.activity" | "missions.delivery" | "missions.changes"
-            | "missions.fileDiff" => {
+            "missions.get"
+            | "missions.activity"
+            | "missions.delivery"
+            | "missions.changes"
+            | "missions.fileDiff"
+            | "missions.diffSession.release" => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
                 struct Query {
@@ -253,6 +257,20 @@ impl Core {
                     file_id: Option<String>,
                 }
                 let query: Query = serde_json::from_value(request.params.clone())?;
+                if request.method == "missions.diffSession.release" {
+                    {
+                        let database = self.database.lock().await;
+                        MissionService::default()
+                            .get(&database, &query.mission_id)?
+                            .context("mission.not_found")?;
+                    }
+                    let released = self
+                        .mission_diff_snapshots
+                        .lock()
+                        .await
+                        .release(&query.mission_id);
+                    return Ok(json!({ "released": released }));
+                }
                 let (mission, workspaces) = {
                     let database = self.database.lock().await;
                     let mission = MissionService::default()
@@ -295,11 +313,24 @@ impl Core {
                 )?;
                 let git = self.mission_git().await?;
                 if request.method == "missions.changes" {
-                    Ok(serde_json::to_value(git.changes(workspace).await?)?)
+                    let snapshot = git.changes_snapshot(workspace).await?;
+                    let files = snapshot.files().to_vec();
+                    self.mission_diff_snapshots
+                        .lock()
+                        .await
+                        .insert(query.mission_id, snapshot);
+                    Ok(serde_json::to_value(files)?)
                 } else {
+                    let snapshot = self
+                        .mission_diff_snapshots
+                        .lock()
+                        .await
+                        .get(&query.mission_id, workspace)
+                        .context("mission.changes_refresh_required")?;
                     Ok(serde_json::to_value(
                         git.file_diff(
                             workspace,
+                            &snapshot,
                             query
                                 .file_id
                                 .as_deref()

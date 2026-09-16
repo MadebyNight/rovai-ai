@@ -101,7 +101,7 @@ export function MissionContextMenu({ m, position, catalog, onClose, onEdit, onSt
   return <Menu.Root open={!!m && !!position} onOpenChange={open => { if (!open) onClose() }}><Menu.Trigger asChild><span className="attachment-context-anchor" style={{ left: position?.x ?? 0, top: position?.y ?? 0 }}/></Menu.Trigger>
     {m && <Menu.Portal><Menu.Content className="compact-menu mission-action-menu" aria-label={`${m.title}的操作`} align="start" side="right" sideOffset={4} collisionPadding={10} loop
       onCloseAutoFocus={event => event.preventDefault()} onEscapeKeyDown={() => requestAnimationFrame(() => position?.origin?.isConnected && position.origin.focus())}>
-      <Menu.Item className="compact-option" onSelect={onEdit}><span>编辑使命</span></Menu.Item>
+      <Menu.Item className="compact-option" onSelect={onEdit}><span>编辑</span></Menu.Item>
       {submenu('status', '状态', <Menu.RadioGroup value={m.status} onValueChange={v => onStatus(v as Status)}>{statuses.map(s => <Menu.RadioItem className="compact-option" value={s.id} key={s.id}><StatusIcon status={s.id}/><span>{s.label}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator></Menu.RadioItem>)}</Menu.RadioGroup>)}
       {submenu('members', '查看队员', <MissionRoster m={m}/>, 'mission-members-popover')}
       {submenu('lead', '队长', <Menu.RadioGroup value={m.defaultLeadAgentId ?? ''} onValueChange={onLead}>{orderedMembers(m).map(id => <Menu.RadioItem className="compact-option" key={id} value={id}><Avatar id={id}/><span>{person(id).displayName}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator></Menu.RadioItem>)}</Menu.RadioGroup>)}

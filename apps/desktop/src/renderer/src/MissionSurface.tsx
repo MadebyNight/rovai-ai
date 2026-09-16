@@ -46,7 +46,7 @@ export function MissionSurface({ enabled = true, full, onExpand, onClose, childr
     const value = release()
     if (value) setWidth(value.before)
     latestExpand.current()
-    requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>('button[aria-label="折叠到右侧抽屉"]')?.focus({ preventScroll: true }))
+    requestAnimationFrame(() => root.current?.querySelector<HTMLButtonElement>('button[aria-label="折叠为使命抽屉"]')?.focus({ preventScroll: true }))
   }
 
   function hidePreviewBeforeConversationCompacts(previous: number, next: number) {

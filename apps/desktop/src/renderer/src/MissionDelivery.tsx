@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentProfile, MissionActivity, MissionChangedFile, MissionDelivery as Delivery, MissionFileDiff, MissionRecord } from '@contracts'
 import { useCampClient } from './camp-client'
 import { AttachmentCard } from './AttachmentCard'
 import { CompactDialog, Icon, statuses } from './MissionControls'
 import { missionCommand, missionError } from './useMissions'
+import { readErrorMessage } from './error-message'
 import { missionDate } from './MissionBoard'
 import { useFilePreview } from './FilePreviewContext'
 import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
@@ -43,7 +44,7 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { 
         {data.git && data.workspace && <><div className="mission-evidence-row"><Icon name="branch"/><code>{data.workspace.branch}</code></div><div className="mission-evidence-row"><span>来源</span><code>{data.workspace.baseBranch ?? 'detached HEAD'}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div></>}
         {data.workspace?.diagnostic && <p className="mission-load-error" role="alert">{data.workspace.diagnostic}</p>}
       </div>
-      {data.git && <MissionChanges mission={mission} revision={revision}/>}
+      {data.git && <MissionChanges mission={mission}/>}
       <section className="mission-delivery-section"><div className="mission-delivery-heading"><h3>Pull Requests <span>{data.pullRequests.length || ''}</span></h3><button className="mission-icon-button" aria-label="关联 Pull Request" onClick={() => setAddingPr(v => !v)}><Icon name="plus"/></button></div>
         {addingPr && <form className="mission-pr-form" onSubmit={e => { e.preventDefault(); void linkPr(url.trim()) }}><input type="url" aria-label="Pull Request 链接" placeholder="粘贴 Pull Request 链接" required value={url} onChange={e => setUrl(e.target.value)} disabled={prBusy} autoFocus/><button className="compact-primary" disabled={prBusy || !url.trim()}>关联</button><button className="compact-cancel" type="button" disabled={prBusy} onClick={() => setAddingPr(false)}>取消</button></form>}
         {prError && <p className="compact-inline-error" role="alert">{prError}</p>}
@@ -58,33 +59,122 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { 
   </section>
 }
 
-function MissionChanges({ mission, revision }: { mission: MissionRecord; revision: number }) {
-  const client = useCampClient(), [files, setFiles] = useState<MissionChangedFile[] | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0), [selected, setSelected] = useState<string | null>(null)
+const MISSION_DIFF_CACHE_LIMIT = 24
+const MISSION_DIFF_REQUEST_DELAY_MS = 32
+type MissionDiffStore = {
+  epoch: number
+  cache: Map<string, MissionFileDiff>
+  inFlight: Map<string, Promise<MissionFileDiff>>
+}
+function putMissionDiff(store: MissionDiffStore, fileId: string, diff: MissionFileDiff) {
+  store.cache.delete(fileId)
+  store.cache.set(fileId, diff)
+  while (store.cache.size > MISSION_DIFF_CACHE_LIMIT) {
+    const oldest = store.cache.keys().next().value as string | undefined
+    if (!oldest) break
+    store.cache.delete(oldest)
+  }
+}
+function eventCampId(params: unknown): string | null {
+  return typeof params === 'object' && params !== null && typeof (params as Record<string, unknown>).campId === 'string'
+    ? (params as Record<string, string>).campId
+    : null
+}
+function staleMissionDiffSnapshot(error: unknown): boolean {
+  const message = readErrorMessage(error)
+  return message.includes('mission.changes_refresh_required') || message.includes('mission.file_no_longer_changed')
+}
+
+function MissionChanges({ mission }: { mission: MissionRecord }) {
+  const client = useCampClient(), [files, setFiles] = useState<MissionChangedFile[] | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0), [selected, setSelected] = useState<string | null>(null), [snapshotReady, setSnapshotReady] = useState(false), [snapshotEpoch, setSnapshotEpoch] = useState(0)
   const generation = useRef(0)
+  const diffStore = useRef<MissionDiffStore>({ epoch: 0, cache: new Map(), inFlight: new Map() })
+  const refreshChanges = useCallback(() => {
+    const store = diffStore.current
+    store.epoch += 1
+    store.cache.clear()
+    store.inFlight.clear()
+    setSnapshotReady(false)
+    setSnapshotEpoch(store.epoch)
+    setRefresh(value => value + 1)
+  }, [])
+  const requestDiff = useCallback((fileId: string) => {
+    const store = diffStore.current
+    const cached = store.cache.get(fileId)
+    if (cached) return Promise.resolve(cached)
+    const pending = store.inFlight.get(fileId)
+    if (pending) return pending
+    const epoch = store.epoch
+    const request = client.request<MissionFileDiff>('missions.fileDiff', { missionId: mission.missionId, fileId })
+      .then(diff => {
+        if (diffStore.current.epoch === epoch) putMissionDiff(diffStore.current, fileId, diff)
+        return diff
+      })
+      .finally(() => {
+        if (diffStore.current.inFlight.get(fileId) === request) diffStore.current.inFlight.delete(fileId)
+      })
+    store.inFlight.set(fileId, request)
+    return request
+  }, [client, mission.missionId])
   useEffect(() => {
-    const current = ++generation.current; setLoading(true)
-    void client.request<MissionChangedFile[]>('missions.changes', { missionId: mission.missionId }).then(files => { if (current === generation.current) { setFiles(files); setError('') } }).catch(error => { if (current === generation.current) setError(missionError(error)) }).finally(() => { if (current === generation.current) setLoading(false) })
+    const current = ++generation.current; setLoading(true); setSnapshotReady(false)
+    void client.request<MissionChangedFile[]>('missions.changes', { missionId: mission.missionId }).then(files => { if (current === generation.current) { setFiles(files); setSelected(selected => selected && files.some(file => file.id === selected) ? selected : null); setError(''); setSnapshotReady(true) } }).catch(error => { if (current === generation.current) setError(missionError(error)) }).finally(() => { if (current === generation.current) setLoading(false) })
     return () => { ++generation.current }
-  }, [client, mission.missionId, mission.updatedAt, mission.runningAgentIds.join(','), revision, refresh])
-  return <section className="mission-delivery-section"><div className="mission-delivery-heading"><h3>累计文件变更 <span>{files && !error ? files.length : ''}</span></h3><button className="mission-icon-button" aria-label="刷新累计文件变更" disabled={loading} onClick={() => setRefresh(v => v + 1)}><Icon name="refresh"/></button></div>
+  }, [client, mission.missionId, refresh])
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = client.onEvent?.(event => {
+      if (event.method !== 'agent_run.terminal') return
+      const campId = eventCampId(event.params)
+      if (campId && campId !== mission.campId) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(refreshChanges, 120)
+    })
+    return () => { if (timer) clearTimeout(timer); unsubscribe?.() }
+  }, [client, mission.campId, refreshChanges])
+  useEffect(() => () => {
+    const store = diffStore.current
+    store.epoch += 1
+    store.cache.clear()
+    store.inFlight.clear()
+    void client.request('missions.diffSession.release', { missionId: mission.missionId }).catch(() => undefined)
+  }, [client, mission.missionId])
+  return <section className="mission-delivery-section"><div className="mission-delivery-heading"><h3>累计文件变更 <span>{files && !error ? files.length : ''}</span></h3><button className="mission-icon-button" aria-label="刷新累计文件变更" disabled={loading} onClick={refreshChanges}><Icon name="refresh"/></button></div>
     {loading && !files && <p className="mission-section-empty" role="status">正在读取工作区…</p>}
-    {error ? <div className="mission-diff-error" role="status"><p>{error}</p><button className="compact-cancel" disabled={loading} onClick={() => setRefresh(v => v + 1)}>重新读取</button></div> : files?.length === 0 ? <p className="mission-section-empty">当前没有文件变更。</p> : files?.map(file => <button className="mission-changed-file" key={file.id} onClick={() => setSelected(file.id)}>
+    {error ? <div className="mission-diff-error" role="status"><p>{error}</p><button className="compact-cancel" disabled={loading} onClick={refreshChanges}>重新读取</button></div> : files?.length === 0 ? <p className="mission-section-empty">当前没有文件变更。</p> : files?.map(file => <button className="mission-changed-file" key={file.id} onClick={() => setSelected(file.id)}>
       <span className={`mission-file-kind is-${file.kind}`}>{kinds[file.kind] ?? '变化'}</span><span className="mission-changed-path"><strong>{file.path}</strong>{file.oldPath && <small>{file.oldPath} →</small>}</span><DiffCount file={file}/><Icon name="chevron-right"/>
     </button>)}
-    {selected && files && <MissionDiff missionId={mission.missionId} files={files} selected={selected} onSelect={setSelected} onClose={() => setSelected(null)}/>}
+    {selected && files && <MissionDiff files={files} selected={selected} snapshotReady={snapshotReady} snapshotEpoch={snapshotEpoch} cache={diffStore.current.cache} requestDiff={requestDiff} onSnapshotStale={refreshChanges} onSelect={setSelected} onClose={() => setSelected(null)}/>}
   </section>
 }
 function DiffCount({file}: {file: MissionChangedFile}) {
   return file.binary ? <span className="mission-file-binary">二进制</span> : <span className="mission-diff-counts"><span>+{file.additions ?? 0}</span><span>−{file.deletions ?? 0}</span></span>
 }
-function MissionDiff({missionId, files, selected, onSelect, onClose}: {missionId: string; files: MissionChangedFile[]; selected: string; onSelect(id: string): void; onClose(): void}) {
-  const client = useCampClient(), [diff, setDiff] = useState<MissionFileDiff | null>(null), [error, setError] = useState(''), [retry, setRetry] = useState(0)
-  useEffect(() => { let current = true; setDiff(null); setError(''); void client.request<MissionFileDiff>('missions.fileDiff', {missionId, fileId: selected}).then(diff => {if(current) setDiff(diff)}).catch(error => {if(current) setError(missionError(error))}); return () => {current=false} }, [client, missionId, selected, retry])
+function MissionDiff({files, selected, snapshotReady, snapshotEpoch, cache, requestDiff, onSnapshotStale, onSelect, onClose}: {files: MissionChangedFile[]; selected: string; snapshotReady: boolean; snapshotEpoch: number; cache: Map<string, MissionFileDiff>; requestDiff(fileId: string): Promise<MissionFileDiff>; onSnapshotStale(): void; onSelect(id: string): void; onClose(): void}) {
+  const [result, setResult] = useState<{ fileId: string; epoch: number; diff: MissionFileDiff } | null>(null), [failure, setFailure] = useState<{ fileId: string; epoch: number; message: string } | null>(null), [retry, setRetry] = useState(0)
+  const requestGeneration = useRef(0)
+  const cached = cache.get(selected)
+  const diff = cached ?? (result?.fileId === selected && result.epoch === snapshotEpoch ? result.diff : null)
+  const error = failure?.fileId === selected && failure.epoch === snapshotEpoch ? failure.message : ''
+  useEffect(() => {
+    const generation = ++requestGeneration.current
+    setFailure(null)
+    if (!snapshotReady || cache.has(selected)) return
+    const timer = setTimeout(() => {
+      void requestDiff(selected).then(diff => {
+        if (generation === requestGeneration.current) setResult({ fileId: selected, epoch: snapshotEpoch, diff })
+      }).catch(error => {
+        if (generation !== requestGeneration.current) return
+        if (staleMissionDiffSnapshot(error)) { onSnapshotStale(); return }
+        setFailure({ fileId: selected, epoch: snapshotEpoch, message: missionError(error) })
+      })
+    }, MISSION_DIFF_REQUEST_DELAY_MS)
+    return () => { clearTimeout(timer); ++requestGeneration.current }
+  }, [cache, onSnapshotStale, requestDiff, retry, selected, snapshotEpoch, snapshotReady])
   return <CompactDialog title="累计文件变更" className="mission-diff-dialog" onClose={onClose}>
     <div className="mission-diff-layout"><nav className="mission-diff-file-list" aria-label="变更文件">{files.map(file => <button key={file.id} aria-current={selected===file.id} onClick={() => onSelect(file.id)}><span>{file.path}</span><DiffCount file={file}/></button>)}</nav>
-      <section className="mission-diff-reading" aria-label="文件差异">{error ? <div className="mission-diff-error" role="alert"><p>{error}</p><button className="compact-cancel" onClick={() => setRetry(v => v + 1)}>重试</button></div> : !diff ? <p className="mission-diff-state" role="status">正在读取文件差异…</p> : <>
+      <section className="mission-diff-reading" aria-label="文件差异">{error ? <div className="mission-diff-error" role="alert"><p>{error}</p><button className="compact-cancel" onClick={() => setRetry(v => v + 1)}>重试</button></div> : !diff ? <p className="mission-diff-state" role="status">{snapshotReady ? '正在读取文件差异…' : '正在更新文件清单…'}</p> : <>
         <header><strong>{diff.file.path}</strong><span>{kinds[diff.file.kind]}</span></header>
-        {diff.file.oldMode !== diff.file.newMode && <p className="mission-diff-note">Git 文件模式：{diff.file.oldMode} → {diff.file.newMode}</p>}
         {diff.file.binary ? <p className="mission-diff-note">二进制文件已变化。</p> : diff.hunks.length ? <div className="mission-diff-code" role="table" aria-label="差异行">{diff.hunks.map((hunk, i) => <div key={i} role="rowgroup"><div className="mission-diff-hunk" role="row">@@ −{hunk.oldStart} +{hunk.newStart} @@</div>{hunk.lines.map((line, j) => <div className={`mission-diff-line is-${line.kind}`} role="row" key={j}><span role="cell" className="mission-line-number">{line.oldLine ?? ''}</span><span role="cell" className="mission-line-number">{line.newLine ?? ''}</span><code role="cell"><span aria-hidden="true">{line.kind === 'addition' ? '+' : line.kind === 'deletion' ? '−' : ' '}</span>{line.text}</code></div>)}</div>)}</div> : <p className="mission-diff-note">没有文本行差异。</p>}
       </>}</section>
     </div>

@@ -11,11 +11,13 @@ Desktop and wide Web add a 使命板 entry using the existing shell and theme. I
 Missions, independently of unread messages and running Agents. Ordinary project/recent/pin navigation does
 not duplicate Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user to desktop.
 
-Cards open from their entire surface, including keyboard activation; nested avatar/menu controls keep
-their own actions. The metadata label uses the stable public number (`M-018`), never an opaque ID suffix.
-Show all member avatars with the lead first, project followed by tags, and a plain
-relative timestamp such as “昨天”. Card, list and opened-Mission menus share this order: 编辑使命、状态、
-查看队员、队长、标签、删除. Click opens
+Cards open from their entire surface, including keyboard activation. Card actions have no visible ellipsis;
+right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
+(`M-018`), never an opaque ID suffix. Show all member avatars with the lead first, project followed by tags,
+and a plain relative timestamp such as “昨天”. An active card places at most three running-member avatars,
+the remaining `+N`, and the execution-console sweep text “执行中” in one muted row at the upper right.
+Unread uses a message icon plus “未读” in the footer rather than a small isolated dot. Card and list menus
+share this order: 编辑、状态、查看队员、队长、标签、删除. Click opens
 submenus; chevrons use the existing 16px icon rhythm. Tags use a lightweight search/create/check popover.
 Status/tag/project filters use matching icon triggers and neutral filled multi-select checkboxes. No selection
 means all, without an extra “all” option. Project and tag pickers have search; status does not. Search and the
@@ -24,7 +26,9 @@ surface in Day and its Night equivalent. Its title/subtitle use the same 34px ov
 Memory and Scheduled Automation, align with shell controls, and lead into four equally tall,
 very light neutral rounded lanes, including empty lanes. List mode groups and folds rows by status.
 Lanes retain at least 200px at narrow widths or increased zoom; the board scrolls horizontally rather than squeezing card content.
-Tags reuse the eight stable identity colors, independent of Mission status.
+Dragging a card to another lane submits the same authoritative status command as the menu; both user and
+Agent status activity render only the actor and resulting status. Tags reuse the eight stable identity colors,
+independent of Mission status.
 
 Creation reuses the production New Conversation directory, membership, lead and default-team controls.
 Title/description follow Automation's field hierarchy without repeated miniheadings. Cancel remains on
@@ -34,7 +38,7 @@ No independent-workspace checkbox is offered; Core decides from the selected pro
 creation retains its draft and command identity for safe retry.
 
 Edit opens a focused dialog matching creation's field treatment. Only title and optional description are
-present, with visible labels, Cancel and Save. Save is disabled until normalized content differs and validates
+present, with accessible visually hidden labels, Cancel and Save. Save is disabled until normalized content differs and validates
 against 1–200 title / 12,000 description limits. It submits the internal revision captured when opened.
 A stale edit stays open, replaces both fields with the latest definition and asks the user to edit again.
 Success closes the dialog and refreshes the board, opened Mission, conversation title and main Camp title.
@@ -78,10 +82,15 @@ After an automatic resize-driven hide, the far-right toggle can still reopen an 
 compact preview. Compact preview and source-message navigation preserve the conversation and draft.
 
 Delivery shows the actual directory and, for Git, associated branch/base and cumulative changes. It has no
-“工作区信息” wrapper or explanatory net-change subtitle. Overview loads file Diff on demand, preserving
-binary/type/rename/Git-mode information and explicit computation failures. Agent files reuse AttachmentCard,
-file preview and source-message navigation. Activity displays actual Mission history. Deletion identifies
-the associated workspace and retained branch; failed cleanup remains visible and retryable.
+“工作区信息” wrapper or explanatory net-change subtitle. Opening the section reads the changed-file list;
+switching files requests only the selected Diff. A bounded per-Mission memory cache restores a viewed file
+without clearing its content or flashing loading state. Cache misses never show the prior file beneath a new
+selection; duplicate requests coalesce and late responses cannot replace the current selection. Explicit
+refresh and coalesced Run-terminal/workspace invalidation clear the cache and update the list; definition-only
+edits do not. Binary/type/rename data and Git modes remain in the contract, but the dialog does not print a
+raw “Git 文件模式” row. Agent files reuse AttachmentCard, file preview and source-message navigation.
+Activity displays actual Mission history. The delete confirmation is intentionally concise and does not repeat
+the Mission title, worktree path or branch; failed cleanup remains visible and retryable after deletion.
 Each explicit source-link click positions and highlights its message once. After presentation, clear that
 focus request even when there is no notification acknowledgement waiter; snapshot updates must not replay
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,

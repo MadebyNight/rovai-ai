@@ -88,6 +88,7 @@ export const WEB_OPERATIONS = [
   'missions.delivery',
   'missions.changes',
   'missions.fileDiff',
+  'missions.diffSession.release',
   'missions.create',
   'missions.update',
   'missions.status',

@@ -83,11 +83,17 @@ failures remain visible and retryable. Cleanup never deletes unrelated paths or 
 
 The comparison is always fixed `base_sha` versus current worktree content: committed, staged and
 unstaged changes form one final net result. Reverting content to the base removes that difference.
-Each query uses a private temporary index, copies the actual index, registers untracked non-ignored
-files with intent-to-add, then invokes Git Diff. The real index and HEAD are not mutated. Git exclusions
-apply to untracked files; tracked files remain part of the comparison.
+`missions.changes` creates or replaces a bounded current-browser snapshot: it copies the actual index into
+a private temporary index, registers untracked non-ignored files with intent-to-add, invokes Git Diff once,
+and retains the resulting opaque file-ID to raw old/new-path mapping. The real index and HEAD are not mutated.
+Git exclusions apply to untracked files; tracked files remain part of the comparison.
 
 Overview returns opaque file ID, path/old path, kind, line counts, binary flag and old/new Git mode.
+`missions.fileDiff` requires that current snapshot and computes only its mapped path or rename path pair;
+it does not call the overview scan. A missing, expired or mismatched mapping returns
+`mission.changes_refresh_required`, after which Renderer refreshes the overview before retrying. Repeated
+file requests may reuse the private index while the snapshot is valid. `missions.diffSession.release` drops
+the process-local snapshot; capacity eviction and a ten-minute idle expiry are additional cleanup bounds.
 Single-file Diff is loaded on demand with hunks and line numbers. Renames, deletions, type changes and
 Git executable-bit changes are retained; arbitrary filesystem permission/ACL changes are outside Git's
 contract. Binary files have file-level records without ordinary text hunks. No complete patch history or
@@ -96,7 +102,7 @@ an explicit reason, never a false empty Diff.
 
 ## Surfaces
 
-Desktop and wide Web share `missions.list|get|activity|delivery|changes|fileDiff`, user commands
+Desktop and wide Web share `missions.list|get|activity|delivery|changes|fileDiff|diffSession.release`, user commands
 `missions.create|update|status|start|linkPr`, and orphan cleanup `missions.cleanup.list|retry`.
 User commands use the existing command envelope and receipts. Deletion uses `camps.delete`.
 Delivery includes current directory, Git association, linked PRs, and same-Camp available Agent-published

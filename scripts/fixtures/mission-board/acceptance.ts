@@ -22,6 +22,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(card.querySelector('.mission-card-meta > span')?.textContent === 'M-018', 'Mission card uses the stable display number')
   check(card.querySelectorAll('.mission-avatar-item').length === 4, 'All members appear on the card')
   check(card.querySelector('.mission-card-project')?.nextElementSibling?.classList.contains('mission-tags'), 'Tags follow the project')
+  check(card.querySelector('.mission-unread-message')?.textContent === '未读', 'Unread Mission uses the approved message icon and label')
+  check(!card.querySelector('.mission-unread-dot'), 'Unread state no longer relies on the old blue dot')
+  check(!document.querySelector('.mission-card-actions'), 'Cards expose actions only through the context menu')
+  const running = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.querySelector('.mission-running'))!
+  const runningChildren = Array.from(running.querySelector('.mission-running')!.children).map(node => node.getBoundingClientRect())
+  check(running.querySelectorAll('.mission-running-avatars .member-avatar').length === 3, 'Running state shows at most three avatars')
+  check(running.querySelector('.mission-running > small')?.textContent === '+1', 'Additional running members collapse into +N')
+  check(running.querySelector('.running-text-highlight'), 'Running label reuses the execution-console sweep')
+  check(new Set(runningChildren.map(bounds => Math.round(bounds.y))).size === 1, '+N and running text share one vertical row')
   const lanes = [...document.querySelectorAll<HTMLElement>('.mission-column')]
   check(lanes.length === 4 && new Set(lanes.map(n => n.clientHeight)).size === 1, 'Four equal lanes')
   check(!document.querySelector('.mission-column header button'), 'No create control in status lanes')
@@ -32,7 +41,16 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const boardScroll = document.querySelector<HTMLElement>('.mission-board-scroll')!
   check(boardScroll.scrollWidth > boardScroll.clientWidth, 'Narrow board scrolls across lanes')
   document.documentElement.style.zoom = ''; await frames()
-  cases.push('board has equal lanes, full roster, automatic tag colors and a stable header')
+  const dragged = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes('M-016'))!
+  const progressLane = Array.from(document.querySelectorAll<HTMLElement>('.mission-column')).find(node => node.querySelector('h2')?.textContent === '进行中')!
+  const transfer = new DataTransfer()
+  dragged.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+  await frames()
+  progressLane.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+  progressLane.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+  await until(() => qa.items[2].status === 'in_progress' && progressLane.textContent?.includes('更新首次使用引导文案'), 'Dragging a Mission updates its status')
+  check(qa.calls.some((call:any) => call.method === 'missions.status' && call.p.command?.missionId === qa.items[2].missionId), 'Drag uses the authoritative status command')
+  cases.push('board has equal lanes, stable metadata, running and unread states, and status drag-and-drop')
 
   button('状态筛选').click()
   await until(() => document.querySelector('.mission-unified-filter'), 'Status filter opens')
@@ -48,12 +66,14 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   button('项目筛选').click()
   cases.push('filters share multi-select checkboxes; only project and tags have search')
 
-  document.querySelector<HTMLButtonElement>('.mission-card-actions')!.click()
-  const editAction = () => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '编辑使命')
+  card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: card.getBoundingClientRect().left + 20, clientY: card.getBoundingClientRect().top + 20 }))
+  const editAction = () => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '编辑')
   await until(editAction, 'Mission actions expose edit first')
   editAction()!.click()
   await until(() => document.querySelector('.mission-edit-dialog'), 'Edit dialog opens')
-  check(document.querySelector('label[for$="-title"]')?.textContent === '使命标题', 'Edit fields have visible labels')
+  const editLabel = document.querySelector<HTMLElement>('label[for$="-title"]')!
+  check(editLabel.textContent === '使命标题' && editLabel.getBoundingClientRect().width <= 1, 'Edit labels remain accessible without repeating the creation hierarchy')
+  check(document.querySelector('.mission-edit-dialog .automation-name-input') && document.querySelector('.mission-edit-dialog .automation-prompt-input'), 'Edit reuses the creation field treatment')
   check(button('保存').disabled, 'Unchanged Mission cannot be saved')
   const editing = qa.items[0]
   editing.title = '另一处刚更新的标题'; editing.detailsVersion += 1
@@ -65,6 +85,14 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   button('保存').click()
   await until(() => !document.querySelector('.mission-edit-dialog'), 'Fresh edit saves')
   check(editing.title === '基于最新内容编辑' && editing.detailsVersion === 3, 'Edit advances internal details version once')
+  card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: card.getBoundingClientRect().left + 20, clientY: card.getBoundingClientRect().top + 20 }))
+  await until(() => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).some(item => item.textContent?.trim() === '删除'), 'Context menu can reopen for deletion')
+  Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '删除')!.click()
+  await until(() => document.querySelector('.mission-delete-dialog') && !button('删除使命').disabled, 'Delete dialog resolves the cleanup authority')
+  const deleteText = document.querySelector('.mission-delete-dialog')!.textContent ?? ''
+  check(deleteText.includes('此操作无法撤销') && !deleteText.includes(editing.title) && !deleteText.includes('/workspace/') && !deleteText.includes('rovai/mission/'), 'Delete dialog is concise and hides redundant Mission/worktree details')
+  button('取消').click()
+  await until(() => !document.querySelector('.mission-delete-dialog'), 'Delete dialog cancels')
   cases.push('edit is shared by card actions and reloads latest details after an optimistic conflict')
 
   const previewFits = () => {
@@ -94,8 +122,8 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-full'), 'Full conversation opens')
   check(document.getElementById('camp-message') === editor && editor.textContent?.includes('使命会话草稿'), 'Same Composer instance and draft after expanding')
   check(document.querySelector('.mission-session-header .context-project')?.textContent === 'rovai-ai', 'Full header shows project')
-  check(button('折叠到右侧抽屉').querySelector('path')?.getAttribute('d') === 'M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5', 'Full header uses the v10 fold-to-drawer glyph')
-  button('折叠到右侧抽屉').click()
+  check(button('折叠为使命抽屉').querySelector('path')?.getAttribute('d') === 'M12.5 3.5v13', 'Full header uses the approved right-panel fold glyph')
+  button('折叠为使命抽屉').click()
   await until(() => document.querySelector('.mission-drawer'), 'Fold restores drawer')
   check(document.getElementById('camp-message') === editor, 'Folding retains the editor')
   cases.push('drawer/full headers and four Camp entries share one Composer without execution auto-open')
@@ -106,8 +134,31 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-delivery-file') && visiblePreview(), 'Activity reopens')
   document.querySelector<HTMLButtonElement>('.mission-changed-file')!.click()
   await until(() => document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog opens')
+  await until(() => document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'First selected file diff loads')
   const diffDialogWidth = document.querySelector('.mission-diff-dialog')!.getBoundingClientRect().width
   check(Math.abs(diffDialogWidth - 1320) <= 1, `Cumulative diff dialog uses the approved desktop width (${diffDialogWidth}px)`)
+  check(!document.querySelector('.mission-diff-dialog')!.textContent?.includes('Git 文件模式'), 'Cumulative diff omits raw Git mode rows')
+  const diffButton = (path: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('.mission-diff-file-list button')).find(node => node.textContent?.includes(path))!
+  const diffCalls = (fileId: string) => qa.calls.filter((call:any) => call.method === 'missions.fileDiff' && call.p.fileId === fileId).length
+  const worker = diffButton('src/worker.ts'), mission = diffButton('src/mission.ts')
+  worker.click(); mission.click()
+  await new Promise(resolve => setTimeout(resolve, 70))
+  check(diffCalls('file-b') === 0, 'A superseded file selection is cancelled before its Git request starts')
+  worker.click()
+  await until(() => diffCalls('file-b') === 1, 'The latest selected file starts one Git request')
+  mission.click()
+  await new Promise(resolve => setTimeout(resolve, 140))
+  check(document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'A late response cannot replace the current file')
+  worker.click(); await frames()
+  check(document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/worker.ts' && !document.querySelector('.mission-diff-state'), 'Returning to a viewed file uses cache without a loading flash')
+  check(diffCalls('file-b') === 1, 'Cached file Diff is not requested again')
+  const changeReads = qa.calls.filter((call:any) => call.method === 'missions.changes').length
+  qa.invalidateMissionDetails(); await new Promise(resolve => setTimeout(resolve, 180))
+  check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads, 'Mission definition invalidation does not rescan Git Diff')
+  qa.terminalMissionRun(qa.items[0].campId); qa.terminalMissionRun(qa.items[0].campId); qa.terminalMissionRun(qa.items[0].campId)
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 1, 'Run completion refreshes the change list')
+  await new Promise(resolve => setTimeout(resolve, 180))
+  check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 1, 'Burst workspace invalidations coalesce into one refresh')
   document.querySelector<HTMLButtonElement>('.mission-diff-dialog .compact-close')!.click()
   await until(() => !document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog closes')
   document.querySelector<HTMLButtonElement>('.mission-delivery-file .attachment-open')!.click()
@@ -119,6 +170,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(fileReader.isConnected, 'File reader survives activity switch')
   document.querySelector<HTMLButtonElement>('.file-preview-tab-close')!.click()
   await until(() => !visiblePreview(), 'Closing last file hides preview')
+  cases.push('Diff switching uses bounded cache, ignores stale responses, and coalesces workspace refreshes')
   cases.push('activity toggle closes actual tab, falls back to retained file, and last close hides preview')
 
   button('活动').click()

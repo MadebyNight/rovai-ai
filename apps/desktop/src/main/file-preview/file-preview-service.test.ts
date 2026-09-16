@@ -825,6 +825,43 @@ describe('FilePreviewService', () => {
     expect(native.selectRoot).not.toHaveBeenCalled()
   })
 
+  it('opens new and same-named Mission files from the Run execution root', async () => {
+    const { root: projectRoot, service, authority, native } = await fixture()
+    const executionRoot = await mkdtemp(join(tmpdir(), 'rovai-mission-worktree-preview-'))
+    directories.push(executionRoot)
+    await mkdir(join(projectRoot, 'src'), { recursive: true })
+    await mkdir(join(executionRoot, 'src'), { recursive: true })
+    await writeFile(join(projectRoot, 'src', 'same.txt'), 'original project')
+    await writeFile(join(executionRoot, 'src', 'same.txt'), 'mission worktree')
+    await writeFile(join(executionRoot, 'src', 'added.txt'), 'new in mission')
+    vi.spyOn(authority, 'resolve').mockImplementation(async (input) => {
+      if (input.kind !== 'run_evidence') return null
+      const rawReference = input.evidenceFileId === 'added' ? 'src/added.txt' : 'src/same.txt'
+      return {
+        kind: 'file_target', campId: 'camp-1', sourceKind: 'run_evidence',
+        sourceIdentity: `run-evidence:run-1:1:${input.evidenceFileId}`,
+        rootPath: executionRoot, basePath: executionRoot, rawReference, allowChildren: true
+      }
+    })
+
+    for (const [evidenceFileId, expected] of [['added', 'new in mission'], ['same', 'mission worktree']] as const) {
+      const opened = await service.open(1, {
+        kind: 'run_evidence', campId: 'camp-1', agentRunId: 'run-1', executionEpoch: 1,
+        evidenceFileId, action: 'open_current'
+      })
+      expect(opened).toMatchObject({ ok: true, value: { kind: 'file_preview', file: {
+        displayPath: `src/${evidenceFileId}.txt`, pathPresentation: 'project_relative'
+      } } })
+      if (!opened.ok || opened.value.kind !== 'file_preview') continue
+      expect(await service.readText(1, {
+        handleId: opened.value.file.handleId,
+        expectedGeneration: opened.value.file.contentGeneration
+      })).toMatchObject({ ok: true, value: { text: expected } })
+    }
+    expect(native.selectRoot).not.toHaveBeenCalled()
+    expect(native.openPath).not.toHaveBeenCalled()
+  })
+
   it('keeps root grants for an explicit external directory operation', async () => {
     const { root, service, native } = await fixture()
     const outside = await mkdtemp(join(tmpdir(), 'rovai-file-preview-grant-'))

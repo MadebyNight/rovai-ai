@@ -364,9 +364,6 @@ button.mission-tag { cursor: pointer; }
 .mission-commission h3 { margin: 6px 0 0; font-size: 13px; font-weight: 550; }
 .mission-commission p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.7; }
 
-.mission-unread-dot { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--info); vertical-align: middle; }
-
-
 /* Retained previews share the Mission drawer's visible layer without remounting. */
 .app-shell:has(.mission-drawer) > .file-preview-retained-host { z-index: 21; border-bottom-right-radius: 14px; overflow: hidden; }
 
@@ -451,9 +448,21 @@ button.mission-tag { cursor: pointer; }
 .mission-board-scroll > .mission-board { min-height: 100%; gap: 12px; max-width: none; margin: 0; align-items: stretch; }
 .mission-board-card .mission-card-open h3 { margin: 0; }
 .mission-card-footer { padding-top: 11px; }
+.mission-card-top-actions { display: flex; flex: 0 0 auto; min-width: 0; align-items: center; justify-content: flex-end; margin-left: auto; }
+.mission-running { display: inline-flex; min-width: 0; align-items: center; gap: 5px; color: var(--muted); font-size: 11.5px; line-height: 18px; white-space: nowrap; }
+.mission-running-avatars { display: inline-flex; align-items: center; padding-left: 3px; }
+.mission-running-avatars .member-avatar { --member-avatar-size: 18px !important; border: 1px solid var(--surface-raised); }
+.mission-running-avatars .member-avatar + .member-avatar { margin-left: -6px; }
+.mission-running > small { color: inherit; font: inherit; }
+.mission-unread-message { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; margin-right: 8px; color: var(--info); font-size: 11px; white-space: nowrap; }
+.mission-unread-message > .navigation-icon { width: 13px; height: 13px; flex: 0 0 13px; }
+.mission-card-footer:has(.mission-unread-message) > time { margin-left: 0; }
+.mission-board-card.is-dragging { opacity: .48; }
+.mission-column.is-drop-target { background: color-mix(in srgb,var(--info) 5%,var(--mission-lane)); outline: 1px dashed color-mix(in srgb,var(--info) 55%,var(--line)); outline-offset: -1px; }
+.mission-action-submenu .mission-state-glyph { flex: 0 0 14px; min-width: 14px; max-width: 14px; width: 14px; height: 14px; }
 .mission-state-glyph.is-in_progress::after { background: var(--info); clip-path: inset(0 50% 0 0); }
 .mission-list-cards[hidden] { display: none; }
-.mission-list-cards .mission-board-card { grid-template-columns: minmax(160px,2fr) minmax(155px,1.4fr) minmax(145px,1fr) 28px; }
+.mission-list-cards .mission-board-card { grid-template-columns: minmax(160px,2fr) minmax(155px,1.4fr) minmax(145px,1fr) 112px; }
 .mission-list-cards .mission-card-meta { grid-column: 4; }
 .mission-list-cards .mission-project-tags { grid-column: 2; }
 .mission-list-cards .mission-card-footer { grid-column: 3; }
@@ -492,7 +501,11 @@ button.mission-tag { cursor: pointer; }
 .mission-definition-fields > label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-weight: 550; }
 .mission-definition-fields > label:not(:first-child) { margin-top: 4px; }
 .mission-definition-fields > label > span { font-weight: 400; }
-.mission-edit-dialog .mission-definition-fields { gap: 6px; }
+.mission-edit-dialog .mission-edit-fields { gap: 14px; }
+.mission-edit-dialog .mission-edit-fields > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.mission-edit-dialog .mission-edit-fields > .automation-name-input { padding: 3px 0 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; font-size: 18px !important; font-weight: 600 !important; line-height: 1.5; }
+.mission-edit-dialog .mission-edit-fields > .automation-prompt-input { min-height: 112px; padding: 12px; border: 1px solid var(--dialog-field-line); border-radius: 10px; background: var(--input); font-size: 13px !important; line-height: 1.65 !important; }
+.mission-delete-summary { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.75; }
 .mission-preview-slot { position: relative; }
 .mission-preview-slot > .file-preview-tabs { --file-preview-tabs-end-padding: 6px; height: 38px; flex: 0 0 38px; padding-block: 5px; border-bottom: 1px solid var(--line); }
 .mission-preview-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }

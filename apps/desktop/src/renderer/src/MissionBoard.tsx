@@ -6,7 +6,8 @@ import { newCommandId } from '../../shared/command-id'
 import { DialogControlIcon } from './AppDialog'
 import { NavigationIcon } from './NavigationIcon'
 import { MissionIcon } from './MissionIcon'
-import { CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, FilterStateIcon, TagMark, statuses, type ContextPosition } from './MissionControls'
+import { Avatar, CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, FilterStateIcon, TagMark, statuses, type ContextPosition } from './MissionControls'
+import { RunningText } from './RunningText'
 import { MissionCommandRejected, missionCommand, missionError } from './useMissions'
 
 type MissionActions = {
@@ -126,12 +127,12 @@ function MissionEdit({ mission, onSave, onClose }: { mission: MissionRecord; onS
     } finally { setBusy(false) }
   }
   return <CompactDialog title="编辑使命" className="mission-edit-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" disabled={busy} onClick={onClose}>取消</button><button className="compact-primary" form={id} disabled={busy || invalid || !changed}>{busy ? '正在保存…' : '保存'}</button></>}>
-    <form id={id} onSubmit={event => { event.preventDefault(); void save() }} className="mission-definition-fields">
+    <form id={id} onSubmit={event => { event.preventDefault(); void save() }} className="mission-definition-fields mission-edit-fields">
       <label htmlFor={`${id}-title`}>使命标题</label>
-      <input id={`${id}-title`} placeholder="使命标题" value={title} onChange={e => setTitle(e.target.value)} disabled={busy} aria-invalid={!!titleError} aria-describedby={titleError ? `${id}-title-error` : undefined} autoFocus/>
+      <input className="automation-name-input" id={`${id}-title`} placeholder="使命标题" value={title} onChange={e => setTitle(e.target.value)} disabled={busy} aria-invalid={!!titleError} aria-describedby={titleError ? `${id}-title-error` : undefined} autoFocus/>
       {titleError && <p id={`${id}-title-error`} role="alert" className="compact-inline-error">{titleError}</p>}
       <label htmlFor={`${id}-description`}>使命描述 <span>可选</span></label>
-      <textarea id={`${id}-description`} placeholder="描述希望完成的使命…" value={description} onChange={e => setDescription(e.target.value)} disabled={busy} aria-invalid={!!descriptionError} aria-describedby={descriptionError ? `${id}-description-error` : undefined} rows={6}/>
+      <textarea className="automation-prompt-input" id={`${id}-description`} placeholder="告诉队员，这次要完成什么…" value={description} onChange={e => setDescription(e.target.value)} disabled={busy} aria-invalid={!!descriptionError} aria-describedby={descriptionError ? `${id}-description-error` : undefined} rows={6}/>
       {descriptionError && <p id={`${id}-description-error`} role="alert" className="compact-inline-error">{descriptionError}</p>}
       {error && <p role="alert" className="compact-inline-error">{error}</p>}
     </form>
@@ -142,8 +143,7 @@ function MissionDelete({ mission, onDelete, onClose }: { mission: MissionRecord;
   useEffect(() => { let current = true; setError(''); void client.request<MissionDelivery>('missions.delivery', { missionId: mission.missionId }).then(data => { if (current) setDelivery(data) }).catch(error => { if (current) setError(missionError(error)) }); return () => { current = false } }, [client, mission.missionId, retry])
   async function remove() { setBusy(true); setError(''); try { await onDelete() } catch (error) { setError(missionError(error)) } finally { setBusy(false) } }
   return <CompactDialog title="删除使命" className="mission-delete-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary mission-delete-confirm" onClick={() => void remove()} disabled={busy || !delivery}>{busy ? '正在删除…' : '删除使命'}</button></>}>
-    <p className="mission-delete-title">{mission.title}</p><p>使命、会话和交付文件将被删除，正在执行的队员会停止。</p>
-    {delivery?.workspace && <div className="mission-delete-workspaces"><p>关联工作区也会删除，Git 分支保留。</p><div><code>{delivery.workspace.worktreePath}</code><small>{delivery.workspace.branch}</small></div></div>}
+    <p className="mission-delete-summary">删除后，使命、会话和交付文件将被一并删除，正在执行的队员会停止。此操作无法撤销。</p>
     {!delivery && !error && <p role="status">正在读取关联工作区…</p>}{error && <p className="compact-inline-error" role="alert">{error}{!delivery && <button className="mission-source-link" onClick={() => setRetry(v => v + 1)}>重试</button>}</p>}
   </CompactDialog>
 }
@@ -154,6 +154,8 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
   const actions = useMissionActions()
   const [query, setQuery] = useState(''), [stateFilter, setStateFilter] = useState<string[]>([]), [tags, setTags] = useState<string[]>([]), [projectFilter, setProjectFilter] = useState<string[]>([]), [view, setView] = useState<'board' | 'list'>('board')
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOverStatus, setDragOverStatus] = useState<MissionStatus | null>(null)
   const catalog = [...new Set(missions.flatMap(m => m.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   const paths = [...new Set(missions.map(m => m.projectPath))]
   const filtered = missions.filter(m => (!stateFilter.length || stateFilter.includes(m.status)) && (!tags.length || tags.some(t => m.tags.includes(t))) && (!projectFilter.length || projectFilter.includes(m.projectPath)) && `${m.title}\n${m.description}\n${m.tags.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
@@ -162,13 +164,14 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
       if (!(event.target instanceof Element) || event.target.closest('button,a,input') || window.getSelection()?.toString()) return
       event.currentTarget.querySelector<HTMLButtonElement>('.mission-card-open')?.focus({ preventScroll: true }); onOpen(m)
     }
-    return <article key={m.missionId} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)}
-      onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); e.currentTarget.querySelector<HTMLButtonElement>('.mission-card-actions')?.click() } }}>
-      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><button className="mission-icon-button mission-card-actions" aria-label={`${m.title}的操作`} onClick={e => actions.menu(m, e)}><Icon name="more"/></button></div>
-      <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.hasUnread && <span className="mission-unread-dot" aria-label="有未读消息"/>}{m.title}</h3></button>
+    return <article key={m.missionId} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}${draggingId === m.missionId ? ' is-dragging' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)} draggable
+      onDragStart={event => { setDraggingId(m.missionId); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', m.missionId) }}
+      onDragEnd={() => { setDraggingId(null); setDragOverStatus(null) }}
+      onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); const bounds = e.currentTarget.getBoundingClientRect(); e.currentTarget.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left, clientY: bounds.bottom })) } }}>
+      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><div className="mission-card-top-actions"><MissionRunning mission={m}/></div></div>
+      <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.title}</h3></button>
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
-      <div className="mission-card-footer"><MissionAvatars m={m} onClick={e => actions.roster(m, e)}/><time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
-      {m.runningAgentIds.length > 0 && <div className="mission-card-presence"><span className="mission-presence"><span className="camp-loading-spinner"/>{m.runningAgentIds.length} 位队员正在执行</span></div>}
+      <div className="mission-card-footer"><MissionAvatars m={m} onClick={e => actions.roster(m, e)}/>{m.hasUnread && <span className="mission-unread-message"><NavigationIcon name="messages"/>未读</span>}<time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
     </article>
   }
   return <section className="mission-board-content mission-board-page" hidden={hidden} aria-label="使命板">
@@ -186,7 +189,10 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     <div className="mission-board-scroll">
       {loading && !missions.length && <p role="status" className="mission-section-empty">正在加载使命…</p>}
       {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${stateFilter.length || statuses.length}, minmax(200px, 1fr))`}}>
-        {statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className="mission-column" key={s.id}>
+        {statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className={`mission-column${dragOverStatus === s.id ? ' is-drop-target' : ''}`} key={s.id}
+          onDragOver={event => { if (!draggingId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverStatus(s.id) }}
+          onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverStatus(current => current === s.id ? null : current) }}
+          onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggingId; const mission = missions.find(candidate => candidate.missionId === id); setDraggingId(null); setDragOverStatus(null); if (mission && mission.status !== s.id) actions.status(mission, s.id) }}>
           <header><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header>
           <div className="mission-column-cards">{filtered.filter(m => m.status === s.id).map(card)}</div>
         </section>)}
@@ -199,6 +205,16 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     </div>
     {!loading && missions.length > 0 && !filtered.length && <p className="mission-section-empty" role="status">没有符合筛选条件的使命。</p>}
   </section>
+}
+
+function MissionRunning({ mission }: { mission: MissionRecord }) {
+  const visible = mission.runningAgentIds.slice(0, 3)
+  if (!visible.length) return null
+  return <span className="mission-running" aria-label={`${mission.runningAgentIds.length} 位队员执行中`}>
+    <span className="mission-running-avatars" aria-hidden="true">{visible.map(id => <Avatar key={id} id={id}/>)}</span>
+    {mission.runningAgentIds.length > 3 && <small aria-hidden="true">+{mission.runningAgentIds.length - 3}</small>}
+    <RunningText text="执行中"/>
+  </span>
 }
 
 function MissionCleanupNotice() {

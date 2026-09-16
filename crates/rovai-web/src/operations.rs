@@ -21,6 +21,8 @@ pub enum Operation {
     MissionChanges,
     #[serde(rename = "missions.fileDiff")]
     MissionFileDiff,
+    #[serde(rename = "missions.diffSession.release")]
+    MissionDiffSessionRelease,
     #[serde(rename = "missions.create")]
     MissionCreate,
     #[serde(rename = "missions.update")]
@@ -395,6 +397,7 @@ impl Operation {
             Self::MissionDelivery => "missions.delivery",
             Self::MissionChanges => "missions.changes",
             Self::MissionFileDiff => "missions.fileDiff",
+            Self::MissionDiffSessionRelease => "missions.diffSession.release",
             Self::MissionCreate => "missions.create",
             Self::MissionUpdate => "missions.update",
             Self::MissionStatus => "missions.status",

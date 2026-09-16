@@ -21,8 +21,12 @@ const model=createReviewModel('web','camp')
 const profiles=[...agents, ...agents.map((agent,i)=>({...agent,agentId:`extra-${i}`,displayName:i?'奥黛丽':'雾切响子'}))]
 const items:MissionRecord[]=[
  ['需要核对窄窗口的目录布局','needs_you',['交互','体验优化']],['补齐使命工作区恢复路径','in_progress',['Core']],['更新首次使用引导文案','not_started',['文案']],['使命累计变更回归测试','completed',['测试']]
-].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:[],hasUnread:i===0}))
+].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.map(a=>a.agentId):[],hasUnread:i===0}))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
+const missionChangedFiles=[
+ {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
+ {id:'file-b',path:'src/worker.ts',oldPath:'src/runner.ts',kind:'renamed',additions:1,deletions:1,binary:false,oldMode:'100644',newMode:'100644'}
+]
 // Hidden Electron acceptance windows still model an attentive foreground user.
 Object.defineProperty(document, 'hasFocus', { value: () => true })
 const notificationJournal: NotificationEpisodeChange[] = []
@@ -104,8 +108,13 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
  if(method==='missions.delivery' && query.has('nonGit'))return {campId:m!.campId,workingDirectory:'/workspace/plain',git:false,workspace:null,pullRequests:[],files:[]}
  if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:'ready',diagnostic:null},pullRequests:[],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
- if(method==='missions.changes')return [{id:'file',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'}]
- if(method==='missions.fileDiff')return {file:{id:'file',path:'src/mission.ts',kind:'modified',oldMode:'100644',newMode:'100644'},hunks:[{oldStart:1,newStart:1,lines:[{kind:'deletion',text:'old',oldLine:1,newLine:null},{kind:'addition',text:'new',oldLine:null,newLine:1}]}],patch:''}
+ if(method==='missions.changes')return structuredClone(missionChangedFiles)
+ if(method==='missions.fileDiff'){
+  const file=missionChangedFiles.find(file=>file.id===p.fileId)!
+  if(file.id==='file-b')await new Promise(resolve=>setTimeout(resolve,90))
+  return {file:structuredClone(file),hunks:[{oldStart:1,newStart:1,lines:[{kind:'deletion',text:`old-${file.id}`,oldLine:1,newLine:null},{kind:'addition',text:`new-${file.id}`,oldLine:null,newLine:1}]}],patch:''}
+ }
+ if(method==='missions.diffSession.release')return {released:true}
  if(method==='missions.create'){const m={...items[0],...c,number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',hasUnread:false};items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})}
  if(method==='camps.changeDefaultLead'){m!.defaultLeadAgentId=c.successorAgentId;snapshot(m!).camp.defaultLeadAgentId=c.successorAgentId;changed();return applied()}
  if(method==='camps.delete'){items.splice(items.indexOf(m!),1);changed();return applied()}
@@ -115,6 +124,8 @@ const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
 ;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,admitMissionNotification,
  sourceMessageId:(missionId:string)=>snapshot(items.find(item=>item.missionId===missionId)!).messages[1].id,
+ invalidateMissionDetails:()=>changed(),
+ terminalMissionRun:(campId:string)=>events.forEach(fn=>fn({method:'agent_run.terminal',params:{campId}})),
  refreshCamp:(campId:string)=>events.forEach(fn=>fn({method:'camp.pendingInputs.changed',params:{campId,reason:'published'}}))}
 window.addEventListener('error',e=>(window as any).missionQA.errors.push(String(e.error?.stack??e.message)))
 window.addEventListener('unhandledrejection',e=>(window as any).missionQA.errors.push(String(e.reason)))
