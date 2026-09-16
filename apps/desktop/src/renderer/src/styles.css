@@ -6661,8 +6661,8 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
   content: "";
   transition: transform 140ms ease, background 140ms ease;
 }
-.runtime-parameter-switch input:checked { border-color: var(--brand); background: var(--brand-soft); }
-.runtime-parameter-switch input:checked::after { background: var(--brand); transform: translateX(14px); }
+.runtime-parameter-switch input:checked { border-color: var(--conversation-action); background: var(--conversation-action); }
+.runtime-parameter-switch input:checked::after { background: var(--conversation-action-contrast); transform: translateX(14px); }
 .runtime-parameter-switch input:disabled { cursor: not-allowed; opacity: .55; }
 .field-label > code { width: fit-content; color: var(--muted); font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .member-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

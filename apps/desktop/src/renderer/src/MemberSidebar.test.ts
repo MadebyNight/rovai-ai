@@ -87,7 +87,10 @@ describe('v0.29 member sidebar', () => {
     expect(markup.includes('id="member-sidebar-filter"')).toBe(count > 8)
     expect(markup).not.toContain('member-context-return')
     expect(markup).not.toContain('virtualized')
-    if (count === 0) expect(markup).toContain('还没有队员')
+    if (count === 0) {
+      expect(markup).toContain('还没有队员')
+      expect(markup).toContain('class="primary-button conversation-primary-button"')
+    }
   })
 })
 
