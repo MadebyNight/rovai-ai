@@ -7352,6 +7352,7 @@ function EmptyCampWelcome({
   starterNotice: string | null
   onChoosePrompt(prompt: string, announceDraft?: boolean): void
 }): JSX.Element {
+  const mobile = useMobileLayout()
   const activeMembers = snapshot.members.filter((member) =>
     member.membershipStatus === 'active' && member.profilePresence === 'present'
   )
@@ -7376,6 +7377,15 @@ function EmptyCampWelcome({
         agentId={firstRunCamp.memberAgentId}
         avatarRef={firstMember?.avatarRef ?? profile?.avatarRef ?? null}
         starterNotice={starterNotice}
+        onChoosePrompt={onChoosePrompt}
+      />
+    )
+  }
+
+  if (mobile) {
+    return (
+      <MobileEmptyCampWelcome
+        pending={snapshot.camp.activationState === 'pending'}
         onChoosePrompt={onChoosePrompt}
       />
     )
@@ -7421,6 +7431,56 @@ function EmptyCampWelcome({
             <span>{starter.body}</span>
           </button>
         ))}
+      </div>
+    </section>
+  )
+}
+
+function MobileEmptyCampWelcome({
+  pending,
+  onChoosePrompt
+}: {
+  pending: boolean
+  onChoosePrompt(prompt: string, announceDraft?: boolean): void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const titleId = useId()
+  const suggestionsId = useId()
+  return (
+    <section className="empty-camp-welcome mobile-empty-camp-welcome" aria-labelledby={titleId}>
+      <h2 id={titleId}>{pending ? '开始一段新对话' : '开始这段协作'}</h2>
+      <div className="mobile-starter-panel">
+        <button
+          type="button"
+          className="mobile-starter-toggle"
+          aria-expanded={open}
+          aria-controls={suggestionsId}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span>起步建议</span>
+          <svg className={open ? 'is-open' : ''} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m6 8 4 4 4-4" />
+          </svg>
+        </button>
+        {open && (
+          <div className="mobile-starter-list" id={suggestionsId} aria-label="起步建议">
+            {EMPTY_CAMP_STARTERS.map((starter) => (
+              <button
+                type="button"
+                key={starter.title}
+                onClick={() => {
+                  onChoosePrompt(starter.prompt)
+                  setOpen(false)
+                }}
+              >
+                <span>{starter.title}</span>
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m8 5 5 5-5 5" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   )
