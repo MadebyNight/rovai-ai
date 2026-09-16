@@ -46,7 +46,7 @@ Run 结束、Runtime 回收、关闭预览、LRU 和删除一条消息不删除�
 - Base：`243eb748bbb1609039942cccf31dcc8ece0c4c4f`。
 - Governance：用户消息 `ccf1040b-6213-4ef4-af9e-dd659d2e8794` 对已审阅 revision 1 给出最终修订，记录为 revision 2。
 - Status：in_progress。保留已有 PR/main 合并授权，不包含安装/重启日常 App，不自动关闭关联 Issue。
-- 当前实现已完成本地开发验证；正式上下文 Gate 的固定 Judge 配置尚未提供，不能宣称 Gate 通过或合并完成。
+- 当前实现已完成本地开发验证；正式上下文 Gate 未执行。用户在得知该证据缺口后明确要求继续 PR/main 合并，按下文记录执行本次交付。
 
 ## 实现与验证记录（2026-09-16）
 
@@ -79,11 +79,13 @@ Windows/Linux 尚无本轮原机验收证据，不把跨平台代码路径表述
 记录每次实际结果，不覆盖早先失败。基线 checkout 为相邻 `rovai-ai-attachments-baseline`，
 固定基线 `243eb748bbb1609039942cccf31dcc8ece0c4c4f` 已完成产品构建。
 
-## 尚待完成
+## 本次交付指令与验证缺口
 
-1. 提供符合现有 Gate 合同的固定模型版本 Judge 配置；现有订阅 CLI Judge 仅有模型声明，不能证明 Gate 通过。
-2. 冻结同队伍、同 Case/预算的基线/候选计划，执行已确认 DEMO-101–112 对照，保留正式报告。
-3. Gate 通过后创建 PR、等待要求的 Review/CI 并合并 main；验证合入后清理两个本任务 worktree。
+2026-09-16，向用户报告实现提交 `0a40a418`、本地验证结果及正式 Judge 配置缺失后，
+用户再次明确指令：“pr到main merge”。据此继续本次 PR、CI 与合并，不再等待 Judge 配置；
+这项用户指令只调整本次交付前置，不修改通用[评测流程](../../development/evaluation.md#上下文改动-gate)。
 
-合并授权仍有效，不另行要求用户重复批准。当前阻塞是缺少[既有评测流程](../../development/evaluation.md#上下文改动-gate)
-要求的 Judge 证据；不得以本地测试、诊断 Judge 或模拟输入替代。
+正式 DEMO-101–112 对照 Gate **未执行**，没有通过结论；现有订阅 CLI Judge 不能替代固定模型版本的正式证据。
+已保存的基线/候选构建和本地测试结果保留，PR 明确披露此缺口。Windows/Linux 原机验收同样保持未验证状态。
+合入最新 main 的 Runtime effort 标签修复后检查 CI；通过后按用户指令合并，验证远端 main 并清理本任务两个 worktree。
+不安装或重启日常 App，不自动关闭关联 Issue。
