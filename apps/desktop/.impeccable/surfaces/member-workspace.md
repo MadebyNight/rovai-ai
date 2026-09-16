@@ -92,6 +92,8 @@ check or the real task's uniform Dispatch Preflight. Do not offer explicit model
 catalog cache and Picker behavior as every other Runtime; its permission draft still defaults to the statically
 admitted highest value `permission_mode=bypass_permissions`. Kiro exposes the existing compact switch pattern for
 `trust_all_tools`; label it “自动允许全部工具” and default it on from Core without adding a separate warning card.
+Every boolean Runtime permission switch on this page uses the neutral action family for its on state across
+Desktop, Web and Mobile; it does not fall back to the Steel brand family.
 
 Model rows keep Runtime display names separate from opaque selection IDs and show the Runtime description when
 provided, with the full text available on hover. Claude's initialize catalog uses this same Picker; no family-specific

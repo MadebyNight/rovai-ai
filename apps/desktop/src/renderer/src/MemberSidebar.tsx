@@ -298,7 +298,7 @@ export function MemberSidebar({
               <span aria-hidden="true">◎</span>
               <strong>还没有队员</strong>
               <p>创建一个长期身份后，可为其配置 Agent 运行时。</p>
-              <button className="primary-button" type="button" onClick={(event) => onCreate(event.currentTarget)}>新增队员</button>
+              <button className="primary-button conversation-primary-button" type="button" onClick={(event) => onCreate(event.currentTarget)}>新增队员</button>
             </div>
           )}
           {members.length > 0 && visibleAgents.length === 0 && (

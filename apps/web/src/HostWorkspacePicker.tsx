@@ -32,6 +32,6 @@ export function HostWorkspacePicker({ transport, onSelect }: { transport: Consol
       {busy ? <p role="status">正在读取目录…</p> : listing?.directories.length === 0 && <p>没有子目录，可以使用当前目录。</p>}
       {listing?.nextOffset != null && <button type="button" className="quiet-button compact" disabled={busy} onClick={() => void browse(listing.projectPath, listing.nextOffset!)}>加载更多目录</button>}
     </AppDialogBody>
-    <AppDialogFooter><button type="button" className="quiet-button" onClick={() => onSelect(null)}>取消</button><button type="button" className="primary-button" disabled={busy || !listing || !!error || path !== listing.projectPath} onClick={() => listing && onSelect({ name: listing.name, projectPath: listing.projectPath })}>使用此目录</button></AppDialogFooter>
+    <AppDialogFooter><button type="button" className="quiet-button" onClick={() => onSelect(null)}>取消</button><button type="button" className="primary-button conversation-primary-button" disabled={busy || !listing || !!error || path !== listing.projectPath} onClick={() => listing && onSelect({ name: listing.name, projectPath: listing.projectPath })}>使用此目录</button></AppDialogFooter>
   </AppDialogContent></Dialog.Portal></Dialog.Root>
 }
