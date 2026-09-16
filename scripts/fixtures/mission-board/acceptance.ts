@@ -25,6 +25,11 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(lanes.length === 4 && new Set(lanes.map(n => n.clientHeight)).size === 1, 'Four equal lanes')
   check(!document.querySelector('.mission-column header button'), 'No create control in status lanes')
   check(document.querySelector('.mission-page-header h1')?.textContent === '使命板', 'Board page title')
+  document.documentElement.style.zoom = '2'; await frames()
+  check(card.clientWidth >= 170 && card.scrollWidth <= card.clientWidth + 1, 'Zoom keeps readable cards without overlapping content')
+  const boardScroll = document.querySelector<HTMLElement>('.mission-board-scroll')!
+  check(boardScroll.scrollWidth > boardScroll.clientWidth, 'Narrow board scrolls across lanes')
+  document.documentElement.style.zoom = ''; await frames()
   cases.push('board has equal lanes, full roster, automatic tag colors and a stable header')
 
   button('状态筛选').click()

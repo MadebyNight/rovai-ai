@@ -20,6 +20,7 @@ means all, without an extra “all” option. Project and tag pickers have searc
 low-frequency board/list menu share the toolbar without vertical separators. The page uses the white home
 surface in Day and its Night equivalent, a title/subtitle aligned with shell controls, and four equally tall,
 very light neutral rounded lanes, including empty lanes. List mode groups and folds rows by status.
+Lanes retain at least 200px at narrow widths or increased zoom; the board scrolls horizontally rather than squeezing card content.
 Tags reuse the eight stable identity colors, independent of Mission status.
 
 Creation reuses the production New Conversation directory, membership, lead and default-team controls.

@@ -156,7 +156,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     <MissionCleanupNotice/>
     <div className="mission-board-scroll">
       {loading && !missions.length && <p role="status" className="mission-section-empty">正在加载使命…</p>}
-      {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${stateFilter.length || statuses.length}, minmax(0, 1fr))`}}>
+      {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${stateFilter.length || statuses.length}, minmax(200px, 1fr))`}}>
         {statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className="mission-column" key={s.id}>
           <header><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header>
           <div className="mission-column-cards">{filtered.filter(m => m.status === s.id).map(card)}</div>
