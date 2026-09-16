@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-file-preview
 status: accepted
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # Camp 文件预览区
@@ -189,7 +189,7 @@ Viewer 不显示右上角复制按钮、整行工具栏或 `Ready` 状态。除 
 - Markdown 继续通过 `SafeMarkdown` 渲染安全 GFM，并在文件预览中显式使用 document 模式；超出 4 MiB 显示分页原文；
   行长随预览容器变化：小于 960px 时正文区域最大 780px，960px 起整体可到 1120px、普通正文最大 860px，
   1200px 起普通正文最大 930px。代码和表格使用更宽的内容轨道，并在自身区域横向滚动；窗口宽度不代替容器宽度。
-- HTML 默认交互预览。Desktop 在不同源 HTTP(S) iframe 中执行，采用独立的 32 MiB 网页上限；超过网页上限使用分页原文。Web 复用同一 Viewer、源码切换、查找与诊断，使用无 `allow-same-origin` 的 opaque sandbox，保留 Host 的 20 MiB 文件读取上限；支持实际来源目录内的相对资源与 HTTP(S) 依赖；目录边界、句柄与 Session 均需有效。初始化失败明确显示失败和重试，源码查看读取未注入原稿；
+- HTML 默认交互预览。Desktop 在不同源 HTTP(S) iframe 中执行，采用独立的 32 MiB 网页上限；超过网页上限使用分页原文。Web 复用同一 Viewer、源码切换、查找与诊断，使用可信内容的同来源 sandbox，允许脚本、原生浏览器存储、表单、新窗口和原生弹窗；与工作台共享来源和存储，具体边界见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，保留 Host 的 20 MiB 文件读取上限；相对资源沿用 [File Preview v15](../../contracts/file-preview-v15.md) 的既有来源能力，HTTP(S) 依赖保持。初始化失败明确显示失败和重试，源码查看读取未注入原稿；
 - 代码/文本通过同一个只读 CodeMirror 6 Viewer 显示行号、搜索、定位、选择与系统复制，大文件分页；
 - 图片/SVG 提供适应、原始尺寸、缩放和重置，不把 SVG 注入宿主 DOM；
 - Diff/Patch 按文件和 hunk 展示，解析失败回退文本。
@@ -234,7 +234,7 @@ HTML 原生解析文档/资源相对路径与站点根相对路径，自动加�
 
 - 完整代码/可解码文本查已加载全文，CodeMirror 使用 Decoration，保留原生选择。
 - Markdown 查渲染可见正文，包含跨行内格式文字；DOM Range/CSS Highlight 不改写正文节点。
-- HTML 通过与宿主不同源、allow-scripts + allow-same-origin 的 iframe 传递有界正文快照、位置与快捷键；宿主匹配，iframe 只绘制和定位，不扩大资源或系统调用权限。
+- HTML 通过 iframe 传递有界正文快照、位置与快捷键；宿主匹配，iframe 绘制和定位。Desktop 原生预览使用不同源站点；Web 使用上述可信同来源策略，消息仍按实际来源、发送窗口和预览身份匹配。
 - Patch 查差异正文；行号、增删符号、hunk 与导航元数据不算正文。
 - File Change 可选当前文件/本次全部变更及仅增删行，跨文件定位复用已加载的不可变 detail；仅操作记录没有可查正文，不读取当前磁盘文件补齐证据。
 - 分页文本只查当前已加载页并明确标注，换页重算，不把当前页零结果表述为全文零结果。图片/SVG 与无内容状态禁用文件查找。

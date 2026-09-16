@@ -97,3 +97,10 @@ Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位�
 当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v24](../../contracts/context-manifest-evidence-v24.md)、
 [File Preview v15](../../contracts/file-preview-v15.md)；理由见 [V1.59-D08](decisions.md#v1-59-d08)。
 运行活动分类、平台资格、根 README 无需变化；不能由方案确认推断 Gate 或 PR 已完成。
+
+## Web HTML 原生存储兼容增量
+
+2026-09-16 用户确认可信 HTML 的同来源预览策略，Desktop 托管 Web 与独立 Server Web 复用统一 Rust 实现。
+原生存储归访问设备的浏览器，允许表单、新窗口和原生弹窗；接受同来源工作台及登录材料可被附件访问的取舍。
+当前权威与范围见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，理由见
+[V1.59-D09](decisions.md#v1-59-d09)。不修改 Desktop 原生预览、HTML 源文件或资源加载，不新增存储/预览服务。

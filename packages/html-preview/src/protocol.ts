@@ -4,7 +4,7 @@ export interface HtmlPreviewDescriptor {
   origin: string
   entryUrl: string
   documentUrl: string
-  /** Browser-only opaque sandbox. Never grant allow-same-origin to this document. */
+  /** Trusted Web HTML bootstrapped at the host origin, sharing native browser storage. */
   sandboxedDocument?: string
 }
 
@@ -58,7 +58,7 @@ export function validPreviewOrigin(preview: HtmlPreviewDescriptor, hostOrigin: s
     if (preview.sandboxedDocument !== undefined) {
       const entry = new URL(preview.entryUrl)
       return typeof preview.sandboxedDocument === 'string' && preview.sandboxedDocument.length <= 24 * 1024 * 1024
-        && preview.origin === 'null' && ['http:', 'https:'].includes(entry.protocol)
+        && preview.origin === hostOrigin && ['http:', 'https:'].includes(entry.protocol)
         && entry.origin === hostOrigin && entry.pathname === '/preview.html' && !entry.search
         && entry.hash === `#${preview.previewId}.${preview.generation}` && preview.documentUrl === preview.entryUrl
     }

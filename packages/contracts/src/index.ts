@@ -1650,7 +1650,7 @@ export interface FilePreviewHtmlSite {
   origin: string
   entryUrl: string
   documentUrl: string
-  /** Browser-only opaque sandbox. Never grant allow-same-origin to this document. */
+  /** Trusted Web HTML bootstrapped at the host origin, sharing native browser storage. */
   sandboxedDocument?: string
   contentGeneration: string
   contentVersion: FileContentVersion

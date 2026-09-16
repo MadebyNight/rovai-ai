@@ -2,7 +2,7 @@
 document_type: architecture
 authority: file-preview-components-and-boundaries
 status: accepted
-last_updated: 2026-09-15
+last_updated: 2026-09-16
 ---
 
 # File Preview Architecture
@@ -165,10 +165,13 @@ Root Grant 只服务“选择目录、打开文件夹、添加外部目录、浏
 
 ## HTML 预览站点与 Markdown 资源
 
-HTML 正式链路为：已有文件能力 → Electron-free 预览站点 → 实际 HTTP 文档 → 不同源 iframe。
+Desktop 原生 HTML 正式链路为：已有文件能力 → Electron-free 预览站点 → 实际 HTTP 文档 → 不同源 iframe。
 共享 `packages/html-preview` 拥有静态资源映射、实例、响应、注入位置映射、诊断和浏览器宿主通道；Desktop Main
 拥有 loopback 生命周期适配、文件来源与窗口绑定。Renderer 只接收 descriptor，不接收磁盘根或通用文件接口。
-共享接口可用于普通浏览器和未来 WebUI/MobileUI，远程部署与离线运行不在本次范围。
+WebUI/MobileUI 复用 Viewer 和浏览器通道；其 HTML 根文档由统一 Rust Host 认证读取后在同来源静态壳中运行。
+Web 按可信 HTML 使用原生 Storage、表单、弹窗和新窗口，不提供附件与工作台的来源或登录材料隔离；
+精确权限与取舍由 [Host Web v2](../contracts/host-web-v2.md#workspaces-uploads-and-resources)拥有。
+下述独立 `.localhost` 站点和不同源保证仅适用于 Desktop 原生预览。
 
 每实例使用独立 `.localhost` origin，并以入口 capability 兑换 HttpOnly partitioned cookie；Host、来源、cookie、
 现有 authority、generation、文件身份与路径范围共同验证，随机端口不是授权。资源保留原文、相对位置和查询参数，

@@ -1,5 +1,6 @@
 <!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>HTML 预览</title></head><body><script>
-// This static, credential-free document runs under CSP sandbox allow-scripts.
+// Trusted HTML uses the actual Web origin and native browser storage.
+// CSP and the parent iframe grant the same preview capabilities.
 // Only its actual parent may supply the bytes it read through the authenticated API.
 (() => {
   const [previewId, generation] = location.hash.slice(1).split('.');

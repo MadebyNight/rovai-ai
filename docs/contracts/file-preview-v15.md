@@ -19,11 +19,12 @@ Web 返回服务器路径，ResolvedFilePreview 可含 absolutePath；它只用�
 旧文件的读取校验和权限不随展示改变。
 
 新附件及其 HTML 相邻资源使用实际来源边界。Desktop 显式附件目录支持相对资源，仍阻止越界和指向其他私有位置的链接。
-Web HTML 保持 allow-scripts 不透明源沙箱，通过已授权文件句柄提供 `/preview-assets/<随机能力>/<相对路径>`。
-能力只允许该来源 root 内已支持类型的当前资源，不授予编辑 Session；每次核对 Session、记录与目录边界。
+Web HTML 的静态预览壳按 [Host Web v2](host-web-v2.md#workspaces-uploads-and-resources)采用可信同来源策略，
+原生 Storage 归访问设备浏览器，可访问同来源主页面及登录材料。资源仍通过已授权文件句柄提供 `/preview-assets/<随机能力>/<相对路径>`。
+资源能力只允许该来源 root 内已支持类型的当前资源，不在资源 URL 中传递编辑 Session；每次核对 Session、记录与目录边界。
 句柄释放、Camp 删除、源失效或 Session 撤销使读取失效；不复制目录或新增永久站点。
 只有资源 GET/HEAD 允许 opaque Origin 与资源 query（例如缓存参数），无 credentialed CORS；业务 API 的同源/认证/无 query 规则不变。
-直接导航到资源同样受 CSP sandbox 隔离。HTML bridge/查找与原始源码视图保持。
+资源响应及直接导航沿用原有 CSP sandbox；本轮只调整 `/preview.html` 静态壳策略。HTML bridge/查找与原始源码视图保持。
 
 图像显式大图/刷新及返回外部编辑器后读取当前源，失败保留已有图像并提示；文件预览沿用原外部变更通知与候选刷新。
 切 Camp 不清空缓存、不扫描全 Camp。路径显示不触发全文摘要，实际内容读取可保留缓存一致性的当前内容标识。

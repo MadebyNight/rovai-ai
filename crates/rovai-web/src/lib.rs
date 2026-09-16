@@ -286,11 +286,16 @@ async fn boundary(State(state): State<WebState>, req: Request, next: Next) -> Re
         }),
     );
     headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"));
-    if (preview_shell || preview_asset) && response.status().is_success() {
-        // Only this credential-free bootstrap gets executable content. CSP sandbox
-        // also isolates direct navigation, independent of the parent's iframe flags.
+    if preview_asset && response.status().is_success() {
+        // Preserve the existing resource response policy, including direct navigation.
         response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(
             "sandbox allow-scripts; default-src 'none'; script-src http: https: data: 'unsafe-inline' 'unsafe-eval'; style-src http: https: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data:; connect-src http: https: ws: wss:; frame-src http: https: data:; frame-ancestors 'self'; object-src 'none'; base-uri http: https:; form-action 'none'"));
+    }
+    if preview_shell && response.status().is_success() {
+        // Only the trusted HTML preview shell gets these capabilities. Keep its CSP
+        // sandbox aligned with the Web iframe; workspace/API policies stay strict.
+        response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(
+            "sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals; default-src 'none'; script-src http: https: data: 'unsafe-inline' 'unsafe-eval'; style-src http: https: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data:; connect-src http: https: ws: wss:; frame-src http: https: data:; frame-ancestors 'self'; object-src 'none'; base-uri http: https:; form-action http: https:"));
     }
     if preview_asset {
         response.headers_mut().insert(

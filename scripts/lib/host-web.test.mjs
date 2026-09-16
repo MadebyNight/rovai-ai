@@ -462,7 +462,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(Buffer.compare(downloaded.value.bytes, Buffer.from(largeText + '\nchanged')), 0)
     await fileCall(first, 'release', { handleId: largeFile.handleId })
     // HTML classification, original-source reads and editor/generation fences use
-    // the real Host API. The separate Chrome case owns rendering and isolation.
+    // the real Host API. The separate Chrome case owns rendering and native browser capabilities.
     const htmlText = '<!doctype html><h1>HTML preview</h1><button>Run</button>'
     await writeFile(join(workspace, 'interactive.html'), htmlText)
     const htmlFile = (await fileCall(first, 'open', { kind: 'camp_workspace', campId: fileCampId, rawReference: 'interactive.html' })).value.file
@@ -497,8 +497,15 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal((await fetch(cssUrl)).status, 404, 'release revokes relative resource access')
     const shell = await fetch(`${origin}/preview.html`)
     assert.equal(shell.status, 200)
-    assert.match(shell.headers.get('content-security-policy'), /sandbox allow-scripts;/)
-    assert.doesNotMatch(shell.headers.get('content-security-policy'), /allow-same-origin/)
+    assert.match(shell.headers.get('content-security-policy'), /sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-modals;/)
+    assert.match(shell.headers.get('content-security-policy'), /form-action http: https:/)
+    assert.doesNotMatch(shell.headers.get('content-security-policy'), /allow-top-navigation/)
+    for (const path of ['/', '/api/not-a-route']) {
+      const response = await fetch(`${origin}${path}`)
+      assert.match(response.headers.get('content-security-policy'), /script-src 'self';/)
+      assert.match(response.headers.get('content-security-policy'), /form-action 'self'/)
+      assert.doesNotMatch(response.headers.get('content-security-policy'), /allow-same-origin|'unsafe-eval'/)
+    }
     assert.equal(shell.headers.get('cache-control'), 'no-store')
     const childPath = join(workspace, 'child notes.md')
     await writeFile(childPath, '# Child\nRelative resource marker')
