@@ -19,8 +19,8 @@ function sessionValue(session: FilePreviewSession, resolvedTheme: ResolvedTheme)
 }
 
 const RetainedPane = memo(FilePreviewPaneContent)
-function RetainedPreview({ session, resolvedTheme, current, bounds, resizing }: {
-  session: FilePreviewSession; resolvedTheme: ResolvedTheme; current: boolean; bounds: CSSProperties | null; resizing: boolean
+function RetainedPreview({ session, resolvedTheme, current, bounds, resizing, missionActivity }: {
+  session: FilePreviewSession; resolvedTheme: ResolvedTheme; current: boolean; bounds: CSSProperties | null; resizing: boolean; missionActivity?: ReactNode
 }): React.JSX.Element {
   const state = session.getSnapshot()
   const value = useMemo(() => ({ ...sessionValue(session, resolvedTheme), isCurrentCamp: current }), [session, state, resolvedTheme, current])
@@ -28,21 +28,23 @@ function RetainedPreview({ session, resolvedTheme, current, bounds, resizing }: 
   return <FilePreviewContext.Provider value={value}>
     <div className={`file-preview-retained-host${resizing ? ' is-resizing' : ''}`} hidden={!visible} inert={!visible}
       style={bounds ?? undefined} data-preview-camp={session.campId}>
-      <RetainedPane visible={visible} />
+      <RetainedPane visible={visible} missionActivity={missionActivity} />
     </div>
   </FilePreviewContext.Provider>
 }
 
-function PreviewDeck({ resources, anchor, resolvedTheme }: {
-  resources: FilePreviewResources; anchor: HTMLDivElement | null; resolvedTheme: ResolvedTheme
+function PreviewDeck({ resources, anchor, resolvedTheme, missionActivity }: {
+  resources: FilePreviewResources; anchor: HTMLDivElement | null; resolvedTheme: ResolvedTheme; missionActivity?: ReactNode
 }): React.JSX.Element {
   const layout = useOptionalFilePreviewLayout()
   const [bounds, setBounds] = useState<CSSProperties | null>(null)
   useLayoutEffect(() => {
     if (!anchor) return
     const measure = (): void => {
-      const rect = anchor.getBoundingClientRect()
-      if (!rect.width || !rect.height) return
+      const bounds = anchor.getBoundingClientRect()
+      if (!bounds.width || !bounds.height || !anchor.clientWidth) return
+      const scale = bounds.width / anchor.clientWidth
+      const rect = { left: bounds.left / scale, top: bounds.top / scale, width: bounds.width / scale, height: bounds.height / scale }
       setBounds(previous => previous?.left === rect.left && previous.top === rect.top
         && previous.width === rect.width && previous.height === rect.height ? previous
         : { left: rect.left, top: rect.top, width: rect.width, height: rect.height })
@@ -62,12 +64,13 @@ function PreviewDeck({ resources, anchor, resolvedTheme }: {
       ? bounds.left + bounds.width - width : bounds.left
   }
   return <>{[...resources.sessions.values()].map(session => <RetainedPreview key={session.id} session={session}
-    resolvedTheme={resolvedTheme} current={resources.isCurrent(session.campId)} bounds={positioned} resizing={!!layout?.resizing} />)}</>
+    resolvedTheme={resolvedTheme} current={resources.isCurrent(session.campId)} bounds={positioned} resizing={!!layout?.resizing}
+    missionActivity={resources.isCurrent(session.campId) ? missionActivity : null} />)}</>
 
 }
 
-export function FilePreviewProvider({ campId, resolvedTheme, api: providedApi, children }: {
-  campId: string | null; resolvedTheme: ResolvedTheme; api?: FilePreviewApi; children: ReactNode
+export function FilePreviewProvider({ campId, resolvedTheme, api: providedApi, children, missionActivity }: {
+  campId: string | null; resolvedTheme: ResolvedTheme; api?: FilePreviewApi; children: ReactNode; missionActivity?: ReactNode
 }): React.JSX.Element {
   const api = providedApi ?? (typeof window === 'undefined' || window.rovai ? desktopFilePreviewApi : null)
   if (!api) throw new Error('共享文件页面缺少显式资源适配。')
@@ -93,7 +96,7 @@ export function FilePreviewProvider({ campId, resolvedTheme, api: providedApi, c
     <FilePreviewLayoutProvider campId={campId} visible={!!campId && value.paneVisible}>
       <FileFindProvider activeTabId={value.activeTabId} visible={!!campId && value.paneVisible}>
         <PreviewHostContext.Provider value={registerAnchor}>{children}</PreviewHostContext.Provider>
-        {createPortal(<PreviewDeck resources={resources} anchor={anchor} resolvedTheme={resolvedTheme} />, deckHost)}
+        {createPortal(<PreviewDeck resources={resources} anchor={anchor} resolvedTheme={resolvedTheme} missionActivity={missionActivity} />, deckHost)}
       </FileFindProvider>
     </FilePreviewLayoutProvider>
   </FilePreviewContext.Provider></FilePreviewApiContext.Provider>

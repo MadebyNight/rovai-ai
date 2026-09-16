@@ -74,6 +74,7 @@ export function NewConversationDialog({
   const [description, setDescription] = useState('')
   const [sourceBranch, setSourceBranch] = useState('HEAD')
   const isMission = purpose === 'mission'
+  const startSubmitRef = useRef<HTMLButtonElement>(null)
   const [quickHelpOpen, setQuickHelpOpen] = useState(false)
   const [enableOneClick, setEnableOneClick] = useState(false)
   const [memberError, setMemberError] = useState<string | null>(null)
@@ -229,7 +230,7 @@ export function NewConversationDialog({
         memberAgentIds: selectedMemberIds,
         defaultLeadAgentId: leadId,
         collaborationMode: 'peer'
-      }, enableOneClick, isMission ? {description, sourceBranch, start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') !== 'save'} : undefined)
+      }, enableOneClick, isMission ? {description, sourceBranch, start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'start'} : undefined)
     } catch (error) {
       setSubmitError(errorMessage(error))
     } finally {
@@ -387,8 +388,17 @@ export function NewConversationDialog({
             </div>
             <footer className="compact-footer">
               <Dialog.Close asChild><button className="compact-cancel" type="button" disabled={busy}>取消</button></Dialog.Close>
-              {isMission && <button className="compact-cancel mission-save" type="submit" value="save" disabled={submissionBlocked}>保存使命</button>}
-              <button className="compact-primary" type="submit" value="start" disabled={submissionBlocked}>{busy ? '正在新建…' : isMission ? '开始使命' : '新建'}</button>
+              <div className={isMission ? 'mission-create-split' : undefined}>
+                <button className="compact-primary" type="submit" value="save" disabled={submissionBlocked}>{busy ? '正在新建…' : '新建'}</button>
+                {isMission && <>
+                  <button ref={startSubmitRef} type="submit" value="start" hidden disabled={submissionBlocked}/>
+                  <DropdownMenu.Root><DropdownMenu.Trigger asChild><button className="compact-primary mission-create-options" type="button" aria-label="新建使命选项" disabled={submissionBlocked}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button></DropdownMenu.Trigger>
+                    <DropdownMenu.Portal><DropdownMenu.Content className="compact-menu" align="end" sideOffset={6}>
+                      <DropdownMenu.Item className="compact-option" onSelect={() => startSubmitRef.current?.form?.requestSubmit(startSubmitRef.current)}>开始使命</DropdownMenu.Item>
+                    </DropdownMenu.Content></DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </>}
+              </div>
             </footer>
           </form>
         </Dialog.Content>

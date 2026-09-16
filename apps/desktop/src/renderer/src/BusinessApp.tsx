@@ -81,11 +81,13 @@ import {
   type NavigationSettingsSection
 } from './CampNavigation'
 import { NewConversationDialog } from './NewConversationDialog'
-import { MissionBoard, MissionDetailHeader, MissionInteractionProvider, MissionIntro, type MissionTab } from './MissionBoard'
-import { MissionActivityPanel, MissionDeliveryPanel } from './MissionDelivery'
+import { MissionBoard, MissionInteractionProvider, MissionIntro } from './MissionBoard'
+import { MissionActivityDocument } from './MissionDelivery'
 import { MissionCommandRejected, missionCommand, missionError, useMissions } from './useMissions'
 import './mission.css'
 import { openRuntimeModelCatalog } from './runtime-check'
+import { MissionSurface } from './MissionSurface'
+import { MissionHeader } from './MissionHeader'
 import { FilePreviewProvider } from './FilePreviewContext'
 import { NavigationShell } from './NavigationShell'
 import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type NavigationIntent, type MemoryNavigationTarget } from './desktop-navigation'
@@ -1064,7 +1066,7 @@ export function BusinessApp({
   } | null>(null)
   const missionList = useMissions(client, !mobile && startupStatus === 'resolved')
   const [missionPresentation, setMissionPresentation] = useState<'drawer' | 'full'>('full')
-  const [missionTab, setMissionTab] = useState<MissionTab>('chat')
+  const [missionOpenRequest, setMissionOpenRequest] = useState(0)
   const [newMissionOpen, setNewMissionOpen] = useState(false)
   const missionCreation = useRef<{id: string; command: MissionCreate} | null>(null)
   const activeMission = missionList.missions.find(m => m.campId === activeCampId)
@@ -3754,9 +3756,10 @@ export function BusinessApp({
   }
 
   async function openMission(mission: MissionRecord): Promise<void> {
+    setMissionPresentation('drawer')
     await activateCamp(mission.campId, { reconcileDefaultLead: false })
     if (activeCampIdRef.current === mission.campId && viewRef.current === 'camp') {
-      setMissionPresentation('drawer'); setMissionTab('chat')
+      setMissionPresentation('drawer'); setMissionOpenRequest(value => value + 1)
     }
   }
   const refreshMission = async (campId: string): Promise<void> => {
@@ -3773,7 +3776,6 @@ export function BusinessApp({
     await Promise.all([missionList.refresh(), loadNavigation()])
   }
   const missionSource = (messageId: string): void => {
-    setMissionTab('chat')
     setNotificationFocus({ requestId: ++notificationFocusSequence.current, kind: 'camp_message', campTurnId: null, messageId, active: true })
   }
   async function createMission(draft: Omit<CreateCampRequest, 'commandId' | 'activationState'>, saveTeam: boolean, definition?: {description: string; sourceBranch: string; start: boolean}): Promise<void> {
@@ -3785,7 +3787,6 @@ export function BusinessApp({
     if (pending && JSON.stringify(pending.command) !== JSON.stringify(command)) throw new Error('上次创建结果尚未确认，请恢复原内容并重试。')
     const request = pending ?? { id: newCommandId(), command }
     missionCreation.current = request
-    const intent = desktopNavigation.beginIntent()
     setBusy('create-mission')
     try {
       const result = await missionCommand(client, 'missions.create', request.command, request.id)
@@ -3801,10 +3802,6 @@ export function BusinessApp({
         catch (error) { notifyError(`使命已保存，暂时未开始：${missionError(error)}`) }
       }
       await missionList.refresh()
-      if (intent.isCurrent()) {
-        await activateCamp(campId, { reconcileDefaultLead: false, initializeComposerDraft: true })
-        if (activeCampIdRef.current === campId) { setMissionPresentation('drawer'); setMissionTab('chat') }
-      }
     } catch (error) {
       if (error instanceof MissionCommandRejected) missionCreation.current = null
       throw error
@@ -3948,7 +3945,8 @@ export function BusinessApp({
 
   return (
     <MobileLayoutProvider value={mobile}>
-    <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
+    <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
+      missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify}/> : null}>
     <MissionInteractionProvider missions={missionList.missions} agents={agents} onChanged={refreshMission} onDeleted={onMissionDeleted} onError={notifyError}>
     <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
@@ -4009,9 +4007,9 @@ export function BusinessApp({
         onDelete={deleteCamp}
         onError={(nextError) => setError(errorMessage(nextError))}
       />
-      {!startupGateVisible && view === 'camp' && !missionDrawer && <AppHeader
-        campTitle={activeMission?.title || activeCampTitle || '对话'}
-        contextLabel={missionCamp ? '使命' : activeCampContextLabel}
+      {!startupGateVisible && view === 'camp' && !missionCamp && <AppHeader
+        campTitle={activeCampTitle || '对话'}
+        contextLabel={activeCampContextLabel}
         camp={campSnapshot?.camp.id === activeCampId ? campSnapshot : null}
         detailEntryHostRef={setCampDetailEntryHost}
         onFocusApprovals={focusCampApprovals}
@@ -4050,12 +4048,15 @@ export function BusinessApp({
         {!startupGateVisible && mobile && view === 'camp' && missionCamp && <section className="mission-mobile-unavailable"><h2>请在电脑上打开此使命</h2><button className="quiet-button" onClick={() => chooseView('compose')}>返回</button></section>}
         {!startupGateVisible && !mobile && view === 'camp' && missionCamp && !activeMission && <section className="mission-section-empty" role={missionList.error ? 'alert' : 'status'}><p>{missionList.error || (missionList.loading ? '正在读取使命…' : '此使命当前不可用。')}</p>{!missionList.loading && <button className="quiet-button" onClick={() => void missionList.refresh()}>重试</button>}</section>}
         {!startupGateVisible && generalPreferences && view === 'camp' && !(mobile && missionCamp) && (!missionCamp || activeMission) && activeCampId && visibleCampSnapshot?.camp.id === activeCampId && (
-          <div className={missionDrawer ? 'mission-drawer mission-workspace-host' : missionCamp ? 'mission-conversation mission-workspace-host' : 'ordinary-workspace-host'} role={missionDrawer ? 'dialog' : undefined} aria-label={missionDrawer ? '使命详情' : undefined}>
-          {activeMission && <MissionDetailHeader mission={activeMission} drawer={missionDrawer} tab={missionTab} onTab={setMissionTab} onExpand={() => setMissionPresentation('full')} onClose={() => chooseView('missions')} detailEntryHostRef={setCampDetailEntryHost}/>}
+          <MissionSurface key={activeCampId} enabled={!!activeMission} full={!missionDrawer} onExpand={() => setMissionPresentation('full')} onClose={() => chooseView('missions')}>
+          {activeMission && <MissionHeader mission={activeMission} drawer={missionDrawer} camp={visibleCampSnapshot} projectName={activeCampProject?.name ?? activeCampContextLabel}
+            openRequest={missionOpenRequest} onExpand={() => setMissionPresentation('full')} onFold={() => setMissionPresentation('drawer')}
+            onClose={() => chooseView('missions')} onFocusApprovals={focusCampApprovals} detailEntryHostRef={setCampDetailEntryHost}/>}
           <CampWorkspace
             key={activeCampId}
-            missionBoard={activeMission ? <MissionIntro mission={activeMission} projects={displayNavigation?.projects ?? []} onTab={setMissionTab} onDetails={() => setMissionPresentation('drawer')}/> : null}
-            missionPanel={activeMission && missionTab === 'delivery' ? <MissionDeliveryPanel mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify}/> : activeMission && missionTab === 'activity' ? <MissionActivityPanel mission={activeMission} agents={agents} onSource={missionSource}/> : null}
+            missionBoard={activeMission ? <MissionIntro mission={activeMission} projects={displayNavigation?.projects ?? []}/> : null}
+            previewTabsInPane={!!activeMission}
+            suppressExecutionAutoOpen={missionDrawer}
             snapshot={visibleCampSnapshot}
             initialComposerDraft={campSnapshotState.initialComposerDraft}
             onInitialComposerDraftConsumed={consumeInitialComposerDraft}
@@ -4116,7 +4117,7 @@ export function BusinessApp({
             onNotify={notify}
             onNotifyError={notifyError}
           />
-          </div>
+          </MissionSurface>
         )}
 
         {!startupGateVisible && view === 'compose' && (

@@ -1,16 +1,14 @@
-import { createContext, useContext, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import type { AgentProfile, CampOpenProjection, MissionDelivery, MissionRecord, MissionStatus, MissionWorkspace, ProjectNavigationGroup } from '@contracts'
 import { useCampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { DialogControlIcon } from './AppDialog'
 import { NavigationIcon } from './NavigationIcon'
-import { useOptionalFilePreview } from './FilePreviewContext'
-import { FilePreviewTabs } from './FilePreviewTabs'
-import { CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, StatusMenu, statuses, type ContextPosition } from './MissionControls'
+import { MissionIcon } from './MissionIcon'
+import { CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, FilterStateIcon, TagMark, statuses, type ContextPosition } from './MissionControls'
 import { MissionCommandRejected, missionCommand, missionError } from './useMissions'
 
-export type MissionTab = 'chat' | 'delivery' | 'activity'
 type MissionActions = {
   edit(mission: MissionRecord): void
   menu(mission: MissionRecord, event: MouseEvent<HTMLElement>): void
@@ -126,6 +124,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
 }) {
   const actions = useMissionActions()
   const [query, setQuery] = useState(''), [stateFilter, setStateFilter] = useState<string[]>([]), [tags, setTags] = useState<string[]>([]), [projectFilter, setProjectFilter] = useState<string[]>([]), [view, setView] = useState<'board' | 'list'>('board')
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const catalog = [...new Set(missions.flatMap(m => m.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   const paths = [...new Set(missions.map(m => m.projectPath))]
   const filtered = missions.filter(m => (!stateFilter.length || stateFilter.includes(m.status)) && (!tags.length || tags.some(t => m.tags.includes(t))) && (!projectFilter.length || projectFilter.includes(m.projectPath)) && `${m.title}\n${m.description}\n${m.tags.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
@@ -138,27 +137,38 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
       onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); e.currentTarget.querySelector<HTMLButtonElement>('.mission-card-actions')?.click() } }}>
       <div className="mission-card-meta"><span>{m.missionId.slice(-8)}</span><button className="mission-icon-button mission-card-actions" aria-label={`${m.title}的操作`} onClick={e => actions.menu(m, e)}><Icon name="more"/></button></div>
       <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.hasUnread && <span className="mission-unread-dot" aria-label="有未读消息"/>}{m.title}</h3></button>
-      {view === 'list' && <span className="mission-list-state"><StatusIcon status={m.status}/>{statuses.find(s => s.id === m.status)?.label}</span>}
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-card-footer"><MissionAvatars m={m} onClick={e => actions.roster(m, e)}/><time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
       {m.runningAgentIds.length > 0 && <div className="mission-card-presence"><span className="mission-presence"><span className="camp-loading-spinner"/>{m.runningAgentIds.length} 位队员正在执行</span></div>}
     </article>
   }
   return <section className="mission-board-content mission-board-page" hidden={hidden} aria-label="使命板">
-    <header className="mission-topbar"><h1>使命</h1><span>{missions.length}</span><button className="mission-new" onClick={onNew}><Icon name="plus"/>新建使命</button></header>
+    <header className="mission-page-header"><div><h1>使命板</h1><p>设定目标，与队伍一起推进。</p></div><button className="mission-new mission-new-entry" onClick={onNew}><Icon name="plus"/>新建使命</button></header>
     <div className="mission-toolbar"><div className="mission-filter-group">
-      <MissionFilter label="状态" values={stateFilter} onChange={setStateFilter} options={statuses.map(s => ({ id: s.id, label: s.label, icon: <StatusIcon status={s.id}/> }))}/>
-      <MissionFilter label="标签" values={tags} onChange={setTags} options={catalog.map(t => ({id: t, label: t}))}/>
-      <MissionFilter label="项目" values={projectFilter} onChange={setProjectFilter} options={paths.map(path => ({ id: path, label: missionProject(missions.find(m => m.projectPath === path)!, projects) }))}/>
+      <MissionFilter label="状态" icon={<FilterStateIcon/>} searchable={false} values={stateFilter} onChange={setStateFilter} options={statuses.map(s => ({ id: s.id, label: s.label, icon: <StatusIcon status={s.id}/> }))}/>
+      <MissionFilter label="标签" icon={<Icon name="tag"/>} values={tags} onChange={setTags} options={catalog.map(t => ({id: t, label: t, icon: <TagMark tag={t}/>}))}/>
+      <MissionFilter label="项目" icon={<NavigationIcon name="folder-open"/>} values={projectFilter} onChange={setProjectFilter} options={paths.map(path => ({ id: path, keywords: path, icon: <NavigationIcon name="folder-open"/>, label: missionProject(missions.find(m => m.projectPath === path)!, projects) }))}/>
       {!!(stateFilter.length + tags.length + projectFilter.length) && <button className="mission-clear-filters" aria-label="清除筛选" onClick={() => { setStateFilter([]); setTags([]); setProjectFilter([]) }}><DialogControlIcon name="close"/></button>}
     </div><label className="mission-search"><NavigationIcon name="search"/><input aria-label="搜索使命" placeholder="搜索使命…" value={query} onChange={e => setQuery(e.target.value)}/></label>
     <Menu.Root><Menu.Trigger asChild><button className="mission-filter mission-view-trigger" aria-label={`切换视图，当前${view === 'board' ? '看板' : '列表'}`}><Icon name={view}/><Icon name="chevron"/></button></Menu.Trigger><Menu.Portal><Menu.Content className="compact-menu" align="end" sideOffset={6}><Menu.RadioGroup value={view} onValueChange={v => setView(v as 'board' | 'list')}>{(['board', 'list'] as const).map(v => <Menu.RadioItem className="compact-option" value={v} key={v}><Icon name={v}/><span>{v === 'board' ? '看板' : '列表'}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator></Menu.RadioItem>)}</Menu.RadioGroup></Menu.Content></Menu.Portal></Menu.Root>
     </div>
     {error && <div className="mission-load-error" role="alert"><span>{error}</span><button onClick={() => void onRefresh()}>重试</button></div>}
     <MissionCleanupNotice/>
-    <div className="mission-board-scroll">{loading && !missions.length ? <p role="status" className="mission-section-empty">正在加载使命…</p> : !missions.length ? <div className="mission-empty"><Icon name="board"/><h2>为队伍设定一个使命</h2><button onClick={onNew}>新建使命</button></div> : view === 'board' ? <div className="mission-board">{statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className="mission-column" key={s.id}><header><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header><div className="mission-column-cards">{filtered.filter(m => m.status === s.id).map(card)}{!filtered.some(m => m.status === s.id) && <p className="mission-column-empty">暂无使命</p>}</div></section>)}</div> : <div className="mission-list-cards">{filtered.map(card)}</div>}
-      {!loading && missions.length > 0 && !filtered.length && <p className="mission-section-empty" role="status">没有符合筛选条件的使命。</p>}
+    <div className="mission-board-scroll">
+      {loading && !missions.length && <p role="status" className="mission-section-empty">正在加载使命…</p>}
+      {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${stateFilter.length || statuses.length}, minmax(0, 1fr))`}}>
+        {statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className="mission-column" key={s.id}>
+          <header><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header>
+          <div className="mission-column-cards">{filtered.filter(m => m.status === s.id).map(card)}</div>
+        </section>)}
+      </div> : <div className="mission-grouped-list">{statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className="mission-list-group" key={s.id}>
+        <button className="mission-group-heading" aria-expanded={!collapsedGroups.includes(s.id)} onClick={() => setCollapsedGroups(current => current.includes(s.id) ? current.filter(id => id !== s.id) : [...current, s.id])}>
+          <Icon name="chevron"/><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span>
+        </button>
+        <div className="mission-list-cards" hidden={collapsedGroups.includes(s.id)}>{filtered.filter(m => m.status === s.id).map(card)}</div>
+      </section>)}</div>}
     </div>
+    {!loading && missions.length > 0 && !filtered.length && <p className="mission-section-empty" role="status">没有符合筛选条件的使命。</p>}
   </section>
 }
 
@@ -183,26 +193,29 @@ function MissionCleanupNotice() {
   </>
 }
 
-export function MissionIntro({ mission: m, projects, onTab, onDetails }: { mission: MissionRecord; projects: ProjectNavigationGroup[]; onTab(tab: MissionTab): void; onDetails(): void }) {
-  const actions = useMissionActions(), [expanded, setExpanded] = useState(false)
-  return <section className="mission-intro" aria-label="会话使命板" onContextMenu={e => actions.menu(m, e)}>
-    <div className="mission-intro-top"><span><Icon name="board"/>使命板</span><StatusMenu m={m} onStatus={s => actions.status(m, s)}/><button className="mission-icon-button" aria-label="使命操作" onClick={e => actions.menu(m, e)}><Icon name="more"/></button></div>
-    <h2>{m.title}</h2>{m.description && <p className={`mission-description${expanded ? ' expanded' : ''}`}>{m.description}</p>}
-    <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags} onEdit={e => actions.tags(m, e)}/></div>
-    <div className="mission-intro-meta"><MissionAvatars m={m} onClick={e => actions.roster(m, e)}/><button onClick={() => actions.edit(m)}>编辑使命</button>{m.description && <button aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? '收起描述' : '完整描述'}<Icon name="chevron"/></button>}</div>
-    <div className="mission-intro-actions"><button onClick={onDetails}><Icon name="expand"/>使命详情</button><button onClick={() => onTab('delivery')}>交付</button><button onClick={() => onTab('activity')}>活动</button>{!m.runningAgentIds.length && <button className="mission-new" disabled={actions.busyId === m.missionId} onClick={() => actions.start(m)}><Icon name="play"/>{m.status === 'completed' ? '继续使命' : '开始使命'}</button>}</div>
-  </section>
-}
-
-export function MissionDetailHeader({ mission, drawer, tab, onTab, onExpand, onClose, detailEntryHostRef }: { mission: MissionRecord; drawer: boolean; tab: MissionTab; onTab(tab: MissionTab): void; onExpand(): void; onClose(): void; detailEntryHostRef(host: HTMLDivElement | null): void }) {
-  const actions = useMissionActions(), id = useId()
-  const preview = useOptionalFilePreview()
-  const tabs: {id: MissionTab; label: string}[] = [{id:'chat',label:'会话'},{id:'delivery',label:'交付'},{id:'activity',label:'活动'}]
-  return <>{drawer && <header className="mission-drawer-header"><strong title={mission.title}>{mission.title}</strong><div><button className="mission-icon-button" aria-label="打开完整使命会话" onClick={onExpand}><Icon name="expand"/></button><button className="mission-icon-button" aria-label="关闭使命抽屉" onClick={onClose}><DialogControlIcon name="close"/></button></div></header>}
-    <div className="mission-detail-tabs" role="tablist" aria-label="使命详情">{tabs.map((item, i) => <button key={item.id} role="tab" id={`${id}-${item.id}`} aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => onTab(item.id)} onKeyDown={event => {
-      const next = event.key === 'ArrowRight' ? (i + 1) % 3 : event.key === 'ArrowLeft' ? (i + 2) % 3 : event.key === 'Home' ? 0 : event.key === 'End' ? 2 : -1
-      if (next >= 0) { event.preventDefault(); onTab(tabs[next].id); document.getElementById(`${id}-${tabs[next].id}`)?.focus() }
-    }}>{item.label}</button>)}{drawer && <div className="camp-detail-entry-host mission-drawer-entries" ref={detailEntryHostRef}/>}<button className="mission-locate-board" onClick={e => actions.menu(mission, e)} aria-label="使命操作"><Icon name="more"/></button></div>
-    {drawer && preview?.paneVisible && <div className="mission-drawer-preview-tabs"><FilePreviewTabs compact/><button className="mission-icon-button" aria-label="收起文件预览" onClick={preview.hidePane}><DialogControlIcon name="close"/></button></div>}
+export function MissionIntro({ mission: m, projects }: { mission: MissionRecord; projects: ProjectNavigationGroup[] }) {
+  const actions = useMissionActions(), [expanded, setExpanded] = useState(false), [canExpand, setCanExpand] = useState(false)
+  const description = useRef<HTMLParagraphElement>(null)
+  useLayoutEffect(() => {
+    const node = description.current
+    if (!node) return
+    const measure = () => {
+      // Compare the natural content height against the three-line reading limit.
+      const lineHeight = parseFloat(getComputedStyle(node).lineHeight)
+      setCanExpand(node.scrollHeight > lineHeight * 3 + 1)
+    }
+    measure()
+    const observer = new ResizeObserver(measure); observer.observe(node)
+    return () => observer.disconnect()
+  }, [m.description])
+  return <>
+    <section className="mission-intro" aria-label="会话使命">
+      <div className="mission-intro-top"><span><MissionIcon/>使命</span><span className="mission-status-readonly"><StatusIcon status={m.status}/>{statuses.find(s => s.id === m.status)?.label}</span></div>
+      <h2>{m.title}</h2>{m.description && <p ref={description} className={`mission-description${expanded ? ' expanded' : ''}`}>{m.description}</p>}
+      {canExpand && <button className="mission-description-toggle" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? '收起描述' : '展开描述'}<Icon name="chevron"/></button>}
+      <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
+      <div className="mission-intro-meta"><MissionAvatars m={m}/></div>
+    </section>
+    {m.status === 'not_started' && !m.runningAgentIds.length && <div className="mission-start-row"><button className="mission-new mission-start" disabled={actions.busyId === m.missionId} onClick={() => actions.start(m)}><Icon name="play"/>{actions.busyId === m.missionId ? '正在开始…' : '开始使命'}</button></div>}
   </>
 }

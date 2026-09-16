@@ -5,6 +5,19 @@ import { AttachmentCard } from './AttachmentCard'
 import { CompactDialog, Icon, statuses } from './MissionControls'
 import { missionCommand, missionError } from './useMissions'
 import { missionDate } from './MissionBoard'
+import { useFilePreview } from './FilePreviewContext'
+import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
+
+export function MissionActivityDocument({ mission, agents, onSource, onNotify }: {
+  mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void; onNotify(message: string): void
+}) {
+  const preview = useFilePreview(), layout = useOptionalFilePreviewLayout()
+  const source = (id: string) => { if (layout?.compact) preview.hidePane(); onSource(id) }
+  return <div className="mission-activity-document">
+    <MissionDeliveryPanel mission={mission} agents={agents} onSource={source} onNotify={onNotify}/>
+    <MissionActivityPanel mission={mission} agents={agents} onSource={source}/>
+  </div>
+}
 
 const kinds: Record<MissionChangedFile['kind'], string> = { added: '新增', deleted: '删除', renamed: '重命名', copied: '复制', type_changed: '类型变化', unmerged: '冲突', modified: '修改' }
 export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void; onNotify(message: string): void }) {

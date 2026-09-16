@@ -1,4 +1,6 @@
 import { usePreviewHost } from './FilePreviewContext'
+import { FilePreviewTabs } from './FilePreviewTabs'
+import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 'react'
 import { SafeMarkdown } from './SafeMarkdown'
 import { FileFindScope } from './FilePreviewFind'
@@ -422,8 +424,8 @@ function FilePreviewDocument({ tab }: { tab: FilePreviewTabModel }): React.JSX.E
 
 function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').PreviewTabModel; children: React.ReactNode }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
-  const { saveReading } = useFilePreview()
-  const content = tab.kind === 'file' ? tab.content : tab.detail
+  const { saveReading, isCurrentCamp } = useFilePreview()
+  const content = tab.kind === 'file' ? tab.content : tab.kind === 'file_change' ? tab.detail : isCurrentCamp ? tab.missionId : null
   const restoring = useRef(false)
   useLayoutEffect(() => {
     if (!tab.reading || !content || !root.current) return
@@ -437,7 +439,7 @@ function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').P
       const code = node.querySelector<HTMLElement>('.cm-scroller')
       if (code && !code.clientHeight) return
       if (code) { code.scrollTop = reading.codeScrollTop ?? 0; code.scrollLeft = reading.codeScrollLeft ?? 0 }
-      const body = node.querySelector<HTMLElement>('.file-preview-content, .agent-run-file-review-scroll')
+      const body = node.querySelector<HTMLElement>('.file-preview-content, .agent-run-file-review-scroll, .mission-activity-document')
       if (body) { body.scrollTop = reading.scrollTop ?? 0; body.scrollLeft = reading.scrollLeft ?? 0 }
       const image = node.querySelector<HTMLElement>('.file-preview-image-stage')
       if (image) { image.scrollTop = reading.imageScrollTop ?? 0; image.scrollLeft = reading.imageScrollLeft ?? 0 }
@@ -453,17 +455,22 @@ function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').P
     const node = event.target
     if (node.classList.contains('cm-scroller')) saveReading(tab.id, { codeScrollTop: node.scrollTop, codeScrollLeft: node.scrollLeft })
     else if (node.classList.contains('file-preview-image-stage')) saveReading(tab.id, { imageScrollTop: node.scrollTop, imageScrollLeft: node.scrollLeft })
-    else if ((node.classList.contains('file-preview-content') || node.classList.contains('agent-run-file-review-scroll'))) saveReading(tab.id, { scrollTop: node.scrollTop, scrollLeft: node.scrollLeft })
+    else if ((node.classList.contains('file-preview-content') || node.classList.contains('agent-run-file-review-scroll') || node.classList.contains('mission-activity-document'))) saveReading(tab.id, { scrollTop: node.scrollTop, scrollLeft: node.scrollLeft })
   }}>{children}</div>
 }
 
-export function FilePreviewPane(): React.JSX.Element {
+export function FilePreviewPane({ tabsInPane = false }: { tabsInPane?: boolean }): React.JSX.Element {
   const host = usePreviewHost()
   const { paneVisible } = useFilePreview()
+  const layout = useOptionalFilePreviewLayout()
+  if (tabsInPane) return <section className="file-preview-pane mission-preview-slot" hidden={!paneVisible}>
+    <FilePreviewTabs compact={layout?.compact}/>
+    <div ref={host} className="file-preview-anchor mission-preview-body" aria-hidden="true"/>
+  </section>
   return <div ref={host} className="file-preview-pane file-preview-anchor" hidden={!paneVisible} aria-hidden="true" />
 }
 
-export function FilePreviewPaneContent({ visible }: { visible: boolean }): React.JSX.Element {
+export function FilePreviewPaneContent({ visible, missionActivity }: { visible: boolean; missionActivity?: React.ReactNode }): React.JSX.Element {
   const { tabs, activeTabId, paneVisible } = useFilePreview()
   const tabLabels = useMemo(() => previewTabLabels(tabs), [tabs])
   return (
@@ -483,7 +490,7 @@ export function FilePreviewPaneContent({ visible }: { visible: boolean }): React
         aria-label={tabLabels.get(tab.id) ?? previewTabLabel(tab)}
         aria-labelledby={`file-preview-tab-${tab.id}`}
       >
-        <ReadingPanel tab={tab}><FileFindScope id={tab.id}>{tab.kind === 'file_change' ? <FileChangesPreview tab={tab} visible={visible && tab.id === activeTabId} /> : <FilePreviewDocument tab={tab} />}</FileFindScope></ReadingPanel>
+        <ReadingPanel tab={tab}>{tab.kind === 'mission_activity' ? missionActivity : <FileFindScope id={tab.id}>{tab.kind === 'file_change' ? <FileChangesPreview tab={tab} visible={visible && tab.id === activeTabId} /> : <FilePreviewDocument tab={tab} />}</FileFindScope>}</ReadingPanel>
       </section>)}
     </section>
   )

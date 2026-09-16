@@ -1435,7 +1435,8 @@ const EMPTY_LIVE_RUNTIME_EVENTS: LiveRuntimeEvent[] = []
 export function CampWorkspace({
   snapshot,
   missionBoard = null,
-  missionPanel = null,
+  previewTabsInPane = false,
+  suppressExecutionAutoOpen = false,
   initialComposerDraft = null,
   onInitialComposerDraftConsumed,
   openCoverage = null,
@@ -1491,7 +1492,8 @@ export function CampWorkspace({
 }: {
   snapshot: CampSnapshot
   missionBoard?: React.ReactNode
-  missionPanel?: React.ReactNode
+  previewTabsInPane?: boolean
+  suppressExecutionAutoOpen?: boolean
   initialComposerDraft?: CampComposerDraftView | null
   onInitialComposerDraftConsumed?(draft: CampComposerDraftView): void
   openCoverage?: CampOpenProjection['coverage'] | null
@@ -1714,7 +1716,7 @@ export function CampWorkspace({
   const [worldMapRoutesVisible, setWorldMapRoutesVisible] = useState(false)
   const [localInspectorTab, setLocalInspectorTab] = useState<CampInspectorTab>('tasks')
   const [workspaceEntryRunningRun] = useState<AgentRunView | null>(() =>
-    workspaceEntrySnapshotReady
+    workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
       ? runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
       : null
   )
@@ -1948,6 +1950,7 @@ export function CampWorkspace({
   useLayoutEffect(() => {
     if (workspaceEntrySnapshotHandled.current || !workspaceEntrySnapshotReady) return
     workspaceEntrySnapshotHandled.current = true
+    if (suppressExecutionAutoOpen) return
     const runningRun = runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
     setExecutionDrawerAgentId(runningRun?.agentId ?? null)
     setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
@@ -1971,12 +1974,14 @@ export function CampWorkspace({
     mobile,
     onOpenInspector,
     snapshot.agentRuns,
-    workspaceEntrySnapshotReady
+    workspaceEntrySnapshotReady,
+    suppressExecutionAutoOpen
   ])
   useLayoutEffect(() => {
     if (workspaceEntryInspectorHandled.current) return
     if (!workspaceEntrySnapshotReady) return
     workspaceEntryInspectorHandled.current = true
+    if (suppressExecutionAutoOpen) return
     if (!mobile && workspaceEntryRunningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
@@ -1986,12 +1991,13 @@ export function CampWorkspace({
     mobile,
     onOpenInspector,
     workspaceEntryRunningRun,
-    workspaceEntrySnapshotReady
+    workspaceEntrySnapshotReady,
+    suppressExecutionAutoOpen
   ])
   useLayoutEffect(() => {
     if (mountedCampId.current === snapshot.camp.id) return
     mountedCampId.current = snapshot.camp.id
-    const runningRun = runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
+    const runningRun = suppressExecutionAutoOpen ? null : runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
     setExecutionDrawerAgentId(runningRun?.agentId ?? null)
     setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
     setExecutionDrawerFocusRequest((request) => ({
@@ -2005,7 +2011,7 @@ export function CampWorkspace({
     if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
-  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
+  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id, suppressExecutionAutoOpen])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -3931,6 +3937,7 @@ export function CampWorkspace({
     const submittedExecutionRequest = submittedExecutionRequests[0]
     if (!submittedExecutionRequest) return
     const consumeRequest = (): void => { setSubmittedExecutionRequests((current) => current.slice(1)) }
+    if (suppressExecutionAutoOpen) { consumeRequest(); return }
     if (taskCreationBlocksSubmittedRunAutoFocus(
       taskCreationActive,
       inspectorVisible,
@@ -3981,7 +3988,8 @@ export function CampWorkspace({
     mobile,
     pendingQueue,
     snapshot.camp.id,
-    taskCreationActive
+    taskCreationActive,
+    suppressExecutionAutoOpen
   ])
 
   const conversationFindTotal = conversationFind.snapshot?.totalMatchCount ?? 0
@@ -4042,7 +4050,7 @@ export function CampWorkspace({
   ) : null
 
   return (
-    <section className={`workspace-shell camp-workspace${missionPanel ? ' has-mission-panel' : ''}`} data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <section
@@ -4053,7 +4061,6 @@ export function CampWorkspace({
           onDragLeave={leaveAttachmentDropSurface}
           onDrop={dropAttachments}
         >
-          <div className="mission-secondary-panel" hidden={!missionPanel}>{missionPanel}</div>
           <div className={`camp-conversation-stage ${conversationFind.open ? 'conversation-find-open' : ''}`.trim()}>
             <div className={`conversation-floating-tools ${conversationFind.open ? 'find-open' : ''}`.trim()}>
               {conversationFind.open && (
@@ -4891,7 +4898,7 @@ export function CampWorkspace({
         {filePreview ? (
           <>
             <FilePreviewResizeHandle onClose={filePreview.hidePane} />
-            <FilePreviewPane />
+            <FilePreviewPane tabsInPane={previewTabsInPane} />
           </>
         ) : null}
 

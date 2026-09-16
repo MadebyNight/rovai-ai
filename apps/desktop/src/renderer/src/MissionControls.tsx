@@ -4,6 +4,7 @@ import * as Menu from '@radix-ui/react-dropdown-menu'
 import * as Popover from '@radix-ui/react-popover'
 import { MemberAvatar } from './MemberAvatar'
 import { NavigationIcon } from './NavigationIcon'
+import { identityColorToken } from './theme'
 import { DialogControlIcon } from './AppDialog'
 import type { AgentProfile, MissionRecord as Mission, MissionStatus as Status } from '@contracts'
 export const statuses: {id: Status; label: string}[] = [{id:'needs_you',label:'需要你'},{id:'not_started',label:'未开始'},{id:'in_progress',label:'进行中'},{id:'completed',label:'已完成'}]
@@ -16,6 +17,9 @@ export function Icon({ name }: { name: 'board' | 'list' | 'plus' | 'chevron' | '
   const d = { 'chevron-right': 'm9 6 6 6-6 6', tag: 'M3 3h8l10 10-8 8L3 11ZM7 7h.01', refresh: 'M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 11-2l3 7M4 12l3 7a7 7 0 0 0 11-2', board: 'M4 4h16v16H4zM9 4v16M15 4v16', list: 'M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1', plus: 'M12 5v14M5 12h14', chevron: 'm6 9 6 6 6-6', play: 'm8 5 11 7-11 7Z', branch: 'M6 3v12a4 4 0 0 0 4 4h2M18 7a6 6 0 0 1-6 6H6', history: 'M3 11a9 9 0 1 1 2.5 7M3 4v7h7M12 7v5l3 2', more: 'M5 12h.01M12 12h.01M19 12h.01', check: 'm5 12 4 4L19 6', expand: 'M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5' }[name]
   return <svg className="mission-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} />{name === 'branch' && <><circle cx="6" cy="3" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="14" cy="19" r="2"/></>}</svg>
 }
+export const tagStyle = (tag: string) => ({ '--mission-tag-color': identityColorToken(`mission-tag:${tag.normalize('NFC').toLocaleLowerCase()}`) } as React.CSSProperties)
+export function TagMark({ tag }: { tag: string }) { return <span className="mission-tag-mark" style={tagStyle(tag)}><Icon name="tag"/></span> }
+export function FilterStateIcon() { return <span className="mission-filter-state-icon" aria-hidden="true"/> }
 export function Avatar({ id, size = 'execution' }: { id: string; size?: 'execution' | 'mention' | 'list' }) {
   const person=usePeople(); const p = person(id); return <MemberAvatar agentId={id} avatarRef={p.avatarRef} displayName={p.displayName} size={size} decorative />
 }
@@ -37,26 +41,41 @@ export function MissionAvatars({ m, onClick }: { m: Mission; onClick?: AnchorAct
     : <span className="mission-avatars" role="img" aria-label={label}>{portraits}</span>
 }
 export function MissionTags({ tags, onEdit }: { tags: string[]; onEdit?: AnchorAction }) {
-  return <div className="mission-tags" aria-label="使命标签">{tags.map(tag => <span className="mission-tag" key={tag} title={tag}>{tag}</span>)}
+  return <div className="mission-tags" aria-label="使命标签">{tags.map(tag => <span className="mission-tag is-colored" style={tagStyle(tag)} key={tag} title={tag}>{tag}</span>)}
     {onEdit && <button className="mission-edit-tags" onClick={onEdit} aria-label="编辑标签" title="编辑标签"><Icon name="tag"/>{tags.length ? <Icon name="plus"/> : '添加标签'}</button>}
   </div>
 }
-export function MissionFilter({ label, options, values, onChange }: {
-  label: string; options: { id: string; label: string; icon?: ReactNode }[]; values: string[]; onChange(values: string[]): void
+export function MissionFilter({ label, icon, options, values, onChange, searchable = true }: {
+  label: string; searchable?: boolean; icon: ReactNode; options: { id: string; label: string; icon?: ReactNode; keywords?: string; count?: number }[]; values: string[]; onChange(values: string[]): void
 }) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
   const selected = options.filter(item => values.includes(item.id))
-  const summary = selected.length === 1 ? selected[0].label : selected.length ? `${selected.length} 项` : ''
-  return <Menu.Root><Menu.Trigger asChild><button className={`mission-filter ${values.length ? 'selected' : ''}`} aria-label={`${label}筛选${summary ? `：${summary}` : ''}`}>
-    {label}{summary && <span className="mission-filter-value">{summary}</span>}<Icon name="chevron"/>
-  </button></Menu.Trigger><Menu.Portal><Menu.Content className="compact-menu mission-filter-menu" sideOffset={6} align="start" collisionPadding={10} loop>
-    <Menu.Item className="compact-option" onSelect={event => { event.preventDefault(); onChange([]) }}><span>全部{label}</span>{!values.length && <Icon name="check"/>}</Menu.Item>
-    <Menu.Separator className="sidebar-action-menu-separator"/>
-    {options.map(option => <Menu.CheckboxItem key={option.id} className="compact-option" checked={values.includes(option.id)}
-      onSelect={event => event.preventDefault()} onCheckedChange={checked => onChange(checked ? [...values, option.id] : values.filter(id => id !== option.id))}>
-      {option.icon}<span>{option.label}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator>
-    </Menu.CheckboxItem>)}
-    {!options.length && <Menu.Label className="mission-menu-label">暂无标签</Menu.Label>}
-  </Menu.Content></Menu.Portal></Menu.Root>
+  const summary = selected.length === 1 ? selected[0].label : selected.length ? `${selected.length}` : ''
+  const found = options.filter(option => `${option.label} ${option.keywords ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  function navigate(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.nativeEvent.isComposing || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    if (event.target === searchRef.current && !['ArrowDown', 'ArrowUp'].includes(event.key)) return
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('.mission-filter-options button'))
+    if (!buttons.length) return
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    event.preventDefault()
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? (event.key === 'ArrowDown' ? 0 : buttons.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+    buttons[next].focus()
+  }
+  return <Popover.Root open={open} onOpenChange={value => { setOpen(value); if (!value) setQuery('') }}><Popover.Trigger asChild><button className={`mission-filter ${values.length ? 'selected' : ''}`} aria-label={`${label}筛选${summary ? `：${selected.map(o => o.label).join('、')}` : ''}`} title={selected.map(o => o.label).join('、') || `${label}筛选`}>
+    {icon}<span className="mission-filter-label">{label}</span>{summary && <span className="mission-filter-value">{summary}</span>}<Icon name="chevron"/>
+  </button></Popover.Trigger><Popover.Portal><Popover.Content className="compact-menu mission-unified-filter" aria-label={`${label}筛选`} sideOffset={6} align="start" collisionPadding={12} onKeyDown={navigate}
+    onOpenAutoFocus={event => { if (searchable) { event.preventDefault(); searchRef.current?.focus() } }}>
+    {searchable && <label className="mission-filter-search"><NavigationIcon name="search"/><input ref={searchRef} aria-label={`搜索${label}`} placeholder={`搜索${label}…`} value={query} onChange={event => setQuery(event.target.value)}/></label>}
+    <div className="mission-filter-options" role="group" aria-label={`选择${label}`}>
+      {found.map(option => <button type="button" role="checkbox" aria-checked={values.includes(option.id)} className="compact-option" key={option.id} onClick={() => onChange(values.includes(option.id) ? values.filter(id => id !== option.id) : [...values, option.id])}>
+        {option.icon ?? icon}<span>{option.label}</span>{option.count !== undefined && <small>{option.count}</small>}<span className="mission-filter-check">{values.includes(option.id) && <Icon name="check"/>}</span>
+      </button>)}
+      {!found.length && <p className="mission-filter-empty">没有匹配的{label}</p>}
+    </div>
+  </Popover.Content></Popover.Portal></Popover.Root>
 }
 export type ContextPosition = { id: string; x: number; y: number; origin: HTMLElement | null }
 export function MissionContextMenu({ m, position, catalog, onClose, onStatus, onLead, onSaveTags, onDelete }: {
@@ -118,7 +137,7 @@ export function LabelsEditor({ m, catalog, onSave }: { m: Mission; catalog: stri
     }
   }}>
     <label className="mission-tag-search"><NavigationIcon name="search"/><input value={query} onChange={e => setQuery(e.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); create() } }}/></label>
-    <div className="mission-tag-options" role="group" aria-label="可选标签">{found.map(tag => <button className="compact-option" key={tag} role="checkbox" aria-checked={m.tags.includes(tag)} disabled={busy} onClick={() => toggle(tag)}><Icon name="tag"/><span>{tag}</span>{m.tags.includes(tag) && <Icon name="check"/>}</button>)}
+    <div className="mission-tag-options" role="group" aria-label="可选标签">{found.map(tag => <button className="compact-option" key={tag} role="checkbox" aria-checked={m.tags.includes(tag)} disabled={busy} onClick={() => toggle(tag)}><TagMark tag={tag}/><span>{tag}</span>{m.tags.includes(tag) && <Icon name="check"/>}</button>)}
       {normalized && !exact && <button className="compact-option" onClick={create} disabled={tooLong || busy}><Icon name="plus"/><span>新建“{normalized}”</span></button>}
       {tooLong && <p className="compact-inline-error" role="alert">标签最多 24 个字符。</p>}
     </div>{error && <div className="mission-tag-error" role="alert"><p>{error}</p><button onClick={() => pending.current && void save(pending.current)} disabled={busy}>重试</button></div>}

@@ -10,10 +10,6 @@
 .mission-topbar > .mission-new { margin-left: auto; }
 .mission-board-content { padding: 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface); }
 .mission-toolbar { display: flex; align-items: center; gap: 12px; flex: 0 0 64px; padding: 14px 24px; }
-.mission-views { display: flex; align-items: center; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
-.mission-views button { display: flex; align-items: center; gap: 6px; padding: 4px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
-.mission-views button[aria-pressed="true"] { color: var(--ink); background: var(--surface-raised); }
-.mission-toolbar-sep { height: 16px; width: 1px; background: var(--line); }
 .mission-filter { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 7px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .mission-filter > span { font: 11px ui-monospace,monospace; }
 .mission-filter:hover,.mission-filter.selected { color: var(--ink); background: var(--neutral-selected); }
@@ -107,9 +103,6 @@
 .mission-folder-option:hover { background: var(--surface-hover); }
 .mission-board-card.selected { border-color: var(--line-strong); background: var(--neutral-selected); }
 .mission-drawer { position: absolute; z-index: 20; top: 50px; right: 0; bottom: 0; display: flex; width: min(650px, calc(100% - var(--rail-width) - 30px)); min-width: 0; flex-direction: column; border-left: 1px solid var(--line-strong); background: var(--conversation-surface); animation: mission-drawer-in 180ms ease-out; }
-.mission-drawer-header { display: flex; min-height: 48px; flex: 0 0 auto; align-items: center; gap: 8px; padding: 7px 18px; border-bottom: 1px solid var(--line); }
-.mission-drawer-header > div { display: flex; gap: 4px; margin-left: auto; }
-.mission-drawer-header .mission-icon-button { width: 30px; height: 30px; }
 .mission-icon-button > svg { width: 16px; height: 16px; }
 .mission-drawer-hero { flex: 0 0 auto; min-width: 0; padding: 18px 22px 15px; }
 .mission-drawer-hero h2 { margin: 0 0 8px; color: var(--ink); font-size: 17px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
@@ -124,11 +117,6 @@
 .mission-drawer-people > span > span:last-child { color: var(--faint); }
 .mission-drawer-people svg { width: 14px; height: 14px; }
 .mission-drawer-people > button { margin-left: auto; height: 29px; font-size: 11.5px; }
-.mission-detail-tabs { display: flex; flex: 0 0 auto; align-items: stretch; height: 40px; gap: 22px; padding: 0 22px; border-bottom: 1px solid var(--line); }
-.mission-detail-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
-.mission-detail-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
-.mission-detail-tabs button:hover { color: var(--ink); }
-.mission-detail-tabs svg { width: 14px; height: 14px; flex-basis: 14px; }
 .mission-chat-panel { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; overflow: hidden; }
 .mission-chat-panel > main { flex: 1; min-height: 0; width: 100%; }
 .mission-chat-panel[hidden],.mission-delivery-panel[hidden],.mission-activity-panel[hidden] { display: none; }
@@ -172,7 +160,7 @@
 .mission-pr-detail { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .mission-pr-detail h3 { margin: 0 0 10px; color: var(--ink); font-size: 14px; }
 .mission-pr-detail code { display: block; overflow-wrap: anywhere; }
-@keyframes mission-drawer-in { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes mission-drawer-in { from { opacity: 0; } to { opacity: 1; } }
 @media(min-width:1800px) { .mission-drawer { width: 710px; } }
 @media(max-width:760px) { .mission-drawer { width: calc(100% - var(--rail-width)); }.mission-drawer-hero { padding: 14px 16px; }.mission-drawer-people { gap: 10px; } }
 @media(prefers-reduced-motion:reduce) { .mission-drawer { animation: none; } }
@@ -325,12 +313,6 @@ button.mission-tag { cursor: pointer; }
 .mission-members-popover .member-avatar { --member-avatar-size: 28px !important; }
 .mission-members-popover .mission-roster strong { font-size: 12px; }
 .mission-members-popover .mission-roster small { margin-top: 1px; }
-.mission-intro-actions { display: flex; align-items: center; gap: 16px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
-.mission-intro-actions > button:not(.mission-new) { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 11.5px; cursor: pointer; }
-.mission-intro-actions > button:hover { color: var(--ink); }
-.mission-intro-actions > .mission-new { margin-left: auto; }
-.mission-detail-tabs .mission-locate-board { margin-left: auto; gap: 6px; border-bottom: 0; font-size: 11px; }
-.mission-intro-actions button:focus-visible,.mission-intro-meta > button:focus-visible,.mission-locate-board:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
 
 /* The same CampWorkspace owns chat, delivery and file preview in both presentations. */
 .mission-board-page { flex: 1; min-height: 0; }
@@ -339,13 +321,8 @@ button.mission-tag { cursor: pointer; }
 .mission-active-content { position: relative; }
 .ordinary-workspace-host { display: contents; }
 .mission-workspace-host { min-width: 0; min-height: 0; }
-.mission-conversation { display: flex; flex: 1; flex-direction: column; width: 100%; height: 100%; overflow: hidden; }
 .mission-active-content > .mission-drawer { top: 0; width: min(700px,calc(100% - 24px)); }
 .mission-workspace-host > .camp-workspace { flex: 1; min-height: 0; }
-.mission-drawer-header > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; }
-.mission-secondary-panel { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
-.mission-secondary-panel[hidden] { display: none; }
-.has-mission-panel .timeline-pane > :not(.mission-secondary-panel),.has-mission-panel .conversation-controls { display: none; }
 .mission-card-actions { opacity: 0; }
 .mission-board-card:hover .mission-card-actions,.mission-board-card:focus-within .mission-card-actions { opacity: 1; }
 .mission-board-card .mission-avatars { flex-wrap: wrap; }
@@ -389,12 +366,152 @@ button.mission-tag { cursor: pointer; }
 
 .mission-unread-dot { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--info); vertical-align: middle; }
 
-.mission-list-state { grid-column: 2; grid-row: 1; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
 
-.mission-drawer-entries { margin-left: auto; }
-.mission-drawer-entries + .mission-locate-board { margin-left: 0; }
-.mission-drawer-preview-tabs { display: flex; min-width: 0; align-items: center; border-bottom: 1px solid var(--line); }
-.mission-drawer-preview-tabs > .file-preview-tabs { flex: 1; min-width: 0; }
 .new-camp-dialog .mission-source-input { width: 100%; min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
 /* Retained previews share the Mission drawer's visible layer without remounting. */
 .app-shell:has(.mission-drawer) > .file-preview-retained-host { z-index: 21; }
+
+/* Mission board, conversation drawer and shared activity preview. */
+.mission-filter { min-height: 30px; padding: 0 8px; gap: 6px; border-radius: 6px; color: var(--muted); }
+.mission-filter > .mission-filter-label { font: inherit; }
+.mission-filter > :is(.mission-icon,.navigation-icon,.mission-filter-state-icon) { width: 15px; height: 15px; flex: 0 0 15px; }
+.mission-filter > .mission-icon:last-child { width: 14px; height: 14px; flex-basis: 14px; }
+.mission-filter .mission-filter-value { max-width: 100px; font-size: 11px; color: var(--ink); }
+.mission-filter:hover,.mission-filter[data-state="open"] { color: var(--ink); background: var(--neutral-hover); }
+.mission-filter.selected { background: var(--neutral-selected); color: var(--ink); }
+.mission-filter-state-icon { display: inline-block; width: 14px; height: 14px; flex: 0 0 14px; border: 1.5px dashed currentColor; border-radius: 50%; }
+.mission-view-trigger { border: 0; border-radius: 6px; flex: 0 0 auto; padding: 0 7px; gap: 4px; }
+.mission-column { display: flex; flex-direction: column; padding: 0 9px 16px; border: 1px solid var(--mission-lane-line); border-radius: 12px; background: var(--mission-lane); }
+.mission-column > header { height: 47px; flex: 0 0 47px; margin: 0; padding: 0 4px; gap: 8px; }
+.mission-column h2 { font-size: 12px; font-weight: 550; }
+.mission-column > header > span:last-child { font-size: 11px; color: var(--muted); }
+.mission-column-cards { flex: 1; gap: 10px; }
+.mission-board-card { background: var(--home-surface); border-color: var(--line); border-radius: 9px; padding: 11px 12px 0; box-shadow: none; }
+.mission-board-card:hover { background: var(--home-surface); border-color: var(--line-strong); }
+.mission-board-card.selected { background: var(--home-surface); border-color: var(--muted); }
+.mission-card-meta { height: 18px; }
+.mission-card-meta > span { color: var(--faint); font-size: 10px; }
+.mission-card-open { padding: 4px 0 12px; }
+.mission-card-open h3 { font-size: 13px; font-weight: 550; line-height: 1.65; }
+.mission-board-card .mission-project-tags { gap: 6px; flex-wrap: wrap; }
+.mission-board-card .mission-project-tags > .mission-tags { flex: 1 1 auto; }
+.mission-avatar-item .member-avatar { --member-avatar-size: 23px !important; }
+.mission-tag.is-colored { color: var(--mission-tag-color); background: color-mix(in srgb, var(--mission-tag-color) 9%, var(--home-surface)); border: 0; border-radius: 4px; padding: 0 6px; line-height: 20px; font-size: 10.5px; }
+.mission-tag-mark { display: inline-flex; color: var(--mission-tag-color); }
+.mission-unified-filter.compact-menu { width: 244px; min-width: 244px; padding: 5px; max-height: min(360px,var(--radix-popover-content-available-height)); display: flex; flex-direction: column; }
+.mission-filter-search { display: flex; align-items: center; gap: 8px; min-height: 35px; margin: 0 5px 5px; padding: 0 3px 5px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.mission-filter-search svg { width: 15px; height: 15px; flex: 0 0 15px; }
+.mission-filter-search input { width: 100%; min-width: 0; border: 0; background: transparent; padding: 4px 0; color: var(--ink); font-size: 12px; }
+.mission-filter-options { overflow-y: auto; }
+.mission-filter-options .compact-option { width: 100%; min-height: 34px; display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); text-align: left; font-size: 12px; cursor: pointer; }
+.mission-filter-options .compact-option:hover,.mission-filter-options .compact-option:focus-visible { background: var(--neutral-hover); outline: none; }
+.mission-filter-options .compact-option > :is(svg,.mission-state-glyph,.mission-tag-mark,.mission-filter-state-icon) { flex: 0 0 14px; width: 14px; height: 14px; }
+.mission-filter-options .compact-option > span:not(.mission-filter-check,.mission-tag-mark,.mission-state-glyph,.mission-filter-state-icon) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mission-filter-options .compact-option > .mission-filter-check { display: inline-flex; justify-content: center; flex: 0 0 16px; width: 16px; }
+.mission-filter-options .compact-option > small { color: var(--faint); font: 11px ui-monospace,monospace; }
+.mission-filter-options .compact-separator { margin: 4px 9px; }
+.mission-filter-empty { padding: 12px 8px; color: var(--muted); text-align: center; font-size: 12px; }
+.mission-grouped-list { display: flex; flex-direction: column; gap: 24px; padding-bottom: 8px; }
+.mission-list-group { min-width: 0; }
+.mission-group-heading { display: flex; align-items: center; gap: 8px; width: 100%; height: 38px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--mission-lane); color: var(--ink); text-align: left; cursor: pointer; }
+.mission-group-heading h2 { font-size: 12px; font-weight: 550; margin: 0; }
+.mission-group-heading > .mission-icon { width: 14px; height: 14px; color: var(--muted); }
+.mission-group-heading[aria-expanded="false"] > .mission-icon { transform: rotate(-90deg); }
+.mission-group-heading > span:last-child { color: var(--muted); font: 11px ui-monospace,monospace; }
+.mission-intro { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--home-surface); box-shadow: none; }
+.mission-intro-top { justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+.mission-intro-top > span { color: var(--muted); gap: 6px; font-size: 11px; }
+.mission-intro-top > .mission-readonly-status { margin-left: auto; cursor: default; }
+.mission-intro h2 { font-size: 15px; font-weight: 600; line-height: 1.6; margin-bottom: 7px; }
+.mission-description { -webkit-line-clamp: 3; font-size: 12px; line-height: 1.75; max-width: none; margin-bottom: 0; }
+.mission-description.expanded { display: block; }
+.mission-description-toggle { display: inline-flex; align-items: center; gap: 3px; min-height: 26px; padding: 2px 0; margin-top: 3px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; font-size: 11px; cursor: pointer; }
+.mission-description-toggle > svg { width: 13px; height: 13px; flex-basis: 13px; }
+.mission-description-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.mission-description-toggle:hover { color: var(--ink); }
+.compact-menu.mission-unified-filter .compact-option > :is(.mission-state-glyph,.mission-filter-state-icon,.mission-tag-mark) { flex: 0 0 14px; min-width: 14px; max-width: 14px; height: 14px; }
+.compact-menu.mission-unified-filter .compact-option > .mission-filter-check { flex: 0 0 16px; min-width: 16px; max-width: 16px; }
+.compact-menu.mission-label-popover .compact-option > .mission-tag-mark { flex: 0 0 16px; min-width: 16px; max-width: 16px; }
+.mission-board-card .mission-project-tags { display: grid; grid-template-columns: max-content minmax(0,1fr); column-gap: 6px; }
+.mission-filter-check { height: 16px; border: 1px solid var(--control-line); border-radius: 4px; color: var(--conversation-action-contrast); }
+.mission-filter-check > .mission-icon { width: 12px; height: 12px; flex: 0 0 12px; }
+.mission-filter-options [aria-checked="true"] .mission-filter-check { background: var(--conversation-action); border-color: var(--conversation-action); }
+.mission-filter-options .compact-option:focus-visible { outline: 1px solid var(--ink); outline-offset: -2px; }
+
+.content.mission-board-content, .content.mission-active-content { grid-column: 2; grid-row: 1 / -1; padding: 0; background: var(--home-surface); }
+.mission-board-page { --mission-lane: color-mix(in srgb,var(--ink) 1.2%,var(--home-surface)); --mission-lane-line: color-mix(in srgb,var(--line) 50%,var(--home-surface)); padding: 5px 28px 24px; background: var(--home-surface); }
+.mission-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 0 17px; margin-bottom: 14px; border: 0; }
+.mission-page-header h1 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 620; }
+.mission-page-header p { margin: 7px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.42; }
+.mission-new-entry { position: relative; z-index: 3; background: var(--neutral-selected); color: var(--ink); font-weight: 550; -webkit-app-region: no-drag; }
+.mission-new-entry * { -webkit-app-region: no-drag; }
+.mission-new-entry:hover { background: var(--neutral-hover); }
+.mission-board-page > .mission-toolbar { padding: 0 0 18px; flex: 0 0 auto; gap: 12px; min-height: 48px; border: 0; }
+.mission-filter-group { gap: 5px; flex-wrap: wrap; }
+.mission-board-page > .mission-board-scroll { padding: 0; }
+.mission-board-scroll > .mission-board { min-height: 100%; gap: 12px; max-width: none; margin: 0; align-items: stretch; }
+.mission-board-card .mission-card-open h3 { margin: 0; }
+.mission-card-footer { padding-top: 11px; }
+.mission-state-glyph.is-in_progress::after { background: var(--info); clip-path: inset(0 50% 0 0); }
+.mission-list-cards[hidden] { display: none; }
+.mission-list-cards .mission-board-card { grid-template-columns: minmax(160px,2fr) minmax(155px,1.4fr) minmax(145px,1fr) 28px; }
+.mission-list-cards .mission-card-meta { grid-column: 4; }
+.mission-list-cards .mission-project-tags { grid-column: 2; }
+.mission-list-cards .mission-card-footer { grid-column: 3; }
+.mission-create-split { display: inline-flex; align-items: stretch; }
+.mission-create-split > .compact-primary:first-child { min-width: 92px; border-radius: 6px 0 0 6px; }
+.mission-create-split > .mission-create-options { display: grid; place-items: center; min-width: 30px; padding-inline: 8px; border-radius: 0 6px 6px 0; }
+.mission-create-options > svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.mission-create-dialog button:active:not(:disabled), .mission-new:active:not(:disabled) { transform: none; }
+.mission-intro .mission-project-tags { margin: 14px 0 12px; flex-wrap: wrap; }
+.mission-status-readonly { margin-left: auto; white-space: nowrap; }
+.mission-start-row { display: flex; justify-content: flex-end; margin: -12px 0 24px; padding: 0; border: 0; }
+.mission-start { height: 36px; padding-inline: 16px; font-size: 12px; }
+.mission-active-content { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+.mission-full { display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; flex-direction: column; background: var(--conversation-surface); }
+.mission-active-content > .mission-drawer { top: 0; width: var(--mission-drawer-width,1040px); }
+.mission-workspace-host > .camp-workspace { flex: 1; min-height: 0; }
+.mission-session-header { height: 40px; min-height: 40px; flex: 0 0 40px; container: mission-header / inline-size; }
+.camp-topbar.mission-session-header .topbar-conversation-context { height: 40px; padding: 0 8px 0 12px; gap: 6px; }
+.mission-session-header .file-preview-toggle-group { position: static; flex: 0 0 auto; gap: 3px; }
+.mission-session-header .context-breadcrumb[hidden] { display: none; }
+.mission-session-header :is(.context-project,.context-sep) { display: inline; }
+.mission-session-leading { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; margin-right: 2px; -webkit-app-region: no-drag; }
+.mission-session-leading > button { flex: 0 0 28px; }
+.mission-session-leading > button:hover { background: var(--neutral-hover); }
+.mission-session-header .file-preview-toggle svg { width: 17px; height: 17px; }
+.mission-activity-entry { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 5px; height: 28px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; -webkit-app-region: no-drag; }
+.mission-activity-entry > svg { width: 14px; height: 14px; }
+.mission-activity-entry:hover { color: var(--ink); background: var(--neutral-hover); }
+.mission-activity-entry[aria-pressed="true"] { color: var(--ink); background: var(--neutral-selected); }
+.mission-preview-slot { position: relative; }
+.mission-preview-slot > .file-preview-tabs { --file-preview-tabs-end-padding: 6px; height: 38px; flex: 0 0 38px; padding-block: 5px; border-bottom: 1px solid var(--line); }
+.mission-preview-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.mission-activity-document { flex: 1; min-width: 0; min-height: 0; padding: 20px 24px 32px; overflow: auto; overscroll-behavior: contain; }
+.mission-activity-document > :is(.mission-delivery-panel,.mission-activity-panel) { padding: 0; overflow: visible; }
+.mission-activity-document > .mission-activity-panel { margin-top: 28px; }
+.file-preview-tab-activate > .mission-icon { width: 14px; height: 14px; flex: 0 0 14px; }
+.file-preview-compact .mission-preview-slot .file-preview-return { display: inline-flex; }
+.app-shell:has(.mission-full) > .file-preview-resize-handle.is-shell-divider { top: 40px; height: calc(100% - 40px); }
+.mission-drawer { animation: none; }
+.mission-drawer.is-resizing { transition: none; }
+.mission-drawer-resize-handle { position: absolute; z-index: 45; top: 0; bottom: 0; left: -5px; width: 10px; cursor: col-resize; touch-action: none; outline: none; -webkit-app-region: no-drag; }
+.mission-drawer-resize-handle::after { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; width: 1px; background: transparent; }
+.mission-drawer-resize-handle:hover::after,.mission-drawer-resize-handle:focus-visible::after,.mission-drawer.is-resizing .mission-drawer-resize-handle::after { background: var(--resize-line); }
+.mission-drawer-expand-tip { position: absolute; top: 48px; left: 17px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; white-space: nowrap; font-size: 11px; color: var(--ink); background: var(--home-surface); box-shadow: var(--shadow-float); pointer-events: none; }
+html.mission-drawer-resizing,html.mission-drawer-resizing * { cursor: col-resize !important; user-select: none !important; }
+html.mission-drawer-resizing :is(.file-preview-retained-host,iframe) { pointer-events: none; }
+:is(.mission-description-toggle,.mission-group-heading,.mission-create-options,.mission-session-leading button,.mission-activity-entry):focus-visible { outline: 1px solid var(--ink); outline-offset: 1px; }
+html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-page-header { padding-left: 128px; }
+html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .topbar-conversation-context { padding-left: 142px; }
+@media(max-width:1190px) { .mission-board-page { padding-inline: 20px; }.mission-board-scroll > .mission-board { gap: 9px; }.mission-column { padding-inline: 7px; }.mission-board-card { padding-inline: 10px; }.mission-filter { padding-inline: 6px; }.mission-filter .mission-filter-value { max-width: 70px; }.mission-search { width: 112px; } }
+@media(prefers-reduced-motion:reduce) { .mission-drawer { animation: none; } }
+@container mission-header (max-width: 700px) {
+  .camp-detail-entry > small, .camp-execution-members, .camp-execution-overflow { display: none; }
+}
+@container mission-header (max-width: 560px) {
+  .camp-topbar.mission-session-header .topbar-conversation-context { gap: 2px; padding-inline: 6px; }
+  .camp-detail-entry, .mission-activity-entry { gap: 3px; padding-inline: 4px; }
+  .mission-session-leading { gap: 0; margin-right: 0; }
+  .mission-session-header .file-preview-toggle-group { gap: 0; }
+}

@@ -76,7 +76,7 @@ export function FilePreviewLayoutProvider({
   useLayoutEffect(() => {
     if (!workspace) return
     const measure = (): void => {
-      const width = workspace.getBoundingClientRect().width
+      const width = workspace.clientWidth
       if (width <= 0 || width === availableWidthRef.current) return
       availableWidthRef.current = width
       setAvailableWidth(width)
@@ -163,6 +163,7 @@ export function FilePreviewWorkspace({ children, hidden }: { children: ReactNode
 }
 
 interface ResizeGesture {
+  scale: number
   pointerId: number
   target: HTMLDivElement
   availableWidth: number
@@ -240,7 +241,7 @@ export function FilePreviewResizeHandle({ onClose }: { onClose(): void }): React
 
   const widthAtPointer = (gesture: ResizeGesture, clientX: number): number => filePreviewDragWidth(
     gesture.availableWidth,
-    gesture.right - clientX + gesture.grabOffset
+    gesture.right - clientX / gesture.scale + gesture.grabOffset
   )
 
   const moveGesture = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -281,12 +282,14 @@ export function FilePreviewResizeHandle({ onClose }: { onClose(): void }): React
       event.preventDefault()
       event.currentTarget.focus({ preventScroll: true })
       const bounds = workspace.getBoundingClientRect()
+      const scale = bounds.width / workspace.clientWidth
       gestureRef.current = {
+        scale,
         pointerId: event.pointerId,
         target: event.currentTarget,
-        availableWidth: bounds.width,
-        right: bounds.right,
-        grabOffset: event.clientX - (bounds.right - layout.width),
+        availableWidth: workspace.clientWidth,
+        right: bounds.right / scale,
+        grabOffset: (event.clientX - bounds.right) / scale + layout.width,
         startWidth: layout.width,
         width: layout.width,
         moved: false
