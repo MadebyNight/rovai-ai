@@ -698,14 +698,16 @@
       "title": "使命",
       "description": "完成目录导航",
       "status": "needs_you",
-      "sourceMessageId": "message-1"
+      "sourceMessageId": "message-1",
+      "attachments": ["/workspace/requirements.pdf", "/workspace/reference"]
     },
     "agentOutput": {
       "missionId": "rvm_example",
       "title": "使命",
       "description": "完成目录导航",
       "status": "needs_you",
-      "sourceMessageId": "message-1"
+      "sourceMessageId": "message-1",
+      "attachments": ["/workspace/requirements.pdf", "/workspace/reference"]
     }
   },
   "mission.update": {

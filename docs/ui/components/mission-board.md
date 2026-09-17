@@ -32,7 +32,10 @@ independent of Mission status.
 
 Creation uses an 820px writing dialog. Mission name is an unboxed heading field; the unboxed description
 fills the remaining writing plane. Source attachments sit between them and support file selection, paste,
-drag/drop and removal using the Composer attachment rhythm. Project, the combined member/lead control and
+drag/drop and removal using the Composer attachment rhythm. They reuse the Composer's file/directory
+classification and `DIR` label. Overflow stays in one no-wrap strip with no visible scrollbar; trackpad
+horizontal scroll, ordinary-wheel conversion and focusable Left/Right/Home/End browsing match Composer.
+Project, the combined member/lead control and
 tags sit as compact property chips above the footer. The team popover selects members and lead together and
 retains the existing default-team preference. The split primary button defaults to 新建; its dropdown offers
 开始使命. Both paths stay on the board without opening the new Camp. No independent-workspace checkbox is
@@ -70,7 +73,10 @@ right. There is no Mission ellipsis action in the conversation header. Drawer ru
 open the execution inspector or overlay; explicit execution entry remains available.
 
 The timeline begins with a read-only 使命 card: title, description clamped to three lines with overflow
-expansion, roster, tags and read-only status. It has no edit, context menu, or detail/delivery/activity links.
+expansion, current source attachments, roster, tags and read-only status. Attachments reuse the same Composer
+cards and focusable no-wrap strip, including file/directory typing, hidden visual scrollbar and
+Left/Right/Home/End browsing. Opening an attachment is not a Mission edit action. The Mission card has no edit,
+context menu, or detail/delivery/activity links.
 An unstarted Mission has a 36px neutral primary 开始使命 action below the card (black in Day).
 Starting schedules the Mission and preserves its explicitly managed status without inserting a visible user-authored message;
 the timeline remains unchanged until a teammate publishes a message.
@@ -103,6 +109,6 @@ the positioning or steal the user's subsequent focus. Status history uses the ac
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 The cumulative Diff dialog uses the wide desktop reading surface rather than the standard compact-dialog width.
 
-Business and ownership rules are defined by [Mission v1](../../contracts/mission-v1.md), not this presentation
+Business and ownership rules are defined by [Mission v2](../../contracts/mission-v2.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

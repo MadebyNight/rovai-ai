@@ -15580,7 +15580,7 @@ mod slow_tests {
         );
         assert_eq!(
             rendered.payload_json,
-            "{\"schemaVersion\":3,\"attachmentOutputRoot\":\"/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf\",\"taskContext\":{\"taskId\":\"task-1\",\"referenceMode\":\"frozen\",\"laterChangesRetargetRun\":false}}"
+            "{\"schemaVersion\":4,\"attachmentOutputRoot\":\"/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf\",\"taskContext\":{\"taskId\":\"task-1\",\"referenceMode\":\"frozen\",\"laterChangesRetargetRun\":false}}"
         );
         assert_eq!(rendered.digest, sha256_text(&rendered.payload_json));
     }

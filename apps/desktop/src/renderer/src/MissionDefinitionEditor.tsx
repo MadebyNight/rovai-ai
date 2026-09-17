@@ -1,22 +1,30 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ButtonHTMLAttributes, type DragEvent, type ReactNode, type RefObject } from 'react'
 import * as Popover from '@radix-ui/react-popover'
-import type { LocalAttachmentSourceView, MissionAttachmentDraft } from '@contracts'
+import type { CampMessageAttachmentView, LocalAttachmentSourceView, MissionAttachmentDraft } from '@contracts'
 import { newCommandId } from '../../shared/command-id'
-import { useCampClient } from './camp-client'
+import { AttachmentCard, ComposerAttachmentStrip } from './AttachmentCard'
 import { DialogControlIcon } from './AppDialog'
 import { Icon, TagMark } from './MissionControls'
 import { NavigationIcon } from './NavigationIcon'
+import { dataTransferContainsFiles, droppedAttachmentInputs, type AttachmentPreparationInput } from './attachment-drop'
+import {
+  FileExtensionLabel,
+  UserFileIcon,
+  attachmentBaseName,
+  attachmentFormatLabel,
+  classifyAttachmentDisplay
+} from './attachment-presentation'
 
 export type MissionDraftAttachment =
   | { kind: 'stored'; attachment: LocalAttachmentSourceView }
-  | { kind: 'local'; id: string; file: File }
+  | { kind: 'local'; id: string; file: File; kindHint: 'file' | 'directory' }
 
 export type MissionWritingPlaneHandle = { chooseFiles(): void }
 
 export function missionAttachmentDrafts(attachments: MissionDraftAttachment[]): MissionAttachmentDraft[] {
   return attachments
     .filter((attachment): attachment is Extract<MissionDraftAttachment, {kind: 'local'}> => attachment.kind === 'local')
-    .map(({ id, file }) => ({ id, file }))
+    .map(({ id, file, kindHint }) => ({ id, file, kindHint }))
 }
 
 export function keptMissionAttachmentIds(attachments: MissionDraftAttachment[]): string[] {
@@ -35,15 +43,6 @@ function attachmentIdentity(attachment: MissionDraftAttachment): string {
     : `local:${attachment.id}`
 }
 
-function attachmentName(attachment: MissionDraftAttachment): string {
-  return attachment.kind === 'stored' ? attachment.attachment.displayName : attachment.file.name
-}
-
-function attachmentExtension(name: string): string {
-  const match = name.match(/\.([^.]+)$/)
-  return match?.[1]?.slice(0, 5).toLocaleUpperCase() ?? 'FILE'
-}
-
 function LocalImage({ file }: { file: File }): React.JSX.Element {
   const [url, setUrl] = useState('')
   useEffect(() => {
@@ -54,8 +53,38 @@ function LocalImage({ file }: { file: File }): React.JSX.Element {
   return <img src={url} alt="" />
 }
 
-function FileGlyph(): React.JSX.Element {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l4 4V21H6z"/><path d="M14 2.8V7h4M9 12h6M9 15h5"/></svg>
+export function missionLocalAttachmentView(
+  attachment: Extract<MissionDraftAttachment, {kind: 'local'}>
+): CampMessageAttachmentView {
+  const directory = attachment.kindHint === 'directory'
+  return {
+    id: attachment.id,
+    displayName: attachment.file.name,
+    kind: attachment.kindHint,
+    fileCount: directory ? null : 1,
+    mediaType: directory ? 'inode/directory' : attachment.file.type || null,
+    byteSize: directory ? null : attachment.file.size,
+    previewKind: !directory && attachment.file.type.startsWith('image/') ? 'image' : 'none',
+    availability: 'unknown'
+  }
+}
+
+function MissionLocalAttachmentItem({ attachment, disabled, onRemove }: {
+  attachment: Extract<MissionDraftAttachment, {kind: 'local'}>
+  disabled: boolean
+  onRemove(): void
+}): React.JSX.Element {
+  const view = missionLocalAttachmentView(attachment)
+  const display = classifyAttachmentDisplay(view)
+  const image = view.previewKind === 'image'
+  return <div className={`attachment-card composer-attachment-card${image ? ' composer-image-attachment' : ''}`}>
+    <div className="attachment-open" aria-label={view.displayName}>
+      {image
+        ? <span className="attachment-visual composer-image-preview" aria-hidden="true"><LocalImage file={attachment.file}/></span>
+        : <><UserFileIcon type={display.userDisplayType === 'image' ? 'document' : display.userDisplayType}/><span className="attachment-copy"><span className="attachment-title-line"><strong title={view.displayName}>{attachmentBaseName(view.displayName, view.kind)}</strong><FileExtensionLabel>{attachmentFormatLabel(view.displayName, view.kind)}</FileExtensionLabel></span></span></>}
+    </div>
+    <button type="button" className="attachment-remove" aria-label={`移除附件 ${view.displayName}`} onClick={onRemove} disabled={disabled}>×</button>
+  </div>
 }
 
 function MissionAttachmentItem({ attachment, mission, disabled, onRemove, onNotify }: {
@@ -65,28 +94,11 @@ function MissionAttachmentItem({ attachment, mission, disabled, onRemove, onNoti
   onRemove(): void
   onNotify(message: string): void
 }): React.JSX.Element {
-  const client = useCampClient()
-  const name = attachmentName(attachment)
-  const isImage = attachment.kind === 'local' && attachment.file.type.startsWith('image/')
-  const open = async (): Promise<void> => {
-    if (attachment.kind !== 'stored' || !mission) return
-    try {
-      const result = client.attachments.kind === 'native'
-        ? await client.attachments.open({ owner: 'mission', ...mission, attachmentRefId: attachment.attachment.id })
-        : await client.attachments.download({ owner: 'mission', ...mission, attachmentRefId: attachment.attachment.id })
-      if (result.error) onNotify('此附件当前不可用。')
-    } catch {
-      onNotify('无法打开此附件。')
-    }
+  if (attachment.kind === 'local') {
+    return <MissionLocalAttachmentItem attachment={attachment} disabled={disabled} onRemove={onRemove}/>
   }
-  return <div className={`mission-editor-file${isImage ? ' is-image' : ''}`}>
-    <button type="button" className="mission-editor-file-open" title={name} onClick={() => void open()} disabled={attachment.kind === 'local'}>
-      {attachment.kind === 'local' && isImage
-        ? <LocalImage file={attachment.file}/>
-        : <><span className="mission-editor-file-glyph"><FileGlyph/></span><span className="mission-editor-file-name">{name}</span><span className="mission-editor-file-ext">{attachmentExtension(name)}</span></>}
-    </button>
-    <button type="button" className="mission-editor-file-remove" aria-label={`移除附件 ${name}`} onClick={onRemove} disabled={disabled}><DialogControlIcon name="close"/></button>
-  </div>
+  if (!mission) return <></>
+  return <AttachmentCard attachment={attachment.attachment} locator={{ owner: 'mission', ...mission, attachmentRefId: attachment.attachment.id }} presentation="composer" disabled={disabled} onRemove={onRemove} onNotify={onNotify}/>
 }
 
 export const MissionWritingPlane = forwardRef<MissionWritingPlaneHandle, {
@@ -111,36 +123,36 @@ export const MissionWritingPlane = forwardRef<MissionWritingPlaneHandle, {
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
   useImperativeHandle(ref, () => ({ chooseFiles: () => inputRef.current?.click() }), [])
-  const addFiles = (files: File[]): void => {
-    if (disabled || attachmentsDisabled || !files.length) return
+  const addFiles = (inputs: AttachmentPreparationInput[]): void => {
+    if (disabled || attachmentsDisabled || !inputs.length) return
     const existing = new Set(attachments
       .filter((attachment): attachment is Extract<MissionDraftAttachment, {kind: 'local'}> => attachment.kind === 'local')
       .map(({ file }) => `${file.name}:${file.size}:${file.lastModified}`))
-    const unique = files.filter(file => !existing.has(`${file.name}:${file.size}:${file.lastModified}`))
+    const unique = inputs.filter(({ file }) => !existing.has(`${file.name}:${file.size}:${file.lastModified}`))
     const remaining = 10 - attachments.length
     if (remaining <= 0) { onNotify('使命附件最多 10 个。'); return }
-    const accepted = unique.slice(0, remaining).map(file => ({ kind: 'local' as const, id: newCommandId(), file }))
+    const accepted = unique.slice(0, remaining).map(({ file, kindHint }) => ({ kind: 'local' as const, id: newCommandId(), file, kindHint }))
     if (accepted.length) onAttachmentsChange([...attachments, ...accepted])
     if (unique.length > accepted.length) onNotify('使命附件最多 10 个。')
     else if (!accepted.length) onNotify('这些文件已经添加。')
   }
-  const withFiles = (event: DragEvent<HTMLElement>): boolean => Array.from(event.dataTransfer.types).includes('Files')
+  const withFiles = (event: DragEvent<HTMLElement>): boolean => dataTransferContainsFiles(event.dataTransfer)
   return <section className="mission-editor-writing-plane"
-    onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); addFiles(files) } }}
+    onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length) { event.preventDefault(); addFiles(files.map(file => ({ file, kindHint: 'file' }))) } }}
     onDragEnter={event => { if (!withFiles(event)) return; event.preventDefault(); if (disabled || attachmentsDisabled) return; dragDepth.current += 1; setDragging(true) }}
     onDragOver={event => { if (!withFiles(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = disabled || attachmentsDisabled ? 'none' : 'copy' }}
     onDragLeave={event => { if (!withFiles(event)) return; event.preventDefault(); dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false) }}
-    onDrop={event => { if (!withFiles(event)) return; event.preventDefault(); dragDepth.current = 0; setDragging(false); addFiles(Array.from(event.dataTransfer.files)) }}>
+    onDrop={event => { if (!withFiles(event)) return; event.preventDefault(); dragDepth.current = 0; setDragging(false); addFiles(droppedAttachmentInputs(event.dataTransfer)) }}>
     <label className="sr-only" htmlFor="mission-editor-title">使命名称</label>
     <input ref={titleInputRef} id="mission-editor-title" className="mission-editor-title" aria-label="使命名称" placeholder="使命名称" autoComplete="off" value={title} disabled={disabled} aria-invalid={!!titleError} onChange={event => onTitleChange(event.target.value)}/>
-    {!!attachments.length && <div className="mission-editor-attachments" role="group" aria-label="使命附件">
+    {!!attachments.length && <ComposerAttachmentStrip ariaLabel="使命附件，使用左右方向键浏览">
       {attachments.map((attachment, index) => <MissionAttachmentItem key={attachmentIdentity(attachment)} attachment={attachment} mission={mission} disabled={disabled || attachmentsDisabled} onNotify={onNotify} onRemove={() => onAttachmentsChange(attachments.filter((_, candidate) => candidate !== index))}/>) }
-    </div>}
+    </ComposerAttachmentStrip>}
     <label className="sr-only" htmlFor="mission-editor-description">使命描述</label>
     <textarea id="mission-editor-description" className="mission-editor-description" aria-label="使命描述" placeholder="告诉队员，这次要完成什么…" spellCheck={false} value={description} disabled={disabled} aria-invalid={!!descriptionError} onChange={event => onDescriptionChange(event.target.value)}/>
     {(titleError || descriptionError) && <p className="mission-editor-field-error" role="alert">{titleError || descriptionError}</p>}
     {dragging && <div className="mission-editor-drop-overlay"><div><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/></svg><span>松开以添加到使命</span></div></div>}
-    <input ref={inputRef} type="file" multiple hidden disabled={disabled || attachmentsDisabled} onChange={event => { addFiles(Array.from(event.target.files ?? [])); event.target.value = '' }}/>
+    <input ref={inputRef} type="file" multiple hidden disabled={disabled || attachmentsDisabled} onChange={event => { addFiles(Array.from(event.target.files ?? []).map(file => ({ file, kindHint: 'file' }))); event.target.value = '' }}/>
   </section>
 })
 MissionWritingPlane.displayName = 'MissionWritingPlane'

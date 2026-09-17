@@ -257,7 +257,7 @@ Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Nat
 
 - 状态：accepted
 - 日期：2026-09-15
-- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v1](../../contracts/mission-v1.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
 
 使命需要跨多轮、恢复和队员切换保持连续，但已有 Camp 已经拥有消息、草稿、成员及执行。因此使命作为
 独立业务定义关联唯一 Camp，避免第二套会话生命周期。业务状态由当前成员显式维护，不从 Run 终态推断。
@@ -276,7 +276,7 @@ Renderer 编辑使用内部乐观版本防止旧弹窗覆盖新定义，但该�
 
 - 状态：accepted
 - 日期：2026-09-16
-- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v1](../../contracts/mission-v1.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
 
 内部 UUID 适合关联但不适合用户识别或 Git 路径。Mission 因此另获全局单调、删除后不复用的数字号；界面、
 分支和 worktree 只使用最少三位的数字表示，内部关系仍使用 UUID。已经持久关联的旧工作区不在迁移中重命名，
@@ -286,3 +286,24 @@ Mission 只保留最新标题、描述和详情版本；活动、开始记录与
 更新提示表示 Runtime 已收到新定义这一事实，而不是 Agent 是否调用过读取工具。因此 ContextManifest 冻结本次
 详情版本，只有当前 binding 的 Runtime Input `accepted` 才推进 Conversation 水位；`mission get` 保持纯读取。
 这避免“读过但下一轮输入未送达”与“输入已经送达却被要求额外调用 get”两种错误确认。
+
+<a id="v1-59-d13"></a>
+
+## V1.59-D13：使命附件原路径只通过受认证 Agent 读取投影披露
+
+- 状态：accepted
+- 日期：2026-09-17
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)
+
+使命定义附件已经参与内部详情版本和更新提醒，但 v26 的 `mission get` 只返回五个定义字段，导致 Agent 收到
+“Mission details have changed”后仍无法发现新增附件。要求用户重新点击开始或再次发送附件会把数据投影缺口变成
+隐含操作前提，并使当前 Mission 定义和 Agent 可读取定义不一致。
+
+选择在现有无参数、当前 Camp 鉴权的 `mission get` 结果中增加始终存在的有序绝对路径数组。路径直接来自已提交
+source refs，不做文件系统观察；因此目录、缺失文件和权限变化都不会改变定义读取结果。此能力使用独立
+`MissionAgentInfo` 投影，不把 raw path 加入共享 `MissionInfo`、Renderer/Web 投影、活动、日志、错误或证据。
+
+不选择自动把路径加入每轮 Run Facts 或 CURRENT_INPUT，因为附件只需在收到提醒后显式读取，持续注入会扩大模型
+上下文和路径披露面；不选择只返回附件元数据，因为 Agent 仍无法访问用户指定源；也不增加 Mission selector，
+避免当前 Run 枚举其他使命。精确前后 shape、兼容与验证已由开发者确认的
+[revision 1](model-context-change-mission-attachment-read.md)冻结。

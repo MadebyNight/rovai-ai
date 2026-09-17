@@ -2412,12 +2412,11 @@ mod tests {
                     &workspace,
                 )
                 .unwrap();
-            let attachment_ids = invocation
+            invocation
                 .source_files
                 .iter()
                 .map(|source| source.id.clone())
-                .collect();
-            attachment_ids
+                .collect()
         }
 
         fn gather_invocation(&self, call_id: &str, body: &str, to: &[&str]) -> GatherInvocation {

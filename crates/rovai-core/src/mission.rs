@@ -61,6 +61,17 @@ pub struct MissionInfo {
     pub source_message_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionAgentInfo {
+    pub mission_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: MissionStatus,
+    pub source_message_id: Option<String>,
+    pub attachments: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionRecord {
@@ -81,6 +92,23 @@ pub struct MissionRecord {
     pub default_lead_agent_id: Option<String>,
     pub running_agent_ids: Vec<String>,
     pub has_unread: bool,
+}
+
+impl MissionRecord {
+    pub fn agent_info(&self) -> MissionAgentInfo {
+        MissionAgentInfo {
+            mission_id: self.info.mission_id.clone(),
+            title: self.info.title.clone(),
+            description: self.info.description.clone(),
+            status: self.info.status,
+            source_message_id: self.info.source_message_id.clone(),
+            attachments: self
+                .source_attachments
+                .iter()
+                .map(|source| source.source_path.clone())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -672,6 +700,7 @@ mod tests {
             created.result.payload
         );
         let record = service.get(&db, &id).unwrap().unwrap();
+        assert!(record.agent_info().attachments.is_empty());
         let number: i64 = db
             .connection()
             .query_row("SELECT number FROM mission WHERE id=?1", [&id], |row| {
@@ -1003,18 +1032,26 @@ mod tests {
     }
 
     #[test]
-    fn mission_attachments_are_editable_private_and_published_when_started() {
+    fn mission_attachments_are_editable_agent_readable_private_and_published_when_started() {
         let mut db = crate::test_support::seeded_runtime_database_owned();
         let workspace = db.directory().join("mission-attachment-workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let first_path = workspace.join("first brief.md");
+        let directory_path = workspace.join("reference material");
         let second_path = workspace.join("replacement.png");
         std::fs::write(&first_path, "first brief").unwrap();
+        std::fs::create_dir(&directory_path).unwrap();
         std::fs::write(&second_path, b"replacement image").unwrap();
         let first = crate::local_attachment_source::observe_source_attachment(
             &first_path,
             "first brief.md",
             Some("text/markdown"),
+        )
+        .unwrap();
+        let directory = crate::local_attachment_source::observe_source_attachment(
+            &directory_path,
+            "reference material",
+            None,
         )
         .unwrap();
         let second = crate::local_attachment_source::observe_source_attachment(
@@ -1035,7 +1072,7 @@ mod tests {
                     member_agent_ids: vec!["agent_1".into()],
                     default_lead_agent_id: "agent_1".into(),
                     tags: vec!["附件".into()],
-                    source_attachments: vec![first.clone()],
+                    source_attachments: vec![first.clone(), directory.clone()],
                 }),
             )
             .unwrap();
@@ -1044,12 +1081,21 @@ mod tests {
             .unwrap()
             .to_string();
         let initial = service.get(&db, &mission_id).unwrap().unwrap();
-        assert_eq!(initial.attachments.len(), 1);
+        assert_eq!(initial.attachments.len(), 2);
         assert_eq!(initial.attachments[0].id, first.id);
+        assert_eq!(initial.attachments[1].id, directory.id);
         assert_eq!(initial.details_version, 1);
+        assert_eq!(
+            initial.agent_info().attachments,
+            vec![
+                first_path.to_string_lossy().into_owned(),
+                directory_path.to_string_lossy().into_owned()
+            ]
+        );
         let public_record = serde_json::to_string(&initial).unwrap();
         assert!(public_record.contains("first brief.md"));
         assert!(!public_record.contains(first_path.to_str().unwrap()));
+        assert!(!public_record.contains(directory_path.to_str().unwrap()));
 
         let updated = service
             .update(
@@ -1061,17 +1107,27 @@ mod tests {
                     tags: None,
                     expected_details_version: Some(1),
                     source_attachment_update: Some(MissionAttachmentUpdate {
-                        keep_attachment_ids: vec![],
+                        keep_attachment_ids: vec![directory.id.clone()],
                         new_source_attachments: vec![second.clone()],
                     }),
                 }),
             )
             .unwrap();
         assert_eq!(updated.result.payload["changed"], true);
+        std::fs::remove_dir(&directory_path).unwrap();
+        std::fs::remove_file(&second_path).unwrap();
         let current = service.get(&db, &mission_id).unwrap().unwrap();
         assert_eq!(current.details_version, 2);
-        assert_eq!(current.attachments.len(), 1);
-        assert_eq!(current.attachments[0].id, second.id);
+        assert_eq!(current.attachments.len(), 2);
+        assert_eq!(current.attachments[0].id, directory.id);
+        assert_eq!(current.attachments[1].id, second.id);
+        assert_eq!(
+            current.agent_info().attachments,
+            vec![
+                directory_path.to_string_lossy().into_owned(),
+                second_path.to_string_lossy().into_owned()
+            ]
+        );
         assert_eq!(
             service
                 .activity(&db, &mission_id, None)
@@ -1102,7 +1158,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             crate::local_attachment_source::parse_source_attachments(&published_json).unwrap(),
-            vec![second]
+            vec![directory, second]
         );
     }
 }
