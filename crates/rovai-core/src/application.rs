@@ -5561,7 +5561,7 @@ impl Core {
                         )
                     })?;
                     if request.tool_name == "mission.get" {
-                        Ok(serde_json::to_value(&mission.info)?)
+                        Ok(serde_json::to_value(mission.agent_info())?)
                     } else {
                         let service = crate::mission::MissionService::default();
                         let execution = if request.tool_name == "mission.update" {

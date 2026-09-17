@@ -4013,7 +4013,7 @@ export interface MissionInfo { missionId: string; title: string; description: st
 export interface MissionRecord extends MissionInfo { number: number; hasUnread: boolean; campId: string; projectPath: string; projectBindingKind: ProjectBindingKind; detailsVersion: number; tags: string[]; attachments: LocalAttachmentSourceView[]; createdAt: string; updatedAt: string; memberAgentIds: string[]; defaultLeadAgentId: string | null; runningAgentIds: string[] }
 export interface MissionCreate { title: string; description: string; projectPath: string; projectBindingKind: ProjectBindingKind; memberAgentIds: string[]; defaultLeadAgentId: string; tags: string[] }
 export interface MissionUpdate { missionId: string; title?: string; description?: string; tags?: string[]; expectedDetailsVersion?: number }
-export interface MissionAttachmentDraft { id: string; file: File }
+export interface MissionAttachmentDraft { id: string; file: File; kindHint: 'file' | 'directory' }
 export interface MissionAttachmentsApi {
   create(commandId: string, command: MissionCreate, attachments: MissionAttachmentDraft[]): Promise<StoredCommandResult>
   update(commandId: string, command: MissionUpdate, keepAttachmentIds: string[], attachments: MissionAttachmentDraft[]): Promise<StoredCommandResult>

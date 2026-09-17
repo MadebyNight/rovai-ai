@@ -620,8 +620,8 @@ mod tests {
                 ) VALUES (
                     'preview-run', 'preview-turn', 'preview-conversation', 0, 0,
                     'preview-responsibility', 'initial', 'preview current file', 'required',
-                    '{"runtimeAdapter":"codex"}', ?1,
-                    'running', 'preview-run', 'codex', 1, ?2, ?2, ?2
+                    '{"runtimeAdapter":"opencode-cli"}', ?1,
+                    'running', 'preview-run', 'opencode-cli', 1, ?2, ?2, ?2
                 )
                 "#,
                 params![
@@ -664,9 +664,9 @@ mod tests {
                         "status": "completed",
                         "kind": "edit",
                         "runtimeFileOperation": {
-                            "adapterKind": "codex",
-                            "protocolFamily": "codex-app-server",
-                            "sourceEventKind": "item.completed",
+                            "adapterKind": "opencode-cli",
+                            "protocolFamily": "acp-v1",
+                            "sourceEventKind": "session/update.tool_call_update.completed",
                             "operationKind": "write",
                             "path": path
                         }

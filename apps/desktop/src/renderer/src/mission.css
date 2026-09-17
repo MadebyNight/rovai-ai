@@ -410,7 +410,7 @@ button.mission-tag { cursor: pointer; }
 .mission-group-heading > .mission-icon { width: 14px; height: 14px; color: var(--muted); }
 .mission-group-heading[aria-expanded="false"] > .mission-icon { transform: rotate(-90deg); }
 .mission-group-heading > span:last-child { color: var(--muted); font: 11px ui-monospace,monospace; }
-.mission-intro { margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--home-surface); box-shadow: none; }
+.mission-intro { min-width: 0; margin: 0 0 24px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--home-surface); box-shadow: none; }
 .mission-intro-top { justify-content: space-between; gap: 12px; margin-bottom: 11px; }
 .mission-intro-top > span { color: var(--muted); gap: 6px; font-size: 11px; }
 .mission-intro-top > .mission-readonly-status { margin-left: auto; cursor: default; }
@@ -467,7 +467,9 @@ button.mission-tag { cursor: pointer; }
 .mission-create-split > .mission-create-options { display: grid; place-items: center; min-width: 30px; padding-inline: 8px; border-radius: 0 6px 6px 0; }
 .mission-create-options > svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .mission-create-dialog button:active:not(:disabled), .mission-new:active:not(:disabled) { transform: none; }
+.mission-intro .composer-attachment-strip { margin: 12px 0 4px; }
 .mission-intro .mission-project-tags { margin: 14px 0 12px; flex-wrap: wrap; }
+.mission-intro-attachment-error { margin: 6px 0 0; }
 .mission-status-readonly { margin-left: auto; white-space: nowrap; }
 .mission-start-row { display: flex; justify-content: flex-end; margin: -12px 0 24px; padding: 0; border: 0; }
 .mission-start { height: 36px; padding-inline: 16px; font-size: 12px; }
@@ -571,21 +573,7 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 .compact-dialog.mission-definition-dialog .mission-editor-description:focus,
 .compact-dialog.mission-definition-dialog .mission-editor-description:focus-visible { border: 0; outline: 0; box-shadow: none; }
 .mission-editor-field-error { flex: 0 0 auto; margin: 0 0 8px; color: var(--danger); font-size: 11.5px; line-height: 1.5; }
-.mission-editor-attachments { display: flex; max-width: 100%; flex: 0 0 auto; gap: 9px; margin: 0 0 9px; padding: 1px 1px 7px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scroll-snap-type: x proximity; }
-.mission-editor-file { position: relative; display: flex; width: 218px; height: 48px; flex: 0 0 218px; align-items: stretch; overflow: hidden; scroll-snap-align: start; border: 1px solid var(--line); border-radius: 11px; background: transparent; }
-.mission-editor-file.is-image { width: 48px; flex-basis: 48px; }
-.mission-editor-file-open { display: grid; width: 100%; min-width: 0; grid-template-columns: 30px minmax(38px,1fr) auto; align-items: center; gap: 9px; padding: 4px 28px 4px 7px; border: 0; color: var(--ink); background: transparent; text-align: left; }
-.mission-editor-file-open:hover:not(:disabled) { background: var(--surface-hover); }
-.mission-editor-file-open:disabled { cursor: default; opacity: 1 !important; }
-.mission-editor-file.is-image .mission-editor-file-open { display: block; padding: 0; }
-.mission-editor-file.is-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.mission-editor-file-glyph { display: grid; width: 30px; height: 30px; place-items: center; color: var(--muted); }
-.mission-editor-file-glyph > svg { width: 27px; height: 27px; fill: color-mix(in srgb, var(--brand-soft) 42%, transparent); stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
-.mission-editor-file-name { min-width: 0; overflow: hidden; font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.mission-editor-file-ext { max-width: 43px; overflow: hidden; padding-left: 7px; border-left: 1px solid var(--line); color: var(--faint); font: 600 9.3px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.mission-editor-file-remove { position: absolute; top: 2px; right: 2px; display: grid; width: 24px; height: 24px; padding: 0; place-items: center; border: 0; border-radius: 50%; color: var(--muted); background: color-mix(in srgb, var(--surface-raised) 90%, transparent); cursor: pointer; }
-.mission-editor-file-remove:hover:not(:disabled) { color: var(--ink); background: var(--neutral-selected); }
-.mission-editor-file-remove .dialog-glyph { width: 12px; height: 12px; }
+.mission-editor-writing-plane > .composer-attachment-strip { flex: 0 0 auto; margin: 0 0 9px; }
 .mission-editor-drop-overlay { position: absolute; z-index: 3; inset: 45px 15px 12px; display: grid; place-items: center; border: 1.5px dashed var(--brand); border-radius: 9px; color: var(--brand-ink); background: color-mix(in srgb, var(--surface-raised) 96%, transparent); pointer-events: none; }
 .mission-editor-drop-overlay > div { display: flex; flex-direction: column; align-items: center; gap: 11px; font-size: 14px; font-weight: 500; }
 .mission-editor-drop-overlay svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -632,7 +620,7 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 .mission-editor-team-check .dialog-glyph { width: 11px; height: 11px; }
 .mission-editor-lead-choice { min-height: 27px; padding: 3px 8px; border: 0; border-radius: 5px; color: var(--faint); background: transparent; font-size: 11px; white-space: nowrap; }
 .mission-editor-lead-choice:hover:not(:disabled),.mission-editor-lead-choice.is-selected { color: var(--ink); background: var(--neutral-selected); }
-.mission-definition-dialog :is(.mission-editor-icon-button,.mission-editor-property,.mission-editor-file-open,.mission-editor-file-remove,.mission-editor-team-member,.mission-editor-lead-choice):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+.mission-definition-dialog :is(.mission-editor-icon-button,.mission-editor-property,.attachment-open,.attachment-remove,.composer-attachment-strip,.mission-editor-team-member,.mission-editor-lead-choice):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
 .mission-editor-team-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 6px; margin-top: 5px; padding: 10px 7px 3px; border-top: 1px solid var(--line); }
 .mission-editor-team-footer label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; cursor: pointer; }
 .mission-editor-team-footer input { accent-color: var(--conversation-action); }
@@ -659,6 +647,6 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
   .mission-definition-dialog { animation: none; }
 }
 @media (forced-colors: active) {
-  .mission-editor-property,.mission-editor-file { border-color: ButtonBorder; }
+  .mission-editor-property,.mission-editor-writing-plane .attachment-card { border-color: ButtonBorder; }
   .mission-editor-title:focus-visible,.mission-editor-description:focus-visible { outline: 1px solid Highlight; outline-offset: 3px; }
 }

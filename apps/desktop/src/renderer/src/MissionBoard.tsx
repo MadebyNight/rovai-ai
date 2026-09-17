@@ -11,6 +11,7 @@ import { Avatar, CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionConte
 import { RunningText } from './RunningText'
 import { MissionCommandRejected, missionCommand, missionError } from './useMissions'
 import { MemberAvatar } from './MemberAvatar'
+import { AttachmentCard, ComposerAttachmentStrip } from './AttachmentCard'
 import {
   MissionAttachmentButton,
   MissionPropertyChip,
@@ -310,7 +311,7 @@ function MissionCleanupNotice() {
 }
 
 export function MissionIntro({ mission: m, projects }: { mission: MissionRecord; projects: ProjectNavigationGroup[] }) {
-  const actions = useMissionActions(), [expanded, setExpanded] = useState(false), [canExpand, setCanExpand] = useState(false)
+  const actions = useMissionActions(), [expanded, setExpanded] = useState(false), [canExpand, setCanExpand] = useState(false), [attachmentError, setAttachmentError] = useState('')
   const description = useRef<HTMLParagraphElement>(null)
   useLayoutEffect(() => {
     const node = description.current
@@ -329,6 +330,10 @@ export function MissionIntro({ mission: m, projects }: { mission: MissionRecord;
       <div className="mission-intro-top"><span><MissionIcon/>使命</span><span className="mission-status-readonly"><StatusIcon status={m.status}/>{statuses.find(s => s.id === m.status)?.label}</span></div>
       <h2>{m.title}</h2>{m.description && <p ref={description} className={`mission-description${expanded ? ' expanded' : ''}`}>{m.description}</p>}
       {canExpand && <button className="mission-description-toggle" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? '收起描述' : '展开描述'}<Icon name="chevron"/></button>}
+      {!!m.attachments.length && <ComposerAttachmentStrip ariaLabel="使命附件，使用左右方向键浏览">
+        {m.attachments.map(attachment => <AttachmentCard key={attachment.id} attachment={attachment} locator={{owner:'mission', campId:m.campId, missionId:m.missionId, attachmentRefId:attachment.id}} presentation="composer" onNotify={setAttachmentError}/>) }
+      </ComposerAttachmentStrip>}
+      {attachmentError && <p className="compact-inline-error mission-intro-attachment-error" role="alert">{attachmentError}</p>}
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-intro-meta"><MissionAvatars m={m}/></div>
     </section>

@@ -885,6 +885,30 @@ mod tests {
     }
 
     #[test]
+    fn mission_get_evidence_omits_attachment_source_paths() {
+        let projected = projection(
+            "mission.get",
+            json!({}),
+            json!({
+                "missionId": "rvm_example",
+                "title": "使命",
+                "description": "读取当前定义",
+                "status": "in_progress",
+                "sourceMessageId": null,
+                "attachments": ["/private/work/requirements.pdf", "/private/work/reference"]
+            }),
+        );
+        assert_eq!(projected["canonicalResult"]["missionId"], "rvm_example");
+        assert_eq!(projected["canonicalResult"]["title"], "使命");
+        assert!(projected["canonicalResult"].get("attachments").is_none());
+        assert!(
+            !serde_json::to_string(&projected)
+                .unwrap()
+                .contains("/private/work")
+        );
+    }
+
+    #[test]
     fn memory_read_projects_v3_target_and_secret_filtered_semantic_body() {
         let projected = projection(
             MEMORY_READ_TOOL_NAME,

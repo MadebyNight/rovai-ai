@@ -33800,7 +33800,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(160));
+        assert_eq!(state, migration_state_through(161));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -33826,6 +33826,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rovai-dsh-migration-{}", Uuid::new_v4()));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        mission_context::downgrade_for_test(database.connection());
         downgrade_current_schema_to_v156_source_for_test(database.connection());
         assert!(
             matches!(classify_database_contract(database.connection()).unwrap(), DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker.projection_schema_version == 106)

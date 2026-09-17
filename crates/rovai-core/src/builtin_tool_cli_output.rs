@@ -624,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_agent_output_schema_rejects_extra_fields() {
+    fn closed_agent_output_schemas_reject_extra_and_invalid_fields() {
         let schema = agent_output_schema("camp.message.send").unwrap();
         assert!(
             validate_schema(
@@ -639,6 +639,26 @@ mod tests {
             )
             .is_err()
         );
+
+        let mission_schema = agent_output_schema("mission.get").unwrap();
+        let mission = json!({
+            "missionId": "rvm_example",
+            "title": "使命",
+            "description": "读取当前定义",
+            "status": "in_progress",
+            "sourceMessageId": null,
+            "attachments": ["/workspace/requirements.pdf", "/workspace/reference"]
+        });
+        validate_schema(&mission, &mission_schema).unwrap();
+        let mut missing = mission.clone();
+        missing.as_object_mut().unwrap().remove("attachments");
+        assert!(validate_schema(&missing, &mission_schema).is_err());
+        let mut wrong_collection = mission.clone();
+        wrong_collection["attachments"] = json!("/workspace/requirements.pdf");
+        assert!(validate_schema(&wrong_collection, &mission_schema).is_err());
+        let mut wrong_item = mission;
+        wrong_item["attachments"] = json!([42]);
+        assert!(validate_schema(&wrong_item, &mission_schema).is_err());
     }
 
     #[test]
