@@ -283,7 +283,8 @@ impl Database {
         let restore = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
         result?;
         restore?;
-        self.migrate_mission_delivery_v160()
+        self.migrate_mission_delivery_v160()?;
+        self.migrate_mission_attachments_v161()
     }
 }
 
@@ -308,7 +309,7 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
         "DROP TABLE IF EXISTS mission_number_sequence;
         ALTER TABLE conversation DROP COLUMN mission_details_delivered_version;
         ALTER TABLE context_manifest DROP COLUMN mission_details_version;
-        DELETE FROM schema_migration WHERE version=160;",
+        DELETE FROM schema_migration WHERE version IN (160,161);",
     )
     .unwrap();
     tx.execute_batch("DROP TABLE IF EXISTS mission_details_read; DELETE FROM schema_migration WHERE version=159;")

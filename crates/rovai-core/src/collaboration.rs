@@ -3537,7 +3537,7 @@ pub(crate) fn admit_mission_start(
             camp_id,
             body: &body,
             structured_content: &content,
-            source_attachments: &[],
+            source_attachments: &mission.source_attachments,
             prepared_attachment_ids: &[],
             legacy_attachment_publication_operation_id: None,
             managed_attachment_ingest_intent_id: None,

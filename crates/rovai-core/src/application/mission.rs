@@ -1,11 +1,64 @@
 //! Desktop Mission application orchestration. Git work is kept outside the database lock.
 use super::*;
 use crate::mission::{
-    CreateMissionCommand, MissionService, StartMissionCommand, StatusMissionCommand,
-    UpdateMissionCommand,
+    CreateMissionCommand, MissionAttachmentUpdate, MissionService, StartMissionCommand,
+    StatusMissionCommand, UpdateMissionCommand,
 };
 use crate::mission_workspace::{self, GitRepository, MissionGit, MissionWorkspace, NameOccupied};
 use rusqlite::{OptionalExtension, params};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MissionSourceAttachmentPathInput {
+    id: String,
+    source_path: String,
+    display_name: String,
+    media_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateMissionWithAttachmentsParams {
+    command_id: String,
+    command: CreateMissionCommand,
+    attachments: Vec<MissionSourceAttachmentPathInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateMissionWithAttachmentsParams {
+    command_id: String,
+    command: UpdateMissionCommand,
+    keep_attachment_ids: Vec<String>,
+    attachments: Vec<MissionSourceAttachmentPathInput>,
+}
+
+async fn observe_mission_source_attachments(
+    inputs: Vec<MissionSourceAttachmentPathInput>,
+) -> Result<Vec<rovai_core::local_attachment_source::LocalAttachmentSourceRef>> {
+    anyhow::ensure!(
+        inputs.len() <= rovai_core::camp_attachment::MAX_PREPARED_ATTACHMENTS,
+        "mission.too_many_attachments"
+    );
+    tokio::task::spawn_blocking(move || {
+        inputs
+            .into_iter()
+            .map(|input| {
+                let canonical_id = uuid::Uuid::parse_str(&input.id)?.hyphenated().to_string();
+                anyhow::ensure!(canonical_id == input.id, "mission.invalid_attachment_id");
+                let mut source = observe_source_attachment(
+                    Path::new(&input.source_path),
+                    &input.display_name,
+                    input.media_type.as_deref(),
+                )?;
+                source.id = input.id;
+                Ok(source)
+            })
+            .collect::<Result<Vec<_>>>()
+    })
+    .await
+    .context("Mission Source Attachment observation task failed")?
+}
 
 impl Core {
     async fn mission_git(&self) -> Result<MissionGit> {
@@ -340,9 +393,22 @@ impl Core {
                     )?)
                 }
             }
-            "missions.create" => {
+            "missions.create" | "missions.createWithAttachments" => {
                 let mut params: UserCommandParams<CreateMissionCommand> =
-                    serde_json::from_value(request.params.clone())?;
+                    if request.method == "missions.createWithAttachments" {
+                        anyhow::ensure!(request.client.is_desktop(), "mission.desktop_required");
+                        let private: CreateMissionWithAttachmentsParams =
+                            serde_json::from_value(request.params.clone())?;
+                        let mut command = private.command;
+                        command.source_attachments =
+                            observe_mission_source_attachments(private.attachments).await?;
+                        UserCommandParams {
+                            command_id: private.command_id,
+                            command,
+                        }
+                    } else {
+                        serde_json::from_value(request.params.clone())?
+                    };
                 if params.command.project_binding_kind == ProjectBindingKind::QuickChat {
                     let path = self.data_dir.join("quick-chat");
                     std::fs::create_dir_all(&path)?;
@@ -378,12 +444,37 @@ impl Core {
                 );
                 Ok(serde_json::to_value(execution.result)?)
             }
-            "missions.update" | "missions.status" | "missions.start" | "missions.linkPr" => {
+            "missions.update"
+            | "missions.updateWithAttachments"
+            | "missions.status"
+            | "missions.start"
+            | "missions.linkPr" => {
+                let private_update = if request.method == "missions.updateWithAttachments" {
+                    anyhow::ensure!(request.client.is_desktop(), "mission.desktop_required");
+                    let private: UpdateMissionWithAttachmentsParams =
+                        serde_json::from_value(request.params.clone())?;
+                    let mut command = private.command;
+                    command.source_attachment_update = Some(MissionAttachmentUpdate {
+                        keep_attachment_ids: private.keep_attachment_ids,
+                        new_source_attachments: observe_mission_source_attachments(
+                            private.attachments,
+                        )
+                        .await?,
+                    });
+                    Some(UserCommandParams {
+                        command_id: private.command_id,
+                        command,
+                    })
+                } else {
+                    None
+                };
                 let mut database = self.database.lock().await;
                 let execution = match request.method.as_str() {
-                    "missions.update" => {
-                        let params: UserCommandParams<UpdateMissionCommand> =
-                            serde_json::from_value(request.params.clone())?;
+                    "missions.update" | "missions.updateWithAttachments" => {
+                        let params: UserCommandParams<UpdateMissionCommand> = match private_update {
+                            Some(params) => params,
+                            None => serde_json::from_value(request.params.clone())?,
+                        };
                         MissionService::default().update(
                             &mut database,
                             &user_command_envelope(params.command_id, params.command),

@@ -10,6 +10,7 @@ CREATE TABLE mission (
     status TEXT NOT NULL CHECK(status IN ('needs_you','not_started','in_progress','completed')),
     source_message_id TEXT,
     tags_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(tags_json) AND json_type(tags_json)='array'),
+    source_attachments_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(source_attachments_json) AND json_type(source_attachments_json)='array'),
     details_version INTEGER NOT NULL DEFAULT 1 CHECK(details_version >= 1),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

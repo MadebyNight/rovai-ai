@@ -649,6 +649,8 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
             | "userAutomation.camp.send"
             | "automations.schedulerControl"
             | "automations.run"
+            | "missions.createWithAttachments"
+            | "missions.updateWithAttachments"
             | "camp.sourceAttachments.addFromPath"
             | "camp.pendingInputs.addSourceAttachmentFromPath"
             | "camp.attachments.location"
@@ -5582,6 +5584,7 @@ impl Core {
                                         description: input.description,
                                         tags: None,
                                         expected_details_version: None,
+                                        source_attachment_update: None,
                                     },
                                 ),
                             )?
@@ -7862,7 +7865,9 @@ impl Core {
             | "missions.fileDiff"
             | "missions.diffSession.release"
             | "missions.create"
+            | "missions.createWithAttachments"
             | "missions.update"
+            | "missions.updateWithAttachments"
             | "missions.status"
             | "missions.start"
             | "missions.linkPr" => self.handle_mission(request).await,

@@ -21,7 +21,7 @@ const model=createReviewModel('web','camp')
 const profiles=[...agents, ...agents.map((agent,i)=>({...agent,agentId:`extra-${i}`,displayName:i?'奥黛丽':'雾切响子'}))]
 const items:MissionRecord[]=[
  ['需要核对窄窗口的目录布局','needs_you',['交互','体验优化']],['补齐使命工作区恢复路径','in_progress',['Core']],['更新首次使用引导文案','not_started',['文案']],['使命累计变更回归测试','completed',['测试']]
-].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.map(a=>a.agentId):[],hasUnread:i===0}))
+].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.map(a=>a.agentId):[],hasUnread:i===0}))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
@@ -69,7 +69,21 @@ function admitMissionNotification(missionId: string, kind: 'open_camp_message' |
  events.forEach(fn => fn({ method: 'notification_episode.changed', params: {} }))
  return messageId
 }
-const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.add(fn);return()=>events.delete(fn)},request:async(method:string,p:any={})=>{
+const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.add(fn);return()=>events.delete(fn)},missionAttachments:{
+ update:async(_commandId:string,patch:any,keepAttachmentIds:string[],attachments:any[])=>{
+  calls.push({method:'missions.updateWithAttachments',p:{patch,keepAttachmentIds,attachments}})
+  const m=items.find(item=>item.missionId===patch.missionId)!
+  if(patch.expectedDetailsVersion!==m.detailsVersion)return {...applied({missionId:m.missionId}),status:'rejected',code:'mission.details_version_conflict'}
+  const next=[...(m.attachments??[]).filter(attachment=>keepAttachmentIds.includes(attachment.id)),...attachments.map(({id,file})=>({id,displayName:file.name,kind:'file',mediaType:file.type||null,byteSize:file.size,fileCount:1,previewKind:file.type.startsWith('image/')?'image':'none',availability:'unknown'}))]
+  const detailsChanged=patch.title!==undefined&&patch.title!==m.title||patch.description!==undefined&&patch.description!==m.description||JSON.stringify(next)!==JSON.stringify(m.attachments??[])
+  Object.assign(m,patch,{attachments:next,detailsVersion:m.detailsVersion+(detailsChanged?1:0),updatedAt:new Date().toISOString()});delete (m as any).expectedDetailsVersion;changed();return applied({missionId:m.missionId,changed:detailsChanged||patch.tags!==undefined})
+ },
+ create:async(_commandId:string,command:any,attachments:any[])=>{
+  calls.push({method:'missions.createWithAttachments',p:{command,attachments}})
+  const m={...items[0],...command,attachments:attachments.map(({id,file})=>({id,displayName:file.name,kind:'file',mediaType:file.type||null,byteSize:file.size,fileCount:1,previewKind:file.type.startsWith('image/')?'image':'none',availability:'unknown'})),number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',sourceMessageId:null,detailsVersion:1,hasUnread:false,runningAgentIds:[],createdAt:now,updatedAt:now}
+  items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})
+ }
+},request:async(method:string,p:any={})=>{
  calls.push({method,p});const c=p.command??p,m=items.find(m=>m.missionId===c.missionId||m.campId===c.campId)
  if(method==='missions.list')return structuredClone(items)
  if(method==='missions.cleanup.list')return []
@@ -107,7 +121,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  }
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
  if(method==='missions.delivery' && query.has('nonGit'))return {campId:m!.campId,workingDirectory:'/workspace/plain',git:false,workspace:null,pullRequests:[],files:[]}
- if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:'ready',diagnostic:null},pullRequests:[],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
+ if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:'ready',diagnostic:null},pullRequests:[{id:'legacy-pr',url:'https://github.com/rovai-ai/rovai/pull/18',title:'历史关联',createdAt:now}],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
  if(method==='missions.changes')return structuredClone(missionChangedFiles)
  if(method==='missions.fileDiff'){
   const file=missionChangedFiles.find(file=>file.id===p.fileId)!

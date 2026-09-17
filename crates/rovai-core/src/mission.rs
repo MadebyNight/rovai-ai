@@ -16,6 +16,10 @@ use crate::{
         DomainCommand, DomainCommandGateway, EntityReference, sealed,
     },
     db::Database,
+    local_attachment_source::{
+        LocalAttachmentAvailability, LocalAttachmentSourceRef, LocalAttachmentSourceView,
+        parse_source_attachments, serialize_source_attachments,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +72,9 @@ pub struct MissionRecord {
     pub project_binding_kind: ProjectBindingKind,
     pub details_version: i64,
     pub tags: Vec<String>,
+    pub attachments: Vec<LocalAttachmentSourceView>,
+    #[serde(skip)]
+    pub source_attachments: Vec<LocalAttachmentSourceRef>,
     pub created_at: String,
     pub updated_at: String,
     pub member_agent_ids: Vec<String>,
@@ -88,6 +95,8 @@ pub struct CreateMissionCommand {
     pub default_lead_agent_id: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default, skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub source_attachments: Vec<LocalAttachmentSourceRef>,
 }
 impl sealed::Sealed for CreateMissionCommand {}
 impl DomainCommand for CreateMissionCommand {
@@ -113,10 +122,19 @@ pub struct UpdateMissionCommand {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub expected_details_version: Option<i64>,
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub source_attachment_update: Option<MissionAttachmentUpdate>,
 }
 impl sealed::Sealed for UpdateMissionCommand {}
 impl DomainCommand for UpdateMissionCommand {
     const TYPE: &'static str = "mission.update";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MissionAttachmentUpdate {
+    pub keep_attachment_ids: Vec<String>,
+    pub new_source_attachments: Vec<LocalAttachmentSourceRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +250,8 @@ impl MissionService {
         let input = &envelope.payload;
         validate_content(Some(&input.title), Some(&input.description))?;
         let tags = normalize_tags(&input.tags)?;
+        validate_mission_source_attachments(&input.source_attachments)?;
+        let source_attachments_json = serialize_source_attachments(&input.source_attachments)?;
         self.gateway.execute(database, envelope, |tx| {
             let mission_id = format!("rvm_{}", Uuid::now_v7().simple());
             tx.execute("INSERT INTO mission_number_sequence DEFAULT VALUES", [])?;
@@ -245,10 +265,17 @@ impl MissionService {
             }, &camp_id)?;
             if created.status == CommandResultStatus::Rejected { return Ok(created); }
             let now = chrono::Utc::now().to_rfc3339();
-            tx.execute("INSERT INTO mission(id,number,camp_id,title,description,status,tags_json,details_version,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'not_started',?6,1,?7,?7)",
-                params![mission_id,number,camp_id,input.title.trim(),input.description,serde_json::to_string(&tags)?,now])?;
+            tx.execute("INSERT INTO mission(id,number,camp_id,title,description,status,tags_json,source_attachments_json,details_version,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'not_started',?6,?7,1,?8,?8)",
+                params![mission_id,number,camp_id,input.title.trim(),input.description,serde_json::to_string(&tags)?,source_attachments_json,now])?;
+            let mut changes = serde_json::Map::from_iter([
+                ("status".into(), json!("not_started")),
+                ("tagsChanged".into(), json!(!tags.is_empty())),
+            ]);
+            if !input.source_attachments.is_empty() {
+                changes.insert("attachmentsChanged".into(), json!(true));
+            }
             record_activity(tx, &mission_id, "created", &envelope.actor, envelope.execution_epoch,
-                json!({"status":"not_started","tagsChanged":!tags.is_empty()}))?;
+                Value::Object(changes))?;
             Ok(CommandHandlerResult::applied("mission.created", json!({"missionId":mission_id,"missionNumber":number,"campId":camp_id}),
                 Some(EntityReference { entity_type: "mission".into(), entity_id: mission_id })))
         })
@@ -261,17 +288,20 @@ impl MissionService {
     ) -> Result<CommandExecution> {
         let input = &envelope.payload;
         ensure!(
-            input.title.is_some() || input.description.is_some() || input.tags.is_some(),
+            input.title.is_some()
+                || input.description.is_some()
+                || input.tags.is_some()
+                || input.source_attachment_update.is_some(),
             "mission.content_required"
         );
         validate_content(input.title.as_deref(), input.description.as_deref())?;
         let tags = input.tags.as_deref().map(normalize_tags).transpose()?;
         self.gateway.execute(database, envelope, |tx| {
             let Some(current) = load_record(tx, &input.mission_id)? else { return Ok(reject("mission.not_found")); };
-            if !can_edit(tx, envelope, &current)? || (tags.is_some() && !matches!(envelope.actor, ActorRef::User { .. })) {
+            if !can_edit(tx, envelope, &current)? || ((tags.is_some() || input.source_attachment_update.is_some()) && !matches!(envelope.actor, ActorRef::User { .. })) {
                 return Ok(reject("mission.forbidden"));
             }
-            let edits_details = input.title.is_some() || input.description.is_some();
+            let edits_details = input.title.is_some() || input.description.is_some() || input.source_attachment_update.is_some();
             if edits_details && matches!(envelope.actor, ActorRef::User { .. }) {
                 let Some(expected) = input.expected_details_version else {
                     return Ok(reject("mission.details_version_required"));
@@ -286,14 +316,19 @@ impl MissionService {
             let title = input.title.as_deref().map(str::trim).unwrap_or(&current.info.title);
             let description = input.description.as_deref().unwrap_or(&current.info.description);
             let next_tags = tags.as_ref().unwrap_or(&current.tags);
+            let next_source_attachments = match &input.source_attachment_update {
+                Some(update) => apply_attachment_update(&current.source_attachments, update)?,
+                None => current.source_attachments.clone(),
+            };
             let mut changes = serde_json::Map::new();
             if title != current.info.title { changes.insert("titleChanged".into(), json!(true)); }
             if description != current.info.description { changes.insert("descriptionChanged".into(), json!(true)); }
             if next_tags != &current.tags { changes.insert("tagsChanged".into(), json!(true)); }
+            if next_source_attachments != current.source_attachments { changes.insert("attachmentsChanged".into(), json!(true)); }
             if changes.is_empty() { return Ok(mutation(&input.mission_id, false)); }
-            let details_changed = title != current.info.title || description != current.info.description;
-            tx.execute("UPDATE mission SET title=?2,description=?3,tags_json=?4,details_version=details_version+?5,updated_at=?6 WHERE id=?1",
-                params![input.mission_id,title,description,serde_json::to_string(next_tags)?,i64::from(details_changed),chrono::Utc::now().to_rfc3339()])?;
+            let details_changed = title != current.info.title || description != current.info.description || next_source_attachments != current.source_attachments;
+            tx.execute("UPDATE mission SET title=?2,description=?3,tags_json=?4,source_attachments_json=?5,details_version=details_version+?6,updated_at=?7 WHERE id=?1",
+                params![input.mission_id,title,description,serde_json::to_string(next_tags)?,serialize_source_attachments(&next_source_attachments)?,i64::from(details_changed),chrono::Utc::now().to_rfc3339()])?;
             if changes.contains_key("titleChanged") {
             tx.execute("UPDATE camp SET title=?2,name_origin='user',version=version+1,updated_at=?3 WHERE id=?1",
                 params![current.camp_id,title.chars().take(80).collect::<String>(),chrono::Utc::now().to_rfc3339()])?;
@@ -393,8 +428,8 @@ pub(crate) fn mission_for_camp(
 }
 
 fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord>> {
-    let row = connection.query_row("SELECT m.id,m.number,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
-        r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,i64>(8)?,r.get::<_,String>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,r.get::<_,Option<String>>(13)?))).optional()?;
+    let row = connection.query_row("SELECT m.id,m.number,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.source_attachments_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
+        r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?,r.get::<_,i64>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,r.get::<_,String>(13)?,r.get::<_,Option<String>>(14)?))).optional()?;
     let Some((
         mission_id,
         number,
@@ -404,6 +439,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         status,
         source_message_id,
         tags,
+        source_attachments_json,
         details_version,
         created_at,
         updated_at,
@@ -414,6 +450,11 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
     else {
         return Ok(None);
     };
+    let source_attachments = parse_source_attachments(&source_attachments_json)?;
+    let attachments = source_attachments
+        .iter()
+        .map(|source| source.view(LocalAttachmentAvailability::Unknown))
+        .collect();
     let strings = |sql: &str| -> Result<Vec<String>> {
         Ok(connection
             .prepare(sql)?
@@ -446,6 +487,8 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         project_binding_kind: serde_json::from_value(json!(binding))?,
         details_version,
         tags: serde_json::from_str(&tags)?,
+        attachments,
+        source_attachments,
         created_at,
         updated_at,
         default_lead_agent_id,
@@ -481,6 +524,47 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
         }
     }
     Ok(values)
+}
+
+fn validate_mission_source_attachments(refs: &[LocalAttachmentSourceRef]) -> Result<()> {
+    ensure!(
+        refs.len() <= crate::camp_attachment::MAX_PREPARED_ATTACHMENTS,
+        "mission.too_many_attachments"
+    );
+    serialize_source_attachments(refs)?;
+    let mut paths = std::collections::HashSet::new();
+    ensure!(
+        refs.iter().all(|source| paths.insert(&source.source_path)),
+        "mission.duplicate_attachment"
+    );
+    Ok(())
+}
+
+fn apply_attachment_update(
+    current: &[LocalAttachmentSourceRef],
+    update: &MissionAttachmentUpdate,
+) -> Result<Vec<LocalAttachmentSourceRef>> {
+    let keep = update
+        .keep_attachment_ids
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    ensure!(
+        keep.len() == update.keep_attachment_ids.len(),
+        "mission.duplicate_attachment"
+    );
+    ensure!(
+        keep.iter()
+            .all(|id| current.iter().any(|source| &source.id == *id)),
+        "mission.attachment_not_found"
+    );
+    let mut next = current
+        .iter()
+        .filter(|source| keep.contains(&source.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    next.extend(update.new_source_attachments.iter().cloned());
+    validate_mission_source_attachments(&next)?;
+    Ok(next)
 }
 fn can_edit<T>(
     tx: &Transaction<'_>,
@@ -575,6 +659,7 @@ mod tests {
             member_agent_ids: vec!["agent_1".into(), "agent_2".into()],
             default_lead_agent_id: "agent_1".into(),
             tags: vec![" UI ".into(), "ui".into()],
+            source_attachments: vec![],
         });
         let created = service.create(&mut db, &create).unwrap();
         assert_eq!(created.result.code, "mission.created");
@@ -633,6 +718,7 @@ mod tests {
                         description,
                         tags: None,
                         expected_details_version: Some(expected_details_version),
+                        source_attachment_update: None,
                     }),
                 )
                 .unwrap();
@@ -666,6 +752,7 @@ mod tests {
                         description: None,
                         tags: None,
                         expected_details_version: Some(3),
+                        source_attachment_update: None,
                     })
                 )
                 .unwrap()
@@ -683,6 +770,7 @@ mod tests {
                     description: Some("stale".into()),
                     tags: None,
                     expected_details_version: Some(2),
+                    source_attachment_update: None,
                 }),
             )
             .unwrap();
@@ -811,6 +899,7 @@ mod tests {
             description: None,
             tags: None,
             expected_details_version: None,
+            source_attachment_update: None,
         });
         edit.actor = ActorRef::Agent {
             agent_id: "agent_1".into(),
@@ -902,6 +991,110 @@ mod tests {
         assert_eq!(
             service.update(&mut db, &edit).unwrap().result.code,
             "mission.forbidden"
+        );
+    }
+
+    #[test]
+    fn mission_attachments_are_editable_private_and_published_when_started() {
+        let mut db = crate::test_support::seeded_runtime_database_owned();
+        let workspace = db.directory().join("mission-attachment-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let first_path = workspace.join("first brief.md");
+        let second_path = workspace.join("replacement.png");
+        std::fs::write(&first_path, "first brief").unwrap();
+        std::fs::write(&second_path, b"replacement image").unwrap();
+        let first = crate::local_attachment_source::observe_source_attachment(
+            &first_path,
+            "first brief.md",
+            Some("text/markdown"),
+        )
+        .unwrap();
+        let second = crate::local_attachment_source::observe_source_attachment(
+            &second_path,
+            "replacement.png",
+            Some("image/png"),
+        )
+        .unwrap();
+        let service = MissionService::default();
+        let created = service
+            .create(
+                &mut db,
+                &command(CreateMissionCommand {
+                    title: "带附件的使命".into(),
+                    description: "附件应随使命定义保存，并在开始时交付。".into(),
+                    project_path: workspace.to_string_lossy().into_owned(),
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    member_agent_ids: vec!["agent_1".into()],
+                    default_lead_agent_id: "agent_1".into(),
+                    tags: vec!["附件".into()],
+                    source_attachments: vec![first.clone()],
+                }),
+            )
+            .unwrap();
+        let mission_id = created.result.payload["missionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let initial = service.get(&db, &mission_id).unwrap().unwrap();
+        assert_eq!(initial.attachments.len(), 1);
+        assert_eq!(initial.attachments[0].id, first.id);
+        assert_eq!(initial.details_version, 1);
+        let public_record = serde_json::to_string(&initial).unwrap();
+        assert!(public_record.contains("first brief.md"));
+        assert!(!public_record.contains(first_path.to_str().unwrap()));
+
+        let updated = service
+            .update(
+                &mut db,
+                &command(UpdateMissionCommand {
+                    mission_id: mission_id.clone(),
+                    title: None,
+                    description: None,
+                    tags: None,
+                    expected_details_version: Some(1),
+                    source_attachment_update: Some(MissionAttachmentUpdate {
+                        keep_attachment_ids: vec![],
+                        new_source_attachments: vec![second.clone()],
+                    }),
+                }),
+            )
+            .unwrap();
+        assert_eq!(updated.result.payload["changed"], true);
+        let current = service.get(&db, &mission_id).unwrap().unwrap();
+        assert_eq!(current.details_version, 2);
+        assert_eq!(current.attachments.len(), 1);
+        assert_eq!(current.attachments[0].id, second.id);
+        assert_eq!(
+            service
+                .activity(&db, &mission_id, None)
+                .unwrap()
+                .into_iter()
+                .find(|activity| activity.kind == "updated")
+                .unwrap()
+                .changes,
+            json!({"attachmentsChanged": true})
+        );
+
+        let started = service
+            .start(
+                &mut db,
+                &command(StartMissionCommand {
+                    mission_id: mission_id.clone(),
+                }),
+            )
+            .unwrap();
+        let message_id = started.result.payload["campMessageId"].as_str().unwrap();
+        let published_json: String = db
+            .connection()
+            .query_row(
+                "SELECT source_attachments_json FROM camp_message WHERE id=?1",
+                [message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            crate::local_attachment_source::parse_source_attachments(&published_json).unwrap(),
+            vec![second]
         );
     }
 }

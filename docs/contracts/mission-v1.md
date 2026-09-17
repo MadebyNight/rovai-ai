@@ -4,7 +4,7 @@ contract: mission-v1
 authority: mission-lifecycle-workspace-and-delivery
 status: accepted
 version: 1
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Mission v1
@@ -21,15 +21,17 @@ There is no ordinary-Camp conversion operation. Mission Camps are excluded from 
 
 Saving atomically creates an active Camp and a `not_started` Mission. It does not create a Run, Git
 branch or worktree. Start is a user command: after execution admission it sets `in_progress` and
-persists a public commission message plus a Mission reference, without copying title or description.
+persists a public commission message plus a Mission reference, without copying title or description. The
+current Mission source attachments are published with that commission message so the admitted lead receives
+the same local source references through the existing attachment path.
 The commission card resolves the current definition. An already active
 queued/running/waiting Run prevents a duplicate commission. A replay uses the same command result.
 Ordinary messages retain ordinary input semantics and can schedule Runs without changing Mission status.
 
 All current Camp members and the user may edit title/description/status. There is no lead-only policy
 or model-visible revision. Agent patches preserve omitted fields; the last committed Agent edit wins on
-a shared field. The Renderer carries an internal `details_version` only for atomic title/description edits:
-creation starts at 1, one effective title/description transaction advances it once, equal values do not,
+a shared field. The Renderer carries an internal `details_version` only for atomic title/description/source-
+attachment edits: creation starts at 1, one effective transaction over those fields advances it once, equal values do not,
 and a stale user edit is rejected; Renderer reloads the latest Mission projection before an explicit retry. Tags,
 status, membership and lead changes do not advance it. The version is absent from MissionInfo, Agent CLI
 inputs/results/errors and model context. Definition, tags, roster, lead and status changes do not schedule
@@ -46,6 +48,13 @@ never historical definition text; creation and start evidence also omit definiti
 case-insensitively deduplicated, at most 30 entries and 24 scalars each. User PR associations accept
 HTTP(S) URLs without embedded credentials. Other activity retains the minimum status/roster/lead/PR facts
 needed for presentation. There is no definition restore path.
+
+A Mission may retain at most ten source attachments using the canonical local source-reference shape. The
+public Mission projection exposes only attachment metadata and availability; raw paths remain Core-private.
+Desktop create/edit observes new files outside the database lock, then atomically stores the resulting refs
+with the Mission command. Edit explicitly lists retained attachment IDs and new refs; unknown, duplicate or
+cross-Mission IDs fail closed. Removing a Mission attachment does not rewrite an attachment already published
+on an earlier commission message.
 
 ## Workspace preparation
 
@@ -105,6 +114,9 @@ an explicit reason, never a false empty Diff.
 Desktop and wide Web share `missions.list|get|activity|delivery|changes|fileDiff|diffSession.release`, user commands
 `missions.create|update|status|start|linkPr`, and orphan cleanup `missions.cleanup.list|retry`.
 User commands use the existing command envelope and receipts. Deletion uses `camps.delete`.
+Desktop Main alone may invoke private `missions.createWithAttachments` and
+`missions.updateWithAttachments` orchestration after converting renderer `File` objects to source paths;
+these methods are not Renderer direct-Core or Web operations.
 Delivery includes current directory, Git association, linked PRs, and same-Camp available Agent-published
 files with their source message. It never manufactures files from narrative claims.
 
@@ -122,3 +134,5 @@ bodies and the read-watermark table, scrubs definition bodies from Mission activ
 adds accepted-delivery watermarks to Conversation/ContextManifest. A deployed Mission preview that already
 uses receipts 157–159/schema 109 is admitted only for Migration 160, which adds the missing DSH schema and
 converges both lineages. No migration creates or renames a workspace or changes frozen context bytes.
+Migration 161/schema 111 adds the validated Mission source-attachment array with an empty default, preserving
+all existing Missions and leaving frozen Context bytes unchanged.

@@ -200,6 +200,19 @@ pub(super) fn v160_schema_matches(connection: &Connection) -> rusqlite::Result<b
         && !object_exists(connection, "mission_details_read")?)
 }
 
+pub(super) fn v161_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    Ok(v160_schema_matches(connection)?
+        && contains_schema(
+            connection,
+            "mission",
+            &[
+                "source_attachments_json TEXT NOT NULL DEFAULT '[]'",
+                "json_valid(source_attachments_json)",
+                "json_type(source_attachments_json)='array'",
+            ],
+        )?)
+}
+
 impl Database {
     pub(super) fn migrate_mission_details_v159(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
@@ -260,10 +273,8 @@ impl Database {
                  UPDATE rovai_data_contract SET projection_schema_version=110,updated_at=datetime('now') WHERE singleton=1;",
             )?;
             anyhow::ensure!(
-                matches!(
-                    classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
-                ),
+                matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.59" && marker.projection_schema_version == 110),
                 "Mission delivery migration failed schema admission"
             );
             let mut tables = vec![
@@ -281,6 +292,37 @@ impl Database {
         let restore = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
         result?;
         restore?;
+        Ok(())
+    }
+
+    pub(super) fn migrate_mission_attachments_v161(&mut self) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 110),
+            "Mission attachment migration requires an admitted v1.59/schema 110 source"
+        );
+        if !has_column(&tx, "mission", "source_attachments_json")? {
+            tx.execute_batch(
+                "ALTER TABLE mission ADD COLUMN source_attachments_json TEXT NOT NULL DEFAULT '[]'
+                 CHECK(json_valid(source_attachments_json) AND json_type(source_attachments_json)='array');",
+            )?;
+        }
+        tx.execute_batch(
+            "INSERT INTO schema_migration VALUES(161,datetime('now'));
+             UPDATE rovai_data_contract SET projection_schema_version=111,updated_at=datetime('now') WHERE singleton=1;",
+        )?;
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&tx)?,
+                DatabaseContractClassification::Current(_)
+            ),
+            "Mission attachment migration failed schema admission"
+        );
+        validate_migration_foreign_keys(&tx, &["mission"])?;
+        tx.commit()?;
         Ok(())
     }
 }

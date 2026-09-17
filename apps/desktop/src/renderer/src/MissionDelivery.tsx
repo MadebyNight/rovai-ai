@@ -3,7 +3,7 @@ import type { AgentProfile, MissionActivity, MissionChangedFile, MissionDelivery
 import { useCampClient } from './camp-client'
 import { AttachmentCard } from './AttachmentCard'
 import { CompactDialog, Icon, statuses } from './MissionControls'
-import { missionCommand, missionError } from './useMissions'
+import { missionError } from './useMissions'
 import { readErrorMessage } from './error-message'
 import { missionDate } from './MissionBoard'
 import { useFilePreview } from './FilePreviewContext'
@@ -24,17 +24,11 @@ const kinds: Record<MissionChangedFile['kind'], string> = { added: '新增', del
 export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void; onNotify(message: string): void }) {
   const client = useCampClient()
   const [data, setData] = useState<Delivery | null>(null), [error, setError] = useState(''), [revision, setRevision] = useState(0)
-  const [url, setUrl] = useState(''), [addingPr, setAddingPr] = useState(false), [prBusy, setPrBusy] = useState(false), [prError, setPrError] = useState('')
   useEffect(() => {
     let current = true
     void client.request<Delivery>('missions.delivery', { missionId: mission.missionId }).then(value => { if (current) { setData(value); setError('') } }).catch(error => { if (current) setError(missionError(error)) })
     return () => { current = false }
   }, [client, mission.missionId, mission.updatedAt, mission.runningAgentIds.join(','), revision])
-  async function linkPr(prUrl: string, remove = false) {
-    setPrBusy(true); setPrError('')
-    try { await missionCommand(client, 'missions.linkPr', { missionId: mission.missionId, url: prUrl, remove }); setRevision(v => v + 1); setUrl(''); setAddingPr(false) }
-    catch (error) { setPrError(missionError(error)) } finally { setPrBusy(false) }
-  }
   return <section className="mission-delivery-panel" aria-label="使命交付">
     {error && <div className="mission-load-error" role="alert"><span>{error}</span><button onClick={() => setRevision(v => v + 1)}>重试</button></div>}
     {!data && !error && <p className="mission-section-empty" role="status">正在加载交付…</p>}
@@ -45,12 +39,6 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { 
         {data.workspace?.diagnostic && <p className="mission-load-error" role="alert">{data.workspace.diagnostic}</p>}
       </div>
       {data.git && <MissionChanges mission={mission}/>}
-      <section className="mission-delivery-section"><div className="mission-delivery-heading"><h3>Pull Requests <span>{data.pullRequests.length || ''}</span></h3><button className="mission-icon-button" aria-label="关联 Pull Request" onClick={() => setAddingPr(v => !v)}><Icon name="plus"/></button></div>
-        {addingPr && <form className="mission-pr-form" onSubmit={e => { e.preventDefault(); void linkPr(url.trim()) }}><input type="url" aria-label="Pull Request 链接" placeholder="粘贴 Pull Request 链接" required value={url} onChange={e => setUrl(e.target.value)} disabled={prBusy} autoFocus/><button className="compact-primary" disabled={prBusy || !url.trim()}>关联</button><button className="compact-cancel" type="button" disabled={prBusy} onClick={() => setAddingPr(false)}>取消</button></form>}
-        {prError && <p className="compact-inline-error" role="alert">{prError}</p>}
-        {data.pullRequests.map(pr => <div className="mission-pr-entry" key={pr.id}><a className="mission-pr-row" href={pr.url} target="_blank" rel="noreferrer"><Icon name="branch"/><span><strong>{pr.title || new URL(pr.url).pathname.split('/').filter(Boolean).slice(-3).join('/')}</strong><small>{new URL(pr.url).host}</small></span></a><button className="mission-icon-button" disabled={prBusy} onClick={() => void linkPr(pr.url, true)} aria-label={`移除关联 ${pr.title || pr.url}`}><span aria-hidden="true">×</span></button></div>)}
-        {!data.pullRequests.length && !addingPr && <p className="mission-section-empty">暂无关联的 Pull Request。</p>}
-      </section>
       <section className="mission-delivery-section"><h3>队员交付 <span>{data.files.length || ''}</span></h3>{data.files.map(file => <div className="mission-delivery-file" key={`${file.messageId}:${file.attachmentId}`}>
         <div className="mission-artifact"><AttachmentCard presentation="agent-timeline" attachment={{ id: file.attachmentId, displayName: file.displayName, kind: file.kind, fileCount: file.fileCount, mediaType: file.mediaType, byteSize: file.byteSize, previewKind: file.previewKind, availability: 'unknown' }} locator={{ owner: 'message', campId: mission.campId, messageId: file.messageId, attachmentRefId: file.attachmentId }} onNotify={onNotify}/><small>{agents.find(a => a.agentId === file.agentId)?.displayName ?? '队员'} · {missionDate(file.createdAt)}</small></div>
         <button className="mission-source-link" onClick={() => onSource(file.messageId)}>查看来源</button>

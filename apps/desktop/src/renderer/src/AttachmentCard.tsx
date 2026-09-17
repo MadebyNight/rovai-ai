@@ -37,6 +37,9 @@ function localAttachmentLocatorKey(locator: LocalAttachmentOwnerLocator): string
   if (locator.owner === 'message') {
     return `message:${locator.campId}:${locator.messageId}:${locator.attachmentRefId}`
   }
+  if (locator.owner === 'mission') {
+    return `mission:${locator.campId}:${locator.missionId}:${locator.attachmentRefId}`
+  }
   if (locator.owner === 'pending') {
     return `pending:${locator.campId}:${locator.pendingInputId}:${locator.attachmentRefId}`
   }

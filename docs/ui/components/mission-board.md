@@ -2,7 +2,7 @@
 document_type: ui-contract
 authority: mission-renderer-presentation
 status: accepted
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Mission board
@@ -30,18 +30,23 @@ Dragging a card to another lane submits the same authoritative status command as
 Agent status activity render only the actor and resulting status. Tags reuse the eight stable identity colors,
 independent of Mission status.
 
-Creation reuses the production New Conversation directory, membership, lead and default-team controls.
-Title/description follow Automation's field hierarchy without repeated miniheadings. Cancel remains on
-the right. Description is optional. The split primary button defaults to 新建; its dropdown offers 开始使命.
-Both paths stay on the board without opening the new Camp. Creation buttons retain their position when pressed.
-No independent-workspace checkbox is offered; Core decides from the selected project. Failed/uncertain
-creation retains its draft and command identity for safe retry.
+Creation uses an 820px writing dialog. Mission name is an unboxed heading field; the unboxed description
+fills the remaining writing plane. Source attachments sit between them and support file selection, paste,
+drag/drop and removal using the Composer attachment rhythm. Project, the combined member/lead control and
+tags sit as compact property chips above the footer. The team popover selects members and lead together and
+retains the existing default-team preference. The split primary button defaults to 新建; its dropdown offers
+开始使命. Both paths stay on the board without opening the new Camp. No independent-workspace checkbox is
+offered; Core decides from the selected project. Failed or uncertain creation retains the exact definition,
+attachment draft and command identity for safe retry.
 
-Edit opens a focused dialog matching creation's field treatment. Only title and optional description are
-present, with accessible visually hidden labels, Cancel and Save. Save is disabled until normalized content differs and validates
-against 1–200 title / 12,000 description limits. It submits the internal revision captured when opened.
-A stale edit stays open, replaces both fields with the latest definition and asks the user to edit again.
-Success closes the dialog and refreshes the board, opened Mission, conversation title and main Camp title.
+Production Edit opens only from the card/list right-click or Shift+F10 menu. It reuses the same wide writing
+dialog; prototype-only previews may expose a direct shortcut. Name, description, tags and source attachments
+remain editable. Project and the combined member/lead chip are visible but locked. Cancel and Save remain at
+the right; the attachment action stays at the left. Save is disabled until normalized content or the attachment
+set differs and validates against 1–200 name / 12,000 description limits. It submits the internal revision
+captured when opened. A stale edit stays open, replaces all editable fields with the latest definition and asks
+the user to edit again. Success closes the dialog and refreshes the board, opened Mission, conversation title
+and main Camp title.
 
 Card opening shows a right conversation drawer with Activity selected in the shared file preview. The left
 edge supports pointer and keyboard resizing, cancellation and double-click expansion. It defaults to

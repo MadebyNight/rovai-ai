@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.59
 status: completed
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # 桌面使命实施
@@ -57,12 +57,19 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 
 真实模型只在隔离 Smoke 和已冻结 Gate 中运行。交互稿的 15 组 fixture 检查不构成以上产品验收。
 
+## 2026-09-17 宽屏定义弹窗与源附件
+
+新建和编辑使命复用宽屏无框书写面：名称、描述、标签及源附件可编辑；项目、队员和队长在编辑态锁定，
+正式编辑入口仍仅为卡片／列表右键菜单。附件沿用本机原路径引用，支持选择、粘贴、拖入、移除和预览，
+开始使命时随 commission 消息进入既有附件发布路径。Migration 161/schema 111 为旧使命补空数组并保留
+所有业务行；Desktop Main 独占将 Renderer File 转成路径的私有编排，Web 不接收本机路径。
+
 ## 主线整合与验收
 
 已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文曾在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；定义编辑与基线修订曾推进到 Migration 158/schema 108，稳定编号与 accepted 水位曾推进到 Migration 159/schema 109。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
 
 随后整合 `origin/main` 的 `e6d7f0cf` 时，主线已把 Migration 157/schema 107 分配给 DSH。最终序列保留
-DSH 157，将 Mission context／definition／delivery 顺延到 158–160，当前 schema 110；已安装的 Mission
+DSH 157，将 Mission context／definition／delivery 顺延到 158–160，并由定义附件 Migration 161 推进到当前 schema 111；已安装的 Mission
 157–159/schema 109 被精确识别为旧 preview，只能通过 Migration 160 补齐 DSH 并收敛，不改写 Mission
 业务行、已冻结 Context 或既有工作区。
 

@@ -413,6 +413,35 @@ const api: RovaiApi = {
       return ipcRenderer.invoke('rovai:composer-attachment-preview', locator)
     }
   },
+  missionAttachments: {
+    async create(commandId, command, attachments) {
+      return ipcRenderer.invoke(
+        'rovai:mission-create-with-attachments',
+        commandId,
+        command,
+        await Promise.all(attachments.map(async ({ id, file }) => {
+          const sourcePath = webUtils.getPathForFile(file)
+          return sourcePath
+            ? { id, sourcePath, displayName: file.name, mediaType: file.type || null }
+            : { id, bytes: new Uint8Array(await file.arrayBuffer()), displayName: file.name, mediaType: file.type || null }
+        }))
+      )
+    },
+    async update(commandId, command, keepAttachmentIds, attachments) {
+      return ipcRenderer.invoke(
+        'rovai:mission-update-with-attachments',
+        commandId,
+        command,
+        keepAttachmentIds,
+        await Promise.all(attachments.map(async ({ id, file }) => {
+          const sourcePath = webUtils.getPathForFile(file)
+          return sourcePath
+            ? { id, sourcePath, displayName: file.name, mediaType: file.type || null }
+            : { id, bytes: new Uint8Array(await file.arrayBuffer()), displayName: file.name, mediaType: file.type || null }
+        }))
+      )
+    }
+  },
   singleChatAttachments: {
     async prepare(conversationId, expectedDraftRevision, file) {
       const sourcePath = webUtils.getPathForFile(file)

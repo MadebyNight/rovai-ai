@@ -70,4 +70,5 @@ they are never relabeled or reformatted. Model schema golden:
 Migration 159/schema 109 introduces the internal Mission definition revision. Migration 160/schema 110 replaces
 read acknowledgement with accepted-delivery watermarks on Conversation and ContextManifest and converges the
 deployed Mission-preview lineage with DSH; it does not rewrite any frozen manifest or change the Run Facts schema
-number.
+number. Migration 161/schema 111 adds Mission definition source attachments without changing ContextManifest,
+Run Facts, frozen input bytes or any delivery watermark.

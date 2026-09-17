@@ -1,8 +1,9 @@
 import { useCampClient } from './camp-client'
 import { readErrorMessage } from './error-message'
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import * as Popover from '@radix-ui/react-popover'
 import type {
   AgentProfile,
   CampCreationPreflight,
@@ -20,6 +21,17 @@ import { NewConversationQuickHelp } from './NewConversationQuickHelp'
 import { MemberAvatar } from './MemberAvatar'
 import { NavigationIcon } from './NavigationIcon'
 import { DialogControlIcon } from './AppDialog'
+import {
+  MissionAttachmentButton,
+  MissionPropertyChip,
+  MissionTagPicker,
+  MissionWritingPlane,
+  ProjectGlyph,
+  TeamGlyph,
+  missionAttachmentDrafts,
+  type MissionDraftAttachment,
+  type MissionWritingPlaneHandle
+} from './MissionDefinitionEditor'
 
 type CreateCampDraft = Omit<CreateCampRequest, 'commandId' | 'activationState'>
 type WorkspaceChoice = WorkspaceSelection | WorkspaceInspection
@@ -29,10 +41,12 @@ export function NewConversationDialog({
   open,
   purpose = 'camp',
   recovery = null,
+  recoveryAttachments = [],
   initialWorkspace,
   initialSelection,
   attentionMessage,
   projects,
+  missionTagCatalog = [],
   preflight,
   agents,
   busy: creationBusy,
@@ -45,10 +59,12 @@ export function NewConversationDialog({
   open: boolean
   purpose?: 'camp' | 'mission'
   recovery?: MissionCreate | null
+  recoveryAttachments?: ReturnType<typeof missionAttachmentDrafts>
   initialWorkspace: WorkspaceSelection | null
   initialSelection?: NewConversationDefaults | null
   attentionMessage?: string | null
   projects: ProjectNavigationGroup[]
+  missionTagCatalog?: string[]
   preflight: CampCreationPreflight
   agents: AgentProfile[]
   busy: boolean
@@ -56,7 +72,7 @@ export function NewConversationDialog({
   onOpenChange(open: boolean): void
   onChooseWorkspaceDirectory(): Promise<WorkspaceSelection | null>
   onWorkspaceSelected(workspace: WorkspaceSelection): Promise<void>
-  onCreate(draft: CreateCampDraft, enableOneClick: boolean, mission?: {description:string; start:boolean}): Promise<void>
+  onCreate(draft: CreateCampDraft, enableOneClick: boolean, mission?: {description:string; start:boolean; tags:string[]; attachments:ReturnType<typeof missionAttachmentDrafts>}): Promise<void>
 }): React.JSX.Element {
   const client = useCampClient()
   const mobile = useMobileLayout()
@@ -72,6 +88,9 @@ export function NewConversationDialog({
   const [optionalOpen, setOptionalOpen] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [tags, setTags] = useState<string[]>([])
+  const [attachments, setAttachments] = useState<MissionDraftAttachment[]>([])
+  const [expanded, setExpanded] = useState(false)
   const isMission = purpose === 'mission'
   const startSubmitRef = useRef<HTMLButtonElement>(null)
   const [quickHelpOpen, setQuickHelpOpen] = useState(false)
@@ -83,6 +102,7 @@ export function NewConversationDialog({
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const submittingRef = useRef(false)
+  const missionEditorRef = useRef<MissionWritingPlaneHandle>(null)
   const draftInitializedRef = useRef(false)
   const profileById = useMemo(
     () => new Map(agents.map((agent) => [agent.agentId, agent])),
@@ -130,6 +150,9 @@ export function NewConversationDialog({
     setOptionalOpen(false)
     setName('')
     setDescription('')
+    setTags([])
+    setAttachments([])
+    setExpanded(false)
     setEnableOneClick(false)
     setQuickHelpOpen(false)
     setMemberError(null)
@@ -228,7 +251,7 @@ export function NewConversationDialog({
         memberAgentIds: selectedMemberIds,
         defaultLeadAgentId: leadId,
         collaborationMode: 'peer'
-      }, enableOneClick, isMission ? {description, start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'start'} : undefined)
+      }, enableOneClick, isMission ? {description, tags, attachments: missionAttachmentDrafts(attachments), start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'start'} : undefined)
     } catch (error) {
       setSubmitError(errorMessage(error))
     } finally {
@@ -251,11 +274,12 @@ export function NewConversationDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay new-camp-dialog-overlay" />
         <Dialog.Content
-          className={`new-camp-dialog compact-dialog ${isMission ? 'mission-create-dialog' : ''}`}
+          className={`new-camp-dialog compact-dialog ${isMission ? `mission-definition-dialog mission-create-dialog${expanded ? ' is-expanded' : ''}` : ''}`}
           aria-describedby="new-camp-dialog-description"
           onOpenAutoFocus={(event) => {
             event.preventDefault()
-            const target = isMission ? nameInputRef.current : projectAccessReady ? projectTriggerRef.current : closeButtonRef.current
+            if (isMission) return
+            const target = projectAccessReady ? projectTriggerRef.current : closeButtonRef.current
             target?.focus()
           }}
           onCloseAutoFocus={(event) => event.preventDefault()}
@@ -264,17 +288,19 @@ export function NewConversationDialog({
             if (event.target instanceof Element && event.target.closest('.new-camp-quick-tooltip')) event.preventDefault()
           }}
         >
-          <header className="compact-header">
+          <header className={`compact-header${isMission ? ' mission-editor-header' : ''}`}>
             <Dialog.Title>{isMission ? '新使命' : '新对话'}</Dialog.Title>
-            <Dialog.Close asChild><button ref={closeButtonRef} className="compact-close" type="button" aria-label={isMission ? '关闭新使命' : '关闭新对话'} disabled={busy}><DialogControlIcon name="close" /></button></Dialog.Close>
+            {isMission
+              ? <div className="mission-editor-header-actions"><button className="mission-editor-icon-button" type="button" aria-label={expanded ? '恢复编辑区域大小' : '展开编辑区域'} title={expanded ? '恢复编辑区域大小' : '展开编辑区域'} onClick={() => setExpanded(value => !value)} disabled={busy}><svg viewBox="0 0 24 24" aria-hidden="true">{expanded ? <><path d="M9 3v6H3M15 21v-6h6M3 9l6-6M21 15l-6 6"/></> : <><path d="M9 3H3v6M15 21h6v-6M3 9l6-6M21 15l-6 6"/></>}</svg></button><Dialog.Close asChild><button ref={closeButtonRef} className="compact-close" type="button" aria-label="关闭新使命" disabled={busy}><DialogControlIcon name="close" /></button></Dialog.Close></div>
+              : <Dialog.Close asChild><button ref={closeButtonRef} className="compact-close" type="button" aria-label="关闭新对话" disabled={busy}><DialogControlIcon name="close" /></button></Dialog.Close>}
           </header>
           <Dialog.Description id="new-camp-dialog-description" className="sr-only">{isMission ? '填写使命目标，选择工作目录与队伍。' : '选择工作目录、队员与队长。对话名称可选。'}</Dialog.Description>
           <form className="compact-form" onSubmit={(event) => void submit(event)}>
-            <div className="compact-body camp-fields">
+            <div className={`compact-body camp-fields${isMission ? ' mission-editor-body' : ''}`}>
               {attentionMessage && <p className="compact-inline-note" role="status">{attentionMessage}</p>}
-              {recovery && !busy && <p className="compact-inline-note" role="status">上次创建结果尚未确认。<button type="button" className="mission-source-link" onClick={() => { setName(recovery.title); setDescription(recovery.description); setWorkspace(recovery.projectBindingKind === 'directory' ? {name:projects.find(p=>p.projectPath===recovery.projectPath)?.name ?? recovery.projectPath,projectPath:recovery.projectPath} : null); setSelectedMemberIds(recovery.memberAgentIds); setLeadId(recovery.defaultLeadAgentId); setSubmitError(null) }}>恢复上次内容以重试</button></p>}
-              {isMission && <><input ref={nameInputRef} className="automation-name-input" aria-label="使命标题" placeholder="使命标题" value={name} disabled={busy} onChange={event=>setName(event.target.value)} aria-invalid={!!nameError} autoComplete="off"/><textarea className="automation-prompt-input" aria-label="使命描述" placeholder="告诉队员，这次要完成什么…" rows={3} value={description} disabled={busy} onChange={event=>setDescription(event.target.value)}/>{nameError && <p className="compact-inline-error" role="alert">{nameError}</p>}</>}
-              <div className="compact-row">
+              {recovery && !busy && <p className="compact-inline-note" role="status">上次创建结果尚未确认。<button type="button" className="mission-source-link" onClick={() => { setName(recovery.title); setDescription(recovery.description); setTags(recovery.tags); setAttachments(recoveryAttachments.map(({id, file}) => ({kind:'local', id, file}))); setWorkspace(recovery.projectBindingKind === 'directory' ? {name:projects.find(p=>p.projectPath===recovery.projectPath)?.name ?? recovery.projectPath,projectPath:recovery.projectPath} : null); setSelectedMemberIds(recovery.memberAgentIds); setLeadId(recovery.defaultLeadAgentId); setSubmitError(null) }}>恢复上次内容以重试</button></p>}
+              {isMission && <MissionWritingPlane ref={missionEditorRef} titleInputRef={nameInputRef} title={name} description={description} attachments={attachments} disabled={busy} attachmentsDisabled={!client.missionAttachments} titleError={!normalizedName ? undefined : nameLength > 200 ? '使命名称最多 200 个字符。' : undefined} descriptionError={Array.from(description).length > 12000 ? '使命描述最多 12,000 个字符。' : undefined} onTitleChange={setName} onDescriptionChange={setDescription} onAttachmentsChange={setAttachments} onNotify={setSubmitError}/>}
+              {!isMission && <><div className="compact-row">
                 <span id="new-camp-workspace-label">工作目录</span>
                 <NewConversationPicker mobile={mobile} open={projectMenuOpen} onOpenChange={setProjectMenuOpen} busy={busy} title="选择工作目录"
                   trigger={<button ref={projectTriggerRef} className="compact-picker new-camp-picker-trigger" type="button" aria-labelledby="new-camp-workspace-label new-camp-workspace-value" aria-busy={!projectAccessReady} disabled={projectActionsDisabled}>
@@ -301,8 +327,27 @@ export function NewConversationDialog({
                   </button>)}
                   <button type="button" className="compact-option" disabled={projectActionsDisabled} onClick={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}><DialogControlIcon name="plus" /><span>选择工作目录…</span></button>
                 </NewConversationPicker>
-              </div>
-              {workspace && <div className="compact-row-detail"><span title={projectDetail}>{projectDetail}</span>{gitPresentation.kind === 'metadata' && <span className="compact-git">{gitPresentation.label}</span>}{gitPresentation.kind === 'loading' && <span role="status">{gitPresentation.label}</span>}</div>}
+              </div></>}
+              {isMission && <div className="mission-editor-properties" aria-label="使命属性">
+                <NewConversationPicker mobile={false} open={projectMenuOpen} onOpenChange={setProjectMenuOpen} busy={busy} title="选择项目"
+                  trigger={<MissionPropertyChip icon={<ProjectGlyph/>} disabled={projectActionsDisabled}>{projectLabel}</MissionPropertyChip>}
+                  menu={<DropdownMenu.Content onCloseAutoFocus={event => event.preventDefault()} className="compact-menu workspace-menu" align="start" sideOffset={6} collisionPadding={12} aria-label="选择项目" loop>
+                    <DropdownMenu.RadioGroup value={workspace?.projectPath ?? ''}>
+                      <DropdownMenu.RadioItem className="compact-option" value="" disabled={projectActionsDisabled} onSelect={() => { setWorkspace(null); setProjectMenuOpen(false) }}><WorkspaceIcon kind="quick-chat"/><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check"/></DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
+                      <DropdownMenu.Separator className="compact-separator"/>
+                      {projects.map(project => <DropdownMenu.RadioItem key={project.projectKey} className="compact-option" value={project.projectPath} disabled={projectActionsDisabled} onSelect={() => selectKnownWorkspace(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{project.projectPath}</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check"/></DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>)}
+                    </DropdownMenu.RadioGroup>
+                    <DropdownMenu.Separator className="compact-separator"/>
+                    <DropdownMenu.Item className="compact-option" disabled={projectActionsDisabled} onSelect={() => void chooseWorkspaceDirectory()}><DialogControlIcon name="plus"/><span>选择工作目录…</span></DropdownMenu.Item>
+                  </DropdownMenu.Content>}>
+                  <button type="button" className="compact-option" aria-pressed={!workspace} onClick={() => { setWorkspace(null); setProjectMenuOpen(false) }}><WorkspaceIcon kind="quick-chat"/><span>使用快速对话</span>{!workspace && <DialogControlIcon name="check"/>}</button>
+                  {projects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} onClick={() => selectKnownWorkspace(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{project.projectPath}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check"/>}</button>)}
+                  <button type="button" className="compact-option" onClick={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}><DialogControlIcon name="plus"/><span>选择工作目录…</span></button>
+                </NewConversationPicker>
+                <MissionTeamPicker busy={busy} members={preflight.presentMembers} availableMembers={availableMembers} selectedMemberIds={selectedMemberIds} selectedMembers={selectedMembers} leadId={leadId} profileById={profileById} enableOneClick={enableOneClick} triggerRef={memberTriggerRef} onEnableOneClick={setEnableOneClick} onToggle={toggleMember} onToggleAll={toggleAllMembers} onLead={setLeadId}/>
+                <MissionTagPicker tags={tags} catalog={missionTagCatalog} disabled={busy} onChange={setTags}/>
+              </div>}
+              {!isMission && <>{workspace && <div className="compact-row-detail"><span title={projectDetail}>{projectDetail}</span>{gitPresentation.kind === 'metadata' && <span className="compact-git">{gitPresentation.label}</span>}{gitPresentation.kind === 'loading' && <span role="status">{gitPresentation.label}</span>}</div>}
               {gitPresentation.kind === 'warning' && <div className="new-camp-workspace-warning" role="alert"><div><strong>{gitPresentation.label}</strong><span>{gitPresentation.detail}</span></div></div>}
               <div className="compact-row">
                 <span id="new-camp-members-label">队员</span>
@@ -334,10 +379,18 @@ export function NewConversationDialog({
                   })}
                 </NewConversationPicker>
               </div>
-              {memberError && <p id="new-camp-members-error" role="alert" className="compact-inline-error new-camp-members-error">{memberError}</p>}
-              {availableMembers.length === 0 && <p className="new-camp-empty-note">暂无可用队员，请先在「队员」中配置 Agent 运行时。</p>}
-              {hasUnavailableSelection && <p className="compact-inline-error" role="alert">所选队员已不可用，请重新选择。</p>}
-              <div className="compact-row">
+              </>}
+              {isMission && <>
+                {gitPresentation.kind === 'warning' && <p className="compact-inline-error" role="alert">{gitPresentation.label}：{gitPresentation.detail}</p>}
+                {memberError && <p id="new-camp-members-error" role="alert" className="compact-inline-error new-camp-members-error">{memberError}</p>}
+                {availableMembers.length === 0 && <p className="new-camp-empty-note">暂无可用队员，请先在「队员」中配置 Agent 运行时。</p>}
+                {hasUnavailableSelection && <p className="compact-inline-error" role="alert">所选队员已不可用，请重新选择。</p>}
+              </>}
+              {!isMission && <>
+                {memberError && <p id="new-camp-members-error" role="alert" className="compact-inline-error new-camp-members-error">{memberError}</p>}
+                {availableMembers.length === 0 && <p className="new-camp-empty-note">暂无可用队员，请先在「队员」中配置 Agent 运行时。</p>}
+                {hasUnavailableSelection && <p className="compact-inline-error" role="alert">所选队员已不可用，请重新选择。</p>}
+                <div className="compact-row">
                 <span id="new-camp-lead-label">队长</span>
                 <NewConversationPicker mobile={mobile} open={leadMenuOpen} onOpenChange={setLeadMenuOpen} busy={busy} title="选择队长"
                   trigger={<button className="compact-picker" type="button" aria-labelledby="new-camp-lead-label new-camp-lead-value" disabled={busy || selectedAvailableMembers.length === 0}>
@@ -362,6 +415,7 @@ export function NewConversationDialog({
                   </button>)}
                 </NewConversationPicker>
               </div>
+              </>}
               {!isMission && <div className="compact-name-disclosure">
                 <button className="compact-text-button" type="button" aria-expanded={optionalOpen} aria-controls="new-camp-optional-panel" disabled={busy} onClick={() => setOptionalOpen((current) => !current)}><DialogControlIcon name={optionalOpen ? 'chevron' : 'plus'} />{optionalOpen ? '对话名称' : normalizedName ? `对话名称：${normalizedName}` : '添加对话名称'}<span>可选</span></button>
                 {optionalOpen && <div className="compact-name-field" id="new-camp-optional-panel">
@@ -372,36 +426,115 @@ export function NewConversationDialog({
                 </div>}
               </div>
               }
-              <div className="new-camp-quick-setting">
+              {!isMission && <div className="new-camp-quick-setting">
                 <div className="new-camp-quick-row">
                   <label className="new-camp-quick-label">
                     <input type="checkbox" checked={enableOneClick} disabled={busy} onChange={(event) => setEnableOneClick(event.target.checked)} />
                     <span>以后使用此队伍一键新建</span>
                   </label>
-                  <NewConversationQuickHelp onOpenChange={setQuickHelpOpen}>{isMission ? <>保存队员和负责人，下次新建时自动使用。<br/>使命目标和工作目录可继续调整。</> : undefined}</NewConversationQuickHelp>
+                  <NewConversationQuickHelp onOpenChange={setQuickHelpOpen}/>
                 </div>
-              </div>
+              </div>}
               {submitError && <p className="compact-inline-error" role="alert">{submitError}</p>}
             </div>
-            <footer className="compact-footer">
-              <Dialog.Close asChild><button className="compact-cancel" type="button" disabled={busy}>取消</button></Dialog.Close>
-              <div className={isMission ? 'mission-create-split' : undefined}>
-                <button className="compact-primary" type="submit" value="save" disabled={submissionBlocked}>{busy ? '正在新建…' : '新建'}</button>
-                {isMission && <>
-                  <button ref={startSubmitRef} type="submit" value="start" hidden disabled={submissionBlocked}/>
-                  <DropdownMenu.Root><DropdownMenu.Trigger asChild><button className="compact-primary mission-create-options" type="button" aria-label="新建使命选项" disabled={submissionBlocked}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button></DropdownMenu.Trigger>
-                    <DropdownMenu.Portal><DropdownMenu.Content className="compact-menu" align="end" sideOffset={6}>
-                      <DropdownMenu.Item className="compact-option" onSelect={() => startSubmitRef.current?.form?.requestSubmit(startSubmitRef.current)}>开始使命</DropdownMenu.Item>
-                    </DropdownMenu.Content></DropdownMenu.Portal>
-                  </DropdownMenu.Root>
-                </>}
-              </div>
-            </footer>
+            {isMission
+              ? <footer className="compact-footer mission-editor-footer">
+                  <MissionAttachmentButton onClick={() => missionEditorRef.current?.chooseFiles()} disabled={busy || !client.missionAttachments}/>
+                  <div className="mission-editor-footer-actions"><Dialog.Close asChild><button className="compact-cancel" type="button" disabled={busy}>取消</button></Dialog.Close>
+                    <div className="mission-create-split">
+                      <button className="compact-primary" type="submit" value="save" disabled={submissionBlocked}>{busy ? '正在新建…' : '新建'}</button>
+                      <button ref={startSubmitRef} type="submit" value="start" hidden disabled={submissionBlocked}/>
+                      <DropdownMenu.Root><DropdownMenu.Trigger asChild><button className="compact-primary mission-create-options" type="button" aria-label="新建使命选项" disabled={submissionBlocked}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button></DropdownMenu.Trigger>
+                        <DropdownMenu.Portal><DropdownMenu.Content className="compact-menu" align="end" sideOffset={6}>
+                          <DropdownMenu.Item className="compact-option" onSelect={() => startSubmitRef.current?.form?.requestSubmit(startSubmitRef.current)}>开始使命</DropdownMenu.Item>
+                        </DropdownMenu.Content></DropdownMenu.Portal>
+                      </DropdownMenu.Root>
+                    </div>
+                  </div>
+                </footer>
+              : <footer className="compact-footer">
+                  <Dialog.Close asChild><button className="compact-cancel" type="button" disabled={busy}>取消</button></Dialog.Close>
+                  <button className="compact-primary" type="submit" value="save" disabled={submissionBlocked}>{busy ? '正在新建…' : '新建'}</button>
+                </footer>}
           </form>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
   )
+}
+
+type MissionMember = CampCreationPreflight['presentMembers'][number]
+
+function MissionTeamPicker({
+  busy,
+  members,
+  availableMembers,
+  selectedMemberIds,
+  selectedMembers,
+  leadId,
+  profileById,
+  enableOneClick,
+  triggerRef,
+  onEnableOneClick,
+  onToggle,
+  onToggleAll,
+  onLead
+}: {
+  busy: boolean
+  members: MissionMember[]
+  availableMembers: MissionMember[]
+  selectedMemberIds: string[]
+  selectedMembers: MissionMember[]
+  leadId: string
+  profileById: Map<string, AgentProfile>
+  enableOneClick: boolean
+  triggerRef: RefObject<HTMLButtonElement | null>
+  onEnableOneClick(value: boolean): void
+  onToggle(agentId: string): void
+  onToggleAll(): void
+  onLead(agentId: string): void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const lead = selectedMembers.find(member => member.agentId === leadId) ?? null
+  const allSelected = availableMembers.length > 0
+    && selectedMemberIds.length === availableMembers.length
+    && selectedMemberIds.every(id => availableMembers.some(member => member.agentId === id))
+
+  return <Popover.Root open={open} onOpenChange={next => { if (!busy) setOpen(next) }}>
+    <Popover.Trigger asChild>
+      <MissionPropertyChip ref={triggerRef} icon={<TeamGlyph/>} disabled={busy || !members.length} aria-invalid={!selectedMemberIds.length}>
+        <span className="mission-editor-team-summary">
+          <span className="compact-avatar-stack">{selectedMembers.slice(0, 3).map(member => <MemberAvatar key={member.agentId} agentId={member.agentId} avatarRef={profileById.get(member.agentId)?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative/>)}</span>
+          <span>{selectedMembers.length ? `${selectedMembers.length} 位队员` : availableMembers.length ? '选择队员' : '暂无可用队员'}</span>
+          <span className="mission-editor-team-divider" aria-hidden="true"/>
+          <span>{lead ? `队长 · ${lead.displayName}` : '选择队长'}</span>
+        </span>
+      </MissionPropertyChip>
+    </Popover.Trigger>
+    <Popover.Portal><Popover.Content className="compact-menu mission-editor-team-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => event.preventDefault()}>
+      <div className="compact-menu-heading"><span>队员与队长</span><button type="button" disabled={busy || !availableMembers.length} onClick={onToggleAll}>{allSelected ? '取消全选' : '全选'}</button></div>
+      <div className="mission-editor-team-list">
+        {members.map(member => {
+          const profile = profileById.get(member.agentId)
+          const available = isNewConversationMemberAvailable(member)
+          const selected = selectedMemberIds.includes(member.agentId)
+          const isLead = leadId === member.agentId
+          return <div className="mission-editor-team-row" key={member.agentId} data-disabled={!available ? '' : undefined}>
+            <button type="button" className="mission-editor-team-member" disabled={busy || !available} onClick={() => onToggle(member.agentId)}>
+              <MemberAvatar agentId={member.agentId} avatarRef={profile?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative/>
+              <span>{member.displayName}<small>{profile?.teamRole || '队员'} · {newConversationMemberStatus(member)}</small></span>
+              <span className={`mission-editor-team-check${selected ? ' is-checked' : ''}`}>{selected && <DialogControlIcon name="check"/>}</span>
+            </button>
+            <button type="button" className={`mission-editor-lead-choice${isLead ? ' is-selected' : ''}`} disabled={busy || !available || !selected} onClick={() => onLead(member.agentId)}>{isLead ? '队长' : '设为队长'}</button>
+          </div>
+        })}
+      </div>
+      <div className="mission-editor-team-footer">
+        <label><input type="checkbox" checked={enableOneClick} disabled={busy} onChange={event => onEnableOneClick(event.target.checked)}/><span>以后使用此队伍一键新建</span></label>
+        <button type="button" className="compact-primary" onClick={() => setOpen(false)} disabled={busy}>完成</button>
+      </div>
+    </Popover.Content></Popover.Portal>
+  </Popover.Root>
 }
 
 function navigateMemberGrid(event: KeyboardEvent<HTMLDivElement>): void {

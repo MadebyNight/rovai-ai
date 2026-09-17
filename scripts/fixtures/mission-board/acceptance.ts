@@ -71,9 +71,21 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(editAction, 'Mission actions expose edit first')
   editAction()!.click()
   await until(() => document.querySelector('.mission-edit-dialog'), 'Edit dialog opens')
-  const editLabel = document.querySelector<HTMLElement>('label[for$="-title"]')!
-  check(editLabel.textContent === '使命标题' && editLabel.getBoundingClientRect().width <= 1, 'Edit labels remain accessible without repeating the creation hierarchy')
-  check(document.querySelector('.mission-edit-dialog .automation-name-input') && document.querySelector('.mission-edit-dialog .automation-prompt-input'), 'Edit reuses the creation field treatment')
+  const editDialog = document.querySelector<HTMLElement>('.mission-edit-dialog')!
+  const editLabel = document.querySelector<HTMLElement>('label[for="mission-editor-title"]')!
+  check(editLabel.textContent === '使命名称' && editLabel.getBoundingClientRect().width <= 1, 'Edit labels remain accessible without repeating the creation hierarchy')
+  check(document.querySelector('.mission-edit-dialog .mission-editor-title') && document.querySelector('.mission-edit-dialog .mission-editor-description'), 'Edit uses the wide borderless writing plane')
+  check(Math.abs(editDialog.getBoundingClientRect().width - 820) <= 1, 'Edit dialog matches the approved 820px writing width')
+  const editTitle = document.querySelector<HTMLInputElement>('.mission-edit-dialog .mission-editor-title')!
+  const editDescription = document.querySelector<HTMLTextAreaElement>('.mission-edit-dialog .mission-editor-description')!
+  check(document.activeElement !== editTitle && document.activeElement !== editDescription, 'Edit opens without focusing a writing field')
+  check(parseFloat(getComputedStyle(editTitle).borderTopWidth) === 0 && parseFloat(getComputedStyle(editDescription).borderTopWidth) === 0, 'Title and description have no field frame')
+  editTitle.focus(); await frames()
+  check(getComputedStyle(editTitle).outlineStyle === 'none' && getComputedStyle(editTitle).boxShadow === 'none', 'Focused title stays visually borderless')
+  editTitle.blur()
+  const properties = Array.from(document.querySelectorAll<HTMLButtonElement>('.mission-edit-dialog .mission-editor-property'))
+  check(properties.length === 3 && properties[0].disabled && properties[1].disabled && !properties[2].disabled, 'Edit locks project and team while keeping tags editable')
+  check(!button('添加附件').disabled, 'Edit keeps attachments editable')
   check(button('保存').disabled, 'Unchanged Mission cannot be saved')
   const editing = qa.items[0]
   editing.title = '另一处刚更新的标题'; editing.detailsVersion += 1
@@ -82,9 +94,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-edit-dialog [role=alert]')?.textContent?.includes('最新内容'), 'Conflict loads latest details')
   check((document.querySelector('.mission-edit-dialog input') as HTMLInputElement).value === '另一处刚更新的标题', 'Conflict replaces stale fields')
   fill(document.querySelector<HTMLInputElement>('.mission-edit-dialog input')!, '基于最新内容编辑')
+  const attachmentInput = document.querySelector<HTMLInputElement>('.mission-edit-dialog input[type=file]')!
+  const attachmentTransfer = new DataTransfer()
+  attachmentTransfer.items.add(new File(['review'], 'review-notes.md', { type: 'text/markdown' }))
+  Object.defineProperty(attachmentInput, 'files', { configurable: true, value: attachmentTransfer.files })
+  attachmentInput.dispatchEvent(new Event('change', { bubbles: true }))
+  await until(() => document.querySelector('.mission-edit-dialog')?.textContent?.includes('review-notes.md'), 'Edit accepts a new attachment')
   button('保存').click()
   await until(() => !document.querySelector('.mission-edit-dialog'), 'Fresh edit saves')
-  check(editing.title === '基于最新内容编辑' && editing.detailsVersion === 3, 'Edit advances internal details version once')
+  check(editing.title === '基于最新内容编辑' && editing.detailsVersion === 3 && editing.attachments[0]?.displayName === 'review-notes.md', 'Edit advances internal details version once and persists attachments')
   card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: card.getBoundingClientRect().left + 20, clientY: card.getBoundingClientRect().top + 20 }))
   await until(() => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).some(item => item.textContent?.trim() === '删除'), 'Context menu can reopen for deletion')
   Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '删除')!.click()
@@ -132,6 +150,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !tab('活动') && !visiblePreview(), 'Second Activity click closes last tab and preview')
   button('活动').click()
   await until(() => document.querySelector('.mission-delivery-file') && visiblePreview(), 'Activity reopens')
+  check(!visiblePreview()!.textContent?.includes('Pull Requests') && !button('关联 Pull Request'), 'Activity omits the unavailable Pull Requests module')
   document.querySelector<HTMLButtonElement>('.mission-changed-file')!.click()
   await until(() => document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog opens')
   await until(() => document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'First selected file diff loads')
@@ -224,8 +243,23 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const newEntry = button('新建使命'), entryBounds = newEntry.getBoundingClientRect()
   check(newEntry.contains(document.elementFromPoint(entryBounds.x + entryBounds.width / 2, entryBounds.y + entryBounds.height / 2)), 'Window drag strip cannot cover creation entry')
   newEntry.click()
-  await until(() => document.querySelector('input[aria-label="使命标题"]'), 'Create dialog')
-  fill(document.querySelector('input[aria-label="使命标题"]')!, '无描述使命')
+  await until(() => document.querySelector('input[aria-label="使命名称"]'), 'Create dialog')
+  const createDialog = document.querySelector<HTMLElement>('.mission-create-dialog')!
+  const createTitle = document.querySelector<HTMLInputElement>('input[aria-label="使命名称"]')!
+  const createDescription = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="使命描述"]')!
+  check(Math.abs(createDialog.getBoundingClientRect().width - 820) <= 1, 'Create dialog matches the approved 820px writing width')
+  check(document.activeElement !== createTitle && document.activeElement !== createDescription, 'Create opens without focusing a writing field')
+  check(parseFloat(getComputedStyle(createTitle).borderTopWidth) === 0 && parseFloat(getComputedStyle(createDescription).borderTopWidth) === 0, 'Create title and description have no field frame')
+  createDescription.focus(); await frames()
+  check(getComputedStyle(createDescription).outlineStyle === 'none' && getComputedStyle(createDescription).boxShadow === 'none', 'Focused description stays visually borderless')
+  createDescription.blur()
+  fill(createTitle, '无描述使命')
+  const createAttachmentInput = document.querySelector<HTMLInputElement>('.mission-create-dialog input[type=file]')!
+  const createAttachmentTransfer = new DataTransfer()
+  createAttachmentTransfer.items.add(new File(['brief'], 'mission-brief.md', { type: 'text/markdown' }))
+  Object.defineProperty(createAttachmentInput, 'files', { configurable: true, value: createAttachmentTransfer.files })
+  createAttachmentInput.dispatchEvent(new Event('change', { bubbles: true }))
+  await until(() => document.querySelector('.mission-create-dialog')?.textContent?.includes('mission-brief.md'), 'Create accepts a new attachment')
   await frames()
   const create = button('新建')
   check(!button('保存使命') && create, 'One default create action')
@@ -234,7 +268,8 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !document.querySelector('.new-camp-dialog'), 'Create dialog closes')
   check(!document.querySelector('.mission-workspace-host'), 'Create remains on board')
   const created = qa.items.find((m: any) => m.title === '无描述使命')
-  check(created.description === '' && created.status === 'not_started', 'Default create does not start')
+  check(created.description === '' && created.status === 'not_started' && created.attachments[0]?.displayName === 'mission-brief.md', 'Default create preserves its attachment and does not start')
+  check(qa.calls.some((c: any) => c.method === 'missions.createWithAttachments' && c.p.command.title === '无描述使命'), 'Create sends attachments through the private native bridge')
   check(!qa.calls.some((c: any) => c.method === 'missions.start' && c.p.command?.missionId === created.missionId), 'No start request on default create')
   Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(card => card.textContent?.includes('无描述使命'))!.click()
   await until(() => document.querySelector('.mission-drawer .mission-start'), 'Created Mission opens with a start action')

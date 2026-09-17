@@ -193,6 +193,8 @@ export function filePreviewSourceKey(request: OpenFilePreviewRequest): string {
           return `attachment:composer:${locator.campId}:${locator.attachmentRefId}`
         case 'message':
           return `attachment:message:${locator.campId}:${locator.messageId}:${locator.attachmentRefId}`
+        case 'mission':
+          return `attachment:mission:${locator.campId}:${locator.missionId}:${locator.attachmentRefId}`
         case 'pending':
           return `attachment:pending:${locator.campId}:${locator.pendingInputId}:${locator.attachmentRefId}`
         case 'pending_edit':

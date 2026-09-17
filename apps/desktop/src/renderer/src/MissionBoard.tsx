@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
 import * as Menu from '@radix-ui/react-dropdown-menu'
-import type { AgentProfile, CampOpenProjection, MissionDelivery, MissionRecord, MissionStatus, MissionWorkspace, ProjectNavigationGroup } from '@contracts'
+import type { AgentProfile, CampOpenProjection, MissionDelivery, MissionRecord, MissionStatus, MissionUpdate, MissionWorkspace, ProjectNavigationGroup } from '@contracts'
 import { useCampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { DialogControlIcon } from './AppDialog'
@@ -9,6 +10,20 @@ import { MissionIcon } from './MissionIcon'
 import { Avatar, CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, FilterStateIcon, TagMark, statuses, type ContextPosition } from './MissionControls'
 import { RunningText } from './RunningText'
 import { MissionCommandRejected, missionCommand, missionError } from './useMissions'
+import { MemberAvatar } from './MemberAvatar'
+import {
+  MissionAttachmentButton,
+  MissionPropertyChip,
+  MissionTagPicker,
+  MissionWritingPlane,
+  ProjectGlyph,
+  TeamGlyph,
+  keptMissionAttachmentIds,
+  missionAttachmentDrafts,
+  storedMissionAttachments,
+  type MissionDraftAttachment,
+  type MissionWritingPlaneHandle
+} from './MissionDefinitionEditor'
 
 type MissionActions = {
   edit(mission: MissionRecord): void
@@ -37,8 +52,8 @@ export function missionDate(value: string): string {
 }
 
 /** Shared overlays keep card actions identical in the board, drawer and full conversation. */
-export function MissionInteractionProvider({ missions, agents, onChanged, onDeleted, onError, children }: {
-  missions: MissionRecord[]; agents: AgentProfile[]; onChanged(campId: string): Promise<void>; onDeleted(campId: string): Promise<void>; onError(message: string): void; children: ReactNode
+export function MissionInteractionProvider({ missions, projects, agents, onChanged, onDeleted, onError, children }: {
+  missions: MissionRecord[]; projects: ProjectNavigationGroup[]; agents: AgentProfile[]; onChanged(campId: string): Promise<void>; onDeleted(campId: string): Promise<void>; onError(message: string): void; children: ReactNode
 }) {
   const client = useCampClient()
   const [position, setPosition] = useState<(ContextPosition & { kind: 'menu' | 'tags' | 'members' }) | null>(null)
@@ -91,7 +106,7 @@ export function MissionInteractionProvider({ missions, agents, onChanged, onDele
     {position && position.kind !== 'menu' && selected && <MissionPopover position={position} title={position.kind === 'tags' ? '编辑标签' : '使命队员'} onClose={() => setPosition(null)} className={position.kind === 'tags' ? 'mission-label-popover' : 'mission-members-popover'}>
       {position.kind === 'tags' ? <LabelsEditor key={selected.missionId} m={selected} catalog={catalog} onSave={tags => change(selected, 'update', { tags })}/> : <MissionRoster m={selected}/>}
     </MissionPopover>}
-    {editing && <MissionEdit key={editing.missionId} mission={editing} onClose={() => setEditing(null)} onSave={patch => change(editing, 'update', patch)}/>}
+    {editing && <MissionEdit key={editing.missionId} mission={editing} projects={projects} agents={agents} catalog={catalog} onClose={() => setEditing(null)} onSaved={() => onChanged(editing.campId)} onSave={patch => change(editing, 'update', patch)}/>}
     {deleting && <MissionDelete key={deleting.missionId} mission={deleting} onClose={() => setDeleting(null)} onDelete={async () => {
       const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: deleting.campId })
       await missionCommand(client, 'camps.delete', { campId: deleting.campId, expectedVersion: snapshot.camp.version, force: true })
@@ -100,43 +115,99 @@ export function MissionInteractionProvider({ missions, agents, onChanged, onDele
   </Actions.Provider></MissionPeopleProvider>
 }
 
-function MissionEdit({ mission, onSave, onClose }: { mission: MissionRecord; onSave(patch: {title?: string; description?: string; expectedDetailsVersion: number}): Promise<void>; onClose(): void }) {
+function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onClose }: {
+  mission: MissionRecord
+  projects: ProjectNavigationGroup[]
+  agents: AgentProfile[]
+  catalog: string[]
+  onSave(patch: Omit<MissionUpdate, 'missionId'>): Promise<void>
+  onSaved(): Promise<void>
+  onClose(): void
+}) {
   const client = useCampClient()
-  const [baseline, setBaseline] = useState({ title: mission.title, description: mission.description, version: mission.detailsVersion })
-  const [title, setTitle] = useState(mission.title), [description, setDescription] = useState(mission.description), [busy, setBusy] = useState(false), [error, setError] = useState('')
-  const id = useId()
+  const [baseline, setBaseline] = useState({ title: mission.title, description: mission.description, tags: mission.tags, attachments: mission.attachments ?? [], version: mission.detailsVersion })
+  const [title, setTitle] = useState(mission.title)
+  const [description, setDescription] = useState(mission.description)
+  const [tags, setTags] = useState(mission.tags)
+  const [attachments, setAttachments] = useState<MissionDraftAttachment[]>(() => storedMissionAttachments(mission.attachments))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const titleInputRef = useRef<HTMLInputElement>(null)
+  const editorRef = useRef<MissionWritingPlaneHandle>(null)
+  const agentById = useMemo(() => new Map(agents.map(agent => [agent.agentId, agent])), [agents])
+  const members = mission.memberAgentIds.map(id => agentById.get(id)).filter((agent): agent is AgentProfile => !!agent)
+  const lead = mission.defaultLeadAgentId ? agentById.get(mission.defaultLeadAgentId) ?? null : null
   const normalizedTitle = title.trim()
+  const keepAttachmentIds = keptMissionAttachmentIds(attachments)
+  const newAttachments = missionAttachmentDrafts(attachments)
+  const attachmentsChanged = newAttachments.length > 0
+    || keepAttachmentIds.join('\n') !== baseline.attachments.map(attachment => attachment.id).join('\n')
   const changed = normalizedTitle !== baseline.title || description !== baseline.description
+    || tags.join('\n') !== baseline.tags.join('\n') || attachmentsChanged
   const titleError = !normalizedTitle ? '请填写使命标题。' : [...normalizedTitle].length > 200 ? '使命标题最多 200 个字符。' : ''
   const descriptionError = [...description].length > 12000 ? '使命描述最多 12,000 个字符。' : ''
   const invalid = !!titleError || !!descriptionError
   async function save() {
     if (!changed || invalid) return
-    const patch = { ...(normalizedTitle !== baseline.title ? { title: normalizedTitle } : {}), ...(description !== baseline.description ? { description } : {}), expectedDetailsVersion: baseline.version }
+    const patch: MissionUpdate = {
+      missionId: mission.missionId,
+      ...(normalizedTitle !== baseline.title ? { title: normalizedTitle } : {}),
+      ...(description !== baseline.description ? { description } : {}),
+      ...(tags.join('\n') !== baseline.tags.join('\n') ? { tags } : {}),
+      expectedDetailsVersion: baseline.version
+    }
     setBusy(true); setError('')
-    try { await onSave(patch); onClose() } catch (error) {
+    try {
+      if (attachmentsChanged) {
+        if (!client.missionAttachments) throw new Error('当前环境不支持编辑使命附件。')
+        const result = await client.missionAttachments.update(newCommandId(), patch, keepAttachmentIds, newAttachments)
+        if (result.status === 'rejected') throw new MissionCommandRejected(result)
+        await onSaved()
+      } else {
+        const { missionId: _missionId, ...contentPatch } = patch
+        await onSave(contentPatch)
+      }
+      onClose()
+    } catch (error) {
       if (error instanceof MissionCommandRejected && error.result.code === 'mission.details_version_conflict') {
         try {
           const latest = (await client.request<MissionRecord[]>('missions.list')).find(candidate => candidate.missionId === mission.missionId)
           if (!latest) throw new Error('Mission no longer exists')
-          setBaseline({ title: latest.title, description: latest.description, version: latest.detailsVersion })
-          setTitle(latest.title); setDescription(latest.description)
+          setBaseline({ title: latest.title, description: latest.description, tags: latest.tags, attachments: latest.attachments ?? [], version: latest.detailsVersion })
+          setTitle(latest.title); setDescription(latest.description); setTags(latest.tags); setAttachments(storedMissionAttachments(latest.attachments))
           setError('使命刚刚被修改，已载入最新内容。请重新编辑后保存。')
         } catch { setError('使命刚刚被修改，但最新内容加载失败。请关闭后重试。') }
       } else setError(missionError(error))
     } finally { setBusy(false) }
   }
-  return <CompactDialog title="编辑使命" className="mission-edit-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" disabled={busy} onClick={onClose}>取消</button><button className="compact-primary" form={id} disabled={busy || invalid || !changed}>{busy ? '正在保存…' : '保存'}</button></>}>
-    <form id={id} onSubmit={event => { event.preventDefault(); void save() }} className="mission-definition-fields mission-edit-fields">
-      <label htmlFor={`${id}-title`}>使命标题</label>
-      <input className="automation-name-input" id={`${id}-title`} placeholder="使命标题" value={title} onChange={e => setTitle(e.target.value)} disabled={busy} aria-invalid={!!titleError} aria-describedby={titleError ? `${id}-title-error` : undefined} autoFocus/>
-      {titleError && <p id={`${id}-title-error`} role="alert" className="compact-inline-error">{titleError}</p>}
-      <label htmlFor={`${id}-description`}>使命描述 <span>可选</span></label>
-      <textarea className="automation-prompt-input" id={`${id}-description`} placeholder="告诉队员，这次要完成什么…" value={description} onChange={e => setDescription(e.target.value)} disabled={busy} aria-invalid={!!descriptionError} aria-describedby={descriptionError ? `${id}-description-error` : undefined} rows={6}/>
-      {descriptionError && <p id={`${id}-description-error`} role="alert" className="compact-inline-error">{descriptionError}</p>}
-      {error && <p role="alert" className="compact-inline-error">{error}</p>}
-    </form>
-  </CompactDialog>
+  return <Dialog.Root open onOpenChange={open => { if (!open && !busy) onClose() }}>
+    <Dialog.Portal>
+      <Dialog.Overlay className="dialog-overlay new-camp-dialog-overlay"/>
+      <Dialog.Content className={`compact-dialog mission-definition-dialog mission-edit-dialog${expanded ? ' is-expanded' : ''}`} aria-describedby="mission-edit-description"
+        onOpenAutoFocus={event => event.preventDefault()} onEscapeKeyDown={event => { if (busy) event.preventDefault() }}>
+        <header className="compact-header mission-editor-header">
+          <div className="mission-editor-heading"><Dialog.Title>编辑使命</Dialog.Title><span>{`M-${String(mission.number).padStart(3, '0')}`}</span></div>
+          <div className="mission-editor-header-actions"><button className="mission-editor-icon-button" type="button" aria-label={expanded ? '恢复编辑区域大小' : '展开编辑区域'} title={expanded ? '恢复编辑区域大小' : '展开编辑区域'} onClick={() => setExpanded(value => !value)} disabled={busy}><svg viewBox="0 0 24 24" aria-hidden="true">{expanded ? <><path d="M9 3v6H3M15 21v-6h6M3 9l6-6M21 15l-6 6"/></> : <><path d="M9 3H3v6M15 21h6v-6M3 9l6-6M21 15l-6 6"/></>}</svg></button><Dialog.Close asChild><button className="compact-close" type="button" aria-label="关闭编辑使命" disabled={busy}><DialogControlIcon name="close"/></button></Dialog.Close></div>
+        </header>
+        <Dialog.Description id="mission-edit-description" className="sr-only">编辑使命名称、描述、标签和附件。项目、队员与队长在创建后不可更改。</Dialog.Description>
+        <form className="compact-form" onSubmit={event => { event.preventDefault(); void save() }}>
+          <div className="compact-body mission-editor-body">
+            <MissionWritingPlane ref={editorRef} titleInputRef={titleInputRef} title={title} description={description} attachments={attachments} disabled={busy} attachmentsDisabled={!client.missionAttachments} titleError={titleError || undefined} descriptionError={descriptionError || undefined} mission={{campId: mission.campId, missionId: mission.missionId}} onTitleChange={setTitle} onDescriptionChange={setDescription} onAttachmentsChange={setAttachments} onNotify={setError}/>
+            <div className="mission-editor-properties" aria-label="使命属性">
+              <MissionPropertyChip icon={<ProjectGlyph/>} locked title="编辑使命时不能更改项目">{missionProject(mission, projects)}</MissionPropertyChip>
+              <MissionPropertyChip icon={<TeamGlyph/>} locked className="mission-editor-team-locked" title="编辑使命时不能更改队员或队长">
+                <span className="mission-editor-team-summary"><span className="compact-avatar-stack">{members.slice(0, 3).map(member => <MemberAvatar key={member.agentId} agentId={member.agentId} avatarRef={member.avatarRef} displayName={member.displayName} size="mention" decorative/>)}</span><span>{members.length} 位队员</span><span className="mission-editor-team-divider" aria-hidden="true"/><span>{lead ? `队长 · ${lead.displayName}` : '未设置队长'}</span></span>
+              </MissionPropertyChip>
+              <MissionTagPicker tags={tags} catalog={catalog} disabled={busy} onChange={setTags}/>
+            </div>
+            {error && <p role="alert" className="compact-inline-error mission-editor-error">{error}</p>}
+          </div>
+          <footer className="compact-footer mission-editor-footer"><MissionAttachmentButton onClick={() => editorRef.current?.chooseFiles()} disabled={busy || !client.missionAttachments}/><div className="mission-editor-footer-actions"><button className="compact-cancel" type="button" disabled={busy} onClick={onClose}>取消</button><button className="compact-primary" type="submit" disabled={busy || invalid || !changed}>{busy ? '正在保存…' : '保存'}</button></div></footer>
+        </form>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>
 }
 function MissionDelete({ mission, onDelete, onClose }: { mission: MissionRecord; onDelete(): Promise<void>; onClose(): void }) {
   const client = useCampClient(), [delivery, setDelivery] = useState<MissionDelivery | null>(null), [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('')

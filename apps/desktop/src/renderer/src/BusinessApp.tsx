@@ -36,6 +36,7 @@ import type {
   NotificationEpisodeView,
   OnboardingRuntimeSelection,
   OnboardingSnapshot,
+  MissionAttachmentDraft,
   MissionRecord,
   MissionCreate,
   NavigationCampItem,
@@ -1069,7 +1070,7 @@ export function BusinessApp({
   const [missionPresentation, setMissionPresentation] = useState<'drawer' | 'full'>('full')
   const [missionOpenRequest, setMissionOpenRequest] = useState(0)
   const [newMissionOpen, setNewMissionOpen] = useState(false)
-  const missionCreation = useRef<{id: string; command: MissionCreate} | null>(null)
+  const missionCreation = useRef<{id: string; command: MissionCreate; attachments: MissionAttachmentDraft[]; attachmentSignature: string} | null>(null)
   const activeMission = missionList.missions.find(m => m.campId === activeCampId)
   const missionCamp = !!activeMission || !!(campSnapshot?.camp.id === activeCampId && campSnapshot?.camp.missionId)
   const missionDrawer = !mobile && view === 'camp' && !!activeMission && missionPresentation === 'drawer'
@@ -3787,18 +3788,26 @@ export function BusinessApp({
   const missionSource = (messageId: string): void => {
     setNotificationFocus({ requestId: ++notificationFocusSequence.current, kind: 'camp_message', campTurnId: null, messageId, active: true })
   }
-  async function createMission(draft: Omit<CreateCampRequest, 'commandId' | 'activationState'>, saveTeam: boolean, definition?: {description: string; start: boolean}): Promise<void> {
+  async function createMission(draft: Omit<CreateCampRequest, 'commandId' | 'activationState'>, saveTeam: boolean, definition?: {description: string; start: boolean; tags: string[]; attachments: MissionAttachmentDraft[]}): Promise<void> {
     if (!definition) throw new Error('缺少使命定义')
-    const command: MissionCreate = { title: draft.name ?? '', description: definition.description, memberAgentIds: draft.memberAgentIds, defaultLeadAgentId: draft.defaultLeadAgentId, projectBindingKind: draft.workspace ? 'directory' : 'quick_chat', projectPath: draft.workspace?.projectPath ?? '', tags: [] }
+    const command: MissionCreate = { title: draft.name ?? '', description: definition.description, memberAgentIds: draft.memberAgentIds, defaultLeadAgentId: draft.defaultLeadAgentId, projectBindingKind: draft.workspace ? 'directory' : 'quick_chat', projectPath: draft.workspace?.projectPath ?? '', tags: definition.tags }
+    const attachmentSignature = JSON.stringify(definition.attachments.map(({ id, file }) => [id, file.name, file.size, file.lastModified, file.type]))
     // Unknown transport outcomes retry the exact command. A different draft cannot
     // accidentally create a second Mission while the first result is unresolved.
     const pending = missionCreation.current
-    if (pending && JSON.stringify(pending.command) !== JSON.stringify(command)) throw new Error('上次创建结果尚未确认，请恢复原内容并重试。')
-    const request = pending ?? { id: newCommandId(), command }
+    if (pending && (JSON.stringify(pending.command) !== JSON.stringify(command) || pending.attachmentSignature !== attachmentSignature)) throw new Error('上次创建结果尚未确认，请恢复原内容并重试。')
+    const request = pending ?? { id: newCommandId(), command, attachments: definition.attachments, attachmentSignature }
     missionCreation.current = request
     setBusy('create-mission')
     try {
-      const result = await missionCommand(client, 'missions.create', request.command, request.id)
+      const result = request.attachments.length
+        ? await (async () => {
+            if (!client.missionAttachments) throw new Error('当前环境不支持使命附件。')
+            const stored = await client.missionAttachments.create(request.id, request.command, request.attachments)
+            if (stored.status === 'rejected') throw new MissionCommandRejected(stored)
+            return stored
+          })()
+        : await missionCommand(client, 'missions.create', request.command, request.id)
       const campId = stringField(result.payload, 'campId'), missionId = stringField(result.payload, 'missionId')
       if (!campId || !missionId) throw new Error('使命已保存，但返回的标识不完整。请刷新使命板。')
       missionCreation.current = null; setNewMissionOpen(false)
@@ -3956,7 +3965,7 @@ export function BusinessApp({
     <MobileLayoutProvider value={mobile}>
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
       missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify}/> : null}>
-    <MissionInteractionProvider missions={missionList.missions} agents={agents} onChanged={refreshMission} onDeleted={onMissionDeleted} onError={notifyError}>
+    <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onDeleted={onMissionDeleted} onError={notifyError}>
     <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
         platform={client.platform}
@@ -4274,10 +4283,10 @@ export function BusinessApp({
           activationState: campActivationStateForCreation('dialog')
         }, enableOneClick)}
       />
-      {!mobile && <NewConversationDialog purpose="mission" open={newMissionOpen} recovery={missionCreation.current?.command ?? null}
+      {!mobile && <NewConversationDialog purpose="mission" open={newMissionOpen} recovery={missionCreation.current?.command ?? null} recoveryAttachments={missionCreation.current?.attachments ?? []}
         initialWorkspace={currentProjectWorkspace(displayNavigation, currentProject)}
         initialSelection={generalPreferences?.newConversationDefaults ?? null}
-        projects={displayNavigation?.projects ?? []} preflight={campCreationPreflight} agents={agents}
+        projects={displayNavigation?.projects ?? []} missionTagCatalog={[...new Set(missionList.missions.flatMap(mission => mission.tags))]} preflight={campCreationPreflight} agents={agents}
         busy={busy === 'create-mission'} projectAccessReady={removedProjectAuthorityReady}
         onOpenChange={open => { if (!busy) setNewMissionOpen(open) }}
         onChooseWorkspaceDirectory={chooseWorkspaceDirectory} onWorkspaceSelected={workspace => restoreNavigationProject(workspace.projectPath)}

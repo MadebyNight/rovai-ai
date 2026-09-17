@@ -359,16 +359,16 @@ type MissionStatusInput = {
 
 数据库内部可以保留序号、事务互斥、commandId 幂等和活动历史；这些机制不要求 Agent 理解或提交版本。
 **三个 CLI 的输入、成功输出、错误 details 和帮助均不泄漏 Mission version／expectedVersion。**
-Agent 继续使用上述字段覆盖规则。UI 的正式编辑只包含标题与可选描述，并携带 Renderer 读取到的内部
-`details_version`；Core 在同一事务比较并同时更新两个字段。过期版本拒绝并返回最新标题、描述和内部版本，
-弹窗替换为最新内容并要求用户重新编辑。该内部冲突结果只属于用户 RPC，不进入 Agent CLI。
+Agent 继续使用上述字段覆盖规则。UI 的正式编辑包含名称、可选描述、标签和使命源附件，并携带 Renderer
+读取到的内部 `details_version`；项目、队员与队长只读锁定。Core 在同一事务比较并更新定义字段和附件集合。
+过期版本拒绝后，弹窗重新读取最新可编辑字段并要求用户继续编辑。该内部冲突结果只属于用户 RPC，不进入 Agent CLI。
 Agent 传入任何版本字段仍按未知字段拒绝。
 结果不确定时仍按已有 confirm_outcome 检查当前事实；不能为恢复而重复发布已成功的公开消息。
 不提供 Agent start、update --status、--no-start、位置状态参数或 description-file。
 
-Renderer 的使命卡片、列表与已打开会话共用“编辑使命”菜单入口。标题必填 1–200，描述可空且至多
-12,000；内容规范化后无变化时保存禁用，busy 时弹窗不关闭。成功后刷新使命板、当前 Mission 与主 Camp 标题。
-标签、项目、来源分支、成员、队长、父 Mission 和状态均不进入该弹窗。
+Renderer 只从使命卡片／列表的右键或 Shift+F10 菜单进入“编辑使命”；卡片普通点击仍打开会话。名称必填
+1–200，描述可空且至多 12,000；标签和至多十个源附件可编辑，项目、成员与队长显示为锁定属性。
+内容规范化后无变化时保存禁用，busy 时弹窗不关闭。成功后刷新使命板、当前 Mission 与主 Camp 标题。
 
 ## cli-operations 完整修改范围
 
@@ -445,6 +445,7 @@ Mission 的创建期 `source_branch`，增加内部 `details_version` 及 worksp
 Migration 160/schema 110 增加稳定数字号，移除历史正文／读取水位，增加 Conversation 已投递版本与
 Manifest 冻结版本；既有 Mission 157–159/schema 109 preview 在该步原位补齐 DSH 并收敛。这些字段不进入
 MissionInfo 或模型输入；迁移不创建或重命名工作区。
+Migration 161/schema 111 增加使命定义源附件数组，旧使命使用空数组；该步不改历史消息附件或冻结输入。
 历史 Manifest 不改旧 bytes/digest。新生成只写 25／25／6，Run Facts 内部合同为 4；已冻结的受支持旧输入只凭
 既有精确 Delivery 证明恢复原版本，不用新投影重算。已发布 v24／Profile 5、Mission preview v24／Profile 6、v23／Profile 5 及 v22／Profile 4 证据均保留。
 

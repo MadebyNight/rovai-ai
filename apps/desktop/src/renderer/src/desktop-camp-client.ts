@@ -24,6 +24,7 @@ export const desktopCampClient: CampClient = {
   onEvent: (listener) => window.rovai.onEvent(listener),
   onClosePreviewRequested: listener => window.rovai.windowControls.onCloseTabRequested(listener),
   get singleChatAttachments() { return window.rovai.singleChatAttachments },
+  get missionAttachments() { return window.rovai.missionAttachments },
   get composerAttachments() { return window.rovai.composerAttachments },
   attachmentLocation: async locator => {
     const path = await window.rovai.request<string | null>('camp.attachments.location', locator)
