@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-17
+last_updated: 2026-09-18
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -22,6 +22,16 @@ Mission Camp、首次执行准备 Git worktree、固定基准累计 Diff、Agent
 [确认的 revision 1](model-context-change-mission-attachment-read.md)实施，使用独立 Agent 投影，
 不把 raw path 加入 Desktop/Web 的公共 Mission 投影。当前合同为 [Mission v2](../../contracts/mission-v2.md)
 与 [Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)。
+
+## Command 文件预览与执行台宽度修复增量
+
+2026-09-18 修正 Mission AgentRun 的 Command 修改文件入口：新 canonical activity 使用 exact Evidence 授权，
+并优先从来源 Run 的 `workspace_json.executionRoot` 解析，历史缺失执行根时才回退 Camp 项目；不同实际根中的
+同名相对路径不再因显示路径相同而合并。当前合同为 [File Preview v16](../../contracts/file-preview-v16.md)。
+
+同时修正 `5f54ceea` 引入执行虚拟列表后，Diff 行最小宽度向外传导并撑大执行抽屉的问题。Desktop、宽屏 WebUI
+和 MobileUI 共用同一 containment：执行列表允许在 Grid/Flex track 内收缩，长代码仍只在 Diff 内横向滚动。
+本增量不改变 Diff 内容、Runtime Evidence、Camp Open wire 或 Mobile 信息架构。
 
 前置：[v1.58](../v1.58/README.md)。前版未完成的评测验收保持原有事实，本版不把它们宣布为完成。
 用户确认统一 Rust Host 与共享 Axum Web 方向，并授权在独立 worktree 实施、验证后推送远程任务分支。
@@ -134,7 +144,7 @@ Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位�
 CLI 26/Output 3 同时保留附件输出路径和 Mission 事实。两个既存 schema 106 来源均可升级且保留旧记录；
 已安装的 Mission 157–159/schema 109 preview 由 Migration 160 原位补齐 DSH 后收敛。
 当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v25](../../contracts/context-manifest-evidence-v25.md)、
-[File Preview v15](../../contracts/file-preview-v15.md)；理由见 [V1.59-D08](decisions.md#v1-59-d08)。
+[File Preview v16](../../contracts/file-preview-v16.md)；附件路径理由见 [V1.59-D08](decisions.md#v1-59-d08)。
 运行活动分类、平台资格、根 README 无需变化；不能由方案确认推断 Gate 或 PR 已完成。
 
 ## Web HTML 原生存储兼容增量

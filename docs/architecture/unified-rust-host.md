@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: unified-rust-host
-last_updated: 2026-09-17
+last_updated: 2026-09-18
 ---
 
 # 统一 Rust Host
@@ -107,7 +107,7 @@ Server Web 共用该 Rust 路径；响应 CSP 与 iframe 均采用
 localStorage/sessionStorage 由访问设备的浏览器原生管理，遵循来源及标签页作用域，不写 Server 数据根、不修改
 原 HTML，也不模拟或检测 Storage。消息通道使用实际来源，继续匹配发送窗口、预览 ID、generation、challenge
 和 document。Web 沿用既有句柄的来源目录内资源能力及 HTTP(S) 依赖；源码模式保留原稿。
-资源读取边界见 [File Preview v15](../contracts/file-preview-v15.md)，本轮不改造该资源加载链路。
+资源读取边界见 [File Preview v16](../contracts/file-preview-v16.md)，本轮不改造该资源加载链路。
 Desktop 原生不同源预览不变，SVG 独立文件仍以文本或下载处理。精确边界见 [Host Web v2](../contracts/host-web-v2.md)。
 
 ## 命令、事件与兼容性

@@ -862,6 +862,44 @@ describe('FilePreviewService', () => {
     expect(native.openPath).not.toHaveBeenCalled()
   })
 
+  it('opens and restores an exact Run activity file from its execution root', async () => {
+    const { root: projectRoot, service, authority, native } = await fixture()
+    const executionRoot = await mkdtemp(join(tmpdir(), 'rovai-run-activity-preview-'))
+    directories.push(executionRoot)
+    await mkdir(join(projectRoot, 'src'), { recursive: true })
+    await mkdir(join(executionRoot, 'src'), { recursive: true })
+    await writeFile(join(projectRoot, 'src', 'generated.txt'), 'original project')
+    await writeFile(join(executionRoot, 'src', 'generated.txt'), 'mission worktree')
+    vi.spyOn(authority, 'resolve').mockImplementation(async (input) => input.kind === 'run_activity_file'
+      ? {
+          kind: 'file_target', campId: input.campId, sourceKind: input.kind,
+          sourceIdentity: `run-activity-file:${input.agentRunId}:${input.executionEpoch}:${input.evidenceId}`,
+          rootPath: executionRoot, basePath: executionRoot, rawReference: input.rawReference, allowChildren: true
+        }
+      : null)
+    const input = {
+      kind: 'run_activity_file' as const,
+      campId: 'camp-1',
+      agentRunId: 'run-1',
+      executionEpoch: 1,
+      evidenceId: 'evidence-1',
+      rawReference: 'src/generated.txt'
+    }
+
+    for (const opened of [await service.open(1, input), await service.restore(1, input)]) {
+      expect(opened).toMatchObject({ ok: true, value: { kind: 'file_preview', file: {
+        displayPath: 'src/generated.txt', pathPresentation: 'project_relative'
+      } } })
+      if (!opened.ok || opened.value.kind !== 'file_preview') continue
+      expect(await service.readText(1, {
+        handleId: opened.value.file.handleId,
+        expectedGeneration: opened.value.file.contentGeneration
+      })).toMatchObject({ ok: true, value: { text: 'mission worktree' } })
+    }
+    expect(native.selectRoot).not.toHaveBeenCalled()
+    expect(native.openPath).not.toHaveBeenCalled()
+  })
+
   it('keeps root grants for an explicit external directory operation', async () => {
     const { root, service, native } = await fixture()
     const outside = await mkdtemp(join(tmpdir(), 'rovai-file-preview-grant-'))

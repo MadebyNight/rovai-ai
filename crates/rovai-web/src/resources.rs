@@ -78,6 +78,13 @@ struct ResolvedSource {
     allow_children: bool,
 }
 
+fn is_core_file_source_kind(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        Some("camp_workspace" | "message_reference" | "run_evidence" | "run_activity_file")
+    )
+}
+
 // Resolve the path portion only. The production TS reference parser remains the
 // presentation owner for line/heading targets; Core validates the original source.
 fn reference_path(raw: &str, base: &std::path::Path) -> Result<PathBuf> {
@@ -183,10 +190,7 @@ async fn resolve(state: &WebState, client: &DraftClient, source: &Value) -> Resu
         });
     }
     ensure!(
-        matches!(
-            source["kind"].as_str(),
-            Some("camp_workspace" | "message_reference" | "run_evidence")
-        ),
+        is_core_file_source_kind(source["kind"].as_str()),
         "source_not_authorized"
     );
     let target = core_value(state, client, "filePreview.resolveSource", source.clone()).await?;
@@ -914,6 +918,20 @@ pub async fn preview_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_file_sources_include_exact_run_activity_files() {
+        for kind in [
+            "camp_workspace",
+            "message_reference",
+            "run_evidence",
+            "run_activity_file",
+        ] {
+            assert!(is_core_file_source_kind(Some(kind)));
+        }
+        assert!(!is_core_file_source_kind(Some("authorized_root")));
+        assert!(!is_core_file_source_kind(None));
+    }
 
     // Owns UTF-8/byte offsets at the new HTTP paging seam. The Desktop reader
     // cannot exercise this Rust boundary; no database or real file is needed.

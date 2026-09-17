@@ -1,6 +1,9 @@
 import type { AgentRunFileChangesView } from '@contracts'
 import { describe, expect, it, vi } from 'vitest'
-import { openAgentRunCurrentFilePreview } from './agent-run-file-preview'
+import {
+  openAgentRunActivityFilePreview,
+  openAgentRunCurrentFilePreview
+} from './agent-run-file-preview'
 import { agentRunFileChangesPreviewTarget } from './file-changes-presentation'
 
 const changes = {
@@ -71,6 +74,71 @@ describe('AgentRun file preview routing', () => {
       action: 'open_current'
     }, undefined, { fileName: 'src/path-only.ts' }, { commitOnSuccess: true, previewOnly: true })
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('opens a Command file through its exact Run activity evidence', async () => {
+    const open = vi.fn().mockResolvedValue({ kind: 'preview', tabId: 'activity-file' })
+    const onError = vi.fn()
+
+    await expect(openAgentRunActivityFilePreview({
+      filePreview: { open },
+      campId: 'camp-1',
+      evidence: {
+        agentRunId: 'run-mission',
+        executionEpoch: 4,
+        canonical: { diffProjection: { sourceEvidenceIds: ['diff-evidence-7'] } }
+      },
+      path: 'src/generated.ts',
+      onError
+    })).resolves.toBe(true)
+
+    expect(open).toHaveBeenCalledWith({
+      kind: 'run_activity_file',
+      campId: 'camp-1',
+      agentRunId: 'run-mission',
+      executionEpoch: 4,
+      evidenceId: 'diff-evidence-7',
+      rawReference: 'src/generated.ts'
+    }, undefined, { fileName: 'src/generated.ts' }, { commitOnSuccess: true, previewOnly: true })
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('keeps the Camp workspace fallback for legacy Command rows without evidence identity', async () => {
+    const open = vi.fn().mockResolvedValue({ kind: 'preview', tabId: 'legacy-file' })
+    await expect(openAgentRunActivityFilePreview({
+      filePreview: { open },
+      campId: 'camp-1',
+      evidence: {
+        agentRunId: 'run-legacy',
+        executionEpoch: 1,
+        canonical: null
+      },
+      path: 'src/legacy.ts',
+      onError: vi.fn()
+    })).resolves.toBe(true)
+    expect(open).toHaveBeenCalledWith({
+      kind: 'camp_workspace',
+      campId: 'camp-1',
+      rawReference: 'src/legacy.ts'
+    }, undefined, { fileName: 'src/legacy.ts' }, { commitOnSuccess: true, previewOnly: true })
+  })
+
+  it('does not downgrade a malformed canonical diff to the Camp workspace', async () => {
+    const open = vi.fn()
+    const onError = vi.fn()
+    await expect(openAgentRunActivityFilePreview({
+      filePreview: { open },
+      campId: 'camp-1',
+      evidence: {
+        agentRunId: 'run-mission',
+        executionEpoch: 4,
+        canonical: { diffProjection: { sourceEvidenceIds: [] } }
+      },
+      path: 'src/generated.ts',
+      onError
+    })).resolves.toBe(false)
+    expect(open).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith('无法打开该文件')
   })
 
   it.each([

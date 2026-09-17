@@ -20,7 +20,7 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
 
   function showExecution(waiting: boolean) {
     const snapshot = structuredClone(initial)
-    snapshot.agentRuns = [{ ...run, executionEvidenceCount: 3, status: waiting ? 'waiting' : 'running', waitReason: waiting ? 'action_approval' : null }]
+    snapshot.agentRuns = [{ ...run, executionEvidenceCount: 4, status: waiting ? 'waiting' : 'running', waitReason: waiting ? 'action_approval' : null }]
     snapshot.turns = [{ id: run.campTurnId, triggerType: 'camp_message', triggerId: snapshot.messages[0].id,
       status: waiting ? 'waiting' : 'running', cancelRequestedAt: null, aggregateReasonCode: null,
       executionBudget: { schemaVersion: 1, acceptedAt: now, deadlineAt: '2026-09-12T04:30:00Z', elapsedSeconds: 35,
@@ -46,6 +46,19 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
           semanticKind: 'shell.execute', toolName: null, presentationHint: '运行工作区测试', phase: 'started',
           outcome: 'unknown', credibility: 'runtime_structured', coverageLevel: 'fine_grained', sourceAuthority: 'runtime',
           sourceEvidenceIds: ['review-tool'], firstEvidenceSequence: 3, lastEvidenceSequence: 3, revision: 1 },
+        contentBlobId: null, contentByteCount: 0, isTruncated: false, occurredAt: now },
+      { id: 'review-diff', agentRunId: run.id, executionEpoch: 1, sequence: 4, eventType: 'runtime.action',
+        kind: 'command', phase: 'completed', payload: { toolCallId: 'review-edit', status: 'completed', kind: 'edit' },
+        canonical: { operationId: 'review-edit', classifierVersion: 'activity-v1', activityDomain: 'file',
+          semanticKind: 'unified_diff_snapshot', toolName: 'apply_patch', presentationHint: '修改长路径文件', phase: 'terminal',
+          outcome: 'succeeded', credibility: 'runtime_structured', coverageLevel: 'fine_grained', sourceAuthority: 'runtime',
+          sourceEvidenceIds: ['review-diff'], firstEvidenceSequence: 4, lastEvidenceSequence: 4, revision: 1,
+          diffProjection: { schemaVersion: 1, source: 'runtime_reported', revision: 1, sourceEvidenceIds: ['review-diff'],
+            status: 'available', semanticKind: 'unified_diff_snapshot', entries: [{
+              path: 'apps/desktop/src/renderer/src/components/very-long-command-preview-regression-file.tsx',
+              changeKind: 'update', additions: 2, deletions: 1,
+              diff: '@@ -1,2 +1,3 @@\n-export const state = "before"\n+export const state = "after"\n+export const keepsInternalHorizontalScroll = true'
+            }] } },
         contentBlobId: null, contentByteCount: 0, isTruncated: false, occurredAt: now }
     ]
     snapshot.approvals = waiting ? [structuredClone(approval)] : []
@@ -59,7 +72,8 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
       startedAt: `2026-09-12T02:${index ? '20' : '10'}:00Z`, createdAt: `2026-09-12T02:${index ? '20' : '10'}:00Z`, endedAt: `2026-09-12T02:${index ? '21' : '11'}:00Z`, updatedAt: `2026-09-12T02:${index ? '21' : '11'}:00Z`, executionEvidenceCount: 1 }))
     snapshot.agentRuns = [...historical, ...snapshot.agentRuns]
     snapshot.executionEvidence.push(...historical.map((item, index) => ({ ...snapshot.executionEvidence[0], id: `historical-evidence-${index}`, agentRunId: item.id, payload: { itemId: `historical-${index}`, delta: '已完成这次独立执行，保留可展开的正文。' } })))
-    snapshot.executionEvidence.push({ ...snapshot.executionEvidence[0], id: 'review-following-text', sequence: 4, payload: { itemId: 'review-following-narration', delta: '检查命令已经开始。结果返回后继续核对改动与回归。' } })
+    snapshot.executionEvidence.push({ ...snapshot.executionEvidence[0], id: 'review-following-text', sequence: 5, payload: { itemId: 'review-following-narration', delta: '检查命令已经开始。结果返回后继续核对改动与回归。' } })
+    snapshot.agentRuns[2].executionEvidenceCount = 5
     const expandedProfiles = [...state.agents, ...Array.from({ length: 8 }, (_, index) => ({ ...state.agents[1], agentId: `mobile-member-${index}`, displayName: `队员 ${index + 3}`, memberOrder: index + 2 }))]
     for (const profile of expandedProfiles.slice(1)) {
       if (!snapshot.members.some(member => member.agentId === profile.agentId)) snapshot.members.push({ ...snapshot.members[1], agentId: profile.agentId, displayName: profile.displayName, memberOrder: profile.memberOrder })
@@ -105,12 +119,39 @@ export function createReviewModel(surface: Surface, scenario: Scenario) {
         if (p.path !== workspacePath) return unavailable('unauthorized workspace')
         return { projectPath: workspacePath, name: 'rovai-workspace',
         gitObservation: { state: 'not_git', repositoryRoot: null, gitCommonDir: null, objectFormat: null, headCommit: null, branch: null, dirty: null, observedAt: now } }
-      case 'agentRunEvidence.list': return { schemaVersion: 1, agentRunId: run.id, requestedAfterSequence: p.afterSequence ?? 0,
-        nextAfterSequence: 3, throughSequence: 3, evidence: state.snapshot.executionEvidence.filter(e => e.agentRunId === (p.agentRunId ?? run.id) && e.sequence > (p.afterSequence ?? 0)), hasMore: false }
+      case 'agentRunExecution.page': {
+        const all = state.snapshot.executionEvidence
+          .filter(e => e.agentRunId === p.agentRunId)
+          .sort((left, right) => left.sequence - right.sequence)
+        const before = p.beforeSequence ?? null
+        const eligible = before === null ? all : all.filter(e => e.sequence < before)
+        const evidence = eligible.slice(-(p.limit ?? 24))
+        const hasMore = evidence.length > 0 && eligible.length > evidence.length
+        return { schemaVersion: 1, campId: state.snapshot.camp.id, agentRunId: p.agentRunId,
+          requestedBeforeSequence: before, nextBeforeSequence: hasMore ? evidence[0].sequence : null,
+          throughSequence: all.at(-1)?.sequence ?? 0, hasMore, evidence: structuredClone(evidence) }
+      }
+      case 'agentRunExecution.changes': {
+        const all = state.snapshot.executionEvidence
+          .filter(e => e.agentRunId === p.agentRunId)
+          .sort((left, right) => left.sequence - right.sequence)
+        const after = p.afterSequence ?? 0
+        const evidence = all.filter(e => e.sequence > after).slice(0, p.limit ?? 96)
+        const nextAfterSequence = evidence.at(-1)?.sequence ?? after
+        return { schemaVersion: 1, campId: state.snapshot.camp.id, agentRunId: p.agentRunId,
+          requestedAfterSequence: after, nextAfterSequence, throughSequence: all.at(-1)?.sequence ?? 0,
+          hasMore: all.some(e => e.sequence > nextAfterSequence), evidence: structuredClone(evidence), refreshedEvidence: [] }
+      }
+      case 'agentRunEvidence.list': {
+        const evidence = state.snapshot.executionEvidence.filter(e => e.agentRunId === (p.agentRunId ?? run.id) && e.sequence > (p.afterSequence ?? 0))
+        return { schemaVersion: 1, agentRunId: p.agentRunId ?? run.id, requestedAfterSequence: p.afterSequence ?? 0,
+          nextAfterSequence: evidence.at(-1)?.sequence ?? (p.afterSequence ?? 0), throughSequence: evidence.at(-1)?.sequence ?? 0,
+          evidence: structuredClone(evidence), hasMore: false }
+      }
       case 'agentRunEvidence.getContent': {
         const evidence = state.snapshot.executionEvidence.find(e => e.id === p.evidenceId)
         if (p.campId !== state.snapshot.camp.id || !evidence) return unavailable(method)
-        return { payload: evidence.payload }
+        return { payload: evidence.payload, canonical: evidence.canonical ?? null }
       }
       default: return unavailable(method)
     }

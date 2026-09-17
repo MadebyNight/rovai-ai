@@ -31,6 +31,14 @@ describe('parseRestoreFilePreviewRequest', () => {
       executionEpoch: 1,
       evidenceFileId: 'file-1',
       action: 'open_current'
+    },
+    {
+      kind: 'run_activity_file',
+      campId: 'rvcamp_01m1s4cranehs9cdc9r7ayj5d3',
+      agentRunId: 'run-1',
+      executionEpoch: 1,
+      evidenceId: 'evidence-1',
+      rawReference: 'src/generated.ts'
     }
   ])('accepts a revalidatable $kind source', (request) => {
     expect(parseRestoreFilePreviewRequest(request)).toEqual(request)

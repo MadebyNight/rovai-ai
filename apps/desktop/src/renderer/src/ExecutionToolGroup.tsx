@@ -6,6 +6,7 @@ import { RunningText } from './RunningText'
 import { ExecutionStatusGlyph } from './ExecutionStatusGlyph'
 import { useOptionalFilePreview } from './FilePreviewContext'
 import { exactMutationDiffLines, inlineDiffLines } from './file-changes-presentation'
+import { openAgentRunActivityFilePreview } from './agent-run-file-preview'
 import { readErrorMessage } from './error-message'
 import {
   activityStatusForAgentRun,
@@ -318,16 +319,13 @@ export function ModifiedFileRow({ campId, change, semanticKind, completeEvidence
     [diff, exactMutation, expanded]
   )
   const openFile = async (): Promise<void> => {
-    if (!filePreview) {
-      onFileOpenError('无法打开该文件')
-      return
-    }
-    const outcome = await filePreview.open({
-      kind: 'camp_workspace',
+    await openAgentRunActivityFilePreview({
+      filePreview,
       campId,
-      rawReference: change.path
-    }, undefined, undefined, { commitOnSuccess: true, previewOnly: true })
-    if (outcome.kind !== 'preview') onFileOpenError('无法打开该文件')
+      evidence: completeEvidence,
+      path: change.path,
+      onError: onFileOpenError
+    })
   }
   return (
     <details

@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-camp-workspace
 status: accepted
-last_updated: 2026-09-15
+last_updated: 2026-09-18
 ---
 
 # Camp 会话工作区
@@ -600,11 +600,12 @@ Canonical Activity 的 presentation row，明确 add 显示“新增”，其他
 图片或其他中间产物不显示为 `修改 <basename>`，也不进入 `Files Changed`；mixed 事件只展示其余普通文件。
 已经持久化的历史卡片不重算。临时文件经 `rovai send --file` 发布后，附件由独立的 Camp Attachment UI 呈现。
 
-文件操作使用阅读文件或笔形 16px 图标。动作词和文件名始终横向单行排列，之间固定保留 5px 间距；空间不足时仅文件名显示省略号，动作词与状态保持完整，完整路径保留在 title 与可访问名称中。执行抽屉与其他执行面使用同一布局。文件名以虚线底线按钮展示，鼠标或键盘点击后用当前 Camp workspace
-来源打开文件预览；成功后才提交预览导航。失败只在当前页显示 danger Toast `无法打开该文件`，不创建或切换
+文件操作使用阅读文件或笔形 16px 图标。动作词和文件名始终横向单行排列，之间固定保留 5px 间距；空间不足时仅文件名显示省略号，动作词与状态保持完整，完整路径保留在 title 与可访问名称中。执行抽屉与其他执行面使用同一布局。文件名以虚线底线按钮展示。canonical diff 修改文件行优先用 exact Run Activity Evidence 授权，并以来源 AgentRun
+的 `executionRoot` 解析；历史 Run 缺少有效执行根时才回退 Camp 项目，缺少 Evidence identity 的历史 presentation
+保留当前 Camp workspace 兼容回退。鼠标或键盘点击后成功才提交预览导航；失败只在当前页显示 danger Toast `无法打开该文件`，不创建或切换
 预览页。写入行有 Diff 时，除文件名预览链接外，动作文字、图标、统计、空白和右侧箭头都属于同一个
 可展开摘要，提供 hover/focus 反馈并控制原有 Diff；键盘可聚焦摘要并用 Enter/Space 切换。文件预览与
-Diff 展开互不触发。缺少可靠路径
+Diff 展开互不触发。展开后的代码宽度不得撑大执行抽屉、WebUI 或 MobileUI；长行只在 Diff 容器内部横向滚动。缺少可靠路径
 不制造链接，缺少 Diff 不制造展开入口。
 
 Renderer 不显示 `apply_patch` 父行或“编辑了 N 个文件”聚合层，不从 Tool 显示名、output、命令文本或当前文件

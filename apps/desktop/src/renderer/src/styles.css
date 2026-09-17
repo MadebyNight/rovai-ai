@@ -3684,6 +3684,7 @@ button.task-event-card:focus-visible .task-card-chevron { color: var(--brand-ink
 .tool-call-disclosure-slot:is(button):hover { color: var(--ink); background: var(--surface-muted); }
 .tool-call-disclosure-slot:is(button):focus-visible { color: var(--ink); }
 .modified-file-row.is-expanded .tool-call-disclosure-slot svg { transform: rotate(180deg); }
+.execution-virtual-list { min-width: 0; }
 .modified-file-diff { max-height: min(220px, 30vh); min-width: 0; margin: 3px 0 8px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--evidence-line); border-radius: 6px; color: var(--evidence-ink); background: var(--evidence-surface); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .modified-file-diff-line { display: grid; min-width: 520px; min-height: 20px; grid-template-columns: 20px 34px 34px minmax(0, 1fr); }
 .modified-file-diff-line > span { display: grid; place-items: center; color: var(--evidence-muted); user-select: none; }

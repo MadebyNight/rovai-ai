@@ -151,6 +151,15 @@ export function parseOpenFilePreviewRequest(value: unknown): OpenFilePreviewRequ
         evidenceFileId: string(input.evidenceFileId, 256),
         action: input.action
       }
+    case 'run_activity_file':
+      return {
+        kind: input.kind,
+        campId: campId(input.campId),
+        agentRunId: string(input.agentRunId, 128),
+        executionEpoch: positiveInteger(input.executionEpoch),
+        evidenceId: string(input.evidenceId, 256),
+        rawReference: string(input.rawReference)
+      }
     case 'child_of_handle':
       if (input.allowSystemOpen !== undefined && typeof input.allowSystemOpen !== 'boolean') {
         throw new Error('Unsupported file preview activation')

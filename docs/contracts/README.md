@@ -1,7 +1,7 @@
 ---
 document_type: contracts-index
 authority: protocol-contract-routing
-last_updated: 2026-09-11
+last_updated: 2026-09-18
 ---
 
 # 长期接口合同
@@ -142,7 +142,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v15（当前）](file-preview-v15.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
+| [File Preview v16（当前）](file-preview-v16.md) | Command 修改文件以 exact Run Activity Evidence 授权，并优先解析来源 AgentRun executionRoot；同名相对路径按实际文件身份去重 |
+| [File Preview v15（历史）](file-preview-v15.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；Command Activity 文件来源由 v16 替代 |
 | [File Preview v14（历史）](file-preview-v14.md) | 继承 v13 窗口保留与 LRU；受管 HTML 无空闲到期，页面通信与资源诊断分离、有限重连 |
 | [File Preview v13（历史）](file-preview-v13.md) | 窗口预览会话、分层 LRU、句柄容量回收、独立候选刷新与有限 HTML 后台保留 |
 | [File Preview v12（历史）](file-preview-v12.md) | HTML 正式迁移至隔离 HTTP 站点；默认交互与依赖加载、诊断、源码及可撤销生命周期 |

@@ -1478,6 +1478,14 @@ export type OpenFilePreviewRequest =
       action: 'review' | 'open_current'
     }
   | {
+      kind: 'run_activity_file'
+      campId: string
+      agentRunId: string
+      executionEpoch: number
+      evidenceId: string
+      rawReference: string
+    }
+  | {
       kind: 'child_of_handle'
       parentHandleId: string
       rawReference: string
@@ -1491,7 +1499,7 @@ export type OpenFilePreviewRequest =
     }
 
 export type RestoreFilePreviewRequest = Extract<OpenFilePreviewRequest, {
-  kind: 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence'
+  kind: 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence' | 'run_activity_file'
 }>
 
 export interface ReopenFilePreviewRequest {

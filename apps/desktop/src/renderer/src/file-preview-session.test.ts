@@ -58,6 +58,14 @@ describe('file preview session identity', () => {
     })).toBe(
       'attachment:single-chat-message:camp-1:conversation-1:conversation-message-1:8b85752a-76a5-4b9d-92d8-a70b6285a0d0'
     )
+    expect(filePreviewSourceKey({
+      kind: 'run_activity_file',
+      campId: 'camp-1',
+      agentRunId: 'run-1',
+      executionEpoch: 2,
+      evidenceId: 'evidence-1',
+      rawReference: 'src/index.ts'
+    })).toBe('run-activity:camp-1:run-1:2:evidence-1:src/index.ts')
   })
 
   it('keeps only business sources that can be revalidated after a Camp switch', () => {
@@ -65,6 +73,14 @@ describe('file preview session identity', () => {
       kind: 'camp_workspace',
       campId: 'camp-1',
       rawReference: 'README.md'
+    })).not.toBeNull()
+    expect(restorableFilePreviewRequest({
+      kind: 'run_activity_file',
+      campId: 'camp-1',
+      agentRunId: 'run-1',
+      executionEpoch: 2,
+      evidenceId: 'evidence-1',
+      rawReference: 'src/index.ts'
     })).not.toBeNull()
     expect(restorableFilePreviewRequest({
       kind: 'child_of_handle',
@@ -158,6 +174,14 @@ describe('file preview session identity', () => {
       { previewKey: 'verified-file' },
       stableFilePreviewSourceKey(workspaceRequest, presentation)
     )).toBe(true)
+  })
+
+  it('does not merge loaded same-path tabs from different canonical roots', () => {
+    expect(filePreviewTabMatchesResolvedFile(
+      { previewKey: 'original-project-file', sourceKey: 'workspace:camp-1:src/index.ts' },
+      { previewKey: 'mission-worktree-file' },
+      'workspace:camp-1:src/index.ts'
+    )).toBe(false)
   })
 
   it('never turns an unverified absolute reference into a displayed physical path', () => {
