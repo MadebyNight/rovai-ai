@@ -25,7 +25,12 @@ const items:MissionRecord[]=[
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
- {id:'file-b',path:'src/worker.ts',oldPath:'src/runner.ts',kind:'renamed',additions:1,deletions:1,binary:false,oldMode:'100644',newMode:'100644'}
+ {id:'file-b',path:'src/worker.ts',oldPath:'src/runner.ts',kind:'renamed',additions:1,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
+ {id:'file-c',path:'src/mission.css',oldPath:null,kind:'modified',additions:8,deletions:2,binary:false,oldMode:'100644',newMode:'100644'},
+ {id:'file-d',path:'src/types.ts',oldPath:null,kind:'modified',additions:3,deletions:0,binary:false,oldMode:'100644',newMode:'100644'},
+ {id:'file-e',path:'src/activity.tsx',oldPath:null,kind:'added',additions:24,deletions:0,binary:false,oldMode:null,newMode:'100644'},
+ {id:'file-f',path:'src/cache.ts',oldPath:null,kind:'modified',additions:5,deletions:4,binary:false,oldMode:'100644',newMode:'100644'},
+ {id:'file-g',path:'src/status.ts',oldPath:null,kind:'deleted',additions:0,deletions:12,binary:false,oldMode:'100644',newMode:null}
 ]
 // Hidden Electron acceptance windows still model an attentive foreground user.
 Object.defineProperty(document, 'hasFocus', { value: () => true })
@@ -112,7 +117,6 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  }
  if(method==='missions.status'){m!.status=c.status;changed();return applied({missionId:m!.missionId,changed:true})}
  if(method==='missions.start'){
-  m!.status='in_progress'
   const s=snapshot(m!),sequence=Math.max(0,...s.messages.map((message:any)=>message.sequence))+1
   const trigger={...structuredClone(s.messages[0]),id:`${m!.missionId}-mission-start`,sequence,authorType:'user',authorId:'local_user',sourceAgentRunId:null,body:'开始使命',content:{schemaVersion:1,segments:[{kind:'text',text:'开始使命'}]},attachments:[],missionStart:{missionId:m!.missionId,title:m!.title,description:m!.description},createdAt:new Date().toISOString()}
   s.messages.push(trigger)

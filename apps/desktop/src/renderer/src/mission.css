@@ -250,6 +250,10 @@ button.mission-tag { cursor: pointer; }
 .mission-file-kind.is-added { color: var(--success); }.mission-file-kind.is-deleted { color: var(--danger); }
 .mission-file-binary { color: var(--muted); font-size: 10.5px; }
 .mission-changed-file > .mission-icon:last-child { width: 12px; height: 12px; flex-basis: 12px; transform: none; }
+.mission-changes-more-files { display: inline-flex; min-height: 30px; align-items: center; gap: 4px; margin-top: 4px; padding: 0 3px; border: 0; border-radius: 5px; color: var(--faint); background: transparent; font-size: 10.5px; cursor: pointer; }
+.mission-changes-more-files:hover { color: var(--ink); background: var(--neutral-hover); }
+.mission-changes-more-files > .mission-icon { width: 13px; height: 13px; transition: transform 120ms ease; }
+.mission-changes-more-files[aria-expanded="true"] > .mission-icon { transform: rotate(180deg); }
 .mission-query-stamp { margin: 10px 0 0; color: var(--faint); font-size: 10.5px; }
 .mission-diff-state { display: flex; justify-content: center; gap: 8px; padding: 36px 12px; color: var(--muted); font-size: 12px; }
 .mission-diff-error { padding: 16px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
@@ -281,7 +285,7 @@ button.mission-tag { cursor: pointer; }
 .mission-delete-confirm.compact-primary { color: var(--danger); background: var(--danger-soft); border-color: transparent; }.mission-delete-confirm.compact-primary:hover { background: color-mix(in srgb,var(--danger) 8%,var(--danger-soft)); border-color: transparent; }
 .mission-cleanup-notice { padding: 0 24px 10px; }.mission-cleanup-notice button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--attention); font-size: 11px; cursor: pointer; }
 .mission-cleanup-list section { padding-block: 8px 16px; }.mission-cleanup-list h3 { font-size: 13px; font-weight: 500; }.mission-cleanup-list p { color: var(--muted); font-size: 12px; line-height: 1.7; }.mission-cleanup-list section > div { display: grid; gap: 5px; margin-bottom: 10px; font-size: 11px; overflow-wrap: anywhere; }.mission-cleanup-list small { color: var(--muted); font-size: 11px; }
-:is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags,.mission-changed-file,.mission-diff-file-list button):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+:is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags,.mission-changed-file,.mission-changes-more-files,.mission-diff-file-list button):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
 @media(max-width:1190px) { .mission-toolbar { gap: 6px; }.mission-filter-group { gap: 0; }.mission-filter { padding-inline: 6px; }.mission-search { width: 150px; }.mission-filter .mission-filter-value { max-width: 70px; }.mission-diff-file-list { flex-basis: 240px; } }
 @media(max-width:760px) { .mission-toolbar { flex-wrap: wrap; flex-basis: auto; }.mission-filter-group { flex: 1 1 100%; }.mission-search { margin-left: 0; flex: 1; }.mission-diff-file-list { flex-basis: 170px; }.mission-full-properties { flex-wrap: wrap; }.mission-diff-dialog-baseline { flex-wrap: wrap; } }
 .compact-menu .compact-option > .mission-state-glyph { flex: 0 0 14px; }

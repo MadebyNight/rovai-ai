@@ -2,18 +2,18 @@
 document_type: model-context-change
 version: v1.59
 change_id: mission
-revision: 5
+revision: 6
 confirmation_status: confirmed
 confirmed_by: local_user
-confirmed_at: 2026-09-16T09:07:30Z
-confirmed_revision: 5
+confirmed_at: 2026-09-17T04:01:19Z
+confirmed_revision: 6
 authority: confirmed-model-input-change-statement
 implementation_baseline: b2df4d85cdb8c6b8a9346290b16311b94fa4b7ed
 implementation_status: in_progress
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
-# 使命：模型输入增量与实施边界（revision 5）
+# 使命：模型输入增量与实施边界（revision 6）
 
 本说明把用户提供的《使命板方案说明 v2》《使命 Camp：Bootstrap、CLI Help 与 cli-operations》
 以及后续持久 Worktree／累计 Diff 要求落实为字段级方案。桌面交互采用已确认 v7，补充整卡点击和
@@ -39,6 +39,9 @@ revision 5 纳入开发者随后对稳定数字号与更新提醒的明确修订
 命名；Mission 不保留历史标题／描述正文；`mission get` 不再确认已读。每次 ContextManifest 冻结当前
 `details_version`，只有包含该版本的 Runtime Input 在当前 binding 上 `accepted` 才推进会话已投递水位。
 该修订替代下文 revision 4 的读取水位、委托正文快照和完整 UUID 命名结论，其他输入 shape 不变。
+
+revision 6 纳入开发者 2026-09-17 的状态语义修订：开始 Mission 只派发执行，不再自动切换为
+`in_progress`；最新 Turn 是否提及 Principal 也不再推断 `needs_you`。Mission 状态只接受显式状态命令。
 
 ## 变更前
 
@@ -403,8 +406,8 @@ Mission 保存共同目标，Task 保存可独立交接的责任；不要为使�
 
 仅回答既有结果的解释性问题，不重开使命。
 
-需要用户处理或交付结果时，先按 Send 规则公开沟通，再用 mission status 关联已提交的消息 ID。
-消息已经成功而状态尚未更新时，复用该消息，不重复发送。
+不要根据最新 Turn 是否提及 Principal 推断或改写 Mission 状态。公开消息和 `--to-principal` 都不会
+自动改变状态；只有明确需要更新整体 Mission 状态时，才单独调用 `mission status`。
 
 收到 `mission_start` 时，先用 mission get 读取当前完整定义，再开展工作；普通消息沿用本轮真实输入。
 只提交要修改的字段；同字段后提交覆盖，无需读取或提交版本。结果不确定时，按 [Recovery](recovery.md) 处理。

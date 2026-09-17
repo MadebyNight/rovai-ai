@@ -20,8 +20,8 @@ The main Camp owns membership, lead, messages, drafts, execution, attachments an
 There is no ordinary-Camp conversion operation. Mission Camps are excluded from ordinary navigation.
 
 Saving atomically creates an active Camp and a `not_started` Mission. It does not create a Run, Git
-branch or worktree. Start is a user command: after execution admission it sets `in_progress` and
-persists a public commission message plus a Mission reference, without copying title or description. The
+branch or worktree. Start is a user command: after execution admission it preserves the current Mission
+status and persists a public commission message plus a Mission reference, without copying title or description. The
 current Mission source attachments are published with that commission message so the admitted lead receives
 the same local source references through the existing attachment path.
 The commission card resolves the current definition. An already active
@@ -40,7 +40,8 @@ or cancel execution. Completed Missions retain their workspaces and running Agen
 Agent transitions to `needs_you` or `completed` require `sourceMessageId`: an existing, non-tombstoned,
 durably published message in the same public Camp. Publish the complete explanation first, then set
 status using its ID. Retrying status does not require publishing the explanation again. Manual user
-status changes may omit the source. Status changes never substitute for a public answer.
+status changes may omit the source. Starting, creating a Run, ending a Run, and publishing a message that
+mentions the Principal never infer or change Mission status. Status changes never substitute for a public answer.
 
 Title is 1–200 Unicode scalars after trimming; description is at most 12,000. Only their latest values and
 current `details_version` are stored. Activity records `titleChanged` / `descriptionChanged` boolean facts,

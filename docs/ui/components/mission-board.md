@@ -72,7 +72,7 @@ open the execution inspector or overlay; explicit execution entry remains availa
 The timeline begins with a read-only 使命 card: title, description clamped to three lines with overflow
 expansion, roster, tags and read-only status. It has no edit, context menu, or detail/delivery/activity links.
 An unstarted Mission has a 36px neutral primary 开始使命 action below the card (black in Day).
-Starting schedules the Mission and changes its status without inserting a visible user-authored message;
+Starting schedules the Mission and preserves its explicitly managed status without inserting a visible user-authored message;
 the timeline remains unchanged until a teammate publishes a message.
 
 Activity is a real closeable preview tab containing delivery and Mission history in one scrolling document.
@@ -88,6 +88,7 @@ compact preview. Compact preview and source-message navigation preserve the conv
 
 Delivery shows the actual directory and, for Git, associated branch/base and cumulative changes. It has no
 “工作区信息” wrapper or explanatory net-change subtitle. Opening the section reads the changed-file list;
+the activity surface initially shows five files and uses “再显示 N 个文件 / 收起文件” to expand in place.
 switching files requests only the selected Diff. A bounded per-Mission memory cache restores a viewed file
 without clearing its content or flashing loading state. Cache misses never show the prior file beneath a new
 selection; duplicate requests coalesce and late responses cannot replace the current selection. Explicit

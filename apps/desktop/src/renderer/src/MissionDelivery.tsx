@@ -49,6 +49,7 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { 
 
 const MISSION_DIFF_CACHE_LIMIT = 24
 const MISSION_DIFF_REQUEST_DELAY_MS = 32
+const MISSION_CHANGES_INITIAL_FILE_LIMIT = 5
 type MissionDiffStore = {
   epoch: number
   cache: Map<string, MissionFileDiff>
@@ -74,7 +75,7 @@ function staleMissionDiffSnapshot(error: unknown): boolean {
 }
 
 function MissionChanges({ mission }: { mission: MissionRecord }) {
-  const client = useCampClient(), [files, setFiles] = useState<MissionChangedFile[] | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0), [selected, setSelected] = useState<string | null>(null), [snapshotReady, setSnapshotReady] = useState(false), [snapshotEpoch, setSnapshotEpoch] = useState(0)
+  const client = useCampClient(), [files, setFiles] = useState<MissionChangedFile[] | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0), [selected, setSelected] = useState<string | null>(null), [showAllFiles, setShowAllFiles] = useState(false), [snapshotReady, setSnapshotReady] = useState(false), [snapshotEpoch, setSnapshotEpoch] = useState(0)
   const generation = useRef(0)
   const diffStore = useRef<MissionDiffStore>({ epoch: 0, cache: new Map(), inFlight: new Map() })
   const refreshChanges = useCallback(() => {
@@ -84,6 +85,7 @@ function MissionChanges({ mission }: { mission: MissionRecord }) {
     store.inFlight.clear()
     setSnapshotReady(false)
     setSnapshotEpoch(store.epoch)
+    setShowAllFiles(false)
     setRefresh(value => value + 1)
   }, [])
   const requestDiff = useCallback((fileId: string) => {
@@ -127,11 +129,14 @@ function MissionChanges({ mission }: { mission: MissionRecord }) {
     store.inFlight.clear()
     void client.request('missions.diffSession.release', { missionId: mission.missionId }).catch(() => undefined)
   }, [client, mission.missionId])
+  const visibleFiles = showAllFiles ? files : files?.slice(0, MISSION_CHANGES_INITIAL_FILE_LIMIT)
+  const additionalFileCount = Math.max(0, (files?.length ?? 0) - MISSION_CHANGES_INITIAL_FILE_LIMIT)
   return <section className="mission-delivery-section"><div className="mission-delivery-heading"><h3>累计文件变更 <span>{files && !error ? files.length : ''}</span></h3><button className="mission-icon-button" aria-label="刷新累计文件变更" disabled={loading} onClick={refreshChanges}><Icon name="refresh"/></button></div>
     {loading && !files && <p className="mission-section-empty" role="status">正在读取工作区…</p>}
-    {error ? <div className="mission-diff-error" role="status"><p>{error}</p><button className="compact-cancel" disabled={loading} onClick={refreshChanges}>重新读取</button></div> : files?.length === 0 ? <p className="mission-section-empty">当前没有文件变更。</p> : files?.map(file => <button className="mission-changed-file" key={file.id} onClick={() => setSelected(file.id)}>
+    {error ? <div className="mission-diff-error" role="status"><p>{error}</p><button className="compact-cancel" disabled={loading} onClick={refreshChanges}>重新读取</button></div> : files?.length === 0 ? <p className="mission-section-empty">当前没有文件变更。</p> : visibleFiles?.map(file => <button className="mission-changed-file" key={file.id} onClick={() => setSelected(file.id)}>
       <span className={`mission-file-kind is-${file.kind}`}>{kinds[file.kind] ?? '变化'}</span><span className="mission-changed-path"><strong>{file.path}</strong>{file.oldPath && <small>{file.oldPath} →</small>}</span><DiffCount file={file}/><Icon name="chevron-right"/>
     </button>)}
+    {!error && additionalFileCount > 0 && <button className="mission-changes-more-files" type="button" aria-expanded={showAllFiles} onClick={() => setShowAllFiles(visible => !visible)}><span>{showAllFiles ? '收起文件' : `再显示 ${additionalFileCount} 个文件`}</span><Icon name="chevron"/></button>}
     {selected && files && <MissionDiff files={files} selected={selected} snapshotReady={snapshotReady} snapshotEpoch={snapshotEpoch} cache={diffStore.current.cache} requestDiff={requestDiff} onSnapshotStale={refreshChanges} onSelect={setSelected} onClose={() => setSelected(null)}/>}
   </section>
 }

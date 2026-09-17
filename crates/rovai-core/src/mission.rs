@@ -235,9 +235,9 @@ impl MissionService {
                 CommandHandlerResult::applied("mission.already_running",json!({"missionId":mission.info.mission_id,"campId":mission.camp_id,"alreadyRunning":true}),None)
             } else { admit_mission_start(tx,&envelope.actor,&envelope.command_id,&mission)? };
             if result.status==CommandResultStatus::Rejected { return Ok(result); }
-            tx.execute("UPDATE mission SET status='in_progress',source_message_id=NULL,updated_at=?2 WHERE id=?1",params![mission.info.mission_id,chrono::Utc::now().to_rfc3339()])?;
-            if !active || mission.info.status != MissionStatus::InProgress {
-                record_activity(tx,&mission.info.mission_id,"started",&envelope.actor,None,json!({"status":"in_progress"}))?;
+            if !active {
+                tx.execute("UPDATE mission SET updated_at=?2 WHERE id=?1",params![mission.info.mission_id,chrono::Utc::now().to_rfc3339()])?;
+                record_activity(tx,&mission.info.mission_id,"started",&envelope.actor,None,json!({}))?;
             }
             Ok(result)
         })
@@ -646,7 +646,7 @@ mod tests {
         }
     }
     #[test]
-    fn mission_commands_keep_definition_atomic_patch_only_and_start_idempotent() {
+    fn mission_commands_keep_definition_atomic_patch_only_and_start_status_independent() {
         let mut db = crate::test_support::seeded_runtime_database_owned();
         let directory = db.directory().join("workspace");
         std::fs::create_dir_all(&directory).unwrap();
@@ -828,8 +828,16 @@ mod tests {
         );
         assert_eq!(
             service.get(&db, &id).unwrap().unwrap().info.status,
-            MissionStatus::InProgress
+            MissionStatus::NotStarted
         );
+        let started_activities = service
+            .activity(&db, &id, None)
+            .unwrap()
+            .into_iter()
+            .filter(|activity| activity.kind == "started")
+            .collect::<Vec<_>>();
+        assert_eq!(started_activities.len(), 1);
+        assert_eq!(started_activities[0].changes, json!({}));
         service
             .status(
                 &mut db,
