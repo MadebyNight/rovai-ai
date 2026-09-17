@@ -613,6 +613,27 @@ html[data-rovai-platform="win32"] .unified-sidebar-drag {
 .camp-marker-slot { display: block; width: 7px; height: 7px; flex: 0 0 7px; }
 .camp-marker-slot .task-dot { display: block; width: 7px; height: 7px; border: 0; border-radius: 50%; background: var(--conversation-unread); }
 .pinned-camp-icon { display: none; }
+.pinned-navigation > .camp-nav-row > .camp-nav-open { position: relative; }
+.pinned-navigation .pinned-camp-icon {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.pinned-navigation .pinned-camp-icon > svg { width: 12px; height: 12px; }
+.pinned-navigation .camp-marker-slot {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 18px;
+  width: 5px;
+  height: 5px;
+  transform: translateY(-50%);
+}
+.pinned-navigation .camp-marker-slot .task-dot { width: 5px; height: 5px; }
 .camp-loading-spinner { width: 12px; height: 12px; flex: 0 0 12px; margin-left: auto; border: 2px solid color-mix(in srgb, var(--info) 24%, transparent); border-top-color: var(--info); border-radius: 50%; background: transparent; animation: camp-marker-spin 700ms linear infinite; }
 .camp-nav-open .truncate { min-width: 0; flex: 1 1 auto; }
 .camp-draft-badge { flex: 0 0 auto; color: var(--faint); font-size: 11px; font-weight: 500; letter-spacing: .02em; }
