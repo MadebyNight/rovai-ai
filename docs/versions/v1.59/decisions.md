@@ -147,6 +147,10 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 不据此新增 Adapter。新适配范围不等于完成资格，不把原生 CLI 成功或跨平台历史证据当作 Linux First-Class。
 原 DMIT 测试账号与安装已按用户要求删除；具体主机访问资料只保存于私有运维文档。
 
+2026-09-17 后续独立验收：DeepSeek Harness 已经作为正式 Adapter，按自己的 14 轴矩阵在 GNU x86_64
+目标主机完成真实验证并绑定独立 evidence digest。它因此取得 Linux x64 qualified，不继承上述 14 项 preview
+范围，也不把 Server OS、macOS 证据或另一 Runtime 的结果当作资格。Cursor 与其余 preview 行不变。
+
 
 <a id="v1-59-d07"></a>
 
@@ -246,7 +250,10 @@ Workspace access 不再替换这些值。DSH 的 sandbox/approval 是唯一安�
 2026-09-16 的原生权限、锁顺序与通用 Diff 收敛由
 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 绑定新的不可变摘要；
 v1 继续作为此前 14 轴验收的历史证据，不被改写。
-其他平台仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
+2026-09-17 的 GNU x86_64 验收在 Ubuntu 24.04.5 上使用相同官方包与真实 MiniMax-M3 路径闭合 14 轴，
+并以 [Linux x64 独立归档](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json) 绑定该目标主机。
+产品版本门槛保持 `>=0.1.5-rc.2`；证据精确记录所测 `0.1.5-rc.2`，不把未知未来版本预先写入证据。
+macOS x64 与 Windows x64 仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
 [Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。机器 Ready 仍是独立检查。
 Migration 157 将 v1.59/schema 106 原位升级到 107，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
 Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。

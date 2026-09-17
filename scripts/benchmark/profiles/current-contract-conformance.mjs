@@ -67,7 +67,7 @@ const criteria = [
   criterion('CCC-016', 'Managed v2 ingests immutable attachments once, commits Message refs without a legacy projection gate, and recovers incomplete ingest intents', [
     test('crates/rovai-core/src/managed_attachment.rs', 'composer_ingest_promotes_once_and_commits_only_v2_rows'),
     test('crates/rovai-core/src/managed_attachment.rs', 'startup_reconcile_abandons_staging_and_promoted_precommit_intents'),
-    test('crates/rovai-core/src/team_tool.rs', 'attachment_send_commits_managed_v2_and_dispatches_without_projection_gate'),
+    test('crates/rovai-core/src/team_tool.rs', 'attachment_send_keeps_source_path_and_dispatches_without_projection_gate'),
     test('crates/rovai-core/src/team_tool.rs', 'running_source_sends_fourteen_mib_without_waiting_for_camp_publication'),
     test('crates/rovai-core/src/camp_attachment_view.rs', 'legacy_rebuild_target_preserves_managed_v2_resources'),
     test('crates/rovai-core/src/context.rs', 'unavailable_legacy_locator_is_omitted_without_filesystem_fallback'),
@@ -81,7 +81,7 @@ export const CURRENT_CONTRACT_PREREQUISITES = Object.freeze([
     evidence: test('crates/rovai-core/src/collaboration.rs', 'agent_task_updates_respect_lead_and_assignee_authority')
   },
   {
-    id: 'built-in-transport-v18',
+    id: 'built-in-transport-v25',
     evidence: test('crates/rovai-core/src/builtin_tool_transport.rs', 'list_and_describe_share_one_digest')
   },
   {

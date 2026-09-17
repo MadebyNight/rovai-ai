@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -31,6 +31,7 @@ Mission Camp、首次执行准备 Git worktree、固定基准累计 Diff、Agent
 正式发布目标调整为 GNU x86_64 / glibc 2.35 基线；同一发布归档必测 Ubuntu 22.04、Debian 12、Ubuntu 24.04。
 Server OS 与 Runtime 资格分别记录；维护者将 Linux 适配扩大至现有目录中除 Cursor 之外的 14 项，
 当前显式开放 preview 等待各自实测闭合；该 Linux 范围不包含后续新增的 DeepSeek Harness。
+DeepSeek Harness 随后通过自己的完整目标主机矩阵取得 Linux x64 资格，不改变其余 preview 行。
 其他 Runtime 的 Linux 探测不自动取得产品资格。未增加 musl、ARM64、Debian 11 或 Linux Desktop。
 理由见 [V1.59-D06](decisions.md#v1-59-d06)，进度见[实施计划](implementation-plan.md#当前批次linux-gnu-235-基线与-runtime-实测)。
 
@@ -73,9 +74,9 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机对话/执行双入口、更多菜单与紧凑间距已按最终稿接入；执行彩环最多显示 2 个头像及 +N，Run 文案由同一共享状态驱动；Server 更新 API 与共享更新页已接入，Desktop 托管只读版本说明；真实 Release 和各平台升级验收分别记录 |
 | Runtime Activity | 已更新 | DeepSeek Harness 复用共享 ACP Activity，按官方结构化结果补 shell 退出、文件路径与完整文件状态；write 的显式 `before:null` 归一为标准新增 Diff，通用 Diff/Files Changed/Diff Card 继续拥有展示，其他 Adapter 分类不变 |
-| Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升；DSH 的 macOS arm64 以 v1 历史验收和 v2 收敛增量的独立摘要维持 qualified |
+| Runtime compatibility | 已更新 | Linux x64 的原有 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升；DSH 的 macOS arm64 以 v1 历史验收和 v2 收敛增量维持 qualified，Linux x64 以独立目标主机证据晋升 qualified |
 | Documentation routing | 已更新 | 文档、架构与决定导航增加统一 Host 入口 |
-| Root README | 已更新 | DeepSeek Harness 的 macOS arm64 验收闭合后增加正式支持行；未新增其他平台声明 |
+| Root README | 已更新 | DeepSeek Harness 的正式支持行现列出分别完成独立验收的 macOS arm64 与 Linux x64 |
 
 本轮产品模型已确认：单 Owner、可信自托管 Host。远程 Owner 与 Desktop 具有同一业务能力目标，
 可以直接选择 Host 有权访问的目录；不再要求本机目录预授权、一次性令牌展示或唯一手填访问地址。
@@ -92,7 +93,9 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 ## DeepSeek Harness Runtime 增量
 
 2026-09-15 用户授权在独立 worktree 按 Runtime checklist 接入 dsh 0.1.5-rc.2。新增 `deepseek-harness` 与
-`dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 的 14 轴验收闭合并取得独立 digest-bound qualified，其他平台未取得资格。
+`dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 的 14 轴验收闭合并取得独立 digest-bound qualified。
+2026-09-17 又在 Ubuntu 24.04.5 / GNU x86_64 目标主机上完成相同 14 轴的独立验收，Linux x64 绑定自己的
+不可变证据晋升 qualified；macOS x64 与 Windows x64 仍未取得资格。
 Migration 157 扩充闭集并到达中间态 v1.59/schema 107；Mission 158–160 收敛后由 161 增加定义附件，当前为 schema 111，
 同时保留 schema 106 原位升级及此前受支持来源。
 Bootstrap 使用已有 managed delivery，模型可见内容、Context/Manifest 与版本轴不变。

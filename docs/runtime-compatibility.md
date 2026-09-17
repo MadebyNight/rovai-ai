@@ -1,7 +1,7 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Agent Runtime 兼容性清单
@@ -29,7 +29,7 @@ Kimi 或 Grok 的平台结论。
 Grok Build 在 adapter-scoped 证据分别覆盖的 macOS arm64、macOS x64 与 Windows x64 均为 `qualified`；
 三个宿主平台各自绑定独立 evidence digest，不互相外推。
 Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery/check/AgentRun；Settings 的 Agent Runtime
-目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 为 qualified，macOS x64、Windows x64 与 Linux x64
+目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 与 Linux x64 为 qualified，macOS x64、Windows x64
 为 not_qualified。Machine Ready、实现与 First-Class 资格分别记录。
 
 ### 2026-09-15 DeepSeek Harness 0.1.5-rc.2 ACP
@@ -53,6 +53,15 @@ edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；真实开发 Camp �
 缺少 before（不同于显式 null）、类型错误、超限或不可信状态仍保留路径级文件活动。该后续修复记录在
 [新增文件增量证据](research/deepseek-harness-runtime/acp-0.1.5-create-diff-evidence.json)；已绑定 digest 的 v2 资格归档
 保持为修复前的不可变证据，本次不扩大平台范围。
+
+2026-09-17 在 Ubuntu 24.04.5 / GNU x86_64 目标主机上以同一官方 `0.1.5-rc.2` 完成独立 Linux 资格验证。
+真实 MiniMax-M3 路径通过文件与命令矩阵、Skills、当前 contract-v25 的全部 22 项 Built-in CLI、cold resume、
+Missing-Send、安全边界、逐调用 usage 和原生 parity probe；确定性模型仅用于 External MCP 生命周期。
+Fleet 使用生产 30 分钟 TTL 验证并发、A/B/A、Core crash、空闲回收后 exact resume 与 planned shutdown。
+验收全过程串行运行并受 4 GiB cgroup 与 2 GiB 整机可用内存底线保护，未使用 swap，未发生 OOM。
+该平台绑定 [Linux x64 独立资格证据](../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)，
+不从 Ubuntu 24.04 外推 Linux ARM64、musl 或其他未列平台；产品最低 Runtime 版本仍为 `>=0.1.5-rc.2`，
+而证据精确记录实际测试版本。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 

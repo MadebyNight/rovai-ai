@@ -8,7 +8,7 @@ use crate::{agent_profile::AdapterKind, platform::HostPlatformKey};
 /// that evidence even when their Adapter identity exists in the Product Catalog.
 /// Every register revision receives a new digest.
 pub const MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION: &str =
-    "sha256:ff18daa828cc7592362fcfd276af2415acf000e73e162808595a2f48ddec9844";
+    "sha256:9a436ecd2ec0ecf2bf85e848d61bc2f82520c5b9d7c254bc813c2b4eab965b1d";
 
 /// Immutable digest of the sanitized, adapter-scoped Windows x64 evidence.
 /// The source qualifies only the Runtime rows named in that evidence; shared
@@ -33,6 +33,8 @@ pub const PI_WINDOWS_X64_EVIDENCE_REVISION: &str =
 
 pub const DSH_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:017f63a62ceb33a8c03e881e9ace29b9710cb94006f87a2def529c6a31276394";
+pub const DSH_LINUX_X64_EVIDENCE_REVISION: &str =
+    "sha256:f18337a37996cc0427d23130ae2ce079d4c0946afeb727e9fa4d218a792a48e2";
 
 pub const ZCODE_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:4c4134d5f68f0633e02d3ade061725d5ff5cfc372d85c345fae10b71ad2badc2";
@@ -197,6 +199,13 @@ mod tests {
                 .as_slice(),
             ),
             (
+                DSH_LINUX_X64_EVIDENCE_REVISION,
+                include_bytes!(
+                    "../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json"
+                )
+                .as_slice(),
+            ),
+            (
                 ZCODE_MACOS_ARM64_EVIDENCE_REVISION,
                 include_bytes!("../../../qualification/runtime-platform/macos-arm64-zcode-v1.json")
                     .as_slice(),
@@ -291,28 +300,38 @@ mod tests {
             for platform in HostPlatformKey::ALL {
                 if platform == HostPlatformKey::LinuxX64 {
                     let admission = registry.platform_admission(runtime_kind, platform);
-                    let preview = !matches!(
-                        runtime_kind,
-                        AdapterKind::CursorAgent | AdapterKind::DeepseekHarness
-                    );
-                    assert_eq!(
-                        admission.status(),
-                        if preview {
-                            RuntimePlatformAdmissionStatus::Preview
-                        } else {
-                            RuntimePlatformAdmissionStatus::NotQualified
+                    match runtime_kind {
+                        AdapterKind::DeepseekHarness => {
+                            assert_eq!(
+                                admission.status(),
+                                RuntimePlatformAdmissionStatus::Qualified
+                            );
+                            assert!(admission.allows_runtime_use());
+                            assert_eq!(admission.blocker_code(), None);
+                            assert_eq!(
+                                admission.evidence_revision(),
+                                Some(DSH_LINUX_X64_EVIDENCE_REVISION)
+                            );
                         }
-                    );
-                    assert_eq!(admission.allows_runtime_use(), preview);
-                    assert_eq!(
-                        admission.blocker_code(),
-                        if preview {
-                            None
-                        } else {
-                            Some("runtime_platform_not_qualified")
+                        AdapterKind::CursorAgent => {
+                            assert_eq!(
+                                admission.status(),
+                                RuntimePlatformAdmissionStatus::NotQualified
+                            );
+                            assert!(!admission.allows_runtime_use());
+                            assert_eq!(
+                                admission.blocker_code(),
+                                Some("runtime_platform_not_qualified")
+                            );
+                            assert!(admission.evidence_revision().is_none());
                         }
-                    );
-                    assert!(admission.evidence_revision().is_none());
+                        _ => {
+                            assert_eq!(admission.status(), RuntimePlatformAdmissionStatus::Preview);
+                            assert!(admission.allows_runtime_use());
+                            assert_eq!(admission.blocker_code(), None);
+                            assert!(admission.evidence_revision().is_none());
+                        }
+                    }
                 }
                 assert_eq!(
                     matrix
@@ -466,23 +485,25 @@ mod tests {
         }
         for platform in HostPlatformKey::ALL {
             let dsh = registry.platform_admission(AdapterKind::DeepseekHarness, platform);
+            let expected_revision = match platform {
+                HostPlatformKey::MacosArm64 => Some(DSH_MACOS_ARM64_EVIDENCE_REVISION),
+                HostPlatformKey::LinuxX64 => Some(DSH_LINUX_X64_EVIDENCE_REVISION),
+                HostPlatformKey::MacosX64 | HostPlatformKey::WindowsX64 => None,
+            };
             assert_eq!(
                 dsh.status(),
-                if platform == HostPlatformKey::MacosArm64 {
+                if expected_revision.is_some() {
                     RuntimePlatformAdmissionStatus::Qualified
                 } else {
                     RuntimePlatformAdmissionStatus::NotQualified
                 }
             );
-            assert_eq!(
-                dsh.evidence_revision(),
-                (platform == HostPlatformKey::MacosArm64)
-                    .then_some(DSH_MACOS_ARM64_EVIDENCE_REVISION)
-            );
-            assert_eq!(dsh.is_qualified(), platform == HostPlatformKey::MacosArm64);
+            assert_eq!(dsh.evidence_revision(), expected_revision);
+            assert_eq!(dsh.is_qualified(), expected_revision.is_some());
             assert_eq!(
                 dsh.reason_code(),
-                (platform != HostPlatformKey::MacosArm64)
+                expected_revision
+                    .is_none()
                     .then_some(RuntimePlatformAdmissionReasonCode::QualificationEvidenceMissing)
             );
         }

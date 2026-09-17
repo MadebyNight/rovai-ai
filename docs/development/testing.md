@@ -116,7 +116,8 @@ edit `+1/-1`、空文件 edit `+1/-0`；内容不匹配时即使 Diff 正确也�
 所有 ELF。`scripts/smoke-linux-server.py` 拥有同归档、普通用户、无开发工具 PATH 的 Server OS seam，
 不调用 Runtime。Ubuntu 两个原生 runner 与 Debian 12 独立 VM 运行同一包，发布草稿依赖这些 gate。
 既有 `runtime_platform_admission::tests::registry_projects_the_complete_closed_matrix` 扩展 Linux 显式适配范围的 preview
-和 Cursor 阻断行，不新增重复 Rust owner。最小 Rust 验证为 `cargo test -p rovai-core --lib runtime_platform_admission::tests::`。
+和 Cursor 阻断行；DeepSeek Harness 的 Linux x64 独立资格也由同一矩阵 owner 绑定自己的 evidence digest，
+不新增重复 Rust owner。最小 Rust 验证为 `cargo test -p rovai-core --lib runtime_platform_admission::tests::`。
 
 
 ### Codex 自定义 Provider 与 Server Runtime

@@ -4,7 +4,7 @@ name: Runtime Platform Admission
 version: v2
 status: accepted
 source_version: v1.39
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Runtime Platform Admission v2
@@ -41,9 +41,11 @@ closed reason code，且 `evidenceRevision = null`；它不能被统计或描述
 `not_qualified` 与 `unsupported` 的 reason/evidence 规则沿用 v1。
 
 v1.59 的 Linux x64 Server OS 与 Runtime 资格独立。Server 在目标发行版启动不晋升 Adapter。
-Linux 按维护者确认的适配范围开放原有 14 个 Runtime 的 `preview`，显式排除 Cursor 与后续新增的 DeepSeek Harness。reason 为 `runtime_platform.qualification_evidence_missing`，
+Linux 按维护者确认的适配范围开放原有 14 个 Runtime 的 `preview`，显式排除 Cursor；后续新增的
+DeepSeek Harness 也没有继承该批范围。preview reason 为 `runtime_platform.qualification_evidence_missing`，
 evidenceRevision 仍为 null，允许 discovery、安装和真实验收。未来新增 Adapter 不自动继承此范围。
-只有目标 Runtime 自己的发行版/版本/能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
+只有目标 Runtime 自己的发行版、版本和能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
+DeepSeek Harness 已按这一独立路径完成 Linux x64 目标主机验收，不改变其余 preview 行。
 
 ## 2. Authority and projection
 
@@ -98,8 +100,10 @@ No fallback Runtime or synthetic default may be created after failure.
 
 ## DeepSeek Harness 增量准入
 
-`deepseek-harness` 的 macos-arm64 行为 `qualified`，reasonCode=null，evidenceRevision 绑定
-[DSH v2 增量验收归档](../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 的 SHA-256；该归档引用不可变 v1 历史验收并绑定
-2026-09-16 的原生权限、Host lock replacement 与通用 Diff 收敛。macos-x64、windows-x64 与 linux-x64
-保持 not_qualified。普通 Settings/成员选择按 Core 现有投影展示，不能以 initialize 成功、共享 ACP 实现或另一
-Runtime 的证据代替该行资格。取舍见 [V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。
+`deepseek-harness` 的 macos-arm64 与 linux-x64 行为 `qualified`，reasonCode=null，各自的
+evidenceRevision 分别绑定 [macOS arm64 v2 增量验收归档](../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)
+和 [Linux x64 目标主机验收归档](../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json) 的 SHA-256。
+macOS 归档引用不可变 v1 历史验收并绑定 2026-09-16 的原生权限、Host lock replacement 与通用 Diff 收敛；
+Linux 归档独立闭合相同 14 个能力轴。macos-x64 与 windows-x64 保持 not_qualified。普通 Settings/成员选择按
+Core 现有投影展示，不能以 initialize 成功、共享 ACP 实现或另一平台、另一 Runtime 的证据代替该行资格。
+取舍见 [V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。

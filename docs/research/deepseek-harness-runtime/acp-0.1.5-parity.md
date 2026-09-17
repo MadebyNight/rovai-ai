@@ -1,7 +1,7 @@
 ---
 document_type: research-evidence
 status: completed
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # DeepSeek Harness 0.1.5-rc.2 ACP 接入对照
@@ -43,9 +43,11 @@ last_updated: 2026-09-16
 
 ### 当前结论
 
-官方 ACP 接入已达到 **macOS arm64 First-Class / qualified**，14 个核心能力轴均已闭合。其余平台保持 not_qualified。
-平台资格绑定独立的 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)；
-它引用但不改写 v1 的 14 轴历史验收，不沿用其他 Runtime 的摘要。
+官方 ACP 接入已在 **macOS arm64 与 Linux x64** 达到 First-Class / qualified，两个平台分别闭合 14 个核心能力轴。
+macOS 资格绑定独立的 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)；
+它引用但不改写 v1 的 14 轴历史验收。Linux 资格绑定
+[目标主机归档](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)，不沿用 macOS 或其他 Runtime 的摘要。
+macOS x64 与 Windows x64 保持 not_qualified。
 2026-09-15 的固定发布包先使用官方 DeepSeek Flash 验证普通回复、warm continuation、文件/命令工具、
 Skills、全部 23 项 Built-in CLI 和原生压缩。官方余额耗尽后，按用户明确授权读取既有 MiniMax BYOK Key，
 仅传入隔离 DSH 验收进程，通过官方 llm-pi-ai/Anthropic-compatible 路由继续运行 MiniMax-M3。
@@ -54,6 +56,12 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 [增量机器可读证据](acp-0.1.5-convergence-evidence.json)，随后新建文件空前态修复见
 [新增文件增量证据](acp-0.1.5-create-diff-evidence.json)。原始日志、数据库、原生 Home 和
 凭据留在仓库外；受控模型只产生确定的工具请求，工具执行、权限和 Session 仍由实际 DSH/Core 负责。
+
+2026-09-17 的 Linux x64 验收使用 Ubuntu 24.04.5、glibc 2.39、4 vCPU、7941 MiB RAM 与同一官方包。
+真实 MiniMax-M3 路径覆盖文件/命令、Skills、当前 contract-v25 全部 22 项 Built-in CLI、原生 parity、
+cold resume、Missing-Send、安全和 usage；确定性模型只用于 MCP 生命周期。Fleet 保持生产 30 分钟 TTL，
+验证并发、A/B/A、Core crash、idle eviction 后 exact resume 与 planned shutdown。全部步骤串行运行在 4 GiB
+cgroup 内，并以 2 GiB 整机可用内存、swap 和 OOM 为停止条件；测试期间没有触发停止条件。
 
 下表逐轴记录当前实现和真实验收；协议未暴露的入口单列为差异，由 [V1.59-D10](../../versions/v1.59/decisions.md#v1-59-d10)接受。
 受控 overflow 是错误注入后调用真实原生 summarizer/retry，不宣称自然耗尽 Provider 窗口。
@@ -70,10 +78,10 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 | Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断；真实 MiniMax add 为 +1/-0、edit 为 update +1/-1、空文件 edit 为 +1/-0 | observer 只补 shell metadata 与官方完整文件状态；write 显式 `before:null` 变为标准 ACP add Diff，缺字段/类型错误/超限保持路径级回退；edit 必须是 string/string；未知工具保持 other |
 | Narration / Final / Missing-Send | Verified / Implemented | ACP committed public/thought 分流、end_turn 唯一终态；真实 zero-send 发布、accepted-send suppression、tool→final 三组通过 | 不把进程退出或日志末尾当 final；通用 ACP recovery 保留原生 public text |
 | Permission / Approval / Workspace | Verified / Implemented | 六组合原名原值冻结 patch；真实 write/Bash 的 workspace-write/read-only 边界由 DSH 决定；Shell 取消后 32 秒无迟到文件；MCP 不产生 Core 合成审批 | `sandbox_mode`/`approval_policy` 从队员页到 Host 保持一致；Runtime 未请求审批时 Core 不阻断或二次询问；不支持 additionalDirectories |
-| Built-in rovai CLI | Verified / Implemented | contract-v24 全 23 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
+| Built-in rovai CLI | Verified / Implemented | 当前 contract-v25 全 22 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
 | Usage / Cache / Cost | Verified / Implemented | 8 个真实 Run 的逐调用入库；新增真实 Core warm/自动压缩/cold 三轮对账与独立原生 observer 的五类 Token 桶完全一致，无重放计数；context gauge 分开 | cache write/cost 未报告，保持 NULL；MiniMax 未报告 reasoning 也保持 NULL；空闲 manual summary 不归入后续 Run |
 | Retry / Queue / Cancel / Cleanup | Verified / Implemented | 共享 accepted-input/queue/lease；余额/缺 Key 不盲重试；真实 pending-approval 取消及运行中 Shell 严格 cancelled；32 秒无晚到文件；Core crash、正常停止清理进程树 | Native compact fail/cancel 保持 generation；idle 回收的专属结果见 Host 轴 |
-| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 107/closed catalogs/选择器接通 | macOS arm64 qualified，DSH 独立 digest；其他平台无本次真实证据，保持 not_qualified |
+| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 107/closed catalogs/选择器接通 | macOS arm64 与 Linux x64 分别绑定独立 digest；macOS x64、Windows x64 保持 not_qualified |
 
 ### 关键行为与其他 ACP Runtime 的区别
 
@@ -117,7 +125,12 @@ Missing-Send、完整冷恢复/取消/无效 ID fallback、MCP 生命周期和�
 `ROVAI_DEEPSEEK_HARNESS_BIN` 指向固定 `0.1.5-rc.2` 可执行文件；正式产品仍继承用户原生 Home。
 
 ```bash
+# macOS Desktop sidecar
 pnpm core:build:debug
+
+# Linux Server / target host
+cargo build --locked --package rovai-core --bins
+
 ROVAI_ACP_SMOKE_ADAPTER=deepseek-harness ROVAI_ACP_FILE_OPERATION_MATRIX=1 node scripts/smoke-acp-runtime.mjs
 ROVAI_ACP_SMOKE_ADAPTER=deepseek-harness ROVAI_ACP_FULL_COMMAND_MATRIX=1 ROVAI_ACP_COMMAND_OUTPUT_ONLY=1 node scripts/smoke-acp-runtime.mjs
 ROVAI_BUILTIN_CLI_ADAPTERS=deepseek-harness node scripts/smoke-builtin-cli.mjs
@@ -178,3 +191,7 @@ Missing-Send protocol、Runtime picker 和 configured Camp 共 9 项通过；后
 最终 816 项通过、6 项既有 manual Runtime smoke 保持 ignored。真实 MiniMax 文件矩阵同时通过 byte-exact 文件
 结果与 add `+1/-0`、edit `+1/-1`、空文件 edit `+1/-0` 投影；真实开发 Camp 的通用 Files Changed/Diff Card
 显示新增文件 `+3/-0` 和完整行级 Diff。没有新增 DSH 专属 UI，也未改变其他 Runtime。
+
+2026-09-17 的 Linux x64 目标机使用上面的 Linux 构建入口，逐项复跑同一验收集合。平台资格绑定独立
+Linux 归档；它记录实际所测 `0.1.5-rc.2`，产品兼容门槛仍为 `>=0.1.5-rc.2`。这不承诺所有未来版本自动
+通过相同行为，也不外推到 Linux ARM64、musl、macOS x64 或 Windows x64。
