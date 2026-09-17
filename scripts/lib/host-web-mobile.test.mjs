@@ -61,19 +61,63 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     await browser.wait(`document.documentElement.dataset.mobileWeb==='true' && document.querySelector('.mobile-bottom-navigation')!==null`)
     await browser.wait(`document.querySelector('.camp-nav-open')!==null`)
     assert.equal(await browser.evaluate('document.title'), 'Rovai AI')
+    stage = 'wide Web pinned navigation'
+    await browser.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false })
+    await browser.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+    await browser.wait(`document.documentElement.dataset.mobileWeb===undefined && document.querySelector('.camp-group-children .camp-nav-row .camp-menu-trigger')!==null`)
+    await browser.evaluate(`document.querySelector('.camp-group-children .camp-nav-row .camp-menu-trigger').focus()`)
+    await browser.key('Enter')
+    await browser.wait(`[...document.querySelectorAll('[role=menuitem]')].some(item=>item.textContent.trim()==='置顶')`)
+    await browser.click(`[...document.querySelectorAll('[role=menuitem]')].find(item=>item.textContent.trim()==='置顶')`)
+    await browser.wait(`document.querySelector('.pinned-navigation .pinned-camp-icon')?.getClientRects().length>0`)
+    const pinnedAlignment = await browser.evaluate(`(()=>{
+      const pinned=document.querySelector('.pinned-navigation .camp-nav-row')
+      const ordinary=document.querySelector('.navigation-projects .camp-group-children .camp-nav-row')
+      const icon=pinned?.querySelector('.pinned-camp-icon')
+      const pinnedTitle=pinned?.querySelector('.truncate')?.getBoundingClientRect()
+      const ordinaryTitle=ordinary?.querySelector('.truncate')?.getBoundingClientRect()
+      return pinned&&ordinary&&icon&&pinnedTitle&&ordinaryTitle?{
+        icon:icon.getBoundingClientRect().toJSON(),
+        iconDisplay:getComputedStyle(icon).display,
+        titleDelta:Math.abs(pinnedTitle.left-ordinaryTitle.left)
+      }:null
+    })()`)
+    assert.ok(pinnedAlignment, 'pinned and ordinary Web conversation rows are visible')
+    assert.ok(['flex', 'inline-flex'].includes(pinnedAlignment.iconDisplay), 'Web pinned conversation shows its bubble icon')
+    assert.equal(pinnedAlignment.icon.width, 12, 'Web bubble icon stays visually subordinate')
+    assert.ok(pinnedAlignment.titleDelta < 1, 'Web pinned and project conversation titles share one text baseline')
+    await capture('web-pinned-conversation')
+    await browser.evaluate(`document.querySelector('.pinned-navigation .camp-nav-row .camp-menu-trigger').focus()`)
+    await browser.key('Enter')
+    await browser.wait(`[...document.querySelectorAll('[role=menuitem]')].some(item=>item.textContent.trim()==='取消置顶')`)
+    await browser.click(`[...document.querySelectorAll('[role=menuitem]')].find(item=>item.textContent.trim()==='取消置顶')`)
+    await browser.wait(`document.querySelector('.pinned-navigation')===null`)
+    await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+    await browser.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+    await browser.wait(`document.documentElement.dataset.mobileWeb==='true' && document.querySelector('.mobile-bottom-navigation')!==null`)
     stage = 'conversation list'
     await capture('conversations')
+    const rowAlignment = await browser.evaluate(`([...document.querySelectorAll('.camp-group-children .camp-nav-row')].filter(row=>row.getClientRects().length>0).map(row=>{const marker=row.querySelector('.camp-marker-slot').getBoundingClientRect();const title=row.querySelector('.truncate').getBoundingClientRect();const box=row.getBoundingClientRect();return {rowCenter:box.top+box.height/2,markerCenter:marker.top+marker.height/2,titleCenter:title.top+title.height/2,x:box.x,width:box.width}}))`)
+    assert.ok(rowAlignment.length > 0, 'conversation rows are visible')
+    for (const row of rowAlignment) {
+      assert.ok(Math.abs(row.rowCenter - row.markerCenter) < 1, 'reminder position is vertically centered in its row')
+      assert.ok(Math.abs(row.titleCenter - row.markerCenter) < 1, 'reminder position is vertically aligned with the title')
+    }
     await browser.click(byLabel('选择工作目录'))
-    await browser.wait(`Boolean(${element('使用此目录')}) && !(${element('使用此目录')}).disabled`)
+    await browser.wait(`document.querySelector('.web-workspace-picker')?.textContent.includes('选择项目目录') && !document.querySelector('.web-workspace-list[aria-busy=true]')`)
+    assert.equal(await browser.evaluate(`document.querySelector('.web-workspace-picker').textContent.includes('Host')`), false, 'project picker does not expose Host terminology')
+    assert.equal(await browser.evaluate(`document.querySelector('#host-workspace-path')===null`), true, 'complete path input stays folded')
+    await browser.click(byLabel('输入完整路径'))
+    await browser.wait(`document.querySelector('#host-workspace-path:not(:disabled)')!==null`)
     await fill('#host-workspace-path', fixture)
     await click('前往')
-    await browser.wait(`!(${element('使用此目录')}).disabled`)
+    await browser.wait(`!document.querySelector('#host-workspace-path') && !(${element('使用此目录')}).disabled`)
     const primaryColor = await browser.evaluate(`getComputedStyle(${element('使用此目录')}).backgroundColor`)
     const rgb = primaryColor.match(/[\d.]+/g).slice(0, 3).map(Number)
     assert.ok(rgb.every(channel => channel < 80) && Math.max(...rgb) - Math.min(...rgb) < 20, 'directory action is neutral black')
     await capture('workspace-picker')
     await click('取消')
-    await browser.wait(`!document.querySelector('#host-workspace-path')`)
+    await browser.wait(`!document.querySelector('.web-workspace-picker')`)
     assert.equal(await browser.evaluate(`document.querySelectorAll('.mobile-bottom-navigation button').length`), 5)
     assert.equal(await browser.evaluate(`document.querySelectorAll('.camp-nav-open').length`), 5)
     await click('查看更多'); await browser.wait(`document.querySelectorAll('.camp-nav-open').length===10`)
@@ -83,10 +127,22 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     await browser.click(byLabel('新建对话'))
     await browser.wait(`document.querySelector('.new-camp-quick-setting')!==null`)
     assert.equal(await browser.evaluate(`document.querySelector('#new-camp-name')===null`), true, 'optional name stays folded')
+    assert.equal(await browser.evaluate(`document.querySelector('#new-camp-lead-label')?.textContent`), '队长', 'conversation Lead is presented as 队长')
+    assert.equal(await browser.evaluate(`document.querySelector('#new-camp-lead-value')?.textContent`), '暂无可选队长', 'empty Lead state uses the 队长 term')
     await capture('new-conversation')
     await browser.click(byLabel('关闭新对话'))
     await click('Mobile 验收对话')
-    await browser.wait(`document.querySelector('[contenteditable=true]')!==null`)
+    await browser.wait(`document.querySelector('[contenteditable=true]')!==null && document.querySelector('.mobile-empty-camp-welcome')!==null`)
+    assert.equal(await browser.evaluate(`document.querySelector('.mobile-empty-camp-welcome .empty-camp-mark')===null && document.querySelector('.mobile-empty-camp-welcome .empty-camp-context')===null`), true, 'phone empty Camp omits the logo and configuration tags')
+    assert.equal(await browser.evaluate(`document.querySelector('.mobile-starter-toggle').getAttribute('aria-expanded')`), 'false')
+    await capture('camp-empty')
+    await click('起步建议')
+    await browser.wait(`document.querySelectorAll('.mobile-starter-list > button').length===3`)
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('.mobile-starter-list > button')].map(button=>button.textContent.trim())`), ['先了解项目', '整理成任务', '检查工作区'])
+    assert.equal(await browser.evaluate(`document.querySelector('.mobile-starter-list').textContent.includes('读取项目结构')`), false, 'phone suggestions only show concise titles')
+    await capture('camp-empty-suggestions')
+    await click('起步建议')
+    await browser.wait(`document.querySelector('.mobile-starter-list')===null`)
     stage = 'draft and Camp tabs'
     await browser.click(byLabel('会话更多操作'))
     await browser.wait(`document.querySelector('.mobile-camp-menu [role=menuitem]')!==null`)
@@ -135,15 +191,24 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     await openSecondary('任务')
     await browser.click(byLabel('返回对话列表'))
     await browser.wait(`document.querySelector('.app-shell').dataset.mobileView==='compose'`)
+    const selectedRow = await browser.evaluate(`(()=>{const selected=document.querySelector('.camp-group-children .camp-nav-row.selected');const peer=document.querySelector('.camp-group-children .camp-nav-row:not(.selected)');if(!selected||!peer)return null;const a=selected.getBoundingClientRect();const b=peer.getBoundingClientRect();return {selected:{x:a.x,width:a.width,background:getComputedStyle(selected).backgroundColor},peer:{x:b.x,width:b.width}}})()`)
+    assert.ok(selectedRow, 'selected conversation remains visible in the list')
+    assert.ok(Math.abs(selectedRow.selected.x - selectedRow.peer.x) < 1 && Math.abs(selectedRow.selected.width - selectedRow.peer.width) < 1, 'selected background shares the complete conversation row')
+    assert.notEqual(selectedRow.selected.background, 'rgba(0, 0, 0, 0)', 'selected conversation keeps its gray surface')
     await click('Mobile 验收对话')
     await browser.wait(`document.querySelector(${JSON.stringify(editor)})?.textContent==='手机标签页草稿'`)
+    if (await browser.evaluate(`document.querySelector('[aria-label="收起会话详情"]')?.getClientRects().length>0`)) {
+      await browser.click(byLabel('收起会话详情'))
+    }
+    await browser.wait(`document.querySelector(${JSON.stringify(editor)})?.getClientRects().length>0`)
     await browser.send('Page.reload')
-    await browser.wait(`document.querySelector(${JSON.stringify(editor)})?.textContent==='手机标签页草稿'`)
+    await browser.wait(`document.querySelector(${JSON.stringify(editor)})?.textContent==='手机标签页草稿' && document.querySelector(${JSON.stringify(editor)})?.getClientRects().length>0`)
     assert.equal(await browser.evaluate(`document.querySelector('.web-login-overlay')===null`), true)
     stage = 'confirmed local image preview'
     const imagePath = join(fixture, 'local-image.png')
     const imageBytes = Buffer.concat([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'), Buffer.alloc(2 * 1024 * 1024)])
     await writeFile(imagePath, imageBytes)
+    await browser.wait(`document.querySelector('.conversation-controls .composer-file-input')!==null`)
     const beforeImage = browser.responses.length
     await browser.setFiles('.conversation-controls .composer-file-input', [imagePath])
     await browser.wait(`(()=>{const image=document.querySelector('.composer-attachment-card img');return image?.complete && image.naturalWidth===1})()`)
@@ -324,7 +389,20 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     assert.equal(saved?.schedule.kind, 'manual')
     assert.deepEqual(browser.errors, [])
     assert.equal((await host.request('camps.snapshot', { campId })).agentRuns.length, 0)
-    await writeFile(join(output, 'validation.json'), JSON.stringify({ productionEntry: true, realHost: true, runtimeExecution: false, realPhone: false, checks }, null, 2))
+    await writeFile(join(output, 'validation.json'), JSON.stringify({
+      productionEntry: true,
+      realHost: true,
+      runtimeExecution: false,
+      realPhone: false,
+      assertions: [
+        'conversation-reminder-and-title-share-vertical-center',
+        'selected-conversation-uses-complete-row',
+        'project-picker-hides-host-terminology-and-path-input-by-default',
+        'mobile-empty-camp-hides-brand-and-configuration-tags',
+        'mobile-starter-suggestions-are-collapsed-and-title-only'
+      ],
+      checks
+    }, null, 2))
   } catch (error) {
     console.log(JSON.stringify({ failedStage: stage, message: error.message }))
     if (browser) { await browser.capture(join(output, 'failure.png')).catch(() => {}); console.log(await browser.evaluate('document.body.innerText.slice(-4500)').catch(() => 'browser unavailable')) }

@@ -1,5 +1,5 @@
 ---
-version: 10
+version: 11
 slug: "new-conversation-dialog"
 primary_target: "apps/desktop/src/renderer/src/NewConversationDialog.tsx"
 related_targets:
@@ -45,7 +45,7 @@ arrow-key navigation, `Esc` dismissal and focus return.
    uses the semantic success foreground and surface, while the in-progress inspection state remains neutral.
    Before removed-Project authority is ready, keep Project choices disabled, do not inspect or submit a cached
    directory, and identify the wait with neutral loading copy; Quick Chat creation remains available.
-2. **队员 / 负责人** — initialize from the saved team filtered to currently available teammates,
+2. **队员 / 队长** — initialize from the saved team filtered to currently available teammates,
    otherwise all available teammates in Member Order. A candidate is available only when its runtime
    configuration is saved and readiness is `ready` or `light_ready`; both display green “可用”.
    Unconfigured candidates display “未配置运行时”; configured but unavailable candidates display
@@ -64,7 +64,7 @@ arrow-key navigation, `Esc` dismissal and focus return.
    Unicode scalars up to 80; align the expanded name editor with the form without a child rail and keep the exact
    placeholder `输入名称...`. Empty means “未命名对话” and is not delegated to a Runtime/LLM.
 4. **以后使用此队伍一键新建** — unchecked on every opening. Place an independently focusable “?”
-   immediately to the right. Its hover, focus and click tooltip says “保存所选队员和负责人，下次点击「新对话」直接创建。”
+   immediately to the right. Its hover, focus and click tooltip says “保存所选队员和队长，下次点击「新对话」直接创建。”
    and “可在「设置 → 通用」关闭。”. Escape closes the tooltip without closing the dialog; opening it must
    not toggle the checkbox. No inline explanation or effective-after-creation text is shown.
    Do not save the workspace or optional name as defaults.

@@ -16,7 +16,7 @@ pub struct ContextDeliveryProfile {
 
 impl ContextDeliveryProfile {
     pub fn validate(self) -> Result<Self> {
-        if self.profile_version != 5 {
+        if self.profile_version != 6 {
             anyhow::bail!("unsupported Context Delivery Profile version");
         }
         if self.max_public_messages == 0
@@ -51,8 +51,13 @@ pub const CONTEXT_DELIVERY_PROFILE_V5: ContextDeliveryProfile = ContextDeliveryP
     max_self_active_tasks: 8,
 };
 
+pub const CONTEXT_DELIVERY_PROFILE_V6: ContextDeliveryProfile = ContextDeliveryProfile {
+    profile_version: 6,
+    ..CONTEXT_DELIVERY_PROFILE_V5
+};
+
 pub fn current_context_delivery_profile() -> Result<ContextDeliveryProfile> {
-    CONTEXT_DELIVERY_PROFILE_V5.validate()
+    CONTEXT_DELIVERY_PROFILE_V6.validate()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,10 +93,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_v5_is_current_and_has_a_stable_digest() {
+    fn profile_v6_is_current_and_retains_frozen_v5_digest() {
         assert_eq!(
             current_context_delivery_profile().unwrap(),
-            CONTEXT_DELIVERY_PROFILE_V5
+            CONTEXT_DELIVERY_PROFILE_V6
         );
         assert_eq!(
             CONTEXT_DELIVERY_PROFILE_V5.canonical_digest().unwrap(),
@@ -104,23 +109,23 @@ mod tests {
         for invalid in [
             ContextDeliveryProfile {
                 profile_version: 3,
-                ..CONTEXT_DELIVERY_PROFILE_V5
+                ..CONTEXT_DELIVERY_PROFILE_V6
             },
             ContextDeliveryProfile {
                 max_public_messages: 0,
-                ..CONTEXT_DELIVERY_PROFILE_V5
+                ..CONTEXT_DELIVERY_PROFILE_V6
             },
             ContextDeliveryProfile {
                 max_message_body_chars: 24_001,
-                ..CONTEXT_DELIVERY_PROFILE_V5
+                ..CONTEXT_DELIVERY_PROFILE_V6
             },
             ContextDeliveryProfile {
                 max_public_reference_chain_messages: 4,
-                ..CONTEXT_DELIVERY_PROFILE_V5
+                ..CONTEXT_DELIVERY_PROFILE_V6
             },
             ContextDeliveryProfile {
                 max_self_active_tasks: 9,
-                ..CONTEXT_DELIVERY_PROFILE_V5
+                ..CONTEXT_DELIVERY_PROFILE_V6
             },
         ] {
             assert!(invalid.validate().is_err());

@@ -27,8 +27,8 @@ last_updated: 2026-09-17
 | Settings Runtime Preview Catalog | Renderer 内受审查的静态 presentation rows | Runtime 设置页中的名称、图标、`待支持`文案和 disabled 状态 | Contracts、Core request、数据库、成员选择、诊断、Probe、AgentRun 或支持数量 |
 
 Product Runtime Catalog 当前包含十六种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
-Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64 与 Windows x64
-分别以平台专属证据取得 qualified，macOS x64 与 Linux x64 保持 not_qualified。
+Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64、macOS x64、
+Windows x64 与 Linux x64 分别绑定平台专属证据并取得 qualified。
 产品目录的机器可判数量、全量检查、诊断分母和
 普通执行仍只来自逐平台 Admission。Cursor 虽保留 closed identity 和历史 reader，但未完成产品资格前不进入
 Settings Runtime Preview Catalog；隐藏该 row 不删除持久 identity，也不改变未准入状态。普通成员 Runtime
@@ -588,4 +588,5 @@ compaction/start 的原生 compactionId/owner turn 取得归属，不收集正�
 后续 Run。input 为 uncached bucket，独立保留 cache read/write、
 output 与 reasoning。缺失字段与 cost 保持 unknown，不从占用或模型文本估算。逐轴差异、真实行为证据及
 平台范围见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；macOS arm64 与 Windows x64
-各自的 14 轴闭合证据支持 First-Class，不在平台间外推。
+使用独立自动化目标主机证据，Linux x64 同样独立闭合 14 轴；macOS x64 记录维护者目标主机验收与发布批准。
+四个平台各自绑定 digest，不能用一行证据替代另一平台；Machine Ready 继续逐机 fail closed。

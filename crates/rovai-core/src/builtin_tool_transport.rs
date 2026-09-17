@@ -9,13 +9,13 @@ use serde_json::{Map, Value, json};
 
 use crate::{command::canonical_json_digest, team_tool_catalog::builtin_tool_definitions};
 
-pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 25;
+pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 27;
 pub const BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = 2;
 pub const BUILTIN_TOOL_ENVELOPE_VERSION: u32 = 1;
 pub const BUILTIN_TOOL_RECEIPT_VERSION: u32 = 1;
-pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 25;
+pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 27;
 pub const BUILTIN_TOOL_AGENT_OUTPUT_CONTRACT_VERSION: u32 = 3;
-pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v25";
+pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v27";
 pub const BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
 pub const ROVAI_AGENT_CLI_ENV: &str = "ROVAI_AGENT_CLI";
 pub const ROVAI_CLI_CONTEXT_ENV: &str = "ROVAI_CLI_CONTEXT";
@@ -177,7 +177,7 @@ pub struct BuiltinToolCliIdentity {
     pub action: &'static str,
 }
 
-pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 23] = [
+pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 26] = [
     BuiltinToolCliIdentity {
         operation: "camp.message.send",
         group: "send",
@@ -257,6 +257,21 @@ pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 23] = [
         operation: "memory.write",
         group: "memory",
         action: "write",
+    },
+    BuiltinToolCliIdentity {
+        operation: "mission.get",
+        group: "mission",
+        action: "get",
+    },
+    BuiltinToolCliIdentity {
+        operation: "mission.update",
+        group: "mission",
+        action: "update",
+    },
+    BuiltinToolCliIdentity {
+        operation: "mission.status",
+        group: "mission",
+        action: "status",
     },
     BuiltinToolCliIdentity {
         operation: "automation.list",
@@ -905,6 +920,30 @@ fn error_contracts(operation: &str) -> Vec<BuiltinToolErrorContract> {
         }),
         _ => {}
     }
+    if matches!(
+        operation,
+        "mission.get" | "mission.update" | "mission.status"
+    ) {
+        for code in ["mission.current_unavailable", "mission.forbidden"] {
+            errors.push(BuiltinToolErrorContract {
+                code: code.into(),
+                recovery: BuiltinToolRecovery::Stop,
+            });
+        }
+        for code in [
+            "mission.invalid_input",
+            "mission.content_required",
+            "mission.invalid_title",
+            "mission.description_too_long",
+            "mission.source_message_required",
+            "mission.invalid_source_message",
+        ] {
+            errors.push(BuiltinToolErrorContract {
+                code: code.into(),
+                recovery: BuiltinToolRecovery::FixInput,
+            });
+        }
+    }
     errors.sort_by(|left, right| left.code.cmp(&right.code));
     errors
 }
@@ -927,6 +966,9 @@ pub fn projection_identity(operation: &str) -> Result<&'static str> {
         | "memory.read"
         | "memory.view"
         | "single_chat.history"
+        | "mission.get"
+        | "mission.update"
+        | "mission.status"
         | "automation.list"
         | "automation.get"
         | "automation.create"
@@ -1065,9 +1107,9 @@ mod tests {
 
     #[test]
     fn cli_mapping_is_complete_unique_and_contract_valid() {
-        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 25);
-        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 25);
-        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v25");
+        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 27);
+        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 27);
+        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v27");
         validate_builtin_tool_contract().unwrap();
         let operations = BUILTIN_TOOL_CLI_IDENTITIES
             .iter()
@@ -1077,8 +1119,8 @@ mod tests {
             .iter()
             .map(|identity| (identity.group, identity.action))
             .collect::<BTreeSet<_>>();
-        assert_eq!(operations.len(), 23);
-        assert_eq!(commands.len(), 23);
+        assert_eq!(operations.len(), 26);
+        assert_eq!(commands.len(), 26);
     }
 
     #[test]

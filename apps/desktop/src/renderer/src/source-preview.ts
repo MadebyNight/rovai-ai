@@ -28,6 +28,22 @@ const SOURCE_FONT_FAMILY = [
 
 const languageLoads = new WeakMap<LanguageDescription, Promise<LanguageSupport | null>>()
 
+// CodeMirror treats a different phrases object as a full setState reset.
+// Keep its identity stable across theme, language and target reconfiguration so
+// reading positions and live search state stay attached to the existing editor.
+const sourceReaderPhrases = EditorState.phrases.of({
+  Find: '查找',
+  next: '下一个',
+  previous: '上一个',
+  all: '全部',
+  'match case': '区分大小写',
+  regexp: '正则表达式',
+  'by word': '全字匹配',
+  close: '关闭',
+  'current match': '当前匹配',
+  'on line': '位于行'
+})
+
 const sourceReaderInterface = {
   '&': {
     height: '100%',
@@ -189,18 +205,7 @@ export function sourceReaderExtensions({
     lineNumbers({ formatNumber: (line) => sourceLineNumber(startLine, line) }),
     fileFindDecorations,
     EditorState.tabSize.of(2),
-    EditorState.phrases.of({
-      Find: '查找',
-      next: '下一个',
-      previous: '上一个',
-      all: '全部',
-      'match case': '区分大小写',
-      regexp: '正则表达式',
-      'by word': '全字匹配',
-      close: '关闭',
-      'current match': '当前匹配',
-      'on line': '位于行'
-    }),
+    sourceReaderPhrases,
     EditorView.contentAttributes.of({
       'aria-label': ariaLabel,
       tabindex: '0'

@@ -36,6 +36,9 @@ import type {
   NotificationEpisodeView,
   OnboardingRuntimeSelection,
   OnboardingSnapshot,
+  MissionAttachmentDraft,
+  MissionRecord,
+  MissionCreate,
   NavigationCampItem,
   NavigationCampTarget,
   NavigationCampPage,
@@ -79,7 +82,13 @@ import {
   type NavigationSettingsSection
 } from './CampNavigation'
 import { NewConversationDialog } from './NewConversationDialog'
+import { MissionBoard, MissionInteractionProvider, MissionIntro } from './MissionBoard'
+import { MissionActivityDocument } from './MissionDelivery'
+import { MissionCommandRejected, missionCommand, missionError, useMissions } from './useMissions'
+import './mission.css'
 import { openRuntimeModelCatalog } from './runtime-check'
+import { MissionSurface } from './MissionSurface'
+import { MissionHeader } from './MissionHeader'
 import { FilePreviewProvider } from './FilePreviewContext'
 import { NavigationShell } from './NavigationShell'
 import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type NavigationIntent, type MemoryNavigationTarget } from './desktop-navigation'
@@ -265,12 +274,13 @@ type LoadState = 'loading' | 'ready' | 'error'
 export type StartupStatus = 'loading' | 'waiting' | 'resolved'
 export const STARTUP_FEEDBACK_DELAY_MS = 400
 export const SHUTDOWN_FEEDBACK_DELAY_MS = 400
-export type View = 'compose' | 'camp' | 'members' | 'automations' | 'memory' | 'settings'
+export type View = 'compose' | 'camp' | 'members' | 'automations' | 'missions' | 'memory' | 'settings'
 type ActivateCampOptions = {
   memberPrepared?: boolean
   reconcileDefaultLead?: boolean
   initializeComposerDraft?: boolean
   preserveNotificationFocus?: boolean
+  missionPresentation?: 'drawer'
   suppressErrors?: boolean
   anchoredMessages?: readonly CampMessageView[]
 }
@@ -319,12 +329,13 @@ export async function prepareActiveAutomationForAppQuit(
 }
 
 export type SettingsSection = NavigationSettingsSection
-export type WindowDragStripPage = Extract<View, 'compose' | 'members' | 'automations' | 'memory' | 'settings'>
+export type WindowDragStripPage = Extract<View, 'compose' | 'members' | 'automations' | 'missions' | 'memory' | 'settings'>
 
 export function windowDragStripPage(view: View): WindowDragStripPage | null {
   return view === 'compose'
     || view === 'members'
     || view === 'automations'
+    || view === 'missions'
     || view === 'memory'
     || view === 'settings'
     ? view
@@ -1055,6 +1066,14 @@ export function BusinessApp({
     campId: string
     messages: readonly CampMessageView[]
   } | null>(null)
+  const missionList = useMissions(client, !mobile && startupStatus === 'resolved')
+  const [missionPresentation, setMissionPresentation] = useState<'drawer' | 'full'>('full')
+  const [missionOpenRequest, setMissionOpenRequest] = useState(0)
+  const [newMissionOpen, setNewMissionOpen] = useState(false)
+  const missionCreation = useRef<{id: string; command: MissionCreate; attachments: MissionAttachmentDraft[]; attachmentSignature: string} | null>(null)
+  const activeMission = missionList.missions.find(m => m.campId === activeCampId)
+  const missionCamp = !!activeMission || !!(campSnapshot?.camp.id === activeCampId && campSnapshot?.camp.missionId)
+  const missionDrawer = !mobile && view === 'camp' && !!activeMission && missionPresentation === 'drawer'
   const [newConversationOpen, setNewConversationOpen] = useState(false)
   const [newConversationInitialWorkspace, setNewConversationInitialWorkspace] = useState<WorkspaceSelection | null>(null)
   const [newConversationInitialSelection, setNewConversationInitialSelection] = useState<GeneralPreferencesSnapshot['newConversationDefaults']>(null)
@@ -1682,6 +1701,9 @@ export function BusinessApp({
       }
       setActiveCampId(campId)
       setCampSnapshot(snapshot, entryPreview, initialComposerDraft)
+      if (snapshot.camp.missionId && options.missionPresentation) {
+        setMissionPresentation(options.missionPresentation)
+      }
       setView('camp')
     }
     if (previewSnapshot) {
@@ -1754,6 +1776,9 @@ export function BusinessApp({
     if (target?.kind !== 'camp' || target.campId !== campId) return false
     if (viewRef.current === 'camp' && activeCampIdRef.current === campId) {
       if (options.anchoredMessages?.length) setNotificationAnchor({ campId, messages: options.anchoredMessages })
+      if (campSnapshotRef.current?.camp.missionId && options.missionPresentation) {
+        setMissionPresentation(options.missionPresentation)
+      }
       return true
     }
     return activated
@@ -2630,6 +2655,7 @@ export function BusinessApp({
       ? { kind: 'members', agentId: selectedMemberId, tab: memberTab }
       : nextView === 'memory' ? { kind: 'memory', memoryId: null }
       : nextView === 'automations' ? { kind: 'automations' }
+      : nextView === 'missions' ? { kind: 'missions' }
       : nextView === 'camp' && activeCampId ? { kind: 'camp', campId: activeCampId }
       : nextView === 'settings' ? { kind: 'settings', section: settingsSection }
       : { kind: 'quick_chat' }
@@ -2705,6 +2731,7 @@ export function BusinessApp({
           setSelectedMemberId(target.agentId); setMemberTab(target.tab); setView('members'); break
         case 'memory': setMemoryTarget(target); setView('memory'); break
         case 'automations': setView('automations'); break
+        case 'missions': setView(mobile ? 'compose' : 'missions'); break
         case 'quick_chat': setView('compose'); break
       }
     }
@@ -2912,6 +2939,7 @@ export function BusinessApp({
         const activated = await activateCamp(action.campId, {
           memberPrepared: true,
           preserveNotificationFocus: target !== null,
+          missionPresentation: 'drawer',
           reconcileDefaultLead: true,
           suppressErrors: true,
           anchoredMessages
@@ -2974,7 +3002,8 @@ export function BusinessApp({
   }, [])
 
   const completeNotificationNavigation = useCallback((requestId: number): void => {
-    if (!notificationPresentationRef.current?.complete(requestId)) return
+    // Direct source links also use focus requests, without a notification waiter.
+    notificationPresentationRef.current?.complete(requestId)
     setNotificationFocus((current) => current?.requestId === requestId ? null : current)
   }, [])
 
@@ -3736,7 +3765,68 @@ export function BusinessApp({
     })
   }
 
-  const windowDragPage = windowDragStripPage(view)
+  async function openMission(mission: MissionRecord): Promise<void> {
+    setMissionPresentation('drawer')
+    await activateCamp(mission.campId, { reconcileDefaultLead: false })
+    if (activeCampIdRef.current === mission.campId && viewRef.current === 'camp') {
+      setMissionPresentation('drawer'); setMissionOpenRequest(value => value + 1)
+    }
+  }
+  const refreshMission = async (campId: string): Promise<void> => {
+    await missionList.refresh()
+    if (activeCampIdRef.current === campId) await refreshActiveCampSnapshot(campId)
+  }
+  const onMissionDeleted = async (campId: string): Promise<void> => {
+    forgetFilePreviewSession(campId, activeCampIdRef.current === campId)
+    campSnapshotCache.current.delete(campId)
+    if (activeCampIdRef.current === campId) {
+      forgetRemovedCampSurface(campId)
+      await desktopNavigation.replace({ kind: 'missions' }, { prepared: true })
+    }
+    await Promise.all([missionList.refresh(), loadNavigation()])
+  }
+  const missionSource = (messageId: string): void => {
+    setNotificationFocus({ requestId: ++notificationFocusSequence.current, kind: 'camp_message', campTurnId: null, messageId, active: true })
+  }
+  async function createMission(draft: Omit<CreateCampRequest, 'commandId' | 'activationState'>, saveTeam: boolean, definition?: {description: string; start: boolean; tags: string[]; attachments: MissionAttachmentDraft[]}): Promise<void> {
+    if (!definition) throw new Error('缺少使命定义')
+    const command: MissionCreate = { title: draft.name ?? '', description: definition.description, memberAgentIds: draft.memberAgentIds, defaultLeadAgentId: draft.defaultLeadAgentId, projectBindingKind: draft.workspace ? 'directory' : 'quick_chat', projectPath: draft.workspace?.projectPath ?? '', tags: definition.tags }
+    const attachmentSignature = JSON.stringify(definition.attachments.map(({ id, file, kindHint }) => [id, file.name, file.size, file.lastModified, file.type, kindHint]))
+    // Unknown transport outcomes retry the exact command. A different draft cannot
+    // accidentally create a second Mission while the first result is unresolved.
+    const pending = missionCreation.current
+    if (pending && (JSON.stringify(pending.command) !== JSON.stringify(command) || pending.attachmentSignature !== attachmentSignature)) throw new Error('上次创建结果尚未确认，请恢复原内容并重试。')
+    const request = pending ?? { id: newCommandId(), command, attachments: definition.attachments, attachmentSignature }
+    missionCreation.current = request
+    setBusy('create-mission')
+    try {
+      const result = request.attachments.length
+        ? await (async () => {
+            if (!client.missionAttachments) throw new Error('当前环境不支持使命附件。')
+            const stored = await client.missionAttachments.create(request.id, request.command, request.attachments)
+            if (stored.status === 'rejected') throw new MissionCommandRejected(stored)
+            return stored
+          })()
+        : await missionCommand(client, 'missions.create', request.command, request.id)
+      const campId = stringField(result.payload, 'campId'), missionId = stringField(result.payload, 'missionId')
+      if (!campId || !missionId) throw new Error('使命已保存，但返回的标识不完整。请刷新使命板。')
+      missionCreation.current = null; setNewMissionOpen(false)
+      if (saveTeam) {
+        try { setGeneralPreferences(await uiPreferences.generalPreferences.setNewConversationDefaults({ memberAgentIds: draft.memberAgentIds, defaultLeadAgentId: draft.defaultLeadAgentId }, true)) }
+        catch { notifyError('使命已创建，但默认队伍设置未保存。可在设置中重试。') }
+      }
+      if (definition.start) {
+        try { await missionCommand(client, 'missions.start', { missionId }) }
+        catch (error) { notifyError(`使命已保存，暂时未开始：${missionError(error)}`) }
+      }
+      await missionList.refresh()
+    } catch (error) {
+      if (error instanceof MissionCommandRejected) missionCreation.current = null
+      throw error
+    } finally { setBusy(null) }
+  }
+
+  const windowDragPage = windowDragStripPage(missionDrawer ? 'missions' : view)
   const visibleCampSnapshot = campSnapshot && activeCampId
     ? campSnapshotWithCurrentAnchor(campSnapshot, activeCampId, notificationAnchor)
     : campSnapshot
@@ -3755,6 +3845,7 @@ export function BusinessApp({
     camp: 'task-content camp-content',
     members: 'members-content',
     automations: 'automation-content',
+    missions: 'mission-board-content',
     memory: 'memory-content',
     settings: 'settings-content'
   }
@@ -3872,12 +3963,14 @@ export function BusinessApp({
 
   return (
     <MobileLayoutProvider value={mobile}>
-    <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}>
-    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
+    <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
+      missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify}/> : null}>
+    <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onDeleted={onMissionDeleted} onError={notifyError}>
+    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
         platform={client.platform}
         footer={sidebarFooter}
-        view={view}
+        view={view === 'camp' && missionCamp ? 'missions' : view}
         state={startupGateVisible ? 'loading' : navigationState}
         navigation={displayNavigation}
         groupLimits={navigationGroupLimits}
@@ -3894,6 +3987,8 @@ export function BusinessApp({
         onNewConversation={beginNewConversation}
         onMembers={() => chooseView('members')}
         onAutomations={() => chooseView('automations')}
+        onMissions={mobile ? undefined : () => chooseView('missions')}
+        pendingMissionCount={missionList.missions.filter(m => m.status === 'needs_you').length}
         onMemory={() => chooseView('memory')}
         pendingMemoryCount={pendingMemoryCount}
         onSettings={openSettings}
@@ -3930,7 +4025,7 @@ export function BusinessApp({
         onDelete={deleteCamp}
         onError={(nextError) => setError(errorMessage(nextError))}
       />
-      {!startupGateVisible && view === 'camp' && <AppHeader
+      {!startupGateVisible && view === 'camp' && !missionCamp && <AppHeader
         campTitle={activeCampTitle || '对话'}
         contextLabel={activeCampContextLabel}
         camp={campSnapshot?.camp.id === activeCampId ? campSnapshot : null}
@@ -3940,7 +4035,7 @@ export function BusinessApp({
       />}
       {windowDragPage && <WindowDragStrip page={windowDragPage} />}
 
-      <main className={`content ${pageContentClassName[view]}`}>
+      <main className={`content ${pageContentClassName[missionDrawer ? 'missions' : view]}${missionCamp && view === 'camp' ? ' mission-active-content' : ''}`}>
         {mobile && view === 'settings' && !mobileSettingsList && <div className="mobile-settings-back"><MobileBack label="返回设置" onClick={() => setMobileSettingsList(true)} /><span>设置</span></div>}
         {startupGateVisible && startupFeedbackVisible && (
           <StartupGate
@@ -3965,9 +4060,21 @@ export function BusinessApp({
           />
         )}
 
-        {!startupGateVisible && generalPreferences && view === 'camp' && activeCampId && visibleCampSnapshot?.camp.id === activeCampId && (
+        {!startupGateVisible && !mobile && <MissionBoard missions={missionList.missions} projects={displayNavigation?.projects ?? []} loading={missionList.loading} error={missionList.error}
+          hidden={view !== 'missions' && !missionDrawer} selectedId={missionDrawer ? activeMission?.missionId : undefined} onRefresh={missionList.refresh}
+          onNew={() => { setNewMissionOpen(true) }} onOpen={mission => { void openMission(mission).catch(error => notifyError(missionError(error))) }}/>} 
+        {!startupGateVisible && mobile && view === 'camp' && missionCamp && <section className="mission-mobile-unavailable"><h2>请在电脑上打开此使命</h2><button className="quiet-button" onClick={() => chooseView('compose')}>返回</button></section>}
+        {!startupGateVisible && !mobile && view === 'camp' && missionCamp && !activeMission && <section className="mission-section-empty" role={missionList.error ? 'alert' : 'status'}><p>{missionList.error || (missionList.loading ? '正在读取使命…' : '此使命当前不可用。')}</p>{!missionList.loading && <button className="quiet-button" onClick={() => void missionList.refresh()}>重试</button>}</section>}
+        {!startupGateVisible && generalPreferences && view === 'camp' && !(mobile && missionCamp) && (!missionCamp || activeMission) && activeCampId && visibleCampSnapshot?.camp.id === activeCampId && (
+          <MissionSurface key={activeCampId} enabled={!!activeMission} full={!missionDrawer} onExpand={() => setMissionPresentation('full')} onClose={() => chooseView('missions')}>
+          {activeMission && <MissionHeader mission={activeMission} drawer={missionDrawer} camp={visibleCampSnapshot} projectName={activeCampProject?.name ?? activeCampContextLabel}
+            openRequest={missionOpenRequest} onExpand={() => setMissionPresentation('full')} onFold={() => setMissionPresentation('drawer')}
+            onClose={() => chooseView('missions')} onFocusApprovals={focusCampApprovals} detailEntryHostRef={setCampDetailEntryHost}/>}
           <CampWorkspace
             key={activeCampId}
+            missionBoard={activeMission ? <MissionIntro mission={activeMission} projects={displayNavigation?.projects ?? []}/> : null}
+            previewTabsInPane={false}
+            suppressExecutionAutoOpen={missionDrawer}
             snapshot={visibleCampSnapshot}
             initialComposerDraft={campSnapshotState.initialComposerDraft}
             onInitialComposerDraftConsumed={consumeInitialComposerDraft}
@@ -4028,6 +4135,7 @@ export function BusinessApp({
             onNotify={notify}
             onNotifyError={notifyError}
           />
+          </MissionSurface>
         )}
 
         {!startupGateVisible && view === 'compose' && (
@@ -4152,7 +4260,7 @@ export function BusinessApp({
               )
         )}
       </main>
-      {mobile && view !== 'camp' && <MobileNavigation view={view} disabled={startupGateVisible || shuttingDown} onNavigate={(target) => {
+      {mobile && view !== 'camp' && view !== 'missions' && <MobileNavigation view={view} disabled={startupGateVisible || shuttingDown} onNavigate={(target) => {
         if (target === 'settings') setMobileSettingsList(true)
         chooseView(target)
       }} />}
@@ -4175,12 +4283,22 @@ export function BusinessApp({
           activationState: campActivationStateForCreation('dialog')
         }, enableOneClick)}
       />
+      {!mobile && <NewConversationDialog purpose="mission" open={newMissionOpen} recovery={missionCreation.current?.command ?? null} recoveryAttachments={missionCreation.current?.attachments ?? []}
+        initialWorkspace={currentProjectWorkspace(displayNavigation, currentProject)}
+        initialSelection={generalPreferences?.newConversationDefaults ?? null}
+        projects={displayNavigation?.projects ?? []} missionTagCatalog={[...new Set(missionList.missions.flatMap(mission => mission.tags))]} preflight={campCreationPreflight} agents={agents}
+        busy={busy === 'create-mission'} projectAccessReady={removedProjectAuthorityReady}
+        onOpenChange={open => { if (!busy) setNewMissionOpen(open) }}
+        onChooseWorkspaceDirectory={chooseWorkspaceDirectory} onWorkspaceSelected={workspace => restoreNavigationProject(workspace.projectPath)}
+        onCreate={createMission}/>} 
       <NotificationAttentionController
         enabled={startupStatus === 'resolved'}
         activeCampId={activeCampId}
         activeCampVisible={view === 'camp'
           && campSnapshot?.camp.id === activeCampId
           && !newConversationOpen
+          && !newMissionOpen
+          && !(mobile && missionCamp)
           && !shuttingDown}
         navigationActive={notificationFocus !== null}
         onNavigate={navigateFromNotification}
@@ -4204,6 +4322,7 @@ export function BusinessApp({
         onDownload={appUpdates.download}
       />}
     </NavigationShell>
+    </MissionInteractionProvider>
     </FilePreviewProvider>
     </MobileLayoutProvider>
   )

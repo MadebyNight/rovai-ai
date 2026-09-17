@@ -41,9 +41,11 @@ closed reason code，且 `evidenceRevision = null`；它不能被统计或描述
 `not_qualified` 与 `unsupported` 的 reason/evidence 规则沿用 v1。
 
 v1.59 的 Linux x64 Server OS 与 Runtime 资格独立。Server 在目标发行版启动不晋升 Adapter。
-Linux 按维护者确认的适配范围开放原有 14 个 Runtime 的 `preview`，显式排除 Cursor 与后续新增的 DeepSeek Harness。reason 为 `runtime_platform.qualification_evidence_missing`，
+Linux 按维护者确认的适配范围开放原有 14 个 Runtime 的 `preview`，显式排除 Cursor；后续新增的
+DeepSeek Harness 也没有继承该批范围。preview reason 为 `runtime_platform.qualification_evidence_missing`，
 evidenceRevision 仍为 null，允许 discovery、安装和真实验收。未来新增 Adapter 不自动继承此范围。
-只有目标 Runtime 自己的发行版/版本/能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
+只有目标 Runtime 自己的发行版、版本和能力证据闭合后才晋升 `qualified`，也不增加 Linux Desktop。
+DeepSeek Harness 已按这一独立路径完成 Linux x64 目标主机验收，不改变其余 preview 行。
 
 ## 2. Authority and projection
 
@@ -98,10 +100,12 @@ No fallback Runtime or synthetic default may be created after failure.
 
 ## DeepSeek Harness 增量准入
 
-`deepseek-harness` 的 macos-arm64 与 windows-x64 行均为 `qualified / reasonCode=null`，分别绑定
-[DSH macOS v2 增量验收归档](../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 与
-[DSH Windows v1 验收归档](../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json) 的 SHA-256。
-前者引用不可变 v1 历史验收并绑定 2026-09-16 的原生权限、Host lock replacement 与通用 Diff 收敛；后者在
-Windows 10 x64、本地 NTFS 上独立闭合 14 轴及生产 30 分钟 idle eviction。macos-x64 与 linux-x64 保持
-not_qualified。普通 Settings/成员选择按 Core 现有投影展示，不能以 initialize 成功、共享 ACP 实现或另一
-Runtime 的证据代替该行资格。取舍见 [V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。
+`deepseek-harness` 的 macos-arm64、macos-x64、windows-x64 与 linux-x64 四行均为
+`qualified / reasonCode=null`，分别绑定自己的 SHA-256 evidenceRevision：
+[macOS arm64 v2 增量验收归档](../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)、
+[macOS x64 维护者目标主机验收归档](../../qualification/runtime-platform/macos-x64-deepseek-harness-v1.json)、
+[Windows x64 v1 验收归档](../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json)与
+[Linux x64 目标主机验收归档](../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)。macOS arm64、
+Windows 与 Linux 记录各自的独立证据；macOS x64 按仓库既有维护者目标主机验收先例记录明确的实测确认与发布批准，
+不伪称本次提交重跑私密模型会话。普通 Settings/成员选择仍须通过 Machine Installation、认证、版本、模型、Probe 与
+Ready 检查。取舍见 [V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。

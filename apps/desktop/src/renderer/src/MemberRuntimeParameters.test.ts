@@ -300,6 +300,8 @@ describe('member runtime parameters', () => {
       expect(markup).toContain('field-label runtime-parameter-switch-field')
       expect(markup).toContain('class="runtime-parameter-switch-state" aria-hidden="true">开启')
     }
+    expect(styles).toContain('.runtime-parameter-switch input:checked { border-color: var(--conversation-action); background: var(--conversation-action); }')
+    expect(styles).toContain('.runtime-parameter-switch input:checked::after { background: var(--conversation-action-contrast);')
   })
 
   it('keeps model, select, and switch control faces on one 44px height contract', () => {

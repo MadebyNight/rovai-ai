@@ -125,6 +125,8 @@ export function CampNavigation({
   onNewConversation,
   onMembers,
   onAutomations = () => undefined,
+  onMissions,
+  pendingMissionCount = 0,
   onMemory,
   pendingMemoryCount,
   onSettings,
@@ -145,7 +147,7 @@ export function CampNavigation({
 }: {
   settingsNavigation?: React.ReactNode
   footer?: React.ReactNode
-  view: 'compose' | 'camp' | 'members' | 'automations' | 'memory' | 'settings'
+  view: 'compose' | 'camp' | 'members' | 'automations' | 'missions' | 'memory' | 'settings'
   state: 'loading' | 'ready' | 'error'
   disabled?: boolean
   navigation: NavigationSnapshot | null
@@ -164,6 +166,8 @@ export function CampNavigation({
   onNewConversation(): void
   onMembers(): void
   onAutomations?(): void
+  onMissions?(): void
+  pendingMissionCount?: number
   onMemory(): void
   pendingMemoryCount: number
   onSettings(): void
@@ -390,6 +394,9 @@ export function CampNavigation({
                     <span className="rail-glyph" aria-hidden="true"><NavigationIcon name="brain" /></span><span className="rail-label">记忆</span>
                     {pendingMemoryCount > 0 && <i className="rail-badge-dot" aria-hidden="true" />}
                   </button>
+                  {onMissions && <button className={`rail-button ${view === 'missions' ? 'active' : ''}`} type="button" aria-current={view === 'missions' ? 'page' : undefined} aria-label={pendingMissionCount ? `使命板，${pendingMissionCount} 项需要你` : '使命板'} title="使命板" onClick={onMissions}>
+                    <span className="rail-glyph" aria-hidden="true"><svg className="navigation-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path strokeLinecap="round" strokeLinejoin="round" d="M5 21V4m0 0c5-4 9 4 14 0v11c-5 4-9-4-14 0"/></svg></span><span className="rail-label">使命板</span>{pendingMissionCount > 0 && <span className="mission-nav-count">{pendingMissionCount}</span>}
+                  </button>}
                   <button className={`rail-button ${view === 'automations' ? 'active' : ''}`} type="button" aria-current={view === 'automations' ? 'page' : undefined} aria-label="定时任务" title="定时任务" onClick={onAutomations}>
                     <span className="rail-glyph" aria-hidden="true"><NavigationIcon name="calendar-clock" /></span><span className="rail-label">定时任务</span>
                   </button>
@@ -1060,7 +1067,7 @@ function CampRow({
         <span className="camp-marker-slot" aria-hidden="true">
           {hasNewReply && <i className="task-dot camp-marker-unread_completed" />}
         </span>
-        {mobile && pinned && <span className="mobile-pinned-camp-icon"><NavigationIcon name="messages" /></span>}
+        {pinned && <span className="pinned-camp-icon" aria-hidden="true"><NavigationIcon name="messages" /></span>}
         <span className="truncate">{title}</span>
         {hasNewReply && <span className="sr-only">有新回复</span>}
         {camp.activationState === 'pending' && <span className="camp-draft-badge">草稿</span>}

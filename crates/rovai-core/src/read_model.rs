@@ -162,6 +162,8 @@ pub struct CampView {
     pub id: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub mission_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_source: Option<CampChannelSource>,
     pub activation_state: String,
     pub project_binding_kind: String,
@@ -261,6 +263,8 @@ pub struct TaskView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CampMessageView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mission_start: Option<Value>,
     pub quotes: Vec<MessageQuoteSnapshot>,
     pub id: String,
     pub sequence: i64,
@@ -560,6 +564,9 @@ pub struct ContextManifestView {
     pub run_fact_refs: Vec<RunFactRefView>,
     pub run_fact_payload: Value,
     pub run_fact_digest: String,
+    pub workspace_fact: Option<Value>,
+    pub workspace_fact_digest: Option<String>,
+    pub workspace_fact_included: bool,
     pub current_input_source: Value,
     pub attachment_refs: Vec<CampAttachmentRefView>,
     pub attachment_digest: String,
@@ -587,6 +594,8 @@ pub struct RunFactRefView {
     pub fact: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mission_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1788,10 +1797,11 @@ fn load_navigation_camps(
           ON activity_event.global_sequence = navigation_activity.last_activity_sequence
         LEFT JOIN camp_view_state ON camp_view_state.camp_id = camp.id
         LEFT JOIN camp_composer_draft ON camp_composer_draft.camp_id = camp.id AND camp_composer_draft.client_id = ?1
-        WHERE camp.activation_state = 'active'
+        WHERE NOT EXISTS(SELECT 1 FROM mission WHERE mission.camp_id=camp.id)
+          AND (camp.activation_state = 'active'
            OR length(trim(COALESCE(camp_composer_draft.body, ''))) > 0
            OR (camp_composer_draft.source_attachments_json IS NOT NULL AND camp_composer_draft.source_attachments_json <> '[]')
-           OR EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = camp.id AND client_id = ?1)
+           OR EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = camp.id AND client_id = ?1))
         "#
     );
     let mut statement = transaction.prepare(&sql)?;
@@ -2013,7 +2023,8 @@ fn load_camp(transaction: &Transaction<'_>, camp_id: &str) -> Result<Option<Camp
             SELECT camp.id, camp.title, camp.activation_state, camp.project_binding_kind, camp.project_path,
                    camp.default_lead_agent_id, camp.membership_generation,
                    camp.version, camp.created_at, camp.updated_at,
-                   channel_conversation.provider, channel_conversation.conversation_kind
+                   channel_conversation.provider, channel_conversation.conversation_kind,
+                   (SELECT id FROM mission WHERE mission.camp_id=camp.id)
             FROM camp
             LEFT JOIN channel_conversation_binding AS channel_binding ON channel_binding.camp_id = camp.id
             LEFT JOIN channel_conversation ON channel_conversation.id = channel_binding.channel_conversation_id
@@ -2025,6 +2036,7 @@ fn load_camp(transaction: &Transaction<'_>, camp_id: &str) -> Result<Option<Camp
                     id: row.get(0)?,
                     title: row.get(1)?,
                     channel_source: camp_channel_source_from_row(row, 10)?,
+                    mission_id: row.get(12)?,
                     activation_state: row.get(2)?,
                     project_binding_kind: row.get(3)?,
                     project_path: row.get(4)?,
@@ -2565,7 +2577,9 @@ fn hydrate_message_views(
             } else {
                 None
             };
+            let mission_start=transaction.query_row("SELECT s.mission_id,m.title,m.description FROM mission_start s JOIN mission m ON m.id=s.mission_id WHERE s.message_id=?1",[&row.id],|r|Ok(serde_json::json!({"missionId":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"description":r.get::<_,String>(2)?}))).optional()?;
             Ok(CampMessageView {
+                mission_start,
                 quotes: load_quotes(transaction, QuoteStorage::CampMessage, &row.id)?,
                 id: row.id,
                 sequence: row.sequence,
@@ -3494,7 +3508,10 @@ fn load_context_manifests(
                manifest.self_active_task_evidence_digest,
                manifest.message_projection_audience,
                manifest.a2a_guidance_evidence_json,
-               manifest.a2a_guidance_evidence_digest
+               manifest.a2a_guidance_evidence_digest,
+               manifest.workspace_fact_json,
+               manifest.workspace_fact_digest,
+               manifest.workspace_fact_included
         FROM context_manifest AS manifest
         JOIN native_session_bootstrap_evidence AS bootstrap
           ON bootstrap.id = manifest.bootstrap_evidence_id
@@ -3575,6 +3592,9 @@ fn load_context_manifests(
                 row.get::<_, String>(56)?,
                 row.get::<_, String>(57)?,
                 row.get::<_, String>(58)?,
+                row.get::<_, Option<String>>(59)?,
+                row.get::<_, Option<String>>(60)?,
+                row.get::<_, bool>(61)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3679,6 +3699,9 @@ fn load_context_manifests(
                 run_fact_refs,
                 run_fact_payload,
                 run_fact_digest: row.8,
+                workspace_fact: row.59.as_deref().map(serde_json::from_str).transpose()?,
+                workspace_fact_digest: row.60,
+                workspace_fact_included: row.61,
                 current_input_source,
                 attachment_refs,
                 attachment_digest: row.11,

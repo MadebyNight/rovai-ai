@@ -444,6 +444,7 @@ pub fn legacy_attachment_belongs_to_owner(
         )?,
         LocalAttachmentOwnerLocator::Pending { .. }
         | LocalAttachmentOwnerLocator::PendingEdit { .. }
+        | LocalAttachmentOwnerLocator::Mission { .. }
         | LocalAttachmentOwnerLocator::SingleChatComposer { .. }
         | LocalAttachmentOwnerLocator::SingleChatPending { .. }
         | LocalAttachmentOwnerLocator::SingleChatPendingEdit { .. }

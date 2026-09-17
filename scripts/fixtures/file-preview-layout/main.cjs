@@ -129,7 +129,7 @@ app.whenReady().then(async () => {
   await check('the persistent preview toggle opens an empty reading plane and closes without saving a new ratio', async () => {
     const initial = await reviewSnapshot()
     assert.equal(initial.toggleVisible, true)
-    assert.equal(initial.separatorVisible, true)
+    assert.equal(initial.separatorVisible, false)
     assert.equal(initial.toggleExpanded, 'false')
     const opened = await click('.file-preview-toggle')
     assert.equal(opened.visible, true)

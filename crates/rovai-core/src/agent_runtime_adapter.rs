@@ -30,7 +30,8 @@ use crate::{
     mcp::McpServerDefinition,
     platform::HostPlatformKey,
     runtime_platform_admission::{
-        DSH_MACOS_ARM64_EVIDENCE_REVISION, DSH_WINDOWS_X64_EVIDENCE_REVISION,
+        DSH_LINUX_X64_EVIDENCE_REVISION, DSH_MACOS_ARM64_EVIDENCE_REVISION,
+        DSH_MACOS_X64_EVIDENCE_REVISION, DSH_WINDOWS_X64_EVIDENCE_REVISION,
         GROK_BUILD_MACOS_ARM64_EVIDENCE_REVISION, GROK_BUILD_MACOS_X64_EVIDENCE_REVISION,
         GROK_BUILD_WINDOWS_X64_EVIDENCE_REVISION, MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION,
         PI_MACOS_ARM64_EVIDENCE_REVISION, PI_MACOS_X64_EVIDENCE_REVISION,
@@ -767,7 +768,16 @@ impl AgentRuntimeAdapterRegistry {
                     platform,
                     DSH_WINDOWS_X64_EVIDENCE_REVISION,
                 ),
-                HostPlatformKey::MacosX64 | HostPlatformKey::LinuxX64 => unqualified(),
+                HostPlatformKey::LinuxX64 => RuntimePlatformAdmission::qualified(
+                    kind,
+                    platform,
+                    DSH_LINUX_X64_EVIDENCE_REVISION,
+                ),
+                HostPlatformKey::MacosX64 => RuntimePlatformAdmission::qualified(
+                    kind,
+                    platform,
+                    DSH_MACOS_X64_EVIDENCE_REVISION,
+                ),
             };
         }
         if kind == AdapterKind::ZcodeApp {

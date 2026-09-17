@@ -147,6 +147,10 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 不据此新增 Adapter。新适配范围不等于完成资格，不把原生 CLI 成功或跨平台历史证据当作 Linux First-Class。
 原 DMIT 测试账号与安装已按用户要求删除；具体主机访问资料只保存于私有运维文档。
 
+2026-09-17 后续独立验收：DeepSeek Harness 已经作为正式 Adapter，按自己的 14 轴矩阵在 GNU x86_64
+目标主机完成真实验证并绑定独立 evidence digest。它因此取得 Linux x64 qualified，不继承上述 14 项 preview
+范围，也不把 Server OS、macOS 证据或另一 Runtime 的结果当作资格。Cursor 与其余 preview 行不变。
+
 
 <a id="v1-59-d07"></a>
 
@@ -165,8 +169,8 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 逻辑句柄满额先回收后台可重建资源；刷新以独立候选准备、成功显示后替换，避免旧正文配新句柄或先拆旧站点。
 新旧共存也计容量，无安全空间就保留旧版本并报告失败。不采用无限扩容或通用事务框架。
 
-
 <a id="v1-59-d08"></a>
+
 ## V1.59-D08：Agent 附件使用实际路径，默认输出与文件归属分开
 
 - 状态：accepted
@@ -182,8 +186,8 @@ DeepSeek Harness 外的全部 Linux 入口。现有目录的 14 项因此显式�
 Web 本地相对资源补入已有句柄下的临时资源能力，仍运行于不透明源沙箱；这补齐 D04 的多文件缺口，
 不采用另起端口或通用预览代理。模型可见字段完整确认见[revision 2](model-context-change-editable-attachments.md)。
 
-
 <a id="v1-59-d09"></a>
+
 ## V1.59-D09：可信 Web HTML 使用同来源原生浏览器能力
 
 - 状态：accepted
@@ -198,7 +202,6 @@ D04 及 D08 延续的不透明来源使作者初始化代码读取 localStorage 
 不写入 Server 数据根、不修改源 HTML。这替代 D04 的隔离保证；共享 Viewer、认证源读取及统一 Rust Host 保留。
 不选择 Storage 模拟或按附件能力检测，因为它们不能提供完整原生行为并增加状态系统；也不建立独立预览服务器，
 避免增加远程部署入口和生命周期。Desktop 原生预览与 CSS/JS 资源加载均不扩入本轮。
-
 
 <a id="v1-59-d10"></a>
 ## V1.59-D10：DeepSeek Harness 使用官方 ACP 与原生系统层
@@ -249,8 +252,70 @@ Workspace access 不再替换这些值。DSH 的 sandbox/approval 是唯一安�
 v1 继续作为此前 14 轴验收的历史证据，不被改写。
 2026-09-17 在 Windows 10 x64、本地 NTFS 上按同一 checklist 独立闭合 14 轴；
 [Windows x64 DSH v1 归档](../../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json) 绑定该宿主、
-固定 0.1.5-rc.2 包、真实 Golden Flows 与实现来源摘要，因此 windows-x64 同步晋升 qualified。macOS x64 与
-Linux x64 仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
-[Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。机器 Ready 仍是独立检查。
+固定 0.1.5-rc.2 包、真实 Golden Flows 与实现来源摘要，因此 windows-x64 同步晋升 qualified。
+2026-09-17 的 GNU x86_64 验收在 Ubuntu 24.04.5 上使用相同官方包与真实 MiniMax-M3 路径闭合 14 轴，
+并以 [Linux x64 独立归档](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json) 绑定该目标主机。
+产品版本门槛保持 `>=0.1.5-rc.2`；证据精确记录所测 `0.1.5-rc.2`，不把未知未来版本预先写入证据。
+维护者同时确认 macOS x64 已完成当前目标主机矩阵且无阻断，按既有 maintainer-target-host-acceptance 先例由
+[macOS x64 DSH v1 归档](../../../qualification/runtime-platform/macos-x64-deepseek-harness-v1.json) 记录明确验收与发布批准。
+四个平台各自绑定 evidenceRevision 并全部晋升 qualified；逐项证据与上游差异见
+[Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。Machine Ready 仍是独立检查。
 Migration 157 将 v1.59/schema 106 原位升级到 107，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
 Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。
+
+<a id="v1-59-d11"></a>
+
+## V1.59-D11：使命复用 Camp，以首次执行基准保留长期工作区
+
+- 状态：accepted
+- 日期：2026-09-15
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+
+使命需要跨多轮、恢复和队员切换保持连续，但已有 Camp 已经拥有消息、草稿、成员及执行。因此使命作为
+独立业务定义关联唯一 Camp，避免第二套会话生命周期。业务状态由当前成员显式维护，不从 Run 终态推断。
+
+选择首次进入 preparing 才读取当时源工作树的当前本地分支与 HEAD、创建持久 worktree，并固定该 commit 为累计比较基准。保存时创建会产生未执行
+工作区，逐轮创建或移动基准则会丢失累计意义并增加恢复成本。临时 index 纳入未跟踪文件，保持真实暂存区；
+不维护每轮快照或非 Git 内容基线。删除才清理工作区，独立清理记录承担失败后的恢复。
+
+用户确认 Agent 只接收简短身份/状态、必要时的固定定义更新提示与首次成功投递的工作环境；Agent 使命
+读写不暴露版本。采用字段补丁与最后提交覆盖，接受同字段并发编辑的后写覆盖，避免模型理解版本冲突协议。
+Renderer 编辑使用内部乐观版本防止旧弹窗覆盖新定义，但该机制不进入模型或 Agent CLI。工作环境描述不增加 Agent 管控。
+
+<a id="v1-59-d12"></a>
+
+## V1.59-D12：使命用稳定数字命名，更新提醒以 Runtime accepted 为送达
+
+- 状态：accepted
+- 日期：2026-09-16
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+
+内部 UUID 适合关联但不适合用户识别或 Git 路径。Mission 因此另获全局单调、删除后不复用的数字号；界面、
+分支和 worktree 只使用最少三位的数字表示，内部关系仍使用 UUID。已经持久关联的旧工作区不在迁移中重命名，
+避免移动正在使用的工作树或破坏恢复证据。
+
+Mission 只保留最新标题、描述和详情版本；活动、开始记录与开始消息不复制正文，只保留变化／引用事实。
+更新提示表示 Runtime 已收到新定义这一事实，而不是 Agent 是否调用过读取工具。因此 ContextManifest 冻结本次
+详情版本，只有当前 binding 的 Runtime Input `accepted` 才推进 Conversation 水位；`mission get` 保持纯读取。
+这避免“读过但下一轮输入未送达”与“输入已经送达却被要求额外调用 get”两种错误确认。
+
+<a id="v1-59-d13"></a>
+
+## V1.59-D13：使命附件原路径只通过受认证 Agent 读取投影披露
+
+- 状态：accepted
+- 日期：2026-09-17
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)
+
+使命定义附件已经参与内部详情版本和更新提醒，但 v26 的 `mission get` 只返回五个定义字段，导致 Agent 收到
+“Mission details have changed”后仍无法发现新增附件。要求用户重新点击开始或再次发送附件会把数据投影缺口变成
+隐含操作前提，并使当前 Mission 定义和 Agent 可读取定义不一致。
+
+选择在现有无参数、当前 Camp 鉴权的 `mission get` 结果中增加始终存在的有序绝对路径数组。路径直接来自已提交
+source refs，不做文件系统观察；因此目录、缺失文件和权限变化都不会改变定义读取结果。此能力使用独立
+`MissionAgentInfo` 投影，不把 raw path 加入共享 `MissionInfo`、Renderer/Web 投影、活动、日志、错误或证据。
+
+不选择自动把路径加入每轮 Run Facts 或 CURRENT_INPUT，因为附件只需在收到提醒后显式读取，持续注入会扩大模型
+上下文和路径披露面；不选择只返回附件元数据，因为 Agent 仍无法访问用户指定源；也不增加 Mission selector，
+避免当前 Run 枚举其他使命。精确前后 shape、兼容与验证已由开发者确认的
+[revision 1](model-context-change-mission-attachment-read.md)冻结。

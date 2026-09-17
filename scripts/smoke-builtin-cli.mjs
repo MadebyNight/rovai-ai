@@ -11,6 +11,22 @@ import {
 import { prepareIsolatedPiAgentDir } from './lib/pi-smoke-config.mjs'
 
 const root = resolve(import.meta.dirname, '..')
+const builtinTransportSource = await readFile(
+  join(root, 'crates', 'rovai-core', 'src', 'builtin_tool_transport.rs'),
+  'utf8'
+)
+const builtinCliContractVersion = builtinTransportSource.match(
+  /BUILTIN_TOOL_CONTRACT_VERSION: u32 = (\d+);/u
+)?.[1]
+const builtinCliIpcVersion = builtinTransportSource.match(
+  /BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = (\d+);/u
+)?.[1]
+const builtinCliCapability = builtinTransportSource.match(
+  /BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "([^"]+)";/u
+)?.[1]
+if (!builtinCliContractVersion || !builtinCliIpcVersion || !builtinCliCapability) {
+  throw new Error('Current Built-in CLI transport constants were not found')
+}
 const coreExecutable = resolve(
   process.env.ROVAI_BUILTIN_CLI_CORE_EXECUTABLE ?? join(root, 'target', 'debug', 'rovai-core')
 )
@@ -442,8 +458,8 @@ try {
 
   console.log(JSON.stringify({
     ok: true,
-    contractVersion: 25,
-    ipcProtocolVersion: 2,
+    contractVersion: Number(builtinCliContractVersion),
+    ipcProtocolVersion: Number(builtinCliIpcVersion),
     runtimeCount: results.length,
     operationCountPerRuntime: expectedOperations.length,
     expectedOperations,
@@ -487,9 +503,9 @@ function assertBuiltinCliCapability(label, installation, allowDeferred = false) 
     return
   }
   if (snapshot?.probeStatus !== 'ready'
-      || !snapshot.capabilities.includes('builtin_cli.transport.v25')
+      || !snapshot.capabilities.includes(builtinCliCapability)
       || !snapshot.models.length) {
-    throw new Error(`${label} is not ready for Built-in CLI v25: ${JSON.stringify(snapshot)}`)
+    throw new Error(`${label} is not ready for Built-in CLI v${builtinCliContractVersion}: ${JSON.stringify(snapshot)}`)
   }
 }
 
@@ -709,7 +725,7 @@ async function startVerificationRun(coreClient, specification, resumed) {
       taskId: null,
       purpose: resumed
         ? `Verify ${specification.adapterKind} resume/process reuse receives a new active CLI lease.`
-        : `Verify ${specification.adapterKind} executes all 23 CLI-only built-in operations.`,
+        : `Verify ${specification.adapterKind} executes all ${expectedOperations.length} CLI-only built-in operations.`,
       completionRole: 'required'
     }
   })
@@ -1084,7 +1100,7 @@ function verificationScript(input) {
     action: 'add',
     scope: 'companion',
     kind: 'preference',
-    body: `Remember that ${input.adapterKind} completed Built-in CLI transport v25 qualification.`,
+    body: `Remember that ${input.adapterKind} completed Built-in CLI transport v${builtinCliContractVersion} qualification.`,
     retrievalKeys: [`cli-${input.slug.slice(0, 18)}`]
   })
   const hearth = JSON.stringify({
@@ -1151,7 +1167,7 @@ assert_fix_input() {
 }
 
 STEP=version
-"$CLI" --version | grep -q 'contract-v25 ipc-v2'
+"$CLI" --version | grep -q 'contract-v${builtinCliContractVersion} ipc-v${builtinCliIpcVersion}'
 
 STEP=exact_help
 root_help="$("$CLI" --help)"
@@ -1684,8 +1700,11 @@ function shellLeasePrelude(includeRunTmp) {
 }
 
 function shellContextPrivacyAssertion() {
-  return process.platform === 'win32'
-    ? ': Windows private-file DACL is verified by the Core platform acceptance suite.'
+  if (process.platform === 'win32') {
+    return ': Windows private-file DACL is verified by the Core platform acceptance suite.'
+  }
+  return process.platform === 'linux'
+    ? 'test "$(stat -c \'%a\' "$CONTEXT")" = "600"'
     : 'test "$(stat -f \'%Lp\' "$CONTEXT")" = "600"'
 }
 

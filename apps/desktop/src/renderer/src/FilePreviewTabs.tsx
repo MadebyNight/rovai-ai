@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import { useFilePreview } from './FilePreviewContext'
 import { FilePreviewTabIcon } from './FilePreviewTabIcon'
+import { Icon } from './MissionControls'
 import { previewTabLabel, previewTabLabels, previewTabPresentation } from './file-preview-tab-presentation'
 
 function tabDomId(tabId: string): string {
@@ -301,10 +302,10 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
                   onClick={() => activate(tab.id)}
                   onKeyDown={(event) => handleTabKeyDown(event, index)}
                 >
-                  <FilePreviewTabIcon
+                  {tab.kind === 'mission_activity' ? <Icon name="history" /> : <FilePreviewTabIcon
                     kind={icon}
                     fileType={tab.kind === 'file' ? tab.file?.kind : 'file_change'}
-                  />
+                  />}
                   <span className="file-preview-tab-label">{label}</span>
                   {hasExternalUpdate && <i className="file-preview-tab-update" aria-hidden="true" />}
                 </button>
@@ -398,15 +399,15 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
               setMenu(null)
               activate(tab.id)
               closeMany(closeOthers)
-            }}>关闭其他文件</button>
+            }}>关闭其他标签页</button>
             <button role="menuitem" type="button" disabled={closeRight.length === 0} onClick={() => {
               setMenu(null)
               closeMany(closeRight)
-            }}>关闭右侧文件</button>
+            }}>关闭右侧标签页</button>
             <button role="menuitem" type="button" onClick={() => {
               setMenu(null)
               closeMany(tabs.map((entry) => entry.id))
-            }}>关闭全部文件</button>
+            }}>关闭全部标签页</button>
           </div>
         )
       })(), document.body)}

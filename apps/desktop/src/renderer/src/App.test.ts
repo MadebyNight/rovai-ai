@@ -143,6 +143,7 @@ import {
   runPulseMemberNameLines,
   taskCreationBlocksSubmittedRunAutoFocus
 } from './CampWorkspace'
+import { MobileLayoutProvider } from './MobileLayout'
 import {
   initialCampSelection,
   limitDraftNameInput,
@@ -2818,6 +2819,7 @@ describe('task event projections', () => {
     expect(markup).toContain('data-navigation-icon="brain"')
     expect(markup).toContain('data-navigation-icon="settings"')
     expect(markup).toContain('id="pinned-heading">置顶')
+    expect(markup).toContain('class="pinned-camp-icon"')
     expect(markup).toContain('快速对话讨论')
     expect(markup).toContain('rovai-ai')
     expect(markup).toContain(longTitle)
@@ -3369,6 +3371,10 @@ describe('task event projections', () => {
         camp: { ...snapshot.camp, activationState: 'pending' }
       }
     }))
+    const mobileMarkup = renderToStaticMarkup(createElement(
+      MobileLayoutProvider,
+      { value: true, children: createElement(CampWorkspace, workspaceProps) }
+    ))
 
     expect(markup).toContain('给 洛可 发消息')
     expect(markup).toContain('集结队伍，写下这次冒险的目标…')
@@ -3391,6 +3397,15 @@ describe('task event projections', () => {
     expect(markup).toContain('先了解项目')
     expect(markup).toContain('整理成任务')
     expect(markup).toContain('检查工作区')
+    expect(mobileMarkup).toContain('class="empty-camp-welcome mobile-empty-camp-welcome"')
+    expect(mobileMarkup).toContain('开始这段协作')
+    expect(mobileMarkup).toContain('>起步建议</span>')
+    expect(mobileMarkup).toContain('aria-expanded="false"')
+    expect(mobileMarkup).not.toContain('class="empty-camp-mark"')
+    expect(mobileMarkup).not.toContain('class="empty-camp-context"')
+    expect(mobileMarkup).not.toContain('class="starter-prompts"')
+    expect(mobileMarkup).not.toContain('读取项目结构并给出可靠的起步建议。')
+    expect(mobileMarkup).not.toContain('先了解项目')
     expect(markup).toContain('>队员</span><small>1</small>')
     expect(markup).not.toContain('camp-lead-picker')
     expect(markup).toContain('>队长</small>')

@@ -251,6 +251,20 @@ const allowedMethods = new Set<CoreMethod>([
   'navigation.groupCamps',
   'navigation.findCamp',
   'navigation.campViewed',
+  'missions.cleanup.list',
+  'missions.cleanup.retry',
+  'missions.list',
+  'missions.get',
+  'missions.activity',
+  'missions.delivery',
+  'missions.changes',
+  'missions.fileDiff',
+  'missions.diffSession.release',
+  'missions.create',
+  'missions.update',
+  'missions.status',
+  'missions.start',
+  'missions.linkPr',
   'camps.create',
   'camps.discardPending',
   'camps.rename',
@@ -1690,6 +1704,14 @@ function requireAttachmentOwnerLocator(value: unknown): LocalAttachmentOwnerLoca
       attachmentRefId
     }
   }
+  if (owner === 'mission') {
+    return {
+      owner,
+      campId,
+      missionId: requireIpcString(input.missionId, 'Mission ID'),
+      attachmentRefId
+    }
+  }
   if (owner === 'single_chat_composer') {
     return {
       owner,
@@ -1788,6 +1810,93 @@ function temporarySourceAttachmentPath(displayName: string): string {
     : ''
   return join(app.getPath('temp'), `rovai-${randomUUID()}${safeExtension}`)
 }
+
+type MissionAttachmentIpcInput = {
+  id: string
+  sourcePath?: string
+  bytes?: Uint8Array
+  displayName: string
+  mediaType: string | null
+}
+
+async function missionAttachmentPathInputs(value: unknown): Promise<{
+  inputs: Array<{id: string; sourcePath: string; displayName: string; mediaType: string | null}>
+  temporaryPaths: string[]
+}> {
+  if (!Array.isArray(value) || value.length > 10) throw new Error('使命附件最多 10 个。')
+  const inputs: Array<{id: string; sourcePath: string; displayName: string; mediaType: string | null}> = []
+  const temporaryPaths: string[] = []
+  for (const candidate of value as MissionAttachmentIpcInput[]) {
+    if (!candidate || typeof candidate !== 'object' || !isAttachmentId(candidate.id)) {
+      throw new Error('使命附件无效。')
+    }
+    const displayName = requireIpcString(candidate.displayName, '附件名称')
+    const mediaType = typeof candidate.mediaType === 'string' && candidate.mediaType.trim()
+      ? candidate.mediaType
+      : null
+    if (typeof candidate.sourcePath === 'string' && candidate.sourcePath) {
+      inputs.push({ id: candidate.id, sourcePath: candidate.sourcePath, displayName, mediaType })
+      continue
+    }
+    if (!(candidate.bytes instanceof Uint8Array) || candidate.bytes.byteLength > MAX_COMPOSER_ATTACHMENT_BYTES) {
+      throw new Error('附件无效或超过 25 MiB。')
+    }
+    const requestedExtension = extname(displayName).toLocaleLowerCase()
+    const safeExtension = /^\.[a-z0-9]{1,16}$/.test(requestedExtension) ? requestedExtension : ''
+    const temporaryPath = join(app.getPath('temp'), `rovai-mission-${candidate.id}${safeExtension}`)
+    try {
+      await writeFile(temporaryPath, candidate.bytes, { flag: 'wx', mode: 0o600 })
+    } catch (error) {
+      const existing = await readFile(temporaryPath).catch(() => null)
+      if (!existing || !existing.equals(Buffer.from(candidate.bytes))) throw error
+    }
+    temporaryPaths.push(temporaryPath)
+    inputs.push({ id: candidate.id, sourcePath: temporaryPath, displayName, mediaType })
+  }
+  return { inputs, temporaryPaths }
+}
+
+ipcMain.handle(
+  'rovai:mission-create-with-attachments',
+  async (_event, commandId: unknown, command: unknown, attachments: unknown) => {
+    const prepared = await missionAttachmentPathInputs(attachments)
+    let rejected = false
+    try {
+      const result = await core.request('missions.createWithAttachments' as CoreMethod, {
+        commandId: requireIpcString(commandId, 'Command ID'),
+        command,
+        attachments: prepared.inputs
+      }) as { status?: string }
+      rejected = result.status === 'rejected'
+      return result
+    } finally {
+      if (rejected) await Promise.all(prepared.temporaryPaths.map(path => unlink(path).catch(() => undefined)))
+    }
+  }
+)
+
+ipcMain.handle(
+  'rovai:mission-update-with-attachments',
+  async (_event, commandId: unknown, command: unknown, keepAttachmentIds: unknown, attachments: unknown) => {
+    if (!Array.isArray(keepAttachmentIds) || keepAttachmentIds.some(id => !isAttachmentId(id))) {
+      throw new Error('使命附件列表无效。')
+    }
+    const prepared = await missionAttachmentPathInputs(attachments)
+    let rejected = false
+    try {
+      const result = await core.request('missions.updateWithAttachments' as CoreMethod, {
+        commandId: requireIpcString(commandId, 'Command ID'),
+        command,
+        keepAttachmentIds,
+        attachments: prepared.inputs
+      }) as { status?: string }
+      rejected = result.status === 'rejected'
+      return result
+    } finally {
+      if (rejected) await Promise.all(prepared.temporaryPaths.map(path => unlink(path).catch(() => undefined)))
+    }
+  }
+)
 
 ipcMain.handle(
   'rovai:composer-attachment-prepare-path',

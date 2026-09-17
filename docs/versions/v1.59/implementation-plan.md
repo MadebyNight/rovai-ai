@@ -10,8 +10,25 @@ last_updated: 2026-09-17
 # v1.59 实施与验收
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
-当前实现工作目录为仓库同级 `rovai-ai-web-recovery`，分支 `rovai/unified-rust-host`；原工作目录已不在，
-复用任务分支继续开发，当前已同步 main `0bfc35b0`。验收只使用隔离 data-dir、Skill Library 和 MCP config。
+本批增量从 `main` 的 `eb850265` 建立仓库同级工作树 `rovai-ai-mobile-project-start`，分支为
+`rovai/mobile-project-start`。验收只使用隔离 data-dir、Skill Library、MCP config 和浏览器 profile。
+
+## 当前批次：手机会话入口与项目目录
+
+2026-09-16 按确认交互稿修正手机会话列表几何：新动态点与标题共用垂直中心，项目内会话和置顶会话保持各自图标槽，
+选中灰底覆盖与普通会话一致的完整行宽。WebUI / MobileUI 的工作区选择改称“选择项目目录”，默认提供位置导航、
+文件夹列表与当前目录确认，完整路径和系统根位置按需展开，不再用 Host 概念解释用户动作。
+
+普通手机空 Camp 移除品牌图形和四项配置标签，只保留开始标题与默认折叠的“起步建议”；三个建议展开后仍调用共享草稿填充，
+不会直接发送。宽屏空 Camp、首次使用欢迎、Composer、消息区和 Rust Host 合同保持现状。
+
+验证通过 `pnpm typecheck`、定向 App Vitest 175 项、`pnpm build:desktop`（含 Web）、文档测试与两项文档治理门禁。
+`pnpm test:host-web-mobile` 三项完整通过：390px 生产手机入口断言提醒点／标题中心、完整选中行、目录文案与按需路径、
+空 Camp 折叠状态；共享执行夹具与独立 Server 手机设置回归同时通过。浏览器测试使用 `eb850265` 未改动的既有
+debug Host / Server 二进制和当前 Web 构建，隔离 data-dir、Skill Library、MCP config 与 Chrome profile，未启动 Runtime；
+仍不把 Chrome 手机视口当作实体手机验收。
+`pnpm test:host-web-live` 也以 1440px 实际 Desktop／Web 双入口完整通过，覆盖宽屏目录跳转、共享 Camp 与管理写入，
+并确认浏览器无原生桥接；同样不包含真实 Runtime 或第二台实体设备。
 
 ## 当前批次：审批 Dock 与手机适配
 
@@ -1148,9 +1165,10 @@ Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 
 按 [V1.59-D10](decisions.md#v1-59-d10)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
 工作树分支 `rovai/dsh-acp-runtime`：共享 Host/Fleet、exact resume、managed system prompt、原生权限、模型目录、
 Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 157 保留现有 Runtime/Skill 行及 trigger，
-从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 与 Windows x64 分别闭合 14 轴并绑定
-平台专属 digest 后，Root README 增加对应的正式支持范围；macOS x64 与 Linux x64 保持 not_qualified。
-逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
+从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
+Root README 增加对应的正式支持行；逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
+2026-09-17 Linux x64 与 Windows x64 又分别以目标主机自动化归档闭合 14 轴；维护者确认 macOS x64 完成同一矩阵
+并批准发布。四个 shipped platform keys 各自绑定 evidenceRevision，全部开放为 qualified，普通 Machine Ready 门禁不变。
 
 2026-09-16 收敛项已实现：队员页显示并保存 DSH 原生 `sandbox_mode`/`approval_policy`；Core 删除 MCP 名称/只读
 推断和二次询问，只承载 DSH 原生请求；shared Fleet 的 DSH replacement 同时覆盖 idle 先回收、busy Run 后回收、
@@ -1159,6 +1177,21 @@ Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gaug
 0 个 synthetic Approval。最低版本错误和权限说明由 Desktop/Mobile 共用组件呈现；没有 DSH 专属 Command、文件或 Diff UI。
 Windows 目标宿主额外验证 verbatim execution root、PowerShell 命令/取消、嵌套 bundled Skill 展开、真实文件矩阵与
 Camp 相对路径投影；生产 30 分钟 idle eviction、Core crash 和 planned shutdown 均确认进程树回收并 exact resume。
+
+2026-09-17 在专用开发机的 Ubuntu 24.04.5 / GNU x86_64 上完成 Linux x64 独立资格验证。固定验收包为
+`@deepseek-ai/dsh@0.1.5-rc.2`，产品最低门槛仍是 `>=0.1.5-rc.2`。真实 MiniMax-M3 路径覆盖文件和命令矩阵、
+Skills、contract-v25 全部 22 项 Built-in CLI、原生 parity、cold resume、Missing-Send、安全与 usage；MCP 生命周期
+使用确定性模型但保留真实 DSH/Core 配置、工具和 Session 路径。Fleet 使用生产 30 分钟 TTL 复验并发、A/B/A、
+Core crash、idle eviction 后 exact resume 与 planned shutdown。Linux 构建使用
+`cargo build --locked --package rovai-core --bins`；`pnpm core:build:debug` 仍只负责 Desktop sidecar 目标。
+
+所有目标机步骤串行置于 4 GiB cgroup，整机可用内存低于 2 GiB、出现 swap 或 OOM 时立即停止；本次没有触发。
+脱敏结果归档在 [Linux x64 DSH 资格证据](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)。
+该归档只证明 `deepseek-harness × linux-x64`，不改变其他 Linux preview 或 Server OS 基线；Windows x64 与
+macOS x64 后续分别由自己的自动化验收归档和维护者目标主机验收归档独立晋升，不继承 Linux 证据。
+最终 Built-in CLI 报告复验中有一次真实 Gather 的两次交付与完成 Run 均成功，但模型没有输出验收要求的
+captured-return marker，因此严格断言失败；配置不变的重跑通过全部 22 项。通过与失败尝试的日志摘要都保留在
+资格归档中，没有删除失败尝试或放宽断言。
 
 ## Weekly 无时间上限
 
@@ -1186,7 +1219,7 @@ Web 描述符与握手/命令使用实际来源，保留窗口、预览 ID、gen
 `test:host-web` 的 4 项和 `test:html-preview` 的 4 项通过。实际浏览器证据来自 macOS，窄屏模拟不计为实体手机、
 Windows 或 Linux 实机验收；本轮不安装或发布产品。
 
-合入上述主线后，扩展 Node 套件为 317 通过、2 项 Windows 专项跳过、3 失败：当前合同 profile 仍引用已改名的
-`attachment_send_commits_managed_v2_and_dispatches_without_projection_gate`；合同指纹断言仍为 schema 105，
-而 Core 已为 106；Windows release verifier 仍声明 Built-in v24，而 Core 已为 v25。
-这些相关文件与主线相同、本分支未修改，作为主线遗留检查记录，不计为本次预览验证通过。
+合入上述主线后的完整回归暴露三个陈旧门禁：当前合同 profile 引用了已改名的 attachment test，合同指纹仍断言
+schema 105 / context 23 / Built-in 24，Windows release verifier 也仍声明 Built-in 24。本增量按权威代码同步为
+schema 107、context 24 与 Built-in 25。修正后 `pnpm test` 的 204 个 Vitest 文件 / 2110 项测试和 323 项 Node
+门禁全部通过，2 项 Windows 环境专项按既有条件跳过；没有改动产品合同或放宽测试。

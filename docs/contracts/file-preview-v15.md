@@ -28,3 +28,8 @@ Web HTML 的静态预览壳按 [Host Web v2](host-web-v2.md#workspaces-uploads-a
 
 图像显式大图/刷新及返回外部编辑器后读取当前源，失败保留已有图像并提示；文件预览沿用原外部变更通知与候选刷新。
 切 Camp 不清空缓存、不扫描全 Camp。路径显示不触发全文摘要，实际内容读取可保留缓存一致性的当前内容标识。
+
+Run Evidence 的 `open_current` 以 exact Camp、AgentRun 和 execution epoch 为身份边界。Core 优先使用该 Run
+`workspace_json.executionRoot` 中的有效绝对路径；只有历史 Run 缺少有效值时，才回退到 active directory Camp 的绝对
+`project_path`。Evidence 文件路径仍必须是无父目录跳转的相对路径，并继续经过详情/摘要一致性、Main realpath、普通文件及
+既有预览安全校验。该规则允许 Mission worktree 新增文件，并禁止同名文件被错误解析到 Camp 原项目目录。

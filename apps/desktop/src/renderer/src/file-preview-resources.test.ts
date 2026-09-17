@@ -70,6 +70,52 @@ function deferred<T>() {
 }
 
 describe('window-owned preview resources', () => {
+  it('keeps mission activity in the shared tab lifecycle without acquiring a file handle', async () => {
+    const { owner, api } = fixture()
+    owner.activate('mission-camp')
+    const session = owner.session('mission-camp')
+    session.actions.openMissionActivity('mission-a')
+    const activityId = session.getSnapshot().activeTabId!
+    session.actions.openMissionActivity('mission-a')
+    expect(session.getSnapshot().tabs).toHaveLength(1)
+    expect(api.open).not.toHaveBeenCalled()
+    expect(api.readText).not.toHaveBeenCalled()
+    session.actions.saveReading(activityId, { scrollTop: 230 })
+    await open(owner, 'mission-camp', 'delivery.txt')
+    const file = active(session)
+    session.actions.activate(activityId)
+    session.actions.close(activityId)
+    expect(session.getSnapshot()).toMatchObject({ activeTabId: file.id, paneVisible: true })
+    expect(active(session).content).toBe(file.content)
+    session.actions.openMissionActivity('mission-a')
+    const reopenedId = session.getSnapshot().activeTabId!
+    session.actions.hidePane()
+    expect(session.getSnapshot().tabs).toHaveLength(2)
+    session.actions.showPane()
+    session.actions.close(file.id)
+    expect(session.getSnapshot()).toMatchObject({ activeTabId: reopenedId, paneVisible: true })
+    session.actions.close(reopenedId)
+    expect(session.getSnapshot()).toMatchObject({ tabs: [], activeTabId: null, paneVisible: false })
+  })
+
+  it('retains activity selection and reading position per Camp across cooling and restoration', async () => {
+    const { owner, api } = fixture()
+    owner.activate('mission-a')
+    const a = owner.session('mission-a')
+    a.actions.openMissionActivity('mission-1')
+    const id = a.getSnapshot().activeTabId!
+    a.actions.saveReading(id, { scrollTop: 320 })
+    await open(owner, 'ordinary')
+    a.cool()
+    owner.activate('mission-a')
+    expect(a.getSnapshot().tabs[0]).toMatchObject({ id, kind: 'mission_activity', missionId: 'mission-1', reading: { scrollTop: 320 } })
+    owner.dispose()
+    const restored = new FilePreviewResources(api)
+    resources.push(restored)
+    restored.activate('mission-a')
+    expect(restored.session('mission-a').getSnapshot()).toMatchObject({ activeTabId: id, paneVisible: true, tabs: [{ kind: 'mission_activity', reading: { scrollTop: 320 } }] })
+  })
+
   it('switches a hot Camp without opening, reading or replacing its content and reading position', async () => {
     const { owner, api, update } = fixture()
     const a = await open(owner, 'a')

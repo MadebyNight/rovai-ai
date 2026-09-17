@@ -44,7 +44,7 @@ Desktop/Web、路径、主题和模拟离线，不属于产品导航。没有建
 构建源在 [`scripts/fixtures/host-web-parity`](../../scripts/fixtures/host-web-parity/renderer.tsx)，沿用既有 UI fixture/test 体系。
 
 - 已有 Camp：相同固定消息、Composer、执行台、任务/队员入口，可编辑本页草稿、模拟发送。
-- 新建 Camp：生产 Dialog；选择固定授权目录、队员和负责人后模拟创建。Runtime 沿用 Desktop 的队员页配置入口，
+- 新建 Camp：生产 Dialog；选择固定授权目录、队员和队长后模拟创建。Runtime 沿用 Desktop 的队员页配置入口，
   可先关闭新建 Dialog，进入「队员」完成模拟配置，再返回新建；没有另造一套嵌套 Runtime 表单。
 - 运行中/审批：真实生产详情结构与固定 Runtime 原生选项；提交期间禁用重复操作，随后呈现已处理状态。
 - 附件/文件：固定 Markdown 的生产预览；Web 通过资源适配下载固定示例，Desktop 系统动作明确标为模拟。

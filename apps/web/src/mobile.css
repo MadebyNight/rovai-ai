@@ -36,10 +36,17 @@ html[data-mobile-web="true"] .mobile-icon-button svg { flex: none; width: 23px; 
 html[data-mobile-web="true"] .mobile-icon-button:disabled { opacity: .4; }
 html[data-mobile-web="true"] .navigation-scroll { flex: 1; min-height: 0; margin-right: 0; padding: 0 20px 12px; overscroll-behavior: contain; }
 html[data-mobile-web="true"] :is(.camp-nav-row, .camp-nav-open) { min-height: 44px; height: 44px; margin: 0; border: 0; }
-html[data-mobile-web="true"] .camp-nav-open { gap: 8px; padding: 0 12px 0 0; font-size: 14px; }
-html[data-mobile-web="true"] .camp-nav-open .camp-marker-slot { position: absolute; left: -10px; width: 6px; height: 6px; }
-html[data-mobile-web="true"] .mobile-pinned-camp-icon { flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
-html[data-mobile-web="true"] .mobile-pinned-camp-icon > svg { width: 20px; height: 20px; }
+html[data-mobile-web="true"] .camp-nav-row { margin-inline: -12px; }
+html[data-mobile-web="true"] .camp-nav-open { position: relative; gap: 8px; padding: 0 12px 0 40px; font-size: 14px; }
+html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row > .camp-nav-open { padding-left: 12px; }
+html[data-mobile-web="true"] .camp-nav-open .camp-marker-slot {
+  position: absolute; top: 50%; left: 30px; display: flex; width: 6px; height: 6px;
+  align-items: center; justify-content: center; transform: translateY(-50%);
+}
+html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row .camp-marker-slot { left: 2px; }
+html[data-mobile-web="true"] .camp-marker-slot .task-dot { display: block; width: 6px; height: 6px; flex: none; margin: 0; }
+html[data-mobile-web="true"] .pinned-camp-icon { display: inline-flex; flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
+html[data-mobile-web="true"] .pinned-camp-icon > svg { width: 20px; height: 20px; }
 html[data-mobile-web="true"] :is(.camp-marker-unread_completed, .mobile-unread-dot) { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mobile-unread); }
 html[data-mobile-web="true"] :is(.camp-menu-trigger, .section-create-button, .project-create-button, .sidebar-group-create) { opacity: 1; min-width: 44px; min-height: 44px; }
 html[data-mobile-web="true"] .navigation-section-title { min-height: 36px; margin: 0 0 3px; padding: 0; color: var(--ink); }
@@ -52,7 +59,7 @@ html[data-mobile-web="true"] .project-heading-row { min-height: 48px; grid-templ
 html[data-mobile-web="true"] .project-heading-row.current-project { background: transparent; }
 html[data-mobile-web="true"] .project-select-row { min-height: 48px; gap: 8px; padding: 0; color: var(--ink); font-size: 14px; font-weight: 500; }
 html[data-mobile-web="true"] .project-folder-glyph { width: 20px; height: 20px; flex: none; color: var(--muted); }
-html[data-mobile-web="true"] .camp-group-children { padding-left: 28px; }
+html[data-mobile-web="true"] .camp-group-children { padding-left: 0; }
 html[data-mobile-web="true"] :is(.group-create-button, .group-menu-trigger, .show-more-camps, .collapse-camps) { min-width: 44px; min-height: 44px; opacity: 1; }
 html[data-mobile-web="true"] .group-create-button { grid-column: 2; width: 48px; height: 48px; padding: 12px; color: var(--ink); border-radius: 10px; pointer-events: auto; }
 html[data-mobile-web="true"] .group-create-button > svg { width: 24px; height: 24px; }
@@ -98,6 +105,18 @@ html[data-mobile-web="true"] .mobile-camp-menu > [data-highlighted] { background
 html[data-mobile-web="true"] .camp-topbar:has(.mobile-camp-more[data-secondary="true"]):not(.has-file-preview) { height: 52px; min-height: 52px; }
 html[data-mobile-web="true"] .file-preview-toggle-group { display: none; }
 html[data-mobile-web="true"] .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+html[data-mobile-web="true"] .mobile-empty-camp-welcome { width: 100%; min-height: 100%; padding: 24px 20px 52px; }
+html[data-mobile-web="true"] .mobile-empty-camp-welcome h2 { font-size: 20px; font-weight: 600; line-height: 1.35; letter-spacing: -.025em; }
+html[data-mobile-web="true"] .mobile-starter-panel { width: min(300px, calc(100vw - 48px)); margin-top: 18px; border-block: 1px solid var(--line); text-align: left; }
+html[data-mobile-web="true"] .mobile-starter-toggle,
+html[data-mobile-web="true"] .mobile-starter-list > button { display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; border: 0; color: var(--ink); background: transparent; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+html[data-mobile-web="true"] .mobile-starter-toggle > svg,
+html[data-mobile-web="true"] .mobile-starter-list > button > svg { width: 17px; height: 17px; flex: none; color: var(--muted); transition: transform 120ms ease; }
+html[data-mobile-web="true"] .mobile-starter-toggle > svg.is-open { transform: rotate(180deg); }
+html[data-mobile-web="true"] .mobile-starter-list { border-top: 1px solid var(--line); }
+html[data-mobile-web="true"] .mobile-starter-list > button { padding-left: 12px; border-bottom: 1px solid var(--line); color: var(--muted); }
+html[data-mobile-web="true"] .mobile-starter-list > button:last-child { border-bottom: 0; }
+html[data-mobile-web="true"] .mobile-starter-list > button:active { color: var(--ink); background: var(--surface-hover); }
 html[data-mobile-web="true"] .camp-workspace[data-mobile-panel] .conversation-controls,
 html[data-mobile-web="true"] .camp-workspace:has(.single-chat-popover:not([hidden])) .conversation-controls { display: none; }
 html[data-mobile-web="true"] .camp-conversation-stage:has(.single-chat-popover:not([hidden])) > .timeline-scroll { visibility: hidden; }
@@ -333,6 +352,41 @@ html[data-mobile-web="true"] .app-dialog { width: calc(100vw - 24px); min-width:
 html[data-mobile-web="true"] .app-dialog { top: calc(var(--mobile-viewport-top, 0px) + var(--mobile-viewport-height, 100dvh) * .5); }
 html[data-mobile-web="true"] :is(.new-camp-dialog, .command-palette) { width: calc(100vw - 24px); max-height: calc(var(--mobile-viewport-height, 100dvh) - 24px); }
 html[data-mobile-web="true"] :is(.field-grid, .task-fields-grid, .app-dialog-fact-grid) { grid-template-columns: minmax(0, 1fr); }
+
+/* Project selection is a simple phone folder sheet; complete paths stay behind the edit action. */
+:root[data-mobile-web="true"] .dialog-content.app-dialog.web-workspace-picker {
+  top: auto;
+  right: 0;
+  bottom: max(0px, calc(100dvh - var(--mobile-viewport-height, 100dvh) - var(--mobile-viewport-top, 0px)));
+  left: 0;
+  width: 100%;
+  max-width: none;
+  max-height: calc(var(--mobile-viewport-height, 100dvh) - max(12px, env(safe-area-inset-top)));
+  margin: 0;
+  transform: none;
+  border-radius: 16px 16px 0 0;
+  animation: none;
+}
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-header { min-height: 60px; padding: 8px 16px 8px 20px; }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-title-row { align-items: center; }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-title { font-size: 17px; }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-close { width: 44px; height: 44px; min-height: 44px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-body { min-height: 0; flex: 1 1 auto; padding: 0 20px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-location { min-height: 52px; grid-template-columns: 44px 44px minmax(0, 1fr) 44px; gap: 2px; padding-bottom: 4px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-location-action { width: 44px; height: 44px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-breadcrumb { font-size: 13px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-path { padding-block: 12px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-path > div:first-of-type { align-items: stretch; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-path input { min-height: 44px; font-size: 16px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-roots button { min-height: 44px; padding-inline: 12px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-list { min-height: 132px; max-height: none; flex: 1 1 auto; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-choice { min-height: 48px; padding-inline: 4px; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-choice > span:nth-child(2) { font-size: 14px; }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-footer { padding: 10px 20px max(18px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-footer-copy { min-width: 0; flex: 1 0 100%; }
+html[data-mobile-web="true"] .web-workspace-picker .web-workspace-current { width: 100%; }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-footer .dialog-actions { display: grid; width: 100%; grid-template-columns: 1fr 1fr; margin: 0; }
+html[data-mobile-web="true"] .web-workspace-picker .app-dialog-footer .dialog-actions > button { width: 100%; min-height: 44px; }
 
 /* New conversation keeps its shared draft while phone pickers use bottom sheets. */
 html[data-mobile-web="true"] :is(.new-camp-dialog, .new-camp-picker-sheet) {

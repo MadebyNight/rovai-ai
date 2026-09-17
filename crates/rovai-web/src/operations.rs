@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 /// and the legacy shared draft remain outside the network capability.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum Operation {
+    #[serde(rename = "missions.cleanup.list")]
+    MissionCleanupList,
+    #[serde(rename = "missions.cleanup.retry")]
+    MissionCleanupRetry,
+    #[serde(rename = "missions.list")]
+    MissionList,
+    #[serde(rename = "missions.get")]
+    MissionGet,
+    #[serde(rename = "missions.activity")]
+    MissionActivity,
+    #[serde(rename = "missions.delivery")]
+    MissionDelivery,
+    #[serde(rename = "missions.changes")]
+    MissionChanges,
+    #[serde(rename = "missions.fileDiff")]
+    MissionFileDiff,
+    #[serde(rename = "missions.diffSession.release")]
+    MissionDiffSessionRelease,
+    #[serde(rename = "missions.create")]
+    MissionCreate,
+    #[serde(rename = "missions.update")]
+    MissionUpdate,
+    #[serde(rename = "missions.status")]
+    MissionStatus,
+    #[serde(rename = "missions.start")]
+    MissionStart,
+    #[serde(rename = "missions.linkPr")]
+    MissionLinkPr,
+
     #[serde(rename = "preferences.newConversation.get")]
     NewConversationGet,
     #[serde(rename = "preferences.newConversation.setDefaults")]
@@ -289,7 +318,10 @@ pub enum Operation {
 impl Operation {
     pub fn timeout(self) -> std::time::Duration {
         std::time::Duration::from_secs(match self {
-            Self::RuntimeCheck
+            Self::MissionCleanupRetry
+            | Self::MissionChanges
+            | Self::MissionFileDiff
+            | Self::RuntimeCheck
             | Self::RuntimeCatalog
             | Self::RuntimeDiscover
             | Self::RuntimeStartupCheck
@@ -357,6 +389,20 @@ impl Operation {
             Self::NewConversationSetDefaults => "preferences.newConversation.setDefaults",
             Self::NewConversationSetOneClick => "preferences.newConversation.setOneClick",
             Self::NewConversationInvalidate => "preferences.newConversation.invalidate",
+            Self::MissionCleanupList => "missions.cleanup.list",
+            Self::MissionCleanupRetry => "missions.cleanup.retry",
+            Self::MissionList => "missions.list",
+            Self::MissionGet => "missions.get",
+            Self::MissionActivity => "missions.activity",
+            Self::MissionDelivery => "missions.delivery",
+            Self::MissionChanges => "missions.changes",
+            Self::MissionFileDiff => "missions.fileDiff",
+            Self::MissionDiffSessionRelease => "missions.diffSession.release",
+            Self::MissionCreate => "missions.create",
+            Self::MissionUpdate => "missions.update",
+            Self::MissionStatus => "missions.status",
+            Self::MissionStart => "missions.start",
+            Self::MissionLinkPr => "missions.linkPr",
             Self::CampRename => "camps.rename",
             Self::CampDelete => "camps.delete",
             Self::CampDiscardPending => "camps.discardPending",

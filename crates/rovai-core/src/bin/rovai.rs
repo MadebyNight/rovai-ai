@@ -455,7 +455,7 @@ fn invocation_identity(args: &[String]) -> Option<BuiltinToolCliIdentity> {
 }
 
 fn is_family_help(args: &[String]) -> bool {
-    matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "task" | "camp" | "history" | "memory" | "single-chat" | "automation"))
+    matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "task" | "camp" | "history" | "memory" | "single-chat" | "automation" | "mission"))
 }
 
 fn load_context() -> Result<BuiltinToolCliContext> {
@@ -1467,7 +1467,7 @@ fn print_root_help() {
 }
 
 fn root_help_text(managed_runtime: bool) -> String {
-    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai gather\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
+    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai gather\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
     if !managed_runtime {
         text.push_str("\nUser Automation:\n  rovai app --help\n\nAgent operations keep their process-private transport. `rovai app` uses the running Desktop App's separate User Automation transport.\n");
     }
@@ -1623,6 +1623,9 @@ fn operation_help_text(description: &BuiltinToolDescription) -> String {
     });
     if !rendered_discriminated {
         render_flat_input_help(&mut output, description);
+        if description.name == "mission.update" {
+            writeln!(output,"\nProvide at least one content field; omitted fields remain unchanged.\nUse mission status to change status.").expect("writing help to a String cannot fail");
+        }
         let examples = operation_help_examples(&description.name);
         writeln!(output, "\nExamples:").expect("writing help to a String cannot fail");
         for example in examples {
@@ -2059,6 +2062,9 @@ fn write_indented_help(output: &mut String, help: &str) {
 
 fn operation_help_examples(operation: &str) -> &'static [&'static str] {
     match operation {
+        "mission.get" => &["rovai mission get"],
+        "mission.update" => &["rovai mission update --title \"目录导航\""],
+        "mission.status" => &["rovai mission status --status in_progress"],
         "camp.message.send" => &CAMP_MESSAGE_SEND_HELP_EXAMPLES,
         "team.gather" => &[
             "rovai gather --to agent_2 --to agent_3 --body '请分别分析并公开回复'",
@@ -2292,7 +2298,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_help_surface_covers_all_twenty_three_operations_and_no_family_aliases() {
+    fn exact_help_surface_covers_the_current_catalog_and_no_family_aliases() {
         let exact_paths: &[&[&str]] = &[
             &["send", "--help"],
             &["gather", "--help"],

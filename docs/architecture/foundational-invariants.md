@@ -100,6 +100,7 @@ last_updated: 2026-09-11
 
 ### Workspace 与动态 Git 能力
 
+- [Mission](missions.md) 以一个主 Camp 承载长期目标，业务状态由用户或当前成员显式维护；Run 结束不自动完成 Mission。保存只建 Mission/Camp，首个获准执行的 Run 进入 preparing 才准备工作区。
 - 每个 Camp 的持久 Workspace Binding 由 `projectBindingKind: quick_chat | directory` 和绝对、规范化、可遍历且安全的 `projectPath` 组成。`quick_chat` 指向应用受管的 Quick Chat 目录，`directory` 指向用户明确选择的安全目录。Core 拒绝文件系统根、产品私有数据树、直接 Git 元数据目录和 bare repository；Runtime 权限仍独立决定 Agent 实际可做什么。
 - Git 是对当前目录的动态能力，而不是 Camp 身份。Camp 创建只重新执行 Core-owned 目录准入，不运行 Git 子进程；显式 Workspace inspection、Run 启动、Git 专用操作和 Run 终止等边界重新观测 `not_git | git_valid | git_invalid`、HEAD 与 branch。Git observation 不扫描 tracked/untracked 工作树，新 observation 的 nullable `dirty` 固定为 unavailable；Git 失效只关闭 Git 专用行为，不废止安全目录、协作历史或普通文件工作。
 - AgentRun 文件变化只来自 Runtime 在该 `agentRunId + executionEpoch` 内明确报告并已落库的可靠终态 Evidence。
@@ -112,6 +113,7 @@ last_updated: 2026-09-11
 - AgentRun 仍冻结 workspace 路径及起止 Git capability、HEAD 与 branch observation 作为既有终态审计事实；历史 boolean dirty 保留读取，新 observation 不采集 dirty。这些 per-Run audit facts 不参与
   文件变化卡片归约，也不成为 Project/导航身份。导航继续按规范目录路径分组，不引入 Project 表或 Repository
   Scope。
+- Mission 累计 Git Diff 由独立的 [Mission v2](../contracts/mission-v2.md) 拥有：首个 preparing 读取源工作树当时的本地分支与 HEAD，持久 worktree 的固定 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence，也不更新基准。非 Git Mission 使用原目录，不提供 branch 或 Git Diff；删除 Mission 才回收关联 worktree，分支保留，独立清理记录负责重试。
 - **Quick Chat / 快速对话** 是应用受管 workspace 的规范领域与产品分组术语，不是 Camp 或 Project。Rust variant 使用 `QuickChat`，存储与 IPC 值使用 `quick_chat`，JavaScript/TypeScript property 使用 `quickChat`，CSS/test identifier 与受管目录名使用 `quick-chat`。旧称只允许存在于历史快照和迁移证据；当前代码、合同与投影不保留 alias、deprecated field、dual read 或旧 wire value 翻译。
 
 <a id="camp-composer"></a>
@@ -356,6 +358,7 @@ last_updated: 2026-09-11
 - Manifest 的附件 receipt 对成功解析的 legacy v1 引用冻结 Camp ID、稳定相对 View path 与 attachment semantic identity；无成功 legacy 引用时使用 `catalogRevision = -1` 的 no-legacy sentinel，不读取当前 View。Managed v2 identity/path 由 attachment refs冻结，不进入 legacy catalog。新用户 source refs 不扩展该 receipt：Core 在每次 Run 解析触发 Message refs，宿主重检后把 exact stored source path 追加到既有 `CURRENT_INPUT.attachments: string[]`；公共 Context shape 和 Adapter contract 不变。inode/device/file ID、root/Entry identity、publication operation、physical generation 与 physical catalog 不进入模型或新的 dispatch 前置条件。
 - 模型投影可以 compact，但不得丢失、重命名或自由文本化 authoritative fact。稳定产品规则留在 Session Charter，per-Run 事实只出现一次；每个 schema/formatter/profile/manifest/section 版本跟随实际 owner 独立推进，不用一个全局数字伪造同步升级。
 - Shared Conversation 始终属于一个 Camp，动态 continuation 使用有界公共消息而不复制私有历史。新 Run 的 closed、typed `RUN_FACTS` 在顶层仅提供附件相关字段 `attachmentOutputRoot`，表示当前 Camp 默认输出位置，不表示所有附件范围或读取/写入授权；无重复 Camp ID、scope、legacy 根和 mutability。Task reference、Session continuity、accepted-input/outcome uncertainty、Gather generation 和 delegation budget 继续作为可选事实；字段缺失与值 unknown 可区分。
+- Mission 的 `RUN_FACTS.mission` 只包含身份、标题、状态。可信用户开始动作形成 `mission_start` 输入，普通用户消息继续保持原始输入。独立 `WORKSPACE` 段只含 preparing 时解析出的工作目录与 Git branch，是信息快照；首次被同一 Native Binding 接受后，后续未变化则省略，失败或不确定交付不推进记录。版本与历史冻结规则见 [ContextManifest v25](../contracts/context-manifest-evidence-v25.md)。
 - Self-active Task snapshot 只选当前成员在当前 Camp 显式负责的非终态 Task，按 Profile 的稳定 order/limit/budget priority 冻结。真实空集合产生显式 empty snapshot；候选存在但被上限/预算全部排除时整段省略并记 aggregate omitted count，不泄露被排除 ID。Renderer/Skill 不得临时改排序。
 - Gather Completion Delivery 始终获得 mandatory typed Current Input，包含完整原请求、barrier/generation、固定 Item 结果/失败、截断/遗漏证据和完成责任；即使旧公开消息已超出上下文预算也必须 self-contained。
 - Structured Skill selection 以 per-Run frozen revision snapshot、verified exposure 和只读 resolver 形成可选 `CURRENT_INPUT.skills` 文件链接。链接使用结构化 Skill identity/revision/digest 而不从 Markdown 推断；路径必须位于本 Run 可读 projection root 且内容再次验证，解析失败显式报告而非静默降级或换用最新 Revision。

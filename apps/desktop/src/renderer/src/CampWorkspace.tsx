@@ -129,7 +129,7 @@ import { runtimeReadinessLabel } from './runtime-status'
 import { runtimeEditorInstallation } from './MemberRuntimeParameters'
 import { SafeMarkdown } from './SafeMarkdown'
 import { FilePreviewPane } from './FilePreviewPane'
-import { FilePreviewResizeHandle, FilePreviewWorkspace } from './FilePreviewLayout'
+import { FilePreviewResizeHandle, FilePreviewWorkspace, useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { useOptionalFilePreview } from './FilePreviewContext'
 import {
   agentRunFileChangeHasReviewableDiff,
@@ -1432,8 +1432,20 @@ export function QuickChatWorkspace({
 const EMPTY_CAMP_MESSAGES: CampMessageView[] = []
 const EMPTY_LIVE_RUNTIME_EVENTS: LiveRuntimeEvent[] = []
 
+// Subscribe to split geometry in this leaf so resizing does not rerender the timeline.
+function RevealNotificationConversation({ active, onHidePreview }: { active: boolean; onHidePreview?(): void }): null {
+  const layout = useOptionalFilePreviewLayout()
+  useLayoutEffect(() => {
+    if (active && layout?.compact && layout.visible) onHidePreview?.()
+  }, [active, layout?.compact, layout?.visible, onHidePreview])
+  return null
+}
+
 export function CampWorkspace({
   snapshot,
+  missionBoard = null,
+  previewTabsInPane = false,
+  suppressExecutionAutoOpen = false,
   initialComposerDraft = null,
   onInitialComposerDraftConsumed,
   openCoverage = null,
@@ -1488,6 +1500,9 @@ export function CampWorkspace({
   onNotifyError
 }: {
   snapshot: CampSnapshot
+  missionBoard?: React.ReactNode
+  previewTabsInPane?: boolean
+  suppressExecutionAutoOpen?: boolean
   initialComposerDraft?: CampComposerDraftView | null
   onInitialComposerDraftConsumed?(draft: CampComposerDraftView): void
   openCoverage?: CampOpenProjection['coverage'] | null
@@ -1710,7 +1725,7 @@ export function CampWorkspace({
   const [worldMapRoutesVisible, setWorldMapRoutesVisible] = useState(false)
   const [localInspectorTab, setLocalInspectorTab] = useState<CampInspectorTab>('tasks')
   const [workspaceEntryRunningRun] = useState<AgentRunView | null>(() =>
-    workspaceEntrySnapshotReady
+    workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
       ? runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
       : null
   )
@@ -1944,6 +1959,7 @@ export function CampWorkspace({
   useLayoutEffect(() => {
     if (workspaceEntrySnapshotHandled.current || !workspaceEntrySnapshotReady) return
     workspaceEntrySnapshotHandled.current = true
+    if (suppressExecutionAutoOpen) return
     const runningRun = runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
     setExecutionDrawerAgentId(runningRun?.agentId ?? null)
     setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
@@ -1967,12 +1983,14 @@ export function CampWorkspace({
     mobile,
     onOpenInspector,
     snapshot.agentRuns,
-    workspaceEntrySnapshotReady
+    workspaceEntrySnapshotReady,
+    suppressExecutionAutoOpen
   ])
   useLayoutEffect(() => {
     if (workspaceEntryInspectorHandled.current) return
     if (!workspaceEntrySnapshotReady) return
     workspaceEntryInspectorHandled.current = true
+    if (suppressExecutionAutoOpen) return
     if (!mobile && workspaceEntryRunningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
@@ -1982,12 +2000,13 @@ export function CampWorkspace({
     mobile,
     onOpenInspector,
     workspaceEntryRunningRun,
-    workspaceEntrySnapshotReady
+    workspaceEntrySnapshotReady,
+    suppressExecutionAutoOpen
   ])
   useLayoutEffect(() => {
     if (mountedCampId.current === snapshot.camp.id) return
     mountedCampId.current = snapshot.camp.id
-    const runningRun = runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
+    const runningRun = suppressExecutionAutoOpen ? null : runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
     setExecutionDrawerAgentId(runningRun?.agentId ?? null)
     setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
     setExecutionDrawerFocusRequest((request) => ({
@@ -2001,7 +2020,7 @@ export function CampWorkspace({
     if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     }
-  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
+  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id, suppressExecutionAutoOpen])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -2046,10 +2065,14 @@ export function CampWorkspace({
   )
   const visibleCampMessages = useMemo(() => {
     const messages = new Map<string, CampMessageView>()
-    for (const message of anchoredMessages) messages.set(message.id, message)
-    for (const message of snapshot.messages) messages.set(message.id, message)
+    for (const message of anchoredMessages) {
+      if (!message.missionStart) messages.set(message.id, message)
+    }
+    for (const message of snapshot.messages) {
+      if (!message.missionStart) messages.set(message.id, message)
+    }
     for (const message of optimisticMessages) {
-      if (!messages.has(message.id)) messages.set(message.id, message)
+      if (!message.missionStart && !messages.has(message.id)) messages.set(message.id, message)
     }
     return [...messages.values()].sort((left, right) =>
       left.sequence - right.sequence || left.id.localeCompare(right.id)
@@ -2352,7 +2375,9 @@ export function CampWorkspace({
       await draftCoordinator.waitForIdle()
       if (cancelled || epoch !== draftCoordinator.getEpoch()) return
       const localVersion = composerHandleRef.current?.getLocalVersion() ?? 0
-      const refreshed = await draftCoordinator.load()
+      const refreshed = await draftCoordinator.load(() => !cancelled
+        && composerHandleRef.current?.getLocalVersion() === localVersion
+        && !composerHandleRef.current?.isDirty())
       if (cancelled || draftCampId.current !== campId
         || epoch !== draftCoordinator.getEpoch()
         || composerHandleRef.current?.getLocalVersion() !== localVersion
@@ -3925,6 +3950,7 @@ export function CampWorkspace({
     const submittedExecutionRequest = submittedExecutionRequests[0]
     if (!submittedExecutionRequest) return
     const consumeRequest = (): void => { setSubmittedExecutionRequests((current) => current.slice(1)) }
+    if (suppressExecutionAutoOpen) { consumeRequest(); return }
     if (taskCreationBlocksSubmittedRunAutoFocus(
       taskCreationActive,
       inspectorVisible,
@@ -3975,7 +4001,8 @@ export function CampWorkspace({
     mobile,
     pendingQueue,
     snapshot.camp.id,
-    taskCreationActive
+    taskCreationActive,
+    suppressExecutionAutoOpen
   ])
 
   const conversationFindTotal = conversationFind.snapshot?.totalMatchCount ?? 0
@@ -4039,6 +4066,9 @@ export function CampWorkspace({
     <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
+        <RevealNotificationConversation active={!!notificationFocus?.active
+          && (notificationFocus.kind === 'camp_message' || notificationFocus.kind === 'camp_turn')}
+          onHidePreview={filePreview?.hidePane} />
         <section
           className="timeline-pane"
           tabIndex={-1}
@@ -4215,6 +4245,7 @@ export function CampWorkspace({
               )}
             >
               <div className="timeline-track">
+              {missionBoard}
               {!conversationFind.open && messageHistory?.hasEarlier && (
                 <div
                   className={`camp-history-loader is-${earlierMessageStatus}`}
@@ -4722,7 +4753,7 @@ export function CampWorkspace({
                 }
                 return items
               })()}
-              {conversationTimeline.length === 0 && snapshot.agentRuns.length === 0 && (
+              {!missionBoard && conversationTimeline.length === 0 && snapshot.agentRuns.length === 0 && (
                 <EmptyCampWelcome
                   snapshot={snapshot}
                   projectName={projectName}
@@ -4883,7 +4914,7 @@ export function CampWorkspace({
         {filePreview ? (
           <>
             <FilePreviewResizeHandle onClose={filePreview.hidePane} />
-            <FilePreviewPane />
+            <FilePreviewPane tabsInPane={previewTabsInPane} />
           </>
         ) : null}
 
@@ -7333,6 +7364,7 @@ function EmptyCampWelcome({
   starterNotice: string | null
   onChoosePrompt(prompt: string, announceDraft?: boolean): void
 }): JSX.Element {
+  const mobile = useMobileLayout()
   const activeMembers = snapshot.members.filter((member) =>
     member.membershipStatus === 'active' && member.profilePresence === 'present'
   )
@@ -7357,6 +7389,15 @@ function EmptyCampWelcome({
         agentId={firstRunCamp.memberAgentId}
         avatarRef={firstMember?.avatarRef ?? profile?.avatarRef ?? null}
         starterNotice={starterNotice}
+        onChoosePrompt={onChoosePrompt}
+      />
+    )
+  }
+
+  if (mobile) {
+    return (
+      <MobileEmptyCampWelcome
+        pending={snapshot.camp.activationState === 'pending'}
         onChoosePrompt={onChoosePrompt}
       />
     )
@@ -7402,6 +7443,56 @@ function EmptyCampWelcome({
             <span>{starter.body}</span>
           </button>
         ))}
+      </div>
+    </section>
+  )
+}
+
+function MobileEmptyCampWelcome({
+  pending,
+  onChoosePrompt
+}: {
+  pending: boolean
+  onChoosePrompt(prompt: string, announceDraft?: boolean): void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const titleId = useId()
+  const suggestionsId = useId()
+  return (
+    <section className="empty-camp-welcome mobile-empty-camp-welcome" aria-labelledby={titleId}>
+      <h2 id={titleId}>{pending ? '开始一段新对话' : '开始这段协作'}</h2>
+      <div className="mobile-starter-panel">
+        <button
+          type="button"
+          className="mobile-starter-toggle"
+          aria-expanded={open}
+          aria-controls={suggestionsId}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span>起步建议</span>
+          <svg className={open ? 'is-open' : ''} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m6 8 4 4 4-4" />
+          </svg>
+        </button>
+        {open && (
+          <div className="mobile-starter-list" id={suggestionsId} aria-label="起步建议">
+            {EMPTY_CAMP_STARTERS.map((starter) => (
+              <button
+                type="button"
+                key={starter.title}
+                onClick={() => {
+                  onChoosePrompt(starter.prompt)
+                  setOpen(false)
+                }}
+              >
+                <span>{starter.title}</span>
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m8 5 5 5-5 5" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   )
@@ -8527,7 +8618,12 @@ function RunExecutionContent({
   ])), [displayedEvidence])
   const narrationByKey = useMemo(() => new Map((displayedEvidence ?? []).map(item => [`narration:${item.id}`, item])), [displayedEvidence])
   const earlierLoadError = windowPage.direction === 'newer' ? null : windowPage.error
-  const earlierLoading = windowPage.loading && windowPage.direction !== 'newer'
+  // A live Run already presents its connection/thinking feedback. Stacking the
+  // empty initial history-page loader above it makes the card 50px taller until
+  // the first window request settles, then visibly moves that feedback upward.
+  const earlierLoading = windowPage.loading
+    && windowPage.direction !== 'newer'
+    && (!nonTerminal || windowPage.evidence.length > 0)
 
   return (
     <ExecutionContentContext.Provider value={windowedEvidence ? windowPage.contentCache : null}>
