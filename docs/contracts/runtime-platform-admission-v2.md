@@ -4,7 +4,7 @@ name: Runtime Platform Admission
 version: v2
 status: accepted
 source_version: v1.39
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Runtime Platform Admission v2
@@ -98,8 +98,10 @@ No fallback Runtime or synthetic default may be created after failure.
 
 ## DeepSeek Harness 增量准入
 
-`deepseek-harness` 的 macos-arm64 行为 `qualified`，reasonCode=null，evidenceRevision 绑定
-[DSH v2 增量验收归档](../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 的 SHA-256；该归档引用不可变 v1 历史验收并绑定
-2026-09-16 的原生权限、Host lock replacement 与通用 Diff 收敛。macos-x64、windows-x64 与 linux-x64
-保持 not_qualified。普通 Settings/成员选择按 Core 现有投影展示，不能以 initialize 成功、共享 ACP 实现或另一
+`deepseek-harness` 的 macos-arm64 与 windows-x64 行均为 `qualified / reasonCode=null`，分别绑定
+[DSH macOS v2 增量验收归档](../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 与
+[DSH Windows v1 验收归档](../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json) 的 SHA-256。
+前者引用不可变 v1 历史验收并绑定 2026-09-16 的原生权限、Host lock replacement 与通用 Diff 收敛；后者在
+Windows 10 x64、本地 NTFS 上独立闭合 14 轴及生产 30 分钟 idle eviction。macos-x64 与 linux-x64 保持
+not_qualified。普通 Settings/成员选择按 Core 现有投影展示，不能以 initialize 成功、共享 ACP 实现或另一
 Runtime 的证据代替该行资格。取舍见 [V1.59-D10](../versions/v1.59/decisions.md#v1-59-d10)。

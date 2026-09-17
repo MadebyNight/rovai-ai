@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Runtime Catalog Boundaries
@@ -27,7 +27,8 @@ last_updated: 2026-09-16
 | Settings Runtime Preview Catalog | Renderer 内受审查的静态 presentation rows | Runtime 设置页中的名称、图标、`待支持`文案和 disabled 状态 | Contracts、Core request、数据库、成员选择、诊断、Probe、AgentRun 或支持数量 |
 
 Product Runtime Catalog 当前包含十六种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
-Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64 以独立证据取得 qualified，其他平台保持 not_qualified。
+Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64 与 Windows x64
+分别以平台专属证据取得 qualified，macOS x64 与 Linux x64 保持 not_qualified。
 产品目录的机器可判数量、全量检查、诊断分母和
 普通执行仍只来自逐平台 Admission。Cursor 虽保留 closed identity 和历史 reader，但未完成产品资格前不进入
 Settings Runtime Preview Catalog；隐藏该 row 不删除持久 identity，也不改变未准入状态。普通成员 Runtime
@@ -586,4 +587,5 @@ compaction/summary 的逐调用 usage 通过私有 observer 按 Session/turn/seq
 compaction/start 的原生 compactionId/owner turn 取得归属，不收集正文；空闲手动压缩的 null turn 不归入
 后续 Run。input 为 uncached bucket，独立保留 cache read/write、
 output 与 reasoning。缺失字段与 cost 保持 unknown，不从占用或模型文本估算。逐轴差异、真实行为证据及
-平台范围见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；macOS arm64 的 14 轴闭合证据支持 First-Class，其他平台不外推。
+平台范围见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；macOS arm64 与 Windows x64
+各自的 14 轴闭合证据支持 First-Class，不在平台间外推。

@@ -325,6 +325,28 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_execution_root_admits_protocol_visible_path() {
+        let admitted = admit_runtime_file_operation(
+            &json!({
+                "runtimeFileOperation": {
+                    "adapterKind": "deepseek-harness",
+                    "protocolFamily": "acp-v1",
+                    "sourceEventKind": "session/update.tool_call_update.completed",
+                    "operationKind": "write",
+                    "path": "C:/workspace/project/src/app.ts"
+                }
+            }),
+            Path::new(r"\\?\C:\workspace\project"),
+            Some("deepseek-harness"),
+        )
+        .expect("candidate should exist")
+        .expect("protocol-visible path should match the verbatim execution root");
+
+        assert_eq!(admitted.path, "src/app.ts");
+    }
+
     #[test]
     fn admits_structured_reads_from_acp_codex_claude_and_pi_only() {
         for (adapter, protocol, source) in [

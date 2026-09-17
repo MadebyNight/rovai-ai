@@ -46,11 +46,13 @@ const markerPath = join(projectRoot, 'native-session-marker.txt')
 const writePath = join(projectRoot, 'COLD_RESUME_APPROVED_WRITE.txt')
 const cancelPath = join(projectRoot, 'COLD_RESUME_CANCELLED_WRITE.txt')
 const markerReadCommand = process.platform === 'win32'
-  ? 'type native-session-marker.txt'
+  ? "Get-Content -LiteralPath 'native-session-marker.txt'"
   : 'cat native-session-marker.txt'
+const terminalToolName = process.platform === 'win32' ? 'pwsh' : 'Bash or terminal'
 const cancelToolCommand = process.platform === 'win32'
-  ? `Start-Sleep -Seconds 30; Set-Content -LiteralPath '${cancelPath.replaceAll("'", "''")}' -Value 'SHOULD_NOT_EXIST'`
+  ? "Start-Sleep -Seconds 30; Set-Content -LiteralPath 'COLD_RESUME_CANCELLED_WRITE.txt' -Value 'SHOULD_NOT_EXIST'"
   : `sleep 30; printf 'SHOULD_NOT_EXIST\\n' > '${cancelPath}'`
+const cancelToolNeedle = process.platform === 'win32' ? 'Start-Sleep -Seconds 30' : 'sleep 30'
 const sessionMarker = `${adapterKind.replaceAll('-', '_').toUpperCase()}_SESSION_${crypto.randomUUID().replaceAll('-', '').toUpperCase()}`
 let client
 
@@ -110,7 +112,7 @@ try {
     workspace,
     body: adapterKind === 'grok-build'
       ? `Memorize this opaque qualification token for the next turn: ${sessionMarker}. Do not call tools and do not repeat the token. Reply exactly MARKER_STORED.`
-      : `You do not know the session marker. You must actually use the Bash or terminal tool exactly once to run this command without changing files: ${markerReadCommand}. Do not simulate or skip the tool call, and do not call any other tool. After the tool returns, remember its exact single-line output. Then reply with MARKER_STORED.`,
+      : `This is an authorized local cold-resume acceptance on a disposable fixture. You do not know the session marker. You must actually use the ${terminalToolName} tool exactly once to run this command without changing files: ${markerReadCommand}. Do not simulate or skip the tool call, and do not call any other tool. After the tool returns, remember its exact single-line output without repeating it. Then reply exactly MARKER_STORED.`,
     address: { mode: 'explicit', agentIds: [profile.agentId] },
     purpose: `Store a session marker in the ${runtime.label} Native Session before Core restart`
   })
@@ -237,7 +239,7 @@ try {
     campId,
     adapterKind === 'grok-build'
       ? 'Do not call tools or modify files. Write a detailed 4000-word explanation of Native Session continuation in one response.'
-      : `Use the Bash or terminal tool exactly once to run: ${cancelToolCommand}. Do not call any other tool. After it completes, reply exactly CANCEL_TOOL_FINISHED.`,
+      : `This is an authorized cancellation acceptance test in a disposable isolated repository. Run the command even though the test harness is expected to cancel it. Use the ${terminalToolName} tool exactly once to run: ${cancelToolCommand}. Do not call any other tool. After it completes, reply exactly CANCEL_TOOL_FINISHED.`,
     `Verify cancel after ${runtime.label} ${runtime.continuationName}`
   )
   const cancelCommand = cancelRequest.commandResult ?? cancelRequest
@@ -499,7 +501,7 @@ async function cancelRunningTool(client, campId, agentRunId) {
     }
     const runningTool = client.events.some(event => event.method === 'runtime.action'
       && event.params?.agentRunId === agentRunId && event.params?.payload?.status === 'in_progress'
-      && String(event.params?.payload?.input ?? '').includes('sleep 30'))
+      && String(event.params?.payload?.input ?? '').includes(cancelToolNeedle))
     if (!cancellationRequested && (resolvedApprovals.size > 0 || runningTool) && run) {
       const turn = snapshot.turns.find((candidate) => candidate.id === run.campTurnId)
       if (!turn) throw new Error(`Cancel smoke has no CampTurn: ${JSON.stringify(run)}`)

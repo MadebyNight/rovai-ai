@@ -30,10 +30,11 @@ use crate::{
     mcp::McpServerDefinition,
     platform::HostPlatformKey,
     runtime_platform_admission::{
-        DSH_MACOS_ARM64_EVIDENCE_REVISION, GROK_BUILD_MACOS_ARM64_EVIDENCE_REVISION,
-        GROK_BUILD_MACOS_X64_EVIDENCE_REVISION, GROK_BUILD_WINDOWS_X64_EVIDENCE_REVISION,
-        MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION, PI_MACOS_ARM64_EVIDENCE_REVISION,
-        PI_MACOS_X64_EVIDENCE_REVISION, PI_WINDOWS_X64_EVIDENCE_REVISION, RuntimePlatformAdmission,
+        DSH_MACOS_ARM64_EVIDENCE_REVISION, DSH_WINDOWS_X64_EVIDENCE_REVISION,
+        GROK_BUILD_MACOS_ARM64_EVIDENCE_REVISION, GROK_BUILD_MACOS_X64_EVIDENCE_REVISION,
+        GROK_BUILD_WINDOWS_X64_EVIDENCE_REVISION, MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION,
+        PI_MACOS_ARM64_EVIDENCE_REVISION, PI_MACOS_X64_EVIDENCE_REVISION,
+        PI_WINDOWS_X64_EVIDENCE_REVISION, RuntimePlatformAdmission,
         RuntimePlatformAdmissionReasonCode, WINDOWS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION,
         ZCODE_MACOS_ARM64_EVIDENCE_REVISION, ZCODE_WINDOWS_X64_EVIDENCE_REVISION,
     },
@@ -755,14 +756,18 @@ impl AgentRuntimeAdapterRegistry {
             )
         };
         if kind == AdapterKind::DeepseekHarness {
-            return if platform == HostPlatformKey::MacosArm64 {
-                RuntimePlatformAdmission::qualified(
+            return match platform {
+                HostPlatformKey::MacosArm64 => RuntimePlatformAdmission::qualified(
                     kind,
                     platform,
                     DSH_MACOS_ARM64_EVIDENCE_REVISION,
-                )
-            } else {
-                unqualified()
+                ),
+                HostPlatformKey::WindowsX64 => RuntimePlatformAdmission::qualified(
+                    kind,
+                    platform,
+                    DSH_WINDOWS_X64_EVIDENCE_REVISION,
+                ),
+                HostPlatformKey::MacosX64 | HostPlatformKey::LinuxX64 => unqualified(),
             };
         }
         if kind == AdapterKind::ZcodeApp {

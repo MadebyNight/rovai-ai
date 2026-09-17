@@ -363,7 +363,7 @@ try {
         camp.id,
         plainTwoTurn
           ? `Do not call tools or inspect files. Reply with exactly ${secondTurnToken} and nothing else.`
-          : `Use the Bash or terminal tool exactly once to run this cross-platform command without changing files: echo ${commandMarker}. Do not call any other tool. Then immediately reply exactly ACP_COMMAND_OUTPUT_OK.`,
+          : `Use the ${process.platform === 'win32' ? 'pwsh' : 'Bash or terminal'} tool exactly once to run this cross-platform command without changing files: echo ${commandMarker}. Do not call any other tool. Then immediately reply exactly ACP_COMMAND_OUTPUT_OK.`,
         {
           taskId: null,
           purpose: 'Verify fixed command output enters Runtime Evidence',
@@ -859,8 +859,8 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
   const createdPath = join(directory, 'created.txt')
   const originalText = `RUNTIME_FILE_${stem}_ORIGINAL\n`
   const editedText = `RUNTIME_FILE_${stem}_EDITED\n`
-  const createdText = `RUNTIME_FILE_${stem}_CREATED\n`
-  const emptyEditedText = `RUNTIME_FILE_${stem}_EMPTY_EDITED\n`
+  const createdText = `RUNTIME_FILE_${stem}_CREATED`
+  const emptyEditedText = `RUNTIME_FILE_${stem}_EMPTY_EDITED`
   await mkdir(directory, { recursive: true })
   await writeFile(existingPath, originalText)
   await writeFile(emptyPath, '')
@@ -894,7 +894,6 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
         'This is an isolated local file-operation acceptance test.',
         `Use the native file Write tool exactly once to create the new file ${createdPath}.`,
         `Set its content argument to the exact JSON-decoded string ${JSON.stringify(createdText)}.`,
-        'The final character of the content argument MUST be one line feed (U+000A, byte 0A). Do not trim or omit it, and do not write the two literal characters backslash+n.',
         'Do not read, list, search, use shell, or call another tool. Then reply exactly FILE_ADD_DONE.'
       ].join('\n'),
       expectedText: createdText,
@@ -919,7 +918,6 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
         'This is an isolated local file-operation acceptance test.',
         `The file ${emptyPath} already exists and is empty. Use native file tools to set its complete content.`,
         `When calling Write, set its content argument to the exact JSON-decoded string ${JSON.stringify(emptyEditedText)}.`,
-        'The final character of the content argument MUST be one line feed (U+000A, byte 0A). Do not trim or omit it, and do not write the two literal characters backslash+n.',
         'If your native Write or Edit tool requires reading the file first, use the native file Read tool once before writing.',
         'Do not list, search, use shell, or call unrelated tools. Then reply exactly FILE_EMPTY_EDIT_DONE.'
       ].join('\n'),
@@ -957,7 +955,7 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       if (error?.code === 'ENOENT') return null
       throw error
     })
-    const pathSuffix = testCase.path.slice(projectRoot.length + 1)
+    const pathSuffix = testCase.path.slice(projectRoot.length + 1).replaceAll('\\', '/')
     const summarizeEvidence = (entry) => {
       const operation = entry.payload?.runtimeFileOperation
       const entries = entry.canonical?.diffProjection?.status === 'available'
@@ -1288,7 +1286,7 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
       request,
       campId,
       [
-        'Use the Bash or terminal tool exactly once to run the following command verbatim.',
+        `Use the ${process.platform === 'win32' ? 'pwsh' : 'Bash or terminal'} tool exactly once to run the following command verbatim.`,
         'Do not call any other tool and do not alter the command.',
         specification.command,
         'After the tool reaches a terminal state, briefly report that it finished.'

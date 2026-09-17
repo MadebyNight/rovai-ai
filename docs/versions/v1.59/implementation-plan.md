@@ -4,7 +4,7 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # v1.59 实施与验收
@@ -1148,14 +1148,17 @@ Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 
 按 [V1.59-D10](decisions.md#v1-59-d10)与 [Runtime checklist](../../development/runtime-integration-checklist.md)实施。
 工作树分支 `rovai/dsh-acp-runtime`：共享 Host/Fleet、exact resume、managed system prompt、原生权限、模型目录、
 Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 157 保留现有 Runtime/Skill 行及 trigger，
-从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
-Root README 增加对应的正式支持行；其余平台保持 not_qualified。逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
+从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 与 Windows x64 分别闭合 14 轴并绑定
+平台专属 digest 后，Root README 增加对应的正式支持范围；macOS x64 与 Linux x64 保持 not_qualified。
+逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
 
 2026-09-16 收敛项已实现：队员页显示并保存 DSH 原生 `sandbox_mode`/`approval_policy`；Core 删除 MCP 名称/只读
 推断和二次询问，只承载 DSH 原生请求；shared Fleet 的 DSH replacement 同时覆盖 idle 先回收、busy Run 后回收、
 回收失败阻断；observer 把官方 write/edit Before/After 归一为标准 ACP Diff，新增缺 Before 与大文件走通用路径级回退。
 真实 MiniMax-M3 文件矩阵已得到 edit `+1/-1` 与空文件 edit `+1/-0`；脚本化 MCP 更新/exact resume/隔离矩阵得到
 0 个 synthetic Approval。最低版本错误和权限说明由 Desktop/Mobile 共用组件呈现；没有 DSH 专属 Command、文件或 Diff UI。
+Windows 目标宿主额外验证 verbatim execution root、PowerShell 命令/取消、嵌套 bundled Skill 展开、真实文件矩阵与
+Camp 相对路径投影；生产 30 分钟 idle eviction、Core crash 和 planned shutdown 均确认进程树回收并 exact resume。
 
 ## Weekly 无时间上限
 

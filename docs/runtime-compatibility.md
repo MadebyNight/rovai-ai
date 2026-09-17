@@ -1,7 +1,7 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Agent Runtime 兼容性清单
@@ -29,7 +29,7 @@ Kimi 或 Grok 的平台结论。
 Grok Build 在 adapter-scoped 证据分别覆盖的 macOS arm64、macOS x64 与 Windows x64 均为 `qualified`；
 三个宿主平台各自绑定独立 evidence digest，不互相外推。
 Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery/check/AgentRun；Settings 的 Agent Runtime
-目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 为 qualified，macOS x64、Windows x64 与 Linux x64
+目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 与 Windows x64 为 qualified，macOS x64 与 Linux x64
 为 not_qualified。Machine Ready、实现与 First-Class 资格分别记录。
 
 ### 2026-09-15 DeepSeek Harness 0.1.5-rc.2 ACP
@@ -53,6 +53,19 @@ edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；真实开发 Camp �
 缺少 before（不同于显式 null）、类型错误、超限或不可信状态仍保留路径级文件活动。该后续修复记录在
 [新增文件增量证据](research/deepseek-harness-runtime/acp-0.1.5-create-diff-evidence.json)；已绑定 digest 的 v2 资格归档
 保持为修复前的不可变证据，本次不扩大平台范围。
+
+2026-09-17 在 Windows 10 Pro 10.0.19045 x64、本地固定 NTFS 上使用同一官方 `0.1.5-rc.2` 包独立闭合
+14 个核心能力轴，并绑定 [Windows x64 资格证据](../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json)。
+真实 DSH/Core 验证覆盖 A→B→A 与并发 Host、warm/cold/压缩后 exact resume、生产 30 分钟 idle eviction、
+crash/planned shutdown、Skills、MCP、六组 sandbox/approval、完整命令输出、当前 Built-in CLI contract-v25、
+Usage 对账、Missing-Send 和文件 read/add/edit/empty 矩阵。真实 Camp 的新增与修改文件均使用相对路径，汇总为
+2 个文件、`+4/-1`。Windows verbatim 根与协议普通盘符路径此前不能用字节级 `strip_prefix` 匹配，导致绝对路径
+展示；现改为平台语义比较并覆盖盘符大小写、`\\?\` 与 UNC。该证据只声明上述 Windows 10 x64/本地 NTFS
+宿主范围，不推断 Windows 11、网络文件系统、macOS x64 或 Linux x64。
+
+首次生产 TTL 观察只按 PID 判断后代是否仍存在，无法排除 Windows 回收后复用同一 PID，因而不作为泄漏或资格
+证据。正式复跑改为同时固定 PID 与 WMI `CreationDate`，在未缩短的 30 分钟 TTL 下于 1,852,042ms 完成淘汰，
+确认三个原后代进程身份均消失、exact Session 恢复成功；planned shutdown 另行回收三个后代进程。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 

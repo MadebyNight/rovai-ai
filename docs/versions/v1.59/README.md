@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -59,9 +59,9 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机对话/执行双入口、更多菜单与紧凑间距已按最终稿接入；执行彩环最多显示 2 个头像及 +N，Run 文案由同一共享状态驱动；Server 更新 API 与共享更新页已接入，Desktop 托管只读版本说明；真实 Release 和各平台升级验收分别记录 |
 | Runtime Activity | 已更新 | DeepSeek Harness 复用共享 ACP Activity，按官方结构化结果补 shell 退出、文件路径与完整文件状态；write 的显式 `before:null` 归一为标准新增 Diff，通用 Diff/Files Changed/Diff Card 继续拥有展示，其他 Adapter 分类不变 |
-| Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升；DSH 的 macOS arm64 以 v1 历史验收和 v2 收敛增量的独立摘要维持 qualified |
+| Runtime compatibility | 已更新 | Linux x64 的 14 项适配行显式 preview，Cursor 保持 not_qualified；原平台证据不变，各行独立验证后才晋升；DSH 的 macOS arm64 与 Windows x64 分别绑定独立证据并保持 qualified |
 | Documentation routing | 已更新 | 文档、架构与决定导航增加统一 Host 入口 |
-| Root README | 已更新 | DeepSeek Harness 的 macOS arm64 验收闭合后增加正式支持行；未新增其他平台声明 |
+| Root README | 已更新 | DeepSeek Harness 的 macOS arm64 与 Windows x64 逐平台验收闭合后列入正式支持行 |
 
 本轮产品模型已确认：单 Owner、可信自托管 Host。远程 Owner 与 Desktop 具有同一业务能力目标，
 可以直接选择 Host 有权访问的目录；不再要求本机目录预授权、一次性令牌展示或唯一手填访问地址。
@@ -78,7 +78,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 ## DeepSeek Harness Runtime 增量
 
 2026-09-15 用户授权在独立 worktree 按 Runtime checklist 接入 dsh 0.1.5-rc.2。新增 `deepseek-harness` 与
-`dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 的 14 轴验收闭合并取得独立 digest-bound qualified，其他平台未取得资格。
+`dsh` Skill group，复用共享 ACP/Fleet、原生配置和现有 UI 参数组件。macOS arm64 的 14 轴验收闭合并取得独立 digest-bound qualified。
 Migration 157 扩充闭集，当前 v1.59/schema 107；保留 schema 106 原位升级及此前受支持来源。
 Bootstrap 使用已有 managed delivery，模型可见内容、Context/Manifest 与版本轴不变。
 2026-09-16 进一步收敛到 Runtime 通用架构：DSH 原生 `sandbox_mode`/`approval_policy` 从队员页到 Host 原样传递，
@@ -88,6 +88,8 @@ Core 不为 MCP 合成第二层安全策略；配置变化时 shared Fleet 先�
 ACP 启动额外等待已配置的原生 MCP Loader entry 完成，避免 0.1.5-rc.2 提前开放 stdio 时首轮工具表缺项；
 该门闩使用原生 lifecycle，不采用固定延时或 prompt 重试。
 Desktop 与 Mobile 共用原生权限文案和“需要 0.1.5-rc.2 或更高版本”的不兼容提示。
+2026-09-17 在 Windows 10 x64、本地 NTFS 上独立复跑全部 14 轴、生产 30 分钟 idle eviction 与真实 Camp，
+Windows x64 以平台专属 digest 晋升 qualified；macOS x64 与 Linux x64 仍未取得资格。
 决策见 [V1.59-D10](decisions.md#v1-59-d10)，逐项执行证据与上游差异见 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。
 
 ## Weekly 无时间上限增量
