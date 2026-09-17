@@ -26,6 +26,39 @@ app.whenReady().then(async () => {
   try {
     await window.loadFile(renderer); await settle()
     await run(`window.pointerEvents=[];for(const type of ['pointerdown','pointermove','pointerup','gotpointercapture','lostpointercapture','pointercancel'])document.addEventListener(type,e=>window.pointerEvents.push({type,x:e.clientX,buttons:e.buttons,primary:e.isPrimary,target:e.target.className}),true)`)
+    const desktopPinned = await run(`(()=>{
+      const pinned=document.querySelector('.pinned-navigation > .camp-nav-row')
+      const ordinary=document.querySelector('.camp-group-children .camp-nav-row')
+      const open=pinned?.querySelector('.camp-nav-open')
+      const icon=pinned?.querySelector('.pinned-camp-icon')
+      const marker=pinned?.querySelector('.camp-marker-slot')
+      const title=pinned?.querySelector('.truncate')?.getBoundingClientRect()
+      const ordinaryTitle=ordinary?.querySelector('.truncate')?.getBoundingClientRect()
+      if(!pinned||!ordinary||!open||!icon||!marker||!title||!ordinaryTitle)return null
+      const iconRect=icon.getBoundingClientRect(),markerRect=marker.getBoundingClientRect()
+      return {
+        iconDisplay:getComputedStyle(icon).display,
+        iconWidth:iconRect.width,
+        iconHidden:icon.getAttribute('aria-hidden'),
+        markerWidth:markerRect.width,
+        markerPosition:getComputedStyle(marker).position,
+        markerOverlapsIcon:markerRect.left<iconRect.right&&markerRect.right>iconRect.left,
+        openPosition:getComputedStyle(open).position,
+        rowLabel:open.getAttribute('aria-label'),
+        titleDelta:Math.abs(title.left-ordinaryTitle.left)
+      }
+    })()`)
+    assert.ok(desktopPinned, 'Desktop pinned and ordinary conversation rows are visible')
+    assert.ok(['flex','inline-flex'].includes(desktopPinned.iconDisplay),'Desktop pinned conversation shows its bubble icon')
+    assert.equal(desktopPinned.iconWidth,12,'Desktop bubble icon stays visually subordinate')
+    assert.equal(desktopPinned.iconHidden,'true','Visible row text keeps the decorative bubble out of the accessibility tree')
+    assert.equal(desktopPinned.markerWidth,5,'Desktop unread marker stays compact')
+    assert.equal(desktopPinned.markerPosition,'absolute','Desktop unread marker does not consume horizontal space')
+    assert.equal(desktopPinned.markerOverlapsIcon,true,'Desktop unread marker sits on the bubble edge')
+    assert.equal(desktopPinned.openPosition,'relative','Desktop marker is anchored to its own conversation row')
+    assert.equal(desktopPinned.rowLabel,'置顶对话，有新回复')
+    assert.ok(desktopPinned.titleDelta<1,'Desktop pinned and project conversation titles share one text baseline')
+    await capture('desktop-pinned-conversation-day')
     assert.equal(await width(),270)
     assert.equal(await run('document.querySelector(".windows-application-menu-item").getBoundingClientRect().left > document.querySelector(".navigation-collapse-button").getBoundingClientRect().right'),true)
     const initialRenders=await run('window.navigationTest.renders()')
@@ -73,6 +106,7 @@ app.whenReady().then(async () => {
     assert.equal(await run('document.querySelector(".navigation-collapse-button")'),null, 'Expanded Mac settings expose no layout or history buttons')
     await run('window.navigationTest.setSettings(false)');await settle()
     assert.equal(await width(),420, 'Mac settings preserve the ordinary rail width')
+    await capture('desktop-pinned-conversation-night')
     await run('window.navigationTest.navigation.reset({kind:"quick_chat"});window.navigationTest.navigation.push({kind:"camp",campId:"A"})');await settle()
     await run('window.navigationTest.navigation.push({kind:"camp",campId:"B"})');await settle()
     assert.equal(await run('document.querySelector("[aria-label=后退]").disabled'),false)
@@ -125,7 +159,7 @@ app.whenReady().then(async () => {
     await run('window.navigationTest.setDisabled(true)');await settle()
     assert.equal(await run('document.querySelector(".navigation-collapse-button").disabled'),true)
     assert.equal(await run('document.querySelector(".navigation-resize-handle").tabIndex'),-1)
-    console.log(JSON.stringify({ok:true,checks:'pointer threshold/reversal/cancellation, full collapse/inert, keyboard/menu, storage, unchanged content renders, draft retention, Windows/menu, macOS/Web fixed settings and collapsed recovery, memory-only shared history, keyboard/side button navigation, input consumption and history reset'}))
+    console.log(JSON.stringify({ok:true,checks:'Desktop pinned conversation icon/alignment/unread marker, pointer threshold/reversal/cancellation, full collapse/inert, keyboard/menu, storage, unchanged content renders, draft retention, Windows/menu, macOS/Web fixed settings and collapsed recovery, memory-only shared history, keyboard/side button navigation, input consumption and history reset'}))
     window.destroy();app.quit()
   } catch(error) {console.error(error);console.error(await run('JSON.stringify({events:window.pointerEvents?.slice(-30),shell:document.querySelector(".navigation-shell").outerHTML.slice(0,300)})'));await capture('failure');app.exit(1)}
 }).catch(error=>{console.error(error);app.exit(1)})
