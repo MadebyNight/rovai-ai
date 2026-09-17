@@ -17,16 +17,30 @@ test('Windows release verification matches the current Core transport versions',
   const contract = transport.match(/BUILTIN_TOOL_CONTRACT_VERSION: u32 = (\d+);/)?.[1]
   const ipc = transport.match(/BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = (\d+);/)?.[1]
   assert.ok(contract && ipc, 'Core transport version constants must be present')
-  assert.deepEqual(verifier.match(/contract-v(\d+) ipc-v(\d+)/)?.slice(1), [contract, ipc],
-    'packaged CLI verification must use current transport versions')
-  assert.equal(verifier.match(/health\.core\.builtinToolContractVersion !== (\d+)/)?.[1], contract,
-    'packaged Core health verification must use the current contract version')
-  assert.equal(verifier.match(/health\.core\.builtinToolIpcProtocolVersion !== (\d+)/)?.[1], ipc,
-    'packaged Core health verification must use the current IPC version')
-  assert.equal(verifier.match(/builtinToolContractVersion: (\d+)/)?.[1], contract,
-    'release manifest must record the current contract version')
-  assert.equal(verifier.match(/builtinToolIpcProtocolVersion: (\d+)/)?.[1], ipc,
-    'release manifest must record the current IPC version')
+  assert.match(verifier, /const builtinToolContractVersion = Number\(/,
+    'Windows verification must derive the current contract version from the Rust source')
+  assert.match(verifier, /const builtinToolIpcProtocolVersion = Number\(/,
+    'Windows verification must derive the current IPC version from the Rust source')
+  assert.match(
+    verifier,
+    /contract-v\$\{builtinToolContractVersion\} ipc-v\$\{builtinToolIpcProtocolVersion\}/,
+    'packaged CLI verification must use the derived transport versions'
+  )
+  assert.match(
+    verifier,
+    /health\.core\.builtinToolContractVersion !== builtinToolContractVersion/,
+    'packaged Core health verification must use the derived contract version'
+  )
+  assert.match(
+    verifier,
+    /health\.core\.builtinToolIpcProtocolVersion !== builtinToolIpcProtocolVersion/,
+    'packaged Core health verification must use the derived IPC version'
+  )
+  assert.match(
+    verifier,
+    /packagedCoreSmoke: \{[\s\S]*builtinToolContractVersion,[\s\S]*builtinToolIpcProtocolVersion/u,
+    'release manifest must record the derived transport versions'
+  )
 })
 
 test('maps only the three shipped sidecar targets', () => {

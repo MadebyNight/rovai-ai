@@ -29,6 +29,20 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
 const root = resolve(import.meta.dirname, '..')
 const dist = join(root, 'dist')
 const packageMetadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const builtinTransportSource = await readFile(
+  join(root, 'crates', 'rovai-core', 'src', 'builtin_tool_transport.rs'),
+  'utf8'
+)
+const builtinToolContractVersion = Number(builtinTransportSource.match(
+  /BUILTIN_TOOL_CONTRACT_VERSION: u32 = (\d+);/u
+)?.[1])
+const builtinToolIpcProtocolVersion = Number(builtinTransportSource.match(
+  /BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = (\d+);/u
+)?.[1])
+if (!Number.isSafeInteger(builtinToolContractVersion)
+    || !Number.isSafeInteger(builtinToolIpcProtocolVersion)) {
+  throw new Error('Current Built-in Tool transport constants were not found')
+}
 const requireSigned = process.argv.includes('--require-signed')
 const unpackedOnly = process.argv.includes('--unpacked-only')
 const appDirectory = join(dist, 'win-unpacked')
@@ -383,7 +397,9 @@ try {
     cli: await verifyBinary('rovai', cliExecutable)
   }
   const cliVersion = run(cliExecutable, ['--version'])
-  if (!cliVersion.includes(`rovai ${packageMetadata.version} contract-v25 ipc-v2`)) {
+  if (!cliVersion.includes(
+    `rovai ${packageMetadata.version} contract-v${builtinToolContractVersion} ipc-v${builtinToolIpcProtocolVersion}`
+  )) {
     throw new Error(`unexpected packaged CLI version: ${cliVersion}`)
   }
   report.push(`CLI: ${cliVersion}`)
@@ -396,8 +412,8 @@ try {
   const health = await core.request('health.check')
   if (health?.core?.ok !== true
       || health.core.version !== packageMetadata.version
-      || health.core.builtinToolContractVersion !== 25
-      || health.core.builtinToolIpcProtocolVersion !== 2) {
+      || health.core.builtinToolContractVersion !== builtinToolContractVersion
+      || health.core.builtinToolIpcProtocolVersion !== builtinToolIpcProtocolVersion) {
     throw new Error(`packaged Core health is incompatible: ${JSON.stringify(health?.core)}`)
   }
   report.push('Packaged Core: isolated Windows data-root preparation and health.check passed')
@@ -439,8 +455,8 @@ try {
     packagedCoreSmoke: {
       isolatedDataRoot: true,
       healthCheck: true,
-      builtinToolContractVersion: 25,
-      builtinToolIpcProtocolVersion: 2
+      builtinToolContractVersion,
+      builtinToolIpcProtocolVersion
     }
   }
   await writeFile(manifestPath, `${JSON.stringify(releaseManifest, null, 2)}\n`, 'utf8')
