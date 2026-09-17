@@ -58,6 +58,7 @@ function canPresentProjectRelativePath(sourceKind: OpenFilePreviewRequest['kind'
   return sourceKind === 'message_reference'
     || sourceKind === 'camp_workspace'
     || sourceKind === 'run_evidence'
+    || sourceKind === 'run_activity_file'
 }
 
 export type FilePreviewAuthorityResult =
@@ -78,7 +79,7 @@ export type FilePreviewAuthorityResult =
   | {
       kind: 'file_target'
       campId: string
-      sourceKind: 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence'
+      sourceKind: 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence' | 'run_activity_file'
       sourceIdentity: string
       rootPath: string
       basePath: string
@@ -976,7 +977,11 @@ export class FilePreviewService {
         ...fileAccessOptions
       })
       if (path.kind === 'directory') {
-        if (target.allowChildren === false || request.kind === 'run_evidence') {
+        if (
+          target.allowChildren === false
+          || request.kind === 'run_evidence'
+          || request.kind === 'run_activity_file'
+        ) {
           return failed('not_regular_file', '这个来源不支持打开文件夹。')
         }
         if (!policy.nativeSideEffects

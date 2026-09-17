@@ -61,7 +61,7 @@ test('production Camp components run in Chrome and Electron without a fake nativ
             assert.ok(layout.railRight <= layout.editorLeft, 'production member roster stays beside the form')
             assert.equal(layout.topDifference, 0)
           }
-          const actions = await exerciseScenario(driver, scenario, surface, join(fixture, 'downloads'))
+          const actions = await exerciseScenario(driver, scenario, surface, join(fixture, 'downloads'), theme)
           if (scenario === 'approval') {
             const buttons = await driver.evaluate(`Array.from(document.querySelectorAll('button')).map(b=>({text:b.textContent.trim(),label:b.getAttribute('aria-label')}))`)
             assert.ok(buttons.some(b => b.text === 'Allow once'), 'native option label from approval fixture')
@@ -93,7 +93,7 @@ test('production Camp components run in Chrome and Electron without a fake nativ
   } finally { await rm(fixture, { recursive: true, force: true }) }
 })
 
-async function exerciseScenario(driver, scenario, surface, downloads) {
+async function exerciseScenario(driver, scenario, surface, downloads, theme) {
   if (scenario === 'camp') {
     await driver.evaluate(`document.querySelector('[contenteditable="true"]').focus()`)
     await driver.key('Enter')
@@ -125,7 +125,12 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
   }
   if (scenario === 'running' || scenario === 'mobile-running') {
     const entryActions = await exerciseExecutionEntry(driver, scenario === 'mobile-running' ? 10 : 1, surface)
-    if (scenario === 'mobile-running') return [...entryActions, ...await finishExecutionEntry(driver)]
+    if (scenario === 'mobile-running') {
+      const containment = surface === 'web' && theme === 'night'
+        ? await exerciseCommandDiffContainment(driver, surface, [360, 375, 430])
+        : []
+      return [...entryActions, ...containment, ...await finishExecutionEntry(driver)]
+    }
     assert.match(await driver.evaluate(`document.querySelector('.tool-group-current').textContent`), /pnpm test -- --run/)
     assert.equal(await driver.evaluate(`document.querySelector('.tool-group-summary > .tool-call-icon').dataset.iconDomain`), 'terminal')
     assert.equal(await driver.evaluate(`document.querySelector('.tool-group-disclosure') === null`), true)
@@ -135,6 +140,9 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     await driver.wait(`document.querySelector('.tool-group-summary').getAttribute('aria-expanded') === 'true'`)
     assert.equal(await driver.evaluate(`document.querySelector('.tool-group-summary .running-text-highlight') === null`), true)
     await driver.wait(`document.querySelector('summary.tool-call-summary') !== null`)
+    const containment = theme === 'day'
+      ? await exerciseCommandDiffContainment(driver, surface, surface === 'web' ? [768, 1440] : [1440])
+      : []
     await driver.click(`document.querySelector('summary.tool-call-summary')`)
     await driver.wait(`document.body.innerText.includes('固定工具输出：已读取交互核对说明。')`)
     assert.match(await driver.evaluate('document.body.innerText'), /pnpm test -- --run/)
@@ -154,7 +162,7 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.running-text-highlight')).display`), 'none')
     assert.equal(await driver.evaluate(`getComputedStyle(document.querySelector('.camp-execution-orbits rect')).animationName`), 'none')
     await driver.send('Emulation.setEmulatedMedia', { features: [] })
-    return [...entryActions, 'production-current-command-and-icon', 'collapsed-running-highlight', 'expanded-static-result', 'collapse-retains-reading-anchor', 'touch-cue-and-44px-target', 'reduced-motion', ...await finishExecutionEntry(driver)]
+    return [...entryActions, ...containment, 'production-current-command-and-icon', 'collapsed-running-highlight', 'expanded-static-result', 'collapse-retains-reading-anchor', 'touch-cue-and-44px-target', 'reduced-motion', ...await finishExecutionEntry(driver)]
   }
   if (scenario === 'file' && surface === 'web') {
     await mkdir(downloads, { recursive: true })
@@ -183,6 +191,47 @@ async function exerciseScenario(driver, scenario, surface, downloads) {
     return ['production-runtime-form-saves-simulated-versioned-configuration']
   }
   return []
+}
+
+async function exerciseCommandDiffContainment(driver, surface, widths) {
+  await driver.wait(`document.querySelector('.tool-activity-group') !== null`)
+  if (!await driver.evaluate(`document.querySelector('.tool-activity-group')?.open === true`)) {
+    await driver.evaluate(`document.querySelector('.tool-group-summary').click()`)
+  }
+  await driver.wait(`document.querySelector('.modified-file-row') !== null`)
+  if (!await driver.evaluate(`document.querySelector('.modified-file-row')?.open === true`)) {
+    await driver.evaluate(`document.querySelector('.modified-file-row > summary').click()`)
+  }
+  await driver.wait(`document.querySelector('.modified-file-row')?.open === true`)
+  for (const width of widths) {
+    await driver.send('Emulation.setDeviceMetricsOverride', { width, height: 920, deviceScaleFactor: 1, mobile: width < 600 })
+    await driver.wait(`innerWidth === ${width}`)
+    const geometry = await driver.evaluate(`(() => {
+      const virtualList = document.querySelector('.execution-virtual-list')
+      const diff = document.querySelector('.modified-file-diff')
+      const host = diff?.closest('.execution-drawer-body, .camp-detail-popover, .mobile-detail-panel') ?? diff?.parentElement
+      if (!virtualList || !diff || !host) return null
+      return {
+        viewport: innerWidth,
+        documentClient: document.documentElement.clientWidth,
+        documentScroll: document.documentElement.scrollWidth,
+        hostClient: host.clientWidth,
+        hostScroll: host.scrollWidth,
+        virtualClient: virtualList.clientWidth,
+        virtualScroll: virtualList.scrollWidth,
+        diffClient: diff.clientWidth,
+        diffScroll: diff.scrollWidth
+      }
+    })()`)
+    assert.ok(geometry, `${surface}/${width}: expanded Command diff exists`)
+    assert.ok(geometry.documentScroll <= geometry.documentClient, `${surface}/${width}: Command diff does not widen the product`)
+    assert.ok(geometry.virtualScroll <= geometry.virtualClient, `${surface}/${width}: virtual execution list stays inside its track`)
+    assert.ok(geometry.hostScroll <= geometry.hostClient, `${surface}/${width}: execution host contains the Command view`)
+    assert.ok(geometry.diffScroll > geometry.diffClient, `${surface}/${width}: wide code remains internally scrollable`)
+  }
+  await driver.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false })
+  await driver.wait(`innerWidth === 1440`)
+  return [`${surface}-command-diff-contained-at-${widths.join('-')}`]
 }
 
 async function finishExecutionEntry(driver) {

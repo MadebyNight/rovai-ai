@@ -211,6 +211,10 @@ export function filePreviewSourceKey(request: OpenFilePreviewRequest): string {
     }
     case 'run_evidence':
       return `evidence:${request.campId}:${request.agentRunId}:${request.executionEpoch}:${request.evidenceFileId}:${request.action}`
+    case 'run_activity_file': {
+      const path = parseFileReference(request.rawReference)?.pathPart ?? request.rawReference
+      return `run-activity:${request.campId}:${request.agentRunId}:${request.executionEpoch}:${request.evidenceId}:${path}`
+    }
     case 'child_of_handle': {
       const path = parseFileReference(request.rawReference)?.pathPart ?? request.rawReference
       return `child:${request.parentHandleId}:${path}`
@@ -260,7 +264,9 @@ export function filePreviewTabMatchesResolvedFile(
   file: Pick<ResolvedFilePreview, 'previewKey'>,
   resolvedSourceKey: string
 ): boolean {
-  return tab.previewKey === file.previewKey || tab.sourceKey === resolvedSourceKey
+  return tab.previewKey !== null
+    ? tab.previewKey === file.previewKey
+    : tab.sourceKey === resolvedSourceKey
 }
 
 export function filePreviewPresentationFromRequest(
@@ -279,7 +285,11 @@ export function filePreviewPresentationFromRequest(
   const parsed = rawReference ? parseFileReference(rawReference) : null
   const fileName = referenceFileName(parsed?.pathPart ?? rawReference)
   const mayShowRelativePath = parsed?.pathKind === 'relative'
-    && (request.kind === 'message_reference' || request.kind === 'camp_workspace')
+    && (
+      request.kind === 'message_reference'
+      || request.kind === 'camp_workspace'
+      || request.kind === 'run_activity_file'
+    )
   const displayPath = mayShowRelativePath
     ? cleanDisplayValue(parsed.pathPart) || fileName
     : fileName

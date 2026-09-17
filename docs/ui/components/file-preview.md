@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-file-preview
 status: accepted
-last_updated: 2026-09-16
+last_updated: 2026-09-18
 ---
 
 # Camp 文件预览区
@@ -198,7 +198,7 @@ Viewer 不显示右上角复制按钮、整行工具栏或 `Ready` 状态。除 
 - Markdown 继续通过 `SafeMarkdown` 渲染安全 GFM，并在文件预览中显式使用 document 模式；超出 4 MiB 显示分页原文；
   行长随预览容器变化：小于 960px 时正文区域最大 780px，960px 起整体可到 1120px、普通正文最大 860px，
   1200px 起普通正文最大 930px。代码和表格使用更宽的内容轨道，并在自身区域横向滚动；窗口宽度不代替容器宽度。
-- HTML 默认交互预览。Desktop 在不同源 HTTP(S) iframe 中执行，采用独立的 32 MiB 网页上限；超过网页上限使用分页原文。Web 复用同一 Viewer、源码切换、查找与诊断，使用可信内容的同来源 sandbox，允许脚本、原生浏览器存储、表单、新窗口和原生弹窗；与工作台共享来源和存储，具体边界见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，保留 Host 的 20 MiB 文件读取上限；相对资源沿用 [File Preview v15](../../contracts/file-preview-v15.md) 的既有来源能力，HTTP(S) 依赖保持。初始化失败明确显示失败和重试，源码查看读取未注入原稿；
+- HTML 默认交互预览。Desktop 在不同源 HTTP(S) iframe 中执行，采用独立的 32 MiB 网页上限；超过网页上限使用分页原文。Web 复用同一 Viewer、源码切换、查找与诊断，使用可信内容的同来源 sandbox，允许脚本、原生浏览器存储、表单、新窗口和原生弹窗；与工作台共享来源和存储，具体边界见 [Host Web v2](../../contracts/host-web-v2.md#workspaces-uploads-and-resources)，保留 Host 的 20 MiB 文件读取上限；相对资源沿用 [File Preview v16](../../contracts/file-preview-v16.md) 继承的既有来源能力，HTTP(S) 依赖保持。初始化失败明确显示失败和重试，源码查看读取未注入原稿；
 - 代码/文本通过同一个只读 CodeMirror 6 Viewer 显示行号、搜索、定位、选择与系统复制，大文件分页；
 - 图片/SVG 提供适应、原始尺寸、缩放和重置，不把 SVG 注入宿主 DOM；
 - Diff/Patch 按文件和 hunk 展示，解析失败回退文本。
@@ -257,11 +257,11 @@ HTML 原生解析文档/资源相对路径与站点根相对路径，自动加�
 才显示／激活目标 Tab 和预览 Pane。文件已移动、删除、无权或读取失败时，当前页只显示红色 Toast `无法打开该文件`，不创建失败预览页、不切换
 当前 Tab、不替换已有 ready 内容，也不抢焦点；不支持应用内预览的类型同样不从这类入口启动系统应用或显示目录。
 精确事务与资源清理边界见
-[File Preview v15](../../contracts/file-preview-v15.md)。
+[File Preview v16](../../contracts/file-preview-v16.md)。
 
 首次打开与恢复使用 cold/opening/ready/missing/unavailable/error；快速成功直接显示正文，耗时后才显示轻量 Loading。
 无法形成当前可读内容时，正文只显示水平、垂直居中的 32px 通用文件轮廓，图标下方相隔 12px 显示一句 13px 常规
-公开文案。错误码到文案的 closed mapping 由 [File Preview v15](../../contracts/file-preview-v15.md) 继承的 v8 失败呈现拥有。
+公开文案。错误码到文案的 closed mapping 由 [File Preview v16](../../contracts/file-preview-v16.md) 继承的 v8 失败呈现拥有。
 该状态不显示路径、尺寸、标题、卡片、边框、按钮、技术详情或内部能力名称；错误内容区之外的 Tabs、Viewer 布局和
 其他 Camp 界面沿用既有视觉，不以本状态为理由重做。
 历史 Attachment 初始 availability 为 unknown；预览、打开或显示所在位置的结果只更新当前卡片为 available、missing、
@@ -298,7 +298,7 @@ macOS/Windows 复用同一 DOM、reducer、Viewer 和主题 token，只投影 `�
 重试在详情与文档失败页中均有明确的进行中状态并禁用重复提交；等待期间保留旧页面及诊断。重试失败显示
 “重新加载失败”，展开可读具体原因；成功后按新 generation 重建页面并收起详情。源码切换使用既有只读源码阅读器
 与网页查找模式，交互 iframe 保持挂载，保留输入、滚动和脚本状态。详情最多 100 项，按文本呈现；未知位置明确
-标注，不显示注入后的伪源码位置。窗口、Tab、Camp、刷新与失效上下文清理见 [File Preview v15](../../contracts/file-preview-v15.md)。
+标注，不显示注入后的伪源码位置。窗口、Tab、Camp、刷新与失效上下文清理见 [File Preview v16](../../contracts/file-preview-v16.md)。
 
 ## 消息附件位置与图像刷新
 

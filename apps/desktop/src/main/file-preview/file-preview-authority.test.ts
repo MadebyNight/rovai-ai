@@ -38,4 +38,34 @@ describe('parseCoreFilePreviewAuthorityResult', () => {
       allowChildren: true
     }, request)).toBeNull()
   })
+
+  it('accepts only the exact path returned for a Run activity file', () => {
+    const request = {
+      kind: 'run_activity_file' as const,
+      campId: 'camp-1',
+      agentRunId: 'run-1',
+      executionEpoch: 2,
+      evidenceId: 'evidence-1',
+      rawReference: 'src/generated.ts'
+    }
+    const receipt = {
+      kind: 'file_target',
+      campId: 'camp-1',
+      sourceKind: 'run_activity_file',
+      sourceIdentity: 'run-activity-file:run-1:2:evidence-1',
+      rootPath: '/mission-worktree',
+      basePath: '/mission-worktree',
+      rawReference: 'src/generated.ts',
+      allowChildren: true
+    }
+    expect(parseCoreFilePreviewAuthorityResult(receipt, request)).toMatchObject({
+      kind: 'file_target',
+      rootPath: '/mission-worktree',
+      rawReference: 'src/generated.ts'
+    })
+    expect(parseCoreFilePreviewAuthorityResult({
+      ...receipt,
+      rawReference: 'src/other.ts'
+    }, request)).toBeNull()
+  })
 })

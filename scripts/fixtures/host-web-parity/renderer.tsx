@@ -51,6 +51,22 @@ function Review() {
   const preflight: CampCreationPreflight = useMemo(() => ({ admissible: true, initialLeadAgentId: agents[0].agentId, blockers: [],
     presentMembers: state.agents.map((agent, i) => ({ agentId: agent.agentId, displayName: agent.displayName,
       memberOrder: i, runtimeConfigured: true, runtimeReadiness: 'ready' })) }), [state.agents])
+  const openCoverage = useMemo(() => {
+    if (scenario !== 'running' && scenario !== 'mobile-running') return null
+    const complete = (count: number) => ({ loadedCount: count, totalCount: count, omittedCount: 0, complete: true })
+    const evidenceCount = state.snapshot.agentRuns.reduce((sum, item) => sum + item.executionEvidenceCount, 0)
+    return {
+      tasks: complete(state.snapshot.tasks.length),
+      messages: { ...complete(state.snapshot.messages.length), oldestLoadedSequence: state.snapshot.messages[0]?.sequence ?? null,
+        newestLoadedSequence: state.snapshot.messages.at(-1)?.sequence ?? null, hasEarlier: false },
+      messageDeliveries: complete(state.snapshot.messageDeliveries.length),
+      turns: complete(state.snapshot.turns.length),
+      agentRuns: complete(state.snapshot.agentRuns.length),
+      executionEvidence: { loadedCount: state.snapshot.executionEvidence.length, totalCount: evidenceCount,
+        omittedCount: Math.max(0, evidenceCount - state.snapshot.executionEvidence.length), complete: false },
+      approvals: complete(state.snapshot.approvals.length)
+    }
+  }, [state.snapshot])
   const nav = navigation(state.snapshot)
   const outsideScope = (path: string) => model.note(`${path} 未纳入本次可点击稿，请对照差异表；没有伪造成功。`)
 
@@ -85,6 +101,7 @@ function Review() {
         onFocusApprovals={() => document.querySelector<HTMLElement>('.approval-dock')?.scrollIntoView({ block: 'nearest' })} />}
       <main className={`content ${view === 'camp' ? 'task-content camp-content' : 'members-content'}`}>
         {view === 'camp' ? <CampWorkspace key={state.snapshot.camp.id} snapshot={state.snapshot} projectName="rovai-workspace"
+          openCoverage={openCoverage}
           agents={state.agents} installations={installations as AdapterInstallation[]} initialComposerDraft={state.draft}
           busy={state.busy} onSend={model.send} onChangeLead={async () => outsideScope('更换默认负责人')}
           onTasksChanged={async () => model.note('模拟：任务面板已重读固定快照。')}

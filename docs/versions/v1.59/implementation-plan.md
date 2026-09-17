@@ -4,7 +4,7 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-17
+last_updated: 2026-09-18
 ---
 
 # v1.59 实施与验收
@@ -12,6 +12,21 @@ last_updated: 2026-09-17
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
 本批增量从 `main` 的 `eb850265` 建立仓库同级工作树 `rovai-ai-mobile-project-start`，分支为
 `rovai/mobile-project-start`。验收只使用隔离 data-dir、Skill Library、MCP config 和浏览器 profile。
+
+## 当前批次：Command 文件来源与执行台宽度
+
+本批从 `origin/main` 的 `e3ef6f37` 建立同级工作树 `rovai-ai-command-preview-fix`，分支为
+`codex/fix-command-file-preview-overflow`，并在提交后 rebase 到包含 PR #414 的 `ffd02517`。文件入口新增
+`run_activity_file` 封闭来源，Core 以 exact
+Camp/AgentRun/epoch/Evidence/canonical diff path 重新授权，再按来源 Run `executionRoot`、历史 Camp 项目顺序
+选择根目录。Renderer 只对缺少 Evidence identity 的历史 presentation 保留 workspace 回退。
+
+执行布局在虚拟列表边界恢复 `min-width: 0`，不改变 Diff 的 520px 内部阅读宽度；生产 Camp 组件夹具新增
+Desktop、Web 768/1440px 与 Mobile 360/375/430px 双主题 containment 断言。本地验证通过 `pnpm typecheck`、
+5 个定向 Vitest 文件 / 87 项测试、`pnpm build:desktop`、`pnpm test:host-web-parity`、文档本地/差异门禁及
+`pnpm test`（205 个 Vitest 文件 / 2122 项测试，Node 门禁 324 项通过、2 项既有平台专项跳过）。Rust 验证通过
+fmt、workspace all-targets Clippy、Core 定向授权测试、Web 资源测试及 PR 套件（Library 829、CLI 28、
+slow integration 310；6 项既有手工平台用例保持 ignored）。全程不启动 Runtime，不读取日常 App 数据。
 
 ## 当前批次：手机会话入口与项目目录
 

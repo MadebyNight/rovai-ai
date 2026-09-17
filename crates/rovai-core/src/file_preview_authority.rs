@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     agent_run_file_change::{find_run_file_change_summary, read_run_file_changes},
+    canonical_activity,
     db::Database,
     managed_blob::ManagedBlobStore,
+    runtime_diff::CommandDiffProjection,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -25,6 +27,8 @@ pub struct ResolveFilePreviewSourceParams {
     pub execution_epoch: Option<i64>,
     #[serde(default)]
     pub evidence_file_id: Option<String>,
+    #[serde(default)]
+    pub evidence_id: Option<String>,
     #[serde(default)]
     pub action: Option<String>,
 }
@@ -426,6 +430,113 @@ fn is_safe_run_evidence_relative_path(path: &str) -> bool {
         })
 }
 
+fn run_activity_authorizes_file(
+    database: &Database,
+    camp_id: &str,
+    agent_run_id: &str,
+    execution_epoch: i64,
+    evidence_id: &str,
+    path: &str,
+) -> Result<bool> {
+    let projection_json = database
+        .connection()
+        .query_row(
+            r#"
+            SELECT activity.diff_projection_json
+            FROM agent_run_execution_evidence AS evidence
+            JOIN agent_run ON agent_run.id = evidence.agent_run_id
+            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = camp_turn.camp_id
+            JOIN canonical_runtime_activity AS activity
+              ON activity.agent_run_id = evidence.agent_run_id
+             AND activity.execution_epoch = evidence.execution_epoch
+            WHERE evidence.id = ?1
+              AND evidence.agent_run_id = ?2
+              AND evidence.execution_epoch = ?3
+              AND camp.id = ?4
+              AND camp.activation_state = 'active'
+              AND activity.classifier_version IN (?5, ?6, ?7, ?8)
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(activity.source_evidence_ids_json)
+                  WHERE json_each.value = evidence.id
+              )
+            ORDER BY CASE activity.classifier_version
+                WHEN ?5 THEN 0
+                WHEN ?6 THEN 1
+                WHEN ?7 THEN 2
+                ELSE 3
+            END
+            LIMIT 1
+            "#,
+            params![
+                evidence_id,
+                agent_run_id,
+                execution_epoch,
+                camp_id,
+                canonical_activity::CLASSIFIER_VERSION,
+                canonical_activity::PREVIOUS_CLASSIFIER_VERSION,
+                canonical_activity::INTERMEDIATE_CLASSIFIER_VERSION,
+                canonical_activity::LEGACY_CLASSIFIER_VERSION,
+            ],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .context("failed to resolve the Run activity file projection")?
+        .flatten();
+    let Some(projection_json) = projection_json else {
+        return Ok(false);
+    };
+    let projection: CommandDiffProjection = serde_json::from_str(&projection_json)
+        .context("Run activity file projection is invalid")?;
+    Ok(projection.status == "available"
+        && projection
+            .source_evidence_ids
+            .iter()
+            .any(|candidate| candidate == evidence_id)
+        && projection
+            .entries
+            .as_ref()
+            .is_some_and(|entries| entries.iter().any(|entry| entry.path == path)))
+}
+
+fn run_activity_file(
+    database: &Database,
+    camp_id: &str,
+    agent_run_id: &str,
+    execution_epoch: i64,
+    evidence_id: &str,
+    raw_reference: &str,
+) -> Result<Option<ResolvedFilePreviewSource>> {
+    if !is_safe_run_evidence_relative_path(raw_reference)
+        || !run_activity_authorizes_file(
+            database,
+            camp_id,
+            agent_run_id,
+            execution_epoch,
+            evidence_id,
+            raw_reference,
+        )?
+    {
+        return Ok(None);
+    }
+    let Some(root_path) = run_evidence_root(database, camp_id, agent_run_id, execution_epoch)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ResolvedFilePreviewSource::FileTarget {
+        camp_id: camp_id.to_string(),
+        source_kind: "run_activity_file".to_string(),
+        source_identity: format!(
+            "run-activity-file:{agent_run_id}:{execution_epoch}:{evidence_id}"
+        ),
+        base_path: root_path.clone(),
+        root_path,
+        raw_reference: raw_reference.to_string(),
+        allow_children: true,
+    }))
+}
+
 fn evidence_current_file(
     database: &Database,
     blob_store: &ManagedBlobStore,
@@ -536,6 +647,16 @@ pub fn resolve_file_preview_source(
             )
         }
         "run_evidence" => Ok(None),
+        "run_activity_file" => run_activity_file(
+            database,
+            camp_id,
+            required_bounded(params.agent_run_id.as_deref(), "agentRunId", 128)?,
+            params
+                .execution_epoch
+                .context("executionEpoch is required")?,
+            required_bounded(params.evidence_id.as_deref(), "evidenceId", 256)?,
+            required_bounded(params.raw_reference.as_deref(), "rawReference", 4_096)?,
+        ),
         _ => anyhow::bail!("unsupported file preview source kind"),
     }
 }
@@ -708,11 +829,76 @@ mod tests {
                 agent_run_id: Some("preview-run".to_string()),
                 execution_epoch: Some(1),
                 evidence_file_id: Some(evidence_file_id.to_string()),
+                evidence_id: None,
                 action: Some("open_current".to_string()),
             },
         )
         .unwrap()
         .expect("projected evidence should resolve")
+    }
+
+    fn record_run_activity_diff(
+        database: &mut Database,
+        data_dir: &Path,
+        execution_root: &Path,
+        path: &str,
+    ) -> String {
+        let absolute_path = execution_root.join(path);
+        ExecutionEvidenceService
+            .record_runtime_event(
+                database,
+                &ManagedBlobStore::new(data_dir),
+                "preview-run",
+                1,
+                "runtime.action",
+                &json!({
+                    "eventId": "preview-diff-event",
+                    "toolCallId": "preview-diff-tool",
+                    "status": "completed",
+                    "kind": "edit",
+                    "runtimeDiff": {
+                        "adapterKind": "opencode-cli",
+                        "protocolFamily": "acp-v1",
+                        "sourceEventKind": "session/update.tool_call_update.completed",
+                        "semanticKind": "complete_before_after",
+                        "entries": [{
+                            "path": absolute_path,
+                            "oldText": "before\n",
+                            "newText": "after\n"
+                        }]
+                    }
+                }),
+            )
+            .unwrap()
+            .expect("Run activity diff evidence should be recorded")
+            .id
+            .clone()
+    }
+
+    fn resolve_run_activity_file(
+        database: &Database,
+        data_dir: &Path,
+        agent_run_id: &str,
+        execution_epoch: i64,
+        evidence_id: &str,
+        path: &str,
+    ) -> Option<ResolvedFilePreviewSource> {
+        resolve_file_preview_source(
+            database,
+            &ManagedBlobStore::new(data_dir),
+            ResolveFilePreviewSourceParams {
+                kind: "run_activity_file".to_string(),
+                camp_id: "preview-camp".to_string(),
+                message_id: None,
+                raw_reference: Some(path.to_string()),
+                agent_run_id: Some(agent_run_id.to_string()),
+                execution_epoch: Some(execution_epoch),
+                evidence_file_id: None,
+                evidence_id: Some(evidence_id.to_string()),
+                action: None,
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -841,6 +1027,103 @@ mod tests {
             "the original project's same-named file must not be selected"
         );
         assert!(!project_root.join("src/new.ts").exists());
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
+    #[test]
+    fn run_activity_file_uses_the_exact_evidence_and_mission_worktree() {
+        let (mut database, data_dir, root, execution_root) = run_workspace_fixture();
+        let evidence_id = record_run_activity_diff(
+            &mut database,
+            &data_dir,
+            &execution_root,
+            "src/generated.ts",
+        );
+        let ResolvedFilePreviewSource::FileTarget {
+            source_kind,
+            root_path,
+            raw_reference,
+            ..
+        } = resolve_run_activity_file(
+            &database,
+            &data_dir,
+            "preview-run",
+            1,
+            &evidence_id,
+            "src/generated.ts",
+        )
+        .expect("the exact canonical diff path should resolve")
+        else {
+            panic!("Run activity should resolve a file target")
+        };
+        assert_eq!(source_kind, "run_activity_file");
+        assert_eq!(Path::new(&root_path), execution_root);
+        assert_eq!(raw_reference, "src/generated.ts");
+
+        for (run_id, epoch, candidate_evidence, path) in [
+            ("other-run", 1, evidence_id.as_str(), "src/generated.ts"),
+            ("preview-run", 2, evidence_id.as_str(), "src/generated.ts"),
+            ("preview-run", 1, "other-evidence", "src/generated.ts"),
+            (
+                "preview-run",
+                1,
+                evidence_id.as_str(),
+                "src/not-reported.ts",
+            ),
+            ("preview-run", 1, evidence_id.as_str(), "../generated.ts"),
+        ] {
+            assert!(
+                resolve_run_activity_file(
+                    &database,
+                    &data_dir,
+                    run_id,
+                    epoch,
+                    candidate_evidence,
+                    path,
+                )
+                .is_none(),
+                "a mismatched Run activity locator must fail closed"
+            );
+        }
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
+    #[test]
+    fn run_activity_file_falls_back_to_the_project_for_a_legacy_run() {
+        let (mut database, data_dir, root, execution_root) = run_workspace_fixture();
+        let evidence_id = record_run_activity_diff(
+            &mut database,
+            &data_dir,
+            &execution_root,
+            "src/generated.ts",
+        );
+        let project_root: String = database
+            .connection()
+            .query_row(
+                "SELECT project_path FROM camp WHERE id = 'preview-camp'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET workspace_json = NULL WHERE id = 'preview-run'",
+                [],
+            )
+            .unwrap();
+        let ResolvedFilePreviewSource::FileTarget { root_path, .. } = resolve_run_activity_file(
+            &database,
+            &data_dir,
+            "preview-run",
+            1,
+            &evidence_id,
+            "src/generated.ts",
+        )
+        .expect("legacy Run activity should use the Camp project") else {
+            panic!("Run activity should resolve a file target")
+        };
+        assert_eq!(root_path, project_root);
         clean_run_workspace_fixture(database, data_dir, root);
     }
 
