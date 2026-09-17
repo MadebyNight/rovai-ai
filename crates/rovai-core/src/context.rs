@@ -2,6 +2,7 @@ use crate::message_quote::{
     MessageQuoteSnapshot, QuoteStorage, load_quotes, model_quotes, quote_scalar_count,
 };
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -123,9 +124,9 @@ pub struct MaterializeContextRequest<'a> {
     pub max_payload_bytes: usize,
 }
 
-/// The one frozen payload selected for a Delivery before its AgentRun exists.
-/// Runtime materialization must consume these bytes verbatim; it may only add
-/// the durable ContextManifest/evidence envelope around them.
+/// Frozen Delivery message/history selection. Versions 22/23 are replayed verbatim.
+/// Version 24 finalizes only Mission WORKSPACE at preparing, then freezes that final
+/// payload in ContextManifest before any Runtime delivery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FrozenDeliveryContext {
@@ -663,7 +664,7 @@ impl ContextService {
         )?;
         let a2a_count = count_a2a_runs(database, &snapshot.camp_turn_id)?;
         let collaboration_state_section = collaboration_changed.then_some(collaboration_state);
-        let run_facts =
+        let (run_facts, mission_details_version) =
             build_run_facts(database, &snapshot, requires_new_native_session, a2a_count)?;
         let rendered_run_facts = render_run_facts(&run_facts)?;
         let bootstrap_redelivery_revision = pending_redelivery_revision(
@@ -693,6 +694,8 @@ impl ContextService {
             None
         };
 
+        let workspace_fact =
+            prepare_workspace_fact(database, &snapshot, requires_new_native_session, false)?;
         let (shared_conversation, payload, runtime_payload) = loop {
             let origin_is_recent = originating_public_user_message
                 .as_ref()
@@ -741,6 +744,7 @@ impl ContextService {
                 self_active_tasks: self_active_tasks_section.as_ref(),
                 shared_conversation: &shared_conversation,
                 run_facts: &rendered_run_facts,
+                workspace: workspace_fact.section(),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
                 single_chat_guidance: (snapshot.invocation_kind == "single_chat")
                     .then_some(SINGLE_CHAT_GUIDANCE.trim()),
@@ -864,6 +868,7 @@ impl ContextService {
             "conversationMessageId": current_input.source_conversation_message_id,
             "sourceContentDigest": current_input.source_content_digest,
             "projectedBodyDigest": current_input.projected_body_digest,
+            "missionStart": mission_start_evidence(database.context_connection(),&snapshot,&current_input)?,
             "projectedInputDigest": canonical_json_digest(&current_input_value)?,
             "quotedInputEvidence": current_input.quote_evidence(),
             "mentionsCurrentUser": current_input.mentions_current_user,
@@ -955,14 +960,16 @@ impl ContextService {
                 camp_attachment_view_receipt_json,
                 camp_attachment_view_receipt_digest,
                 formatter_version,
-                rendered_payload_blob_id, rendered_payload_digest, created_at
+                rendered_payload_blob_id, rendered_payload_digest, created_at,
+                workspace_fact_json,workspace_fact_digest,workspace_fact_included,
+                mission_details_version
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
                 ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
                 ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50,
-                ?51
+                ?51, ?52, ?53, ?54, ?55
             )
             "#,
             params![
@@ -1012,7 +1019,7 @@ impl ContextService {
                 serde_json::to_string(&a2a_guidance.evidence)?,
                 a2a_guidance.evidence_digest,
                 CONTEXT_MANIFEST_VERSION,
-                3_i64,
+                4_i64,
                 camp_attachment_view_receipt
                     .as_ref()
                     .map(|_| CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION),
@@ -1025,6 +1032,14 @@ impl ContextService {
                 blob.id,
                 payload_digest,
                 created_at,
+                workspace_fact
+                    .value
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                workspace_fact.digest,
+                i64::from(workspace_fact.included),
+                mission_details_version,
             ],
         )?;
         let persisted_manifest_id = if inserted != 1 {
@@ -1203,7 +1218,7 @@ impl ContextService {
             || snapshot.native_collaboration_state_digest.as_deref()
                 != Some(collaboration_state_digest.as_str()))
         .then_some(collaboration_state);
-        let run_facts = build_run_facts(
+        let (run_facts, mission_details_version) = build_run_facts(
             transaction,
             &snapshot,
             requires_new_native_session,
@@ -1222,6 +1237,8 @@ impl ContextService {
         } else {
             max_payload_bytes
         };
+        let workspace_fact =
+            prepare_workspace_fact(transaction, &snapshot, requires_new_native_session, true)?;
         let (shared_conversation, payload) = loop {
             let origin_is_recent = originating_public_user_message
                 .as_ref()
@@ -1270,6 +1287,7 @@ impl ContextService {
                 self_active_tasks: self_active_tasks_section.as_ref(),
                 shared_conversation: &shared_conversation,
                 run_facts: &rendered_run_facts,
+                workspace: workspace_fact.section(),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
                 single_chat_guidance: None,
                 current_input: &current_input_value,
@@ -1411,6 +1429,7 @@ impl ContextService {
                 "conversationMessageId": current_input.source_conversation_message_id,
                 "sourceContentDigest": current_input.source_content_digest,
                 "projectedBodyDigest": current_input.projected_body_digest,
+            "missionStart": mission_start_evidence(transaction,&snapshot,&current_input)?,
             "projectedInputDigest": canonical_json_digest(&current_input_value)?,
             "quotedInputEvidence": current_input.quote_evidence(),
                 "mentionsCurrentUser": current_input.mentions_current_user,
@@ -1423,7 +1442,11 @@ impl ContextService {
             "a2aGuidanceEvidence": a2a_guidance.evidence.clone(),
             "a2aGuidanceEvidenceDigest": a2a_guidance.evidence_digest.clone(),
             "contextManifestVersion": CONTEXT_MANIFEST_VERSION,
-            "runFactsSchemaVersion": 3,
+            "runFactsSchemaVersion": 4,
+            "workspaceFact": workspace_fact.value,
+            "workspaceFactDigest": workspace_fact.digest,
+            "workspaceFactIncluded": workspace_fact.included,
+            "missionDetailsVersion": mission_details_version,
             "campAttachmentViewReceiptVersion": camp_attachment_view_receipt.as_ref().map(|_| CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION),
             "campAttachmentViewReceipt": camp_attachment_view_receipt,
             "campAttachmentViewReceiptDigest": camp_attachment_view_receipt_digest,
@@ -1909,7 +1932,7 @@ impl ContextService {
         if row.5 != "running" || row.6 != execution_epoch {
             anyhow::bail!("AgentRun or Native Binding changed before input delivery");
         }
-        if !matches!((row.10, row.11), (22, 22) | (23, 23) | (24, 24)) {
+        if !matches!((row.10, row.11), (22, 22) | (23, 23) | (24, 24) | (25, 25)) {
             anyhow::bail!("Legacy ContextManifest cannot be dispatched");
         }
         let (runtime_attachment_auth_receipt, runtime_attachment_auth_receipt_digest) =
@@ -2273,6 +2296,11 @@ fn acknowledge_input_delivery_transaction(
                 ),
                 native_charter_digest = ?4,
                 native_collaboration_state_digest = ?5,
+                native_workspace_fact_digest = COALESCE((SELECT workspace_fact_digest FROM context_manifest WHERE agent_run_id=?8 AND workspace_fact_included=1),native_workspace_fact_digest),
+                mission_details_delivered_version = CASE
+                    WHEN ?9 IS NULL THEN mission_details_delivered_version
+                    ELSE MAX(COALESCE(mission_details_delivered_version,0),?9)
+                END,
                 version = version + 1, updated_at = ?6
             WHERE id = ?1 AND native_binding_id = ?2
               AND native_binding_generation = ?7
@@ -2286,6 +2314,8 @@ fn acknowledge_input_delivery_transaction(
                 row.collaboration_state_digest,
                 now,
                 row.native_binding_generation,
+                row.agent_run_id,
+                row.mission_details_version,
             ],
         )?;
         if marker_updated != 1 {
@@ -2626,6 +2656,7 @@ fn camp_has_active_feishu_binding(connection: &Connection, camp_id: &str) -> Res
 fn build_session_charter(
     snapshot: &RunSnapshot,
     has_active_feishu_binding: bool,
+    is_mission: bool,
 ) -> Result<String> {
     if snapshot.invocation_kind == "single_chat" {
         return Ok(SINGLE_CHAT_SESSION_CHARTER.trim().to_string());
@@ -2650,10 +2681,15 @@ fn build_session_charter(
          - Current user instructions, current Core authorization and Run facts, and current tool, repository, and filesystem evidence outrank identity, Memory, history, and cached context.\n\
          - Core reauthorizes every operation at invocation; projected IDs and facts are not authorization tokens.\n\
          - Preserve existing user work. Do not infer omitted content; retrieve it only when the current work requires it. Memory indexes and retrieval keys are discovery hints; read a Memory before relying on it.\n\
-         - In SHARED_CONVERSATION, the top-level campId applies to every projected message; nextBodyOffset is the Unicode-scalar bodyOffset for a camp.read item; omitted sequence bounds may contain gaps and are not executable ranges.\n\n{}{}{}",
+         - In SHARED_CONVERSATION, the top-level campId applies to every projected message; nextBodyOffset is the Unicode-scalar bodyOffset for a camp.read item; omitted sequence bounds may contain gaps and are not executable ranges.\n\n{}{}{}{}",
         BUILTIN_CLI_CHARTER.trim(),
         file_guidance,
         adapter_guidance,
+        if is_mission {
+            "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Change status only when the whole Mission's state changes, not merely when your Run ends."
+        } else {
+            ""
+        },
         quote_guidance = include_str!("../resources/charter-message-quotes.md").trim(),
     ))
 }
@@ -2731,7 +2767,11 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
     // Channel guidance is selected only for new evidence, never when replaying a Binding.
     let has_active_feishu_binding =
         camp_has_active_feishu_binding(database.connection(), &snapshot.camp_id)?;
-    let charter = build_session_charter(snapshot, has_active_feishu_binding)?;
+    let charter = build_session_charter(
+        snapshot,
+        has_active_feishu_binding,
+        mission_facts(database.connection(), snapshot)?.is_some(),
+    )?;
     let (entrypoint, observed, authorization_basis_digest) =
         if snapshot.invocation_kind == "single_chat" {
             (
@@ -3371,6 +3411,8 @@ struct RunFacts {
     schema_version: i64,
     attachment_output_root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    mission: Option<crate::mission::MissionFacts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     conversation_mode: Option<ConversationModeFact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_context: Option<TaskContextFact>,
@@ -3422,9 +3464,14 @@ fn build_run_facts<R: ContextReadConnection>(
     snapshot: &RunSnapshot,
     requires_new_native_session: bool,
     a2a_run_count: i64,
-) -> Result<RunFacts> {
+) -> Result<(RunFacts, Option<i64>)> {
+    let selected_mission = selected_mission_facts(database.context_connection(), snapshot)?;
+    let mission_details_version = selected_mission
+        .as_ref()
+        .map(|selected| selected.details_version);
     let mut facts = RunFacts {
-        schema_version: 3,
+        schema_version: 4,
+        mission: selected_mission.map(|selected| selected.facts),
         attachment_output_root: crate::storage_layout::resolve_attachment_output_root(
             database.context_connection(),
             &snapshot.camp_id,
@@ -3525,7 +3572,7 @@ fn build_run_facts<R: ContextReadConnection>(
                 .then_some(false),
         });
     }
-    Ok(facts)
+    Ok((facts, mission_details_version))
 }
 
 fn a2a_task_context_fact(invocation_kind: &str, task_id: Option<&str>) -> Option<TaskContextFact> {
@@ -3935,6 +3982,8 @@ struct RunFactRef {
     fact: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mission_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3954,14 +4003,17 @@ fn render_run_facts(run_facts: &RunFacts) -> Result<RenderedRunFacts> {
     let mut references = vec![RunFactRef {
         fact: "attachment_output_root",
         task_id: None,
+        mission_id: None,
     }];
     if let Some(task_context) = run_facts.task_context.as_ref() {
         references.push(RunFactRef {
             fact: "task_context",
             task_id: Some(task_context.task_id.clone()),
+            mission_id: None,
         });
     }
     for (included, fact) in [
+        (run_facts.mission.is_some(), "mission"),
         (run_facts.session_continuity.is_some(), "session_continuity"),
         (run_facts.external_effect.is_some(), "external_effect"),
         (run_facts.gather.is_some(), "gather"),
@@ -3971,6 +4023,11 @@ fn render_run_facts(run_facts: &RunFacts) -> Result<RenderedRunFacts> {
             references.push(RunFactRef {
                 fact,
                 task_id: None,
+                mission_id: if fact == "mission" {
+                    run_facts.mission.as_ref().map(|m| m.mission_id.clone())
+                } else {
+                    None
+                },
             });
         }
     }
@@ -5276,6 +5333,22 @@ fn load_current_input_body<R: ContextReadConnection>(
         (Some(camp_message_id), None) => {
             let camp_message = load_trigger_camp_message(database, snapshot, camp_message_id)?;
             let source = project_camp_current_input_source(database, snapshot, &camp_message)?;
+            if snapshot.invocation_kind == "direct" && source == json!({"type":"user"}) {
+                let mission_id=database.context_connection().query_row("SELECT s.mission_id FROM mission_start s JOIN mission m ON m.id=s.mission_id WHERE s.message_id=?1 AND s.camp_turn_id=?2 AND m.camp_id=?3",params![camp_message_id,snapshot.camp_turn_id,snapshot.camp_id],|r|r.get::<_,String>(0)).optional()?;
+                if let Some(mission_id) = mission_id {
+                    let payload = json!({"kind":"mission_start","source":{"type":"user"},"missionId":mission_id});
+                    return Ok(CurrentInput {
+                        quotes: Vec::new(),
+                        id: camp_message.id,
+                        payload: payload.clone(),
+                        source_camp_message_id: Some(camp_message_id.to_string()),
+                        source_conversation_message_id: None,
+                        source_content_digest: camp_message.content_digest,
+                        projected_body_digest: canonical_json_digest(&payload)?,
+                        mentions_current_user: false,
+                    });
+                }
+            }
             let (body, mentions_current_user) = projected_current_camp_message(
                 database.context_connection(),
                 camp_message.stored_body,
@@ -5687,11 +5760,198 @@ fn load_self_active_tasks<R: ContextReadConnection>(
     Ok((candidates.into_iter().take(limit).collect(), omitted_count))
 }
 
+fn mission_start_evidence(
+    connection: &Connection,
+    snapshot: &RunSnapshot,
+    input: &CurrentInput,
+) -> Result<Option<Value>> {
+    if input.payload.get("kind") != Some(&json!("mission_start")) {
+        return Ok(None);
+    }
+    let value=connection.query_row("SELECT command_id,mission_id FROM mission_start WHERE message_id=?1 AND camp_turn_id=?2",params![input.source_camp_message_id,snapshot.camp_turn_id],|r|Ok(json!({"commandId":r.get::<_,String>(0)?,"missionId":r.get::<_,String>(1)?,"campId":snapshot.camp_id}))).optional()?;
+    Ok(Some(value.context("mission.start_evidence_missing")?))
+}
+struct SelectedMissionFacts {
+    facts: crate::mission::MissionFacts,
+    details_version: i64,
+}
+
+fn selected_mission_facts(
+    connection: &Connection,
+    snapshot: &RunSnapshot,
+) -> Result<Option<SelectedMissionFacts>> {
+    if snapshot.invocation_kind == "single_chat" {
+        return Ok(None);
+    }
+    let row = connection
+        .query_row(
+            "SELECT m.id,m.title,m.status,
+                    CASE WHEN c.mission_details_delivered_version IS NOT NULL
+                              AND m.details_version > c.mission_details_delivered_version
+                         THEN 1 ELSE 0 END,
+                    m.details_version
+             FROM mission m
+             JOIN conversation c ON c.id=?2 AND c.camp_id=m.camp_id
+             WHERE m.camp_id=?1",
+            params![snapshot.camp_id, snapshot.conversation_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|(mission_id, title, status, changed, details_version)| {
+        Ok(SelectedMissionFacts {
+            facts: crate::mission::MissionFacts {
+                mission_id,
+                title,
+                status: serde_json::from_value(json!(status))?,
+                update_notice: changed.then(|| {
+                    "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT.".to_string()
+                }),
+            },
+            details_version,
+        })
+    })
+    .transpose()
+}
+
+fn mission_facts(
+    connection: &Connection,
+    snapshot: &RunSnapshot,
+) -> Result<Option<crate::mission::MissionFacts>> {
+    Ok(selected_mission_facts(connection, snapshot)?.map(|selected| selected.facts))
+}
+#[derive(Default)]
+struct PreparedWorkspaceFact {
+    value: Option<Value>,
+    digest: Option<String>,
+    included: bool,
+}
+impl PreparedWorkspaceFact {
+    fn section(&self) -> Option<&Value> {
+        self.value.as_ref().filter(|_| self.included)
+    }
+}
+fn prepare_workspace_fact<R: ContextReadConnection>(
+    database: &R,
+    snapshot: &RunSnapshot,
+    new_session: bool,
+    preflight: bool,
+) -> Result<PreparedWorkspaceFact> {
+    let connection = database.context_connection();
+    if mission_facts(connection, snapshot)?.is_none() {
+        return Ok(PreparedWorkspaceFact::default());
+    }
+    let root = snapshot.workspace["executionRoot"]
+        .as_str()
+        .context("mission.workspace_not_prepared")?;
+    let mut value = json!({"workingDirectory":root});
+    let associated_branch=connection.query_row("SELECT branch FROM mission_workspace WHERE camp_id=?1 AND working_directory=?2 AND state='ready'",params![snapshot.camp_id,root],|r|r.get::<_,String>(0)).optional()?;
+    if let Some(branch) = associated_branch {
+        let observed = connection
+            .query_row(
+                "SELECT starting_git_observation_json FROM agent_run WHERE id=?1",
+                [&snapshot.agent_run_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        let branch = if let Some(observed) = observed {
+            let observation: crate::git::GitObservation = serde_json::from_str(&observed)?;
+            anyhow::ensure!(
+                observation.state == crate::git::GitCapabilityState::GitValid,
+                "mission.branch_unavailable"
+            );
+            observation.branch
+        } else {
+            anyhow::ensure!(preflight, "mission.workspace_not_prepared");
+            Some(branch)
+        };
+        value["branch"] = json!(branch);
+    }
+    let digest = canonical_json_digest(&value)?;
+    let accepted = connection
+        .query_row(
+            "SELECT native_workspace_fact_digest FROM conversation WHERE id=?1",
+            [&snapshot.conversation_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    let included = new_session || accepted.as_deref() != Some(digest.as_str());
+    Ok(PreparedWorkspaceFact {
+        value: Some(value),
+        digest: Some(digest),
+        included,
+    })
+}
+
+fn validate_workspace_evidence(
+    payload: &str,
+    workspace: Option<&str>,
+    digest: Option<&str>,
+    included: bool,
+) -> Result<()> {
+    let section = payload
+        .split_once("[WORKSPACE]\n")
+        .and_then(|(_, value)| value.split_once("\n[/WORKSPACE]").map(|(value, _)| value));
+    let Some(workspace) = workspace else {
+        anyhow::ensure!(
+            digest.is_none() && !included && section.is_none(),
+            "Workspace evidence is incomplete"
+        );
+        return Ok(());
+    };
+    let value: Value = serde_json::from_str(workspace)?;
+    let fields = value
+        .as_object()
+        .context("Workspace evidence must be an object")?;
+    anyhow::ensure!(
+        fields
+            .keys()
+            .all(|key| matches!(key.as_str(), "workingDirectory" | "branch"))
+            && value["workingDirectory"]
+                .as_str()
+                .is_some_and(|path| Path::new(path).is_absolute()),
+        "Workspace evidence contains invalid fields"
+    );
+    anyhow::ensure!(
+        fields
+            .get("branch")
+            .is_none_or(|branch| branch.is_null() || branch.is_string()),
+        "Workspace branch evidence is invalid"
+    );
+    anyhow::ensure!(
+        Some(canonical_json_digest(&value)?.as_str()) == digest,
+        "Workspace evidence digest is invalid"
+    );
+    if included {
+        anyhow::ensure!(
+            serde_json::from_str::<Value>(section.context("Workspace section is missing")?)?
+                == value,
+            "Workspace section differs from evidence"
+        );
+    } else {
+        anyhow::ensure!(
+            section.is_none(),
+            "Omitted workspace unexpectedly reached the model"
+        );
+    }
+    Ok(())
+}
+
 struct RenderPayloadInput<'a> {
     collaboration_state: Option<&'a Value>,
     self_active_tasks: Option<&'a SelfActiveTaskProjection>,
     shared_conversation: &'a SharedConversation,
     run_facts: &'a RenderedRunFacts,
+    workspace: Option<&'a Value>,
     a2a_guidance: Option<&'a str>,
     single_chat_guidance: Option<&'a str>,
     current_input: &'a Value,
@@ -5725,6 +5985,9 @@ fn render_payload(input: RenderPayloadInput<'_>) -> Result<String> {
     }
     if !input.run_facts.is_empty() {
         append_json_text_section(&mut output, "RUN_FACTS", &input.run_facts.payload_json);
+    }
+    if let Some(workspace) = input.workspace {
+        append_json_section(&mut output, "WORKSPACE", workspace)?;
     }
     if let Some(a2a_guidance) = input.a2a_guidance {
         append_json_text_section(&mut output, "A2A_GUIDANCE", a2a_guidance);
@@ -6052,10 +6315,10 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !matches!(row.15, 22 | 23 | 24) {
+    if !matches!(row.15, 22..=25) {
         anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
     }
-    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22 | 23 | 24) {
+    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22..=25) {
         anyhow::bail!("Gather completion requires a Gather-capable context formatter");
     }
     if row.31 != AGENT_MESSAGE_PROJECTION_AUDIENCE {
@@ -6101,9 +6364,11 @@ fn load_existing_manifest(
     let stored_profile: ContextDeliveryProfile = serde_json::from_str(&row.17)
         .context("Stored ContextManifest delivery profile is invalid")?;
     let mut current_profile = current_context_delivery_profile()?;
-    // Frozen v22 bytes retain Profile 4. Only newly formatted input uses Profile 5.
+    // Frozen v22/v23 bytes retain Profiles 4/5. Newly formatted input uses Profile 6.
     if row.15 == 22 {
         current_profile.profile_version = 4;
+    } else if row.15 == 23 || (row.15 == 24 && row.16 == 5) {
+        current_profile.profile_version = 5;
     }
     if row.16 != current_profile.profile_version
         || stored_profile != current_profile
@@ -6133,6 +6398,13 @@ fn load_existing_manifest(
         anyhow::bail!("Stored ContextManifest payload digest is invalid");
     }
     validate_a2a_guidance_evidence(&a2a_guidance_evidence, &row.33, &payload)?;
+    let (workspace_json,workspace_digest,workspace_included)=database.connection().query_row("SELECT workspace_fact_json,workspace_fact_digest,workspace_fact_included FROM context_manifest WHERE id=?1",[&row.0],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,bool>(2)?)))?;
+    validate_workspace_evidence(
+        &payload,
+        workspace_json.as_deref(),
+        workspace_digest.as_deref(),
+        workspace_included,
+    )?;
     if row.14 != delivery_mode.as_str() {
         anyhow::bail!("ContextManifest Charter delivery mode cannot change during recovery");
     }
@@ -6302,13 +6574,19 @@ fn validate_frozen_view_receipt(
     let version = selection
         .get("contextManifestVersion")
         .and_then(Value::as_i64);
-    if !matches!(version, Some(22 | 23 | 24))
+    if !matches!(version, Some(22..=25))
         || selection.get("runFactsSchemaVersion")
-            != Some(&json!(if version == Some(24) { 3 } else { 2 }))
+            != Some(&json!(match version {
+                Some(25) => 4,
+                Some(24) => 3,
+                _ => 2,
+            }))
     {
         anyhow::bail!("Frozen Delivery Context uses an obsolete Attachment contract");
     }
-    if version == Some(24)
+    if (version == Some(25)
+        || (version == Some(24)
+            && selection.get("contextDeliveryProfileVersion") == Some(&json!(5))))
         && selection
             .get("campAttachmentViewReceipt")
             .is_none_or(Value::is_null)
@@ -6367,6 +6645,47 @@ fn materialize_frozen_delivery_context(
     {
         anyhow::bail!("Frozen Delivery Context no longer matches the AgentRun boundary");
     }
+    anyhow::ensure!(
+        sha256_text(&frozen.rendered_payload) == frozen.rendered_payload_digest,
+        "Frozen Delivery Context digest changed before materialization"
+    );
+    let workspace_fact = if frozen.manifest_selection["contextDeliveryProfileVersion"] == json!(6) {
+        prepare_workspace_fact(database, snapshot, requires_new_native_session, false)?
+    } else {
+        PreparedWorkspaceFact::default()
+    };
+    let finalized;
+    let frozen = if workspace_fact.value.is_some() {
+        let mut next = frozen.clone();
+        if let Some(start) = next.rendered_payload.find("[WORKSPACE]\n") {
+            let end = next.rendered_payload[start..]
+                .find("\n[/WORKSPACE]\n\n")
+                .context("Frozen WORKSPACE is incomplete")?
+                + start
+                + "\n[/WORKSPACE]\n\n".len();
+            next.rendered_payload.replace_range(start..end, "");
+        }
+        if let Some(value) = workspace_fact.section() {
+            let end = next
+                .rendered_payload
+                .find("\n[/RUN_FACTS]\n\n")
+                .context("Mission Run Facts are missing")?
+                + "\n[/RUN_FACTS]\n\n".len();
+            let mut section = String::new();
+            append_json_section(&mut section, "WORKSPACE", value)?;
+            next.rendered_payload.insert_str(end, &section);
+        }
+        next.rendered_payload_digest = sha256_text(&next.rendered_payload);
+        next.runtime_payload = next.rendered_payload.clone();
+        next.runtime_payload_digest = next.rendered_payload_digest.clone();
+        next.manifest_selection["workspaceFact"] = json!(workspace_fact.value);
+        next.manifest_selection["workspaceFactDigest"] = json!(workspace_fact.digest);
+        next.manifest_selection["workspaceFactIncluded"] = json!(workspace_fact.included);
+        finalized = next;
+        &finalized
+    } else {
+        frozen
+    };
     let bootstrap_redelivery_revision = pending_redelivery_revision(
         database,
         &bootstrap_evidence.native_binding_id,
@@ -6505,6 +6824,10 @@ fn materialize_frozen_delivery_context(
     let run_facts_schema_version = required("runFactsSchemaVersion")?
         .as_i64()
         .context("Frozen Delivery Context Run Facts schema version is invalid")?;
+    let mission_details_version = optional_i64("missionDetailsVersion")?;
+    if mission_details_version.is_some_and(|version| version < 1) {
+        anyhow::bail!("Frozen Delivery Context Mission details version is invalid");
+    }
     let camp_attachment_view_receipt_version =
         required("campAttachmentViewReceiptVersion")?.as_i64();
     let receipt_value = required("campAttachmentViewReceipt")?;
@@ -6514,7 +6837,7 @@ fn materialize_frozen_delivery_context(
     let camp_attachment_view_receipt_digest = required("campAttachmentViewReceiptDigest")?.as_str();
     if !matches!(
         (context_manifest_version, run_facts_schema_version),
-        (22 | 23, 2) | (24, 3)
+        (22 | 23, 2) | (24, 3) | (25, 4)
     ) {
         anyhow::bail!("Frozen Delivery Context version evidence is inconsistent");
     }
@@ -6524,7 +6847,9 @@ fn materialize_frozen_delivery_context(
         {
             anyhow::bail!("Frozen Delivery Context View evidence is inconsistent");
         }
-    } else if context_manifest_version != 24
+    } else if !(context_manifest_version == 25
+        || (context_manifest_version == 24
+            && selection.get("contextDeliveryProfileVersion") == Some(&json!(5))))
         || camp_attachment_view_receipt_version.is_some()
         || !receipt_value.is_null()
     {
@@ -6581,14 +6906,16 @@ fn materialize_frozen_delivery_context(
             camp_attachment_view_receipt_json,
             camp_attachment_view_receipt_digest,
             formatter_version,
-            rendered_payload_blob_id, rendered_payload_digest, created_at
+            rendered_payload_blob_id, rendered_payload_digest, created_at,
+            workspace_fact_json,workspace_fact_digest,workspace_fact_included,
+            mission_details_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
             ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
             ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50,
-            ?51
+            ?51, ?52, ?53, ?54, ?55
         )
         "#,
         params![
@@ -6643,6 +6970,14 @@ fn materialize_frozen_delivery_context(
             blob.id,
             payload_digest,
             created_at,
+            workspace_fact
+                .value
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
+            workspace_fact.digest,
+            i64::from(workspace_fact.included),
+            mission_details_version,
         ],
     )?;
     for camp in &history_camps {
@@ -6863,6 +7198,7 @@ struct DeliveryTargetRow {
     status: String,
     native_input_id: Option<String>,
     bootstrap_redelivery_revision: Option<i64>,
+    mission_details_version: Option<i64>,
 }
 
 impl DeliveryTargetRow {
@@ -6898,7 +7234,8 @@ fn load_delivery_target(
                    context_manifest.collaboration_state_included,
                    camp_turn.camp_id, runtime_input_delivery.status,
                    runtime_input_delivery.native_input_id,
-                   runtime_input_delivery.bootstrap_redelivery_revision
+                   runtime_input_delivery.bootstrap_redelivery_revision,
+                   context_manifest.mission_details_version
             FROM runtime_input_delivery
             JOIN context_manifest
               ON context_manifest.id = runtime_input_delivery.context_manifest_id
@@ -6930,6 +7267,7 @@ fn load_delivery_target(
                     status: row.get(13)?,
                     native_input_id: row.get(14)?,
                     bootstrap_redelivery_revision: row.get(15)?,
+                    mission_details_version: row.get(16)?,
                 })
             },
         )
@@ -7151,7 +7489,8 @@ mod slow_tests {
 
     fn test_run_facts() -> RunFacts {
         RunFacts {
-            schema_version: 3,
+            schema_version: 4,
+            mission: None,
             attachment_output_root: "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf"
                 .to_string(),
             conversation_mode: None,
@@ -7366,6 +7705,7 @@ mod slow_tests {
             self_active_tasks: None,
             shared_conversation: &shared_conversation,
             run_facts: &run_facts,
+            workspace: None,
             a2a_guidance: None,
             single_chat_guidance: Some(SINGLE_CHAT_GUIDANCE.trim()),
             current_input: &json!({
@@ -9256,7 +9596,7 @@ mod slow_tests {
             .unwrap();
         assert!(manifest_schema.contains("run_fact_payload_json"));
         assert!(!manifest_schema.contains("run_notice_"));
-        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24)"));
+        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24, 25)"));
         assert!(manifest_schema.contains("message_projection_audience TEXT NOT NULL"));
         assert!(manifest_schema.contains("a2a_guidance_evidence_json TEXT NOT NULL"));
         let contract: (String, i64, i64) = reopened
@@ -11470,6 +11810,40 @@ mod slow_tests {
     #[test]
     fn accepted_input_advances_only_current_binding_and_restart_blocks_redelivery() {
         let mut fixture = fixture();
+        fixture.database.connection().execute("INSERT INTO mission(id,number,camp_id,title,description,status,details_version,created_at,updated_at) VALUES('rvm_context',1,?1,'Shared Mission','full description stays out of facts','in_progress',1,'now','now')",[&fixture.camp_id]).unwrap();
+        let snapshot =
+            load_run_snapshot(&fixture.database, &fixture.run_id, fixture.execution_epoch)
+                .unwrap()
+                .unwrap();
+        let ordinary = load_current_input(&fixture.database, &snapshot).unwrap();
+        assert!(ordinary.payload.get("kind").is_none());
+        fixture.database.connection().execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,command_id,created_at) VALUES(?1,'rvm_context',?2,'start-command','now')",params![snapshot.trigger_camp_message_id,snapshot.camp_turn_id]).unwrap();
+        assert_eq!(
+            load_current_input(&fixture.database, &snapshot)
+                .unwrap()
+                .as_payload(&[], &[]),
+            json!({"kind":"mission_start","source":{"type":"user"},"missionId":"rvm_context"})
+        );
+        assert!(
+            mission_facts(fixture.database.connection(), &snapshot)
+                .unwrap()
+                .unwrap()
+                .update_notice
+                .is_none(),
+            "a new Conversation receives the current definition without an update notice"
+        );
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE conversation SET mission_details_delivered_version=1 WHERE id=?1",
+                [&snapshot.conversation_id],
+            )
+            .unwrap();
+        fixture.database.connection().execute(
+            "UPDATE mission SET title='Changed Mission',details_version=2 WHERE id='rvm_context'",
+            [],
+        ).unwrap();
         let store = ManagedBlobStore::new(&fixture.directory);
         let service = ContextService;
         let prepared = service
@@ -11487,6 +11861,57 @@ mod slow_tests {
         let ContextMaterialization::Ready(prepared) = prepared else {
             panic!("small context should be ready");
         };
+        let snapshot =
+            load_run_snapshot(&fixture.database, &fixture.run_id, fixture.execution_epoch)
+                .unwrap()
+                .unwrap();
+        let first = prepare_workspace_fact(&fixture.database, &snapshot, true, false).unwrap();
+        assert!(first.included);
+        assert_eq!(first.value.as_ref().unwrap().as_object().unwrap().len(), 1);
+        assert!(prepared.rendered_payload.contains("[WORKSPACE]"));
+        let workspace_json = serde_json::to_string(first.value.as_ref().unwrap()).unwrap();
+        validate_workspace_evidence(
+            &prepared.rendered_payload,
+            Some(&workspace_json),
+            first.digest.as_deref(),
+            true,
+        )
+        .unwrap();
+        for (payload, json, digest, included) in [
+            (
+                prepared.rendered_payload.as_str(),
+                Some(workspace_json.as_str()),
+                Some("corrupt"),
+                true,
+            ),
+            (
+                prepared.rendered_payload.as_str(),
+                Some(workspace_json.as_str()),
+                first.digest.as_deref(),
+                false,
+            ),
+            (
+                "[CURRENT_INPUT]\n{}\n[/CURRENT_INPUT]",
+                Some(workspace_json.as_str()),
+                first.digest.as_deref(),
+                true,
+            ),
+            (prepared.rendered_payload.as_str(), None, None, false),
+        ] {
+            assert!(validate_workspace_evidence(payload, json, digest, included).is_err());
+        }
+        assert!(
+            !prepared
+                .rendered_payload
+                .contains("full description stays out of facts")
+        );
+        assert!(prepared.rendered_payload.contains(
+            "Mission details have changed. Read the latest mission name and description before handling CURRENT_INPUT."
+        ));
+        assert!(
+            prepared.rendered_payload.find("[RUN_FACTS]").unwrap()
+                < prepared.rendered_payload.find("[WORKSPACE]").unwrap()
+        );
         let runtime = ExecutionRuntimeService::default();
         let execution = runtime
             .load_agent_run_execution(&fixture.database, &fixture.run_id, fixture.execution_epoch)
@@ -11547,6 +11972,12 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(marker_before, 0);
+        assert!(
+            prepare_workspace_fact(&fixture.database, &snapshot, false, false)
+                .unwrap()
+                .included,
+            "prepared is not accepted"
+        );
         let accepted = service
             .acknowledge_input_delivery(&mut fixture.database, &delivery.id, "native-input-1")
             .unwrap();
@@ -11562,6 +11993,40 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(marker_after, prepared.camp_message_boundary_sequence);
+        let delivered_version: i64 = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT mission_details_delivered_version FROM conversation WHERE id=?1",
+                [&execution.conversation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivered_version, 2);
+        assert!(
+            !prepare_workspace_fact(&fixture.database, &snapshot, false, false)
+                .unwrap()
+                .included,
+            "unchanged accepted Workspace is omitted"
+        );
+        let info = mission_facts(fixture.database.connection(), &snapshot)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(info)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(
+            mission_facts(fixture.database.connection(), &snapshot)
+                .unwrap()
+                .unwrap()
+                .update_notice
+                .is_none()
+        );
         let conversation_after_accept: (i64, String, i64) = fixture
             .database
             .connection()
@@ -11681,6 +12146,21 @@ mod slow_tests {
         assert_eq!(replacement.1, 2);
         assert_eq!(replacement.2, 0);
         assert_eq!(replacement.3, None);
+        assert!(
+            prepare_workspace_fact(&fixture.database, &snapshot, false, false)
+                .unwrap()
+                .included,
+            "replacement Binding receives Workspace again"
+        );
+        service
+            .acknowledge_input_delivery(&mut fixture.database, &delivery.id, "native-input-1")
+            .unwrap();
+        assert!(
+            prepare_workspace_fact(&fixture.database, &snapshot, false, false)
+                .unwrap()
+                .included,
+            "old ACK cannot mark replacement Binding"
+        );
 
         let recovery = fixture.database.prepare_v2_recovery().unwrap();
         assert_eq!(recovery.runs_waiting_for_recovery, 1);
@@ -13906,7 +14386,7 @@ mod slow_tests {
             load_run_snapshot(&fixture.database, &fixture.run_id, fixture.execution_epoch)
                 .unwrap()
                 .unwrap();
-        let charter = build_session_charter(&snapshot, false).unwrap();
+        let charter = build_session_charter(&snapshot, false, false).unwrap();
         assert!(charter.ends_with(&format!("\n- {CODEX_FINAL_CAMP_ANSWER_GUIDANCE}")));
         assert_eq!(charter.matches(CODEX_FINAL_CAMP_ANSWER_GUIDANCE).count(), 1);
         let shared_charter = charter
@@ -13914,7 +14394,7 @@ mod slow_tests {
             .unwrap()
             .to_string();
         assert_eq!(
-            build_session_charter(&snapshot, true).unwrap(),
+            build_session_charter(&snapshot, true, false).unwrap(),
             format!(
                 "{shared_charter}\n- {FEISHU_FILE_DELIVERY_GUIDANCE}\n- {CODEX_FINAL_CAMP_ANSWER_GUIDANCE}"
             )
@@ -13924,11 +14404,11 @@ mod slow_tests {
             .filter(|adapter_kind| *adapter_kind != AdapterKind::CodexCli)
         {
             snapshot.effective_config["runtimeAdapter"] = json!(adapter_kind.as_str());
-            let other_charter = build_session_charter(&snapshot, false).unwrap();
+            let other_charter = build_session_charter(&snapshot, false, false).unwrap();
             assert_eq!(other_charter, shared_charter, "{adapter_kind:?}");
             assert!(!other_charter.contains(CODEX_FINAL_CAMP_ANSWER_GUIDANCE));
             assert_eq!(
-                build_session_charter(&snapshot, true).unwrap(),
+                build_session_charter(&snapshot, true, false).unwrap(),
                 format!("{shared_charter}\n- {FEISHU_FILE_DELIVERY_GUIDANCE}"),
                 "{adapter_kind:?}"
             );
@@ -14215,7 +14695,7 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(manifest.0, 0);
-        assert_eq!(manifest.1, 5);
+        assert_eq!(manifest.1, 6);
         assert_eq!(manifest.2.len(), 64);
         assert_eq!((manifest.3, manifest.4, manifest.5), (5, 2, 6));
         fixture.cleanup();
@@ -15106,9 +15586,10 @@ mod slow_tests {
     }
 
     #[test]
-    fn run_facts_v3_always_includes_output_root_and_omits_other_absent_fields() {
+    fn run_facts_v4_always_includes_output_root_and_omits_other_absent_fields() {
         let facts = RunFacts {
-            schema_version: 3,
+            schema_version: 4,
+            mission: None,
             attachment_output_root: test_run_facts().attachment_output_root,
             conversation_mode: None,
             task_context: Some(TaskContextFact {
@@ -15145,7 +15626,7 @@ mod slow_tests {
         assert_eq!(
             serde_json::from_str::<Value>(&rendered.payload_json).unwrap(),
             json!({
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "attachmentOutputRoot": "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf",
                 "taskContext": {
                     "taskId": "task-1",
@@ -15181,7 +15662,7 @@ mod slow_tests {
         assert_eq!(rendered.references.len(), 6);
 
         let non_gather_budget = RunFacts {
-            schema_version: 3,
+            schema_version: 4,
             delegation: Some(DelegationFact {
                 new_a2a_dispatch_allowed: false,
                 new_a2a_target_contact_allowed: false,
@@ -15201,7 +15682,7 @@ mod slow_tests {
         assert!(
             camp_resources_only
                 .payload_json
-                .contains("\"schemaVersion\":3")
+                .contains("\"schemaVersion\":4")
         );
         let shared_conversation = SharedConversation {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
@@ -15216,6 +15697,7 @@ mod slow_tests {
             self_active_tasks: None,
             shared_conversation: &shared_conversation,
             run_facts: &camp_resources_only,
+            workspace: None,
             a2a_guidance: None,
             single_chat_guidance: None,
             current_input: &json!({"source":{"type":"user"},"body":"work"}),

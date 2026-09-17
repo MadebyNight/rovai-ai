@@ -1224,6 +1224,7 @@ export interface CurrentInputSkillResolution {
 }
 
 export interface CampMessageView {
+  missionStart?: {missionId: string; title: string; description: string}
   quotes: MessageQuoteSnapshot[]
   id: string
   sequence: number
@@ -1274,6 +1275,7 @@ export type LocalAttachmentOwnerLocator =
       attachmentRefId: string
     }
   | { owner: 'message'; campId: string; messageId: string; attachmentRefId: string }
+  | { owner: 'mission'; campId: string; missionId: string; attachmentRefId: string }
   | {
       owner: 'single_chat_composer'
       campId: string
@@ -2048,7 +2050,8 @@ export interface CampAttachmentRefView {
 }
 
 export interface RunFactRefView {
-  fact: 'attachment_output_root' | 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
+  missionId?: string
+  fact: 'camp_resources' | 'attachment_output_root' | 'mission' | 'task_context' | 'session_continuity' | 'external_effect' | 'gather' | 'delegation'
   taskId?: string
 }
 
@@ -2064,9 +2067,9 @@ export interface ContextManifestView {
   historyCamps: ContextManifestHistoryCampView[]
   rawMessageCount: number
   previousAcceptedPublicBoundarySequence: number
-  contextDeliveryProfileVersion: 4 | 5
+  contextDeliveryProfileVersion: 4 | 5 | 6
   contextDeliveryProfile: {
-    profileVersion: 4 | 5
+    profileVersion: 4 | 5 | 6
     maxPublicMessages: number
     maxPublicHistoryChars: number
     maxMessageBodyChars: number
@@ -2087,6 +2090,9 @@ export interface ContextManifestView {
   runFactRefs: RunFactRefView[]
   runFactPayload: unknown
   runFactDigest: string
+  workspaceFact?: { workingDirectory: string; branch?: string | null } | null
+  workspaceFactDigest?: string | null
+  workspaceFactIncluded?: boolean
   currentInputSource: unknown
   attachmentRefs: CampAttachmentRefView[]
   attachmentDigest: string
@@ -2102,7 +2108,7 @@ export interface ContextManifestView {
   mcpProjectionDigest: string
   selfActiveTaskEvidence: unknown
   selfActiveTaskEvidenceDigest: string
-  formatterVersion: 22 | 23 | 24
+  formatterVersion: 22 | 23 | 24 | 25
   renderedPayloadDigest: string
   delivery: RuntimeInputDeliveryView | null
   createdAt: string
@@ -2249,6 +2255,7 @@ export interface CampSnapshot {
   camp: {
     id: string
     title: string
+    missionId?: string | null
     channelSource?: CampChannelSource | null
     activationState: CampActivationState
     projectBindingKind: ProjectBindingKind
@@ -3710,6 +3717,20 @@ export type CoreMethod =
   | 'automations.list'
   | 'automations.get'
   | 'automations.runs.list'
+  | 'missions.cleanup.list'
+  | 'missions.cleanup.retry'
+  | 'missions.list'
+  | 'missions.get'
+  | 'missions.activity'
+  | 'missions.delivery'
+  | 'missions.changes'
+  | 'missions.fileDiff'
+  | 'missions.diffSession.release'
+  | 'missions.create'
+  | 'missions.update'
+  | 'missions.status'
+  | 'missions.start'
+  | 'missions.linkPr'
   | 'automations.create'
   | 'automations.update'
   | 'automations.configureTimeLimit'
@@ -3946,6 +3967,7 @@ export interface RovaiApi {
     }, file: File): Promise<CampPendingInputsView>
     preview(locator: LocalAttachmentOwnerLocator): Promise<AttachmentPreviewResult>
   }
+  missionAttachments: MissionAttachmentsApi
   singleChatAttachments: {
     prepare(
       conversationId: string,
@@ -3985,3 +4007,19 @@ export interface RovaiApi {
   revealMonitoringExport(path: string): Promise<void>
   platform: NodeJS.Platform
 }
+
+export type MissionStatus = 'needs_you' | 'not_started' | 'in_progress' | 'completed'
+export interface MissionInfo { missionId: string; title: string; description: string; status: MissionStatus; sourceMessageId: string | null }
+export interface MissionRecord extends MissionInfo { number: number; hasUnread: boolean; campId: string; projectPath: string; projectBindingKind: ProjectBindingKind; detailsVersion: number; tags: string[]; attachments: LocalAttachmentSourceView[]; createdAt: string; updatedAt: string; memberAgentIds: string[]; defaultLeadAgentId: string | null; runningAgentIds: string[] }
+export interface MissionCreate { title: string; description: string; projectPath: string; projectBindingKind: ProjectBindingKind; memberAgentIds: string[]; defaultLeadAgentId: string; tags: string[] }
+export interface MissionUpdate { missionId: string; title?: string; description?: string; tags?: string[]; expectedDetailsVersion?: number }
+export interface MissionAttachmentDraft { id: string; file: File }
+export interface MissionAttachmentsApi {
+  create(commandId: string, command: MissionCreate, attachments: MissionAttachmentDraft[]): Promise<StoredCommandResult>
+  update(commandId: string, command: MissionUpdate, keepAttachmentIds: string[], attachments: MissionAttachmentDraft[]): Promise<StoredCommandResult>
+}
+export interface MissionActivity { id: number; kind: string; actorType: string; actorId: string; changes: Record<string, unknown>; createdAt: string }
+export interface MissionWorkspace { id: string; missionId: string; campId: string; executionHostId: string; sourceDirectory: string; repositoryRoot: string; gitCommonDir: string; worktreePath: string; workingDirectory: string; baseBranch: string | null; branch: string; baseSha: string; state: 'preparing' | 'ready' | 'cleanup_pending' | 'cleanup_failed'; diagnostic: string | null }
+export interface MissionDelivery { campId: string; workingDirectory: string; git: boolean; workspace: MissionWorkspace | null; pullRequests: { id: string; url: string; title: string; createdAt: string }[]; files: { attachmentId: string; displayName: string; kind: 'file' | 'directory'; fileCount: number; mediaType: string; byteSize: number; previewKind: 'image' | 'none'; messageId: string; agentId: string; createdAt: string }[] }
+export interface MissionChangedFile { id: string; path: string; oldPath: string | null; kind: 'added' | 'deleted' | 'renamed' | 'copied' | 'type_changed' | 'unmerged' | 'modified'; additions: number | null; deletions: number | null; binary: boolean; oldMode: string; newMode: string }
+export interface MissionFileDiff { file: MissionChangedFile; patch: string; hunks: { oldStart: number; newStart: number; lines: { kind: 'addition' | 'deletion' | 'context' | 'metadata'; text: string; oldLine: number | null; newLine: number | null }[] }[] }

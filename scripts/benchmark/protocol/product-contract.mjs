@@ -30,6 +30,9 @@ export async function collectProductContractFingerprint({
   const gitStatus = await runGit(repositoryRoot, ['status', '--porcelain=v1'])
   const health = coreHealth ? sanitizeCoreHealth(coreHealth) : null
   const coreDigest = coreExecutable ? await digestExecutable(coreExecutable) : null
+  const deliveryProfileSymbol = capture(source.contextDelivery.contents,
+    /pub fn current_context_delivery_profile\(\)[^{]*\{\s*(CONTEXT_DELIVERY_PROFILE_V\d+)\.validate\(\)/u,
+    'Current Context Delivery Profile symbol')
 
   const fields = {
     releaseBuildIdentity: available({
@@ -62,8 +65,8 @@ export async function collectProductContractFingerprint({
       constantAuthority(source.contextContract, 'AGENT_RUN_CONTEXT_FORMATTER_VERSION')
     ),
     contextDeliveryProfileVersion: available(
-      Number.parseInt(capture(source.contextDelivery.contents, /CONTEXT_DELIVERY_PROFILE_V5:[\s\S]*?profile_version:\s*(\d+)/u, 'Context Delivery Profile version'), 10),
-      constantAuthority(source.contextDelivery, 'CONTEXT_DELIVERY_PROFILE_V5')
+      Number.parseInt(capture(source.contextDelivery.contents, new RegExp(`${deliveryProfileSymbol}:[\\s\\S]*?profile_version:\\s*(\\d+)`, 'u'), 'Context Delivery Profile version'), 10),
+      constantAuthority(source.contextDelivery, deliveryProfileSymbol)
     ),
     durableTaskContract: available({
       version: Number.parseInt(capture(source.taskContract.contents, /DURABLE_TASK_CONTRACT_VERSION:\s*u32\s*=\s*(\d+)/u, 'Durable Task contract version'), 10),

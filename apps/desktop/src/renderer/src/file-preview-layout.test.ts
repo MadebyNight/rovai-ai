@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  filePreviewCloseThreshold,
   filePreviewDragWidth,
   filePreviewRatioForWidth,
   filePreviewRatioFromStoredValue,
+  filePreviewSplitMinWidth,
   filePreviewWidthForRatio
 } from './file-preview-layout'
 
@@ -30,6 +32,13 @@ describe('File preview split geometry', () => {
     const preferredRatio = .65
     expect(filePreviewWidthForRatio(1_000, preferredRatio)).toBe(580)
     expect(filePreviewWidthForRatio(2_000, preferredRatio)).toBe(1_300)
+  })
+
+  it('gives Mission Activity a narrower stable split without changing ordinary files', () => {
+    expect(filePreviewSplitMinWidth(true)).toBe(721)
+    expect(filePreviewSplitMinWidth(false)).toBe(841)
+    expect(filePreviewCloseThreshold(true)).toBe(220)
+    expect(filePreviewCloseThreshold(false)).toBe(320)
   })
 
   it('recovers from invalid storage and accepts stable ratios from very wide workspaces', () => {

@@ -50,7 +50,10 @@ pub const TEAM_CREATE_TASK_TOOL_NAME: &str = "team.create_task";
 pub const TEAM_GET_TASK_TOOL_NAME: &str = "team.get_task";
 pub const TEAM_UPDATE_TASK_TOOL_NAME: &str = "team.update_task";
 pub const TEAM_LIST_TASKS_TOOL_NAME: &str = "team.list_tasks";
-pub const TEAM_TOOL_NAMES: [&str; 23] = [
+pub const TEAM_TOOL_NAMES: [&str; 26] = [
+    "mission.get",
+    "mission.update",
+    "mission.status",
     AUTOMATION_LIST_TOOL_NAME,
     AUTOMATION_GET_TOOL_NAME,
     AUTOMATION_CREATE_TOOL_NAME,
@@ -6324,8 +6327,17 @@ mod tests {
     #[cfg(feature = "slow-tests")]
     fn public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes() {
         // Current and pre-upgrade frozen deliveries must consume exact bytes and original version axes.
-        for frozen_version in [24, 23, 22] {
+        for frozen_version in [25, 24, 23, 22] {
             let mut fixture = Fixture::new();
+            let expected_isolation = if frozen_version == 25 {
+                "git_worktree"
+            } else {
+                "shared"
+            };
+            fixture.database.connection().execute(
+                "UPDATE agent_run SET workspace_json=json_set(workspace_json,'$.isolation',?2) WHERE id=?1",
+                params![fixture.source_run_id, expected_isolation],
+            ).unwrap();
             fixture
                 .database
                 .connection()
@@ -6391,7 +6403,21 @@ Use this exact public input @agent_2";
             )
             .unwrap();
             let mut frozen_snapshot: Value = serde_json::from_str(&frozen_snapshot).unwrap();
-            if frozen_version < 24 {
+            let target_workspace: String = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT workspace_json FROM agent_run WHERE id=?1",
+                    [&target_run_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&target_workspace).unwrap()["isolation"],
+                expected_isolation,
+                "A2A must preserve the source worktree environment instead of freezing it as shared"
+            );
+            if frozen_version < 25 {
                 use sha2::{Digest, Sha256};
                 let hash = |text: &str| format!("sha256:{:x}", Sha256::digest(text.as_bytes()));
                 let (receipt, receipt_digest) =
@@ -6408,32 +6434,47 @@ Use this exact public input @agent_2";
                 let frozen = &mut frozen_snapshot["frozenContext"];
                 let selection = &mut frozen["manifestSelection"];
                 selection["contextManifestVersion"] = json!(frozen_version);
-                selection["runFactsSchemaVersion"] = json!(2);
+                selection["runFactsSchemaVersion"] =
+                    json!(if frozen_version == 24 { 3 } else { 2 });
                 selection["campAttachmentViewReceiptVersion"] = json!(2);
                 selection["campAttachmentViewReceipt"] = serde_json::to_value(receipt).unwrap();
                 selection["campAttachmentViewReceiptDigest"] = json!(receipt_digest);
-                if frozen_version == 22 {
+                {
                     let mut old_profile = crate::context_delivery::CONTEXT_DELIVERY_PROFILE_V5;
-                    old_profile.profile_version = 4;
-                    selection["contextDeliveryProfileVersion"] = json!(4);
+                    old_profile.profile_version = if frozen_version == 22 { 4 } else { 5 };
+                    selection["contextDeliveryProfileVersion"] = json!(old_profile.profile_version);
                     selection["contextDeliveryProfileJson"] =
                         serde_json::to_value(old_profile).unwrap();
                     selection["contextDeliveryProfileDigest"] =
                         json!(old_profile.canonical_digest().unwrap());
                 }
-                let current_json = selection["runFactPayload"].as_str().unwrap().to_string();
-                let mut facts: Value = serde_json::from_str(&current_json).unwrap();
-                facts
+                for key in [
+                    "workspaceFact",
+                    "workspaceFactDigest",
+                    "workspaceFactIncluded",
+                ] {
+                    selection.as_object_mut().unwrap().remove(key);
+                }
+                selection["currentInputSource"]
                     .as_object_mut()
                     .unwrap()
-                    .remove("attachmentOutputRoot");
-                facts["schemaVersion"] = json!(2);
-                facts["campResources"] = json!({"campId":fixture.camp_id,"publishedAttachmentRoot":legacy_root,"access":"enumerate_and_read","scope":"current_camp","mutability":"read_only"});
+                    .remove("missionStart");
+                let current_json = selection["runFactPayload"].as_str().unwrap().to_string();
+                let mut facts: Value = serde_json::from_str(&current_json).unwrap();
+                if frozen_version < 24 {
+                    facts
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("attachmentOutputRoot");
+                    facts["schemaVersion"] = json!(if frozen_version == 24 { 3 } else { 2 });
+                    facts["campResources"] = json!({"campId":fixture.camp_id,"publishedAttachmentRoot":legacy_root,"access":"enumerate_and_read","scope":"current_camp","mutability":"read_only"});
+                }
+                facts["schemaVersion"] = json!(if frozen_version == 24 { 3 } else { 2 });
                 let legacy_json = serde_json::to_string(&facts).unwrap();
                 selection["runFactPayload"] = json!(legacy_json);
                 selection["runFactDigest"] = json!(hash(&legacy_json));
                 for reference in selection["runFactRefs"].as_array_mut().unwrap() {
-                    if reference["fact"] == "attachment_output_root" {
+                    if frozen_version < 24 && reference["fact"] == "attachment_output_root" {
                         reference["fact"] = json!("camp_resources");
                     }
                 }
@@ -6550,7 +6591,13 @@ Use this exact public input @agent_2";
                 (
                     frozen_version,
                     frozen_version,
-                    if frozen_version == 22 { 4 } else { 5 }
+                    if frozen_version == 22 {
+                        4
+                    } else if frozen_version == 23 || frozen_version == 24 {
+                        5
+                    } else {
+                        6
+                    }
                 )
             );
             // Reopening a materialized legacy manifest is a read-only replay, not a new render.

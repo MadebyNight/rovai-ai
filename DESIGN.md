@@ -151,7 +151,8 @@ without extra focus outlines or halos; higher contrast preferences restore the s
 - **Buttons:** compact, direct and text-first. Primary actions use Steel by default. Conversation send, conversation/project renaming, new-conversation dialog creation, task creation and member creation/invitation use
   the neutral `--conversation-action` family, as do first-run onboarding, teammate Runtime permission switches, Host workspace confirmation, teammate save, Memory, Automation and MCP/Skills actions. Teammate save and workspace creation entries use light tonal buttons. Home creation uses a quiet tonal entry; danger marks destructive actions and sidebar removal. Active buttons move down 1px; disabled controls retain legible content at
   reduced opacity. Floating return-to-latest icon controls keep their hit area stationary while pressed;
-  their face uses a tonal change for feedback.
+  their face uses a tonal change for feedback. Mission creation/start buttons also keep their position
+  when pressed; their primary actions use the neutral `--conversation-action` family.
   Conversation teammate selection and saving the default team use the same neutral action family for checked controls.
 - **Inputs:** use the raised/input surface and a perceivable control boundary. DOM focus supports typing, IME and keyboard navigation without extra outlines, halos or focus-only border changes. Search inputs do not add a focus underline.
 - **Navigation:** rows and selection surfaces establish location. Selected conversation and teammate rows omit

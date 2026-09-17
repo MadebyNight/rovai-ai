@@ -96,6 +96,59 @@ fn directory_camp_root(database: &Database, camp_id: &str) -> Result<Option<Stri
         .context("failed to resolve the Camp workspace")
 }
 
+fn workspace_execution_root(workspace_json: Option<&str>) -> Option<String> {
+    workspace_json
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|workspace| {
+            workspace
+                .get("executionRoot")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .filter(|path| Path::new(path).is_absolute())
+}
+
+fn run_evidence_root(
+    database: &Database,
+    camp_id: &str,
+    agent_run_id: &str,
+    execution_epoch: i64,
+) -> Result<Option<String>> {
+    let row = database
+        .connection()
+        .query_row(
+            r#"
+            SELECT agent_run.workspace_json, camp.project_binding_kind, camp.project_path
+            FROM agent_run
+            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = camp_turn.camp_id
+            WHERE agent_run.id = ?1
+              AND agent_run.execution_epoch = ?2
+              AND camp.id = ?3
+              AND camp.activation_state = 'active'
+            "#,
+            params![agent_run_id, execution_epoch, camp_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .context("failed to resolve the AgentRun file workspace")?;
+    let Some((workspace_json, binding_kind, project_path)) = row else {
+        return Ok(None);
+    };
+    Ok(
+        workspace_execution_root(workspace_json.as_deref()).or_else(|| {
+            (binding_kind == "directory" && Path::new(&project_path).is_absolute())
+                .then_some(project_path)
+        }),
+    )
+}
+
 fn strip_balanced_reference_wrapper(value: &str) -> &str {
     let mut characters = value.chars();
     let Some(first) = characters.next() else {
@@ -317,16 +370,7 @@ fn message_source(
     if !message_authorizes_reference(&body, raw_reference) {
         return Ok(None);
     }
-    let run_root = workspace_json
-        .as_deref()
-        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-        .and_then(|workspace| {
-            workspace
-                .get("executionRoot")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .filter(|path| Path::new(path).is_absolute());
+    let run_root = workspace_execution_root(workspace_json.as_deref());
     let root_path = match run_root {
         Some(path) => path,
         None if binding_kind == "directory" && Path::new(&project_path).is_absolute() => {
@@ -371,6 +415,17 @@ fn evidence_review(
     }))
 }
 
+fn is_safe_run_evidence_relative_path(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+}
+
 fn evidence_current_file(
     database: &Database,
     blob_store: &ManagedBlobStore,
@@ -410,18 +465,11 @@ fn evidence_current_file(
     if detail_file.path != summary.path {
         return Ok(Some(unavailable()));
     }
-    let path = Path::new(&summary.path);
-    if path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
+    if !is_safe_run_evidence_relative_path(&summary.path) {
         return Ok(Some(unavailable()));
     }
-    let Some(root_path) = directory_camp_root(database, camp_id)? else {
+    let Some(root_path) = run_evidence_root(database, camp_id, agent_run_id, execution_epoch)?
+    else {
         return Ok(Some(unavailable()));
     };
     Ok(Some(ResolvedFilePreviewSource::FileTarget {
@@ -494,7 +542,178 @@ pub fn resolve_file_preview_source(
 
 #[cfg(test)]
 mod tests {
-    use super::message_authorizes_reference;
+    use std::path::{Path, PathBuf};
+
+    use rusqlite::params;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use super::{
+        ResolveFilePreviewSourceParams, ResolvedFilePreviewSource,
+        is_safe_run_evidence_relative_path, message_authorizes_reference,
+        resolve_file_preview_source, run_evidence_root,
+    };
+    use crate::{
+        agent_run_file_change::AgentRunFileChangeProjector, db::Database,
+        execution_evidence::ExecutionEvidenceService, managed_blob::ManagedBlobStore,
+    };
+
+    fn run_workspace_fixture() -> (Database, PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "rovai-file-preview-run-workspace-test-{}",
+            Uuid::new_v4()
+        ));
+        let project_root = root.join("project");
+        let execution_root = root.join("mission-worktree");
+        std::fs::create_dir_all(&project_root).unwrap();
+        std::fs::create_dir_all(&execution_root).unwrap();
+        let (database, data_dir) = crate::test_support::seeded_runtime_database_fast();
+        let now = "2026-09-16T00:00:00Z";
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO camp(
+                    id, title, project_binding_kind, project_path,
+                    last_message_sequence, version, created_at, updated_at
+                ) VALUES ('preview-camp', 'Preview', 'directory', ?1, 0, 1, ?2, ?2)
+                "#,
+                params![project_root.to_string_lossy().as_ref(), now],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO conversation(id, camp_id, agent_id, created_at, updated_at)
+                VALUES ('preview-conversation', 'preview-camp', 'agent_1', ?1, ?1)
+                "#,
+                [now],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO camp_turn(
+                    id, camp_id, trigger_type, trigger_id, status, created_at, updated_at
+                ) VALUES (
+                    'preview-turn', 'preview-camp', 'system_event',
+                    'preview-trigger', 'running', ?1, ?1
+                )
+                "#,
+                [now],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO agent_run(
+                    id, camp_turn_id, conversation_id,
+                    initial_camp_context_through_sequence,
+                    initial_conversation_context_through_sequence,
+                    responsibility_key, start_reason, purpose,
+                    completion_role, effective_config_json, workspace_json,
+                    status, idempotency_key, runtime_adapter_kind, execution_epoch,
+                    created_at, started_at, updated_at
+                ) VALUES (
+                    'preview-run', 'preview-turn', 'preview-conversation', 0, 0,
+                    'preview-responsibility', 'initial', 'preview current file', 'required',
+                    '{"runtimeAdapter":"codex"}', ?1,
+                    'running', 'preview-run', 'codex', 1, ?2, ?2, ?2
+                )
+                "#,
+                params![
+                    serde_json::to_string(&json!({
+                        "executionRoot": execution_root,
+                        "access": "write",
+                        "isolation": "shared"
+                    }))
+                    .unwrap(),
+                    now,
+                ],
+            )
+            .unwrap();
+        (database, data_dir, root, execution_root)
+    }
+
+    fn clean_run_workspace_fixture(database: Database, data_dir: PathBuf, root: PathBuf) {
+        drop(database);
+        std::fs::remove_dir_all(data_dir).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn project_run_file_operations(
+        database: &mut Database,
+        data_dir: &Path,
+        paths: &[&str],
+    ) -> Vec<(String, String)> {
+        let blob_store = ManagedBlobStore::new(data_dir);
+        for (index, path) in paths.iter().enumerate() {
+            ExecutionEvidenceService
+                .record_runtime_event(
+                    database,
+                    &blob_store,
+                    "preview-run",
+                    1,
+                    "runtime.action",
+                    &json!({
+                        "eventId": format!("preview-event-{index}"),
+                        "toolCallId": format!("preview-tool-{index}"),
+                        "status": "completed",
+                        "kind": "edit",
+                        "runtimeFileOperation": {
+                            "adapterKind": "codex",
+                            "protocolFamily": "codex-app-server",
+                            "sourceEventKind": "item.completed",
+                            "operationKind": "write",
+                            "path": path
+                        }
+                    }),
+                )
+                .unwrap()
+                .expect("file evidence should be recorded");
+        }
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status = 'succeeded', ended_at = updated_at WHERE id = 'preview-run'",
+                [],
+            )
+            .unwrap();
+        AgentRunFileChangeProjector
+            .project_terminal_run(database, &blob_store, "preview-run", 1)
+            .unwrap()
+            .expect("terminal file changes should be projected")
+            .files
+            .into_iter()
+            .map(|file| (file.path, file.evidence_file_id))
+            .collect()
+    }
+
+    fn resolve_open_current(
+        database: &Database,
+        data_dir: &Path,
+        evidence_file_id: &str,
+    ) -> ResolvedFilePreviewSource {
+        resolve_file_preview_source(
+            database,
+            &ManagedBlobStore::new(data_dir),
+            ResolveFilePreviewSourceParams {
+                kind: "run_evidence".to_string(),
+                camp_id: "preview-camp".to_string(),
+                message_id: None,
+                raw_reference: None,
+                agent_run_id: Some("preview-run".to_string()),
+                execution_epoch: Some(1),
+                evidence_file_id: Some(evidence_file_id.to_string()),
+                action: Some("open_current".to_string()),
+            },
+        )
+        .unwrap()
+        .expect("projected evidence should resolve")
+    }
 
     #[test]
     fn message_reference_requires_an_explicit_markdown_destination() {
@@ -559,5 +778,135 @@ mod tests {
             "查看 ``[伪链接](src/secret.ts)``。",
             "src/secret.ts"
         ));
+    }
+
+    #[test]
+    fn run_evidence_prefers_the_exact_run_execution_root() {
+        let (database, data_dir, root, execution_root) = run_workspace_fixture();
+        assert_eq!(
+            run_evidence_root(&database, "preview-camp", "preview-run", 1).unwrap(),
+            Some(execution_root.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            run_evidence_root(&database, "another-camp", "preview-run", 1).unwrap(),
+            None,
+            "a Run workspace must not authorize another Camp"
+        );
+        assert_eq!(
+            run_evidence_root(&database, "preview-camp", "preview-run", 2).unwrap(),
+            None,
+            "a stale execution epoch must not authorize the current Run workspace"
+        );
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
+    #[test]
+    fn open_current_resolves_new_and_same_named_files_from_the_mission_worktree() {
+        let (mut database, data_dir, root, execution_root) = run_workspace_fixture();
+        let project_root: PathBuf = database
+            .connection()
+            .query_row(
+                "SELECT project_path FROM camp WHERE id = 'preview-camp'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map(PathBuf::from)
+            .unwrap();
+        std::fs::create_dir_all(project_root.join("src")).unwrap();
+        std::fs::create_dir_all(execution_root.join("src")).unwrap();
+        std::fs::write(project_root.join("src/shared.ts"), "project\n").unwrap();
+        std::fs::write(execution_root.join("src/shared.ts"), "mission\n").unwrap();
+        std::fs::write(execution_root.join("src/new.ts"), "new mission file\n").unwrap();
+        let evidence =
+            project_run_file_operations(&mut database, &data_dir, &["src/shared.ts", "src/new.ts"]);
+        for expected_path in ["src/shared.ts", "src/new.ts"] {
+            let evidence_file_id = evidence
+                .iter()
+                .find_map(|(path, id)| (path == expected_path).then_some(id))
+                .expect("projected file identity");
+            let ResolvedFilePreviewSource::FileTarget {
+                root_path,
+                raw_reference,
+                ..
+            } = resolve_open_current(&database, &data_dir, evidence_file_id)
+            else {
+                panic!("open_current should authorize a current file target")
+            };
+            assert_eq!(Path::new(&root_path), execution_root);
+            assert_eq!(raw_reference, expected_path);
+        }
+        assert_eq!(
+            std::fs::read_to_string(execution_root.join("src/shared.ts")).unwrap(),
+            "mission\n",
+            "the original project's same-named file must not be selected"
+        );
+        assert!(!project_root.join("src/new.ts").exists());
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
+    #[test]
+    fn ordinary_and_legacy_runs_fall_back_to_the_camp_project() {
+        let (database, data_dir, root, _) = run_workspace_fixture();
+        let project_root: String = database
+            .connection()
+            .query_row(
+                "SELECT project_path FROM camp WHERE id = 'preview-camp'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET workspace_json = ?1 WHERE id = 'preview-run'",
+                [
+                    serde_json::to_string(&json!({ "executionRoot": project_root.clone() }))
+                        .unwrap(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            run_evidence_root(&database, "preview-camp", "preview-run", 1).unwrap(),
+            Some(project_root.clone()),
+            "an ordinary Camp Run remains rooted at its project"
+        );
+
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET workspace_json = NULL WHERE id = 'preview-run'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            run_evidence_root(&database, "preview-camp", "preview-run", 1).unwrap(),
+            Some(project_root.clone()),
+            "a historical Run without workspace evidence uses the Camp project"
+        );
+
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET workspace_json = '{\"executionRoot\":\"relative/path\"}' WHERE id = 'preview-run'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            run_evidence_root(&database, "preview-camp", "preview-run", 1).unwrap(),
+            Some(project_root),
+            "an invalid historical execution root cannot escape the fallback policy"
+        );
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
+    #[test]
+    fn run_evidence_paths_keep_the_existing_relative_containment_gate() {
+        assert!(is_safe_run_evidence_relative_path("src/generated.txt"));
+        assert!(is_safe_run_evidence_relative_path("generated.txt"));
+        assert!(!is_safe_run_evidence_relative_path("../generated.txt"));
+        assert!(!is_safe_run_evidence_relative_path(
+            "src/../../generated.txt"
+        ));
+        assert!(!is_safe_run_evidence_relative_path("/tmp/generated.txt"));
     }
 }

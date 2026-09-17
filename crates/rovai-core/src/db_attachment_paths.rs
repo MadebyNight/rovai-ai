@@ -47,6 +47,28 @@ pub(super) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> 
     Ok(true)
 }
 
+pub(super) const GUARDS: &str = r#"
+        DROP TRIGGER IF EXISTS runtime_input_delivery_attachment_auth_insert;
+        CREATE TRIGGER context_manifest_v24_only_insert BEFORE INSERT ON context_manifest
+        WHEN NEW.context_manifest_version <> 24 AND NOT (
+            NEW.context_manifest_version IN (22,23) AND NEW.formatter_version=NEW.context_manifest_version
+            AND EXISTS(SELECT 1 FROM agent_run r JOIN message_delivery d ON d.id=r.trigger_message_delivery_id
+                WHERE r.id=NEW.agent_run_id
+                AND json_extract(d.frozen_snapshot_json,'$.frozenContext.manifestSelection.contextManifestVersion')=NEW.context_manifest_version
+                AND json_extract(d.frozen_snapshot_json,'$.frozenContext.renderedPayloadDigest')=NEW.rendered_payload_digest))
+        BEGIN SELECT RAISE(ABORT, 'new ContextManifest must use v24 or exact frozen legacy evidence'); END;
+        CREATE TRIGGER context_manifest_quote_profile_insert BEFORE INSERT ON context_manifest
+        WHEN (NEW.context_manifest_version>=23 AND NEW.context_delivery_profile_version<>5)
+          OR (NEW.context_manifest_version<23 AND NEW.context_delivery_profile_version<>4)
+        BEGIN SELECT RAISE(ABORT, 'ContextManifest quote profile pairing is invalid'); END;
+        CREATE TRIGGER runtime_input_delivery_attachment_auth_insert BEFORE INSERT ON runtime_input_delivery
+        WHEN NEW.runtime_request_digest IS NULL OR NOT (
+            (NEW.runtime_attachment_auth_receipt_version IS 1 AND NEW.runtime_attachment_auth_receipt_json IS NOT NULL AND NEW.runtime_attachment_auth_receipt_digest IS NOT NULL)
+            OR (NEW.runtime_attachment_auth_receipt_version IS NULL AND NEW.runtime_attachment_auth_receipt_json IS NULL AND NEW.runtime_attachment_auth_receipt_digest IS NULL
+                AND EXISTS(SELECT 1 FROM context_manifest WHERE id=NEW.context_manifest_id AND context_manifest_version=24 AND camp_attachment_view_receipt_version IS NULL)))
+        BEGIN SELECT RAISE(ABORT, 'Runtime Input Delivery attachment evidence does not match its manifest'); END;
+    "#;
+
 pub(super) fn apply(tx: &Transaction<'_>) -> Result<()> {
     let schema: String = tx.query_row(
         "SELECT sql FROM sqlite_schema WHERE type='table' AND name='context_manifest'",
@@ -84,27 +106,7 @@ pub(super) fn apply(tx: &Transaction<'_>) -> Result<()> {
             })
             .collect(),
     )?;
-    tx.execute_batch(r#"
-        DROP TRIGGER IF EXISTS runtime_input_delivery_attachment_auth_insert;
-        CREATE TRIGGER context_manifest_v24_only_insert BEFORE INSERT ON context_manifest
-        WHEN NEW.context_manifest_version <> 24 AND NOT (
-            NEW.context_manifest_version IN (22,23) AND NEW.formatter_version=NEW.context_manifest_version
-            AND EXISTS(SELECT 1 FROM agent_run r JOIN message_delivery d ON d.id=r.trigger_message_delivery_id
-                WHERE r.id=NEW.agent_run_id
-                AND json_extract(d.frozen_snapshot_json,'$.frozenContext.manifestSelection.contextManifestVersion')=NEW.context_manifest_version
-                AND json_extract(d.frozen_snapshot_json,'$.frozenContext.renderedPayloadDigest')=NEW.rendered_payload_digest))
-        BEGIN SELECT RAISE(ABORT, 'new ContextManifest must use v24 or exact frozen legacy evidence'); END;
-        CREATE TRIGGER context_manifest_quote_profile_insert BEFORE INSERT ON context_manifest
-        WHEN (NEW.context_manifest_version>=23 AND NEW.context_delivery_profile_version<>5)
-          OR (NEW.context_manifest_version<23 AND NEW.context_delivery_profile_version<>4)
-        BEGIN SELECT RAISE(ABORT, 'ContextManifest quote profile pairing is invalid'); END;
-        CREATE TRIGGER runtime_input_delivery_attachment_auth_insert BEFORE INSERT ON runtime_input_delivery
-        WHEN NEW.runtime_request_digest IS NULL OR NOT (
-            (NEW.runtime_attachment_auth_receipt_version IS 1 AND NEW.runtime_attachment_auth_receipt_json IS NOT NULL AND NEW.runtime_attachment_auth_receipt_digest IS NOT NULL)
-            OR (NEW.runtime_attachment_auth_receipt_version IS NULL AND NEW.runtime_attachment_auth_receipt_json IS NULL AND NEW.runtime_attachment_auth_receipt_digest IS NULL
-                AND EXISTS(SELECT 1 FROM context_manifest WHERE id=NEW.context_manifest_id AND context_manifest_version=24 AND camp_attachment_view_receipt_version IS NULL)))
-        BEGIN SELECT RAISE(ABORT, 'Runtime Input Delivery attachment evidence does not match its manifest'); END;
-    "#)?;
+    tx.execute_batch(GUARDS)?;
     validate_migration_foreign_keys(tx, &["context_manifest"])?;
     Ok(())
 }
@@ -264,6 +266,7 @@ mod tests {
                 Uuid::new_v4()
             ));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        super::super::mission_context::downgrade_for_test(database.connection());
         downgrade_for_test(database.connection());
         database.connection().execute_batch("CREATE TEMP TRIGGER reject_attachment_path_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=156 BEGIN SELECT RAISE(ABORT,'attachment path receipt failure'); END;").unwrap();
         assert!(

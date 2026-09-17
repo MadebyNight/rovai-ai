@@ -114,7 +114,7 @@ export class FilePreviewResources {
 
   admit(session: FilePreviewSession): boolean {
     const hot = [...this.sessions.values()].filter(value => value.pendingOpens > 0 || value.getSnapshot().tabs.some(tab => tab.kind === 'file'
-      ? !!(tab.content || tab.file || tab.candidate || tab.loadState === 'opening') : !!tab.detail || tab.detailStatus === 'loading'))
+      ? !!(tab.content || tab.file || tab.candidate || tab.loadState === 'opening') : tab.kind === 'file_change' && (!!tab.detail || tab.detailStatus === 'loading')))
     if (hot.includes(session) || hot.length < this.limits.hotCamps) return true
     const victim = hot.filter(value => value !== session && !this.isCurrent(value.campId)
       && value.getSnapshot().tabs.every(tab => tab.kind !== 'file' || !tab.content || !!(tab.sourceRequest && restorableFilePreviewRequest(tab.sourceRequest))))

@@ -150,6 +150,14 @@ pub enum LocalAttachmentOwnerLocator {
         #[serde(rename = "attachmentRefId")]
         attachment_ref_id: String,
     },
+    Mission {
+        #[serde(rename = "campId")]
+        camp_id: String,
+        #[serde(rename = "missionId")]
+        mission_id: String,
+        #[serde(rename = "attachmentRefId")]
+        attachment_ref_id: String,
+    },
     SingleChatComposer {
         #[serde(rename = "campId")]
         camp_id: String,
@@ -199,6 +207,7 @@ impl LocalAttachmentOwnerLocator {
             | Self::Pending { camp_id, .. }
             | Self::PendingEdit { camp_id, .. }
             | Self::Message { camp_id, .. }
+            | Self::Mission { camp_id, .. }
             | Self::SingleChatComposer { camp_id, .. }
             | Self::SingleChatPending { camp_id, .. }
             | Self::SingleChatPendingEdit { camp_id, .. }
@@ -218,6 +227,9 @@ impl LocalAttachmentOwnerLocator {
                 attachment_ref_id, ..
             }
             | Self::Message {
+                attachment_ref_id, ..
+            }
+            | Self::Mission {
                 attachment_ref_id, ..
             }
             | Self::SingleChatComposer {
@@ -544,6 +556,17 @@ pub fn load_source_attachment_for_client(
             .query_row(
                 "SELECT source_attachments_json FROM camp_message WHERE camp_id = ?1 AND id = ?2",
                 params![camp_id, message_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?,
+        LocalAttachmentOwnerLocator::Mission {
+            camp_id,
+            mission_id,
+            ..
+        } => connection
+            .query_row(
+                "SELECT source_attachments_json FROM mission WHERE camp_id = ?1 AND id = ?2",
+                params![camp_id, mission_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()?,

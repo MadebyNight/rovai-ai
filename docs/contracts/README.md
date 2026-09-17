@@ -9,6 +9,12 @@ last_updated: 2026-09-11
 本目录保存跨版本、字段级且可由测试直接验证的接口合同。[Version Decisions](../decisions/README.md)解释为什么选择某个边界，
 Architecture 解释组件如何组成，Version 概览记录交付范围；它们都不复制本目录的完整 wire shape。
 
+## Mission
+
+| 合同 | 范围 |
+| --- | --- |
+| [Mission v1（当前）](mission-v1.md) | 身份、业务状态、当前成员操作、工作区准备与清理、固定基准累计变更 |
+
 ## 生命周期
 
 - 已接受且带版本号的合同语义冻结，只允许修正错字、链接、元数据和不改变语义的表达。
@@ -249,7 +255,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Memory Capture v3（当前）](memory-capture-v3.md) | v2 边界加 complete exact-Scope View、copyable Revision target、active body aggregate quota、64 KiB production projection limit 与 Memory-domain clean break |
 | [Memory Capture v2 (historical)](memory-capture-v2.md) | v1 捕获/Review/Forget 边界加 flat Agent-relative Scope identity、revise target assertion、durable domain rejection 与 Supersession 原子顺序 |
 | [Memory Capture v1 (historical)](memory-capture-v1.md) | 初版 best-effort 在线捕获、actor-bounded add/revise、隔离 Hearth Review Item、双 CAS、候选清除与 Forget safeguard；不含 Scope-identified revise |
-| [Built-in Tool Transport v25（当前）](builtin-tool-transport-v25.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
+| [Built-in Tool Transport v26（当前）](builtin-tool-transport-v26.md) | 保留 v25 的附件原路径与输出合同，并增加三个当前 Camp Mission 操作；不暴露业务版本或工作区 |
+| [Built-in Tool Transport v25（历史）](builtin-tool-transport-v25.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [Built-in Tool Transport v24（历史）](builtin-tool-transport-v24.md) | v22 transport 与 Single Chat history 不变；新增七项 Scheduled Automation 操作，catalog 扩为二十三项 |
 | [Built-in Tool Transport v22（历史）](builtin-tool-transport-v22.md) | v21 transport 不变；新增只在当前有效 Single Chat Run 可用的 `single_chat.history`，catalog 扩为十六项 |
 | [Built-in Tool Transport v21（历史）](builtin-tool-transport-v21.md) | v20 IPC/Envelope 不变；当前 lease 根目录与 CLI 外部附件快照 |
@@ -363,7 +370,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v2 (historical)](message-delivery-v2.md) | `forward | return` 冻结边、target lineage、caller continuation，以及 v1 queue/attempt/recovery/settlement |
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
 | [Current Input Skill Links v1（当前）](current-input-skill-links-v1.md) | Structured Skill Mention、per-Run send snapshot、start-time resolver 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v24（当前）](context-manifest-evidence-v24.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
+| [ContextManifest Evidence v25（当前）](context-manifest-evidence-v25.md) | 合并 v24 的附件输出路径与 Mission 事实、可信开始输入、独立 WORKSPACE；冻结 22/23/24 保留 |
+| [ContextManifest Evidence v24（历史）](context-manifest-evidence-v24.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [ContextManifest Evidence v23（历史）](context-manifest-evidence-v23.md) | v21 selection/evidence 不变；Formatter/Manifest 22 增加 ExternalPrincipal direct source 与 ExternalQuote deterministic projection |
 | [ContextManifest Evidence v21（历史）](context-manifest-evidence-v21.md) | Formatter 21 bytes 不变；View receipt v2 只冻结稳定附件语义；不含 ExternalPrincipal/ExternalQuote |
 | [ContextManifest Evidence v20（历史）](context-manifest-evidence-v20.md) | Formatter 21、mandatory Run Facts v2、Published View paths/physical receipt、schema 54 与 Migration 99 clean break |
@@ -372,12 +380,14 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v17（历史）](context-manifest-evidence-v17.md) | Formatter v19、`agent_v1` message audience、closed forward/return A2A guidance evidence、Gather v3 与 exact frozen recovery |
 | [ContextManifest Evidence v16（历史）](context-manifest-evidence-v16.md) | Formatter v18、Skill selection/availability/Exposure/resolution、exact payload 与 Migration 91 clean-break recovery |
 | [ContextManifest Evidence v15（历史）](context-manifest-evidence-v15.md) | Formatter v17、compact history/offset、Run Facts exact bytes/evidence 与旧 v15 recovery 边界 |
-| [Run Facts v2（当前）](run-facts-v2.md) | v1 optional facts 不变；增加每个 AgentRun mandatory `campResources` Published Attachment root |
+| [Run Facts v3（当前）](run-facts-v3.md) | 保持既有事实；新增紧凑 mission identity/status，workspace 在独立 section |
+| [Run Facts v2（historical）](run-facts-v2.md) | v1 optional facts 不变；增加每个 AgentRun mandatory `campResources` Published Attachment root |
 | [Run Facts v1（历史）](run-facts-v1.md) | Task reference、Session continuity、external effect、Gather generation fallback 与 delegation budget 的 optional 结构化模型事实 |
 | [ContextManifest Evidence v14（历史）](context-manifest-evidence-v14.md) | Formatter v16、Gather result notice、完整 request/current generation evidence 与旧 v14/v15 exact recovery |
 | [ContextManifest Evidence v13（历史）](context-manifest-evidence-v13.md) | Formatter v15、`gather_completion` 与 completion input v1 frozen evidence |
 | [ContextManifest Evidence v12 (historical)](context-manifest-evidence-v12.md) | v11 self-active semantics 加 Formatter v14 的 `mentionsCurrentUser`、Structured Content/projected body evidence 与 frozen recovery |
-| [Context Delivery Profile v5（当前）](context-delivery-profile-v5.md) | v3 数值与 Task/reference 语义不变；当前 Agent 自身消息在 recent top-15 和 whole-history omission 前失去候选资格 |
+| [Context Delivery Profile v6（当前）](context-delivery-profile-v6.md) | 沿用 Profile 5 数值与选文；实际 preparing workspace 参与直接与 A2A 最终预算 |
+| [Context Delivery Profile v5（historical）](context-delivery-profile-v5.md) | v3 数值与 Task/reference 语义不变；当前 Agent 自身消息在 recent top-15 和 whole-history omission 前失去候选资格 |
 | [Context Delivery Profile v3（历史）](context-delivery-profile-v3.md) | v2 public context 加 self-active Task selection/order/max 8 与 public-history-first budget priority；自身消息仍属于 recent candidate |
 | [ContextManifest Evidence v11 (historical)](context-manifest-evidence-v11.md) | Formatter v13 与 self-active empty/omission 语义；不含 Current User Mention metadata |
 | [ContextManifest Evidence v10 (historical)](context-manifest-evidence-v10.md) | self-active Task evidence 的旧空集合语义；不作为 Formatter v13 恢复入口 |

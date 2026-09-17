@@ -8,6 +8,7 @@ export function previewTabPresentation(tab: PreviewTabModel): {
   displayPath: string
   icon: ResourceVisualKind
 } {
+  if (tab.kind === 'mission_activity') return { fileName: '活动', displayPath: '活动', icon: 'text' }
   if (tab.kind === 'file') return {
     fileName: tab.presentation.fileName,
     displayPath: tab.presentation.displayPath,

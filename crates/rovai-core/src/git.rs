@@ -336,7 +336,10 @@ async fn optional_git_text(cwd: &Path, args: &[&str]) -> Option<String> {
 }
 
 async fn git_output(cwd: &Path, args: &[&str]) -> Result<Output> {
-    let mut command = Command::new("git");
+    let executable = crate::runtime_discovery::resolve_active_command_path("git")
+        .context("Git executable is unavailable")?;
+    let mut command = Command::new(executable);
+    crate::runtime_discovery::configure_active_runtime_command(&mut command);
     command.arg("-C").arg(cwd).args(args).kill_on_drop(true);
     tokio::time::timeout(Duration::from_secs(10), command.output())
         .await

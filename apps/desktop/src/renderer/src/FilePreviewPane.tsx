@@ -1,4 +1,6 @@
 import { usePreviewHost } from './FilePreviewContext'
+import { FilePreviewTabs } from './FilePreviewTabs'
+import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 'react'
 import { SafeMarkdown } from './SafeMarkdown'
 import { FileFindScope } from './FilePreviewFind'
@@ -95,6 +97,9 @@ function FilePathButton({
 
 function SourceViewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   const { resolvedTheme } = useFilePreview()
+  // Reading samples are mutable snapshots. They may suppress an old target on a
+  // cold mount, but must not remove the current highlight on a theme/parent render.
+  const target = useMemo(() => tab.reading ? undefined : tab.file?.target, [tab.file?.target])
   const text = tab.content?.kind === 'page' ? tab.content.page.text
     : tab.content && 'text' in tab.content ? tab.content.text : ''
   const startLine = tab.content?.kind === 'page' ? tab.content.page.startLine : 1
@@ -104,7 +109,7 @@ function SourceViewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element 
       text={text}
       startLine={startLine}
       findScopeLabel={tab.content?.kind === 'page' ? '仅查找当前已加载页' : ''}
-      target={tab.reading ? undefined : tab.file?.target}
+      target={target}
       theme={resolvedTheme}
     />
   )
@@ -287,6 +292,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   const { open, resolvedTheme } = useFilePreview()
   const [linkError, setLinkError] = useState<string | null>(null)
   const file = tab.file
+  const headingTarget = useMemo(() => tab.reading ? undefined : file?.target?.heading, [file?.target])
   const api = useFilePreviewApi()
   const readImage = useCallback((rawReference: string) => {
     if (!file || !api.readChildImage) throw new Error('图片资源适配不可用。')
@@ -302,7 +308,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
         <SafeMarkdown
           mode="document"
           theme={resolvedTheme}
-          headingTarget={tab.reading ? undefined : file.target?.heading}
+          headingTarget={headingTarget}
           onHeadingTargetResult={(found) => setLinkError(found ? null : '未找到指定的标题，已保持在文件顶部。')}
           localImageContent={api.readChildImage && file.capabilities.includes('read_child') ? readImage : undefined}
           localImageUrl={file.capabilities.includes('preview_asset') ? (rawReference) => filePreviewAssetUrl(
@@ -418,8 +424,8 @@ function FilePreviewDocument({ tab }: { tab: FilePreviewTabModel }): React.JSX.E
 
 function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').PreviewTabModel; children: React.ReactNode }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
-  const { saveReading } = useFilePreview()
-  const content = tab.kind === 'file' ? tab.content : tab.detail
+  const { saveReading, isCurrentCamp } = useFilePreview()
+  const content = tab.kind === 'file' ? tab.content : tab.kind === 'file_change' ? tab.detail : isCurrentCamp ? tab.missionId : null
   const restoring = useRef(false)
   useLayoutEffect(() => {
     if (!tab.reading || !content || !root.current) return
@@ -433,7 +439,7 @@ function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').P
       const code = node.querySelector<HTMLElement>('.cm-scroller')
       if (code && !code.clientHeight) return
       if (code) { code.scrollTop = reading.codeScrollTop ?? 0; code.scrollLeft = reading.codeScrollLeft ?? 0 }
-      const body = node.querySelector<HTMLElement>('.file-preview-content, .agent-run-file-review-scroll')
+      const body = node.querySelector<HTMLElement>('.file-preview-content, .agent-run-file-review-scroll, .mission-activity-document')
       if (body) { body.scrollTop = reading.scrollTop ?? 0; body.scrollLeft = reading.scrollLeft ?? 0 }
       const image = node.querySelector<HTMLElement>('.file-preview-image-stage')
       if (image) { image.scrollTop = reading.imageScrollTop ?? 0; image.scrollLeft = reading.imageScrollLeft ?? 0 }
@@ -449,17 +455,22 @@ function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').P
     const node = event.target
     if (node.classList.contains('cm-scroller')) saveReading(tab.id, { codeScrollTop: node.scrollTop, codeScrollLeft: node.scrollLeft })
     else if (node.classList.contains('file-preview-image-stage')) saveReading(tab.id, { imageScrollTop: node.scrollTop, imageScrollLeft: node.scrollLeft })
-    else if ((node.classList.contains('file-preview-content') || node.classList.contains('agent-run-file-review-scroll'))) saveReading(tab.id, { scrollTop: node.scrollTop, scrollLeft: node.scrollLeft })
+    else if ((node.classList.contains('file-preview-content') || node.classList.contains('agent-run-file-review-scroll') || node.classList.contains('mission-activity-document'))) saveReading(tab.id, { scrollTop: node.scrollTop, scrollLeft: node.scrollLeft })
   }}>{children}</div>
 }
 
-export function FilePreviewPane(): React.JSX.Element {
+export function FilePreviewPane({ tabsInPane = false }: { tabsInPane?: boolean }): React.JSX.Element {
   const host = usePreviewHost()
   const { paneVisible } = useFilePreview()
+  const layout = useOptionalFilePreviewLayout()
+  if (tabsInPane) return <section className="file-preview-pane mission-preview-slot" hidden={!paneVisible}>
+    <FilePreviewTabs compact={layout?.compact}/>
+    <div ref={host} className="file-preview-anchor mission-preview-body" aria-hidden="true"/>
+  </section>
   return <div ref={host} className="file-preview-pane file-preview-anchor" hidden={!paneVisible} aria-hidden="true" />
 }
 
-export function FilePreviewPaneContent({ visible }: { visible: boolean }): React.JSX.Element {
+export function FilePreviewPaneContent({ visible, missionActivity }: { visible: boolean; missionActivity?: React.ReactNode }): React.JSX.Element {
   const { tabs, activeTabId, paneVisible } = useFilePreview()
   const tabLabels = useMemo(() => previewTabLabels(tabs), [tabs])
   return (
@@ -479,7 +490,7 @@ export function FilePreviewPaneContent({ visible }: { visible: boolean }): React
         aria-label={tabLabels.get(tab.id) ?? previewTabLabel(tab)}
         aria-labelledby={`file-preview-tab-${tab.id}`}
       >
-        <ReadingPanel tab={tab}><FileFindScope id={tab.id}>{tab.kind === 'file_change' ? <FileChangesPreview tab={tab} visible={visible && tab.id === activeTabId} /> : <FilePreviewDocument tab={tab} />}</FileFindScope></ReadingPanel>
+        <ReadingPanel tab={tab}>{tab.kind === 'mission_activity' ? missionActivity : <FileFindScope id={tab.id}>{tab.kind === 'file_change' ? <FileChangesPreview tab={tab} visible={visible && tab.id === activeTabId} /> : <FilePreviewDocument tab={tab} />}</FileFindScope>}</ReadingPanel>
       </section>)}
     </section>
   )

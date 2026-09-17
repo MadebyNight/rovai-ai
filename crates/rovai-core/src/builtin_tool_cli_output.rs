@@ -121,6 +121,9 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
         | "memory.search"
         | "memory.read"
         | "single_chat.history"
+        | "mission.get"
+        | "mission.update"
+        | "mission.status"
         | "automation.list"
         | "automation.get"
         | "automation.create"
@@ -228,6 +231,9 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
         | "memory.search"
         | "memory.read"
         | "single_chat.history"
+        | "mission.get"
+        | "mission.update"
+        | "mission.status"
         | "automation.list"
         | "automation.get"
         | "automation.create"
@@ -368,13 +374,11 @@ pub fn validate_schema(value: &Value, schema: &Value) -> Result<()> {
         }
         bail!("value does not match any oneOf variant");
     }
-    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        if variants
+    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array)
+        && !variants
             .iter()
             .any(|variant| validate_schema(value, variant).is_ok())
-        {
-            return Ok(());
-        }
+    {
         bail!("value does not match any anyOf variant");
     }
     if let Some(variants) = schema.get("allOf").and_then(Value::as_array) {
@@ -434,19 +438,20 @@ pub fn validate_schema(value: &Value, schema: &Value) -> Result<()> {
             bail!("number is higher than maximum");
         }
     }
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        let object = value.as_object().context("schema expects an object")?;
+        for key in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(key) {
+                bail!("schema requires property {key}");
+            }
+        }
+    }
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
         let object = value.as_object().context("schema expects an object")?;
         if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
             for key in object.keys() {
                 if !properties.contains_key(key) {
                     bail!("schema rejects extra property {key}");
-                }
-            }
-        }
-        if let Some(required) = schema.get("required").and_then(Value::as_array) {
-            for key in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(key) {
-                    bail!("schema requires property {key}");
                 }
             }
         }
@@ -679,7 +684,7 @@ mod tests {
         ))
         .unwrap();
         let documents = golden.as_object().unwrap();
-        assert_eq!(documents.len(), 23);
+        assert_eq!(documents.len(), builtin_tool_definitions().len());
         for definition in builtin_tool_definitions() {
             let operation = definition["name"].as_str().unwrap();
             let fixture = documents

@@ -14,6 +14,7 @@ Dialog、Popover 等基础原子遵守根目录 [`DESIGN.md`](../../../DESIGN.md
 |---|---|
 | [App Shell 与统一侧栏](app-shell-navigation.md) | 一级导航、Project/Camp 投影、Quick Chat、设置入口和窗口布局 |
 | [MCP 与 Skills 设置](capability-settings.md) | 可拖拽列表/详情、启停筛选、JSON 与文件夹导入、正文预览和头像范围选择 |
+| [Mission 使命板](mission-board.md) | 桌面使命导航、卡片、抽屉、会话板、交付与活动 |
 | [Automation 工作区](automation-workspace.md) | 定时任务一级入口、模板、自动保存、计划字段、运行/通知状态与结果会话入口 |
 | [Desktop Bootstrap Shell](bootstrap-shell.md) | Full Core ready 前的 authority 状态、重试、诊断、本机主题与偏好降级；不挂载业务空态 |
 | [Camp 会话工作区](conversation-workspace.md) | 公共消息、Camp 内单聊、作者感知附件/图片分区、过程 Drawer、终态文件行、每 Run 文件变化卡片、Task、Approval、Composer、Inspector、Stop 与关闭等待面 |
