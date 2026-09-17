@@ -57,11 +57,11 @@ async function runFixture(t, mode, expectedCases) {
 test('the production Camp Composer refreshes continuation on publication without replacing a Draft', { timeout: 60_000 },
   t => runFixture(t, '--continuation', 11))
 
-test('Pending attachments use Composer cards, body-only queue summaries and active-editor drag routing', { timeout: 60_000 },
+test('Returned Pending attachments use normal Composer cards and preserve the remaining queue', { timeout: 60_000 },
   t => runFixture(t, '--pending-attachments', 6))
 
 test('loading the Composer route preserves conversation and input positions', { timeout: 60_000 },
   t => runFixture(t, '--route-loading', 1))
 
-test('Pending edits survive normal Camp navigation while preserving ownership and explicit recovery', { timeout: 60_000 },
+test('Pending withdrawal preserves Draft navigation, ownership and explicit recovery', { timeout: 60_000 },
   t => runFixture(t, '--pending-navigation', 7))

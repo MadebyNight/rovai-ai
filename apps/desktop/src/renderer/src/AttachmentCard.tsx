@@ -37,6 +37,9 @@ function localAttachmentLocatorKey(locator: LocalAttachmentOwnerLocator): string
   if (locator.owner === 'message') {
     return `message:${locator.campId}:${locator.messageId}:${locator.attachmentRefId}`
   }
+  if (locator.owner === 'mission') {
+    return `mission:${locator.campId}:${locator.missionId}:${locator.attachmentRefId}`
+  }
   if (locator.owner === 'pending') {
     return `pending:${locator.campId}:${locator.pendingInputId}:${locator.attachmentRefId}`
   }
@@ -407,7 +410,10 @@ function AttachmentRevealGlyph(): JSX.Element {
   )
 }
 
-export function ComposerAttachmentStrip({ children }: { children: ReactNode }): JSX.Element {
+export function ComposerAttachmentStrip({ children, ariaLabel = '待发送附件，使用左右方向键浏览' }: {
+  children: ReactNode
+  ariaLabel?: string
+}): JSX.Element {
   const stripRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const strip = stripRef.current
@@ -420,7 +426,7 @@ export function ComposerAttachmentStrip({ children }: { children: ReactNode }): 
     <div
       className="composer-attachment-strip"
       role="group"
-      aria-label="待发送附件，使用左右方向键浏览"
+      aria-label={ariaLabel}
       tabIndex={0}
       onKeyDown={scrollAttachmentStripOnKeyDown}
       ref={stripRef}

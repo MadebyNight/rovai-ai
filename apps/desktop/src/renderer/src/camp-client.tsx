@@ -11,6 +11,7 @@ export interface EditingRecovery { get(identity: string): unknown; set(identity:
 export type CampClient = Pick<RovaiApi,
   'request' | 'singleChatAttachments' | 'platform'
 > & {
+  missionAttachments: RovaiApi['missionAttachments'] | null
   composerAttachments: Omit<RovaiApi['composerAttachments'], 'preview'> & {
     preview(locator: import('@contracts').LocalAttachmentOwnerLocator): Promise<Omit<import('@contracts').AttachmentPreviewResult, 'preview'> & {
       preview: import('@contracts').AttachmentPreview | { blob: Blob } | null

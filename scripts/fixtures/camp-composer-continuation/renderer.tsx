@@ -18,7 +18,10 @@ const previewLocators: LocalAttachmentOwnerLocator[] = []
 let releasePreparation: (() => void) | null = null
 let pausePreparation = false
 let leaveGuard: CampLeaveGuard | null = null
-let failPendingSave = false
+let returnFailure: 'rejected' | 'unknown' | null = null
+let releaseReturn: (() => void) | null = null
+let pauseReturn = false
+const editActions: string[] = []
 const listeners = new Set<(event: CoreEvent) => void>()
 const emit = (method: string, params: Record<string, unknown>) => {
   for (const listener of listeners) listener({ method, params })
@@ -78,35 +81,40 @@ Object.assign(window, { rovai: {
     if (method === 'camps.members.fast.check') return null
     if (method === 'camp.pendingInputs.get') return structuredClone({ ...queue, campId: params.campId })
     if (method === 'camp.pendingInputs.edit') {
-      const command = params.command as {
-        pendingInputId: string; expectedRevision: number; editToken: string | null; action: PendingInputEditAction
-      }
+      const command = params.command as { pendingInputId: string; expectedRevision: number; editToken: string | null; action: PendingInputEditAction }
       const item = queue.items.find(item => item.id === command.pendingInputId)!
       check(item?.revision === command.expectedRevision, 'Pending edit must use the canonical revision')
       const action = command.action
-      if (action.type === 'save' && failPendingSave) throw new Error('保存失败，请重试')
-      if (action.type === 'begin') {
-        queue.editSession = { pendingInputId: item.id, editToken: 'fixture-edit-token', basePendingRevision: item.revision,
-          recoveryRequired: false, workingQuotes: [], workingAttachments: structuredClone(item.attachments) }
-      } else {
-        check(command.editToken === queue.editSession?.editToken, 'Working attachments must use the edit token')
-        if (action.type === 'remove_attachment') {
-          queue.editSession!.workingAttachments = queue.editSession!.workingAttachments.filter(a => a.id !== action.attachmentRefId)
-        } else if (action.type === 'reorder_attachments') {
-          queue.editSession!.workingAttachments = action.attachmentRefIds.map(id => queue.editSession!.workingAttachments.find(a => a.id === id)!)
-        } else {
-          if (action.type === 'save') {
-            item.attachments = structuredClone(queue.editSession!.workingAttachments)
-            item.content = action.content
-            item.body = action.content.segments.map(segment => segment.kind === 'text' ? segment.text : '').join('')
-            item.revision += 1
-          } else if (action.type === 'delete') {
-            queue.items = queue.items.filter(candidate => candidate.id !== item.id)
-          } else check(action.type === 'cancel', 'Only the exercised edit actions are mocked')
-          queue.editSession = null
-        }
+      editActions.push(action.type)
+      if (action.type === 'takeover') {
+        check(command.editToken === queue.editSession?.editToken, 'Takeover must use the current lease')
+        queue.editSession = { pendingInputId: item.id, editToken: 'taken-over', basePendingRevision: item.revision,
+          recoveryRequired: false, foreignClient: false, workingQuotes: [], workingAttachments: structuredClone(item.attachments) }
+        return { status: 'applied', code: 'pending_input.edit_started', payload: { editToken: 'taken-over' } }
       }
-      return { status: 'accepted', code: 'ok', payload: { editToken: queue.editSession?.editToken } }
+      if (action.type === 'return_to_composer') {
+        const current = drafts.get(campId)!
+        check(current.revision === action.expectedDraftRevision, 'Withdrawal must use the flushed Draft revision')
+        if (pauseReturn) await new Promise<void>(resolve => { releaseReturn = resolve })
+        if (returnFailure === 'rejected') return { status: 'rejected', code: 'pending_input.changed', payload: {} }
+        drafts.set(campId, { ...current, content: structuredClone(item.content), body: item.body,
+          revision: current.revision + 1, attachments: structuredClone(item.attachments), quotes: item.quotes,
+          replyIntent: item.replyIntent, continuationIntent: null })
+        queue.items = queue.items.filter(candidate => candidate.id !== item.id)
+        queue.editSession = null
+        if (returnFailure === 'unknown') throw new Error('连接中断，结果尚未确认')
+        return { status: 'applied', code: 'pending_input.returned_to_composer', payload: { pendingInputId: item.id, draftRevision: current.revision + 1 } }
+      }
+      check(action.type === 'delete', 'The current page must not begin a separate editor')
+      queue.items = queue.items.filter(candidate => candidate.id !== item.id)
+      return { status: 'applied', code: 'pending_input.deleted', payload: {} }
+    }
+    if (method === 'camp.composerDraft.removeAttachment') {
+      const current = drafts.get(String(params.campId))!
+      check(current.revision === params.expectedRevision, 'Removal uses the current Draft revision')
+      const next = { ...current, revision: current.revision + 1, attachments: current.attachments.filter(a => a.id !== params.attachmentId) }
+      drafts.set(next.campId, next)
+      return structuredClone(next)
     }
     if (method === 'camp.composerDraft.get') {
       if (nextRead) { const held = nextRead; nextRead = null; return held.promise }
@@ -129,19 +137,11 @@ Object.assign(window, { rovai: {
       const current = drafts.get(id)!
       check(current.revision === revision, 'Ordinary attachment must use the current Draft revision')
       attachmentCalls.push({ owner: 'composer', file: file.name })
+      if (pausePreparation) await new Promise<void>(resolve => { releasePreparation = resolve })
+      if (file.name === 'unreadable.txt') throw new Error('attachment_unreadable')
       const next = { ...current, revision: revision + 1, attachments: [...current.attachments, sourceAttachment(file)] }
       drafts.set(id, next)
       return structuredClone(next)
-    },
-    async preparePending(input: { pendingInputId: string; expectedRevision: number; editToken: string }, file: File) {
-      check(input.pendingInputId === queue.editSession?.pendingInputId && input.editToken === queue.editSession.editToken,
-        'Pending ingress must target the current working owner, not the hidden Draft')
-      check(input.expectedRevision === queue.items.find(item => item.id === input.pendingInputId)?.revision, 'Pending ingress revision')
-      attachmentCalls.push({ owner: 'pending_edit', file: file.name })
-      if (pausePreparation) await new Promise<void>(resolve => { releasePreparation = resolve })
-      if (file.name === 'unreadable.txt') throw new Error('文件当前无法读取')
-      queue.editSession!.workingAttachments.push(sourceAttachment(file))
-      return structuredClone(queue)
     },
     async preview(locator: LocalAttachmentOwnerLocator) {
       previewLocators.push(locator)
@@ -210,6 +210,10 @@ async function reset(draft = emptyDraft(), holdInitialRead = false, entryDraft: 
   previewLocators.length = 0
   releasePreparation = null
   pausePreparation = false
+  pauseReturn = false
+  releaseReturn = null
+  returnFailure = null
+  editActions.length = 0
   savedContinuationSources.length = 0
   drafts.clear()
   drafts.set(campId, draft)
@@ -256,11 +260,9 @@ function holdRead() {
   return held
 }
 
-const pendingEditor = () => document.getElementById('pending-camp-message')!
-const pendingCards = () => document.querySelectorAll('.pending-input-editor .composer-attachment-card')
-const pendingButton = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('.pending-input-editor button'))
-  .find(button => button.textContent?.trim() === label)!
-const pendingReady = () => pendingEditor()?.isContentEditable === true
+const pendingEditor = editor
+const pendingCards = () => document.querySelectorAll('.composer .composer-attachment-card')
+const pendingReady = () => editor()?.isContentEditable === true && editor()?.getAttribute('aria-disabled') !== 'true'
 const imageFile = (name = '粘贴图片.png') => new File(['fixture image'], name, { type: 'image/png' })
 const textFile = (name: string) => new File(['fixture text'], name, { type: 'text/plain' })
 
@@ -278,8 +280,9 @@ function dragFiles(target: Element, files: File[], drop = true): DragEvent {
 }
 
 async function beginPending(index = 0) {
+  const count = queue.items.length
   document.querySelectorAll<HTMLButtonElement>('.pending-input-edit')[index].click()
-  await until(pendingReady, 'The Pending editor must own its edit session')
+  await until(() => queue.items.length === count - 1 && pendingReady(), 'Withdrawal must replace the normal Composer and release the queue')
 }
 
 async function setupPendingAttachments() {
@@ -302,191 +305,133 @@ async function setupPendingAttachments() {
   return draft
 }
 
+// Pending v4 retires the separate save/cancel editor. Legacy token/revision and
+// working-ref behavior remains covered by the Core owner; these cases own the
+// current Renderer transfer, ordinary attachment and navigation seams.
 async function runPendingAttachmentCases(): Promise<string[]> {
   const cases: string[] = []
-  const draft = await setupPendingAttachments()
+  await setupPendingAttachments()
   const summaries = document.querySelectorAll('.pending-input-copy')
-  check(summaries[0].textContent === '请看这份设计说明' && summaries[1].textContent === '', 'Queue summaries must contain only body, including an empty attachment-only body')
-  check(!document.querySelector('.pending-input-list .attachment-card, .pending-input-attachments'), 'Queue rows must not render attachment cards')
-  check(!previewLocators.some(locator => locator.owner === 'pending'), 'Queue display must not load attachment previews')
-  cases.push('queue rows show only body and leave attachment-only summaries blank')
+  check(summaries[0].textContent === '请看这份设计说明' && summaries[1].textContent === '', 'Queue summaries contain only body, including empty attachment-only body')
+  check(!document.querySelector('.pending-input-list .attachment-card'), 'Queue rows must not load attachment cards')
+  check(!previewLocators.some(locator => locator.owner === 'pending'), 'Queue rows do not read attachment previews')
+  cases.push('body-only queue summaries do not read files')
 
   await beginPending()
-  await until(() => Boolean(document.querySelector('.pending-input-editor .composer-image-preview img')), 'Existing Pending image must use the shared thumbnail')
-  const ordinaryImage = document.querySelector<HTMLElement>('.composer > [hidden] .composer-image-attachment')!
-  const pendingImage = document.querySelector<HTMLElement>('.pending-input-editor .composer-image-attachment')!
-  check(ordinaryImage && getComputedStyle(ordinaryImage).width === getComputedStyle(pendingImage).width, 'Pending and ordinary Composer thumbnails must share their dimensions')
+  await until(() => pendingCards().length === 2, 'Canonical attachments must replace the previous Draft attachments')
+  check(editor().textContent === '请看这份设计说明' && !document.querySelector('.pending-input-editor'), 'Withdrawal uses only the normal Composer')
+  check(queue.items.length === 1 && editActions.join() === 'return_to_composer', 'Withdrawal releases the selected queue row without beginning a legacy edit')
+  cases.push('canonical body and files replace only the selected Draft and release the queue')
+
   pausePreparation = true
-  const clipboardData = new DataTransfer()
-  clipboardData.items.add(imageFile())
-  pendingEditor().dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }))
-  await until(() => releasePreparation !== null, 'Pasted image must reach Pending ingress')
-  check(document.querySelector('.pending-input-editor .attachment-preparing')
-    && document.querySelector<HTMLButtonElement>('.pending-input-editor .composer-send')!.disabled,
-    'Preparation uses shared loading cards and prevents premature Save')
-  const blocked = dragFiles(pendingEditor(), [textFile('blocked.txt')])
-  await flush()
-  check(blocked.dataTransfer?.dropEffect === 'none' && !attachmentCalls.some(call => call.file === 'blocked.txt'), 'Busy edit must reject further drops without routing to the hidden Draft')
-  pausePreparation = false
-  releasePreparation!()
-  await until(() => pendingReady() && document.querySelectorAll('.pending-input-editor .composer-image-preview img').length === 2, 'Pasted image must become a normal image thumbnail')
-  check(previewLocators.some(locator => locator.owner === 'pending_edit' && locator.editToken === 'fixture-edit-token'), 'Image preview must use the working owner and edit token')
-  cases.push('pasted Pending images share Composer thumbnails, loading and edit-scoped previews')
+  const clipboardData = new DataTransfer(); clipboardData.items.add(imageFile())
+  editor().dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }))
+  await until(() => releasePreparation !== null, 'Pasted image must reach ordinary Composer ingress')
+  check(document.querySelector('.attachment-preparing'), 'Preparation must render shared loading feedback')
+  pausePreparation = false; releasePreparation!()
+  await until(() => pendingCards().length === 3 && !document.querySelector('.attachment-preparing'), 'Prepared image must join the Draft')
+  check(previewLocators.some(locator => locator.owner === 'composer'), 'Thumbnail reads the current Composer owner')
+  cases.push('paste uses ordinary preparation feedback and owner-scoped previews')
 
-  const over = dragFiles(pendingEditor(), [textFile('拖入文件.txt')], false)
-  await flush()
-  check(over.defaultPrevented && over.dataTransfer?.dropEffect === 'copy', 'Parent must not override Pending drag acceptance')
-  check(document.querySelector('.composer.is-dragging-attachments .pending-input-editor .composer-destination')?.textContent === '将添加到这条消息',
-    'Pending drop must show the ordinary destination feedback')
-  pendingEditor().dispatchEvent(new DragEvent('drop', { dataTransfer: over.dataTransfer, bubbles: true, cancelable: true }))
-  await until(() => pendingReady() && pendingCards().length === 4, 'Dropped file must join the current Pending editor')
-  check(!document.querySelector('.composer.is-dragging-attachments'), 'Drop must clear the feedback')
-  const timeline = document.querySelector('.conversation-main') ?? document.querySelector('.conversation-controls')!
-  dragFiles(timeline, [textFile('会话区拖入.txt'), textFile('多文件和很长的中文附件名称用于检查横向附件带不会撑破输入区域.md')])
-  await until(() => pendingReady() && pendingCards().length === 6, 'Conversation drop must accept multiple files for the active Pending editor')
-  check(attachmentCalls.every(call => call.owner === 'pending_edit'), 'Editing drops must never reach ordinary Draft ingress')
-  cases.push('Pending editor and conversation drops share feedback and route multiple files to working attachments')
+  dragFiles(editor(), [textFile('拖入文件.txt'), textFile('补充说明.md')])
+  await until(() => pendingCards().length === 5, 'Multiple dropped files join the returned Draft')
+  document.querySelector<HTMLButtonElement>('[aria-label="移除附件 拖入文件.txt"]')!.click()
+  await until(() => pendingCards().length === 4, 'Removal must update the current Draft')
+  check(attachmentCalls.every(call => call.owner === 'composer') && queue.items[0].attachments.length === 1, 'New files must not mutate the remaining Pending input')
+  cases.push('multi-file drag and remove affect only the returned Composer')
 
-  const firstId = queue.editSession!.workingAttachments[0].id
-  const firstButton = document.querySelector<HTMLButtonElement>('.pending-input-editor .attachment-open')!
-  firstButton.focus()
-  firstButton.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true }))
-  await until(() => Boolean(document.querySelector('.attachment-context-menu')), 'Keyboard must open attachment actions')
-  Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent === '后移')!.click()
-  await until(() => pendingReady() && queue.editSession!.workingAttachments[1].id === firstId, 'Attachment menu must preserve reorder support')
-  document.querySelector<HTMLButtonElement>('.pending-input-editor [aria-label="移除附件 拖入文件.txt"]')!.click()
-  await until(() => pendingReady() && pendingCards().length === 5, 'Shared remove button must remove the selected working ref')
-  pendingButton('保存').click()
-  await until(() => !pendingEditor(), 'Save must close the edit')
-  check(queue.items[0].attachments.length === 5 && queue.items[0].revision === 2, 'Save must preserve working attachments in the same queued item')
-  check(document.querySelectorAll('.pending-input-copy')[0].textContent === '请看这份设计说明', 'Saved attachments must remain absent from the queue summary')
-  check(JSON.stringify(drafts.get(campId)) === JSON.stringify(draft), 'Editing must preserve the independent ordinary Draft')
-  cases.push('shared card removal and keyboard-menu reorder save only the edited Pending')
+  dragFiles(editor(), [textFile('unreadable.txt')])
+  await until(() => document.body.textContent?.includes('文件当前无法读取') === true, 'Import failure must remain actionable')
+  dragFiles(editor(), [textFile('恢复后的文件.txt')])
+  await until(() => drafts.get(campId)!.attachments.length === 5, 'Import can recover after failure')
+  cases.push('failed ingress preserves existing files and permits another import')
 
   await beginPending()
-  dragFiles(pendingEditor(), [textFile('unreadable.txt')])
-  await until(() => pendingReady() && Boolean(document.querySelector('[role="alert"]')?.textContent?.includes('文件当前无法读取')), 'Failed ingress must retain an actionable error and recover controls')
-  dragFiles(pendingEditor(), [textFile('放弃的附件.txt')])
-  await until(() => pendingReady() && pendingCards().length === 6, 'Successful drop must work after an ingress failure')
-  pendingButton('取消').click()
-  await until(() => Boolean(document.querySelector('[role="dialog"]')), 'Cancel with changed attachments must confirm discard')
-  Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(button => button.textContent === '放弃修改')!.click()
-  await until(() => !pendingEditor(), 'Discard must close the edit')
-  check(queue.items[0].attachments.length === 5, 'Cancel must not change canonical Pending attachments')
-  cases.push('failed Pending ingress recovers and Cancel discards only working attachment changes')
-
-  await beginPending(1)
-  check(!pendingButton('保存').disabled && !pendingEditor().textContent?.trim(), 'Attachment-only Pending must remain saveable')
-  document.querySelector<HTMLButtonElement>('.pending-input-editor .attachment-remove')!.click()
-  await until(() => pendingReady() && pendingCards().length === 0, 'The last attachment can be removed')
-  check(pendingButton('保存').disabled, 'Empty body and empty attachments cannot be saved')
-  queue.editSession = { ...queue.editSession!, recoveryRequired: true }
-  emit('camp.pendingInputs.changed', { campId, reason: 'edit_changed' })
-  await until(() => !pendingReady(), 'Fenced edit must become read-only')
-  const fenced = dragFiles(pendingEditor(), [textFile('fenced.txt')])
-  await flush()
-  check(fenced.dataTransfer?.dropEffect === 'none' && !attachmentCalls.some(call => call.file === 'fenced.txt'), 'Fenced edit must reject drops, not fall back to the normal Draft')
-  check(JSON.stringify(drafts.get(campId)) === JSON.stringify(draft), 'Failure and fenced paths must leave the ordinary Draft intact')
-  cases.push('attachment-only Save and fenced-edit drag guards remain intact')
+  await until(() => pendingCards().length === 1 && !editor().textContent?.trim(), 'Attachment-only withdrawal clears old text and refs')
+  document.querySelector<HTMLButtonElement>('.composer .attachment-remove')!.click()
+  await until(() => drafts.get(campId)!.attachments.length === 0, 'The last source ref can be removed')
+  check(!Array.from(document.querySelectorAll<HTMLButtonElement>('.composer button[type=submit]')).some(button => !button.disabled), 'Empty text and empty attachments cannot send')
+  cases.push('attachment-only withdrawal and empty-send guard remain intact')
   return cases
 }
 
 async function runPendingNavigationCases(): Promise<string[]> {
   const cases: string[] = []
-  const draft = await setupPendingAttachments()
+  await setupPendingAttachments()
   const originalSnapshot = snapshot
   queue.items[0].content.segments.unshift({ kind: 'atom', atom: { type: 'member', agentId: 'agent_1' } })
-  emit('camp.pendingInputs.changed', { campId, reason: 'fixture-ready' })
-  await flush()
-  await beginPending()
-  const canonical = JSON.stringify(queue.items[0].content)
-  pendingEditor().focus()
-  const selection = window.getSelection()!
-  selection.selectAllChildren(pendingEditor())
-  selection.collapseToEnd()
-  document.execCommand('insertText', false, '，回来后继续修改')
-  pausePreparation = true
-  dragFiles(pendingEditor(), [textFile('导航前补充.txt')])
-  await until(() => releasePreparation !== null, 'Working attachment preparation must start')
-  let leaveBlocked = false
-  try { await leaveGuard!() } catch { leaveBlocked = true }
-  check(leaveBlocked && pendingEditor(), 'Navigation must wait for the in-flight Pending mutation')
-  pausePreparation = false
-  releasePreparation!()
-  await until(() => pendingReady() && pendingCards().length === 3, 'Working attachment preparation must finish')
-  cases.push('in-flight Pending attachment changes block navigation until they finish')
-  const text = pendingEditor().textContent
+  emit('camp.pendingInputs.changed', { campId, reason: 'fixture-ready' }); await flush()
+  pauseReturn = true
+  document.querySelector<HTMLButtonElement>('.pending-input-edit')!.click()
+  await until(() => releaseReturn !== null, 'The transfer must reach its command')
+  let blocked = false
+  try { await leaveGuard!() } catch { blocked = true }
+  check(blocked && !pendingReady(), 'Navigation and editing are fenced while transfer is pending')
+  pauseReturn = false; releaseReturn!()
+  await until(() => pendingReady() && queue.items.length === 1, 'Transfer must finish')
+  cases.push('in-flight transfer fences navigation and editing')
 
-  const aborted = await leaveGuard!()
-  aborted.complete(false)
-  await until(pendingReady, 'An aborted transition must unlock the same editor')
-  check(pendingEditor().textContent === text, 'Aborted navigation must preserve unsaved text')
-  cases.push('aborted navigation retains and unlocks the active edit')
+  editor().focus(); const selection = window.getSelection()!
+  selection.selectAllChildren(editor()); selection.collapseToEnd()
+  document.execCommand('insertText', false, '，回来后继续修改'); await flush()
+  const text = editor().textContent
+  const aborted = await leaveGuard!(); aborted.complete(false)
+  await until(pendingReady, 'Aborted navigation unlocks the same Composer')
+  check(editor().textContent === text, 'Aborted navigation preserves text')
+  cases.push('aborted navigation preserves returned Draft text')
 
   const remount = async (nextSnapshot: CampSnapshot, nextQueue: CampPendingInputsView) => {
-    flushSync(() => root!.unmount())
-    snapshot = nextSnapshot
-    queue = nextQueue
-    root = createRoot(document.getElementById('root')!)
-    await render()
-    await until(() => editor()?.getAttribute('aria-disabled') !== 'true', 'Ordinary Draft must be ready')
+    flushSync(() => root!.unmount()); snapshot = nextSnapshot; queue = nextQueue
+    root = createRoot(document.getElementById('root')!); await render()
+    await until(pendingReady, 'Remounted Composer must load')
   }
-  const originalQueue = queue
-  const otherId = 'rvcamp_01h47kvsy5fk1shh6w1g60eec1'
+  const originalQueue = queue, otherId = 'rvcamp_01h47kvsy5fk1shh6w1g60eec1'
   drafts.set(otherId, { ...emptyDraft(otherId), content: composerDocumentFromText('另一会话草稿'), body: '另一会话草稿' })
-  const mutations = calls.filter(call => call === 'camp.pendingInputs.edit').length
-  const leave = await leaveGuard!()
-  leave.complete(true)
+  const mutationCount = editActions.length
+  const leave = await leaveGuard!(); leave.complete(true)
   await remount({ ...snapshot, camp: { ...snapshot.camp, id: otherId } }, { campId: otherId, executionActive: false, items: [], editSession: null })
-  check(!pendingEditor() && editor().textContent?.includes('另一会话草稿'), 'Pending text cannot leak into another Camp')
-  const back = await leaveGuard!()
-  back.complete(true)
-  await remount(originalSnapshot, originalQueue)
-  await until(pendingReady, 'Returning must resume the original edit without an explicit recovery click')
-  check(pendingEditor().textContent === text && pendingCards().length === 3, 'Unsaved body and working attachments must return together')
-  check(pendingEditor().querySelector('[data-token-kind="member_mention"][data-agent-id="agent_1"]'), 'Member identity must survive navigation')
-  check(calls.filter(call => call === 'camp.pendingInputs.edit').length === mutations, 'Navigation must not begin, takeover, save or cancel')
-  check(JSON.stringify(queue.items[0].content) === canonical, 'Navigation cannot update canonical Pending text')
-  check(JSON.stringify(drafts.get(campId)) === JSON.stringify(draft), 'The hidden ordinary Draft remains independent')
-  cases.push('Camp navigation restores the exact local edit, Atom and attachments without mutation')
+  check(editor().textContent?.includes('另一会话草稿'), 'Returned Draft cannot leak into another Camp')
+  const back = await leaveGuard!(); back.complete(true); await remount(originalSnapshot, originalQueue)
+  check(editor().textContent === text && pendingCards().length === 2, 'Returned text and attachments survive ordinary navigation')
+  check(editor().querySelector('[data-token-kind="member_mention"][data-agent-id="agent_1"]') && editActions.length === mutationCount, 'Atom identity survives without another withdrawal')
+  cases.push('ordinary Draft persistence owns cross-Camp navigation after withdrawal')
 
-  failPendingSave = true
-  pendingButton('保存').click()
-  await until(() => pendingReady() && Boolean(document.querySelector('.pending-input-notice')?.textContent?.includes('保存失败')), 'Failed save must recover the editor')
-  check(pendingEditor().textContent === text, 'Save failure must retain the edited document')
-  failPendingSave = false
-  pendingButton('保存').click()
-  await until(() => !pendingEditor(), 'Retry must save and close the edit')
-  check(queue.items[0].body.includes('回来后继续修改') && queue.items[0].attachments.length === 3, 'Explicit Save must commit the retained edit')
-  check(editor().textContent?.includes('独立保留的普通草稿'), 'Saving the Pending edit restores the ordinary Composer')
-  cases.push('save failure retains the resumed edit and explicit retry commits it')
+  await setupPendingAttachments(); returnFailure = 'rejected'
+  const before = editor().textContent
+  document.querySelector<HTMLButtonElement>('.pending-input-edit')!.click()
+  await until(() => Boolean(document.querySelector('.pending-input-notice')), 'A rejected transfer must explain its failure')
+  check(pendingReady() && editor().textContent === before && queue.items.length === 2, 'Rejection preserves both owners')
+  returnFailure = null; await beginPending()
+  cases.push('rejection preserves both owners and explicit retry succeeds')
 
+  await setupPendingAttachments(); returnFailure = 'unknown'
+  document.querySelector<HTMLButtonElement>('.pending-input-edit')!.click()
+  await until(() => Boolean(Array.from(document.querySelectorAll('button')).find(b => b.textContent === '重新加载草稿')), 'Unknown outcome requires explicit reload')
+  check(!pendingReady(), 'Unknown transfer outcome cannot autosave stale text')
+  returnFailure = null
+  Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(b => b.textContent === '重新加载草稿')!.click()
+  await until(() => pendingReady() && editor().textContent === '请看这份设计说明', 'Reload resolves the already committed transfer')
+  check(editActions.filter(a => a === 'return_to_composer').length === 1, 'Recovery reads instead of repeating withdrawal')
+  cases.push('unknown outcome blocks stale edits and reloads the committed Draft')
+
+  await setupPendingAttachments()
+  queue.editSession = { pendingInputId: queue.items[0].id, editToken: 'foreign-token', basePendingRevision: 1,
+    foreignClient: true, recoveryRequired: true, workingQuotes: [], workingAttachments: [] }
+  emit('camp.pendingInputs.changed', { campId, reason: 'foreign-edit' }); await flush()
+  check(editActions.length === 0 && document.querySelector<HTMLButtonElement>('.pending-input-delete')!.disabled, 'Reading a foreign edit neither takes over nor enables delete')
+  check(document.querySelector('.pending-input-edit')?.getAttribute('title')?.includes('接管'), 'Takeover must be explicit in the action')
   await beginPending()
-  const cancelled = await leaveGuard!()
-  cancelled.complete(true)
-  await remount(originalSnapshot, queue)
-  await until(pendingReady, 'A second edit can resume after page navigation')
-  pendingButton('取消').click()
-  await until(() => !pendingEditor(), 'Cancel still closes an unchanged resumed edit')
-  cases.push('cancel after navigation preserves the normal Draft')
+  check(editActions.join() === 'takeover,return_to_composer', 'Explicit takeover precedes withdrawal')
+  cases.push('foreign ownership requires explicit takeover before withdrawal')
 
+  await setupPendingAttachments()
+  queue.editSession = { pendingInputId: queue.items[0].id, editToken: 'own-legacy', basePendingRevision: 1,
+    recoveryRequired: true, workingQuotes: [], workingAttachments: [sourceAttachment(textFile('未保存.txt'))] }
+  emit('camp.pendingInputs.changed', { campId, reason: 'legacy-edit' }); await flush()
+  check(editActions.length === 0 && !document.querySelector('.pending-input-editor'), 'Legacy recovery does not mount or mutate an editor')
   await beginPending()
-  const fenced = await leaveGuard!()
-  fenced.complete(true)
-  queue.editSession!.editToken = 'another-owner'
-  await remount(originalSnapshot, queue)
-  check(!pendingEditor() && document.querySelector('.pending-input-list')?.textContent?.includes('重新编辑'), 'A changed owner must retain explicit recovery, never resume the cached draft')
-  cases.push('changed edit ownership requires explicit recovery')
-
-  // New explicit begin in a fresh projection, then an unguarded teardown models
-  // reload/crash: there is deliberately no navigation snapshot to resume.
-  queue.editSession = null
-  emit('camp.pendingInputs.changed', { campId, reason: 'fixture-reset' })
-  await flush()
-  await beginPending()
-  await remount(originalSnapshot, queue)
-  check(!pendingEditor() && document.querySelector('.pending-input-list')?.textContent?.includes('重新编辑'), 'Unguarded teardown must keep the existing recovery mechanism')
-  cases.push('reload/crash without navigation preparation still requires recovery')
+  check(!drafts.get(campId)!.attachments.some(a => a.displayName === '未保存.txt'), 'Withdrawal restores canonical refs, not unsaved legacy working refs')
+  cases.push('legacy recovery explicitly restores canonical content without importing unsaved edits')
   return cases
 }
 

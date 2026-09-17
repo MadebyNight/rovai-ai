@@ -171,6 +171,11 @@ describe('DraftMutationCoordinator', () => {
       { kind: 'start_reply', revision: 11 }
     ])
     expect(coordinator.getCurrentDraft()).toMatchObject({ revision: 12 })
+
+    // The background reader's acceptance fence runs before onChange/currentDraft.
+    const before = coordinator.getCurrentDraft()
+    await coordinator.load(() => false)
+    expect(coordinator.getCurrentDraft()).toBe(before)
   })
 
   it('fences late results from an earlier Draft epoch', async () => {

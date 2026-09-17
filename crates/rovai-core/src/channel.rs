@@ -14500,6 +14500,7 @@ mod tests {
                                         | "operation_policy_version"
                                         | "destination_conversation_id"
                                 ))
+                            && column != "workspace_preparing_at"
                             && column != "automation_run_id"
                             && column != "quotes_json"
                             && column != "quote_trash_json"

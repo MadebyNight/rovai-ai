@@ -82,6 +82,15 @@ pub fn validate_builtin_tool_input(canonical_name: &str, input: &Value) -> Resul
         MEMORY_WRITE_TOOL_NAME => {
             serde_json::from_value::<MemoryWriteToolInput>(input.clone()).map(|_| ())
         }
+        "mission.get" => {
+            serde_json::from_value::<crate::mission::MissionGetInput>(input.clone()).map(|_| ())
+        }
+        "mission.update" => {
+            serde_json::from_value::<crate::mission::MissionUpdateInput>(input.clone()).map(|_| ())
+        }
+        "mission.status" => {
+            serde_json::from_value::<crate::mission::MissionStatusInput>(input.clone()).map(|_| ())
+        }
         AUTOMATION_LIST_TOOL_NAME => {
             serde_json::from_value::<AutomationListToolInput>(input.clone()).map(|_| ())
         }
@@ -875,8 +884,15 @@ fn memory_view_item_schema(
     })
 }
 
+fn mission_mutation_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["missionId","changed"],"properties":{"missionId":{"type":"string"},"changed":{"type":"boolean"}}})
+}
+
 pub fn builtin_tool_definitions() -> Vec<Value> {
     vec![
+        json!({"name":"mission.get","title":"Read the current Mission","description":"Read the current Camp's Mission, including its current attachment source paths.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"required":["missionId","title","description","status","sourceMessageId","attachments"],"properties":{"missionId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"]},"sourceMessageId":{"type":["string","null"]},"attachments":{"type":"array","items":{"type":"string"}}}}}),
+        json!({"name":"mission.update","title":"Update the current Mission","description":"Update the current Mission's title or description without starting work.","inputSchema":{"type":"object","additionalProperties":false,"anyOf":[{"required":["title"]},{"required":["description"]}],"properties":{"title":{"type":"string","minLength":1,"maxLength":200},"description":{"type":"string","maxLength":12000}}},"outputSchema":mission_mutation_schema()}),
+        json!({"name":"mission.status","title":"Set the current Mission status","description":"Set the current Mission's status without starting or stopping work.","inputSchema":{"type":"object","additionalProperties":false,"required":["status"],"properties":{"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"],"description":"One of: needs_you, not_started, in_progress, completed."},"sourceMessageId":{"type":"string","minLength":1,"description":"Required for needs_you or completed; reference an existing public message in this Camp."}}},"outputSchema":mission_mutation_schema()}),
         json!({
             "name": AUTOMATION_LIST_TOOL_NAME,
             "title": "List scheduled Automations",
@@ -1301,6 +1317,29 @@ mod tests {
         );
         validate_builtin_tool_input(CAMP_MESSAGE_SEND_TOOL_NAME, &json!({"body": ""})).unwrap();
         validate_builtin_tool_input(TEAM_LIST_TASKS_TOOL_NAME, &json!({"limit": 100})).unwrap();
+        validate_builtin_tool_input("mission.get", &json!({})).unwrap();
+        validate_builtin_tool_input("mission.update", &json!({"description": ""})).unwrap();
+        validate_builtin_tool_input("mission.status", &json!({"status": "in_progress"})).unwrap();
+        for (operation, input) in [
+            ("mission.get", json!({"missionId": "another"})),
+            ("mission.get", json!({"version": 1})),
+            ("mission.update", json!({})),
+            ("mission.update", json!({"title": "x", "version": 1})),
+            (
+                "mission.update",
+                json!({"title": "x", "workingDirectory": "/tmp"}),
+            ),
+            ("mission.status", json!({"status": "running"})),
+            (
+                "mission.status",
+                json!({"status": "completed", "sourceMessageId": ""}),
+            ),
+        ] {
+            assert!(
+                validate_builtin_tool_input(operation, &input).is_err(),
+                "{operation}: {input}"
+            );
+        }
     }
 
     #[test]

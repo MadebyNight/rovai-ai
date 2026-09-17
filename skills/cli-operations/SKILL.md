@@ -1,6 +1,6 @@
 ---
 name: cli-operations
-description: 当不确定当前工作应使用 CampMessage、Gather、持久 Task、Camp/History 检索还是 Memory，需要由 Default Lead 并行征集多个成员后统一综合，普通消息是否应升级为 Task，一次业务事件需要协调多个 Rovai 操作，或 CLI 返回后需要根据最新状态选择恢复动作时使用。普通单一操作及其具体收件人或参数应直接查看对应操作帮助，不要因此自动加载本 Skill。
+description: 当不确定当前工作应使用 CampMessage、Gather、持久 Task、Camp/History 检索还是 Memory，需要由 Default Lead 并行征集多个成员后统一综合，普通消息是否应升级为 Task，一次业务事件需要协调多个 Rovai 操作，需要协调使命内容、状态与公开消息，或 CLI 返回后需要根据最新状态选择恢复动作时使用。普通单一操作及其具体收件人或参数应直接查看对应操作帮助，不要因此自动加载本 Skill。
 ---
 
 # Rovai CLI 操作协调
@@ -14,7 +14,8 @@ description: 当不确定当前工作应使用 CampMessage、Gather、持久 Tas
 
 先判断用户需要留下什么领域事实：
 
-- Camp 中可见的答复、状态、问题或一次性协作消息：选择 CampMessage。
+- Camp 中可见的答复、进展说明、问题或一次性协作消息：选择 CampMessage。
+- 当前 Camp 的使命定义或整体状态：选择 Mission。
 - 当前 Default Lead 要把同一主题并行交给多个成员，并在全部成员 Run 终态后只收到一次统一续跑：选择 Gather。
 - 跨 AgentRun 仍需追踪、可独立交接和验收的责任：选择 Task。
 - 查找 Camp、消息或稳定 ID 对应的历史事实：选择 Camp/History 读取。
@@ -35,6 +36,8 @@ Memory 代替 Task、项目文档或历史证据。
 或用户意图已经满足。
 
 ## 按需读取
+
+- 需要协调使命内容、状态与公开消息时，读取 [Mission](references/mission.md)。
 
 - 需要决定公开消息、Agent routing、User attention 或是否无需 Task 时，读取
   [Send](references/send.md)。

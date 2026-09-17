@@ -5,6 +5,7 @@ import { WindowsApplicationMenu } from '../../../apps/desktop/src/renderer/src/W
 import { CampNavigation } from '../../../apps/desktop/src/renderer/src/CampNavigation'
 import { createDesktopNavigation, type NavigationTarget } from '../../../apps/desktop/src/renderer/src/desktop-navigation'
 import { WindowDragStrip } from '../../../apps/desktop/src/renderer/src/App'
+import type { NavigationCampItem, NavigationPin, NavigationSnapshot } from '@contracts'
 import '../../../apps/desktop/src/renderer/src/styles.css'
 import '../../../apps/web/src/styles.css'
 
@@ -18,6 +19,26 @@ Object.assign(window, { rovai: { platform: 'win32', windowControls: {
   }
 } } })
 let renders = 0
+const pinnedCamp = {
+  id: 'pinned-camp', title: '置顶对话', activationState: 'active', projectPath: '/fixture/quick-chat',
+  projectBindingKind: 'quick_chat', defaultLead: null, marker: 'unread_completed',
+  lastActivityAt: '2026-09-17T00:00:02Z', lastActivityGlobalSequence: 2,
+  latestCompletionGlobalSequence: 2, version: 1
+} satisfies NavigationCampItem
+const ordinaryCamp = {
+  ...pinnedCamp, id: 'ordinary-camp', title: '普通对话', marker: 'none',
+  lastActivityAt: '2026-09-17T00:00:01Z', lastActivityGlobalSequence: 1,
+  latestCompletionGlobalSequence: 0
+} satisfies NavigationCampItem
+const navigationSnapshot = {
+  schemaVersion: 3,
+  throughGlobalSequence: 2,
+  quickChat: { totalCount: 2, recentCamps: [pinnedCamp, ordinaryCamp] },
+  projects: []
+} satisfies NavigationSnapshot
+const navigationPins = [{
+  kind: 'camp', targetKey: pinnedCamp.id, pinnedAt: '2026-09-17T00:00:03Z'
+}] satisfies NavigationPin[]
 function Content(): React.JSX.Element { renders++; return <textarea aria-label="保留的草稿" defaultValue="未发送内容" /> }
 function Fixture(): React.JSX.Element {
   const [settings, setSettings] = useState(false)
@@ -41,7 +62,7 @@ function Fixture(): React.JSX.Element {
     settle: () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 90))))
   } })
   return <><WindowsApplicationMenu /><NavigationShell platform={platform} browser={browser} disabled={disabled} settings={settings} navigation={navigation} nativeWindowControls={browser ? undefined : window.rovai.windowControls}>
-    <CampNavigation platform={platform} view={settings ? 'settings' : 'compose'} state="ready" navigation={null} activeCampId={null} pendingMemoryCount={0}
+    <CampNavigation platform={platform} view={settings ? 'settings' : 'compose'} state="ready" navigation={navigationSnapshot} pins={navigationPins} activeCampId={pinnedCamp.id} pendingMemoryCount={0}
       onNewConversation={noop} onMembers={noop} onMemory={noop} onSettings={() => setSettings(true)} onSettingsBack={() => setSettings(false)}
       onOpenProject={noop} onCamp={noop} onRemoveProject={async () => undefined} onRename={async () => undefined} onDelete={async () => undefined} onError={noop} />
     <WindowDragStrip page={settings ? 'settings' : 'compose'} /><main className={`content task-content ${settings ? 'settings-content' : 'compose-content'}`}><Content /></main>

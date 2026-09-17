@@ -52,7 +52,14 @@ export interface FilePreviewChangesTabSnapshot {
   selectedEvidenceFileId: string | null
 }
 
-export type FilePreviewTabSnapshot = FilePreviewFileTabSnapshot | FilePreviewChangesTabSnapshot
+export interface MissionActivityTabSnapshot {
+  kind: 'mission_activity'
+  id: string
+  missionId: string
+  reading?: FilePreviewReadingState
+}
+
+export type FilePreviewTabSnapshot = FilePreviewFileTabSnapshot | FilePreviewChangesTabSnapshot | MissionActivityTabSnapshot
 
 export interface FilePreviewSessionSnapshot {
   tabs: FilePreviewTabSnapshot[]
@@ -64,7 +71,9 @@ const DEFAULT_SESSION_LIMIT = filePreviewRetentionLimits.snapshots
 
 function copySnapshot(snapshot: FilePreviewSessionSnapshot): FilePreviewSessionSnapshot {
   return {
-    tabs: snapshot.tabs.map((tab) => tab.kind === 'file_change'
+    tabs: snapshot.tabs.map((tab) => tab.kind === 'mission_activity'
+      ? { ...tab, reading: tab.reading ? { ...tab.reading } : undefined }
+      : tab.kind === 'file_change'
       ? {
           ...tab,
           changes: {
@@ -184,6 +193,8 @@ export function filePreviewSourceKey(request: OpenFilePreviewRequest): string {
           return `attachment:composer:${locator.campId}:${locator.attachmentRefId}`
         case 'message':
           return `attachment:message:${locator.campId}:${locator.messageId}:${locator.attachmentRefId}`
+        case 'mission':
+          return `attachment:mission:${locator.campId}:${locator.missionId}:${locator.attachmentRefId}`
         case 'pending':
           return `attachment:pending:${locator.campId}:${locator.pendingInputId}:${locator.attachmentRefId}`
         case 'pending_edit':

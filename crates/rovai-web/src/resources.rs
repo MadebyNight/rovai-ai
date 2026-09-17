@@ -914,6 +914,7 @@ pub async fn preview_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     // Owns UTF-8/byte offsets at the new HTTP paging seam. The Desktop reader
     // cannot exercise this Rust boundary; no database or real file is needed.
     #[test]

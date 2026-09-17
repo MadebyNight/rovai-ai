@@ -45,6 +45,10 @@ explicit local-link click
 `Files Changed` 卡片的入口由 Renderer 根据冻结的 `presentationKind` 路由：可靠差异进入不可变 Review，
 `operation_only` 使用同一 Run Evidence 身份打开普通当前文件 Tab。后者仍经过 Core/Main 当前文件映射与具体文件能力
 校验，并采用成功后提交；它不把当前文件内容写回历史 Evidence，也不改变 Runtime 文件变化投影。
+Core 解析 `run_evidence/open_current` 时，以 exact AgentRun + execution epoch + Camp 绑定读取冻结的
+`workspace_json.executionRoot`；有效绝对路径优先于 Camp 项目目录。只有缺少有效 executionRoot 的旧 Run 才回退到
+active directory Camp 的绝对 `project_path`。相对 Evidence 路径和既有越界拒绝保持不变，因此 Mission worktree 的新增文件
+以及与原项目同名的文件都指向该 Run 的实际执行目录，而不会误开原项目副本。
 
 任何打开来源必须先成为封闭 `OpenFilePreviewRequest`。消息来源中的 `rawReference` 必须由 Core 证明是 exact
 CampMessage 的显式本地 Markdown link destination；Core 返回的 root/base/candidate 只在 Core↔Main 内部存在；
