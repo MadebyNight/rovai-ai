@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-app-shell-navigation
 status: accepted
-last_updated: 2026-09-14
+last_updated: 2026-09-17
 ---
 
 # App Shell 与统一侧栏
@@ -51,8 +51,8 @@ Camp（包括快速对话）按最近一条已发布用户消息排序，桌面�
 
 Camp 行显示稳定标题和必要状态。三点菜单是置顶/取消置顶、重命名、复制会话 ID 和删除的唯一
 入口；复制只写稳定 Camp ID 原文。Camp 顶栏不得重复这些操作。
-WebUI 的置顶 Camp 在标题左侧显示小号对话图标，标题与 Project 子列表中的 Camp 共用文字基线；
-未读点叠在图标边缘，不额外占据水平位置。MobileUI 沿用 20px 对话图标，Desktop 原生侧栏不新增占位。
+Desktop 与宽屏 WebUI 的置顶 Camp 在标题左侧显示 12px 对话图标，标题与 Project 子列表中的 Camp 共用文字基线；
+未读点叠在图标边缘，不额外占据水平位置。MobileUI 沿用 20px 对话图标与手机行高。
 
 自动生成的 Camp 标题不把开头连续的真实队员 Mention / 所有队员 Mention 当作标题内容；只保留
 首段正文开始后的文字，正文中后部的 Mention 和手写 `@文字` 继续作为普通标题文字。Camp 行不把
