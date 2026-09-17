@@ -29,8 +29,8 @@ Kimi 或 Grok 的平台结论。
 Grok Build 在 adapter-scoped 证据分别覆盖的 macOS arm64、macOS x64 与 Windows x64 均为 `qualified`；
 三个宿主平台各自绑定独立 evidence digest，不互相外推。
 Cursor identity 仅保留内部兼容与历史读取，默认不进入 discovery/check/AgentRun；Settings 的 Agent Runtime
-目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64 与 Linux x64 为 qualified，macOS x64、Windows x64
-为 not_qualified。Machine Ready、实现与 First-Class 资格分别记录。
+目录不展示该项。DeepSeek Harness 使用官方 ACP，macOS arm64、macOS x64、Windows x64 与 Linux x64 均为
+digest-bound qualified。Machine Ready、实现与 First-Class 资格分别记录。
 
 ### 2026-09-15 DeepSeek Harness 0.1.5-rc.2 ACP
 
@@ -54,6 +54,19 @@ edit 为标准 update `+1/-1`、空文件 edit 为 `+1/-0`；真实开发 Camp �
 [新增文件增量证据](research/deepseek-harness-runtime/acp-0.1.5-create-diff-evidence.json)；已绑定 digest 的 v2 资格归档
 保持为修复前的不可变证据，本次不扩大平台范围。
 
+2026-09-17 在 Windows 10 Pro 10.0.19045 x64、本地固定 NTFS 上使用同一官方 `0.1.5-rc.2` 包独立闭合
+14 个核心能力轴，并绑定 [Windows x64 资格证据](../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json)。
+真实 DSH/Core 验证覆盖 A→B→A 与并发 Host、warm/cold/压缩后 exact resume、生产 30 分钟 idle eviction、
+crash/planned shutdown、Skills、MCP、六组 sandbox/approval、完整命令输出、当前 Built-in CLI contract-v25、
+Usage 对账、Missing-Send 和文件 read/add/edit/empty 矩阵。真实 Camp 的新增与修改文件均使用相对路径，汇总为
+2 个文件、`+4/-1`。Windows verbatim 根与协议普通盘符路径此前不能用字节级 `strip_prefix` 匹配，导致绝对路径
+展示；现改为平台语义比较并覆盖盘符大小写、`\\?\` 与 UNC。该证据只声明上述 Windows 10 x64/本地 NTFS
+宿主范围，不推断 Windows 11、网络文件系统、macOS x64 或 Linux x64。
+
+首次生产 TTL 观察只按 PID 判断后代是否仍存在，无法排除 Windows 回收后复用同一 PID，因而不作为泄漏或资格
+证据。正式复跑改为同时固定 PID 与 WMI `CreationDate`，在未缩短的 30 分钟 TTL 下于 1,852,042ms 完成淘汰，
+确认三个原后代进程身份均消失、exact Session 恢复成功；planned shutdown 另行回收三个后代进程。
+
 2026-09-17 在 Ubuntu 24.04.5 / GNU x86_64 目标主机上以同一官方 `0.1.5-rc.2` 完成独立 Linux 资格验证。
 真实 MiniMax-M3 路径通过文件与命令矩阵、Skills、当前 contract-v25 的全部 22 项 Built-in CLI、cold resume、
 Missing-Send、安全边界、逐调用 usage 和原生 parity probe；确定性模型仅用于 External MCP 生命周期。
@@ -62,6 +75,12 @@ Fleet 使用生产 30 分钟 TTL 验证并发、A/B/A、Core crash、空闲回�
 该平台绑定 [Linux x64 独立资格证据](../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)，
 不从 Ubuntu 24.04 外推 Linux ARM64、musl 或其他未列平台；产品最低 Runtime 版本仍为 `>=0.1.5-rc.2`，
 而证据精确记录实际测试版本。
+
+同日维护者确认 macOS x64 已完成当前 DSH 14 轴与 Golden Flows 目标主机验收，未发现阻断，并明确批准四个
+shipped platform keys 全部开放。该结论绑定
+[macOS x64 维护者目标主机验收归档](../qualification/runtime-platform/macos-x64-deepseek-harness-v1.json)，沿用仓库已有
+maintainer-target-host-acceptance 准入形式；归档不伪称本次提交重跑私密模型会话，也不推断未提供的 OS build、
+executable fingerprint 或原始日志。每台机器的安装、认证、模型、版本、Probe 与 Ready 继续独立 fail closed。
 
 ### 2026-09-07 Pi 0.84.4 edit patch 文件变化证据
 

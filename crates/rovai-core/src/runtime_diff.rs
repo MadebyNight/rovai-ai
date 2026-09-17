@@ -559,15 +559,18 @@ fn resolve_reported_absolute_path(display_root: &Path, reported: &str) -> Option
 }
 
 fn display_path_from_resolved(display_root: &Path, resolved: PathBuf) -> Option<String> {
-    if resolved == display_root {
-        return None;
-    }
-    let display_path = resolved
-        .strip_prefix(display_root)
-        .ok()
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or(resolved);
+    let display_path = if path_starts_with(&resolved, display_root) {
+        let relative = resolved
+            .components()
+            .skip(display_root.components().count())
+            .collect::<PathBuf>();
+        if relative.as_os_str().is_empty() {
+            return None;
+        }
+        relative
+    } else {
+        resolved
+    };
     if display_path.components().any(|component| {
         matches!(component, Component::Normal(value) if value.to_string_lossy().eq_ignore_ascii_case(".git"))
     }) {
@@ -645,6 +648,19 @@ fn unified_diff_section_paths(section: &str) -> Option<(String, String)> {
 }
 
 fn normalize_absolute_path(path: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let path = {
+        let value = path.to_string_lossy();
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            path.to_path_buf()
+        }
+    };
+    #[cfg(windows)]
+    let path = path.as_path();
     if !path.is_absolute() {
         return None;
     }
@@ -1253,6 +1269,35 @@ mod tests {
         assert!(
             normalize_reported_path_for_display(Path::new("/repo"), "/outside/.git/config")
                 .is_none()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_display_root_matches_protocol_visible_paths() {
+        assert_eq!(
+            normalize_reported_path_for_display(
+                Path::new(r"\\?\C:\workspace\project"),
+                r"C:/workspace/project/src/app.ts"
+            )
+            .as_deref(),
+            Some("src/app.ts")
+        );
+        assert_eq!(
+            normalize_reported_path_for_display(
+                Path::new(r"\\?\UNC\server\share\project"),
+                r"\\server\share\project\src\app.ts"
+            )
+            .as_deref(),
+            Some("src/app.ts")
+        );
+        assert_eq!(
+            normalize_reported_path_for_display(
+                Path::new(r"C:\Workspace\Project"),
+                r"\\?\c:\workspace\project\src\app.ts"
+            )
+            .as_deref(),
+            Some("src/app.ts")
         );
     }
 

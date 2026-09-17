@@ -3190,7 +3190,7 @@ fn copy_candidate_tree(
         .mode(mode)
         .open(&destination)?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     let mut first_bytes = Vec::new();
     loop {
         let read = input.read(&mut buffer)?;
@@ -3300,7 +3300,7 @@ fn copy_candidate_node_windows(
             let destination = destination_root.join(relative);
             let mut output = create_private_new_file(&destination)?;
             let mut digest = Sha256::new();
-            let mut buffer = [0_u8; 64 * 1024];
+            let mut buffer = vec![0_u8; 64 * 1024];
             let mut first_bytes = Vec::new();
             let mut copied = 0_u64;
             loop {
@@ -3402,7 +3402,7 @@ fn inspect_candidate_node(
     let mut input = File::open(&source)?;
     let mode = metadata.permissions().mode() & 0o777;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     let mut first_bytes = Vec::new();
     loop {
         let read = input.read(&mut buffer)?;
@@ -3496,7 +3496,7 @@ fn inspect_candidate_node_windows(
                 anyhow::bail!("Skill package exceeds maximum total size");
             }
             let mut digest = Sha256::new();
-            let mut buffer = [0_u8; 64 * 1024];
+            let mut buffer = vec![0_u8; 64 * 1024];
             let mut first_bytes = Vec::new();
             let mut inspected = 0_u64;
             loop {
@@ -4196,6 +4196,12 @@ mod windows_skill_library_tests {
             service
                 .verify_revision_content(&skill.current_revision)
                 .unwrap();
+            assert!(
+                service
+                    .reveal_location(&database, &skill.id)
+                    .unwrap()
+                    .is_dir()
+            );
         }
 
         drop(database);
@@ -5229,7 +5235,12 @@ mod slow_tests {
         let mut database = Database::open(&data).unwrap();
         let service = SkillLibraryService::new(root.clone()).unwrap();
         service.install_bundled_skills(&mut database).unwrap();
-        let skill = service.list(&database).unwrap().remove(0);
+        let skill = service
+            .list(&database)
+            .unwrap()
+            .into_iter()
+            .find(|skill| skill.name == "cli-operations")
+            .expect("nested bundled Skill should exist");
 
         let location = service.reveal_location(&database, &skill.id).unwrap();
 

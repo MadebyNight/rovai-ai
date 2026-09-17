@@ -4,7 +4,7 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # v1.59 实施与验收
@@ -1167,12 +1167,16 @@ Rust 门禁：Core 807 通过/6 既有忽略、CLI 35 通过、slow integration 
 Skill group、标准 MCP、结构化 Activity、逐调用 usage 与 context gauge 已接通。迁移 157 保留现有 Runtime/Skill 行及 trigger，
 从 v1.59/schema 106 升至 107。现有模型上下文合同不变。macOS arm64 的 14 轴验收闭合、独立 digest-bound qualified 后，
 Root README 增加对应的正式支持行；逐项真实验收和差异由 [DSH Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)记录。
+2026-09-17 Linux x64 与 Windows x64 又分别以目标主机自动化归档闭合 14 轴；维护者确认 macOS x64 完成同一矩阵
+并批准发布。四个 shipped platform keys 各自绑定 evidenceRevision，全部开放为 qualified，普通 Machine Ready 门禁不变。
 
 2026-09-16 收敛项已实现：队员页显示并保存 DSH 原生 `sandbox_mode`/`approval_policy`；Core 删除 MCP 名称/只读
 推断和二次询问，只承载 DSH 原生请求；shared Fleet 的 DSH replacement 同时覆盖 idle 先回收、busy Run 后回收、
 回收失败阻断；observer 把官方 write/edit Before/After 归一为标准 ACP Diff，新增缺 Before 与大文件走通用路径级回退。
 真实 MiniMax-M3 文件矩阵已得到 edit `+1/-1` 与空文件 edit `+1/-0`；脚本化 MCP 更新/exact resume/隔离矩阵得到
 0 个 synthetic Approval。最低版本错误和权限说明由 Desktop/Mobile 共用组件呈现；没有 DSH 专属 Command、文件或 Diff UI。
+Windows 目标宿主额外验证 verbatim execution root、PowerShell 命令/取消、嵌套 bundled Skill 展开、真实文件矩阵与
+Camp 相对路径投影；生产 30 分钟 idle eviction、Core crash 和 planned shutdown 均确认进程树回收并 exact resume。
 
 2026-09-17 在专用开发机的 Ubuntu 24.04.5 / GNU x86_64 上完成 Linux x64 独立资格验证。固定验收包为
 `@deepseek-ai/dsh@0.1.5-rc.2`，产品最低门槛仍是 `>=0.1.5-rc.2`。真实 MiniMax-M3 路径覆盖文件和命令矩阵、
@@ -1183,7 +1187,8 @@ Core crash、idle eviction 后 exact resume 与 planned shutdown。Linux 构建�
 
 所有目标机步骤串行置于 4 GiB cgroup，整机可用内存低于 2 GiB、出现 swap 或 OOM 时立即停止；本次没有触发。
 脱敏结果归档在 [Linux x64 DSH 资格证据](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)。
-该归档只晋升 `deepseek-harness × linux-x64`，不改变其他 Linux preview、Server OS 基线或 macOS x64/Windows x64 状态。
+该归档只证明 `deepseek-harness × linux-x64`，不改变其他 Linux preview 或 Server OS 基线；Windows x64 与
+macOS x64 后续分别由自己的自动化验收归档和维护者目标主机验收归档独立晋升，不继承 Linux 证据。
 最终 Built-in CLI 报告复验中有一次真实 Gather 的两次交付与完成 Run 均成功，但模型没有输出验收要求的
 captured-return marker，因此严格断言失败；配置不变的重跑通过全部 22 项。通过与失败尝试的日志摘要都保留在
 资格归档中，没有删除失败尝试或放宽断言。

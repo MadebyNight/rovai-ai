@@ -43,11 +43,12 @@ last_updated: 2026-09-17
 
 ### 当前结论
 
-官方 ACP 接入已在 **macOS arm64 与 Linux x64** 达到 First-Class / qualified，两个平台分别闭合 14 个核心能力轴。
-macOS 资格绑定独立的 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)；
-它引用但不改写 v1 的 14 轴历史验收。Linux 资格绑定
-[目标主机归档](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)，不沿用 macOS 或其他 Runtime 的摘要。
-macOS x64 与 Windows x64 保持 not_qualified。
+官方 ACP 接入已在 **macOS arm64、macOS x64、Windows x64 与 Linux x64** 达到 First-Class / qualified。
+四个平台分别绑定 [macOS arm64 v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json)、
+[macOS x64 维护者目标主机验收归档](../../../qualification/runtime-platform/macos-x64-deepseek-harness-v1.json)、
+[Windows x64 v1 归档](../../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json)与
+[Linux x64 目标主机归档](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json)。前三份自动化归档各自
+声明精确宿主范围；macOS x64 归档记录维护者已完成目标主机矩阵并明确批准发布，不伪称本次提交重跑私密会话。
 2026-09-15 的固定发布包先使用官方 DeepSeek Flash 验证普通回复、warm continuation、文件/命令工具、
 Skills、全部 23 项 Built-in CLI 和原生压缩。官方余额耗尽后，按用户明确授权读取既有 MiniMax BYOK Key，
 仅传入隔离 DSH 验收进程，通过官方 llm-pi-ai/Anthropic-compatible 路由继续运行 MiniMax-M3。
@@ -72,7 +73,7 @@ cgroup 内，并以 2 GiB 整机可用内存、swap 和 OOM 为停止条件；�
 | Host / Fleet / LRU | Verified / Implemented | 真实同 Host warm；同进程 A→B→A；同成员并发独立 Host、exact 切回；Core crash 后进程树退出并 exact 恢复 | 配置不兼容时 idle Host 先确认回收；busy Host 等当前 Run 结束再回收，replacement 在锁释放后启动；失败阻断新 Host；共享 LRU/租约/退役回归通过 |
 | Native Session / Continuation | Verified / Implemented | warm、Core cold、压缩后新 Host exact resume；MCP 更新 exact；无效持久 ID 仅一条 continuity lost 并创建替代 Session | 不用 session/load；冷恢复没有历史 Action/Approval 重放 |
 | Bootstrap / Context | Verified / Implemented | 官方 systemPrompt section 每模型步按 exact Session 装配冻结字节；A/B/A、cold、compaction 保留正确身份；测试覆盖子代理不继承成员自身份、缺失/损坏绑定拒绝 | 相比 Grok 的 _meta.rules，使用受管官方 Cordis 插件；ContextManifest/Bootstrap 内容格式不变 |
-| Compaction continuity | Verified / Implemented | manual、压力、overflow、自动阈值、overflow retry、fail/cancel、压缩后 cold resume；每阶段重新加载随机 Skill marker、实际 MCP 调用与一条审批；压缩后 deny 零副作用 | overflow 使用一次受控错误触发真实 native retry；无 ACP /compact/lifecycle，采用持续 System 层 |
+| Compaction continuity | Verified / Implemented | manual、压力、overflow、自动阈值、overflow retry、fail/cancel、压缩后 cold resume；每阶段重新加载随机 Skill marker并实际调用 MCP；DSH 未请求审批时 0 个 synthetic Approval；压缩后原生 workspace-write 拒绝越界命令且零副作用 | overflow 使用一次受控错误触发真实 native retry；无 ACP /compact/lifecycle，采用持续 System 层 |
 | Skills | Verified / Implemented | 实际读取 .dsh/skills 的随机 marker 与 cli-operations；导入、冲突保留、删除、禁用/重启投影复核 | 沿用共享 group 与原生目录追加；不是独立 Skill 设置 |
 | External MCP | Verified / Implemented | 真实模型通过 stdio/HTTP、同名覆盖、更新、相邻隔离、取消分配/重分配/删除、原生恢复、exact Session；脚本化复验三组权限均为 0 个 Core 合成审批，副作用由 DSH 原生工具层决定；原生 MCP 首轮零延时压力复验 30/30 | whole-definition 遮蔽属于配置投影；0.1.5-rc.2 的 ACP stdio 可早于同级 Loader settle，受管 Host 以官方 entry lifecycle 作启动门闩，不使用 sleep 或重放 prompt；无 SSE/resources/prompts |
 | Tool / Action / Command Output | Verified / Implemented | stdout/stderr/mixed/empty/nonzero/large；read/add/edit/empty；稳定 callId、canonical path、非零失败、4 KiB 公开截断；真实 MiniMax add 为 +1/-0、edit 为 update +1/-1、空文件 edit 为 +1/-0 | observer 只补 shell metadata 与官方完整文件状态；write 显式 `before:null` 变为标准 ACP add Diff，缺字段/类型错误/超限保持路径级回退；edit 必须是 string/string；未知工具保持 other |
@@ -81,7 +82,7 @@ cgroup 内，并以 2 GiB 整机可用内存、swap 和 OOM 为停止条件；�
 | Built-in rovai CLI | Verified / Implemented | 当前 contract-v25 全 22 操作、70 条证据；原生 Bash、三种输入源、精确寻址、Gather、历史/附件、新旧 Run lease fencing、原 Session 续轮 | 共用 bundled CLI 与 private IPC，未走 built-in MCP |
 | Usage / Cache / Cost | Verified / Implemented | 8 个真实 Run 的逐调用入库；新增真实 Core warm/自动压缩/cold 三轮对账与独立原生 observer 的五类 Token 桶完全一致，无重放计数；context gauge 分开 | cache write/cost 未报告，保持 NULL；MiniMax 未报告 reasoning 也保持 NULL；空闲 manual summary 不归入后续 Run |
 | Retry / Queue / Cancel / Cleanup | Verified / Implemented | 共享 accepted-input/queue/lease；余额/缺 Key 不盲重试；真实 pending-approval 取消及运行中 Shell 严格 cancelled；32 秒无晚到文件；Core crash、正常停止清理进程树 | Native compact fail/cancel 保持 generation；idle 回收的专属结果见 Host 轴 |
-| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 107/closed catalogs/选择器接通 | macOS arm64 与 Linux x64 分别绑定独立 digest；macOS x64、Windows x64 保持 not_qualified |
+| Ready / Version / Platform | Verified / Implemented | CLI >=0.1.5-rc.2 门槛、原生 executable fingerprint、initialize/new/resume 与 catalog 检查；schema 107/closed catalogs/选择器接通 | 四个 shipped platform keys 分别绑定自己的 DSH digest；Machine Ready 继续独立 fail closed |
 
 ### 关键行为与其他 ACP Runtime 的区别
 
@@ -98,8 +99,9 @@ cgroup 内，并以 2 GiB 整机可用内存、swap 和 OOM 为停止条件；�
    也不重试已接受的用户输入。
 3. **Compact**：策略是 native_system_prompt_preserved，类似 Pi 的持续系统层。生产没有文字 detector 或
    compact 后重发；原生下一模型步自然重新装配。原生实测 generation 0→1→2→3，cold resume 后自动压力
-   3→4、受控 overflow 加真实重试 4→5；失败与取消保持 5→5。七个能力检查点均实际加载新 Skill 内容、
-   调用 MCP 并触发审批；最后 deny 没有副作用。ACP 不暴露人工 compact 命令，因此该入口
+   3→4、受控 overflow 加真实重试 4→5；失败与取消保持 5→5。七个能力检查点均实际加载新 Skill 内容并
+   调用 MCP；当 DSH 没有发出原生权限请求时 Core 不合成审批。最后以 `workspace-write + never` 的原生终端
+   沙箱拒绝越界写入，0 个审批且没有副作用。ACP 不暴露人工 compact 命令，因此该入口
    仍是原生能力，不伪造 UI 成功或使用 token 降幅推断完成。
 4. **工具与用量**：DSH ACP 把 Bash 非零退出也报告为 completed，且 usage_update 只有占用率。官方只读
    tools/result 与 committed session/event observer 分别提供结构化退出状态、write/edit 完整文件状态和逐调用用量，
@@ -152,6 +154,20 @@ Safety smoke 使用 Core 的实际冻结参数，并把越界目标放在自有�
 Usage smoke 仅在隔离原生 Home 降低压缩阈值，通过独立官方 observer 对照 Core 数据库；检查普通调用与摘要调用
 的五类 Token 桶、warm/cold 同一 Native Session、新 Host 和零重放，不修改生产阈值或替代 Provider。
 
+### Windows x64 目标宿主复验
+
+2026-09-17 在 Windows 10 Pro 10.0.19045 x64 与本地固定 NTFS 上，从固定 npm 包和可执行文件摘要重新执行
+全部真实 Golden Flows。A→B→A、并发 Host、crash recovery、planned shutdown 与生产 30 分钟 idle eviction
+通过；warm/cold/压缩后 exact resume、无效 Session fallback、取消后无迟到副作用、Usage 分桶、Skills、MCP、
+Missing-Send、命令输出和 contract-v25 Built-in CLI 均通过。文件矩阵与真实 Camp 的 read/add/edit/empty 结果
+证明通用 Files Changed/Diff Card 在 Windows 上显示相对路径；本次 Camp 为 2 个文件、`+4/-1`。
+
+最初不一致包含四个独立原因：Windows Core execution root 可带 verbatim `\\?\` 前缀，而 ACP 事件使用普通盘符
+路径，字节级 `strip_prefix` 因而失败；旧 smoke 用 POSIX shell/分隔符；模型没有把提示中的尾换行提交给原生
+Write，DSH 并未吞掉已提交字节；Windows debug 线程还暴露了主队列 future 与嵌套 Skill 复制的栈占用问题。
+当前分别以平台路径语义、原生 PowerShell fixture、按实际 tool argument 的 byte-exact 断言、boxed future 与
+heap buffer 修复，并用目标宿主回归覆盖。Windows 证据不外推 Windows 11、网络文件系统、macOS x64 或 Linux x64。
+
 ### BYOK 验收与 ACP 默认模型
 
 正式 Adapter 不读取 Qoder/CodeBuddy 的配置。此次借用 Key 是用户明确授权的验收输入，私有包装进程只读取
@@ -184,7 +200,7 @@ Missing-Send protocol、Runtime picker 和 configured Camp 共 9 项通过；后
 204 个测试文件、2072 项全部通过。早期并行负载下出现 evaluation-host/CoreClient 的时序超时，
 隔离复跑 25 项通过后降低测试进程并发完成全量；没有修改或禁用这些测试。上述本地门禁不能替代
 真实 Runtime 行为证据。
-本次新增 DSH 专属 macOS arm64 平台资格 digest；安装、认证、模型与机器 Ready 仍按每台机器独立检查。
+该轮新增 DSH 专属 macOS arm64 平台资格 digest；安装、认证、模型与机器 Ready 仍按每台机器独立检查。
 
 随后补齐 write 新建文件的显式 `before:null`：Node observer 2 项、DSH Rust owner 5 项、ACP null Diff owner、
 平台证据 revision owner、TypeScript typecheck、文档治理 10 项及带 merge-base 的差异门禁均通过；Rust library

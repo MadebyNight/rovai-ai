@@ -233,7 +233,7 @@ depending on the team.
 | [Qwen Code](https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/) | Added alongside native | Added alongside native | Re-delivered after compaction |
 | [TRAE CLI CN](https://www.trae.cn/) | Added alongside native | Added alongside native | Based on Runtime capabilities |
 | [Kimi Code](https://www.kimi.com/code/docs/) | Added alongside native | Added alongside native | Native resume; re-delivered after compaction |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (macOS arm64, Linux x64) | Added alongside native; assigned same-name server replaces native definition | Added alongside native | Persistent native system prompt through compaction; exact resume |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (macOS arm64/x64, Windows x64, Linux x64) | Added alongside native; assigned same-name server replaces native definition | Added alongside native | Persistent native system prompt through compaction; exact resume |
 
 For exact versions, capabilities, and observed boundaries, see the
 [Agent Runtime Compatibility Register](docs/runtime-compatibility.md) *(Chinese)*.

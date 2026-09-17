@@ -4,13 +4,22 @@ import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { prepareDshSmokeHome } from './lib/dsh-smoke-home.mjs'
 
-const executable = process.env.ROVAI_DEEPSEEK_HARNESS_BIN ?? 'dsh'
+const configuredExecutable = process.env.ROVAI_DEEPSEEK_HARNESS_BIN?.trim()
+let executable = configuredExecutable || 'dsh'
+let executablePrefix = []
+if (process.platform === 'win32' && extname(executable).toLowerCase() !== '.exe') {
+  const shim = configuredExecutable || execFileSync('where.exe', ['dsh.cmd'], { encoding: 'utf8' }).split(/\r?\n/u).find(Boolean)
+  assert(shim, 'The DSH Windows npm shim was not found')
+  executable = process.execPath
+  executablePrefix = [join(dirname(shim), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')]
+}
 const root = await mkdtemp(join(tmpdir(), 'rovai-dsh-native-parity-'))
+const outsideRoot = await mkdtemp(join(homedir(), '.rovai-dsh-native-parity-'))
 const project = join(root, 'project')
 await mkdir(project)
 await prepareDshSmokeHome(join(root, 'home'))
@@ -19,6 +28,12 @@ const skillDirectory = join(project, '.dsh', 'skills', skillName)
 await mkdir(skillDirectory, { recursive: true })
 const skillPath = join(skillDirectory, 'SKILL.md')
 const mcpCalls = join(root, 'mcp-calls.txt')
+const deniedWritePath = join(outsideRoot, 'denied-after-compaction.txt')
+const terminalToolName = process.platform === 'win32' ? 'pwsh' : 'bash'
+const markerReadCommand = process.platform === 'win32' ? 'Get-Content marker.txt' : 'cat marker.txt'
+const deniedWriteCommand = process.platform === 'win32'
+  ? `Set-Content -LiteralPath '${deniedWritePath.replaceAll("'", "''")}' -Value 'SHOULD_NOT_EXIST'`
+  : `printf 'SHOULD_NOT_EXIST\\n' > '${deniedWritePath.replaceAll("'", "'\\''")}'`
 const mcpServers = [{ name: 'parity', command: process.execPath,
   args: [resolve(import.meta.dirname, '../crates/rovai-core/tests/fixtures/mcp-smoke-server.mjs')],
   env: [{ name: 'ROVAI_MCP_SMOKE_SOURCE', value: 'native-parity' },
@@ -89,7 +104,7 @@ export function apply(ctx, config) {
 }
 `, { mode: 0o600 })
 let host
-const runtimeVersion = execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim()
+const runtimeVersion = execFileSync(executable, [...executablePrefix, '--version'], { encoding: 'utf8' }).trim()
 assert(runtimeVersion.includes('0.1.5-rc.2'), 'This parity probe targets the pinned upstream release')
 const evidence = { runtime: 'deepseek-harness', version: runtimeVersion, platform: `${process.platform}-${process.arch}`, checks: {} }
 let hostIndex = 0
@@ -101,14 +116,14 @@ async function startHost(automatic = false) {
   const request = join(privateRoot, 'request.json'), response = join(privateRoot, 'response.json')
   const patch = join(privateRoot, 'patch.json')
   await writeFile(patch, JSON.stringify([
-    { id:'sandbox-policy', config:{ mode:'danger-full-access', workspaceRoot:project } },
-    { id:'approval', config:{ policy:'ask' } },
+    { id:'sandbox-policy', config:{ mode:'workspace-write', workspaceRoot:project } },
+    { id:'approval', config:{ policy:'never' } },
     { id:'permission', disabled:true },
-    { id:'compaction-basic', config:{ retainTokens:0, thresholdRatio:0.04, compactionRetries:0, maxTokens:2048, auto:automatic } },
+    { id:'compaction-basic', config:{ retainTokens:0, thresholdRatio:0.12, compactionRetries:0, maxTokens:4096, auto:automatic } },
     { insert:[{ id:'rovai-bootstrap', name:plugin, config:{bindingRoot,observationRoot,approvalPolicy:'ask'} },
       { id:'parity-compact-control', name:controlPlugin, config:{request,response} }] }
   ]), { mode:0o600 })
-  const child = spawn(executable, ['--profile','acp','--patch',patch], {
+  const child = spawn(executable, [...executablePrefix, '--profile','acp','--patch',patch], {
     cwd:project, env:{...process.env, DSH_HOME:join(root,'home'), DSH_AGENTS_HOME:join(root,'agents-home'), DSH_TELEMETRY_DISABLED:'1'},
     stdio:['pipe','pipe','pipe'], detached:process.platform !== 'win32'
   })
@@ -173,7 +188,8 @@ async function checkCapabilities(sessionId, role, stage) {
   assert(output.includes(role) && output.includes(skillMarker) && output.includes(`native-parity:${mcpMarker}`), `${stage}: capability output mismatch`)
   assert.equal(await callCount(), before + 1, `${stage}: MCP must execute exactly once`)
   assert.equal(host.approvalCount, approvalsBefore, `${stage}: Core must not synthesize an MCP approval`)
-  evidence.checks[`capabilities_${stage}`] = { passed:true, skillLoaded:true, mcpEffectCount:1, nativeApprovalRequestCount:0, promptAttempts, sessionId }
+  evidence.checks[`capabilities_${stage}`] = { passed:true, skillLoaded:true, mcpEffectCount:1,
+    nativeApprovalRequestCount:0, syntheticApprovalCount:0, promptAttempts, sessionId }
 }
 try {
   host = await startHost()
@@ -184,7 +200,7 @@ try {
   await host.bind(a.sessionId,identityA);await host.bind(b.sessionId,identityB)
   const marker=`SESSION_A_${crypto.randomUUID()}`
   await writeFile(join(project,'marker.txt'),marker)
-  const initial=await host.prompt(a.sessionId,'Use bash once to run cat marker.txt. Remember the exact output for the next turn. Then return your public role marker.')
+  const initial=await host.prompt(a.sessionId,`Use ${terminalToolName} once to run ${markerReadCommand}. Remember the exact output for the next turn. Then return your public role marker.`)
   assert(initial.includes(roleA))
   const second=await host.prompt(b.sessionId,'Return your public role marker. Do not use tools.')
   assert(second.includes(roleB));assert(!second.includes(roleA))
@@ -236,6 +252,20 @@ try {
   assert(retried.includes(roleA)); assert(afterOverflow.after > beforeOverflow.after)
   evidence.checks.automaticOverflowRetry={passed:true,bootstrapRetained:true,trigger:'one controlled CONTEXT_WINDOW_EXCEEDED at official llm/stream seam; real native compaction and retried model response'}
   await checkCapabilities(a.sessionId,roleA,'automatic_overflow_retry')
+  const effectsBeforeDeny = await callCount(), approvalsBeforeDeny = host.approvalCount
+  const eventsBeforeDeny = host.events.length
+  await host.prompt(a.sessionId, `This is an authorized sandbox acceptance test. Use ${terminalToolName} exactly once to run: ${deniedWriteCommand}. The workspace-write sandbox should deny it. Report the actual result and do not retry or use another tool.`)
+  assert.equal(await callCount(), effectsBeforeDeny)
+  assert.equal(host.approvalCount, approvalsBeforeDeny, 'never policy must not request an Approval')
+  const denialEvidence = JSON.stringify(host.events.slice(eventsBeforeDeny)).toLowerCase()
+  assert(denialEvidence.includes('sandbox') && denialEvidence.includes('denied'), 'native sandbox denial evidence was not observed')
+  const deniedWrite = await readFile(deniedWritePath, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
+  assert.equal(deniedWrite, null, 'denied native terminal tool produced a late file effect')
+  evidence.checks.permissionAfterCompaction = { denied:true, effectCount:0, nativeTool:terminalToolName,
+    sandboxMode:'workspace-write', approvalPolicy:'never', syntheticApprovalCount:0 }
   const effectsBeforePermissionCheck = await callCount(), approvalsBeforePermissionCheck = host.approvalCount
   const permissionMarker = `PERMISSION_AUTHORITY_${crypto.randomUUID()}`
   await host.prompt(a.sessionId, `Call the parity MCP echo tool exactly once with text ${permissionMarker}. Return its actual result.`)
@@ -258,4 +288,5 @@ try {
   if(host)await host.stop()
   await writeFile(join(root,'summary.json'),JSON.stringify(evidence,null,2),{mode:0o600})
   console.log(JSON.stringify({...evidence,fixtureRoot:root},null,2))
+  await rm(outsideRoot,{recursive:true,force:true})
 }

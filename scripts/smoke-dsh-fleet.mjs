@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { configureProductRuntime } from './configure-product-runtime.mjs'
 import { createConfiguredCampAndSend } from './lib/create-configured-camp.mjs'
-import { startQualificationCore, processTable, descendantsOf, waitForProcessesToExit } from './lib/qualification-core.mjs'
+import { startQualificationCore, processTable, descendantsOf, waitForProcessIdentitiesToExit, waitForProcessesToExit } from './lib/qualification-core.mjs'
 import { removeEphemeralRuntimeCampFilesRoot } from './lib/runtime-camp-files-root.mjs'
 
 const repository = resolve(import.meta.dirname, '..')
@@ -20,18 +20,10 @@ execFileSync('git', ['-c','user.name=Runtime acceptance','-c','user.email=runtim
 let core, events = [], workspace
 const evidence = { runtime:'deepseek-harness', version:'0.1.5-rc.2', checks:{} }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-async function waitForIdleExits(pids) {
-  const deadline=Date.now()+32*60_000
-  let remaining=[...pids]
-  while(remaining.length && Date.now()<deadline) {
-    remaining=remaining.filter(pid=>{
-      try { process.kill(pid,0); return true }
-      catch(error) { if(error.code==='ESRCH')return false; throw error }
-    })
-    if(remaining.length)await sleep(2_000)
-  }
-  return remaining
-}
+const delayedReadCommand = file => process.platform === 'win32'
+  ? `Start-Sleep -Seconds 20; Get-Content ${file}`
+  : `sleep 20; cat ${file}`
+const delayedReadNeedle = process.platform === 'win32' ? 'Start-Sleep -Seconds 20' : 'sleep 20'
 async function start() {
   events = []
   core = startQualificationCore({ coreExecutable:join(repository,'target/debug/rovai-core'),
@@ -76,8 +68,12 @@ async function wait(item, predicate) {
 const finished=item=>wait(item,(_snapshot,run)=>run?.status==='succeeded')
 const runningTool=item=>wait(item,()=>events.some(event=>event.method==='runtime.action'
   && event.params?.agentRunId===item.runId && event.params?.payload?.status==='in_progress'
-  && JSON.stringify(event.params.payload.input).includes('sleep 20')))
+  && JSON.stringify(event.params.payload.input).includes(delayedReadNeedle)))
 async function owned() { return descendantsOf(await processTable(),core.pid) }
+async function ownedRows() {
+  const table=await processTable(), pids=new Set(descendantsOf(table,core.pid))
+  return table.filter(process=>pids.has(process.pid))
+}
 async function stopAndCheck(label, crash=false) {
   const pids=await owned(), pid=core.pid
   assert(pids.length>0, `${label}: no resident Runtime observed`)
@@ -94,9 +90,9 @@ try {
   const tokenA=`FLEET_A_${crypto.randomUUID()}`, tokenB=`FLEET_B_${crypto.randomUUID()}`
   await writeFile(join(project,'marker-a.txt'),tokenA)
   await writeFile(join(project,'marker-b.txt'),tokenB)
-  const first=await create('You do not know the marker. Use Bash exactly once to execute `sleep 20; cat marker-a.txt`. You must actually read the tool result and remember its exact marker for the next turn. Then reply DONE. Do not simulate the tool or call another tool.')
+  const first=await create(`You do not know the marker. Use the terminal tool exactly once to execute \`${delayedReadCommand('marker-a.txt')}\`. You must actually read the tool result and remember its exact marker for the next turn. Then reply DONE. Do not simulate the tool or call another tool.`)
   await runningTool(first)
-  const second=await create('You do not know the marker. Use Bash exactly once to execute `sleep 20; cat marker-b.txt`. You must actually read the tool result and remember its exact marker for the next turn. Then reply DONE. Do not simulate the tool or call another tool.')
+  const second=await create(`You do not know the marker. Use the terminal tool exactly once to execute \`${delayedReadCommand('marker-b.txt')}\`. You must actually read the tool result and remember its exact marker for the next turn. Then reply DONE. Do not simulate the tool or call another tool.`)
   await runningTool(second)
   const firstWhileSecond=await core.request('camps.snapshot',{campId:first.campId})
   assert.equal(firstWhileSecond.agentRuns.find(run=>run.id===first.runId)?.status,'running','concurrency did not overlap')
@@ -125,12 +121,12 @@ try {
   evidence.checks.crashRecovery={passed:true,exactSession:true}
   console.error('[dsh-fleet] crash process cleanup and exact recovery passed')
   if(process.env.ROVAI_DSH_FLEET_IDLE_CHECK==='1') {
-    const pids=await owned(), since=Date.now()
-    assert(pids.length>0)
+    const beforeIdle=await ownedRows(), since=Date.now()
+    assert(beforeIdle.length>0)
     console.error('[dsh-fleet] observing production 30-minute idle eviction')
-    const remaining=await waitForIdleExits(pids)
+    const remaining=await waitForProcessIdentitiesToExit(beforeIdle,32*60_000)
     assert.deepEqual(remaining,[],'idle eviction left a Runtime process')
-    evidence.checks.idleEviction={passed:true,elapsedMs:Date.now()-since,descendantsReaped:pids.length}
+    evidence.checks.idleEviction={passed:true,elapsedMs:Date.now()-since,descendantsReaped:beforeIdle.length}
     const afterIdle=await finished(await send(first.campId,'Reply exactly AFTER_IDLE. Do not call tools.'))
     assert.equal(afterIdle.start.params.nativeThreadId,a.start.params.nativeThreadId)
     assert.notEqual(afterIdle.start.params.hostInstanceId,restoredResult.start.params.hostInstanceId)

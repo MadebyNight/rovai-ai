@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.59
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-16
+last_updated: 2026-09-17
 ---
 
 # v1.59 版本决定
@@ -250,11 +250,16 @@ Workspace access 不再替换这些值。DSH 的 sandbox/approval 是唯一安�
 2026-09-16 的原生权限、锁顺序与通用 Diff 收敛由
 [DSH v2 增量归档](../../../qualification/runtime-platform/macos-arm64-deepseek-harness-v2.json) 绑定新的不可变摘要；
 v1 继续作为此前 14 轴验收的历史证据，不被改写。
+2026-09-17 在 Windows 10 x64、本地 NTFS 上按同一 checklist 独立闭合 14 轴；
+[Windows x64 DSH v1 归档](../../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json) 绑定该宿主、
+固定 0.1.5-rc.2 包、真实 Golden Flows 与实现来源摘要，因此 windows-x64 同步晋升 qualified。
 2026-09-17 的 GNU x86_64 验收在 Ubuntu 24.04.5 上使用相同官方包与真实 MiniMax-M3 路径闭合 14 轴，
 并以 [Linux x64 独立归档](../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json) 绑定该目标主机。
 产品版本门槛保持 `>=0.1.5-rc.2`；证据精确记录所测 `0.1.5-rc.2`，不把未知未来版本预先写入证据。
-macOS x64 与 Windows x64 仍 not_qualified，不继承现有 Linux 14 项或其他 Runtime 资格。逐项证据与上游差异见
-[Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。机器 Ready 仍是独立检查。
+维护者同时确认 macOS x64 已完成当前目标主机矩阵且无阻断，按既有 maintainer-target-host-acceptance 先例由
+[macOS x64 DSH v1 归档](../../../qualification/runtime-platform/macos-x64-deepseek-harness-v1.json) 记录明确验收与发布批准。
+四个平台各自绑定 evidenceRevision 并全部晋升 qualified；逐项证据与上游差异见
+[Parity Matrix](../../research/deepseek-harness-runtime/acp-0.1.5-parity.md)。Machine Ready 仍是独立检查。
 Migration 157 将 v1.59/schema 106 原位升级到 107，只扩充 Runtime/Skill 闭集，保留已有行、索引、trigger 与分配。
 Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Native Binding 不做 clean break。
 

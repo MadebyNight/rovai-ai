@@ -363,7 +363,7 @@ try {
         camp.id,
         plainTwoTurn
           ? `Do not call tools or inspect files. Reply with exactly ${secondTurnToken} and nothing else.`
-          : `Use the Bash or terminal tool exactly once to run this cross-platform command without changing files: echo ${commandMarker}. Do not call any other tool. Then immediately reply exactly ACP_COMMAND_OUTPUT_OK.`,
+          : `Use the ${process.platform === 'win32' ? 'pwsh' : 'Bash or terminal'} tool exactly once to run this cross-platform command without changing files: echo ${commandMarker}. Do not call any other tool. Then immediately reply exactly ACP_COMMAND_OUTPUT_OK.`,
         {
           taskId: null,
           purpose: 'Verify fixed command output enters Runtime Evidence',
@@ -955,7 +955,7 @@ async function runFileOperationMatrix({ request, events, campId, adapterKind, pr
       if (error?.code === 'ENOENT') return null
       throw error
     })
-    const pathSuffix = testCase.path.slice(projectRoot.length + 1)
+    const pathSuffix = testCase.path.slice(projectRoot.length + 1).replaceAll('\\', '/')
     const summarizeEvidence = (entry) => {
       const operation = entry.payload?.runtimeFileOperation
       const entries = entry.canonical?.diffProjection?.status === 'available'
@@ -1286,7 +1286,7 @@ async function runCommandOutputMatrix({ request, events, campId, adapterKind }) 
       request,
       campId,
       [
-        'Use the Bash or terminal tool exactly once to run the following command verbatim.',
+        `Use the ${process.platform === 'win32' ? 'pwsh' : 'Bash or terminal'} tool exactly once to run the following command verbatim.`,
         'Do not call any other tool and do not alter the command.',
         specification.command,
         'After the tool reaches a terminal state, briefly report that it finished.'

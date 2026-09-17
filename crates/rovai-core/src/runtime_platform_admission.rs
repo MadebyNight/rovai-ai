@@ -8,7 +8,7 @@ use crate::{agent_profile::AdapterKind, platform::HostPlatformKey};
 /// that evidence even when their Adapter identity exists in the Product Catalog.
 /// Every register revision receives a new digest.
 pub const MACOS_RUNTIME_COMPATIBILITY_EVIDENCE_REVISION: &str =
-    "sha256:9a436ecd2ec0ecf2bf85e848d61bc2f82520c5b9d7c254bc813c2b4eab965b1d";
+    "sha256:9e86c26d448802e41fafef42d7f085ee4ae55c8b58b037bbfa0145f642bd42a3";
 
 /// Immutable digest of the sanitized, adapter-scoped Windows x64 evidence.
 /// The source qualifies only the Runtime rows named in that evidence; shared
@@ -33,8 +33,12 @@ pub const PI_WINDOWS_X64_EVIDENCE_REVISION: &str =
 
 pub const DSH_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:017f63a62ceb33a8c03e881e9ace29b9710cb94006f87a2def529c6a31276394";
+pub const DSH_MACOS_X64_EVIDENCE_REVISION: &str =
+    "sha256:de01e77a089da05a3b1f129cdeecd9941628a78bd7a5cd65ccb6baf98f7fb9ac";
 pub const DSH_LINUX_X64_EVIDENCE_REVISION: &str =
     "sha256:f18337a37996cc0427d23130ae2ce079d4c0946afeb727e9fa4d218a792a48e2";
+pub const DSH_WINDOWS_X64_EVIDENCE_REVISION: &str =
+    "sha256:39c8037edac69b899a382e569f2b92135e9f48490b16321726b35375dc6444f0";
 
 pub const ZCODE_MACOS_ARM64_EVIDENCE_REVISION: &str =
     "sha256:4c4134d5f68f0633e02d3ade061725d5ff5cfc372d85c345fae10b71ad2badc2";
@@ -199,9 +203,23 @@ mod tests {
                 .as_slice(),
             ),
             (
+                DSH_MACOS_X64_EVIDENCE_REVISION,
+                include_bytes!(
+                    "../../../qualification/runtime-platform/macos-x64-deepseek-harness-v1.json"
+                )
+                .as_slice(),
+            ),
+            (
                 DSH_LINUX_X64_EVIDENCE_REVISION,
                 include_bytes!(
                     "../../../qualification/runtime-platform/linux-x64-deepseek-harness-v1.json"
+                )
+                .as_slice(),
+            ),
+            (
+                DSH_WINDOWS_X64_EVIDENCE_REVISION,
+                include_bytes!(
+                    "../../../qualification/runtime-platform/windows-x64-deepseek-harness-v1.json"
                 )
                 .as_slice(),
             ),
@@ -378,6 +396,19 @@ mod tests {
                     Some(ZCODE_WINDOWS_X64_EVIDENCE_REVISION)
                 );
                 assert_eq!(admission.blocker_code(), None);
+            } else if runtime_kind == AdapterKind::DeepseekHarness {
+                assert_eq!(
+                    admission.status(),
+                    RuntimePlatformAdmissionStatus::Qualified
+                );
+                assert!(admission.allows_runtime_use());
+                assert!(admission.is_qualified());
+                assert_eq!(admission.reason_code(), None);
+                assert_eq!(
+                    admission.evidence_revision(),
+                    Some(DSH_WINDOWS_X64_EVIDENCE_REVISION)
+                );
+                assert_eq!(admission.blocker_code(), None);
             } else if !matches!(
                 runtime_kind,
                 AdapterKind::CursorAgent | AdapterKind::ZcodeApp | AdapterKind::DeepseekHarness
@@ -487,8 +518,9 @@ mod tests {
             let dsh = registry.platform_admission(AdapterKind::DeepseekHarness, platform);
             let expected_revision = match platform {
                 HostPlatformKey::MacosArm64 => Some(DSH_MACOS_ARM64_EVIDENCE_REVISION),
+                HostPlatformKey::MacosX64 => Some(DSH_MACOS_X64_EVIDENCE_REVISION),
                 HostPlatformKey::LinuxX64 => Some(DSH_LINUX_X64_EVIDENCE_REVISION),
-                HostPlatformKey::MacosX64 | HostPlatformKey::WindowsX64 => None,
+                HostPlatformKey::WindowsX64 => Some(DSH_WINDOWS_X64_EVIDENCE_REVISION),
             };
             assert_eq!(
                 dsh.status(),
@@ -548,6 +580,39 @@ mod tests {
         assert_eq!(pi["status"], "qualified");
         assert!(pi["reasonCode"].is_null());
         assert_eq!(pi["evidenceRevision"], PI_WINDOWS_X64_EVIDENCE_REVISION);
+
+        for (platform, platform_name, revision) in [
+            (
+                HostPlatformKey::MacosArm64,
+                "macos-arm64",
+                DSH_MACOS_ARM64_EVIDENCE_REVISION,
+            ),
+            (
+                HostPlatformKey::MacosX64,
+                "macos-x64",
+                DSH_MACOS_X64_EVIDENCE_REVISION,
+            ),
+            (
+                HostPlatformKey::WindowsX64,
+                "windows-x64",
+                DSH_WINDOWS_X64_EVIDENCE_REVISION,
+            ),
+            (
+                HostPlatformKey::LinuxX64,
+                "linux-x64",
+                DSH_LINUX_X64_EVIDENCE_REVISION,
+            ),
+        ] {
+            let dsh = serde_json::to_value(
+                registry.platform_admission(AdapterKind::DeepseekHarness, platform),
+            )
+            .unwrap();
+            assert_eq!(dsh["runtimeKind"], "deepseek-harness");
+            assert_eq!(dsh["platform"], platform_name);
+            assert_eq!(dsh["status"], "qualified");
+            assert!(dsh["reasonCode"].is_null());
+            assert_eq!(dsh["evidenceRevision"], revision);
+        }
 
         let qualified = serde_json::to_value(
             registry.platform_admission(AdapterKind::CodexCli, HostPlatformKey::WindowsX64),

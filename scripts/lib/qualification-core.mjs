@@ -7,20 +7,56 @@ import { runCaptured } from './qualification-common.mjs'
 import { coreDataDirectoryArguments } from './runtime-camp-files-root.mjs'
 
 export async function findCompetingRovaiProcesses() {
-  const result = await runCaptured('/bin/ps', ['-axo', 'pid=,ppid=,command='], { timeoutMs: 10_000 })
-  if (result.code !== 0) throw new Error(`could not inspect running processes: ${result.stderr}`)
-  return parseProcessTable(result.stdout).filter((process) => {
+  return (await processTable()).filter((process) => {
+    const executable = process.executable?.replaceAll('\\', '/') ?? ''
     const command = process.command
-    return /^(?:\S*\/)rovai-core(?:\s|$)/.test(command)
+    return /\/rovai-core\.exe$/iu.test(executable)
+      || /\/Rovai-ai\.exe$/iu.test(executable)
+      || /^(?:\S*\/)rovai-core(?:\s|$)/.test(command)
       || /^rovai-core(?:\s|$)/.test(command)
       || /^\S*Rovai(?:-ai| AI)\.app\/Contents\/MacOS\/Rovai(?:-ai| AI)(?:\s|$)/.test(command)
   })
 }
 
 export async function processTable() {
+  if (process.platform === 'win32') return windowsProcessTable()
   const result = await runCaptured('/bin/ps', ['-axo', 'pid=,ppid=,command='], { timeoutMs: 10_000 })
   if (result.code !== 0) throw new Error(`could not inspect running processes: ${result.stderr}`)
   return parseProcessTable(result.stdout)
+}
+
+async function windowsProcessTable() {
+  const windowsRoot = process.env.SystemRoot?.trim()
+  const executable = windowsRoot
+    ? join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : 'powershell.exe'
+  const script = [
+    "$ProgressPreference = 'SilentlyContinue';",
+    'Get-CimInstance Win32_Process',
+    '| Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine,ExecutablePath',
+    '| ConvertTo-Json -Compress'
+  ].join(' ')
+  const result = await runCaptured(executable, [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script
+  ], { timeoutMs: 15_000 })
+  if (result.code !== 0) throw new Error(`could not inspect running processes: ${result.stderr}`)
+  const trimmed = result.stdout.replace(/^\uFEFF/u, '').trim()
+  if (!trimmed) return []
+  const parsed = JSON.parse(trimmed)
+  return (Array.isArray(parsed) ? parsed : [parsed]).flatMap((entry) => {
+    const pid = Number(entry.ProcessId)
+    const ppid = Number(entry.ParentProcessId)
+    if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(ppid)) return []
+    return [{
+      pid,
+      ppid,
+      command: typeof entry.CommandLine === 'string'
+        ? entry.CommandLine
+        : typeof entry.ExecutablePath === 'string' ? entry.ExecutablePath : '',
+      executable: typeof entry.ExecutablePath === 'string' ? entry.ExecutablePath : null,
+      startedAt: typeof entry.CreationDate === 'string' ? entry.CreationDate : null
+    }]
+  })
 }
 
 export function descendantsOf(table, rootPid) {
@@ -48,6 +84,27 @@ export async function waitForProcessesToExit(pids, timeoutMs = 30_000) {
     if (remaining.length > 0) await new Promise((resolveWait) => setTimeout(resolveWait, 250))
   }
   return remaining
+}
+
+export async function waitForProcessIdentitiesToExit(processes, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  let remaining = [...processes]
+  while (remaining.length > 0 && Date.now() < deadline) {
+    const table = await processTable()
+    const byPid = new Map(table.map((process) => [process.pid, process]))
+    remaining = remaining.filter((expected) => {
+      const current = byPid.get(expected.pid)
+      return current ? sameProcessIdentity(expected, current) : false
+    })
+    if (remaining.length > 0) await new Promise((resolveWait) => setTimeout(resolveWait, 2_000))
+  }
+  return remaining
+}
+
+export function sameProcessIdentity(expected, current) {
+  if (expected.pid !== current.pid) return false
+  if (expected.startedAt && current.startedAt) return expected.startedAt === current.startedAt
+  return true
 }
 
 export function startQualificationCore({

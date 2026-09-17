@@ -484,7 +484,7 @@ async function runPiFileOperationMatrix({ client, workspace, agentId, projectRoo
       afterSequence: 0,
       limit: 1_000
     })
-    const pathSuffix = testCase.path.slice(projectRoot.length + 1)
+    const pathSuffix = testCase.path.slice(projectRoot.length + 1).replaceAll('\\', '/')
     const actualText = await readFile(testCase.path, 'utf8').catch((error) => {
       if (error?.code === 'ENOENT') return null
       throw error

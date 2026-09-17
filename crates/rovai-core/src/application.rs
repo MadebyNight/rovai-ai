@@ -672,7 +672,7 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
 }
 
 async fn response_for_request(core: &Arc<Core>, request: &Request) -> Response {
-    match core.handle(request).await {
+    match Box::pin(core.handle(request)).await {
         Ok(result) => {
             if request_did_invalidate_navigation(core, request, &result).await {
                 emit_navigation_invalidated(

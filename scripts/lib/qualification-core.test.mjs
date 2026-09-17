@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { qualificationRuntimePrivateDiagnostic } from './qualification-core.mjs'
+import { qualificationRuntimePrivateDiagnostic, sameProcessIdentity } from './qualification-core.mjs'
+
+test('long process waits reject a reused Windows PID by creation identity', () => {
+  const expected = { pid: 42, startedAt: '/Date(1000)/' }
+  assert.equal(sameProcessIdentity(expected, { pid: 42, startedAt: '/Date(1000)/' }), true)
+  assert.equal(sameProcessIdentity(expected, { pid: 42, startedAt: '/Date(2000)/' }), false)
+  assert.equal(sameProcessIdentity(expected, { pid: 43, startedAt: '/Date(1000)/' }), false)
+  assert.equal(sameProcessIdentity(expected, { pid: 42 }), true)
+  assert.equal(sameProcessIdentity({ pid: 42 }, { pid: 42 }), true)
+})
 
 test('private Runtime diagnostics retain bounded stderr and failed native turn details', () => {
   const log = qualificationRuntimePrivateDiagnostic({
