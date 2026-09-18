@@ -14,7 +14,7 @@ Gather 已从当前 Built-in catalog、CLI、Core 调度、Run Facts、Context �
 当前多人协作使用普通多目标 `rovai send`。每个目标获得普通 waiting Delivery，回复作为普通公共消息进入发起者的
 FIFO，能够合批时合批。Core 不捕获 return、不维护 Barrier、不生成 completion，也不保证收齐后只唤醒一次。
 
-Migration 162 终态化残留的非终态 Gather 和旧 completion 调度状态，但不会伪造 completion。已经公开、未冻结且仍安全
+Migration 163 终态化残留的非终态 Gather 和旧 completion 调度状态，但不会伪造 completion。已经公开、未冻结且仍安全
 的成员消息责任可以按 [Message Delivery v9](../contracts/message-delivery-v9.md) 迁入普通队列；历史终态对象原样只读。
 
 当前架构见 [Public Camp Message、Delivery 与 AgentRun](public-a2a-message-delivery.md)。历史字段见

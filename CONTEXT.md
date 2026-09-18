@@ -1208,8 +1208,10 @@ _Avoid_: executable sequence range, body continuation, Manifest replay cursor, a
 **Context Delivery Profile**:
 A versioned application configuration for deterministic model-input selection. Current public Profile v7 gives mandatory
 fixed sections and the largest complete FIFO RUN_INPUT prefix priority, defaults an unspecified Runtime payload capability
-to 96 KiB without a common 1 MiB clamp, then spends only remaining bytes on optional context. Shared history uses at most
-15 complete messages and never truncates a message. Single Chat retains Profile v6.
+to 96 KiB without a common 1 MiB clamp, and uses the same message projection and serializer for claim sizing and final
+delivery. Body, viewer-visible quotes, each message's own source attachments and Skills are indivisible; only remaining
+bytes are spent on optional context. Shared history uses at most 15 complete messages and never truncates a message.
+Single Chat retains Profile v6.
 _Avoid_: formatter constants, model DTO schema, Evidence schema, Member Runtime Parameters, mutable user preference, summary model configuration
 
 **Cross-Camp History Search**:
@@ -1220,7 +1222,10 @@ _Avoid_: global Camp history, Archived Camp search, former-membership history, M
 The model-facing discovery and raw-read surface for original public CampMessages. Every call rederives live authorization
 and recipient-specific visibility; `camp.read` is not bounded by the current ContextManifest and can see later currently
 visible messages. It pages by `limit <= 20` and cursor, then returns the selected page completely without aggregate-size
-shrinking. Recallable, suppressed and withdrawn messages remain unavailable, and reading has no claim or ACK side effect.
+shrinking. Its current request shapes are timeline `before/limit`, exact `messageId`, and thread `thread/before/limit`;
+retired `mode/direction/around` fields are neither accepted nor translated. Recallable, suppressed and withdrawn messages
+remain unavailable, every quote source is separately visibility-checked for the viewer, and reading has no claim or ACK
+side effect.
 _Avoid_: Manifest-bounded read, unread-only retrieval, truncated success, attachment file access, bearer cursor, Memory recall
 
 **Cross-Camp History Fence**:
@@ -1715,7 +1720,7 @@ The legacy immutable Core-owned payload and private metadata stored under `<data
 _Avoid_: new Agent attachment, new Desktop user attachment, Runtime attachment root, Published Attachment Path, original user file, second authoritative copy
 
 **Prepared Attachment**:
-A historical Draft-private reference to one Authority Attachment. Migration 162 removes public Draft/Pending references
+A historical Draft-private reference to one Authority Attachment. Migration 163 removes public Draft/Pending references
 without deleting user source files or attachments still referenced by published messages; no current public ingress or
 recovery UI creates or activates Prepared Attachment state.
 _Avoid_: current user attachment, Local Attachment Source Ref, Published Attachment, Runtime-readable file
@@ -1787,7 +1792,11 @@ The former combined transaction that published a message and immediately created
 _Avoid_: current write seam, Message Publication Admission, Delivery Claim, Single Chat admission
 
 **Delivery Claim**:
-The Scheduler-owned atomic transaction for one `(CampId, AgentId)` lane. It selects the complete FIFO head prefix, reads and freezes the Agent's current execution configuration and Skill selection, creates one immutable multi-input AgentRun and its ordered inputs/anchor, and binds every selected Delivery. No later message can join that Run.
+The Scheduler-owned atomic transaction for one `(CampId, AgentId)` lane. It independently verifies prior execution
+isolation for that lane and cleanup for the actual shared execution root, resolves the current Runtime capacity once,
+and selects the complete FIFO head prefix through the same serialized message projection used for delivery. It then
+freezes the execution configuration and Skill selection, creates one immutable multi-input AgentRun and its ordered
+inputs/anchor, and binds every selected Delivery. No later message can join that Run.
 _Avoid_: message publication, queued Run placeholder, source-specific batch, skip-ahead selection, Runtime launch
 
 **Execution Dispatch Check**:

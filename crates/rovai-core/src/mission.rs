@@ -1139,6 +1139,12 @@ mod tests {
                 .unwrap()
                 .cleanup_available
         );
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
+                .unwrap()
+                .len(),
+            1
+        );
         db.connection()
             .execute(
                 "UPDATE agent_run SET status='succeeded',ended_at='ended',updated_at='ended' WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
@@ -1170,6 +1176,10 @@ mod tests {
             .unwrap();
         let other_mission_id = other.result.payload["missionId"].as_str().unwrap();
         let other_camp_id = other.result.payload["campId"].as_str().unwrap();
+        db.connection().execute(
+            "INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES('projection-workspace-other',?1,?2,?3,'/other/repo','/other/repo','/other/repo/.git','/other-worktree','/other-worktree','main','rovai/mission/002','base','owner','ready','created','updated')",
+            params![other_mission_id, other_camp_id, host],
+        ).unwrap();
         service
             .start(
                 &mut db,
@@ -1178,6 +1188,12 @@ mod tests {
                 }),
             )
             .unwrap();
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
+                .unwrap()
+                .len(),
+            1
+        );
         db.connection()
             .execute(
                 "UPDATE agent_run SET workspace_json=json_object('executionRoot','/worktree') WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",

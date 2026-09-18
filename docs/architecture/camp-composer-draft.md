@@ -46,5 +46,5 @@ warning，但该选择不能创建持久 Draft 模型、恢复列表或第二份
 
 ## 升级
 
-Migration 162 一次性删除旧 public Composer Draft、未公开 Pending 及编辑/恢复状态，且不提供 legacy recovery UI。
+Migration 163 一次性删除旧 public Composer Draft、未公开 Pending 及编辑/恢复状态，且不提供 legacy recovery UI。
 删除引用不删除用户源文件；已发布消息和其附件不受影响。历史合同只用于解释旧数据库，不再作为当前入口。

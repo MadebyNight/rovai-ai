@@ -439,10 +439,10 @@ impl BuiltinToolInvocationEnvelope {
         }
         uuid::Uuid::parse_str(&self.request_id)
             .context("Built-in Tool envelope requestId must be a UUID")?;
-        let outcome = match (self.ok, self.result.as_ref(), self.error.as_ref()) {
+        let expected_receipt = match (self.ok, self.result.as_ref(), self.error.as_ref()) {
             (true, Some(result), None) => {
-                canonical_operation_result(result.clone())?;
-                result.clone()
+                validate_canonical_operation_result(result)?;
+                builtin_tool_receipt(&self.operation, &self.request_id, true, result)?
             }
             (false, None, Some(error)) => {
                 if error.code.trim().is_empty() || error.message.trim().is_empty() {
@@ -455,12 +455,11 @@ impl BuiltinToolInvocationEnvelope {
                 {
                     bail!("Built-in Tool error details must be an object");
                 }
-                serde_json::to_value(error)?
+                let error = serde_json::to_value(error)?;
+                builtin_tool_receipt(&self.operation, &self.request_id, false, &error)?
             }
             _ => bail!("Built-in Tool envelope must contain exactly one of result or error"),
         };
-        let expected_receipt =
-            builtin_tool_receipt(&self.operation, &self.request_id, self.ok, &outcome)?;
         if self.receipt != expected_receipt {
             bail!("Built-in Tool envelope receipt does not cover its outcome");
         }
@@ -674,6 +673,11 @@ fn catalog_digest_operations() -> Result<Vec<CatalogDigestOperation>> {
 }
 
 pub fn canonical_operation_result(value: Value) -> Result<Value> {
+    validate_canonical_operation_result(&value)?;
+    Ok(value)
+}
+
+fn validate_canonical_operation_result(value: &Value) -> Result<()> {
     let result = value
         .as_object()
         .context("Canonical Operation Result must be an object")?;
@@ -682,7 +686,7 @@ pub fn canonical_operation_result(value: Value) -> Result<Value> {
             bail!("Canonical Operation Result contains forbidden field {forbidden}");
         }
     }
-    Ok(value)
+    Ok(())
 }
 
 fn direct_arguments(input_schema: &Value) -> Vec<BuiltinToolArgument> {

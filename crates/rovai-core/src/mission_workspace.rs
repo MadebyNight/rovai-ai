@@ -1062,6 +1062,10 @@ pub fn workspace_in_use(connection: &Connection, workspace: &MissionWorkspace) -
                 r.status IN ('queued','running','waiting')
                 OR (r.cancel_requested_at IS NOT NULL AND r.cancel_acknowledged_at IS NULL)
               )
+            UNION ALL
+            SELECT 1
+            FROM camp_message_delivery d
+            WHERE d.camp_id=?1 AND d.status='waiting'
         )",
         params![workspace.camp_id, workspace.working_directory],
         |row| row.get(0),

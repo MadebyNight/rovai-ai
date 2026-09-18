@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -630,6 +630,26 @@ fn validate_frozen_runtime_columns(
         anyhow::bail!("AgentRun frozen Runtime columns disagree with effective configuration");
     }
     Ok(())
+}
+
+pub(crate) fn runtime_cleanup_blocked_since_connection(
+    connection: &Connection,
+    conversation_id: &str,
+    excluded_agent_run_id: Option<&str>,
+) -> Result<Option<String>> {
+    Ok(connection.query_row(
+        r#"
+        SELECT MIN(cancel_requested_at)
+        FROM agent_run
+        WHERE conversation_id = ?1
+          AND (?2 IS NULL OR id <> ?2)
+          AND cancel_requested_at IS NOT NULL
+          AND cancel_acknowledged_at IS NULL
+          AND status IN ('succeeded', 'failed', 'cancelled')
+        "#,
+        params![conversation_id, excluded_agent_run_id],
+        |row| row.get(0),
+    )?)
 }
 
 #[derive(Debug, Default)]
@@ -2794,10 +2814,11 @@ impl ExecutionRuntimeService {
         conversation_id: &str,
         agent_run_id: &str,
     ) -> Result<Option<String>> {
-        Ok(database.connection().query_row(
-            "SELECT MIN(cancel_requested_at) FROM agent_run WHERE conversation_id = ?1 AND id <> ?2 AND cancel_requested_at IS NOT NULL AND cancel_acknowledged_at IS NULL AND status IN ('succeeded', 'failed', 'cancelled')",
-            params![conversation_id, agent_run_id], |row| row.get(0),
-        )?)
+        runtime_cleanup_blocked_since_connection(
+            database.connection(),
+            conversation_id,
+            Some(agent_run_id),
+        )
     }
 
     pub fn defer_runtime_cleanup(

@@ -48,7 +48,12 @@ ChannelDelivery 继续维护自己的业务状态。
 - Channel 收敛为异步消息桥；Channel-bound Camp 的 Agent 公开消息默认产生独立、可去重 ChannelDelivery。
 - Automation occurrence 只有 `started` 或 `skipped(overlap)` 两种入口结果，仍通过普通 Delivery claim 创建首个 Run。
 - 普通 batch claim 由单一事件唤醒 Scheduler 负责；Core 启动时检查存量，并以不重置 deadline 的全局 30 秒只读优先
-  兜底恢复；原 500ms 循环保留既有非 batch Run 派发与其他职责，但不再扫描普通 Delivery 或 queued batch Run。
+  兜底恢复；原 500ms 职责在独立串行维护任务中保留既有 non-batch Run 派发与其他职责，不再扫描普通
+  Delivery/queued batch Run，也不以慢 preparation 阻塞 batch wake。
+- claim 与最终交付复用同一 `RUN_INPUT.messages[]` 投影和 Runtime capacity；正文、viewer-visible quotes、
+  逐消息 source attachments 与 Skills 共同参与 FIFO 前缀选择。
+- `camp.read` 请求直接使用 `before/limit`、`messageId` 或 `thread/before/limit`；不再接受或翻译旧
+  `mode/direction/around` 请求。
 - Built-in IPC、Runtime Adapter 和 `camp.read` 不再用统一总量阈值裁剪成功结果；完整交付或明确失败。
 - Runtime 输入仍有确定性容量：profile 缺省 96 KiB，不再应用通用 1 MiB clamp。
 - `SHARED_CONVERSATION` 使用每个 Camp+Agent 的 accepted 增量公共消息窗口，保留原始顺序和当前 Agent 自己的消息；
@@ -62,6 +67,8 @@ ChannelDelivery 继续维护自己的业务状态。
 产品与架构决策以及完整字段级 revision 2 已由开发者确认。合同、Schema、Core、Runtime、CLI、Renderer、
 Skill、Migration 与自动化验证已完成，并以 Delivery-first 主链取代旧 public Camp 执行模型。此处记录的是
 仓库实现完成状态，不把未执行的安装包、第三方真实 Runtime 或真实渠道 Smoke 描述为发布资格。
+`main` 的 Mission workspace lifecycle 拥有 Migration 162/schema 112；Delivery-first clean break 因此使用
+Migration 163/schema 113，并显式接纳已运行旧功能分支 162 的精确物理结构作为收敛来源。
 
 ## 跨版本文档影响
 

@@ -19,7 +19,6 @@ Camp switch, refresh and app exit do not persist or recover the edit. A lightwei
 Renderer-only choice, but cannot introduce Core draft state. Single Chat retains its separate private draft
 and pending-input contract.
 
-Migration 162 deletes legacy public Composer Draft, unpublished Pending and their edit/recovery state. It
+Migration 163 deletes legacy public Composer Draft, unpublished Pending and their edit/recovery state. It
 does not delete user source files or attachments used by published messages. No legacy recovery screen or
 reactivation API remains.
-

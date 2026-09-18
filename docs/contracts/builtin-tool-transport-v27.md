@@ -38,6 +38,12 @@ transport interruption is an explicit failure, never `success + truncated`. Inte
 I/O, backpressure and managed spooling are allowed without changing the output schema or requiring an
 Agent-visible `blobRef`, preview or continuation call.
 
+On the CLI receive path, one explicit projection entry point performs the complete Envelope validation exactly
+once, including version, operation, result/error exclusivity and receipt consistency. Canonical-result checks
+borrow the parsed result tree, and projections that preserve the business shape consume that owned tree; operations
+that intentionally remove or reshape fields retain their operation-specific projection. These ownership rules do
+not weaken Core input authorization, lease fencing, construction-time validation, or receipt verification.
+
 Replay returns the first complete, finalized result. Evidence stores that result or an integrity-preserving
 managed identity with byte length and digest. An interrupted transport for an effectful command does not prove
 that the business operation did not occur; existing idempotency and effect-recovery rules still apply.

@@ -41,9 +41,12 @@ create an AgentRun.
 
 The scheduler atomically claims a complete FIFO prefix for one `(campId, agentId)` lane. The transaction:
 
-1. validates current membership and execution/isolation admission;
+1. validates current membership, prior execution isolation for the same Camp+Agent lane, and cleanup for the
+   actual shared execution root as independent gates;
 2. reads the Agent's current Runtime, model, mode, workspace, tools and permissions;
-3. selects the largest complete prefix that fits the current input profile, without skipping the head;
+3. projects each candidate message exactly as `RUN_INPUT.messages[]`, including its own body, quotes, source
+   attachments and Skills, serializes that projection under the once-resolved Runtime capacity, and selects the
+   largest complete prefix without skipping the head;
 4. creates one immutable `AgentRun` plus ordered `AgentRunInput` rows;
 5. binds every selected Delivery to that Run and changes it to `claimed`.
 
@@ -64,8 +67,9 @@ first perform a read-only pending-work check; when neither waiting Delivery nor 
 exists, it must not open the claim write transaction. Terminal settlement must not directly claim a successor,
 and an error while later scheduling work must not change an already-committed terminal result. Network recovery
 may dispatch its admitted existing Run but must not claim a new Delivery. Existing non-batch Run dispatch and
-other 500ms maintenance duties are outside this Scheduler contract and retain their existing cadence; that path
-must not claim an ordinary Delivery or dispatch an ordinary queued batch Run.
+other 500ms maintenance duties are outside this Scheduler contract and retain their existing cadence in one
+separate serialized, non-overlapping task. That path must not claim an ordinary Delivery or dispatch an ordinary
+queued batch Run, and slow non-batch preparation must not block ordinary batch wakes or the fallback.
 
 ## Terminal behavior
 
@@ -78,6 +82,6 @@ waiting Deliveries; rejoining creates a new lifetime and only later messages cre
 
 ## Migration
 
-Migration 162 preserves already-public legacy work that has no frozen ContextManifest or accepted Runtime
+Migration 163 preserves already-public legacy work that has no frozen ContextManifest or accepted Runtime
 input as v9 waiting Deliveries. It terminalizes the old mutable Run/attempt placeholders. Frozen or
 accepted legacy work is never requeued.

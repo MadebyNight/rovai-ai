@@ -4,6 +4,7 @@ use crate::{
         StructuredCampMessageContent, StructuredCampMessageSegment, render_current_plain_text,
         render_plain_text_with_current_user,
     },
+    camp_message_publication::public_camp_message_publication_cte,
     command::canonical_json_digest,
 };
 use anyhow::{Context, Result, ensure};
@@ -217,6 +218,140 @@ pub fn load_quotes(
         )
         .optional()?;
     parse_quotes(value.as_deref().unwrap_or("[]"))
+}
+
+/// The visibility boundary used when immutable Camp quote snapshots are
+/// projected to one Agent. The stored snapshot remains unchanged; only the
+/// per-viewer projection is filtered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CampQuoteFence {
+    CampSequence(i64),
+    GlobalPublicationSequence(i64),
+}
+
+pub fn load_agent_visible_camp_quotes(
+    connection: &Connection,
+    owner_message_id: &str,
+    camp_id: &str,
+    viewer_agent_id: &str,
+    fence: CampQuoteFence,
+) -> Result<Vec<MessageQuoteSnapshot>> {
+    load_agent_visible_camp_quotes_with_claimed_sources(
+        connection,
+        owner_message_id,
+        camp_id,
+        viewer_agent_id,
+        fence,
+        &std::collections::HashSet::new(),
+    )
+}
+
+pub(crate) fn load_agent_visible_camp_quotes_with_claimed_sources(
+    connection: &Connection,
+    owner_message_id: &str,
+    camp_id: &str,
+    viewer_agent_id: &str,
+    fence: CampQuoteFence,
+    claimed_source_message_ids: &std::collections::HashSet<String>,
+) -> Result<Vec<MessageQuoteSnapshot>> {
+    let quotes = load_quotes(connection, QuoteStorage::CampMessage, owner_message_id)?;
+    quotes
+        .into_iter()
+        .filter_map(|quote| {
+            if quote.source.scope != "camp"
+                || quote.source.camp_id != camp_id
+                || quote.source.conversation_id.is_some()
+            {
+                return Some(Ok(None));
+            }
+            Some(
+                camp_quote_source_is_visible(
+                    connection,
+                    &quote,
+                    viewer_agent_id,
+                    fence,
+                    claimed_source_message_ids.contains(&quote.source.message_id),
+                )
+                .map(|visible| visible.then_some(quote)),
+            )
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|quotes| quotes.into_iter().flatten().collect())
+}
+
+fn camp_quote_source_is_visible(
+    connection: &Connection,
+    quote: &MessageQuoteSnapshot,
+    viewer_agent_id: &str,
+    fence: CampQuoteFence,
+    claimed_source_is_visible: bool,
+) -> Result<bool> {
+    let (sql, boundary) = match fence {
+        CampQuoteFence::CampSequence(boundary) => (
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM camp_message AS message
+                WHERE message.id = ?1
+                  AND message.camp_id = ?2
+                  AND message.sequence <= ?3
+                  AND message.tombstoned_at IS NULL
+                  AND message.recall_state <> 'withdrawn'
+                  AND (?5 OR message.recall_state <> 'recallable')
+                  AND (?5 OR NOT EXISTS (
+                      SELECT 1
+                      FROM camp_message_delivery AS hidden_delivery
+                      WHERE hidden_delivery.message_id = message.id
+                        AND hidden_delivery.recipient_agent_id = ?4
+                        AND hidden_delivery.status = 'waiting'
+                  ))
+            )
+            "#
+            .to_string(),
+            boundary,
+        ),
+        CampQuoteFence::GlobalPublicationSequence(boundary) => (
+            format!(
+                r#"
+                WITH {}
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM camp_message AS message
+                    JOIN public_camp_message_publication AS publication
+                      ON publication.message_id = message.id
+                    WHERE message.id = ?1
+                      AND message.camp_id = ?2
+                      AND publication.global_sequence <= ?3
+                      AND message.tombstoned_at IS NULL
+                      AND message.recall_state <> 'withdrawn'
+                      AND (?5 OR message.recall_state <> 'recallable')
+                      AND (?5 OR NOT EXISTS (
+                          SELECT 1
+                          FROM camp_message_delivery AS hidden_delivery
+                          WHERE hidden_delivery.message_id = message.id
+                            AND hidden_delivery.recipient_agent_id = ?4
+                            AND hidden_delivery.status = 'waiting'
+                      ))
+                )
+                "#,
+                public_camp_message_publication_cte()
+            ),
+            boundary,
+        ),
+    };
+    connection
+        .query_row(
+            &sql,
+            params![
+                quote.source.message_id,
+                quote.source.camp_id,
+                boundary,
+                viewer_agent_id,
+                claimed_source_is_visible,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 pub fn store_quotes(
@@ -723,6 +858,103 @@ pub fn mutate_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Quote snapshots are immutable, but their source text may cross an Agent
+    // delivery fence only after that exact source message becomes visible.
+    #[test]
+    fn camp_quote_projection_rechecks_source_visibility_for_each_agent() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE camp_message(
+                    id TEXT PRIMARY KEY,
+                    camp_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    tombstoned_at TEXT,
+                    recall_state TEXT NOT NULL,
+                    quotes_json TEXT NOT NULL
+                );
+                CREATE TABLE camp_message_delivery(
+                    message_id TEXT NOT NULL,
+                    recipient_agent_id TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+                INSERT INTO camp_message VALUES
+                    ('message_1', 'camp_1', 1, NULL, 'committed', '[]'),
+                    ('message_2', 'camp_1', 2, NULL, 'committed', '[]');
+                INSERT INTO camp_message_delivery VALUES
+                    ('message_1', 'agent_b', 'waiting');
+                "#,
+            )
+            .unwrap();
+        let mut quote = MessageQuoteSnapshot {
+            version: 1,
+            quote_id: "quote_1".into(),
+            source: MessageQuoteSource {
+                scope: "camp".into(),
+                camp_id: "camp_1".into(),
+                conversation_id: None,
+                message_id: "message_1".into(),
+            },
+            author_at_capture: MessageQuoteAuthor::User {
+                display_name: "Principal".into(),
+            },
+            text: "secret excerpt".into(),
+            format: "plain_text".into(),
+            captured_at: "2026-09-18T00:00:00Z".into(),
+            source_content_digest: "sha256:source".into(),
+            locator: None,
+            snapshot_digest: String::new(),
+        };
+        quote.snapshot_digest = quote.digest().unwrap();
+        store_quotes(
+            &connection,
+            QuoteStorage::CampMessage,
+            "message_2",
+            std::slice::from_ref(&quote),
+        )
+        .unwrap();
+
+        let hidden = load_agent_visible_camp_quotes(
+            &connection,
+            "message_2",
+            "camp_1",
+            "agent_b",
+            CampQuoteFence::CampSequence(2),
+        )
+        .unwrap();
+        assert!(hidden.is_empty());
+        assert_eq!(
+            load_agent_visible_camp_quotes(
+                &connection,
+                "message_2",
+                "camp_1",
+                "agent_a",
+                CampQuoteFence::CampSequence(2),
+            )
+            .unwrap(),
+            vec![quote.clone()]
+        );
+
+        connection
+            .execute(
+                "UPDATE camp_message_delivery SET status='claimed' WHERE message_id='message_1'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            load_agent_visible_camp_quotes(
+                &connection,
+                "message_2",
+                "camp_1",
+                "agent_b",
+                CampQuoteFence::CampSequence(2),
+            )
+            .unwrap(),
+            vec![quote]
+        );
+    }
 
     // The projection owns Unicode, whitespace, GFM display and offset semantics; no full app fixture is needed.
     #[test]

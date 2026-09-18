@@ -159,9 +159,9 @@ use rovai_core::{
     },
     context::{
         CharterDeliveryMode, ContextMaterialization, ContextPayloadTooLarge, ContextService,
-        DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES, MaterializeContextRequest, PersistPiPromptImageEvidence,
-        PiPromptImageEvidence, PreparedContext, RuntimeInputDelivery,
-        charter_delivery_mode_for_adapter,
+        MaterializeContextRequest, PersistPiPromptImageEvidence, PiPromptImageEvidence,
+        PreparedContext, RuntimeInputDelivery, charter_delivery_mode_for_adapter,
+        runtime_max_context_payload_bytes,
     },
     core_data_dir_lock::{CoreDataDirLease, CoreDataDirLeaseAcquisition},
     current_user::CURRENT_USER_ID,
@@ -11419,7 +11419,7 @@ impl Core {
                     agent_run_id: &execution.agent_run_id,
                     execution_epoch: execution.execution_epoch,
                     charter_delivery_mode: request.charter_delivery_mode,
-                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                    max_payload_bytes: runtime_max_context_payload_bytes(&execution.runtime),
                 },
             )
         }?;
@@ -11464,7 +11464,7 @@ impl Core {
                 agent_run_id: &execution.agent_run_id,
                 execution_epoch: execution.execution_epoch,
                 charter_delivery_mode: request.charter_delivery_mode,
-                max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                max_payload_bytes: runtime_max_context_payload_bytes(&execution.runtime),
             };
             let materialization = match mcp_projection {
                 Some(mcp_projection) => ContextService
@@ -21386,28 +21386,22 @@ async fn process_agent_run_scheduler(
     output: mpsc::UnboundedSender<String>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
-    let mut automation_clock = crate::automation_clock::AutomationClock::start();
-    let mut interval = tokio::time::interval(Duration::from_millis(500));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let (maintenance_shutdown_tx, maintenance_shutdown_rx) = oneshot::channel();
+    let mut maintenance_handle = tokio::spawn(process_agent_run_maintenance(
+        core.clone(),
+        output.clone(),
+        maintenance_shutdown_rx,
+    ));
     let mut delivery_batch_fallback = tokio::time::interval_at(
         tokio::time::Instant::now() + DELIVERY_BATCH_FALLBACK_INTERVAL,
         DELIVERY_BATCH_FALLBACK_INTERVAL,
     );
     delivery_batch_fallback.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut mcp_cleanup_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(30),
-        Duration::from_secs(30),
-    );
-    mcp_cleanup_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut pending_execution_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(15),
-        Duration::from_secs(15),
-    );
-    pending_execution_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut delivery_batch_dispatches = tokio::task::JoinSet::new();
     let mut delivery_batch_workers = HashMap::new();
     let mut delivery_batch_inflight = HashSet::new();
     let mut scan_delivery_batches = true;
+    let mut maintenance_exited = false;
     'scheduler: loop {
         if scan_delivery_batches {
             scan_delivery_batches = false;
@@ -21438,23 +21432,6 @@ async fn process_agent_run_scheduler(
             }
         }
         tokio::select! {
-            _ = interval.tick() => {
-                {
-                    // Hold the same fence used by native suspend/resume control.
-                    let control = core.automation_scheduler_control.read().await;
-                    if let Some((now, boundary)) = automation_clock.tick()
-                        && !control.is_some_and(|value| value.paused)
-                    {
-                        let boundary = control.map_or(boundary, |value| boundary.max(value.recovery_boundary));
-                        core.process_automations(now, boundary).await;
-                    }
-                }
-                core.expire_elapsed_execution_budgets(&output).await;
-                core.dispatch_runtime_deliveries(&output).await;
-                core.dispatch_agent_run_cancellations(&output).await;
-                dispatch_pending_single_chat_inputs(&core).await;
-                core.dispatch_non_batch_agent_runs(&output).await;
-            },
             _ = core.delivery_batch_scheduler_notify.notified() => {
                 scan_delivery_batches = true;
             },
@@ -21488,6 +21465,65 @@ async fn process_agent_run_scheduler(
                     None => {}
                 }
             },
+            result = &mut maintenance_handle => {
+                maintenance_exited = true;
+                match result {
+                    Ok(()) => eprintln!("agent-run maintenance task exited unexpectedly"),
+                    Err(error) => eprintln!("agent-run maintenance task failed: {error}"),
+                }
+                break 'scheduler;
+            },
+            _ = &mut shutdown => break 'scheduler,
+        }
+    }
+    if !maintenance_exited {
+        let _ = maintenance_shutdown_tx.send(());
+        maintenance_handle.abort();
+        let _ = maintenance_handle.await;
+    }
+    delivery_batch_dispatches.abort_all();
+    while delivery_batch_dispatches.join_next().await.is_some() {}
+}
+
+/// Keeps the legacy fixed-interval responsibilities serialized without making
+/// ordinary Camp Delivery notifications wait for their Runtime preflight.
+async fn process_agent_run_maintenance(
+    core: Arc<Core>,
+    output: mpsc::UnboundedSender<String>,
+    mut shutdown: oneshot::Receiver<()>,
+) {
+    let mut automation_clock = crate::automation_clock::AutomationClock::start();
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut mcp_cleanup_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(30),
+        Duration::from_secs(30),
+    );
+    mcp_cleanup_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut pending_execution_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(15),
+        Duration::from_secs(15),
+    );
+    pending_execution_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                {
+                    // Hold the same fence used by native suspend/resume control.
+                    let control = core.automation_scheduler_control.read().await;
+                    if let Some((now, boundary)) = automation_clock.tick()
+                        && !control.is_some_and(|value| value.paused)
+                    {
+                        let boundary = control.map_or(boundary, |value| boundary.max(value.recovery_boundary));
+                        core.process_automations(now, boundary).await;
+                    }
+                }
+                core.expire_elapsed_execution_budgets(&output).await;
+                core.dispatch_runtime_deliveries(&output).await;
+                core.dispatch_agent_run_cancellations(&output).await;
+                dispatch_pending_single_chat_inputs(&core).await;
+                core.dispatch_non_batch_agent_runs(&output).await;
+            },
             _ = core.agent_run_cancellation_notify.notified() => {
                 core.dispatch_agent_run_cancellations(&output).await;
             },
@@ -21504,11 +21540,9 @@ async fn process_agent_run_scheduler(
             _ = pending_execution_interval.tick() => {
                 core.recover_pending_execution_intents().await;
             },
-            _ = &mut shutdown => break 'scheduler,
+            _ = &mut shutdown => break,
         }
     }
-    delivery_batch_dispatches.abort_all();
-    while delivery_batch_dispatches.join_next().await.is_some() {}
 }
 
 async fn process_network_recovery(

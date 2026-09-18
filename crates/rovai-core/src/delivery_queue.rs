@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
-use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -8,13 +7,16 @@ use crate::{
     agent_profile::{FrozenAgentRuntimeConfig, resolve_frozen_runtime},
     camp_content::StructuredCampMessageContent,
     collaboration::build_effective_config,
-    current_input_skill::freeze_skill_selection,
+    context::{
+        project_batch_run_input_for_claim, runtime_max_context_payload_bytes,
+        serialized_batch_run_input_len,
+    },
+    current_input_skill::{
+        SkillSelectionSnapshot, freeze_skill_selection, projected_skill_links_for_claim,
+    },
     db::Database,
-    runtime::AgentRunWorkspace,
+    runtime::{AgentRunWorkspace, runtime_cleanup_blocked_since_connection},
 };
-
-pub const DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES: usize = 96 * 1024;
-const BATCH_FIXED_CONTEXT_RESERVE_BYTES: usize = 24 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EnqueuedDelivery {
@@ -27,31 +29,15 @@ struct WaitingDelivery {
     id: String,
     message_id: String,
     sequence: i64,
-    author_type: String,
-    author_id: String,
-    body: String,
     structured_content_json: Option<String>,
-    anchor_message_id: Option<String>,
     content_digest: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BatchSizingMessage<'a> {
-    message_id: &'a str,
-    sequence: i64,
-    sender_type: &'a str,
-    sender_id: &'a str,
-    body: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    structured_content_json: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    anchor_message_id: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-struct BatchSizingInput<'a> {
-    messages: Vec<BatchSizingMessage<'a>>,
+#[derive(Debug)]
+struct BatchPrefixSelection {
+    count: usize,
+    first_too_large: bool,
+    skill_selection: SkillSelectionSnapshot,
 }
 
 pub(crate) fn enqueue_message_deliveries(
@@ -252,6 +238,11 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
         ));
 
         for (camp_id, agent_id, conversation_id, _, _) in lanes {
+            if runtime_cleanup_blocked_since_connection(&transaction, &conversation_id, None)?
+                .is_some()
+            {
+                continue;
+            }
             let runtime = match resolve_frozen_runtime(&transaction, &conversation_id, &agent_id)? {
                 Ok(runtime) => runtime,
                 Err(_) => continue,
@@ -309,8 +300,18 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
             if waiting.is_empty() {
                 continue;
             }
-            let (selected_count, first_too_large) = select_batch_prefix(&waiting)?;
-            let selected = &waiting[..selected_count];
+            let max_payload_bytes = runtime_max_context_payload_bytes(&runtime);
+            let selection = select_batch_prefix(
+                &transaction,
+                &camp_id,
+                &agent_id,
+                camp_public_tail,
+                &runtime,
+                std::path::Path::new(cleanup_execution_root),
+                &waiting,
+                max_payload_bytes,
+            )?;
+            let selected = &waiting[..selection.count];
             let anchor_message_id = selected
                 .last()
                 .map(|delivery| delivery.message_id.as_str())
@@ -329,8 +330,9 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
                 &effective_config,
                 workspace.as_ref(),
                 &runtime,
+                &selection.skill_selection,
                 selected,
-                first_too_large,
+                selection.first_too_large,
                 &now,
             )?;
             claimed_run_ids.push(agent_run_id);
@@ -377,9 +379,7 @@ fn load_waiting_prefix(
     let mut statement = transaction.prepare(
         r#"
         SELECT delivery.id, message.id, message.sequence,
-               message.author_type, message.author_id, message.body,
-               message.structured_content_json,
-               message.reply_to_camp_message_id, message.content_digest
+               message.structured_content_json, message.content_digest
         FROM camp_message_delivery AS delivery
         JOIN camp_message AS message ON message.id = delivery.message_id
         WHERE delivery.camp_id = ?1
@@ -396,44 +396,73 @@ fn load_waiting_prefix(
                 id: row.get(0)?,
                 message_id: row.get(1)?,
                 sequence: row.get(2)?,
-                author_type: row.get(3)?,
-                author_id: row.get(4)?,
-                body: row.get(5)?,
-                structured_content_json: row.get(6)?,
-                anchor_message_id: row.get(7)?,
-                content_digest: row.get(8)?,
+                structured_content_json: row.get(3)?,
+                content_digest: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn select_batch_prefix(waiting: &[WaitingDelivery]) -> Result<(usize, bool)> {
-    let available =
-        DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES.saturating_sub(BATCH_FIXED_CONTEXT_RESERVE_BYTES);
+#[allow(clippy::too_many_arguments)]
+fn select_batch_prefix(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    agent_id: &str,
+    camp_public_tail: i64,
+    runtime: &FrozenAgentRuntimeConfig,
+    execution_root: &std::path::Path,
+    waiting: &[WaitingDelivery],
+    max_payload_bytes: usize,
+) -> Result<BatchPrefixSelection> {
+    let mut batch_content = Vec::new();
+    let mut previous_selection = None;
     for count in 1..=waiting.len() {
-        let payload = BatchSizingInput {
-            messages: waiting[..count]
-                .iter()
-                .map(|message| BatchSizingMessage {
-                    message_id: &message.message_id,
-                    sequence: message.sequence,
-                    sender_type: &message.author_type,
-                    sender_id: &message.author_id,
-                    body: &message.body,
-                    structured_content_json: message.structured_content_json.as_deref(),
-                    anchor_message_id: message.anchor_message_id.as_deref(),
-                })
-                .collect(),
-        };
-        if serde_json::to_vec(&payload)?.len() > available {
-            return Ok(if count == 1 {
-                (1, true)
-            } else {
-                (count - 1, false)
+        if let Some(content_json) = waiting[count - 1].structured_content_json.as_deref() {
+            let mut content = serde_json::from_str::<StructuredCampMessageContent>(content_json)
+                .context("CampMessage Structured Content is invalid during Delivery claim")?;
+            batch_content.append(&mut content);
+        }
+        let skill_selection =
+            freeze_skill_selection(transaction, &batch_content, runtime.adapter_kind)?;
+        let skill_links = projected_skill_links_for_claim(
+            transaction,
+            &skill_selection,
+            runtime.adapter_kind,
+            execution_root,
+        )?;
+        let message_ids = waiting[..count]
+            .iter()
+            .map(|delivery| delivery.message_id.clone())
+            .collect::<Vec<_>>();
+        let run_input = project_batch_run_input_for_claim(
+            transaction,
+            camp_id,
+            agent_id,
+            camp_public_tail,
+            &message_ids,
+            &skill_links,
+        )?;
+        if serialized_batch_run_input_len(&run_input)? > max_payload_bytes {
+            return Ok(match previous_selection {
+                Some(skill_selection) => BatchPrefixSelection {
+                    count: count - 1,
+                    first_too_large: false,
+                    skill_selection,
+                },
+                None => BatchPrefixSelection {
+                    count: 1,
+                    first_too_large: true,
+                    skill_selection,
+                },
             });
         }
+        previous_selection = Some(skill_selection);
     }
-    Ok((waiting.len(), false))
+    Ok(BatchPrefixSelection {
+        count: waiting.len(),
+        first_too_large: false,
+        skill_selection: previous_selection.unwrap_or_default(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -449,21 +478,11 @@ fn insert_batch_run(
     effective_config: &Value,
     workspace: Option<&AgentRunWorkspace>,
     runtime: &FrozenAgentRuntimeConfig,
+    skill_selection: &SkillSelectionSnapshot,
     selected: &[WaitingDelivery],
     first_too_large: bool,
     now: &str,
 ) -> Result<()> {
-    let mut batch_content = Vec::new();
-    for delivery in selected {
-        let Some(content_json) = delivery.structured_content_json.as_deref() else {
-            continue;
-        };
-        let mut content = serde_json::from_str::<StructuredCampMessageContent>(content_json)
-            .context("CampMessage Structured Content is invalid during Delivery claim")?;
-        batch_content.append(&mut content);
-    }
-    let skill_selection =
-        freeze_skill_selection(transaction, &batch_content, runtime.adapter_kind)?;
     let (skill_selection_json, skill_selection_digest) =
         skill_selection.canonical_json_and_digest()?;
     let first_delivery_id = &selected[0].id;
@@ -618,11 +637,14 @@ pub(crate) fn settle_run_deliveries(
 mod tests {
     use super::*;
     use crate::{
+        agent_profile::{ModelDescriptor, ModelOptionDescriptor, RuntimeOptionScope, ValueChoice},
         camp_content::{StructuredCampMessageSegment, canonical_content_digest},
         collaboration::{CollaborationService, CreateCampCommand},
         command::{ActorRef, CommandEnvelope},
-        current_input_skill::parse_skill_selection_snapshot,
+        current_input_skill::{CurrentInputSkillLink, parse_skill_selection_snapshot},
+        message_quote::{QuoteSelection, QuoteStorage, capture_quote, store_quotes},
     };
+    use serde_json::json;
 
     struct Fixture {
         database: Database,
@@ -1159,6 +1181,11 @@ mod tests {
         fixture.enqueue("message-2", "后处理");
 
         let now = chrono::Utc::now().to_rfc3339();
+        let retired_root = fixture
+            ._directory
+            .join("retired-conversation-root")
+            .to_string_lossy()
+            .into_owned();
         fixture
             .database
             .connection()
@@ -1167,10 +1194,15 @@ mod tests {
                 UPDATE agent_run
                 SET status = 'failed', ended_at = ?2, updated_at = ?2,
                     cancel_requested_at = ?2,
-                    cancel_reason_code = 'runtime_terminal_unconfirmed'
+                    cancel_reason_code = 'runtime_terminal_unconfirmed',
+                    workspace_json = json_object(
+                        'executionRoot', ?3,
+                        'access', 'write',
+                        'isolation', 'runtime_managed'
+                    )
                 WHERE id = ?1
                 "#,
-                params![first_run, now],
+                params![first_run, now, retired_root],
             )
             .unwrap();
 
@@ -1210,6 +1242,66 @@ mod tests {
             )
             .unwrap();
         assert_eq!(next_anchor, "message-2");
+    }
+
+    #[test]
+    fn pending_cleanup_on_a_shared_execution_root_blocks_another_lane() {
+        let mut fixture = Fixture::new();
+        fixture.enqueue("message-1", "先占用共享目录");
+        let first_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let shared_root: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT project_path FROM camp WHERE id = ?1",
+                [&fixture.camp_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_run
+                SET status='failed', ended_at=?2, updated_at=?2,
+                    cancel_requested_at=?2,
+                    cancel_reason_code='runtime_terminal_unconfirmed'
+                WHERE id=?1
+                "#,
+                params![first_run, now],
+            )
+            .unwrap();
+
+        let second_camp = fixture.add_camp_lane("shared-execution-root");
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE camp SET project_path=?2 WHERE id=?1",
+                params![second_camp, shared_root],
+            )
+            .unwrap();
+        fixture.enqueue_for(&second_camp, "message-2", "不得提前领取");
+        assert!(
+            claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap()
+                .is_empty()
+        );
+        let state: (String, Option<String>) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT status, claimed_agent_run_id FROM camp_message_delivery WHERE message_id='message-2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, ("waiting".to_string(), None));
     }
 
     #[test]
@@ -1317,5 +1409,213 @@ mod tests {
         assert_eq!(snapshot.entries.len(), 1);
         assert_eq!(snapshot.entries[0].skill_id, "missing-skill");
         assert_eq!(snapshot.entries[0].name_at_send, "review-code");
+    }
+
+    #[test]
+    fn runtime_payload_capacity_selects_the_real_fifo_prefix_and_defaults_to_96_kib() {
+        let mut constrained = Fixture::new();
+        let models_json: String = constrained
+            .database
+            .connection()
+            .query_row(
+                "SELECT model_catalog_json FROM adapter_capability_snapshot WHERE installation_id='adapter-test-codex'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut models: Vec<ModelDescriptor> = serde_json::from_str(&models_json).unwrap();
+        models[0].options.push(ModelOptionDescriptor {
+            key: "maxContextPayloadBytes".to_string(),
+            label: "Maximum context payload bytes".to_string(),
+            value_type: "enum".to_string(),
+            values: vec![ValueChoice {
+                value: (8 * 1024).to_string(),
+                label: "8 KiB".to_string(),
+            }],
+            default_value: Some((8 * 1024).to_string()),
+            scope: RuntimeOptionScope::Run,
+        });
+        constrained
+            .database
+            .connection()
+            .execute(
+                "UPDATE adapter_capability_snapshot SET model_catalog_json=?1 WHERE installation_id='adapter-test-codex'",
+                [serde_json::to_string(&models).unwrap()],
+            )
+            .unwrap();
+        constrained
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_profile
+                SET default_model_selection_json = ?2
+                WHERE id = ?1
+                "#,
+                params![
+                    "agent_1",
+                    json!({
+                        "mode": "explicit",
+                        "modelId": "gpt-test",
+                        "options": {"maxContextPayloadBytes": (8 * 1024).to_string()}
+                    })
+                    .to_string(),
+                ],
+            )
+            .unwrap();
+        constrained.enqueue("capacity-1", &"a".repeat(5_000));
+        constrained.enqueue("capacity-2", &"b".repeat(5_000));
+        let run_id = claim_waiting_delivery_batches(&mut constrained.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let claimed_inputs: i64 = constrained
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM agent_run_input WHERE agent_run_id = ?1",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(claimed_inputs, 1);
+        let remaining: i64 = constrained
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM camp_message_delivery WHERE status = 'waiting'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 1);
+
+        let mut defaulted = Fixture::new();
+        defaulted.enqueue("default-capacity-1", &"a".repeat(5_000));
+        defaulted.enqueue("default-capacity-2", &"b".repeat(5_000));
+        let run_id = claim_waiting_delivery_batches(&mut defaulted.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let claimed_inputs: i64 = defaulted
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM agent_run_input WHERE agent_run_id = ?1",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(claimed_inputs, 2);
+    }
+
+    #[test]
+    fn claim_projection_contains_each_user_attachment_quotes_and_message_skills() {
+        let mut fixture = Fixture::new();
+        fixture.enqueue("projected-1", "secret");
+        fixture.enqueue("projected-2", "review this");
+        let first_source = json!([{
+            "id": "00000000-0000-4000-8000-000000000001",
+            "sourcePath": "/tmp/source-one.txt",
+            "displayName": "source-one.txt",
+            "kind": "file",
+            "mediaType": "text/plain",
+            "observedByteSize": 10
+        }]);
+        let second_source = json!([{
+            "id": "00000000-0000-4000-8000-000000000002",
+            "sourcePath": "/tmp/source-two.txt",
+            "displayName": "source-two.txt",
+            "kind": "file",
+            "mediaType": "text/plain",
+            "observedByteSize": 11
+        }]);
+        let second_content = vec![
+            StructuredCampMessageSegment::Text {
+                text: "review this ".to_string(),
+            },
+            StructuredCampMessageSegment::SkillMention {
+                skill_id: "skill-review".to_string(),
+                name_at_send: "review-code".to_string(),
+            },
+        ];
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE camp_message SET source_attachments_json=?2 WHERE id=?1",
+                params!["projected-1", first_source.to_string()],
+            )
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE camp_message
+                SET source_attachments_json=?2, structured_content_json=?3,
+                    content_digest=?4
+                WHERE id=?1
+                "#,
+                params![
+                    "projected-2",
+                    second_source.to_string(),
+                    serde_json::to_string(&second_content).unwrap(),
+                    canonical_content_digest(&second_content).unwrap(),
+                ],
+            )
+            .unwrap();
+        let transaction = fixture.database.connection_mut().transaction().unwrap();
+        let quote = capture_quote(
+            &transaction,
+            &fixture.camp_id,
+            None,
+            &QuoteSelection {
+                message_id: "projected-1".to_string(),
+                body_at_selection: "secret".to_string(),
+                start_scalar: 0,
+                end_scalar: 6,
+                text: "secret".to_string(),
+                current_user_display_name: None,
+            },
+        )
+        .unwrap();
+        store_quotes(
+            &transaction,
+            QuoteStorage::CampMessage,
+            "projected-2",
+            &[quote],
+        )
+        .unwrap();
+        let boundary: i64 = transaction
+            .query_row(
+                "SELECT last_message_sequence FROM camp WHERE id=?1",
+                [&fixture.camp_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let projection = project_batch_run_input_for_claim(
+            &transaction,
+            &fixture.camp_id,
+            "agent_1",
+            boundary,
+            &["projected-1".to_string(), "projected-2".to_string()],
+            &[CurrentInputSkillLink {
+                name: "review-code".to_string(),
+                path: "/tmp/.codex/skills/review-code/SKILL.md".to_string(),
+            }],
+        )
+        .unwrap();
+        let messages = projection["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["attachments"][0]["path"], "/tmp/source-one.txt");
+        assert_eq!(messages[1]["attachments"][0]["path"], "/tmp/source-two.txt");
+        assert_eq!(messages[1]["quotes"][0]["text"], "secret");
+        assert_eq!(messages[1]["skills"][0]["name"], "review-code");
+        assert_eq!(
+            messages[1]["skills"][0]["path"],
+            "/tmp/.codex/skills/review-code/SKILL.md"
+        );
+        assert!(serialized_batch_run_input_len(&projection).unwrap() > 0);
+        transaction.rollback().unwrap();
     }
 }

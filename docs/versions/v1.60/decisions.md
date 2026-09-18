@@ -46,6 +46,10 @@ Principal 展示本地 Composer 消息；claim 事务使消息失去撤回资格
 本消息引用/附件关系、搜索索引、缓存和普通内容摘要，只保留顺序、撤回者、时间、取消事实及无正文的
 erased-terminal command receipt。
 
+Quote snapshot 在存储中仍是不可变摘录，但外层消息可见不自动授予 source message 可见性；自动上下文、
+read、search 与 thread 在每次 Agent-facing 投影时都按当前查看者和边界重验 source。这样既保留引用的历史
+完整性，又不能用可见消息把仍可撤回或对另一目标仍 suppressed 的正文提前带给当前 Agent。
+
 这不是取证级擦除，不覆盖 WAL、备份、剪贴板、用户原文件或第三方副本。Channel、Automation、Agent 和 A2A
 内容有独立上游或执行证据，因此不复用该原文擦除合同。
 
@@ -60,8 +64,9 @@ erased-terminal command receipt。
 Rovai-owned 全局总量规则；底层仍可使用 bounded buffer、chunk、backpressure 和 managed spool，但不能改变一个
 调用的逻辑结果。完整到达才是成功，无法完整交付就明确失败或中断。
 
-Runtime 输入是另一条边界：Scheduler 必须知道能冻结多少必要消息，因此继续使用 claim 时解析的 payload budget，
-未声明能力默认 96 KiB，不再把 1 MiB 写成通用上限。
+Runtime 输入是另一条边界：Scheduler 必须知道能冻结多少必要消息，因此在 claim 时只解析一次 payload budget，
+未声明能力默认 96 KiB，不再把 1 MiB 写成通用上限。合批选择与最终交付复用同一消息投影和序列化口径，
+正文、quotes、逐消息 source attachments 与 Skills 不再由另一份估算 DTO 近似。
 
 <a id="v1-60-d05"></a>
 ## V1.60-D05：Channel 与 Automation 复用普通消息和 Delivery，只保留自己的业务结果
@@ -92,5 +97,21 @@ batch claim：状态提交后只发送无负载 wake，Scheduler 从数据库分
 
 本次不保存精确 lane hint，也不引入持久通知或新的恢复状态机。相比按需启停 timer，保留一个不会被普通 wake 推迟的
 全局 30 秒兜底更简单且能覆盖进程内漏通知；代价是空闲时仍有低频只读检查。兜底确认无 waiting Delivery 或 queued
-batch Run 后不进入 claim 写事务。原 500ms 循环保留既有非 batch Run 派发、Automation、取消、Single Chat 与维护职责，
-但不得领取普通 Delivery 或派发普通 queued batch Run。
+batch Run 后不进入 claim 写事务。原 500ms 职责保留在一个独立、串行且不重叠的维护任务中，继续处理既有 non-batch
+Run、Automation、取消和 Single Chat，但不得领取普通 Delivery、派发普通 queued batch Run，或用慢 preparation 占住
+普通 batch 协调循环。
+
+<a id="v1-60-d07"></a>
+## V1.60-D07：Camp Read 使用直接意图字段，不保留模式翻译层
+
+- 状态：accepted
+- 日期：2026-09-18
+- 当前权威：Camp History v7 与 Built-in Tool Runtime
+
+旧 `Item / Around / Thread / Timeline` union 同时把用户意图和内部查询策略暴露为 `mode/direction`，CLI 又在
+发送前补写默认值，造成 direct flags、JSON 输入、Schema 与补读提示有两份合同。选择收敛为 timeline
+`{before?, limit?}`、exact `{messageId}` 和 thread `{thread, before?, limit?}` 三种直接形状；默认 limit 为 20，
+timeline/thread 固定向前读取。
+
+`mode`、`direction`、`around`、`after` 和 generic `cursor` 从当前请求合同删除，CLI 不建立旧字段到新字段的
+兼容翻译。这是开发期 clean break；输出可继续携带既有 mode/direction 描述结果形状，但不恢复旧请求面。

@@ -1,5 +1,7 @@
 use crate::message_quote::{
-    MessageQuoteSnapshot, QuoteStorage, load_quotes, model_quotes, quote_scalar_count,
+    CampQuoteFence, MessageQuoteSnapshot, QuoteStorage, load_agent_visible_camp_quotes,
+    load_agent_visible_camp_quotes_with_claimed_sources, load_quotes, model_quotes,
+    quote_scalar_count,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -21,7 +23,7 @@ const CODEX_FINAL_CAMP_ANSWER_GUIDANCE: &str = "When publishing the Camp-visible
 const LEGACY_GATHER_COMPLETION_INPUT_SCHEMA_VERSION: i64 = 3;
 
 use crate::{
-    agent_profile::{AdapterKind, validate_stored_member_identity},
+    agent_profile::{AdapterKind, FrozenAgentRuntimeConfig, validate_stored_member_identity},
     camp_attachment_view::{
         CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION, CampAttachmentViewReceiptV2,
         RUNTIME_ATTACHMENT_AUTH_RECEIPT_VERSION, load_camp_attachment_view_receipt,
@@ -80,6 +82,21 @@ impl<'a> ContextReadConnection for Transaction<'a> {
     fn context_connection(&self) -> &Connection {
         self
     }
+}
+
+pub(crate) fn runtime_max_context_payload_bytes(runtime: &FrozenAgentRuntimeConfig) -> usize {
+    runtime
+        .model
+        .options
+        .get("maxContextPayloadBytes")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .or_else(|| value.as_str().and_then(|bytes| bytes.parse::<usize>().ok()))
+        })
+        .unwrap_or(DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES)
+        .max(MIN_CONTEXT_PAYLOAD_BYTES)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -4115,6 +4132,97 @@ fn model_batch_input_message(
     value
 }
 
+/// Projects a prospective Delivery prefix through the same message projector
+/// and `RUN_INPUT` serializer used after the batch has been claimed. This keeps
+/// claim sizing aligned with the delivered bodies, quotes, attachments and
+/// per-message Skill links.
+pub(crate) fn project_batch_run_input_for_claim(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    viewer_agent_id: &str,
+    through_sequence: i64,
+    message_ids: &[String],
+    skill_links: &[CurrentInputSkillLink],
+) -> Result<Value> {
+    let base_profile = current_public_camp_batch_context_delivery_profile()?;
+    let complete_profile = ContextDeliveryProfile {
+        max_public_history_chars: usize::MAX,
+        max_message_body_chars: usize::MAX,
+        ..base_profile
+    };
+    let claimed_source_message_ids = message_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut messages = Vec::with_capacity(message_ids.len());
+    for message_id in message_ids {
+        let row = transaction
+            .query_row(
+                r#"
+                SELECT message.sequence, message.author_type, message.author_id,
+                       source_conversation.id, message.body,
+                       message.structured_content_json,
+                       message.reply_to_camp_message_id
+                FROM camp_message AS message
+                LEFT JOIN agent_run AS source_run
+                  ON source_run.id = message.source_agent_run_id
+                LEFT JOIN conversation AS source_conversation
+                  ON source_conversation.id = source_run.conversation_id
+                WHERE message.id = ?1
+                  AND message.camp_id = ?2
+                  AND message.sequence <= ?3
+                  AND message.tombstoned_at IS NULL
+                  AND message.recall_state <> 'withdrawn'
+                "#,
+                params![message_id, camp_id, through_sequence],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .context("Delivery claim message is outside its frozen Camp boundary")?;
+        let skill_names = row
+            .5
+            .as_deref()
+            .map(batch_message_skill_names)
+            .transpose()?
+            .unwrap_or_default();
+        let (body, mentions_current_user) =
+            projected_current_camp_message(transaction, row.4, row.5)?;
+        let mut message = project_shared_message(
+            transaction,
+            camp_id.to_string(),
+            message_id.clone(),
+            row.0,
+            row.1,
+            row.2,
+            row.3,
+            row.6,
+            body,
+            mentions_current_user,
+            viewer_agent_id,
+            through_sequence,
+            complete_profile,
+            true,
+            Some(&claimed_source_message_ids),
+        )?;
+        message.skill_names = skill_names;
+        messages.push(model_batch_input_message(&message, skill_links));
+    }
+    Ok(json!({"messages": messages}))
+}
+
+pub(crate) fn serialized_batch_run_input_len(run_input: &Value) -> Result<usize> {
+    let mut rendered = String::new();
+    append_json_section(&mut rendered, "RUN_INPUT", run_input)?;
+    Ok(rendered.len())
+}
+
 fn load_batch_model_context<R: ContextReadConnection>(
     database: &R,
     snapshot: &RunSnapshot,
@@ -4170,8 +4278,11 @@ fn load_batch_model_context<R: ContextReadConnection>(
                         anchor_message_id,
                         body,
                         mentions_current_user,
+                        &snapshot.agent_id,
+                        snapshot.camp_message_boundary_sequence,
                         complete_profile,
                         true,
+                        None,
                     )?;
                     message.skill_names = skill_names;
                     Ok(message)
@@ -4894,8 +5005,11 @@ fn load_public_reference_closure<R: ContextReadConnection>(
             row.8.clone(),
             body,
             mentions_current_user,
+            &snapshot.agent_id,
+            snapshot.camp_message_boundary_sequence,
             profile,
             snapshot.invocation_kind != "single_chat",
+            None,
         )?;
         next_parent_id = row.8;
         messages.push(ReferenceClosureMessage { distance, message });
@@ -5003,8 +5117,11 @@ fn load_recent_public_messages<R: ContextReadConnection>(
             reply_to_message_id,
             body,
             mentions_current_user,
+            &snapshot.agent_id,
+            snapshot.camp_message_boundary_sequence,
             profile,
             snapshot.invocation_kind != "single_chat",
+            None,
         )?);
     }
     Ok(messages)
@@ -5022,8 +5139,11 @@ fn project_shared_message<R: ContextReadConnection>(
     reply_to_message_id: Option<String>,
     body: String,
     mentions_current_user: bool,
+    viewer_agent_id: &str,
+    quote_boundary_sequence: i64,
     profile: ContextDeliveryProfile,
     quote_scope_current: bool,
+    claimed_quote_source_message_ids: Option<&HashSet<String>>,
 ) -> Result<SharedMessage> {
     let content_digest = database.context_connection().query_row(
         "SELECT content_digest FROM camp_message WHERE id = ?1 AND camp_id = ?2",
@@ -5086,27 +5206,35 @@ fn project_shared_message<R: ContextReadConnection>(
             legacy_view_backed,
         });
     }
-    if sender_type == "agent" {
-        for source in
-            load_agent_message_source_refs(database.context_connection(), Some(&message_id))?
-        {
-            attachments.push(SharedMessageAttachment {
-                attachment_id: source.id,
-                name: source.display_name,
-                media_type: source
-                    .media_type
-                    .unwrap_or_else(|| "application/octet-stream".into()),
-                path: source.source_path,
-                content_digest: None,
-                legacy_view_backed: false,
-            });
-        }
+    for source in load_message_source_refs(database.context_connection(), Some(&message_id))? {
+        attachments.push(SharedMessageAttachment {
+            attachment_id: source.id,
+            name: source.display_name,
+            media_type: source
+                .media_type
+                .unwrap_or_else(|| "application/octet-stream".into()),
+            path: source.source_path,
+            content_digest: None,
+            legacy_view_backed: false,
+        });
     }
-    let quotes = load_quotes(
-        database.context_connection(),
-        QuoteStorage::CampMessage,
-        &message_id,
-    )?;
+    let quotes = match claimed_quote_source_message_ids {
+        Some(claimed_source_message_ids) => load_agent_visible_camp_quotes_with_claimed_sources(
+            database.context_connection(),
+            &message_id,
+            &camp_id,
+            viewer_agent_id,
+            CampQuoteFence::CampSequence(quote_boundary_sequence),
+            claimed_source_message_ids,
+        )?,
+        None => load_agent_visible_camp_quotes(
+            database.context_connection(),
+            &message_id,
+            &camp_id,
+            viewer_agent_id,
+            CampQuoteFence::CampSequence(quote_boundary_sequence),
+        )?,
+    };
     let prefix = body_prefix(
         &body,
         if quotes.is_empty() {
@@ -5332,8 +5460,11 @@ fn load_originating_public_user_message<R: ContextReadConnection>(
         row.7,
         body,
         mentions_current_user,
+        &snapshot.agent_id,
+        snapshot.camp_message_boundary_sequence,
         profile,
         snapshot.invocation_kind != "single_chat",
+        None,
     )
     .map(Some)
 }
@@ -5790,7 +5921,13 @@ fn load_current_input<R: ContextReadConnection>(
 ) -> Result<CurrentInput> {
     let mut input = load_current_input_body(database, snapshot)?;
     input.quotes = if let Some(id) = input.source_camp_message_id.as_deref() {
-        load_quotes(database.context_connection(), QuoteStorage::CampMessage, id)?
+        load_agent_visible_camp_quotes(
+            database.context_connection(),
+            id,
+            &snapshot.camp_id,
+            &snapshot.agent_id,
+            CampQuoteFence::CampSequence(snapshot.camp_message_boundary_sequence),
+        )?
     } else if let Some(id) = input.source_conversation_message_id.as_deref() {
         load_quotes(
             database.context_connection(),
@@ -6198,14 +6335,17 @@ fn resolve_context_attachment_path(
     }
 }
 
-fn load_agent_message_source_refs(
+fn load_message_source_refs(
     connection: &Connection,
     message_id: Option<&str>,
 ) -> Result<Vec<crate::local_attachment_source::LocalAttachmentSourceRef>> {
-    let json: Option<String> = connection.query_row(
-        "SELECT source_attachments_json FROM camp_message WHERE id = ?1 AND author_type = 'agent'",
-        [message_id], |row| row.get(0),
-    ).optional()?;
+    let json: Option<String> = connection
+        .query_row(
+            "SELECT source_attachments_json FROM camp_message WHERE id = ?1",
+            [message_id],
+            |row| row.get(0),
+        )
+        .optional()?;
     json.map(|value| crate::local_attachment_source::parse_source_attachments(&value))
         .transpose()
         .map(Option::unwrap_or_default)
@@ -6308,7 +6448,7 @@ fn load_current_attachment_refs<R: ContextReadConnection>(
             legacy_view_backed,
         });
     }
-    for source in load_agent_message_source_refs(
+    for source in load_message_source_refs(
         database.context_connection(),
         current_input.source_camp_message_id.as_deref(),
     )? {
@@ -8253,7 +8393,6 @@ mod slow_tests {
         camp_content::{StructuredCampMessageSegment, canonical_content_digest},
         camp_history::{
             CampHistoryService, CampListInput, CampReadInput, CampSearchInput, HistorySearchInput,
-            ReadDirection,
         },
         collaboration::{
             CollaborationService, CreateTaskCommand, ExecutionRequest, TestCampMessageAddress,
@@ -8284,8 +8423,7 @@ mod slow_tests {
         read_model::{READ_MODEL_SCHEMA_VERSION, ReadModelService},
         runtime::{
             AgentRunWorkspace, BindNativeSessionCommand, ClaimAgentRunCommand,
-            ExecutionRuntimeService, ResolveAcceptedInputRecoveryBlockerCommand,
-            SucceedAgentRunCommand,
+            ExecutionRuntimeService, SucceedAgentRunCommand,
         },
         single_chat::{OpenSingleChatCommand, SendSingleChatMessageCommand, SingleChatService},
         skill::{SetSkillEnabledCommand, SetSkillGroupAssignmentsCommand, SkillLibraryService},
@@ -9337,9 +9475,12 @@ mod slow_tests {
             .read(
                 &mut fixture.database,
                 &run,
-                &CampReadInput::Item {
+                &CampReadInput {
                     camp_id: Some(fixture.camp_id.clone()),
-                    message_id: late_message_id.clone(),
+                    message_id: Some(late_message_id.clone()),
+                    thread: None,
+                    before: None,
+                    limit: None,
                 },
             )
             .unwrap();
@@ -9353,9 +9494,12 @@ mod slow_tests {
             .read(
                 &mut fixture.database,
                 &run,
-                &CampReadInput::Item {
+                &CampReadInput {
                     camp_id: Some(crate::camp_id::CampId::new().to_string()),
-                    message_id: initial_message_id,
+                    message_id: Some(initial_message_id),
+                    thread: None,
+                    before: None,
+                    limit: None,
                 },
             )
             .unwrap_err();
@@ -9607,10 +9751,11 @@ mod slow_tests {
             .read(
                 &mut fixture.database,
                 &second_run,
-                &CampReadInput::Timeline {
+                &CampReadInput {
                     camp_id: Some(fixture.camp_id.clone()),
-                    direction: ReadDirection::After,
-                    cursor: None,
+                    message_id: None,
+                    thread: None,
+                    before: None,
                     limit: Some(20),
                 },
             )
@@ -9635,10 +9780,11 @@ mod slow_tests {
                 .read(
                     &mut fixture.database,
                     &first_run,
-                    &CampReadInput::Timeline {
+                    &CampReadInput {
                         camp_id: Some(fixture.camp_id.clone()),
-                        direction: ReadDirection::After,
-                        cursor: None,
+                        message_id: None,
+                        thread: None,
+                        before: None,
                         limit: Some(1),
                     },
                 )

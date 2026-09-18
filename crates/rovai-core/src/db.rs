@@ -24690,7 +24690,7 @@ impl Database {
                 anyhow::bail!("v162 could not extend the AgentRun schema");
             }
             tx.execute_batch(&target_schema)
-                .context("v162 failed to create the replacement AgentRun table")?;
+                .context("v163 failed to create the replacement AgentRun table")?;
             let columns = table_columns(&tx, "agent_run")?
                 .into_iter()
                 .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
@@ -24704,9 +24704,9 @@ impl Database {
                 ALTER TABLE agent_run_v162 RENAME TO agent_run;
                 "#,
             ))
-            .context("v162 failed to replace the AgentRun table")?;
+            .context("v163 failed to replace the AgentRun table")?;
             restore_rebuild_schema_objects(&tx, "agent_run", objects)
-                .context("v162 failed to restore AgentRun indexes or triggers")?;
+                .context("v163 failed to restore AgentRun indexes or triggers")?;
 
             // Execution consoles follow an AgentRun. New Delivery-first Runs have no
             // CampTurn, while historical consoles retain their original Turn link.
@@ -24812,7 +24812,7 @@ impl Database {
             }
             let manifest_objects = migration_schema_objects(&tx, "context_manifest", true)?;
             tx.execute_batch(&manifest_v162)
-                .context("v162 failed to create the replacement ContextManifest table")?;
+                .context("v163 failed to create the replacement ContextManifest table")?;
             drop_rebuild_triggers(&tx, &manifest_objects)?;
             tx.execute_batch(
                 "INSERT INTO context_manifest_v162 SELECT * FROM context_manifest; \
@@ -25294,7 +25294,7 @@ impl Database {
                 WHERE singleton = 1;
                 "#,
             )
-            .context("v162 failed to create Delivery-first queue schema")?;
+            .context("v163 failed to create Delivery-first queue schema")?;
 
             tx.execute_batch(
                 r#"
@@ -30770,7 +30770,7 @@ pub(crate) fn downgrade_current_schema_to_v162_source_for_test(connection: &Conn
         .unwrap();
     assert_eq!(
         unsupported_rows, 0,
-        "v161 migration fixture cannot represent v162-only business rows"
+        "v162 migration fixture cannot represent v163-only business rows"
     );
 
     fn renamed_table_schema(sql: String, table: &str, replacement: &str) -> String {
@@ -35816,7 +35816,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(162));
+        assert_eq!(state, migration_state_through(163));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -36415,7 +36415,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        downgrade_current_schema_to_v161_source_for_test(database.connection());
+        downgrade_current_schema_to_v162_source_for_test(database.connection());
         database
             .connection()
             .execute_batch("PRAGMA foreign_keys=OFF;")

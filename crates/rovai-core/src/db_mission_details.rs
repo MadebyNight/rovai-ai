@@ -495,6 +495,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(retained, ("ready".into(), 1, "create".into(), false, false));
+        database.migrate_camp_message_agent_run_v163().unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::Current(_)
+        ));
         crate::collaboration::delete_camp_aggregate(database.connection(), camp_id).unwrap();
         assert_eq!(
             database

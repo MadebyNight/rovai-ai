@@ -211,7 +211,7 @@ function fixture({ title = 'Use prior context when it is necessary' } = {}) {
   const projectionWithoutDigest = {
     schemaVersion: 1,
     operation: 'camp.read',
-    canonicalInput: { mode: 'item', messageId: 'message-context' },
+    canonicalInput: { messageId: 'message-context' },
     canonicalResult: {
       items: [{ messageId: 'message-context', sequence: 4, bodyTruncated: false }],
       itemCount: 1,

@@ -104,7 +104,7 @@ membership version；这一统一 Router fence 覆盖整个 catalog，而不是�
 | 组件 | 拥有的权威 | 不是 |
 | --- | --- | --- |
 | Built-in Tool Catalog | canonical names、输入/结果 schema、`agentOutputSchema`、projection identity、错误合同、CLI mapping、digest | Agent-facing discovery API |
-| `rovai` CLI | 输入来源解析、`camp.read` 默认补全、canonical Schema 校验、IPC、完整 Envelope validation、显式 projection、stdout/exit/stderr 安全边界、有限运输重试 | 领域 handler、授权者、receipt 生成者、通用字段删除器 |
+| `rovai` CLI | 输入来源解析、canonical Schema 校验、IPC、一次完整 Envelope validation、显式 projection、stdout/exit/stderr 安全边界、有限运输重试 | 领域 handler、授权者、receipt 生成者、通用字段删除器 |
 | BuiltinToolRouter | current lease 解析、operation 分发、完整 Envelope、receipt、Replay、Activity | 第二套 Message/Delivery 服务 |
 | Domain Services / Gateway | 可见范围、版本、状态、幂等副作用和业务不变量 | CLI 或 MCP 适配层 |
 | Runtime Fleet | process ownership、exclusive Run lease、reuse、fence、quiescence | Camp 选择或业务 catalog |
@@ -166,10 +166,10 @@ Camp History exact help 保持三段职责：目标未知时用 `history.search`
 用 `camp.search --camp-id` 搜索一个 Camp；获得稳定消息 ID 后用 `camp.read --camp-id` 读取。Search/Read
 省略 `--camp-id` 时只解析当前 Camp，显式当前 ID 与省略等价，不会扩张为全历史或按 message ID 反查。
 
-`camp.read` exact help 还必须忠实展示 CLI 与 canonical Schema 的分层：CLI 省略 mode 时使用
-`timeline + before + limit 20`，Timeline direction/limit 可由调用者显式覆盖，cursor 不设默认；Core Schema
-仍要求完整 canonical mode 和对应 direction。`item`、`around`、`thread` 都是显式 message-anchored 选择，
-CLI 不根据 `messageId` 或其他 branch 字段猜测 mode。
+`camp.read` exact help 直接展示四种 canonical request：`--limit 20`、`--before CURSOR`、
+`--message-id MESSAGE_ID` 与 `--thread MESSAGE_ID --limit 20`。省略定位字段就是 timeline；`messageId`
+选择 exact item，`thread` 选择 thread。输入 Schema 与 CLI 都不再公开 `mode`、`direction`、`around`、
+`after` 或 generic `cursor`，也不把这些旧字段翻译成新请求。省略 limit 时由 Core 使用 20。
 
 `rovai send --help` 的基础示例分别演示 `--public-only`、Agent-only 与
 `--public-only --to-principal`。`--to-principal` 的精确字段帮助拥有“新产生且未解决的 Principal 决定、
@@ -624,15 +624,14 @@ request/receipt 有显式可验证关联，它作为同一 Activity 的 supporti
 Activity。命令文本、时间、cwd 或输出相似度不能建立关联。Shell 子进程共享当前 Run 身份，但
 系统不声称能够证明模型主观意图。
 
-- CLI 先从 direct flags、JSON stdin/heredoc 或 `--input-file` 三种互斥来源构造一个对象。仅 `camp.read`
-  在这个汇合点把省略 mode 补为 Timeline，并补齐省略的 `direction=before` 与 `limit=20`；随后所有来源
-  共用 catalog canonical input Schema validator，只有通过后才加载 lease/context 并发送 IPC。Core 因此只
-  接收完整 canonical input，不感知输入来源或默认补全。其他 operation 不添加 enum 同义词、业务默认值
-  或 cursor 纠正，Core 继续保留权威校验；
+- CLI 先从 direct flags、JSON stdin/heredoc 或 `--input-file` 三种互斥来源构造一个对象；所有来源共用
+  catalog canonical input Schema validator，只有通过后才加载 lease/context 并发送 IPC。`camp.read`
+  直接发送 `messageId | thread | before | limit` 的合法组合，不补写模式或方向，也不接受旧字段。
+  Core 不感知输入来源，继续拥有默认 limit、cursor 与组合约束的权威校验；
 - CLI 参数或输入来源错误：Agent stdout 使用 `builtin_tool.invalid_input` + `fix_input`，退出码
   `2`。Schema failure 最多返回 4 条确定性字段 issue，顺序为 missing required、当前 mode 不允许、
   enum/const、type、numeric bounds、string/array bounds；合法 mode 只解释选中 branch。Issue 只含
-  operation、mode、field/flag、reason、合法值/边界/valid modes，不含用户正文、input-file path、Schema
+  operation、field/flag、reason、合法值/边界，不含用户正文、input-file path、Schema
   path、Rust error、IPC endpoint、lease 或凭据；其他 parse、IPC/lease/catalog preflight 失败继续使用安全
   通用 structured error，退出码 `2`；
 - Core 业务拒绝：完整 Envelope 记录在 Core/Evidence，Agent stdout 输出业务 `error`，退出码 `1`；

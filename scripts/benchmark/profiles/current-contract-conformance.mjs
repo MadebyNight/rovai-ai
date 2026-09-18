@@ -3,7 +3,7 @@ import { digestJson } from '../protocol/canonical.mjs'
 
 export const CURRENT_CONTRACT_DATA_STORE = Object.freeze({
   version: 'v1.60',
-  projectionSchemaVersion: 112
+  projectionSchemaVersion: 113
 })
 
 const criteria = [
@@ -59,8 +59,8 @@ const criteria = [
     test('crates/rovai-core/src/db.rs', 'current_migration_state_admission_matrix'),
     test('crates/rovai-core/src/db.rs', 'v107_quarantine_moves_owned_directories_without_following_links')
   ]),
-  criterion('CCC-014', 'The v162 transition preserves published work, requeues unfrozen Delivery, and retires legacy Run placeholders', [
-    test('crates/rovai-core/src/db.rs', 'v162_requeues_unfrozen_public_work_and_retires_the_legacy_run_placeholder')
+  criterion('CCC-014', 'The v163 transition preserves published work, requeues unfrozen Delivery, and retires legacy Run placeholders', [
+    test('crates/rovai-core/src/db.rs', 'v163_requeues_unfrozen_public_work_and_retires_the_legacy_run_placeholder')
   ]),
   criterion('CCC-015', 'Public batch windows keep their accepted Camp+Agent watermark across Native Session replacement and do not apply the legacy self filter', [
     test('crates/rovai-core/src/context.rs', 'batch_public_window_keeps_the_camp_agent_watermark_across_new_sessions')

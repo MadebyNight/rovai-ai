@@ -280,24 +280,6 @@ fn camp_read_item_schema() -> Value {
     })
 }
 
-fn camp_read_around_schema() -> Value {
-    json!({
-        "additionalProperties": false,
-        "required": [
-            "campId", "mode",
-            "anchorMessageId", "items", "hasMoreBefore", "hasMoreAfter"
-        ],
-        "properties": {
-            "campId": {"type": "string"},
-            "mode": {"const": "around"},
-            "anchorMessageId": {"type": "string"},
-            "items": {"type": "array", "minItems": 1, "maxItems": 21, "items": collection_message_schema()},
-            "hasMoreBefore": {"type": "boolean"},
-            "hasMoreAfter": {"type": "boolean"}
-        }
-    })
-}
-
 fn camp_read_thread_schema() -> Value {
     json!({
         "additionalProperties": false,
@@ -342,7 +324,6 @@ fn camp_read_success_schema() -> Value {
         "type": "object",
         "oneOf": [
             camp_read_item_schema(),
-            camp_read_around_schema(),
             camp_read_thread_schema(),
             camp_read_timeline_schema()
         ]
@@ -1079,7 +1060,7 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
         json!({
             "name": CAMP_READ_TOOL_NAME,
             "title": "Read original Camp messages",
-            "description": "Read messages from exactly one Camp. With no mode, return the newest 20 visible messages from the current or explicitly selected Camp (mode=timeline, direction=before, limit=20). Use direction=after to begin with the oldest visible page. Use explicit item, around, or thread modes for message-anchored reads. Around is bounded and does not paginate; thread and timeline use exclusive integer sequence cursors. Reuse nextCursor with the same mode and direction. IDs and cursors locate content but never grant access.",
+            "description": "Read messages from exactly one Camp. With no message selector, return the newest visible messages from the current or explicitly selected Camp; use before as the exclusive sequence cursor and limit for paging. Use messageId for one exact message, or thread for a thread page ending before the optional cursor. Reuse nextCursor as before. IDs and cursors locate content but never grant access.",
             "inputSchema": CampHistoryService::camp_read_input_schema(),
             "outputSchema": camp_read_success_schema()
         }),
@@ -1319,20 +1300,30 @@ mod tests {
             }),
         )
         .unwrap();
-        validate_builtin_tool_input(
-            CAMP_READ_TOOL_NAME,
-            &json!({"mode": "item", "messageId": "message_123"}),
-        )
-        .unwrap();
+        validate_builtin_tool_input(CAMP_READ_TOOL_NAME, &json!({"messageId": "message_123"}))
+            .unwrap();
         validate_builtin_tool_input(
             CAMP_READ_TOOL_NAME,
             &json!({
                 "campId": "7b5db24c-4a43-4cab-9217-d982b08f7691",
-                "mode": "timeline",
-                "direction": "after"
+                "before": 42,
+                "limit": 20
             }),
         )
         .unwrap();
+        validate_builtin_tool_input(
+            CAMP_READ_TOOL_NAME,
+            &json!({"thread": "message_123", "limit": 20}),
+        )
+        .unwrap();
+        for legacy in [
+            json!({"mode": "timeline"}),
+            json!({"direction": "before"}),
+            json!({"cursor": 42}),
+            json!({"after": 5}),
+        ] {
+            assert!(validate_builtin_tool_input(CAMP_READ_TOOL_NAME, &legacy).is_err());
+        }
     }
 
     #[test]

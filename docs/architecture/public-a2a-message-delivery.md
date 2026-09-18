@@ -46,9 +46,10 @@ self-send 继续拒绝。显示名兼容解析若仍存在，只在发送事务�
 每个 `(CampId, AgentId)` 有一条按消息 sequence 排序的 waiting Delivery 队列。等待阶段不创建 queued Run，也不冻结
 Runtime 配置。Scheduler 获得执行资格时，在一个事务中：
 
-1. 检查当前 membership、lane 与执行隔离门禁；
+1. 分别检查当前 membership、同一 Camp+Agent 旧执行隔离，以及实际共享 executionRoot 的清理门禁；
 2. 读取当前 Runtime、模型、模式、工作区、工具与权限配置；
-3. 从队首选取能完整交付的最大连续前缀，不跳过任何中间项；
+3. 用本次 Runtime payload capacity 和正式 `RUN_INPUT.messages[]` 投影/序列化结果，从队首选取能完整交付的
+   最大连续前缀，不跳过任何中间项；每条消息按自身 ID 投影正文、quotes、source attachments 与 Skills；
 4. 创建一个 batch AgentRun 和有序 AgentRunInput；
 5. 以最后一条输入作为 Run anchor，冻结 ContextManifest 和实际执行配置；
 6. 把所选 Delivery 原子改为 claimed 并绑定该 Run。
@@ -64,7 +65,9 @@ Runtime preparation 使用相互独立的 worker，一个慢任务或失败任�
 协调任务常驻一个不被普通 wake 重置的 30 秒全局兜底。每次兜底先只读检查 waiting Delivery 或尚未 dispatch 的
 queued batch Run；空闲时不进入 claim 的写事务。终态处理只结算并 wake，不直接领取 successor；网络恢复只派发已明确
 获准的既有 Run，不领取新 Delivery。原 500ms 循环继续承担既有非 batch Run 派发、Automation deadline、取消、
-Single Chat 与维护职责，但不再扫描普通 batch 队列，也不能领取普通 Delivery。
+Single Chat 与维护职责，但不再扫描普通 batch 队列，也不能领取普通 Delivery。该旧周期工作运行在独立、串行
+且不重叠的维护任务中；慢 Single Chat/non-batch Runtime preparation 不得占住普通 batch wake、fallback 或 worker
+completion 的协调循环。
 
 必要 `RUN_INPUT` 优先于可选历史。队首单条也超过当前 Runtime profile 时，Core 创建明确的 preflight-failed Run，
 不向 Runtime 发送截断内容，并让队列随后继续。完整选择规则见 [Profile 7](../contracts/context-delivery-profile-v7.md)。
@@ -75,7 +78,8 @@ Single Chat 与维护职责，但不再扫描普通 batch 队列，也不能领�
 此后已 claim 目标通过 `RUN_INPUT` 接收；仍未 claim 的目标继续被所有 Agent-facing 读取路径隔离；非目标 Agent 按普通
 公共规则读取。撤回成功取消所有 waiting Delivery 并擦除 Rovai 活跃数据中的原文；人类时间线占位不是 Agent MessageView。
 
-自动上下文、`camp.read`、搜索、线程、reply 展开和结构化引用共享同一可见性服务。ContextManifest 冻结自动上下文，
+自动上下文、`camp.read`、搜索、线程、reply 展开和结构化引用共享同一可见性服务。外层消息可见不代表它引用的
+source 可见；每条 quote snapshot 在投影时按查看 Agent 和边界重新校验 source。ContextManifest 冻结自动上下文，
 但 Run 内的 `camp.read` 始终按调用时最新状态读取，不受 Manifest 上下界限制。
 
 ## 终态、停止与恢复
@@ -84,9 +88,9 @@ Run 终态按输入 Delivery 分别写入 `settled | failed | cancelled`。普�
 的 Run；它不暂停 lane，不取消 waiting Delivery，也不能误停 successor。产品没有业务重试入口。Runtime 明确未接受且无
 副作用风险时，可以恢复同一冻结 Run 的运输；accepted/unknown 永不作为未执行重新投递。
 
-Run 显示失败不等于旧执行已隔离。Adapter cleanup 未确认时，后继 Delivery 保持 waiting，不提前创建必败 Run；旧执行
-仍可能写共享 execution root 时，只对相关 root 使用临时 dispatch fence。unknown 默认换新 Native Session，但换 Session
-不能替代旧进程清理。
+Run 显示失败不等于旧执行已隔离。Scheduler 在 claim 前分别检查同一 Camp+Agent 的旧执行隔离和实际共享
+executionRoot 的旧执行清理；任一未确认时，后继 Delivery 保持 waiting 且不创建新 Run。unknown 默认换新 Native
+Session，但换 Session 不能替代旧进程清理。
 
 ## Channel 与 Automation
 
@@ -96,5 +100,5 @@ ChannelDelivery；outbox 失败不重跑模型。Automation admission 创建 sta
 
 ## 历史切换
 
-Migration 162 把尚未进入冻结/accepted Runtime input 的旧公开等待责任转成新 waiting Delivery，并终态化旧的可变 Run
+Migration 163 把尚未进入冻结/accepted Runtime input 的旧公开等待责任转成新 waiting Delivery，并终态化旧的可变 Run
 占位。历史 Run、CampTurn、Gather、Manifest 与 evidence 原样只读；冻结或 outcome-unknown 输入绝不重新入队。

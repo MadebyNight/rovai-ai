@@ -26,7 +26,9 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] 发布新 ContextManifest、Context Delivery Profile、Run Facts、Message Delivery、Camp History、
   Built-in Tool Transport、Automation 与 Channel 合同。
 - [x] 更新长期 Architecture、`CONTEXT.md`、当前决定导航、UI 规范与文档任务路由。
-- [x] 新增末端 Migration；保留历史 migration、终态 CampTurn/Gather、冻结 ContextManifest 与 evidence。
+- [x] 在 v1.59 Mission workspace lifecycle Migration 162/schema 112 之后新增 Delivery-first Migration 163/schema 113；
+  保留历史 migration、终态 CampTurn/Gather、冻结 ContextManifest 与 evidence，并将已运行旧功能分支
+  Delivery-first 162 的精确物理结构收敛到同一 163 当前结构。
 - [x] 删除旧 Composer Draft、未公开 Pending 和可重新激活的编辑/恢复状态，但不删除用户源文件。
 - [x] 切换前让旧 active execution/Gather 安全终结；新调度不扫描或推进历史 Gather/CampTurn。
 
@@ -37,11 +39,14 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
   claim 对应 Delivery，并冻结 Run 配置与输入锚点。
 - [x] 未 claim Delivery 不提前创建 Run；新消息不追加已冻结 Run；严格 FIFO，不跳过队首。
 - [x] 第一条必要输入超过本次 Runtime payload budget 时创建精确失败 Run，不交给 Runtime，随后继续队列。
+- [x] claim 从本次 Runtime 配置解析一次容量；队首选择与正式交付复用同一消息投影和序列化口径，覆盖
+  body、viewer-visible quotes、逐消息 source attachments 与 Skills，不保留独立估算 DTO。
 - [x] 接受、取消、恢复和成员移除都按整个冻结批次及每条 Delivery 保留证据。
 
 ## Gate 3：发布、可见性、撤回与幂等
 
-- [x] Core 对自动上下文、Camp Read、搜索、线程、回复展开和结构化引用执行同一消息可见性规则。
+- [x] Core 对自动上下文、Camp Read、搜索、线程、回复展开和结构化引用执行同一消息可见性规则；每个
+  quote source 在投影时按当前 Agent 和边界独立重验，外层消息可见不能泄露被 suppress/withdraw 的来源。
 - [x] 本地可撤回消息在首次目标 claim 前只向 Principal 展示；claim 事务原子结束撤回资格。
 - [x] 撤回原子取消全部 waiting Delivery，清除受控正文、引用、附件关系、FTS/缓存及 body digest。
 - [x] 原发送命令转为 erased-terminal receipt；相同 command ID 永不再次进入 Handler。
@@ -55,6 +60,9 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] Run Facts 删除 Gather 与 delegation；A2A Guidance 和特殊 Mission/Gather Current Input 分支退出。
 - [x] `camp.read` 按调用时最新状态和 recipient-specific visibility 选页，不受 frozen ContextManifest 边界限制；
   完整返回选中消息，删除 80k scalar budget 与尺寸缩页。
+- [x] `camp.read` 请求收敛为 timeline `before/limit`、exact `messageId` 与 thread `thread/before/limit`；删除
+  `mode/direction/around/after/cursor` 请求和 CLI 帮助，不增加旧模式翻译层。
+- [x] `RUN_INPUT.messages[]` 按每条 message ID 投影 source attachments，不以作者类型决定是否加载。
 - [x] 旧冻结上下文按原版本读取，不回填历史 `input_message_ids` 或重算 anchor。
 
 ## Gate 5：删除旧协作支线
@@ -70,17 +78,22 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] overlap 直接 skipped；occurrence time limit 从 started admission 起计时；没有 queued occurrence。
 - [x] Channel 入站在消息与 Delivery 提交后完成；Channel-bound Camp 的 Agent 公开消息自动创建独立 outbox。
 - [x] Run 失败与 execution-isolation ACK 分离；cleanup 未确认时只保留后继 Delivery。
-- [x] cleanup `Unproven` 且旧执行可能写共享 executionRoot 时，临时阻止共享该 root 的新 dispatch。
+- [x] claim 前分别检查同一 Camp+Agent 的旧执行隔离与实际共享 executionRoot 的旧执行清理；任一未确认时
+  Delivery 保持 waiting 且不创建新 Run。
 - [x] accepted/unknown 默认换新 Native Session，除非 Adapter 已有可验证的旧 turn 终止证明。
 - [x] 普通 batch claim 收敛到单一事件唤醒 Scheduler；启动检查和固定 30 秒全局兜底均从数据库恢复，
-  空闲兜底不进入 claim 写事务；原 500ms 循环保留既有非 batch Run 派发与其他职责，但不再处理普通 batch。
+  空闲兜底不进入 claim 写事务；原 500ms 职责由独立串行维护任务承担，不再处理普通 batch，慢 non-batch
+  preparation 不占住 batch wake/fallback 协调循环。
 
 ## Gate 7：完整 Built-in 结果与副本清理
 
 - [x] 删除 Core request/response、CLI reader 和等效 wrapper 的统一总量拒绝。
 - [x] 移除 Runtime Adapter 对 Built-in 完整结果的静默前缀截断；无法完整交付时明确失败。
 - [x] 正常 Agent-facing 结果不引入 preview/blobRef/nextOffset 补读协议。
-- [x] 减少 Core→CLI→Runtime 链路的重复消息树重建、全文 clone 和重复 JSON buffer。
+- [x] CLI 单次接收链只执行一次完整 Envelope validation；错误版本、未知 operation、非法 result/error 与
+  损坏 receipt 仍拒绝。
+- [x] Canonical result 检查改为借用，原样 Agent projection 移动所有权；保留确实改变字段的 operation-specific
+  projection，消除只读检查和原样转交的全文 clone。
 - [x] Replay 保存首次定稿的完整结果；evidence 保存完整结果或受管存储身份、字节数和 digest。
 
 ## Gate 8：Renderer 与产品收口
@@ -94,8 +107,9 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 ## Gate 9：验证与切换
 
 - [x] Migration 覆盖 fresh DB、当前 schema、受支持旧来源、失败回滚、历史 frozen evidence 和旧 active cutover。
-- [x] 队列覆盖 FIFO、合批、并发 claim、crash before/after commit、超大队首、成员移除和设置变更。
-- [x] 可见性/撤回覆盖自动上下文、读取、搜索、线程、引用、旧 cursor、FTS、附件与 command replay。
+- [x] 队列覆盖 FIFO、合批、并发 claim、crash before/after commit、超大队首、Runtime 容量、用户附件、
+  Skills、不可执行候选饥饿、双重 cleanup 门禁、成员移除和设置变更。
+- [x] 可见性/撤回覆盖自动上下文、读取、搜索、线程、quote source、旧 cursor、FTS、附件与 command replay。
 - [x] Runtime 覆盖 accepted/unknown cleanup、迟到 launch、进程 reap、executionRoot fence 和 Native Session rotation。
 - [x] 大结果覆盖超过旧 1/8/16 MiB、Unicode、quotes、慢接收、分段到达、中断、replay 与 digest 一致。
 - [x] Channel/Automation 覆盖 overlap、timeout、普通 claim、默认外发、outbox retry 与模型不重跑。
@@ -106,8 +120,9 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 
 本次删除的 active Rust 测试随生产合同在同一改动中退出：public Gather/Barrier/completion、持久
 Pending/Draft、CampTurn 预算/取消和旧 Delivery 重试不再存在于新执行主链。按源码中的 active `#[test]`
-声明核对，基线 1,154 项、当前 1,127 项；diff 中删除 38 个旧 owner，同时新增或迁入 11 个新 owner，
-净减少 27 项。保留的 successor owner 是 `delivery_queue::tests`、v162 migration、public batch context、
+声明核对，合并后的 `origin/main@6b44843d` 基线 1,162 项、当前 1,145 项；diff 中删除 44 个旧 owner，
+同时新增或迁入 27 个新 owner，净减少 17 项。保留的 successor owner 是 `delivery_queue::tests`、
+v163 migration、public batch context、
 撤回擦除/replay、完整结果运输、Channel/Automation 与 execution-isolation 测试；Single Chat 和历史 migration
 测试未随 public Camp clean break 删除。
 
@@ -128,14 +143,16 @@ cleanup 未确认可能放行后继、撤回命令可能重新发布。纯函数
 ## 最终验证证据
 
 - `cargo check --workspace --all-targets`：通过。
-- `cargo test -p rovai-core --lib`：815 passed，0 failed，6 ignored；ignored 均为文档声明的人工真实 Runtime smoke。
+- `cargo test -p rovai-core --lib`：831 passed，0 failed，6 ignored，0 filtered out；ignored 均为文档声明的
+  人工真实 Runtime smoke。
 - `cargo test -p rovai-core --bin rovai`：28 passed，0 failed。
+- `cargo test -p rovai-core --features slow-tests --lib camp_history::slow_tests::`：7 passed，0 failed。
 - `cargo test -p rovai-core --features slow-tests --lib context::slow_tests::`：42 passed，0 failed；包含
   Delivery-first Context、Runtime Input Delivery、历史 v68-v71/v93 migration 与 live Camp Read owner。
 - `cargo test -p rovai-core --features slow-tests --lib --no-run`：全部 slow-test target 编译通过。
 - `pnpm typecheck`：通过。
-- `pnpm test`：文档、Skill、Electron sandbox、202 个 Vitest 文件/2,108 项测试，以及 Node 脚本
-  323 passed、2 skipped，全部通过。
+- `pnpm test`：文档、Skill、Electron sandbox、205 个 Vitest 文件/2,120 项测试，以及 Node 脚本
+  324 passed、2 skipped，全部通过。
 - `cargo fmt --all -- --check` 与 `git diff --check`：通过。
 
 本轮没有执行安装包、第三方真实 Runtime 或真实 Channel 网络 smoke；它们不是上述仓库实现完成结论的证据。
