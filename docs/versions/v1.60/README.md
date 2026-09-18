@@ -47,6 +47,8 @@ ChannelDelivery 继续维护自己的业务状态。
 - 删除持久 Composer Draft、旧未公开 Pending 及其恢复状态；Renderer 当前编辑只存在于当前窗口，发送失败不清空。
 - Channel 收敛为异步消息桥；Channel-bound Camp 的 Agent 公开消息默认产生独立、可去重 ChannelDelivery。
 - Automation occurrence 只有 `started` 或 `skipped(overlap)` 两种入口结果，仍通过普通 Delivery claim 创建首个 Run。
+- 普通 batch claim 由单一事件唤醒 Scheduler 负责；Core 启动时检查存量，并以不重置 deadline 的全局 30 秒只读优先
+  兜底恢复；原 500ms 循环保留既有非 batch Run 派发与其他职责，但不再扫描普通 Delivery 或 queued batch Run。
 - Built-in IPC、Runtime Adapter 和 `camp.read` 不再用统一总量阈值裁剪成功结果；完整交付或明确失败。
 - Runtime 输入仍有确定性容量：profile 缺省 96 KiB，不再应用通用 1 MiB clamp。
 - `SHARED_CONVERSATION` 使用每个 Camp+Agent 的 accepted 增量公共消息窗口，保留原始顺序和当前 Agent 自己的消息；
@@ -66,7 +68,7 @@ Skill、Migration 与自动化验证已完成，并以 Delivery-first 主链取�
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.59 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.60 |
-| Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输与渠道/Automation 取舍 |
+| Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输、渠道/Automation 与事件唤醒调度取舍 |
 | Contracts | 已更新 | [模型上下文变更说明](model-context-change-camp-message-run.md)与当前合同索引已发布 Context、Run Facts、Message Delivery、Camp Read 与 Built-in Transport 新版本 |
 | Architecture | 已更新 | 长期 Architecture、系统图源与生成图已同步 Delivery-first 主链、普通多目标消息和 `RUN_INPUT` |
 | UI | 已更新 | 当前 UI 规范与 Renderer 已同步等待预览、精确 Run Stop、红色失败、撤回与 Renderer-local Composer |

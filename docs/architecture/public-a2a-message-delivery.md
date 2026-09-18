@@ -56,6 +56,16 @@ Runtime 配置。Scheduler 获得执行资格时，在一个事务中：
 用户、Agent、Mission、Automation 与 Channel 来源使用同一规则，不形成批次边界。新消息不会追加到已冻结 Run。
 commit 前崩溃只留下 waiting Delivery；commit 后恢复同一 Run。设置变化影响未 claim 消息，不改变既有 Run。
 
+普通 Delivery 只有一个进程内 Scheduler 协调任务拥有 claim。Core 启动时先执行一次存量检查；新 waiting Delivery、
+Run 终态、Runtime ready 与相关 cleanup 完成后，在权威事务提交后发送无负载 wake。wake 只表示数据库状态可能变化，
+不保存 lane 清单，也不是工作权威。Scheduler 按页继续 claim 和 dispatch，超过单页上限时不会等待下一次定时检查；
+Runtime preparation 使用相互独立的 worker，一个慢任务或失败任务不阻塞其他 lane。
+
+协调任务常驻一个不被普通 wake 重置的 30 秒全局兜底。每次兜底先只读检查 waiting Delivery 或尚未 dispatch 的
+queued batch Run；空闲时不进入 claim 的写事务。终态处理只结算并 wake，不直接领取 successor；网络恢复只派发已明确
+获准的既有 Run，不领取新 Delivery。原 500ms 循环继续承担既有非 batch Run 派发、Automation deadline、取消、
+Single Chat 与维护职责，但不再扫描普通 batch 队列，也不能领取普通 Delivery。
+
 必要 `RUN_INPUT` 优先于可选历史。队首单条也超过当前 Runtime profile 时，Core 创建明确的 preflight-failed Run，
 不向 Runtime 发送截断内容，并让队列随后继续。完整选择规则见 [Profile 7](../contracts/context-delivery-profile-v7.md)。
 

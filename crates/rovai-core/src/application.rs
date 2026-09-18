@@ -164,7 +164,10 @@ use rovai_core::{
     current_user::CURRENT_USER_ID,
     database_admission::{AdmissionAssessment, AuthorityBlock, DatabaseAdmission},
     db::{Database, DatabaseInitializeError, DatabaseMigrationError, DatabaseOpenError},
-    delivery_queue::claim_waiting_delivery_batches,
+    delivery_queue::{
+        claim_waiting_delivery_batches, has_pending_delivery_batch_work,
+        has_waiting_delivery_batch_work,
+    },
     diagnostics::{
         DiagnosticCheck, DiagnosticGroup, DiagnosticStatus, DiagnosticsReport, aggregate_counts,
         database_integrity_check, diagnostics_export_v5,
@@ -310,6 +313,9 @@ const RUNTIME_EVIDENCE_DELTA_BATCH_WINDOW: Duration = Duration::from_millis(25);
 const RUNTIME_EVIDENCE_DELTA_BATCH_MAX_ITEMS: usize = 32;
 const CAMP_ATTACHMENT_VIEW_MUTATION_DEADLINE: Duration = Duration::from_secs(55);
 const CAMP_ATTACHMENT_VIEW_QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DELIVERY_BATCH_SCHEDULER_PAGE_LIMIT: i64 = 16;
+const DELIVERY_BATCH_FALLBACK_INTERVAL: Duration = Duration::from_secs(30);
+const NON_BATCH_AGENT_RUN_DISPATCH_LIMIT: i64 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeCancellationIngressFence {
@@ -1858,6 +1864,7 @@ struct Core {
     automation_scheduler_control: RwLock<Option<AutomationSchedulerControl>>,
     compaction_detector_policies: DesiredCompactionDetectorPolicies,
     agent_run_cancellation_notify: Notify,
+    delivery_batch_scheduler_notify: Notify,
     agent_run_cleanup_inflight: Mutex<HashSet<ActiveExecutionKey>>,
     network_recovery: Mutex<NetworkRecoveryQueue>,
     network_recovery_notify: Notify,
@@ -2294,6 +2301,19 @@ impl Core {
         CampOutputDirectory::prepare(database, camp_id).map(|_| ())
     }
 
+    fn notify_delivery_batch_scheduler_if_pending(&self, database: &Database) {
+        match has_pending_delivery_batch_work(database) {
+            Ok(true) => self.delivery_batch_scheduler_notify.notify_one(),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!(
+                    "failed to inspect Message Delivery work after a committed state change: {error:#}"
+                );
+                self.delivery_batch_scheduler_notify.notify_one();
+            }
+        }
+    }
+
     async fn acquire_camp_attachment_mutation(
         &self,
         camp_id: &str,
@@ -2468,6 +2488,7 @@ impl Core {
                     json!({ "turns": expired }),
                 );
                 self.agent_run_cancellation_notify.notify_one();
+                self.delivery_batch_scheduler_notify.notify_one();
             }
             Err(error) => eprintln!("CampTurn Execution Budget expiry failed: {error:#}"),
         }
@@ -3476,6 +3497,7 @@ impl Core {
                 true,
             )?;
         }
+        self.delivery_batch_scheduler_notify.notify_one();
         Ok(())
     }
 
@@ -3494,6 +3516,7 @@ impl Core {
                 true,
             )?;
         }
+        self.delivery_batch_scheduler_notify.notify_one();
         Ok(())
     }
 
@@ -4961,6 +4984,7 @@ impl Core {
         let mut evidence_run = None;
         let mut evidence_replayed = false;
         let mut evidence_receipt_id = None;
+        let mut delivery_batch_state_changed = false;
         let result: Result<Value> = async {
             let mut database = self.database.lock().await;
             let service = TeamToolService::default();
@@ -5078,6 +5102,8 @@ impl Core {
                         } else {
                             service.send_public_message(&mut database, &invocation)
                         }?;
+                    delivery_batch_state_changed |=
+                        command_result_has_delivery_work(&execution.result.payload);
                     evidence_replayed = execution.replayed;
                     evidence_receipt_id = execution.result.payload["messageId"]
                         .as_str()
@@ -5507,6 +5533,12 @@ impl Core {
                         CURRENT_USER_ID,
                         &quick_chat_path,
                     )?;
+                    delivery_batch_state_changed |= execution
+                        .result
+                        .payload
+                        .get("campId")
+                        .and_then(Value::as_str)
+                        .is_some();
                     evidence_replayed = execution.replayed;
                     if let (Some(run_id), Some(camp_id)) = (
                         execution
@@ -5569,6 +5601,8 @@ impl Core {
                             ),
                         )?
                     };
+                    delivery_batch_state_changed |=
+                        execution.result.status != CommandResultStatus::Rejected;
                     evidence_replayed = execution.replayed;
                     command_execution_payload(execution)
                 }
@@ -5724,6 +5758,9 @@ impl Core {
             Ok(operation_result)
         }
         .await;
+        if delivery_batch_state_changed {
+            self.delivery_batch_scheduler_notify.notify_one();
+        }
         if let (Some(authenticated_run), Some(tool_call_id)) =
             (evidence_run.as_ref(), evidence_tool_call_digest)
         {
@@ -5993,11 +6030,16 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                let state_changed = execution.result.status != CommandResultStatus::Rejected;
                 emit(
                     &self.output,
                     "automations.updated",
                     json!({ "reason": "closed" }),
                 );
+                drop(database);
+                if state_changed {
+                    self.delivery_batch_scheduler_notify.notify_one();
+                }
                 Ok(serde_json::to_value(execution.result)?)
             }
             "automations.delete" => {
@@ -6008,11 +6050,16 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                let state_changed = execution.result.status != CommandResultStatus::Rejected;
                 emit(
                     &self.output,
                     "automations.updated",
                     json!({ "reason": "deleted" }),
                 );
+                drop(database);
+                if state_changed {
+                    self.delivery_batch_scheduler_notify.notify_one();
+                }
                 Ok(serde_json::to_value(execution.result)?)
             }
             "automations.run" => {
@@ -6051,6 +6098,7 @@ impl Core {
                         .context(
                             "failed to fence an Automation after attachment preparation failed",
                         )?;
+                    self.delivery_batch_scheduler_notify.notify_one();
                     return Err(error);
                 }
                 emit(
@@ -6058,6 +6106,15 @@ impl Core {
                     "automations.updated",
                     json!({ "reason": "run" }),
                 );
+                if execution
+                    .result
+                    .payload
+                    .get("campId")
+                    .and_then(Value::as_str)
+                    .is_some()
+                {
+                    self.delivery_batch_scheduler_notify.notify_one();
+                }
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.credentials.get" => {
@@ -6291,6 +6348,7 @@ impl Core {
                     ),
                 )?;
                 self.ensure_new_channel_camp_attachment_ready(&mut database, &execution)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.dingtalk.pendingBinding.resolve" => {
@@ -6315,6 +6373,7 @@ impl Core {
                     ),
                 )?;
                 self.ensure_new_channel_camp_attachment_ready(&mut database, &execution)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.feishu.account.upsert" => {
@@ -6469,6 +6528,7 @@ impl Core {
                     ),
                 )?;
                 self.ensure_new_channel_camp_attachment_ready(&mut database, &execution)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.feishu.pendingBinding.resolve" => {
@@ -6491,6 +6551,7 @@ impl Core {
                     ),
                 )?;
                 self.ensure_new_channel_camp_attachment_ready(&mut database, &execution)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.membership.add" => {
@@ -6577,6 +6638,7 @@ impl Core {
                     ),
                 )?;
                 self.ensure_new_channel_camp_attachment_ready(&mut database, &execution)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.dingtalk.host.tick" => {
@@ -6590,6 +6652,7 @@ impl Core {
                     },
                     &params,
                 )?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(tick)?)
             }
             "channels.inbound.observe" => {
@@ -6644,6 +6707,7 @@ impl Core {
                     ),
                 )?;
                 self.ensure_new_channel_camp_attachment_ready(&mut database, &execution)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.host.tick" => {
@@ -6657,6 +6721,7 @@ impl Core {
                     },
                     &params,
                 )?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(tick)?)
             }
             "channels.executionConsole.source" => {
@@ -6737,6 +6802,7 @@ impl Core {
                         camp_id.as_deref(),
                         json!({ "campId": camp_id, "result": execution.result }),
                     );
+                    self.delivery_batch_scheduler_notify.notify_one();
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
@@ -6998,6 +7064,7 @@ impl Core {
             "members.presence.set" => {
                 let params: UserCommandParams<SetMemberPresenceCommand> =
                     serde_json::from_value(request.params.clone())?;
+                let became_present = params.command.presence == "present";
                 let mut database = self.database.lock().await;
                 let execution = AgentProfileService::default().set_presence(
                     &mut database,
@@ -7005,6 +7072,12 @@ impl Core {
                 )?;
                 if execution.result.status == CommandResultStatus::Applied {
                     self.mark_skill_projections_dirty_best_effort(&mut database, true);
+                }
+                let wake_delivery_scheduler =
+                    became_present && execution.result.status == CommandResultStatus::Applied;
+                drop(database);
+                if wake_delivery_scheduler {
+                    self.delivery_batch_scheduler_notify.notify_one();
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
@@ -7029,6 +7102,11 @@ impl Core {
                 if execution.result.status == CommandResultStatus::Applied {
                     self.runtime_fleet.invalidate_member(&agent_id).await;
                     self.mark_skill_projections_dirty_best_effort(&mut database, true);
+                }
+                let state_changed = execution.result.status == CommandResultStatus::Applied;
+                drop(database);
+                if state_changed {
+                    self.delivery_batch_scheduler_notify.notify_one();
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
@@ -7771,6 +7849,9 @@ impl Core {
                 if should_dispatch_cancellation {
                     self.agent_run_cancellation_notify.notify_one();
                 }
+                if execution.result.status != CommandResultStatus::Rejected {
+                    self.delivery_batch_scheduler_notify.notify_one();
+                }
                 Ok(serde_json::to_value(execution.result)?)
             }
             "camps.changeDefaultLead" => {
@@ -8240,6 +8321,7 @@ impl Core {
                         Some(&camp_id),
                         json!({ "campId": camp_id, "result": execution.result }),
                     );
+                    self.delivery_batch_scheduler_notify.notify_one();
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
@@ -8931,6 +9013,9 @@ impl Core {
             let database = self.database.lock().await;
             DomainCommandGateway.replay_if_recorded(&database, &envelope)?
         } {
+            if command_result_has_delivery_work(&replay.result.payload) {
+                self.delivery_batch_scheduler_notify.notify_one();
+            }
             return Ok(json!({
                 "commandResult": replay.result,
                 "replayed": true,
@@ -8948,6 +9033,9 @@ impl Core {
                 "camp.messages.send",
                 Some(params.camp_id.as_str()),
             );
+        }
+        if command_result_has_delivery_work(&execution.result.payload) {
+            self.delivery_batch_scheduler_notify.notify_one();
         }
         Ok(json!({
             "commandResult": execution.result,
@@ -8984,6 +9072,9 @@ impl Core {
         };
         if execution.result.status != CommandResultStatus::Rejected {
             self.request_camp_attachment_projection(&camp_id);
+        }
+        if command_result_has_delivery_work(&execution.result.payload) {
+            self.delivery_batch_scheduler_notify.notify_one();
         }
         Ok(json!({
             "commandResult": execution.result,
@@ -9670,7 +9761,7 @@ impl Core {
         self: &Arc<Self>,
         attempt: NetworkRecoveryAttempt,
         output: &mpsc::UnboundedSender<String>,
-    ) -> bool {
+    ) -> Option<String> {
         let registration = &attempt.registration;
         let admission: Result<Option<CommandExecution>> = {
             let mut database = self.database.lock().await;
@@ -9736,7 +9827,7 @@ impl Core {
                     "agent_run.network_recovery_attempt_admitted",
                     Some(&registration.camp_id),
                 );
-                true
+                Some(registration.agent_run_id.clone())
             }
             Ok(Some(admission)) => {
                 eprintln!(
@@ -9761,7 +9852,7 @@ impl Core {
                         Some(&registration.camp_id),
                     );
                 }
-                false
+                None
             }
             Ok(None) => {
                 self.stop_network_recovery(
@@ -9770,7 +9861,7 @@ impl Core {
                     "run_no_longer_active",
                 )
                 .await;
-                false
+                None
             }
             Err(error) => {
                 eprintln!(
@@ -9787,29 +9878,105 @@ impl Core {
                     "admission_error",
                 )
                 .await;
-                false
+                None
             }
         }
     }
 
-    async fn dispatch_agent_runs(self: &Arc<Self>, output: &mpsc::UnboundedSender<String>) {
-        let candidates = {
-            let mut database = self.database.lock().await;
-            if let Err(error) = claim_waiting_delivery_batches(&mut database, 16) {
-                eprintln!("failed to claim waiting Message Delivery batches: {error:#}");
-                return;
+    async fn collect_delivery_batch_dispatch_candidates(
+        &self,
+    ) -> Result<Vec<rovai_core::runtime::QueuedAgentRunCandidate>> {
+        loop {
+            let claimed = {
+                let mut database = self.database.lock().await;
+                if !has_waiting_delivery_batch_work(&database)? {
+                    Vec::new()
+                } else {
+                    claim_waiting_delivery_batches(
+                        &mut database,
+                        DELIVERY_BATCH_SCHEDULER_PAGE_LIMIT,
+                    )?
+                }
+            };
+            if claimed.is_empty() {
+                break;
             }
-            match ExecutionRuntimeService::default().list_dispatchable_agent_runs(&database, 16) {
+            tokio::task::yield_now().await;
+        }
+
+        let candidates = {
+            let database = self.database.lock().await;
+            let runtime = ExecutionRuntimeService::default();
+            let mut candidates = Vec::new();
+            let mut offset = 0;
+            loop {
+                let mut page = runtime.list_dispatchable_batch_agent_runs(
+                    &database,
+                    DELIVERY_BATCH_SCHEDULER_PAGE_LIMIT,
+                    offset,
+                )?;
+                let page_len = page.len() as i64;
+                candidates.append(&mut page);
+                if page_len < DELIVERY_BATCH_SCHEDULER_PAGE_LIMIT {
+                    break;
+                }
+                offset += page_len;
+            }
+            candidates
+        };
+        Ok(candidates)
+    }
+
+    async fn dispatch_agent_runs_by_id(
+        self: &Arc<Self>,
+        agent_run_ids: &[String],
+        output: &mpsc::UnboundedSender<String>,
+    ) {
+        let candidates = {
+            let database = self.database.lock().await;
+            let runtime = ExecutionRuntimeService::default();
+            let mut candidates = Vec::with_capacity(agent_run_ids.len());
+            for agent_run_id in agent_run_ids {
+                match runtime.load_dispatchable_agent_run(&database, agent_run_id) {
+                    Ok(Some(candidate)) => candidates.push(candidate),
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("failed to load dispatchable AgentRun {agent_run_id}: {error:#}");
+                    }
+                }
+            }
+            candidates
+        };
+        self.dispatch_existing_agent_run_candidates(candidates, output)
+            .await;
+    }
+
+    async fn dispatch_non_batch_agent_runs(
+        self: &Arc<Self>,
+        output: &mpsc::UnboundedSender<String>,
+    ) {
+        let candidates = {
+            let database = self.database.lock().await;
+            match ExecutionRuntimeService::default().list_dispatchable_non_batch_agent_runs(
+                &database,
+                NON_BATCH_AGENT_RUN_DISPATCH_LIMIT,
+            ) {
                 Ok(candidates) => candidates,
                 Err(error) => {
-                    eprintln!("failed to scan dispatchable AgentRuns: {error:#}");
+                    eprintln!("failed to scan existing non-batch AgentRuns: {error:#}");
                     return;
                 }
             }
         };
-        if candidates.is_empty() {
-            return;
-        }
+        self.dispatch_existing_agent_run_candidates(candidates, output)
+            .await;
+    }
+
+    async fn dispatch_existing_agent_run_candidates(
+        self: &Arc<Self>,
+        candidates: Vec<rovai_core::runtime::QueuedAgentRunCandidate>,
+        output: &mpsc::UnboundedSender<String>,
+    ) {
         let mut dispatch_tasks = tokio::task::JoinSet::new();
         for candidate in candidates {
             let core = self.clone();
@@ -9821,6 +9988,23 @@ impl Core {
         while let Some(result) = dispatch_tasks.join_next().await {
             if let Err(error) = result {
                 eprintln!("AgentRun dispatch preparation worker failed: {error}");
+            }
+        }
+    }
+
+    async fn delivery_batch_dispatch_made_progress(&self, agent_run_id: &str) -> bool {
+        let database = self.database.lock().await;
+        match database.connection().query_row(
+            "SELECT COUNT(*) FROM agent_run WHERE id = ?1 AND status = 'queued'",
+            [agent_run_id],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(queued) => queued == 0,
+            Err(error) => {
+                eprintln!(
+                    "failed to inspect AgentRun {agent_run_id} after dispatch preparation: {error:#}"
+                );
+                false
             }
         }
     }
@@ -9844,6 +10028,7 @@ impl Core {
             service.settle_runs(&mut database, now).and_then(|settled| {
                 let dispatches =
                     service.claim_due(&mut database, now, recovery_boundary, &quick_chat_path)?;
+                let claimed = !dispatches.is_empty();
                 let mut ready = Vec::with_capacity(dispatches.len());
                 for dispatch in dispatches {
                     match CampOutputDirectory::prepare(&database, &dispatch.camp_id).map(|_| ()) {
@@ -9861,12 +10046,15 @@ impl Core {
                     }
                 }
                 let notification_ready = service.has_ready_notification(&database, now)?;
-                Ok((ready, settled, notification_ready))
+                Ok((ready, settled, claimed, notification_ready))
             })
         };
         match result {
-            Ok((dispatches, settled, notification_ready)) => {
-                if settled || !dispatches.is_empty() {
+            Ok((dispatches, settled, claimed, notification_ready)) => {
+                if settled || claimed {
+                    self.delivery_batch_scheduler_notify.notify_one();
+                }
+                if settled || claimed {
                     emit(
                         &self.output,
                         "automations.updated",
@@ -10479,6 +10667,7 @@ impl Core {
                         "replayed": execution.replayed,
                     }),
                 );
+                self.delivery_batch_scheduler_notify.notify_one();
             }
             Ok(_) => {}
             Err(rejection_error) => {
@@ -10538,6 +10727,7 @@ impl Core {
                 core.agent_run_cleanup_inflight.lock().await.remove(&key);
                 if completed {
                     core.agent_run_cancellation_notify.notify_one();
+                    core.delivery_batch_scheduler_notify.notify_one();
                 }
             });
         }
@@ -11564,11 +11754,11 @@ impl Core {
         terminal: PlannedShutdownAbortiveTerminal,
     ) -> Result<rovai_core::runtime::PlannedShutdownTerminalSettlement> {
         let mut database = self.database.lock().await;
-        ExecutionRuntimeService::default().settle_planned_shutdown_abortive_terminal(
-            &mut database,
-            permit,
-            &terminal,
-        )
+        let settlement = ExecutionRuntimeService::default()
+            .settle_planned_shutdown_abortive_terminal(&mut database, permit, &terminal)?;
+        drop(database);
+        self.delivery_batch_scheduler_notify.notify_one();
+        Ok(settlement)
     }
 
     async fn prepare_builtin_tool_binding(
@@ -13537,6 +13727,7 @@ impl Core {
                         "replayed": terminal.replayed,
                     }),
                 );
+                self.delivery_batch_scheduler_notify.notify_one();
                 self.reconcile_skill_projection_after_run_terminal(
                     &current.workspace.execution_root,
                 )
@@ -14452,7 +14643,10 @@ impl Core {
             }
         };
         match failure {
-            Ok(terminal) if terminal.result.status != CommandResultStatus::Rejected => true,
+            Ok(terminal) if terminal.result.status != CommandResultStatus::Rejected => {
+                self.delivery_batch_scheduler_notify.notify_one();
+                true
+            }
             Ok(_) => false,
             Err(failure_error) => {
                 eprintln!(
@@ -14515,6 +14709,9 @@ impl Core {
                     .interrupt(&execution.agent_run_id, execution.execution_epoch)
                     .await;
             }
+        }
+        if failure_persisted {
+            self.delivery_batch_scheduler_notify.notify_one();
         }
         if failure_persisted && file_change_ingress_flushed {
             self.project_agent_run_file_changes_after_terminal(
@@ -14590,6 +14787,7 @@ impl Core {
                     "reasonCode": "runtime_configuration_invalid",
                 }),
             );
+            self.delivery_batch_scheduler_notify.notify_one();
             self.reconcile_skill_projection_after_run_terminal(
                 &candidate.execution_workspace().execution_root,
             )
@@ -15432,6 +15630,7 @@ async fn run_core(
         automation_scheduler_control: RwLock::new(automation_scheduler_control),
         compaction_detector_policies: compaction_detector_policies.clone(),
         agent_run_cancellation_notify: Notify::new(),
+        delivery_batch_scheduler_notify: Notify::new(),
         agent_run_cleanup_inflight: Mutex::new(HashSet::new()),
         network_recovery: Mutex::new(NetworkRecoveryQueue::default()),
         network_recovery_notify: Notify::new(),
@@ -17045,6 +17244,7 @@ async fn persist_pi_prompt_completion(
         core.pi
             .forget_agent_run(agent_run_id, execution_epoch)
             .await;
+        core.delivery_batch_scheduler_notify.notify_one();
         core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
             .await;
         return Ok(());
@@ -17142,6 +17342,7 @@ async fn persist_pi_prompt_completion(
                         "replayed": terminal.replayed,
                     }),
                 );
+                core.delivery_batch_scheduler_notify.notify_one();
                 core.reconcile_skill_projection_after_run_terminal(
                     &execution.workspace.execution_root,
                 )
@@ -17163,6 +17364,7 @@ async fn persist_pi_prompt_completion(
                         .forget_agent_run(agent_run_id, execution_epoch)
                         .await;
                 }
+                core.delivery_batch_scheduler_notify.notify_one();
                 core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
                     .await;
                 return Ok(());
@@ -19530,6 +19732,7 @@ async fn persist_acp_prompt_completion(
                 .complete_agent_run(agent_run_id, execution_epoch)
                 .await;
         }
+        core.delivery_batch_scheduler_notify.notify_one();
         core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
             .await;
         return Ok(());
@@ -19649,6 +19852,7 @@ async fn persist_acp_prompt_completion(
                         "replayed": terminal.replayed,
                     }),
                 );
+                core.delivery_batch_scheduler_notify.notify_one();
                 core.reconcile_skill_projection_after_run_terminal(
                     &execution.workspace.execution_root,
                 )
@@ -19658,6 +19862,7 @@ async fn persist_acp_prompt_completion(
                         .complete_agent_run(agent_run_id, execution_epoch)
                         .await;
                 }
+                core.delivery_batch_scheduler_notify.notify_one();
                 core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
                     .await;
                 return Ok(());
@@ -20531,6 +20736,7 @@ async fn process_agent_run_codex_message(
                 core.codex_cli
                     .complete_agent_run(agent_run_id, execution_epoch)
                     .await;
+                core.delivery_batch_scheduler_notify.notify_one();
                 core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
                     .await;
             }
@@ -20659,6 +20865,7 @@ async fn process_agent_run_codex_message(
                         "replayed": terminal.replayed,
                     }),
                 );
+                core.delivery_batch_scheduler_notify.notify_one();
                 terminal_persisted = true;
                 terminal_execution_root = Some(execution.workspace.execution_root.clone());
                 break;
@@ -20703,6 +20910,7 @@ async fn process_agent_run_codex_message(
     core.codex_cli
         .complete_agent_run(agent_run_id, execution_epoch)
         .await;
+    core.delivery_batch_scheduler_notify.notify_one();
     core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
         .await;
 }
@@ -21146,6 +21354,11 @@ async fn process_agent_run_scheduler(
     let mut automation_clock = crate::automation_clock::AutomationClock::start();
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut delivery_batch_fallback = tokio::time::interval_at(
+        tokio::time::Instant::now() + DELIVERY_BATCH_FALLBACK_INTERVAL,
+        DELIVERY_BATCH_FALLBACK_INTERVAL,
+    );
+    delivery_batch_fallback.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut mcp_cleanup_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + Duration::from_secs(30),
         Duration::from_secs(30),
@@ -21156,7 +21369,39 @@ async fn process_agent_run_scheduler(
         Duration::from_secs(15),
     );
     pending_execution_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    loop {
+    let mut delivery_batch_dispatches = tokio::task::JoinSet::new();
+    let mut delivery_batch_workers = HashMap::new();
+    let mut delivery_batch_inflight = HashSet::new();
+    let mut scan_delivery_batches = true;
+    'scheduler: loop {
+        if scan_delivery_batches {
+            scan_delivery_batches = false;
+            match core.collect_delivery_batch_dispatch_candidates().await {
+                Ok(candidates) => {
+                    for candidate in candidates {
+                        let agent_run_id = candidate.agent_run_id.clone();
+                        if !delivery_batch_inflight.insert(agent_run_id.clone()) {
+                            continue;
+                        }
+                        let worker_core = core.clone();
+                        let worker_output = output.clone();
+                        let progress_agent_run_id = agent_run_id.clone();
+                        let handle = delivery_batch_dispatches.spawn(async move {
+                            worker_core
+                                .dispatch_agent_run_candidate(candidate, worker_output)
+                                .await;
+                            worker_core
+                                .delivery_batch_dispatch_made_progress(&progress_agent_run_id)
+                                .await
+                        });
+                        delivery_batch_workers.insert(handle.id(), agent_run_id);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("failed to advance Message Delivery batch scheduler: {error:#}");
+                }
+            }
+        }
         tokio::select! {
             _ = interval.tick() => {
                 {
@@ -21173,7 +21418,40 @@ async fn process_agent_run_scheduler(
                 core.dispatch_runtime_deliveries(&output).await;
                 core.dispatch_agent_run_cancellations(&output).await;
                 dispatch_pending_single_chat_inputs(&core).await;
-                core.dispatch_agent_runs(&output).await;
+                core.dispatch_non_batch_agent_runs(&output).await;
+            },
+            _ = core.delivery_batch_scheduler_notify.notified() => {
+                scan_delivery_batches = true;
+            },
+            _ = delivery_batch_fallback.tick() => {
+                let pending = {
+                    let database = core.database.lock().await;
+                    has_pending_delivery_batch_work(&database)
+                };
+                match pending {
+                    Ok(true) => scan_delivery_batches = true,
+                    Ok(false) => {}
+                    Err(error) => {
+                        eprintln!("failed to inspect pending Message Delivery batch work: {error:#}");
+                    }
+                }
+            },
+            result = delivery_batch_dispatches.join_next_with_id(), if !delivery_batch_dispatches.is_empty() => {
+                match result {
+                    Some(Ok((task_id, made_progress))) => {
+                        if let Some(agent_run_id) = delivery_batch_workers.remove(&task_id) {
+                            delivery_batch_inflight.remove(&agent_run_id);
+                        }
+                        scan_delivery_batches |= made_progress;
+                    }
+                    Some(Err(error)) => {
+                        if let Some(agent_run_id) = delivery_batch_workers.remove(&error.id()) {
+                            delivery_batch_inflight.remove(&agent_run_id);
+                        }
+                        eprintln!("Message Delivery dispatch preparation worker failed: {error}");
+                    }
+                    None => {}
+                }
             },
             _ = core.agent_run_cancellation_notify.notified() => {
                 core.dispatch_agent_run_cancellations(&output).await;
@@ -21191,9 +21469,11 @@ async fn process_agent_run_scheduler(
             _ = pending_execution_interval.tick() => {
                 core.recover_pending_execution_intents().await;
             },
-            _ = &mut shutdown => break,
+            _ = &mut shutdown => break 'scheduler,
         }
     }
+    delivery_batch_dispatches.abort_all();
+    while delivery_batch_dispatches.join_next().await.is_some() {}
 }
 
 async fn process_network_recovery(
@@ -21240,14 +21520,16 @@ async fn process_network_recovery(
                 .spawn(async move { core.begin_network_recovery_attempt(attempt, &output).await });
             worker_entries.insert(handle.id(), entry_key);
         }
-        let mut dispatch_admitted = false;
+        let mut dispatch_admitted = Vec::new();
         while !workers.is_empty() {
             tokio::select! {
                 result = workers.join_next_with_id() => {
                     match result {
                         Some(Ok((task_id, admitted))) => {
                             worker_entries.remove(&task_id);
-                            dispatch_admitted |= admitted;
+                            if let Some(agent_run_id) = admitted {
+                                dispatch_admitted.push(agent_run_id);
+                            }
                         }
                         Some(Err(error)) => {
                             if let Some((agent_run_id, execution_epoch)) = worker_entries.remove(&error.id()) {
@@ -21269,9 +21551,9 @@ async fn process_network_recovery(
                 }
             }
         }
-        if dispatch_admitted {
+        if !dispatch_admitted.is_empty() {
             tokio::select! {
-                _ = core.dispatch_agent_runs(&output) => {}
+                _ = core.dispatch_agent_runs_by_id(&dispatch_admitted, &output) => {}
                 _ = &mut shutdown => break 'coordinator,
             }
         }
@@ -22066,6 +22348,13 @@ fn command_execution_payload(execution: CommandExecution) -> Result<Value> {
     .into())
 }
 
+fn command_result_has_delivery_work(payload: &Value) -> bool {
+    payload
+        .get("deliveryIds")
+        .and_then(Value::as_array)
+        .is_some_and(|delivery_ids| !delivery_ids.is_empty())
+}
+
 fn command_rejection_details(code: &str, payload: &Value) -> Option<Value> {
     if code.starts_with("message.") {
         return payload.get("details").cloned();
@@ -22757,6 +23046,7 @@ mod tests {
             attachment_projection_requests,
             compaction_detector_policies: compaction_detector_policies.clone(),
             agent_run_cancellation_notify: Notify::new(),
+            delivery_batch_scheduler_notify: Notify::new(),
             agent_run_cleanup_inflight: Mutex::new(HashSet::new()),
             network_recovery: Mutex::new(NetworkRecoveryQueue::default()),
             network_recovery_notify: Notify::new(),

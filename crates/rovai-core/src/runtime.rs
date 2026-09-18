@@ -22,7 +22,7 @@ use crate::{
     },
     context_index::index_camp_message,
     db::Database,
-    delivery_queue::{claim_waiting_delivery_batches, settle_run_deliveries},
+    delivery_queue::settle_run_deliveries,
     execution_budget::{CampTurnExecutionBudgetExhaustionReason, camp_turn_execution_budget_now},
     git::GitObservation,
     message_delivery::{
@@ -1266,8 +1266,49 @@ impl ExecutionRuntimeService {
         database: &Database,
         limit: i64,
     ) -> Result<Vec<QueuedAgentRunCandidate>> {
+        self.list_dispatchable_agent_runs_scoped(database, limit, 0, "all", None)
+    }
+
+    pub fn list_dispatchable_batch_agent_runs(
+        &self,
+        database: &Database,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QueuedAgentRunCandidate>> {
+        self.list_dispatchable_agent_runs_scoped(database, limit, offset, "batch", None)
+    }
+
+    pub fn list_dispatchable_non_batch_agent_runs(
+        &self,
+        database: &Database,
+        limit: i64,
+    ) -> Result<Vec<QueuedAgentRunCandidate>> {
+        self.list_dispatchable_agent_runs_scoped(database, limit, 0, "non_batch", None)
+    }
+
+    pub fn load_dispatchable_agent_run(
+        &self,
+        database: &Database,
+        agent_run_id: &str,
+    ) -> Result<Option<QueuedAgentRunCandidate>> {
+        Ok(self
+            .list_dispatchable_agent_runs_scoped(database, 1, 0, "exact", Some(agent_run_id))?
+            .pop())
+    }
+
+    fn list_dispatchable_agent_runs_scoped(
+        &self,
+        database: &Database,
+        limit: i64,
+        offset: i64,
+        scope: &str,
+        exact_agent_run_id: Option<&str>,
+    ) -> Result<Vec<QueuedAgentRunCandidate>> {
         if !(1..=100).contains(&limit) {
             anyhow::bail!("AgentRun scheduler limit must be between 1 and 100");
+        }
+        if offset < 0 {
+            anyhow::bail!("AgentRun scheduler offset must not be negative");
         }
         let now = camp_turn_execution_budget_now().to_rfc3339();
         let mut statement = database.connection().prepare(
@@ -1296,6 +1337,14 @@ impl ExecutionRuntimeService {
               AND camp_member.status = 'active'
               AND camp_member.leave_requested_at IS NULL
               AND agent_profile.profile_status = 'present'
+              AND (
+                  ?3 = 'all'
+                  OR (?3 = 'batch'
+                      AND agent_run.status = 'queued'
+                      AND agent_run.invocation_kind = 'batch')
+                  OR (?3 = 'non_batch' AND agent_run.invocation_kind <> 'batch')
+                  OR (?3 = 'exact' AND agent_run.id = ?4)
+              )
               AND (
                   agent_run.invocation_kind = 'batch'
                   OR (
@@ -1336,26 +1385,29 @@ impl ExecutionRuntimeService {
                              AND earlier_run.id < agent_run.id))
               )
             ORDER BY agent_run.created_at, agent_run.id
-            LIMIT ?2
+            LIMIT ?2 OFFSET ?5
             "#,
         )?;
         let rows = statement
-            .query_map(params![now, limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, Option<String>>(11)?,
-                ))
-            })?
+            .query_map(
+                params![now, limit, scope, exact_agent_run_id, offset],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                    ))
+                },
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(
@@ -6001,7 +6053,6 @@ fn pump_target_after_run_terminal(database: &mut Database, agent_run_id: &str) -
         return Ok(());
     };
     if invocation_kind == "batch" {
-        let _ = claim_waiting_delivery_batches(database, 1)?;
         return Ok(());
     }
     let _ = dispatch_pending_for_recipient(

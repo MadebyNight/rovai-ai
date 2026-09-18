@@ -17,7 +17,8 @@ last_updated: 2026-09-18
 - 当前主链：[Public Camp Message/Delivery 架构](../architecture/public-a2a-message-delivery.md)、
   [Message Delivery v9](../contracts/message-delivery-v9.md)、[Camp Message Send v21](../contracts/camp-message-send-v21.md)；
   Delivery-first 与 CampTurn/Gather clean break 理由：[V1.60-D01](../versions/v1.60/decisions.md#v1-60-d01)、
-  [V1.60-D02](../versions/v1.60/decisions.md#v1-60-d02)。
+  [V1.60-D02](../versions/v1.60/decisions.md#v1-60-d02)；单一事件唤醒 claim owner 与固定全局兜底理由：
+  [V1.60-D06](../versions/v1.60/decisions.md#v1-60-d06)。
 - 撤回与 Renderer-local Composer：[Camp Composer Draft v14](../contracts/camp-composer-draft-v14.md)、
   [Camp History v7](../contracts/camp-history-v7.md)；理由：[V1.60-D03](../versions/v1.60/decisions.md#v1-60-d03)。
 - 多输入 Context 与完整运输：[ContextManifest v26](../contracts/context-manifest-evidence-v26.md)、

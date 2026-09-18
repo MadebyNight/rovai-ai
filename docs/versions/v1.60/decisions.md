@@ -77,3 +77,20 @@ Channel-bound Camp 的 Agent 公开消息默认外发，不根据 Run 来源、�
 Automation 触发原子创建 started occurrence、新 Camp、系统消息和 Delivery，再由普通 Scheduler claim；相同
 Automation 尚有 active occurrence 时直接 skipped(overlap)。不新增 queued occurrence、专用 AgentRun 输入或来源型
 批次边界，occurrence timeout 与通知仍由 Automation 自己结算。
+
+<a id="v1-60-d06"></a>
+## V1.60-D06：普通 Delivery 使用单一事件唤醒 claim owner 与固定全局兜底
+
+- 状态：accepted
+- 日期：2026-09-18
+- 当前权威：Public Camp Message/Delivery 架构与 Message Delivery v9
+
+固定 500ms 扫描让空闲 Core 持续申请普通队列写事务，并把正常消息启动和同 lane 接续增加至多一个 tick 的等待；
+终态、网络恢复和周期扫描又各自可能领取新 Delivery，使 claim 所有权分散。选择由单一常驻 Scheduler 拥有普通
+batch claim：状态提交后只发送无负载 wake，Scheduler 从数据库分页领取并并发准备 Runtime；终态只结算和 wake，
+网络恢复只派发其明确获准的既有 Run。
+
+本次不保存精确 lane hint，也不引入持久通知或新的恢复状态机。相比按需启停 timer，保留一个不会被普通 wake 推迟的
+全局 30 秒兜底更简单且能覆盖进程内漏通知；代价是空闲时仍有低频只读检查。兜底确认无 waiting Delivery 或 queued
+batch Run 后不进入 claim 写事务。原 500ms 循环保留既有非 batch Run 派发、Automation、取消、Single Chat 与维护职责，
+但不得领取普通 Delivery 或派发普通 queued batch Run。

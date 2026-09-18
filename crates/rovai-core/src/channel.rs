@@ -15390,6 +15390,11 @@ mod tests {
             .unwrap();
         assert_eq!(cancelled.result.status, CommandResultStatus::Applied);
         assert_eq!(cancelled.result.payload["status"], "cancelled");
+        assert_eq!(
+            claim_waiting_runs(&mut database).len(),
+            1,
+            "the ordinary batch Scheduler claims the successor after terminal settlement"
+        );
 
         let next_tick = service
             .host_tick(

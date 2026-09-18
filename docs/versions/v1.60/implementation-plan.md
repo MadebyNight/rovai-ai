@@ -72,6 +72,8 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] Run 失败与 execution-isolation ACK 分离；cleanup 未确认时只保留后继 Delivery。
 - [x] cleanup `Unproven` 且旧执行可能写共享 executionRoot 时，临时阻止共享该 root 的新 dispatch。
 - [x] accepted/unknown 默认换新 Native Session，除非 Adapter 已有可验证的旧 turn 终止证明。
+- [x] 普通 batch claim 收敛到单一事件唤醒 Scheduler；启动检查和固定 30 秒全局兜底均从数据库恢复，
+  空闲兜底不进入 claim 写事务；原 500ms 循环保留既有非 batch Run 派发与其他职责，但不再处理普通 batch。
 
 ## Gate 7：完整 Built-in 结果与副本清理
 

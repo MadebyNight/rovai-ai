@@ -53,6 +53,20 @@ A crash before commit leaves waiting Deliveries; a crash after commit recovers t
 Sources do not form batch boundaries. User, Agent/A2A, Mission, Automation and Channel messages can share
 one Run. No budget root, depth, caller lineage, Gather or CampTurn is consulted. Self-send remains invalid.
 
+Exactly one ordinary batch Scheduler in a Core process may claim waiting Deliveries. It performs one startup
+reconciliation, then wakes after committed Delivery creation, lane release, Runtime readiness or cleanup
+completion. A wake carries no durable work identity; the database remains the only work list. Duplicate and
+coalesced wakes are valid. The Scheduler continues across query-page limits and dispatches Runtime preparation
+in independent workers.
+
+One process-global 30-second fallback remains active without being postponed by ordinary wakes. Its tick must
+first perform a read-only pending-work check; when neither waiting Delivery nor undispatched queued batch Run
+exists, it must not open the claim write transaction. Terminal settlement must not directly claim a successor,
+and an error while later scheduling work must not change an already-committed terminal result. Network recovery
+may dispatch its admitted existing Run but must not claim a new Delivery. Existing non-batch Run dispatch and
+other 500ms maintenance duties are outside this Scheduler contract and retain their existing cadence; that path
+must not claim an ordinary Delivery or dispatch an ordinary queued batch Run.
+
 ## Terminal behavior
 
 Run settlement changes each claimed Delivery to `settled`, `failed` or `cancelled` with monotonic evidence.
@@ -67,4 +81,3 @@ waiting Deliveries; rejoining creates a new lifetime and only later messages cre
 Migration 162 preserves already-public legacy work that has no frozen ContextManifest or accepted Runtime
 input as v9 waiting Deliveries. It terminalizes the old mutable Run/attempt placeholders. Frozen or
 accepted legacy work is never requeued.
-

@@ -108,6 +108,38 @@ pub(crate) fn enqueue_message_deliveries(
     Ok(deliveries)
 }
 
+/// Cheap, read-only gate for the ordinary batch scheduler. A false result means
+/// the fallback tick can return without opening the immediate transaction used
+/// by `claim_waiting_delivery_batches`.
+pub fn has_pending_delivery_batch_work(database: &Database) -> Result<bool> {
+    Ok(database.connection().query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM camp_message_delivery
+            WHERE status = 'waiting'
+        ) OR EXISTS(
+            SELECT 1
+            FROM agent_run
+            WHERE invocation_kind = 'batch'
+              AND status = 'queued'
+              AND input_ready_at IS NOT NULL
+              AND cancel_requested_at IS NULL
+        )
+        "#,
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+pub fn has_waiting_delivery_batch_work(database: &Database) -> Result<bool> {
+    Ok(database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM camp_message_delivery WHERE status = 'waiting')",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
 /// Converts waiting Delivery lanes into immutable, ordered multi-input AgentRuns.
 /// Waiting rows carry only message responsibility. Runtime, model and permissions are
 /// resolved here. Workspace is also frozen unless an unprepared Mission must first
@@ -119,129 +151,193 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
     let transaction = database
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let lanes = {
-        let mut statement = transaction.prepare(
-            r#"
-            SELECT delivery.camp_id, delivery.recipient_agent_id,
-                   conversation.id, MIN(delivery.queue_sequence)
-            FROM camp_message_delivery AS delivery
-            JOIN conversation
-              ON conversation.camp_id = delivery.camp_id
-             AND conversation.agent_id = delivery.recipient_agent_id
-             AND conversation.kind = 'camp_member'
-            JOIN camp_member
-              ON camp_member.camp_id = delivery.camp_id
-             AND camp_member.agent_id = delivery.recipient_agent_id
-            JOIN agent_profile ON agent_profile.id = delivery.recipient_agent_id
-            WHERE delivery.status = 'waiting'
-              AND camp_member.status = 'active'
-              AND camp_member.leave_requested_at IS NULL
-              AND agent_profile.profile_status = 'present'
-              AND NOT EXISTS (
-                  SELECT 1 FROM agent_run AS active
-                  WHERE active.conversation_id = conversation.id
-                    AND active.status IN ('queued', 'running', 'waiting')
-              )
-            GROUP BY delivery.camp_id, delivery.recipient_agent_id, conversation.id
-            ORDER BY MIN(delivery.created_at), MIN(delivery.queue_sequence),
-                     delivery.camp_id, delivery.recipient_agent_id
-            LIMIT ?1
-            "#,
-        )?;
-        statement
-            .query_map([limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
     let mut claimed_run_ids = Vec::new();
-    for (camp_id, agent_id, conversation_id) in lanes {
-        let runtime = match resolve_frozen_runtime(&transaction, &conversation_id, &agent_id)? {
-            Ok(runtime) => runtime,
-            Err(_) => continue,
+    let mut cursor: Option<(String, i64, String, String, String)> = None;
+    while claimed_run_ids.len() < limit as usize {
+        let lanes = {
+            let mut statement = transaction.prepare(
+                r#"
+                WITH eligible_lane AS (
+                    SELECT delivery.camp_id AS camp_id,
+                           delivery.recipient_agent_id AS recipient_agent_id,
+                           conversation.id AS conversation_id,
+                           MIN(delivery.created_at) AS first_created_at,
+                           MIN(delivery.queue_sequence) AS first_queue_sequence
+                    FROM camp_message_delivery AS delivery
+                    JOIN conversation
+                      ON conversation.camp_id = delivery.camp_id
+                     AND conversation.agent_id = delivery.recipient_agent_id
+                     AND conversation.kind = 'camp_member'
+                    JOIN camp_member
+                      ON camp_member.camp_id = delivery.camp_id
+                     AND camp_member.agent_id = delivery.recipient_agent_id
+                    JOIN agent_profile
+                      ON agent_profile.id = delivery.recipient_agent_id
+                    WHERE delivery.status = 'waiting'
+                      AND camp_member.status = 'active'
+                      AND camp_member.leave_requested_at IS NULL
+                      AND agent_profile.profile_status = 'present'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM agent_run AS active
+                          WHERE active.conversation_id = conversation.id
+                            AND active.status IN ('queued', 'running', 'waiting')
+                      )
+                    GROUP BY delivery.camp_id,
+                             delivery.recipient_agent_id,
+                             conversation.id
+                )
+                SELECT camp_id, recipient_agent_id, conversation_id,
+                       first_created_at, first_queue_sequence
+                FROM eligible_lane
+                WHERE ?2 IS NULL
+                   OR first_created_at > ?2
+                   OR (first_created_at = ?2 AND first_queue_sequence > ?3)
+                   OR (first_created_at = ?2 AND first_queue_sequence = ?3
+                       AND camp_id > ?4)
+                   OR (first_created_at = ?2 AND first_queue_sequence = ?3
+                       AND camp_id = ?4 AND recipient_agent_id > ?5)
+                   OR (first_created_at = ?2 AND first_queue_sequence = ?3
+                       AND camp_id = ?4 AND recipient_agent_id = ?5
+                       AND conversation_id > ?6)
+                ORDER BY first_created_at, first_queue_sequence,
+                         camp_id, recipient_agent_id, conversation_id
+                LIMIT ?1
+                "#,
+            )?;
+            let (created_at, sequence, camp_id, agent_id, conversation_id) = cursor
+                .as_ref()
+                .map(
+                    |(created_at, sequence, camp_id, agent_id, conversation_id)| {
+                        (
+                            Some(created_at.as_str()),
+                            *sequence,
+                            camp_id.as_str(),
+                            agent_id.as_str(),
+                            conversation_id.as_str(),
+                        )
+                    },
+                )
+                .unwrap_or((None, 0, "", "", ""));
+            statement
+                .query_map(
+                    params![
+                        limit,
+                        created_at,
+                        sequence,
+                        camp_id,
+                        agent_id,
+                        conversation_id
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let effective_config =
-            build_effective_config(&transaction, &conversation_id, &agent_id, &runtime)?;
-        let project_path: String = transaction.query_row(
-            "SELECT project_path FROM camp WHERE id = ?1",
-            [&camp_id],
-            |row| row.get(0),
-        )?;
-        let workspace = batch_workspace_for_claim(&transaction, &camp_id, &project_path)?;
-        if let Some(workspace) = workspace.as_ref() {
-            workspace.validate()?;
+        let Some(last_lane) = lanes.last() else {
+            break;
+        };
+        cursor = Some((
+            last_lane.3.clone(),
+            last_lane.4,
+            last_lane.0.clone(),
+            last_lane.1.clone(),
+            last_lane.2.clone(),
+        ));
+
+        for (camp_id, agent_id, conversation_id, _, _) in lanes {
+            let runtime = match resolve_frozen_runtime(&transaction, &conversation_id, &agent_id)? {
+                Ok(runtime) => runtime,
+                Err(_) => continue,
+            };
+            let effective_config =
+                build_effective_config(&transaction, &conversation_id, &agent_id, &runtime)?;
+            let project_path: String = transaction.query_row(
+                "SELECT project_path FROM camp WHERE id = ?1",
+                [&camp_id],
+                |row| row.get(0),
+            )?;
+            let workspace = batch_workspace_for_claim(&transaction, &camp_id, &project_path)?;
+            if let Some(workspace) = workspace.as_ref() {
+                workspace.validate()?;
+            }
+            let cleanup_execution_root = workspace
+                .as_ref()
+                .map(|workspace| workspace.execution_root.as_str())
+                .unwrap_or(project_path.as_str());
+            let cleanup_pending_on_execution_root: bool = transaction.query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM agent_run AS prior_run
+                    LEFT JOIN camp_turn AS prior_turn
+                      ON prior_turn.id = prior_run.camp_turn_id
+                    JOIN camp AS prior_camp
+                      ON prior_camp.id = COALESCE(prior_run.camp_id, prior_turn.camp_id)
+                    WHERE prior_run.status IN ('succeeded', 'failed', 'cancelled')
+                      AND prior_run.cancel_requested_at IS NOT NULL
+                      AND prior_run.cancel_acknowledged_at IS NULL
+                      AND COALESCE(
+                          json_extract(prior_run.workspace_json, '$.executionRoot'),
+                          prior_camp.project_path
+                      ) = ?1
+                )
+                "#,
+                [cleanup_execution_root],
+                |row| row.get(0),
+            )?;
+            if cleanup_pending_on_execution_root {
+                continue;
+            }
+            let camp_public_tail: i64 = transaction.query_row(
+                "SELECT last_message_sequence FROM camp WHERE id = ?1",
+                [&camp_id],
+                |row| row.get(0),
+            )?;
+            let conversation_tail: i64 = transaction.query_row(
+                "SELECT last_message_sequence FROM conversation WHERE id = ?1",
+                [&conversation_id],
+                |row| row.get(0),
+            )?;
+            let waiting = load_waiting_prefix(&transaction, &camp_id, &agent_id)?;
+            if waiting.is_empty() {
+                continue;
+            }
+            let (selected_count, first_too_large) = select_batch_prefix(&waiting)?;
+            let selected = &waiting[..selected_count];
+            let anchor_message_id = selected
+                .last()
+                .map(|delivery| delivery.message_id.as_str())
+                .context("Delivery claim selected an empty input batch")?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let agent_run_id = Uuid::new_v4().to_string();
+            insert_batch_run(
+                &transaction,
+                &agent_run_id,
+                &camp_id,
+                &conversation_id,
+                &agent_id,
+                anchor_message_id,
+                camp_public_tail,
+                conversation_tail,
+                &effective_config,
+                workspace.as_ref(),
+                &runtime,
+                selected,
+                first_too_large,
+                &now,
+            )?;
+            claimed_run_ids.push(agent_run_id);
+            if claimed_run_ids.len() == limit as usize {
+                break;
+            }
         }
-        let cleanup_execution_root = workspace
-            .as_ref()
-            .map(|workspace| workspace.execution_root.as_str())
-            .unwrap_or(project_path.as_str());
-        let cleanup_pending_on_execution_root: bool = transaction.query_row(
-            r#"
-            SELECT EXISTS(
-                SELECT 1
-                FROM agent_run AS prior_run
-                LEFT JOIN camp_turn AS prior_turn
-                  ON prior_turn.id = prior_run.camp_turn_id
-                JOIN camp AS prior_camp
-                  ON prior_camp.id = COALESCE(prior_run.camp_id, prior_turn.camp_id)
-                WHERE prior_run.status IN ('succeeded', 'failed', 'cancelled')
-                  AND prior_run.cancel_requested_at IS NOT NULL
-                  AND prior_run.cancel_acknowledged_at IS NULL
-                  AND COALESCE(
-                      json_extract(prior_run.workspace_json, '$.executionRoot'),
-                      prior_camp.project_path
-                  ) = ?1
-            )
-            "#,
-            [cleanup_execution_root],
-            |row| row.get(0),
-        )?;
-        if cleanup_pending_on_execution_root {
-            continue;
-        }
-        let camp_public_tail: i64 = transaction.query_row(
-            "SELECT last_message_sequence FROM camp WHERE id = ?1",
-            [&camp_id],
-            |row| row.get(0),
-        )?;
-        let conversation_tail: i64 = transaction.query_row(
-            "SELECT last_message_sequence FROM conversation WHERE id = ?1",
-            [&conversation_id],
-            |row| row.get(0),
-        )?;
-        let waiting = load_waiting_prefix(&transaction, &camp_id, &agent_id)?;
-        if waiting.is_empty() {
-            continue;
-        }
-        let (selected_count, first_too_large) = select_batch_prefix(&waiting)?;
-        let selected = &waiting[..selected_count];
-        let anchor_message_id = selected
-            .last()
-            .map(|delivery| delivery.message_id.as_str())
-            .context("Delivery claim selected an empty input batch")?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let agent_run_id = Uuid::new_v4().to_string();
-        insert_batch_run(
-            &transaction,
-            &agent_run_id,
-            &camp_id,
-            &conversation_id,
-            &agent_id,
-            anchor_message_id,
-            camp_public_tail,
-            conversation_tail,
-            &effective_config,
-            workspace.as_ref(),
-            &runtime,
-            selected,
-            first_too_large,
-            &now,
-        )?;
-        claimed_run_ids.push(agent_run_id);
     }
     transaction.commit()?;
     Ok(claimed_run_ids)
@@ -585,6 +681,55 @@ mod tests {
         }
 
         fn enqueue(&mut self, message_id: &str, body: &str) -> String {
+            let camp_id = self.camp_id.clone();
+            self.enqueue_for(&camp_id, message_id, body)
+        }
+
+        fn add_camp_lane(&mut self, label: &str) -> String {
+            let workspace = self._directory.join(format!("workspace-{label}"));
+            std::fs::create_dir_all(&workspace).unwrap();
+            let created = CollaborationService::default()
+                .create_camp(
+                    &mut self.database,
+                    &CommandEnvelope {
+                        command_id: format!("create-delivery-queue-{label}"),
+                        actor: ActorRef::User {
+                            user_id: "local_user".to_string(),
+                        },
+                        camp_id: None,
+                        expected_versions: Vec::new(),
+                        execution_epoch: None,
+                        payload: CreateCampCommand::for_test_with_members(
+                            workspace.to_string_lossy().into_owned(),
+                            &["agent_1"],
+                            "agent_1",
+                        ),
+                    },
+                )
+                .unwrap();
+            let camp_id = created.result.payload["campId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            self.database
+                .connection()
+                .execute(
+                    r#"
+                    INSERT INTO conversation(
+                        id, camp_id, agent_id, last_message_sequence,
+                        version, created_at, updated_at
+                    ) VALUES (
+                        ?1, ?2, 'agent_1', 0,
+                        1, datetime('now'), datetime('now')
+                    )
+                    "#,
+                    params![format!("delivery-queue-{label}"), camp_id],
+                )
+                .unwrap();
+            camp_id
+        }
+
+        fn enqueue_for(&mut self, camp_id: &str, message_id: &str, body: &str) -> String {
             let transaction = self.database.connection_mut().transaction().unwrap();
             let now = chrono::Utc::now().to_rfc3339();
             transaction
@@ -595,13 +740,13 @@ mod tests {
                         version = version + 1, updated_at = ?2
                     WHERE id = ?1
                     "#,
-                    params![self.camp_id, now],
+                    params![camp_id, now],
                 )
                 .unwrap();
             let sequence: i64 = transaction
                 .query_row(
                     "SELECT last_message_sequence FROM camp WHERE id = ?1",
-                    [&self.camp_id],
+                    [camp_id],
                     |row| row.get(0),
                 )
                 .unwrap();
@@ -623,7 +768,7 @@ mod tests {
                     "#,
                     params![
                         message_id,
-                        self.camp_id,
+                        camp_id,
                         sequence,
                         body,
                         serde_json::to_string(&vec![serde_json::json!({
@@ -638,7 +783,7 @@ mod tests {
                 .unwrap();
             let delivery = enqueue_message_deliveries(
                 &transaction,
-                &self.camp_id,
+                camp_id,
                 message_id,
                 sequence,
                 &["agent_1".to_string()],
@@ -649,6 +794,16 @@ mod tests {
             .unwrap();
             transaction.commit().unwrap();
             delivery.delivery_id
+        }
+
+        fn set_delivery_created_at(&self, message_id: &str, created_at: &str) {
+            self.database
+                .connection()
+                .execute(
+                    "UPDATE camp_message_delivery SET created_at = ?2, updated_at = ?2 WHERE message_id = ?1",
+                    params![message_id, created_at],
+                )
+                .unwrap();
         }
 
         fn batch_run_count(&self) -> i64 {
@@ -797,6 +952,97 @@ mod tests {
             )
             .unwrap();
         assert_eq!(closed, 2);
+    }
+
+    #[test]
+    fn pending_work_gate_tracks_waiting_delivery_and_queued_batch_run() {
+        let mut fixture = Fixture::new();
+        assert!(!has_pending_delivery_batch_work(&fixture.database).unwrap());
+        assert!(!has_waiting_delivery_batch_work(&fixture.database).unwrap());
+
+        fixture.enqueue("message-1", "待领取");
+        assert!(has_pending_delivery_batch_work(&fixture.database).unwrap());
+        assert!(has_waiting_delivery_batch_work(&fixture.database).unwrap());
+
+        let run_id = claim_waiting_delivery_batches(&mut fixture.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(has_pending_delivery_batch_work(&fixture.database).unwrap());
+        assert!(!has_waiting_delivery_batch_work(&fixture.database).unwrap());
+        let runtime = crate::runtime::ExecutionRuntimeService::default();
+        assert_eq!(
+            runtime
+                .list_dispatchable_batch_agent_runs(&fixture.database, 1, 0)
+                .unwrap()
+                .first()
+                .map(|candidate| candidate.agent_run_id.as_str()),
+            Some(run_id.as_str())
+        );
+        assert_eq!(
+            runtime
+                .load_dispatchable_agent_run(&fixture.database, &run_id)
+                .unwrap()
+                .map(|candidate| candidate.agent_run_id),
+            Some(run_id.clone())
+        );
+        assert!(
+            runtime
+                .list_dispatchable_non_batch_agent_runs(&fixture.database, 1)
+                .unwrap()
+                .is_empty(),
+            "the legacy 500ms dispatch path must not pick up ordinary batch Runs"
+        );
+
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status = 'running' WHERE id = ?1",
+                [&run_id],
+            )
+            .unwrap();
+        assert!(!has_pending_delivery_batch_work(&fixture.database).unwrap());
+    }
+
+    #[test]
+    fn batch_terminal_pump_leaves_successor_for_scheduler_claim() {
+        let mut fixture = Fixture::new();
+        fixture.enqueue("message-1", "先处理");
+        let first_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        fixture.enqueue("message-2", "后处理");
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let transaction = fixture.database.connection_mut().transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE agent_run SET status = 'succeeded', ended_at = ?2, updated_at = ?2 WHERE id = ?1",
+                params![first_run, now],
+            )
+            .unwrap();
+        settle_run_deliveries(&transaction, &first_run, "succeeded", None, &now).unwrap();
+        transaction.commit().unwrap();
+
+        crate::runtime::pump_targets_after_runs_terminal(
+            &mut fixture.database,
+            std::slice::from_ref(&first_run),
+        )
+        .unwrap();
+
+        let successor: (String, Option<String>) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT status, claimed_agent_run_id FROM camp_message_delivery WHERE message_id = 'message-2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(successor, ("waiting".to_string(), None));
+        assert_eq!(fixture.batch_run_count(), 1);
     }
 
     #[test]
@@ -964,6 +1210,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(next_anchor, "message-2");
+    }
+
+    #[test]
+    fn blocked_candidate_page_does_not_starve_a_later_runnable_lane() {
+        let mut fixture = Fixture::new();
+        for index in 0..16 {
+            let camp_id = if index == 0 {
+                fixture.camp_id.clone()
+            } else {
+                fixture.add_camp_lane(&format!("blocked-{index:02}"))
+            };
+            let initial_message_id = format!("blocked-{index:02}-initial");
+            fixture.enqueue_for(&camp_id, &initial_message_id, "先处理");
+            let initial_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap()
+                .into_iter()
+                .next()
+                .expect("new lane should be claimable before its cleanup fence is installed");
+            let now = chrono::Utc::now().to_rfc3339();
+            fixture
+                .database
+                .connection()
+                .execute(
+                    r#"
+                    UPDATE agent_run
+                    SET status = 'failed', ended_at = ?2, updated_at = ?2,
+                        cancel_requested_at = ?2,
+                        cancel_reason_code = 'runtime_terminal_unconfirmed'
+                    WHERE id = ?1
+                    "#,
+                    params![initial_run, now],
+                )
+                .unwrap();
+            let waiting_message_id = format!("blocked-{index:02}-waiting");
+            fixture.enqueue_for(&camp_id, &waiting_message_id, "等待清理");
+            fixture.set_delivery_created_at(
+                &waiting_message_id,
+                &format!("2026-01-01T00:00:{index:02}Z"),
+            );
+        }
+
+        let runnable_camp = fixture.add_camp_lane("runnable-after-blocked-page");
+        fixture.enqueue_for(
+            &runnable_camp,
+            "runnable-after-blocked-page",
+            "应当立即领取",
+        );
+        fixture.set_delivery_created_at("runnable-after-blocked-page", "2026-01-01T00:01:00Z");
+
+        let claimed = claim_waiting_delivery_batches(&mut fixture.database, 16).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let anchor: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT anchor_message_id FROM agent_run WHERE id = ?1",
+                [&claimed[0]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(anchor, "runnable-after-blocked-page");
     }
 
     #[test]
