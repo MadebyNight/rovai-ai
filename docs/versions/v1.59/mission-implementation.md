@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.59
 status: completed
-last_updated: 2026-09-17
+last_updated: 2026-09-18
 ---
 
 # 桌面使命实施
@@ -66,6 +66,26 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 正式编辑入口仍仅为卡片／列表右键菜单。附件沿用本机原路径引用，支持选择、粘贴、拖入、移除和预览，
 开始使命时随 commission 消息进入既有附件发布路径。Migration 161/schema 111 为旧使命补空数组并保留
 所有业务行；Desktop Main 独占将 Renderer File 转成路径的私有编排，Web 不接收本机路径。
+
+## 2026-09-18 使命板文件变更与创建恢复增量
+
+使命入口恢复为 Desktop／宽屏 Web 的正式导航项；`needs_you` 只用右侧垂直居中的蓝点提示，视觉上不显示
+数量。完整会话的折回按钮保持原位置，改用已确认交互稿的收拢图标。新建使命在同一挂载期保留一份未完成
+草稿，关闭后再次打开会恢复名称、描述、项目、队伍、标签和附件；只有创建成功才清空。项目和队员选择器
+增加搜索及受限高度滚动，标签选择器使用更醒目的身份色圆点并保持在当前编辑上下文。卡片／列表右键菜单
+在保留点击展开子菜单的前提下，为编辑、状态、查看队员、队长、标签和删除全部补齐 hover／键盘焦点反馈；
+普通项统一使用中性灰底，删除继续使用危险色语义。
+
+交付区不再截断前五项，而是展示完整、可搜索、支持单子目录压缩的文件树。累计 Diff 使用 1320px 宽屏
+阅读面：固定基准及总计位于标题区，左侧文件树与右侧单文件差异通过可拖动且可键盘操作的分隔条连接；
+窄屏时文件树折叠到阅读器上方。既有 `missions.changes`、`missions.fileDiff` 和
+`missions.diffSession.release` 接口、固定基准、请求合并、LRU 缓存、迟到响应隔离及终态刷新语义保持不变，
+本增量没有改变 Core、Git 工作区或 Mission 合同。
+
+定向验证覆盖文件树结构、目录压缩与计数、搜索／滚动、弹窗布局和分隔条键盘调整、缓存与迟到响应、
+项目／队员搜索、标签选择、草稿恢复及成功创建后清空。`pnpm typecheck`、完整 Vitest 207 个文件／
+2124 项、隔离 Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check` 与带 merge-base
+的 `pnpm docs:check:ci` 均通过。
 
 ## 主线整合与验收
 

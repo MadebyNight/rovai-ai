@@ -4,7 +4,7 @@ import type { CampMessageAttachmentView, LocalAttachmentSourceView, MissionAttac
 import { newCommandId } from '../../shared/command-id'
 import { AttachmentCard, ComposerAttachmentStrip } from './AttachmentCard'
 import { DialogControlIcon } from './AppDialog'
-import { Icon, TagMark } from './MissionControls'
+import { Icon, TagColorDot } from './MissionControls'
 import { NavigationIcon } from './NavigationIcon'
 import { dataTransferContainsFiles, droppedAttachmentInputs, type AttachmentPreparationInput } from './attachment-drop'
 import {
@@ -183,6 +183,7 @@ export function MissionTagPicker({ tags, catalog, disabled, onChange }: {
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
   const normalized = query.trim().replace(/\s+/g, ' ')
   const all = useMemo(() => [...new Set([...catalog, ...tags])].sort((a, b) => a.localeCompare(b, 'zh-CN')), [catalog, tags])
   const found = all.filter(tag => tag.toLocaleLowerCase().includes(normalized.toLocaleLowerCase()))
@@ -194,11 +195,11 @@ export function MissionTagPicker({ tags, catalog, disabled, onChange }: {
     onChange([...tags, normalized]); setQuery('')
   }
   return <Popover.Root open={open} onOpenChange={value => { setOpen(value); if (!value) setQuery('') }}>
-    <Popover.Trigger asChild><MissionPropertyChip icon={<TagMark tag={tags[0] ?? '使命标签'}/>} disabled={disabled}>{tags.length ? tags.join('、') : '添加标签'}</MissionPropertyChip></Popover.Trigger>
-    <Popover.Portal><Popover.Content className="compact-menu mission-editor-tag-popover" align="start" sideOffset={6} collisionPadding={12}>
-      <label className="mission-tag-search"><NavigationIcon name="search"/><input autoFocus value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); create() } }}/></label>
+    <Popover.Trigger asChild><MissionPropertyChip icon={<TagColorDot tag={tags[0] ?? '使命标签'}/>} disabled={disabled}>{tags.length ? tags.join('、') : '添加标签'}</MissionPropertyChip></Popover.Trigger>
+    <Popover.Portal><Popover.Content className="compact-menu mission-editor-tag-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
+      <label className="mission-tag-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); create() } }}/></label>
       <div className="mission-tag-options" role="group" aria-label="可选标签">
-        {found.map(tag => <button type="button" className="compact-option" key={tag} role="checkbox" aria-checked={tags.includes(tag)} onClick={() => toggle(tag)}><TagMark tag={tag}/><span>{tag}</span>{tags.includes(tag) && <Icon name="check"/>}</button>)}
+        {found.map(tag => <button type="button" className="compact-option" key={tag} role="checkbox" aria-checked={tags.includes(tag)} onClick={() => toggle(tag)}><TagColorDot tag={tag}/><span>{tag}</span>{tags.includes(tag) && <Icon name="check"/>}</button>)}
         {normalized && !exact && <button type="button" className="compact-option" onClick={create} disabled={tooLong || tags.length >= 30}><Icon name="plus"/><span>新建“{normalized}”</span></button>}
         {tooLong && <p className="compact-inline-error" role="alert">标签最多 24 个字符。</p>}
       </div>
