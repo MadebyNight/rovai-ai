@@ -37,8 +37,8 @@ rovai camp read --mode around --message-id "<message-id>" --before 5 --after 5
 rovai camp read --mode thread --message-id "<message-id>" --direction after --limit 20
 ```
 
-只传 `--message-id`、`--body-offset`、`--before` 等 message-anchored 字段时，CLI 会按默认 Timeline
-解释省略的 mode，并要求调用者显式选择 item、around 或 thread。
+只传 `--message-id`、`--before` 等 message-anchored 字段时，CLI 会按默认 Timeline 解释省略的 mode，
+并要求调用者显式选择 item、around 或 thread。`item` 直接返回完整消息，不接受正文 offset/limit。
 
 `camp.search` 和 `camp.read` 都只解析一个 Camp target：省略 `--camp-id` 时是当前 Camp，显式传入时是
 当前 AgentRun 冻结 Manifest 中仍有实时访问权的那个历史 Camp。显式传入当前 Camp ID 与省略完全等价；

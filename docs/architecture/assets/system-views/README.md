@@ -6,7 +6,7 @@
 
 - `source/system-overview.mjs`：系统全景及共享配色、文字和连线工具。
 - `source/member-execution.mjs`：咕咕的身份关系、三条 Conversation 中的执行交接。
-- `source/collaboration-comics.mjs`：A2A 四格漫画、协作组织场景及共享手绘组件。图 05 覆盖轻量 Lead、直接协作、Task、Skill、Gather 与成果交接。
+- `source/collaboration-comics.mjs`：A2A 四格漫画、协作组织场景及共享手绘组件。图 05 覆盖轻量 Lead、直接协作、Task、Skill、多目标消息与普通回复接续。
 - `source/toolkit-stack.mjs`：CLI + Skill Toolkit 和技术栈架构。
 - `source/context-memory.mjs`：三层 Bootstrap 与六层动态上下文、长会话漫画，以及记忆的主动提报与持续演进。书架区分共同记忆、队员记忆和队员间记忆；演进面板表达晋升、修订、替代与遗忘，回环连线将读取后的实践反馈带回提报。
 - `source/run-lifecycle.mjs`：以 Codex 为例，按执行阶段展开收件人 FIFO 队列、Dispatch Pump、Scheduler、Warm Host 取得或冷启动、上下文交付与原生工具循环。执行结束后，可复用的常驻 Host 回到 IdleWarm，下一轮取得时轮换 Lease。

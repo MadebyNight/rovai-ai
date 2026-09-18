@@ -143,7 +143,7 @@ Agent 消息中的 Current User Mention 保持为 Markdown 正文之前的行内
 
 | 层级 | 权威入口 |
 | --- | --- |
-| Draft/Pending V2、identity、旧读新写、App 退出 fence 与 exact revision | [Camp Composer Draft v12](../../contracts/camp-composer-draft-v12.md)与[Pending Camp Input v3](../../contracts/pending-camp-input-v3.md) |
+| public Composer 本地所有权、发送快照、失败保留与退出边界 | [Camp Composer Draft v14](../../contracts/camp-composer-draft-v14.md)与[Pending Camp Activation v2](../../contracts/pending-camp-activation-v2.md) |
 | Lexical/React/Core 所有权、局部编辑、同步与 replacement | [Composer 架构](../../architecture/camp-composer-draft.md) |
 | Reply/Continuation 来源、物化与无 fallback | [Composer Draft 不变量](../../architecture/foundational-invariants.md#camp-composer) |
 | Renderer 视觉、Typeahead、Popover、IME、键盘与 Clipboard | 本文 |

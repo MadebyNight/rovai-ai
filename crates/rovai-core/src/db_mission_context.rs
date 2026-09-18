@@ -35,6 +35,11 @@ const GUARDS: &str = r#"
     BEGIN SELECT RAISE(ABORT,'Runtime Input Delivery attachment evidence does not match its manifest'); END;
 "#;
 
+#[cfg(test)]
+pub(super) fn restore_v161_context_guards_for_test(transaction: &Transaction<'_>) {
+    transaction.execute_batch(GUARDS).unwrap();
+}
+
 fn contains_schema(
     connection: &Connection,
     name: &str,
@@ -140,6 +145,102 @@ pub(super) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> 
             &[
                 "command_id TEXT NOT NULL",
                 "camp_turn_id TEXT NOT NULL UNIQUE",
+            ][..],
+        ),
+        ("mission_pr", &["UNIQUE(mission_id,url)"][..]),
+        (
+            "mission_workspace",
+            &[
+                "preparation_token TEXT NOT NULL",
+                "UNIQUE(mission_id,execution_host_id,git_common_dir)",
+            ][..],
+        ),
+        (
+            "mission_execution_host",
+            &["singleton INTEGER PRIMARY KEY CHECK(singleton=1)"][..],
+        ),
+        (
+            "mission_workspace_binding_reset",
+            &[
+                "native_binding_generation",
+                "native_workspace_fact_digest=NULL",
+            ][..],
+        ),
+        (
+            "mission_camp_delete_cleanup",
+            &["state='cleanup_pending'", "WHERE camp_id=OLD.id"][..],
+        ),
+        ("agent_run", &["workspace_preparing_at TEXT"][..]),
+        ("conversation", &["native_workspace_fact_digest TEXT"][..]),
+    ] {
+        if !contains_schema(connection, name, fragments)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// v162 keeps the Mission schema but replaces the public Camp context guard and
+/// lets a Mission start point at either its historical CampTurn or its new
+/// Delivery-first admission record.
+pub(super) fn schema_matches_v162(connection: &Connection) -> rusqlite::Result<bool> {
+    if !contains_schema(
+        connection,
+        "context_manifest",
+        &[
+            "formatter_version IN (20, 21, 22, 23, 24, 25, 26)",
+            "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)",
+            "run_facts_schema_version IN (1, 2, 3, 4, 5)",
+            CURRENT_FACT_BRANCH,
+            PATH_FACT_BRANCH,
+            "workspace_fact_json",
+            "workspace_fact_digest",
+            "workspace_fact_included",
+        ],
+    )? || !contains_schema(
+        connection,
+        "context_manifest_v26_only_insert",
+        &[
+            "NEW.context_manifest_version = 26",
+            "invocation_kind = 'batch'",
+            "invocation_kind = 'single_chat'",
+        ],
+    )? || !contains_schema(
+        connection,
+        "context_manifest_quote_profile_insert",
+        &[
+            "NEW.context_manifest_version = 26",
+            "NEW.context_manifest_version = 25",
+        ],
+    )? || !contains_schema(
+        connection,
+        "runtime_input_delivery_attachment_auth_insert",
+        &["context_manifest_version IN (24, 25, 26)"],
+    )? {
+        return Ok(false);
+    }
+
+    for (name, fragments) in [
+        (
+            "mission",
+            &[
+                "camp_id TEXT NOT NULL UNIQUE",
+                "status IN ('needs_you','not_started','in_progress','completed')",
+            ][..],
+        ),
+        (
+            "mission_activity",
+            &[
+                "changes_json TEXT NOT NULL",
+                "REFERENCES mission(id) ON DELETE CASCADE",
+            ][..],
+        ),
+        (
+            "mission_start",
+            &[
+                "command_id TEXT NOT NULL",
+                "delivery_id TEXT UNIQUE",
+                "CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))",
             ][..],
         ),
         ("mission_pr", &["UNIQUE(mission_id,url)"][..]),
@@ -284,12 +385,23 @@ impl Database {
         result?;
         restore?;
         self.migrate_mission_delivery_v160()?;
-        self.migrate_mission_attachments_v161()
+        self.migrate_mission_attachments_v161()?;
+        self.migrate_camp_message_agent_run_v162()
     }
 }
 
 #[cfg(test)]
 pub(super) fn downgrade_for_test(connection: &Connection) {
+    if connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=162)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()
+    {
+        downgrade_current_schema_to_v161_source_for_test(connection);
+    }
     if !connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=158)",

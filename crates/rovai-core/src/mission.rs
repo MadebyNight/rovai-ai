@@ -258,7 +258,16 @@ impl MissionService {
         self.gateway.execute(database,envelope,|tx| {
             if !matches!(envelope.actor,ActorRef::User{..}) { return Ok(reject("mission.user_required")); }
             let Some(mission)=load_record(tx,&envelope.payload.mission_id)? else { return Ok(reject("mission.not_found")); };
-            let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_run r JOIN conversation c ON c.id=r.conversation_id WHERE c.camp_id=?1 AND r.status IN ('queued','running','waiting'))",[&mission.camp_id],|r|r.get(0))?;
+            let active:bool=tx.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM mission_start AS start
+                    JOIN camp_message_delivery AS delivery ON delivery.id=start.delivery_id
+                    WHERE start.mission_id=?1 AND delivery.status IN ('waiting','claimed')
+                )",
+                [&mission.info.mission_id],
+                |r|r.get(0)
+            )?;
             let result=if active {
                 CommandHandlerResult::applied("mission.already_running",json!({"missionId":mission.info.mission_id,"campId":mission.camp_id,"alreadyRunning":true}),None)
             } else { admit_mission_start(tx,&envelope.actor,&envelope.command_id,&mission)? };
@@ -885,6 +894,16 @@ mod tests {
                     |r| r.get::<_, i64>(0)
                 )
                 .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM camp_message_delivery WHERE status='waiting'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
             1
         );
         let info = serde_json::to_value(service.get(&db, &id).unwrap().unwrap().info).unwrap();
@@ -904,6 +923,12 @@ mod tests {
         assert_eq!(result.result.code, "mission.invalid_source_message");
 
         // The running member remains allowed after another member becomes lead.
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
+                .unwrap()
+                .len(),
+            1
+        );
         let runtime = crate::runtime::ExecutionRuntimeService::default();
         let candidate = runtime
             .list_dispatchable_agent_runs(&db, 10)

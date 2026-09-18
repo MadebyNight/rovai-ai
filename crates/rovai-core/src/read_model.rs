@@ -282,6 +282,9 @@ pub struct CampMessageView {
     pub camp_turn_id: Option<String>,
     pub presentation: Option<Value>,
     pub created_at: String,
+    pub withdrawn: bool,
+    pub can_withdraw: bool,
+    pub version: i64,
 }
 
 pub type CampMessageAttachmentView = LocalAttachmentSourceView;
@@ -334,7 +337,9 @@ pub struct AgentRunRuntimeModelView {
 #[serde(rename_all = "camelCase")]
 pub struct AgentRunView {
     pub id: String,
-    pub camp_turn_id: String,
+    pub camp_turn_id: Option<String>,
+    pub input_message_ids: Vec<String>,
+    pub anchor_message_id: Option<String>,
     pub conversation_id: String,
     pub agent_id: String,
     pub task_id: Option<String>,
@@ -455,7 +460,7 @@ pub struct AgentRunDiagnosticView {
     pub agent_run_id: String,
     pub execution_epoch: i64,
     pub camp_id: String,
-    pub camp_turn_id: String,
+    pub camp_turn_id: Option<String>,
     pub conversation_id: String,
     pub agent_id: String,
     pub status: String,
@@ -1396,8 +1401,9 @@ impl ReadModelService {
             SELECT EXISTS(
                 SELECT 1
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                WHERE agent_run.id = ?1 AND camp_turn.camp_id = ?2
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                WHERE agent_run.id = ?1
+                  AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?2
             )
             "#,
             params![agent_run_id, camp_id],
@@ -1471,7 +1477,8 @@ impl ReadModelService {
             .query_row(
                 r#"
                 SELECT agent_run.id, agent_run.execution_epoch,
-                       camp_turn.camp_id, agent_run.camp_turn_id,
+                       COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                       agent_run.camp_turn_id,
                        agent_run.conversation_id, conversation.agent_id,
                        agent_run.status, agent_run.wait_reason,
                        agent_run.public_runtime_failure_json,
@@ -1488,7 +1495,7 @@ impl ReadModelService {
                        agent_run.final_camp_message_id,
                        (SELECT body FROM camp_message
                         WHERE camp_message.id = agent_run.final_camp_message_id
-                          AND camp_message.camp_id = camp_turn.camp_id
+                          AND camp_message.camp_id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
                           AND camp_message.tombstoned_at IS NULL),
                        (SELECT json_extract(event_log.payload_json, '$.finalOutputDigest')
                         FROM event_log
@@ -1504,7 +1511,7 @@ impl ReadModelService {
                        (SELECT MAX(sequence) FROM agent_run_execution_evidence
                         WHERE agent_run_execution_evidence.agent_run_id = agent_run.id)
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                 JOIN conversation ON conversation.id = agent_run.conversation_id
                 WHERE agent_run.id = ?1
                 "#,
@@ -1514,7 +1521,7 @@ impl ReadModelService {
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
@@ -1780,8 +1787,8 @@ fn load_navigation_camps(
             EXISTS(
                 SELECT 1
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                WHERE camp_turn.camp_id = camp.id
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = camp.id
                   AND agent_run.status IN ('queued', 'running', 'waiting')
             ),
             camp.version,
@@ -1958,22 +1965,23 @@ fn load_camp_open_counts(transaction: &Transaction<'_>, camp_id: &str) -> Result
               (SELECT COUNT(*) FROM camp_turn WHERE camp_id = ?1 AND kind = 'camp'),
               (SELECT COUNT(*)
                FROM agent_run
-               JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-               WHERE camp_turn.camp_id = ?1
+               LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+               WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
                  AND agent_run.invocation_kind <> 'single_chat'),
               (SELECT COUNT(*)
                FROM agent_run_execution_evidence AS evidence
                JOIN agent_run ON agent_run.id = evidence.agent_run_id
-               JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-               WHERE camp_turn.camp_id = ?1
+               LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+               WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
                  AND agent_run.invocation_kind <> 'single_chat'),
               (SELECT COUNT(*)
                FROM approval
                JOIN action_execution ON action_execution.id = approval.action_id
                JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-               JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+               LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                JOIN conversation ON conversation.id = agent_run.conversation_id
-               WHERE camp_turn.camp_id = ?1 AND approval.status = 'pending'
+               WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+                 AND approval.status = 'pending'
                  AND conversation.kind <> 'single_chat')
             "#,
             [camp_id],
@@ -2248,6 +2256,8 @@ struct CampMessageRow {
     camp_turn_id: Option<String>,
     presentation_json: Option<String>,
     created_at: String,
+    recall_state: String,
+    version: i64,
 }
 
 fn camp_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CampMessageRow> {
@@ -2267,6 +2277,8 @@ fn camp_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CampMessageRow>
         camp_turn_id: row.get(12)?,
         presentation_json: row.get(13)?,
         created_at: row.get(14)?,
+        recall_state: row.get(15)?,
+        version: row.get(16)?,
     })
 }
 
@@ -2287,7 +2299,7 @@ fn load_open_messages(
                CASE WHEN author_type = 'agent'
                     THEN recipient_presentation_json
                     ELSE presentation_json
-               END, created_at
+               END, created_at, recall_state, version
         FROM camp_message
         WHERE camp_id = ?1 AND tombstoned_at IS NULL
         ORDER BY sequence DESC LIMIT ?2
@@ -2321,7 +2333,7 @@ fn load_messages(
                CASE WHEN author_type = 'agent'
                     THEN recipient_presentation_json
                     ELSE presentation_json
-               END, created_at
+               END, created_at, recall_state, version
         FROM camp_message
         LEFT JOIN public_camp_message_publication AS publication
           ON publication.message_id = camp_message.id
@@ -2359,7 +2371,7 @@ fn load_messages_before(
                CASE WHEN author_type = 'agent'
                     THEN recipient_presentation_json
                     ELSE presentation_json
-               END, created_at
+               END, created_at, recall_state, version
         FROM camp_message
         LEFT JOIN public_camp_message_publication AS publication
           ON publication.message_id = camp_message.id
@@ -2429,7 +2441,8 @@ fn load_messages_around(
                     THEN camp_message.recipient_presentation_json
                     ELSE camp_message.presentation_json
                END,
-               camp_message.created_at
+               camp_message.created_at, camp_message.recall_state,
+               camp_message.version
         FROM camp_message
         JOIN window_ids ON window_ids.id = camp_message.id
         LEFT JOIN public_camp_message_publication AS publication
@@ -2601,6 +2614,9 @@ fn hydrate_message_views(
                     .transpose()
                     .context("CampMessage presentation is invalid")?,
                 created_at: row.created_at,
+                withdrawn: row.recall_state == "withdrawn",
+                can_withdraw: row.recall_state == "recallable",
+                version: row.version,
             })
         })
         .collect::<Result<Vec<_>>>()
@@ -3010,12 +3026,22 @@ fn load_agent_runs(
                agent_run.ended_at, agent_run.updated_at,
                agent_run.public_runtime_failure_json,
                json_extract(agent_run.runtime_model_selection_json, '$.source'),
-               agent_run.runtime_observed_model_id
+               agent_run.runtime_observed_model_id,
+               COALESCE((
+                 SELECT json_group_array(input.message_id)
+                 FROM (
+                   SELECT message_id
+                   FROM agent_run_input
+                   WHERE agent_run_id = agent_run.id
+                   ORDER BY ordinal
+                 ) AS input
+               ), '[]'),
+               agent_run.anchor_message_id
         FROM agent_run
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-        JOIN camp ON camp.id = camp_turn.camp_id
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
         JOIN conversation ON conversation.id = agent_run.conversation_id
-        WHERE camp_turn.camp_id = ?1
+        WHERE camp.id = ?1
           AND agent_run.invocation_kind <> 'single_chat'
         ORDER BY
           CASE
@@ -3039,7 +3065,7 @@ fn load_agent_runs(
         .query_map(params![camp_id, limit], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
@@ -3075,6 +3101,8 @@ fn load_agent_runs(
                 row.get::<_, Option<String>>(34)?,
                 row.get::<_, Option<String>>(35)?,
                 row.get::<_, Option<String>>(36)?,
+                row.get::<_, String>(37)?,
+                row.get::<_, Option<String>>(38)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3118,10 +3146,15 @@ fn load_agent_runs(
                 public_runtime_failure_json,
                 runtime_model_source,
                 runtime_observed_model_id,
+                input_message_ids_json,
+                anchor_message_id,
             )| {
                 Ok(AgentRunView {
                     id,
                     camp_turn_id,
+                    input_message_ids: serde_json::from_str(&input_message_ids_json)
+                        .context("AgentRun input Message IDs are invalid")?,
+                    anchor_message_id,
                     conversation_id,
                     agent_id,
                     task_id,
@@ -3203,8 +3236,8 @@ fn load_execution_evidence(
                  evidence.is_truncated, evidence.occurred_at
           FROM agent_run_execution_evidence AS evidence
           JOIN agent_run ON agent_run.id = evidence.agent_run_id
-          JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-          WHERE camp_turn.camp_id = ?1
+          LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+          WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
             AND agent_run.invocation_kind <> 'single_chat'
             AND (?3 = 0 OR agent_run.status IN ('queued', 'running', 'waiting'))
           ORDER BY evidence.occurred_at DESC,
@@ -3516,7 +3549,7 @@ fn load_context_manifests(
         JOIN native_session_bootstrap_evidence AS bootstrap
           ON bootstrap.id = manifest.bootstrap_evidence_id
         JOIN agent_run ON agent_run.id = manifest.agent_run_id
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
         LEFT JOIN runtime_input_delivery AS delivery
           ON delivery.id = (
               SELECT candidate.id
@@ -3526,7 +3559,7 @@ fn load_context_manifests(
                        candidate.prepared_at DESC, candidate.id DESC
               LIMIT 1
           )
-        WHERE camp_turn.camp_id = ?1
+        WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         ORDER BY manifest.created_at DESC, manifest.id
         "#,
     )?;
@@ -3783,9 +3816,9 @@ pub(crate) fn load_conversation_approvals(
         FROM approval
         JOIN action_execution ON action_execution.id = approval.action_id
         JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
         JOIN conversation ON conversation.id = agent_run.conversation_id
-        WHERE camp_turn.camp_id = ?1
+        WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
           AND (?2 = 0 OR approval.status = 'pending')
           AND ((?4 IS NULL AND conversation.kind <> 'single_chat')
             OR (?4 IS NOT NULL AND conversation.kind = 'single_chat' AND conversation.id = ?4))
@@ -3858,8 +3891,8 @@ fn load_actions(transaction: &Transaction<'_>, camp_id: &str) -> Result<Vec<Acti
                action_execution.updated_at
         FROM action_execution
         JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-        WHERE camp_turn.camp_id = ?1
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         ORDER BY action_execution.created_at DESC, action_execution.id
         "#,
     )?;

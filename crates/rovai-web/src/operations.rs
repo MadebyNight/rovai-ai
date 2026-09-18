@@ -59,8 +59,6 @@ pub enum Operation {
     MemberRemove,
     #[serde(rename = "members.reorder")]
     MemberReorder,
-    #[serde(rename = "agentRuns.resolveRecoveryBlocker")]
-    RunResolveRecovery,
     #[serde(rename = "runtime.subsystems.retry")]
     SubsystemRetry,
     #[serde(rename = "notifications.inbox")]
@@ -239,38 +237,16 @@ pub enum Operation {
     Skill,
     #[serde(rename = "mcp.config.get")]
     Mcp,
-    #[serde(rename = "camp.composerDraft.get")]
-    DraftGet,
-    #[serde(rename = "camp.composerDraft.save")]
-    DraftSave,
-    #[serde(rename = "camp.composerDraft.discard")]
-    DraftDiscard,
-    #[serde(rename = "camp.composerDraft.startReply")]
-    DraftReply,
-    #[serde(rename = "camp.composerDraft.cancelReply")]
-    DraftCancelReply,
-    #[serde(rename = "camp.composerDraft.resolveReplyRecipient")]
-    DraftReplyRecipient,
-    #[serde(rename = "camp.composerDraft.dismissContinuation")]
-    DraftDismissContinuation,
-    #[serde(rename = "camp.composerDraft.resolveContinuationRecipient")]
-    DraftContinuationRecipient,
-    #[serde(rename = "camp.composerDraft.removeAttachment")]
-    DraftRemoveAttachment,
     #[serde(rename = "messageQuotes.mutateDraft")]
     DraftQuote,
-    #[serde(rename = "camp.pendingInputs.get")]
-    PendingInputs,
-    #[serde(rename = "camp.pendingInputs.edit")]
-    PendingEdit,
+    #[serde(rename = "messageQuotes.capture")]
+    CaptureQuote,
     #[serde(rename = "camp.messages.send")]
     Send,
     #[serde(rename = "action.approvals.resolve")]
     Approval,
     #[serde(rename = "agentRuns.cancel")]
     CancelRun,
-    #[serde(rename = "campTurns.cancel")]
-    CancelTurn,
     #[serde(rename = "commands.reconcile")]
     Reconcile,
     #[serde(rename = "camps.create")]
@@ -411,7 +387,6 @@ impl Operation {
             Self::MemberRemovalPreview => "members.removalPreview",
             Self::MemberRemove => "members.remove",
             Self::MemberReorder => "members.reorder",
-            Self::RunResolveRecovery => "agentRuns.resolveRecoveryBlocker",
             Self::SubsystemRetry => "runtime.subsystems.retry",
             Self::NotificationInbox => "notifications.inbox",
             Self::NotificationChanges => "notifications.changesSince",
@@ -477,22 +452,11 @@ impl Operation {
             Self::RuntimeCheck => "runtime.product.check",
             Self::RuntimeCatalog => "runtime.modelCatalog.open",
             Self::RuntimeDiscover => "runtime.discovery.rescan",
-            Self::DraftGet => "camp.composerDraft.get",
-            Self::DraftSave => "camp.composerDraft.save",
-            Self::DraftDiscard => "camp.composerDraft.discard",
-            Self::DraftReply => "camp.composerDraft.startReply",
-            Self::DraftCancelReply => "camp.composerDraft.cancelReply",
-            Self::DraftReplyRecipient => "camp.composerDraft.resolveReplyRecipient",
-            Self::DraftDismissContinuation => "camp.composerDraft.dismissContinuation",
-            Self::DraftContinuationRecipient => "camp.composerDraft.resolveContinuationRecipient",
-            Self::DraftRemoveAttachment => "camp.composerDraft.removeAttachment",
             Self::DraftQuote => "messageQuotes.mutateDraft",
-            Self::PendingInputs => "camp.pendingInputs.get",
-            Self::PendingEdit => "camp.pendingInputs.edit",
+            Self::CaptureQuote => "messageQuotes.capture",
             Self::Send => "camp.messages.send",
             Self::Approval => "action.approvals.resolve",
             Self::CancelRun => "agentRuns.cancel",
-            Self::CancelTurn => "campTurns.cancel",
             Self::Reconcile => "commands.reconcile",
             Self::CampCreate => "camps.create",
             Self::CampCreationDefaults => "camps.creationPreflight",

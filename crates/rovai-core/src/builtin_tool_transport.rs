@@ -16,7 +16,6 @@ pub const BUILTIN_TOOL_RECEIPT_VERSION: u32 = 1;
 pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 27;
 pub const BUILTIN_TOOL_AGENT_OUTPUT_CONTRACT_VERSION: u32 = 3;
 pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v27";
-pub const BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
 pub const ROVAI_AGENT_CLI_ENV: &str = "ROVAI_AGENT_CLI";
 pub const ROVAI_CLI_CONTEXT_ENV: &str = "ROVAI_CLI_CONTEXT";
 pub const ROVAI_RUN_TMP_ENV: &str = "ROVAI_RUN_TMP";
@@ -177,15 +176,10 @@ pub struct BuiltinToolCliIdentity {
     pub action: &'static str,
 }
 
-pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 26] = [
+pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 25] = [
     BuiltinToolCliIdentity {
         operation: "camp.message.send",
         group: "send",
-        action: "",
-    },
-    BuiltinToolCliIdentity {
-        operation: "team.gather",
-        group: "gather",
         action: "",
     },
     BuiltinToolCliIdentity {
@@ -837,34 +831,12 @@ fn error_contracts(operation: &str) -> Vec<BuiltinToolErrorContract> {
             for code in [
                 "message.addressing_invalid",
                 "message.public_only_conflict",
-                "message.fanout_exceeded",
-                "message.a2a_depth_exhausted",
                 "message.task_recipient_ambiguous",
                 "message.invalid_task",
-                "message.execution_budget_exceeded",
             ] {
                 errors.push(BuiltinToolErrorContract {
                     code: code.to_string(),
                     recovery: BuiltinToolRecovery::FixInput,
-                });
-            }
-        }
-        "team.gather" => {
-            for (code, recovery) in [
-                ("gather.default_lead_required", BuiltinToolRecovery::Stop),
-                ("gather.no_recipients", BuiltinToolRecovery::FixInput),
-                ("gather.addressing_invalid", BuiltinToolRecovery::FixInput),
-                ("gather.fanout_exceeded", BuiltinToolRecovery::FixInput),
-                ("gather.turn_not_active", BuiltinToolRecovery::Stop),
-                (
-                    "gather.execution_budget_exceeded",
-                    BuiltinToolRecovery::Stop,
-                ),
-                ("gather.idempotency_conflict", BuiltinToolRecovery::Stop),
-            ] {
-                errors.push(BuiltinToolErrorContract {
-                    code: code.to_string(),
-                    recovery,
                 });
             }
         }
@@ -951,7 +923,6 @@ fn error_contracts(operation: &str) -> Vec<BuiltinToolErrorContract> {
 pub fn projection_identity(operation: &str) -> Result<&'static str> {
     match operation {
         "camp.message.send" => Ok("camp-message-send-v2"),
-        "team.gather" => Ok("gather-v1"),
         "memory.write" => Ok("memory-write-v2"),
         "member.create"
         | "team.create_task"
@@ -998,9 +969,6 @@ pub fn recovery_for_error_code(code: &str) -> BuiltinToolRecovery {
                 | "message.task_recipient_ambiguous"
                 | "message.invalid_task"
                 | "message.execution_budget_exceeded"
-                | "gather.no_recipients"
-                | "gather.addressing_invalid"
-                | "gather.fanout_exceeded"
                 | "member.invalid_creation_key"
                 | "member.invalid_identity"
                 | "member.avatar_invalid"
@@ -1119,8 +1087,8 @@ mod tests {
             .iter()
             .map(|identity| (identity.group, identity.action))
             .collect::<BTreeSet<_>>();
-        assert_eq!(operations.len(), 26);
-        assert_eq!(commands.len(), 26);
+        assert_eq!(operations.len(), 25);
+        assert_eq!(commands.len(), 25);
     }
 
     #[test]

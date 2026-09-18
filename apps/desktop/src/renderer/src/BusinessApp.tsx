@@ -188,11 +188,6 @@ export function shouldRefreshActiveCampForCoreEvent(
   activeCampId: string | null,
   shuttingDown = false
 ): boolean {
-  if (event.method === 'camp.pendingInputs.changed') {
-    const params = asRecord(event.params)
-    return !shuttingDown && Boolean(activeCampId)
-      && params.campId === activeCampId && params.reason === 'published'
-  }
   if (shuttingDown || !activeCampId || !ACTIVE_CAMP_INVALIDATION_EVENTS.has(event.method)) {
     return false
   }
@@ -1196,7 +1191,7 @@ export function BusinessApp({
       await afterNextPaint()
       preparation.didLeave ||= viewRef.current !== 'camp' || activeCampIdRef.current !== leavingCampId
     } catch (nextError) {
-      setError(`离开当前会话前未能保存草稿：${errorMessage(nextError)}`)
+      setError(`离开当前会话前未能完成输入操作：${errorMessage(nextError)}`)
       return false
     } finally {
       preparation.users -= 1
@@ -1249,7 +1244,7 @@ export function BusinessApp({
         automationLeaveGuardRef.current
       )
     } catch (nextError) {
-      setError(`退出应用前未能保存草稿：${errorMessage(nextError)}`)
+      setError(`退出应用前未能完成输入操作：${errorMessage(nextError)}`)
       throw nextError
     }
   }, [])
@@ -1717,18 +1712,15 @@ export function BusinessApp({
       }, CAMP_OPEN_FEEDBACK_DELAY_MS)
     }
     try {
-      const [{ snapshot, traceId, startedAt }, initialComposerDraft] = await Promise.all([
-        requestCampProjection(campId, options.reconcileDefaultLead === false ? 'open' : 'enter'),
-        options.initializeComposerDraft
-          ? client.request<CampComposerDraftView>('camp.composerDraft.get', { campId })
-            .catch(() => null)
-          : Promise.resolve(null)
-      ])
+      const { snapshot, traceId, startedAt } = await requestCampProjection(
+        campId,
+        options.reconcileDefaultLead === false ? 'open' : 'enter'
+      )
       if (selectionGeneration !== campSelectionGeneration.current || (transaction && !transaction.isCurrent())) {
         return false
       }
       clearCampOpenFeedback()
-      commitCampSurface(snapshot, false, initialComposerDraft)
+      commitCampSurface(snapshot, false, null)
       await afterNextPaint()
       if (selectionGeneration !== campSelectionGeneration.current) return false
       console.info(
@@ -3090,7 +3082,7 @@ export function BusinessApp({
     if (removingActiveCamp) {
       const transitioned = await leaveActiveSurface(remove)
       if (!transitioned) {
-        throw new Error('当前草稿尚未保存，项目未从侧栏移除。请重试。')
+        throw new Error('当前输入操作尚未完成，项目未从侧栏移除。请重试。')
       }
     } else {
       await remove()
@@ -3155,83 +3147,6 @@ export function BusinessApp({
       return
     }
     await deleteCampWithoutAutomationLeaveGuard(camp)
-  }
-
-  const stopCampRuns = async (camp: NavigationCampItem | null = null): Promise<void> => {
-    const campId = camp?.id ?? activeCampId
-    if (!campId) return
-    setError(null)
-    let requestedTurnIds: string[] = []
-    try {
-      const snapshot = campSnapshot?.camp.id === campId
-        ? campSnapshot
-        : (await requestCampProjection(campId, 'open')).snapshot
-      const cancellableIds = new Set(cancellableTurnIds(
-        snapshot,
-        camp ? 'camp_cleanup' : 'current_execution'
-      ))
-      const activeTurns = snapshot.turns.filter((turn) => cancellableIds.has(turn.id))
-      requestedTurnIds = activeTurns.map((turn) => turn.id)
-      if (requestedTurnIds.length === 0) return
-      setCancellingTurnIds((current) => new Set([...current, ...requestedTurnIds]))
-      await Promise.all(activeTurns.map(async (turn) => {
-        const result = await client.request<StoredCommandResult>('campTurns.cancel', {
-          commandId: newCommandId(),
-          command: {
-            campId,
-            campTurnId: turn.id,
-            expectedVersion: turn.version
-          }
-        })
-        if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
-        if (campSnapshotRef.current?.camp.id === campId) {
-          setCampSnapshot(applyCancellationResult(campSnapshotRef.current, result))
-        }
-      }))
-    } catch (nextError) {
-      setCancellingTurnIds((current) =>
-        new Set([...current].filter((turnId) => !requestedTurnIds.includes(turnId)))
-      )
-      setError(errorMessage(nextError))
-      throw nextError
-    } finally {
-      setCancellingTurnIds((current) => new Set([...current].filter((id) => !requestedTurnIds.includes(id))))
-      if (requestedTurnIds.length > 0) {
-        try {
-          await refreshActiveCampSnapshot(campId)
-        } catch {
-          // The next poll refreshes the full projection.
-        }
-      }
-    }
-  }
-
-  const resolveAgentRunRecoveryBlocker = async (run: AgentRunView): Promise<void> => {
-    const campId = activeCampId
-    if (!campId || campSnapshot?.camp.id !== campId) return
-    setError(null)
-    try {
-      const result = await client.request<StoredCommandResult>(
-        'agentRuns.resolveRecoveryBlocker',
-        {
-          commandId: newCommandId(),
-          command: {
-            campId,
-            agentRunId: run.id,
-            expectedVersion: run.version
-          }
-        }
-      )
-      if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
-      await Promise.all([
-        refreshActiveCampSnapshot(campId),
-        loadNavigation()
-      ])
-      notify('已按“结果未知”结束运行；原请求没有重发')
-    } catch (nextError) {
-      setError(errorMessage(nextError))
-      throw nextError
-    }
   }
 
   const cancelAgentRun = async (run: AgentRunView): Promise<void> => {
@@ -3587,8 +3502,7 @@ export function BusinessApp({
         throw new Error(commandFailureMessage(result.commandResult))
       }
       const campMessageId = stringField(result.commandResult.payload, 'campMessageId')
-      const pendingInputId = stringField(result.commandResult.payload, 'pendingInputId')
-      const campTurnId = stringField(result.commandResult.payload, 'campTurnId')
+      const deliveryIds = stringArrayField(result.commandResult.payload, 'deliveryIds')
       const agentRunIds = stringArrayField(result.commandResult.payload, 'agentRunIds')
       const sequence = typeof result.commandResult.payload.sequence === 'number'
         ? result.commandResult.payload.sequence
@@ -3596,7 +3510,7 @@ export function BusinessApp({
       if (campMessageId) {
         setOptimisticCampMessages((current) => [...current, {
           campId, commandId,
-          message: { ...optimisticMessage, id: campMessageId, sequence, campTurnId }
+          message: { ...optimisticMessage, id: campMessageId, sequence, campTurnId: null }
         }])
         void requestCampProjection(campId, 'open')
           .then(async ({ snapshot }) => {
@@ -3611,10 +3525,10 @@ export function BusinessApp({
           .catch((nextError) => setError(errorMessage(nextError)))
       }
       return {
-        ...(pendingInputId ? { pendingInputId } : {}),
+        ...(campMessageId ? { campMessageId } : {}),
         ...(campMessageId && typeof result.commandResult.payload.sequence === 'number'
           ? { publishedMessageSequence: sequence } : {}),
-        campTurnId,
+        deliveryIds,
         agentRunIds,
         addressedAgentIds: optimisticMessage.addressedAgentIds
       }
@@ -3627,6 +3541,22 @@ export function BusinessApp({
     } finally {
       setBusy(null)
     }
+  }
+
+  const withdrawCampMessage = async (message: CampMessageView): Promise<void> => {
+    const campId = activeCampIdRef.current
+    if (!campId || message.id.startsWith('optimistic:') || !message.canWithdraw) return
+    const result = await client.request<StoredCommandResult>('camp.messages.withdraw', {
+      commandId: newCommandId(),
+      command: {
+        campId,
+        messageId: message.id,
+        expectedVersion: message.version
+      }
+    })
+    if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
+    setOptimisticCampMessages((current) => current.filter((entry) => entry.message.id !== message.id))
+    await refreshActiveCampSnapshot(campId)
   }
 
   const resolveActionApproval = async (
@@ -4092,6 +4022,7 @@ export function BusinessApp({
             liveRuntimeEvents={liveRuntimeEvents}
             busy={busy === 'camp-message' || busy === 'change-default-lead' || busy === 'camp-membership' || busy?.startsWith('action-approval-') === true}
             onSend={sendCampMessage}
+            onWithdrawMessage={withdrawCampMessage}
             onPendingDraftPersisted={refreshPendingCampNavigation}
             onPendingCampLeave={settlePendingCampOnLeave}
             onCampLeaveGuardChange={registerCampLeaveGuard}
@@ -4103,13 +4034,11 @@ export function BusinessApp({
             onResolveApproval={(approval, decision) => {
               void resolveActionApproval(approval, decision)
             }}
-            onResolveRecoveryBlocker={resolveAgentRunRecoveryBlocker}
             cancellingTurnIds={activeCancellingTurnIds}
             cancellingRunIds={activeCancellingRunIds}
             confirmingRunIds={activeConfirmingRunIds}
             onCancelAgentRun={cancelAgentRun}
             stopping={activeCampStopping}
-            onStop={() => void stopCampRuns()}
             executionPlacement={mobile ? 'inspector' : generalPreferences.executionConsolePlacement}
             onExecutionPlacementChange={changeExecutionConsolePlacement}
             worldMapEnabled={!mobile && generalPreferences.worldMapEnabled}
@@ -4701,7 +4630,10 @@ export function optimisticCampMessage(
     replyToCampMessageId: draft.replyIntent?.replyToCampMessageId ?? null,
     campTurnId: null,
     presentation: null,
-    createdAt
+    createdAt,
+    withdrawn: false,
+    canWithdraw: false,
+    version: 1
   }
 }
 
@@ -4712,17 +4644,41 @@ export function campMessageSendParams(
 ): {
   commandId: string
   campId: string
-  draftRevision: number
+  content: CampComposerDraftView['content']
+  sourceAttachments: Array<{
+    id: string
+    sourcePath: string
+    displayName: string
+    kind: 'file' | 'directory'
+    mediaType: string | null
+    observedByteSize: number | null
+  }>
+  quotes: CampComposerDraftView['quotes']
+  replyToCampMessageId: string | null
   execution: {
     taskId: null
     purpose: string
     completionRole: 'required'
   }
 } {
+  const sourceAttachments = draft.attachments.map((attachment) => {
+    if (!attachment.sourcePath) throw new Error('本地附件来源已不可用，请移除后重新添加。')
+    return {
+      id: attachment.id,
+      sourcePath: attachment.sourcePath,
+      displayName: attachment.displayName,
+      kind: attachment.kind,
+      mediaType: attachment.mediaType,
+      observedByteSize: attachment.byteSize
+    }
+  })
   return {
     commandId,
     campId,
-    draftRevision: draft.revision,
+    content: draft.content,
+    sourceAttachments,
+    quotes: draft.quotes,
+    replyToCampMessageId: draft.replyIntent?.replyToCampMessageId ?? null,
     execution: {
       taskId: null,
       purpose: campMessageExecutionPurpose(draft),

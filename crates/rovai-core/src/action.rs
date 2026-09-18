@@ -1268,14 +1268,15 @@ impl ActionSafetyService {
                            approval.version, approval.native_options_json,
                            action_execution.agent_run_id,
                            action_execution.status, action_execution.control_mode,
-                           action_execution.version, camp_turn.camp_id,
+                           action_execution.version,
+                           COALESCE(agent_run.camp_id, camp_turn.camp_id),
                            action_execution.source_agent_run_execution_epoch,
                            agent_run.execution_epoch, agent_run.permission_semantics,
                            agent_run.status, agent_run.cancel_requested_at
                     FROM approval
                     JOIN action_execution ON action_execution.id = approval.action_id
                     JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE approval.id = ?1
                     "#,
                     [&envelope.payload.approval_id],
@@ -1598,12 +1599,13 @@ impl ActionSafetyService {
                     SELECT action_execution.status, action_execution.policy_decision,
                            action_execution.control_mode, action_execution.execute_before,
                            action_execution.version, action_execution.attempt_count,
-                           action_execution.agent_run_id, camp_turn.camp_id,
+                           action_execution.agent_run_id,
+                           COALESCE(agent_run.camp_id, camp_turn.camp_id),
                            agent_run.status, agent_run.execution_epoch,
                            agent_run.cancel_requested_at
                     FROM action_execution
                     JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE action_execution.id = ?1
                     "#,
                     [&envelope.payload.action_id],
@@ -1928,11 +1930,11 @@ impl ActionSafetyService {
                            action_execution.agent_run_id,
                            action_execution.control_mode,
                            action_execution.dispatch_may_have_started_at,
-                           camp_turn.camp_id,
+                           COALESCE(agent_run.camp_id, camp_turn.camp_id),
                            agent_run.execution_epoch
                     FROM action_execution
                     JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE action_execution.id = ?1
                     "#,
                     [&envelope.payload.action_id],
@@ -2153,11 +2155,11 @@ impl ActionSafetyService {
                            runtime_delivery_checkpoint.target_execution_epoch,
                            runtime_delivery_checkpoint.payload_digest,
                            runtime_delivery_checkpoint.payload_json,
-                           camp_turn.camp_id, agent_run.status,
+                           COALESCE(agent_run.camp_id, camp_turn.camp_id), agent_run.status,
                            agent_run.execution_epoch, agent_run.cancel_requested_at
                     FROM runtime_delivery_checkpoint
                     JOIN agent_run ON agent_run.id = runtime_delivery_checkpoint.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE runtime_delivery_checkpoint.id = ?1
                     "#,
                     [&envelope.payload.delivery_id],
@@ -2304,11 +2306,11 @@ impl ActionSafetyService {
                            runtime_delivery_checkpoint.payload_digest,
                            runtime_delivery_checkpoint.target_execution_epoch,
                            runtime_delivery_checkpoint.lease_owner,
-                           camp_turn.camp_id, agent_run.status,
+                           COALESCE(agent_run.camp_id, camp_turn.camp_id), agent_run.status,
                            agent_run.execution_epoch
                     FROM runtime_delivery_checkpoint
                     JOIN agent_run ON agent_run.id = runtime_delivery_checkpoint.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE runtime_delivery_checkpoint.id = ?1
                     "#,
                     [&envelope.payload.delivery_id],
@@ -2430,13 +2432,14 @@ impl ActionSafetyService {
                     r#"
                     SELECT action_execution.id, action_execution.status,
                            action_execution.version, action_execution.native_thread_id,
-                           camp_turn.camp_id, agent_run.status, agent_run.execution_epoch,
+                           COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                           agent_run.status, agent_run.execution_epoch,
                            approval.id, approval.status,
                            runtime_delivery_checkpoint.id,
                            runtime_delivery_checkpoint.status
                     FROM action_execution
                     JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     LEFT JOIN approval ON approval.action_id = action_execution.id
                     LEFT JOIN runtime_delivery_checkpoint
                       ON runtime_delivery_checkpoint.action_id = action_execution.id
@@ -2626,11 +2629,11 @@ impl ActionSafetyService {
             let run = transaction
                 .query_row(
                     r#"
-                    SELECT camp_turn.camp_id, agent_run.status,
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id), agent_run.status,
                            agent_run.version, agent_run.execution_epoch,
                            agent_run.invocation_kind, agent_run.camp_turn_id
                     FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE agent_run.id = ?1
                     "#,
                     [&envelope.payload.agent_run_id],
@@ -2641,7 +2644,7 @@ impl ActionSafetyService {
                             row.get::<_, i64>(2)?,
                             row.get::<_, i64>(3)?,
                             row.get::<_, String>(4)?,
-                            row.get::<_, String>(5)?,
+                            row.get::<_, Option<String>>(5)?,
                         ))
                     },
                 )
@@ -2664,6 +2667,9 @@ impl ActionSafetyService {
 
             let now = chrono::Utc::now().to_rfc3339();
             if invocation_kind == "single_chat" {
+                let camp_turn_id = camp_turn_id
+                    .as_deref()
+                    .context("Single Chat AgentRun has no CampTurn")?;
                 let settlement = settle_abortive_agent_run_in_tx(
                     transaction,
                     &envelope.payload.agent_run_id,
@@ -2674,7 +2680,7 @@ impl ActionSafetyService {
                 let camp_turn_status = recompute_camp_turn(
                     transaction,
                     &camp_id,
-                    &camp_turn_id,
+                    camp_turn_id,
                     &envelope.actor,
                     Some(run_epoch),
                     &now,
@@ -2894,11 +2900,12 @@ impl ActionSafetyService {
             let row = transaction
                 .query_row(
                     r#"
-                    SELECT camp_turn.camp_id, runtime_delivery_checkpoint.agent_run_id,
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                           runtime_delivery_checkpoint.agent_run_id,
                            agent_run.execution_epoch
                     FROM runtime_delivery_checkpoint
                     JOIN agent_run ON agent_run.id = runtime_delivery_checkpoint.agent_run_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE runtime_delivery_checkpoint.id = ?1
                     "#,
                     [&envelope.payload.delivery_id],
@@ -2985,7 +2992,8 @@ impl ActionSafetyService {
     ) -> Result<Vec<RuntimeDeliveryCandidate>> {
         let mut statement = database.connection().prepare(
             r#"
-            SELECT runtime_delivery_checkpoint.id, camp_turn.camp_id,
+            SELECT runtime_delivery_checkpoint.id,
+                   COALESCE(agent_run.camp_id, camp_turn.camp_id),
                    runtime_delivery_checkpoint.agent_run_id,
                    action_execution.id, action_execution.version,
                    action_execution.status, action_execution.action_kind,
@@ -2999,7 +3007,7 @@ impl ActionSafetyService {
             FROM runtime_delivery_checkpoint
             JOIN action_execution ON action_execution.id = runtime_delivery_checkpoint.action_id
             JOIN agent_run ON agent_run.id = runtime_delivery_checkpoint.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE runtime_delivery_checkpoint.status = 'pending'
               AND runtime_delivery_checkpoint.delivery_kind = 'authorization_resolution'
               AND runtime_delivery_checkpoint.available_at <= ?1
@@ -3074,13 +3082,14 @@ impl ActionSafetyService {
     ) -> Result<Vec<InterceptedActionAttempt>> {
         let mut statement = database.connection().prepare(
             r#"
-            SELECT action_execution.id, camp_turn.camp_id,
+            SELECT action_execution.id,
+                   COALESCE(agent_run.camp_id, camp_turn.camp_id),
                    action_execution.active_attempt_id,
                    action_execution.action_execution_epoch,
                    action_execution.action_kind
             FROM action_execution
             JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE action_execution.agent_run_id = ?1
               AND action_execution.source_agent_run_execution_epoch = ?2
               AND agent_run.execution_epoch = ?2
@@ -3228,13 +3237,14 @@ fn load_agent_action_context(
             SELECT agent_run.effective_config_json, agent_run.workspace_json,
                    agent_run.permission_semantics
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             JOIN conversation ON conversation.id = agent_run.conversation_id
             JOIN camp_member
-              ON camp_member.camp_id = camp_turn.camp_id
+              ON camp_member.camp_id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
              AND camp_member.agent_id = conversation.agent_id
             JOIN agent_profile ON agent_profile.id = conversation.agent_id
-            WHERE agent_run.id = ?1 AND camp_turn.camp_id = ?2
+            WHERE agent_run.id = ?1
+              AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?2
               AND conversation.agent_id = ?3
               AND agent_run.execution_epoch = ?4
               AND agent_run.status IN ('running', 'waiting')

@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.59
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
@@ -10,6 +10,8 @@ last_updated: 2026-09-18
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
+
+后继：[v1.60](../v1.60/README.md)。本页冻结 v1.59 切换时的实施中事实；未完成项不因版本切换被改写为完成。
 
 ## 桌面 Mission 增量
 

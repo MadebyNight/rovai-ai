@@ -20,7 +20,7 @@ Rovai Desktop
 │   ├── UserAutomationServer        当前用户私有 socket / credential
 │   ├── closed operation dispatcher
 │   └── Core client + Renderer navigation
-└── rovai-core                      领域写入、Read Model、预算与执行权威
+└── rovai-core                      领域写入、Read Model、Delivery claim 与执行权威
 
 rovai app ...                       每次命令一个短进程
     └── User Automation IPC ──────> Electron Main
@@ -41,7 +41,7 @@ owner，因此 V1 不采用。
 | --- | --- | --- |
 | `rovai app` CLI | 参数/文件读取、context discovery、IPC、Trial journal/编排、双 cursor wait、安全 bundle | 领域授权、Core credential、Runtime launch、AgentRun terminal 推断 |
 | Electron Main server | endpoint 生命周期、用户 credential、closed dispatch、错误脱敏、Camp window navigation | 任意 Core invoke、Trial/Benchmark entity、Runtime output 替代公共消息 |
-| Core | Camp/Message/AgentRun mutation、预算、terminal、Evidence、公共消息、诊断安全投影 | CLI journal、Trial 生命周期、自动打开 Desktop |
+| Core | Camp/Message/Delivery/AgentRun mutation、claim、terminal、Evidence、公共消息、诊断安全投影 | CLI journal、Trial 生命周期、自动打开 Desktop |
 | Renderer | 复用既有 Camp activation 呈现目标 Camp | endpoint、credential、路径、Core method 选择 |
 | Runtime Adapter | 既有 Run 执行和 Evidence 生产 | Trial 资格、导出格式、User Automation transport |
 
@@ -52,8 +52,9 @@ service；Main 不直接访问 SQLite。成员创建与 Runtime 配置只映射�
 `members.runtime.set`、`members.runtime.clear` 三个既有 Domain Command；显式模型配置前可通过
 `runtime.product.check` 与 `runtime.modelCatalog.open` 两个固定 Read Model 核对可用性和目录，不能透传 path、
 环境或 provider secret。`camp send` 只发出一个带幂等 `commandId` 的
-`userAutomation.camp.send`；Core 在一个 Domain Command transaction 中复用正式 Message/Turn/Run 准入，但不以
-Composer 作为中间存储，也不读取、覆盖或消费用户草稿。当前合同无法解释的新状态必须失败并要求升级，不能以
+`userAutomation.camp.send`；Core 在一个 Domain Command transaction 中复用正式 Message publication 与目标
+Delivery 创建，不提前创建 AgentRun，也不以 Composer 作为中间存储或读取、覆盖、消费 Renderer 当前输入。
+当前合同无法解释的新状态必须失败并要求升级，不能以
 convenience path 绕过。
 
 IPC 断开不能证明 mutation 未发生。CLI 的 mutation command ID 在首次 Core 写之前进入 durable journal；失败

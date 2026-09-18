@@ -464,12 +464,6 @@ fn supporting_builtin_operation(
                 "effectiveRecipients",
                 "deliveryIds",
             ]),
-            "team.gather" => Some(&[
-                "gatherId",
-                "requestMessageId",
-                "effectiveRecipients",
-                "completion",
-            ]),
             "team.create_task" => Some(&[
                 "taskId",
                 "title",

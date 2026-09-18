@@ -96,15 +96,14 @@ use rovai_core::{
         BUILTIN_TOOL_EVIDENCE_PROJECTION_SCHEMA_VERSION, project_builtin_tool_invocation,
     },
     builtin_tool_transport::{
-        BUILTIN_TOOL_CONTRACT_VERSION, BUILTIN_TOOL_IPC_PROTOCOL_VERSION,
-        BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES, BuiltinToolError, BuiltinToolInvocationEnvelope,
-        BuiltinToolIpcRequest, BuiltinToolIpcRequestBody, BuiltinToolIpcResponse,
-        COMPACTION_HOOK_IPC_PROTOCOL_VERSION, COMPACTION_OBSERVATION_IPC_KIND,
-        CompactionHookIpcRequest, CompactionHookIpcResponse, builtin_tool_catalog_digest,
-        builtin_tool_description, recovery_for_error_code,
+        BUILTIN_TOOL_CONTRACT_VERSION, BUILTIN_TOOL_IPC_PROTOCOL_VERSION, BuiltinToolError,
+        BuiltinToolInvocationEnvelope, BuiltinToolIpcRequest, BuiltinToolIpcRequestBody,
+        BuiltinToolIpcResponse, COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
+        COMPACTION_OBSERVATION_IPC_KIND, CompactionHookIpcRequest, CompactionHookIpcResponse,
+        builtin_tool_catalog_digest, builtin_tool_description, recovery_for_error_code,
     },
     camp_attachment::{
-        CampAttachmentStore, CampComposerReplyRecipient, desktop_target_for_source_attachment,
+        CampAttachmentStore, desktop_target_for_source_attachment,
         legacy_attachment_belongs_to_owner, preview_source_attachment,
     },
     camp_attachment_publication::unresolved_publication_camp_ids,
@@ -139,9 +138,9 @@ use rovai_core::{
         CollaborationService, CreateCampCommand, CreateTaskCommand, DeleteCampCommand,
         DiscardPendingCampCommand, ExecutionRequest, ProjectBindingKind,
         ReconcileDefaultLeadCommand, RemoveCampMemberCommand, RenameCampCommand,
-        SendUserAutomationCampMessageCommand, SendUserCampDraftCommand,
+        SendUserAutomationCampMessageCommand, SendUserCampMessageCommand,
         TaskAcceptanceCriteriaUpdate, TaskAssigneeFilter, TaskAssigneeUpdate, TaskListQuery,
-        TaskStatus, UpdateTaskCommand,
+        TaskStatus, UpdateTaskCommand, WithdrawCampMessageCommand,
     },
     command::{
         ActorRef, CommandEnvelope, CommandExecution, CommandGatewayError, CommandHandlerResult,
@@ -165,6 +164,7 @@ use rovai_core::{
     current_user::CURRENT_USER_ID,
     database_admission::{AdmissionAssessment, AuthorityBlock, DatabaseAdmission},
     db::{Database, DatabaseInitializeError, DatabaseMigrationError, DatabaseOpenError},
+    delivery_queue::claim_waiting_delivery_batches,
     diagnostics::{
         DiagnosticCheck, DiagnosticGroup, DiagnosticStatus, DiagnosticsReport, aggregate_counts,
         database_integrity_check, diagnostics_export_v5,
@@ -203,8 +203,7 @@ use rovai_core::{
         MEMORY_WRITE_TOOL_NAME, MemoryToolService, MemoryWriteToolInput, MemoryWriteToolInvocation,
     },
     message_delivery::{
-        CAMP_MESSAGE_SEND_TOOL_NAME, CancelMessageDeliveryCommand, DeliveryDispatchTrigger,
-        MessageDeliveryService, RetryMessageDeliveryCommand, dispatch_accepted_deliveries,
+        CAMP_MESSAGE_SEND_TOOL_NAME, DeliveryDispatchTrigger, dispatch_accepted_deliveries,
         dispatch_pending_for_recipient, mark_unstarted_deliveries_interrupted_before_dispatch,
         runtime_waiting_camps, runtime_waiting_recipients,
     },
@@ -237,13 +236,12 @@ use rovai_core::{
     runtime::{
         AgentRunCancellationCandidate, AgentRunExecution, AgentRunWorkspace,
         ArmAgentRunNetworkRecoveryCommand, BindNativeSessionCommand, CampRuntimeCleanupTarget,
-        CancelAgentRunCommand, CancelCampTurnCommand, ClaimAgentRunCommand,
-        CompleteAgentRunNetworkRecoveryCommand, ExecutionRuntimeService, FailAgentRunCommand,
-        MarkAgentRunForNetworkRecoveryCommand, MissingSendRecoveryBoundary,
-        MissingSendRecoveryCandidate, NativeSessionResumeDisposition, NativeSessionResumeFailure,
-        PermissionSemantics, PlannedShutdownAbortiveTerminal, RebindAgentRunRuntimeCommand,
-        RecordCancelledAgentRunEndingGitObservationCommand, RecordObservedRuntimeModelCommand,
-        RejectAgentRunDispatchCommand, ResolveAcceptedInputRecoveryBlockerCommand,
+        CancelAgentRunCommand, ClaimAgentRunCommand, CompleteAgentRunNetworkRecoveryCommand,
+        ExecutionRuntimeService, FailAgentRunCommand, MarkAgentRunForNetworkRecoveryCommand,
+        MissingSendRecoveryBoundary, MissingSendRecoveryCandidate, NativeSessionResumeDisposition,
+        NativeSessionResumeFailure, PermissionSemantics, PlannedShutdownAbortiveTerminal,
+        RebindAgentRunRuntimeCommand, RecordCancelledAgentRunEndingGitObservationCommand,
+        RecordObservedRuntimeModelCommand, RejectAgentRunDispatchCommand,
         RestartNativeSessionCommand, SucceedAgentRunCommand,
     },
     runtime_compaction_display::{
@@ -279,10 +277,10 @@ use rovai_core::{
     storage_layout::CampOutputDirectory,
     team_tool::{
         AuthenticatedTeamToolRun, BuiltinToolBindingCredential, CampMessageSendInput,
-        CampMessageSendInvocation, GatherInput, GatherInvocation, TEAM_CREATE_TASK_TOOL_NAME,
-        TEAM_GET_TASK_TOOL_NAME, TEAM_LIST_TASKS_TOOL_NAME, TEAM_UPDATE_TASK_TOOL_NAME,
-        TeamCreateTaskInput, TeamGetTaskInput, TeamListTasksInput, TeamTaskToolInvocation,
-        TeamToolInvocationError, TeamToolService, TeamUpdateTaskInput,
+        CampMessageSendInvocation, TEAM_CREATE_TASK_TOOL_NAME, TEAM_GET_TASK_TOOL_NAME,
+        TEAM_LIST_TASKS_TOOL_NAME, TEAM_UPDATE_TASK_TOOL_NAME, TeamCreateTaskInput,
+        TeamGetTaskInput, TeamListTasksInput, TeamTaskToolInvocation, TeamToolInvocationError,
+        TeamToolService, TeamUpdateTaskInput,
     },
     team_tool_catalog::validate_builtin_tool_input,
 };
@@ -290,7 +288,7 @@ use runtime_fleet::{AgentRuntimeFleetConfig, AgentRuntimeFleetManager};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     sync::{Mutex, Notify, RwLock, mpsc, oneshot},
     time::{Duration, MissedTickBehavior},
 };
@@ -646,17 +644,15 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
             | "runtime.networkRecovery.wake"
             | "runtime.modelCatalog.open"
             | "camp.messages.send"
+            | "camp.messages.withdraw"
             | "userAutomation.camp.send"
             | "automations.schedulerControl"
             | "automations.run"
             | "missions.createWithAttachments"
             | "missions.updateWithAttachments"
-            | "camp.sourceAttachments.addFromPath"
-            | "camp.pendingInputs.addSourceAttachmentFromPath"
             | "camp.attachments.location"
             | "camp.attachments.previewSource"
             | "camp.attachments.desktopOpenTarget"
-            | "campTurns.cancel"
             | "agentRuns.cancel"
             | "singleChat.sourceAttachments.addFromPath"
             | "singleChat.composerDraft.removeAttachment"
@@ -710,52 +706,25 @@ fn request_invalidates_navigation(method: &str) -> bool {
             | "camps.reconcileDefaultLead"
             | "camps.enter"
             | "camps.delete"
-            | "camp.composerDraft.save"
             | "messageQuotes.mutateDraft"
-            | "camp.composerDraft.startReply"
-            | "camp.composerDraft.cancelReply"
-            | "camp.composerDraft.resolveReplyRecipient"
-            | "camp.composerDraft.dismissContinuation"
-            | "camp.composerDraft.resolveContinuationRecipient"
-            | "camp.composerDraft.removeAttachment"
-            | "camp.composerDraft.discard"
-            | "camp.sourceAttachments.addFromPath"
             | "camp.messages.send"
+            | "camp.messages.withdraw"
             | "userAutomation.camp.send"
-            | "campTurns.cancel"
             | "agentRuns.cancel"
             | "channels.executionConsole.agentRun.cancel"
             | "channels.dingtalk.executionConsole.agentRun.cancel"
-            | "agentRuns.resolveRecoveryBlocker"
     )
 }
 
 fn navigation_invalidation_emitted_at_commit_boundary(method: &str) -> bool {
     matches!(
         method,
-        "camps.create"
-            | "camps.discardPending"
-            | "camp.composerDraft.removeAttachment"
-            | "camp.composerDraft.discard"
-            | "camp.sourceAttachments.addFromPath"
-            | "camp.messages.send"
+        "camps.create" | "camps.discardPending" | "camp.messages.send" | "camp.messages.withdraw"
     )
 }
 
 fn navigation_invalidation_requires_pending_camp(method: &str) -> bool {
-    matches!(
-        method,
-        "camp.composerDraft.save"
-            | "messageQuotes.mutateDraft"
-            | "camp.composerDraft.startReply"
-            | "camp.composerDraft.cancelReply"
-            | "camp.composerDraft.resolveReplyRecipient"
-            | "camp.composerDraft.dismissContinuation"
-            | "camp.composerDraft.resolveContinuationRecipient"
-            | "camp.composerDraft.removeAttachment"
-            | "camp.composerDraft.discard"
-            | "camp.sourceAttachments.addFromPath"
-    )
+    matches!(method, "messageQuotes.mutateDraft")
 }
 
 async fn request_did_invalidate_navigation(core: &Core, request: &Request, result: &Value) -> bool {
@@ -780,29 +749,6 @@ async fn request_did_invalidate_navigation(core: &Core, request: &Request, resul
             );
             true
         }
-    }
-}
-
-async fn emit_navigation_invalidated_for_pending_camp(
-    database: &Mutex<Database>,
-    output: &mpsc::UnboundedSender<String>,
-    reason: &str,
-    camp_id: &str,
-) {
-    let should_emit = {
-        let database = database.lock().await;
-        match ReadModelService.camp_is_pending(&database, camp_id) {
-            Ok(pending) => pending,
-            Err(error) => {
-                eprintln!(
-                    "failed to scope Navigation invalidation for Camp {camp_id}; invalidating conservatively: {error:#}"
-                );
-                true
-            }
-        }
-    };
-    if should_emit {
-        emit_navigation_invalidated(output, reason, Some(camp_id));
     }
 }
 
@@ -950,14 +896,6 @@ struct CampCreationMember {
 #[serde(rename_all = "camelCase")]
 struct CampIdParams {
     camp_id: CampId,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PendingCampInputsParams {
-    camp_id: CampId,
-    #[serde(default)]
-    submitted_input_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1264,19 +1202,19 @@ struct AcknowledgeCampViewedParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SendCampMessageParams {
-    #[serde(
-        default,
-        skip_serializing_if = "rovai_core::draft_client::DraftClient::is_desktop"
-    )]
-    draft_client: rovai_core::draft_client::DraftClient,
     command_id: String,
     camp_id: CampId,
-    draft_revision: i64,
+    content: ComposerDocument,
+    #[serde(default)]
+    source_attachments: Vec<rovai_core::local_attachment_source::LocalAttachmentSourceRef>,
+    #[serde(default)]
+    quotes: Vec<rovai_core::message_quote::MessageQuoteSnapshot>,
+    reply_to_camp_message_id: Option<String>,
     execution: Option<ExecutionRequest>,
 }
 
 impl SendCampMessageParams {
-    fn envelope(&self) -> CommandEnvelope<SendUserCampDraftCommand> {
+    fn envelope(&self) -> CommandEnvelope<SendUserCampMessageCommand> {
         let params = self;
         CommandEnvelope {
             command_id: params.command_id.clone(),
@@ -1286,10 +1224,12 @@ impl SendCampMessageParams {
             camp_id: Some(params.camp_id.to_string()),
             expected_versions: Vec::new(),
             execution_epoch: None,
-            payload: SendUserCampDraftCommand {
-                draft_client: params.draft_client.clone(),
+            payload: SendUserCampMessageCommand {
                 camp_id: params.camp_id.to_string(),
-                draft_revision: params.draft_revision,
+                content: params.content.clone(),
+                source_attachments: params.source_attachments.clone(),
+                quotes: params.quotes.clone(),
+                reply_to_camp_message_id: params.reply_to_camp_message_id.clone(),
                 execution: params.execution.clone(),
             },
         }
@@ -1344,86 +1284,9 @@ struct AutomationMutationParams<T> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CampComposerDraftParams {
+struct CaptureCampMessageQuoteParams {
     camp_id: CampId,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SaveCampComposerDraftParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    content: ComposerDocument,
-    continuation_source_message_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StartCampComposerReplyParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    reply_to_camp_message_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MutateCampComposerReplyParams {
-    camp_id: CampId,
-    expected_revision: i64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ResolveCampComposerReplyRecipientParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    recipient: CampComposerReplyRecipient,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DismissCampComposerContinuationParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    source_camp_message_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ResolveCampComposerContinuationRecipientParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    agent_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RemovePreparedAttachmentParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    attachment_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AddSourceAttachmentFromPathParams {
-    camp_id: CampId,
-    expected_revision: i64,
-    source_path: String,
-    display_name: String,
-    media_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AddPendingSourceAttachmentFromPathParams {
-    camp_id: CampId,
-    pending_input_id: String,
-    expected_revision: i64,
-    edit_token: String,
-    source_path: String,
-    display_name: String,
-    media_type: Option<String>,
+    selection: rovai_core::message_quote::QuoteSelection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1437,76 +1300,6 @@ struct AddSingleChatPendingSourceAttachmentFromPathParams {
     source_path: String,
     display_name: String,
     media_type: Option<String>,
-}
-
-async fn add_composer_source_attachment_from_path(
-    database: &Mutex<Database>,
-    output: &mpsc::UnboundedSender<String>,
-    data_dir: &Path,
-    params: AddSourceAttachmentFromPathParams,
-) -> Result<Value> {
-    let store = CampAttachmentStore::new(data_dir);
-    let source_path = params.source_path.clone();
-    let display_name = params.display_name.clone();
-    let media_type = params.media_type.clone();
-    let source_ref = tokio::task::spawn_blocking(move || {
-        observe_source_attachment(
-            Path::new(&source_path),
-            &display_name,
-            media_type.as_deref(),
-        )
-    })
-    .await
-    .context("Source Attachment observation task failed")??;
-    let draft = {
-        let mut database = database.lock().await;
-        store.commit_source_attachment(
-            &mut database,
-            params.camp_id.as_str(),
-            params.expected_revision,
-            source_ref,
-        )?
-    };
-    emit_navigation_invalidated_for_pending_camp(
-        database,
-        output,
-        "camp.sourceAttachments.addFromPath",
-        params.camp_id.as_str(),
-    )
-    .await;
-    Ok(serde_json::to_value(draft)?)
-}
-
-async fn add_pending_source_attachment_from_path(
-    database: &Mutex<Database>,
-    output: &mpsc::UnboundedSender<String>,
-    params: AddPendingSourceAttachmentFromPathParams,
-) -> Result<Value> {
-    let source_path = params.source_path.clone();
-    let display_name = params.display_name.clone();
-    let media_type = params.media_type.clone();
-    let source_ref = tokio::task::spawn_blocking(move || {
-        observe_source_attachment(
-            Path::new(&source_path),
-            &display_name,
-            media_type.as_deref(),
-        )
-    })
-    .await
-    .context("Pending Source Attachment observation task failed")??;
-    let queue = {
-        let mut database = database.lock().await;
-        rovai_core::pending_camp_input::add_working_source_attachment(
-            &mut database,
-            params.camp_id.as_str(),
-            &params.pending_input_id,
-            params.expected_revision,
-            &params.edit_token,
-            source_ref,
-        )?
-    };
-    emit_pending_inputs_changed(output, params.camp_id.as_str(), "edited");
-    Ok(serde_json::to_value(queue)?)
 }
 
 async fn add_single_chat_source_attachment_from_path(
@@ -5291,32 +5084,6 @@ impl Core {
                         .map(str::to_string);
                     command_execution_payload(execution)
                 }
-                rovai_core::gather::GATHER_TOOL_NAME => {
-                    let input = serde_json::from_value::<GatherInput>(request.input)
-                        .context("team.gather input is invalid")?;
-                    let invocation = GatherInvocation {
-                        native_binding_id: request.native_binding_id,
-                        binding_credential: request.binding_credential,
-                        runtime_tool_call_id: request.runtime_tool_call_id,
-                        input,
-                    };
-                    let execution =
-                        if let Some((agent_run_id, execution_epoch)) = attested_run.as_ref() {
-                            service.gather_attested(
-                                &mut database,
-                                &invocation,
-                                agent_run_id,
-                                *execution_epoch,
-                            )
-                        } else {
-                            service.gather(&mut database, &invocation)
-                        }?;
-                    evidence_replayed = execution.replayed;
-                    evidence_receipt_id = execution.result.payload["gatherId"]
-                        .as_str()
-                        .map(str::to_string);
-                    command_execution_payload(execution)
-                }
                 MEMBER_CREATE_TOOL_NAME => {
                     let input = serde_json::from_value::<MemberCreateInput>(request.input)
                         .context("member.create input is invalid")?;
@@ -7228,26 +6995,6 @@ impl Core {
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
-            "message.delivery.retry" => {
-                let params: UserCommandParams<RetryMessageDeliveryCommand> =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                let execution = MessageDeliveryService::default().retry(
-                    &mut database,
-                    &user_command_envelope(params.command_id, params.command),
-                )?;
-                Ok(serde_json::to_value(execution.result)?)
-            }
-            "message.delivery.cancel" => {
-                let params: UserCommandParams<CancelMessageDeliveryCommand> =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                let execution = MessageDeliveryService::default().cancel(
-                    &mut database,
-                    &user_command_envelope(params.command_id, params.command),
-                )?;
-                Ok(serde_json::to_value(execution.result)?)
-            }
             "members.presence.set" => {
                 let params: UserCommandParams<SetMemberPresenceCommand> =
                     serde_json::from_value(request.params.clone())?;
@@ -8447,27 +8194,6 @@ impl Core {
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
-            "campTurns.cancel" => {
-                let params: UserCommandParams<CancelCampTurnCommand> =
-                    serde_json::from_value(request.params.clone())?;
-                let camp_id = params.command.camp_id.clone();
-                let mut database = self.database.lock().await;
-                let execution = ExecutionRuntimeService::default().request_camp_turn_cancellation(
-                    &mut database,
-                    &user_camp_command_envelope(params.command_id, camp_id.clone(), params.command),
-                )?;
-                let should_notify = execution.result.status == CommandResultStatus::Applied;
-                drop(database);
-                if should_notify {
-                    self.agent_run_cancellation_notify.notify_one();
-                    emit_agent_run_terminal(
-                        &self.output,
-                        Some(&camp_id),
-                        json!({ "campId": camp_id, "result": execution.result }),
-                    );
-                }
-                Ok(serde_json::to_value(execution.result)?)
-            }
             "agentRuns.cancel" => {
                 let params: UserCommandParams<CancelAgentRunCommand> =
                     serde_json::from_value(request.params.clone())?;
@@ -8487,18 +8213,6 @@ impl Core {
                         json!({ "campId": camp_id, "result": execution.result }),
                     );
                 }
-                Ok(serde_json::to_value(execution.result)?)
-            }
-            "agentRuns.resolveRecoveryBlocker" => {
-                let params: UserCommandParams<ResolveAcceptedInputRecoveryBlockerCommand> =
-                    serde_json::from_value(request.params.clone())?;
-                let camp_id = params.command.camp_id.clone();
-                let mut database = self.database.lock().await;
-                let execution = ExecutionRuntimeService::default()
-                    .resolve_accepted_input_recovery_blocker(
-                        &mut database,
-                        &user_camp_command_envelope(params.command_id, camp_id, params.command),
-                    )?;
                 Ok(serde_json::to_value(execution.result)?)
             }
             "camps.snapshot" => {
@@ -8707,56 +8421,6 @@ impl Core {
                     )?,
                 )?)
             }
-            "camp.pendingInputs.get" => {
-                let params: PendingCampInputsParams =
-                    serde_json::from_value(request.params.clone())?;
-                let database = self.database.lock().await;
-                let mut queue = rovai_core::pending_camp_input::read_queue_for_client(
-                    &database,
-                    params.camp_id.as_str(),
-                    &request.client,
-                )?;
-                queue.submission_outcomes =
-                    rovai_core::pending_camp_input::read_submission_outcomes(
-                        &database,
-                        params.camp_id.as_str(),
-                        &params.submitted_input_ids,
-                    )?;
-                Ok(serde_json::to_value(queue)?)
-            }
-            "camp.pendingInputs.edit" => {
-                let mut params: UserCommandParams<
-                    rovai_core::pending_camp_input::EditPendingCampInputCommand,
-                > = serde_json::from_value(request.params.clone())?;
-                params.command.draft_client = request.client.clone();
-                let camp_id = params.command.camp_id.clone();
-                let mut database = self.database.lock().await;
-                let store = CampAttachmentStore::for_client(&self.data_dir, request.client.clone());
-                let cleanup = matches!(
-                    params.command.action,
-                    rovai_core::pending_camp_input::PendingInputEditAction::ReturnToComposer { .. }
-                )
-                .then(|| store.draft_attachment_cleanup_plan(&database, &camp_id))
-                .transpose()?;
-                let execution = rovai_core::pending_camp_input::edit_input(
-                    &mut database,
-                    &user_camp_command_envelope(params.command_id, camp_id.clone(), params.command),
-                )?;
-                drop(database);
-                if execution.result.code == "pending_input.returned_to_composer"
-                    && !execution.replayed
-                    && let Some(cleanup) = cleanup
-                    && let Err(error) = store.cleanup_detached_attachments(cleanup)
-                {
-                    eprintln!(
-                        "Returned Pending input; detached Draft attachment cleanup failed: {error:#}"
-                    );
-                }
-                if execution.result.status != CommandResultStatus::Rejected && !execution.replayed {
-                    emit_pending_inputs_changed(&self.output, &camp_id, "edited");
-                }
-                Ok(serde_json::to_value(execution.result)?)
-            }
             "messageQuotes.mutateDraft" => {
                 let mut params: UserCommandParams<
                     rovai_core::message_quote::MutateQuoteDraftCommand,
@@ -8788,168 +8452,19 @@ impl Core {
                     )?)
                 }
             }
-            "camp.composerDraft.get" => {
-                let params: CampComposerDraftParams =
-                    serde_json::from_value(request.params.clone())?;
-                let database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .load_draft(&database, params.camp_id.as_str())?,
-                )?)
-            }
-            "camp.composerDraft.save" => {
-                let params: SaveCampComposerDraftParams =
+            "messageQuotes.capture" => {
+                let params: CaptureCampMessageQuoteParams =
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .save_content_with_continuation(
-                            &mut database,
-                            params.camp_id.as_str(),
-                            params.expected_revision,
-                            params.content,
-                            params.continuation_source_message_id.as_deref(),
-                        )?,
-                )?)
-            }
-            "camp.composerDraft.startReply" => {
-                let params: StartCampComposerReplyParams =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .start_reply(
-                            &mut database,
-                            params.camp_id.as_str(),
-                            params.expected_revision,
-                            &params.reply_to_camp_message_id,
-                        )?,
-                )?)
-            }
-            "camp.composerDraft.cancelReply" => {
-                let params: MutateCampComposerReplyParams =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .cancel_reply(
-                            &mut database,
-                            params.camp_id.as_str(),
-                            params.expected_revision,
-                        )?,
-                )?)
-            }
-            "camp.composerDraft.resolveReplyRecipient" => {
-                let params: ResolveCampComposerReplyRecipientParams =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .resolve_reply_recipient(
-                            &mut database,
-                            params.camp_id.as_str(),
-                            params.expected_revision,
-                            params.recipient,
-                        )?,
-                )?)
-            }
-            "camp.composerDraft.dismissContinuation" => {
-                let params: DismissCampComposerContinuationParams =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .dismiss_continuation(
-                            &mut database,
-                            params.camp_id.as_str(),
-                            params.expected_revision,
-                            &params.source_camp_message_id,
-                        )?,
-                )?)
-            }
-            "camp.composerDraft.resolveContinuationRecipient" => {
-                let params: ResolveCampComposerContinuationRecipientParams =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                        .resolve_continuation_recipient(
-                            &mut database,
-                            params.camp_id.as_str(),
-                            params.expected_revision,
-                            &params.agent_id,
-                        )?,
-                )?)
-            }
-            "camp.composerDraft.removeAttachment" => {
-                let params: RemovePreparedAttachmentParams =
-                    serde_json::from_value(request.params.clone())?;
-                let store = CampAttachmentStore::for_client(&self.data_dir, request.client.clone());
-                let (draft, cleanup) = {
-                    let mut database = self.database.lock().await;
-                    store.remove_prepared_from_database(
-                        &mut database,
-                        params.camp_id.as_str(),
-                        params.expected_revision,
-                        &params.attachment_id,
-                    )?
-                };
-                emit_navigation_invalidated_for_pending_camp(
-                    &self.database,
-                    &self.output,
-                    "camp.composerDraft.removeAttachment",
+                let transaction = database.connection_mut().transaction()?;
+                let quote = rovai_core::message_quote::capture_quote(
+                    &transaction,
                     params.camp_id.as_str(),
-                )
-                .await;
-                let cleanup_store = store.clone();
-                if let Err(error) = tokio::task::spawn_blocking(move || {
-                    cleanup_store.cleanup_detached_attachments(cleanup)
-                })
-                .await
-                .context("Prepared Attachment cleanup task failed")?
-                {
-                    eprintln!(
-                        "Prepared Attachment {} was removed from Draft {}, but its superseded file could not be cleaned immediately: {error:#}",
-                        params.attachment_id, params.camp_id
-                    );
-                }
-                Ok(serde_json::to_value(draft)?)
-            }
-            "camp.composerDraft.discard" => {
-                let params: CampComposerDraftParams =
-                    serde_json::from_value(request.params.clone())?;
-                let store = CampAttachmentStore::for_client(&self.data_dir, request.client.clone());
-                let cleanup = {
-                    let mut database = self.database.lock().await;
-                    store.discard_draft_from_database(&mut database, params.camp_id.as_str())?
-                };
-                emit_navigation_invalidated_for_pending_camp(
-                    &self.database,
-                    &self.output,
-                    "camp.composerDraft.discard",
-                    params.camp_id.as_str(),
-                )
-                .await;
-                tokio::task::spawn_blocking(move || store.cleanup_detached_attachments(cleanup))
-                    .await
-                    .context("Camp Composer Draft cleanup task failed")??;
-                Ok(json!({ "discarded": true }))
-            }
-            "camp.sourceAttachments.addFromPath" => {
-                let params: AddSourceAttachmentFromPathParams =
-                    serde_json::from_value(request.params.clone())?;
-                add_composer_source_attachment_from_path(
-                    &self.database,
-                    &self.output,
-                    &self.data_dir,
-                    params,
-                )
-                .await
-            }
-            "camp.pendingInputs.addSourceAttachmentFromPath" => {
-                let params: AddPendingSourceAttachmentFromPathParams =
-                    serde_json::from_value(request.params.clone())?;
-                add_pending_source_attachment_from_path(&self.database, &self.output, params).await
+                    None,
+                    &params.selection,
+                )?;
+                transaction.commit()?;
+                Ok(serde_json::to_value(quote)?)
             }
             "camp.attachments.previewSource" => {
                 let locator: LocalAttachmentOwnerLocator =
@@ -9081,10 +8596,19 @@ impl Core {
                 )?)?)
             }
             "camp.messages.send" => {
-                let mut params: SendCampMessageParams =
-                    serde_json::from_value(request.params.clone())?;
-                params.draft_client = request.client.clone();
+                let params: SendCampMessageParams = serde_json::from_value(request.params.clone())?;
                 self.send_test_camp_message_request(params).await
+            }
+            "camp.messages.withdraw" => {
+                let params: UserCommandParams<WithdrawCampMessageCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let camp_id = params.command.camp_id.clone();
+                let mut database = self.database.lock().await;
+                let execution = CollaborationService::default().withdraw_camp_message(
+                    &mut database,
+                    &user_camp_command_envelope(params.command_id, camp_id, params.command),
+                )?;
+                Ok(serde_json::to_value(execution.result)?)
             }
             "userAutomation.camp.send" => {
                 let params: SendUserAutomationCampMessageParams =
@@ -9375,7 +8899,6 @@ impl Core {
 
     async fn send_test_camp_message_request(&self, params: SendCampMessageParams) -> Result<Value> {
         let envelope = params.envelope();
-        CollaborationService::validate_send_message_input(&envelope.payload)?;
         if let Some(replay) = {
             let database = self.database.lock().await;
             DomainCommandGateway.replay_if_recorded(&database, &envelope)?
@@ -9387,133 +8910,16 @@ impl Core {
                 "pendingExecution": null,
             }));
         }
-
-        // Queue admission has no file side effects. In particular, do not copy an
-        // attachment only to reject it because this Camp cannot send directly.
-        let queued = {
+        let execution = {
             let mut database = self.database.lock().await;
-            if rovai_core::pending_camp_input::requires_queue(&database, params.camp_id.as_str())? {
-                Some(
-                    CollaborationService::default().send_user_camp_draft_with_managed_ingest(
-                        &mut database,
-                        &envelope,
-                        None,
-                    )?,
-                )
-            } else {
-                None
-            }
-        };
-        if let Some(execution) = queued {
-            if execution.result.status != CommandResultStatus::Rejected && !execution.replayed {
-                emit_pending_inputs_changed(&self.output, params.camp_id.as_str(), "enqueued");
-            }
-            return Ok(
-                json!({"commandResult": execution.result, "replayed": execution.replayed, "preflight": null, "pendingExecution": null}),
-            );
-        }
-        let (managed_store, ingest_plan) = {
-            let mut database = self.database.lock().await;
-            let managed_store = ManagedAttachmentStore::for_database(&database);
-            let plan = if params.draft_client.is_desktop() {
-                managed_store.begin_current_composer_ingest(
-                    &mut database,
-                    params.camp_id.as_str(),
-                    &params.command_id,
-                    params.draft_revision,
-                )?
-            } else {
-                None
-            };
-            (managed_store, plan)
-        };
-        let prepared_ingest = if let Some(plan) = ingest_plan {
-            let materializer = managed_store.clone();
-            let authority_store = CampAttachmentStore::new(&self.data_dir);
-            let materialization_plan = plan.clone();
-            let prepared = match tokio::task::spawn_blocking(move || {
-                materializer.materialize_composer(&authority_store, &materialization_plan)
-            })
-            .await
-            .context("Managed Attachment Composer ingest task failed")?
-            {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    let mut database = self.database.lock().await;
-                    let _ = managed_store.abandon(&mut database, plan.intent_id(), "copy_failed");
-                    return Err(error);
-                }
-            };
-            if let Err(error) = {
-                let mut database = self.database.lock().await;
-                managed_store.record_promoted(&mut database, &prepared)
-            } {
-                let mut database = self.database.lock().await;
-                let _ =
-                    managed_store.abandon(&mut database, prepared.intent_id(), "promote_failed");
-                return Err(error);
-            }
-            Some(prepared)
-        } else {
-            None
-        };
-        let execution_result = {
-            let mut database = self.database.lock().await;
-            CollaborationService::default().send_user_camp_draft_with_managed_ingest(
-                &mut database,
-                &envelope,
-                prepared_ingest
-                    .as_ref()
-                    .map(|prepared| prepared.intent_id()),
-            )
-        };
-        let execution = match execution_result {
-            Ok(execution) if execution.result.status != CommandResultStatus::Rejected => execution,
-            Ok(execution) => {
-                if let Some(prepared) = prepared_ingest.as_ref() {
-                    let mut database = self.database.lock().await;
-                    let _ = managed_store.abandon(
-                        &mut database,
-                        prepared.intent_id(),
-                        "message_commit_failed",
-                    );
-                }
-                execution
-            }
-            Err(error) => {
-                if let Some(prepared) = prepared_ingest.as_ref() {
-                    let mut database = self.database.lock().await;
-                    let _ = managed_store.abandon(
-                        &mut database,
-                        prepared.intent_id(),
-                        "message_commit_failed",
-                    );
-                }
-                return Err(error);
-            }
+            CollaborationService::default().send_user_camp_message(&mut database, &envelope)?
         };
         if execution.result.status != CommandResultStatus::Rejected {
-            if execution.result.payload.get("pendingInputId").is_some() {
-                emit_pending_inputs_changed(&self.output, params.camp_id.as_str(), "enqueued");
-            } else {
-                emit_navigation_invalidated(
-                    &self.output,
-                    "camp.messages.send",
-                    Some(params.camp_id.as_str()),
-                );
-            }
-        }
-        if let Some(prepared) = prepared_ingest {
-            let cleanup_store = managed_store.clone();
-            let authority_store = CampAttachmentStore::new(&self.data_dir);
-            if let Err(error) = tokio::task::spawn_blocking(move || {
-                cleanup_store.cleanup_committed_composer_sources(&authority_store, &prepared)
-            })
-            .await
-            .context("Managed Attachment Composer source cleanup task failed")?
-            {
-                eprintln!("Committed Composer source cleanup was deferred: {error:#}");
-            }
+            emit_navigation_invalidated(
+                &self.output,
+                "camp.messages.send",
+                Some(params.camp_id.as_str()),
+            );
         }
         Ok(json!({
             "commandResult": execution.result,
@@ -10360,7 +9766,11 @@ impl Core {
 
     async fn dispatch_agent_runs(self: &Arc<Self>, output: &mpsc::UnboundedSender<String>) {
         let candidates = {
-            let database = self.database.lock().await;
+            let mut database = self.database.lock().await;
+            if let Err(error) = claim_waiting_delivery_batches(&mut database, 16) {
+                eprintln!("failed to claim waiting Message Delivery batches: {error:#}");
+                return;
+            }
             match ExecutionRuntimeService::default().list_dispatchable_agent_runs(&database, 16) {
                 Ok(candidates) => candidates,
                 Err(error) => {
@@ -10882,7 +10292,7 @@ impl Core {
                                         error_code: delivered_error_code.to_string(),
                                         error_detail: Some(format!("{error:#}")),
                                         failure: Some(delivered_failure.clone()),
-                                        manual_retry_allowed: true,
+                                        manual_retry_allowed: !execution.camp_turn_id.is_empty(),
                                     },
                                 )
                                 .await
@@ -15002,7 +14412,7 @@ impl Core {
                     error_code: error_code.to_string(),
                     error_detail: Some(format!("{error:#}")),
                     failure: public_failure,
-                    manual_retry_allowed: true,
+                    manual_retry_allowed: !execution.camp_turn_id.is_empty(),
                     ending_git_observation,
                 },
             };
@@ -15123,7 +14533,7 @@ impl Core {
                         error_code: "runtime_configuration_invalid".to_string(),
                         error_detail: Some(format!("{error:#}")),
                         failure: public_failure,
-                        manual_retry_allowed: true,
+                        manual_retry_allowed: !candidate.camp_turn_id.is_empty(),
                         ending_git_observation,
                     },
                 },
@@ -15862,7 +15272,6 @@ async fn run_core(
     let compaction_detector_policies =
         DesiredCompactionDetectorPolicies::from_process_environment();
     let recovery = (|| -> Result<_> {
-        rovai_core::pending_camp_input::recover_edit_sessions(&database)?;
         rovai_core::single_chat::recover_pending_edit_sessions(&database)?;
         AutomationService::default().recover_interrupted(&mut database)?;
         let controlled = ExecutionRuntimeService::default()
@@ -21174,7 +20583,7 @@ async fn process_agent_run_codex_message(
                             error_code: error_code.clone(),
                             error_detail: Some(error_detail.clone()),
                             failure: public_failure.clone(),
-                            manual_retry_allowed: true,
+                            manual_retry_allowed: !execution.camp_turn_id.is_empty(),
                             ending_git_observation: ending_git_observation.clone(),
                         },
                     },
@@ -21199,7 +20608,7 @@ async fn process_agent_run_codex_message(
                         error_code: error_code.clone(),
                         error_detail: Some(error_detail.clone()),
                         failure: public_failure.clone(),
-                        manual_retry_allowed: true,
+                        manual_retry_allowed: !execution.camp_turn_id.is_empty(),
                         ending_git_observation,
                     },
                 },
@@ -21622,44 +21031,6 @@ async fn process_agent_run_exit(
     }
 }
 
-async fn dispatch_pending_camp_inputs(core: &Core) {
-    let heads = {
-        let database = core.database.lock().await;
-        rovai_core::pending_camp_input::ready_heads(&database)
-    };
-    let heads = match heads {
-        Ok(heads) => heads,
-        Err(error) => {
-            eprintln!("Pending Camp Input admission failed: {error:#}");
-            return;
-        }
-    };
-    for command in heads {
-        let camp_id = command.camp_id.clone();
-        let envelope =
-            user_camp_command_envelope(uuid::Uuid::new_v4().to_string(), camp_id.clone(), command);
-        let result = {
-            let mut database = core.database.lock().await;
-            CollaborationService::default().send_pending_camp_input(&mut database, &envelope)
-        };
-        match result {
-            Ok(execution) if execution.result.status != CommandResultStatus::Rejected => {
-                emit_pending_inputs_changed(&core.output, &camp_id, "published");
-                emit_navigation_invalidated(
-                    &core.output,
-                    "camp.pendingInputs.published",
-                    Some(&camp_id),
-                );
-            }
-            Ok(_) => emit_pending_inputs_changed(&core.output, &camp_id, "publication_failed"),
-            Err(error) => {
-                emit_pending_inputs_changed(&core.output, &camp_id, "publication_failed");
-                eprintln!("Pending Camp Input publication paused: {error:#}");
-            }
-        }
-    }
-}
-
 async fn dispatch_pending_single_chat_inputs(core: &Core) {
     let candidates = {
         let database = core.database.lock().await;
@@ -21773,7 +21144,6 @@ async fn process_agent_run_scheduler(
                 core.expire_elapsed_execution_budgets(&output).await;
                 core.dispatch_runtime_deliveries(&output).await;
                 core.dispatch_agent_run_cancellations(&output).await;
-                dispatch_pending_camp_inputs(&core).await;
                 dispatch_pending_single_chat_inputs(&core).await;
                 core.dispatch_agent_runs(&output).await;
             },
@@ -22445,20 +21815,6 @@ fn emit_navigation_invalidated(
     );
 }
 
-fn emit_pending_inputs_changed(
-    output: &mpsc::UnboundedSender<String>,
-    camp_id: &str,
-    reason: &str,
-) {
-    // Private post-commit invalidation only. Never put queued content, recipients
-    // or edit tokens into the public event log or Runtime context.
-    emit(
-        output,
-        "camp.pendingInputs.changed",
-        json!({ "campId": camp_id, "reason": reason }),
-    );
-}
-
 fn emit_agent_run_terminal(
     output: &mpsc::UnboundedSender<String>,
     camp_id: Option<&str>,
@@ -22551,12 +21907,10 @@ async fn serve_builtin_tool_ipc(core: Arc<Core>, mut shutdown: oneshot::Receiver
 
 async fn handle_builtin_tool_connection(core: Arc<Core>, stream: LocalIpcStream) -> Result<()> {
     let (reader, mut writer) = tokio::io::split(stream);
-    let reader = BufReader::new(reader);
-    let mut limited = reader.take((BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 2) as u64);
+    let mut reader = BufReader::new(reader);
     let mut frame = Vec::new();
-    let read = limited.read_until(b'\n', &mut frame).await?;
-    let oversized = frame.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 1;
-    let line = if read > 0 && frame.last() == Some(&b'\n') && !oversized {
+    let read = reader.read_until(b'\n', &mut frame).await?;
+    let line = if read > 0 && frame.last() == Some(&b'\n') {
         frame.pop();
         if frame.last() == Some(&b'\r') {
             frame.pop();
@@ -22594,10 +21948,6 @@ async fn handle_builtin_tool_connection(core: Arc<Core>, stream: LocalIpcStream)
                 serde_json::to_value(response)?
             }
         }
-        None if oversized => serde_json::to_value(BuiltinToolIpcResponse::ipc_error(
-            "builtin_tool.ipc_request_too_large",
-            "Built-in Tool IPC request exceeds 1 MiB",
-        ))?,
         None if read == 0 => return Ok(()),
         None => serde_json::to_value(BuiltinToolIpcResponse::ipc_error(
             "builtin_tool.invalid_ipc_request",
@@ -23029,6 +22379,16 @@ mod tests {
     #[cfg(feature = "slow-tests")]
     use std::fs;
 
+    #[cfg(feature = "slow-tests")]
+    fn text_composer_document(text: &str) -> ComposerDocument {
+        ComposerDocument {
+            version: rovai_core::camp_content::COMPOSER_DOCUMENT_VERSION,
+            segments: vec![rovai_core::camp_content::ComposerSegment::Text {
+                text: text.to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn agent_run_failure_preserves_safe_runtime_detail_for_every_adapter() {
         for runtime_kind in AdapterKind::ALL {
@@ -23152,7 +22512,8 @@ mod tests {
 
     #[cfg(feature = "slow-tests")]
     #[tokio::test]
-    async fn composer_source_attachment_keeps_the_native_path_without_managed_storage() {
+    async fn renderer_source_attachment_observation_keeps_the_native_path_without_managed_storage()
+    {
         let fixture = std::env::temp_dir().join(format!(
             "rovai-composer-database-lock-test-{}",
             uuid::Uuid::new_v4()
@@ -23169,33 +22530,13 @@ mod tests {
             rovai_core::camp_attachment::insert_test_camp(&database, camp_id);
         }
 
-        let (output, _receiver) = mpsc::unbounded_channel();
-        let attached = add_composer_source_attachment_from_path(
-            &database,
-            &output,
-            &data_dir,
-            AddSourceAttachmentFromPathParams {
-                camp_id: CampId::parse(camp_id).unwrap(),
-                expected_revision: 0,
-                source_path: source.to_string_lossy().into_owned(),
-                display_name: "source.txt".to_string(),
-                media_type: Some("text/plain".to_string()),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(attached["attachments"].as_array().unwrap().len(), 1);
+        let attached = observe_source_attachment(&source, "source.txt", Some("text/plain"))
+            .expect("the Renderer-local source reference should be observable");
+        assert_eq!(Path::new(&attached.source_path), source);
         let locked = database.lock().await;
         let inspection = rusqlite::Connection::open(locked.path()).unwrap();
-        let stored: String = inspection
-            .query_row(
-                "SELECT source_attachments_json FROM camp_composer_draft WHERE camp_id = ?1",
-                [camp_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(stored.contains(&source.to_string_lossy().to_string()));
         for table in [
+            "camp_composer_draft",
             "prepared_attachment",
             "managed_attachment",
             "message_attachment",
@@ -24342,36 +23683,19 @@ done
             core.attachment_views
                 .ensure_empty_camp_ready(&mut database, &camp_id)
                 .unwrap();
-            CampAttachmentStore::new(&core.data_dir)
-                .save_body(&mut database, &camp_id, "Use the published attachment")
-                .unwrap();
             camp_id
         };
-        let prepared = add_composer_source_attachment_from_path(
-            &core.database,
-            &core.output,
-            &core.data_dir,
-            AddSourceAttachmentFromPathParams {
-                camp_id: CampId::parse(&camp_id).unwrap(),
-                expected_revision: 1,
-                source_path: source.display().to_string(),
-                display_name: "published.txt".to_string(),
-                media_type: Some("text/plain".to_string()),
-            },
-        )
-        .await
-        .unwrap();
-        let draft_revision = prepared["revision"].as_i64().unwrap();
-        let attachment_id = prepared["attachments"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let source_attachment =
+            observe_source_attachment(&source, "published.txt", Some("text/plain")).unwrap();
+        let attachment_id = source_attachment.id.clone();
         let sent = core
             .send_test_camp_message_request(SendCampMessageParams {
-                draft_client: crate::draft_client::DraftClient::default(),
                 command_id: uuid::Uuid::new_v4().to_string(),
                 camp_id: CampId::parse(&camp_id).unwrap(),
-                draft_revision,
+                content: text_composer_document("Use the published attachment"),
+                source_attachments: vec![source_attachment],
+                quotes: Vec::new(),
+                reply_to_camp_message_id: None,
                 execution: None,
             })
             .await
@@ -24532,10 +23856,12 @@ done
         let draft_revision = prepared.revision;
         let attachment_id = prepared.attachments[0].id.clone();
         core.send_test_camp_message_request(SendCampMessageParams {
-            draft_client: crate::draft_client::DraftClient::default(),
             command_id: uuid::Uuid::new_v4().to_string(),
             camp_id: CampId::parse(&camp_id).unwrap(),
-            draft_revision,
+            content: text_composer_document("Use the published attachment"),
+            source_attachments: Vec::new(),
+            quotes: Vec::new(),
+            reply_to_camp_message_id: None,
             execution: None,
         })
         .await
@@ -25926,7 +25252,6 @@ done
         ));
         assert!(request_runs_outside_main_queue("camp.messages.send"));
         assert!(request_runs_outside_main_queue("userAutomation.camp.send"));
-        assert!(request_runs_outside_main_queue("campTurns.cancel"));
         assert!(request_runs_outside_main_queue("agentRuns.cancel"));
         assert!(request_runs_outside_main_queue(
             "runtime.pendingExecution.cancel"
@@ -25943,13 +25268,10 @@ done
             "camps.rename",
             "camps.enter",
             "camps.delete",
-            "camp.composerDraft.save",
-            "camp.sourceAttachments.addFromPath",
             "camp.messages.send",
+            "camp.messages.withdraw",
             "userAutomation.camp.send",
-            "campTurns.cancel",
             "agentRuns.cancel",
-            "agentRuns.resolveRecoveryBlocker",
         ] {
             assert!(request_invalidates_navigation(method), "{method}");
         }
@@ -25966,10 +25288,8 @@ done
         for method in [
             "camps.create",
             "camps.discardPending",
-            "camp.composerDraft.removeAttachment",
-            "camp.composerDraft.discard",
-            "camp.sourceAttachments.addFromPath",
             "camp.messages.send",
+            "camp.messages.withdraw",
         ] {
             assert!(
                 navigation_invalidation_emitted_at_commit_boundary(method),
@@ -26024,7 +25344,7 @@ done
         let workspace = root.join("workspace");
         fs::create_dir_all(&workspace).unwrap();
         let core = Arc::new(runtime_resolution_test_core(&root).unwrap());
-        let (camp_id, draft_revision) = {
+        let camp_id = {
             let mut database = core.database.lock().await;
             let agent_id = AgentProfileService::default()
                 .list_profiles(&database)
@@ -26064,18 +25384,16 @@ done
             core.attachment_views
                 .ensure_empty_camp_ready(&mut database, &camp_id)
                 .unwrap();
-            let draft_revision = CampAttachmentStore::new(&core.data_dir)
-                .save_body(&mut database, &camp_id, "Keep cleanup busy")
-                .unwrap()
-                .revision;
-            (camp_id, draft_revision)
+            camp_id
         };
         let sent = core
             .send_test_camp_message_request(SendCampMessageParams {
-                draft_client: crate::draft_client::DraftClient::default(),
                 command_id: uuid::Uuid::new_v4().to_string(),
                 camp_id: CampId::parse(&camp_id).unwrap(),
-                draft_revision,
+                content: text_composer_document("Keep cleanup busy"),
+                source_attachments: Vec::new(),
+                quotes: Vec::new(),
+                reply_to_camp_message_id: None,
                 execution: Some(ExecutionRequest {
                     task_id: None,
                     purpose: "Exercise Runtime cleanup".to_string(),
@@ -26085,10 +25403,20 @@ done
             })
             .await
             .unwrap();
-        let agent_run_id = sent["commandResult"]["payload"]["agentRunIds"][0]
-            .as_str()
-            .unwrap_or_else(|| panic!("message did not create an AgentRun: {sent:#}"))
-            .to_string();
+        assert_eq!(
+            sent["commandResult"]["payload"]["deliveryIds"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        let agent_run_id = {
+            let mut database = core.database.lock().await;
+            claim_waiting_delivery_batches(&mut database, 1)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("waiting Delivery did not create an AgentRun: {sent:#}"))
+        };
         let (version, execution_epoch) = {
             let mut database = core.database.lock().await;
             let candidate = ExecutionRuntimeService::default()

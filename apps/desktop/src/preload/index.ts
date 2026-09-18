@@ -389,26 +389,6 @@ const api: RovaiApi = {
         bytes
       )
     },
-    async preparePending(input, file) {
-      const sourcePath = webUtils.getPathForFile(file)
-      if (sourcePath) {
-        return ipcRenderer.invoke(
-          'rovai:pending-attachment-prepare-path',
-          input,
-          sourcePath,
-          file.name,
-          file.type || null
-        )
-      }
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      return ipcRenderer.invoke(
-        'rovai:pending-attachment-prepare-bytes',
-        input,
-        file.name,
-        file.type || null,
-        bytes
-      )
-    },
     preview(locator) {
       return ipcRenderer.invoke('rovai:composer-attachment-preview', locator)
     }

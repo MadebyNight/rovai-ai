@@ -124,8 +124,8 @@ fn run_evidence_root(
             r#"
             SELECT agent_run.workspace_json, camp.project_binding_kind, camp.project_path
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            JOIN camp ON camp.id = camp_turn.camp_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             WHERE agent_run.id = ?1
               AND agent_run.execution_epoch = ?2
               AND camp.id = ?3

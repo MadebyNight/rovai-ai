@@ -51,7 +51,6 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
                 },
                 "effectiveRecipients": {
                     "type": "array",
-                    "maxItems": 16,
                     "uniqueItems": true,
                     "items": {"type": "string"}
                 },
@@ -65,24 +64,9 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
                 },
                 "deliveryIds": {
                     "type": "array",
-                    "maxItems": 16,
                     "uniqueItems": true,
                     "items": {"type": "string"}
                 }
-            }
-        })),
-        "team.gather" => Ok(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["gatherId", "requestMessageId", "effectiveRecipients", "completion"],
-            "properties": {
-                "gatherId": {"type": "string"},
-                "requestMessageId": {"type": "string"},
-                "effectiveRecipients": {
-                    "type": "array", "minItems": 1, "maxItems": 16,
-                    "uniqueItems": true, "items": {"type": "string"}
-                },
-                "completion": {"const": "deferred"}
             }
         })),
         "memory.write" => Ok(json!({
@@ -186,20 +170,6 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
             }
             Ok(projected)
         }
-        "team.gather" => Ok(json!({
-            "gatherId": object
-                .get("gatherId")
-                .context("team.gather result has no gatherId")?,
-            "requestMessageId": object
-                .get("requestMessageId")
-                .context("team.gather result has no requestMessageId")?,
-            "effectiveRecipients": object
-                .get("effectiveRecipients")
-                .context("team.gather result has no effectiveRecipients")?,
-            "completion": object
-                .get("completion")
-                .context("team.gather result has no completion")?,
-        })),
         "memory.write" => match object.get("outcome").and_then(Value::as_str) {
             Some("effective") => Ok(json!({
                 "outcome": "effective",
@@ -569,13 +539,9 @@ mod tests {
                 "sequence": 1,
                 "authorType": "agent",
                 "authorId": "agent_27",
-                "replyToMessageId": null,
+                "anchorMessageId": null,
                 "createdAt": "2026-01-01T00:00:00Z",
                 "body": "hello",
-                "bodyOffset": 0,
-                "bodyLength": 5,
-                "bodyTruncated": false,
-                "nextBodyOffset": null,
                 "attachmentCount": 1,
                 "attachments": [{
                     "attachmentId": "attachment_123",

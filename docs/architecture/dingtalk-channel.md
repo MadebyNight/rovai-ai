@@ -3,16 +3,17 @@ document_type: architecture
 architecture: dingtalk-channel
 authority: dingtalk-channel-component-and-authority-boundaries
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-18
 ---
 
 # 钉钉渠道架构
 
-字段、状态、Renderer 管理入口和恢复合同见 [DingTalk Channel v13](../contracts/dingtalk-channel-v13.md)，credential 与 Developer Session 持久化见
+字段、状态、Renderer 管理入口和恢复合同见 [DingTalk Channel v13](../contracts/dingtalk-channel-v13.md)，当前异步入站/外发语义见
+[Channel Message Bridge v1](../contracts/channel-message-bridge-v1.md)，credential 与 Developer Session 持久化见
 [Channel Storage v3](../contracts/channel-storage-v3.md)，共享 Camp admission、membership 与
-模型输入分别继续由 [Feishu Channel v2](../contracts/feishu-channel-v2.md)中已经 provider-neutral 的渠道核心、
+模型输入分别继续由 provider-neutral 渠道核心、
 [Camp Membership v2](../contracts/camp-membership-v2.md)和
-[ContextManifest Evidence v22](../contracts/context-manifest-evidence-v22.md)拥有。取舍理由见
+[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)拥有。取舍理由见
 [v1.36 决策记录](../versions/v1.36/decisions.md)和
 [V1.37-D09](../versions/v1.37/decisions.md#v1-37-d09)、
 [V1.37-D10](../versions/v1.37/decisions.md#v1-37-d10)、
@@ -48,7 +49,7 @@ Renderer 渠道设置
              ├─ provider-neutral Bot/Owner directory
              ├─ ExternalPrincipal / ExternalQuote
              ├─ conversation binding / PendingCampBinding
-             ├─ ChannelTurnRequest / single-root FIFO
+             ├─ durable inbound receipt FIFO
              ├─ unified atomic Camp admission / membership
              └─ execution console / ChannelDelivery outbox
 ```
@@ -56,7 +57,7 @@ Renderer 渠道设置
 Renderer 只呈现 Provider snapshot 和显式 Owner 动作。它不接触控制台 Cookie/Token、AppSecret、Session 原文、控制面输出、
 transport conversation 或 pending aggregate。Main 拥有外部网络和运行期秘密；Core 在 `rovai.sqlite` 中拥有明文持久
 Session/credential 以及业务 identity、项目/Camp、admission、
-membership 与 Outbox。DingTalk Host 不直接创建 CampMessage、CampTurn 或 AgentRun。
+membership 与 Outbox。DingTalk Host 不直接创建 CampMessage、Delivery 或 AgentRun。
 
 ## Developer Web Session 与控制台 API
 
@@ -205,7 +206,8 @@ Stream callback fast ACK
 → finalize
 → PendingCampBinding or existing binding FIFO
 → CollaborationService atomic external-channel admission
-→ CampMessage + CampTurn + initial AgentRun(s)
+→ CampMessage + target Delivery(ies); inbound receipt completed
+→ unified Scheduler claim → AgentRun
 ```
 
 私聊按 receiving App 建 Quick Chat；精确 `/new` 只旋转该私聊 Camp，不创建触发消息或 Run。同组织内部群通过“添加机器人”
@@ -219,7 +221,7 @@ Stream callback fast ACK
 相等判断；普通成员 mention 也不得推导 Agent target。多 Rovai Bot 由多个独立 App Stream 的真实接收事实证明，每份
 callback 立即合并到同一 SQLite aggregate，目标按首次持久观察顺序冻结，首观察 App 唯一负责 acknowledgement 与项目卡。
 Main 正常存活时在 3 秒后提交完整集合；Main 重启错过定时器时，Core 在 deadline 后以非空且相等的 expected/observed
-集合自动封口。两条路径都只能产生一个 `ChannelTurnRequest` 与同一 CampTurn 的多个 AgentRun；迟到 callback 不建第二根。
+集合自动封口。两条路径都只能产生一个 durable inbound receipt、一个 CampMessage 与有序目标 Delivery 集；迟到 callback 不重复发布。
 私聊不依赖 `isInAtList` 或 mention identity，继续直接进入 Quick Chat。
 
 群 roster 以远端当前机器人列表与本机 published DingTalk Bot 的交集为 authority，使用既有 membership

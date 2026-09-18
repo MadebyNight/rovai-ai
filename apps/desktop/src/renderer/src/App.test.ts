@@ -360,18 +360,6 @@ describe('availability-first workspace gate', () => {
 })
 
 describe('active Camp event invalidation', () => {
-  it('refreshes public history only when a private queued input is published in the active Camp', () => {
-    for (const reason of ['enqueued', 'edited', 'publication_failed']) {
-      expect(shouldRefreshActiveCampForCoreEvent({
-        method: 'camp.pendingInputs.changed', params: { campId: 'camp-1', reason }
-      }, 'camp-1')).toBe(false)
-    }
-    const publication = { method: 'camp.pendingInputs.changed', params: { campId: 'camp-1', reason: 'published' } }
-    expect(shouldRefreshActiveCampForCoreEvent(publication, 'camp-1')).toBe(true)
-    expect(shouldRefreshActiveCampForCoreEvent(publication, 'camp-2')).toBe(false)
-    expect(shouldRefreshActiveCampForCoreEvent(publication, 'camp-1', true)).toBe(false)
-  })
-
   it('refreshes the active Camp when a persisted AgentRun reaches terminal', () => {
     expect(shouldRefreshActiveCampForCoreEvent({
       method: 'agent_run.terminal',
@@ -512,6 +500,7 @@ describe('active Camp event invalidation', () => {
         tasks: [],
         messages: [{
     quotes: [],
+          withdrawn: false, canWithdraw: false, version: 1,
           id: 'message-terminal-refresh', sequence: 1, timelineGlobalSequence: null,
           authorType: 'user', authorId: 'local_user', sourceAgentRunId: null,
           body: '完成验收', content: [{ kind: 'text', text: '完成验收' }], attachments: [],
@@ -826,6 +815,7 @@ describe('Camp snapshot cache', () => {
   it('adapts the bounded open projection without restoring heavy history', () => {
     const message = (id: string, sequence: number): CampMessageView => ({
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id,
       sequence,
       timelineGlobalSequence: sequence,
@@ -1109,6 +1099,7 @@ describe('task event projections', () => {
       presentation: CampSnapshot['messages'][number]['presentation'] = null
     ): CampSnapshot['messages'][number] => ({
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id,
       sequence,
       timelineGlobalSequence: sequence,
@@ -1243,6 +1234,7 @@ describe('task event projections', () => {
 
     const message = (sequence: number, createdAt = task.createdAt): CampMessageView => ({
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id: `message-${sequence}`, sequence, timelineGlobalSequence: null,
       authorType: 'user', authorId: 'local_user', sourceAgentRunId: null,
       body: 'message', content: [{ kind: 'text', text: 'message' }], attachments: [],
@@ -1332,6 +1324,7 @@ describe('task event projections', () => {
       createdAt: string
     ): CampSnapshot['messages'][number] => ({
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id,
       sequence,
       timelineGlobalSequence: sequence,
@@ -1722,6 +1715,7 @@ describe('task event projections', () => {
   it('merges an anchored message window without replacing newer snapshot messages', () => {
     const campMessage = (id: string, sequence: number, body: string): CampMessageView => ({
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id,
       sequence,
       timelineGlobalSequence: sequence,
@@ -1889,7 +1883,7 @@ describe('task event projections', () => {
     ])
   })
 
-  it('submits only the exact Core Draft revision as message content authority', () => {
+  it('submits the current Renderer input without a persistent Core Draft identity', () => {
     const params = campMessageSendParams('command-1', 'camp-1', {
     quotes: [],
       campId: 'camp-1',
@@ -1906,16 +1900,27 @@ describe('task event projections', () => {
       expiresAt: '2026-08-10T00:00:00Z'
     })
 
-    expect(params).toMatchObject({
+    expect(params).toEqual({
       commandId: 'command-1',
       campId: 'camp-1',
-      draftRevision: 7
+      content: {
+        version: 2,
+        segments: [{ kind: 'atom', atom: { type: 'member', agentId: 'agent_2' } }]
+      },
+      sourceAttachments: [],
+      quotes: [],
+      replyToCampMessageId: null,
+      execution: {
+        taskId: null,
+        purpose: '请 @沐瓦 检查',
+        completionRole: 'required'
+      }
     })
+    expect(params).not.toHaveProperty('draftRevision')
     expect(params).not.toHaveProperty('body')
     expect(params).not.toHaveProperty('address')
     expect(params).not.toHaveProperty('agentIds')
     expect(params).not.toHaveProperty('preparedAttachmentIds')
-    expect(params).not.toHaveProperty('replyToCampMessageId')
     expect(params.execution).not.toHaveProperty('expectedOutput')
   })
 
@@ -2040,6 +2045,7 @@ describe('task event projections', () => {
       revision: 4,
       attachments: [{
         id: 'attachment-only',
+        sourcePath: '/tmp/说明.txt',
         displayName: '说明.txt',
         kind: 'file',
         fileCount: 1,
@@ -2058,7 +2064,17 @@ describe('task event projections', () => {
     expect(campMessageSendParams('command-attachment-only', draft.campId, draft)).toEqual({
       commandId: 'command-attachment-only',
       campId: draft.campId,
-      draftRevision: 4,
+      content: { version: 2, segments: [] },
+      sourceAttachments: [{
+        id: 'attachment-only',
+        sourcePath: '/tmp/说明.txt',
+        displayName: '说明.txt',
+        kind: 'file',
+        mediaType: 'text/plain',
+        observedByteSize: 12
+      }],
+      quotes: [],
+      replyToCampMessageId: null,
       execution: {
         taskId: null,
         purpose: 'Camp attachment-only message',
@@ -2241,6 +2257,7 @@ describe('task event projections', () => {
   it('projects one terminal Stop outcome at the authoritative cancellation boundary', () => {
     const userMessage: CampMessageView = {
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id: 'message-stop',
       sequence: 1,
       timelineGlobalSequence: 10,
@@ -2816,7 +2833,7 @@ describe('task event projections', () => {
     expect(markup).toContain('<strong>Rovai AI</strong>')
     expect(markup).toContain('队员')
     expect(markup).toContain('记忆，2 条普通提案待确认')
-    expect(markup).not.toContain('使命板')
+    expect(markup).toContain('使命板，3 项需要你')
     expect(markup).toContain('data-navigation-icon="square-pen"')
     expect(markup).toContain('data-navigation-icon="users"')
     expect(markup).toContain('data-navigation-icon="brain"')
@@ -3122,15 +3139,16 @@ describe('task event projections', () => {
     expect(capabilitiesGroup).toContain('<strong>Skills</strong>')
     expect(capabilitiesGroup).toContain('<strong>MCP</strong>')
     expect(capabilitiesGroup).toContain('<strong>运行时</strong>')
+    expect(capabilitiesGroup).toContain('<strong>远程连接</strong>')
     expect(capabilitiesGroup).toContain('<strong>渠道</strong>')
-    expect(capabilitiesGroup).not.toContain('<strong>远程连接</strong>')
     expect(capabilitiesGroup).toContain('data-navigation-icon="sparkles"')
     expect(capabilitiesGroup).toContain('data-navigation-icon="blocks"')
     expect(capabilitiesGroup).toContain('data-navigation-icon="cpu"')
     expect(capabilitiesGroup).toContain('data-navigation-icon="radio-tower"')
     expect(capabilitiesGroup.indexOf('<strong>Skills</strong>')).toBeLessThan(capabilitiesGroup.indexOf('<strong>MCP</strong>'))
     expect(capabilitiesGroup.indexOf('<strong>MCP</strong>')).toBeLessThan(capabilitiesGroup.indexOf('<strong>运行时</strong>'))
-    expect(capabilitiesGroup.indexOf('<strong>运行时</strong>')).toBeLessThan(capabilitiesGroup.indexOf('<strong>渠道</strong>'))
+    expect(capabilitiesGroup.indexOf('<strong>运行时</strong>')).toBeLessThan(capabilitiesGroup.indexOf('<strong>远程连接</strong>'))
+    expect(capabilitiesGroup.indexOf('<strong>远程连接</strong>')).toBeLessThan(capabilitiesGroup.indexOf('<strong>渠道</strong>'))
     expect(supportGroup).toContain('<strong>诊断与修复</strong>')
     expect(supportGroup).toContain('<strong>运行监控</strong>')
     expect(supportGroup).toContain('<strong>关于与更新</strong>')
@@ -3421,7 +3439,7 @@ describe('task event projections', () => {
     expect(markup).not.toContain('当前 Camp 上下文')
     expect(markup).toContain('消息未发送')
     expect(markup).toContain('1 位目标队员暂时不可执行')
-    expect(markup).toContain('草稿已保留')
+    expect(markup).toContain('当前输入已保留')
     expect(markup).toContain('尚未配置 Agent 运行时')
     expect(markup).toContain('配置洛可的 Agent 运行时')
     expect(markup.indexOf('class="runtime-recovery-dock"')).toBeLessThan(markup.indexOf('class="composer"'))
@@ -3627,6 +3645,7 @@ describe('task event projections', () => {
       messageDeliveries: [],
       messages: [{
     quotes: [],
+        withdrawn: false, canWithdraw: false, version: 1,
         id: 'message-user', sequence: 1, timelineGlobalSequence: 1,
         authorType: 'user', authorId: 'local_user',
         sourceAgentRunId: null, body: '请 @沐瓦 实现复制。',
@@ -3739,6 +3758,7 @@ describe('task event projections', () => {
       id: 'run-submitted-first',
       agentId: 'agent_3',
       campTurnId: 'turn-submitted',
+      inputMessageIds: ['message-submitted'],
       status: 'queued' as const,
       createdAt: '2026-07-28T06:00:00Z'
     }
@@ -3751,12 +3771,13 @@ describe('task event projections', () => {
     }
     const submittedRuns = [submittedSecondRun, submittedFirstRun]
     expect(firstSubmittedAgentRun({
-      campTurnId: 'turn-submitted',
+      deliveryIds: ['delivery-1', 'delivery-2'],
       agentRunIds: ['run-submitted-first', 'run-submitted-second'],
       addressedAgentIds: ['agent_3', 'agent_2']
     }, submittedRuns)?.id).toBe('run-submitted-first')
     expect(firstSubmittedAgentRun({
-      campTurnId: 'turn-submitted',
+      campMessageId: 'message-submitted',
+      deliveryIds: ['delivery-1', 'delivery-2'],
       agentRunIds: [],
       addressedAgentIds: ['agent_3', 'agent_2']
     }, submittedRuns)?.id).toBe('run-submitted-first')
@@ -3879,13 +3900,9 @@ describe('task event projections', () => {
     expect(markup).not.toContain('tool-call-disclosure')
     expect(markup).not.toContain('working-row')
     expect(markup).not.toContain('live-execution-progress')
-    expect(markup).toContain('aria-label="停止当前执行"')
-    expect(markup).toContain('class="composer-primary-action is-stop"')
-    const runningComposerAction = markup.slice(
-      markup.indexOf('class="composer-primary-action is-stop"'),
-      markup.indexOf('</button>', markup.indexOf('class="composer-primary-action is-stop"'))
-    )
-    expect(runningComposerAction).not.toContain('停止</button>')
+    expect(markup).not.toContain('aria-label="停止当前执行"')
+    expect(markup).not.toContain('class="composer-primary-action is-stop"')
+    expect(markup).not.toContain('aria-label="停止当前运行"')
     expect(markup).not.toContain('加入待发送')
 
     const cachedPreviewMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
@@ -4065,20 +4082,15 @@ describe('task event projections', () => {
       onChangeLead: async () => undefined,
       onTasksChanged: async () => undefined,
       onResolveApproval: () => undefined,
-      cancellingTurnIds: new Set(['turn-1']),
-      stopping: true,
-      onStop: () => undefined
+      cancellingRunIds: new Set(['run-muwa']),
+      onCancelAgentRun: async () => undefined,
+      stopping: false
     }))
     expect(cancellingMarkup).toContain('正在提交停止请求')
-    expect(cancellingMarkup).toContain('正在提交停止请求，完成后即可继续发送。')
     expect(cancellingMarkup).toContain('execution-disclosure run-live is-cancelling')
-    expect(cancellingMarkup).toContain('aria-label="正在提交停止请求"')
-    const cancellingComposerAction = cancellingMarkup.slice(
-      cancellingMarkup.indexOf('class="composer-primary-action is-stop"'),
-      cancellingMarkup.indexOf('</button>', cancellingMarkup.indexOf('class="composer-primary-action is-stop"'))
-    )
-    expect(cancellingComposerAction).toContain('composer-primary-action-spinner')
-    expect(cancellingComposerAction).not.toContain('正在提交停止请求…')
+    expect(cancellingMarkup).toContain('class="execution-run-stop-state tone-attention"')
+    expect(cancellingMarkup).not.toContain('aria-label="停止当前运行"')
+    expect(cancellingMarkup).not.toContain('class="composer-primary-action is-stop"')
     expect(cancellingMarkup).not.toMatch(/<textarea[^>]*disabled/)
     expect(cancellingMarkup).not.toContain('execution-disclosure is-running')
 
@@ -4088,14 +4100,16 @@ describe('task event projections', () => {
         messages: [...snapshot.messages, {
           id: 'message-agent', sequence: 2, timelineGlobalSequence: 4,
           authorType: 'agent' as const, authorId: 'agent_2',
-          quotes: [], sourceAgentRunId: 'run-muwa', body: '复制入口已完成。', content: [{ kind: 'text', text: '复制入口已完成。' }], addressMode: 'broadcast' as const,
+          quotes: [], withdrawn: false, canWithdraw: false, version: 1,
+          sourceAgentRunId: 'run-muwa', body: '复制入口已完成。', content: [{ kind: 'text', text: '复制入口已完成。' }], addressMode: 'broadcast' as const,
           attachments: [],
           addressedAgentIds: [], replyToCampMessageId: 'message-user',
           campTurnId: 'turn-1', presentation: null, createdAt: '2026-07-28T05:02:00Z'
         }, {
           id: 'message-user-follow-up', sequence: 3, timelineGlobalSequence: 5,
           authorType: 'user' as const, authorId: 'local_user',
-          quotes: [], sourceAgentRunId: null, body: '我再确认一下。', content: [{ kind: 'text', text: '我再确认一下。' }], addressMode: 'default' as const,
+          quotes: [], withdrawn: false, canWithdraw: false, version: 1,
+          sourceAgentRunId: null, body: '我再确认一下。', content: [{ kind: 'text', text: '我再确认一下。' }], addressMode: 'default' as const,
           attachments: [],
           addressedAgentIds: ['agent_2'], replyToCampMessageId: null,
           campTurnId: null, presentation: null, createdAt: '2026-07-28T05:03:00Z'
@@ -4503,6 +4517,7 @@ describe('task event projections', () => {
   it('renders an attachment-only message shell without an empty body bubble', () => {
     const attachmentOnlyMessage: CampMessageView = {
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id: 'message-attachment-only',
       sequence: 1,
       timelineGlobalSequence: 1,
@@ -4601,6 +4616,7 @@ describe('task event projections', () => {
   it('renders a public A2A message with the Scheme C handoff footer', () => {
     const publicMessage: CampMessageView = {
     quotes: [],
+      withdrawn: false, canWithdraw: false, version: 1,
       id: 'public-a2a-message',
       sequence: 1,
       timelineGlobalSequence: 2,
@@ -5627,7 +5643,8 @@ describe('task event projections', () => {
     }))
     expect(waitingMarkup).toContain('class="process-content"')
     expect(waitingMarkup).toContain('仅在详情激活后渲染')
-    expect(waitingMarkup).toContain('无法安全自动恢复')
+    expect(waitingMarkup).toContain('执行异常，正在清理')
+    expect(waitingMarkup).toContain('清理完成后，后续消息会按正常顺序继续执行')
 
     const networkBlockedMarkup = renderToStaticMarkup(createElement(RunExecutionDisclosure, {
       run: {

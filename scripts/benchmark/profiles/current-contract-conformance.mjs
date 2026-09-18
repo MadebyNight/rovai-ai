@@ -2,16 +2,16 @@ import { defineBenchmarkProfile } from '../execution/suite.mjs'
 import { digestJson } from '../protocol/canonical.mjs'
 
 export const CURRENT_CONTRACT_DATA_STORE = Object.freeze({
-  version: 'v1.56',
-  projectionSchemaVersion: 98
+  version: 'v1.60',
+  projectionSchemaVersion: 112
 })
 
 const criteria = [
   criterion('CCC-001', 'Public A2A Current Input preserves the trusted sender Agent identity', [
     test('crates/rovai-core/src/team_tool.rs', 'public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes')
   ]),
-  criterion('CCC-002', 'Ordinary user Current Input remains type:user', [
-    test('crates/rovai-core/src/context.rs', 'current_input_is_complete_even_when_it_exceeds_the_history_body_limit')
+  criterion('CCC-002', 'Ordinary user RUN_INPUT remains complete with its trusted sender type', [
+    test('crates/rovai-core/src/context.rs', 'run_input_is_complete_even_when_it_exceeds_the_history_body_limit')
   ]),
   criterion('CCC-003', 'Run Fact is rendered once', [
     test('crates/rovai-core/src/team_tool.rs', 'task_linked_public_delivery_reuses_exact_run_fact_bytes')
@@ -19,21 +19,22 @@ const criteria = [
   criterion('CCC-004', 'Frozen Delivery, model section, and Manifest reuse exact Run Fact bytes and digest', [
     test('crates/rovai-core/src/team_tool.rs', 'task_linked_public_delivery_reuses_exact_run_fact_bytes')
   ]),
-  criterion('CCC-005', 'Structured CampMessage prefix and camp.read continuation reconstruct the persisted body', [
-    test('crates/rovai-core/src/context.rs', 'structured_history_continuation_uses_the_persisted_body_text_space')
+  criterion('CCC-005', 'camp.read returns the selected message body completely without a continuation protocol', [
+    test('crates/rovai-core/src/camp_history.rs', 'camp_read_returns_the_selected_page_and_item_body_without_size_clipping')
   ]),
   criterion('CCC-006', 'A later member rename does not alter frozen structured-message semantics', [
     test('crates/rovai-core/src/camp_content.rs', 'rendering_projects_current_names_without_changing_semantic_digest'),
     test('crates/rovai-core/src/read_model.rs', 'snapshot_projects_current_names_from_structured_mentions')
   ]),
-  criterion('CCC-007', 'max_public_messages omission stores only a bounded count and sequence envelope', [
-    test('crates/rovai-core/src/context.rs', 'public_context_uses_latest_raw_window_prefixes_and_explicit_omission')
+  criterion('CCC-007', 'The incremental public window keeps the latest 15 messages, including self output, with bounded omission evidence', [
+    test('crates/rovai-core/src/context.rs', 'recent_public_messages_include_self_before_limit_and_omission_aggregation')
   ]),
-  criterion('CCC-008', 'History budget, runtime budget, and reference closure retain bounded exact IDs', [
-    test('crates/rovai-core/src/context.rs', 'public_history_budget_is_shared_and_quote_groups_remain_atomic')
+  criterion('CCC-008', 'Required RUN_INPUT stays complete while optional shared history yields to the Runtime payload budget', [
+    test('crates/rovai-core/src/context.rs', 'oversized_required_context_fails_before_manifest_or_boundary_ack'),
+    test('crates/rovai-core/src/context.rs', 'fully_evicted_batch_history_cursor_still_covers_the_frozen_tail')
   ]),
-  criterion('CCC-009', 'Large-history omission JSON remains bounded rather than growing with all message IDs', [
-    test('crates/rovai-core/src/context.rs', 'whole_history_omission_evidence_stays_bounded_for_large_intervals')
+  criterion('CCC-009', 'A fully evicted shared-history window retains only a bounded count and live read cursor', [
+    test('crates/rovai-core/src/context.rs', 'fully_evicted_batch_history_cursor_still_covers_the_frozen_tail')
   ]),
   criterion('CCC-010', 'ContextManifest and Formatter versions match the current context contract', [
     test('crates/rovai-core/src/context_contract.rs', 'binding_contract_freezes_each_context_axis_version')
@@ -58,11 +59,11 @@ const criteria = [
     test('crates/rovai-core/src/db.rs', 'current_migration_state_admission_matrix'),
     test('crates/rovai-core/src/db.rs', 'v107_quarantine_moves_owned_directories_without_following_links')
   ]),
-  criterion('CCC-014', 'The v99 schema transition preserves completed evidence, closes unfinished execution, and backfills only published attachments', [
-    test('crates/rovai-core/src/db.rs', 'v99_preserves_legacy_evidence_classifies_unfinished_work_and_backfills_only_published_attachments')
+  criterion('CCC-014', 'The v162 transition preserves published work, requeues unfrozen Delivery, and retires legacy Run placeholders', [
+    test('crates/rovai-core/src/db.rs', 'v162_requeues_unfrozen_public_work_and_retires_the_legacy_run_placeholder')
   ]),
-  criterion('CCC-015', 'Self-authored recent messages are excluded before the top-15 and omission aggregate', [
-    test('crates/rovai-core/src/context.rs', 'recent_public_messages_filter_self_before_limit_and_omission_aggregation')
+  criterion('CCC-015', 'Public batch windows keep their accepted Camp+Agent watermark across Native Session replacement and do not apply the legacy self filter', [
+    test('crates/rovai-core/src/context.rs', 'batch_public_window_keeps_the_camp_agent_watermark_across_new_sessions')
   ]),
   criterion('CCC-016', 'Managed v2 ingests immutable attachments once, commits Message refs without a legacy projection gate, and recovers incomplete ingest intents', [
     test('crates/rovai-core/src/managed_attachment.rs', 'composer_ingest_promotes_once_and_commits_only_v2_rows'),
@@ -81,12 +82,12 @@ export const CURRENT_CONTRACT_PREREQUISITES = Object.freeze([
     evidence: test('crates/rovai-core/src/collaboration.rs', 'agent_task_updates_respect_lead_and_assignee_authority')
   },
   {
-    id: 'built-in-transport-v25',
+    id: 'built-in-transport-v27',
     evidence: test('crates/rovai-core/src/builtin_tool_transport.rs', 'list_and_describe_share_one_digest')
   },
   {
     id: 'accepted-input-ack',
-    evidence: test('crates/rovai-core/src/context.rs', 'accepted_input_advances_only_current_binding_and_restart_blocks_redelivery')
+    evidence: test('crates/rovai-core/src/context.rs', 'redelivery_overlay_is_frozen_at_prepare_and_acknowledges_only_its_revision')
   }
 ])
 
@@ -94,7 +95,7 @@ export const CURRENT_CONTRACT_CRITERIA = Object.freeze(criteria)
 
 export const CURRENT_CONTRACT_PROFILE = defineBenchmarkProfile({
   id: 'current-contract-conformance',
-  version: '1.56.0',
+  version: '1.60.0',
   lane: 'contract-conformance',
   hardOutcomeDefinition: {
     validity: 'deterministic_source_and_harness_valid',
@@ -112,8 +113,8 @@ export const CURRENT_CONTRACT_PROFILE = defineBenchmarkProfile({
     compositeScore: false
   },
   suite: {
-    id: 'rovai-v1.56-current-contract',
-    version: '1.56.0',
+    id: 'rovai-v1.60-current-contract',
+    version: '1.60.0',
     shuffle: false,
     rounds: [{ id: 'deterministic', ordinal: 1 }],
     cases: criteria.map((entry) => ({

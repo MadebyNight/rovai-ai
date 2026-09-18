@@ -3,7 +3,6 @@ import type { LiveRuntimeEvent } from './index'
 /** Display vocabulary only. Protocol identities, receipts and stored evidence stay unchanged. */
 export const BUILTIN_CLI_NAMES: Readonly<Record<string, string>> = Object.freeze({
   'camp.message.send': 'rovai send',
-  'team.gather': 'rovai gather',
   'member.create': 'rovai member create',
   'team.create_task': 'rovai task create',
   'team.get_task': 'rovai task get',
@@ -51,7 +50,7 @@ export function builtinInputText(payloadValue: unknown): string | null {
   const projection = record(payload.operationProjection)
   if (projection.operation !== operation) return null
   const input = record(projection.canonicalInput)
-  const message = operation === 'camp.message.send' || operation === 'team.gather'
+  const message = operation === 'camp.message.send'
   const fields = Object.entries(input).filter(([key, value]) =>
     value !== null && value !== undefined && !PROJECTION_FACT.test(key) && key !== 'changedFields'
     && !(message && key === 'body')
@@ -65,7 +64,6 @@ function cliResult(operation: string, result: unknown): unknown {
   const value = record(result)
   let keys: string[] | undefined
   if (operation === 'camp.message.send') keys = ['messageId', 'agentAddressingMode', 'effectiveRecipients', 'deliveryIds']
-  if (operation === 'team.gather') keys = ['gatherId', 'requestMessageId', 'effectiveRecipients', 'completion']
   if (operation === 'team.create_task' || operation === 'team.update_task') {
     keys = ['taskId', 'title', 'status', 'assigneeAgentId', 'version', 'availableActions']
     if (operation === 'team.update_task') keys.push('changed')

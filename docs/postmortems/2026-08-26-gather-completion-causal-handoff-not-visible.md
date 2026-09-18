@@ -332,7 +332,7 @@ Architecture/Contract/UI 权威确认；本复盘本身不创造产品规范。
 - [Gather v3 合同](../contracts/gather-v3.md)
 - [Message Delivery v5 合同](../contracts/message-delivery-v5.md)
 - [Camp Message Send v12 合同](../contracts/camp-message-send-v12.md)
-- [Gather Item terminal 与 fallback 实现](../../crates/rovai-core/src/gather.rs)
+- Gather Item terminal 与 fallback 的历史实现已随 v1.60 Gather clean break 删除；当前只保留上述历史合同与架构说明
 - [Message Delivery Dispatch Pump](../../crates/rovai-core/src/message_delivery.rs)
 - [Camp Read Model](../../crates/rovai-core/src/read_model.rs)
 - [Camp timeline、A2A 页脚与“统一综合”标签](../../apps/desktop/src/renderer/src/CampWorkspace.tsx)

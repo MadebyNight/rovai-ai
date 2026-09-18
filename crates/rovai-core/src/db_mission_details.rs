@@ -315,10 +315,8 @@ impl Database {
              UPDATE rovai_data_contract SET projection_schema_version=111,updated_at=datetime('now') WHERE singleton=1;",
         )?;
         anyhow::ensure!(
-            matches!(
-                classify_database_contract(&tx)?,
-                DatabaseContractClassification::Current(_)
-            ),
+            matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 111),
             "Mission attachment migration failed schema admission"
         );
         validate_migration_foreign_keys(&tx, &["mission"])?;

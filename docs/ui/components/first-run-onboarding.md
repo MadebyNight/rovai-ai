@@ -72,8 +72,8 @@ defaults 与可保存模型选择，或者扫描异常/超时没有形成可靠�
 首次欢迎区在输入框上方的可用会话空间内垂直居中，内容宽度上限为 680px，最小桌面窗口仍呈现三列卡片。
 会话列不足 480px 时卡片改为单列并允许局部滚动；这套布局只作用于初次集结空状态。
 
-选择卡片只替换 Composer Draft、聚焦并把光标放在末尾。仅辅助技术可见的 live status 说明“草稿已准备好，可编辑后发送。”。
-不得自动点击发送、创建消息/Run、创建定时任务或调用 Skill；输入框直接复用会话共享组件和既有保存／发送行为。
+选择卡片只替换当前 Renderer 输入、聚焦并把光标放在末尾。仅辅助技术可见的 live status 说明“内容已填入，可编辑后发送。”。
+不得自动点击发送、创建消息/Run、创建定时任务或调用 Skill；输入框直接复用会话共享组件和 Renderer-local 发送行为。
 
 ## 响应式与无障碍
 
@@ -86,7 +86,7 @@ defaults 与可保存模型选择，或者扫描异常/超时没有形成可靠�
 
 ## References
 
-- [First-run Onboarding v3](../../contracts/first-run-onboarding-v3.md)
+- [First-run Onboarding v4](../../contracts/first-run-onboarding-v4.md)
 - [Desktop Bootstrap Shell](bootstrap-shell.md)
 - [First-run Onboarding 架构](../../architecture/first-run-onboarding.md)
 - [Camp 会话工作区](conversation-workspace.md)

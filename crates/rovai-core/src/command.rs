@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::db::Database;
 
 const REQUEST_DIGEST_VERSION: i64 = 1;
+const ERASED_REQUEST_DIGEST_VERSION: i64 = 0;
 pub(crate) const COMMAND_RESULT_STORAGE_MARKER_JSON: &str =
     r#"{"_rovaiStorage":"command-result-columns-v1"}"#;
 const COMMAND_RESULT_STORAGE_MARKER: &str = "command-result-columns-v1";
@@ -176,6 +177,12 @@ pub struct StoredCommandResult {
     pub payload: Value,
     pub result_entity: Option<EntityReference>,
     pub recorded_at: String,
+    #[serde(skip)]
+    actor_type: String,
+    #[serde(skip)]
+    actor_id: String,
+    #[serde(skip)]
+    camp_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,7 +227,7 @@ impl DomainCommandGateway {
         validate_envelope::<C>(envelope)?;
         let request_digest = request_digest(envelope)?;
         load_stored_result(database.connection(), &envelope.command_id)?
-            .map(|result| replay_or_conflict(result, C::TYPE, &request_digest))
+            .map(|result| replay_or_conflict(result, envelope, &request_digest))
             .transpose()
     }
 
@@ -240,7 +247,7 @@ impl DomainCommandGateway {
         // Retry a failed text flush before replaying the already committed command receipt.
         crate::execution_text::flush_settled(database)?;
         if let Some(result) = load_stored_result(database.connection(), &envelope.command_id)? {
-            return replay_or_conflict(result, C::TYPE, &request_digest);
+            return replay_or_conflict(result, envelope, &request_digest);
         }
 
         let transaction = database
@@ -250,7 +257,7 @@ impl DomainCommandGateway {
 
         if let Some(result) = load_stored_result(&transaction, &envelope.command_id)? {
             transaction.commit()?;
-            return replay_or_conflict(result, C::TYPE, &request_digest);
+            return replay_or_conflict(result, envelope, &request_digest);
         }
 
         let handler_result = handler(&transaction)?;
@@ -265,6 +272,9 @@ impl DomainCommandGateway {
             payload: handler_result.payload,
             result_entity: handler_result.result_entity,
             recorded_at,
+            actor_type: envelope.actor.actor_type().to_string(),
+            actor_id: envelope.actor.actor_id().to_string(),
+            camp_id: envelope.camp_id.clone(),
         };
         append_command_result(&transaction, envelope, &stored_result)?;
         transaction.commit()?;
@@ -353,15 +363,23 @@ fn canonicalize_json(value: Value) -> Value {
     }
 }
 
-fn replay_or_conflict(
+fn replay_or_conflict<C>(
     result: StoredCommandResult,
-    command_type: &str,
+    envelope: &CommandEnvelope<C>,
     request_digest: &str,
-) -> Result<CommandExecution> {
-    if result.command_type == command_type
+) -> Result<CommandExecution>
+where
+    C: DomainCommand,
+{
+    let normal_match = result.command_type == C::TYPE
         && result.request_digest_version == REQUEST_DIGEST_VERSION
-        && result.request_digest == request_digest
-    {
+        && result.request_digest == request_digest;
+    let erased_scope_match = result.command_type == C::TYPE
+        && result.request_digest_version == ERASED_REQUEST_DIGEST_VERSION
+        && result.actor_type == envelope.actor.actor_type()
+        && result.actor_id == envelope.actor.actor_id()
+        && result.camp_id == envelope.camp_id;
+    if normal_match || erased_scope_match {
         return Ok(CommandExecution {
             result,
             replayed: true,
@@ -383,7 +401,8 @@ fn load_stored_result(
             r#"
             SELECT command_id, command_type, request_digest, request_digest_version,
                    result_status, result_code, result_payload_json,
-                   result_entity_type, result_entity_id, created_at
+                   result_entity_type, result_entity_id, created_at,
+                   actor_type, actor_id, camp_id
             FROM event_log
             WHERE event_type = 'command.result' AND command_id = ?1
             "#,
@@ -410,6 +429,9 @@ fn load_stored_result(
                     payload,
                     result_entity,
                     row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                 ))
             },
         )
@@ -425,6 +447,9 @@ fn load_stored_result(
                 payload,
                 result_entity,
                 recorded_at,
+                actor_type,
+                actor_id,
+                camp_id,
             )| {
                 Ok(StoredCommandResult {
                     command_id,
@@ -437,6 +462,9 @@ fn load_stored_result(
                         .context("failed to decode persisted command result payload")?,
                     result_entity,
                     recorded_at,
+                    actor_type,
+                    actor_id,
+                    camp_id,
                 })
             },
         )
@@ -552,6 +580,59 @@ where
             result.recorded_at,
         ],
     )?;
+    Ok(())
+}
+
+/// Replaces a content-derived command receipt with a terminal, plaintext-free
+/// receipt. Replays still use the same command-result record and are authorized
+/// by command type plus actor/Camp scope, but never compare or restore the
+/// erased request digest.
+pub(crate) fn erase_command_result_receipt(
+    transaction: &Transaction<'_>,
+    command_id: &str,
+    command_type: &str,
+    actor: &ActorRef,
+    camp_id: &str,
+    message_id: &str,
+) -> Result<()> {
+    let payload = serde_json::to_string(&json!({
+        "messageId": message_id,
+        "status": "withdrawn",
+    }))?;
+    let changed = transaction.execute(
+        r#"
+        UPDATE event_log
+        SET request_digest = '',
+            request_digest_version = ?2,
+            result_status = 'applied',
+            result_code = 'message.withdrawn',
+            result_payload_json = ?3,
+            result_entity_type = 'camp_message',
+            result_entity_id = ?4
+        WHERE event_type = 'command.result'
+          AND command_id = ?1
+          AND command_type = ?5
+          AND actor_type = ?6
+          AND actor_id = ?7
+          AND camp_id = ?8
+          AND result_entity_type = 'camp_message'
+          AND result_entity_id = ?4
+        "#,
+        params![
+            command_id,
+            ERASED_REQUEST_DIGEST_VERSION,
+            payload,
+            message_id,
+            command_type,
+            actor.actor_type(),
+            actor.actor_id(),
+            camp_id,
+        ],
+    )?;
+    anyhow::ensure!(
+        changed == 1,
+        "publication command receipt is unavailable for erasure"
+    );
     Ok(())
 }
 

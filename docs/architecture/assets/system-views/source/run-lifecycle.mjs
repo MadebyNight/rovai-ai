@@ -1,6 +1,5 @@
-// Confirmed from static production calls at revision 23c00258; native execution was not_run.
-// main.rs: dispatch_agent_run_candidate → claim_agent_run → launch_agent_run;
-// message_delivery.rs: dispatch_pending_for_recipient orders by queue_sequence;
+// Confirmed from the current static production path; native execution is illustrative.
+// delivery_queue.rs: claim_waiting_delivery_batches selects the recipient FIFO prefix and creates the Run;
 // runtime.rs: list_dispatchable_agent_runs preserves per-Conversation serial execution.
 // prepare_agent_run_skill_exposure / prepare_agent_run_mcp_projection → Codex Fleet and binding;
 // prepare_session_bootstrap → start_or_resume_agent_thread → materialize_agent_run_context;
@@ -38,12 +37,12 @@ export function renderRunLifecycle() {
     + connection('M456 256 H492', T.ding, { width: 2.2 })
     + box(s, 502, 219, 244, 73, '#fff', T.ding.border, false, 10)
     + label(624, 247, 'Dispatch Pump', 21, { color: T.ding.main, weight: 600, anchor: 'middle' })
-    + label(624, 277, '物化 queued AgentRun', 17, { color: P.ink, anchor: 'middle' })
+    + label(624, 277, '扫描等待 Delivery', 17, { color: P.ink, anchor: 'middle' })
     + label(135, 326, '队首满足执行资格后推进', 18, { color: T.ding.main })
     + pill(815, 256, 352, '同一 Conversation 按序接续', T.ding, 20);
 
-  const capability = phase(s, 373, 168, '2', '领取 Run，准备运行能力', T.ding,
-    ['Scheduler 领取 · 读取冻结配置与工作目录', '校验 Skill 投影 · 准备 MCP Projection'],
+  const capability = phase(s, 373, 168, '2', 'claim 队首批次，创建并冻结 Run', T.ding,
+    ['Scheduler 原子 claim · 冻结输入、配置与工作目录', '校验 Skill 投影 · 准备 MCP Projection'],
     '本轮可用能力', ['SkillExposureSnapshot', '可发现的 Skills · 已配置的 MCP Servers']);
 
   const session = phase(s, 563, 295, '3', '取得 Host，绑定本轮执行', T.gugu,
@@ -69,8 +68,8 @@ export function renderRunLifecycle() {
     '送入本轮的模型上下文')
     + [
       ['同伴 · 自身责任 · 公共历史', T.gugu],
-      ['运行事实 · 协作指引', T.teal],
-      ['完整 CURRENT_INPUT', T.cheese],
+      ['运行事实 · 工作区', T.teal],
+      ['完整有序 RUN_INPUT', T.cheese],
     ].map(([name, tone], i) => rect(814, 942 + i * 43, 644, 34, '#fff', tone.border, 8)
       + label(834, 966 + i * 43, name, 18, { color: tone.main, weight: 600 })).join('');
 

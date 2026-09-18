@@ -144,7 +144,7 @@ export function renderA2AComic() {
     + spark(s, 650, 760, T.gugu);
 
   const fourth =
-    label(1456, 552, 'Caller Return', 20, { color: T.gugu.main, anchor: 'end' })
+    label(1456, 552, '显式选择返回目标', 20, { color: T.gugu.main, anchor: 'end' })
     + connection('M937 737 H1058', T.gugu, { width: 2.6 })
     + connection('M1176 737 H1311', T.cheese, { width: 2.6 })
     + avatar(s, 'gugu', 879, 737, 45, true)
@@ -194,7 +194,7 @@ export function renderOrganizationComic() {
   const panels = panel(s, 18, 14, 838, 530, '对等协作 · 轻量 Lead', T.ding)
     + panel(s, 880, 14, 606, 530, 'Task · 跨 Run 的责任', T.cheese)
     + panel(s, 18, 574, 608, 434, 'Skill · 按需选择协作方法', T.gugu)
-    + panel(s, 650, 574, 836, 434, 'Gather · 同题并行，一次汇总', T.green);
+    + panel(s, 650, 574, 836, 434, '多目标消息 · 回复陆续到达', T.green);
 
   const peers =
     bubble(s, 56, 97, 328, 91, T.ding, 179, 235)
@@ -237,7 +237,7 @@ export function renderOrganizationComic() {
     + book(s, 433, 674, '双人追问', 'grill-duo', ['ding', 'cheese'], 'question', -2)
     + label(323, 948, '分工 · 轮次 · 评审方式', 23, { color: T.gugu.main, anchor: 'middle' });
 
-  const gather =
+  const multiTargetReplies =
     bubble(s, 685, 662, 387, 60, T.green, 775, 756)
     + label(879, 701, '共同请求：导出功能能发布了吗？', 21, { color: T.green.main, weight: 600, anchor: 'middle' })
     + connection('M800 818 H833 V772 H875', T.ding, { width: 2.2 })
@@ -247,21 +247,21 @@ export function renderOrganizationComic() {
     + box(s, 880, 738, 204, 82, '#fff', T.cheese.border, false, 10)
     + avatar(s, 'cheese', 919, 779, 25)
     + label(959, 772, '芝士', 21, { color: T.cheese.main, weight: 600 })
-    + label(959, 802, '责任已结束', 16, { color: P.muted })
+    + label(959, 802, '普通回复已到达', 16, { color: P.muted })
     + box(s, 880, 867, 204, 82, '#fff', T.gugu.border, false, 10)
     + avatar(s, 'gugu', 919, 908, 25)
     + label(959, 901, '咕咕', 21, { color: T.gugu.main, weight: 600 })
-    + label(959, 931, '责任已结束', 16, { color: P.muted })
+    + label(959, 931, '普通回复已到达', 16, { color: P.muted })
     + connection('M1085 779 H1121 V841 H1150', T.cheese, { width: 2.1 })
     + connection('M1085 908 H1121 V841', T.gugu, { width: 2.1, arrow: false })
     + box(s, 1155, 794, 127, 107, '#fff', T.green.border, false, 11)
     + envelope(s, 1175, 811, 74, 42, T.green)
     + envelope(s, 1188, 833, 74, 42, T.green)
-    + label(1219, 759, '全部结束', 18, { color: T.green.main, weight: 600, anchor: 'middle' })
-    + label(1219, 941, '结果汇集', 19, { color: T.green.main, anchor: 'middle' })
+    + label(1219, 759, 'Lead 的 FIFO', 18, { color: T.green.main, weight: 600, anchor: 'middle' })
+    + label(1219, 941, '按到达顺序入队', 19, { color: T.green.main, anchor: 'middle' })
     + connection('M1287 841 H1335', T.green, { width: 2.4 })
     + avatar(s, 'ding', 1400, 841, 43, true)
-    + pill(1328, 932, 144, '一次汇总 Run', T.ding, 16);
+    + pill(1328, 932, 144, '后续 Run 继续', T.ding, 16);
 
-  return frame(1036, panels + peers + tasks + methods + gather);
+  return frame(1036, panels + peers + tasks + methods + multiTargetReplies);
 }

@@ -28,7 +28,7 @@ pub const CAMP_LIST_TOOL_NAME: &str = "camp.list";
 pub const CAMP_SEARCH_TOOL_NAME: &str = "camp.search";
 pub const HISTORY_SEARCH_TOOL_NAME: &str = "history.search";
 pub const CAMP_READ_TOOL_NAME: &str = "camp.read";
-pub const CAMP_HISTORY_CONTRACT_VERSION: u32 = 5;
+pub const CAMP_HISTORY_CONTRACT_VERSION: u32 = 6;
 
 const CAMP_LIST_DEFAULT_LIMIT: usize = 20;
 const CAMP_LIST_MAX_LIMIT: usize = 50;
@@ -41,13 +41,11 @@ const MAX_QUERY_CHARS: usize = 512;
 const MAX_CAMP_QUERY_CHARS: usize = 200;
 const MAX_HISTORY_CAMP_IDS: usize = 20;
 const MAX_SNIPPET_CHARS: usize = 200;
-const MAX_BODY_CHARS: usize = 4_000;
 const MAX_AROUND_MESSAGES: usize = 10;
 const DEFAULT_AROUND_BEFORE: usize = 5;
 const DEFAULT_AROUND_AFTER: usize = 10;
 const DEFAULT_PAGE_LIMIT: usize = 20;
 const MAX_PAGE_LIMIT: usize = 20;
-const COLLECTION_BODY_PREFIX_CHARS: usize = 500;
 const MAX_ATTACHMENTS: usize = 10;
 const MAX_RESPONSE_CHARS: usize = 80_000;
 
@@ -103,8 +101,6 @@ pub enum CampReadInput {
     Item {
         camp_id: Option<String>,
         message_id: String,
-        body_offset: Option<usize>,
-        body_limit: Option<usize>,
     },
     Around {
         camp_id: Option<String>,
@@ -133,6 +129,7 @@ struct RunFence {
     current_camp_id: String,
     current_boundary: i64,
     global_boundary: i64,
+    viewer_agent_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +149,7 @@ enum MessageFence {
 struct CampTarget {
     camp_id: String,
     fence: MessageFence,
+    viewer_agent_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -262,9 +260,7 @@ impl CampHistoryService {
                     "properties": {
                         "campId": {"type": "string", "pattern": CAMP_ID_PATTERN},
                         "mode": {"const": "item"},
-                        "messageId": {"type": "string", "minLength": 1},
-                        "bodyOffset": {"type": "integer", "minimum": 0},
-                        "bodyLimit": {"type": "integer", "minimum": 1, "maximum": MAX_BODY_CHARS}
+                        "messageId": {"type": "string", "minLength": 1}
                     }
                 },
                 {
@@ -498,16 +494,7 @@ impl CampHistoryService {
             CampReadInput::Item {
                 camp_id: _,
                 message_id,
-                body_offset,
-                body_limit,
-            } => read_item(
-                &transaction,
-                &target,
-                run,
-                message_id,
-                body_offset.unwrap_or(0),
-                effective_limit(*body_limit, MAX_BODY_CHARS, MAX_BODY_CHARS)?,
-            )?,
+            } => read_item(&transaction, &target, run, message_id)?,
             CampReadInput::Around {
                 camp_id: _,
                 message_id,
@@ -688,13 +675,13 @@ fn load_run_fence(
     transaction
         .query_row(
             r#"
-            SELECT manifest.id, manifest.camp_message_boundary_sequence,
+            SELECT manifest.id, camp.last_message_sequence,
                    manifest.global_public_message_boundary
             FROM context_manifest AS manifest
             JOIN agent_run ON agent_run.id = manifest.agent_run_id
             JOIN conversation ON conversation.id = agent_run.conversation_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            JOIN camp ON camp.id = camp_turn.camp_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             JOIN camp_member
               ON camp_member.camp_id = camp.id
              AND camp_member.agent_id = ?4
@@ -703,7 +690,7 @@ fn load_run_fence(
               AND agent_run.execution_epoch = ?2
               AND agent_run.status = 'running'
               AND conversation.agent_id = ?4
-              AND camp_turn.camp_id = ?3
+              AND camp.id = ?3
               AND manifest.history_fence_version = 1
               AND camp_member.status = 'active'
               AND camp_member.leave_requested_at IS NULL
@@ -721,6 +708,7 @@ fn load_run_fence(
                     current_camp_id: run.camp_id.clone(),
                     current_boundary: row.get(1)?,
                     global_boundary: row.get(2)?,
+                    viewer_agent_id: run.agent_id.clone(),
                 })
             },
         )
@@ -780,6 +768,7 @@ fn resolve_camp_target(
             fence: MessageFence::Current {
                 boundary: fence.current_boundary,
             },
+            viewer_agent_id: run.agent_id.clone(),
         }));
     }
     let authorized = transaction
@@ -810,6 +799,7 @@ fn resolve_camp_target(
         fence: MessageFence::History {
             global_boundary: fence.global_boundary,
         },
+        viewer_agent_id: run.agent_id.clone(),
     }))
 }
 
@@ -884,6 +874,13 @@ fn load_current_body_candidates(
         WHERE message.camp_id = ?1
           AND message.sequence <= ?2
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?4
+                AND hidden_delivery.status = 'waiting'
+          )
         ORDER BY message.sequence DESC, message.id
         LIMIT ?3
         "#
@@ -899,6 +896,13 @@ fn load_current_body_candidates(
           AND message.camp_id = ?1
           AND message.sequence <= ?2
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?5
+                AND hidden_delivery.status = 'waiting'
+          )
         ORDER BY message.sequence DESC, message.id
         LIMIT ?3
         "#
@@ -910,7 +914,8 @@ fn load_current_body_candidates(
                 params![
                     fence.current_camp_id,
                     fence.current_boundary,
-                    (budget + 1) as i64
+                    (budget + 1) as i64,
+                    fence.viewer_agent_id,
                 ],
                 message_search_row,
             )?
@@ -923,6 +928,7 @@ fn load_current_body_candidates(
                     fence.current_boundary,
                     (budget + 1) as i64,
                     literal_fts_query(query),
+                    fence.viewer_agent_id,
                 ],
                 message_search_row,
             )?
@@ -967,6 +973,13 @@ fn load_history_body_candidates(
           AND agent_profile.profile_status = 'present'
           AND publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?2
+                AND hidden_delivery.status = 'waiting'
+          )
           AND message.camp_id IN (SELECT value FROM json_each(?4))
           AND (?5 IS NULL OR julianday(message.created_at) >= julianday(?5))
           AND (?6 IS NULL OR julianday(message.created_at) < julianday(?6))
@@ -998,6 +1011,13 @@ fn load_history_body_candidates(
           AND agent_profile.profile_status = 'present'
           AND publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?2
+                AND hidden_delivery.status = 'waiting'
+          )
           AND message.camp_id IN (SELECT value FROM json_each(?4))
           AND (?5 IS NULL OR julianday(message.created_at) >= julianday(?5))
           AND (?6 IS NULL OR julianday(message.created_at) < julianday(?6))
@@ -1076,6 +1096,13 @@ fn merge_current_principal_candidates(
         WHERE message.camp_id = ?1
           AND message.sequence <= ?2
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?4
+                AND hidden_delivery.status = 'waiting'
+          )
           AND EXISTS (
               SELECT 1 FROM json_each(message.structured_content_json) AS segment
               WHERE json_extract(segment.value, '$.kind') = 'current_user_mention'
@@ -1091,6 +1118,7 @@ fn merge_current_principal_candidates(
                 fence.current_camp_id,
                 fence.current_boundary,
                 (remaining + 1) as i64,
+                fence.viewer_agent_id,
             ],
             message_search_row,
         )?
@@ -1135,6 +1163,13 @@ fn merge_history_principal_candidates(
           AND agent_profile.profile_status = 'present'
           AND publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?2
+                AND hidden_delivery.status = 'waiting'
+          )
           AND message.camp_id IN (SELECT value FROM json_each(?4))
           AND (?5 IS NULL OR julianday(message.created_at) >= julianday(?5))
           AND (?6 IS NULL OR julianday(message.created_at) < julianday(?6))
@@ -1213,6 +1248,13 @@ fn merge_current_reference_candidates(
               AND message.camp_id = ?3
               AND message.sequence <= ?4
               AND message.tombstoned_at IS NULL
+              AND message.recall_state NOT IN ('recallable', 'withdrawn')
+              AND NOT EXISTS (
+                  SELECT 1 FROM camp_message_delivery AS hidden_delivery
+                  WHERE hidden_delivery.message_id = message.id
+                    AND hidden_delivery.recipient_agent_id = ?6
+                    AND hidden_delivery.status = 'waiting'
+              )
             ORDER BY message.sequence DESC, message.id
             LIMIT ?5
             "#,
@@ -1224,7 +1266,8 @@ fn merge_current_reference_candidates(
                     value,
                     fence.current_camp_id,
                     fence.current_boundary,
-                    (limit + 1) as i64
+                    (limit + 1) as i64,
+                    fence.viewer_agent_id,
                 ],
                 message_search_row,
             )?
@@ -1287,6 +1330,13 @@ fn merge_history_reference_candidates(
               AND agent_profile.profile_status = 'present'
               AND publication.global_sequence <= ?5
               AND message.tombstoned_at IS NULL
+              AND message.recall_state NOT IN ('recallable', 'withdrawn')
+              AND NOT EXISTS (
+                  SELECT 1 FROM camp_message_delivery AS hidden_delivery
+                  WHERE hidden_delivery.message_id = message.id
+                    AND hidden_delivery.recipient_agent_id = ?2
+                    AND hidden_delivery.status = 'waiting'
+              )
               AND message.camp_id IN (SELECT value FROM json_each(?6))
               AND (?7 IS NULL OR julianday(message.created_at) >= julianday(?7))
               AND (?8 IS NULL OR julianday(message.created_at) < julianday(?8))
@@ -1467,7 +1517,7 @@ fn ranked_search_response(
                 "sequence": candidate.message.sequence,
                 "authorType": candidate.message.author_type,
                 "authorId": candidate.message.author_id,
-                "replyToMessageId": candidate.message.reply_to_message_id,
+                "anchorMessageId": candidate.message.reply_to_message_id,
                 "createdAt": candidate.message.created_at,
                 "snippet": snippet(
                     &candidate.message.body,
@@ -1571,25 +1621,20 @@ fn read_item(
     target: &CampTarget,
     run: &AuthenticatedTeamToolRun,
     message_id: &str,
-    body_offset: usize,
-    body_limit: usize,
 ) -> Result<Value> {
-    let message =
-        load_item_message(transaction, target, run, message_id)?.ok_or_else(read_unavailable)?;
-    let body_length = message.body.chars().count();
-    if body_offset > body_length {
-        return Err(invalid_argument(
-            "bodyOffset exceeds the message body length",
-        ));
-    }
-    let body = message
-        .body
-        .chars()
-        .skip(body_offset)
-        .take(body_limit)
-        .collect::<String>();
-    let returned = body.chars().count();
-    let next_offset = body_offset + returned;
+    let message = match load_item_message(transaction, target, run, message_id)? {
+        Some(message) => message,
+        None => {
+            return if message_is_withdrawn(transaction, &target.camp_id, message_id)? {
+                Err(tool_error(
+                    "message.withdrawn",
+                    "The Camp message has been withdrawn",
+                ))
+            } else {
+                Err(read_unavailable())
+            };
+        }
+    };
     let (attachments, attachment_count) = load_attachments(transaction, message_id)?;
     let addressing = load_exact_addressing(transaction, message_id)?;
     let mut value = json!({
@@ -1600,13 +1645,9 @@ fn read_item(
             "sequence": message.sequence,
             "authorType": message.author_type,
             "authorId": message.author_id,
-            "replyToMessageId": message.reply_to_message_id,
+            "anchorMessageId": message.reply_to_message_id,
             "createdAt": message.created_at,
-            "body": body,
-            "bodyOffset": body_offset,
-            "bodyLength": body_length,
-            "bodyTruncated": next_offset < body_length || body_offset > 0,
-            "nextBodyOffset": (next_offset < body_length).then_some(next_offset),
+            "body": message.body,
             "attachmentCount": attachment_count,
             "attachments": attachments,
             "attachmentsTruncated": attachment_count > MAX_ATTACHMENTS,
@@ -1615,13 +1656,23 @@ fn read_item(
         }]
     });
     attach_message_quotes(transaction, message_id, &mut value["items"][0])?;
-    if json_chars(&value)? > MAX_RESPONSE_CHARS {
-        return Err(tool_error(
-            "camp.response_overloaded",
-            "Camp message metadata exceeds the hard response limit",
-        ));
-    }
     Ok(value)
+}
+
+fn message_is_withdrawn(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    message_id: &str,
+) -> Result<bool> {
+    transaction
+        .query_row(
+            "SELECT recall_state = 'withdrawn' FROM camp_message WHERE id = ?1 AND camp_id = ?2",
+            params![message_id, camp_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|value| value.unwrap_or(false))
+        .map_err(Into::into)
 }
 
 fn load_item_message(
@@ -1670,6 +1721,7 @@ fn load_committed_self_written_message(
               AND message.camp_id = ?2
               AND message.sequence > ?3
               AND message.tombstoned_at IS NULL
+              AND message.recall_state NOT IN ('recallable', 'withdrawn')
               AND message.author_type = 'agent'
               AND message.author_id = ?4
               AND message.source_agent_run_id = ?5
@@ -1712,6 +1764,7 @@ fn load_exact_addressing(transaction: &Transaction<'_>, message_id: &str) -> Res
         SELECT effective_recipient_ids_json, structured_content_json
         FROM camp_message
         WHERE id = ?1 AND tombstoned_at IS NULL
+          AND recall_state NOT IN ('recallable', 'withdrawn')
         "#,
         [message_id],
         |row| Ok((row.get(0)?, row.get(1)?)),
@@ -1732,8 +1785,7 @@ fn read_around(
     before: usize,
     after: usize,
 ) -> Result<Value> {
-    let anchor =
-        load_visible_message(transaction, target, message_id)?.ok_or_else(read_unavailable)?;
+    let anchor = load_anchor_message(transaction, target, message_id)?;
     let mut preceding = load_relative_messages(
         transaction,
         target,
@@ -1777,8 +1829,7 @@ fn read_thread(
     cursor: Option<i64>,
     limit: usize,
 ) -> Result<Value> {
-    let anchor =
-        load_visible_message(transaction, target, message_id)?.ok_or_else(read_unavailable)?;
+    let anchor = load_anchor_message(transaction, target, message_id)?;
     let root = resolve_thread_root(transaction, target, anchor.clone())?;
     let boundary = cursor.unwrap_or(anchor.sequence);
     let inclusive = cursor.is_none();
@@ -1818,6 +1869,23 @@ fn read_thread(
             "hasMore": has_more,
         }),
     )
+}
+
+fn load_anchor_message(
+    transaction: &Transaction<'_>,
+    target: &CampTarget,
+    message_id: &str,
+) -> Result<MessageRow> {
+    if let Some(message) = load_visible_message(transaction, target, message_id)? {
+        return Ok(message);
+    }
+    if message_is_withdrawn(transaction, &target.camp_id, message_id)? {
+        return Err(tool_error(
+            "message.withdrawn",
+            "The Camp message has been withdrawn",
+        ));
+    }
+    Err(read_unavailable())
 }
 
 fn read_timeline(
@@ -1869,6 +1937,13 @@ fn load_visible_message(
             FROM camp_message
             WHERE id = ?1 AND camp_id = ?2
               AND sequence <= ?3 AND tombstoned_at IS NULL
+              AND recall_state NOT IN ('recallable', 'withdrawn')
+              AND NOT EXISTS (
+                  SELECT 1 FROM camp_message_delivery AS hidden_delivery
+                  WHERE hidden_delivery.message_id = camp_message.id
+                    AND hidden_delivery.recipient_agent_id = ?4
+                    AND hidden_delivery.status = 'waiting'
+              )
             "#
             .to_string(),
             boundary,
@@ -1887,6 +1962,13 @@ fn load_visible_message(
             WHERE message.id = ?1 AND message.camp_id = ?2
               AND publication.global_sequence <= ?3
               AND message.tombstoned_at IS NULL
+              AND message.recall_state NOT IN ('recallable', 'withdrawn')
+              AND NOT EXISTS (
+                  SELECT 1 FROM camp_message_delivery AS hidden_delivery
+                  WHERE hidden_delivery.message_id = message.id
+                    AND hidden_delivery.recipient_agent_id = ?4
+                    AND hidden_delivery.status = 'waiting'
+              )
             LIMIT 1
             "#
             ),
@@ -1896,7 +1978,12 @@ fn load_visible_message(
     let mut message = transaction
         .query_row(
             &sql,
-            params![message_id, target.camp_id, parameter],
+            params![
+                message_id,
+                target.camp_id,
+                parameter,
+                target.viewer_agent_id,
+            ],
             message_search_row,
         )
         .optional()?;
@@ -2011,6 +2098,13 @@ fn load_ordered_messages(
         WHERE message.camp_id = ?1
           {fence_filter}
           AND message.tombstoned_at IS NULL
+          AND message.recall_state NOT IN ('recallable', 'withdrawn')
+          AND NOT EXISTS (
+              SELECT 1 FROM camp_message_delivery AS hidden_delivery
+              WHERE hidden_delivery.message_id = message.id
+                AND hidden_delivery.recipient_agent_id = ?5
+                AND hidden_delivery.status = 'waiting'
+          )
           {cursor_filter}
         ORDER BY message.sequence {order}, message.id
         LIMIT ?4
@@ -2024,7 +2118,13 @@ fn load_ordered_messages(
     let mut statement = transaction.prepare(&sql)?;
     let mut messages = statement
         .query_map(
-            params![target.camp_id, boundary, cursor_parameter, limit as i64],
+            params![
+                target.camp_id,
+                boundary,
+                cursor_parameter,
+                limit as i64,
+                target.viewer_agent_id,
+            ],
             message_search_row,
         )?
         .collect::<rusqlite::Result<Vec<_>>>()
@@ -2228,53 +2328,23 @@ fn fit_collection_response(
     rows: Vec<MessageRow>,
     mut response: Value,
 ) -> Result<Value> {
-    let mut prefix = COLLECTION_BODY_PREFIX_CHARS;
-    loop {
-        let items = rows
-            .iter()
-            .map(|row| collection_item(transaction, row, prefix))
-            .collect::<Result<Vec<_>>>()?;
-        response["items"] = Value::Array(items);
-        if json_chars(&response)? <= MAX_RESPONSE_CHARS {
-            return Ok(response);
-        }
-        prefix = match prefix {
-            500.. => 400,
-            400..=499 => 300,
-            300..=399 => 200,
-            200..=299 => 100,
-            100..=199 => 50,
-            50..=99 => 1,
-            _ => {
-                return Err(tool_error(
-                    "camp.response_overloaded",
-                    "Camp message page metadata exceeds the hard response limit",
-                ));
-            }
-        };
-    }
+    response["items"] = Value::Array(
+        rows.iter()
+            .map(|row| collection_item(transaction, row))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    Ok(response)
 }
 
-fn collection_item(
-    transaction: &Transaction<'_>,
-    row: &MessageRow,
-    prefix_limit: usize,
-) -> Result<Value> {
-    let body_length = row.body.chars().count();
-    let body = row.body.chars().take(prefix_limit).collect::<String>();
-    let returned = body.chars().count();
+fn collection_item(transaction: &Transaction<'_>, row: &MessageRow) -> Result<Value> {
     let mut value = json!({
         "messageId": row.id,
         "sequence": row.sequence,
         "authorType": row.author_type,
         "authorId": row.author_id,
-        "replyToMessageId": row.reply_to_message_id,
+        "anchorMessageId": row.reply_to_message_id,
         "createdAt": row.created_at,
-        "body": body,
-        "bodyOffset": 0,
-        "bodyLength": body_length,
-        "bodyTruncated": returned < body_length,
-        "nextBodyOffset": (returned < body_length).then_some(returned),
+        "body": row.body,
         "attachmentCount": attachment_count(transaction, &row.id)?,
     });
     attach_message_quotes(transaction, &row.id, &mut value)?;
@@ -2381,7 +2451,13 @@ mod slow_tests {
                     quotes_json TEXT NOT NULL DEFAULT '[]',
                     effective_recipient_ids_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
-                    tombstoned_at TEXT
+                    tombstoned_at TEXT,
+                    recall_state TEXT NOT NULL DEFAULT 'ineligible'
+                );
+                CREATE TABLE camp_message_delivery (
+                    message_id TEXT NOT NULL,
+                    recipient_agent_id TEXT NOT NULL,
+                    status TEXT NOT NULL
                 );
                 "#,
             )
@@ -2402,6 +2478,7 @@ mod slow_tests {
                 current_camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
                 current_boundary: 100,
                 global_boundary: 100,
+                viewer_agent_id: "agent_1".to_string(),
             },
             "x",
             8,
@@ -2476,7 +2553,13 @@ mod slow_tests {
                     quotes_json TEXT NOT NULL DEFAULT '[]',
                     effective_recipient_ids_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
-                    tombstoned_at TEXT
+                    tombstoned_at TEXT,
+                    recall_state TEXT NOT NULL DEFAULT 'ineligible'
+                );
+                CREATE TABLE camp_message_delivery (
+                    message_id TEXT NOT NULL,
+                    recipient_agent_id TEXT NOT NULL,
+                    status TEXT NOT NULL
                 );
                 INSERT INTO camp_message(
                     id, camp_id, sequence, author_type, author_id,
@@ -2523,6 +2606,7 @@ mod slow_tests {
                     current_camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
                     current_boundary: 1,
                     global_boundary: 1,
+                    viewer_agent_id: "agent_1".to_string(),
                 },
                 "@Principal",
                 8,
@@ -2544,6 +2628,7 @@ mod slow_tests {
             &CampTarget {
                 camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
                 fence: MessageFence::Current { boundary: 1 },
+                viewer_agent_id: "agent_1".to_string(),
             },
             ReadDirection::After,
             None,
@@ -2577,7 +2662,13 @@ mod slow_tests {
                     quotes_json TEXT NOT NULL DEFAULT '[]',
                     effective_recipient_ids_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
-                    tombstoned_at TEXT
+                    tombstoned_at TEXT,
+                    recall_state TEXT NOT NULL DEFAULT 'ineligible'
+                );
+                CREATE TABLE camp_message_delivery (
+                    message_id TEXT NOT NULL,
+                    recipient_agent_id TEXT NOT NULL,
+                    status TEXT NOT NULL
                 );
                 CREATE TABLE message_attachment (
                     id TEXT PRIMARY KEY,
@@ -2710,9 +2801,10 @@ mod slow_tests {
         let target = CampTarget {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
             fence: MessageFence::Current { boundary: 1 },
+            viewer_agent_id: "agent-1".to_string(),
         };
 
-        let item = read_item(&transaction, &target, &run, "self-send", 0, 4_000).unwrap();
+        let item = read_item(&transaction, &target, &run, "self-send").unwrap();
         assert_eq!(item["items"][0]["messageId"], "self-send");
         assert_eq!(item["items"][0]["body"], "body-self-send");
 
@@ -2726,7 +2818,7 @@ mod slow_tests {
             "wrong-command",
             "tombstoned-self-send",
         ] {
-            let error = read_item(&transaction, &target, &run, message_id, 0, 4_000)
+            let error = read_item(&transaction, &target, &run, message_id)
                 .expect_err("unproven post-boundary message must remain fenced");
             assert_eq!(
                 error
@@ -2740,18 +2832,9 @@ mod slow_tests {
         let other_camp_target = CampTarget {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eec0".to_string(),
             fence: MessageFence::Current { boundary: 1 },
+            viewer_agent_id: "agent-1".to_string(),
         };
-        assert!(
-            read_item(
-                &transaction,
-                &other_camp_target,
-                &run,
-                "other-camp",
-                0,
-                4_000,
-            )
-            .is_err()
-        );
+        assert!(read_item(&transaction, &other_camp_target, &run, "other-camp").is_err());
 
         assert!(read_around(&transaction, &target, "self-send", 1, 1).is_err());
         assert!(
@@ -2771,7 +2854,7 @@ mod slow_tests {
     }
 
     #[test]
-    fn response_budget_keeps_collection_items_and_item_reads_use_unicode_scalars() {
+    fn camp_read_returns_the_selected_page_and_item_body_without_size_clipping() {
         let mut connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
@@ -2789,7 +2872,13 @@ mod slow_tests {
                     quotes_json TEXT NOT NULL DEFAULT '[]',
                     effective_recipient_ids_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
-                    tombstoned_at TEXT
+                    tombstoned_at TEXT,
+                    recall_state TEXT NOT NULL DEFAULT 'ineligible'
+                );
+                CREATE TABLE camp_message_delivery (
+                    message_id TEXT NOT NULL,
+                    recipient_agent_id TEXT NOT NULL,
+                    status TEXT NOT NULL
                 );
                 CREATE TABLE message_attachment (
                     id TEXT PRIMARY KEY,
@@ -2864,6 +2953,7 @@ mod slow_tests {
         let target = CampTarget {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
             fence: MessageFence::Current { boundary: 1 },
+            viewer_agent_id: "agent_1".to_string(),
         };
         let run = AuthenticatedTeamToolRun {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
@@ -2871,11 +2961,11 @@ mod slow_tests {
             agent_run_id: "run-1".to_string(),
             execution_epoch: 1,
         };
-        let item = read_item(&transaction, &target, &run, "message-1", 12, 2).unwrap();
+        let item = read_item(&transaction, &target, &run, "message-1").unwrap();
         let item = &item["items"][0];
-        assert_eq!(item["body"], "😀中");
-        assert_eq!(item["bodyLength"], 15);
-        assert_eq!(item["nextBodyOffset"], 14);
+        assert_eq!(item["body"], "@Principal A😀中B");
+        assert!(item.get("bodyLength").is_none());
+        assert!(item.get("nextBodyOffset").is_none());
         assert_eq!(item["attachmentCount"], 13);
         assert_eq!(item["attachments"].as_array().unwrap().len(), 10);
         assert_eq!(item["attachmentsTruncated"], true);
@@ -2916,7 +3006,7 @@ mod slow_tests {
                 author_type: "user".to_string(),
                 author_id: "local_user".to_string(),
                 reply_to_message_id: None,
-                body: "x".repeat(1_000),
+                body: "x".repeat(5_000),
                 created_at: "2026-08-01T00:00:00Z".to_string(),
                 recency: sequence,
                 camp_title: None,
@@ -2941,8 +3031,8 @@ mod slow_tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|item| item["body"].as_str().unwrap().chars().count() <= 500)
+                .all(|item| item["body"].as_str().unwrap().chars().count() == 5_000)
         );
-        assert!(json_chars(&collection).unwrap() <= MAX_RESPONSE_CHARS);
+        assert!(json_chars(&collection).unwrap() > MAX_RESPONSE_CHARS);
     }
 }

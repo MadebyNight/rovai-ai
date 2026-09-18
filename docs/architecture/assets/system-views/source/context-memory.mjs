@@ -63,15 +63,13 @@ export function renderLayeredContext() {
     + contextLayer(s, 770, '公共历史', 'SHARED_CONVERSATION', '来源消息 · 引用链 · 最近讨论与成果', T.ding,
       [0, 1, 2].map(i => box(s, 755 + i * 87, 790 + i * 7, 118, 60, '#fff', T.ding.border, false, 8)
         + label(795 + i * 87, 827 + i * 7, ['目标', '反馈', '成果'][i], 17, { color: T.ding.main, anchor: 'middle' })).join(''))
-    + contextLayer(s, 898, '本次执行事实', 'RUN_FACTS', '当前 Run · 调用关系 · 关联 Task 与 Gather', T.teal,
-      pill(758, 934, 122, 'Caller', T.teal, 19)
+    + contextLayer(s, 898, '本次执行事实', 'RUN_FACTS', '当前 Run · 关联 Mission/Task · 外部效果', T.teal,
+      pill(758, 934, 122, 'Mission', T.teal, 19)
       + connection('M887 953 H923', T.teal, { width: 2.1 })
       + pill(932, 934, 116, 'Run', T.teal, 19))
-    + contextLayer(s, 1026, '协作指引', 'A2A_GUIDANCE', '按调用场景给出接续与返回提示', T.green,
-      avatar(s, 'cheese', 782, 1082, 29)
-      + bubble(s, 839, 1050, 210, 61, T.green, 818, 1091)
-      + label(857, 1088, '结果交回直属调用者', 18, { color: T.green.main }))
-    + contextLayer(s, 1154, '本次输入', 'CURRENT_INPUT', '用户目标或收件消息 · 附件与 Skill 引用', T.cheese,
+    + contextLayer(s, 1026, '工作区', 'WORKSPACE', '本次 Run 的项目根、分支与执行位置', T.green,
+      file(s, 748, 1047, 300, '项目根 · 当前分支', T.green))
+    + contextLayer(s, 1154, '本批输入', 'RUN_INPUT', '有序消息批次 · 附件与 Skill 引用', T.cheese,
       avatar(s, 'ding', 790, 1213, 30)
       + envelope(s, 852, 1190, 99, 58, T.cheese)
       + clip(991, 1211, T.cheese, 1.1), '完整保留');

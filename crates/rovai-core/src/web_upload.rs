@@ -1,7 +1,7 @@
 //! Host temporary-file ingress into the existing source-reference Draft. There
 //! is no new asset lifetime: after binding, Core never deletes the source file.
 use crate::{
-    camp_attachment::CampAttachmentStore, command::*, db::Database, draft_client::DraftClient,
+    command::*, db::Database, draft_client::DraftClient,
     local_attachment_source::LocalAttachmentSourceRef,
 };
 use anyhow::{Result, ensure};
@@ -26,12 +26,6 @@ pub struct UploadIntent {
 pub enum UploadTarget {
     #[default]
     Camp,
-    CampPending {
-        #[serde(rename = "pendingInputId")]
-        pending_input_id: String,
-        #[serde(rename = "editToken")]
-        edit_token: String,
-    },
     SingleChat {
         #[serde(rename = "conversationId")]
         conversation_id: String,
@@ -53,18 +47,16 @@ impl UploadTarget {
 
 pub fn snapshot(
     database: &Database,
-    data_dir: &std::path::Path,
+    _data_dir: &std::path::Path,
     client: &DraftClient,
     intent: &UploadIntent,
 ) -> Result<serde_json::Value> {
     match &intent.target {
-        UploadTarget::Camp => Ok(serde_json::to_value(
-            CampAttachmentStore::for_client(data_dir, client.clone())
-                .load_draft(database, &intent.camp_id)?,
-        )?),
-        UploadTarget::CampPending { .. } => Ok(serde_json::to_value(
-            crate::pending_camp_input::read_queue_for_client(database, &intent.camp_id, client)?,
-        )?),
+        UploadTarget::Camp => {
+            let recorded = reconcile(database, client, intent.clone())?
+                .ok_or_else(|| anyhow::anyhow!("upload receipt is missing"))?;
+            Ok(recorded.result.payload["source"].clone())
+        }
         UploadTarget::SingleChat { conversation_id }
         | UploadTarget::SingleChatPending {
             conversation_id, ..
@@ -128,7 +120,7 @@ pub fn reconcile(
 
 pub fn bind(
     database: &mut Database,
-    data_dir: &std::path::Path,
+    _data_dir: &std::path::Path,
     client: &DraftClient,
     intent: UploadIntent,
     source: LocalAttachmentSourceRef,
@@ -143,18 +135,30 @@ pub fn bind(
             && source.observed_byte_size == Some(envelope.payload.intent.byte_size),
         "upload observation changed"
     );
-    let store = CampAttachmentStore::for_client(data_dir, client.clone());
     DomainCommandGateway.execute(database, &envelope, |transaction| {
         let intent = &envelope.payload.intent;
         match &intent.target {
-            UploadTarget::Camp => store.commit_source_attachment_in_transaction(transaction, &intent.camp_id, intent.expected_revision, source)?,
-            UploadTarget::CampPending { pending_input_id, edit_token } => crate::pending_camp_input::commit_working_source_attachment_in_transaction(transaction, &intent.camp_id, pending_input_id, intent.expected_revision, edit_token, source, client)?,
+            UploadTarget::Camp => {
+                ensure!(
+                    transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1 AND deleted_at IS NULL)",
+                        [&intent.camp_id],
+                        |row| row.get::<_, bool>(0),
+                    )?,
+                    "camp.not_found"
+                );
+            }
             UploadTarget::SingleChat { conversation_id } => {
                 ensure!(transaction.query_row("SELECT EXISTS(SELECT 1 FROM conversation WHERE id=?1 AND camp_id=?2 AND kind='single_chat' AND ended_at IS NULL)", rusqlite::params![conversation_id,intent.camp_id], |r| r.get::<_, bool>(0))?, "single_chat.camp_mismatch");
-                crate::single_chat::SingleChatService::for_client(client.clone()).commit_source_attachment_in_transaction(transaction, conversation_id, intent.expected_revision, source)?;
+                crate::single_chat::SingleChatService::for_client(client.clone()).commit_source_attachment_in_transaction(transaction, conversation_id, intent.expected_revision, source.clone())?;
             }
-            UploadTarget::SingleChatPending { conversation_id, pending_input_id, edit_token } => crate::single_chat::SingleChatService::for_client(client.clone()).commit_pending_source_attachment_in_transaction(transaction, &intent.camp_id, conversation_id, pending_input_id, intent.expected_revision, edit_token, source)?,
+            UploadTarget::SingleChatPending { conversation_id, pending_input_id, edit_token } => crate::single_chat::SingleChatService::for_client(client.clone()).commit_pending_source_attachment_in_transaction(transaction, &intent.camp_id, conversation_id, pending_input_id, intent.expected_revision, edit_token, source.clone())?,
         }
-        Ok(CommandHandlerResult::applied("attachment.upload_bound", json!({"attachmentRefId":intent.command_id, "draftId":client.draft_id(&intent.camp_id), "revision":intent.expected_revision+1}), None))
+        let payload = if matches!(intent.target, UploadTarget::Camp) {
+            json!({"attachmentRefId":intent.command_id, "source":source})
+        } else {
+            json!({"attachmentRefId":intent.command_id, "draftId":client.draft_id(&intent.camp_id), "revision":intent.expected_revision+1})
+        };
+        Ok(CommandHandlerResult::applied("attachment.upload_bound", payload, None))
     })
 }

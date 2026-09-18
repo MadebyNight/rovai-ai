@@ -2907,10 +2907,10 @@ fn validate_agent_mutation<C: DomainCommand>(
     let row: Option<(String, String, i64)> = transaction
         .query_row(
             r#"
-            SELECT camp_turn.camp_id, conversation.agent_id,
+            SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id), conversation.agent_id,
                    agent_run.execution_epoch
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             JOIN conversation ON conversation.id = agent_run.conversation_id
             WHERE agent_run.id = ?1
               AND agent_run.status IN ('running', 'waiting')

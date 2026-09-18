@@ -15,7 +15,8 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
     element.dispatchEvent(new Event('input', { bubbles: true }))
   }
   const cases: string[] = []
-  check(!document.querySelector('button[title="使命板"]'), 'Mission navigation stays hidden')
+  await until(() => document.querySelector('button[title="使命板"]'), 'The Mission navigation must load')
+  document.querySelector<HTMLButtonElement>('button[title="使命板"]')!.click()
   await until(() => document.querySelector('.mission-board-card'), 'The Mission board must load')
   const card = document.querySelector<HTMLElement>('.mission-board-card')!
   check(card.querySelector('.mission-card-meta > span')?.textContent === 'M-018', 'Mission card uses the stable display number')

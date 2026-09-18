@@ -1,5 +1,5 @@
 use crate::draft_client::DraftClient;
-use crate::message_quote::{QuoteStorage, load_quotes, store_quotes};
+use crate::message_quote::{MessageQuoteSnapshot, QuoteStorage, load_quotes, store_quotes};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     path::Path,
@@ -15,33 +15,28 @@ pub const DURABLE_TASK_CONTRACT_VERSION: u32 = 3;
 const TRUSTED_MEMBERSHIP_SYSTEM_COMPONENTS: &[&str] = &["channel-membership-sync"];
 
 use crate::{
-    agent_profile::{FrozenAgentRuntimeConfig, resolve_frozen_runtime},
+    agent_profile::FrozenAgentRuntimeConfig,
     camp_attachment::{
         consume_prepared_attachments, consume_prepared_attachments_for_managed_ingest,
     },
     camp_attachment_publication::CampAttachmentPublicationCoordinator,
     camp_attachment_view::commit_publication_in_message_transaction,
     camp_content::{
-        StructuredCampMessageContent, StructuredCampMessageSegment, canonical_content_digest,
-        composer_document_to_content, has_all_members_mention, member_mention_ids,
-        mentions_current_user, normalize_content, parse_composer_document_json, render_plain_text,
-        validate_content, validate_user_authored_content,
+        ComposerDocument, StructuredCampMessageContent, StructuredCampMessageSegment,
+        canonical_content_digest, composer_document_to_content, has_all_members_mention,
+        member_mention_ids, mentions_current_user, normalize_content, parse_composer_document_json,
+        render_plain_text, validate_content, validate_user_authored_content,
     },
     camp_id::CampId,
     command::{
         ActorRef, CommandEnvelope, CommandExecution, CommandHandlerResult, DomainCommand,
-        DomainCommandGateway, EntityReference, canonical_json_digest, sealed,
+        DomainCommandGateway, EntityReference, canonical_json_digest, erase_command_result_receipt,
+        sealed,
     },
     context_index::index_camp_message,
-    current_input_skill::{SkillSelectionSnapshot, freeze_skill_selection},
     db::Database,
-    execution_budget::{
-        CampTurnExecutionBudgetExhaustionReason, CampTurnExecutionBudgetRequest,
-        FrozenCampTurnExecutionBudget, freeze_camp_turn_execution_budget,
-    },
-    gather::{
-        GatherInitiatorLifetime, cancel_gathers_for_initiator, settle_item_from_delivery_terminal,
-    },
+    delivery_queue::enqueue_message_deliveries,
+    execution_budget::{CampTurnExecutionBudgetExhaustionReason, CampTurnExecutionBudgetRequest},
     local_attachment_source::{
         LocalAttachmentSourceRef, parse_source_attachments, serialize_source_attachments,
         validate_source_attachments,
@@ -49,8 +44,6 @@ use crate::{
     managed_attachment::{
         CommitManagedAttachmentIngest, ManagedAttachmentIngestSource, ManagedAttachmentService,
     },
-    pending_camp_input::{self, SendPendingCampInputCommand},
-    runtime::AgentRunWorkspace,
 };
 
 #[cfg(test)]
@@ -179,6 +172,20 @@ impl DomainCommand for RenameCampCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WithdrawCampMessageCommand {
+    #[serde(deserialize_with = "crate::camp_id::deserialize_camp_id_string")]
+    pub camp_id: String,
+    pub message_id: String,
+    pub expected_version: i64,
+}
+
+impl sealed::Sealed for WithdrawCampMessageCommand {}
+impl DomainCommand for WithdrawCampMessageCommand {
+    const TYPE: &'static str = "camp_message.withdraw";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangeDefaultLeadCommand {
     #[serde(deserialize_with = "crate::camp_id::deserialize_camp_id_string")]
@@ -296,7 +303,6 @@ pub struct CampMemberRemovalPreview {
     pub open_assigned_task_count: i64,
     pub pending_delivery_count: i64,
     pub running_delivery_count: i64,
-    pub open_gather_item_count: i64,
     pub removable: bool,
     pub blocker_code: Option<String>,
 }
@@ -333,6 +339,27 @@ pub struct SendUserCampDraftCommand {
 impl sealed::Sealed for SendUserCampDraftCommand {}
 impl DomainCommand for SendUserCampDraftCommand {
     const TYPE: &'static str = "camp.message.send_user_draft";
+}
+
+/// One-shot local Composer submission. Editing state stays in the Renderer; Core
+/// receives only the immutable content that this command publishes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SendUserCampMessageCommand {
+    #[serde(deserialize_with = "crate::camp_id::deserialize_camp_id_string")]
+    pub camp_id: String,
+    pub content: ComposerDocument,
+    #[serde(default)]
+    pub source_attachments: Vec<LocalAttachmentSourceRef>,
+    #[serde(default)]
+    pub quotes: Vec<MessageQuoteSnapshot>,
+    pub reply_to_camp_message_id: Option<String>,
+    pub execution: Option<ExecutionRequest>,
+}
+
+impl sealed::Sealed for SendUserCampMessageCommand {}
+impl DomainCommand for SendUserCampMessageCommand {
+    const TYPE: &'static str = "camp.message.send_user";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -560,6 +587,237 @@ impl CollaborationService {
         validate_camp_message_input(command)
     }
 
+    pub fn send_user_camp_message(
+        &self,
+        database: &mut Database,
+        envelope: &CommandEnvelope<SendUserCampMessageCommand>,
+    ) -> Result<CommandExecution> {
+        let command = SendUserCampDraftCommand {
+            draft_client: DraftClient::default(),
+            camp_id: envelope.payload.camp_id.clone(),
+            draft_revision: 1,
+            execution: envelope.payload.execution.clone(),
+        };
+        self.execute_user_camp_message(
+            database,
+            envelope,
+            &command,
+            UserCampMessageAttachmentCommit {
+                legacy_publication_operation_id: None,
+                managed_ingest_intent_id: None,
+                source: UserCampMessageSource::Inline(&envelope.payload.quotes),
+            },
+            |transaction| {
+                if envelope.payload.quotes.iter().any(|quote| {
+                    quote.source.scope != "camp" || quote.source.camp_id != command.camp_id
+                }) {
+                    return Ok(Err(rejected(
+                        "quote.invalid_source",
+                        "Every quote must have been captured from this Camp",
+                    )));
+                }
+                let content = composer_document_to_content(&envelope.payload.content)?;
+                validate_user_authored_content(&content)?;
+                load_structured_content_submission(
+                    transaction,
+                    &command.camp_id,
+                    content,
+                    envelope.payload.source_attachments.clone(),
+                    envelope.payload.reply_to_camp_message_id.clone(),
+                    false,
+                    Vec::new(),
+                )
+            },
+        )
+    }
+
+    pub fn withdraw_camp_message(
+        &self,
+        database: &mut Database,
+        envelope: &CommandEnvelope<WithdrawCampMessageCommand>,
+    ) -> Result<CommandExecution> {
+        self.gateway.execute(database, envelope, |transaction| {
+            let ActorRef::User { user_id } = &envelope.actor else {
+                return Ok(rejected(
+                    "message.withdraw_user_required",
+                    "Only the local Principal can withdraw a Composer message",
+                ));
+            };
+            if user_id != crate::current_user::CURRENT_USER_ID
+                || envelope.camp_id.as_deref() != Some(envelope.payload.camp_id.as_str())
+                || envelope.payload.message_id.trim().is_empty()
+                || envelope.payload.expected_version < 1
+            {
+                return Ok(rejected(
+                    "message.withdraw_invalid",
+                    "The message withdrawal identity is invalid",
+                ));
+            }
+            let message = transaction
+                .query_row(
+                    r#"
+                    SELECT author_type, author_id, origin_kind, recall_state,
+                           version, source_operation_id
+                    FROM camp_message
+                    WHERE id = ?1 AND camp_id = ?2 AND tombstoned_at IS NULL
+                    "#,
+                    params![envelope.payload.message_id, envelope.payload.camp_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((
+                author_type,
+                author_id,
+                origin_kind,
+                recall_state,
+                version,
+                source_command_id,
+            )) = message
+            else {
+                return Ok(rejected("message.not_found", "Camp message does not exist"));
+            };
+            if author_type != "user"
+                || author_id != crate::current_user::CURRENT_USER_ID
+                || origin_kind != "local_composer"
+            {
+                return Ok(rejected(
+                    "message.withdraw_ineligible",
+                    "Only a local Composer message can be withdrawn",
+                ));
+            }
+            if recall_state != "recallable" {
+                return Ok(rejected(
+                    if recall_state == "withdrawn" {
+                        "message.withdrawn"
+                    } else {
+                        "message.withdraw_too_late"
+                    },
+                    "The message has crossed an Agent recognition boundary",
+                ));
+            }
+            if version != envelope.payload.expected_version {
+                return Ok(rejected(
+                    "message.withdraw_stale",
+                    "The Camp message changed before withdrawal",
+                ));
+            }
+            let source_command_id = source_command_id
+                .filter(|value| !value.trim().is_empty())
+                .context("recallable Composer message has no publication command identity")?;
+            let unsafe_delivery_exists: bool = transaction.query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1 FROM camp_message_delivery
+                    WHERE message_id = ?1 AND status <> 'waiting'
+                ) OR EXISTS(
+                    SELECT 1 FROM agent_run_input WHERE message_id = ?1
+                )
+                "#,
+                [&envelope.payload.message_id],
+                |row| row.get(0),
+            )?;
+            if unsafe_delivery_exists {
+                return Ok(rejected(
+                    "message.withdraw_too_late",
+                    "The message has crossed an Agent recognition boundary",
+                ));
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            transaction.execute(
+                r#"
+                UPDATE camp_message_delivery
+                SET status = 'cancelled', failure_code = 'message_withdrawn',
+                    ended_at = ?2, version = version + 1, updated_at = ?2
+                WHERE message_id = ?1 AND status = 'waiting'
+                "#,
+                params![envelope.payload.message_id, now],
+            )?;
+            transaction.execute(
+                "DELETE FROM camp_message_reference WHERE camp_message_id = ?1",
+                [&envelope.payload.message_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM camp_message_mention WHERE camp_message_id = ?1",
+                [&envelope.payload.message_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM camp_message_attachment_ref WHERE camp_message_id = ?1",
+                [&envelope.payload.message_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM message_attachment WHERE camp_message_id = ?1",
+                [&envelope.payload.message_id],
+            )?;
+            let changed = transaction.execute(
+                r#"
+                UPDATE camp_message
+                SET body = '', structured_content_json = '[]', quotes_json = '[]',
+                    content_digest = 'erased', source_attachments_json = '[]',
+                    reply_to_camp_message_id = NULL,
+                    recipient_presentation_json = '{}',
+                    recall_state = 'withdrawn', withdrawn_by_id = ?3,
+                    withdrawn_at = ?4, version = version + 1, updated_at = ?4
+                WHERE id = ?1 AND camp_id = ?2
+                  AND recall_state = 'recallable' AND version = ?5
+                "#,
+                params![
+                    envelope.payload.message_id,
+                    envelope.payload.camp_id,
+                    user_id,
+                    now,
+                    envelope.payload.expected_version,
+                ],
+            )?;
+            if changed != 1 {
+                return Ok(rejected(
+                    "message.withdraw_stale",
+                    "The Camp message changed before withdrawal",
+                ));
+            }
+            erase_command_result_receipt(
+                transaction,
+                &source_command_id,
+                SendUserCampMessageCommand::TYPE,
+                &envelope.actor,
+                &envelope.payload.camp_id,
+                &envelope.payload.message_id,
+            )?;
+            append_domain_event(
+                transaction,
+                "camp_message.withdrawn",
+                Some(&envelope.payload.camp_id),
+                Some(("camp_message", &envelope.payload.message_id)),
+                &envelope.actor,
+                None,
+                &json!({
+                    "messageId": envelope.payload.message_id,
+                    "withdrawnAt": now,
+                }),
+            )?;
+            Ok(CommandHandlerResult::applied(
+                "message.withdrawn",
+                json!({
+                    "messageId": envelope.payload.message_id,
+                    "status": "withdrawn",
+                }),
+                Some(EntityReference {
+                    entity_type: "camp_message".to_string(),
+                    entity_id: envelope.payload.message_id.clone(),
+                }),
+            ))
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn send_test_camp_message(
         &self,
@@ -636,7 +894,7 @@ impl CollaborationService {
         // This fixture constructs already-admitted messages for scheduler and
         // historical migration owners. Composer admission is exercised through
         // the production send entry point in pending_camp_input::tests.
-        self.execute_user_camp_message(
+        let mut execution = self.execute_user_camp_message(
             database,
             &command,
             &command.payload,
@@ -653,7 +911,15 @@ impl CollaborationService {
                     command.payload.draft_revision,
                 )
             },
-        )
+        )?;
+        if execution.result.status != crate::command::CommandResultStatus::Rejected {
+            let agent_run_ids =
+                crate::delivery_queue::claim_waiting_delivery_batches(database, 100)?;
+            if let Some(payload) = execution.result.payload.as_object_mut() {
+                payload.insert("agentRunIds".to_string(), json!(agent_run_ids));
+            }
+        }
+        Ok(execution)
     }
 
     #[cfg(all(test, feature = "slow-tests"))]
@@ -1587,7 +1853,7 @@ impl CollaborationService {
         };
         let affected_deliveries =
             camp_membership_affected_deliveries(connection, camp_id, agent_id, membership_version)?;
-        let non_terminal_agent_run_count = camp_membership_affected_run_ids(
+        let legacy_non_terminal_agent_run_count = camp_membership_affected_run_ids(
             connection,
             camp_id,
             agent_id,
@@ -1595,6 +1861,20 @@ impl CollaborationService {
             &affected_deliveries,
         )?
         .len() as i64;
+        let batch_non_terminal_agent_run_count: i64 = connection.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM agent_run AS run
+            JOIN conversation ON conversation.id = run.conversation_id
+            WHERE run.camp_id = ?1 AND conversation.agent_id = ?2
+              AND run.invocation_kind = 'batch'
+              AND run.status IN ('queued', 'running', 'waiting')
+            "#,
+            params![camp_id, agent_id],
+            |row| row.get(0),
+        )?;
+        let non_terminal_agent_run_count =
+            legacy_non_terminal_agent_run_count + batch_non_terminal_agent_run_count;
         let open_assigned_task_count: i64 = connection.query_row(
             r#"
             SELECT COUNT(*) FROM task
@@ -1604,44 +1884,28 @@ impl CollaborationService {
             params![camp_id, agent_id],
             |row| row.get(0),
         )?;
-        let pending_delivery_count = affected_deliveries
+        let legacy_pending_delivery_count = affected_deliveries
             .iter()
             .filter(|delivery| delivery.status == "pending")
             .count() as i64;
-        let running_delivery_count = affected_deliveries
+        let legacy_running_delivery_count = affected_deliveries
             .iter()
             .filter(|delivery| delivery.status == "running")
             .count() as i64;
-        let open_gather_item_count: i64 = connection.query_row(
+        let (batch_pending_delivery_count, batch_running_delivery_count): (i64, i64) = connection
+            .query_row(
             r#"
-            SELECT COUNT(*)
-            FROM gather_item
-            JOIN gather_record ON gather_record.id = gather_item.gather_id
-            JOIN message_delivery AS dispatch_delivery
-              ON dispatch_delivery.id = gather_item.dispatch_delivery_id
-            JOIN agent_run AS initiator_run
-              ON initiator_run.id = gather_record.initiator_agent_run_id
-            WHERE gather_record.camp_id = ?1
-              AND gather_item.status IN ('pending', 'running')
-              AND (
-                    (
-                        gather_item.recipient_agent_id = ?2
-                        AND dispatch_delivery.recipient_membership_version_at_admission = ?3
-                    )
-                    OR (
-                        gather_record.initiator_agent_id = ?2
-                        AND CAST(
-                              json_extract(
-                                  initiator_run.effective_config_json,
-                                  '$.campMemberVersion'
-                              ) AS INTEGER
-                            ) = ?3
-                    )
-              )
-            "#,
-            params![camp_id, agent_id, membership_version],
-            |row| row.get(0),
+                SELECT
+                    COALESCE(SUM(status = 'waiting'), 0),
+                    COALESCE(SUM(status = 'claimed'), 0)
+                FROM camp_message_delivery
+                WHERE camp_id = ?1 AND recipient_agent_id = ?2
+                "#,
+            params![camp_id, agent_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        let pending_delivery_count = legacy_pending_delivery_count + batch_pending_delivery_count;
+        let running_delivery_count = legacy_running_delivery_count + batch_running_delivery_count;
         let removable = status == "active" && active_member_count > 1;
         Ok(Some(CampMemberRemovalPreview {
             camp_id: camp_id.to_string(),
@@ -1655,7 +1919,6 @@ impl CollaborationService {
             open_assigned_task_count,
             pending_delivery_count,
             running_delivery_count,
-            open_gather_item_count,
             removable,
             blocker_code: (!removable).then(|| {
                 if status != "active" {
@@ -2611,14 +2874,15 @@ impl CollaborationService {
         )
     }
 
-    /// Shared atomic execution admission used by trusted channel ingress.
+    /// Shared atomic message admission used by trusted channel ingress.
     ///
     /// The channel layer owns transport aggregation, deduplication and serial
     /// queueing. Once it has one finalized request, this seam performs the same
-    /// authoritative address resolution, Conversation creation, Runtime config
-    /// freeze, CampMessage/CampTurn creation and AgentRun materialization as the
-    /// local user path. The System actor authorizes the trusted adapter only;
-    /// the persisted public author remains the External Principal.
+    /// authoritative address resolution, Conversation routing, CampMessage
+    /// publication and per-target Delivery creation as the local user path.
+    /// Runtime configuration and AgentRun inputs remain claim-time facts. The
+    /// System actor authorizes the trusted adapter only; the persisted public
+    /// author remains the External Principal.
     pub(crate) fn admit_external_channel_message(
         &self,
         transaction: &Transaction<'_>,
@@ -2707,48 +2971,18 @@ impl CollaborationService {
         let generated_camp_name = generated_camp_name(&input.structured_content, |agent_id| {
             member_names.get(agent_id).cloned()
         })?;
-        let created_conversation_ids = ensure_resolution_conversations(
-            transaction,
-            &input.camp_id,
-            &mut resolution,
-            &input.now,
-        )?;
-        let effective_configs = match prepare_agent_run_configs(transaction, &resolution)? {
-            Ok(configs) => configs,
-            Err(rejection) => {
-                delete_new_conversations(transaction, &created_conversation_ids)?;
-                return Ok(Err(rejection));
-            }
-        };
+        ensure_resolution_conversations(transaction, &input.camp_id, &mut resolution, &input.now)?;
         let execution = ExecutionRequest {
             task_id: None,
             purpose: "Respond to the finalized external channel message".to_string(),
             completion_role: required_completion_role(),
             budget: None,
         };
-        let frozen_execution_budget = match freeze_camp_turn_execution_budget(
-            None,
-            chrono::DateTime::parse_from_rfc3339(&input.now)?.with_timezone(&chrono::Utc),
-            i64::try_from(resolution.targets.len())
-                .context("root AgentRun responsibility count overflow")?,
-        ) {
-            Ok(budget) => budget,
-            Err(error) => {
-                delete_new_conversations(transaction, &created_conversation_ids)?;
-                return Ok(Err(rejected(
-                    "camp_turn.execution_budget_invalid",
-                    &error.to_string(),
-                )));
-            }
-        };
         let camp_message_id = Uuid::new_v4().to_string();
-        let camp_turn_id = Uuid::new_v4().to_string();
         let queued = queue_camp_message_and_runs(
             transaction,
             QueueCampMessageInput {
                 camp_message_id: &camp_message_id,
-                camp_turn_id: Some(&camp_turn_id),
-                automation_run_id: None,
                 camp_id: &input.camp_id,
                 body: &input.body,
                 structured_content: &input.structured_content,
@@ -2763,16 +2997,13 @@ impl CollaborationService {
                 reply_to_camp_message_id: None,
                 resolution: &resolution,
                 execution: Some(&execution),
-                task_admission: None,
-                frozen_execution_budget: Some(&frozen_execution_budget),
-                effective_configs: Some(&effective_configs),
-                workspace: None,
                 actor: &system_actor,
                 message_author: Some(CampMessageAuthor {
                     author_type: "external_principal",
                     author_id: &input.external_principal_id,
                     source_agent_run_id: None,
                 }),
+                origin_kind: Some("channel"),
                 execution_epoch: None,
                 command_id: &input.command_id,
                 now: &input.now,
@@ -2781,7 +3012,7 @@ impl CollaborationService {
         )?;
         Ok(Ok(ExternalChannelAdmissionResult {
             camp_message_id,
-            camp_turn_id,
+            delivery_ids: queued.delivery_ids,
             camp_sequence: queued.camp_sequence,
         }))
     }
@@ -2855,17 +3086,7 @@ impl CollaborationService {
                 return Ok(Err(result));
             }
         };
-        let created_conversation_ids =
-            ensure_resolution_conversations(transaction, &camp_id, &mut resolution, &input.now)?;
-        let effective_configs = match prepare_agent_run_configs(transaction, &resolution)? {
-            Ok(configs) => configs,
-            Err(rejection) => {
-                delete_new_conversations(transaction, &created_conversation_ids)?;
-                transaction.execute("DELETE FROM camp_member WHERE camp_id = ?1", [&camp_id])?;
-                transaction.execute("DELETE FROM camp WHERE id = ?1", [&camp_id])?;
-                return Ok(Err(rejection));
-            }
-        };
+        ensure_resolution_conversations(transaction, &camp_id, &mut resolution, &input.now)?;
         append_domain_event(
             transaction,
             "camp.created",
@@ -2884,21 +3105,7 @@ impl CollaborationService {
                 "automationRunId": input.automation_run_id,
             }),
         )?;
-        let accepted_at =
-            chrono::DateTime::parse_from_rfc3339(&input.now)?.with_timezone(&chrono::Utc);
-        let time_policy = input
-            .unbounded_time
-            .then_some(CampTurnExecutionBudgetRequest {
-                elapsed_seconds: None,
-                max_agent_run_responsibilities:
-                    crate::execution_budget::PRODUCT_MAX_AGENT_RUN_RESPONSIBILITIES,
-                max_accepted_a2a: crate::execution_budget::PRODUCT_MAX_ACCEPTED_A2A,
-            });
-        let frozen_execution_budget =
-            freeze_camp_turn_execution_budget(time_policy.as_ref(), accepted_at, 1)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let camp_message_id = Uuid::new_v4().to_string();
-        let camp_turn_id = Uuid::new_v4().to_string();
         let content = normalize_content(vec![StructuredCampMessageSegment::Text {
             text: input.prompt.clone(),
         }]);
@@ -2913,8 +3120,6 @@ impl CollaborationService {
             transaction,
             QueueCampMessageInput {
                 camp_message_id: &camp_message_id,
-                camp_turn_id: Some(&camp_turn_id),
-                automation_run_id: Some(&input.automation_run_id),
                 camp_id: &camp_id,
                 body: &input.prompt,
                 structured_content: &content,
@@ -2929,96 +3134,29 @@ impl CollaborationService {
                 reply_to_camp_message_id: None,
                 resolution: &resolution,
                 execution: Some(&execution),
-                task_admission: None,
-                frozen_execution_budget: Some(&frozen_execution_budget),
-                effective_configs: Some(&effective_configs),
-                workspace: None,
                 actor: &system_actor,
                 message_author: Some(CampMessageAuthor {
-                    author_type: "user",
-                    author_id: &input.user_id,
+                    author_type: "system",
+                    author_id: &input.automation_run_id,
                     source_agent_run_id: None,
                 }),
+                origin_kind: Some("automation"),
                 execution_epoch: None,
                 command_id: &input.automation_run_id,
                 now: &input.now,
                 generated_camp_name: None,
             },
         )?;
-        let root_agent_run_id = queued
-            .agent_run_ids
+        let delivery_id = queued
+            .delivery_ids
             .into_iter()
             .next()
-            .context("scheduled Automation admission created no root AgentRun")?;
+            .context("scheduled Automation admission created no Delivery")?;
         Ok(Ok(ScheduledAutomationAdmissionResult {
             camp_id,
-            camp_turn_id,
-            root_agent_run_id,
+            camp_message_id,
+            delivery_id,
         }))
-    }
-
-    pub fn send_pending_camp_input(
-        &self,
-        database: &mut Database,
-        envelope: &CommandEnvelope<SendPendingCampInputCommand>,
-    ) -> Result<CommandExecution> {
-        let result = (|| {
-            let pending = pending_camp_input::load_input(
-                database.connection(),
-                &envelope.payload.pending_input_id,
-                &envelope.payload.camp_id,
-            )?;
-            if envelope.actor
-                != (ActorRef::User {
-                    user_id: pending.user_id.clone(),
-                })
-            {
-                anyhow::bail!("Pending input must publish as its original user");
-            }
-            let command = SendUserCampDraftCommand {
-                draft_client: DraftClient::default(),
-                camp_id: envelope.payload.camp_id.clone(),
-                draft_revision: envelope.payload.expected_revision,
-                execution: pending.execution,
-            };
-            self.execute_user_camp_message(
-                database,
-                envelope,
-                &command,
-                UserCampMessageAttachmentCommit {
-                    legacy_publication_operation_id: None,
-                    managed_ingest_intent_id: None,
-                    source: UserCampMessageSource::Pending(&envelope.payload),
-                },
-                |transaction| {
-                    let current = pending_camp_input::load_input(
-                        transaction,
-                        &envelope.payload.pending_input_id,
-                        &command.camp_id,
-                    )?;
-                    load_structured_content_submission(
-                        transaction,
-                        &command.camp_id,
-                        current.content,
-                        current.source_attachments,
-                        current.reply_to_camp_message_id,
-                        current.recipient_selection_required,
-                        Vec::new(),
-                    )
-                },
-            )
-        })();
-        if result.is_err() {
-            // The failed message transaction rolled back. Keep the input for explicit repair.
-            let transaction = database.connection_mut().transaction()?;
-            pending_camp_input::record_publish_failure(
-                &transaction,
-                &envelope.payload,
-                "pending_input.send_failed",
-            )?;
-            transaction.commit()?;
-        }
-        result
     }
 
     fn execute_user_camp_message<C, Prepare>(
@@ -3038,63 +3176,12 @@ impl CollaborationService {
     {
         Self::validate_send_message_input(command)?;
         let camp_message_id = Uuid::new_v4().to_string();
-        let camp_turn_id = command
-            .execution
-            .as_ref()
-            .map(|_| Uuid::new_v4().to_string());
         self.gateway.execute(database, envelope, |transaction| {
-            if let UserCampMessageSource::Pending(pending) = attachment_commit.source
-                && let Some(result) = pending_camp_input::publish_admission(transaction, pending)?
-            {
-                return Ok(result);
-            }
-            if matches!(attachment_commit.source, UserCampMessageSource::Composer)
-                && pending_camp_input::must_queue(transaction, &command.camp_id)?
-            {
-                let ActorRef::User { user_id } = &envelope.actor else {
-                    return Ok(rejected(
-                        "pending_input.user_required",
-                        "Only a User can queue Camp input",
-                    ));
-                };
-                if !actor_can_write_camp(
-                    transaction,
-                    &envelope.actor,
-                    envelope.execution_epoch,
-                    &command.camp_id,
-                )? {
-                    return Ok(rejected(
-                        "camp.write_forbidden",
-                        "Actor cannot write to this Camp",
-                    ));
-                }
-                let has_legacy_attachments: bool = transaction.query_row(
-                    &format!("SELECT EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = ?1 AND client_id = '{}')", command.draft_client.sql_key()),
-                    [&command.camp_id],
-                    |row| row.get(0),
-                )?;
-                if has_legacy_attachments {
-                    return Ok(rejected(
-                        "legacy_draft.queue_unsupported",
-                        "Legacy Prepared Attachments must be sent directly or removed before queueing.",
-                    ));
-                }
-                return match prepare(transaction)? {
-                    Ok(submission) => pending_camp_input::insert_input(
-                        transaction,
-                        command,
-                        &submission.structured_content,
-                        &submission.source_attachments,
-                        submission.reply_to_camp_message_id.as_deref(),
-                        user_id,
-                    ),
-                    Err(rejection) => Ok(rejection),
-                };
-            }
             let prepared = prepare(transaction)?;
             let prepared = match prepared {
                 Ok(submission) => {
-                    if let Err(failure) = validate_source_attachments(&submission.source_attachments)
+                    if let Err(failure) =
+                        validate_source_attachments(&submission.source_attachments)
                     {
                         Err(rejected(
                             failure.code().as_str(),
@@ -3158,7 +3245,7 @@ impl CollaborationService {
                             "Execution request requires at least one addressable Agent",
                         ));
                     }
-                    let task_admission = if let Some(task_id) = command
+                    if let Some(task_id) = command
                         .execution
                         .as_ref()
                         .and_then(|execution| execution.task_id.as_deref())
@@ -3169,80 +3256,50 @@ impl CollaborationService {
                                 "Task-linked execution requires exactly one recipient",
                             ));
                         }
-                        match task_link_admission(
+                        if task_link_admission(
                             transaction,
                             task_id,
                             &command.camp_id,
                             &resolution.targets[0].agent_id,
                         )? {
-                            Some(admission) => Some(admission),
-                            None => {
-                                return Ok(rejected(
-                                    "agent_run.task_not_executable",
-                                    "Task is not ready for this executable assignee",
-                                ));
-                            }
+                            // The task link is valid; claim-time configuration is frozen later.
+                        } else {
+                            return Ok(rejected(
+                                "agent_run.task_not_executable",
+                                "Task is not ready for this executable assignee",
+                            ));
                         }
-                    } else {
-                        None
-                    };
+                    }
                     // Domain and audit timestamps must reflect the user's wall clock. Execution
                     // Budget observation has a separate non-decreasing clock because its elapsed
                     // safety semantics are not a presentation timestamp.
                     let now = chrono::Utc::now().to_rfc3339();
-                    let created_conversation_ids = if command.execution.is_some() {
+                    if command.execution.is_some() {
                         ensure_resolution_conversations(
                             transaction,
                             &command.camp_id,
                             &mut resolution,
                             &now,
-                        )?
-                    } else {
-                        Vec::new()
-                    };
-                    let effective_configs = if command.execution.is_some() {
-                        match prepare_agent_run_configs(transaction, &resolution)? {
-                            Ok(configs) => Some(configs),
-                            Err(rejection) => {
-                                delete_new_conversations(transaction, &created_conversation_ids)?;
-                                return Ok(rejection);
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    let frozen_execution_budget = if let Some(execution) = &command.execution {
-                        match freeze_camp_turn_execution_budget(
-                            execution.budget.as_ref(),
-                            chrono::DateTime::parse_from_rfc3339(&now)?.with_timezone(&chrono::Utc),
-                            i64::try_from(resolution.targets.len())
-                                .context("root AgentRun responsibility count overflow")?,
-                        ) {
-                            Ok(budget) => Some(budget),
-                            Err(error) => {
-                                delete_new_conversations(transaction, &created_conversation_ids)?;
-                                return Ok(rejected(
-                                    "camp_turn.execution_budget_invalid",
-                                    &error.to_string(),
-                                ));
-                            }
-                        }
-                    } else {
-                        None
-                    };
+                        )?;
+                    }
 
                     let input_quotes = match attachment_commit.source {
-                        UserCampMessageSource::Composer => load_quotes(transaction, QuoteStorage::ClientCampDraft(&command.draft_client), &command.camp_id)?,
-                        UserCampMessageSource::Pending(pending) => load_quotes(transaction, QuoteStorage::CampPending, &pending.pending_input_id)?,
+                        UserCampMessageSource::Composer => load_quotes(
+                            transaction,
+                            QuoteStorage::ClientCampDraft(&command.draft_client),
+                            &command.camp_id,
+                        )?,
+                        UserCampMessageSource::Inline(quotes) => quotes.to_vec(),
                         _ => Vec::new(),
                     };
-                    anyhow::ensure!(input_quotes.is_empty() || !submission.body.trim().is_empty(), "quote.question_required");
+                    anyhow::ensure!(
+                        input_quotes.is_empty() || !submission.body.trim().is_empty(),
+                        "quote.question_required"
+                    );
                     let queued = queue_camp_message_and_runs(
                         transaction,
                         QueueCampMessageInput {
                             camp_message_id: &camp_message_id,
-                            camp_turn_id: camp_turn_id.as_deref(),
-                            automation_run_id: None,
                             camp_id: &command.camp_id,
                             body: &submission.body,
                             structured_content: &submission.structured_content,
@@ -3261,12 +3318,9 @@ impl CollaborationService {
                                 .as_deref(),
                             resolution: &resolution,
                             execution: command.execution.as_ref(),
-                            task_admission: task_admission.as_ref(),
-                            frozen_execution_budget: frozen_execution_budget.as_ref(),
-                            effective_configs: effective_configs.as_ref(),
-                            workspace: None,
                             actor: &envelope.actor,
                             message_author: None,
+                            origin_kind: None,
                             execution_epoch: envelope.execution_epoch,
                             command_id: &envelope.command_id,
                             now: &now,
@@ -3274,37 +3328,24 @@ impl CollaborationService {
                                 .then(|| submission.generated_camp_name.clone()),
                         },
                     )?;
-                    store_quotes(transaction, QuoteStorage::CampMessage, &camp_message_id, &input_quotes)?;
-                    if let UserCampMessageSource::Pending(pending) = attachment_commit.source {
-                        pending_camp_input::record_published(
-                            transaction,
-                            &pending.pending_input_id,
-                            &camp_message_id,
-                            camp_turn_id.as_deref(),
-                        )?;
-                    }
+                    store_quotes(
+                        transaction,
+                        QuoteStorage::CampMessage,
+                        &camp_message_id,
+                        &input_quotes,
+                    )?;
                     let result_payload = json!({
                         "campMessageId": camp_message_id,
                         "sequence": queued.camp_sequence,
-                        "campTurnId": camp_turn_id,
-                        "agentRunIds": queued.agent_run_ids,
-                        "executionBudget": frozen_execution_budget,
+                        "deliveryIds": queued.delivery_ids,
                     });
-                    let entity = camp_turn_id
-                        .as_ref()
-                        .map(|id| EntityReference {
-                            entity_type: "camp_turn".to_string(),
-                            entity_id: id.clone(),
-                        })
-                        .or_else(|| {
-                            Some(EntityReference {
-                                entity_type: "camp_message".to_string(),
-                                entity_id: camp_message_id.clone(),
-                            })
-                        });
-                    if camp_turn_id.is_some() {
+                    let entity = Some(EntityReference {
+                        entity_type: "camp_message".to_string(),
+                        entity_id: camp_message_id.clone(),
+                    });
+                    if command.execution.is_some() {
                         Ok(CommandHandlerResult::accepted(
-                            "camp_turn.queued",
+                            "camp_message.deliveries_waiting",
                             result_payload,
                             entity,
                         ))
@@ -3318,11 +3359,6 @@ impl CollaborationService {
                 })(),
                 Err(rejection) => Ok(rejection),
             }?;
-            if let UserCampMessageSource::Pending(pending) = attachment_commit.source
-                && result.status == crate::command::CommandResultStatus::Rejected
-            {
-                pending_camp_input::record_publish_failure(transaction, pending, &result.code)?;
-            }
             Ok(result)
         })
     }
@@ -3480,7 +3516,7 @@ pub(crate) fn create_camp_in_tx(
 
 struct QueuedCampMessage {
     camp_sequence: i64,
-    agent_run_ids: Vec<String>,
+    delivery_ids: Vec<String>,
 }
 
 pub(crate) fn admit_mission_start(
@@ -3505,19 +3541,8 @@ pub(crate) fn admit_mission_start(
     };
     let now = chrono::Utc::now();
     let now_text = now.to_rfc3339();
-    let created =
-        ensure_resolution_conversations(transaction, camp_id, &mut resolution, &now_text)?;
-    let configs = match prepare_agent_run_configs(transaction, &resolution)? {
-        Ok(value) => value,
-        Err(rejection) => {
-            delete_new_conversations(transaction, &created)?;
-            return Ok(rejection);
-        }
-    };
-    let budget = freeze_camp_turn_execution_budget(None, now, 1)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    ensure_resolution_conversations(transaction, camp_id, &mut resolution, &now_text)?;
     let message_id = Uuid::new_v4().to_string();
-    let turn_id = Uuid::new_v4().to_string();
     let body = "开始使命".to_string();
     let content = normalize_content(vec![StructuredCampMessageSegment::Text {
         text: body.clone(),
@@ -3532,8 +3557,6 @@ pub(crate) fn admit_mission_start(
         transaction,
         QueueCampMessageInput {
             camp_message_id: &message_id,
-            camp_turn_id: Some(&turn_id),
-            automation_run_id: None,
             camp_id,
             body: &body,
             structured_content: &content,
@@ -3548,22 +3571,33 @@ pub(crate) fn admit_mission_start(
             reply_to_camp_message_id: None,
             resolution: &resolution,
             execution: Some(&execution),
-            task_admission: None,
-            frozen_execution_budget: Some(&budget),
-            effective_configs: Some(&configs),
-            workspace: None,
             actor,
             message_author: None,
+            origin_kind: Some("mission"),
             execution_epoch: None,
             command_id,
             now: &now_text,
             generated_camp_name: None,
         },
     )?;
-    transaction.execute("INSERT INTO mission_start(message_id,mission_id,camp_turn_id,created_at,command_id) VALUES(?1,?2,?3,?4,?5)",params![message_id,mission.info.mission_id,turn_id,now_text,command_id])?;
+    let delivery_id = queued
+        .delivery_ids
+        .first()
+        .context("Mission start created no Delivery")?;
+    transaction.execute(
+        "INSERT INTO mission_start(message_id,mission_id,delivery_id,created_at,command_id) \
+         VALUES(?1,?2,?3,?4,?5)",
+        params![
+            message_id,
+            mission.info.mission_id,
+            delivery_id,
+            now_text,
+            command_id
+        ],
+    )?;
     Ok(CommandHandlerResult::accepted(
         "mission.started",
-        json!({"missionId":mission.info.mission_id,"campId":camp_id,"campMessageId":message_id,"campTurnId":turn_id,"agentRunIds":queued.agent_run_ids}),
+        json!({"missionId":mission.info.mission_id,"campId":camp_id,"campMessageId":message_id,"deliveryIds":queued.delivery_ids}),
         Some(EntityReference {
             entity_type: "mission".into(),
             entity_id: mission.info.mission_id.clone(),
@@ -3585,28 +3619,26 @@ pub(crate) struct ExternalChannelAdmissionInput {
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalChannelAdmissionResult {
     pub camp_message_id: String,
-    pub camp_turn_id: String,
+    pub delivery_ids: Vec<String>,
     pub camp_sequence: i64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ScheduledAutomationAdmissionInput {
-    pub unbounded_time: bool,
     pub automation_run_id: String,
     pub automation_name: String,
     pub prompt: String,
     pub member_id: String,
     pub project_binding_kind: ProjectBindingKind,
     pub project_path: String,
-    pub user_id: String,
     pub now: String,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ScheduledAutomationAdmissionResult {
     pub camp_id: String,
-    pub camp_turn_id: String,
-    pub root_agent_run_id: String,
+    pub camp_message_id: String,
+    pub delivery_id: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3614,11 +3646,6 @@ struct CampMessageAuthor<'a> {
     author_type: &'a str,
     author_id: &'a str,
     source_agent_run_id: Option<&'a str>,
-}
-
-struct PreparedAgentRunConfig {
-    effective_config: Value,
-    runtime: FrozenAgentRuntimeConfig,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3631,8 +3658,8 @@ struct UserCampMessageAttachmentCommit<'a> {
 #[derive(Debug, Clone, Copy)]
 enum UserCampMessageSource<'a> {
     Composer,
+    Inline(&'a [MessageQuoteSnapshot]),
     Automation,
-    Pending(&'a SendPendingCampInputCommand),
     #[cfg(test)]
     FixtureComposer,
 }
@@ -3924,8 +3951,6 @@ fn load_structured_content_submission(
 
 struct QueueCampMessageInput<'a> {
     camp_message_id: &'a str,
-    camp_turn_id: Option<&'a str>,
-    automation_run_id: Option<&'a str>,
     camp_id: &'a str,
     body: &'a str,
     structured_content: &'a [StructuredCampMessageSegment],
@@ -3940,12 +3965,9 @@ struct QueueCampMessageInput<'a> {
     reply_to_camp_message_id: Option<&'a str>,
     resolution: &'a AddressResolution,
     execution: Option<&'a ExecutionRequest>,
-    task_admission: Option<&'a TaskLinkAdmission>,
-    frozen_execution_budget: Option<&'a FrozenCampTurnExecutionBudget>,
-    effective_configs: Option<&'a BTreeMap<String, PreparedAgentRunConfig>>,
-    workspace: Option<&'a AgentRunWorkspace>,
     actor: &'a ActorRef,
     message_author: Option<CampMessageAuthor<'a>>,
+    origin_kind: Option<&'a str>,
     execution_epoch: Option<i64>,
     command_id: &'a str,
     now: &'a str,
@@ -3956,15 +3978,6 @@ fn queue_camp_message_and_runs(
     transaction: &Transaction<'_>,
     input: QueueCampMessageInput<'_>,
 ) -> Result<QueuedCampMessage> {
-    if input.execution.is_some() != input.camp_turn_id.is_some() {
-        anyhow::bail!("CampTurn identity must match the execution request");
-    }
-    if input.execution.is_some() != input.effective_configs.is_some() {
-        anyhow::bail!("AgentRun effective configurations must be prepared before queueing");
-    }
-    if input.execution.is_some() != input.frozen_execution_budget.is_some() {
-        anyhow::bail!("CampTurn execution has no frozen Execution Budget");
-    }
     let activation_state: String = transaction.query_row(
         "SELECT activation_state FROM camp WHERE id = ?1",
         [input.camp_id],
@@ -4010,48 +4023,6 @@ fn queue_camp_message_and_runs(
         |row| row.get(0),
     )?;
 
-    if let Some(camp_turn_id) = input.camp_turn_id {
-        let budget = input
-            .frozen_execution_budget
-            .context("CampTurn execution has no frozen budget")?;
-        transaction.execute(
-            r#"
-                INSERT INTO camp_turn(
-                    id, camp_id, trigger_type, trigger_id, status,
-                    automation_run_id,
-                    cancel_requested_at, cancel_request_command_id,
-                    execution_budget_schema_version,
-                    execution_budget_accepted_at, execution_budget_deadline_at,
-                    execution_budget_elapsed_seconds,
-                    execution_budget_max_agent_run_responsibilities,
-                    execution_budget_max_accepted_a2a,
-                    execution_budget_root_agent_run_responsibilities,
-                    execution_budget_exhausted_at,
-                    execution_budget_exhaustion_reason,
-                    execution_budget_exhaustion_command_id,
-                    version, created_at, updated_at, ended_at
-                ) VALUES (
-                    ?1, ?2, 'camp_message', ?3, 'running', ?11, NULL, NULL,
-                    ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    NULL, NULL, NULL, 1, ?5, ?5, NULL
-                )
-            "#,
-            params![
-                camp_turn_id,
-                input.camp_id,
-                input.camp_message_id,
-                budget.schema_version,
-                budget.accepted_at,
-                budget.deadline_at,
-                budget.elapsed_seconds,
-                budget.max_agent_run_responsibilities,
-                budget.max_accepted_a2a,
-                budget.root_agent_run_responsibilities,
-                input.automation_run_id,
-            ],
-        )?;
-    }
-
     let actor_author = actor_parts(input.actor);
     let (author_type, author_id, source_agent_run_id) =
         input.message_author.map_or(actor_author, |author| {
@@ -4071,6 +4042,21 @@ fn queue_camp_message_and_runs(
     let structured_content_json = serde_json::to_string(input.structured_content)?;
     let source_attachments_json = serialize_source_attachments(input.source_attachments)?;
     let content_digest = canonical_content_digest(input.structured_content)?;
+    let origin_kind = input.origin_kind.unwrap_or_else(|| match author_type {
+        "agent" => "agent",
+        "external_principal" => "channel",
+        "user" if matches!(input.actor, ActorRef::User { .. }) => "local_composer",
+        "user" => "system",
+        _ => "system",
+    });
+    let recall_state = if origin_kind == "local_composer"
+        && input.execution.is_some()
+        && !addressed_agent_ids.is_empty()
+    {
+        "recallable"
+    } else {
+        "ineligible"
+    };
     transaction.execute(
         r#"
         INSERT INTO camp_message(
@@ -4080,10 +4066,11 @@ fn queue_camp_message_and_runs(
             source_attachments_json,
             address_mode, addressed_agent_ids_json,
             reply_to_camp_message_id, camp_turn_id, agent_run_id,
-            tombstoned_at, version, created_at, updated_at
+            tombstoned_at, version, created_at, updated_at,
+            origin_kind, recall_state, source_operation_id
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-            ?11, ?12, ?13, ?14, NULL, NULL, 1, ?15, ?15
+            ?11, ?12, ?13, NULL, NULL, NULL, 1, ?14, ?14, ?15, ?16, ?17
         )
         "#,
         params![
@@ -4100,8 +4087,10 @@ fn queue_camp_message_and_runs(
             input.address_mode,
             addressed_agent_ids_json,
             input.reply_to_camp_message_id,
-            input.camp_turn_id,
             input.now,
+            origin_kind,
+            recall_state,
+            input.command_id,
         ],
     )?;
     if !input.consume_composer_draft
@@ -4191,135 +4180,22 @@ fn queue_camp_message_and_runs(
         input.body,
         &addressed_agent_ids_json,
     )?;
-    let mut agent_run_ids = Vec::new();
-    if let (Some(execution), Some(camp_turn_id)) = (input.execution, input.camp_turn_id) {
-        for target in &input.resolution.targets {
-            let conversation_id = target
-                .conversation_id
-                .as_deref()
-                .context("Execution target has no admitted Conversation")?;
-            let conversation_sequence: i64 = transaction.query_row(
-                "SELECT last_message_sequence FROM conversation WHERE id = ?1",
-                [conversation_id],
-                |row| row.get(0),
-            )?;
-            let prepared = input
-                .effective_configs
-                .and_then(|configs| configs.get(&target.agent_id))
-                .context("AgentRun target has no prepared Runtime configuration")?;
-            let agent_run_id = Uuid::new_v4().to_string();
-            let responsibility_key = execution.task_id.as_ref().map_or_else(
-                || format!("respond/{}", target.agent_id),
-                |task_id| format!("execute/{task_id}/{}", target.agent_id),
-            );
-            let workspace_json = input
-                .workspace
-                .map(|workspace| {
-                    serde_json::to_string(&AgentRunWorkspace::runtime_managed_path(
-                        workspace.execution_root.clone(),
-                    ))
-                })
-                .transpose()?;
-            let skill_selection = if matches!(input.actor, ActorRef::User { .. }) {
-                freeze_skill_selection(
-                    transaction,
-                    input.structured_content,
-                    prepared.runtime.adapter_kind,
-                )?
-            } else {
-                SkillSelectionSnapshot::default()
-            };
-            let (skill_selection_json, skill_selection_digest) =
-                skill_selection.canonical_json_and_digest()?;
-            transaction.execute(
-                r#"
-                INSERT INTO agent_run(
-                    id, camp_turn_id, conversation_id, task_id,
-                    task_version_at_admission, assignee_agent_id_at_admission,
-                    trigger_conversation_message_id, trigger_camp_message_id, input_ready_at,
-                    initial_camp_context_through_sequence,
-                    initial_conversation_context_through_sequence,
-                    responsibility_key, responsibility_generation,
-                    predecessor_agent_run_id, start_reason,
-                    purpose, completion_role,
-                    effective_config_json, workspace_json, permission_semantics,
-                    runtime_adapter_kind, runtime_installation_id,
-                    runtime_executable_path, runtime_auth_scope,
-                    runtime_reported_version, runtime_executable_fingerprint,
-                    runtime_initial_reported_version,
-                    runtime_initial_executable_fingerprint,
-                    runtime_capabilities_json, runtime_model_selection_json,
-                    runtime_permission_config_json,
-                    runtime_binding_compatibility_digest,
-                    runtime_host_config_digest, runtime_protocol_version,
-                    runtime_installation_generation,
-                    runtime_search_environment_generation,
-                    runtime_native_session_compatibility_key,
-                    skill_selection_snapshot_json,
-                    skill_selection_snapshot_digest,
-                    status, wait_reason, wait_deadline_at,
-                    idempotency_key, automatic_retry_count, runtime_rebind_count,
-                    last_error_code, last_error_details_ref,
-                    manual_retry_allowed, retry_declined_at,
-                    execution_epoch, execution_lease_owner,
-                    execution_lease_expires_at,
-                    cancel_requested_at, cancel_reason_code,
-                    cancel_acknowledged_at, version,
-                    created_at, started_at, ended_at, updated_at
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?30, ?31, NULL, ?5, ?6, ?7, ?8,
-                    ?9, 0, NULL, 'initial', ?10, ?11,
-                    ?12, ?13, 'runtime_managed_v2',
-                    ?15, ?16, ?17, ?18, ?19, ?20, ?19, ?20,
-                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29,
-                    ?32, ?33,
-                    'queued', NULL, NULL,
-                    ?14, 0, 0, NULL, NULL, 0, NULL,
-                    0, NULL, NULL, NULL, NULL, NULL, 1,
-                    ?6, NULL, NULL, ?6
-                )
-                "#,
-                params![
-                    agent_run_id,
-                    camp_turn_id,
-                    conversation_id,
-                    execution.task_id,
-                    input.camp_message_id,
-                    input.now,
-                    camp_sequence,
-                    conversation_sequence,
-                    responsibility_key,
-                    execution.purpose,
-                    execution.completion_role,
-                    serde_json::to_string(&prepared.effective_config)?,
-                    workspace_json,
-                    format!("{}:{}", input.command_id, target.agent_id),
-                    prepared.runtime.adapter_kind.as_str(),
-                    prepared.runtime.installation_id,
-                    prepared.runtime.executable_path,
-                    prepared.runtime.auth_scope,
-                    prepared.runtime.reported_version,
-                    prepared.runtime.executable_fingerprint,
-                    serde_json::to_string(&prepared.runtime.capabilities)?,
-                    serde_json::to_string(&prepared.runtime.model)?,
-                    serde_json::to_string(&prepared.runtime.permissions)?,
-                    prepared.runtime.binding_compatibility_digest,
-                    prepared.runtime.host_config_digest,
-                    prepared.runtime.protocol_version,
-                    prepared.runtime.installation_generation,
-                    prepared.runtime.search_environment_generation,
-                    prepared.runtime.native_session_compatibility_key,
-                    input.task_admission.map(|admission| admission.task_version),
-                    input
-                        .task_admission
-                        .map(|admission| admission.assignee_agent_id.as_str()),
-                    skill_selection_json,
-                    skill_selection_digest,
-                ],
-            )?;
-            agent_run_ids.push(agent_run_id);
-        }
-    }
+    let deliveries = if input.execution.is_some() {
+        enqueue_message_deliveries(
+            transaction,
+            input.camp_id,
+            input.camp_message_id,
+            camp_sequence,
+            &addressed_agent_ids,
+            input.now,
+        )?
+    } else {
+        Vec::new()
+    };
+    let delivery_ids = deliveries
+        .iter()
+        .map(|delivery| delivery.delivery_id.clone())
+        .collect::<Vec<_>>();
 
     append_domain_event(
         transaction,
@@ -4332,29 +4208,27 @@ fn queue_camp_message_and_runs(
             "sequence": camp_sequence,
             "addressSource": input.resolution.source,
             "addressedAgentIds": addressed_agent_ids,
-            "campTurnId": input.camp_turn_id,
-            "agentRunIds": agent_run_ids,
+            "deliveryIds": delivery_ids,
         }),
     )?;
-    if let (Some(execution), Some(camp_turn_id)) = (input.execution, input.camp_turn_id) {
-        for agent_run_id in &agent_run_ids {
-            append_domain_event(
-                transaction,
-                "agent_run.queued",
-                Some(input.camp_id),
-                Some(("agent_run", agent_run_id)),
-                input.actor,
-                input.execution_epoch,
-                &json!({
-                    "taskId": execution.task_id,
-                    "campTurnId": camp_turn_id,
-                }),
-            )?;
-        }
+    for delivery in &deliveries {
+        append_domain_event(
+            transaction,
+            "camp_message_delivery.waiting",
+            Some(input.camp_id),
+            Some(("camp_message_delivery", &delivery.delivery_id)),
+            input.actor,
+            input.execution_epoch,
+            &json!({
+                "messageId": input.camp_message_id,
+                "recipientAgentId": delivery.recipient_agent_id,
+                "queueSequence": camp_sequence,
+            }),
+        )?;
     }
     Ok(QueuedCampMessage {
         camp_sequence,
-        agent_run_ids,
+        delivery_ids,
     })
 }
 
@@ -4393,13 +4267,6 @@ fn ensure_resolution_conversations(
         created.push(conversation_id);
     }
     Ok(created)
-}
-
-fn delete_new_conversations(transaction: &Connection, conversation_ids: &[String]) -> Result<()> {
-    for conversation_id in conversation_ids {
-        transaction.execute("DELETE FROM conversation WHERE id = ?1", [conversation_id])?;
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -4608,14 +4475,14 @@ pub(crate) fn actor_can_write_camp(
         r#"
         SELECT COUNT(*)
         FROM agent_run
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
         JOIN conversation ON conversation.id = agent_run.conversation_id
         JOIN camp_member
-          ON camp_member.camp_id = camp_turn.camp_id
+          ON camp_member.camp_id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
          AND camp_member.agent_id = conversation.agent_id
         JOIN agent_profile ON agent_profile.id = conversation.agent_id
         WHERE agent_run.id = ?1
-          AND camp_turn.camp_id = ?2
+          AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?2
           AND conversation.agent_id = ?3
           AND agent_run.execution_epoch = ?4
           AND agent_run.status IN ('running', 'waiting')
@@ -4906,18 +4773,12 @@ fn validate_camp_message_input(command: &SendUserCampDraftCommand) -> Result<()>
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct TaskLinkAdmission {
-    pub task_version: i64,
-    pub assignee_agent_id: String,
-}
-
 pub(crate) fn task_link_admission(
     transaction: &Transaction<'_>,
     task_id: &str,
     camp_id: &str,
     recipient_agent_id: &str,
-) -> Result<Option<TaskLinkAdmission>> {
+) -> Result<bool> {
     let task = transaction
         .query_row(
             r#"
@@ -4934,62 +4795,21 @@ pub(crate) fn task_link_admission(
             },
         )
         .optional()?;
-    let Some((status, assignee_agent_id, version)) = task else {
-        return Ok(None);
+    let Some((status, assignee_agent_id, _version)) = task else {
+        return Ok(false);
     };
     if !matches!(status.as_str(), "pending" | "in_progress") {
-        return Ok(None);
+        return Ok(false);
     }
     let Some(assignee_agent_id) = assignee_agent_id else {
-        return Ok(None);
+        return Ok(false);
     };
     if assignee_agent_id != recipient_agent_id
         || !is_active_member(transaction, camp_id, recipient_agent_id)?
     {
-        return Ok(None);
+        return Ok(false);
     }
-    Ok(Some(TaskLinkAdmission {
-        task_version: version,
-        assignee_agent_id,
-    }))
-}
-
-fn prepare_agent_run_configs(
-    transaction: &Transaction<'_>,
-    resolution: &AddressResolution,
-) -> Result<std::result::Result<BTreeMap<String, PreparedAgentRunConfig>, CommandHandlerResult>> {
-    let mut configs = BTreeMap::new();
-    for target in &resolution.targets {
-        let conversation_id = target
-            .conversation_id
-            .as_deref()
-            .context("Execution target has no admitted Conversation")?;
-        let runtime = match resolve_frozen_runtime(transaction, conversation_id, &target.agent_id)?
-        {
-            Ok(runtime) => runtime,
-            Err(blocker) => {
-                return Ok(Err(CommandHandlerResult::rejected(
-                    "agent_run.runtime_not_ready",
-                    json!({
-                        "agentId": target.agent_id,
-                        "conversationId": conversation_id,
-                        "blockerCode": blocker.code,
-                        "detail": blocker.payload,
-                    }),
-                )));
-            }
-        };
-        let effective_config =
-            build_effective_config(transaction, conversation_id, &target.agent_id, &runtime)?;
-        configs.insert(
-            target.agent_id.clone(),
-            PreparedAgentRunConfig {
-                effective_config,
-                runtime,
-            },
-        );
-    }
-    Ok(Ok(configs))
+    Ok(true)
 }
 
 pub(crate) fn build_effective_config(
@@ -5154,8 +4974,8 @@ pub(crate) fn camp_delete_blockers(transaction: &Connection, camp_id: &str) -> R
             r#"
             SELECT COUNT(*)
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
               AND agent_run.status IN ('queued', 'running', 'waiting')
             "#,
         ),
@@ -5176,7 +4996,7 @@ pub(crate) fn camp_delete_blockers(transaction: &Connection, camp_id: &str) -> R
             LEFT JOIN agent_run ON agent_run.id = action_execution.agent_run_id
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE approval.status = 'pending'
-              AND (task.camp_id = ?1 OR camp_turn.camp_id = ?1)
+              AND (task.camp_id = ?1 OR COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1)
             "#,
         ),
         (
@@ -5185,8 +5005,8 @@ pub(crate) fn camp_delete_blockers(transaction: &Connection, camp_id: &str) -> R
             SELECT COUNT(*)
             FROM action_execution
             JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
               AND (
                 action_execution.status IN ('prepared', 'executing')
                 OR (action_execution.status = 'unknown'
@@ -5202,13 +5022,20 @@ pub(crate) fn camp_delete_blockers(transaction: &Connection, camp_id: &str) -> R
             "#,
         ),
         (
+            "waiting_camp_message_delivery",
+            r#"
+            SELECT COUNT(*) FROM camp_message_delivery
+            WHERE camp_id = ?1 AND status IN ('waiting', 'claimed')
+            "#,
+        ),
+        (
             "pending_runtime_delivery",
             r#"
             SELECT COUNT(*)
             FROM runtime_delivery_checkpoint
             JOIN agent_run ON agent_run.id = runtime_delivery_checkpoint.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
               AND runtime_delivery_checkpoint.status NOT IN ('acked', 'safely_closed')
             "#,
         ),
@@ -5218,8 +5045,8 @@ pub(crate) fn camp_delete_blockers(transaction: &Connection, camp_id: &str) -> R
             SELECT COUNT(*)
             FROM runtime_input_delivery
             JOIN agent_run ON agent_run.id = runtime_input_delivery.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
               AND runtime_input_delivery.status IN ('prepared', 'delivery_unknown')
             "#,
         ),
@@ -5229,14 +5056,14 @@ pub(crate) fn camp_delete_blockers(transaction: &Connection, camp_id: &str) -> R
             SELECT
                 (SELECT COUNT(*)
                  FROM agent_run
-                 JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                 WHERE camp_turn.camp_id = ?1
+                 LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                 WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
                    AND agent_run.execution_lease_owner IS NOT NULL)
               + (SELECT COUNT(*)
                  FROM action_execution
                  JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-                 JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                 WHERE camp_turn.camp_id = ?1
+                 LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                 WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
                    AND action_execution.execution_lease_owner IS NOT NULL)
               + (SELECT COUNT(*) FROM message_delivery_attempt
                  JOIN message_delivery ON message_delivery.id = message_delivery_attempt.delivery_id
@@ -6216,12 +6043,42 @@ pub(crate) fn end_camp_membership(
         agent_id,
         current_membership_version,
     )?;
-    let affected_run_ids = camp_membership_affected_run_ids(
+    let mut affected_run_ids = camp_membership_affected_run_ids(
         transaction,
         camp_id,
         agent_id,
         current_membership_version,
         &affected_deliveries,
+    )?;
+    let batch_run_ids = {
+        let mut statement = transaction.prepare(
+            r#"
+            SELECT run.id
+            FROM agent_run AS run
+            JOIN conversation ON conversation.id = run.conversation_id
+            WHERE run.camp_id = ?1
+              AND conversation.agent_id = ?2
+              AND run.invocation_kind = 'batch'
+              AND run.status IN ('queued', 'running', 'waiting')
+            ORDER BY run.created_at, run.id
+            "#,
+        )?;
+        statement
+            .query_map(params![camp_id, agent_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    affected_run_ids.extend(batch_run_ids);
+    affected_run_ids.sort();
+    affected_run_ids.dedup();
+
+    let cancelled_batch_delivery_count = transaction.execute(
+        r#"
+        UPDATE camp_message_delivery
+        SET status = 'cancelled', failure_code = 'recipient_membership_ended',
+            ended_at = ?3, version = version + 1, updated_at = ?3
+        WHERE camp_id = ?1 AND recipient_agent_id = ?2 AND status = 'waiting'
+        "#,
+        params![camp_id, agent_id, now],
     )?;
 
     let changed = transaction.execute(
@@ -6292,19 +6149,17 @@ pub(crate) fn end_camp_membership(
         )?;
     }
 
-    cancel_gathers_for_initiator(
-        transaction,
-        GatherInitiatorLifetime {
-            camp_id,
-            agent_id,
-            membership_version: current_membership_version,
-        },
-        "gather_initiator_left_camp",
-        actor,
-        execution_epoch,
-        now,
-    )?;
     for gather_id in &initiated_gather_ids {
+        transaction.execute(
+            r#"
+            UPDATE gather_record
+            SET status = 'cancelled',
+                cancellation_reason_code = 'gather_initiator_left_camp',
+                version = version + 1, cancelled_at = ?2, updated_at = ?2
+            WHERE id = ?1 AND status IN ('collecting', 'ready', 'completing')
+            "#,
+            params![gather_id, now],
+        )?;
         transaction.execute(
             r#"
             UPDATE gather_item
@@ -6324,7 +6179,7 @@ pub(crate) fn end_camp_membership(
     }
 
     let mut affected_turn_ids = BTreeSet::new();
-    let mut cancelled_delivery_count = 0_usize;
+    let mut cancelled_delivery_count = cancelled_batch_delivery_count;
     for delivery in &affected_deliveries {
         affected_turn_ids.insert(delivery.camp_turn_id.clone());
         if delivery.status != "pending" {
@@ -6386,14 +6241,18 @@ pub(crate) fn end_camp_membership(
                     "membershipVersion": membership_version,
                 }),
             )?;
-            settle_item_from_delivery_terminal(
-                transaction,
-                &delivery.id,
-                terminal_status,
-                Some(&delivery.failure_code),
-                actor,
-                execution_epoch,
-                now,
+            transaction.execute(
+                r#"
+                UPDATE gather_item
+                SET status = 'cancelled', terminal_source = 'delivery',
+                    error_code = ?2,
+                    terminal_resolution_source = 'camp_membership_reconciliation',
+                    terminal_reason_code = ?2,
+                    version = version + 1, ended_at = ?3, updated_at = ?3
+                WHERE dispatch_delivery_id = ?1
+                  AND status IN ('pending', 'running')
+                "#,
+                params![delivery.id, delivery.failure_code, now],
             )?;
         }
     }
@@ -6406,7 +6265,9 @@ pub(crate) fn end_camp_membership(
             actor,
             now,
         )?;
-        affected_turn_ids.insert(settlement.camp_turn_id);
+        if !settlement.camp_turn_id.is_empty() {
+            affected_turn_ids.insert(settlement.camp_turn_id);
+        }
     }
 
     let released = {
@@ -9139,6 +9000,162 @@ mod slow_tests {
         assert_eq!(row_count(&database, "camp_message"), 1);
         assert_eq!(row_count(&database, "camp_turn"), 0);
         assert_eq!(row_count(&database, "agent_run"), 0);
+        drop(database);
+        std::fs::remove_dir_all(directory).expect("temporary database should be removable");
+    }
+
+    #[test]
+    fn recallable_local_composer_message_is_erased_and_cannot_be_republished() {
+        let (mut database, directory) = test_database();
+        let service = CollaborationService::default();
+        let camp_id = create_camp_with_members(&service, &mut database, &directory, &["agent_2"]);
+        let send = user_envelope(
+            "withdrawable-local-composer-message",
+            Some(&camp_id),
+            SendUserCampMessageCommand {
+                camp_id: camp_id.clone(),
+                content: composer_document(vec![
+                    Segment::MemberMention {
+                        agent_id: "agent_2".to_string(),
+                    },
+                    Segment::Text {
+                        text: "这段原文撤回后不能恢复".to_string(),
+                    },
+                ]),
+                source_attachments: Vec::new(),
+                quotes: Vec::new(),
+                reply_to_camp_message_id: None,
+                execution: Some(ExecutionRequest {
+                    task_id: None,
+                    purpose: "验证撤回擦除".to_string(),
+                    completion_role: "required".to_string(),
+                    budget: None,
+                }),
+            },
+        );
+        let sent = service
+            .send_user_camp_message(&mut database, &send)
+            .expect("one-shot Composer message should be admitted");
+        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+        let message_id = sent.result.payload["campMessageId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let before: (String, i64) = database
+            .connection()
+            .query_row(
+                "SELECT recall_state, version FROM camp_message WHERE id = ?1",
+                [&message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(before, ("recallable".to_string(), 1));
+        assert_eq!(row_count(&database, "agent_run"), 0);
+
+        let withdrawn = service
+            .withdraw_camp_message(
+                &mut database,
+                &user_envelope(
+                    "withdraw-local-composer-message",
+                    Some(&camp_id),
+                    WithdrawCampMessageCommand {
+                        camp_id: camp_id.clone(),
+                        message_id: message_id.clone(),
+                        expected_version: before.1,
+                    },
+                ),
+            )
+            .expect("recallable message should withdraw atomically");
+        assert_eq!(withdrawn.result.code, "message.withdrawn");
+
+        let erased: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        ) = database
+            .connection()
+            .query_row(
+                r#"
+                SELECT body, structured_content_json, quotes_json, content_digest,
+                       source_attachments_json, recall_state, reply_to_camp_message_id
+                FROM camp_message WHERE id = ?1
+                "#,
+                [&message_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            erased,
+            (
+                "".to_string(),
+                "[]".to_string(),
+                "[]".to_string(),
+                "erased".to_string(),
+                "[]".to_string(),
+                "withdrawn".to_string(),
+                None,
+            )
+        );
+        let delivery: (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT status, failure_code FROM camp_message_delivery WHERE message_id = ?1",
+                [&message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            delivery,
+            (
+                "cancelled".to_string(),
+                Some("message_withdrawn".to_string())
+            )
+        );
+        assert_eq!(row_count(&database, "camp_message_mention"), 0);
+
+        let receipt: (String, i64, String, String) = database
+            .connection()
+            .query_row(
+                r#"
+                SELECT request_digest, request_digest_version,
+                       result_code, result_payload_json
+                FROM event_log
+                WHERE event_type = 'command.result' AND command_id = ?1
+                "#,
+                [&send.command_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(receipt.0, "");
+        assert_eq!(receipt.1, 0);
+        assert_eq!(receipt.2, "message.withdrawn");
+        assert!(!receipt.3.contains("这段原文"));
+
+        let mut changed_replay = send.clone();
+        changed_replay.payload.content = composer_document(vec![Segment::Text {
+            text: "即使正文不同，也不能用旧 commandId 重新发布".to_string(),
+        }]);
+        let replay = service
+            .send_user_camp_message(&mut database, &changed_replay)
+            .expect("erased terminal receipt should replay by actor and Camp scope");
+        assert!(replay.replayed);
+        assert_eq!(replay.result.code, "message.withdrawn");
+        assert_eq!(row_count(&database, "camp_message"), 1);
+
         drop(database);
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }

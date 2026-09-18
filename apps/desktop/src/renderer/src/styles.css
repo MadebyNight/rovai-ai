@@ -3217,7 +3217,8 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
   transform: translateY(0);
 }
 .message-copy-button,
-.message-reply-button {
+.message-reply-button,
+.message-withdraw-button {
   display: grid;
   width: 28px;
   height: 28px;
@@ -3234,16 +3235,29 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
   user-select: none;
 }
 .message-copy-button svg,
-.message-reply-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.55; }
-.message-copy-button + .message-reply-button { margin-left: 1px; }
+.message-reply-button svg,
+.message-withdraw-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.55; }
+.message-actions > button + button { margin-left: 1px; }
 .message-copy-button:hover,
 .message-reply-button:hover { border-color: var(--line); color: var(--brand-ink); background: var(--surface-hover); }
+.message-withdraw-button:hover:not(:disabled) { border-color: var(--line); color: var(--danger); background: var(--danger-soft); }
+.message-withdraw-button:disabled { cursor: wait; opacity: .55; }
 .message-surface.copied .message-copy-button,
 .message-actions.copied .message-copy-button { color: var(--ink); background: var(--surface-subtle); }
 @media (hover: none), (pointer: coarse) {
   .message-actions { opacity: 1; pointer-events: auto; transform: translateY(0); }
-  .message-copy-button, .message-reply-button { width: 40px; height: 40px; flex-basis: 40px; }
+  .message-copy-button, .message-reply-button, .message-withdraw-button { width: 40px; height: 40px; flex-basis: 40px; }
 }
+.withdrawn-message-event {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+.withdrawn-message-event time { font: 9.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .copy-feedback {
   position: absolute;
   width: 1px;

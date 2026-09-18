@@ -273,7 +273,6 @@
       "messageId": "msg_123",
       "agentAddressingMode": "automatic",
       "visibility": "camp_public",
-      "campTurnId": "turn_123",
       "effectiveRecipients": [
         "agent_27"
       ],
@@ -282,7 +281,7 @@
       "deliveryIds": [
         "delivery_123"
       ],
-      "allocatedAgentRunResponsibilities": 1
+      "attachments": []
     },
     "agentOutput": {
       "messageId": "msg_123",
@@ -293,33 +292,6 @@
       "deliveryIds": [
         "delivery_123"
       ]
-    }
-  },
-  "team.gather": {
-    "canonicalResult": {
-      "status": "accepted",
-      "gatherId": "gather_123",
-      "requestMessageId": "msg_gather_123",
-      "campTurnId": "turn_123",
-      "effectiveRecipients": [
-        "agent_27",
-        "agent_28"
-      ],
-      "dispatchDeliveryIds": [
-        "delivery_27",
-        "delivery_28"
-      ],
-      "completion": "deferred",
-      "allocatedAgentRunResponsibilities": 3
-    },
-    "agentOutput": {
-      "gatherId": "gather_123",
-      "requestMessageId": "msg_gather_123",
-      "effectiveRecipients": [
-        "agent_27",
-        "agent_28"
-      ],
-      "completion": "deferred"
     }
   },
   "member.create": {
@@ -528,13 +500,9 @@
           "sequence": 1,
           "authorType": "agent",
           "authorId": "agent_27",
-          "replyToMessageId": null,
+          "anchorMessageId": null,
           "createdAt": "2026-01-01T00:00:00Z",
           "body": "hello",
-          "bodyOffset": 0,
-          "bodyLength": 5,
-          "bodyTruncated": false,
-          "nextBodyOffset": null,
           "attachmentCount": 1,
           "attachments": [
             {
@@ -566,13 +534,9 @@
           "sequence": 1,
           "authorType": "agent",
           "authorId": "agent_27",
-          "replyToMessageId": null,
+          "anchorMessageId": null,
           "createdAt": "2026-01-01T00:00:00Z",
           "body": "hello",
-          "bodyOffset": 0,
-          "bodyLength": 5,
-          "bodyTruncated": false,
-          "nextBodyOffset": null,
           "attachmentCount": 1,
           "attachments": [
             {

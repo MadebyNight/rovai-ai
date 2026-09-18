@@ -46,7 +46,6 @@ import type {
   BuiltinMemberAvatarRole,
   CampComposerDraftView,
   ComposerDocument,
-  CampPendingInputsView,
   CampComposerReplyRecipient,
   CampMessageAttachmentView,
   CampMessageAroundSnapshot,
@@ -85,7 +84,6 @@ import {
   draftCoordinatorChangeRefreshesProjection,
   type DraftMutation
 } from './draft-mutation-coordinator'
-import { PendingCampInputs, PendingInputReturnRejectedError, pendingError, type PendingCampInputsHandle } from './PendingCampInputs'
 import { AttachmentCard, AttachmentPlaceholder, ComposerAttachmentStrip } from './AttachmentCard'
 export { attachmentRevealLabel } from './AttachmentCard'
 import {
@@ -425,64 +423,133 @@ export function composerDraftNeedsContinuationRepair(
 async function mutateComposerDraft(
   client: CampClient,
   draft: CampComposerDraftView,
-  mutation: DraftMutation
+  mutation: DraftMutation,
+  snapshot: CampSnapshot
 ): Promise<CampComposerDraftView> {
-  const common = { campId: draft.campId, expectedRevision: draft.revision }
-  switch (mutation.kind) {
-    case 'return_pending_input': {
-      const result = await client.request<StoredCommandResult>('camp.pendingInputs.edit', {
-        commandId: mutation.commandId,
-        command: { campId: draft.campId, pendingInputId: mutation.pendingInputId,
-          expectedRevision: mutation.expectedRevision, editToken: mutation.editToken,
-          action: { type: 'return_to_composer', expectedDraftRevision: draft.revision } }
-      })
-      if (result.status === 'rejected') throw new PendingInputReturnRejectedError(pendingError(result.code))
-      return client.request<CampComposerDraftView>('camp.composerDraft.get', { campId: draft.campId })
+  const bodyFor = (content: ComposerDocument): string => content.segments.map((segment) => {
+    if (segment.kind === 'text') return segment.text
+    const atom = segment.atom
+    if (atom.type === 'all_members') return '@所有成员'
+    if (atom.type === 'skill') return `$${atom.nameAtSend}`
+    return `@${snapshot.members.find((member) => member.agentId === atom.agentId)?.displayName
+      ?? atom.labelFallback
+      ?? atom.agentId}`
+  }).join('')
+  const update = (changes: Partial<CampComposerDraftView>): CampComposerDraftView => {
+    const content = changes.content ?? draft.content
+    return {
+      ...draft,
+      ...changes,
+      body: changes.body ?? bodyFor(content),
+      revision: draft.revision + 1,
+      updatedAt: new Date().toISOString()
     }
-    case 'quote':
-      return client.request<CampComposerDraftView>('messageQuotes.mutateDraft', {
-        commandId: mutation.commandId,
-        command: { ...common, conversationId: null, action: mutation.action }
-      })
+  }
+  const prependRecipient = (
+    content: ComposerDocument,
+    recipient: CampComposerReplyRecipient
+  ): ComposerDocument => {
+    const atom = recipient.kind === 'all_members'
+      ? { type: 'all_members' as const }
+      : { type: 'member' as const, agentId: recipient.agentId }
+    const segments = [...content.segments]
+    const first = segments[0]
+    const alreadyFirst = first?.kind === 'atom'
+      && first.atom.type === atom.type
+      && (atom.type !== 'member' || (first.atom.type === 'member' && first.atom.agentId === atom.agentId))
+    if (!alreadyFirst) segments.unshift({ kind: 'atom', atom }, { kind: 'text', text: ' ' })
+    return { version: 2, segments }
+  }
+  switch (mutation.kind) {
+    case 'return_pending_input':
+      throw new Error('旧版待发送输入已停用。')
+    case 'quote': {
+      if (mutation.action.type === 'add') {
+        const quote = await client.request<MessageQuoteSnapshot>('messageQuotes.capture', {
+          campId: draft.campId,
+          selection: mutation.action.selection
+        })
+        return update({ quotes: [...draft.quotes, quote] })
+      }
+      if (mutation.action.type === 'remove') {
+        const quoteId = mutation.action.quoteId
+        return update({ quotes: draft.quotes.filter((quote) => quote.quoteId !== quoteId) })
+      }
+      throw new Error('引用撤销仅在当前编辑操作中可用。')
+    }
     case 'save_content':
-      return client.request<CampComposerDraftView>('camp.composerDraft.save', {
-        ...common,
-        content: mutation.content,
-        continuationSourceMessageId: draft.continuationIntent?.sourceCampMessageId ?? null
-      })
-    case 'add_source_attachment':
-      return client.composerAttachments.prepare(
+      return update({ content: mutation.content })
+    case 'add_source_attachment': {
+      const attachment = await client.composerAttachments.prepare(
         draft.campId,
         draft.revision,
         mutation.file
       )
+      return update({ attachments: [...draft.attachments, attachment] })
+    }
     case 'remove_source_attachment':
-      return client.request<CampComposerDraftView>('camp.composerDraft.removeAttachment', {
-        ...common,
-        attachmentId: mutation.attachmentId
+      return update({ attachments: draft.attachments.filter(({ id }) => id !== mutation.attachmentId) })
+    case 'start_reply': {
+      const message = snapshot.messages.find(({ id }) => id === mutation.replyToCampMessageId)
+      if (!message || message.withdrawn) throw new Error('camp_message.invalid_reply')
+      const authorMember = message.authorType === 'agent'
+        ? snapshot.members.find(({ agentId }) => agentId === message.authorId) ?? null
+        : null
+      const recipientAvailable = Boolean(authorMember
+        && authorMember.membershipStatus === 'active'
+        && authorMember.profilePresence === 'present')
+      const content = recipientAvailable
+        ? prependRecipient(draft.content, { kind: 'member', agentId: message.authorId })
+        : draft.content
+      return update({
+        content,
+        replyIntent: {
+          replyToCampMessageId: message.id,
+          targetState: 'available',
+          author: {
+            authorType: message.authorType === 'agent' ? 'agent' : message.authorType === 'user' ? 'user' : 'system',
+            authorId: message.authorId,
+            displayName: authorMember?.displayName ?? message.authorDisplayName ?? (message.authorType === 'user' ? '用户' : '系统'),
+            recipientAvailability: message.authorType === 'agent'
+              ? recipientAvailable ? 'available' : 'unavailable'
+              : 'not_applicable'
+          },
+          excerpt: message.body.replace(/\s+/gu, ' ').slice(0, 160),
+          recipientSelectionRequired: message.authorType === 'agent' && !recipientAvailable
+        }
       })
-    case 'start_reply':
-      return client.request<CampComposerDraftView>('camp.composerDraft.startReply', {
-        ...common,
-        replyToCampMessageId: mutation.replyToCampMessageId
-      })
+    }
     case 'cancel_reply':
-      return client.request<CampComposerDraftView>('camp.composerDraft.cancelReply', common)
-    case 'resolve_reply_recipient':
-      return client.request<CampComposerDraftView>(
-        'camp.composerDraft.resolveReplyRecipient',
-        { ...common, recipient: mutation.recipient }
-      )
+      return update({ replyIntent: null })
+    case 'resolve_reply_recipient': {
+      if (!draft.replyIntent) throw new Error('camp_message.invalid_reply')
+      return update({
+        content: prependRecipient(draft.content, mutation.recipient),
+        replyIntent: { ...draft.replyIntent, recipientSelectionRequired: false }
+      })
+    }
     case 'dismiss_continuation':
-      return client.request<CampComposerDraftView>(
-        'camp.composerDraft.dismissContinuation',
-        { ...common, sourceCampMessageId: mutation.sourceCampMessageId }
-      )
+      return update({ continuationIntent: null })
     case 'resolve_continuation_recipient':
-      return client.request<CampComposerDraftView>(
-        'camp.composerDraft.resolveContinuationRecipient',
-        { ...common, agentId: mutation.agentId }
-      )
+      return update({
+        content: prependRecipient(draft.content, { kind: 'member', agentId: mutation.agentId }),
+        continuationIntent: null
+      })
+  }
+}
+
+function emptyLocalComposerDraft(campId: string): CampComposerDraftView {
+  return {
+    campId,
+    body: '',
+    content: emptyComposerDocument(),
+    quotes: [],
+    revision: 1,
+    attachments: [],
+    replyIntent: null,
+    continuationIntent: null,
+    updatedAt: null,
+    expiresAt: null
   }
 }
 
@@ -524,9 +591,9 @@ export function agentRunCountsAsExecuting(run: Pick<AgentRunView, 'status' | 'wa
 }
 
 export type CampMessageSendReceipt = {
-  pendingInputId?: string
+  campMessageId?: string
   publishedMessageSequence?: number
-  campTurnId: string | null
+  deliveryIds: string[]
   agentRunIds: string[]
   addressedAgentIds: string[]
 }
@@ -650,19 +717,13 @@ export function firstSubmittedAgentRun(
   const runById = new Map(runs.map((run) => [run.id, run]))
   for (const runId of receipt.agentRunIds) {
     const run = runById.get(runId)
-    if (run && (!receipt.campTurnId || run.campTurnId === receipt.campTurnId)) return run
-  }
-  if (!receipt.campTurnId) return null
-  const turnRuns = runs
-    .filter((run) => run.campTurnId === receipt.campTurnId)
-    .sort((left, right) =>
-      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
-    )
-  for (const agentId of receipt.addressedAgentIds) {
-    const run = turnRuns.find((candidate) => candidate.agentId === agentId)
     if (run) return run
   }
-  return turnRuns[0] ?? null
+  if (receipt.campMessageId) {
+    const batchRun = runs.find((run) => run.inputMessageIds?.includes(receipt.campMessageId!))
+    if (batchRun) return batchRun
+  }
+  return null
 }
 
 export function isViewingNonTerminalAgentRun(
@@ -1458,6 +1519,7 @@ export function CampWorkspace({
   liveRuntimeEvents = EMPTY_LIVE_RUNTIME_EVENTS,
   busy,
   onSend,
+  onWithdrawMessage,
   onPendingDraftPersisted,
   onPendingCampLeave,
   onCampLeaveGuardChange,
@@ -1467,13 +1529,11 @@ export function CampWorkspace({
   onRemoveMember,
   onTasksChanged,
   onResolveApproval,
-  onResolveRecoveryBlocker = async () => undefined,
   cancellingTurnIds = new Set<string>(),
   cancellingRunIds = new Set<string>(),
   confirmingRunIds = new Set<string>(),
-  onCancelAgentRun = async () => undefined,
+  onCancelAgentRun,
   stopping,
-  onStop,
   executionPlacement = 'inspector',
   onExecutionPlacementChange = async () => undefined,
   worldMapEnabled = true,
@@ -1515,6 +1575,7 @@ export function CampWorkspace({
   liveRuntimeEvents?: LiveRuntimeEvent[]
   busy: boolean
   onSend(draft: CampComposerDraftView): Promise<CampMessageSendReceipt | void>
+  onWithdrawMessage?(message: CampMessageView): Promise<void>
   onPendingDraftPersisted?(): void
   onPendingCampLeave?(draft: CampComposerDraftView): Promise<void>
   onCampLeaveGuardChange?(campId: string, guard: CampLeaveGuard | null): void
@@ -1524,13 +1585,13 @@ export function CampWorkspace({
   onRemoveMember?(preview: CampMemberRemovalPreview): Promise<CampMemberRemoveOutcome>
   onTasksChanged(): Promise<void>
   onResolveApproval(approval: ActionApprovalView, optionId: string): void
-  onResolveRecoveryBlocker?(run: AgentRunView): Promise<void>
   cancellingTurnIds?: ReadonlySet<string>
   cancellingRunIds?: ReadonlySet<string>
   confirmingRunIds?: ReadonlySet<string>
   onCancelAgentRun?(run: AgentRunView): Promise<void>
   stopping: boolean
-  onStop(): void
+  /** Retained only for source compatibility; the public Composer exposes no Stop action. */
+  onStop?(): void
   executionPlacement?: ExecutionConsolePlacement
   onExecutionPlacementChange?(placement: ExecutionConsolePlacement): Promise<ExecutionConsolePlacement | void>
   worldMapEnabled?: boolean
@@ -1581,13 +1642,10 @@ export function CampWorkspace({
     hasExplicitRecipient: false,
     hasUnavailableAtom: false
   })
-  const [pendingQueue, setPendingQueue] = useState<CampPendingInputsView | null>(null)
-  const pendingInputsRef = useRef<PendingCampInputsHandle>(null)
   const singleChatLeaveGuardRef = useRef<(() => CampLeavePreparation) | null>(null)
   const bindSingleChatLeaveGuard = useCallback((guard: (() => CampLeavePreparation) | null): void => {
     singleChatLeaveGuardRef.current = guard
   }, [])
-  const [pendingRefresh, setPendingRefresh] = useState(0)
   const [preparingAttachments, setPreparingAttachments] = useState<Array<{ id: string; name: string; kind: AttachmentKind }>>([])
   const [failedAttachments, setFailedAttachments] = useState<Array<{ id: string; name: string; kind: AttachmentKind; error: string }>>([])
   const [attachmentDragState, setAttachmentDragState] = useState<AttachmentDragKind | null>(null)
@@ -1599,6 +1657,7 @@ export function CampWorkspace({
   const composerLockAwaitingDisabledCommitRef = useRef(false)
   const [replyInteractionError, setReplyInteractionError] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [withdrawingMessageId, setWithdrawingMessageId] = useState<string | null>(null)
   const [starterNotice, setStarterNotice] = useState<string | null>(null)
   const [mentionPopover, setMentionPopover] = useState<MentionPopoverRequest | null>(null)
   const [composerSkillCatalog, setComposerSkillCatalog] = useState<{
@@ -1615,28 +1674,17 @@ export function CampWorkspace({
     publishedMessageSequence: number
   } | null>(null)
   const activeCampIdRef = useRef(snapshot.camp.id)
+  const activeSnapshotRef = useRef(snapshot)
   const activationStateRef = useRef(snapshot.camp.activationState)
-  const pendingDraftPersistedRef = useRef(onPendingDraftPersisted)
-  const pendingCampLeaveRef = useRef(onPendingCampLeave)
   activeCampIdRef.current = snapshot.camp.id
+  activeSnapshotRef.current = snapshot
   activationStateRef.current = snapshot.camp.activationState
-  pendingDraftPersistedRef.current = onPendingDraftPersisted
-  pendingCampLeaveRef.current = onPendingCampLeave
   const draftCoordinatorRef = useRef<DraftMutationCoordinator | null>(null)
   if (!draftCoordinatorRef.current) {
     draftCoordinatorRef.current = new DraftMutationCoordinator({
-      load: (campId) => client.request<CampComposerDraftView>(
-        'camp.composerDraft.get',
-        { campId }
-      ),
+      load: async (campId) => emptyLocalComposerDraft(campId),
       mutate: async (draft, mutation) => {
-        const next = await mutateComposerDraft(client, draft, mutation)
-        if (
-          activeCampIdRef.current === draft.campId
-          && activationStateRef.current === 'pending'
-          && (mutation.kind !== 'save_content' || draft.revision === 0)
-        ) pendingDraftPersistedRef.current?.()
-        return next
+        return mutateComposerDraft(client, draft, mutation, activeSnapshotRef.current)
       },
       onChange: (_draft, _epoch, kind) => {
         if (draftCoordinatorChangeRefreshesProjection(kind)) {
@@ -1747,11 +1795,7 @@ export function CampWorkspace({
     sequence: workspaceEntryRunningRun ? 1 : 0,
     moveDomFocus: false
   })
-  const [resolvingRecoveryBlockerId, setResolvingRecoveryBlockerId] = useState<string | null>(null)
   const [submittedExecutionRequests, setSubmittedExecutionRequests] = useState<CampMessageSendReceipt[]>([])
-  const submittedInputIds = submittedExecutionRequests.flatMap((receipt) =>
-    receipt.pendingInputId ? [receipt.pendingInputId] : []
-  )
   const publishedMessageSequence = snapshot.messages.reduce((latest, message) => Math.max(latest, message.sequence), 0)
   const executionDrawerTriggerRef = useRef<HTMLButtonElement | null>(null)
   const executionDrawerReturnAgentIdRef = useRef<string | null>(null)
@@ -2172,7 +2216,6 @@ export function CampWorkspace({
   )
   const activeRuns = snapshot.agentRuns.filter((run) => NON_TERMINAL_RUNS.has(run.status))
   const executionBlocked = activeRuns.length > 0 || stopping
-  const showComposerStop = executionBlocked && !hasSendablePayload
   const composerInteractionDisabled = draftLoadState.state !== 'ready'
     || routingMutating
     || composerSubmitting
@@ -2256,7 +2299,6 @@ export function CampWorkspace({
     try {
       await draftCoordinator.load()
       if (draftCampId.current !== campId) return
-      pendingInputsRef.current?.clearError()
       setComposerPersistenceError(null)
       setDraftLoadState({ state: 'ready' })
     } catch (error) {
@@ -2280,8 +2322,6 @@ export function CampWorkspace({
     try {
       const privatePreparation = singleChatLeaveGuardRef.current?.()
       if (privatePreparation) pendingLeavePreparations.push(privatePreparation)
-      const publicPreparation = await pendingInputsRef.current?.prepareForLeave()
-      if (publicPreparation) pendingLeavePreparations.push(publicPreparation)
       if (draftLoadState.state !== 'ready') {
         return { complete(didLeave) {
           for (const preparation of pendingLeavePreparations) preparation.complete(didLeave)
@@ -2289,11 +2329,8 @@ export function CampWorkspace({
         } }
       }
       await attachmentPreparationQueue.current
-      const flushed = await composerHandle?.flush()
-      const draft = flushed?.draft ?? await draftCoordinator.waitForIdle()
-      const settlePending = activationStateRef.current === 'pending'
-        ? pendingCampLeaveRef.current
-        : undefined
+      await composerHandle?.flush()
+      await draftCoordinator.waitForIdle()
       let completed = false
       return {
         complete(didLeave) {
@@ -2301,9 +2338,6 @@ export function CampWorkspace({
           completed = true
           for (const preparation of pendingLeavePreparations) preparation.complete(didLeave)
           if (!didLeave) composerHandle?.setInteractionLocked(false)
-          if (didLeave && settlePending) {
-            void settlePending(draft).catch(() => undefined)
-          }
         }
       }
     } catch (error) {
@@ -2770,43 +2804,6 @@ export function CampWorkspace({
     }
   }
 
-  const returnPendingInputToComposer = async (
-    item: import('@contracts').PendingCampInputView,
-    editToken: string | null
-  ): Promise<void> => {
-    const composerHandle = composerHandleRef.current
-    if (!composerHandle || composerSubmittingRef.current || routingMutatingRef.current || draftLoadState.state !== 'ready') {
-      throw new Error('输入框正在处理变更，请稍后再试。')
-    }
-    routingMutatingRef.current = true
-    setRoutingMutating(true)
-    composerHandle.setInteractionLocked(true)
-    let transferAttempted = false
-    try {
-      await attachmentPreparationQueue.current
-      await composerHandle.flush()
-      transferAttempted = true
-      const next = await draftCoordinator.returnPendingInput(item.id, item.revision, editToken)
-      composerHandle.replaceDocument(next.content, 'end')
-      setFailedAttachments([])
-      setComposerPersistenceError(null)
-      setReplyInteractionError(null)
-      window.requestAnimationFrame(() => composerHandleRef.current?.focus('end'))
-    } catch (error) {
-      // A rejection has no transfer side effects. An unknown result or failed
-      // post-commit read must reload before old local text can autosave again.
-      if (transferAttempted && !(error instanceof PendingInputReturnRejectedError)) {
-        composerLockAwaitingDisabledCommitRef.current = true
-        setDraftLoadState({ state: 'error', error: error instanceof Error ? error : new Error(readErrorMessage(error)) })
-      }
-      throw error
-    } finally {
-      if (!composerLockAwaitingDisabledCommitRef.current) composerHandle.setInteractionLocked(false)
-      routingMutatingRef.current = false
-      setRoutingMutating(false)
-    }
-  }
-
   const focusComposerAtBoundary = (
     _modality: ReplyFocusModality,
     boundary: 'start' | 'end'
@@ -2985,9 +2982,7 @@ export function CampWorkspace({
 
   useLayoutEffect(() => {
     const campId = snapshot.camp.id
-    let cancelled = false
     setQuoteSourceId(null)
-    setPendingQueue(null)
     conversationFindRequestGeneration.current += 1
     if (conversationFindDebounceTimer.current !== null) {
       window.clearTimeout(conversationFindDebounceTimer.current)
@@ -3002,20 +2997,18 @@ export function CampWorkspace({
       snapshot: null,
       error: null
     })
-    // New-Camp entry hands off a Core read before the first paint. Later entries
-    // still load normally; an empty timeline alone cannot establish Draft authority.
-    const entryDraft = initialComposerDraft?.campId === campId ? initialComposerDraft : null
+    // Camp Composer state is intentionally owned only by this mounted Renderer.
+    // Switching Camps or remounting starts a fresh local editor.
+    const entryDraft = emptyLocalComposerDraft(campId)
     draftCoordinator.beginEpoch(campId, entryDraft)
-    setDraftLoadState({ state: entryDraft ? 'ready' : 'loading' })
+    setDraftLoadState({ state: 'ready' })
     setComposerPersistenceError(null)
     setComposerLocalStatus({
       hasContent: false,
       hasExplicitRecipient: false,
       hasUnavailableAtom: false
     })
-    initializedComposerRoute.current = entryDraft
-      ? { revision: entryDraft.revision, publishedMessageSequence }
-      : null
+    initializedComposerRoute.current = { revision: entryDraft.revision, publishedMessageSequence }
     setPreparingAttachments([])
     setFailedAttachments([])
     setAttachmentDragState(null)
@@ -3025,23 +3018,7 @@ export function CampWorkspace({
     setReplyInteractionError(null)
     autoSuppressedContinuationSourceRef.current = null
     draftCampId.current = campId
-    if (entryDraft) onInitialComposerDraftConsumed?.(entryDraft)
-    else void draftCoordinator.load()
-      .then(() => {
-        if (cancelled || draftCampId.current !== campId) return
-        setDraftLoadState({ state: 'ready' })
-      })
-      .catch((error: unknown) => {
-        if (!cancelled && draftCampId.current === campId) {
-          setDraftLoadState({
-            state: 'error',
-            error: error instanceof Error ? error : new Error(readErrorMessage(error))
-          })
-        }
-      })
-    return () => {
-      cancelled = true
-    }
+    onInitialComposerDraftConsumed?.(entryDraft)
   }, [snapshot.camp.id])
 
   useEffect(() => {
@@ -3507,7 +3484,7 @@ export function CampWorkspace({
       if (!frozenDraft) throw new Error('Composer Draft 尚未就绪。')
       const sendReceipt = await onSend(frozenDraft)
       if (mountedCampId.current === campId
-        && (sendReceipt?.pendingInputId || sendReceipt?.agentRunIds.length || sendReceipt?.campTurnId)) {
+        && (sendReceipt?.deliveryIds.length || sendReceipt?.agentRunIds.length)) {
         setSubmittedExecutionRequests((current) => [...current, sendReceipt])
       }
       try {
@@ -3544,7 +3521,6 @@ export function CampWorkspace({
       }
       composerSubmittingRef.current = false
       setComposerSubmitting(false)
-      setPendingRefresh((value) => value + 1)
       if (restoreEditorFocus) {
         window.requestAnimationFrame(() => composerHandleRef.current?.focus('end'))
       }
@@ -3743,7 +3719,7 @@ export function CampWorkspace({
 
   const chooseStarterPrompt = (prompt: string, announceDraft = false): void => {
     composerHandleRef.current?.setDocument(composerDocumentFromText(prompt), 'end')
-    if (announceDraft) setStarterNotice('草稿已准备好，可编辑后发送。')
+    if (announceDraft) setStarterNotice('内容已填入，可编辑后发送。')
   }
 
   const selectInspectorTab = (tab: CampInspectorTab): void => {
@@ -3933,19 +3909,6 @@ export function CampWorkspace({
     setExecutionDrawerFocusedRunId(null)
   }
 
-  const resolveRecoveryBlocker = async (run: AgentRunView): Promise<void> => {
-    if (resolvingRecoveryBlockerId) return
-    setResolvingRecoveryBlockerId(run.id)
-    try {
-      await onResolveRecoveryBlocker(run)
-      window.requestAnimationFrame(() => composerEditorRef.current?.focus())
-    } catch {
-      // The App surface owns the visible error; keep the execution drawer stable.
-    } finally {
-      setResolvingRecoveryBlockerId(null)
-    }
-  }
-
   useEffect(() => {
     const submittedExecutionRequest = submittedExecutionRequests[0]
     if (!submittedExecutionRequest) return
@@ -3959,21 +3922,7 @@ export function CampWorkspace({
       consumeRequest()
       return
     }
-    let receipt = submittedExecutionRequest
-    if (receipt.pendingInputId) {
-      // Queue admission has no Run yet. Only its durable publication outcome may
-      // turn this workspace's send intent into a precise execution selection.
-      const outcome = pendingQueue?.campId === snapshot.camp.id
-        ? pendingQueue.submissionOutcomes?.find((item) => item.pendingInputId === receipt.pendingInputId)
-        : undefined
-      if (!outcome || outcome.state === 'queued' || outcome.state === 'needs_repair') return
-      if (outcome.state !== 'published' || !outcome.campTurnId) {
-        consumeRequest()
-        return
-      }
-      receipt = { ...receipt, campTurnId: outcome.campTurnId, addressedAgentIds: outcome.addressedAgentIds }
-    }
-    const targetRun = firstSubmittedAgentRun(receipt, snapshot.agentRuns)
+    const targetRun = firstSubmittedAgentRun(submittedExecutionRequest, snapshot.agentRuns)
     if (!targetRun) return
     consumeRequest()
     if (executionConsoleIsVisible(
@@ -3999,8 +3948,6 @@ export function CampWorkspace({
     snapshot.agentRuns,
     submittedExecutionRequests,
     mobile,
-    pendingQueue,
-    snapshot.camp.id,
     taskCreationActive,
     suppressExecutionAutoOpen
   ])
@@ -4054,9 +4001,7 @@ export function CampWorkspace({
       focusedRunId={executionDrawerFocusedRunId}
       focusRequest={executionDrawerFocusRequest}
       onClose={closeExecutionProcess}
-      onResolveRecoveryBlocker={resolveRecoveryBlocker}
       onCancelAgentRun={onCancelAgentRun}
-      resolvingRecoveryBlockerId={resolvingRecoveryBlockerId}
       memberById={memberById}
       onFileOpenError={notifyError}
     />
@@ -4417,6 +4362,21 @@ export function CampWorkspace({
                     continue
                   }
                   const campMessage = timelineItem.message
+                  if (campMessage.withdrawn) {
+                    previousMessageAuthorKey = null
+                    items.push(
+                      <div
+                        className="timeline-node withdrawn-message-event"
+                        key={campMessage.id}
+                        role="status"
+                        aria-label={`你撤回了第${campMessage.sequence}条消息`}
+                      >
+                        <span>你撤回了一条消息</span>
+                        <time>{messageClockTime(campMessage.createdAt)}</time>
+                      </div>
+                    )
+                    continue
+                  }
                   const member = memberById.get(campMessage.authorId)
                   const author = campMessageAuthorLabel(campMessage, memberById, currentUserName)
                   const authorProfile = profileById.get(campMessage.authorId) ?? null
@@ -4498,6 +4458,15 @@ export function CampWorkspace({
                     ].join('\n'),
                     campMessage.content
                   )
+                  const handleWithdraw = campMessage.canWithdraw && onWithdrawMessage
+                    ? (): void => {
+                        if (withdrawingMessageId) return
+                        setWithdrawingMessageId(campMessage.id)
+                        void onWithdrawMessage(campMessage)
+                          .catch((error) => notifyError?.(error instanceof Error ? error.message : String(error)))
+                          .finally(() => setWithdrawingMessageId((current) => current === campMessage.id ? null : current))
+                      }
+                    : undefined
                   const messageClasses = [
                     'timeline-node conversation-bubble', campMessage.authorType,
                     campMessage.authorType === 'agent' && 'public-agent-message',
@@ -4589,6 +4558,8 @@ export function CampWorkspace({
                                 showActions={campMessage.authorType !== 'agent'}
                                 onReply={humanAuthored ? undefined : handleReply}
                                 onCopy={handleCopy}
+                                onWithdraw={handleWithdraw}
+                                withdrawing={withdrawingMessageId === campMessage.id}
                               >
                                 <MessageQuotes history quotes={campMessage.quotes ?? []} onReveal={revealQuote} />
                                 {replyParentId && (
@@ -4959,11 +4930,6 @@ export function CampWorkspace({
         ].filter(Boolean).join(' ')}
         onSubmit={(event) => void submit(event)}
       >
-        <PendingCampInputs ref={pendingInputsRef} key={snapshot.camp.id} campId={snapshot.camp.id}
-          submittedInputIds={submittedInputIds}
-          refreshKey={pendingRefresh} executionActive={executionBlocked}
-          disabled={composerInteractionDisabled || preparingAttachments.length > 0}
-          onQueueChange={setPendingQueue} onReturnToComposer={returnPendingInputToComposer} />
         <div>
         <div className="composer-route-slot">
         {draftLoadState.state === 'loading' && (
@@ -5096,7 +5062,7 @@ export function CampWorkspace({
                       ? (
                           <div className="reply-recipient-repair-copy">
                             <strong>引用的消息当前不可用</strong>
-                            <span>请取消引用后再发送，草稿内容会继续保留。</span>
+                            <span>请取消引用后再发送，当前输入会继续保留。</span>
                           </div>
                         )
                       : (
@@ -5147,7 +5113,7 @@ export function CampWorkspace({
                 <div className="reply-recipient-repair-copy">
                   <strong>原接收者当前不可接收，请选择其他成员</strong>
                   <span>
-                    草稿与附件会继续保留；只有你显式选择新接收者后才能发送。
+                    当前输入与附件会继续保留；只有你显式选择新接收者后才能发送。
                   </span>
                 </div>
                 <div className="reply-recipient-options" aria-label="选择替代接收者">
@@ -5171,7 +5137,7 @@ export function CampWorkspace({
             {draftLoadState.state === 'error' && (
               <div className="reply-recipient-repair composer-draft-load-error" role="alert">
                 <div className="reply-recipient-repair-copy">
-                  <strong>草稿无法加载</strong>
+                  <strong>输入框无法初始化</strong>
                   <span>{draftLoadState.error.message}</span>
                 </div>
                 <button
@@ -5179,7 +5145,7 @@ export function CampWorkspace({
                   type="button"
                   onClick={() => void retryComposerDraftLoad()}
                 >
-                  重新加载草稿
+                  重新初始化
                 </button>
               </div>
             )}
@@ -5214,7 +5180,7 @@ export function CampWorkspace({
               skillCatalogStatus={composerSkillCatalog.status}
               ariaLabel={`给 ${defaultLead?.displayName ?? '默认负责人'} 发消息`}
               placeholder={draftLoadState.state === 'error'
-                ? '草稿暂不可用'
+                ? '输入框暂不可用'
                 : isCampEmpty
                   ? '集结队伍，写下这次冒险的目标…'
                   : '和队伍继续前行：补充线索、调整方向或布置新任务…'}
@@ -5239,7 +5205,7 @@ export function CampWorkspace({
             )}
             {composerPersistenceError && (
               <span className="composer-reply-status" role="status" aria-live="polite">
-                草稿尚未保存；发送或切换会先重试。{composerPersistenceError.message}
+                当前输入更新失败；内容仍保留在本窗口。{composerPersistenceError.message}
               </span>
             )}
           </div>
@@ -5288,13 +5254,10 @@ export function CampWorkspace({
                 </span>
               )}
               <ComposerPrimaryAction
-                action={showComposerStop ? 'stop' : 'send'}
-                type={showComposerStop ? 'button' : 'submit'}
-                onClick={showComposerStop ? onStop : undefined}
-                disabled={showComposerStop ? stopping || activeRuns.length === 0 : composerSendDisabled}
-                busy={showComposerStop
-                  ? stopping
-                  : Boolean(busy || composerSubmitting || preparingAttachments.length > 0)}
+                action="send"
+                type="submit"
+                disabled={composerSendDisabled}
+                busy={Boolean(busy || composerSubmitting || preparingAttachments.length > 0)}
               />
             </div>
           </div>
@@ -5581,9 +5544,7 @@ function ExecutionDrawer({
   focusedRunId,
   focusRequest,
   onClose,
-  onResolveRecoveryBlocker,
   onCancelAgentRun,
-  resolvingRecoveryBlockerId,
   memberById,
   onFileOpenError
 }: {
@@ -5608,9 +5569,7 @@ function ExecutionDrawer({
   focusedRunId: string | null
   focusRequest: ExecutionDrawerFocusRequest
   onClose(): void
-  onResolveRecoveryBlocker(run: AgentRunView): Promise<void>
-  onCancelAgentRun(run: AgentRunView): Promise<void>
-  resolvingRecoveryBlockerId: string | null
+  onCancelAgentRun?(run: AgentRunView): Promise<void>
   memberById: Map<string, CampSnapshot['members'][number]>
   onFileOpenError(message: string): void
 }): JSX.Element {
@@ -5660,7 +5619,8 @@ function ExecutionDrawer({
     ? turns.find((turn) => turn.id === resolvedFocusedRun.campTurnId) ?? null
     : null
   const turnStopping = Boolean(
-    resolvedFocusedRun && cancellingTurnIds.has(resolvedFocusedRun.campTurnId)
+    resolvedFocusedRun?.campTurnId
+      && cancellingTurnIds.has(resolvedFocusedRun.campTurnId)
   )
   const runStopping = Boolean(
     resolvedFocusedRun
@@ -5673,7 +5633,7 @@ function ExecutionDrawer({
   const runStopConfirming = Boolean(
     resolvedFocusedRun && confirmingRunIds.has(resolvedFocusedRun.id)
   )
-  const stopViewState = resolvedFocusedRun
+  const stopViewState = onCancelAgentRun && resolvedFocusedRun
     ? agentRunStopViewState(resolvedFocusedRun, owningTurn, {
         cancelling: runStopping,
         confirming: runStopConfirming,
@@ -6008,7 +5968,7 @@ function ExecutionDrawer({
             ) : stopViewState === 'confirming' ? (
               <span className="execution-run-stop-state tone-attention" role="status">正在确认停止状态</span>
             ) : null}
-            {stopViewState === 'available' && resolvedFocusedRun && (
+            {stopViewState === 'available' && resolvedFocusedRun && onCancelAgentRun && (
               <button
                 type="button"
                 className="execution-drawer-action-button is-danger"
@@ -6065,8 +6025,11 @@ function ExecutionDrawer({
           <ExecutionToolGroupStateContext.Provider value={groupState}>
           <ol className="execution-process-timeline">
             {process.runs.map((run) => {
-              const cancelling = cancellingTurnIds.has(run.campTurnId)
-                && NON_TERMINAL_RUNS.has(run.status)
+              const cancelling = NON_TERMINAL_RUNS.has(run.status) && (
+                cancellingRunIds.has(run.id)
+                || run.cancelRequestedAt !== null
+                || Boolean(run.campTurnId && cancellingTurnIds.has(run.campTurnId))
+              )
               const focused = run.id === resolvedFocusedRunId
               const state = agentRunPresentation(run, cancelling)
               const stateShape = runPulseStateShape(run, cancelling)
@@ -6108,8 +6071,6 @@ function ExecutionDrawer({
                       loadedEvidenceCount={loadedEvidenceCountByRunId.get(run.id) ?? 0}
                       cancelling={cancelling}
                       focused={focused}
-                      onResolveRecoveryBlocker={onResolveRecoveryBlocker}
-                      resolvingRecoveryBlocker={resolvingRecoveryBlockerId === run.id}
                       onFileOpenError={onFileOpenError}
                     />
                   </article>
@@ -6580,7 +6541,7 @@ export function RuntimeRecoveryDock({
           <span className="runtime-recovery-symbol" aria-hidden="true">!</span>
           <div>
             <strong>消息未发送</strong>
-            <span>{targetCount} 位目标队员暂时不可执行 · 草稿已保留</span>
+            <span>{targetCount} 位目标队员暂时不可执行 · 当前输入已保留</span>
           </div>
         </div>
         {onDismiss && (
@@ -6813,13 +6774,10 @@ function CampMembersPanel({
   const removalDeliveryCount = removalPreview
     ? removalPreview.pendingDeliveryCount + removalPreview.runningDeliveryCount
     : 0
-  const removalMessageGatherCount = removalPreview
-    ? removalDeliveryCount + removalPreview.openGatherItemCount
-    : 0
   const removalHasActualImpact = Boolean(removalPreview && (
     removalPreview.nonTerminalAgentRunCount > 0
     || removalPreview.openAssignedTaskCount > 0
-    || removalMessageGatherCount > 0
+    || removalDeliveryCount > 0
     || removalPreview.isDefaultLead
   ))
   const showRemovalDialogBody = removalPreviewState.status !== 'ready'
@@ -7107,9 +7065,9 @@ function CampMembersPanel({
                             {removalPreview.openAssignedTaskCount} 个任务将释放负责人，回到待分配状态。
                           </AppDialogImpact>
                         )}
-                        {removalMessageGatherCount > 0 && (
-                          <AppDialogImpact tone="warning" icon="info" label="消息与 Gather">
-                            {removalDeliveryCount} 个投递、{removalPreview.openGatherItemCount} 个 Gather 项将正式结算。
+                        {removalDeliveryCount > 0 && (
+                          <AppDialogImpact tone="warning" icon="info" label="等待消息">
+                            {removalDeliveryCount} 个投递将取消或结束。
                           </AppDialogImpact>
                         )}
                         {removalPreview.isDefaultLead && (
@@ -7771,6 +7729,8 @@ function MessageSurface({
   showActions = true,
   onReply,
   onCopy,
+  onWithdraw,
+  withdrawing = false,
   children
 }: {
   copied: boolean
@@ -7778,13 +7738,21 @@ function MessageSurface({
   showActions?: boolean
   onReply?(modality: ReplyFocusModality): void
   onCopy(): void
+  onWithdraw?(): void
+  withdrawing?: boolean
   children: React.ReactNode
 }): JSX.Element {
   return (
     <div className={`message-surface${hasDelivery ? ' has-delivery' : ''}${copied ? ' copied' : ''}`}>
       {children}
       {showActions && (
-        <MessageActions copied={copied} onReply={onReply} onCopy={onCopy} />
+        <MessageActions
+          copied={copied}
+          onReply={onReply}
+          onCopy={onCopy}
+          onWithdraw={onWithdraw}
+          withdrawing={withdrawing}
+        />
       )}
     </div>
   )
@@ -7794,12 +7762,16 @@ function MessageActions({
   copied,
   className,
   onReply,
-  onCopy
+  onCopy,
+  onWithdraw,
+  withdrawing = false
 }: {
   copied: boolean
   className?: string
   onReply?(modality: ReplyFocusModality): void
   onCopy(): void
+  onWithdraw?(): void
+  withdrawing?: boolean
 }): JSX.Element {
   return (
     <div
@@ -7811,6 +7783,21 @@ function MessageActions({
         {copied ? '已复制' : ''}
       </span>
       <MessageCopyButton copied={copied} onCopy={onCopy} />
+      {onWithdraw && (
+        <button
+          className="message-withdraw-button"
+          type="button"
+          aria-label={withdrawing ? '正在撤回这条消息' : '撤回这条消息'}
+          title="撤回"
+          disabled={withdrawing}
+          onClick={onWithdraw}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 7H5v-4" />
+            <path d="M5.4 7.1A8 8 0 1 1 4.2 15" />
+          </svg>
+        </button>
+      )}
       {onReply && (
         <button
           className="message-reply-button"
@@ -8470,8 +8457,6 @@ function RunExecutionContent({
   finalBody,
   cancelling,
   onLoadHistoricalEvidence,
-  onResolveRecoveryBlocker,
-  resolvingRecoveryBlocker,
   onFileOpenError
 }: {
   run: AgentRunView
@@ -8485,8 +8470,6 @@ function RunExecutionContent({
   finalBody: string | null
   cancelling: boolean
   onLoadHistoricalEvidence(): Promise<void>
-  onResolveRecoveryBlocker?(run: AgentRunView): Promise<void>
-  resolvingRecoveryBlocker: boolean
   onFileOpenError(message: string): void
 }): JSX.Element {
   const client = useCampClient()
@@ -8785,20 +8768,9 @@ function RunExecutionContent({
       {nonTerminal && !cancelling && run.waitReason === 'recovery_blocked' && (
         <div className="process-recovery-blocker" role="status">
           <div>
-            <strong>无法安全自动恢复</strong>
-            <p>
-              Agent 运行时已接受该任务，但 Rovai AI 重启后无法确认原任务的最终结果。
-              为避免重复执行，原请求不会自动重发。请先检查当前工作区，再结束此运行并按需发送新的后续任务。
-            </p>
+            <strong>执行异常，正在清理</strong>
+            <p>原请求不会自动重发；清理完成后，后续消息会按正常顺序继续执行。</p>
           </div>
-          <button
-            className="quiet-button compact"
-            type="button"
-            disabled={resolvingRecoveryBlocker}
-            onClick={() => void onResolveRecoveryBlocker?.(run)}
-          >
-            {resolvingRecoveryBlocker ? '正在结束…' : '结束此运行'}
-          </button>
         </div>
       )}
       {nonTerminal && !cancelling && run.waitReason === 'network_recovery_blocked' && (
@@ -8848,8 +8820,6 @@ export function RunExecutionDisclosure({
   finalBody = null,
   cancelling = false,
   focused = false,
-  onResolveRecoveryBlocker,
-  resolvingRecoveryBlocker = false,
   onFileOpenError = () => undefined
 }: {
   run: AgentRunView
@@ -8862,8 +8832,6 @@ export function RunExecutionDisclosure({
   finalBody?: string | null
   cancelling?: boolean
   focused?: boolean
-  onResolveRecoveryBlocker?(run: AgentRunView): Promise<void>
-  resolvingRecoveryBlocker?: boolean
   onFileOpenError?(message: string): void
 }): JSX.Element | null {
   const client = useCampClient()
@@ -8951,8 +8919,6 @@ export function RunExecutionDisclosure({
       finalBody={finalBody}
       cancelling={cancelling}
       onLoadHistoricalEvidence={loadHistoricalEvidence}
-      onResolveRecoveryBlocker={onResolveRecoveryBlocker}
-      resolvingRecoveryBlocker={resolvingRecoveryBlocker}
       onFileOpenError={onFileOpenError}
     />
   ) : null

@@ -8,10 +8,12 @@ import { createStructuredMessageClipboardData } from './structured-message-clipb
 const createdAt = '2026-08-30T04:00:00Z'
 type ExternalQuote = Extract<StructuredCampMessageContent[number], { kind: 'external_quote' }>
 
-function message(overrides: Partial<CampMessageView> = {
-    quotes: [],}): CampMessageView {
+function message(overrides: Partial<CampMessageView> = {}): CampMessageView {
   return {
     quotes: [],
+    withdrawn: false,
+    canWithdraw: false,
+    version: 1,
     id: 'message-owner',
     sequence: 1,
     timelineGlobalSequence: 1,

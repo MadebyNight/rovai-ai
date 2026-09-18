@@ -848,7 +848,8 @@ pub struct ChannelExecutionConsoleSourceView {
     pub sequence: i64,
     pub agent_run_id: String,
     pub camp_id: String,
-    pub camp_turn_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camp_turn_id: Option<String>,
     pub channel_conversation_id: String,
     pub agent_id: String,
     pub agent_display_name: String,
@@ -887,7 +888,8 @@ pub struct ChannelExecutionWebTriggerView {
 #[serde(rename_all = "camelCase")]
 pub struct ChannelExecutionWebRunView {
     pub id: String,
-    pub camp_turn_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camp_turn_id: Option<String>,
     pub purpose: String,
     pub invocation_kind: String,
     pub status: String,
@@ -1172,13 +1174,13 @@ impl ChannelService {
                 SELECT console.latest_sequence, console.agent_run_id,
                        console.target_app_id, console.external_message_id,
                        console.state, console.terminal_snapshot_json, conversation.provider,
-                       turn.camp_id, console.camp_turn_id,
+                       COALESCE(run.camp_id, turn.camp_id), console.camp_turn_id,
                        console.channel_conversation_id, console.agent_id,
                        run.created_at
                 FROM channel_execution_console AS console
                 JOIN channel_conversation AS conversation ON conversation.id = console.channel_conversation_id
                 JOIN agent_run AS run ON run.id = console.agent_run_id
-                JOIN camp_turn AS turn ON turn.id = console.camp_turn_id
+                LEFT JOIN camp_turn AS turn ON turn.id = console.camp_turn_id
                 WHERE console.agent_run_id = ?1
                   AND console.latest_sequence = ?2
                   AND console.state IN ('opening', 'active', 'terminal_pending', 'terminal_sealed')
@@ -1194,7 +1196,7 @@ impl ChannelService {
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
-                        row.get::<_, String>(8)?,
+                        row.get::<_, Option<String>>(8)?,
                         row.get::<_, String>(9)?,
                         row.get::<_, String>(10)?,
                         row.get::<_, String>(11)?,
@@ -1302,7 +1304,7 @@ impl ChannelService {
 
         struct WebRunFacts {
             id: String,
-            camp_turn_id: String,
+            camp_turn_id: Option<String>,
             purpose: String,
             invocation_kind: String,
             status: String,
@@ -1325,18 +1327,18 @@ impl ChannelService {
                 r#"
                 SELECT camp.title, profile.display_name
                 FROM agent_run AS run
-                JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
-                JOIN camp ON camp.id = turn.camp_id
+                LEFT JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
+                JOIN camp ON camp.id = COALESCE(run.camp_id, turn.camp_id)
                 JOIN conversation ON conversation.id = run.conversation_id
                 JOIN agent_profile AS profile ON profile.id = conversation.agent_id
                 JOIN camp_member AS member
-                  ON member.camp_id = turn.camp_id AND member.agent_id = conversation.agent_id
+                  ON member.camp_id = camp.id AND member.agent_id = conversation.agent_id
                 JOIN channel_execution_console AS console ON console.agent_run_id = run.id
                 JOIN channel_conversation AS channel
                   ON channel.id = console.channel_conversation_id
                 WHERE run.id = ?1
                   AND run.created_at = ?2
-                  AND turn.camp_id = ?3
+                  AND camp.id = ?3
                   AND conversation.agent_id = ?4
                   AND console.target_app_id = ?5
                   AND console.channel_conversation_id = ?6
@@ -1384,12 +1386,15 @@ impl ChannelService {
                        END,
                        history_console.terminal_snapshot_json
                 FROM agent_run AS run
-                JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
+                LEFT JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
                 JOIN conversation ON conversation.id = run.conversation_id
                 LEFT JOIN channel_execution_console AS history_console
                   ON history_console.agent_run_id = run.id
                 LEFT JOIN camp_message AS trigger_message
-                  ON trigger_message.id = run.trigger_camp_message_id
+                  ON trigger_message.id = COALESCE(
+                      run.anchor_message_id,
+                      run.trigger_camp_message_id
+                  )
                  AND trigger_message.tombstoned_at IS NULL
                 LEFT JOIN agent_profile AS trigger_profile
                   ON trigger_profile.id = trigger_message.author_id
@@ -1397,7 +1402,7 @@ impl ChannelService {
                 LEFT JOIN external_principal AS trigger_principal
                   ON trigger_principal.id = trigger_message.author_id
                  AND trigger_message.author_type = 'external_principal'
-                WHERE turn.camp_id = ?1
+                WHERE COALESCE(run.camp_id, turn.camp_id) = ?1
                   AND conversation.agent_id = ?2
                   AND (run.created_at < ?3 OR run.id = ?4)
                 ORDER BY run.created_at, run.id
@@ -1527,8 +1532,8 @@ impl ChannelService {
     }
 
     /// Reconciles a Feishu Topic Camp with the latest accepted parent-group
-    /// Bot roster before an internal A2A/Gather admission, then fail-closes
-    /// every explicitly requested target that is no longer present.
+    /// Bot roster before a targeted message admission, then fail-closes every
+    /// explicitly requested target that is no longer present.
     /// Normal Camps and normal Feishu groups are left untouched.
     pub fn ensure_topic_roster_members(
         &self,
@@ -2040,12 +2045,15 @@ impl ChannelService {
               ON request_binding.id = request.binding_id
             LEFT JOIN pending_camp_binding AS pending
               ON pending.id = delivery.pending_binding_id
+            LEFT JOIN channel_conversation_binding AS direct_binding
+              ON direct_binding.id = delivery.channel_binding_id
             LEFT JOIN channel_execution_console AS console
               ON console.id = delivery.console_id
             JOIN channel_conversation AS conversation
               ON conversation.id = COALESCE(
                    request_binding.channel_conversation_id,
-                   pending.channel_conversation_id
+                   pending.channel_conversation_id,
+                   direct_binding.channel_conversation_id
                  )
             WHERE conversation.provider = 'dingtalk'
             "#,
@@ -4348,6 +4356,21 @@ impl ChannelService {
                             WHERE binding_id = ?1 AND status IN ('queued', 'admitted')
                         )
                         OR EXISTS(
+                            SELECT 1
+                            FROM channel_conversation_binding AS binding
+                            JOIN camp_message_delivery AS delivery
+                              ON delivery.camp_id = binding.camp_id
+                            WHERE binding.id = ?1 AND delivery.status = 'waiting'
+                        )
+                        OR EXISTS(
+                            SELECT 1
+                            FROM channel_conversation_binding AS binding
+                            JOIN agent_run AS run
+                              ON run.camp_id = binding.camp_id
+                            WHERE binding.id = ?1
+                              AND run.status IN ('queued', 'running', 'waiting')
+                        )
+                        OR EXISTS(
                             SELECT 1 FROM channel_inbound_aggregate
                             WHERE status = 'collecting'
                               AND json_extract(frozen_payload_json, '$.conversationId') = ?2
@@ -5759,18 +5782,14 @@ impl ChannelService {
                 )?;
                 queued.push((request_id, queue_position, message.ack_app_id.clone()));
             }
-            for (index, (request_id, queue_position, ack_app_id)) in queued.iter().enumerate() {
-                let admission = if index == 0 {
-                    try_admit_request(
-                        transaction,
-                        request_id,
-                        &now_text,
-                        &envelope.command_id,
-                        &mut settled_run_ids,
-                    )?
-                } else {
-                    AdmissionAttempt::Deferred
-                };
+            for (request_id, queue_position, ack_app_id) in &queued {
+                let admission = try_admit_request(
+                    transaction,
+                    request_id,
+                    &now_text,
+                    &envelope.command_id,
+                    &mut settled_run_ids,
+                )?;
                 if matches!(admission, AdmissionAttempt::Deferred) {
                     insert_queue_ack_delivery(
                         transaction,
@@ -6179,14 +6198,20 @@ impl ChannelService {
                 &now,
             )?;
             settled_run_id = Some(settlement.agent_run_id.clone());
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &projection.camp_id,
-                &projection.camp_turn_id,
-                &envelope.actor,
-                Some(projection.execution_epoch),
-                &now,
-            )?;
+            let camp_turn_status = projection
+                .camp_turn_id
+                .as_deref()
+                .map(|camp_turn_id| {
+                    recompute_camp_turn(
+                        transaction,
+                        &projection.camp_id,
+                        camp_turn_id,
+                        &envelope.actor,
+                        Some(projection.execution_epoch),
+                        &now,
+                    )
+                })
+                .transpose()?;
             Ok(CommandHandlerResult::applied(
                 settlement.terminal_code,
                 json!({
@@ -6358,7 +6383,8 @@ impl ChannelService {
                            delivery.source_camp_message_id,
                            COALESCE(
                                request_conversation.provider,
-                               pending_conversation.provider
+                               pending_conversation.provider,
+                               bound_conversation.provider
                            ), delivery.retry_suppression_json
                     FROM channel_delivery AS delivery
                     LEFT JOIN channel_turn_request AS request
@@ -6371,6 +6397,10 @@ impl ChannelService {
                       ON pending.id = delivery.pending_binding_id
                     LEFT JOIN channel_conversation AS pending_conversation
                       ON pending_conversation.id = pending.channel_conversation_id
+                    LEFT JOIN channel_conversation_binding AS direct_binding
+                      ON direct_binding.id = delivery.channel_binding_id
+                    LEFT JOIN channel_conversation AS bound_conversation
+                      ON bound_conversation.id = direct_binding.channel_conversation_id
                     WHERE delivery.id = ?1
                     "#,
                     [&envelope.payload.delivery_id],
@@ -6610,38 +6640,37 @@ impl ChannelService {
                     }
                 }
                 "agent_attachment" if envelope.payload.outcome == "failed" => {
-                    let request_id = request_id
-                        .as_deref()
-                        .context("agent attachment delivery has no request identity")?;
-                    let acknowledgement_app_id: String = transaction.query_row(
-                        "SELECT ack_app_id FROM channel_turn_request WHERE id = ?1",
-                        [request_id],
-                        |row| row.get(0),
-                    )?;
-                    let file_name = payload
-                        .get("fileName")
-                        .and_then(Value::as_str)
-                        .unwrap_or("附件");
-                    insert_delivery(
-                        transaction,
-                        request_id,
-                        &format!(
-                            "attention:agent_attachment:{}",
-                            envelope.payload.delivery_id
-                        ),
-                        "attention",
-                        &acknowledgement_app_id,
-                        source_agent_id.as_deref(),
-                        source_camp_message_id.as_deref(),
-                        &json!({
-                            "kind": "attention",
-                            "failureCode": envelope.payload.failure_code.as_deref()
-                                .unwrap_or("channel_attachment_delivery_failed"),
-                            "text": format!("附件「{file_name}」发送失败；正文及其他附件不会重复发送。"),
-                            "failedTargetAppId": target_app_id,
-                        }),
-                        &now_text,
-                    )?;
+                    if let Some(request_id) = request_id.as_deref() {
+                        let acknowledgement_app_id: String = transaction.query_row(
+                            "SELECT ack_app_id FROM channel_turn_request WHERE id = ?1",
+                            [request_id],
+                            |row| row.get(0),
+                        )?;
+                        let file_name = payload
+                            .get("fileName")
+                            .and_then(Value::as_str)
+                            .unwrap_or("附件");
+                        insert_delivery(
+                            transaction,
+                            request_id,
+                            &format!(
+                                "attention:agent_attachment:{}",
+                                envelope.payload.delivery_id
+                            ),
+                            "attention",
+                            &acknowledgement_app_id,
+                            source_agent_id.as_deref(),
+                            source_camp_message_id.as_deref(),
+                            &json!({
+                                "kind": "attention",
+                                "failureCode": envelope.payload.failure_code.as_deref()
+                                    .unwrap_or("channel_attachment_delivery_failed"),
+                                "text": format!("附件「{file_name}」发送失败；正文及其他附件不会重复发送。"),
+                                "failedTargetAppId": target_app_id,
+                            }),
+                            &now_text,
+                        )?;
+                    }
                 }
                 _ => {}
             }
@@ -6964,7 +6993,7 @@ struct ExecutionConsoleActionProjection {
     state: String,
     owner_principal_id: Option<String>,
     camp_id: String,
-    camp_turn_id: String,
+    camp_turn_id: Option<String>,
     run_status: String,
     wait_reason: Option<String>,
     execution_epoch: i64,
@@ -6985,12 +7014,12 @@ fn execution_console_action_projection(
                        feishu_owner.canonical_owner_principal_id,
                        dingtalk_owner.canonical_owner_principal_id
                    ),
-                   turn.camp_id, console.camp_turn_id,
+                   COALESCE(run.camp_id, turn.camp_id), console.camp_turn_id,
                    run.status, run.wait_reason, run.execution_epoch,
                    turn.cancel_requested_at
             FROM channel_execution_console AS console
             JOIN agent_run AS run ON run.id = console.agent_run_id
-            JOIN camp_turn AS turn ON turn.id = console.camp_turn_id
+            LEFT JOIN camp_turn AS turn ON turn.id = console.camp_turn_id
             JOIN channel_conversation AS conversation
               ON conversation.id = console.channel_conversation_id
             LEFT JOIN channel_member_bot_directory AS bot
@@ -9062,21 +9091,21 @@ fn try_admit_request(
     transaction.execute(
         r#"
         UPDATE channel_turn_request
-        SET status = 'admitted', camp_message_id = ?2, camp_turn_id = ?3,
-            trigger_camp_sequence = ?4, admitted_at = ?5,
+        SET status = 'completed', camp_message_id = ?2,
+            delivery_ids_json = ?3, trigger_camp_sequence = ?4,
+            admitted_at = ?5, completed_at = ?5,
             version = version + 1, updated_at = ?5
         WHERE id = ?1 AND status = 'queued'
         "#,
         params![
             request_id,
             admission.camp_message_id,
-            admission.camp_turn_id,
+            serde_json::to_string(&admission.delivery_ids)?,
             admission.camp_sequence,
             now,
         ],
     )?;
     update_queue_ack_on_admission(transaction, request_id, &ack_app_id, now)?;
-    recall_older_execution_consoles(transaction, request_id, &admission.camp_turn_id, now)?;
     Ok(AdmissionAttempt::Admitted)
 }
 
@@ -9224,6 +9253,92 @@ fn insert_delivery(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn insert_bound_delivery(
+    transaction: &Transaction<'_>,
+    channel_binding_id: &str,
+    dedupe_key: &str,
+    delivery_kind: &str,
+    target_app_id: &str,
+    source_agent_id: &str,
+    source_camp_message_id: &str,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    transaction.execute(
+        r#"
+        INSERT INTO channel_delivery(
+            id, request_id, pending_binding_id, channel_binding_id,
+            dedupe_key, delivery_kind, priority, target_app_id,
+            source_agent_id, source_camp_message_id, payload_json,
+            status, attempt_count, available_at, lease_owner, lease_expires_at,
+            external_delivery_message_id, failure_code, created_at, updated_at, ended_at
+        ) VALUES (
+            ?1, NULL, NULL, ?2, ?3, ?4, ?5, ?6,
+            ?7, ?8, ?9, 'pending', 0, ?10, NULL, NULL,
+            NULL, NULL, ?10, ?10, NULL
+        )
+        ON CONFLICT(dedupe_key) DO NOTHING
+        "#,
+        params![
+            format!("rvcd_{}", Uuid::new_v4().simple()),
+            channel_binding_id,
+            dedupe_key,
+            delivery_kind,
+            delivery_priority(delivery_kind),
+            target_app_id,
+            source_agent_id,
+            source_camp_message_id,
+            serde_json::to_string(payload)?,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_bound_attachment_delivery(
+    transaction: &Transaction<'_>,
+    channel_binding_id: &str,
+    dedupe_key: &str,
+    target_app_id: &str,
+    source_agent_id: &str,
+    source_camp_message_id: &str,
+    attachment_ordinal: i64,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    transaction.execute(
+        r#"
+        INSERT INTO channel_delivery(
+            id, request_id, pending_binding_id, channel_binding_id,
+            dedupe_key, delivery_kind, priority, target_app_id,
+            source_agent_id, source_camp_message_id, attachment_ordinal,
+            payload_json, status, attempt_count, available_at,
+            lease_owner, lease_expires_at, external_delivery_message_id,
+            failure_code, created_at, updated_at, ended_at
+        ) VALUES (
+            ?1, NULL, NULL, ?2, ?3, 'agent_attachment', 50, ?4,
+            ?5, ?6, ?7, ?8, 'pending', 0, ?9,
+            NULL, NULL, NULL, NULL, ?9, ?9, NULL
+        )
+        ON CONFLICT(dedupe_key) DO NOTHING
+        "#,
+        params![
+            format!("rvcd_{}", Uuid::new_v4().simple()),
+            channel_binding_id,
+            dedupe_key,
+            target_app_id,
+            source_agent_id,
+            source_camp_message_id,
+            attachment_ordinal,
+            serde_json::to_string(payload)?,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn insert_console_delivery(
     transaction: &Transaction<'_>,
     request_id: &str,
@@ -9319,94 +9434,6 @@ fn delivery_priority(delivery_kind: &str) -> i64 {
         "project_selection" => 5,
         _ => 60,
     }
-}
-
-fn recall_older_execution_consoles(
-    transaction: &Transaction<'_>,
-    new_request_id: &str,
-    new_camp_turn_id: &str,
-    now: &str,
-) -> Result<()> {
-    let channel_conversation_id: String = transaction.query_row(
-        r#"
-        SELECT binding.channel_conversation_id
-        FROM channel_turn_request AS request
-        JOIN channel_conversation_binding AS binding ON binding.id = request.binding_id
-        WHERE request.id = ?1
-        "#,
-        [new_request_id],
-        |row| row.get(0),
-    )?;
-    let consoles = query_rows(
-        transaction,
-        r#"
-        SELECT console.id, console.request_id, console.target_app_id, console.agent_id,
-               console.state
-        FROM channel_execution_console AS console
-        WHERE console.channel_conversation_id = ?1
-          AND console.camp_turn_id <> ?2
-          AND console.state <> 'recalled'
-        ORDER BY console.created_at, console.agent_run_id
-        "#,
-        params![channel_conversation_id, new_camp_turn_id],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-            ))
-        },
-    )?;
-    for (console_id, request_id, target_app_id, agent_id, state) in consoles {
-        let recall_open: bool = transaction.query_row(
-            r#"
-            SELECT EXISTS(
-                SELECT 1 FROM channel_delivery
-                WHERE console_id = ?1 AND delivery_kind = 'execution_console_recall'
-                  AND status IN ('pending', 'attempting')
-            )
-            "#,
-            [&console_id],
-            |row| row.get(0),
-        )?;
-        if recall_open || state == "recall_pending" {
-            continue;
-        }
-        transaction.execute(
-            r#"
-            DELETE FROM channel_delivery
-            WHERE console_id = ?1 AND delivery_kind = 'execution_console_upsert'
-              AND status = 'pending'
-            "#,
-            [&console_id],
-        )?;
-        transaction.execute(
-            r#"
-            UPDATE channel_execution_console
-            SET state = 'recall_pending', failure_code = NULL,
-                recalled_at = NULL, updated_at = ?2
-            WHERE id = ?1 AND state <> 'recalled'
-            "#,
-            params![console_id, now],
-        )?;
-        insert_console_delivery(
-            transaction,
-            &request_id,
-            &console_id,
-            &format!("execution_console_recall:{console_id}:{new_request_id}"),
-            "execution_console_recall",
-            &target_app_id,
-            Some(&agent_id),
-            &json!({
-                "kind": "execution_console_recall",
-                "executionConsoleId": console_id,
-            }),
-            now,
-        )?;
-    }
-    Ok(())
 }
 
 fn decline_unattended_channel_retries(
@@ -9525,7 +9552,7 @@ fn reconcile_terminal_pending_execution_consoles(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
@@ -9553,7 +9580,7 @@ fn reconcile_terminal_pending_execution_consoles(
             transaction,
             &request_id,
             &channel_conversation_id,
-            &camp_turn_id,
+            camp_turn_id.as_deref(),
             &agent_run_id,
             &agent_id,
             &target_app_id,
@@ -9577,12 +9604,18 @@ fn project_active_request_deliveries_for_turn(
         r#"
         SELECT request.id, request.camp_turn_id, request.trigger_camp_sequence,
                request.ack_app_id, request.camp_id, binding.channel_conversation_id,
-               channel_conversation.provider
+               channel_conversation.provider, request.delivery_ids_json
         FROM channel_turn_request AS request
         JOIN channel_conversation_binding AS binding ON binding.id = request.binding_id
         JOIN channel_conversation
           ON channel_conversation.id = binding.channel_conversation_id
-        WHERE request.status = 'admitted'
+        WHERE (
+                request.status = 'admitted'
+                OR (
+                    request.status = 'completed'
+                    AND json_array_length(request.delivery_ids_json) > 0
+                )
+              )
           AND (?1 IS NULL OR request.camp_turn_id = ?1)
         ORDER BY request.created_at, request.id
         "#,
@@ -9590,12 +9623,13 @@ fn project_active_request_deliveries_for_turn(
         |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
             ))
         },
     )?;
@@ -9607,6 +9641,7 @@ fn project_active_request_deliveries_for_turn(
         camp_id,
         channel_conversation_id,
         provider,
+        delivery_ids_json,
     ) in active
     {
         let run_states = query_rows(
@@ -9625,11 +9660,20 @@ fn project_active_request_deliveries_for_turn(
             LEFT JOIN channel_member_bot_directory AS bot
               ON bot.provider = ?2 AND bot.agent_id = conversation.agent_id
              AND bot.status = 'published'
-            WHERE run.camp_turn_id = ?1
+            WHERE (
+                    (?1 IS NOT NULL AND run.camp_turn_id = ?1)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM camp_message_delivery AS delivery
+                        JOIN json_each(?3) AS requested_delivery
+                          ON requested_delivery.value = delivery.id
+                        WHERE delivery.claimed_agent_run_id = run.id
+                    )
+                  )
             GROUP BY run.id, conversation.agent_id, run.status, run.version, bot.app_id
             ORDER BY run.created_at, run.id
             "#,
-            params![camp_turn_id, provider],
+            params![camp_turn_id, provider, delivery_ids_json],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -9667,7 +9711,7 @@ fn project_active_request_deliveries_for_turn(
                 transaction,
                 &request_id,
                 &channel_conversation_id,
-                &camp_turn_id,
+                camp_turn_id.as_deref(),
                 &run_id,
                 &agent_id,
                 &app_id,
@@ -9678,6 +9722,9 @@ fn project_active_request_deliveries_for_turn(
                 now,
             )?;
         }
+        let Some(camp_turn_id) = camp_turn_id.as_deref() else {
+            continue;
+        };
         let outputs = query_rows(
             transaction,
             r#"
@@ -9690,7 +9737,7 @@ fn project_active_request_deliveries_for_turn(
               AND message.tombstoned_at IS NULL
             ORDER BY message.sequence, message.id
             "#,
-            params![camp_turn_id, trigger_sequence],
+            params![camp_turn_id, trigger_sequence.unwrap_or_default()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -9737,7 +9784,7 @@ fn project_active_request_deliveries_for_turn(
                 materialize_agent_attachments(
                     transaction,
                     AgentAttachmentDeliveryContext {
-                        request_id: &request_id,
+                        route: AgentChannelDeliveryRoute::Request(&request_id),
                         camp_id: &camp_id,
                         message_id: &message_id,
                         agent_id: &agent_id,
@@ -10034,7 +10081,7 @@ fn materialize_execution_console(
     transaction: &Transaction<'_>,
     request_id: &str,
     channel_conversation_id: &str,
-    camp_turn_id: &str,
+    camp_turn_id: Option<&str>,
     agent_run_id: &str,
     agent_id: &str,
     target_app_id: &str,
@@ -10265,8 +10312,112 @@ fn execution_console_terminal_quiet_window_elapsed(previous: &str, now: &str) ->
         >= EXECUTION_CONSOLE_TERMINAL_QUIET_WINDOW_MILLISECONDS)
 }
 
+/// A public Agent message in a Channel-bound Camp owns its outbound delivery
+/// directly. It is intentionally independent from whichever inbound Channel
+/// request (if any) caused the AgentRun that published the message.
+pub(crate) fn enqueue_bound_camp_agent_message(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    message_id: &str,
+    agent_id: &str,
+    body: &str,
+    content: &StructuredCampMessageContent,
+    now: &str,
+) -> Result<()> {
+    let binding = transaction
+        .query_row(
+            r#"
+            SELECT binding.id, conversation.provider
+            FROM channel_conversation_binding AS binding
+            JOIN channel_conversation AS conversation
+              ON conversation.id = binding.channel_conversation_id
+            WHERE binding.camp_id = ?1 AND binding.status = 'active'
+            "#,
+            [camp_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((channel_binding_id, provider)) = binding else {
+        return Ok(());
+    };
+    let Some(author_app_id) = bot_app_id(transaction, &provider, agent_id)? else {
+        let dedupe_key = format!("agent_output:{message_id}");
+        let unavailable_target = format!("unpublished:{agent_id}");
+        insert_bound_delivery(
+            transaction,
+            &channel_binding_id,
+            &dedupe_key,
+            "agent_output",
+            &unavailable_target,
+            agent_id,
+            message_id,
+            &json!({
+                "kind": "agent_output",
+                "sourceCampMessageId": message_id,
+                "sourceAgentId": agent_id,
+                "failureCode": "channel.author_bot_unpublished",
+                "text": body,
+            }),
+            now,
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE channel_delivery
+            SET status = 'failed', failure_code = 'channel.author_bot_unpublished',
+                ended_at = ?2, updated_at = ?2
+            WHERE dedupe_key = ?1 AND status = 'pending'
+            "#,
+            params![dedupe_key, now],
+        )?;
+        return Ok(());
+    };
+
+    if !body.trim().is_empty() {
+        let payload = if provider == FEISHU_PROVIDER {
+            feishu_agent_output_projection(
+                transaction,
+                message_id,
+                agent_id,
+                &author_app_id,
+                content,
+            )?
+        } else {
+            dingtalk_agent_output_projection(transaction, message_id, agent_id, body, content)?
+        };
+        insert_bound_delivery(
+            transaction,
+            &channel_binding_id,
+            &format!("agent_output:{message_id}"),
+            "agent_output",
+            &author_app_id,
+            agent_id,
+            message_id,
+            &payload,
+            now,
+        )?;
+    }
+    materialize_agent_attachments(
+        transaction,
+        AgentAttachmentDeliveryContext {
+            route: AgentChannelDeliveryRoute::Binding(&channel_binding_id),
+            camp_id,
+            message_id,
+            agent_id,
+            target_app_id: &author_app_id,
+            requires_body_delivery: !body.trim().is_empty(),
+        },
+        now,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum AgentChannelDeliveryRoute<'a> {
+    Request(&'a str),
+    Binding(&'a str),
+}
+
 struct AgentAttachmentDeliveryContext<'a> {
-    request_id: &'a str,
+    route: AgentChannelDeliveryRoute<'a>,
     camp_id: &'a str,
     message_id: &'a str,
     agent_id: &'a str,
@@ -10280,7 +10431,7 @@ fn materialize_agent_attachments(
     now: &str,
 ) -> Result<()> {
     let AgentAttachmentDeliveryContext {
-        request_id,
+        route,
         camp_id,
         message_id,
         agent_id,
@@ -10320,30 +10471,47 @@ fn materialize_agent_attachments(
         } else {
             "file"
         };
-        insert_attachment_delivery(
-            transaction,
-            request_id,
-            &format!("agent_attachment:{message_id}:{ordinal}:{attachment_id}"),
-            target_app_id,
-            agent_id,
-            message_id,
-            ordinal,
-            &json!({
-                "kind": "agent_attachment",
-                "sourceCampMessageId": message_id,
-                "sourceAgentId": agent_id,
-                "campId": camp_id,
-                "attachmentId": attachment_id,
-                "ordinal": ordinal,
-                "attachmentKind": attachment_kind,
-                "fileName": file_name,
-                "mediaType": media_type,
-                "size": size,
-                "contentDigest": digest,
-                "requiresBodyDelivery": requires_body_delivery,
-            }),
-            now,
-        )?;
+        let dedupe_key = format!("agent_attachment:{message_id}:{ordinal}:{attachment_id}");
+        let payload = json!({
+            "kind": "agent_attachment",
+            "sourceCampMessageId": message_id,
+            "sourceAgentId": agent_id,
+            "campId": camp_id,
+            "attachmentId": attachment_id,
+            "ordinal": ordinal,
+            "attachmentKind": attachment_kind,
+            "fileName": file_name,
+            "mediaType": media_type,
+            "size": size,
+            "contentDigest": digest,
+            "requiresBodyDelivery": requires_body_delivery,
+        });
+        match route {
+            AgentChannelDeliveryRoute::Request(request_id) => insert_attachment_delivery(
+                transaction,
+                request_id,
+                &dedupe_key,
+                target_app_id,
+                agent_id,
+                message_id,
+                ordinal,
+                &payload,
+                now,
+            )?,
+            AgentChannelDeliveryRoute::Binding(channel_binding_id) => {
+                insert_bound_attachment_delivery(
+                    transaction,
+                    channel_binding_id,
+                    &dedupe_key,
+                    target_app_id,
+                    agent_id,
+                    message_id,
+                    ordinal,
+                    &payload,
+                    now,
+                )?
+            }
+        }
     }
     let sources: String = transaction.query_row(
         "SELECT source_attachments_json FROM camp_message WHERE id = ?1 AND camp_id = ?2",
@@ -10357,23 +10525,40 @@ fn materialize_agent_attachments(
         if source.kind != crate::local_attachment_source::LocalAttachmentKind::File {
             continue;
         }
-        insert_attachment_delivery(
-            transaction,
-            request_id,
-            &format!("agent_attachment:{message_id}:{ordinal}:{}", source.id),
-            target_app_id,
-            agent_id,
-            message_id,
-            ordinal as i64,
-            &json!({
-                "kind": "agent_attachment", "sourceCampMessageId": message_id, "sourceAgentId": agent_id,
-                "campId": camp_id, "attachmentId": source.id, "ordinal": ordinal,
-                "attachmentKind": if source.media_type.as_deref().is_some_and(|mime| mime.starts_with("image/")) { "image" } else { "file" },
-                "fileName": source.display_name, "mediaType": source.media_type,
-                "storage": "source_ref", "requiresBodyDelivery": requires_body_delivery,
-            }),
-            now,
-        )?;
+        let dedupe_key = format!("agent_attachment:{message_id}:{ordinal}:{}", source.id);
+        let payload = json!({
+            "kind": "agent_attachment", "sourceCampMessageId": message_id, "sourceAgentId": agent_id,
+            "campId": camp_id, "attachmentId": source.id, "ordinal": ordinal,
+            "attachmentKind": if source.media_type.as_deref().is_some_and(|mime| mime.starts_with("image/")) { "image" } else { "file" },
+            "fileName": source.display_name, "mediaType": source.media_type,
+            "storage": "source_ref", "requiresBodyDelivery": requires_body_delivery,
+        });
+        match route {
+            AgentChannelDeliveryRoute::Request(request_id) => insert_attachment_delivery(
+                transaction,
+                request_id,
+                &dedupe_key,
+                target_app_id,
+                agent_id,
+                message_id,
+                ordinal as i64,
+                &payload,
+                now,
+            )?,
+            AgentChannelDeliveryRoute::Binding(channel_binding_id) => {
+                insert_bound_attachment_delivery(
+                    transaction,
+                    channel_binding_id,
+                    &dedupe_key,
+                    target_app_id,
+                    agent_id,
+                    message_id,
+                    ordinal as i64,
+                    &payload,
+                    now,
+                )?
+            }
+        }
     }
     Ok(())
 }
@@ -10582,6 +10767,13 @@ fn claim_deliveries(
                   JOIN channel_conversation AS conversation
                     ON conversation.id = pending.channel_conversation_id
                   WHERE pending.id = delivery.pending_binding_id
+              ),
+              (
+                  SELECT conversation.provider
+                  FROM channel_conversation_binding AS binding
+                  JOIN channel_conversation AS conversation
+                    ON conversation.id = binding.channel_conversation_id
+                  WHERE binding.id = delivery.channel_binding_id
               )
           ) = ?2
           AND (
@@ -10618,8 +10810,7 @@ fn claim_deliveries(
                       ) = 0
                       OR EXISTS (
                           SELECT 1 FROM channel_delivery AS body_delivery
-                          WHERE body_delivery.request_id = delivery.request_id
-                            AND body_delivery.source_camp_message_id =
+                          WHERE body_delivery.source_camp_message_id =
                                 delivery.source_camp_message_id
                             AND body_delivery.delivery_kind = 'agent_output'
                             AND body_delivery.status IN ('sent', 'failed')
@@ -10627,8 +10818,7 @@ fn claim_deliveries(
                   )
                   AND NOT EXISTS (
                       SELECT 1 FROM channel_delivery AS earlier_attachment
-                      WHERE earlier_attachment.request_id = delivery.request_id
-                        AND earlier_attachment.source_camp_message_id =
+                      WHERE earlier_attachment.source_camp_message_id =
                             delivery.source_camp_message_id
                         AND earlier_attachment.delivery_kind = 'agent_attachment'
                         AND earlier_attachment.attachment_ordinal <
@@ -10663,11 +10853,20 @@ fn claim_deliveries(
             r#"
             SELECT delivery.id, delivery.request_id, delivery.delivery_kind,
                    delivery.target_app_id, COALESCE(bot.credential_ref, ''),
-                   COALESCE(request_conversation.chat_id, pending_conversation.chat_id),
-                   COALESCE(request_conversation.topic_key, pending_conversation.topic_key),
+                   COALESCE(
+                       request_conversation.chat_id,
+                       pending_conversation.chat_id,
+                       bound_conversation.chat_id
+                   ),
+                   COALESCE(
+                       request_conversation.topic_key,
+                       pending_conversation.topic_key,
+                       bound_conversation.topic_key
+                   ),
                    COALESCE(
                        request_conversation.conversation_kind,
-                       pending_conversation.conversation_kind
+                       pending_conversation.conversation_kind,
+                       bound_conversation.conversation_kind
                    ),
                    delivery.payload_json,
                    delivery.attempt_count,
@@ -10686,8 +10885,9 @@ fn claim_deliveries(
                        WHEN delivery.delivery_kind = 'queue_ack'
                         AND json_extract(delivery.payload_json, '$.action') = 'recall'
                         AND COALESCE(
-                            request_conversation.provider,
-                            pending_conversation.provider
+                           request_conversation.provider,
+                            pending_conversation.provider,
+                            bound_conversation.provider
                         ) = 'feishu'
                        THEN (
                            SELECT previous.external_delivery_message_id
@@ -10705,7 +10905,8 @@ fn claim_deliveries(
                    ,CASE
                        WHEN COALESCE(
                            request_conversation.provider,
-                           pending_conversation.provider
+                           pending_conversation.provider,
+                           bound_conversation.provider
                        ) = 'dingtalk'
                         AND delivery.delivery_kind = 'execution_console_recall'
                        THEN (
@@ -10721,7 +10922,8 @@ fn claim_deliveries(
                        )
                        WHEN COALESCE(
                            request_conversation.provider,
-                           pending_conversation.provider
+                           pending_conversation.provider,
+                           bound_conversation.provider
                        ) = 'dingtalk'
                         AND delivery.delivery_kind = 'queue_ack'
                         AND json_extract(delivery.payload_json, '$.action') = 'recall'
@@ -10748,12 +10950,14 @@ fn claim_deliveries(
                              )
                          AND identity.provider = COALESCE(
                              request_conversation.provider,
-                             pending_conversation.provider
+                             pending_conversation.provider,
+                             bound_conversation.provider
                          )
                          AND identity.app_id = delivery.target_app_id
                          AND identity.identity_kind = CASE COALESCE(
                              request_conversation.provider,
-                             pending_conversation.provider
+                             pending_conversation.provider,
+                             bound_conversation.provider
                          )
                              WHEN 'dingtalk' THEN 'user_id'
                              ELSE 'open_id'
@@ -10762,7 +10966,8 @@ fn claim_deliveries(
                    ) AS recipient_open_id
                    ,COALESCE(
                        request_conversation.provider,
-                       pending_conversation.provider
+                       pending_conversation.provider,
+                       bound_conversation.provider
                    ) AS provider
             FROM channel_delivery AS delivery
             LEFT JOIN channel_turn_request AS request ON request.id = delivery.request_id
@@ -10773,10 +10978,15 @@ fn claim_deliveries(
               ON pending.id = delivery.pending_binding_id
             LEFT JOIN channel_conversation AS pending_conversation
               ON pending_conversation.id = pending.channel_conversation_id
+            LEFT JOIN channel_conversation_binding AS direct_binding
+              ON direct_binding.id = delivery.channel_binding_id
+            LEFT JOIN channel_conversation AS bound_conversation
+              ON bound_conversation.id = direct_binding.channel_conversation_id
             LEFT JOIN channel_member_bot_directory AS bot
               ON bot.provider = COALESCE(
                     request_conversation.provider,
-                    pending_conversation.provider
+                    pending_conversation.provider,
+                    bound_conversation.provider
                  )
              AND bot.app_id = delivery.target_app_id
             LEFT JOIN channel_execution_console AS console
@@ -10847,10 +11057,15 @@ fn channel_host_has_outstanding_work(
                   ON pending.id = delivery.pending_binding_id
                 LEFT JOIN channel_conversation AS pending_conversation
                   ON pending_conversation.id = pending.channel_conversation_id
+                LEFT JOIN channel_conversation_binding AS direct_binding
+                  ON direct_binding.id = delivery.channel_binding_id
+                LEFT JOIN channel_conversation AS bound_conversation
+                  ON bound_conversation.id = direct_binding.channel_conversation_id
                 WHERE delivery.status IN ('pending', 'attempting')
                   AND COALESCE(
                       request_conversation.provider,
-                      pending_conversation.provider
+                      pending_conversation.provider,
+                      bound_conversation.provider
                   ) = ?1
             )
             OR EXISTS(
@@ -13506,155 +13721,8 @@ mod tests {
         path
     }
 
-    fn insert_pending_topic_delivery(
-        database: &Database,
-        camp_id: &str,
-        recipient_agent_id: &str,
-    ) -> String {
-        let (camp_turn_id, source_agent_run_id): (String, String) = database
-            .connection()
-            .query_row(
-                r#"
-                SELECT run.camp_turn_id, run.id
-                FROM agent_run AS run
-                JOIN conversation ON conversation.id = run.conversation_id
-                WHERE conversation.camp_id = ?1 AND conversation.agent_id = 'agent_1'
-                LIMIT 1
-                "#,
-                [camp_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let recipient_membership_version: i64 = database
-            .connection()
-            .query_row(
-                r#"
-                SELECT version FROM camp_member
-                WHERE camp_id = ?1 AND agent_id = ?2
-                  AND status = 'active' AND leave_requested_at IS NULL
-                "#,
-                params![camp_id, recipient_agent_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let now = Utc::now().to_rfc3339();
-        database
-            .connection()
-            .execute(
-                r#"
-                UPDATE camp
-                SET last_message_sequence = last_message_sequence + 1,
-                    version = version + 1, updated_at = ?2
-                WHERE id = ?1
-                "#,
-                params![camp_id, now],
-            )
-            .unwrap();
-        let camp_sequence: i64 = database
-            .connection()
-            .query_row(
-                "SELECT last_message_sequence FROM camp WHERE id = ?1",
-                [camp_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let message_id = format!("topic-message-{recipient_agent_id}");
-        database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO camp_message(
-                    id, camp_id, sequence,
-                    author_type, author_id, source_agent_run_id, body,
-                    structured_content_json, content_digest,
-                    address_mode, addressed_agent_ids_json,
-                    camp_turn_id, agent_run_id,
-                    version, created_at, updated_at,
-                    effective_recipient_ids_json, recipient_set_digest,
-                    recipient_presentation_json, source_operation_id,
-                    agent_addressing_mode
-                ) VALUES (
-                    ?1, ?2, ?3,
-                    'agent', 'agent_1', ?4, '调用协作队员',
-                    '[{"kind":"text","text":"调用协作队员"}]', 'message-digest',
-                    'explicit', ?5,
-                    ?6, ?4,
-                    1, ?7, ?7,
-                    ?5, 'recipient-set-digest', '[]', ?1, 'automatic'
-                )
-                "#,
-                params![
-                    message_id,
-                    camp_id,
-                    camp_sequence,
-                    source_agent_run_id,
-                    serde_json::to_string(&vec![recipient_agent_id]).unwrap(),
-                    camp_turn_id,
-                    now,
-                ],
-            )
-            .unwrap();
-        let project_path: String = database
-            .connection()
-            .query_row(
-                "SELECT project_path FROM camp WHERE id = ?1",
-                [camp_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        database
-            .connection()
-            .execute(
-                "UPDATE agent_run SET workspace_json = ?2 WHERE id = ?1",
-                params![
-                    source_agent_run_id,
-                    serde_json::to_string(
-                        &crate::runtime::AgentRunWorkspace::runtime_managed_path(project_path)
-                    )
-                    .unwrap(),
-                ],
-            )
-            .unwrap();
-        let delivery_id = format!("topic-delivery-{recipient_agent_id}");
-        database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO message_delivery(
-                    id, camp_id, camp_turn_id, message_id,
-                    recipient_agent_id, recipient_canonical_position,
-                    recipient_digest, message_body_digest,
-                    source_agent_run_id, edge_kind,
-                    target_parent_agent_run_id, a2a_root_agent_run_id, a2a_depth,
-                    ancestor_agent_ids_json, recipient_presentation_snapshot_json,
-                    frozen_snapshot_json, delivery_kind, dispatch_disposition,
-                    completion_role, camp_message_boundary_sequence, queue_sequence,
-                    status, dispatch_phase, retry_generation,
-                    created_at, updated_at, recipient_membership_version_at_admission
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, 0,
-                    'recipient-digest', 'message-digest',
-                    ?6, 'forward', ?6, ?6, 1,
-                    '[]', '{}',
-                    '{"schemaVersion":3,"deliveryKind":"public_a2a","dispatchDisposition":"dispatch","completionRole":"required"}',
-                    'public_a2a', 'dispatch', 'required', ?7, 1,
-                    'pending', 'never_attempted', 0, ?8, ?8, ?9
-                )
-                "#,
-                params![
-                    delivery_id,
-                    camp_id,
-                    camp_turn_id,
-                    message_id,
-                    recipient_agent_id,
-                    source_agent_run_id,
-                    camp_sequence,
-                    now,
-                    recipient_membership_version,
-                ],
-            )
-            .unwrap();
-        delivery_id
+    fn claim_waiting_runs(database: &mut Database) -> Vec<String> {
+        crate::delivery_queue::claim_waiting_delivery_batches(database, 100).unwrap()
     }
 
     fn execution_console_page_command(
@@ -14342,9 +14410,10 @@ mod tests {
                 2
             );
             for (table, count) in [
-                ("camp_message", 1),
-                ("camp_turn", 1),
-                ("agent_run", 1),
+                ("camp_message", 2),
+                ("camp_turn", 0),
+                ("agent_run", 0),
+                ("camp_message_delivery", 2),
                 ("channel_turn_request", 2),
             ] {
                 assert_eq!(
@@ -14504,6 +14573,22 @@ mod tests {
                             && column != "automation_run_id"
                             && column != "quotes_json"
                             && column != "quote_trash_json"
+                            && !(table == "camp_message"
+                                && matches!(
+                                    column.as_str(),
+                                    "origin_kind"
+                                        | "recall_state"
+                                        | "withdrawn_by_id"
+                                        | "withdrawn_at"
+                                ))
+                            && !(table == "agent_run"
+                                && matches!(
+                                    column.as_str(),
+                                    "camp_id"
+                                        | "anchor_message_id"
+                                        | "current_public_tail_sequence"
+                                ))
+                            && !(table == "channel_delivery" && column == "channel_binding_id")
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -15108,15 +15193,21 @@ mod tests {
             DINGTALK_PROVIDER,
             "p2p",
         );
-        for table in ["camp_message", "camp_turn", "agent_run"] {
+        for (table, expected) in [
+            ("camp_message", 1),
+            ("camp_message_delivery", 1),
+            ("camp_turn", 0),
+            ("agent_run", 0),
+        ] {
             let count: i64 = database
                 .connection()
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!(count, 1, "DingTalk must reuse atomic admission for {table}");
+            assert_eq!(count, expected, "DingTalk admission mismatch for {table}");
         }
+        assert_eq!(claim_waiting_runs(&mut database).len(), 1);
 
         let mut queued_observation = observation_command(
             "ding-app-agent_1",
@@ -15140,7 +15231,7 @@ mod tests {
                 &dingtalk_host_envelope("dingtalk-observe-queued", queued_observation),
             )
             .unwrap();
-        let queued = service
+        let second_admission = service
             .finalize_inbound(
                 &mut database,
                 &quick_chat_path,
@@ -15155,7 +15246,19 @@ mod tests {
                 ),
             )
             .unwrap();
-        assert_eq!(queued.result.code, "channel.turn.queued");
+        assert_eq!(second_admission.result.code, "channel.turn.admitted");
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM camp_message_delivery WHERE status = 'waiting'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1,
+            "a later Channel message is received immediately and waits only in the Agent lane",
+        );
 
         let console_tick = service
             .host_tick(
@@ -15174,30 +15277,13 @@ mod tests {
             .iter()
             .find(|delivery| delivery.delivery_kind == "execution_console_upsert")
             .expect("DingTalk admission must open one execution state card");
-        let queue_delivery = console_tick
-            .deliveries
-            .iter()
-            .find(|delivery| {
-                delivery.delivery_kind == "queue_ack" && delivery.payload.get("action").is_none()
-            })
-            .expect("the second DingTalk request must emit a queue card");
-        service
-            .settle_delivery(
-                &mut database,
-                &dingtalk_host_envelope(
-                    "dingtalk-queue-card-sent",
-                    SettleChannelDeliveryCommand {
-                        delivery_id: queue_delivery.delivery_id.clone(),
-                        worker_id: "dingtalk-console-worker".to_string(),
-                        outcome: "sent".to_string(),
-                        external_delivery_message_id: Some("ding-carrier-queue-2".to_string()),
-                        external_update_message_id: None,
-                        failure_code: None,
-                        retryable: false,
-                    },
-                ),
-            )
-            .unwrap();
+        assert!(
+            console_tick
+                .deliveries
+                .iter()
+                .all(|delivery| delivery.delivery_kind != "queue_ack"),
+            "Channel receipt completion does not create a second request queue",
+        );
         let console_source = service
             .execution_console_source(
                 &mut database,
@@ -15305,7 +15391,7 @@ mod tests {
         assert_eq!(cancelled.result.status, CommandResultStatus::Applied);
         assert_eq!(cancelled.result.payload["status"], "cancelled");
 
-        let promoted_tick = service
+        let next_tick = service
             .host_tick(
                 &mut database,
                 &ActorRef::System {
@@ -15317,33 +15403,15 @@ mod tests {
                 },
             )
             .unwrap();
-        let queue_recall = promoted_tick
-            .deliveries
-            .iter()
-            .find(|delivery| {
-                delivery.delivery_kind == "queue_ack" && delivery.payload["action"] == "recall"
-            })
-            .expect("promoting the second DingTalk request must recall its queue card");
-        assert_eq!(
-            queue_recall.update_message_id, None,
-            "a DingTalk carrier must never masquerade as an AI Card update outTrackId"
-        );
-        assert_eq!(
-            queue_recall.recall_message_id.as_deref(),
-            Some("ding-carrier-queue-2")
-        );
-        let execution_recall = promoted_tick
-            .deliveries
-            .iter()
-            .find(|delivery| delivery.delivery_kind == "execution_console_recall")
-            .expect("the next DingTalk root must truly recall the previous terminal card");
-        assert_eq!(
-            execution_recall.update_message_id.as_deref(),
-            Some("ding-card-run-1")
-        );
-        assert_eq!(
-            execution_recall.recall_message_id.as_deref(),
-            Some("ding-carrier-run-1")
+        assert!(next_tick.deliveries.iter().any(|delivery| {
+            delivery.delivery_kind == "execution_console_upsert"
+                && delivery.payload["agentRunId"] != console_source.agent_run_id
+        }));
+        assert!(
+            next_tick
+                .deliveries
+                .iter()
+                .all(|delivery| delivery.delivery_kind != "queue_ack"),
         );
 
         let aggregate_count: i64 = database
@@ -15649,6 +15717,7 @@ mod tests {
             DINGTALK_PROVIDER,
         );
         assert_eq!(resolved.result.code, "channel.binding.resolved");
+        assert_eq!(claim_waiting_runs(&mut database).len(), 2);
         let dispatched = service
             .host_tick(
                 &mut database,
@@ -16543,196 +16612,6 @@ mod tests {
         assert_eq!(rejected.result.code, "feishu_owner_identity.conflict");
     }
 
-    // The channel owner proves the cross-module boundary: local cancellation
-    // preserves output, whole-Turn cancellation frees FIFO without an ACK.
-    #[test]
-    fn cancellation_preserves_local_output_and_suppresses_only_aborted_turn_retries() {
-        for whole_turn in [false, true] {
-            let mut database = seeded_runtime_database_owned();
-            let service = ChannelService::default();
-            connect_account(&service, &mut database);
-            publish_bot(&service, &mut database, "agent_1", "cli_app_1");
-            publish_bot(&service, &mut database, "agent_2", "cli_app_2");
-            seed_project(&database, "cancellation");
-            let path = quick_chat_path(&database);
-            let picker = pending_workspace_picker(&service, &mut database, "group", "oc_cancel");
-            service
-                .resolve_pending_camp_binding(
-                    &mut database,
-                    &path,
-                    &host_envelope("bind-cancel", picker),
-                )
-                .unwrap();
-            let (request_id, camp_id, turn_id, run_id, source_id): (String, String, String, String, String) = database.connection().query_row(
-                "SELECT request.id, request.camp_id, request.camp_turn_id, run.id, run.trigger_camp_message_id
-                 FROM channel_turn_request AS request JOIN agent_run AS run ON run.camp_turn_id = request.camp_turn_id
-                 JOIN camp_turn AS turn ON turn.id = request.camp_turn_id WHERE request.status = 'admitted'",
-                [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
-            ).unwrap();
-            let now = Utc::now().to_rfc3339();
-            let transaction = database.connection_mut().transaction().unwrap();
-            for (key, kind) in [
-                ("cancel-body", "agent_output"),
-                ("cancel-attention", "attention"),
-                ("cancel-sent", "attention"),
-                ("cancel-attempt", "attention"),
-            ] {
-                insert_delivery(
-                    &transaction,
-                    &request_id,
-                    key,
-                    kind,
-                    "cli_app_1",
-                    Some("agent_1"),
-                    Some(&source_id),
-                    &json!({"text": "test", "body": "test"}),
-                    &now,
-                )
-                .unwrap();
-            }
-            insert_attachment_delivery(
-                &transaction,
-                &request_id,
-                "cancel-file",
-                "cli_app_1",
-                "agent_1",
-                &source_id,
-                0,
-                &json!({"text": "file"}),
-                &now,
-            )
-            .unwrap();
-            transaction.execute("UPDATE channel_delivery SET status = 'sent', external_delivery_message_id = 'already-sent', ended_at = ?1 WHERE dedupe_key = 'cancel-sent'", [&now]).unwrap();
-            transaction.execute("UPDATE channel_delivery SET status = 'attempting', lease_owner = 'cancel-worker', attempt_count = 1, lease_expires_at = '2999-01-01T00:00:00Z' WHERE dedupe_key = 'cancel-attempt'", []).unwrap();
-            let attempting_id: String = transaction
-                .query_row(
-                    "SELECT id FROM channel_delivery WHERE dedupe_key = 'cancel-attempt'",
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            transaction.commit().unwrap();
-            let runtime = crate::runtime::ExecutionRuntimeService::default();
-            let result = if whole_turn {
-                runtime
-                    .request_camp_turn_cancellation(
-                        &mut database,
-                        &CommandEnvelope {
-                            command_id: "stop-whole".into(),
-                            actor: ActorRef::User {
-                                user_id: "local_user".into(),
-                            },
-                            camp_id: Some(camp_id.clone()),
-                            expected_versions: Vec::new(),
-                            execution_epoch: None,
-                            payload: crate::runtime::CancelCampTurnCommand {
-                                camp_id: camp_id.clone(),
-                                camp_turn_id: turn_id,
-                                expected_version: 1,
-                            },
-                        },
-                    )
-                    .unwrap()
-            } else {
-                runtime
-                    .request_agent_run_cancellation(
-                        &mut database,
-                        &CommandEnvelope {
-                            command_id: "stop-local".into(),
-                            actor: ActorRef::User {
-                                user_id: "local_user".into(),
-                            },
-                            camp_id: Some(camp_id.clone()),
-                            expected_versions: Vec::new(),
-                            execution_epoch: None,
-                            payload: crate::runtime::CancelAgentRunCommand {
-                                camp_id,
-                                agent_run_id: run_id.clone(),
-                                expected_version: 1,
-                            },
-                        },
-                    )
-                    .unwrap()
-            };
-            assert_eq!(result.result.status, CommandResultStatus::Applied);
-            let state: (String, i64, bool) = database.connection().query_row(
-                "SELECT request.status, (SELECT count(*) FROM channel_delivery WHERE request_id = request.id AND dedupe_key IN ('cancel-body','cancel-file','cancel-attention') AND status = 'pending'), (SELECT cancel_acknowledged_at IS NULL FROM agent_run WHERE id = ?2) FROM channel_turn_request AS request WHERE id = ?1",
-                params![request_id, run_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-            ).unwrap();
-            assert_eq!(
-                state,
-                (
-                    if whole_turn { "failed" } else { "admitted" }.into(),
-                    if whole_turn { 0 } else { 3 },
-                    true
-                )
-            );
-            if !whole_turn {
-                continue;
-            }
-            let suppression: String = database
-                .connection()
-                .query_row(
-                    "SELECT retry_suppression_json FROM channel_delivery WHERE id = ?1",
-                    [&attempting_id],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(
-                serde_json::from_str::<Value>(&suppression).unwrap()["outcomeUnknown"],
-                true
-            );
-            for (outcome, retryable) in [("failed", true), ("sent", false)] {
-                service
-                    .settle_delivery(
-                        &mut database,
-                        &host_envelope(
-                            &format!("late-{outcome}"),
-                            SettleChannelDeliveryCommand {
-                                delivery_id: attempting_id.clone(),
-                                worker_id: "cancel-worker".into(),
-                                outcome: outcome.into(),
-                                external_delivery_message_id: (outcome == "sent")
-                                    .then(|| "late-sent".into()),
-                                external_update_message_id: None,
-                                failure_code: None,
-                                retryable,
-                            },
-                        ),
-                    )
-                    .unwrap();
-            }
-            service
-                .host_tick(
-                    &mut database,
-                    &ActorRef::System {
-                        component_id: FEISHU_CHANNEL_HOST_COMPONENT.into(),
-                    },
-                    &ChannelHostTickRequest {
-                        worker_id: "next-worker".into(),
-                        limit: 20,
-                    },
-                )
-                .unwrap();
-            let final_state: (String, String, i64, String) = database.connection().query_row(
-                "SELECT request.status, (SELECT external_delivery_message_id FROM channel_delivery WHERE id = ?2),
-                    (SELECT count(*) FROM channel_turn_request WHERE binding_id = request.binding_id AND status = 'admitted'),
-                    (SELECT external_delivery_message_id FROM channel_delivery WHERE dedupe_key = 'cancel-sent')
-                 FROM channel_turn_request AS request WHERE id = ?1", params![request_id, attempting_id],
-                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
-            ).unwrap();
-            assert_eq!(
-                final_state,
-                (
-                    "failed".into(),
-                    "late-sent".into(),
-                    1,
-                    "already-sent".into()
-                )
-            );
-        }
-    }
-
     #[test]
     fn owner_dm_persists_canonical_quick_chat_workspace_for_dispatch() {
         let mut database = seeded_runtime_database_owned();
@@ -16954,15 +16833,24 @@ mod tests {
             1,
             "the owner must remain an ExternalPrincipal"
         );
-        for table in ["camp_message", "camp_turn", "agent_run"] {
+        for (table, expected) in [
+            ("camp_message", 1),
+            ("camp_message_delivery", 1),
+            ("camp_turn", 0),
+            ("agent_run", 0),
+        ] {
             let count: i64 = database
                 .connection()
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!(count, 1, "{table} must be admitted atomically");
+            assert_eq!(
+                count, expected,
+                "{table} must match Delivery-first admission"
+            );
         }
+        assert_eq!(claim_waiting_runs(&mut database).len(), 1);
         let console_tick = serde_json::to_value(
             service
                 .host_tick(
@@ -17099,17 +16987,16 @@ mod tests {
             .unwrap();
         assert_eq!(busy.result.code, "channel.dm.busy");
 
-        let (camp_id, camp_turn_id, agent_run_id): (String, String, String) = database
+        let (camp_id, agent_run_id): (String, String) = database
             .connection()
             .query_row(
                 r#"
-                SELECT request.camp_id, request.camp_turn_id, run.id
-                FROM channel_turn_request AS request
-                JOIN agent_run AS run ON run.camp_turn_id = request.camp_turn_id
-                WHERE request.status = 'admitted'
+                SELECT run.camp_id, run.id
+                FROM agent_run AS run
+                WHERE run.invocation_kind = 'batch'
                 "#,
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         let failed_at = Utc::now().to_rfc3339();
@@ -17147,8 +17034,8 @@ mod tests {
                 ) VALUES (
                     'channel-output', ?1, ?2, 'agent', 'agent_1',
                     ?3, 'partial channel output', ?4, ?5,
-                    'default', '[]', NULL, ?6, ?3, NULL, 1,
-                    ?7, ?7, '[]', NULL, '{}', NULL
+                    'default', '[]', NULL, NULL, ?3, NULL, 1,
+                    ?6, ?6, '[]', NULL, '{}', NULL
                 )
                 "#,
                 params![
@@ -17157,7 +17044,6 @@ mod tests {
                     agent_run_id,
                     output_content_json,
                     output_digest,
-                    camp_turn_id,
                     failed_at,
                 ],
             )
@@ -17193,24 +17079,31 @@ mod tests {
                 params![camp_id, failed_at],
             )
             .unwrap();
+        {
+            let transaction = database.connection_mut().transaction().unwrap();
+            enqueue_bound_camp_agent_message(
+                &transaction,
+                &camp_id,
+                "channel-output",
+                "agent_1",
+                "partial channel output",
+                &output_content,
+                &failed_at,
+            )
+            .unwrap();
+            transaction.commit().unwrap();
+        }
         database
             .connection()
             .execute(
                 r#"
                 UPDATE agent_run
                 SET status = 'failed', last_error_code = 'runtime_failed',
-                    manual_retry_allowed = 1, ended_at = ?2,
+                    manual_retry_allowed = 0, ended_at = ?2,
                     version = version + 1, updated_at = ?2
                 WHERE id = ?1
                 "#,
                 params![agent_run_id, failed_at],
-            )
-            .unwrap();
-        database
-            .connection()
-            .execute(
-                "UPDATE camp_turn SET status = 'waiting', updated_at = ?2 WHERE id = ?1",
-                params![camp_turn_id, failed_at],
             )
             .unwrap();
 
@@ -17641,7 +17534,7 @@ mod tests {
                 &host_envelope(
                     "settle-channel-attachment-failed",
                     SettleChannelDeliveryCommand {
-                        delivery_id: attachment_delivery_id,
+                        delivery_id: attachment_delivery_id.clone(),
                         worker_id: "channel-test-worker".to_string(),
                         outcome: "failed".to_string(),
                         external_delivery_message_id: None,
@@ -17652,33 +17545,17 @@ mod tests {
                 ),
             )
             .unwrap();
-        let attention_tick = serde_json::to_value(
-            service
-                .host_tick(
-                    &mut database,
-                    &ActorRef::System {
-                        component_id: (FEISHU_CHANNEL_HOST_COMPONENT).to_string(),
-                    },
-                    &ChannelHostTickRequest {
-                        worker_id: "channel-test-worker".to_string(),
-                        limit: 20,
-                    },
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        let attention_deliveries = attention_tick["deliveries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|delivery| delivery["deliveryKind"] == "attention")
-            .collect::<Vec<_>>();
-        assert_eq!(attention_deliveries.len(), 1);
-        assert!(
-            attention_deliveries[0]["payload"]["text"]
-                .as_str()
-                .unwrap()
-                .contains("正文及其他附件不会重复发送")
+        let attachment_failure: (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT status, failure_code FROM channel_delivery WHERE id = ?1",
+                [&attachment_delivery_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            attachment_failure,
+            ("failed".to_string(), Some("upload_failed".to_string()))
         );
 
         let retry_declined_at: Option<String> = database
@@ -17689,19 +17566,19 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(
-            retry_declined_at.is_some(),
-            "a Channel request cannot wait for a local-only retry decision"
+        assert_eq!(
+            retry_declined_at, None,
+            "manual retry is not part of the new model"
         );
-        let turn_status: String = database
+        let camp_turn_count: i64 = database
             .connection()
             .query_row(
-                "SELECT status FROM camp_turn WHERE id = ?1 AND camp_id = ?2",
-                params![camp_turn_id, camp_id],
+                "SELECT COUNT(*) FROM camp_turn WHERE camp_id = ?1",
+                [&camp_id],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(turn_status, "failed");
+        assert_eq!(camp_turn_count, 0);
 
         let data_directory = database.directory().to_path_buf();
         database.close();
@@ -17715,63 +17592,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&restored).unwrap(),
             serde_json::to_value(&terminal_source).unwrap()
-        );
-
-        // A distinct upgrade boundary: v124 had no content snapshot to preserve.
-        // Copy migration freezes the best available content without new deliveries,
-        // card identity changes, or importing the retired view state.
-        crate::db::downgrade_current_schema_to_v124_source_for_test(restarted.connection());
-        let deliveries_before_upgrade: i64 = restarted
-            .connection()
-            .query_row("SELECT COUNT(*) FROM channel_delivery", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        drop(restarted);
-        let mut upgraded = Database::open(&data_directory).unwrap();
-        let migrated = service
-            .execution_console_source(&mut upgraded, &agent_run_id, terminal_source.sequence)
-            .unwrap()
-            .unwrap();
-        assert_eq!(migrated.sequence, terminal_source.sequence);
-        assert_eq!(
-            migrated.external_message_id,
-            terminal_source.external_message_id
-        );
-        assert_eq!(
-            migrated.public_output.as_deref(),
-            Some("late public output")
-        );
-        assert!(
-            migrated
-                .evidence
-                .iter()
-                .any(|item| item.id == "late-console-text")
-        );
-        assert_eq!(
-            upgraded
-                .connection()
-                .query_row("SELECT COUNT(*) FROM channel_delivery", [], |row| row
-                    .get::<_, i64>(0),)
-                .unwrap(),
-            deliveries_before_upgrade
-        );
-        assert_eq!(upgraded.connection().query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('channel_execution_console') WHERE name IN ('display_mode', 'page_index', 'view_version')",
-            [], |row| row.get::<_, i64>(0),
-        ).unwrap(), 0);
-        upgraded
-            .connection()
-            .execute(
-                "UPDATE managed_blob SET state = 'missing' WHERE id = ?1",
-                [&large_blob.id],
-            )
-            .unwrap();
-        assert!(
-            service
-                .execution_console_source(&mut upgraded, &agent_run_id, terminal_source.sequence)
-                .is_err(),
-            "missing full evidence must fail closed instead of presenting a preview as the true tail"
         );
     }
 
@@ -17850,6 +17670,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(finalized.result.code, "channel.turn.admitted");
+        assert_eq!(claim_waiting_runs(&mut database).len(), 1);
         let tick = serde_json::to_value(
             service
                 .host_tick(
@@ -18003,18 +17824,19 @@ mod tests {
                 ),
             )
             .unwrap();
-
-        let (request_id, camp_turn_id, agent_run_id): (String, String, String) = database
+        let claimed = claim_waiting_runs(&mut database);
+        assert_eq!(claimed.len(), 1);
+        let agent_run_id = claimed[0].clone();
+        let request_id: String = database
             .connection()
             .query_row(
                 r#"
-                SELECT request.id, request.camp_turn_id, run.id
+                SELECT request.id
                 FROM channel_turn_request AS request
-                JOIN agent_run AS run ON run.camp_turn_id = request.camp_turn_id
-                WHERE request.status = 'admitted'
+                WHERE request.status = 'completed'
                 "#,
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| row.get(0),
             )
             .unwrap();
         let opening_tick = service
@@ -18168,17 +17990,6 @@ mod tests {
                 WHERE id = ?1
                 "#,
                 params![agent_run_id, terminal_at],
-            )
-            .unwrap();
-        database
-            .connection()
-            .execute(
-                r#"
-                UPDATE camp_turn
-                SET status = 'completed', ended_at = ?2, updated_at = ?2
-                WHERE id = ?1
-                "#,
-                params![camp_turn_id, terminal_at],
             )
             .unwrap();
         let terminal_tick = service
@@ -18787,7 +18598,12 @@ mod tests {
             FEISHU_PROVIDER,
             "group",
         );
-        for (table, expected) in [("camp_message", 1), ("camp_turn", 1), ("agent_run", 2)] {
+        for (table, expected) in [
+            ("camp_message", 2),
+            ("camp_message_delivery", 3),
+            ("camp_turn", 0),
+            ("agent_run", 0),
+        ] {
             let count: i64 = database
                 .connection()
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
@@ -18796,9 +18612,10 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 count, expected,
-                "only the FIFO head should cross atomic admission"
+                "all frozen inbound messages should complete receipt into Delivery lanes"
             );
         }
+        assert_eq!(claim_waiting_runs(&mut database).len(), 2);
         assert_eq!(
             database
                 .connection()
@@ -18850,10 +18667,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             queue_acknowledgements.len(),
-            1,
-            "only the request that actually remained queued may emit a queue acknowledgement"
+            0,
+            "Channel receipt has no separate request queue acknowledgement"
         );
-        assert_eq!(queue_acknowledgements[0]["payload"]["status"], "queued");
         let picker_recalls = outbox["deliveries"]
             .as_array()
             .unwrap()
@@ -18894,7 +18710,7 @@ mod tests {
 
         // The same FIFO fixture owns poll-response loss: claims remain leased,
         // expiry is recoverable, and a later failure rolls the whole tick back.
-        let acknowledgement_id = queue_acknowledgements[0]["deliveryId"].as_str().unwrap();
+        let recovered_delivery_id = picker_recalls[0]["deliveryId"].as_str().unwrap();
         let actor = ActorRef::System {
             component_id: FEISHU_CHANNEL_HOST_COMPONENT.to_string(),
         };
@@ -18906,12 +18722,12 @@ mod tests {
             |database: &Database| -> (String, Option<String>, i64) {
                 database.connection().query_row(
                 "SELECT status, lease_owner, attempt_count FROM channel_delivery WHERE id = ?1",
-                [acknowledgement_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                [recovered_delivery_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             ).unwrap()
             };
         database.connection().execute(
             "UPDATE channel_delivery SET lease_expires_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
-            [acknowledgement_id],
+            [recovered_delivery_id],
         ).unwrap();
         let before_failed_tick = lease_state(&database);
         let fail_claim_sql =
@@ -18934,26 +18750,26 @@ mod tests {
         let recovered_ack = recovered
             .deliveries
             .iter()
-            .find(|delivery| delivery.delivery_id == acknowledgement_id)
+            .find(|delivery| delivery.delivery_id == recovered_delivery_id)
             .expect("a lost poll response must recover the same delivery after lease expiry");
         assert_eq!(recovered_ack.attempt_count, 2);
         assert_eq!(recovered_ack.provider, FEISHU_PROVIDER);
         // Keep this fixture's active lease independent of elapsed wall time.
         database.connection().execute(
             "UPDATE channel_delivery SET lease_expires_at = '2999-01-01T00:00:00Z' WHERE id = ?1",
-            [acknowledgement_id],
+            [recovered_delivery_id],
         ).unwrap();
         let repeated = service.host_tick(&mut database, &actor, &poll).unwrap();
         assert!(
             repeated
                 .deliveries
                 .iter()
-                .all(|delivery| delivery.delivery_id != acknowledgement_id)
+                .all(|delivery| delivery.delivery_id != recovered_delivery_id)
         );
         let mut settlement = host_envelope(
             "settle-recovered-ack",
             SettleChannelDeliveryCommand {
-                delivery_id: acknowledgement_id.to_string(),
+                delivery_id: recovered_delivery_id.to_string(),
                 worker_id: "binding-worker".to_string(),
                 outcome: "sent".to_string(),
                 external_delivery_message_id: Some("om_recovered_ack".to_string()),
@@ -19011,59 +18827,6 @@ mod tests {
             "group",
         );
 
-        let finished_at = Utc::now().to_rfc3339();
-        database.connection().execute(
-            "UPDATE agent_run SET status = 'succeeded', wait_reason = NULL, ended_at = ?1, updated_at = ?1",
-            [&finished_at],
-        ).unwrap();
-        database
-            .connection()
-            .execute(
-                "UPDATE camp_turn SET status = 'completed', ended_at = ?1, updated_at = ?1",
-                [&finished_at],
-            )
-            .unwrap();
-        // A claim failure after FIFO promotion must also roll back the new
-        // message, Turn, Run and their audit events, not only the outbox lease.
-        database.connection().execute_batch(fail_claim_sql).unwrap();
-        assert!(
-            service
-                .host_tick(&mut database, &actor, &poll)
-                .unwrap_err()
-                .to_string()
-                .contains("fixture claim failure")
-        );
-        for (table, expected) in [("camp_message", 1), ("camp_turn", 1), ("agent_run", 2)] {
-            let count = database
-                .connection()
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .unwrap();
-            assert_eq!(
-                count, expected,
-                "{table}: failed maintenance must roll back admission"
-            );
-        }
-        database
-            .connection()
-            .execute_batch("DROP TRIGGER fail_channel_claim")
-            .unwrap();
-        // The next wake promotes the root; another must not duplicate it.
-        let promoted = service.host_tick(&mut database, &actor, &poll).unwrap();
-        let queue_recall = promoted
-            .deliveries
-            .iter()
-            .find(|delivery| {
-                delivery.delivery_kind == "queue_ack" && delivery.payload["action"] == "recall"
-            })
-            .expect("admitting the queued root must recall its queue acknowledgement");
-        assert_eq!(
-            queue_recall.update_message_id.as_deref(),
-            Some("om_recovered_ack")
-        );
-        assert_eq!(queue_recall.recall_message_id, None);
-        service.host_tick(&mut database, &actor, &poll).unwrap();
         assert_channel_camp_name(
             &mut database,
             camp_id,
@@ -19072,7 +18835,7 @@ mod tests {
             FEISHU_PROVIDER,
             "group",
         );
-        for (table, expected) in [("camp_message", 2), ("camp_turn", 2), ("agent_run", 3)] {
+        for (table, expected) in [("camp_message", 2), ("camp_turn", 0), ("agent_run", 2)] {
             let count = database
                 .connection()
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
@@ -19081,7 +18844,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 count, expected,
-                "{table}: a maintenance wake must admit the next root exactly once"
+                "{table}: Delivery claim must not reconstruct CampTurn or a request queue"
             );
         }
         assert_eq!(
@@ -19094,22 +18857,19 @@ mod tests {
                 )
                 .unwrap(),
             2,
-            "both admitted messages retain their domain audit events"
+            "both received messages retain their domain audit events"
         );
         assert_eq!(
             database
                 .connection()
                 .query_row(
-                    "SELECT COUNT(*) FROM event_log event
-                 JOIN agent_run run ON event.entity_id = run.id
-                 WHERE event.event_type = 'agent_run.queued'
-                   AND run.idempotency_key LIKE 'channel-host-maintenance:%:admission:%'",
+                    "SELECT COUNT(*) FROM channel_turn_request WHERE status = 'completed'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )
                 .unwrap(),
-            1,
-            "the single target of the queued message retains stable identity and its audit event"
+            2,
+            "inbound receipt completes independently of Agent execution"
         );
         assert_eq!(
             database
@@ -20034,17 +19794,17 @@ mod tests {
                 .query_row(
                     r#"
                     SELECT COUNT(*)
-                    FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                    WHERE camp_turn.camp_id = ?1
+                    FROM camp_message_delivery
+                    WHERE camp_id = ?1 AND status = 'waiting'
                     "#,
                     [camp_id],
                     |row| row.get::<_, i64>(0),
                 )
                 .unwrap(),
             1,
-            "only the explicitly mentioned Bot receives the initial AgentRun"
+            "only the explicitly mentioned Bot receives the initial Delivery"
         );
+        assert_eq!(claim_waiting_runs(&mut database).len(), 1);
         assert_eq!(
             database
                 .connection()
@@ -20053,8 +19813,7 @@ mod tests {
                     SELECT conversation.agent_id
                     FROM agent_run
                     JOIN conversation ON conversation.id = agent_run.conversation_id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                    WHERE camp_turn.camp_id = ?1
+                    WHERE agent_run.camp_id = ?1
                     "#,
                     [camp_id],
                     |row| row.get::<_, String>(0),
@@ -20101,8 +19860,7 @@ mod tests {
                     r#"
                     SELECT COUNT(*)
                     FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                    WHERE camp_turn.camp_id = ?1
+                    WHERE agent_run.camp_id = ?1
                     "#,
                     [camp_id],
                     |row| row.get::<_, i64>(0),
@@ -20112,115 +19870,38 @@ mod tests {
             "roster reconciliation never creates an AgentRun"
         );
 
-        let delivery_id = insert_pending_topic_delivery(&database, camp_id, "agent_3");
-        let generation_before_dispatch: i64 = database
-            .connection()
-            .query_row(
-                r#"
-                SELECT generation FROM external_group_bot_roster_state
-                WHERE provider = 'feishu' AND tenant_key = 'tenant_1'
-                  AND chat_id = 'oc_topic_group'
-                "#,
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            crate::message_delivery::dispatch_delivery(
-                &mut database,
-                &delivery_id,
-                crate::message_delivery::DeliveryDispatchTrigger::Accepted,
-                true,
-            )
-            .unwrap(),
-            crate::message_delivery::DeliveryDispatchOutcome::Waiting {
-                condition: "runtime_unavailable".to_string(),
-            },
-            "an internal Topic delivery must wait for a newer Host roster observation"
-        );
-        let tick = serde_json::to_value(
-            service
-                .host_tick(
-                    &mut database,
-                    &ActorRef::System {
-                        component_id: (FEISHU_CHANNEL_HOST_COMPONENT).to_string(),
-                    },
-                    &ChannelHostTickRequest {
-                        worker_id: "topic-roster-test-host".to_string(),
-                        limit: 20,
-                    },
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            tick["rosterRefreshes"],
-            json!([{
-                "provider": "feishu",
-                "tenantKey": "tenant_1",
-                "chatId": "oc_topic_group",
-                "requiredRosterGeneration": generation_before_dispatch + 1,
-            }]),
-            "the Host pump must receive the exact parent-group refresh request"
-        );
-        assert_eq!(
-            database
-                .connection()
-                .query_row(
-                    "SELECT COUNT(*) FROM agent_run WHERE trigger_message_delivery_id = ?1",
-                    [&delivery_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap(),
-            0,
-            "no AgentRun exists before the requested generation is reconciled"
-        );
         service
-            .reconcile_feishu_group_roster(
+            .ensure_topic_roster_members(
                 &mut database,
-                &host_envelope(
-                    "topic-roster-release-delivery",
-                    ReconcileFeishuGroupRosterCommand {
-                        provider: FEISHU_PROVIDER.to_string(),
-                        tenant_key: "tenant_1".to_string(),
-                        chat_id: "oc_topic_group".to_string(),
-                        present_app_ids: vec![
-                            "cli_app_1".to_string(),
-                            "cli_app_2".to_string(),
-                            "cli_app_3".to_string(),
-                        ],
-                    },
-                ),
+                camp_id,
+                &["agent_3".to_string()],
+                "topic-agent-present",
             )
             .unwrap();
-        let (delivery_status, recipient_agent_id): (String, String) = database
+        let (source_message_id, source_sequence): (String, i64) = database
             .connection()
             .query_row(
-                r#"
-                SELECT delivery.status, conversation.agent_id
-                FROM message_delivery AS delivery
-                JOIN agent_run AS run ON run.id = delivery.target_agent_run_id
-                JOIN conversation ON conversation.id = run.conversation_id
-                WHERE delivery.id = ?1
-                "#,
-                [&delivery_id],
+                "SELECT id, sequence FROM camp_message WHERE camp_id = ?1 ORDER BY sequence LIMIT 1",
+                [camp_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(delivery_status, "running");
-        assert_eq!(recipient_agent_id, "agent_3");
-
-        let leaving_delivery_id = insert_pending_topic_delivery(&database, camp_id, "agent_2");
-        assert!(matches!(
-            crate::message_delivery::dispatch_delivery(
-                &mut database,
-                &leaving_delivery_id,
-                crate::message_delivery::DeliveryDispatchTrigger::Accepted,
-                true,
+        let leaving_delivery_id = {
+            let transaction = database.connection_mut().transaction().unwrap();
+            let delivery = crate::delivery_queue::enqueue_message_deliveries(
+                &transaction,
+                camp_id,
+                &source_message_id,
+                source_sequence,
+                &["agent_2".to_string()],
+                &Utc::now().to_rfc3339(),
             )
-            .unwrap(),
-            crate::message_delivery::DeliveryDispatchOutcome::Waiting { .. }
-        ));
+            .unwrap()
+            .remove(0)
+            .delivery_id;
+            transaction.commit().unwrap();
+            delivery
+        };
 
         service
             .reconcile_feishu_group_roster(
@@ -20242,9 +19923,10 @@ mod tests {
                 r#"
                 SELECT removed.status, initial_run.cancel_requested_at
                 FROM camp_member AS removed
-                JOIN camp_turn ON camp_turn.camp_id = removed.camp_id
-                JOIN agent_run AS initial_run ON initial_run.camp_turn_id = camp_turn.id
+                JOIN agent_run AS initial_run ON initial_run.camp_id = removed.camp_id
+                JOIN conversation ON conversation.id = initial_run.conversation_id
                 WHERE removed.camp_id = ?1 AND removed.agent_id = 'agent_2'
+                  AND conversation.agent_id = 'agent_1'
                 "#,
                 [camp_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
@@ -20260,8 +19942,8 @@ mod tests {
             .query_row(
                 r#"
                 SELECT delivery.status, COUNT(run.id)
-                FROM message_delivery AS delivery
-                LEFT JOIN agent_run AS run ON run.trigger_message_delivery_id = delivery.id
+                FROM camp_message_delivery AS delivery
+                LEFT JOIN agent_run AS run ON run.id = delivery.claimed_agent_run_id
                 WHERE delivery.id = ?1
                 GROUP BY delivery.id
                 "#,
@@ -20269,43 +19951,11 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert!(matches!(
-            leaving_delivery_status.as_str(),
-            "failed" | "cancelled"
-        ));
+        assert!(matches!(leaving_delivery_status.as_str(), "cancelled"));
         assert_eq!(
             leaving_target_run_count, 0,
             "a Bot removed by the fresh roster cannot receive the pending next AgentRun"
         );
-        {
-            let transaction = database.connection_mut().transaction().unwrap();
-            assert!(
-                crate::message_delivery::topic_channel_recipient_is_present(
-                    &transaction,
-                    camp_id,
-                    "agent_3",
-                )
-                .unwrap()
-            );
-            assert!(
-                !crate::message_delivery::topic_channel_recipient_is_present(
-                    &transaction,
-                    camp_id,
-                    "agent_2",
-                )
-                .unwrap(),
-                "A2A/Gather retry materialization must reject a Bot that left the parent group"
-            );
-            transaction.commit().unwrap();
-        }
-        service
-            .ensure_topic_roster_members(
-                &mut database,
-                camp_id,
-                &["agent_3".to_string()],
-                "topic-a2a-present",
-            )
-            .unwrap();
         let removed_target = service.ensure_topic_roster_members(
             &mut database,
             camp_id,
@@ -20317,7 +19967,7 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("channel.topic_bot_not_in_roster"),
-            "A2A/Gather to a Bot that left the parent group must fail closed"
+            "a new message cannot target a Bot that left the parent group"
         );
 
         service
@@ -20341,8 +19991,7 @@ mod tests {
                     r#"
                 SELECT member.status, run.cancel_requested_at
                 FROM camp_member AS member
-                JOIN camp_turn ON camp_turn.camp_id = member.camp_id
-                JOIN agent_run AS run ON run.camp_turn_id = camp_turn.id
+                JOIN agent_run AS run ON run.camp_id = member.camp_id
                 JOIN conversation ON conversation.id = run.conversation_id
                 WHERE member.camp_id = ?1 AND member.agent_id = 'agent_1'
                   AND conversation.agent_id = 'agent_1'
@@ -20383,7 +20032,7 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("channel.topic_bot_not_in_roster"),
-            "the frozen Run may finish, but no new A2A/Gather may target its removed Bot"
+            "the frozen Run may finish, but no new targeted message may reach its removed Bot"
         );
     }
 

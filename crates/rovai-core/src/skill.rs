@@ -125,8 +125,6 @@ const CLI_OPERATIONS_OPENAI: &str =
     include_str!("../../../skills/cli-operations/agents/openai.yaml");
 const CLI_OPERATIONS_SEND_REFERENCE: &str =
     include_str!("../../../skills/cli-operations/references/send.md");
-const CLI_OPERATIONS_GATHER_REFERENCE: &str =
-    include_str!("../../../skills/cli-operations/references/gather.md");
 const CLI_OPERATIONS_MISSION_REFERENCE: &str =
     include_str!("../../../skills/cli-operations/references/mission.md");
 const CLI_OPERATIONS_TASK_REFERENCE: &str =
@@ -573,11 +571,6 @@ const CLI_OPERATIONS_FILES: &[(&str, &str, u32)] = &[
     ("NOTICE", CLI_OPERATIONS_NOTICE, 0o644),
     ("agents/openai.yaml", CLI_OPERATIONS_OPENAI, 0o644),
     ("references/send.md", CLI_OPERATIONS_SEND_REFERENCE, 0o644),
-    (
-        "references/gather.md",
-        CLI_OPERATIONS_GATHER_REFERENCE,
-        0o644,
-    ),
     ("references/task.md", CLI_OPERATIONS_TASK_REFERENCE, 0o644),
     (
         "references/mission.md",

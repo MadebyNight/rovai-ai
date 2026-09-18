@@ -14,9 +14,8 @@ use rovai_core::builtin_tool_cli_output::{
     validate_schema,
 };
 use rovai_core::builtin_tool_transport::{
-    BUILTIN_TOOL_CONTRACT_VERSION, BUILTIN_TOOL_IPC_PROTOCOL_VERSION,
-    BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES, BuiltinToolArgument, BuiltinToolCliContext,
-    BuiltinToolCliIdentity, BuiltinToolDescription, BuiltinToolIpcRequest,
+    BUILTIN_TOOL_CONTRACT_VERSION, BUILTIN_TOOL_IPC_PROTOCOL_VERSION, BuiltinToolArgument,
+    BuiltinToolCliContext, BuiltinToolCliIdentity, BuiltinToolDescription, BuiltinToolIpcRequest,
     BuiltinToolIpcRequestBody, BuiltinToolIpcResponse, COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
     COMPACTION_OBSERVATION_IPC_KIND, COMPACTION_OBSERVATION_OUTBOX_SCHEMA_VERSION,
     CompactionHookIpcRequest, CompactionHookIpcResponse, CompactionObservationOutboxRecord,
@@ -32,7 +31,7 @@ use rovai_core::command::canonical_json_digest;
 use rovai_core::platform::local_ipc::LocalIpcClientStream;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 
 #[path = "rovai/app_cli.rs"]
@@ -133,7 +132,7 @@ async fn run() -> Result<u8> {
     }
 
     let (operation, input) = match args.as_slice() {
-        [command, rest @ ..] if matches!(command.as_str(), "send" | "gather") => {
+        [command, rest @ ..] if command == "send" => {
             let identity = builtin_tool_identity_by_command(command, "")
                 .with_context(|| format!("unknown Rovai command: rovai {command}"))?;
             let description = builtin_tool_description(identity.operation)?;
@@ -306,7 +305,7 @@ async fn run_compaction_hook(args: &[String]) -> Result<()> {
     }))?;
     let request_id = Uuid::new_v4().to_string();
     let observed_at = chrono::Utc::now().to_rfc3339();
-    let mut request = CompactionHookIpcRequest {
+    let request = CompactionHookIpcRequest {
         kind: COMPACTION_OBSERVATION_IPC_KIND.to_string(),
         ipc_protocol_version: COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
         process_id,
@@ -321,13 +320,6 @@ async fn run_compaction_hook(args: &[String]) -> Result<()> {
         display_auth,
         summary_text,
     };
-    if request.summary_text.is_some()
-        && serde_json::to_vec(&request)?.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES
-    {
-        // The optional display sidecar must never make the lifecycle observation
-        // undeliverable. Keep the exact observation and omit only oversized UI text.
-        request.summary_text = None;
-    }
     let outbox_record = CompactionObservationOutboxRecord {
         schema_version: COMPACTION_OBSERVATION_OUTBOX_SCHEMA_VERSION,
         request_id,
@@ -406,9 +398,6 @@ async fn send_compaction_hook(
     request: &CompactionHookIpcRequest,
 ) -> Result<CompactionHookIpcResponse> {
     let serialized = serde_json::to_vec(request)?;
-    if serialized.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES {
-        bail!("compaction hook request is too large");
-    }
     let response = exchange_local_ipc_frame(endpoint, &serialized, COMPACTION_HOOK_TIMEOUT)
         .await
         .map_err(|(_, error)| error)?;
@@ -446,9 +435,7 @@ fn operation_help(args: &[String]) -> Result<Option<BuiltinToolDescription>> {
 
 fn invocation_identity(args: &[String]) -> Option<BuiltinToolCliIdentity> {
     match args {
-        [command, ..] if matches!(command.as_str(), "send" | "gather") => {
-            builtin_tool_identity_by_command(command, "")
-        }
+        [command, ..] if command == "send" => builtin_tool_identity_by_command(command, ""),
         [group, action, ..] => builtin_tool_identity_by_command(group, action),
         _ => None,
     }
@@ -1357,9 +1344,6 @@ async fn send_with_retry(
 ) -> std::result::Result<BuiltinToolIpcResponse, BuiltinToolIpcFailure> {
     let serialized =
         serde_json::to_vec(request).map_err(|_| BuiltinToolIpcFailure::BeforeDispatch)?;
-    if serialized.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES {
-        return Err(BuiltinToolIpcFailure::BeforeDispatch);
-    }
     let mut dispatch_became_indeterminate = false;
     for attempt in 0..CORE_ATTEMPTS {
         match exchange_local_ipc_frame(endpoint, &serialized, CORE_TIMEOUT).await {
@@ -1410,7 +1394,7 @@ async fn exchange_local_ipc_frame(
     .await
     .map_err(|error| (LocalIpcRoundTripFailure::AfterDispatch, error.into()))?
     .map_err(|error| (LocalIpcRoundTripFailure::AfterDispatch, error.into()))?;
-    tokio::time::timeout(timeout, read_bounded_response(stream))
+    tokio::time::timeout(timeout, read_response_frame(stream))
         .await
         .map_err(|error| (LocalIpcRoundTripFailure::AfterDispatch, error.into()))?
         .map_err(|error| {
@@ -1423,21 +1407,20 @@ async fn exchange_local_ipc_frame(
         })
 }
 
-async fn read_bounded_response(stream: impl AsyncRead + Unpin) -> std::io::Result<String> {
-    let reader = BufReader::new(stream);
-    let mut limited = reader.take((BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 2) as u64);
+async fn read_response_frame(stream: impl AsyncRead + Unpin) -> std::io::Result<String> {
+    let mut reader = BufReader::new(stream);
     let mut frame = Vec::new();
-    let read = limited.read_until(b'\n', &mut frame).await?;
+    let read = reader.read_until(b'\n', &mut frame).await?;
     if read == 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "Built-in Tool IPC response ended before a frame",
         ));
     }
-    if frame.last() != Some(&b'\n') || frame.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 1 {
+    if frame.last() != Some(&b'\n') {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "Built-in Tool IPC response exceeds the frame limit",
+            "Built-in Tool IPC response ended before a complete frame",
         ));
     }
     frame.pop();
@@ -1467,7 +1450,7 @@ fn print_root_help() {
 }
 
 fn root_help_text(managed_runtime: bool) -> String {
-    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai gather\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
+    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
     if !managed_runtime {
         text.push_str("\nUser Automation:\n  rovai app --help\n\nAgent operations keep their process-private transport. `rovai app` uses the running Desktop App's separate User Automation transport.\n");
     }
@@ -1632,13 +1615,6 @@ fn operation_help_text(description: &BuiltinToolDescription) -> String {
             writeln!(output, "  {example}").expect("writing help to a String cannot fail");
         }
     }
-    if description.name == "team.gather" {
-        writeln!(
-            output,
-            "\nGather is asynchronous. After acceptance, end the current Lead Run. Do not poll, repeat Gather, or wait synchronously; Rovai delivers one FIFO completion after every member Run is terminal. Member progress returns stay public, but only the last accepted return from each current Run/retry generation is included as its captured result, so the member's final send must contain the complete conclusion. Captured returns do not consume the ordinary A2A allowance and are limited to 16 per Item/retry generation."
-        )
-        .expect("writing help to a String cannot fail");
-    }
     output
 }
 
@@ -1668,13 +1644,6 @@ fn render_flat_input_help(output: &mut String, description: &BuiltinToolDescript
         }
         if description.name == "camp.message.send" && argument.field == "publicOnly" {
             write_indented_help(output, CAMP_MESSAGE_SEND_PUBLIC_ONLY_HELP);
-        }
-        if description.name == "team.gather" && argument.field == "to" {
-            writeln!(
-                output,
-                "      Canonical member target; repeat for each additional distinct member."
-            )
-            .expect("writing help to a String cannot fail");
         }
         if description.name == "camp.message.send" && argument.field == "mentionUser" {
             write_indented_help(output, CAMP_MESSAGE_SEND_TO_PRINCIPAL_HELP);
@@ -2022,7 +1991,7 @@ fn operation_help_examples_for_variant(
     match (operation, discriminator_value) {
         ("camp.read", "item") => &[
             "rovai camp read --mode item --message-id '<message-id>'",
-            "rovai camp read --camp-id '<camp-id>' --mode item --message-id '<message-id>' --body-offset 0 --body-limit 4000",
+            "rovai camp read --camp-id '<camp-id>' --mode item --message-id '<message-id>'",
         ],
         ("camp.read", "around") => &[
             "rovai camp read --mode around --message-id '<message-id>' --before 5 --after 5",
@@ -2066,10 +2035,6 @@ fn operation_help_examples(operation: &str) -> &'static [&'static str] {
         "mission.update" => &["rovai mission update --title \"目录导航\""],
         "mission.status" => &["rovai mission status --status in_progress"],
         "camp.message.send" => &CAMP_MESSAGE_SEND_HELP_EXAMPLES,
-        "team.gather" => &[
-            "rovai gather --to agent_2 --to agent_3 --body '请分别分析并公开回复'",
-            "rovai gather --input-file gather.json",
-        ],
         "member.create" => &[
             "rovai member create --creation-key 2b945f3f-4b45-4ae5-92b2-739fce600338 --display-name 'Nova' --team-role 'Researcher'",
             "rovai member create --input-file confirmed-member.json",
@@ -2139,27 +2104,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ipc_response_reader_requires_one_bounded_newline_delimited_utf8_frame() {
+    async fn ipc_response_reader_requires_one_complete_newline_delimited_utf8_frame() {
         assert_eq!(
-            read_bounded_response(std::io::Cursor::new(b"{\"ok\":true}\n"))
+            read_response_frame(std::io::Cursor::new(b"{\"ok\":true}\n"))
                 .await
                 .unwrap(),
             r#"{"ok":true}"#
         );
         assert_eq!(
-            read_bounded_response(std::io::Cursor::new(b"{}"))
+            read_response_frame(std::io::Cursor::new(b"{}"))
                 .await
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
-        let oversized = vec![b'x'; BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 2];
+        let large = format!("{{\"body\":\"{}\"}}\n", "x".repeat(2 * 1024 * 1024));
         assert_eq!(
-            read_bounded_response(std::io::Cursor::new(oversized))
+            read_response_frame(std::io::Cursor::new(large.as_bytes()))
                 .await
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::InvalidData
+                .unwrap(),
+            large.trim_end()
         );
     }
 
@@ -2270,12 +2234,7 @@ mod tests {
                 .operation,
             "camp.message.send"
         );
-        assert_eq!(
-            builtin_tool_identity_by_command("gather", "")
-                .unwrap()
-                .operation,
-            "team.gather"
-        );
+        assert!(builtin_tool_identity_by_command("gather", "").is_none());
         assert!(builtin_tool_identity_by_command("memory", "propose-hearth").is_none());
         assert!(
             invocation_identity(&["memory".to_string(), "propose-hearth".to_string()]).is_none()
@@ -2301,7 +2260,6 @@ mod tests {
     fn exact_help_surface_covers_the_current_catalog_and_no_family_aliases() {
         let exact_paths: &[&[&str]] = &[
             &["send", "--help"],
-            &["gather", "--help"],
             &["member", "create", "--help"],
             &["task", "create", "--help"],
             &["task", "get", "--help"],
@@ -2324,7 +2282,7 @@ mod tests {
             &["automation", "update", "--help"],
             &["automation", "delete", "--help"],
         ];
-        assert_eq!(exact_paths.len(), 23);
+        assert_eq!(exact_paths.len(), 22);
         for path in exact_paths {
             let args = path
                 .iter()
@@ -2352,43 +2310,6 @@ mod tests {
         let help = operation_help_text(&view);
         assert!(help.contains("One of: hearth, companion, relationship."));
         assert!(help.contains("Required only when --scope relationship"));
-        let gather = builtin_tool_description("team.gather").unwrap();
-        let gather_help = operation_help_text(&gather);
-        assert!(gather_help.contains("only the last accepted return"));
-        assert!(gather_help.contains("limited to 16 per Item/retry generation"));
-        assert!(
-            gather_help
-                .contains("Canonical member target; repeat for each additional distinct member.")
-        );
-        assert!(!gather_help.contains("inline"));
-        assert!(
-            parse_and_validate_operation_input(
-                &gather,
-                &[
-                    "--to".to_string(),
-                    "agent_2".to_string(),
-                    "--to".to_string(),
-                    "agent_3".to_string(),
-                    "--body".to_string(),
-                    "Compare the two approaches".to_string(),
-                ],
-            )
-            .is_ok()
-        );
-        assert!(
-            parse_and_validate_operation_input(
-                &gather,
-                &[
-                    "--to".to_string(),
-                    "agent_2".to_string(),
-                    "--to".to_string(),
-                    "agent_2".to_string(),
-                    "--body".to_string(),
-                    "Compare the two approaches".to_string(),
-                ],
-            )
-            .is_err()
-        );
     }
 
     #[test]
@@ -2448,7 +2369,8 @@ mod tests {
         assert!(read_help[thread_index..timeline_index].contains("Default: 20."));
         assert!(read_help.contains("Do not use older, newer, backward, or forward"));
         assert!(read_help.contains("Reuse nextCursor with the same mode and direction"));
-        assert!(read_help[item_index..around_index].contains("--body-offset <integer>"));
+        assert!(!read_help.contains("--body-offset"));
+        assert!(!read_help.contains("--body-limit"));
         assert!(read_help[around_index..thread_index].contains("--before <integer>"));
         assert!(!read_help[timeline_index..].contains("--before <integer>"));
         assert_eq!(

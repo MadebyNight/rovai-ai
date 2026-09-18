@@ -283,11 +283,11 @@ pub fn list_completed_run_file_changes(
                projection.file_count, projection.operation_count,
                projection.additions, projection.deletions,
                projection.files_summary_json, projection.completed_at,
-               projection.schema_version, camp_turn.camp_id
+               projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id)
         FROM agent_run_file_change_projection AS projection
         JOIN agent_run ON agent_run.id = projection.agent_run_id
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-        WHERE camp_turn.camp_id = ?1
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
           AND projection.status = 'complete'
         ORDER BY projection.completed_at, projection.agent_run_id, projection.execution_epoch
         "#,
@@ -312,13 +312,13 @@ pub fn find_run_file_change_summary(
                    projection.file_count, projection.operation_count,
                    projection.additions, projection.deletions,
                    projection.files_summary_json, projection.completed_at,
-                   projection.schema_version, camp_turn.camp_id
+                   projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id)
             FROM agent_run_file_change_projection AS projection
             JOIN agent_run ON agent_run.id = projection.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE projection.agent_run_id = ?1
               AND projection.execution_epoch = ?2
-              AND camp_turn.camp_id = ?3
+              AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?3
               AND projection.status = 'complete'
             "#,
             params![agent_run_id, execution_epoch, camp_id],
@@ -346,10 +346,10 @@ pub fn read_run_file_changes(
             SELECT projection.details_blob_id, projection.schema_version
             FROM agent_run_file_change_projection AS projection
             JOIN agent_run ON agent_run.id = projection.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE projection.agent_run_id = ?1
               AND projection.execution_epoch = ?2
-              AND camp_turn.camp_id = ?3
+              AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?3
               AND projection.status = 'complete'
             "#,
             params![agent_run_id, execution_epoch, camp_id],
@@ -387,10 +387,10 @@ fn load_card(
                    projection.file_count, projection.operation_count,
                    projection.additions, projection.deletions,
                    projection.files_summary_json, projection.completed_at,
-                   projection.schema_version, camp_turn.camp_id
+                   projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id)
             FROM agent_run_file_change_projection AS projection
             JOIN agent_run ON agent_run.id = projection.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE projection.agent_run_id = ?1 AND projection.execution_epoch = ?2
               AND projection.status = 'complete'
             "#,
