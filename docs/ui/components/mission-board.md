@@ -105,9 +105,12 @@ compact preview. Compact preview and source-message navigation preserve the conv
 Delivery shows the actual directory and, for Git, associated branch/base and cumulative changes. It has no
 “工作区信息” wrapper or explanatory net-change subtitle. Opening the section reads the changed-file list;
 the activity surface renders the complete changed-file set as a searchable, vertically scrollable directory tree
-with a 480px ceiling. Directories precede files, single-child directory chains compress, and expand/collapse-all,
-refresh and open-reader controls stay in the heading. File rows show only a type icon, filename and compact
-status glyph; path, change kind, binary state and rename source remain available to assistive technology.
+with a 480px ceiling. Directories precede files, single-child directory chains compress, and all directories are
+expanded by default. Large flattened trees keep a bounded mounted-row window while preserving the complete
+scroll range, search result set, accessible sibling metadata and Arrow/Home/End navigation; keyboard focus
+reveals an off-screen logical row before moving to it. Expand/collapse-all, refresh and open-reader controls stay
+in the heading. File rows show only a type icon, filename and compact status glyph; path, change kind, binary
+state and rename source remain available to assistive technology.
 Selecting a file opens the wide cumulative Diff dialog and requests only that file's Diff. Its header identifies
 the fixed baseline, current Mission workspace, total files and aggregate additions/deletions. The body places a
 searchable tree beside one Diff reader with old/new line numbers; the dialog has no bottom footer and closes from

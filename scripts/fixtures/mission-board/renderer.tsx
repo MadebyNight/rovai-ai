@@ -1,4 +1,4 @@
-import {runMissionAcceptance} from './acceptance'
+import {runMissionAcceptance,runMissionLargeDiffAcceptance} from './acceptance'
 import React from 'react'
 import {createRoot} from 'react-dom/client'
 import {BusinessApp} from '../../../apps/desktop/src/renderer/src/BusinessApp'
@@ -37,7 +37,8 @@ const missionChangedFiles=[
  {id:'file-d',path:'src/types.ts',oldPath:null,kind:'modified',additions:3,deletions:0,binary:false,oldMode:'100644',newMode:'100644'},
  {id:'file-e',path:'src/ui/activity.tsx',oldPath:null,kind:'added',additions:24,deletions:0,binary:false,oldMode:null,newMode:'100644'},
  {id:'file-f',path:'src/runtime/cache.ts',oldPath:null,kind:'modified',additions:5,deletions:4,binary:false,oldMode:'100644',newMode:'100644'},
- {id:'file-g',path:'src/runtime/status.ts',oldPath:null,kind:'deleted',additions:0,deletions:12,binary:false,oldMode:'100644',newMode:null}
+ {id:'file-g',path:'src/runtime/status.ts',oldPath:null,kind:'deleted',additions:0,deletions:12,binary:false,oldMode:'100644',newMode:null},
+ ...(query.has('largeDiff')?Array.from({length:1193},(_,index)=>({id:`large-${index}`,path:`zzzz/file-${String(index).padStart(4,'0')}.ts`,oldPath:null,kind:'modified',additions:1,deletions:1,binary:false,oldMode:'100644',newMode:'100644'})):[])
 ]
 // Hidden Electron acceptance windows still model an attentive foreground user.
 Object.defineProperty(document, 'hasFocus', { value: () => true })
@@ -148,7 +149,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
 const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}},generalPreferences:new Proxy({}, {get:(_,key)=>async(...args:any[])=>{if(key==='setNewConversationDefaults')prefs.newConversationDefaults=args[0];return prefs}}),navigationPreferences:new Proxy({}, {get:()=>async()=>navigationPrefs})}
 const navigationHistory={initial:{entries:[{kind:'missions' as const}],index:0},write:(state:any)=>state,go:async()=>false,listen:()=>()=>{}}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,navigationHistory,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
-;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,admitMissionNotification,
+;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
  sourceMessageId:(missionId:string)=>snapshot(items.find(item=>item.missionId===missionId)!).messages[1].id,
  invalidateMissionDetails:()=>changed(),
  terminalMissionRun:(campId:string)=>events.forEach(fn=>fn({method:'agent_run.terminal',params:{campId}})),

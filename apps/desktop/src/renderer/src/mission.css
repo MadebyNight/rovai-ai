@@ -228,56 +228,12 @@ button.mission-tag { cursor: pointer; }
 .mission-roster small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .mission-delivery-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .mission-delivery-heading h3 { margin-bottom: 0; }
-.mission-workspace-details { margin-top: 6px; color: var(--muted); font-size: 11px; }
-.mission-workspace-details summary { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; list-style: none; }
-.mission-workspace-details summary::-webkit-details-marker { display: none; }
-.mission-workspace-details summary > svg { width: 12px; height: 12px; }
-.mission-workspace-details[open] summary > svg { transform: rotate(180deg); }
-.mission-workspace-details dl { display: grid; grid-template-columns: 64px minmax(0,1fr); gap: 9px; margin: 12px 0; }
-.mission-workspace-details dd { margin: 0; overflow-wrap: anywhere; }.mission-workspace-details code { font-size: 11px; }
-.mission-workspace-details p { line-height: 1.7; margin: 8px 0; }
-.mission-diff-baseline { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; color: var(--muted); font-size: 11px; }
-.mission-diff-baseline .mission-diff-counts { margin-left: auto; }
 .mission-diff-counts { display: inline-flex; gap: 6px; flex: 0 0 auto; white-space: nowrap; font: 11px ui-monospace,monospace; }
 .mission-diff-counts > span:first-child { color: var(--success); }.mission-diff-counts > span:last-child { color: var(--danger); }
-.mission-changed-file { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 43px; padding: 9px 0; border: 0; border-bottom: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
-.mission-changed-file:first-child { border-top: 1px solid var(--line); }
-.mission-changed-file:hover { background: var(--neutral-hover); }
-.mission-changed-path { flex: 1; min-width: 0; }
-.mission-changed-path strong { display: block; font: 11.5px/1.6 ui-monospace,monospace; overflow-wrap: anywhere; }
-.mission-changed-path small { display: block; margin-top: 4px; font: 10.5px/1.6 ui-monospace,monospace; color: var(--faint); overflow-wrap: anywhere; }
-.mission-file-kind { flex: 0 0 auto; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
-.mission-file-kind.is-added { color: var(--success); }.mission-file-kind.is-deleted { color: var(--danger); }
 .mission-file-binary { color: var(--muted); font-size: 10.5px; }
-.mission-changed-file > .mission-icon:last-child { width: 12px; height: 12px; flex-basis: 12px; transform: none; }
-.mission-changes-more-files { display: inline-flex; min-height: 30px; align-items: center; gap: 4px; margin-top: 4px; padding: 0 3px; border: 0; border-radius: 5px; color: var(--faint); background: transparent; font-size: 10.5px; cursor: pointer; }
-.mission-changes-more-files:hover { color: var(--ink); background: var(--neutral-hover); }
-.mission-changes-more-files > .mission-icon { width: 13px; height: 13px; transition: transform 120ms ease; }
-.mission-changes-more-files[aria-expanded="true"] > .mission-icon { transform: rotate(180deg); }
-.mission-query-stamp { margin: 10px 0 0; color: var(--faint); font-size: 10.5px; }
 .mission-diff-state { display: flex; justify-content: center; gap: 8px; padding: 36px 12px; color: var(--muted); font-size: 12px; }
 .mission-diff-error { padding: 16px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .mission-diff-error strong { color: var(--danger); font-weight: 500; }.mission-diff-error p { margin: 7px 0; }.mission-diff-error button { height: 30px; background: var(--neutral-hover); }
-.mission-diff-empty { display: grid; justify-items: center; gap: 6px; padding: 26px 12px; color: var(--muted); font-size: 12px; }
-.mission-diff-empty strong { color: var(--ink); font-weight: 500; }.mission-diff-empty p { margin: 0; font-size: 11px; }
-.compact-dialog.mission-diff-dialog { width: min(1320px,calc(100vw - 64px)); height: min(820px,calc(100vh - 64px)); max-height: calc(100vh - 64px); }
-.mission-diff-dialog .compact-header { flex: 0 0 auto; padding: 18px 22px; }
-.mission-diff-dialog .compact-body { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 0; overflow: hidden; }
-.mission-diff-dialog .compact-footer { padding: 12px 20px; border-top: 1px solid var(--line); }
-.mission-diff-dialog-baseline { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
-.mission-diff-dialog-baseline .mission-diff-counts { margin-left: auto; }
-.mission-diff-layout { display: flex; flex: 1; min-height: 0; }
-.mission-diff-file-list { flex: 0 0 280px; min-width: 0; overflow: auto; padding: 12px 10px; border-right: 1px solid var(--line); }
-.mission-diff-file-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; margin-bottom: 3px; padding: 10px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
-.mission-diff-file-list button[aria-current="true"] { color: var(--ink); background: var(--neutral-selected); }.mission-diff-file-list button:hover { background: var(--neutral-hover); }
-.mission-diff-reading { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; overflow: auto; }
-.mission-diff-reading > header { display: flex; gap: 12px; padding: 15px 20px; border-bottom: 1px solid var(--line); }
-.mission-diff-reading > header strong { min-width: 0; flex: 1; font: 12px/1.5 ui-monospace,monospace; overflow-wrap: anywhere; }.mission-diff-reading > header span { color: var(--muted); font-size: 11px; }
-.mission-diff-reading .agent-run-file-review-blocks { flex: 1; padding: 0; min-height: 0; overflow: auto; }
-.mission-diff-reading .agent-run-file-review-block { border: 0; border-radius: 0; min-width: 100%; width: max-content; }
-.mission-diff-reading .agent-run-file-review-diff-code { font-size: 11px; --code-preview-font-size: 11px; }
-.mission-diff-reading .mission-diff-error { padding-inline: 20px; }
-.mission-diff-note { margin: 0; padding: 14px 16px; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .mission-delete-dialog p { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 0 0 12px; }
 .mission-delete-dialog .mission-delete-title { color: var(--ink); font-size: 14px; font-weight: 500; }
 .mission-delete-workspaces > div { display: grid; gap: 5px; padding: 10px 0; border-top: 1px solid var(--line); }
@@ -285,9 +241,9 @@ button.mission-tag { cursor: pointer; }
 .mission-delete-confirm.compact-primary { color: var(--danger); background: var(--danger-soft); border-color: transparent; }.mission-delete-confirm.compact-primary:hover { background: color-mix(in srgb,var(--danger) 8%,var(--danger-soft)); border-color: transparent; }
 .mission-cleanup-notice { padding: 0 24px 10px; }.mission-cleanup-notice button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--attention); font-size: 11px; cursor: pointer; }
 .mission-cleanup-list section { padding-block: 8px 16px; }.mission-cleanup-list h3 { font-size: 13px; font-weight: 500; }.mission-cleanup-list p { color: var(--muted); font-size: 12px; line-height: 1.7; }.mission-cleanup-list section > div { display: grid; gap: 5px; margin-bottom: 10px; font-size: 11px; overflow-wrap: anywhere; }.mission-cleanup-list small { color: var(--muted); font-size: 11px; }
-:is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags,.mission-changed-file,.mission-changes-more-files,.mission-diff-file-list button):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
-@media(max-width:1190px) { .mission-toolbar { gap: 6px; }.mission-filter-group { gap: 0; }.mission-filter { padding-inline: 6px; }.mission-search { width: 150px; }.mission-filter .mission-filter-value { max-width: 70px; }.mission-diff-file-list { flex-basis: 240px; } }
-@media(max-width:760px) { .mission-toolbar { flex-wrap: wrap; flex-basis: auto; }.mission-filter-group { flex: 1 1 100%; }.mission-search { margin-left: 0; flex: 1; }.mission-diff-file-list { flex-basis: 170px; }.mission-full-properties { flex-wrap: wrap; }.mission-diff-dialog-baseline { flex-wrap: wrap; } }
+:is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+@media(max-width:1190px) { .mission-toolbar { gap: 6px; }.mission-filter-group { gap: 0; }.mission-filter { padding-inline: 6px; }.mission-search { width: 150px; }.mission-filter .mission-filter-value { max-width: 70px; } }
+@media(max-width:760px) { .mission-toolbar { flex-wrap: wrap; flex-basis: auto; }.mission-filter-group { flex: 1 1 100%; }.mission-search { margin-left: 0; flex: 1; }.mission-full-properties { flex-wrap: wrap; } }
 .compact-menu .compact-option > .mission-state-glyph { flex: 0 0 14px; }
 .compact-menu:is(.mission-action-menu,.mission-action-submenu,.mission-filter-menu,.mission-status-menu) .compact-option > span.mission-state-glyph { flex: 0 0 14px; }
 .mission-intro-meta > button.mission-avatars { margin-left: 0; padding: 0; gap: 3px; height: auto; }
@@ -513,9 +469,6 @@ button.mission-tag { cursor: pointer; }
 .mission-activity-document > .mission-activity-panel { margin-top: 28px; }
 .mission-activity-document .mission-evidence-row { column-gap: 8px; }
 .mission-activity-document .mission-evidence-row code { font-size: 10.5px; line-height: 1.65; }
-.mission-activity-document .mission-changed-file { padding-block: 8px; column-gap: 6px; }
-.mission-activity-document .mission-changed-path strong { font-size: 11px; }
-.mission-activity-document .mission-file-kind { font-size: 10px; }
 .file-preview-tab-activate > .mission-icon { width: 14px; height: 14px; flex: 0 0 14px; }
 .file-preview-compact .mission-preview-slot .file-preview-return { display: inline-flex; }
 .mission-workspace-host > .file-preview-resize-handle.is-shell-divider { position: absolute; z-index: 24; top: 0; right: var(--file-preview-width); bottom: 0; height: auto; margin: 0; }
@@ -685,13 +638,14 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 .changes-tree-search:focus-within { border-color: var(--dialog-field-line-hover); box-shadow: 0 0 0 1px var(--dialog-field-line-hover); }
 .changes-tree-search > .navigation-icon { width: 12px; height: 12px; flex: 0 0 12px; }
 .changes-tree-search input { width: 100%; height: 100%; min-width: 0; flex: 1; padding: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 12px; }
-.changes-search-clear,.mission-diff-file-list .changes-search-clear { display: grid; width: 24px; height: 24px; min-height: 24px; flex: 0 0 24px; place-items: center; margin: 0; padding: 0; border: 0; border-radius: 4px; color: var(--faint); background: transparent; }
+.changes-search-clear { display: grid; width: 24px; height: 24px; min-height: 24px; flex: 0 0 24px; place-items: center; margin: 0; padding: 0; border: 0; border-radius: 4px; color: var(--faint); background: transparent; }
 .changes-search-clear:hover { color: var(--ink); background: var(--neutral-hover); }
 .changes-search-clear .dialog-glyph { width: 12px; height: 12px; }
-.changes-tree { display: flex; min-width: 0; flex-direction: column; gap: 0; padding: 0; }
+.changes-tree { --mission-tree-row-height: 29px; display: flex; min-width: 0; flex-direction: column; gap: 0; padding: 0; }
 #mission-detail-tree { max-height: 480px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.changes-tree-row,.mission-diff-file-list .changes-tree-row { position: relative; display: flex; width: 100%; max-width: 100%; height: 29px; min-height: 29px; flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; overflow: hidden; margin: 0; padding: 0 7px 0 min(calc(4px + var(--depth,0) * 18px),35%); border: 0; border-radius: 7px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; overflow-wrap: normal; }
-.changes-tree-row:hover,.mission-diff-file-list .changes-tree-row:hover,.changes-tree-row[aria-selected="true"] { color: var(--ink); background: var(--neutral-hover); }
+.changes-tree-spacer { width: 1px; flex: 0 0 auto; pointer-events: none; }
+.changes-tree-row { position: relative; display: flex; width: 100%; max-width: 100%; height: var(--mission-tree-row-height); min-height: var(--mission-tree-row-height); flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; overflow: hidden; margin: 0; padding: 0 7px 0 min(calc(4px + var(--depth,0) * 18px),35%); border: 0; border-radius: 7px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; overflow-wrap: normal; }
+.changes-tree-row:hover,.changes-tree-row[aria-selected="true"] { color: var(--ink); background: var(--neutral-hover); }
 .changes-tree-row:active:not(:disabled) { transform: none; background: var(--neutral-selected); }
 .changes-tree-row:focus-visible { outline: 1px solid var(--muted); outline-offset: -1px; background: var(--neutral-selected); }
 .changes-tree-row .node-chevron { display: grid; width: 14px; height: 20px; flex: 0 0 14px; place-items: center; color: var(--faint); }
@@ -751,6 +705,7 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 html.diff-resizing,html.diff-resizing * { cursor: col-resize !important; user-select: none !important; }
 html.diff-resizing .mission-diff-file-list,html.diff-resizing .mission-diff-reading { pointer-events: none; }
 .mission-diff-reading { display: flex; min-width: 0; min-height: 0; flex: 1; grid-column: 3; grid-row: 1; flex-direction: column; overflow: hidden; }
+.mission-diff-reading .mission-diff-error { padding-inline: 20px; }
 .mission-diff-reading > header { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .mission-diff-reading > header > .node-icon { margin-top: 1px; }
 .diff-title-wrap { min-width: 0; flex: 1; }
@@ -795,10 +750,10 @@ html.diff-resizing .mission-diff-file-list,html.diff-resizing .mission-diff-read
   .mission-diff-reading > header { gap: 8px; padding: 12px 14px; }
   .diff-header-stats { margin-left: 24px; }
   .changes-tree-search input { font-size: 16px; }
-  #mission-detail-tree .changes-tree-row,#mission-modal-tree .changes-tree-row { height: 32px; min-height: 32px; }
+  :is(#mission-detail-tree,#mission-modal-tree) { --mission-tree-row-height: 32px; }
 }
 @media (pointer: coarse) {
-  .changes-tree-row,.mission-diff-file-list .changes-tree-row { height: 40px; min-height: 40px; }
+  .changes-tree { --mission-tree-row-height: 40px; }
   .diff-resize-handle::before { inset: 0 -12px; }
 }
 @media (forced-colors: active) {

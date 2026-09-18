@@ -396,3 +396,51 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   cases.push('notifications open Mission drawers over the board, including the already active full Mission, and retain exact message focus')
   return { ok: true, cases }
 }
+
+export async function runMissionLargeDiffAcceptance(): Promise<{ ok: true; cases: string[] }> {
+  const qa = (window as any).missionQA
+  const check = (value: unknown, message: string): void => { if (!value) throw new Error(message) }
+  const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  const until = async (condition: () => unknown, message: string): Promise<void> => {
+    for (let i = 0; i < 240; ++i) { await frames(); if (condition()) return }
+    throw new Error(`${message}${qa.errors.length ? `\n${qa.errors.join('\n')}` : ''}`)
+  }
+  const fill = (element: HTMLInputElement, value: string): void => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  await until(() => document.querySelector('.mission-board-card'), 'Large-diff Mission board loads')
+  document.querySelector<HTMLElement>('.mission-board-card')!.click()
+  await until(() => document.querySelector('#mission-detail-tree'), 'Large-diff detail tree loads')
+  await until(() => document.querySelector('.mission-delivery-heading h3 span')?.textContent === '1200', 'Large-diff heading reports every changed file')
+  const detail = document.querySelector<HTMLElement>('#mission-detail-tree')!
+  await until(() => detail.scrollHeight > detail.clientHeight, 'Large-diff detail tree exposes a bounded scroll viewport')
+  check(detail.querySelectorAll('[role=treeitem]').length < 80, 'Large-diff detail tree virtualizes mounted rows')
+  check(!detail.querySelector('[role=treeitem][aria-expanded=false]'), 'Large-diff directories remain expanded by default')
+
+  const first = detail.querySelector<HTMLButtonElement>('[role=treeitem]')!
+  first.focus()
+  first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+  await until(() => (document.activeElement as HTMLElement | null)?.dataset.fileId === 'large-1192', 'End reveals and focuses the last logical tree row')
+  check(detail.scrollTop > 0, 'Keyboard navigation scrolls the virtual detail tree')
+
+  const search = document.querySelector<HTMLInputElement>('input[aria-controls="mission-detail-tree"]')!
+  fill(search, 'file-0420.ts')
+  await until(() => detail.querySelectorAll('.changes-tree-row.is-file').length === 1, 'Large-diff search narrows to one file')
+  const match = detail.querySelector<HTMLButtonElement>('.changes-tree-row.is-file')!
+  check(match.dataset.fileId === 'large-420', 'Large-diff search keeps the matching file identity')
+  match.click()
+  await until(() => document.querySelector('#mission-modal-tree'), 'Large-diff reader opens from a filtered tree result')
+
+  const modal = document.querySelector<HTMLElement>('#mission-modal-tree')!
+  await until(() => modal.scrollHeight > modal.clientHeight, 'Large-diff modal tree exposes a bounded scroll viewport')
+  check(modal.querySelectorAll('[role=treeitem]').length < 80, 'Large-diff modal tree reuses virtualized rows')
+  await until(() => modal.querySelector('[data-file-id="large-420"]'), 'Modal reveals its selected virtual row on open')
+  check(document.querySelector('.diff-dialog-summary')?.textContent?.includes('1200 个文件'), 'Large-diff reader preserves the complete file total')
+  const headingButton = document.querySelector<HTMLElement>('.modal-tree-heading > .mission-icon-button')!
+  const headingStyle = getComputedStyle(headingButton)
+  check(headingStyle.flexDirection !== 'column' && headingStyle.alignItems !== 'flex-start', 'Tree heading control is isolated from removed flat-list button styles')
+  check(qa.errors.length === 0, qa.errors.join('\n'))
+  return { ok: true, cases: ['large cumulative diffs virtualize both trees without losing search, scroll, totals or keyboard focus'] }
+}
