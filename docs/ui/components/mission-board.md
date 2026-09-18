@@ -7,10 +7,11 @@ last_updated: 2026-09-18
 
 # Mission board
 
-Desktop and wide Web retain the Mission board surface, route and interaction model, but the current release
-hides its 使命板 navigation menu entry. The hidden entry's badge would count `needs_you` Missions independently
-of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate Mission Camps.
-Mobile has no Mission entry; a Mission deep link directs the user to desktop.
+Desktop and wide Web expose the 使命板 navigation entry and retain its surface, route and interaction model.
+When one or more Missions need the user, a blue dot sits at the entry's right edge and is vertically centered;
+the accessible label includes the count, but the visual indicator never renders a numeral. `needs_you` remains
+independent of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate
+Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user to desktop.
 
 Cards open from their entire surface, including keyboard activation. Card actions have no visible ellipsis;
 right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
@@ -19,7 +20,9 @@ and a plain relative timestamp such as “昨天”. An active card places at mo
 the remaining `+N`, and the execution-console sweep text “执行中” in one muted row at the upper right.
 Unread uses a message icon plus “未读” in the footer rather than a small isolated dot. Card and list menus
 share this order: 编辑、状态、查看队员、队长、标签、删除. Click opens
-submenus; chevrons use the existing 16px icon rhythm. Tags use a lightweight search/create/check popover.
+submenus; chevrons use the existing 16px icon rhythm. Every actionable row exposes the same neutral hover and
+keyboard-focus background, while 删除 keeps the danger text and soft-danger background. Tags use a lightweight
+search/create/check popover.
 Status/tag/project filters use matching icon triggers and neutral filled multi-select checkboxes. No selection
 means all, without an extra “all” option. Project and tag pickers have search; status does not. Search and the
 low-frequency board/list menu share the toolbar without vertical separators. The page uses the white home
@@ -36,12 +39,17 @@ fills the remaining writing plane. Source attachments sit between them and suppo
 drag/drop and removal using the Composer attachment rhythm. They reuse the Composer's file/directory
 classification and `DIR` label. Overflow stays in one no-wrap strip with no visible scrollbar; trackpad
 horizontal scroll, ordinary-wheel conversion and focusable Left/Right/Home/End browsing match Composer.
-Project, the combined member/lead control and
-tags sit as compact property chips above the footer. The team popover selects members and lead together and
-retains the existing default-team preference. The split primary button defaults to 新建; its dropdown offers
-开始使命. Both paths stay on the board without opening the new Camp. No independent-workspace checkbox is
-offered; Core decides from the selected project. Failed or uncertain creation retains the exact definition,
-attachment draft and command identity for safe retry.
+Project, the combined member/lead control and tags sit as compact property chips above the footer. Project and
+team popovers have focused search fields and bounded, vertically scrollable result lists; project matching uses
+name and path, while team matching uses name, role and availability. Tag choices use a prominent identity-color
+dot with tight dot/name spacing, and choosing a tag remains inside the current picker and definition dialog.
+The team popover selects members and lead together and retains the existing default-team preference. The split
+primary button defaults to 新建; its dropdown offers 开始使命. Both paths stay on the board without opening the
+new Camp. No independent-workspace checkbox is offered; Core decides from the selected project. One unfinished
+Mission draft is retained for the lifetime of the mounted creation flow, including title, description, project,
+team, tags and attachments, whenever the dialog is dismissed and reopened. Only a confirmed successful create
+clears it. Failed or uncertain creation retains the exact definition, attachment draft and command identity for
+safe retry.
 
 Production Edit opens only from the card/list right-click or Shift+F10 menu. It reuses the same wide writing
 dialog; prototype-only previews may expose a direct shortcut. Name, description, tags and source attachments
@@ -68,7 +76,8 @@ targets its exact message, turn, approval or private conversation through the sh
 Message/turn targeting hides a compact preview first, retaining its tabs and reading state so the target is visible.
 
 The drawer hides the conversation title and places close/expand at the left. Full presentation shows
-project › conversation title, preceded by return-to-board and fold-to-drawer. Both use one full-width
+project › conversation title, preceded by return-to-board and fold-to-drawer; the fold control keeps its existing
+position and uses the inward-corner collapse glyph from the approved board prototype. Both use one full-width
 AppHeader with 执行、任务、队员、单聊、活动 in the message column and the preview toggle at the far
 right. There is no Mission ellipsis action in the conversation header. Drawer runs do not automatically
 open the execution inspector or overlay; explicit execution entry remains available.
@@ -95,8 +104,19 @@ compact preview. Compact preview and source-message navigation preserve the conv
 
 Delivery shows the actual directory and, for Git, associated branch/base and cumulative changes. It has no
 “工作区信息” wrapper or explanatory net-change subtitle. Opening the section reads the changed-file list;
-the activity surface initially shows five files and uses “再显示 N 个文件 / 收起文件” to expand in place.
-switching files requests only the selected Diff. A bounded per-Mission memory cache restores a viewed file
+the activity surface renders the complete changed-file set as a searchable, vertically scrollable directory tree
+with a 480px ceiling. Directories precede files, single-child directory chains compress, and all directories are
+expanded by default. Large flattened trees keep a bounded mounted-row window while preserving the complete
+scroll range, search result set, accessible sibling metadata and Arrow/Home/End navigation; keyboard focus
+reveals an off-screen logical row before moving to it. Expand/collapse-all, refresh and open-reader controls stay
+in the heading. File rows show only a type icon, filename and compact status glyph; path, change kind, binary
+state and rename source remain available to assistive technology.
+Selecting a file opens the wide cumulative Diff dialog and requests only that file's Diff. Its header identifies
+the fixed baseline, current Mission workspace, total files and aggregate additions/deletions. The body places a
+searchable tree beside one Diff reader with old/new line numbers; the dialog has no bottom footer and closes from
+its top-right control or Escape. The 1px splitter exposes a forgiving hit target, pointer cancellation, 24px arrow
+steps, 80px Shift+arrow steps, and Home/double-click default restoration, while narrow screens collapse the tree
+above the reader. A bounded per-Mission memory cache restores a viewed file
 without clearing its content or flashing loading state. Cache misses never show the prior file beneath a new
 selection; duplicate requests coalesce and late responses cannot replace the current selection. Explicit
 refresh and coalesced Run-terminal/workspace invalidation clear the cache and update the list; definition-only
@@ -115,7 +135,6 @@ Each explicit source-link click positions and highlights its message once. After
 focus request even when there is no notification acknowledgement waiter; snapshot updates must not replay
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
-The cumulative Diff dialog uses the wide desktop reading surface rather than the standard compact-dialog width.
 
 Business and ownership rules are defined by [Mission v3](../../contracts/mission-v3.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and

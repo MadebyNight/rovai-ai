@@ -67,6 +67,42 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 开始使命时随 commission 消息进入既有附件发布路径。Migration 161/schema 111 为旧使命补空数组并保留
 所有业务行；Desktop Main 独占将 Renderer File 转成路径的私有编排，Web 不接收本机路径。
 
+## 2026-09-18 使命板文件变更与创建恢复增量
+
+使命入口恢复为 Desktop／宽屏 Web 的正式导航项；`needs_you` 只用右侧垂直居中的蓝点提示，视觉上不显示
+数量。完整会话的折回按钮保持原位置，改用已确认交互稿的收拢图标。新建使命在同一挂载期保留一份未完成
+草稿，关闭后再次打开会恢复名称、描述、项目、队伍、标签和附件；只有创建成功才清空。项目和队员选择器
+增加搜索及受限高度滚动，标签选择器使用更醒目的身份色圆点并保持在当前编辑上下文。卡片／列表右键菜单
+在保留点击展开子菜单的前提下，为编辑、状态、查看队员、队长、标签和删除全部补齐 hover／键盘焦点反馈；
+普通项统一使用中性灰底，删除继续使用危险色语义。
+
+交付区不再截断前五项，而是展示完整、可搜索、支持单子目录压缩的文件树。累计 Diff 使用 1320px 宽屏
+阅读面：固定基准及总计位于标题区，左侧文件树与右侧单文件差异通过可拖动且可键盘操作的分隔条连接；
+窄屏时文件树折叠到阅读器上方。既有 `missions.changes`、`missions.fileDiff` 和
+`missions.diffSession.release` 接口、固定基准、请求合并、LRU 缓存、迟到响应隔离及终态刷新语义保持不变，
+本增量没有改变 Core、Git 工作区或 Mission 合同。
+
+定向验证覆盖文件树结构、目录压缩与计数、搜索／滚动、弹窗布局和分隔条键盘调整、缓存与迟到响应、
+项目／队员搜索、标签选择、草稿恢复及成功创建后清空。`pnpm typecheck`、完整 Vitest 207 个文件／
+2124 项、隔离 Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check` 与带 merge-base
+的 `pnpm docs:check:ci` 均通过。
+
+## 2026-09-18 累计 Diff 样式隔离与大文件集窗口化
+
+合入后的复核发现，旧 flat-list Diff 的 `.mission-diff-file-list button` 仍会命中新目录树标题中的
+折叠按钮，造成纵向布局、左对齐和旧内边距泄漏；相关旧选择器及无现存 DOM 对应的规则已删除，仍在使用的
+计数、二进制、加载与错误状态样式保留在当前树形阅读器附近。
+
+详情区与 Diff 弹窗继续共享同一文件树，并保持目录默认全部展开。完整过滤、建树和扁平结果仍作为逻辑树与
+键盘导航依据，但大结果集只挂载当前滚动窗口及前后余量，通过等高占位保留完整滚动范围。Arrow、Home、End
+可把未挂载的目标行带入窗口后再转移焦点；弹窗打开时同样先揭示当前选择。Core、Git Diff 接口、固定基准、
+缓存与刷新合同均未改变。新增 1200 文件的隔离 Electron 验收，覆盖详情树与弹窗树的有界 DOM、默认展开、
+搜索、滚动、完整总计和跨窗口键盘焦点，并用静态回归阻止旧广域按钮选择器返回。
+
+修复验证包括 `pnpm typecheck`、完整 Vitest 207 个文件／2126 项、含标准与 1200 文件场景的隔离
+Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check`、带 merge-base 的
+`pnpm docs:check:ci` 与 `git diff --check`。
+
 ## 2026-09-18 显式 Worktree 清理与删除处置
 
 用户选择可用性优先的最小实现。卡片／列表原有右键菜单只在 Core 的 `cleanupAvailable` 为真时显示
@@ -82,8 +118,8 @@ Worktree 和本地分支，使用中性操作。删除使命新增默认 `retain
 
 最终验证覆盖 `cargo check --workspace --all-targets`、`cargo test -p rovai-core --lib`
 （832 passed、6 ignored）、`cargo test -p rovai-web`（8 passed）、`pnpm typecheck`、
-`pnpm test:desktop-bridge`、`pnpm test:mission-board`（11 个产品行为场景）、`pnpm test:host-web`
-（4 passed）、`pnpm build:web`，以及完整 documentation governance／diff-aware CI 门禁。
+`pnpm test:desktop-bridge`、`pnpm test:mission-board`（标准场景与 1200 文件窗口化场景）、
+`pnpm test:host-web`（4 passed）、`pnpm build:web`，以及完整 documentation governance／diff-aware CI 门禁。
 
 ## 主线整合与验收
 

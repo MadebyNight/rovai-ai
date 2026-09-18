@@ -15,7 +15,11 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
     element.dispatchEvent(new Event('input', { bubbles: true }))
   }
   const cases: string[] = []
-  check(!document.querySelector('button[title="使命板"]'), 'Mission navigation stays hidden')
+  const missionNavigation = document.querySelector<HTMLButtonElement>('button[title^="使命板"]')!
+  check(missionNavigation && missionNavigation.textContent?.trim() === '使命板', 'Mission navigation is visible without a numeric badge')
+  const missionReminder = missionNavigation.querySelector<HTMLElement>('.mission-rail-badge-dot')!
+  const missionNavigationBounds = missionNavigation.getBoundingClientRect(), missionReminderBounds = missionReminder.getBoundingClientRect()
+  check(Math.abs(missionReminderBounds.y + missionReminderBounds.height / 2 - (missionNavigationBounds.y + missionNavigationBounds.height / 2)) <= 1 && missionNavigationBounds.right - missionReminderBounds.right <= 12, 'Needs-you state uses a right-aligned, vertically centered blue reminder dot')
   await until(() => document.querySelector('.mission-board-card'), 'The Mission board must load')
   const card = document.querySelector<HTMLElement>('.mission-board-card')!
   check(card.querySelector('.mission-card-meta > span')?.textContent === 'M-018', 'Mission card uses the stable display number')
@@ -102,6 +106,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check((document.querySelector('.mission-edit-dialog input') as HTMLInputElement).value === '另一处刚更新的标题', 'Conflict replaces stale fields')
   fill(document.querySelector<HTMLInputElement>('.mission-edit-dialog input')!, '基于最新内容编辑')
   const attachmentInput = document.querySelector<HTMLInputElement>('.mission-edit-dialog input[type=file]')!
+  check(attachmentInput, 'Edit attachment input remains mounted before file selection')
   const attachmentTransfer = new DataTransfer()
   attachmentTransfer.items.add(new File(['review'], 'review-notes.md', { type: 'text/markdown' }))
   Object.defineProperty(attachmentInput, 'files', { configurable: true, value: attachmentTransfer.files })
@@ -158,7 +163,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-full'), 'Full conversation opens')
   check(document.getElementById('camp-message') === editor && editor.textContent?.includes('使命会话草稿'), 'Same Composer instance and draft after expanding')
   check(document.querySelector('.mission-session-header .context-project')?.textContent === 'rovai-ai', 'Full header shows project')
-  check(button('折叠为使命抽屉').querySelector('path')?.getAttribute('d') === 'M12.5 3.5v13', 'Full header uses the approved right-panel fold glyph')
+  check(button('折叠为使命抽屉').querySelector('path')?.getAttribute('d') === 'M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5', 'Full header uses the approved conversation-collapse glyph')
   button('折叠为使命抽屉').click()
   await until(() => document.querySelector('.mission-drawer'), 'Fold restores drawer')
   check(document.getElementById('camp-message') === editor, 'Folding retains the editor')
@@ -169,18 +174,38 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   button('活动').click()
   await until(() => document.querySelector('.mission-delivery-file') && visiblePreview(), 'Activity reopens')
   check(!visiblePreview()!.textContent?.includes('Pull Requests') && !button('关联 Pull Request'), 'Activity omits the unavailable Pull Requests module')
-  check(document.querySelectorAll('.mission-changed-file').length === 5 && button('再显示 2 个文件'), 'Cumulative changes initially show five files and the remaining count')
-  button('再显示 2 个文件').click()
-  await until(() => document.querySelectorAll('.mission-changed-file').length === 7 && button('收起文件'), 'Cumulative changes expand in place')
-  document.querySelector<HTMLButtonElement>('.mission-changed-file')!.click()
+  await until(() => document.querySelectorAll('#mission-detail-tree [data-file-id]').length === 7, 'Cumulative changes render the entire expanded file tree')
+  check(!document.querySelector('.mission-changed-file') && !document.querySelector('.mission-changes-more-files'), 'Cumulative changes no longer use a truncated flat list')
+  check(document.querySelector('#mission-detail-tree [title="src/runtime"]')?.textContent?.includes('runtime'), 'Nested paths are grouped into directories')
+  check(parseFloat(getComputedStyle(document.querySelector('#mission-detail-tree')!).maxHeight) === 480, 'Detail tree uses the approved 480px scroll ceiling')
+  check(!document.querySelector('#mission-detail-tree')?.textContent?.includes('修改'), 'Tree rows use compact status glyphs without status words')
+  const detailSearch = document.querySelector<HTMLInputElement>('.mission-delivery-section .changes-tree-search input')!
+  fill(detailSearch, 'cache')
+  await until(() => document.querySelectorAll('#mission-detail-tree [data-file-id]').length === 1, 'Detail file search filters paths')
+  document.querySelector<HTMLButtonElement>('.mission-delivery-section .changes-search-clear')!.click()
+  await until(() => document.querySelectorAll('#mission-detail-tree [data-file-id]').length === 7, 'Clearing detail search restores the tree')
+  const originalDiffTrigger = document.querySelector<HTMLButtonElement>('#mission-detail-tree [data-file-id="file-a"]')!
+  originalDiffTrigger.click()
   await until(() => document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog opens')
   await until(() => document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'First selected file diff loads')
   const diffDialogWidth = document.querySelector('.mission-diff-dialog')!.getBoundingClientRect().width
   check(Math.abs(diffDialogWidth - 1320) <= 1, `Cumulative diff dialog uses the approved desktop width (${diffDialogWidth}px)`)
+  check(document.querySelector('.diff-dialog-baseline code')?.textContent === 'aaaaaaaaaaaa' && document.querySelector('.diff-dialog-summary')?.textContent?.includes('7 个文件'), 'Dialog header shows the fixed baseline and cumulative totals')
+  check(!document.querySelector('.mission-diff-dialog .compact-footer'), 'Diff dialog closes only from the top control or Escape')
   check(!document.querySelector('.mission-diff-dialog')!.textContent?.includes('Git 文件模式'), 'Cumulative diff omits raw Git mode rows')
-  const diffButton = (path: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('.mission-diff-file-list button')).find(node => node.textContent?.includes(path))!
+  const modalSearch = document.querySelector<HTMLInputElement>('.mission-diff-file-list .changes-tree-search input')!
+  fill(modalSearch, 'worker')
+  await until(() => document.querySelectorAll('#mission-modal-tree [data-file-id]').length === 1, 'Dialog tree search filters file paths')
+  document.querySelector<HTMLButtonElement>('.mission-diff-file-list .changes-search-clear')!.click()
+  await until(() => document.querySelectorAll('#mission-modal-tree [data-file-id]').length === 7, 'Dialog tree search clears without closing the reader')
+  const splitter = document.querySelector<HTMLElement>('.diff-resize-handle')!, treeNavigation = document.querySelector<HTMLElement>('.mission-diff-file-list')!
+  const initialTreeWidth = Math.round(treeNavigation.getBoundingClientRect().width)
+  splitter.focus(); splitter.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+  await until(() => Math.round(treeNavigation.getBoundingClientRect().width) > initialTreeWidth, 'Diff tree splitter supports keyboard resizing')
+  splitter.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+  const diffButton = (fileId: string) => document.querySelector<HTMLButtonElement>(`.mission-diff-file-list [data-file-id="${fileId}"]`)!
   const diffCalls = (fileId: string) => qa.calls.filter((call:any) => call.method === 'missions.fileDiff' && call.p.fileId === fileId).length
-  const worker = diffButton('src/worker.ts'), mission = diffButton('src/mission.ts')
+  const worker = diffButton('file-b'), mission = diffButton('file-a')
   worker.click(); mission.click()
   await new Promise(resolve => setTimeout(resolve, 70))
   check(diffCalls('file-b') === 0, 'A superseded file selection is cancelled before its Git request starts')
@@ -190,7 +215,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await new Promise(resolve => setTimeout(resolve, 140))
   check(document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'A late response cannot replace the current file')
   worker.click(); await frames()
-  check(document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/worker.ts' && !document.querySelector('.mission-diff-state'), 'Returning to a viewed file uses cache without a loading flash')
+  check(document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/runtime/worker.ts' && !document.querySelector('.mission-diff-state'), 'Returning to a viewed file uses cache without a loading flash')
   check(diffCalls('file-b') === 1, 'Cached file Diff is not requested again')
   const changeReads = qa.calls.filter((call:any) => call.method === 'missions.changes').length
   qa.invalidateMissionDetails(); await new Promise(resolve => setTimeout(resolve, 180))
@@ -201,6 +226,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 1, 'Burst workspace invalidations coalesce into one refresh')
   document.querySelector<HTMLButtonElement>('.mission-diff-dialog .compact-close')!.click()
   await until(() => !document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog closes')
+  check(document.activeElement === originalDiffTrigger, 'Closing the diff dialog restores focus to its detail-tree trigger')
   document.querySelector<HTMLButtonElement>('.mission-delivery-file .attachment-open')!.click()
   await until(() => visiblePreview()?.textContent?.includes('交互核对'), 'Delivery opens shared file viewer')
   const fileReader = visiblePreview()!.querySelector('.file-preview-content')!
@@ -274,13 +300,57 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   createDescription.focus(); await frames()
   check(getComputedStyle(createDescription).outlineStyle === 'none' && getComputedStyle(createDescription).boxShadow === 'none', 'Focused description stays visually borderless')
   createDescription.blur()
-  fill(createTitle, '无描述使命')
+  fill(createTitle, '草稿保留使命')
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(createDescription, '关闭后仍应恢复的使命描述')
+  createDescription.dispatchEvent(new Event('input', { bubbles: true }))
+  const creationProperties = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.mission-create-dialog .mission-editor-property'))
+  creationProperties()[0].click()
+  await until(() => document.querySelector('.mission-editor-project-popover'), 'Mission project picker opens')
+  const projectList = document.querySelector<HTMLElement>('.mission-editor-project-list')!
+  check(projectList.scrollHeight > projectList.clientHeight, 'Long project catalog remains vertically scrollable')
+  fill(document.querySelector<HTMLInputElement>('input[aria-label="搜索项目"]')!, '示例项目 12')
+  await until(() => document.querySelectorAll('.mission-editor-project-list .compact-option').length === 1, 'Project search filters the catalog')
+  document.querySelector<HTMLButtonElement>('.mission-editor-project-list [title="/workspace/sample-12"]')!.click()
+  await until(() => !document.querySelector('.mission-editor-project-popover'), 'Choosing a searched project closes only its picker')
+  creationProperties()[1].click()
+  await until(() => document.querySelector('.mission-editor-team-popover'), 'Mission team picker opens')
+  const teamList = document.querySelector<HTMLElement>('.mission-editor-team-list')!
+  check(teamList.scrollHeight > teamList.clientHeight, 'Long member catalog remains vertically scrollable')
+  fill(document.querySelector<HTMLInputElement>('input[aria-label="搜索队员"]')!, '扩展队员 12')
+  await until(() => document.querySelectorAll('.mission-editor-team-row').length === 1, 'Member search filters names and roles')
+  button('完成').click()
+  await until(() => !document.querySelector('.mission-editor-team-popover'), 'Team picker closes from its own completion action')
+  creationProperties()[2].click()
+  await until(() => document.querySelector('.mission-editor-tag-popover'), 'Mission tag picker opens')
+  const tagSearch = document.querySelector<HTMLInputElement>('input[aria-label="搜索或新建标签"]')!
+  fill(tagSearch, '交互')
+  await until(() => document.querySelectorAll('.mission-editor-tag-popover .mission-tag-options [role=checkbox]').length === 1, 'Tag search filters existing tags')
+  const tagOption = document.querySelector<HTMLButtonElement>('.mission-editor-tag-popover .mission-tag-options [role=checkbox]')!
+  check(tagOption.querySelector('.mission-tag-color-dot')!.getBoundingClientRect().width >= 14, 'Tag choices use a prominent color dot instead of a tag glyph')
+  tagOption.click(); await frames()
+  check(document.querySelector('.mission-create-dialog') && document.querySelector('.mission-editor-tag-popover'), 'Choosing a tag stays in the current editor and picker')
+  creationProperties()[2].click()
+  await until(() => !document.querySelector('.mission-editor-tag-popover') && document.querySelector('.mission-create-dialog'), 'Tag picker closes back into the same Mission draft')
   const createAttachmentInput = document.querySelector<HTMLInputElement>('.mission-create-dialog input[type=file]')!
+  check(createAttachmentInput, 'Mission draft remains open after closing the tag picker')
   const createAttachmentTransfer = new DataTransfer()
   createAttachmentTransfer.items.add(new File(['brief'], 'mission-brief.md', { type: 'text/markdown' }))
   Object.defineProperty(createAttachmentInput, 'files', { configurable: true, value: createAttachmentTransfer.files })
   createAttachmentInput.dispatchEvent(new Event('change', { bubbles: true }))
   await until(() => document.querySelector('.mission-create-dialog [title="mission-brief.md"]'), 'Create accepts a new attachment')
+  document.querySelector<HTMLButtonElement>('.mission-create-dialog .mission-editor-footer .compact-cancel')!.click()
+  await until(() => !document.querySelector('.mission-create-dialog'), 'Closing an unfinished Mission keeps its draft')
+  button('新建使命').click()
+  await until(() => document.querySelector('.mission-create-dialog'), 'Mission creation can reopen')
+  check((document.querySelector('input[aria-label="使命名称"]') as HTMLInputElement).value === '草稿保留使命'
+    && (document.querySelector('textarea[aria-label="使命描述"]') as HTMLTextAreaElement).value === '关闭后仍应恢复的使命描述'
+    && document.querySelector('.mission-create-dialog [title="mission-brief.md"]')
+    && creationProperties()[0].textContent?.includes('示例项目 12')
+    && creationProperties()[2].textContent?.includes('交互'), 'Reopening restores the one retained title, description, project, tag and attachment draft')
+  fill(document.querySelector<HTMLInputElement>('input[aria-label="使命名称"]')!, '无描述使命')
+  const reopenedDescription = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="使命描述"]')!
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(reopenedDescription, '')
+  reopenedDescription.dispatchEvent(new Event('input', { bubbles: true }))
   await frames()
   const create = button('新建')
   check(!button('保存使命') && create, 'One default create action')
@@ -289,9 +359,14 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !document.querySelector('.new-camp-dialog'), 'Create dialog closes')
   check(!document.querySelector('.mission-workspace-host'), 'Create remains on board')
   const created = qa.items.find((m: any) => m.title === '无描述使命')
-  check(created.description === '' && created.status === 'not_started' && created.attachments[0]?.displayName === 'mission-brief.md', 'Default create preserves its attachment and does not start')
+  check(created.description === '' && created.status === 'not_started' && created.projectPath === '/workspace/sample-12' && created.tags.includes('交互') && created.attachments[0]?.displayName === 'mission-brief.md', 'Default create preserves its draft properties and attachment without starting')
   check(qa.calls.some((c: any) => c.method === 'missions.createWithAttachments' && c.p.command.title === '无描述使命'), 'Create sends attachments through the private native bridge')
   check(!qa.calls.some((c: any) => c.method === 'missions.start' && c.p.command?.missionId === created.missionId), 'No start request on default create')
+  button('新建使命').click()
+  await until(() => document.querySelector('.mission-create-dialog'), 'Creation opens again after a confirmed create')
+  check((document.querySelector('input[aria-label="使命名称"]') as HTMLInputElement).value === '' && !document.querySelector('.mission-create-dialog [title="mission-brief.md"]'), 'Confirmed creation clears the retained Mission draft')
+  document.querySelector<HTMLButtonElement>('.mission-create-dialog .mission-editor-footer .compact-cancel')!.click()
+  await until(() => !document.querySelector('.mission-create-dialog'), 'Fresh creation dialog closes')
   Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(card => card.textContent?.includes('无描述使命'))!.click()
   await until(() => document.querySelector('.mission-drawer .mission-start'), 'Created Mission opens with a start action')
   const startCalls = qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length
@@ -349,4 +424,52 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   cases.push('workspace cleanup is Core-gated, concise, neutral, explicit, and disappears after completion')
   return { ok: true, cases }
+}
+
+export async function runMissionLargeDiffAcceptance(): Promise<{ ok: true; cases: string[] }> {
+  const qa = (window as any).missionQA
+  const check = (value: unknown, message: string): void => { if (!value) throw new Error(message) }
+  const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  const until = async (condition: () => unknown, message: string): Promise<void> => {
+    for (let i = 0; i < 240; ++i) { await frames(); if (condition()) return }
+    throw new Error(`${message}${qa.errors.length ? `\n${qa.errors.join('\n')}` : ''}`)
+  }
+  const fill = (element: HTMLInputElement, value: string): void => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  await until(() => document.querySelector('.mission-board-card'), 'Large-diff Mission board loads')
+  document.querySelector<HTMLElement>('.mission-board-card')!.click()
+  await until(() => document.querySelector('#mission-detail-tree'), 'Large-diff detail tree loads')
+  await until(() => document.querySelector('.mission-delivery-heading h3 span')?.textContent === '1200', 'Large-diff heading reports every changed file')
+  const detail = document.querySelector<HTMLElement>('#mission-detail-tree')!
+  await until(() => detail.scrollHeight > detail.clientHeight, 'Large-diff detail tree exposes a bounded scroll viewport')
+  check(detail.querySelectorAll('[role=treeitem]').length < 80, 'Large-diff detail tree virtualizes mounted rows')
+  check(!detail.querySelector('[role=treeitem][aria-expanded=false]'), 'Large-diff directories remain expanded by default')
+
+  const first = detail.querySelector<HTMLButtonElement>('[role=treeitem]')!
+  first.focus()
+  first.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+  await until(() => (document.activeElement as HTMLElement | null)?.dataset.fileId === 'large-1192', 'End reveals and focuses the last logical tree row')
+  check(detail.scrollTop > 0, 'Keyboard navigation scrolls the virtual detail tree')
+
+  const search = document.querySelector<HTMLInputElement>('input[aria-controls="mission-detail-tree"]')!
+  fill(search, 'file-0420.ts')
+  await until(() => detail.querySelectorAll('.changes-tree-row.is-file').length === 1, 'Large-diff search narrows to one file')
+  const match = detail.querySelector<HTMLButtonElement>('.changes-tree-row.is-file')!
+  check(match.dataset.fileId === 'large-420', 'Large-diff search keeps the matching file identity')
+  match.click()
+  await until(() => document.querySelector('#mission-modal-tree'), 'Large-diff reader opens from a filtered tree result')
+
+  const modal = document.querySelector<HTMLElement>('#mission-modal-tree')!
+  await until(() => modal.scrollHeight > modal.clientHeight, 'Large-diff modal tree exposes a bounded scroll viewport')
+  check(modal.querySelectorAll('[role=treeitem]').length < 80, 'Large-diff modal tree reuses virtualized rows')
+  await until(() => modal.querySelector('[data-file-id="large-420"]'), 'Modal reveals its selected virtual row on open')
+  check(document.querySelector('.diff-dialog-summary')?.textContent?.includes('1200 个文件'), 'Large-diff reader preserves the complete file total')
+  const headingButton = document.querySelector<HTMLElement>('.modal-tree-heading > .mission-icon-button')!
+  const headingStyle = getComputedStyle(headingButton)
+  check(headingStyle.flexDirection !== 'column' && headingStyle.alignItems !== 'flex-start', 'Tree heading control is isolated from removed flat-list button styles')
+  check(qa.errors.length === 0, qa.errors.join('\n'))
+  return { ok: true, cases: ['large cumulative diffs virtualize both trees without losing search, scroll, totals or keyboard focus'] }
 }

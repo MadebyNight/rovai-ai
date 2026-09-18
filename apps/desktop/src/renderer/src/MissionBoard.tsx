@@ -7,7 +7,7 @@ import { newCommandId } from '../../shared/command-id'
 import { DialogControlIcon } from './AppDialog'
 import { NavigationIcon } from './NavigationIcon'
 import { MissionIcon } from './MissionIcon'
-import { Avatar, CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, FilterStateIcon, TagMark, statuses, type ContextPosition } from './MissionControls'
+import { Avatar, CompactDialog, Icon, LabelsEditor, MissionAvatars, MissionContextMenu, MissionFilter, MissionPeopleProvider, MissionPopover, MissionRoster, MissionTags, StatusIcon, FilterStateIcon, TagColorDot, statuses, type ContextPosition } from './MissionControls'
 import { RunningText } from './RunningText'
 import { MissionCommandRejected, missionCommand, missionError } from './useMissions'
 import { MemberAvatar } from './MemberAvatar'
@@ -273,7 +273,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     <header className="mission-page-header"><div><h1>使命板</h1><p>设定目标，与队伍一起推进。</p></div><button className="mission-new mission-new-entry" onClick={onNew}><Icon name="plus"/>新建使命</button></header>
     <div className="mission-toolbar"><div className="mission-filter-group">
       <MissionFilter label="状态" icon={<FilterStateIcon/>} searchable={false} values={stateFilter} onChange={setStateFilter} options={statuses.map(s => ({ id: s.id, label: s.label, icon: <StatusIcon status={s.id}/> }))}/>
-      <MissionFilter label="标签" icon={<Icon name="tag"/>} values={tags} onChange={setTags} options={catalog.map(t => ({id: t, label: t, icon: <TagMark tag={t}/>}))}/>
+      <MissionFilter label="标签" icon={<Icon name="tag"/>} values={tags} onChange={setTags} options={catalog.map(t => ({id: t, label: t, icon: <TagColorDot tag={t}/>}))}/>
       <MissionFilter label="项目" icon={<NavigationIcon name="folder-open"/>} values={projectFilter} onChange={setProjectFilter} options={paths.map(path => ({ id: path, keywords: path, icon: <NavigationIcon name="folder-open"/>, label: missionProject(missions.find(m => m.projectPath === path)!, projects) }))}/>
       {!!(stateFilter.length + tags.length + projectFilter.length) && <button className="mission-clear-filters" aria-label="清除筛选" onClick={() => { setStateFilter([]); setTags([]); setProjectFilter([]) }}><DialogControlIcon name="close"/></button>}
     </div><label className="mission-search"><NavigationIcon name="search"/><input aria-label="搜索使命" placeholder="搜索使命…" value={query} onChange={e => setQuery(e.target.value)}/></label>
