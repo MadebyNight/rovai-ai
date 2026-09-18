@@ -13,7 +13,7 @@ import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 const root = resolve(import.meta.dirname, '../..')
 const fixtureSource = join(root, 'scripts/fixtures/mission-board')
 
-async function runFixture(t, expectedCases) {
+async function runFixture(t, expectedCases, mode = 'standard') {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-mission-board-test-'))
   let child
@@ -28,7 +28,7 @@ async function runFixture(t, expectedCases) {
     delete environment.ELECTRON_RUN_AS_NODE
     process.stdout.write(`Automatic acceptance userData: ${join(fixture, 'user-data')}; no Core/SQLite/Skill Library/Runtime\n`)
     child = spawn(electron, [
-      join(fixtureSource, 'main.cjs'), join(fixture, 'renderer/index.html'), join(fixture, 'user-data'),
+      join(fixtureSource, 'main.cjs'), join(fixture, 'renderer/index.html'), join(fixture, 'user-data'), mode,
       ...(process.platform === 'linux' ? ['--no-sandbox'] : [])
     ], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
     closed = once(child, 'close')
@@ -54,3 +54,4 @@ async function runFixture(t, expectedCases) {
 }
 
 test('Mission card, drawer, delivery and retained preview share one Camp workspace', { timeout: 100_000 }, t => runFixture(t, 10))
+test('Mission file trees virtualize a large cumulative Git diff', { timeout: 100_000 }, t => runFixture(t, 1, 'large-diff'))

@@ -87,6 +87,22 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 2124 项、隔离 Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check` 与带 merge-base
 的 `pnpm docs:check:ci` 均通过。
 
+## 2026-09-18 累计 Diff 样式隔离与大文件集窗口化
+
+合入后的复核发现，旧 flat-list Diff 的 `.mission-diff-file-list button` 仍会命中新目录树标题中的
+折叠按钮，造成纵向布局、左对齐和旧内边距泄漏；相关旧选择器及无现存 DOM 对应的规则已删除，仍在使用的
+计数、二进制、加载与错误状态样式保留在当前树形阅读器附近。
+
+详情区与 Diff 弹窗继续共享同一文件树，并保持目录默认全部展开。完整过滤、建树和扁平结果仍作为逻辑树与
+键盘导航依据，但大结果集只挂载当前滚动窗口及前后余量，通过等高占位保留完整滚动范围。Arrow、Home、End
+可把未挂载的目标行带入窗口后再转移焦点；弹窗打开时同样先揭示当前选择。Core、Git Diff 接口、固定基准、
+缓存与刷新合同均未改变。新增 1200 文件的隔离 Electron 验收，覆盖详情树与弹窗树的有界 DOM、默认展开、
+搜索、滚动、完整总计和跨窗口键盘焦点，并用静态回归阻止旧广域按钮选择器返回。
+
+修复验证包括 `pnpm typecheck`、完整 Vitest 207 个文件／2126 项、含标准与 1200 文件场景的隔离
+Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check`、带 merge-base 的
+`pnpm docs:check:ci` 与 `git diff --check`。
+
 ## 主线整合与验收
 
 已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文曾在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；定义编辑与基线修订曾推进到 Migration 158/schema 108，稳定编号与 accepted 水位曾推进到 Migration 159/schema 109。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。

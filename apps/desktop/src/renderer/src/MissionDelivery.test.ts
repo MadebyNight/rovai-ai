@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { MissionChangedFile } from '@contracts'
-import { missionFileTree } from './MissionDelivery'
+import { missionFileTree, missionTreeWindow } from './MissionDelivery'
 
 function changedFile(id: string, path: string): MissionChangedFile {
   return {
@@ -71,5 +72,28 @@ describe('Mission cumulative file tree', () => {
       },
       { kind: 'file', name: 'README.md', path: 'README.md', id: 'readme' }
     ])
+  })
+
+  it('does not retain flat-list selectors that leak into tree controls', () => {
+    const css = readFileSync(new URL('./mission.css', import.meta.url), 'utf8')
+
+    expect(css).not.toContain('.mission-diff-file-list button {')
+    expect(css).not.toContain('.mission-diff-file-list button[aria-current="true"]')
+  })
+
+  it('calculates a bounded row window with overscan and full-height spacers', () => {
+    expect(missionTreeWindow(1_200, 14_500, 480, 29)).toEqual({
+      start: 492,
+      end: 525,
+      before: 14_268,
+      after: 19_575
+    })
+    expect(missionTreeWindow(1_200, Number.POSITIVE_INFINITY, 480, 29)).toEqual({
+      start: 0,
+      end: 25,
+      before: 0,
+      after: 34_075
+    })
+    expect(missionTreeWindow(0, 0, 480, 29)).toEqual({ start: 0, end: 0, before: 0, after: 0 })
   })
 })

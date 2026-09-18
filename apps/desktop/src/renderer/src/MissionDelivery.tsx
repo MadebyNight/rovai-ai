@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { AgentProfile, MissionActivity, MissionChangedFile, MissionDelivery as Delivery, MissionFileDiff, MissionRecord } from '@contracts'
 import { useCampClient } from './camp-client'
@@ -152,6 +152,24 @@ function missionTreeKey(node: MissionTreeNode): string {
   return node.kind === 'directory' ? `directory:${node.path}` : `file:${node.file.id}`
 }
 
+const MISSION_TREE_ROW_HEIGHT = 29
+const MISSION_TREE_VIRTUAL_THRESHOLD = 80
+const MISSION_TREE_OVERSCAN = 8
+type MissionTreeWindow = { start: number; end: number; before: number; after: number }
+
+export function missionTreeWindow(total: number, scrollTop: number, viewportHeight: number, rowHeight: number, overscan = MISSION_TREE_OVERSCAN): MissionTreeWindow {
+  const count = Math.max(0, Math.floor(Number.isFinite(total) ? total : 0))
+  if (!count) return { start: 0, end: 0, before: 0, after: 0 }
+  const height = Math.max(1, Number.isFinite(rowHeight) ? rowHeight : MISSION_TREE_ROW_HEIGHT)
+  const viewport = Math.max(height, Number.isFinite(viewportHeight) ? viewportHeight : height)
+  const buffer = Math.max(0, Math.floor(Number.isFinite(overscan) ? overscan : 0))
+  const maximum = Math.max(0, count * height - viewport)
+  const offset = Math.max(0, Math.min(maximum, Number.isFinite(scrollTop) ? scrollTop : 0))
+  const start = Math.max(0, Math.floor(offset / height) - buffer)
+  const end = Math.min(count, Math.max(start + 1, Math.ceil((offset + viewport) / height) + buffer))
+  return { start, end, before: start * height, after: (count - end) * height }
+}
+
 function MissionFileIcon({ file }: { file: MissionChangedFile }): React.JSX.Element {
   const path = file.path.toLocaleLowerCase()
   const document = (soft: string) => <><path d="M3.4 1.25h5.1L13 5.7v8.4c0 .55-.45 1-1 1H3.4c-.55 0-1-.45-1-1V2.25c0-.55.45-1 1-1Z" fill={soft}/><path d="M8.5 1.25V4.9c0 .45.35.8.8.8H13" fill="none" stroke="currentColor" strokeWidth=".75" opacity=".65"/></>
@@ -197,14 +215,90 @@ function MissionFileTree({ files, selected, query, expanded, scope, onQueryChang
   const tree = useMemo(() => missionFileTree(matchingFiles), [matchingFiles])
   const visible = useMemo(() => flattenMissionTree(tree, expanded, Boolean(normalizedQuery)), [expanded, normalizedQuery, tree])
   const [focusedKey, setFocusedKey] = useState<string | null>(null)
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 480, rowHeight: MISSION_TREE_ROW_HEIGHT })
   const rows = useRef(new Map<string, HTMLButtonElement>())
   const searchRef = useRef<HTMLInputElement>(null)
+  const treeRef = useRef<HTMLDivElement>(null)
+  const scrollFrame = useRef(0)
+  const pendingFocusKey = useRef<string | null>(null)
   const selectedKey = selected ? `file:${selected}` : null
-  const tabKey = visible.some(entry => missionTreeKey(entry.node) === focusedKey) ? focusedKey
+  const preferredTabKey = visible.some(entry => missionTreeKey(entry.node) === focusedKey) ? focusedKey
     : visible.some(entry => missionTreeKey(entry.node) === selectedKey) ? selectedKey
       : visible[0] ? missionTreeKey(visible[0].node) : null
+  const virtualized = visible.length > MISSION_TREE_VIRTUAL_THRESHOLD
+  const windowRange = virtualized
+    ? missionTreeWindow(visible.length, viewport.scrollTop, viewport.height, viewport.rowHeight)
+    : { start: 0, end: visible.length, before: 0, after: 0 }
+  const rendered = visible.slice(windowRange.start, windowRange.end)
+  const tabKey = rendered.some(entry => missionTreeKey(entry.node) === preferredTabKey)
+    ? preferredTabKey
+    : rendered[0] ? missionTreeKey(rendered[0].node) : null
+  const readViewport = useCallback(() => {
+    const element = treeRef.current
+    if (!element) return
+    const rowHeight = Number.parseFloat(getComputedStyle(element).getPropertyValue('--mission-tree-row-height')) || MISSION_TREE_ROW_HEIGHT
+    const height = Math.max(rowHeight, element.clientHeight || rowHeight)
+    const scrollTop = Math.max(0, Math.min(element.scrollTop, Math.max(0, visible.length * rowHeight - height)))
+    if (element.scrollTop !== scrollTop) element.scrollTop = scrollTop
+    setViewport(current => current.scrollTop === scrollTop && current.height === height && current.rowHeight === rowHeight
+      ? current
+      : { scrollTop, height, rowHeight })
+  }, [visible.length])
+  useLayoutEffect(() => {
+    if (!virtualized || !treeRef.current) return
+    readViewport()
+    const element = treeRef.current
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(readViewport)
+    observer?.observe(element)
+    window.addEventListener('resize', readViewport)
+    return () => { observer?.disconnect(); window.removeEventListener('resize', readViewport) }
+  }, [readViewport, virtualized])
+  useLayoutEffect(() => {
+    if (scope !== 'modal' || !selectedKey || !virtualized || !treeRef.current) return
+    const index = visible.findIndex(entry => missionTreeKey(entry.node) === selectedKey)
+    if (index < 0) return
+    const element = treeRef.current
+    const height = element.clientHeight || viewport.height
+    const top = index * viewport.rowHeight
+    const bottom = top + viewport.rowHeight
+    if (top >= element.scrollTop && bottom <= element.scrollTop + height) return
+    const scrollTop = Math.max(0, Math.min(top, visible.length * viewport.rowHeight - height))
+    element.scrollTop = scrollTop
+    setViewport(current => current.scrollTop === scrollTop ? current : { ...current, scrollTop })
+  }, [scope, selectedKey, virtualized, viewport.height, viewport.rowHeight, visible])
+  useLayoutEffect(() => {
+    const key = pendingFocusKey.current
+    if (!key) return
+    const row = rows.current.get(key)
+    if (!row) return
+    pendingFocusKey.current = null
+    row.focus({ preventScroll: true })
+    row.scrollIntoView({ block: 'nearest' })
+  }, [focusedKey, windowRange.end, windowRange.start])
+  useEffect(() => () => { if (scrollFrame.current) cancelAnimationFrame(scrollFrame.current) }, [])
+  const resetScroll = (): void => {
+    if (treeRef.current) treeRef.current.scrollTop = 0
+    setViewport(current => current.scrollTop === 0 ? current : { ...current, scrollTop: 0 })
+  }
+  const revealIndex = (index: number): void => {
+    const element = treeRef.current
+    if (!element) return
+    const height = element.clientHeight || viewport.height
+    const top = index * viewport.rowHeight
+    const bottom = top + viewport.rowHeight
+    let scrollTop = element.scrollTop
+    if (top < scrollTop) scrollTop = top
+    else if (bottom > scrollTop + height) scrollTop = bottom - height
+    scrollTop = Math.max(0, Math.min(scrollTop, Math.max(0, visible.length * viewport.rowHeight - height)))
+    if (element.scrollTop !== scrollTop) element.scrollTop = scrollTop
+    setViewport(current => current.scrollTop === scrollTop ? current : { ...current, scrollTop })
+  }
   const focusNode = (key: string): void => {
+    const index = visible.findIndex(entry => missionTreeKey(entry.node) === key)
+    if (index < 0) return
+    pendingFocusKey.current = key
     setFocusedKey(key)
+    revealIndex(index)
     requestAnimationFrame(() => {
       const row = rows.current.get(key)
       row?.focus({ preventScroll: true })
@@ -218,9 +312,8 @@ function MissionFileTree({ files, selected, query, expanded, scope, onQueryChang
     else next.add(path)
     onExpandedChange(next)
   }
-  const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, entry: VisibleMissionTreeNode): void => {
+  const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, entry: VisibleMissionTreeNode, index: number): void => {
     if (event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey) return
-    const index = visible.indexOf(entry)
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault()
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1 : Math.max(0, Math.min(visible.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
@@ -238,16 +331,18 @@ function MissionFileTree({ files, selected, query, expanded, scope, onQueryChang
     }
   }
   return <>
-    <div className="changes-tree-tools"><label className="changes-tree-search"><NavigationIcon name="search"/><span className="sr-only">筛选文件或路径</span><input ref={searchRef} type="search" autoComplete="off" spellCheck={false} placeholder="筛选文件…" value={query} aria-controls={`mission-${scope}-tree`} onChange={event => { setFocusedKey(null); onQueryChange(event.target.value) }} onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing && visible[0]) { event.preventDefault(); focusNode(missionTreeKey(visible[0].node)) } }}/>{query && <button type="button" className="changes-search-clear" aria-label="清除文件筛选" title="清除文件筛选" onClick={() => { onQueryChange(''); searchRef.current?.focus() }}><DialogControlIcon name="close"/></button>}</label></div>
-    {visible.length ? <div className="changes-tree" id={`mission-${scope}-tree`} role="tree" aria-label={scope === 'detail' ? '累计变更文件目录树，可上下滚动' : '选择要查看差异的文件'}>
-      {visible.map(entry => {
+    <div className="changes-tree-tools"><label className="changes-tree-search"><NavigationIcon name="search"/><span className="sr-only">筛选文件或路径</span><input ref={searchRef} type="search" autoComplete="off" spellCheck={false} placeholder="筛选文件…" value={query} aria-controls={`mission-${scope}-tree`} onChange={event => { setFocusedKey(null); resetScroll(); onQueryChange(event.target.value) }} onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing && visible[0]) { event.preventDefault(); focusNode(missionTreeKey(visible[0].node)) } }}/>{query && <button type="button" className="changes-search-clear" aria-label="清除文件筛选" title="清除文件筛选" onClick={() => { resetScroll(); onQueryChange(''); searchRef.current?.focus() }}><DialogControlIcon name="close"/></button>}</label></div>
+    {visible.length ? <div ref={treeRef} className="changes-tree" id={`mission-${scope}-tree`} role="tree" aria-label={scope === 'detail' ? '累计变更文件目录树，可上下滚动' : '选择要查看差异的文件'} onScroll={virtualized ? () => { if (scrollFrame.current) return; scrollFrame.current = requestAnimationFrame(() => { scrollFrame.current = 0; readViewport() }) } : undefined}>
+      {windowRange.before > 0 && <div className="changes-tree-spacer" style={{ height: windowRange.before }} aria-hidden="true"/>}
+      {rendered.map((entry, renderedIndex) => {
         const node = entry.node
+        const index = windowRange.start + renderedIndex
         const directory = node.kind === 'directory'
         const key = missionTreeKey(node)
         const open = directory && (Boolean(normalizedQuery) || expanded.has(node.path))
         const accessible = directory ? `${node.path}，${node.count} 个变更文件` : `${node.path}，${kinds[node.file.kind]}${node.file.binary ? '，二进制文件' : ''}${node.file.oldPath ? `，原路径 ${node.file.oldPath}` : ''}`
         return <button ref={element => { if (element) rows.current.set(key, element); else rows.current.delete(key) }} type="button" role="treeitem" aria-level={entry.depth + 1} aria-posinset={entry.position} aria-setsize={entry.siblings} aria-expanded={directory ? open : undefined} aria-selected={!directory ? node.file.id === selected : undefined} tabIndex={key === tabKey ? 0 : -1} className={`changes-tree-row ${directory ? 'is-directory' : 'is-file'}`} data-node-key={key} data-file-id={directory ? undefined : node.file.id} style={{ '--depth': entry.depth } as CSSProperties} title={node.path} aria-label={accessible} key={key}
-          onFocus={() => setFocusedKey(key)} onKeyDown={event => onTreeKeyDown(event, entry)} onClick={event => { if (directory) toggleDirectory(node.path); else onSelect(node.file.id, event.currentTarget) }}>
+          onFocus={() => setFocusedKey(key)} onKeyDown={event => onTreeKeyDown(event, entry, index)} onClick={event => { if (directory) toggleDirectory(node.path); else onSelect(node.file.id, event.currentTarget) }}>
           {Array.from({ length: entry.depth }, (_, guide) => <span className="tree-guide" style={{ '--guide': guide } as CSSProperties} aria-hidden="true" key={guide}/>)}
           {directory ? <span className="node-chevron"><Icon name={open ? 'chevron' : 'chevron-right'}/></span> : <MissionFileIcon file={node.file}/>}
           <span className="node-name">{node.name}</span>
@@ -256,7 +351,8 @@ function MissionFileTree({ files, selected, query, expanded, scope, onQueryChang
             : <MissionFileStatus file={node.file}/>}
         </button>
       })}
-    </div> : <div className="changes-filter-empty"><p>没有匹配的文件</p><button type="button" onClick={() => { onQueryChange(''); searchRef.current?.focus() }}>清除筛选</button></div>}
+      {windowRange.after > 0 && <div className="changes-tree-spacer" style={{ height: windowRange.after }} aria-hidden="true"/>}
+    </div> : <div className="changes-filter-empty"><p>没有匹配的文件</p><button type="button" onClick={() => { resetScroll(); onQueryChange(''); searchRef.current?.focus() }}>清除筛选</button></div>}
   </>
 }
 
