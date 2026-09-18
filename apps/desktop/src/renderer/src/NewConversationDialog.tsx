@@ -134,7 +134,10 @@ export function NewConversationDialog({
   useEffect(() => {
     if (!open) {
       if (recovery) return
-      draftInitializedRef.current = false
+      // A mission draft lives for the lifetime of this mounted dialog and is
+      // cleared only after a confirmed create. Closing a regular camp dialog
+      // keeps its existing reset-on-dismiss behavior.
+      if (!isMission) draftInitializedRef.current = false
       return
     }
     if (draftInitializedRef.current) return
@@ -157,7 +160,7 @@ export function NewConversationDialog({
     setQuickHelpOpen(false)
     setMemberError(null)
     setSubmitError(null)
-  }, [initialSelectionPlan, initialWorkspace, open, recovery])
+  }, [initialSelectionPlan, initialWorkspace, isMission, open, recovery])
 
   const pendingGitInspectionPath = workspace && !hasGitObservation(workspace)
     ? workspace.projectPath
@@ -252,6 +255,15 @@ export function NewConversationDialog({
         defaultLeadAgentId: leadId,
         collaborationMode: 'peer'
       }, enableOneClick, isMission ? {description, tags, attachments: missionAttachmentDrafts(attachments), start:(event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'start'} : undefined)
+      if (isMission) {
+        draftInitializedRef.current = false
+        setName('')
+        setDescription('')
+        setTags([])
+        setAttachments([])
+        setExpanded(false)
+        setSubmitError(null)
+      }
     } catch (error) {
       setSubmitError(errorMessage(error))
     } finally {
@@ -329,21 +341,8 @@ export function NewConversationDialog({
                 </NewConversationPicker>
               </div></>}
               {isMission && <div className="mission-editor-properties" aria-label="使命属性">
-                <NewConversationPicker mobile={false} open={projectMenuOpen} onOpenChange={setProjectMenuOpen} busy={busy} title="选择项目"
-                  trigger={<MissionPropertyChip icon={<ProjectGlyph/>} disabled={projectActionsDisabled}>{projectLabel}</MissionPropertyChip>}
-                  menu={<DropdownMenu.Content onCloseAutoFocus={event => event.preventDefault()} className="compact-menu workspace-menu" align="start" sideOffset={6} collisionPadding={12} aria-label="选择项目" loop>
-                    <DropdownMenu.RadioGroup value={workspace?.projectPath ?? ''}>
-                      <DropdownMenu.RadioItem className="compact-option" value="" disabled={projectActionsDisabled} onSelect={() => { setWorkspace(null); setProjectMenuOpen(false) }}><WorkspaceIcon kind="quick-chat"/><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check"/></DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
-                      <DropdownMenu.Separator className="compact-separator"/>
-                      {projects.map(project => <DropdownMenu.RadioItem key={project.projectKey} className="compact-option" value={project.projectPath} disabled={projectActionsDisabled} onSelect={() => selectKnownWorkspace(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{project.projectPath}</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check"/></DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>)}
-                    </DropdownMenu.RadioGroup>
-                    <DropdownMenu.Separator className="compact-separator"/>
-                    <DropdownMenu.Item className="compact-option" disabled={projectActionsDisabled} onSelect={() => void chooseWorkspaceDirectory()}><DialogControlIcon name="plus"/><span>选择工作目录…</span></DropdownMenu.Item>
-                  </DropdownMenu.Content>}>
-                  <button type="button" className="compact-option" aria-pressed={!workspace} onClick={() => { setWorkspace(null); setProjectMenuOpen(false) }}><WorkspaceIcon kind="quick-chat"/><span>使用快速对话</span>{!workspace && <DialogControlIcon name="check"/>}</button>
-                  {projects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} onClick={() => selectKnownWorkspace(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{project.projectPath}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check"/>}</button>)}
-                  <button type="button" className="compact-option" onClick={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}><DialogControlIcon name="plus"/><span>选择工作目录…</span></button>
-                </NewConversationPicker>
+                <MissionProjectPicker open={projectMenuOpen} onOpenChange={setProjectMenuOpen} projects={projects} workspace={workspace} projectLabel={projectLabel} disabled={projectActionsDisabled}
+                  onQuickChat={() => { setWorkspace(null); setProjectMenuOpen(false) }} onProject={selectKnownWorkspace} onChooseDirectory={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}/>
                 <MissionTeamPicker busy={busy} members={preflight.presentMembers} availableMembers={availableMembers} selectedMemberIds={selectedMemberIds} selectedMembers={selectedMembers} leadId={leadId} profileById={profileById} enableOneClick={enableOneClick} triggerRef={memberTriggerRef} onEnableOneClick={setEnableOneClick} onToggle={toggleMember} onToggleAll={toggleAllMembers} onLead={setLeadId}/>
                 <MissionTagPicker tags={tags} catalog={missionTagCatalog} disabled={busy} onChange={setTags}/>
               </div>}
@@ -465,6 +464,48 @@ export function NewConversationDialog({
 
 type MissionMember = CampCreationPreflight['presentMembers'][number]
 
+function MissionProjectPicker({
+  open,
+  projects,
+  workspace,
+  projectLabel,
+  disabled,
+  onOpenChange,
+  onQuickChat,
+  onProject,
+  onChooseDirectory
+}: {
+  open: boolean
+  projects: ProjectNavigationGroup[]
+  workspace: WorkspaceChoice | null
+  projectLabel: string
+  disabled: boolean
+  onOpenChange(open: boolean): void
+  onQuickChat(): void
+  onProject(project: ProjectNavigationGroup): void
+  onChooseDirectory(): void
+}): React.JSX.Element {
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const normalized = query.trim().toLocaleLowerCase()
+  const matchingProjects = projects.filter(project => `${project.name}\n${project.projectPath}`.toLocaleLowerCase().includes(normalized))
+  const quickChatMatches = !normalized || `使用快速对话 Rovai AI 管理的快速对话目录`.toLocaleLowerCase().includes(normalized)
+  return <Popover.Root open={open} onOpenChange={next => { if (!disabled) onOpenChange(next); if (!next) setQuery('') }}>
+    <Popover.Trigger asChild><MissionPropertyChip icon={<ProjectGlyph/>} disabled={disabled}>{projectLabel}</MissionPropertyChip></Popover.Trigger>
+    <Popover.Portal><Popover.Content className="compact-menu mission-editor-project-popover" align="start" sideOffset={6} collisionPadding={12}
+      onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
+      <label className="mission-picker-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索项目" placeholder="搜索项目…"
+        onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.closest('.mission-editor-project-popover')?.querySelector<HTMLButtonElement>('.mission-editor-project-list button:not(:disabled)')?.focus() } }}/></label>
+      <div className="mission-editor-project-list" role="group" aria-label="可选项目">
+        {quickChatMatches && <button type="button" className="compact-option" aria-pressed={!workspace} disabled={disabled} onClick={onQuickChat}><WorkspaceIcon kind="quick-chat"/><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span>{!workspace && <DialogControlIcon name="check"/>}</button>}
+        {matchingProjects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} disabled={disabled} title={project.projectPath} onClick={() => onProject(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{project.projectPath}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check"/>}</button>)}
+        {!quickChatMatches && !matchingProjects.length && <p className="mission-picker-empty" role="status">没有匹配的项目</p>}
+      </div>
+      <div className="mission-editor-project-footer"><button type="button" className="compact-option" disabled={disabled} onClick={onChooseDirectory}><DialogControlIcon name="plus"/><span>选择工作目录…</span></button></div>
+    </Popover.Content></Popover.Portal>
+  </Popover.Root>
+}
+
 function MissionTeamPicker({
   busy,
   members,
@@ -495,12 +536,19 @@ function MissionTeamPicker({
   onLead(agentId: string): void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
   const lead = selectedMembers.find(member => member.agentId === leadId) ?? null
   const allSelected = availableMembers.length > 0
     && selectedMemberIds.length === availableMembers.length
     && selectedMemberIds.every(id => availableMembers.some(member => member.agentId === id))
+  const normalized = query.trim().toLocaleLowerCase()
+  const matchingMembers = members.filter(member => {
+    const profile = profileById.get(member.agentId)
+    return `${member.displayName}\n${profile?.teamRole ?? ''}\n${newConversationMemberStatus(member)}`.toLocaleLowerCase().includes(normalized)
+  })
 
-  return <Popover.Root open={open} onOpenChange={next => { if (!busy) setOpen(next) }}>
+  return <Popover.Root open={open} onOpenChange={next => { if (!busy) setOpen(next); if (!next) setQuery('') }}>
     <Popover.Trigger asChild>
       <MissionPropertyChip ref={triggerRef} icon={<TeamGlyph/>} disabled={busy || !members.length} aria-invalid={!selectedMemberIds.length}>
         <span className="mission-editor-team-summary">
@@ -511,10 +559,12 @@ function MissionTeamPicker({
         </span>
       </MissionPropertyChip>
     </Popover.Trigger>
-    <Popover.Portal><Popover.Content className="compact-menu mission-editor-team-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => event.preventDefault()}>
+    <Popover.Portal><Popover.Content className="compact-menu mission-editor-team-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
       <div className="compact-menu-heading"><span>队员与队长</span><button type="button" disabled={busy || !availableMembers.length} onClick={onToggleAll}>{allSelected ? '取消全选' : '全选'}</button></div>
+      <label className="mission-picker-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索队员" placeholder="搜索队员…"
+        onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.closest('.mission-editor-team-popover')?.querySelector<HTMLButtonElement>('.mission-editor-team-member:not(:disabled)')?.focus() } }}/></label>
       <div className="mission-editor-team-list">
-        {members.map(member => {
+        {matchingMembers.map(member => {
           const profile = profileById.get(member.agentId)
           const available = isNewConversationMemberAvailable(member)
           const selected = selectedMemberIds.includes(member.agentId)
@@ -528,10 +578,11 @@ function MissionTeamPicker({
             <button type="button" className={`mission-editor-lead-choice${isLead ? ' is-selected' : ''}`} disabled={busy || !available || !selected} onClick={() => onLead(member.agentId)}>{isLead ? '队长' : '设为队长'}</button>
           </div>
         })}
+        {!matchingMembers.length && <p className="mission-picker-empty" role="status">没有匹配的队员</p>}
       </div>
       <div className="mission-editor-team-footer">
         <label><input type="checkbox" checked={enableOneClick} disabled={busy} onChange={event => onEnableOneClick(event.target.checked)}/><span>以后使用此队伍一键新建</span></label>
-        <button type="button" className="compact-primary" onClick={() => setOpen(false)} disabled={busy}>完成</button>
+        <button type="button" className="compact-primary" onClick={() => { setOpen(false); setQuery('') }} disabled={busy}>完成</button>
       </div>
     </Popover.Content></Popover.Portal>
   </Popover.Root>

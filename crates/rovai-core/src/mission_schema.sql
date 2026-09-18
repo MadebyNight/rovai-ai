@@ -61,7 +61,13 @@ CREATE TABLE mission_workspace (
     branch TEXT NOT NULL,
     base_sha TEXT NOT NULL,
     preparation_token TEXT NOT NULL,
+    preparation_kind TEXT NOT NULL DEFAULT 'create' CHECK(preparation_kind IN ('create','restore')),
+    generation INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1),
     state TEXT NOT NULL CHECK(state IN ('preparing','ready','cleanup_pending','cleanup_failed')),
+    cleanup_command_id TEXT,
+    cleanup_expected_branch_oid TEXT,
+    cleanup_worktree_removed INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_worktree_removed IN (0,1)),
+    cleanup_branch_removed INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_branch_removed IN (0,1)),
     diagnostic TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -80,8 +86,3 @@ ALTER TABLE context_manifest ADD COLUMN mission_details_version INTEGER CHECK(mi
 CREATE TRIGGER mission_workspace_binding_reset AFTER UPDATE OF native_binding_id,native_binding_generation ON conversation
 WHEN OLD.native_binding_id IS NOT NEW.native_binding_id OR OLD.native_binding_generation IS NOT NEW.native_binding_generation
 BEGIN UPDATE conversation SET native_workspace_fact_digest=NULL WHERE id=NEW.id; END;
-CREATE TRIGGER mission_camp_delete_cleanup BEFORE DELETE ON camp
-BEGIN
-    UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
-    WHERE camp_id=OLD.id AND state IN ('ready','preparing');
-END;

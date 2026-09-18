@@ -11,7 +11,10 @@ pub use transport::{
 };
 #[path = "core_subsystems.rs"]
 mod core_subsystems;
-use crate::{acp, antigravity, builtin_tool_runtime, claude, codex, health, pi, runtime_fleet};
+use crate::{
+    acp, antigravity, builtin_tool_runtime, claude, codex, health, mission_workspace, pi,
+    runtime_fleet,
+};
 #[path = "runtime_check_environment.rs"]
 mod runtime_check_environment;
 #[path = "startup_settings.rs"]
@@ -136,9 +139,9 @@ use rovai_core::{
     collaboration::{
         AddCampMemberCommand, CampActivationState, CampCollaborationMode, ChangeDefaultLeadCommand,
         CollaborationService, CreateCampCommand, CreateTaskCommand, DeleteCampCommand,
-        DiscardPendingCampCommand, ExecutionRequest, ProjectBindingKind,
-        ReconcileDefaultLeadCommand, RemoveCampMemberCommand, RenameCampCommand,
-        SendUserAutomationCampMessageCommand, SendUserCampMessageCommand,
+        DiscardPendingCampCommand, ExecutionRequest, MissionWorkspaceDisposition,
+        ProjectBindingKind, ReconcileDefaultLeadCommand, RemoveCampMemberCommand,
+        RenameCampCommand, SendUserAutomationCampMessageCommand, SendUserCampMessageCommand,
         TaskAcceptanceCriteriaUpdate, TaskAssigneeFilter, TaskAssigneeUpdate, TaskListQuery,
         TaskStatus, UpdateTaskCommand, WithdrawCampMessageCommand,
     },
@@ -7680,7 +7683,8 @@ impl Core {
                     )?,
                 )?)
             }
-            "missions.cleanup.list"
+            "missions.workspace.cleanup"
+            | "missions.cleanup.list"
             | "missions.cleanup.retry"
             | "missions.list"
             | "missions.get"
@@ -8107,6 +8111,7 @@ impl Core {
                 let camp_id = params.command.camp_id.clone();
                 let command_id = params.command_id.clone();
                 let force = params.command.force;
+                let workspace_disposition = params.command.workspace_disposition;
                 let envelope =
                     user_camp_command_envelope(params.command_id, camp_id.clone(), params.command);
                 if let Some(replay) = {
@@ -8146,6 +8151,36 @@ impl Core {
                     self.runtime_fleet
                         .force_fence_camp_for_deletion(&camp_id)
                         .await?;
+                }
+                let mission_id = {
+                    let database = self.database.lock().await;
+                    crate::mission::mission_for_camp(database.connection(), &camp_id)?
+                        .map(|mission| mission.info.mission_id)
+                };
+                if let Some(mission_id) = mission_id.as_deref() {
+                    match workspace_disposition {
+                        MissionWorkspaceDisposition::Cleanup => {
+                            let has_workspace = {
+                                let database = self.database.lock().await;
+                                !mission_workspace::load_workspaces(
+                                    database.connection(),
+                                    mission_id,
+                                )?
+                                .is_empty()
+                            };
+                            if has_workspace {
+                                self.cleanup_live_mission_workspace_locked(mission_id, &command_id)
+                                    .await?;
+                            }
+                        }
+                        MissionWorkspaceDisposition::Retain => {
+                            let database = self.database.lock().await;
+                            database.connection().execute(
+                                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,diagnostic=NULL,updated_at=?2 WHERE camp_id=?1 AND state IN ('cleanup_pending','cleanup_failed') AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1)",
+                                rusqlite::params![camp_id, chrono::Utc::now().to_rfc3339()],
+                            )?;
+                        }
+                    }
                 }
                 let (_view_mutation, _) = self.acquire_camp_attachment_mutation(&camp_id).await?;
                 let mut database = self.database.lock().await;

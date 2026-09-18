@@ -49,7 +49,8 @@ Runtime 终态文件行与会话中的每 Run 文件变化卡片由
 
 MCP 与 Skills 的列表/详情、导入、启停和拖拽合同见 [Capability settings](components/capability-settings.md)。
 
-使命一级入口、抽屉与完整会话、交付和活动见[使命板](components/mission-board.md)。当前仅桌面和宽屏 Web 开放。
+使命板、抽屉与完整会话、交付和活动见[使命板](components/mission-board.md)。当前发布显示一级菜单入口，
+以右侧蓝点提示需要用户处理的使命；Mobile 仍无使命入口。
 
 ## Web 与 Mobile
 

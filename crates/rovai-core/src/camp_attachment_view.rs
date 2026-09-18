@@ -7519,6 +7519,7 @@ mod tests {
                         camp_id: camp_id.clone(),
                         expected_version: version,
                         force: true,
+                        workspace_disposition: Default::default(),
                     },
                 },
             )

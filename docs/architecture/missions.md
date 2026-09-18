@@ -2,7 +2,7 @@
 document_type: architecture
 authority: mission-architecture
 status: accepted
-last_updated: 2026-09-16
+last_updated: 2026-09-18
 ---
 
 # Missions
@@ -13,12 +13,15 @@ drafts, published files and execution. Renderer does not create a parallel conve
 
 `MissionService` applies atomic commands through the existing gateway. The scheduler enters preparing
 only after execution admission; the application coordinator then resolves or recovers the Mission workspace
-outside the SQLite lock. It serializes preparation and deletion, persists association before Git work, and
-rechecks claim fences before launching the Runtime. Non-Git projects retain their original cwd. A worktree
-is retained throughout Mission life; independent orphan cleanup records survive deletion and restart.
+outside the SQLite lock. It serializes preparation, explicit cleanup and deletion, persists association before
+Git work, and rechecks claim fences before launching the Runtime. Non-Git projects retain their original cwd.
+A worktree is retained throughout ordinary Mission use. Standalone cleanup records two foreground steps in its
+existing association; a later preparing phase restores the branch/worktree according to actual resource state.
 
-`MissionGit` reads the source checkout's current local branch and `HEAD` only when the first admitted Run
-enters preparing. It uses that fixed commit, the Host-resolved Git executable and verified ownership to create/reuse/clean worktrees.
+`MissionGit` reads the source checkout's current local branch and `HEAD` when the first admitted Run enters
+preparing, and again only when both previously managed Git resources have been removed. It uses the resolved
+commit, the Host-resolved Git executable and verified ownership to create, restore or clean worktrees. Cleanup
+removes the verified worktree before conditionally deleting the local Mission branch at its captured OID.
 It computes cumulative changes against a fixed initial commit with an independent temporary index. Opening
 the cumulative-change browser establishes a bounded, expiring process-local snapshot containing the file-ID
 to old/new-path mapping and that index. A single-file request resolves only through this snapshot and runs a
@@ -46,6 +49,10 @@ snapshot has its own dynamic section and acceptance marker, fenced to the native
 No Mission business version is taught to Agents; field patches use last-committed values.
 
 Desktop/wide Web share Mission navigation and the existing CampWorkspace. Drawer and full conversation
-preserve one mounted composer/preview owner. Mobile is intentionally outside this increment. Protocol and
-failure behavior live in [Mission v2](../contracts/mission-v2.md); UI in [Mission board](../ui/components/mission-board.md).
-Reasons for the durable workspace and simplified model interface: [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11).
+preserve one mounted composer/preview owner. Mobile is intentionally outside this increment. Renderer consumes
+Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
+branch in place; optional cleanup must finish before the Mission is deleted and has no retained-resource UI or
+background retry. Protocol and failure behavior live in [Mission v3](../contracts/mission-v3.md); UI in
+[Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
+interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
+[V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14).

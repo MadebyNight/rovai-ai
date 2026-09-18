@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.59
 status: completed
-last_updated: 2026-09-17
+last_updated: 2026-09-18
 ---
 
 # 桌面使命实施
@@ -56,7 +56,7 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 - Git 文件系统 owner：固定基准、临时 index 保真实 index、未跟踪／忽略／二进制／特殊路径、冲突及恢复；
   纯 parser 矩阵不能证明 Git 行为，使用临时真实仓库。最小命令 `cargo test -p rovai-core --lib mission_workspace::tests`。
 - 已有 Context Evidence owner 扩展使命输入、once-per-binding ACK 和恢复负向分支；沿用唯一 golden，不复制 JSON 断言。
-- Migration 158 扩展受支持来源的 admission 矩阵，在 DSH 157 后同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106；Migration 160 另行覆盖已部署 Mission 157–159/schema 109 与 DSH 的原位收敛。独立 Mission migration owner 证明事务回滚、既有历史保留、删除 Camp 后清理记录继续存在并可跨重启读取；旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_cleanup_survives_camp_deletion`。
+- Migration 158 扩展受支持来源的 admission 矩阵，在 DSH 157 后同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106；Migration 160 另行覆盖已部署 Mission 157–159/schema 109 与 DSH 的原位收敛。独立 Mission migration owner 证明事务回滚和当前默认保留行为；Migration 162 owner 证明最小检查点列、触发器移除、既有行保留和失败回滚。旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令分别为 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_workspace_survives_camp_deletion` 与 `cargo test -p rovai-core --lib workspace_lifecycle_migration_is_atomic_preserves_rows_and_removes_delete_trigger`。
 
 真实模型只在隔离 Smoke 和已冻结 Gate 中运行。交互稿的 15 组 fixture 检查不构成以上产品验收。
 
@@ -67,12 +67,67 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 开始使命时随 commission 消息进入既有附件发布路径。Migration 161/schema 111 为旧使命补空数组并保留
 所有业务行；Desktop Main 独占将 Renderer File 转成路径的私有编排，Web 不接收本机路径。
 
+## 2026-09-18 使命板文件变更与创建恢复增量
+
+使命入口恢复为 Desktop／宽屏 Web 的正式导航项；`needs_you` 只用右侧垂直居中的蓝点提示，视觉上不显示
+数量。完整会话的折回按钮保持原位置，改用已确认交互稿的收拢图标。新建使命在同一挂载期保留一份未完成
+草稿，关闭后再次打开会恢复名称、描述、项目、队伍、标签和附件；只有创建成功才清空。项目和队员选择器
+增加搜索及受限高度滚动，标签选择器使用更醒目的身份色圆点并保持在当前编辑上下文。卡片／列表右键菜单
+在保留点击展开子菜单的前提下，为编辑、状态、查看队员、队长、标签和删除全部补齐 hover／键盘焦点反馈；
+普通项统一使用中性灰底，删除继续使用危险色语义。
+
+交付区不再截断前五项，而是展示完整、可搜索、支持单子目录压缩的文件树。累计 Diff 使用 1320px 宽屏
+阅读面：固定基准及总计位于标题区，左侧文件树与右侧单文件差异通过可拖动且可键盘操作的分隔条连接；
+窄屏时文件树折叠到阅读器上方。既有 `missions.changes`、`missions.fileDiff` 和
+`missions.diffSession.release` 接口、固定基准、请求合并、LRU 缓存、迟到响应隔离及终态刷新语义保持不变，
+本增量没有改变 Core、Git 工作区或 Mission 合同。
+
+定向验证覆盖文件树结构、目录压缩与计数、搜索／滚动、弹窗布局和分隔条键盘调整、缓存与迟到响应、
+项目／队员搜索、标签选择、草稿恢复及成功创建后清空。`pnpm typecheck`、完整 Vitest 207 个文件／
+2124 项、隔离 Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check` 与带 merge-base
+的 `pnpm docs:check:ci` 均通过。
+
+## 2026-09-18 累计 Diff 样式隔离与大文件集窗口化
+
+合入后的复核发现，旧 flat-list Diff 的 `.mission-diff-file-list button` 仍会命中新目录树标题中的
+折叠按钮，造成纵向布局、左对齐和旧内边距泄漏；相关旧选择器及无现存 DOM 对应的规则已删除，仍在使用的
+计数、二进制、加载与错误状态样式保留在当前树形阅读器附近。
+
+详情区与 Diff 弹窗继续共享同一文件树，并保持目录默认全部展开。完整过滤、建树和扁平结果仍作为逻辑树与
+键盘导航依据，但大结果集只挂载当前滚动窗口及前后余量，通过等高占位保留完整滚动范围。Arrow、Home、End
+可把未挂载的目标行带入窗口后再转移焦点；弹窗打开时同样先揭示当前选择。Core、Git Diff 接口、固定基准、
+缓存与刷新合同均未改变。新增 1200 文件的隔离 Electron 验收，覆盖详情树与弹窗树的有界 DOM、默认展开、
+搜索、滚动、完整总计和跨窗口键盘焦点，并用静态回归阻止旧广域按钮选择器返回。
+
+修复验证包括 `pnpm typecheck`、完整 Vitest 207 个文件／2126 项、含标准与 1200 文件场景的隔离
+Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check`、带 merge-base 的
+`pnpm docs:check:ci` 与 `git diff --check`。
+
+## 2026-09-18 显式 Worktree 清理与删除处置
+
+用户选择可用性优先的最小实现。卡片／列表原有右键菜单只在 Core 的 `cleanupAvailable` 为真时显示
+`清理使命 Worktree`；没有详情页省略号、保留资源页面、后台重试、脏文件拦截或额外风险确认。弹窗删除
+Worktree 和本地分支，使用中性操作。删除使命新增默认 `retain` 的 `workspaceDisposition`；只有用户勾选时
+才先结束执行、完成两步清理并删除使命，任一步失败都保留使命。
+
+实现复用 `mission_workspace` 与命令记录，只增加准备模式、generation、清理命令、expected branch OID 和
+两个步骤检查点。清理与 preparing 使用同一互斥，Core 按同 Camp 或相同 execution root 检查全部活跃 Run；
+分支使用 expected OID 条件删除。后续 Run 在 Worktree 缺失时按实际分支状态恢复，既有 Native Session resume
+不变。Migration 162/schema 112 原位补列并删除旧的无条件 Camp-delete cleanup trigger；历史孤儿清理 route
+仅继续处理已经处于旧 `cleanup_pending`／`cleanup_failed` 的记录。
+
+最终验证覆盖 `cargo check --workspace --all-targets`、`cargo test -p rovai-core --lib`
+（832 passed、6 ignored）、`cargo test -p rovai-web`（8 passed）、`pnpm typecheck`、
+`pnpm test:desktop-bridge`、`pnpm test:mission-board`（标准场景与 1200 文件窗口化场景）、
+`pnpm test:host-web`（4 passed）、`pnpm build:web`，以及完整 documentation governance／diff-aware CI 门禁。
+
 ## 主线整合与验收
 
 已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文曾在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；定义编辑与基线修订曾推进到 Migration 158/schema 108，稳定编号与 accepted 水位曾推进到 Migration 159/schema 109。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
 
 随后整合 `origin/main` 的 `e6d7f0cf` 时，主线已把 Migration 157/schema 107 分配给 DSH。最终序列保留
-DSH 157，将 Mission context／definition／delivery 顺延到 158–160，并由定义附件 Migration 161 推进到当前 schema 111；已安装的 Mission
+DSH 157，将 Mission context／definition／delivery 顺延到 158–160，由定义附件 Migration 161 推进到 schema 111，
+再由工作区处置 Migration 162 推进到当前 schema 112；已安装的 Mission
 157–159/schema 109 被精确识别为旧 preview，只能通过 Migration 160 补齐 DSH 并收敛，不改写 Mission
 业务行、已冻结 Context 或既有工作区。
 
@@ -87,7 +142,7 @@ DSH 157，将 Mission context／definition／delivery 顺延到 158–160，并�
 常规门禁与最终安装已完成；上下文 Gate 按用户追加指令提前结束，不记为完整通过。
 
 真实运行第七次验收已通过六个阶段：保存不执行、开始幂等与 preparing 建工作区、A2A／非队长更新、
-固定基准净 Diff 与文件来源、Core 重启及非 Git 普通消息、删除 worktree 并保留分支。证据位于
+固定基准净 Diff 与文件来源、Core 重启及非 Git 普通消息、当时合同下删除 worktree 并保留分支。证据位于
 `/private/tmp/rovai-mission-evidence-20260915/runtime-7/report.json`，四个真实 Codex Run 均成功。
 执行夹具使用独立空 `ZDOTDIR`，避免本机登录 Shell 把候选 CLI 的 PATH 改回日常安装版。
 

@@ -219,6 +219,16 @@ pub struct DeleteCampCommand {
     pub expected_version: i64,
     #[serde(default)]
     pub force: bool,
+    #[serde(default)]
+    pub workspace_disposition: MissionWorkspaceDisposition,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionWorkspaceDisposition {
+    #[default]
+    Retain,
+    Cleanup,
 }
 
 impl sealed::Sealed for DeleteCampCommand {}
@@ -8835,6 +8845,7 @@ mod slow_tests {
                 camp_id: camp_id.clone(),
                 expected_version: delete_version,
                 force: false,
+                workspace_disposition: Default::default(),
             },
         );
         let delete = service
@@ -8927,6 +8938,7 @@ mod slow_tests {
                         camp_id: camp_id.clone(),
                         expected_version: delete_version,
                         force: false,
+                        workspace_disposition: Default::default(),
                     },
                 ),
             )
@@ -8980,6 +8992,7 @@ mod slow_tests {
                         camp_id: camp_id.clone(),
                         expected_version: delete_version,
                         force: true,
+                        workspace_disposition: Default::default(),
                     },
                 ),
                 &prior_blockers,
@@ -8996,6 +9009,7 @@ mod slow_tests {
                         camp_id: camp_id.clone(),
                         expected_version: delete_version,
                         force: true,
+                        workspace_disposition: Default::default(),
                     },
                 ),
             )

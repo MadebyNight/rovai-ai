@@ -92,6 +92,9 @@ pub struct MissionRecord {
     pub default_lead_agent_id: Option<String>,
     pub running_agent_ids: Vec<String>,
     pub has_unread: bool,
+    pub workspace_ever_created: bool,
+    pub workspace_resources_present: bool,
+    pub cleanup_available: bool,
 }
 
 impl MissionRecord {
@@ -191,6 +194,16 @@ pub struct StartMissionCommand {
 impl sealed::Sealed for StartMissionCommand {}
 impl DomainCommand for StartMissionCommand {
     const TYPE: &'static str = "mission.start";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CleanupMissionWorkspaceCommand {
+    pub mission_id: String,
+}
+impl sealed::Sealed for CleanupMissionWorkspaceCommand {}
+impl DomainCommand for CleanupMissionWorkspaceCommand {
+    const TYPE: &'static str = "mission.workspace.cleanup";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -503,6 +516,8 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         crate::camp_message_publication::public_camp_message_publication_cte()
     );
     let has_unread = connection.query_row(&unread_sql, [&camp_id], |r| r.get(0))?;
+    let (workspace_ever_created, workspace_resources_present, cleanup_available) =
+        crate::mission_workspace::cleanup_projection(connection, &mission_id, &camp_id)?;
     Ok(Some(MissionRecord {
         has_unread,
         number,
@@ -529,6 +544,9 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         created_at,
         updated_at,
         default_lead_agent_id,
+        workspace_ever_created,
+        workspace_resources_present,
+        cleanup_available,
     }))
 }
 fn validate_content(title: Option<&str>, description: Option<&str>) -> Result<()> {
@@ -1054,6 +1072,139 @@ mod tests {
             service.update(&mut db, &edit).unwrap().result.code,
             "mission.forbidden"
         );
+    }
+
+    #[test]
+    fn mission_cleanup_capability_comes_from_workspace_records_and_execution_occupancy() {
+        let mut db = crate::test_support::seeded_runtime_database_owned();
+        let service = MissionService::default();
+        let project_path = db.directory().to_string_lossy().into_owned();
+        let created = service
+            .create(
+                &mut db,
+                &command(CreateMissionCommand {
+                    title: "cleanup projection".into(),
+                    description: String::new(),
+                    project_path,
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    member_agent_ids: vec!["agent_1".into()],
+                    default_lead_agent_id: "agent_1".into(),
+                    tags: vec![],
+                    source_attachments: vec![],
+                }),
+            )
+            .unwrap();
+        let mission_id = created.result.payload["missionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let camp_id = created.result.payload["campId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let initial = service.get(&db, &mission_id).unwrap().unwrap();
+        assert!(!initial.workspace_ever_created);
+        assert!(!initial.workspace_resources_present);
+        assert!(!initial.cleanup_available);
+
+        let host: String = db
+            .connection()
+            .query_row(
+                "SELECT id FROM mission_execution_host WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        db.connection().execute(
+            "INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES('projection-workspace',?1,?2,?3,'/repo','/repo','/repo/.git','/worktree','/worktree','main','rovai/mission/001','base','owner','ready','created','updated')",
+            params![mission_id, camp_id, host],
+        ).unwrap();
+        let idle = service.get(&db, &mission_id).unwrap().unwrap();
+        assert!(idle.workspace_ever_created);
+        assert!(idle.workspace_resources_present);
+        assert!(idle.cleanup_available);
+
+        service
+            .start(
+                &mut db,
+                &command(StartMissionCommand {
+                    mission_id: mission_id.clone(),
+                }),
+            )
+            .unwrap();
+        assert!(
+            !service
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available
+        );
+        db.connection()
+            .execute(
+                "UPDATE agent_run SET status='succeeded',ended_at='ended',updated_at='ended' WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
+                [&camp_id],
+            )
+            .unwrap();
+        assert!(
+            service
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available
+        );
+
+        let other = service
+            .create(
+                &mut db,
+                &command(CreateMissionCommand {
+                    title: "same execution root".into(),
+                    description: String::new(),
+                    project_path: "/other/repo".into(),
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    member_agent_ids: vec!["agent_1".into()],
+                    default_lead_agent_id: "agent_1".into(),
+                    tags: vec![],
+                    source_attachments: vec![],
+                }),
+            )
+            .unwrap();
+        let other_mission_id = other.result.payload["missionId"].as_str().unwrap();
+        let other_camp_id = other.result.payload["campId"].as_str().unwrap();
+        service
+            .start(
+                &mut db,
+                &command(StartMissionCommand {
+                    mission_id: other_mission_id.into(),
+                }),
+            )
+            .unwrap();
+        db.connection()
+            .execute(
+                "UPDATE agent_run SET workspace_json=json_object('executionRoot','/worktree') WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
+                [other_camp_id],
+            )
+            .unwrap();
+        assert!(
+            !service
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available
+        );
+        db.connection()
+            .execute(
+                "UPDATE agent_run SET status='succeeded',ended_at='ended',updated_at='ended' WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
+                [other_camp_id],
+            )
+            .unwrap();
+        db.connection().execute(
+            "UPDATE mission_workspace SET state='cleanup_pending',cleanup_worktree_removed=1,cleanup_branch_removed=1 WHERE mission_id=?1",
+            [&mission_id],
+        ).unwrap();
+        let cleaned = service.get(&db, &mission_id).unwrap().unwrap();
+        assert!(cleaned.workspace_ever_created);
+        assert!(!cleaned.workspace_resources_present);
+        assert!(!cleaned.cleanup_available);
     }
 
     #[test]

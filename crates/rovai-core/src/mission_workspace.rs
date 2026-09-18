@@ -34,8 +34,30 @@ pub struct MissionWorkspace {
     pub base_sha: String,
     #[serde(skip)]
     pub preparation_token: String,
+    #[serde(skip)]
+    pub preparation_kind: String,
+    #[serde(skip)]
+    pub generation: i64,
     pub state: String,
+    #[serde(skip)]
+    pub cleanup_command_id: Option<String>,
+    #[serde(skip)]
+    pub cleanup_expected_branch_oid: Option<String>,
+    #[serde(skip)]
+    pub cleanup_worktree_removed: bool,
+    #[serde(skip)]
+    pub cleanup_branch_removed: bool,
     pub diagnostic: Option<String>,
+}
+
+impl MissionWorkspace {
+    pub fn cleanup_finished(&self) -> bool {
+        self.cleanup_worktree_removed && self.cleanup_branch_removed
+    }
+
+    pub fn managed_resources_remain(&self) -> bool {
+        !self.cleanup_finished()
+    }
 }
 #[derive(Debug, Clone)]
 pub struct GitRepository {
@@ -294,7 +316,11 @@ impl MissionGit {
     }
     /// A private staging parent proves ownership even across interruption before worktree registration.
     /// The final worktree carries that proof in Git's admin directory, outside tracked files.
-    pub async fn materialize(&self, workspace: &MissionWorkspace) -> Result<()> {
+    async fn materialize_with_branch(
+        &self,
+        workspace: &MissionWorkspace,
+        create_branch: bool,
+    ) -> Result<()> {
         let target = Path::new(&workspace.worktree_path);
         if path_occupied(target)? {
             if self.verify_tree(target, workspace, true).await.is_ok() {
@@ -317,31 +343,39 @@ impl MissionGit {
         }
         let checkout = staging.join("checkout");
         if !checkout.exists() {
+            let mut args = vec!["worktree".into(), "add".into(), "--no-guess-remote".into()];
+            if create_branch {
+                args.extend(["-b".into(), workspace.branch.clone().into()]);
+            }
+            args.push(checkout.as_os_str().to_owned());
+            args.push(
+                if create_branch {
+                    workspace.base_sha.clone()
+                } else {
+                    workspace.branch.clone()
+                }
+                .into(),
+            );
             let output = self
-                .output(
-                    Path::new(&workspace.repository_root),
-                    &[
-                        "worktree".into(),
-                        "add".into(),
-                        "--no-guess-remote".into(),
-                        "-b".into(),
-                        workspace.branch.clone().into(),
-                        checkout.as_os_str().to_owned(),
-                        workspace.base_sha.clone().into(),
-                    ],
-                    None,
-                    None,
-                )
+                .output(Path::new(&workspace.repository_root), &args, None, None)
                 .await?;
             if !output.status.success() {
                 let error = output.stderr.lossy_text();
-                if error.contains("already exists")
+                if create_branch
+                    && error.contains("already exists")
                     && (error.contains("branch named")
                         || error.contains("reference already exists"))
                 {
                     return Err(NameOccupied.into());
                 }
-                bail!("mission.worktree_create_failed: {error}");
+                bail!(
+                    "{}: {error}",
+                    if create_branch {
+                        "mission.worktree_create_failed"
+                    } else {
+                        "mission.worktree_restore_failed"
+                    }
+                );
             }
         }
         self.verify_tree(&checkout, workspace, false).await?;
@@ -395,6 +429,14 @@ impl MissionGit {
         fs::remove_dir(&staging)?;
         Ok(())
     }
+
+    pub async fn materialize(&self, workspace: &MissionWorkspace) -> Result<()> {
+        self.materialize_with_branch(workspace, true).await
+    }
+
+    pub async fn restore(&self, workspace: &MissionWorkspace) -> Result<()> {
+        self.materialize_with_branch(workspace, false).await
+    }
     fn remove_empty_staging(&self, workspace: &MissionWorkspace) -> Result<()> {
         let staging = Self::staging_root(workspace)?;
         if path_occupied(&staging)? {
@@ -434,6 +476,14 @@ impl MissionGit {
         ensure!(workspace.state == "ready", "mission.workspace_not_ready");
         self.verify_tree(Path::new(&workspace.worktree_path), workspace, true)
             .await?;
+        ensure!(
+            self.current_branch(workspace).await?.as_deref() == Some(workspace.branch.as_str()),
+            "mission.workspace_branch_mismatch"
+        );
+        ensure!(
+            self.branch_oid(workspace).await?.is_some(),
+            "mission.workspace_branch_missing"
+        );
         self.bytes(
             Path::new(&workspace.worktree_path),
             &[
@@ -474,6 +524,117 @@ impl MissionGit {
             Some(1) => Ok(None),
             _ => bail!("mission.branch_unavailable"),
         }
+    }
+
+    pub fn worktree_exists(&self, workspace: &MissionWorkspace) -> Result<bool> {
+        path_occupied(Path::new(&workspace.worktree_path))
+    }
+
+    pub async fn branch_oid(&self, workspace: &MissionWorkspace) -> Result<Option<String>> {
+        let reference = format!("refs/heads/{}", workspace.branch);
+        let valid = self
+            .output(
+                Path::new(&workspace.repository_root),
+                &[
+                    "check-ref-format".into(),
+                    "--branch".into(),
+                    workspace.branch.clone().into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        ensure!(valid.status.success(), "mission.branch_identity_invalid");
+        let output = self
+            .output(
+                Path::new(&workspace.repository_root),
+                &[
+                    "show-ref".into(),
+                    "--verify".into(),
+                    "--quiet".into(),
+                    reference.into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        match output.status.code() {
+            Some(0) => Ok(Some(
+                self.text(
+                    Path::new(&workspace.repository_root),
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        &format!("refs/heads/{}^{{commit}}", workspace.branch),
+                    ],
+                )
+                .await?,
+            )),
+            Some(1) => Ok(None),
+            _ => bail!("mission.branch_unavailable: {}", output.stderr.lossy_text()),
+        }
+    }
+
+    pub async fn delete_branch_expected(
+        &self,
+        workspace: &MissionWorkspace,
+        expected_oid: &str,
+    ) -> Result<()> {
+        match self.branch_oid(workspace).await? {
+            None => return Ok(()),
+            Some(actual) => ensure!(actual == expected_oid, "mission.branch_changed"),
+        }
+        let reference = format!("refs/heads/{}", workspace.branch);
+        let worktrees = self
+            .output(
+                Path::new(&workspace.repository_root),
+                &[
+                    "worktree".into(),
+                    "list".into(),
+                    "--porcelain".into(),
+                    "-z".into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        ensure!(
+            worktrees.status.success(),
+            "mission.branch_unavailable: {}",
+            worktrees.stderr.lossy_text()
+        );
+        let checkout_marker = format!("branch {reference}");
+        ensure!(
+            !worktrees
+                .stdout
+                .bytes
+                .split(|byte| *byte == 0)
+                .any(|field| field == checkout_marker.as_bytes()),
+            "mission.branch_in_use"
+        );
+        let output = self
+            .output(
+                Path::new(&workspace.repository_root),
+                &[
+                    "update-ref".into(),
+                    "-d".into(),
+                    reference.into(),
+                    expected_oid.into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        ensure!(
+            output.status.success(),
+            "mission.branch_changed: {}",
+            output.stderr.lossy_text()
+        );
+        ensure!(
+            self.branch_oid(workspace).await?.is_none(),
+            "mission.branch_changed"
+        );
+        Ok(())
     }
     pub async fn cleanup(&self, workspace: &MissionWorkspace) -> Result<()> {
         let target = Path::new(&workspace.worktree_path);
@@ -716,6 +877,7 @@ const MISSION_DIFF_SNAPSHOT_TTL: Duration = Duration::from_secs(10 * 60);
 pub struct MissionDiffSnapshot {
     workspace_id: String,
     worktree_path: String,
+    workspace_generation: i64,
     files: Arc<Vec<MissionChangedFile>>,
     file_indices: Arc<BTreeMap<String, usize>>,
     temporary_index: Arc<TemporaryIndex>,
@@ -734,6 +896,7 @@ impl MissionDiffSnapshot {
         Self {
             workspace_id: workspace.id.clone(),
             worktree_path: workspace.worktree_path.clone(),
+            workspace_generation: workspace.generation,
             files: Arc::new(files),
             file_indices: Arc::new(file_indices),
             temporary_index: Arc::new(temporary_index),
@@ -751,7 +914,9 @@ impl MissionDiffSnapshot {
         &self.temporary_index.index
     }
     fn matches(&self, workspace: &MissionWorkspace) -> bool {
-        self.workspace_id == workspace.id && self.worktree_path == workspace.worktree_path
+        self.workspace_id == workspace.id
+            && self.worktree_path == workspace.worktree_path
+            && self.workspace_generation == workspace.generation
     }
 }
 
@@ -846,7 +1011,7 @@ pub fn has_git_marker(path: &Path) -> bool {
     })
 }
 pub fn load_workspaces(connection: &Connection, mission_id: &str) -> Result<Vec<MissionWorkspace>> {
-    let mut stmt=connection.prepare("SELECT id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,diagnostic FROM mission_workspace WHERE mission_id=?1 ORDER BY created_at,id")?;
+    let mut stmt=connection.prepare("SELECT id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,preparation_kind,generation,state,cleanup_command_id,cleanup_expected_branch_oid,cleanup_worktree_removed,cleanup_branch_removed,diagnostic FROM mission_workspace WHERE mission_id=?1 ORDER BY created_at,id")?;
     Ok(stmt
         .query_map([mission_id], |r| {
             Ok(MissionWorkspace {
@@ -863,18 +1028,67 @@ pub fn load_workspaces(connection: &Connection, mission_id: &str) -> Result<Vec<
                 branch: r.get(10)?,
                 base_sha: r.get(11)?,
                 preparation_token: r.get(12)?,
-                state: r.get(13)?,
-                diagnostic: r.get(14)?,
+                preparation_kind: r.get(13)?,
+                generation: r.get(14)?,
+                state: r.get(15)?,
+                cleanup_command_id: r.get(16)?,
+                cleanup_expected_branch_oid: r.get(17)?,
+                cleanup_worktree_removed: r.get(18)?,
+                cleanup_branch_removed: r.get(19)?,
+                diagnostic: r.get(20)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 pub fn persist_plan(connection: &Connection, workspace: &MissionWorkspace) -> Result<()> {
-    connection.execute("INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'preparing',?14,?14)",params![workspace.id,workspace.mission_id,workspace.camp_id,workspace.execution_host_id,workspace.source_directory,workspace.repository_root,workspace.git_common_dir,workspace.worktree_path,workspace.working_directory,workspace.base_branch,workspace.branch,workspace.base_sha,workspace.preparation_token,chrono::Utc::now().to_rfc3339()])?;
+    connection.execute("INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,preparation_kind,generation,state,cleanup_command_id,cleanup_expected_branch_oid,cleanup_worktree_removed,cleanup_branch_removed,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'preparing',?16,?17,?18,?19,?20,?20)",params![workspace.id,workspace.mission_id,workspace.camp_id,workspace.execution_host_id,workspace.source_directory,workspace.repository_root,workspace.git_common_dir,workspace.worktree_path,workspace.working_directory,workspace.base_branch,workspace.branch,workspace.base_sha,workspace.preparation_token,workspace.preparation_kind,workspace.generation,workspace.cleanup_command_id,workspace.cleanup_expected_branch_oid,workspace.cleanup_worktree_removed,workspace.cleanup_branch_removed,chrono::Utc::now().to_rfc3339()])?;
     Ok(())
 }
 pub fn execution_directory(connection: &Connection, camp_id: &str) -> Result<Option<String>> {
     Ok(connection.query_row("SELECT w.working_directory FROM mission_workspace w JOIN mission m ON m.id=w.mission_id WHERE m.camp_id=?1 AND w.state='ready' ORDER BY w.created_at LIMIT 1",[camp_id],|r|r.get(0)).optional()?)
+}
+
+pub fn workspace_in_use(connection: &Connection, workspace: &MissionWorkspace) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM agent_run r
+            JOIN conversation c ON c.id=r.conversation_id
+            WHERE (
+                c.camp_id=?1
+                OR json_extract(r.workspace_json,'$.executionRoot')=?2
+            )
+              AND (
+                r.status IN ('queued','running','waiting')
+                OR (r.cancel_requested_at IS NOT NULL AND r.cancel_acknowledged_at IS NULL)
+              )
+        )",
+        params![workspace.camp_id, workspace.working_directory],
+        |row| row.get(0),
+    )?)
+}
+
+pub fn cleanup_projection(
+    connection: &Connection,
+    mission_id: &str,
+    camp_id: &str,
+) -> Result<(bool, bool, bool)> {
+    let workspaces = load_workspaces(connection, mission_id)?;
+    let Some(workspace) = workspaces.first() else {
+        return Ok((false, false, false));
+    };
+    let resources_present = workspace.managed_resources_remain();
+    let current_host: String = connection.query_row(
+        "SELECT id FROM mission_execution_host WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?;
+    let available = resources_present
+        && workspace.execution_host_id == current_host
+        && workspace.camp_id == camp_id
+        && workspace.state != "preparing"
+        && !workspace_in_use(connection, workspace)?;
+    Ok((true, resources_present, available))
 }
 
 struct TemporaryIndex {
@@ -1143,7 +1357,13 @@ mod tests {
             branch: "rovai/mission/rvm_test".into(),
             base_sha: repository.base_sha.clone(),
             preparation_token: Uuid::new_v4().to_string(),
+            preparation_kind: "create".into(),
+            generation: 1,
             state: "preparing".into(),
+            cleanup_command_id: None,
+            cleanup_expected_branch_oid: None,
+            cleanup_worktree_removed: false,
+            cleanup_branch_removed: false,
             diagnostic: None,
         };
         (Fixture(root), git, repository, workspace)
@@ -1224,6 +1444,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(git.current_branch(&workspace).await.unwrap(), None);
+        assert!(git.validate(&workspace).await.is_err());
+        git.bytes(
+            Path::new(&workspace.worktree_path),
+            &["checkout", &workspace.branch],
+        )
+        .await
+        .unwrap();
         git.validate(&workspace).await.unwrap();
         git.cleanup(&workspace).await.unwrap();
         assert!(!Path::new(&workspace.worktree_path).exists());
@@ -1242,6 +1469,100 @@ mod tests {
         fs::create_dir(&non_git).unwrap();
         assert!(git.inspect(&non_git).await.unwrap().is_none());
     }
+
+    #[tokio::test]
+    async fn restore_keeps_branch_content_and_expected_oid_fences_branch_deletion() {
+        let (_fixture, git, repo, mut workspace) = fixture().await;
+        git.materialize(&workspace).await.unwrap();
+        workspace.state = "ready".into();
+        let worktree = PathBuf::from(&workspace.worktree_path);
+        fs::write(worktree.join("mission-result.txt"), "kept\n").unwrap();
+        git.bytes(&worktree, &["add", "mission-result.txt"])
+            .await
+            .unwrap();
+        git.bytes(&worktree, &["commit", "-m", "mission result"])
+            .await
+            .unwrap();
+        let expected = git.branch_oid(&workspace).await.unwrap().unwrap();
+
+        git.cleanup(&workspace).await.unwrap();
+        assert!(!worktree.exists());
+        workspace.preparation_token = Uuid::new_v4().to_string();
+        workspace.preparation_kind = "restore".into();
+        workspace.state = "preparing".into();
+        git.restore(&workspace).await.unwrap();
+        workspace.state = "ready".into();
+        git.validate(&workspace).await.unwrap();
+        assert_eq!(
+            fs::read_to_string(worktree.join("mission-result.txt")).unwrap(),
+            "kept\n"
+        );
+
+        git.cleanup(&workspace).await.unwrap();
+        let other = repo.root.parent().unwrap().join("other-worktree");
+        git.bytes(
+            &repo.root,
+            &[
+                "worktree",
+                "add",
+                other.to_str().unwrap(),
+                &workspace.branch,
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            git.delete_branch_expected(&workspace, &expected)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("mission.branch_in_use")
+        );
+        git.bytes(
+            &repo.root,
+            &["worktree", "remove", "--force", other.to_str().unwrap()],
+        )
+        .await
+        .unwrap();
+        fs::write(repo.root.join("replacement.txt"), "replacement\n").unwrap();
+        git.bytes(&repo.root, &["add", "replacement.txt"])
+            .await
+            .unwrap();
+        git.bytes(&repo.root, &["commit", "-m", "replacement"])
+            .await
+            .unwrap();
+        let replacement = git
+            .text(&repo.root, &["rev-parse", "HEAD^{commit}"])
+            .await
+            .unwrap();
+        git.bytes(
+            &repo.root,
+            &[
+                "update-ref",
+                &format!("refs/heads/{}", workspace.branch),
+                &replacement,
+                &expected,
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            git.delete_branch_expected(&workspace, &expected)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("mission.branch_changed")
+        );
+        assert_eq!(
+            git.branch_oid(&workspace).await.unwrap().as_deref(),
+            Some(replacement.as_str())
+        );
+        git.delete_branch_expected(&workspace, &replacement)
+            .await
+            .unwrap();
+        assert!(git.branch_oid(&workspace).await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn fixed_base_diff_is_final_net_content_without_mutating_real_index() {
         let (_fixture, git, _repo, mut workspace) = fixture().await;

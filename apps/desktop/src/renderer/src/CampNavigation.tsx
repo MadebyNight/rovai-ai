@@ -32,6 +32,7 @@ import {
   AppDialogHeader
 } from './AppDialog'
 import { NavigationIcon, type NavigationIconName } from './NavigationIcon'
+import { MissionIcon } from './MissionIcon'
 import {
   primaryShortcutLabel,
   shouldHandlePrimaryShortcut
@@ -125,7 +126,7 @@ export function CampNavigation({
   onNewConversation,
   onMembers,
   onAutomations = () => undefined,
-  onMissions,
+  onMissions = () => undefined,
   pendingMissionCount = 0,
   onMemory,
   pendingMemoryCount,
@@ -382,6 +383,17 @@ export function CampNavigation({
                   </button>
                   <button className={`rail-button ${view === 'members' ? 'active' : ''}`} type="button" aria-current={view === 'members' ? 'page' : undefined} aria-label="队员" title="队员" onClick={onMembers}>
                     <span className="rail-glyph" aria-hidden="true"><NavigationIcon name="users" /></span><span className="rail-label">队员</span>
+                  </button>
+                  <button
+                    className={`rail-button ${view === 'missions' ? 'active' : ''}`}
+                    type="button"
+                    aria-current={view === 'missions' ? 'page' : undefined}
+                    aria-label={pendingMissionCount > 0 ? `使命板，${pendingMissionCount} 个使命需要你` : '使命板'}
+                    title={pendingMissionCount > 0 ? `使命板 · ${pendingMissionCount} 个使命需要你` : '使命板'}
+                    onClick={onMissions}
+                  >
+                    <span className="rail-glyph" aria-hidden="true"><MissionIcon /></span><span className="rail-label">使命板</span>
+                    {pendingMissionCount > 0 && <i className="mission-rail-badge-dot" aria-hidden="true" />}
                   </button>
                   <button
                     className={`rail-button ${view === 'memory' ? 'active' : ''}`}

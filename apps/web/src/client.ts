@@ -79,6 +79,7 @@ export const WEB_OPERATIONS = [
   'memory.hearthReviewItems.accept',
   'memory.hearthReviewItems.reject',
   'memory.export',
+  'missions.workspace.cleanup',
   'missions.cleanup.list',
   'missions.cleanup.retry',
   'missions.list',

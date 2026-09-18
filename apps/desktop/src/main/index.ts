@@ -251,6 +251,7 @@ const allowedMethods = new Set<CoreMethod>([
   'navigation.groupCamps',
   'navigation.findCamp',
   'navigation.campViewed',
+  'missions.workspace.cleanup',
   'missions.cleanup.list',
   'missions.cleanup.retry',
   'missions.list',

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const { mkdirSync } = require('node:fs')
 const { isAbsolute, join } = require('node:path')
 const { app, BrowserWindow } = require('electron')
-const [renderer, userData] = process.argv.slice(2)
+const [renderer, userData, mode = 'standard'] = process.argv.slice(2)
 assert(isAbsolute(renderer) && isAbsolute(userData))
 mkdirSync(userData, { recursive: true })
 app.setPath('userData', userData); app.setPath('sessionData', join(userData, 'session'))
@@ -10,8 +10,11 @@ app.setPath('userData', userData); app.setPath('sessionData', join(userData, 'se
 app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: process.platform === 'linux', width: 1440, height: 920, useContentSize: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
-  await window.loadFile(renderer)
-  const report = await window.webContents.executeJavaScript('window.missionQA.run()', true)
+  await window.loadFile(renderer, mode === 'large-diff' ? { query: { largeDiff: '1' } } : undefined)
+  const report = await window.webContents.executeJavaScript(mode === 'large-diff' ? 'window.missionQA.runLargeDiff()' : 'window.missionQA.run()', true)
+  if (mode === 'large-diff') {
+    console.log(JSON.stringify(report)); app.exit(report.ok ? 0 : 1); return
+  }
   await window.webContents.executeJavaScript(`(() => {
     localStorage.setItem('rovai.mission-drawer-width', '1040')
     document.querySelector('.mission-board-card')?.click()
