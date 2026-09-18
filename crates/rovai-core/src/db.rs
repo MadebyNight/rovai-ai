@@ -25289,11 +25289,18 @@ impl Database {
                 .replace(
                     "camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,",
                     "camp_turn_id TEXT UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,\n    delivery_id TEXT UNIQUE REFERENCES camp_message_delivery(id),",
-                )
-                .replace(
-                    "created_at TEXT NOT NULL\n)",
-                    "created_at TEXT NOT NULL,\n    CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))\n)",
                 );
+            let Some((mission_start_prefix, mission_start_suffix)) =
+                mission_start_v162.rsplit_once("created_at TEXT NOT NULL")
+            else {
+                anyhow::bail!("v162 could not extend Mission start linkage");
+            };
+            if mission_start_suffix.trim() != ")" {
+                anyhow::bail!("v162 could not extend Mission start linkage");
+            }
+            let mission_start_v162 = format!(
+                "{mission_start_prefix}created_at TEXT NOT NULL,\n    CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))\n)"
+            );
             if !mission_start_v162.contains("CREATE TABLE mission_start_v162")
                 || !mission_start_v162.contains("delivery_id TEXT UNIQUE")
                 || !mission_start_v162.contains("camp_turn_id IS NOT NULL")
@@ -34013,6 +34020,56 @@ mod tests {
             batch_contract.1 >= 6,
             "ordered RunInput relation is missing"
         );
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v162_accepts_mission_start_schema_rebuilt_by_v160() {
+        let directory = std::env::temp_dir().join(format!(
+            "rovai-v162-v160-mission-start-schema-{}",
+            Uuid::new_v4()
+        ));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v161_source_for_test(database.connection());
+        database
+            .connection()
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 CREATE TABLE mission_start_v160 (
+                    message_id TEXT PRIMARY KEY NOT NULL REFERENCES camp_message(id) ON DELETE CASCADE,
+                    mission_id TEXT NOT NULL REFERENCES mission(id) ON DELETE CASCADE,
+                    camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,
+                    command_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO mission_start_v160(message_id,mission_id,camp_turn_id,command_id,created_at)
+                SELECT message_id,mission_id,camp_turn_id,command_id,created_at FROM mission_start;
+                DROP TABLE mission_start;
+                ALTER TABLE mission_start_v160 RENAME TO mission_start;
+                PRAGMA foreign_keys=ON;",
+            )
+            .unwrap();
+
+        let source_schema = database
+            .connection()
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name='mission_start'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(source_schema.contains("created_at TEXT NOT NULL\n                )"));
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 111
+        ));
+
+        database.migrate_camp_message_agent_run_v162().unwrap();
+        assert!(camp_message_agent_run_v162_schema_matches(database.connection()).unwrap());
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
