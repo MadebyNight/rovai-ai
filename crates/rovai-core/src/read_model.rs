@@ -6103,6 +6103,51 @@ mod slow_tests {
                 .is_none()
         );
 
+        // Historical Runs still resolve their Camp through CampTurn after the
+        // delivery-first batch model moved new Runs to agent_run.camp_id.
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO camp_turn(
+                    id, camp_id, trigger_type, trigger_id, status,
+                    created_at, updated_at
+                ) VALUES (
+                    'legacy-execution-window-turn', ?1, 'system_event',
+                    'legacy-execution-window-trigger', 'running', ?2, ?2
+                )
+                "#,
+                params![camp_id, now],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_run
+                SET camp_turn_id = 'legacy-execution-window-turn',
+                    trigger_camp_message_id = anchor_message_id,
+                    camp_id = NULL, anchor_message_id = NULL,
+                    current_public_tail_sequence = NULL,
+                    invocation_kind = 'direct'
+                WHERE id = ?1
+                "#,
+                [agent_run_id],
+            )
+            .unwrap();
+        assert!(
+            !crate::execution_window::read_page(&mut database, camp_id, agent_run_id, None, 1,)
+                .unwrap()
+                .evidence
+                .is_empty()
+        );
+        assert_eq!(
+            crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 0, &[], 1,)
+                .unwrap()
+                .next_after_sequence,
+            1
+        );
+
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }

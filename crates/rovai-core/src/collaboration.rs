@@ -5243,6 +5243,27 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         "DELETE FROM managed_attachment_ingest_intent WHERE camp_id = ?1",
         [camp_id],
     )?;
+    // Delivery-first Runs own their ordered inputs. Release those edges before
+    // deleting the claimed Delivery rows and public messages they reference.
+    transaction.execute(
+        r#"
+        DELETE FROM agent_run_input
+        WHERE agent_run_id IN (
+            SELECT agent_run.id
+            FROM agent_run
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+        )
+        "#,
+        [camp_id],
+    )?;
+    transaction.execute(
+        r#"
+        DELETE FROM mission_start
+        WHERE mission_id IN (SELECT id FROM mission WHERE camp_id = ?1)
+        "#,
+        [camp_id],
+    )?;
     transaction.execute(
         r#"
         DELETE FROM approval
@@ -5251,8 +5272,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
                 SELECT action_execution.id
                 FROM action_execution
                 JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                WHERE camp_turn.camp_id = ?1
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
            )
         "#,
         [camp_id],
@@ -5263,8 +5284,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         WHERE agent_run_id IN (
             SELECT agent_run.id
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         )
         "#,
         [camp_id],
@@ -5275,8 +5296,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         WHERE agent_run_id IN (
             SELECT agent_run.id
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         )
         "#,
         [camp_id],
@@ -5287,8 +5308,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         WHERE agent_run_id IN (
             SELECT agent_run.id
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         )
         "#,
         [camp_id],
@@ -5309,8 +5330,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
             SELECT action_execution.id
             FROM action_execution
             JOIN agent_run ON agent_run.id = action_execution.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         )
         "#,
         [camp_id],
@@ -5321,8 +5342,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         WHERE agent_run_id IN (
             SELECT agent_run.id
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         )
         "#,
         [camp_id],
@@ -5333,8 +5354,8 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         WHERE agent_run_id IN (
             SELECT agent_run.id
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
         )
         "#,
         [camp_id],
@@ -5348,13 +5369,69 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
             input_ready_at = NULL,
             final_conversation_message_id = NULL,
             final_camp_message_id = NULL
-        WHERE camp_turn_id IN (SELECT id FROM camp_turn WHERE camp_id = ?1)
+        WHERE id IN (
+            SELECT agent_run.id
+            FROM agent_run
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+        )
         "#,
+        [camp_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM camp_message_delivery WHERE camp_id = ?1",
         [camp_id],
     )?;
     transaction.execute("DELETE FROM message_delivery WHERE camp_id = ?1", [camp_id])?;
     transaction.execute(
         "DELETE FROM conversation_message WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id = ?1)",
+        [camp_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM event_log WHERE camp_id = ?1 OR task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
+        [camp_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM turn WHERE runtime_session_id IN (SELECT runtime_session.id FROM runtime_session JOIN task ON task.id = runtime_session.task_id WHERE task.camp_id = ?1)",
+        [camp_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM runtime_session WHERE task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
+        [camp_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM artifact WHERE task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
+        [camp_id],
+    )?;
+    transaction.execute(
+        r#"
+        UPDATE agent_run
+        SET task_id = NULL
+        WHERE id IN (
+            SELECT agent_run.id
+            FROM agent_run
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+        )
+        "#,
+        [camp_id],
+    )?;
+    transaction.execute("DELETE FROM task WHERE camp_id = ?1", [camp_id])?;
+    transaction.execute("DELETE FROM gather_record WHERE camp_id = ?1", [camp_id])?;
+    transaction.execute(
+        "UPDATE camp_message SET agent_run_id = NULL WHERE camp_id = ?1",
+        [camp_id],
+    )?;
+    transaction.execute(
+        r#"
+        DELETE FROM agent_run
+        WHERE id IN (
+            SELECT agent_run.id
+            FROM agent_run
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+        )
+        "#,
         [camp_id],
     )?;
     transaction.execute(
@@ -5376,38 +5453,6 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         [camp_id],
     )?;
     transaction.execute("DELETE FROM camp_message WHERE camp_id = ?1", [camp_id])?;
-    transaction.execute(
-        "DELETE FROM event_log WHERE camp_id = ?1 OR task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
-        [camp_id],
-    )?;
-    transaction.execute(
-        "DELETE FROM turn WHERE runtime_session_id IN (SELECT runtime_session.id FROM runtime_session JOIN task ON task.id = runtime_session.task_id WHERE task.camp_id = ?1)",
-        [camp_id],
-    )?;
-    transaction.execute(
-        "DELETE FROM runtime_session WHERE task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
-        [camp_id],
-    )?;
-    transaction.execute(
-        "DELETE FROM artifact WHERE task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
-        [camp_id],
-    )?;
-    transaction.execute(
-        r#"
-        UPDATE agent_run
-        SET task_id = NULL
-        WHERE camp_turn_id IN (SELECT id FROM camp_turn WHERE camp_id = ?1)
-        "#,
-        [camp_id],
-    )?;
-    transaction.execute("DELETE FROM task WHERE camp_id = ?1", [camp_id])?;
-    transaction.execute(
-        r#"
-        DELETE FROM agent_run
-        WHERE camp_turn_id IN (SELECT id FROM camp_turn WHERE camp_id = ?1)
-        "#,
-        [camp_id],
-    )?;
     transaction.execute("DELETE FROM camp_turn WHERE camp_id = ?1", [camp_id])?;
     transaction.execute("DELETE FROM conversation WHERE camp_id = ?1", [camp_id])?;
     transaction.execute("DELETE FROM camp_member WHERE camp_id = ?1", [camp_id])?;
@@ -8719,50 +8764,34 @@ mod slow_tests {
             .connection()
             .execute(
                 r#"
-                UPDATE camp_turn
-                SET status = 'completed', ended_at = datetime('now'),
-                    updated_at = datetime('now')
-                WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)
+                UPDATE camp_message_delivery
+                SET status = 'settled', ended_at = datetime('now'),
+                    version = version + 1, updated_at = datetime('now')
+                WHERE claimed_agent_run_id = ?1
                 "#,
                 [agent_run_id],
             )
             .unwrap();
-        let delivery_id = "delivery-before-delete";
-        database
+        let current_run_shape: (String, Option<String>, i64, i64) = database
             .connection()
-            .execute(
+            .query_row(
                 r#"
-                INSERT INTO message_delivery(
-                    id, camp_id, camp_turn_id, message_id,
-                    recipient_agent_id, recipient_canonical_position,
-                    recipient_digest, message_body_digest,
-                    source_agent_run_id, edge_kind,
-                    target_parent_agent_run_id, a2a_root_agent_run_id, a2a_depth,
-                    ancestor_agent_ids_json, recipient_presentation_snapshot_json,
-                    frozen_snapshot_json, camp_message_boundary_sequence,
-                    queue_sequence, status, dispatch_phase, dispatch_attempt_count,
-                    created_at, updated_at, ended_at
-                )
-                SELECT
-                    ?2, ?3, agent_run.camp_turn_id, agent_run.trigger_camp_message_id,
-                    'agent_2', 0, 'sha256:recipient', 'sha256:message',
-                    agent_run.id, 'forward', agent_run.id, agent_run.id, 1,
-                    '[]', '{}', '{}', 0,
-                    1, 'settled', 'terminal', 1,
-                    datetime('now'), datetime('now'), datetime('now')
+                SELECT invocation_kind, camp_turn_id,
+                       (SELECT COUNT(*) FROM agent_run_input WHERE agent_run_id = agent_run.id),
+                       (SELECT COUNT(*) FROM camp_message_delivery
+                        WHERE claimed_agent_run_id = agent_run.id)
                 FROM agent_run
-                WHERE agent_run.id = ?1
+                WHERE id = ?1
                 "#,
-                rusqlite::params![agent_run_id, delivery_id, camp_id],
+                [agent_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
-        database
-            .connection()
-            .execute(
-                "UPDATE agent_run SET trigger_message_delivery_id = ?2 WHERE id = ?1",
-                rusqlite::params![agent_run_id, delivery_id],
-            )
-            .unwrap();
+        assert_eq!(
+            current_run_shape,
+            ("batch".to_string(), None, 1, 1),
+            "Camp deletion fixture must exercise the Delivery-first Run shape",
+        );
         service
             .create_task(
                 &mut database,
@@ -8792,7 +8821,7 @@ mod slow_tests {
                 )
                 SELECT 'delivered-file-before-delete', ?1, 'send-file-before-delete',
                     'agent_workspace', 'committed', 0, '{}', 'none',
-                    trigger_camp_message_id, datetime('now'), datetime('now'), datetime('now')
+                    anchor_message_id, datetime('now'), datetime('now'), datetime('now')
                 FROM agent_run WHERE id = ?2
                 "#,
                 rusqlite::params![camp_id, agent_run_id],
@@ -8821,6 +8850,9 @@ mod slow_tests {
         assert_eq!(row_count(&database, "conversation"), 0);
         assert_eq!(row_count(&database, "camp_message"), 0);
         assert_eq!(row_count(&database, "message_delivery"), 0);
+        assert_eq!(row_count(&database, "camp_message_delivery"), 0);
+        assert_eq!(row_count(&database, "agent_run_input"), 0);
+        assert_eq!(row_count(&database, "agent_run"), 0);
         assert_eq!(row_count(&database, "managed_attachment_ingest_intent"), 0);
         assert_eq!(row_count(&database, "task"), 0);
         let foreign_key_violations: i64 = database
@@ -8860,6 +8892,30 @@ mod slow_tests {
             .as_str()
             .unwrap()
             .to_string();
+        let running_batch_id = created.result.payload["agentRunIds"][0]
+            .as_str()
+            .unwrap()
+            .to_string();
+        database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_run
+                SET status = 'running', execution_lease_owner = 'delete-test-worker',
+                    execution_lease_expires_at = datetime('now', '+5 minutes'),
+                    started_at = datetime('now'), updated_at = datetime('now')
+                WHERE id = ?1
+                "#,
+                [&running_batch_id],
+            )
+            .unwrap();
+        assert!(
+            crate::camp_attachment_view::CampAttachmentViewStore::for_test(&database)
+                .unwrap()
+                .camp_has_active_runtime(&database, &camp_id)
+                .unwrap(),
+            "attachment mutation fencing must recognize a running Delivery-first Run",
+        );
         let delete_version = camp_version(&database, &camp_id);
         let result = service
             .delete_camp(
@@ -8886,7 +8942,7 @@ mod slow_tests {
                 .any(|blocker| blocker["code"] == "nonterminal_agent_run")
         );
         assert_eq!(row_count(&database, "camp"), 1);
-        assert_eq!(row_count(&database, "camp_turn"), 1);
+        assert_eq!(row_count(&database, "camp_turn"), 0);
         assert_eq!(row_count(&database, "agent_run"), 1);
         let cleanup_targets = ExecutionRuntimeService::default()
             .list_camp_runtime_cleanup_targets(&database, &camp_id)

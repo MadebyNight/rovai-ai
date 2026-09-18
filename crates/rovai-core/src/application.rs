@@ -8088,11 +8088,25 @@ impl Core {
                     return Err(error);
                 }
                 let mut database = self.database.lock().await;
-                let execution = CollaborationService::default().delete_camp_after_settlement(
+                let execution = match CollaborationService::default().delete_camp_after_settlement(
                     &mut database,
                     &envelope,
                     &prior_blockers,
-                )?;
+                ) {
+                    Ok(execution) => execution,
+                    Err(error) => {
+                        if let Some(cleanup) = cleanup.as_ref()
+                            && let Err(cancel_error) = self
+                                .attachment_views
+                                .cancel_camp_delete_cleanup(&mut database, cleanup)
+                        {
+                            return Err(cancel_error.context(format!(
+                                "Camp deletion failed ({error:#}) and its attachment cleanup reservation could not be released"
+                            )));
+                        }
+                        return Err(error);
+                    }
+                };
                 if execution.result.status == CommandResultStatus::Applied {
                     self.mark_skill_projections_dirty_best_effort(&mut database, true);
                 } else if let Some(cleanup) = cleanup.as_ref() {
@@ -8157,10 +8171,24 @@ impl Core {
                     return Err(error);
                 }
                 let mut database = self.database.lock().await;
-                let execution = CollaborationService::default().discard_pending_camp(
+                let execution = match CollaborationService::default().discard_pending_camp(
                     &mut database,
                     &user_camp_command_envelope(params.command_id, camp_id, params.command),
-                )?;
+                ) {
+                    Ok(execution) => execution,
+                    Err(error) => {
+                        if let Some(cleanup) = cleanup.as_ref()
+                            && let Err(cancel_error) = self
+                                .attachment_views
+                                .cancel_camp_delete_cleanup(&mut database, cleanup)
+                        {
+                            return Err(cancel_error.context(format!(
+                                "Pending Camp discard failed ({error:#}) and its attachment cleanup reservation could not be released"
+                            )));
+                        }
+                        return Err(error);
+                    }
+                };
                 let discarded = execution.result.status == CommandResultStatus::Applied
                     && execution
                         .result

@@ -2208,6 +2208,7 @@ describe('task event projections', () => {
 
   it('admits Run Stop only for an active non-blocked Run outside Turn cancellation', () => {
     const run = {
+      campTurnId: 'turn',
       status: 'waiting' as const,
       waitReason: 'runtime_delivery',
       cancelRequestedAt: null
@@ -2222,6 +2223,13 @@ describe('task event projections', () => {
       .toBe(false)
     expect(canStopAgentRun({ ...run, status: 'cancelled' }, turn)).toBe(false)
     expect(canStopAgentRun(run, null)).toBe(false)
+    const batchRun = { ...run, campTurnId: null }
+    expect(canStopAgentRun(batchRun, null)).toBe(true)
+    expect(agentRunStopViewState(batchRun, null, {
+      cancelling: false,
+      confirming: false,
+      turnCancelling: false
+    })).toBe('available')
 
     expect(agentRunStopViewState(run, turn, {
       cancelling: false,

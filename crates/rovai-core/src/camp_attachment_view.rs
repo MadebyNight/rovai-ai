@@ -1637,8 +1637,8 @@ impl CampAttachmentViewStore {
                 SELECT EXISTS(
                     SELECT 1
                     FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                    WHERE camp_turn.camp_id = ?1
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
                       AND agent_run.status = 'running'
                       AND agent_run.execution_lease_owner IS NOT NULL
                 )
@@ -7462,6 +7462,33 @@ mod tests {
                 &database, &camp_id,
             )
             .unwrap()
+        );
+
+        // A process can exit after reserving Camp cleanup but before the Camp
+        // transaction runs. On the next startup, Camp presence proves that the
+        // planned cleanup must be rolled back so a retry is not reported busy.
+        let abandoned = view
+            .prepare_camp_delete_cleanup(&mut database, &camp_id, &Uuid::new_v4().to_string())
+            .unwrap()
+            .unwrap();
+        view.reconcile(&mut database, &CampAttachmentStore::new(&data_dir))
+            .unwrap();
+        let recovered: (String, String, Option<String>) = database
+            .connection()
+            .query_row(
+                r#"
+                SELECT operation.status, view.state, view.active_operation_id
+                FROM camp_attachment_view_operation AS operation
+                JOIN camp_attachment_view AS view ON view.camp_id = operation.camp_id
+                WHERE operation.id = ?1
+                "#,
+                [&abandoned.operation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            recovered,
+            ("rolled_back".to_string(), "ready".to_string(), None)
         );
 
         let delete_command_id = Uuid::new_v4().to_string();

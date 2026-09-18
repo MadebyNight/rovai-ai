@@ -109,8 +109,9 @@ pub(crate) fn enqueue_message_deliveries(
 }
 
 /// Converts waiting Delivery lanes into immutable, ordered multi-input AgentRuns.
-/// Waiting rows carry only message responsibility. Runtime, model, permissions and
-/// workspace are resolved here and frozen on the newly created Run.
+/// Waiting rows carry only message responsibility. Runtime, model and permissions are
+/// resolved here. Workspace is also frozen unless an unprepared Mission must first
+/// establish its exact execution directory at the execution-preparing boundary.
 pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Result<Vec<String>> {
     if !(1..=100).contains(&limit) {
         anyhow::bail!("Delivery claim limit must be between 1 and 100");
@@ -170,8 +171,14 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
             [&camp_id],
             |row| row.get(0),
         )?;
-        let workspace = AgentRunWorkspace::runtime_managed_path(project_path);
-        workspace.validate()?;
+        let workspace = batch_workspace_for_claim(&transaction, &camp_id, &project_path)?;
+        if let Some(workspace) = workspace.as_ref() {
+            workspace.validate()?;
+        }
+        let cleanup_execution_root = workspace
+            .as_ref()
+            .map(|workspace| workspace.execution_root.as_str())
+            .unwrap_or(project_path.as_str());
         let cleanup_pending_on_execution_root: bool = transaction.query_row(
             r#"
             SELECT EXISTS(
@@ -190,7 +197,7 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
                   ) = ?1
             )
             "#,
-            [&workspace.execution_root],
+            [cleanup_execution_root],
             |row| row.get(0),
         )?;
         if cleanup_pending_on_execution_root {
@@ -228,7 +235,7 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
             camp_public_tail,
             conversation_tail,
             &effective_config,
-            &workspace,
+            workspace.as_ref(),
             &runtime,
             selected,
             first_too_large,
@@ -238,6 +245,32 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
     }
     transaction.commit()?;
     Ok(claimed_run_ids)
+}
+
+fn batch_workspace_for_claim(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    project_path: &str,
+) -> Result<Option<AgentRunWorkspace>> {
+    let mission_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM mission WHERE camp_id = ?1)",
+        [camp_id],
+        |row| row.get(0),
+    )?;
+    if !mission_exists {
+        return Ok(Some(AgentRunWorkspace::runtime_managed_path(
+            project_path.to_string(),
+        )));
+    }
+    let Some(execution_root) = crate::mission_workspace::execution_directory(transaction, camp_id)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(AgentRunWorkspace {
+        execution_root,
+        access: "write".to_string(),
+        isolation: "git_worktree".to_string(),
+    }))
 }
 
 fn load_waiting_prefix(
@@ -318,7 +351,7 @@ fn insert_batch_run(
     camp_public_tail: i64,
     conversation_tail: i64,
     effective_config: &Value,
-    workspace: &AgentRunWorkspace,
+    workspace: Option<&AgentRunWorkspace>,
     runtime: &FrozenAgentRuntimeConfig,
     selected: &[WaitingDelivery],
     first_too_large: bool,
@@ -388,7 +421,7 @@ fn insert_batch_run(
             format!("batch/{agent_id}/{first_delivery_id}/{last_delivery_id}"),
             "Handle the claimed Camp message batch",
             serde_json::to_string(effective_config)?,
-            serde_json::to_string(workspace)?,
+            workspace.map(serde_json::to_string).transpose()?,
             status,
             format!("delivery-batch:{first_delivery_id}:{last_delivery_id}"),
             error_code,
@@ -628,6 +661,76 @@ mod tests {
                 )
                 .unwrap()
         }
+
+        fn attach_completed_mission(&mut self, ready_working_directory: Option<&std::path::Path>) {
+            let now = chrono::Utc::now().to_rfc3339();
+            let source_directory: String = self
+                .database
+                .connection()
+                .query_row(
+                    "SELECT project_path FROM camp WHERE id = ?1",
+                    [&self.camp_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            self.database
+                .connection()
+                .execute(
+                    r#"
+                    INSERT INTO mission(
+                        id, number, camp_id, title, description, status,
+                        tags_json, source_attachments_json, details_version,
+                        created_at, updated_at
+                    ) VALUES (
+                        'delivery-queue-mission', 1, ?1, 'Mission', '', 'completed',
+                        '[]', '[]', 1, ?2, ?2
+                    )
+                    "#,
+                    params![self.camp_id, now],
+                )
+                .unwrap();
+            let Some(working_directory) = ready_working_directory else {
+                return;
+            };
+            std::fs::create_dir_all(working_directory).unwrap();
+            let execution_host_id: String = self
+                .database
+                .connection()
+                .query_row(
+                    "SELECT id FROM mission_execution_host WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            self.database
+                .connection()
+                .execute(
+                    r#"
+                    INSERT INTO mission_workspace(
+                        id, mission_id, camp_id, execution_host_id,
+                        source_directory, repository_root, git_common_dir,
+                        worktree_path, working_directory, base_branch, branch,
+                        base_sha, preparation_token, state, created_at, updated_at
+                    ) VALUES (
+                        'delivery-queue-mission-workspace', 'delivery-queue-mission', ?1, ?2,
+                        ?3, ?3, ?4, ?5, ?5, 'main', 'rovai/mission/001',
+                        'base-sha', 'owner-token', 'ready', ?6, ?6
+                    )
+                    "#,
+                    params![
+                        self.camp_id,
+                        execution_host_id,
+                        source_directory,
+                        std::path::Path::new(&source_directory)
+                            .join(".git")
+                            .to_string_lossy()
+                            .into_owned(),
+                        working_directory.to_string_lossy().into_owned(),
+                        now,
+                    ],
+                )
+                .unwrap();
+        }
     }
 
     #[test]
@@ -694,6 +797,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(closed, 2);
+    }
+
+    #[test]
+    fn mission_batch_claim_uses_ready_worktree_and_defers_unprepared_workspace() {
+        let mut ready = Fixture::new();
+        let ready_worktree = ready._directory.join("mission-worktree");
+        ready.attach_completed_mission(Some(&ready_worktree));
+        ready.enqueue("ready-message", "继续使命");
+        let ready_run = claim_waiting_delivery_batches(&mut ready.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let ready_workspace_json: Option<String> = ready
+            .database
+            .connection()
+            .query_row(
+                "SELECT workspace_json FROM agent_run WHERE id = ?1",
+                [&ready_run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ready_workspace: AgentRunWorkspace =
+            serde_json::from_str(&ready_workspace_json.unwrap()).unwrap();
+        assert_eq!(
+            ready_workspace,
+            AgentRunWorkspace {
+                execution_root: ready_worktree.to_string_lossy().into_owned(),
+                access: "write".to_string(),
+                isolation: "git_worktree".to_string(),
+            }
+        );
+
+        let mut unprepared = Fixture::new();
+        unprepared.attach_completed_mission(None);
+        unprepared.enqueue("unprepared-message", "首次执行使命");
+        let unprepared_run = claim_waiting_delivery_batches(&mut unprepared.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let unprepared_workspace_json: Option<String> = unprepared
+            .database
+            .connection()
+            .query_row(
+                "SELECT workspace_json FROM agent_run WHERE id = ?1",
+                [&unprepared_run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(unprepared_workspace_json.is_none());
     }
 
     #[test]

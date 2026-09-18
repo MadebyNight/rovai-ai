@@ -346,13 +346,13 @@ function restoreExecutionConsoleReadingPosition(
 }
 
 export function canStopAgentRun(
-  run: Pick<AgentRunView, 'status' | 'waitReason' | 'cancelRequestedAt'>,
+  run: Pick<AgentRunView, 'status' | 'waitReason' | 'cancelRequestedAt' | 'campTurnId'>,
   turn: Pick<CampSnapshot['turns'][number], 'cancelRequestedAt'> | null
 ): boolean {
   return NON_TERMINAL_RUNS.has(run.status)
     && run.cancelRequestedAt === null
     && run.waitReason !== 'recovery_blocked'
-    && turn?.cancelRequestedAt === null
+    && (run.campTurnId === null || turn?.cancelRequestedAt === null)
 }
 
 export type AgentRunStopViewState =
@@ -363,7 +363,7 @@ export type AgentRunStopViewState =
   | 'hidden'
 
 export function agentRunStopViewState(
-  run: Pick<AgentRunView, 'status' | 'waitReason' | 'cancelRequestedAt'>,
+  run: Pick<AgentRunView, 'status' | 'waitReason' | 'cancelRequestedAt' | 'campTurnId'>,
   turn: Pick<CampSnapshot['turns'][number], 'cancelRequestedAt'> | null,
   local: { cancelling: boolean; confirming: boolean; turnCancelling: boolean }
 ): AgentRunStopViewState {
