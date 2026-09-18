@@ -59,6 +59,7 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
   const client = useCampClient()
   const [position, setPosition] = useState<(ContextPosition & { kind: 'menu' | 'tags' | 'members' }) | null>(null)
   const [editing, setEditing] = useState<MissionRecord | null>(null)
+  const [cleaning, setCleaning] = useState<MissionRecord | null>(null)
   const [deleting, setDeleting] = useState<MissionRecord | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const starts = useRef(new Map<string, string>())
@@ -103,14 +104,16 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
         await onChanged(selected.campId)
       })()) }}
       onSaveTags={tags => selected ? change(selected, 'update', { tags }) : Promise.resolve()}
+      onCleanup={() => { if (selected) setCleaning(selected); setPosition(null) }}
       onDelete={() => { if (selected) setDeleting(selected); setPosition(null) }} />
     {position && position.kind !== 'menu' && selected && <MissionPopover position={position} title={position.kind === 'tags' ? '编辑标签' : '使命队员'} onClose={() => setPosition(null)} className={position.kind === 'tags' ? 'mission-label-popover' : 'mission-members-popover'}>
       {position.kind === 'tags' ? <LabelsEditor key={selected.missionId} m={selected} catalog={catalog} onSave={tags => change(selected, 'update', { tags })}/> : <MissionRoster m={selected}/>}
     </MissionPopover>}
     {editing && <MissionEdit key={editing.missionId} mission={editing} projects={projects} agents={agents} catalog={catalog} onClose={() => setEditing(null)} onSaved={() => onChanged(editing.campId)} onSave={patch => change(editing, 'update', patch)}/>}
-    {deleting && <MissionDelete key={deleting.missionId} mission={deleting} onClose={() => setDeleting(null)} onDelete={async () => {
+    {cleaning && <MissionWorkspaceCleanup key={cleaning.missionId} mission={cleaning} onClose={() => setCleaning(null)} onCleaned={async () => { await onChanged(cleaning.campId); setCleaning(null) }}/>}
+    {deleting && <MissionDelete key={deleting.missionId} mission={deleting} onClose={() => setDeleting(null)} onDelete={async workspaceDisposition => {
       const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: deleting.campId })
-      await missionCommand(client, 'camps.delete', { campId: deleting.campId, expectedVersion: snapshot.camp.version, force: true })
+      await missionCommand(client, 'camps.delete', { campId: deleting.campId, expectedVersion: snapshot.camp.version, force: true, workspaceDisposition })
       await onDeleted(deleting.campId); setDeleting(null)
     }}/>}
   </Actions.Provider></MissionPeopleProvider>
@@ -210,12 +213,32 @@ function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onCl
     </Dialog.Portal>
   </Dialog.Root>
 }
-function MissionDelete({ mission, onDelete, onClose }: { mission: MissionRecord; onDelete(): Promise<void>; onClose(): void }) {
+function MissionWorkspaceCleanup({ mission, onCleaned, onClose }: { mission: MissionRecord; onCleaned(): Promise<void>; onClose(): void }) {
   const client = useCampClient(), [delivery, setDelivery] = useState<MissionDelivery | null>(null), [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('')
   useEffect(() => { let current = true; setError(''); void client.request<MissionDelivery>('missions.delivery', { missionId: mission.missionId }).then(data => { if (current) setDelivery(data) }).catch(error => { if (current) setError(missionError(error)) }); return () => { current = false } }, [client, mission.missionId, retry])
-  async function remove() { setBusy(true); setError(''); try { await onDelete() } catch (error) { setError(missionError(error)) } finally { setBusy(false) } }
+  async function cleanup() {
+    setBusy(true); setError('')
+    try {
+      await missionCommand(client, 'missions.workspace.cleanup', { missionId: mission.missionId })
+      await onCleaned()
+    } catch (error) { setError(missionError(error)) } finally { setBusy(false) }
+  }
+  return <CompactDialog title="清理使命 Worktree" className="mission-worktree-cleanup-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary" onClick={() => void cleanup()} disabled={busy || !delivery?.workspace}>{busy ? '正在清理…' : '清理'}</button></>}>
+    <p>将删除此使命的 Worktree 和本地分支。</p>
+    {delivery?.workspace && <div className="mission-delete-workspaces"><div><code>{delivery.workspace.worktreePath}</code><small>{delivery.workspace.branch}</small></div></div>}
+    {!delivery && !error && <p role="status">正在读取关联工作区…</p>}
+    {error && <p className="compact-inline-error" role="alert">{error}{!delivery && <button className="mission-source-link" onClick={() => setRetry(value => value + 1)}>重试</button>}</p>}
+  </CompactDialog>
+}
+
+function MissionDelete({ mission, onDelete, onClose }: { mission: MissionRecord; onDelete(workspaceDisposition: 'retain' | 'cleanup'): Promise<void>; onClose(): void }) {
+  const client = useCampClient(), [delivery, setDelivery] = useState<MissionDelivery | null>(null), [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const [cleanupWorkspace, setCleanupWorkspace] = useState(false)
+  useEffect(() => { let current = true; setError(''); void client.request<MissionDelivery>('missions.delivery', { missionId: mission.missionId }).then(data => { if (current) setDelivery(data) }).catch(error => { if (current) setError(missionError(error)) }); return () => { current = false } }, [client, mission.missionId, retry])
+  async function remove() { setBusy(true); setError(''); try { await onDelete(cleanupWorkspace ? 'cleanup' : 'retain') } catch (error) { setError(missionError(error)) } finally { setBusy(false) } }
   return <CompactDialog title="删除使命" className="mission-delete-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary mission-delete-confirm" onClick={() => void remove()} disabled={busy || !delivery}>{busy ? '正在删除…' : '删除使命'}</button></>}>
     <p className="mission-delete-summary">删除后，使命、会话和交付文件将被一并删除，正在执行的队员会停止。此操作无法撤销。</p>
+    {mission.workspaceEverCreated && <label className="mission-delete-workspace-option"><input type="checkbox" checked={cleanupWorkspace} disabled={busy || !mission.workspaceResourcesPresent} onChange={event => setCleanupWorkspace(event.target.checked)}/><span>{mission.workspaceResourcesPresent ? '同时清理 Worktree 及本地分支' : '同时清理 Worktree 及本地分支（已清理）'}</span><span className="mission-inline-help" tabIndex={0} aria-label="未勾选时，Worktree 和本地分支保留在原位置。" data-tooltip="未勾选时，Worktree 和本地分支保留在原位置。">?</span></label>}
     {!delivery && !error && <p role="status">正在读取关联工作区…</p>}{error && <p className="compact-inline-error" role="alert">{error}{!delivery && <button className="mission-source-link" onClick={() => setRetry(v => v + 1)}>重试</button>}</p>}
   </CompactDialog>
 }
@@ -289,6 +312,7 @@ function MissionRunning({ mission }: { mission: MissionRecord }) {
   </span>
 }
 
+/** Historical orphan cleanup only; retained v3 workspaces never enter these states. */
 function MissionCleanupNotice() {
   const client = useCampClient(), [rows, setRows] = useState<MissionWorkspace[]>([]), [open, setOpen] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState<string | null>(null)
   useEffect(() => {

@@ -213,6 +213,54 @@ pub(super) fn v161_schema_matches(connection: &Connection) -> rusqlite::Result<b
         )?)
 }
 
+fn apply_workspace_lifecycle_schema(connection: &Connection) -> Result<()> {
+    for (column, definition) in [
+        (
+            "preparation_kind",
+            "TEXT NOT NULL DEFAULT 'create' CHECK(preparation_kind IN ('create','restore'))",
+        ),
+        (
+            "generation",
+            "INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1)",
+        ),
+        ("cleanup_command_id", "TEXT"),
+        ("cleanup_expected_branch_oid", "TEXT"),
+        (
+            "cleanup_worktree_removed",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_worktree_removed IN (0,1))",
+        ),
+        (
+            "cleanup_branch_removed",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_branch_removed IN (0,1))",
+        ),
+    ] {
+        if !has_column(connection, "mission_workspace", column)? {
+            connection.execute_batch(&format!(
+                "ALTER TABLE mission_workspace ADD COLUMN {column} {definition};"
+            ))?;
+        }
+    }
+    connection.execute_batch("DROP TRIGGER IF EXISTS mission_camp_delete_cleanup;")?;
+    Ok(())
+}
+
+pub(super) fn v162_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    Ok(v161_schema_matches(connection)?
+        && contains_schema(
+            connection,
+            "mission_workspace",
+            &[
+                "generation INTEGER NOT NULL DEFAULT 1",
+                "preparation_kind TEXT NOT NULL DEFAULT 'create'",
+                "cleanup_command_id TEXT",
+                "cleanup_expected_branch_oid TEXT",
+                "cleanup_worktree_removed INTEGER NOT NULL DEFAULT 0",
+                "cleanup_branch_removed INTEGER NOT NULL DEFAULT 0",
+            ],
+        )?
+        && !object_exists(connection, "mission_camp_delete_cleanup")?)
+}
+
 impl Database {
     pub(super) fn migrate_mission_details_v159(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
@@ -315,14 +363,162 @@ impl Database {
              UPDATE rovai_data_contract SET projection_schema_version=111,updated_at=datetime('now') WHERE singleton=1;",
         )?;
         anyhow::ensure!(
-            matches!(
-                classify_database_contract(&tx)?,
-                DatabaseContractClassification::Current(_)
-            ),
+            matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 111),
             "Mission attachment migration failed schema admission"
         );
         validate_migration_foreign_keys(&tx, &["mission"])?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub(super) fn migrate_mission_workspace_lifecycle_v162(&mut self) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            matches!(classify_database_contract(&tx)?, DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 111),
+            "Mission workspace lifecycle migration requires an admitted v1.59/schema 111 source"
+        );
+        apply_workspace_lifecycle_schema(&tx)?;
+        tx.execute_batch(
+            "INSERT INTO schema_migration VALUES(162,datetime('now'));
+             UPDATE rovai_data_contract SET projection_schema_version=112,updated_at=datetime('now') WHERE singleton=1;",
+        )?;
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&tx)?,
+                DatabaseContractClassification::Current(_)
+            ),
+            "Mission workspace lifecycle migration failed schema admission"
+        );
+        validate_migration_foreign_keys(&tx, &["mission_workspace"])?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::{ActorRef, CommandEnvelope};
+    use uuid::Uuid;
+
+    #[test]
+    fn workspace_lifecycle_migration_is_atomic_preserves_rows_and_removes_delete_trigger() {
+        let mut database = crate::test_support::seeded_runtime_database_owned();
+        let project_path = database.directory().to_string_lossy().into_owned();
+        let created = crate::mission::MissionService::default()
+            .create(
+                &mut database,
+                &CommandEnvelope {
+                    command_id: Uuid::new_v4().to_string(),
+                    actor: ActorRef::User {
+                        user_id: "local_user".into(),
+                    },
+                    camp_id: None,
+                    expected_versions: vec![],
+                    execution_epoch: None,
+                    payload: crate::mission::CreateMissionCommand {
+                        title: "workspace lifecycle".into(),
+                        description: String::new(),
+                        project_path,
+                        project_binding_kind: crate::collaboration::ProjectBindingKind::Directory,
+                        member_agent_ids: vec!["agent_1".into()],
+                        default_lead_agent_id: "agent_1".into(),
+                        tags: vec![],
+                        source_attachments: vec![],
+                    },
+                },
+            )
+            .unwrap();
+        let mission_id = created.result.payload["missionId"].as_str().unwrap();
+        let camp_id = created.result.payload["campId"].as_str().unwrap();
+        let host: String = database
+            .connection()
+            .query_row(
+                "SELECT id FROM mission_execution_host WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        database.connection().execute(
+            "INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES('workspace-row',?1,?2,?3,'/repo','/repo','/repo/.git','/worktree','/worktree','main','rovai/mission/001','base','owner','ready','created','updated')",
+            params![mission_id, camp_id, host],
+        ).unwrap();
+        database
+            .connection()
+            .execute_batch(
+                "DELETE FROM schema_migration WHERE version=162;
+             UPDATE rovai_data_contract SET projection_schema_version=111 WHERE singleton=1;
+             CREATE TRIGGER mission_camp_delete_cleanup BEFORE DELETE ON camp
+             BEGIN
+                 UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
+                 WHERE camp_id=OLD.id AND state IN ('ready','preparing');
+             END;
+             ALTER TABLE mission_workspace DROP COLUMN cleanup_branch_removed;
+             ALTER TABLE mission_workspace DROP COLUMN cleanup_worktree_removed;
+             ALTER TABLE mission_workspace DROP COLUMN cleanup_expected_branch_oid;
+             ALTER TABLE mission_workspace DROP COLUMN cleanup_command_id;
+             ALTER TABLE mission_workspace DROP COLUMN generation;
+             ALTER TABLE mission_workspace DROP COLUMN preparation_kind;",
+            )
+            .unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.projection_schema_version == 111
+        ));
+
+        database
+            .connection()
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_workspace_lifecycle_receipt
+             BEFORE INSERT ON schema_migration WHEN NEW.version=162
+             BEGIN SELECT RAISE(ABORT,'workspace lifecycle receipt failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            database
+                .migrate_mission_workspace_lifecycle_v162()
+                .unwrap_err()
+                .to_string()
+                .contains("workspace lifecycle receipt failure")
+        );
+        assert!(!has_column(database.connection(), "mission_workspace", "generation").unwrap());
+        assert!(object_exists(database.connection(), "mission_camp_delete_cleanup").unwrap());
+
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_workspace_lifecycle_receipt;")
+            .unwrap();
+        database.migrate_mission_workspace_lifecycle_v162().unwrap();
+        assert!(v162_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::Current(_)
+        ));
+        let retained: (String, i64, String, bool, bool) = database
+            .connection()
+            .query_row(
+                "SELECT state,generation,preparation_kind,cleanup_worktree_removed,cleanup_branch_removed FROM mission_workspace WHERE id='workspace-row'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(retained, ("ready".into(), 1, "create".into(), false, false));
+        crate::collaboration::delete_camp_aggregate(database.connection(), camp_id).unwrap();
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT state FROM mission_workspace WHERE id='workspace-row'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "ready"
+        );
     }
 }

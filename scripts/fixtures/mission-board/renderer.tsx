@@ -28,7 +28,7 @@ const missionSourceAttachments=[
 ]
 const items:MissionRecord[]=[
  ['需要核对窄窗口的目录布局','needs_you',['交互','体验优化']],['补齐使命工作区恢复路径','in_progress',['Core']],['更新首次使用引导文案','not_started',['文案']],['使命累计变更回归测试','completed',['测试']]
-].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:i===0?structuredClone(missionSourceAttachments):[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.map(a=>a.agentId):[],hasUnread:i===0}))
+].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:i===0?structuredClone(missionSourceAttachments):[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.map(a=>a.agentId):[],hasUnread:i===0,workspaceEverCreated:i!==2,workspaceResourcesPresent:i!==2,cleanupAvailable:i!==1&&i!==2}))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
@@ -92,7 +92,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  },
  create:async(_commandId:string,command:any,attachments:any[])=>{
   calls.push({method:'missions.createWithAttachments',p:{command,attachments}})
-  const m={...items[0],...command,attachments:attachments.map(({id,file,kindHint})=>({id,displayName:file.name,kind:kindHint,mediaType:kindHint==='directory'?'inode/directory':file.type||null,byteSize:kindHint==='directory'?null:file.size,fileCount:kindHint==='directory'?null:1,previewKind:kindHint==='file'&&file.type.startsWith('image/')?'image':'none',availability:'unknown'})),number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',sourceMessageId:null,detailsVersion:1,hasUnread:false,runningAgentIds:[],createdAt:now,updatedAt:now}
+  const m={...items[0],...command,attachments:attachments.map(({id,file,kindHint})=>({id,displayName:file.name,kind:kindHint,mediaType:kindHint==='directory'?'inode/directory':file.type||null,byteSize:kindHint==='directory'?null:file.size,fileCount:kindHint==='directory'?null:1,previewKind:kindHint==='file'&&file.type.startsWith('image/')?'image':'none',availability:'unknown'})),number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',sourceMessageId:null,detailsVersion:1,hasUnread:false,runningAgentIds:[],workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false,createdAt:now,updatedAt:now}
   items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})
  }
 },request:async(method:string,p:any={})=>{
@@ -123,6 +123,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
   Object.assign(m!,c,{detailsVersion:m!.detailsVersion+(detailsChanged?1:0),updatedAt:new Date().toISOString()});delete (m! as any).expectedDetailsVersion;changed();return applied({missionId:m!.missionId,changed:detailsChanged||c.tags!==undefined})
  }
  if(method==='missions.status'){m!.status=c.status;changed();return applied({missionId:m!.missionId,changed:true})}
+ if(method==='missions.workspace.cleanup'){m!.workspaceResourcesPresent=false;m!.cleanupAvailable=false;changed();return applied({missionId:m!.missionId})}
  if(method==='missions.start'){
   const s=snapshot(m!),sequence=Math.max(0,...s.messages.map((message:any)=>message.sequence))+1
   const trigger={...structuredClone(s.messages[0]),id:`${m!.missionId}-mission-start`,sequence,authorType:'user',authorId:'local_user',sourceAgentRunId:null,body:'开始使命',content:{schemaVersion:1,segments:[{kind:'text',text:'开始使命'}]},attachments:[],missionStart:{missionId:m!.missionId,title:m!.title,description:m!.description},createdAt:new Date().toISOString()}
@@ -132,7 +133,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  }
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
  if(method==='missions.delivery' && query.has('nonGit'))return {campId:m!.campId,workingDirectory:'/workspace/plain',git:false,workspace:null,pullRequests:[],files:[]}
- if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:'ready',diagnostic:null},pullRequests:[{id:'legacy-pr',url:'https://github.com/rovai-ai/rovai/pull/18',title:'历史关联',createdAt:now}],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
+ if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:m!.workspaceResourcesPresent?'ready':'cleaned',diagnostic:null},pullRequests:[{id:'legacy-pr',url:'https://github.com/rovai-ai/rovai/pull/18',title:'历史关联',createdAt:now}],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
  if(method==='missions.changes')return structuredClone(missionChangedFiles)
  if(method==='missions.fileDiff'){
   const file=missionChangedFiles.find(file=>file.id===p.fileId)!
@@ -140,7 +141,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
   return {file:structuredClone(file),hunks:[{oldStart:1,newStart:1,lines:[{kind:'deletion',text:`old-${file.id}`,oldLine:1,newLine:null},{kind:'addition',text:`new-${file.id}`,oldLine:null,newLine:1}]}],patch:''}
  }
  if(method==='missions.diffSession.release')return {released:true}
- if(method==='missions.create'){const m={...items[0],...c,number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',hasUnread:false};items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})}
+ if(method==='missions.create'){const m={...items[0],...c,number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',hasUnread:false,workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false};items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})}
  if(method==='camps.changeDefaultLead'){m!.defaultLeadAgentId=c.successorAgentId;snapshot(m!).camp.defaultLeadAgentId=c.successorAgentId;changed();return applied()}
  if(method==='camps.delete'){items.splice(items.indexOf(m!),1);changed();return applied()}
  return model.client.request(method as any,p)

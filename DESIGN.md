@@ -168,7 +168,9 @@ without extra focus outlines or halos; higher contrast preferences restore the s
 - **Dialogs and Popovers:** one raised neutral surface with a 1px structural boundary and no colored
   top stripe. Use a single title, regular-weight muted labels and light 1px field borders. Keep common
   fields visible; disclose optional detail without losing drafts or validation. Footers contain actions
-  and only necessary status. Destructive dialog actions use `--danger-soft` with `--danger` text.
+  and only necessary status. Destructive dialog actions use `--danger-soft` with `--danger` text. The standalone
+  Mission Worktree cleanup action is a narrow product-specific exception: it uses the neutral conversation
+  action while its concise dialog states the exact Worktree/branch scope.
   Preserve identity portraits and functional context icons. Closing menus or dialogs does not automatically refocus an entry button; retain input positioning, focus trapping and keyboard navigation. Runtime configuration dropdown bodies remain unchanged.
 - **Evidence:** uses the dedicated evidence and diff tokens, monospaced type where appropriate, and
   structural `+`/`-`, line numbers or labels in addition to color.

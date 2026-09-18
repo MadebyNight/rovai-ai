@@ -53,4 +53,4 @@ async function runFixture(t, expectedCases) {
   }
 }
 
-test('Mission card, drawer, delivery and retained preview share one Camp workspace', { timeout: 100_000 }, t => runFixture(t, 10))
+test('Mission card, drawer, delivery and retained preview share one Camp workspace', { timeout: 100_000 }, t => runFixture(t, 11))

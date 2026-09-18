@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 /// and the legacy shared draft remain outside the network capability.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum Operation {
+    #[serde(rename = "missions.workspace.cleanup")]
+    MissionWorkspaceCleanup,
     #[serde(rename = "missions.cleanup.list")]
     MissionCleanupList,
     #[serde(rename = "missions.cleanup.retry")]
@@ -389,6 +391,7 @@ impl Operation {
             Self::NewConversationSetDefaults => "preferences.newConversation.setDefaults",
             Self::NewConversationSetOneClick => "preferences.newConversation.setOneClick",
             Self::NewConversationInvalidate => "preferences.newConversation.invalidate",
+            Self::MissionWorkspaceCleanup => "missions.workspace.cleanup",
             Self::MissionCleanupList => "missions.cleanup.list",
             Self::MissionCleanupRetry => "missions.cleanup.retry",
             Self::MissionList => "missions.list",

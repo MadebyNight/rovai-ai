@@ -103,13 +103,20 @@ refresh and coalesced Run-terminal/workspace invalidation clear the cache and up
 edits do not. Binary/type/rename data and Git modes remain in the contract, but the dialog does not print a
 raw “Git 文件模式” row. Agent files reuse AttachmentCard, file preview and source-message navigation.
 Activity displays actual Mission history. The delete confirmation is intentionally concise and does not repeat
-the Mission title, worktree path or branch; failed cleanup remains visible and retryable after deletion.
+the Mission title, worktree path or branch. When a workspace record exists it adds one default-unchecked
+`同时清理 Worktree 及本地分支` option and a focusable `?` explaining that unchecked resources stay in place.
+The existing card/list right-click menu shows `清理使命 Worktree` only from Core's `cleanupAvailable`; there is
+no conversation-header ellipsis or retained-workspace page. Its dialog states that it removes the Worktree and
+local branch, lists the two identifiers, and uses only neutral `取消` / `清理` actions. A cleanup failure keeps
+the Mission and returns to the same explicit retry path; delete-with-cleanup does not delete the Mission first.
+The legacy orphan-cleanup notice remains only for pre-v3 rows already pending or failed; resources retained by
+the v3 delete choice never enter that route or appear there.
 Each explicit source-link click positions and highlights its message once. After presentation, clear that
 focus request even when there is no notification acknowledgement waiter; snapshot updates must not replay
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 The cumulative Diff dialog uses the wide desktop reading surface rather than the standard compact-dialog width.
 
-Business and ownership rules are defined by [Mission v2](../../contracts/mission-v2.md), not this presentation
+Business and ownership rules are defined by [Mission v3](../../contracts/mission-v3.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

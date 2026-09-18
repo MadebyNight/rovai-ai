@@ -78,9 +78,9 @@ export function MissionFilter({ label, icon, options, values, onChange, searchab
   </Popover.Content></Popover.Portal></Popover.Root>
 }
 export type ContextPosition = { id: string; x: number; y: number; origin: HTMLElement | null }
-export function MissionContextMenu({ m, position, catalog, onClose, onEdit, onStatus, onLead, onSaveTags, onDelete }: {
+export function MissionContextMenu({ m, position, catalog, onClose, onEdit, onStatus, onLead, onSaveTags, onCleanup, onDelete }: {
   m: Mission | undefined; position: ContextPosition | null; onClose(): void; onStatus(status: Status): void;
-  catalog: string[]; onEdit(): void; onLead(id: string): void; onSaveTags(tags: string[]): Promise<void>; onDelete(): void
+  catalog: string[]; onEdit(): void; onLead(id: string): void; onSaveTags(tags: string[]): Promise<void>; onCleanup(): void; onDelete(): void
 }) {
   const person=usePeople();
   const [panel, setPanel] = useState<string | null>(null)
@@ -106,6 +106,7 @@ export function MissionContextMenu({ m, position, catalog, onClose, onEdit, onSt
       {submenu('members', '查看队员', <MissionRoster m={m}/>, 'mission-members-popover')}
       {submenu('lead', '队长', <Menu.RadioGroup value={m.defaultLeadAgentId ?? ''} onValueChange={onLead}>{orderedMembers(m).map(id => <Menu.RadioItem className="compact-option" key={id} value={id}><Avatar id={id}/><span>{person(id).displayName}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator></Menu.RadioItem>)}</Menu.RadioGroup>)}
       {submenu('tags', '标签', <LabelsEditor m={m} catalog={catalog} onSave={onSaveTags}/>, 'mission-label-popover')}
+      {m.cleanupAvailable && <Menu.Item className="compact-option" onSelect={onCleanup}><span>清理使命 Worktree</span></Menu.Item>}
       <Menu.Separator className="sidebar-action-menu-separator"/>
       <Menu.Item className="compact-option mission-danger-item" onSelect={onDelete}><span>删除</span></Menu.Item>
     </Menu.Content></Menu.Portal>}

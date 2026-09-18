@@ -284,7 +284,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 111;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 112;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -720,6 +720,7 @@ struct CurrentMigrationState {
     v159: bool,
     v160: bool,
     v161: bool,
+    v162: bool,
 }
 
 impl CurrentMigrationState {
@@ -741,6 +742,14 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v162 {
+            let mut previous = *self;
+            previous.v162 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 112
+                && self.v161
+                && previous.admits("v1.59", 111, classifier);
+        }
         if self.v161 {
             let mut previous = *self;
             previous.v161 = false;
@@ -2976,6 +2985,8 @@ pub(crate) fn classify_database_contract(
         (migrations.v159 || migrations.v160) && mission_details::v160_schema_matches(connection)?;
     let mission_attachment_schema_matches =
         migrations.v161 && mission_details::v161_schema_matches(connection)?;
+    let mission_workspace_lifecycle_schema_matches =
+        migrations.v162 && mission_details::v162_schema_matches(connection)?;
     // The Mission preview shipped 157-159 before main assigned 157 to DSH. Admit
     // that exact physical schema only as a source for migration 160, which adds
     // DSH and converges both lineages on the same current schema.
@@ -3015,6 +3026,7 @@ pub(crate) fn classify_database_contract(
             && !mission_details_schema_matches)
         || (migrations.v160 && !mission_delivery_schema_matches)
         || (migrations.v161 && !mission_attachment_schema_matches)
+        || (migrations.v162 && !mission_workspace_lifecycle_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3912,7 +3924,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 158),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 159),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 160),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 161)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 161),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 162)
         "#,
         [],
         |row| {
@@ -4009,6 +4022,7 @@ fn load_current_migration_state(
                 v159: row.get(89)?,
                 v160: row.get(90)?,
                 v161: row.get(91)?,
+                v162: row.get(92)?,
             })
         },
     )
@@ -6929,6 +6943,12 @@ impl Database {
             if !self.schema_migration_applied(161)? {
                 migration_step!("migration_161", self.migrate_mission_attachments_v161());
             }
+            if !self.schema_migration_applied(162)? {
+                migration_step!(
+                    "migration_162",
+                    self.migrate_mission_workspace_lifecycle_v162()
+                );
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7607,6 +7627,12 @@ impl Database {
         if !self.schema_migration_applied(161)? {
             migration_step!("migration_161", self.migrate_mission_attachments_v161());
         }
+        if !self.schema_migration_applied(162)? {
+            migration_step!(
+                "migration_162",
+                self.migrate_mission_workspace_lifecycle_v162()
+            );
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
@@ -7662,6 +7688,11 @@ impl Database {
             )?;
             tx.execute_batch(include_str!("mission_schema.sql"))?;
             tx.execute_batch(r#"
+                CREATE TRIGGER mission_camp_delete_cleanup BEFORE DELETE ON camp
+                BEGIN
+                    UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
+                    WHERE camp_id=OLD.id AND state IN ('ready','preparing');
+                END;
                 CREATE TRIGGER context_manifest_v24_only_insert BEFORE INSERT ON context_manifest
                 WHEN NEW.context_manifest_version <> 24 AND NOT (
                     NEW.context_manifest_version IN (22,23) AND NEW.formatter_version=NEW.context_manifest_version
@@ -32735,6 +32766,7 @@ mod tests {
             v159: version >= 159,
             v160: version >= 160,
             v161: version >= 161,
+            v162: version >= 162,
         }
     }
 
@@ -32871,10 +32903,16 @@ mod tests {
                 160,
             ),
             (
+                "v1.59/schema 111 before Mission workspace lifecycle",
+                "v1.59",
+                111,
+                161,
+            ),
+            (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                161,
+                162,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -33800,7 +33838,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(161));
+        assert_eq!(state, migration_state_through(162));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -34171,10 +34209,11 @@ mod tests {
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }
 
-    // Migration 158 owns atomic schema/receipt admission and durable cleanup after
-    // Camp cascade. SQL state and restart identity require this isolated DB owner.
+    // Migration 158 owns atomic schema/receipt admission; the current migration
+    // chain must retain opted-out workspace records after Camp cascade. SQL state
+    // and restart identity require this isolated DB owner.
     #[test]
-    fn mission_migration_is_atomic_and_cleanup_survives_camp_deletion() {
+    fn mission_migration_is_atomic_and_workspace_survives_camp_deletion() {
         let mut database = crate::test_support::seeded_runtime_database_owned();
         downgrade_current_schema_to_v155_source_for_test(database.connection());
         database.migrate_attachment_paths_v156().unwrap();
@@ -34274,7 +34313,7 @@ mod tests {
                     |r| r.get::<_, String>(0)
                 )
                 .unwrap(),
-            "cleanup_pending"
+            "ready"
         );
         let directory = database.directory().to_path_buf();
         database.close();
@@ -34294,7 +34333,7 @@ mod tests {
             reopened
                 .connection()
                 .query_row(
-                    "SELECT count(*) FROM mission_workspace WHERE state='cleanup_pending'",
+                    "SELECT count(*) FROM mission_workspace WHERE state='ready'",
                     [],
                     |r| r.get::<_, i64>(0)
                 )
@@ -34364,7 +34403,7 @@ mod tests {
     }
 
     #[test]
-    fn deployed_mission_preview_converges_through_attachment_migration_161() {
+    fn deployed_mission_preview_converges_through_workspace_lifecycle_162() {
         let directory =
             std::env::temp_dir().join(format!("rovai-mission-dsh-join-{}", Uuid::new_v4()));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
@@ -34383,7 +34422,7 @@ mod tests {
                     execution_epoch: None,
                     payload: crate::mission::CreateMissionCommand {
                         title: "migration survivor".into(),
-                        description: "retain through schema 161".into(),
+                        description: "retain through schema 162".into(),
                         project_path: project.to_string_lossy().into_owned(),
                         project_binding_kind: crate::collaboration::ProjectBindingKind::Directory,
                         member_agent_ids: vec!["agent_1".into()],
@@ -34405,10 +34444,15 @@ mod tests {
         let tx = database.connection().unchecked_transaction().unwrap();
         rewrite_dsh_runtime_closed_sets(&tx, true).unwrap();
         tx.execute_batch(
-            "DELETE FROM schema_migration WHERE version IN (160,161);
+            "DELETE FROM schema_migration WHERE version IN (160,161,162);
              UPDATE rovai_data_contract
              SET projection_schema_version=109,updated_at=datetime('now')
-             WHERE singleton=1;",
+             WHERE singleton=1;
+             CREATE TRIGGER mission_camp_delete_cleanup BEFORE DELETE ON camp
+             BEGIN
+                 UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
+                 WHERE camp_id=OLD.id AND state IN ('ready','preparing');
+             END;",
         )
         .unwrap();
         tx.commit().unwrap();
@@ -34498,6 +34542,13 @@ mod tests {
         database.migrate_mission_attachments_v161().unwrap();
         assert!(database.schema_migration_applied(161).unwrap());
         assert!(mission_details::v161_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.projection_schema_version == 111
+        ));
+        database.migrate_mission_workspace_lifecycle_v162().unwrap();
+        assert!(database.schema_migration_applied(162).unwrap());
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)

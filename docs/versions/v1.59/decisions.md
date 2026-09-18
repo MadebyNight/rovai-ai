@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.59
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-17
+last_updated: 2026-09-18
 ---
 
 # v1.59 版本决定
@@ -269,7 +269,7 @@ Bootstrap 的内容、Manifest、选择/预算与证据结构不变，现有 Nat
 
 - 状态：accepted
 - 日期：2026-09-15
-- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v3](../../contracts/mission-v3.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
 
 使命需要跨多轮、恢复和队员切换保持连续，但已有 Camp 已经拥有消息、草稿、成员及执行。因此使命作为
 独立业务定义关联唯一 Camp，避免第二套会话生命周期。业务状态由当前成员显式维护，不从 Run 终态推断。
@@ -288,7 +288,7 @@ Renderer 编辑使用内部乐观版本防止旧弹窗覆盖新定义，但该�
 
 - 状态：accepted
 - 日期：2026-09-16
-- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v3](../../contracts/mission-v3.md)、[ContextManifest v25](../../contracts/context-manifest-evidence-v25.md)
 
 内部 UUID 适合关联但不适合用户识别或 Git 路径。Mission 因此另获全局单调、删除后不复用的数字号；界面、
 分支和 worktree 只使用最少三位的数字表示，内部关系仍使用 UUID。已经持久关联的旧工作区不在迁移中重命名，
@@ -305,7 +305,7 @@ Mission 只保留最新标题、描述和详情版本；活动、开始记录与
 
 - 状态：accepted
 - 日期：2026-09-17
-- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v2](../../contracts/mission-v2.md)、[Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v3](../../contracts/mission-v3.md)、[Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)
 
 使命定义附件已经参与内部详情版本和更新提醒，但 v26 的 `mission get` 只返回五个定义字段，导致 Agent 收到
 “Mission details have changed”后仍无法发现新增附件。要求用户重新点击开始或再次发送附件会把数据投影缺口变成
@@ -319,3 +319,27 @@ source refs，不做文件系统观察；因此目录、缺失文件和权限变
 上下文和路径披露面；不选择只返回附件元数据，因为 Agent 仍无法访问用户指定源；也不增加 Mission selector，
 避免当前 Run 枚举其他使命。精确前后 shape、兼容与验证已由开发者确认的
 [revision 1](model-context-change-mission-attachment-read.md)冻结。
+
+<a id="v1-59-d14"></a>
+
+## V1.59-D14：使命工作区采用显式前台清理，删除默认原地保留
+
+- 状态：accepted
+- 日期：2026-09-18
+- 当前权威：[Mission 架构](../../architecture/missions.md)、[Mission v3](../../contracts/mission-v3.md)、[使命板 UI](../../ui/components/mission-board.md)
+
+用户要求把功能复杂度控制在直接可用的最小范围，并明确接受不为本功能增加额外保护流程。使命删除因此
+默认不清理 Worktree 或本地分支；删除弹窗只提供一个默认未勾选的处置选项，未勾选的资源原地保留，Rovai
+不提供保留资源页面、后续入口或后台维护。勾选时必须先结束相关执行并完成清理，失败则保留使命供用户重试。
+这局部替代 D11 的“删除即进入独立清理记录”结论，不改变 preparing 才创建、长期复用和固定累计 Diff 基准。
+
+单独清理由 Core 投影可用性，Renderer 不根据使命状态推断。清理与 Run 准备共用现有互斥，只在确认时再次
+核对工作区归属、相关执行占用和分支身份；删除 Worktree 后以捕获的 expected OID 条件删除本地分支。命令身份、
+两个完成步骤和 OID 复用现有工作区／命令记录，不引入通用资源管理器、后台恢复服务、自动重建或自动重试。
+脏文件、未跟踪文件和仅本地提交不会增加阻断、备份、二次确认或风险清单；这是明确的可用性取舍，不取消
+防止删错目标所需的归属、占用和 OID 校验。
+
+清理后的下一个真实 Run 才恢复工作区：分支仍在时从其当前提交重建并保留原 `base_sha`；分支也不存在时从
+源项目当时的 `HEAD` 重建并更新 `base_sha`；存在 Worktree 但分支缺失或不匹配时明确报错。既有 Native Session
+继续 resume，不增加工作区变化提示、公共消息、上下文注入或 Session 重置。内部 generation 只隔离旧 Diff 和
+迟到结果。UI 保留卡片／列表右键入口和简洁中性确认，不增加详情页省略号。
