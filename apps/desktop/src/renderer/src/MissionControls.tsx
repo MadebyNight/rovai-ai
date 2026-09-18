@@ -19,6 +19,7 @@ export function Icon({ name }: { name: 'board' | 'list' | 'plus' | 'chevron' | '
 }
 export const tagStyle = (tag: string) => ({ '--mission-tag-color': identityColorToken(`mission-tag:${tag.normalize('NFC').toLocaleLowerCase()}`) } as React.CSSProperties)
 export function TagMark({ tag }: { tag: string }) { return <span className="mission-tag-mark" style={tagStyle(tag)}><Icon name="tag"/></span> }
+export function TagColorDot({ tag }: { tag: string }) { return <span className="mission-tag-color-dot" style={tagStyle(tag)} aria-hidden="true"/> }
 export function FilterStateIcon() { return <span className="mission-filter-state-icon" aria-hidden="true"/> }
 export function Avatar({ id, size = 'execution' }: { id: string; size?: 'execution' | 'mention' | 'list' }) {
   const person=usePeople(); const p = person(id); return <MemberAvatar agentId={id} avatarRef={p.avatarRef} displayName={p.displayName} size={size} decorative />
@@ -137,9 +138,9 @@ export function LabelsEditor({ m, catalog, onSave }: { m: Mission; catalog: stri
       if (event.shiftKey && index === 0 || !event.shiftKey && index === controls.length - 1) { event.preventDefault(); controls[event.shiftKey ? controls.length - 1 : 0]?.focus() }
     }
   }}>
-    <label className="mission-tag-search"><NavigationIcon name="search"/><input value={query} onChange={e => setQuery(e.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); create() } }}/></label>
-    <div className="mission-tag-options" role="group" aria-label="可选标签">{found.map(tag => <button className="compact-option" key={tag} role="checkbox" aria-checked={m.tags.includes(tag)} disabled={busy} onClick={() => toggle(tag)}><TagMark tag={tag}/><span>{tag}</span>{m.tags.includes(tag) && <Icon name="check"/>}</button>)}
-      {normalized && !exact && <button className="compact-option" onClick={create} disabled={tooLong || busy}><Icon name="plus"/><span>新建“{normalized}”</span></button>}
+    <label className="mission-tag-search"><NavigationIcon name="search"/><input autoFocus value={query} onChange={e => setQuery(e.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); create() } }}/></label>
+    <div className="mission-tag-options" role="group" aria-label="可选标签">{found.map(tag => <button type="button" className="compact-option" key={tag} role="checkbox" aria-checked={m.tags.includes(tag)} disabled={busy} onPointerDown={event => event.stopPropagation()} onClick={event => { event.preventDefault(); event.stopPropagation(); toggle(tag) }}><TagColorDot tag={tag}/><span>{tag}</span>{m.tags.includes(tag) && <Icon name="check"/>}</button>)}
+      {normalized && !exact && <button type="button" className="compact-option" onPointerDown={event => event.stopPropagation()} onClick={event => { event.preventDefault(); event.stopPropagation(); create() }} disabled={tooLong || busy}><Icon name="plus"/><span>新建“{normalized}”</span></button>}
       {tooLong && <p className="compact-inline-error" role="alert">标签最多 24 个字符。</p>}
     </div>{error && <div className="mission-tag-error" role="alert"><p>{error}</p><button onClick={() => pending.current && void save(pending.current)} disabled={busy}>重试</button></div>}
   </div>
