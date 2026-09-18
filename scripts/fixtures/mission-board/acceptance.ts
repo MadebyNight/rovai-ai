@@ -121,6 +121,10 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-delete-dialog') && !button('删除使命').disabled, 'Delete dialog resolves the cleanup authority')
   const deleteText = document.querySelector('.mission-delete-dialog')!.textContent ?? ''
   check(deleteText.includes('此操作无法撤销') && !deleteText.includes(editing.title) && !deleteText.includes('/workspace/') && !deleteText.includes('rovai/mission/'), 'Delete dialog is concise and hides redundant Mission/worktree details')
+  const deleteWorkspace = document.querySelector<HTMLInputElement>('.mission-delete-workspace-option input')!
+  const deleteHelp = document.querySelector<HTMLElement>('.mission-delete-workspace-option .mission-inline-help')!
+  check(deleteWorkspace && !deleteWorkspace.checked && !deleteWorkspace.disabled, 'Delete keeps workspace cleanup unchecked by default')
+  check(deleteHelp.getAttribute('aria-label') === '未勾选时，Worktree 和本地分支保留在原位置。', 'Delete explains the unchecked retention choice through its help control')
   button('取消').click()
   await until(() => !document.querySelector('.mission-delete-dialog'), 'Delete dialog cancels')
   cases.push('edit is shared by card actions and reloads latest details after an optimistic conflict')
@@ -394,6 +398,31 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !document.querySelector('.mission-workspace-host'), 'Notified drawer closes back to the board')
   check(qa.errors.length === 0, qa.errors.join('\n'))
   cases.push('notifications open Mission drawers over the board, including the already active full Mission, and retain exact message focus')
+
+  const cleanupMission = qa.items.find((item:any) => item.title === '基于最新内容编辑')
+  const cleanupCard = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes(cleanupMission.title))!
+  const cleanupGroup = cleanupCard.closest<HTMLElement>('.mission-list-group')
+  if (cleanupGroup?.querySelector('.mission-list-cards')?.hasAttribute('hidden')) {
+    cleanupGroup.querySelector<HTMLButtonElement>('.mission-group-heading')!.click()
+    await frames()
+  }
+  cleanupCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: cleanupCard.getBoundingClientRect().left + 20, clientY: cleanupCard.getBoundingClientRect().top + 20 }))
+  const cleanupAction = () => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '清理使命 Worktree')
+  await until(cleanupAction, 'Core cleanup capability exposes the existing right-click action')
+  cleanupAction()!.click()
+  await until(() => document.querySelector('.mission-worktree-cleanup-dialog') && !button('清理').disabled, 'Workspace cleanup dialog resolves its exact resources')
+  const cleanupDialog = document.querySelector<HTMLElement>('.mission-worktree-cleanup-dialog')!
+  check(cleanupDialog.textContent?.includes('将删除此使命的 Worktree 和本地分支。') && cleanupDialog.textContent?.includes('/workspace/rovai-ai-mission-018') && cleanupDialog.textContent?.includes('rovai/mission/018'), 'Cleanup dialog stays concise and identifies the exact path and branch')
+  check(button('清理').classList.contains('compact-primary') && !button('清理').classList.contains('danger'), 'Cleanup uses the neutral primary action')
+  button('清理').click()
+  await until(() => !document.querySelector('.mission-worktree-cleanup-dialog') && cleanupMission.workspaceResourcesPresent === false, 'Explicit cleanup completes and refreshes the Mission projection')
+  check(qa.calls.some((call:any) => call.method === 'missions.workspace.cleanup' && call.p.command?.missionId === cleanupMission.missionId), 'Cleanup uses the authoritative Mission workspace command')
+  const refreshedCleanupCard = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes(cleanupMission.title))!
+  refreshedCleanupCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: refreshedCleanupCard.getBoundingClientRect().left + 20, clientY: refreshedCleanupCard.getBoundingClientRect().top + 20 }))
+  await until(() => document.querySelector('[role=menu]'), 'Mission action menu reopens after cleanup')
+  check(!cleanupAction(), 'Completed cleanup hides the action from the Core capability projection')
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  cases.push('workspace cleanup is Core-gated, concise, neutral, explicit, and disappears after completion')
   return { ok: true, cases }
 }
 

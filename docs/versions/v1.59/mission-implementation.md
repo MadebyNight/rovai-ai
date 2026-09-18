@@ -56,7 +56,7 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 - Git 文件系统 owner：固定基准、临时 index 保真实 index、未跟踪／忽略／二进制／特殊路径、冲突及恢复；
   纯 parser 矩阵不能证明 Git 行为，使用临时真实仓库。最小命令 `cargo test -p rovai-core --lib mission_workspace::tests`。
 - 已有 Context Evidence owner 扩展使命输入、once-per-binding ACK 和恢复负向分支；沿用唯一 golden，不复制 JSON 断言。
-- Migration 158 扩展受支持来源的 admission 矩阵，在 DSH 157 后同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106；Migration 160 另行覆盖已部署 Mission 157–159/schema 109 与 DSH 的原位收敛。独立 Mission migration owner 证明事务回滚、既有历史保留、删除 Camp 后清理记录继续存在并可跨重启读取；旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_cleanup_survives_camp_deletion`。
+- Migration 158 扩展受支持来源的 admission 矩阵，在 DSH 157 后同时接纳主线附件路径 schema 106 与已安装的 Mission preview schema 106；Migration 160 另行覆盖已部署 Mission 157–159/schema 109 与 DSH 的原位收敛。独立 Mission migration owner 证明事务回滚和当前默认保留行为；Migration 162 owner 证明最小检查点列、触发器移除、既有行保留和失败回滚。旧迁移 owner 没有这个生命周期，需隔离 SQLite。最小命令分别为 `cargo test -p rovai-core --lib mission_migration_is_atomic_and_workspace_survives_camp_deletion` 与 `cargo test -p rovai-core --lib workspace_lifecycle_migration_is_atomic_preserves_rows_and_removes_delete_trigger`。
 
 真实模型只在隔离 Smoke 和已冻结 Gate 中运行。交互稿的 15 组 fixture 检查不构成以上产品验收。
 
@@ -103,12 +103,31 @@ ContextManifest 内部冻结本轮 `details_version`，只有对应 Runtime Inpu
 Electron `pnpm test:mission-board`、`pnpm docs:test`、`pnpm docs:check`、带 merge-base 的
 `pnpm docs:check:ci` 与 `git diff --check`。
 
+## 2026-09-18 显式 Worktree 清理与删除处置
+
+用户选择可用性优先的最小实现。卡片／列表原有右键菜单只在 Core 的 `cleanupAvailable` 为真时显示
+`清理使命 Worktree`；没有详情页省略号、保留资源页面、后台重试、脏文件拦截或额外风险确认。弹窗删除
+Worktree 和本地分支，使用中性操作。删除使命新增默认 `retain` 的 `workspaceDisposition`；只有用户勾选时
+才先结束执行、完成两步清理并删除使命，任一步失败都保留使命。
+
+实现复用 `mission_workspace` 与命令记录，只增加准备模式、generation、清理命令、expected branch OID 和
+两个步骤检查点。清理与 preparing 使用同一互斥，Core 按同 Camp 或相同 execution root 检查全部活跃 Run；
+分支使用 expected OID 条件删除。后续 Run 在 Worktree 缺失时按实际分支状态恢复，既有 Native Session resume
+不变。Migration 162/schema 112 原位补列并删除旧的无条件 Camp-delete cleanup trigger；历史孤儿清理 route
+仅继续处理已经处于旧 `cleanup_pending`／`cleanup_failed` 的记录。
+
+最终验证覆盖 `cargo check --workspace --all-targets`、`cargo test -p rovai-core --lib`
+（832 passed、6 ignored）、`cargo test -p rovai-web`（8 passed）、`pnpm typecheck`、
+`pnpm test:desktop-bridge`、`pnpm test:mission-board`（标准场景与 1200 文件窗口化场景）、
+`pnpm test:host-web`（4 passed）、`pnpm build:web`，以及完整 documentation governance／diff-aware CI 门禁。
+
 ## 主线整合与验收
 
 已整合 `origin/main` 的 `42427999`（含 #397–#403）。主线 Migration 156/schema 106 保留；Mission 与附件上下文曾在 Migration 157/schema 107 汇合，并兼容先前安装的 Mission schema 106；定义编辑与基线修订曾推进到 Migration 158/schema 108，稳定编号与 accepted 水位曾推进到 Migration 159/schema 109。preparing 与 claim 共用准入检查，同时保留主线无时限执行的语义。
 
 随后整合 `origin/main` 的 `e6d7f0cf` 时，主线已把 Migration 157/schema 107 分配给 DSH。最终序列保留
-DSH 157，将 Mission context／definition／delivery 顺延到 158–160，并由定义附件 Migration 161 推进到当前 schema 111；已安装的 Mission
+DSH 157，将 Mission context／definition／delivery 顺延到 158–160，由定义附件 Migration 161 推进到 schema 111，
+再由工作区处置 Migration 162 推进到当前 schema 112；已安装的 Mission
 157–159/schema 109 被精确识别为旧 preview，只能通过 Migration 160 补齐 DSH 并收敛，不改写 Mission
 业务行、已冻结 Context 或既有工作区。
 
@@ -123,7 +142,7 @@ DSH 157，将 Mission context／definition／delivery 顺延到 158–160，并�
 常规门禁与最终安装已完成；上下文 Gate 按用户追加指令提前结束，不记为完整通过。
 
 真实运行第七次验收已通过六个阶段：保存不执行、开始幂等与 preparing 建工作区、A2A／非队长更新、
-固定基准净 Diff 与文件来源、Core 重启及非 Git 普通消息、删除 worktree 并保留分支。证据位于
+固定基准净 Diff 与文件来源、Core 重启及非 Git 普通消息、当时合同下删除 worktree 并保留分支。证据位于
 `/private/tmp/rovai-mission-evidence-20260915/runtime-7/report.json`，四个真实 Codex Run 均成功。
 执行夹具使用独立空 `ZDOTDIR`，避免本机登录 Shell 把候选 CLI 的 PATH 改回日常安装版。
 

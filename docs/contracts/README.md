@@ -13,7 +13,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 | 合同 | 范围 |
 | --- | --- |
-| [Mission v2（当前）](mission-v2.md) | 继承 v1，并让当前 Mission 的受认证 Agent 显式读取有序附件原路径 |
+| [Mission v3（当前）](mission-v3.md) | 继承 v2，以显式处置控制使命删除，支持可重建工作区、前台分步清理与条件分支删除 |
+| [Mission v2（历史）](mission-v2.md) | 继承 v1，并让当前 Mission 的受认证 Agent 显式读取有序附件原路径；删除即排队清理的规则由 v3 局部替代 |
 | [Mission v1（历史）](mission-v1.md) | 身份、业务状态、当前成员操作、工作区准备与清理、固定基准累计变更；附件 raw path 始终私有的结论由 v2 局部替代 |
 
 ## 生命周期

@@ -120,6 +120,11 @@ pub(super) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> 
             return Ok(false);
         }
     }
+    let workspace_lifecycle: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=162)",
+        [],
+        |row| row.get(0),
+    )?;
     for (name, fragments) in [
         (
             "mission",
@@ -168,6 +173,9 @@ pub(super) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> 
         ("agent_run", &["workspace_preparing_at TEXT"][..]),
         ("conversation", &["native_workspace_fact_digest TEXT"][..]),
     ] {
+        if workspace_lifecycle && name == "mission_camp_delete_cleanup" {
+            continue;
+        }
         if !contains_schema(connection, name, fragments)? {
             return Ok(false);
         }
@@ -258,6 +266,13 @@ impl Database {
             if !preview {
                 tx.execute_batch(include_str!("mission_schema.sql"))?;
             }
+            tx.execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS mission_camp_delete_cleanup BEFORE DELETE ON camp
+                 BEGIN
+                     UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
+                     WHERE camp_id=OLD.id AND state IN ('ready','preparing');
+                 END;",
+            )?;
             tx.execute_batch(GUARDS)?;
             mission_details::apply_schema(&tx)?;
             tx.execute_batch("INSERT INTO schema_migration VALUES(158,datetime('now')); INSERT INTO schema_migration VALUES(159,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=109,updated_at=datetime('now') WHERE singleton=1;")?;
@@ -284,7 +299,8 @@ impl Database {
         result?;
         restore?;
         self.migrate_mission_delivery_v160()?;
-        self.migrate_mission_attachments_v161()
+        self.migrate_mission_attachments_v161()?;
+        self.migrate_mission_workspace_lifecycle_v162()
     }
 }
 
@@ -309,7 +325,7 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
         "DROP TABLE IF EXISTS mission_number_sequence;
         ALTER TABLE conversation DROP COLUMN mission_details_delivered_version;
         ALTER TABLE context_manifest DROP COLUMN mission_details_version;
-        DELETE FROM schema_migration WHERE version IN (160,161);",
+        DELETE FROM schema_migration WHERE version IN (160,161,162);",
     )
     .unwrap();
     tx.execute_batch("DROP TABLE IF EXISTS mission_details_read; DELETE FROM schema_migration WHERE version=159;")
@@ -327,7 +343,7 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
     profile.profile_version = 5;
     tx.execute("UPDATE context_manifest SET context_manifest_version=24,formatter_version=24,run_facts_schema_version=3,run_fact_payload_json=json_set(run_fact_payload_json,'$.schemaVersion',3),context_delivery_profile_version=5,context_delivery_profile_json=?1,context_delivery_profile_digest=?2 WHERE context_manifest_version=25",params![serde_json::to_string(&profile).unwrap(),profile.canonical_digest().unwrap()]).unwrap();
     tx.execute_batch(&guard).unwrap();
-    tx.execute_batch("DROP TRIGGER mission_camp_delete_cleanup; DROP TRIGGER mission_workspace_binding_reset;
+    tx.execute_batch("DROP TRIGGER IF EXISTS mission_camp_delete_cleanup; DROP TRIGGER mission_workspace_binding_reset;
         DROP TRIGGER context_manifest_v25_only_insert; DROP TRIGGER context_manifest_quote_profile_insert;
         DROP TRIGGER runtime_input_delivery_attachment_auth_insert;
         DROP TABLE mission_start; DROP TABLE mission_activity; DROP TABLE mission_pr; DROP TABLE mission;

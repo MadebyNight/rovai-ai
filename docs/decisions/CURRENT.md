@@ -70,8 +70,8 @@ last_updated: 2026-09-18
 
 ## Mission
 
-- 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v2](../contracts/mission-v2.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v25](../contracts/context-manifest-evidence-v25.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
-- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D12](../versions/v1.59/decisions.md#v1-59-d12)；附件原路径只在受认证 `mission get` 专用投影披露的理由：[V1.59-D13](../versions/v1.59/decisions.md#v1-59-d13)。
+- 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v3](../contracts/mission-v3.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v25](../contracts/context-manifest-evidence-v25.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
+- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D12](../versions/v1.59/decisions.md#v1-59-d12)；附件原路径只在受认证 `mission get` 专用投影披露的理由：[V1.59-D13](../versions/v1.59/decisions.md#v1-59-d13)；删除默认保留、前台最小清理与 Session 延续的理由：[V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14)。
 
 ## Single Chat
 

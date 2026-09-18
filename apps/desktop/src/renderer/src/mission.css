@@ -228,6 +228,7 @@ button.mission-tag { cursor: pointer; }
 .mission-roster small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .mission-delivery-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .mission-delivery-heading h3 { margin-bottom: 0; }
+.mission-workspace-cleared { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
 .mission-diff-counts { display: inline-flex; gap: 6px; flex: 0 0 auto; white-space: nowrap; font: 11px ui-monospace,monospace; }
 .mission-diff-counts > span:first-child { color: var(--success); }.mission-diff-counts > span:last-child { color: var(--danger); }
 .mission-file-binary { color: var(--muted); font-size: 10.5px; }
@@ -239,9 +240,16 @@ button.mission-tag { cursor: pointer; }
 .mission-delete-workspaces > div { display: grid; gap: 5px; padding: 10px 0; border-top: 1px solid var(--line); }
 .mission-delete-workspaces code { font-size: 11px; overflow-wrap: anywhere; }.mission-delete-workspaces small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .mission-delete-confirm.compact-primary { color: var(--danger); background: var(--danger-soft); border-color: transparent; }.mission-delete-confirm.compact-primary:hover { background: color-mix(in srgb,var(--danger) 8%,var(--danger-soft)); border-color: transparent; }
+.mission-worktree-cleanup-dialog p { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+.mission-delete-workspace-option { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--ink); font-size: 12px; cursor: pointer; }
+.mission-delete-workspace-option:has(input:disabled) { color: var(--faint); cursor: default; }
+.mission-delete-workspace-option input { accent-color: var(--brand); }
+.mission-inline-help { position: relative; display: inline-grid; width: 17px; height: 17px; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: 10px; line-height: 1; cursor: help; }
+.mission-inline-help::after { position: absolute; z-index: 460; bottom: calc(100% + 7px); left: 50%; display: none; width: max-content; max-width: 280px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--ink); background: var(--surface-raised); box-shadow: var(--shadow-float); content: attr(data-tooltip); font-size: 11px; line-height: 1.55; transform: translateX(-50%); }
+.mission-inline-help:is(:hover,:focus-visible)::after { display: block; }
 .mission-cleanup-notice { padding: 0 24px 10px; }.mission-cleanup-notice button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--attention); font-size: 11px; cursor: pointer; }
 .mission-cleanup-list section { padding-block: 8px 16px; }.mission-cleanup-list h3 { font-size: 13px; font-weight: 500; }.mission-cleanup-list p { color: var(--muted); font-size: 12px; line-height: 1.7; }.mission-cleanup-list section > div { display: grid; gap: 5px; margin-bottom: 10px; font-size: 11px; overflow-wrap: anywhere; }.mission-cleanup-list small { color: var(--muted); font-size: 11px; }
-:is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+:is(.mission-filter,.mission-card-open,.mission-avatars,.mission-icon-button,.mission-clear-filters,.mission-tag,.mission-edit-tags,.mission-inline-help):focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
 @media(max-width:1190px) { .mission-toolbar { gap: 6px; }.mission-filter-group { gap: 0; }.mission-filter { padding-inline: 6px; }.mission-search { width: 150px; }.mission-filter .mission-filter-value { max-width: 70px; } }
 @media(max-width:760px) { .mission-toolbar { flex-wrap: wrap; flex-basis: auto; }.mission-filter-group { flex: 1 1 100%; }.mission-search { margin-left: 0; flex: 1; }.mission-full-properties { flex-wrap: wrap; } }
 .compact-menu .compact-option > .mission-state-glyph { flex: 0 0 14px; }

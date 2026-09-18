@@ -20,7 +20,9 @@ Mission Camp、首次执行准备 Git worktree、固定基准累计 Diff、Agent
 实现范围及当前进度见[使命实施计划](mission-implementation.md)。
 使命定义附件已进入用户编辑面；Agent 显式读取原路径的后续变更已按
 [确认的 revision 1](model-context-change-mission-attachment-read.md)实施，使用独立 Agent 投影，
-不把 raw path 加入 Desktop/Web 的公共 Mission 投影。当前合同为 [Mission v2](../../contracts/mission-v2.md)
+不把 raw path 加入 Desktop/Web 的公共 Mission 投影。2026-09-18 又按用户确认把工作区管理收敛为显式
+前台操作：删除使命默认原地保留 Worktree／本地分支，勾选后先清理成功再删除；单独清理可从原右键入口重试，
+不增加保留资源页面、后台维护或 Session 重置。当前合同为 [Mission v3](../../contracts/mission-v3.md)
 与 [Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)。
 
 ## Command 文件预览与执行台宽度修复增量
@@ -80,7 +82,7 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 | --- | --- | --- |
 | Version lifecycle | 已更新 | 前版生命周期冻结；本概览、实施计划与[版本索引](../README.md)建立唯一 current v1.59 |
 | Decisions | 已更新 | [V1.59-D01](decisions.md#v1-59-d01)解释唯一 Host；[V1.59-D02](decisions.md#v1-59-d02)确定独立 Server 数据根和原生部署；[V1.59-D05](decisions.md#v1-59-d05)确定长期登录与普通 Session 续期 |
-| Contracts | 已更新 | [Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)拥有新入口与数据根，v1 保留兼容；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；[Mission v2](../../contracts/mission-v2.md)和[Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)增加当前 Mission 附件原路径的受认证 Agent 读取投影；Migration 153 保留旧 Desktop 数据和旧任务分支 150 草稿；154 隔离单聊 Draft/Pending 客户端 |
+| Contracts | 已更新 | [Host Lifecycle v2](../../contracts/host-lifecycle-v2.md)拥有新入口与数据根，v1 保留兼容；[Host Web v2](../../contracts/host-web-v2.md)、[Draft v13](../../contracts/camp-composer-draft-v13.md)、[Pending v4](../../contracts/pending-camp-input-v4.md)拥有网络写入、编辑归属与恢复；[Mission v3](../../contracts/mission-v3.md)保留 v2 的受认证附件读取并增加显式工作区处置、恢复与前台分步清理；[Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)拥有当前 Agent wire；Migration 153 保留旧 Desktop 数据和旧任务分支 150 草稿；154 隔离单聊 Draft/Pending 客户端 |
 | Architecture | 已更新 | [统一 Rust Host](../../architecture/unified-rust-host.md)及架构导航记录已确认目标与当前实现的区分 |
 | UI | 已更新 | 实际 Web 挂载共享 BusinessApp/CampNavigation/CampWorkspace；同步 main `42e1e6d1` 的运行头像/双弧入口与横向溢出修复；[差异表](../../ui/host-web-parity.md)保留正式能力边界；[Mobile WebUI](../../ui/host-web-mobile.md)已实施，手机对话/执行双入口、更多菜单与紧凑间距已按最终稿接入；执行彩环最多显示 2 个头像及 +N，Run 文案由同一共享状态驱动；Server 更新 API 与共享更新页已接入，Desktop 托管只读版本说明；当前发布显示使命板入口，以右侧蓝点提示需要用户处理的使命，远程连接菜单仍隐藏；既有页面、Host 能力及独立 `rovai-server` 入口保留；真实 Release 和各平台升级验收分别记录 |
 | Runtime Activity | 已更新 | DeepSeek Harness 复用共享 ACP Activity，按官方结构化结果补 shell 退出、文件路径与完整文件状态；write 的显式 `before:null` 归一为标准新增 Diff，通用 Diff/Files Changed/Diff Card 继续拥有展示，其他 Adapter 分类不变 |
@@ -107,7 +109,8 @@ Headless 执行，最后接入认证、上传和 WebUI。详见[实施计划](im
 2026-09-17 又在 Ubuntu 24.04.5 / GNU x86_64 目标主机上完成相同 14 轴的独立验收，Linux x64 绑定自己的
 不可变证据晋升 qualified；Windows 10 x64/本地 NTFS 同日完成独立 14 轴、真实 Camp 和生产 TTL 验收；维护者
 确认 macOS x64 目标主机矩阵完成且批准发布。四个平台分别绑定证据并全部 qualified。
-Migration 157 扩充闭集并到达中间态 v1.59/schema 107；Mission 158–160 收敛后由 161 增加定义附件，当前为 schema 111，
+Migration 157 扩充闭集并到达中间态 v1.59/schema 107；Mission 158–160 收敛后由 161 增加定义附件，
+Migration 162 增加工作区准备模式、代次和最小清理检查点并移除无条件删除触发器，当前为 schema 112，
 同时保留 schema 106 原位升级及此前受支持来源。
 Bootstrap 使用已有 managed delivery，模型可见内容、Context/Manifest 与版本轴不变。
 2026-09-16 进一步收敛到 Runtime 通用架构：DSH 原生 `sandbox_mode`/`approval_policy` 从队员页到 Host 原样传递，
@@ -140,7 +143,8 @@ Run Facts 顶层仅提供 attachmentOutputRoot；删除 Camp 仅清理自有位�
 [已确认 revision 2](model-context-change-editable-attachments.md)记录精确字段与确认消息，
 [实施计划](editable-attachments-implementation.md)保留原 worktree 与 PR/main 合并交付顺序。
 当前先以 Migration 157/schema 107 应用主线 DSH 闭集扩展，再由 Mission context、定义编辑／Git 基线修订和
-稳定数字号／accepted 投递水位推进到 Migration 158–160/schema 110，使命定义附件随后推进到 Migration 161/schema 111；Formatter/Manifest 25、Run Facts 4、
+稳定数字号／accepted 投递水位推进到 Migration 158–160/schema 110，使命定义附件随后推进到 Migration 161/schema 111，
+显式工作区处置推进到 Migration 162/schema 112；Formatter/Manifest 25、Run Facts 4、
 CLI 26/Output 3 同时保留附件输出路径和 Mission 事实。两个既存 schema 106 来源均可升级且保留旧记录；
 已安装的 Mission 157–159/schema 109 preview 由 Migration 160 原位补齐 DSH 后收敛。
 当前权威为 [Camp Attachment v10](../../contracts/camp-attachment-v10.md)、[Context v25](../../contracts/context-manifest-evidence-v25.md)、

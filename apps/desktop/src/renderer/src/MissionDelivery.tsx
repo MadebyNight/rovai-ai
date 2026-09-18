@@ -38,11 +38,12 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify }: { 
     {!data && !error && <p className="mission-section-empty" role="status">正在加载交付…</p>}
     {data && <>
       <div className="mission-delivery-section">
+        {data.workspace?.state === 'cleaned' && <p className="mission-workspace-cleared">Worktree 已清理 · 下次执行时重建</p>}
         <div className="mission-evidence-row"><span>目录</span><code>{data.workingDirectory}</code></div>
         {data.git && data.workspace && <><div className="mission-evidence-row"><Icon name="branch"/><code>{data.workspace.branch}</code></div><div className="mission-evidence-row"><span>来源</span><code>{data.workspace.baseBranch ?? 'detached HEAD'}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div></>}
         {data.workspace?.diagnostic && <p className="mission-load-error" role="alert">{data.workspace.diagnostic}</p>}
       </div>
-      {data.git && <MissionChanges mission={mission} baseSha={data.workspace?.baseSha ?? null}/>}
+      {data.git && (!data.workspace || data.workspace.state === 'ready') && <MissionChanges mission={mission} baseSha={data.workspace?.baseSha ?? null}/>}
       <section className="mission-delivery-section"><h3>队员交付 <span>{data.files.length || ''}</span></h3>{data.files.map(file => <div className="mission-delivery-file" key={`${file.messageId}:${file.attachmentId}`}>
         <div className="mission-artifact"><AttachmentCard presentation="agent-timeline" attachment={{ id: file.attachmentId, displayName: file.displayName, kind: file.kind, fileCount: file.fileCount, mediaType: file.mediaType, byteSize: file.byteSize, previewKind: file.previewKind, availability: 'unknown' }} locator={{ owner: 'message', campId: mission.campId, messageId: file.messageId, attachmentRefId: file.attachmentId }} onNotify={onNotify}/><small>{agents.find(a => a.agentId === file.agentId)?.displayName ?? '队员'} · {missionDate(file.createdAt)}</small></div>
         <button className="mission-source-link" onClick={() => onSource(file.messageId)}>查看来源</button>
