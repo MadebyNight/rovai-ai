@@ -17,8 +17,9 @@ export interface DisplayArea {
   height: number
 }
 
-export const DEFAULT_WINDOW_WIDTH = 1440
-export const DEFAULT_WINDOW_HEIGHT = 920
+export const DEFAULT_WINDOW_WIDTH = 1800
+export const DEFAULT_WINDOW_HEIGHT = 1000
+export const DEFAULT_WINDOW_RATIO = 0.9
 
 export interface ResettableWindow {
   isFullScreen(): boolean
@@ -51,8 +52,16 @@ export function defaultWindowBounds(
   if (!display) {
     return { width: DEFAULT_WINDOW_WIDTH, height: DEFAULT_WINDOW_HEIGHT, x: 0, y: 0 }
   }
-  const width = constrainedDimension(DEFAULT_WINDOW_WIDTH, display.width, minWidth)
-  const height = constrainedDimension(DEFAULT_WINDOW_HEIGHT, display.height, minHeight)
+  const width = constrainedDimension(
+    Math.min(DEFAULT_WINDOW_WIDTH, display.width * DEFAULT_WINDOW_RATIO),
+    display.width,
+    minWidth
+  )
+  const height = constrainedDimension(
+    Math.min(DEFAULT_WINDOW_HEIGHT, display.height * DEFAULT_WINDOW_RATIO),
+    display.height,
+    minHeight
+  )
   return {
     width,
     height,
