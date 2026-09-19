@@ -20,6 +20,33 @@ afterEach(async () => {
 })
 
 describe('window state', () => {
+  it('uses 90% of the work area up to the 1800 by 1000 default cap', () => {
+    expect(defaultWindowBounds({ x: 0, y: 0, width: 1920, height: 1032 }, 1040, 700)).toEqual({
+      width: 1728,
+      height: 929,
+      x: 96,
+      y: 52
+    })
+    expect(defaultWindowBounds({ x: 0, y: 0, width: 2560, height: 1392 }, 1040, 700)).toEqual({
+      width: 1800,
+      height: 1000,
+      x: 380,
+      y: 196
+    })
+    expect(defaultWindowBounds(primary, 1040, 700)).toEqual({
+      width: 1800,
+      height: 1000,
+      x: 380,
+      y: 208
+    })
+    expect(defaultWindowBounds(null, 1040, 700)).toEqual({
+      width: 1800,
+      height: 1000,
+      x: 0,
+      y: 0
+    })
+  })
+
   it('keeps a valid size and clamps the full window into its display work area', () => {
     expect(sanitizeWindowState({
       schemaVersion: 1,
@@ -62,8 +89,20 @@ describe('window state', () => {
   it('constrains the default and oversized saved bounds to a small work area', () => {
     const small = { x: 80, y: 40, width: 1200, height: 760 }
     expect(defaultWindowBounds(small, 1040, 700)).toEqual({
-      width: 1200,
-      height: 760,
+      width: 1080,
+      height: 700,
+      x: 140,
+      y: 70
+    })
+    expect(defaultWindowBounds({ x: 80, y: 40, width: 1040, height: 700 }, 1040, 700)).toEqual({
+      width: 1040,
+      height: 700,
+      x: 80,
+      y: 40
+    })
+    expect(defaultWindowBounds({ x: 80, y: 40, width: 900, height: 600 }, 1040, 700)).toEqual({
+      width: 900,
+      height: 600,
       x: 80,
       y: 40
     })
@@ -100,6 +139,13 @@ describe('window state', () => {
     expect(applied).toEqual(defaultWindowBounds(primary, 1040, 700))
     expect(persisted).toEqual(applied)
     expect(windowResetCapability(false)).toEqual({ canReset: true, reason: null })
+    const secondary = { x: -1920, y: -180, width: 1920, height: 1080 }
+    let secondaryApplied = null
+    await resetWindowBounds({
+      isFullScreen: () => false,
+      setBounds: (bounds) => { secondaryApplied = bounds }
+    }, secondary, 1040, 700, async () => undefined)
+    expect(secondaryApplied).toEqual({ width: 1728, height: 972, x: -1824, y: -126 })
   })
 
   it('does not apply or queue a reset while fullscreen', async () => {
