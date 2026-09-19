@@ -4,7 +4,7 @@ version: v1.61
 lifecycle: current
 authority: version-implementation-plan
 status: completed
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # v1.61 实施与验收
@@ -63,6 +63,19 @@ last_updated: 2026-09-19
 - [x] Session Charter revision 从 9 轮换到 10；Bootstrap/Formatter/Manifest/Run Facts/Built-in 与 schema 均不变。
 - [x] Mission 定向 Rust、格式、TypeScript/Node、文档治理与远端 required check 通过；合入后执行祖先验证。
 
+## 2026-09-20 执行卡读取链路简化
+
+- 修改前 Core 输入循环直接等待普通请求，后到的执行窗口请求连处理都无法开始；修改后输入循环只分派，
+  有序语义由单一 FIFO worker 接管，`agentRunExecution.page/changes` 复用既有独立任务集合。
+  `camps.enter/open` 保持有序、不可合并且不提前宣称完成，没有引入优先级调度器、只读连接或新 RPC。
+- `camps.enter/open` 与执行窗口读取在完成数据库工作后立即释放 guard，JSON 序列化和无内容日志位于锁外。
+  Core 日志按同一 request ID 记录到达、处理开始、拿锁等待、读取/活动文本处理、序列化和响应完成；
+  Renderer 另以 Camp/Run 身份记录冷请求发出与页面完成首帧绘制，不采集输出内容。
+- Renderer 删除消息发送、Camp 重命名与 Default Lead 变更后绕过 coordinator 的直接 `camps.open` 写回，
+  统一为一个在途读取加至多一次 dirty trailing refresh；Camp 切换与 high-water fence 继续拒绝迟到结果。
+- 新 slow test 在一个不持数据库锁的有序请求中注入受控 3 秒屏障，并要求冷 page 在屏障释放前返回。
+  修复前 page 继承完整等待，修复后立即进入普通归属校验。共享数据库 mutex 仍是明确保留边界，不把该场景误报为数据库隔离已完成。
+
 ## Rust 测试准入记录
 
 新增测试拥有既有 owner 无法证明的事务/协议边界：Mission service 的内部 ID、数值分页与筛选绑定游标；
@@ -73,6 +86,8 @@ Migration 165 的 exact v1.60/schema 114 来源、DDL 重建及 current admissio
 `cargo test -p rovai-core --features slow-tests --lib context::slow_tests::session_charter_publishes_one_cli_only_builtin_contract -- --exact`。
 默认接收提示新增 owner 证明投影只作用于正确的 default-addressed 消息、claim-time 显示名与 context version
 不可漂移，以及 Migration 166 从 exact v1.61/schema 115 升级而不改写消息；纯 renderer 单测无法证明这些事务边界。
+执行卡新增的 slow test 使用仅测试编译的受控屏障占住有序 worker、不持数据库锁，以验证冷
+`agentRunExecution.page` 不继承无关的 3 秒等待；既有分类单测不能证明真实 ingress/worker/response 接线。
 删除测试为零。
 
 ## 实施收口

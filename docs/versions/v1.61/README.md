@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
 model_context_change: true
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # Rovai-ai v1.61：Mission 全局发现、完成判断与默认接收提示
@@ -58,6 +58,10 @@ Manifest/Evidence schema、权限、状态、CLI 和调度不变。
 
 Migration 166 只扩展 ContextManifest 的 v27/Profile 8 closed constraints，并在 `agent_run_input` 冻结
 context version 与 nullable 的 claim-time 接收者显示名；既有输入回填 v26 marker，消息内容和 Delivery 不回写。
+
+同日的执行卡读取链路收敛不改变 schema、RPC、分页或活动文本语义：Core 输入读取与有序
+处理分离，`agentRunExecution.page/changes` 复用既有独立派发，Camp/执行窗口序列化移到数据库锁外；
+Renderer 的消息发送、Camp 重命名与 Default Lead 变更后刷新统一进入既有 coordinator。
 
 ## 跨版本文档影响
 
