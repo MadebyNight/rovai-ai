@@ -2,7 +2,8 @@ pub const CAMP_MESSAGE_SEND_SUMMARY: &str = "Publish one public Camp message. Us
 
 pub const CAMP_MESSAGE_SEND_FILE_HELP: &str = "Attach a recipient-facing file or directory at its actual path; repeat to preserve attachment order. Rovai references the current file without copying or changing permissions. Temporary files may become unavailable when their source is cleaned up.";
 
-pub const CAMP_MESSAGE_SEND_BODY_HELP: &str = "For multiline Markdown, pass real newline characters.\nDirect --body values are literal: \\n inside ordinary shell quotes is text, not a line break.\nJSON stdin/heredoc and JSON --input-file decode \\n escapes.";
+pub const CAMP_MESSAGE_SEND_BODY_HELP: &str = "Use --body for simple single-line text; \\n remains literal.\n\
+     For multiline text, Markdown, or content containing backticks or $(), write a UTF-8 JSON request with a file-write tool and use --input-file <path>.";
 
 pub const CAMP_MESSAGE_SEND_PUBLIC_ONLY_SCHEMA_DESCRIPTION: &str = "Guarantee that this public Camp message addresses no Agent. When true, explicit Agent recipients and taskId are invalid, effectiveRecipients and deliveryIds are empty, and no Agent is woken. This may be combined with mentionUser because Principal attention is not Agent routing.";
 
@@ -27,7 +28,7 @@ Ordinary public Camp messages are already visible to the Principal. Use this fla
 It creates no Agent Delivery, does not represent approval, and may be combined with --public-only. Principal attention is message-local and is never inherited by replies, Tasks, or downstream A2A work.";
 
 pub const CAMP_MESSAGE_SEND_HELP_EXAMPLES: [&str; 3] = [
-    "rovai send --public-only --body 'Final conclusion: the failure is a client-version regression.'",
+    "Write request.json with a file-write tool:\n  {\"publicOnly\":true,\"body\":\"Result:\\n\\nUpdated `src/example.rs`.\"}\nrovai send --input-file request.json",
     "rovai send --to agent_5 --body 'Please reproduce on the previous client build and return the version and result.'",
     "rovai send --public-only --to-principal --body 'Please choose whether to roll back the client or continue the token investigation.'",
 ];
@@ -88,7 +89,9 @@ mod tests {
     #[test]
     fn examples_keep_public_agent_and_principal_attention_separate() {
         assert_eq!(CAMP_MESSAGE_SEND_HELP_EXAMPLES.len(), 3);
-        assert!(CAMP_MESSAGE_SEND_HELP_EXAMPLES[0].contains("--public-only"));
+        assert!(CAMP_MESSAGE_SEND_HELP_EXAMPLES[0].contains("\"publicOnly\":true"));
+        assert!(CAMP_MESSAGE_SEND_HELP_EXAMPLES[0].contains("--input-file request.json"));
+        assert!(!CAMP_MESSAGE_SEND_HELP_EXAMPLES[0].contains("--public-only"));
         assert!(CAMP_MESSAGE_SEND_HELP_EXAMPLES[1].contains("--to agent_5"));
         assert!(!CAMP_MESSAGE_SEND_HELP_EXAMPLES[1].contains("--to-principal"));
         assert!(CAMP_MESSAGE_SEND_HELP_EXAMPLES[2].contains("--public-only"));
