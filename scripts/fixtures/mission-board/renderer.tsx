@@ -30,6 +30,7 @@ const items:MissionRecord[]=[
  ['需要核对窄窗口的目录布局','needs_you',['交互','体验优化']],['补齐使命工作区恢复路径','in_progress',['Core']],['更新首次使用引导文案','not_started',['文案']],['使命累计变更回归测试','completed',['测试']]
 ].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:i===0?structuredClone(missionSourceAttachments):[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.slice(0,4).map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.slice(0,4).map(a=>a.agentId):[],hasUnread:i===0,workspaceEverCreated:i!==2,workspaceResourcesPresent:i!==2,cleanupAvailable:i!==1&&i!==2}))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
+let failNextMissionRefresh=false, missionRefreshPending=false
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
  {id:'file-b',path:'src/runtime/worker.ts',oldPath:'src/runtime/runner.ts',kind:'renamed',additions:1,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
@@ -98,7 +99,10 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  }
 },request:async(method:string,p:any={})=>{
  calls.push({method,p});const c=p.command??p,m=items.find(m=>m.missionId===c.missionId||m.campId===c.campId)
- if(method==='missions.list')return structuredClone(items)
+ if(method==='missions.list'){
+  if(failNextMissionRefresh){failNextMissionRefresh=false;missionRefreshPending=true;await new Promise(resolve=>setTimeout(resolve,150));missionRefreshPending=false;throw new Error('fixture mission refresh failed')}
+  return structuredClone(items)
+ }
  if(method==='missions.cleanup.list')return []
  if(method==='members.list')return profiles
  if(method==='runtime.installations.list')return installations
@@ -151,6 +155,7 @@ const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}}
 const navigationHistory={initial:{entries:[{kind:'missions' as const}],index:0},write:(state:any)=>state,go:async()=>false,listen:()=>()=>{}}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,navigationHistory,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
 ;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
+ failNextMissionRefresh:()=>{failNextMissionRefresh=true},missionRefreshPending:()=>missionRefreshPending,
  sourceMessageId:(missionId:string)=>snapshot(items.find(item=>item.missionId===missionId)!).messages[1].id,
  invalidateMissionDetails:()=>changed(),
  terminalMissionRun:(campId:string)=>events.forEach(fn=>fn({method:'agent_run.terminal',params:{campId}})),

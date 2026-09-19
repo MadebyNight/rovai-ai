@@ -491,7 +491,7 @@ function MissionProjectPicker({
   const matchingProjects = projects.filter(project => `${project.name}\n${project.projectPath}`.toLocaleLowerCase().includes(normalized))
   const quickChatMatches = !normalized || `使用快速对话 Rovai AI 管理的快速对话目录`.toLocaleLowerCase().includes(normalized)
   return <Popover.Root open={open} onOpenChange={next => { if (!disabled) onOpenChange(next); if (!next) setQuery('') }}>
-    <Popover.Trigger asChild><MissionPropertyChip icon={<ProjectGlyph/>} disabled={disabled}>{projectLabel}</MissionPropertyChip></Popover.Trigger>
+    <Popover.Trigger asChild><MissionPropertyChip className="mission-editor-project-property" icon={<ProjectGlyph/>} disabled={disabled} aria-label={`项目：${projectLabel}`}>{projectLabel}</MissionPropertyChip></Popover.Trigger>
     <Popover.Portal><Popover.Content className="compact-menu mission-editor-project-popover" align="start" sideOffset={6} collisionPadding={12}
       onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
       <label className="mission-picker-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索项目" placeholder="搜索项目…"
@@ -550,17 +550,17 @@ function MissionTeamPicker({
 
   return <Popover.Root open={open} onOpenChange={next => { if (!busy) setOpen(next); if (!next) setQuery('') }}>
     <Popover.Trigger asChild>
-      <MissionPropertyChip ref={triggerRef} icon={<TeamGlyph/>} disabled={busy || !members.length} aria-invalid={!selectedMemberIds.length}>
+      <MissionPropertyChip ref={triggerRef} className="mission-editor-team-property" icon={<TeamGlyph/>} disabled={busy || !members.length} aria-invalid={!selectedMemberIds.length} aria-label={selectedMembers.length ? `队员与队长：${selectedMembers.length} 位队员，${lead ? `队长 ${lead.displayName}` : '未选择队长'}` : availableMembers.length ? '选择队员与队长' : '暂无可用队员'}>
         <span className="mission-editor-team-summary">
-          <span className="compact-avatar-stack">{selectedMembers.slice(0, 3).map(member => <MemberAvatar key={member.agentId} agentId={member.agentId} avatarRef={profileById.get(member.agentId)?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative/>)}</span>
-          <span>{selectedMembers.length ? `${selectedMembers.length} 位队员` : availableMembers.length ? '选择队员' : '暂无可用队员'}</span>
-          <span className="mission-editor-team-divider" aria-hidden="true"/>
-          <span>{lead ? `队长 · ${lead.displayName}` : '选择队长'}</span>
+          {selectedMembers.length ? <><span className="compact-avatar-stack">{selectedMembers.slice(0, 2).map(member => <MemberAvatar key={member.agentId} agentId={member.agentId} avatarRef={profileById.get(member.agentId)?.avatarRef ?? null} displayName={member.displayName} size="mention" decorative/>)}{selectedMembers.length > 2 && <span className="mission-editor-team-overflow" aria-hidden="true">+{selectedMembers.length - 2}</span>}</span>
+            <span className="mission-editor-team-divider" aria-hidden="true"/>
+            <span>{lead ? `队长 ${lead.displayName}` : '选择队长'}</span></>
+            : <span>{availableMembers.length ? '选择队员' : '暂无可用队员'}</span>}
         </span>
       </MissionPropertyChip>
     </Popover.Trigger>
     <Popover.Portal><Popover.Content className="compact-menu mission-editor-team-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
-      <div className="compact-menu-heading"><span>队员与队长</span><button type="button" disabled={busy || !availableMembers.length} onClick={onToggleAll}>{allSelected ? '取消全选' : '全选'}</button></div>
+      <div className="compact-menu-heading"><span>队员与队长 <small className="mission-editor-team-count">已选 {selectedMemberIds.length} / {members.length}</small></span><button type="button" disabled={busy || !availableMembers.length} onClick={onToggleAll}>{allSelected ? '取消全选' : '全选'}</button></div>
       <label className="mission-picker-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索队员" placeholder="搜索队员…"
         onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.closest('.mission-editor-team-popover')?.querySelector<HTMLButtonElement>('.mission-editor-team-member:not(:disabled)')?.focus() } }}/></label>
       <div className="mission-editor-team-list">

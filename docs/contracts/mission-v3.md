@@ -4,7 +4,7 @@ contract: mission-v3
 authority: mission-workspace-reuse-cleanup-and-deletion
 status: accepted
 version: 3
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Mission v3
@@ -57,9 +57,21 @@ retry from the same action. There is no background retry, backup, retained-works
 file blocker. Successful standalone cleanup retains the Mission; the next actual Run follows the preparation
 table above.
 
+The foreground path validates each required fact once before its corresponding destructive step. On the first
+attempt Core verifies the exact path, repository, owner marker and branch ownership, reads the branch OID once,
+and persists it before removing the worktree. A retry reuses that persisted expected OID, and a completed
+worktree checkpoint skips the worktree verification/removal step. After worktree removal, Core checks that no
+other worktree uses the branch and performs one expected-OID `update-ref -d`; it does not surround the delete
+with duplicate branch-OID reads. Already absent owned resources are idempotent success, including a retry after
+the ref was deleted but before its checkpoint was recorded. Ownership proof still limits stale-registration and
+interrupted-staging cleanup to this Mission's exact resources.
+
 The dialog is named `清理使命 Worktree`, says `将删除此使命的 Worktree 和本地分支。`, may list the path and
 branch, and has only `取消` and the neutral `清理` action. This is an intentional Mission-specific presentation
-choice; the ownership, occupancy and expected-OID correctness checks remain authoritative.
+choice; the ownership, occupancy and expected-OID correctness checks remain authoritative. Once
+`missions.workspace.cleanup` succeeds, Renderer closes the dialog immediately and refreshes the Mission list
+and current Camp asynchronously. A later refresh failure is reported as a separate refresh problem and never
+turns the completed cleanup into a failed dialog result.
 
 ## Mission deletion
 

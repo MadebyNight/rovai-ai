@@ -71,6 +71,21 @@ pub struct GitRepository {
 pub struct MissionGit {
     executable: PathBuf,
 }
+
+#[derive(Debug)]
+pub(crate) struct VerifiedWorktreeCleanup {
+    target_present: bool,
+    stale_registrations: Vec<PathBuf>,
+    staging_root: Option<PathBuf>,
+    staging_checkout_present: bool,
+}
+
+impl VerifiedWorktreeCleanup {
+    pub(crate) fn requires_branch(&self) -> bool {
+        self.target_present || self.staging_checkout_present
+    }
+}
+
 impl MissionGit {
     pub fn new(executable: PathBuf) -> Result<Self> {
         ensure!(
@@ -530,7 +545,7 @@ impl MissionGit {
         path_occupied(Path::new(&workspace.worktree_path))
     }
 
-    pub async fn branch_oid(&self, workspace: &MissionWorkspace) -> Result<Option<String>> {
+    async fn validated_branch_reference(&self, workspace: &MissionWorkspace) -> Result<String> {
         let reference = format!("refs/heads/{}", workspace.branch);
         let valid = self
             .output(
@@ -545,14 +560,43 @@ impl MissionGit {
             )
             .await?;
         ensure!(valid.status.success(), "mission.branch_identity_invalid");
+        Ok(reference)
+    }
+
+    pub(crate) async fn cleanup_branch_reference(
+        &self,
+        workspace: &MissionWorkspace,
+    ) -> Result<String> {
+        ensure!(
+            fs::canonicalize(&workspace.repository_root)? == Path::new(&workspace.repository_root),
+            "mission.repository_mismatch"
+        );
+        ensure!(
+            fs::canonicalize(
+                self.text(
+                    Path::new(&workspace.repository_root),
+                    &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                )
+                .await?
+            )? == Path::new(&workspace.git_common_dir),
+            "mission.repository_mismatch"
+        );
+        self.validated_branch_reference(workspace).await
+    }
+
+    pub(crate) async fn branch_oid_for_reference(
+        &self,
+        workspace: &MissionWorkspace,
+        reference: &str,
+    ) -> Result<Option<String>> {
         let output = self
             .output(
                 Path::new(&workspace.repository_root),
                 &[
                     "show-ref".into(),
                     "--verify".into(),
-                    "--quiet".into(),
-                    reference.into(),
+                    "--hash".into(),
+                    reference.to_string().into(),
                 ],
                 None,
                 None,
@@ -560,17 +604,43 @@ impl MissionGit {
             .await?;
         match output.status.code() {
             Some(0) => Ok(Some(
-                self.text(
-                    Path::new(&workspace.repository_root),
-                    &[
-                        "rev-parse",
-                        "--verify",
-                        &format!("refs/heads/{}^{{commit}}", workspace.branch),
-                    ],
-                )
-                .await?,
+                String::from_utf8(output.stdout.bytes)
+                    .context("mission.invalid_git_text")?
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string(),
             )),
             Some(1) => Ok(None),
+            Some(128) if output.stderr.lossy_text().contains("not a valid ref") => Ok(None),
+            _ => bail!("mission.branch_unavailable: {}", output.stderr.lossy_text()),
+        }
+    }
+
+    pub async fn branch_oid(&self, workspace: &MissionWorkspace) -> Result<Option<String>> {
+        let reference = self.validated_branch_reference(workspace).await?;
+        self.branch_oid_for_reference(workspace, &reference).await
+    }
+
+    pub(crate) async fn branch_exists_for_reference(
+        &self,
+        workspace: &MissionWorkspace,
+        reference: &str,
+    ) -> Result<bool> {
+        let output = self
+            .output(
+                Path::new(&workspace.repository_root),
+                &[
+                    "show-ref".into(),
+                    "--verify".into(),
+                    "--quiet".into(),
+                    reference.to_string().into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
             _ => bail!("mission.branch_unavailable: {}", output.stderr.lossy_text()),
         }
     }
@@ -578,13 +648,9 @@ impl MissionGit {
     pub async fn delete_branch_expected(
         &self,
         workspace: &MissionWorkspace,
+        reference: &str,
         expected_oid: &str,
     ) -> Result<()> {
-        match self.branch_oid(workspace).await? {
-            None => return Ok(()),
-            Some(actual) => ensure!(actual == expected_oid, "mission.branch_changed"),
-        }
-        let reference = format!("refs/heads/{}", workspace.branch);
         let worktrees = self
             .output(
                 Path::new(&workspace.repository_root),
@@ -618,35 +684,43 @@ impl MissionGit {
                 &[
                     "update-ref".into(),
                     "-d".into(),
-                    reference.into(),
+                    reference.to_string().into(),
                     expected_oid.into(),
                 ],
                 None,
                 None,
             )
             .await?;
-        ensure!(
-            output.status.success(),
-            "mission.branch_changed: {}",
-            output.stderr.lossy_text()
-        );
-        ensure!(
-            self.branch_oid(workspace).await?.is_none(),
-            "mission.branch_changed"
-        );
+        if !output.status.success() {
+            // A crash can happen after the conditional delete but before its durable checkpoint.
+            // Missing is therefore an idempotent retry; a still-present ref failed the OID fence.
+            if !self
+                .branch_exists_for_reference(workspace, reference)
+                .await?
+            {
+                return Ok(());
+            }
+            bail!("mission.branch_changed: {}", output.stderr.lossy_text());
+        }
         Ok(())
     }
-    pub async fn cleanup(&self, workspace: &MissionWorkspace) -> Result<()> {
+
+    pub(crate) async fn verify_worktree_cleanup(
+        &self,
+        workspace: &MissionWorkspace,
+        reference: &str,
+    ) -> Result<VerifiedWorktreeCleanup> {
         let target = Path::new(&workspace.worktree_path);
-        if path_occupied(target)? {
+        let target_present = path_occupied(target)?;
+        let mut stale_registrations = Vec::new();
+        if target_present {
             self.verify_tree(target, workspace, true).await?;
-            self.bytes(
-                Path::new(&workspace.repository_root),
-                &["worktree", "remove", "--force", &workspace.worktree_path],
-            )
-            .await?;
+            ensure!(
+                self.current_branch(workspace).await?.as_deref() == Some(workspace.branch.as_str()),
+                "mission.workspace_branch_mismatch"
+            );
         } else {
-            // Prune only the exact registered worktree after proving its owner. Never run global prune.
+            // Select only exact stale registrations carrying this workspace's owner marker.
             let registrations = Path::new(&workspace.git_common_dir).join("worktrees");
             if path_occupied(&registrations)? {
                 ensure!(
@@ -671,16 +745,62 @@ impl MissionGit {
                         Path::new(registered.trim_end_matches(['\r', '\n'])) == target.join(".git"),
                         "mission.cleanup_registration_mismatch"
                     );
-                    fs::remove_dir_all(entry.path())?;
+                    ensure!(
+                        fs::read_to_string(entry.path().join("HEAD"))?
+                            .trim_end_matches(['\r', '\n'])
+                            == format!("ref: {reference}"),
+                        "mission.workspace_branch_mismatch"
+                    );
+                    stale_registrations.push(entry.path());
                 }
             }
         }
         let staging = Self::staging_root(workspace)?;
-        if staging.exists() {
+        let mut staging_checkout_present = false;
+        let staging_root = if staging.exists() {
             Self::verify_staging_owner(&staging, workspace)?;
             let checkout = staging.join("checkout");
             if checkout.exists() {
                 self.verify_tree(&checkout, workspace, false).await?;
+                ensure!(
+                    self.text(&checkout, &["symbolic-ref", "--short", "HEAD"])
+                        .await?
+                        == workspace.branch,
+                    "mission.workspace_branch_mismatch"
+                );
+                staging_checkout_present = true;
+            }
+            Some(staging)
+        } else {
+            None
+        };
+        Ok(VerifiedWorktreeCleanup {
+            target_present,
+            stale_registrations,
+            staging_root,
+            staging_checkout_present,
+        })
+    }
+
+    pub(crate) async fn remove_verified_worktree(
+        &self,
+        workspace: &MissionWorkspace,
+        verified: VerifiedWorktreeCleanup,
+    ) -> Result<()> {
+        if verified.target_present {
+            self.bytes(
+                Path::new(&workspace.repository_root),
+                &["worktree", "remove", "--force", &workspace.worktree_path],
+            )
+            .await?;
+        } else {
+            for registration in verified.stale_registrations {
+                fs::remove_dir_all(registration)?;
+            }
+        }
+        if let Some(staging) = verified.staging_root {
+            let checkout = staging.join("checkout");
+            if verified.staging_checkout_present {
                 self.bytes(
                     Path::new(&workspace.repository_root),
                     &[
@@ -696,6 +816,12 @@ impl MissionGit {
             fs::remove_dir(staging)?;
         }
         Ok(())
+    }
+
+    pub async fn cleanup(&self, workspace: &MissionWorkspace) -> Result<()> {
+        let reference = format!("refs/heads/{}", workspace.branch);
+        let verified = self.verify_worktree_cleanup(workspace, &reference).await?;
+        self.remove_verified_worktree(workspace, verified).await
     }
 
     async fn temporary_index(&self, workspace: &MissionWorkspace) -> Result<TemporaryIndex> {
@@ -1457,9 +1583,10 @@ mod tests {
         .unwrap();
         git.validate(&workspace).await.unwrap();
         let expected = git.branch_oid(&workspace).await.unwrap().unwrap();
+        let reference = git.cleanup_branch_reference(&workspace).await.unwrap();
         fs::remove_dir_all(&workspace.worktree_path).unwrap();
         assert!(
-            git.delete_branch_expected(&workspace, &expected)
+            git.delete_branch_expected(&workspace, &reference, &expected)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -1481,7 +1608,10 @@ mod tests {
             .unwrap()
         );
         git.cleanup(&workspace).await.unwrap();
-        git.delete_branch_expected(&workspace, &expected)
+        git.delete_branch_expected(&workspace, &reference, &expected)
+            .await
+            .unwrap();
+        git.delete_branch_expected(&workspace, &reference, &expected)
             .await
             .unwrap();
         assert!(git.branch_oid(&workspace).await.unwrap().is_none());
@@ -1514,6 +1644,7 @@ mod tests {
             .await
             .unwrap();
         let expected = git.branch_oid(&workspace).await.unwrap().unwrap();
+        let reference = git.cleanup_branch_reference(&workspace).await.unwrap();
 
         git.cleanup(&workspace).await.unwrap();
         assert!(!worktree.exists());
@@ -1542,7 +1673,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            git.delete_branch_expected(&workspace, &expected)
+            git.delete_branch_expected(&workspace, &reference, &expected)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -1577,7 +1708,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            git.delete_branch_expected(&workspace, &expected)
+            git.delete_branch_expected(&workspace, &reference, &expected)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -1587,7 +1718,7 @@ mod tests {
             git.branch_oid(&workspace).await.unwrap().as_deref(),
             Some(replacement.as_str())
         );
-        git.delete_branch_expected(&workspace, &replacement)
+        git.delete_branch_expected(&workspace, &reference, &replacement)
             .await
             .unwrap();
         assert!(git.branch_oid(&workspace).await.unwrap().is_none());

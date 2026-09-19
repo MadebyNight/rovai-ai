@@ -439,6 +439,7 @@ button.mission-tag { cursor: pointer; }
 .mission-start-row { display: flex; justify-content: flex-end; margin: -12px 0 24px; padding: 0; border: 0; }
 .mission-start { height: 36px; padding-inline: 16px; font-size: 12px; }
 .mission-active-content { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+.mission-active-content > .mission-workspace-host { max-width: none; }
 .mission-full { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; flex-direction: column; background: var(--conversation-surface); }
 .mission-active-content > .mission-drawer { top: 12px; right: 12px; bottom: 12px; width: var(--mission-drawer-width,1040px); border: 1px solid var(--line); border-radius: 14px; background: var(--conversation-surface); box-shadow: var(--shadow-float); }
 .mission-drawer > .camp-topbar { border-radius: 14px 14px 0 0; }
@@ -540,21 +541,28 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 .mission-editor-drop-overlay > div { display: flex; flex-direction: column; align-items: center; gap: 11px; font-size: 14px; font-weight: 500; }
 .mission-editor-drop-overlay svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .mission-editor-properties { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 11px 27px 18px; }
-.mission-editor-property { display: inline-flex; max-width: min(100%, 310px); height: 30px; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: transparent; font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer; }
+.mission-editor-property { display: inline-flex; max-width: min(100%, 224px); height: 30px; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: transparent; font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer; }
 .mission-editor-property:hover:not(:disabled),.mission-editor-property[data-state="open"] { border-color: var(--line-strong); color: var(--ink); background: var(--surface-hover); }
 .mission-editor-property > :is(svg,.mission-tag-mark,.mission-tag-color-dot) { width: 14px; height: 14px; flex: 0 0 14px; }
 .mission-editor-property > svg { fill: none; stroke: currentColor; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
-.mission-editor-property > .dialog-glyph { width: 12px; height: 12px; margin-left: 1px; color: var(--faint); }
 .mission-editor-property-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mission-editor-project-property { max-width: min(100%, 156px); }
+.mission-editor-team-property { max-width: min(100%, 224px); padding-left: 7px; }
+.mission-editor-tag-property { max-width: min(100%, 132px); }
 .mission-editor-property.is-locked:disabled { cursor: default; opacity: 1; }
 .mission-editor-property.is-locked:hover { border-color: var(--line); color: var(--muted); background: transparent; }
 .mission-editor-lock { width: 12px !important; height: 12px !important; margin-left: 2px; color: var(--faint); }
-.mission-editor-team-summary { display: inline-flex; min-width: 0; align-items: center; gap: 7px; }
+.mission-editor-team-summary { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 6px; }
 .mission-editor-team-summary > span:not(.compact-avatar-stack):not(.mission-editor-team-divider) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mission-editor-team-summary .compact-avatar-stack { flex: 0 0 auto; }
 .mission-editor-team-summary .member-avatar { --member-avatar-size: 22px !important; }
 .mission-editor-team-summary .compact-avatar-stack .member-avatar + .member-avatar { box-shadow: 0 0 0 1.5px var(--surface-raised); }
+.mission-editor-team-overflow { display: grid; width: 22px; height: 22px; flex: 0 0 22px; margin-left: -8px; place-items: center; border: 1.5px solid var(--surface-raised); border-radius: 50%; color: var(--muted); background: var(--surface-muted); font-size: 9px; font-weight: 650; letter-spacing: -.25px; }
 .mission-editor-team-divider { width: 1px; height: 12px; flex: 0 0 1px; margin: 0 1px; background: var(--line); }
-.mission-editor-team-locked { max-width: min(100%, 390px); padding-left: 7px; }
+.mission-editor-team-locked { padding-left: 7px; }
+.mission-editor-selected-tags { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: 3px; overflow: hidden; }
+.mission-editor-selected-tag { min-width: 0; max-width: 60px; overflow: hidden; padding: 3px 5px; border: 1px solid color-mix(in srgb, var(--mission-tag-color) 35%, var(--line)); border-radius: 4px; color: var(--ink); background: color-mix(in srgb, var(--mission-tag-color) 17%, var(--surface-raised)); font-size: 10.5px; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
+.mission-editor-selected-tag-overflow { flex: 0 0 auto; color: var(--faint); font-size: 10.5px; }
 .mission-editor-error { margin-bottom: 8px !important; }
 .mission-definition-dialog .mission-editor-footer { min-height: 59px; justify-content: space-between; padding: 11px 21px 11px 22px; border-top: 1px solid var(--line); }
 .mission-editor-footer-actions { display: flex; align-items: center; gap: 9px; }
@@ -564,13 +572,16 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 .mission-tag-search > svg { width: 15px; height: 15px; flex: 0 0 15px; }
 .mission-tag-search > input { width: 100%; height: 28px; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 12px; }
 .mission-editor-tag-popover .mission-tag-options { max-height: 265px; overflow-y: auto; }
-.mission-editor-tag-popover .compact-option { width: 100%; min-height: 36px; gap: 5px; border: 0; background: transparent; text-align: left; }
+.mission-editor-tag-popover .compact-option { width: 100%; min-height: 36px; gap: 5px; border: 1px solid transparent; background: transparent; text-align: left; }
 .mission-editor-tag-popover .compact-option:hover,.mission-editor-tag-popover .compact-option:focus-visible { background: var(--surface-hover); }
-.mission-editor-tag-popover .compact-option > :is(.mission-tag-mark,.mission-tag-color-dot) { width: 15px; height: 15px; flex: 0 0 15px; }
+.mission-editor-tag-popover .mission-editor-tag-option.is-selected { border-color: color-mix(in srgb, var(--mission-tag-color) 32%, var(--line)); background: color-mix(in srgb, var(--mission-tag-color) 14%, var(--surface-raised)); }
+.mission-editor-tag-popover .mission-editor-tag-option.is-selected:hover,.mission-editor-tag-popover .mission-editor-tag-option.is-selected:focus-visible { background: color-mix(in srgb, var(--mission-tag-color) 20%, var(--surface-raised)); }
+.mission-editor-tag-popover .mission-tag-options .compact-option > :is(span.mission-tag-mark,span.mission-tag-color-dot) { width: 15px; height: 15px; flex: 0 0 15px; }
 .mission-editor-tag-popover .compact-option > .mission-icon:last-child { width: 15px; height: 15px; margin-left: auto; }
 .mission-editor-project-popover,.mission-editor-team-popover { display: flex; min-width: 0; max-height: min(420px, var(--radix-popover-content-available-height)); flex-direction: column; overflow: hidden; }
 .mission-editor-project-popover { width: 360px; }
-.mission-editor-team-popover { width: 370px; }
+.mission-editor-team-popover { width: 348px; max-height: min(396px, var(--radix-popover-content-available-height)); }
+.mission-editor-team-count { margin-left: 5px; color: var(--faint); font-size: 10px; font-weight: 400; }
 .mission-picker-search { display: flex; min-height: 36px; flex: 0 0 auto; align-items: center; gap: 8px; margin: 0 4px 5px; padding: 0 5px 5px; border-bottom: 1px solid var(--line); color: var(--faint); }
 .mission-picker-search > svg { width: 15px; height: 15px; flex: 0 0 15px; }
 .mission-picker-search > input { width: 100%; min-width: 0; height: 28px; padding: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 12px; }
@@ -583,8 +594,8 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
 .mission-editor-project-footer { flex: 0 0 auto; margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line); }
 .mission-editor-project-footer .compact-option { width: 100%; border: 0; background: transparent; }
 .mission-picker-empty { margin: 0; padding: 18px 10px; color: var(--muted); text-align: center; font-size: 11.5px; }
-.mission-editor-team-list { max-height: 270px; }
-.mission-editor-team-row { display: flex; min-height: 51px; align-items: center; padding-right: 5px; border-radius: 6px; }
+.mission-editor-team-list { max-height: 260px; }
+.mission-editor-team-row { display: flex; min-height: 47px; align-items: center; padding-right: 5px; border-radius: 6px; }
 .mission-editor-team-row:hover { background: var(--surface-hover); }
 .mission-editor-team-row[data-disabled] { opacity: .55; }
 .mission-editor-team-member { display: flex; min-width: 0; flex: 1; align-items: center; gap: 9px; padding: 7px 8px; border: 0; border-radius: 6px; color: var(--ink); background: transparent; text-align: left; }
@@ -609,8 +620,10 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
   .mission-editor-properties { gap: 7px; padding: 10px 19px 15px; }
   .mission-editor-title { font-size: 20px; }
   .mission-definition-dialog .mission-editor-footer { padding: 10px 13px; }
-  .mission-editor-team-summary .compact-avatar-stack .member-avatar:nth-child(n+3) { display: none; }
   .mission-editor-property { max-width: 100%; font-size: 11px; }
+  .mission-editor-project-property { max-width: min(100%, 148px); }
+  .mission-editor-team-property { max-width: min(100%, 224px); }
+  .mission-editor-tag-property { max-width: min(100%, 124px); }
 }
 @media (max-height: 620px) {
   .compact-dialog.mission-definition-dialog,.compact-dialog.mission-definition-dialog.is-expanded { height: calc(100vh - 28px); min-height: 240px; }
@@ -626,6 +639,7 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
   .mission-editor-property,.mission-editor-writing-plane .attachment-card { border-color: ButtonBorder; }
   .mission-editor-title:focus-visible,.mission-editor-description:focus-visible { outline: 1px solid Highlight; outline-offset: 3px; }
   .mission-rail-badge-dot,.mission-tag-color-dot { border-color: CanvasText; background: Highlight; forced-color-adjust: none; }
+  .mission-editor-selected-tag,.mission-editor-tag-popover .mission-editor-tag-option.is-selected { border-color: Highlight; background: Canvas; }
 }
 
 /* Cumulative mission changes: compact, searchable directory tree and reader. */
@@ -715,7 +729,7 @@ html.diff-resizing .mission-diff-file-list,html.diff-resizing .mission-diff-read
 .mission-diff-reading { display: flex; min-width: 0; min-height: 0; flex: 1; grid-column: 3; grid-row: 1; flex-direction: column; overflow: hidden; }
 .mission-diff-reading .mission-diff-error { padding-inline: 20px; }
 .mission-diff-reading > header { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
-.mission-diff-reading > header > .node-icon { margin-top: 1px; }
+.mission-diff-reading > header > .node-icon { width: 14px; height: 16px; flex: 0 0 14px; margin-top: 1px; }
 .diff-title-wrap { min-width: 0; flex: 1; }
 .mission-diff-reading > header .diff-title-wrap > strong { display: block; min-width: 0; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace,monospace; }
 .diff-title-wrap small { display: flex; min-width: 0; align-items: center; gap: 5px; margin-top: 5px; color: var(--muted); font: 10.5px/1.6 ui-monospace,monospace; }
