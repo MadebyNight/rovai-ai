@@ -68,6 +68,15 @@ const fixtureExecutionRoot = join(fixtureRoot, 'workspace')
 const codexExpectedCommand = 'rovai camp read --limit 20'
 const claudeExpectedCommand = "printf '%s\\n' 'ROVAI_CLAUDE_EMPTY_OUTPUT_OK'"
 const webSearchQueries = ['password=公开验收词 token=保持原样', '第二项公开查询']
+const fixtureContextManifestVersion = 27
+const fixtureContextDeliveryProfile = {
+  profileVersion: 8,
+  maxPublicMessages: 15,
+  maxPublicHistoryChars: 24_000,
+  maxMessageBodyChars: 2_000,
+  maxPublicReferenceChainMessages: 3,
+  maxSelfActiveTasks: 8
+}
 
 const runtimes = [
   runtime('codex', 'codex-cli', 'Codex CLI', codexExpectedCommand, {
@@ -1095,6 +1104,15 @@ async function activateControlledRun() {
 
 async function seedFixture() {
   const now = '2026-08-05T12:00:00Z'
+  const recoveryInputMessageId = 'message-recovery-input'
+  const recoveryInputEntry = runtimes.find((entry) => entry.key === 'copilot')
+  assert(recoveryInputEntry, 'Recovery fixture requires the Copilot Runtime entry')
+  const recoveryInputRuntimeIndex = runtimes.indexOf(recoveryInputEntry)
+  const recoveryInputSequence = recoveryInputRuntimeIndex + 1
+  const fixtureLastMessageSequence = runtimes.length + 1
+  const recoveryInputBody = '请继续恢复验证。'
+  const recoveryInputContent = [{ kind: 'text', text: recoveryInputBody }]
+  const recoveryInputContentDigest = `sha256:${canonicalJsonDigest(recoveryInputContent)}`
   const workspaceJson = JSON.stringify({
     executionRoot: fixtureExecutionRoot,
     access: 'write',
@@ -1212,8 +1230,8 @@ async function seedFixture() {
         ${sqlLiteral(`conversation-${entry.key}`)},
         ${sqlLiteral(recoveryBlocked ? 'batch' : 'direct')},
         ${sqlNullable(recoveryBlocked ? campId : null)},
-        ${sqlNullable(recoveryBlocked ? `message-${entry.key}` : null)},
-        ${recoveryBlocked ? runtimes.length : 'NULL'},
+        ${sqlNullable(recoveryBlocked ? recoveryInputMessageId : null)},
+        ${recoveryBlocked ? fixtureLastMessageSequence : 'NULL'},
         0, 0,
         ${sqlLiteral(`direct:${entry.agentId}`)}, 'initial',
         ${sqlLiteral(`验证 ${entry.runtimeName} Runtime Activity`)},
@@ -1241,6 +1259,7 @@ async function seedFixture() {
     )`
   ].join(',\n')
   const messageRows = runtimes.map((entry, index) => {
+    const sequence = index < recoveryInputRuntimeIndex ? index + 1 : index + 2
     const body = entry.runLevelOnly
       ? 'Run-level：Runtime 未报告内部工具；Rovai 未生成命令、文件或工具调用卡片。'
       : entry.sourceAuthority === 'core'
@@ -1250,7 +1269,7 @@ async function seedFixture() {
       ? [runtimes[0].agentId, runtimes[1].agentId]
       : []
     return `(
-      ${sqlLiteral(`message-${entry.key}`)}, ${sqlLiteral(campId)}, ${index + 1},
+      ${sqlLiteral(`message-${entry.key}`)}, ${sqlLiteral(campId)}, ${sequence},
       'agent', ${sqlLiteral(entry.agentId)}, ${sqlLiteral(`run-${entry.key}`)},
       ${sqlLiteral(body)}, ${sqlLiteral(JSON.stringify([{ kind: 'text', text: body }]))},
       ${sqlLiteral(addressedAgentIds.length > 0 ? 'explicit' : 'default')},
@@ -1260,6 +1279,13 @@ async function seedFixture() {
       ${sqlLiteral(`2026-08-05T12:${String(index).padStart(2, '0')}:02Z`)}
     )`
   }).join(',\n')
+  const recoveryInputMessageRow = `(
+    ${sqlLiteral(recoveryInputMessageId)}, ${sqlLiteral(campId)}, ${recoveryInputSequence},
+    'user', 'local_user', NULL,
+    ${sqlLiteral(recoveryInputBody)}, ${sqlLiteral(JSON.stringify(recoveryInputContent))},
+    'explicit', ${sqlLiteral(JSON.stringify([recoveryInputEntry.agentId]))}, NULL,
+    NULL, 1, '2026-08-05T12:02:01Z', '2026-08-05T12:02:01Z'
+  )`
   const deliveryRows = [{
     id: 'delivery-antigravity-codex', recipientAgentId: runtimes[0].agentId,
     recipientCanonicalPosition: 0, status: 'settled', failureCode: null
@@ -1274,7 +1300,6 @@ async function seedFixture() {
     '[]', '{}', '{}', 1, ${sqlLiteral(delivery.status)}, 'terminal', 1, 0, 0,
     ${sqlNullable(delivery.failureCode)}, 1, ${sqlLiteral(now)}, ${sqlLiteral(now)}, ${sqlLiteral(now)}
   )`).join(',\n')
-
   await runSql(databasePath, 'DROP TRIGGER camp_attachment_view_camp_insert;')
   try {
     await runSql(databasePath, `
@@ -1309,7 +1334,7 @@ async function seedFixture() {
       version, created_at, updated_at, activation_state
     ) VALUES (
       ${sqlLiteral(campId)}, ${sqlLiteral(campTitle)}, 'user', 'peer', 'quick_chat',
-      '', ${sqlLiteral(runtimes[0].agentId)}, ${runtimes.length}, 1,
+      '', ${sqlLiteral(runtimes[0].agentId)}, ${fixtureLastMessageSequence}, 1,
       ${sqlLiteral(now)}, ${sqlLiteral(now)}, 'active'
     ), (
       ${sqlLiteral(composerLayoutCampId)}, ${sqlLiteral(composerLayoutCampTitle)}, 'user', 'peer', 'quick_chat',
@@ -1379,6 +1404,31 @@ async function seedFixture() {
     SET status = 'waiting', wait_reason = 'recovery_blocked', runtime_recovery_required = 0,
         last_error_code = 'accepted_input_outcome_unknown'
     WHERE id = ${sqlLiteral(recoveryBlockedRunId)};
+    INSERT INTO camp_message(
+      id, camp_id, sequence, author_type, author_id, source_agent_run_id,
+      body, structured_content_json, address_mode, addressed_agent_ids_json, camp_turn_id,
+      agent_run_id, version, created_at, updated_at
+    ) VALUES ${messageRows}, ${recoveryInputMessageRow};
+    INSERT INTO camp_message_delivery(
+      id, camp_id, message_id, recipient_agent_id,
+      recipient_membership_version_at_admission, queue_sequence,
+      status, claimed_agent_run_id, failure_code, version,
+      created_at, claimed_at, ended_at, updated_at
+    ) VALUES (
+      'fixture-copilot-delivery', ${sqlLiteral(campId)}, ${sqlLiteral(recoveryInputMessageId)},
+      ${sqlLiteral(recoveryInputEntry.agentId)}, 1, ${recoveryInputSequence},
+      'claimed', ${sqlLiteral(recoveryBlockedRunId)}, NULL, 2,
+      ${sqlLiteral(now)}, ${sqlLiteral(now)}, NULL, ${sqlLiteral(now)}
+    );
+    INSERT INTO agent_run_input(
+      agent_run_id, ordinal, delivery_id, message_id,
+      message_sequence, message_content_digest,
+      context_manifest_version, default_recipient_display_name
+    ) VALUES (
+      ${sqlLiteral(recoveryBlockedRunId)}, 0, 'fixture-copilot-delivery', ${sqlLiteral(recoveryInputMessageId)},
+      ${recoveryInputSequence}, ${sqlLiteral(recoveryInputContentDigest)},
+      ${fixtureContextManifestVersion}, NULL
+    );
     INSERT INTO native_session_bootstrap_evidence(
       id, conversation_id, native_binding_id, native_binding_generation,
       contract_version, bootstrap_formatter_version,
@@ -1420,7 +1470,7 @@ async function seedFixture() {
       camp_attachment_view_receipt_digest
     ) VALUES (
       'fixture-copilot-manifest', ${sqlLiteral(recoveryBlockedRunId)},
-      'fixture-copilot-bootstrap', 1, ${runtimes.length}, 0,
+      'fixture-copilot-bootstrap', 1, ${fixtureLastMessageSequence}, 0,
       '[]', 'fixture-collaboration', 0,
       '[]', 'fixture-run-fact', '{}',
       '[]', 'fixture-attachments',
@@ -1430,15 +1480,16 @@ async function seedFixture() {
       '{"schemaVersion":2,"configDigest":"sha256:empty-mcp-config","configStatus":"ready","projectionMode":"unsupported","sameNamePolicy":null,"warnings":[],"servers":[]}',
       'sha256:legacy-empty-mcp-exposure', 'fixture-mcp-projection',
       '[]', 'fixture-active-tasks',
-      0, ${runtimes.length}, 0,
-      7, '{"profileVersion":7,"maxPublicMessages":15,"maxPublicHistoryChars":24000,"maxMessageBodyChars":2000,"maxPublicReferenceChainMessages":3,"maxSelfActiveTasks":8}',
-      'fixture-context-profile', NULL,
-      '[]', 26,
+      0, ${fixtureLastMessageSequence}, 0,
+      ${fixtureContextDeliveryProfile.profileVersion},
+      ${sqlLiteral(JSON.stringify(fixtureContextDeliveryProfile))},
+      ${sqlLiteral(canonicalJsonDigest(fixtureContextDeliveryProfile))}, NULL,
+      '[]', ${fixtureContextManifestVersion},
       ${sqlLiteral(recoveryBlob.id)}, ${sqlLiteral(recoveryBlob.digest)}, ${sqlLiteral(now)},
       '[]', '[]', '[]', 'fixture-shared-message-evidence', '{"schemaVersion":5}',
       'agent_v1', '{"schemaVersion":1,"included":false}',
       '8f0abde6b1c7b1bf405e1efa2a2cfe82a1bd329a64003a93c3e20c84a8c26d92',
-      26, 5, 2,
+      ${fixtureContextManifestVersion}, 5, 2,
       ${sqlLiteral(JSON.stringify(campAttachmentViewReceipt))},
       ${sqlLiteral(campAttachmentViewReceiptDigest)}
     );
@@ -1454,7 +1505,7 @@ async function seedFixture() {
     ) VALUES (
       'fixture-copilot-input', ${sqlLiteral(recoveryBlockedRunId)}, 1,
       'fixture-copilot-manifest', 'fixture-copilot-binding', 1,
-      ${runtimes.length}, ${sqlLiteral(recoveryBlob.digest)},
+      ${fixtureLastMessageSequence}, ${sqlLiteral(recoveryBlob.digest)},
       'accepted', 'acp-prompt-fixture-host-1',
       ${sqlLiteral(now)}, ${sqlLiteral(now)}, ${sqlLiteral(now)},
       1, ${sqlLiteral(JSON.stringify(runtimeAttachmentAuthReceipt))},
@@ -1467,11 +1518,6 @@ async function seedFixture() {
         runtimeAttachmentAuthReceiptDigest
       }))}
     );
-    INSERT INTO camp_message(
-      id, camp_id, sequence, author_type, author_id, source_agent_run_id,
-      body, structured_content_json, address_mode, addressed_agent_ids_json, camp_turn_id,
-      agent_run_id, version, created_at, updated_at
-    ) VALUES ${messageRows};
     INSERT INTO message_delivery(
       id, camp_id, camp_turn_id, message_id,
       recipient_agent_id, recipient_canonical_position,
