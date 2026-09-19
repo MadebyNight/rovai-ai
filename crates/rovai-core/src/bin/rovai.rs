@@ -1514,7 +1514,9 @@ fn operation_help_text(description: &BuiltinToolDescription) -> String {
         let examples = operation_help_examples(&description.name);
         writeln!(output, "\nExamples:").expect("writing help to a String cannot fail");
         for example in examples {
-            writeln!(output, "  {example}").expect("writing help to a String cannot fail");
+            for line in example.lines() {
+                writeln!(output, "  {line}").expect("writing help to a String cannot fail");
+            }
         }
     }
     output
@@ -2383,7 +2385,9 @@ mod tests {
         assert_eq!(
             operation_help_examples("camp.message.send"),
             [
-                "rovai send --public-only --body 'Final conclusion: the failure is a client-version regression.'",
+                r#"Write request.json with a file-write tool:
+  {"publicOnly":true,"body":"Result:\n\nUpdated `src/example.rs`."}
+rovai send --input-file request.json"#,
                 "rovai send --to agent_5 --body 'Please reproduce on the previous client build and return the version and result.'",
                 "rovai send --public-only --to-principal --body 'Please choose whether to roll back the client or continue the token investigation.'",
             ]
@@ -2401,11 +2405,14 @@ mod tests {
             "effectiveRecipients and deliveryIds are empty, and no Agent Delivery is created."
         ));
         assert!(!help.contains("inline Agent addressing"));
-        assert!(help.contains("For multiline Markdown, pass real newline characters."));
+        assert!(help.contains(r"Use --body for simple single-line text; \n remains literal."));
+        assert!(help.contains("For multiline text, Markdown, or content containing backticks or $(), write a UTF-8 JSON request with a file-write tool and use --input-file <path>."));
         assert!(help.contains(
-            r"Direct --body values are literal: \n inside ordinary shell quotes is text, not a line break."
+            r#"Examples:
+  Write request.json with a file-write tool:
+    {"publicOnly":true,"body":"Result:\n\nUpdated `src/example.rs`."}
+  rovai send --input-file request.json"#
         ));
-        assert!(help.contains(r"JSON stdin/heredoc and JSON --input-file decode \n escapes."));
         assert!(help.contains(CAMP_MESSAGE_SEND_FILE_HELP));
         assert!(!help.contains("Rovai privately snapshots"));
         assert!(help.contains("It may be combined with --to-principal."));
