@@ -250,6 +250,7 @@ fn classify_high_value_runtime_error(
             "credit balance",
             "insufficient credits",
             "billing limit",
+            "quota limit",
         ],
     ) {
         return (
@@ -745,6 +746,12 @@ mod tests {
             ),
             (
                 "Quota exceeded for this account",
+                "runtime_quota_exceeded",
+                RuntimeFailurePhase::Terminal,
+                false,
+            ),
+            (
+                "ACP error -32603: Internal error: failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator.",
                 "runtime_quota_exceeded",
                 RuntimeFailurePhase::Terminal,
                 false,

@@ -573,7 +573,7 @@ Dialog 验收，专项结果不能替代默认全套结果。
 
 ### 主动检查的环境刷新
 
-当前语义由 [Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md) 拥有。
+当前语义由 [Runtime Launch v42](../contracts/runtime-launch-and-verification-v42.md) 继承 v41 并拥有。
 `runtime_check_refresh_tests` 是 macOS/Windows Check Manager、保存 CAS、正式状态与草稿隔离的集成 owner：使用可注入的
 基础环境读取器、UUID 临时目录、私有 SQLite 和合成程序，不读取真实 Runtime 安装或账号。
 它覆盖目录变化、原路径升级、指定路径失效不回退、进程 PATH 不参与主程序选择、草稿/恢复自动不发布、
