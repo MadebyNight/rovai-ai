@@ -496,6 +496,8 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(css).toMatch(/\.conversation-bubble :is\(\.final-copy, \.message-bubble\) \.safe-markdown code,\s*\.execution-drawer \.safe-markdown code,\s*\.file-preview-markdown \.safe-markdown code\s*\{[^}]*padding:\s*1px 4px[^}]*border-radius:\s*6px[^}]*background:\s*var\(--conversation-inline-code-canvas\)[^}]*box-decoration-break:\s*clone/)
     expect(css).toMatch(/\.conversation-bubble :is\(\.final-copy, \.message-bubble\) \.safe-markdown pre,\s*\.execution-drawer \.safe-markdown pre,\s*\.file-preview-markdown \.safe-markdown pre\s*\{[^}]*padding:\s*11px 12px[^}]*border-color:\s*var\(--conversation-code-line\)[^}]*border-radius:\s*8px[^}]*background:\s*var\(--conversation-code-block-canvas\)/)
     expect(css).toMatch(/\.conversation-bubble :is\(\.final-copy, \.message-bubble\) \.safe-markdown pre code,\s*\.execution-drawer \.safe-markdown pre code,\s*\.file-preview-markdown \.safe-markdown pre code\s*\{[^}]*padding:\s*0[^}]*border-radius:\s*0[^}]*background:\s*transparent/)
+    expect(css).toMatch(/\.file-preview-metadata\s*\{[^}]*border:\s*1px solid var\(--conversation-code-line\)[^}]*border-radius:\s*8px[^}]*color:\s*var\(--evidence-ink\)[^}]*background:\s*var\(--conversation-code-block-canvas\)/)
+    expect(css).toMatch(/@container file-preview-pane \(max-width:\s*330px\)[\s\S]*?\.file-preview-metadata-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/)
   })
 
   it('keeps AgentRun disclosure in a fixed trailing SVG track', () => {

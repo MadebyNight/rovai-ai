@@ -2,7 +2,7 @@ import { usePreviewHost } from './FilePreviewContext'
 import { FilePreviewTabs } from './FilePreviewTabs'
 import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 'react'
-import { SafeMarkdown } from './SafeMarkdown'
+import { MarkdownFilePreview } from './MarkdownFilePreview'
 import { FileFindScope } from './FilePreviewFind'
 import { FileFindDomAdapter } from './FileFindDomAdapter'
 import { HtmlViewer } from './HtmlFileViewer'
@@ -292,7 +292,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   const { open, resolvedTheme } = useFilePreview()
   const [linkError, setLinkError] = useState<string | null>(null)
   const file = tab.file
-  const headingTarget = useMemo(() => tab.reading ? undefined : file?.target?.heading, [file?.target])
+  const headingTarget = tab.reading ? undefined : file?.target?.heading
   const api = useFilePreviewApi()
   const readImage = useCallback((rawReference: string) => {
     if (!file || !api.readChildImage) throw new Error('图片资源适配不可用。')
@@ -302,11 +302,11 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
   if (tab.content.kind === 'markdown' && file) {
     return (
       <div className="file-preview-markdown" ref={root} tabIndex={0}
-        onKeyDown={(event) => selectPreviewContents(event, event.currentTarget.querySelector('.safe-markdown'))}>
-        <FileFindDomAdapter root={root} selector=".safe-markdown" revision={tab.content} />
+        onKeyDown={(event) => selectPreviewContents(event, event.currentTarget.querySelector('.file-preview-markdown-document'))}>
+        <FileFindDomAdapter root={root} selector=".file-preview-markdown-document" revision={tab.content} />
         {linkError && <p className="file-preview-inline-error" role="alert">{linkError}</p>}
-        <SafeMarkdown
-          mode="document"
+        <MarkdownFilePreview
+          source={tab.content.text}
           theme={resolvedTheme}
           headingTarget={headingTarget}
           onHeadingTargetResult={(found) => setLinkError(found ? null : '未找到指定的标题，已保持在文件顶部。')}
@@ -326,9 +326,7 @@ function Viewer({ tab }: { tab: FilePreviewTabModel }): React.JSX.Element {
               setLinkError(outcome.kind === 'error' ? outcome.error.message : null)
             })
           }}
-        >
-          {tab.content.text}
-        </SafeMarkdown>
+        />
       </div>
     )
   }
@@ -439,7 +437,7 @@ function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').P
       const code = node.querySelector<HTMLElement>('.cm-scroller')
       if (code && !code.clientHeight) return
       if (code) { code.scrollTop = reading.codeScrollTop ?? 0; code.scrollLeft = reading.codeScrollLeft ?? 0 }
-      const body = node.querySelector<HTMLElement>('.file-preview-content, .agent-run-file-review-scroll, .mission-activity-document')
+      const body = node.querySelector<HTMLElement>('.file-preview-markdown, .file-preview-content, .agent-run-file-review-scroll, .mission-activity-document')
       if (body) { body.scrollTop = reading.scrollTop ?? 0; body.scrollLeft = reading.scrollLeft ?? 0 }
       const image = node.querySelector<HTMLElement>('.file-preview-image-stage')
       if (image) { image.scrollTop = reading.imageScrollTop ?? 0; image.scrollLeft = reading.imageScrollLeft ?? 0 }
@@ -455,7 +453,7 @@ function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').P
     const node = event.target
     if (node.classList.contains('cm-scroller')) saveReading(tab.id, { codeScrollTop: node.scrollTop, codeScrollLeft: node.scrollLeft })
     else if (node.classList.contains('file-preview-image-stage')) saveReading(tab.id, { imageScrollTop: node.scrollTop, imageScrollLeft: node.scrollLeft })
-    else if ((node.classList.contains('file-preview-content') || node.classList.contains('agent-run-file-review-scroll') || node.classList.contains('mission-activity-document'))) saveReading(tab.id, { scrollTop: node.scrollTop, scrollLeft: node.scrollLeft })
+    else if ((node.classList.contains('file-preview-markdown') || node.classList.contains('file-preview-content') || node.classList.contains('agent-run-file-review-scroll') || node.classList.contains('mission-activity-document'))) saveReading(tab.id, { scrollTop: node.scrollTop, scrollLeft: node.scrollLeft })
   }}>{children}</div>
 }
 
