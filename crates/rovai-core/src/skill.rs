@@ -702,7 +702,7 @@ const BUNDLED_SKILLS: &[BundledDefinition] = &[
         upstream_repository: None,
         upstream_revision: None,
         management_policy: SkillManagementPolicy::UserManaged,
-        enabled_by_default: true,
+        enabled_by_default: false,
     },
     BundledDefinition {
         name: "cli-operations",
@@ -726,7 +726,7 @@ const BUNDLED_SKILLS: &[BundledDefinition] = &[
         upstream_repository: None,
         upstream_revision: None,
         management_policy: SkillManagementPolicy::UserManaged,
-        enabled_by_default: true,
+        enabled_by_default: false,
     },
     BundledDefinition {
         name: "worktree",
@@ -734,7 +734,7 @@ const BUNDLED_SKILLS: &[BundledDefinition] = &[
         upstream_repository: None,
         upstream_revision: None,
         management_policy: SkillManagementPolicy::UserManaged,
-        enabled_by_default: true,
+        enabled_by_default: false,
     },
     BundledDefinition {
         name: "grill-duo",
@@ -742,7 +742,7 @@ const BUNDLED_SKILLS: &[BundledDefinition] = &[
         upstream_repository: Some(MATTPOCOCK_SKILLS_REPOSITORY),
         upstream_revision: Some(MATTPOCOCK_SKILLS_REVISION),
         management_policy: SkillManagementPolicy::UserManaged,
-        enabled_by_default: true,
+        enabled_by_default: false,
     },
     BundledDefinition {
         name: "grill-duo-with-docs",
@@ -750,7 +750,7 @@ const BUNDLED_SKILLS: &[BundledDefinition] = &[
         upstream_repository: Some(MATTPOCOCK_SKILLS_REPOSITORY),
         upstream_revision: Some(MATTPOCOCK_SKILLS_REVISION),
         management_policy: SkillManagementPolicy::UserManaged,
-        enabled_by_default: true,
+        enabled_by_default: false,
     },
     BundledDefinition {
         name: "review-duo",
@@ -758,7 +758,7 @@ const BUNDLED_SKILLS: &[BundledDefinition] = &[
         upstream_repository: None,
         upstream_revision: None,
         management_policy: SkillManagementPolicy::UserManaged,
-        enabled_by_default: true,
+        enabled_by_default: false,
     },
 ];
 
@@ -4728,11 +4728,9 @@ mod slow_tests {
                 "worktree",
             ]
         );
-        assert!(
-            skills
-                .iter()
-                .all(|skill| skill.enabled == (skill.name != "analyze-agent-codebase"))
-        );
+        assert!(skills.iter().all(|skill| {
+            skill.enabled == matches!(skill.name.as_str(), "cli-operations" | "memory-stewardship")
+        }));
         assert!(skills.iter().all(|skill| {
             skill.management_policy
                 == if matches!(skill.name.as_str(), "cli-operations" | "memory-stewardship") {
@@ -4792,20 +4790,20 @@ mod slow_tests {
             .into_iter()
             .find(|skill| skill.name == "worktree")
             .unwrap();
-        let disable = user_envelope(
-            "disable-user-managed-official",
+        let enable = user_envelope(
+            "enable-user-managed-official",
             SetSkillEnabledCommand {
                 skill_id: worktree.id.clone(),
                 expected_version: worktree.version,
-                enabled: false,
+                enabled: true,
             },
         );
-        let disable_result = service.set_enabled(&mut database, &disable).unwrap();
+        let enable_result = service.set_enabled(&mut database, &enable).unwrap();
         assert_eq!(
-            disable_result.result.payload["version"],
+            enable_result.result.payload["version"],
             worktree.version + 1
         );
-        let disabled = service.get(&database, &worktree.id).unwrap().unwrap();
+        let enabled = service.get(&database, &worktree.id).unwrap().unwrap();
         service
             .set_group_assignments(
                 &mut database,
@@ -4813,7 +4811,7 @@ mod slow_tests {
                     "remove-one-user-managed-official-group",
                     SetSkillGroupAssignmentsCommand {
                         skill_id: worktree.id.clone(),
-                        expected_version: disabled.version,
+                        expected_version: enabled.version,
                         group_keys: SkillDeliveryGroupKey::ALL
                             .into_iter()
                             .filter(|group| *group != SkillDeliveryGroupKey::Qwen)
@@ -4824,8 +4822,8 @@ mod slow_tests {
             .unwrap();
         for (name, enabled) in [
             ("analyze-agent-codebase", true),
-            ("grill-duo", false),
-            ("grill-duo-with-docs", false),
+            ("grill-duo", true),
+            ("grill-duo-with-docs", true),
         ] {
             let skill = skills.iter().find(|skill| skill.name == name).unwrap();
             let changed = service
@@ -4847,8 +4845,8 @@ mod slow_tests {
         service.install_bundled_skills(&mut database).unwrap();
         for (name, enabled) in [
             ("analyze-agent-codebase", true),
-            ("grill-duo", false),
-            ("grill-duo-with-docs", false),
+            ("grill-duo", true),
+            ("grill-duo-with-docs", true),
         ] {
             let initial = skills.iter().find(|skill| skill.name == name).unwrap();
             let refreshed = service.get(&database, &initial.id).unwrap().unwrap();
@@ -4857,7 +4855,7 @@ mod slow_tests {
             assert_eq!(refreshed.group_assignments, initial.group_assignments);
         }
         let refreshed = service.get(&database, &worktree.id).unwrap().unwrap();
-        assert!(!refreshed.enabled);
+        assert!(refreshed.enabled);
         assert_eq!(
             refreshed.group_assignments.len(),
             SkillDeliveryGroupKey::ALL.len() - 1
