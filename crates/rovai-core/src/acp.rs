@@ -42,6 +42,7 @@ use rovai_core::{
         RuntimeCompactionTokenSnapshot,
     },
     runtime_discovery::{RuntimeLaunchPurpose, runtime_launch_allowed},
+    runtime_failure::sanitize_public_runtime_error,
     runtime_search_operation,
     storage_layout::CampOutputDirectory,
 };
@@ -1154,10 +1155,21 @@ struct AcpRpcError {
     code: Option<i64>,
     structured_code: Option<String>,
     message: String,
+    provider_detail: Option<String>,
 }
 
 impl AcpRpcError {
     fn from_response(value: &Value) -> Self {
+        let message = value
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("ACP request failed")
+            .to_string();
+        let provider_detail = value
+            .pointer("/data/error")
+            .and_then(Value::as_str)
+            .and_then(|detail| sanitize_public_runtime_error(detail, &[]))
+            .filter(|detail| detail != &message);
         Self {
             code: value.get("code").and_then(Value::as_i64),
             structured_code: value
@@ -1173,18 +1185,19 @@ impl AcpRpcError {
                         })
                 })
                 .map(str::to_string),
-            message: value
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("ACP request failed")
-                .to_string(),
+            message,
+            provider_detail,
         }
     }
 
     fn diagnostic(&self) -> String {
-        self.code.map_or_else(
+        let detail = self.provider_detail.as_ref().map_or_else(
             || self.message.clone(),
-            |code| format!("ACP error {code}: {}", self.message),
+            |provider_detail| format!("{}: {provider_detail}", self.message),
+        );
+        self.code.map_or_else(
+            || detail.clone(),
+            |code| format!("ACP error {code}: {detail}"),
         )
     }
 }
@@ -6974,7 +6987,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn acp_rpc_error_keeps_only_a_bounded_structured_kind() {
+    fn acp_rpc_error_keeps_only_allowlisted_bounded_fields() {
         let error = AcpRpcError::from_response(&json!({
             "code": -32000,
             "message": "transport failed",
@@ -6987,6 +7000,38 @@ mod tests {
             "data": { "code": "not safe because it has spaces" }
         }));
         assert!(rejected.structured_code.is_none());
+
+        let provider_detail = AcpRpcError::from_response(&json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": {
+                "error": "failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."
+            }
+        }));
+        assert_eq!(
+            provider_detail.diagnostic(),
+            "ACP error -32603: Internal error: failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."
+        );
+
+        let redacted_detail = AcpRpcError::from_response(&json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "error": "provider failed with api_key=must-not-leak" }
+        }));
+        assert_eq!(
+            redacted_detail.diagnostic(),
+            "ACP error -32603: Internal error: provider failed with api_key=[redacted]"
+        );
+
+        let unlisted_detail = AcpRpcError::from_response(&json!({
+            "code": -32603,
+            "message": "Internal error",
+            "data": { "detail": "must remain private" }
+        }));
+        assert_eq!(
+            unlisted_detail.diagnostic(),
+            "ACP error -32603: Internal error"
+        );
     }
     use crate::runtime_fleet::AgentRuntimeFleetConfig;
     use rovai_core::agent_profile::{AdapterPermissionConfig, ResolvedModelSelection};
@@ -8689,7 +8734,7 @@ IFS= read -r session || exit 1
 printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"session-error","models":{{"currentModelId":"trae-default","availableModels":[{{"modelId":"trae-default","name":"TRAE Default"}}]}}}}}}'
 IFS= read -r prompt || exit 1
 {prompt_activity}
-printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":{error_code},"message":"Internal error"}}}}'
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":{error_code},"message":"Internal error","data":{{"error":"failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."}}}}}}'
 while IFS= read -r ignored; do :; done
 "#,
                 ),
@@ -8764,6 +8809,9 @@ while IFS= read -r ignored; do :; done
                     }) if native_prompt_id == prompt_id
                 ));
             }
+            let expected_error = format!(
+                "ACP error {error_code}: Internal error: failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."
+            );
             assert!(matches!(
                 receiver.recv().await,
                 Some(AcpIncoming::Message { message, .. })
@@ -8773,6 +8821,8 @@ while IFS= read -r ignored; do :; done
                             == Some(error_code)
                         && message.pointer("/params/inputDisposition").and_then(Value::as_str)
                             == Some(if expected_accepted { "accepted" } else { "not_accepted" })
+                        && message.pointer("/params/error").and_then(Value::as_str)
+                            == Some(expected_error.as_str())
             ));
 
             host.shutdown().await;

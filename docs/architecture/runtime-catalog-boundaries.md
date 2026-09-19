@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-09-17
+last_updated: 2026-09-19
 ---
 
 # Runtime Catalog Boundaries
@@ -14,7 +14,7 @@ last_updated: 2026-09-17
 [Runtime Platform Admission v2](../contracts/runtime-platform-admission-v2.md)拥有；Runtime 启动与延迟验证边界见
 [Runtime 进程与校验不变量](foundational-invariants.md#runtime-process-verification)、
 [Runtime 恢复与关闭不变量](foundational-invariants.md#runtime-recovery-shutdown)及
-[Runtime Launch and Verification v41](../contracts/runtime-launch-and-verification-v41.md)。实测版本和能力只由
+[Runtime Launch and Verification v42](../contracts/runtime-launch-and-verification-v42.md)。实测版本和能力只由
 [Runtime 兼容性清单](../runtime-compatibility.md)记录。
 
 ## 四层权威
@@ -72,7 +72,7 @@ Desktop 只编辑草稿，不拥有第二份有效配置。SQLite 保存与旧 m
 显式程序路径失效时保持缺失，不能换用自动候选；用户恢复自动后再使用原有发现来源。
 草稿浅检不写安装，草稿深检复用 Check Manager 的并发、deadline 与清理 owner，结果只回到编辑器。
 环境只传入对应 Runtime 进程与原生配置读取，既不修改系统环境，也不投影到公共上下文。
-字段、CAS、迁移和错误边界由 [Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md)拥有。
+字段、CAS、迁移和错误边界由 [Runtime Launch v42](../contracts/runtime-launch-and-verification-v42.md)拥有。
 
 主动正式检查在后端先读取最新基础环境、加载已保存启动设置，再将不可变环境快照交给 Check Manager。
 刷新后的请求不与旧搜索代数合并；结果写回与保存/刷新共用更新锁并重验代数和程序身份。
@@ -202,7 +202,7 @@ active PATH，使用 `--no-session-persistence`，不追加 model、settings、�
 但保存的队员配置保留。原生成功目录在刷新失败时继续按已有 stale/expired 边界读取，失败不能更新成功时间。
 `model.catalog.initialize` 是当前 Claude Ready 必需证据，旧配置在执行前重新验证。显式模型 ID 继续
 原样传给 `--model`；运行时默认省略该参数。字段与错误边界见
-[Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md)。
+[Runtime Launch v42](../contracts/runtime-launch-and-verification-v42.md)。
 
 ## 内部诊断与公开 Runtime failure
 
@@ -211,9 +211,11 @@ active PATH，使用 `--no-session-persistence`，不追加 model、settings、�
 retryable；完整 error chain、原始 stderr、私有日志、exit status、byte count 和 digest 仍属于内部诊断。
 公开 detail 必须先脱敏、去控制字符并有界化，不能包含 Prompt、用户消息、Tool input 或完整 Tool output。
 
-ACP matching Prompt error 至少保留安全数字 JSON-RPC error code 和有界 message；Prompt activity 与 matching
-response 已证明输入 accepted 时，公开 failure 的 retryable 必须为 false，不能用 Provider 可重试分类覆盖 Core
-的防重放门禁。原始 `error.data` 不进入公开投影。
+ACP matching Prompt error 至少保留安全数字 JSON-RPC error code 和有界 message。通用 ACP Host 还可以从
+精确白名单标量路径提取 Provider detail；当前只接受字符串 `error.data.error`，并在进入诊断或公开 failure
+前复用统一的路径、凭据、控制字符和长度清洗。对象、数组、其他 `error.data` 路径及完整原始对象一律忽略，
+不能由各 Adapter 自行扩展或把原始 `error.data` 交给 Renderer。Prompt activity 与 matching response 已证明
+输入 accepted 时，公开 failure 的 retryable 必须为 false，不能用 Provider 可重试分类覆盖 Core 的防重放门禁。
 
 `runtime` 只表示 Runtime/Provider 明确报错；协议、参数和输出格式问题是 `compatibility`，executable/cwd/
 权限/附件目录问题是 `environment`，只有明确 Core 状态、持久化或配置生成证据才能是 `rovai`，否则为
@@ -222,7 +224,7 @@ response 已证明输入 accepted 时，公开 failure 的 retryable 必须为 f
 `AgentRunView.failure` 和 `ProductRuntimeAvailability.failure` 只投影该安全对象。显式检查可以持久化 Probe
 Attempt failure；启动浅检测的瞬时 version failure 仍只用于内部发现，不升级为产品级 failure，也不覆盖
 last-known-good。此增量不修改其他 Runtime 的执行路径或 Availability 状态集合。字段级合同见
-[Runtime Launch and Verification v41](../contracts/runtime-launch-and-verification-v41.md)。
+[Runtime Launch and Verification v42](../contracts/runtime-launch-and-verification-v42.md)。
 
 ## TRAE CLI CN 当前边界
 
@@ -287,7 +289,7 @@ Cursor Host 完成 Run 后停止，不跨 Run 延伸未证明的进程状态。
 项目 `.cursor/skills` 是 Rovai managed delivery target；该结论只建立可清理文件投影，不把上游文档中的
 Skill 扫描能力冒充真实 load/invocation pass。当前所有平台未准入，因此普通产品路径不会实际投影或启动
 Cursor。Settings 的 Agent Runtime 目录默认不展示 Cursor；closed identity 只用于内部兼容、历史读取和后续实现。
-字段级行为见 [Runtime Launch and Verification v41](../contracts/runtime-launch-and-verification-v41.md)，
+字段级行为见 [Runtime Launch and Verification v42](../contracts/runtime-launch-and-verification-v42.md)，
 证据状态见 [Runtime 兼容性清单](../runtime-compatibility.md)。
 
 ## ACP Client Terminal 边界
@@ -316,7 +318,7 @@ output 与 error 不进入 Camp message 或 durable Evidence。字段与幂等�
 三者的普通检查沿用正式运行的原生 Home 选择，包括未设置的 Home override；Grok BYOK 不再复制配置。
 临时 cwd、Kiro additive agent、既有非交互认证、无消息 Session 检查和有界进程清理保留，不发送 Prompt。
 只清理 Probe 自有资源；原生初始化可能联网或落盘，检查不保证模型生成、余额或任意项目配置。
-自动化回归与真实模型 smoke 继续由调用方提供隔离环境，详见 [Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md)。
+自动化回归与真实模型 smoke 继续由调用方提供隔离环境，详见 [Runtime Launch v42](../contracts/runtime-launch-and-verification-v42.md)。
 
 仍保留两项独立差异：Kiro 通过临时 `.kiro/agents/rovai.json` 与 `--agent rovai` 追加 MCP；Kimi 通过
 Rovai 专属 env 文件提供进程级模型配置。两者分别评估，本次不改变默认 Agent、MCP 或 Provider 投递机制。
@@ -368,7 +370,7 @@ lease fencing、exact successor read 与 logical/native continuation 全部通�
 因此 snapshot 声明 built-in transport。macOS arm64、macOS x64 与 Windows x64 当前均为 digest-bound
 `qualified`：arm64 由完整 Kimi 资格矩阵准入，macOS x64 由维护者完成平台验收后的独立发布确认准入，Windows
 x64 由独立 Windows 资格证据准入。三者都进入普通 discovery、检查、成员配置和 AgentRun 路径。字段级行为见
-[Runtime Launch and Verification v41](../contracts/runtime-launch-and-verification-v41.md)，证据状态见
+[Runtime Launch and Verification v42](../contracts/runtime-launch-and-verification-v42.md)，证据状态见
 [Runtime 兼容性清单](../runtime-compatibility.md)。
 
 ## Grok Build 当前边界
@@ -467,7 +469,7 @@ Pi Prompt images 已通过原生 RPC 接入，但结构化 Web Search 与 Camp F
 macOS x64 和 Windows x64 各自绑定 Pi 专属 immutable evidence revision，均为 `qualified / reasonCode=null`；普通
 discovery、检查、成员选择、Diagnostics 与 AgentRun 对三平台开放，UI 走正式 Runtime 展示且不再标记实验性。
 平台晋升不新增 Pi 已明确 unsupported/hidden 的能力。字段级行为见
-[Runtime Launch and Verification v41](../contracts/runtime-launch-and-verification-v41.md)，
+[Runtime Launch and Verification v42](../contracts/runtime-launch-and-verification-v42.md)，
 证据状态见[Runtime 兼容性清单](../runtime-compatibility.md)。
 
 ## 队员最高权限默认
@@ -494,7 +496,7 @@ Runtime-managed AgentRun 通过标准 ACP `session/set_config_option` 投递冻�
 `CoreEnforcedV1 + read_only Workspace` 恢复路径仍强制 `plan`。descriptor 的 `recommendedValue=default` 只是
 保守提示，不改变 Product default；已有成员保存的
 `default`、`auto` 或 `plan` 不由 discovery、升级或 migration 静默扩权。十二种 Runtime 的 exact 默认矩阵见
-[Runtime Launch and Verification v41](../contracts/runtime-launch-and-verification-v41.md)。
+[Runtime Launch and Verification v42](../contracts/runtime-launch-and-verification-v42.md)。
 
 ACP Client FS 不把这些权限 descriptor 复制成 Core allowlist。`fs/read_text_file` / `fs/write_text_file` 对当前
 fenced Run 只作协议与参数校验，绝对路径按 Runtime 请求执行，相对路径以 execution root 解析；是否能读写、是否
@@ -519,7 +521,7 @@ fingerprint 同时包含内核与独立 Node；PATH 中的社区
 CLI 不属于这个 Product Runtime。Core 内的协议翻译负责原生 NDJSON、Session/Input/Turn/Tool identity 与 callback，
 已有 AcpHost/Fleet 继续拥有 owner、epoch、停止、LRU；Host 复用以 Camp 为授权边界。Node prelude 的
 pipe-owned companion 在 Unix 补充回收原生 detached Bash 进程组；Windows 由原子 Job 拥有全部后代，
-以 Job 空集确认退出，不使用 Unix companion。生命周期细节由 Runtime Launch v41 拥有。
+以 Job 空集确认退出，不使用 Unix companion。生命周期细节由 Runtime Launch v42 拥有。
 内部 ACP shape 不改变公开协议来源。有原生后台任务的 Host 保留 Session/成员关联，禁止跨成员复用和空闲/容量回收；
 后台结果走原 Run 的已登记 Evidence 归属，前台 Run 与 CLI 授权正常结束。普通 Probe 沿用原生 HOME/存储，
 只隔离临时 cwd/socket，且不发送生成请求；Probe 实测与 Adapter 能力及发布资格分开。
@@ -532,7 +534,7 @@ pipe-owned companion 在 Unix 补充回收原生 detached Bash 进程组；Windo
 该差异是当前 Host 的认证覆盖范围，不是取消账号配置接入或宣称 app-server 协议不支持账号认证。
 图片沿用授权附件路径，由原生 Read 转为模型图片内容；Read 保持读取活动，不形成 Files Changed 或修改 Diff。原生配置变化 fence Host 与 Binding。MCP 合并遵从原生用户/项目优先级，再叠加当前 Rovai Assignment；
 warm resume 不刷新 MCP，所以集合变化不能沿用旧 Host。协议、FirstPayload、权限、Usage 与保留能力见
-[Runtime Launch v41](../contracts/runtime-launch-and-verification-v41.md)。平台资格与 Machine Ready 分开维护。
+[Runtime Launch v42](../contracts/runtime-launch-and-verification-v42.md)。平台资格与 Machine Ready 分开维护。
 
 Windows x64 与 macOS arm64 分别以平台专属冻结证据标记 Qualified；macOS x64 同时开放为可执行 Preview，
 没有 Intel Mac 真机资格。管理页不显示测试、试运行或实验性标签，保留机器检查、错误和具体能力限制；
