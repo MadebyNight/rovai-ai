@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.60
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -11,7 +11,7 @@ last_updated: 2026-09-19
 
 # Rovai-ai v1.60：Camp 消息与多输入 AgentRun
 
-前置：[v1.59](../v1.59/README.md)。本版只重构公开 Camp；Single Chat 继续使用自己的
+前置：[v1.59](../v1.59/README.md)。后继：[v1.61](../v1.61/README.md)。本版只重构公开 Camp；Single Chat 继续使用自己的
 Conversation-local 输入、队列和上下文合同。
 
 ## 目标

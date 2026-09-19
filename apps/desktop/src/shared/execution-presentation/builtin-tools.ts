@@ -24,6 +24,7 @@ export const BUILTIN_CLI_NAMES: Readonly<Record<string, string>> = Object.freeze
   'automation.close': 'rovai automation close',
   'automation.update': 'rovai automation update',
   'automation.delete': 'rovai automation delete',
+  'mission.list': 'rovai mission list',
   'mission.get': 'rovai mission get',
   'mission.update': 'rovai mission update',
   'mission.status': 'rovai mission status'

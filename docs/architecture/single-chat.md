@@ -8,7 +8,7 @@ last_updated: 2026-09-11
 # Single Chat Architecture
 
 Single Chat 是现有执行基础设施上的一种私有 Conversation 模式。字段级合同见
-[Single Chat v5](../contracts/single-chat-v5.md)，当前选择理由见
+[Single Chat v6](../contracts/single-chat-v6.md)，当前选择理由见
 [V1.50-D01](../versions/v1.50/decisions.md#v1-50-d01)至
 [V1.50-D04](../versions/v1.50/decisions.md#v1-50-d04)及
 [V1.58-D06](../versions/v1.58/decisions.md#v1-58-d06)。
@@ -22,7 +22,7 @@ Single Chat 是现有执行基础设施上的一种私有 Conversation 模式。
 | `SingleChatService` | Conversation 生命周期、原子 open/send/end、附件 Draft revision、Pending FIFO、Snapshot/History | Runtime process、Prompt 执行、公共投影 |
 | Source Attachment 基础设施 | `LocalAttachmentSourceRef` 观察/清洗/重检、owner 精确读取、原路径投影与公共 AttachmentCard 能力 | Source 永久可用性、Single Chat transcript、队列顺序 |
 | Context builder | 无 Memory 的专用 Bootstrap、专用 Charter/Guidance、过滤后 Skill exposure、私有水位上的公共增量和公共 resolved attachment paths | transcript 自动重放、连续性解释、异步唤醒、授权替代 |
-| Built-in Router | `single_chat_v1` 固定三项 allowlist、当前 Camp scope 与当前单聊历史反向解析 | Runtime 原生 delegation、通用 Capability DSL |
+| Built-in Router | 冻结 `single_chat_v1` policy version；v2 的五项只读 allowlist、当前 Camp scope 与当前单聊历史反向解析 | Runtime 原生 delegation、通用 Capability DSL、Mission mutation |
 | Runtime terminal service | 冻结 route 复核、恰好一条私有 final、迟到事件 fence | Renderer 展示、队列编辑 |
 | Existing Scheduler/Fleet | 普通 capacity/readiness、dispatch、Binding、cleanup 和空闲 Conversation 的 Pending 发布 | Single Chat 专用回复槽、跨 Conversation cleanup fence |
 
@@ -98,6 +98,11 @@ Memory Entrypoint；Dynamic Context 选择专用 Charter/Guidance，排除 Self 
 模型不接收 Native Session 连续性或替换原因，也不接收自动私有 transcript replay。需要但缺少此前私聊正文时，Runtime
 通过始终可用的 `single_chat.history` 请求 Core；Router 只从已认证当前 Run 解析 active destination，并把读取上界锁在
 `CURRENT_INPUT` 之前。History 的附件只提供清洗后的名称、类型、大小和 ref id 等元数据，不把旧附件自动注入当前 Run。
+
+新 Single Chat Run 冻结 operation policy version 2：除现有 `camp.search`、`camp.read` 与
+`single_chat.history` 外，只增加全局只读 `mission.list/get`。Mission read 不切换当前 Camp/Mission，也不取得
+写权限。历史 version 1 Run 保留原三项 allowlist；terminal/history 路径接受两种已知冻结版本，未知版本
+fail closed。Charter revision 9 教学该入口，但完整 `cli-operations` Skill 仍从 Single Chat exposure 排除。
 
 ## 输出与迟到事件
 

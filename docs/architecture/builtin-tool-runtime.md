@@ -9,7 +9,7 @@ last_updated: 2026-09-19
 # Built-in Tool Runtime Architecture
 
 本文件说明 Rovai built-in operations 的长期组件结构。当前字段与版本以
-[Built-in Tool Transport v28](../contracts/builtin-tool-transport-v28.md)、
+[Built-in Tool Transport v29](../contracts/builtin-tool-transport-v29.md)、
 [Built-in Tool Agent Output Projection v1](../contracts/builtin-tool-agent-output-projection-v1.md)、
 [Camp History v8](../contracts/camp-history-v8.md)、
 [Durable Task v3](../contracts/durable-task-v3.md) 和
@@ -77,6 +77,7 @@ Core BuiltinToolRouter
     ├── Single Chat history service
     ├── Scheduled Automation service
     ├── Memory Retrieval / Mutation service
+    ├── Mission read / current-Mission mutation service
     └── Member Profile service + narrow managed-avatar importer
 ```
 
@@ -133,9 +134,16 @@ rovai task create|get|update|list
 rovai camp list|search|read
 rovai history search
 rovai memory view|search|read|write
+rovai mission list|get|update|status
 rovai single-chat history    Single Chat only
 rovai automation list|get|create|run|close|update|delete
 ```
+
+Mission read uses a distinct global read seam: every effective authenticated AgentRun may list all Missions or
+read one opaque internal `rvm_...` ID, including saved structured attachment paths. Omitted-ID `get` resolves only the
+authenticated Run's current Camp. Neither read calls the target Camp mutation gate or changes current context.
+`update/status` accept no Mission selector and retain current-public-Mission write authorization. Single Chat
+policy version 2 adds only `mission.list/get`; its historical version 1 allowlist remains frozen.
 
 `rovai single-chat history` 不接受 Conversation、Camp 或 Agent ID。Core 从已认证 Run 的冻结 destination
 推导当前 active Single Chat，并把 exclusive `beforeSequence` 上界限制在 `CURRENT_INPUT` sequence；它只返回
@@ -187,9 +195,9 @@ Domain Service 保留 line-leading 连续有效 mention 的兼容 parser，未�
 CLI、Runtime Adapter、Bootstrap 与 Skill 都不重写正文或教学该 grammar。`--public-only` 在任何 alias/member lookup 前绕过正文寻址，并与显式
 `to/taskId` 原子冲突；`agentAddressingMode` 表达 caller intent，`effectiveRecipients/deliveryIds` 表达实际结果。
 该 schema 继续进入当前 catalog digest。
-当前 v28 contract/CLI command version、`builtin_cli.transport.v28` capability 与 IPC protocol 2 必须同时进入
+当前 v29 contract/CLI command version、`builtin_cli.transport.v29` capability 与 IPC protocol 2 必须同时进入
 Binding compatibility 和 digest。Camp History 使用 v8；Native Binding context contract 加入内部
-`sessionCharterRevision: 8`；本次读取权限修复不改变 Charter 字节或轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
+`sessionCharterRevision: 9`；Mission catalog 入口变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
 使用 Formatter 26 / ContextManifest 26，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
 
 `ROVAI_RUN_TMP` 是 Runtime Host 启动时继承的稳定精确路径，不是 process root、Camp workspace 或附件存储。
@@ -223,11 +231,14 @@ canonical result 或 Evidence；这条 narrow importer 与 Renderer 上传继续
 | `team.list_tasks` | 紧凑 `TaskListPage` |
 | `memory.view` | complete exact-Scope canonical result；不分页、不截断 |
 | `memory.write` | `{outcome: effective, memoryId, revisionId} \| {outcome: review_pending, reviewItemId}` |
+| `mission.list` | 完整 `{missions, nextCursor, hasMore}` |
+| `mission.get` | 完整定义与有序结构化附件 |
+| `mission.update/status` | `{missionId, changed}`；`missionId` 为内部 `rvm_...` ID |
 | `automation.list` | `{automations, nextCursor, truncated}` |
 | `automation.get/create/close/update` | 完整 `AutomationView` |
 | `automation.run` | `{status, runId, campId, conversationId, reason}` |
 | `automation.delete` | `{automationId, deleted: true}` |
-| 其余八项 | 去除 Envelope wrapper 后的 canonical result |
+| 其余七项 | 去除 Envelope wrapper 后的 canonical result |
 
 `memory.view` item 与 authorized current/revised `memory.read` 的 canonical result 包含同一个 indivisible
 `target(memoryId, revisionId, complete Agent-relative Scope identity)`。Agent revise 原样复制 target；CLI 只

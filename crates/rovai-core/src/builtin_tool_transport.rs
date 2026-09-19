@@ -12,13 +12,13 @@ use crate::{
     team_tool_catalog::builtin_tool_definitions,
 };
 
-pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 28;
+pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 29;
 pub const BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = 2;
 pub const BUILTIN_TOOL_ENVELOPE_VERSION: u32 = 1;
 pub const BUILTIN_TOOL_RECEIPT_VERSION: u32 = 1;
-pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 28;
+pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 29;
 pub const BUILTIN_TOOL_AGENT_OUTPUT_CONTRACT_VERSION: u32 = 3;
-pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v28";
+pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v29";
 pub const ROVAI_AGENT_CLI_ENV: &str = "ROVAI_AGENT_CLI";
 pub const ROVAI_CLI_CONTEXT_ENV: &str = "ROVAI_CLI_CONTEXT";
 pub const ROVAI_RUN_TMP_ENV: &str = "ROVAI_RUN_TMP";
@@ -179,7 +179,7 @@ pub struct BuiltinToolCliIdentity {
     pub action: &'static str,
 }
 
-pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 25] = [
+pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 26] = [
     BuiltinToolCliIdentity {
         operation: "camp.message.send",
         group: "send",
@@ -254,6 +254,11 @@ pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 25] = [
         operation: "memory.write",
         group: "memory",
         action: "write",
+    },
+    BuiltinToolCliIdentity {
+        operation: "mission.list",
+        group: "mission",
+        action: "list",
     },
     BuiltinToolCliIdentity {
         operation: "mission.get",
@@ -899,10 +904,20 @@ fn error_contracts(operation: &str) -> Vec<BuiltinToolErrorContract> {
         }),
         _ => {}
     }
-    if matches!(
-        operation,
-        "mission.get" | "mission.update" | "mission.status"
-    ) {
+    if matches!(operation, "mission.list" | "mission.get") {
+        for code in [
+            "mission.invalid_input",
+            "mission.invalid_cursor",
+            "mission.not_found",
+            "mission.current_unavailable",
+        ] {
+            errors.push(BuiltinToolErrorContract {
+                code: code.into(),
+                recovery: BuiltinToolRecovery::FixInput,
+            });
+        }
+    }
+    if matches!(operation, "mission.update" | "mission.status") {
         for code in ["mission.current_unavailable", "mission.forbidden"] {
             errors.push(BuiltinToolErrorContract {
                 code: code.into(),
@@ -944,6 +959,7 @@ pub fn projection_identity(operation: &str) -> Result<&'static str> {
         | "memory.read"
         | "memory.view"
         | "single_chat.history"
+        | "mission.list"
         | "mission.get"
         | "mission.update"
         | "mission.status"
@@ -991,6 +1007,22 @@ pub fn recovery_for_error_code(code: &str) -> BuiltinToolRecovery {
         BuiltinToolRecovery::RetrySameRequest
     } else {
         BuiltinToolRecovery::Stop
+    }
+}
+
+pub fn recovery_for_operation_error(operation: &str, code: &str) -> BuiltinToolRecovery {
+    if matches!(operation, "mission.list" | "mission.get")
+        && matches!(
+            code,
+            "mission.invalid_input"
+                | "mission.invalid_cursor"
+                | "mission.not_found"
+                | "mission.current_unavailable"
+        )
+    {
+        BuiltinToolRecovery::FixInput
+    } else {
+        recovery_for_error_code(code)
     }
 }
 
@@ -1090,9 +1122,9 @@ mod tests {
 
     #[test]
     fn cli_mapping_is_complete_unique_and_contract_valid() {
-        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 28);
-        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 28);
-        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v28");
+        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 29);
+        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 29);
+        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v29");
         validate_builtin_tool_contract().unwrap();
         let operations = BUILTIN_TOOL_CLI_IDENTITIES
             .iter()
@@ -1102,8 +1134,8 @@ mod tests {
             .iter()
             .map(|identity| (identity.group, identity.action))
             .collect::<BTreeSet<_>>();
-        assert_eq!(operations.len(), 25);
-        assert_eq!(commands.len(), 25);
+        assert_eq!(operations.len(), 26);
+        assert_eq!(commands.len(), 26);
     }
 
     #[test]
@@ -1257,6 +1289,14 @@ mod tests {
         assert!(camp_search.errors.iter().any(|error| {
             error.code == "camp.search_unavailable" && error.recovery == BuiltinToolRecovery::Stop
         }));
+        assert_eq!(
+            recovery_for_operation_error("mission.get", "mission.current_unavailable"),
+            BuiltinToolRecovery::FixInput
+        );
+        assert_eq!(
+            recovery_for_operation_error("mission.status", "mission.current_unavailable"),
+            BuiltinToolRecovery::Stop
+        );
         let send = builtin_tool_description("camp.message.send").unwrap();
         assert_eq!(
             send.arguments

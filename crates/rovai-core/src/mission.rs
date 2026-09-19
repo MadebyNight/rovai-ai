@@ -30,6 +30,54 @@ pub enum MissionStatus {
     InProgress,
     Completed,
 }
+
+pub const MISSION_LIST_DEFAULT_LIMIT: usize = 20;
+pub const MISSION_LIST_MAX_LIMIT: usize = 50;
+
+#[derive(Debug)]
+pub struct MissionAgentInputError {
+    code: &'static str,
+    message: &'static str,
+}
+
+impl MissionAgentInputError {
+    fn invalid_query() -> Self {
+        Self {
+            code: "mission.invalid_input",
+            message: "Mission list query is invalid",
+        }
+    }
+
+    fn invalid_limit() -> Self {
+        Self {
+            code: "mission.invalid_input",
+            message: "Mission list limit must be between 1 and 50",
+        }
+    }
+
+    fn invalid_cursor() -> Self {
+        Self {
+            code: "mission.invalid_cursor",
+            message: "Mission list cursor is invalid or does not match the filters",
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+
+impl std::fmt::Display for MissionAgentInputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for MissionAgentInputError {}
 impl MissionStatus {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -69,7 +117,37 @@ pub struct MissionAgentInfo {
     pub description: String,
     pub status: MissionStatus,
     pub source_message_id: Option<String>,
-    pub attachments: Vec<String>,
+    pub attachments: Vec<MissionAgentAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionAgentAttachment {
+    pub attachment_id: String,
+    pub name: String,
+    pub kind: String,
+    pub file_count: Option<u64>,
+    pub media_type: Option<String>,
+    pub byte_size: Option<u64>,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionListItem {
+    pub mission_id: String,
+    pub camp_id: String,
+    pub title: String,
+    pub status: MissionStatus,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionListPage {
+    pub missions: Vec<MissionListItem>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +186,17 @@ impl MissionRecord {
             attachments: self
                 .source_attachments
                 .iter()
-                .map(|source| source.source_path.clone())
+                .map(|source| MissionAgentAttachment {
+                    attachment_id: source.id.clone(),
+                    name: source.display_name.clone(),
+                    kind: source.kind.as_str().to_string(),
+                    file_count: (source.kind
+                        == crate::local_attachment_source::LocalAttachmentKind::File)
+                        .then_some(1),
+                    media_type: source.media_type.clone(),
+                    byte_size: source.observed_byte_size,
+                    path: source.source_path.clone(),
+                })
                 .collect(),
         }
     }
@@ -134,9 +222,29 @@ impl DomainCommand for CreateMissionCommand {
     const TYPE: &'static str = "mission.create";
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MissionGetInput {}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MissionGetInput {
+    pub mission_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MissionListInput {
+    pub query: Option<String>,
+    pub status: Option<MissionStatus>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MissionListCursor {
+    schema_version: u8,
+    query: Option<String>,
+    status: Option<MissionStatus>,
+    before_number: i64,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -416,6 +524,108 @@ impl MissionService {
     pub fn get(&self, database: &Database, mission_id: &str) -> Result<Option<MissionRecord>> {
         load_record(database.connection(), mission_id)
     }
+
+    pub fn list_for_agent(
+        &self,
+        database: &Database,
+        input: &MissionListInput,
+    ) -> Result<MissionListPage> {
+        let limit = input.limit.unwrap_or(MISSION_LIST_DEFAULT_LIMIT);
+        if !(1..=MISSION_LIST_MAX_LIMIT).contains(&limit) {
+            return Err(MissionAgentInputError::invalid_limit().into());
+        }
+        if input
+            .query
+            .as_ref()
+            .is_some_and(|query| query.trim().is_empty() || query.chars().count() > 200)
+        {
+            return Err(MissionAgentInputError::invalid_query().into());
+        }
+        let cursor = input
+            .cursor
+            .as_deref()
+            .map(decode_mission_list_cursor)
+            .transpose()?;
+        if cursor.as_ref().is_some_and(|cursor| {
+            cursor.query.as_deref() != input.query.as_deref() || cursor.status != input.status
+        }) {
+            return Err(MissionAgentInputError::invalid_cursor().into());
+        }
+        let before_number = cursor.as_ref().map(|cursor| cursor.before_number);
+        let status = input.status.map(MissionStatus::as_str);
+        let row_limit = i64::try_from(limit + 1).context("Mission list limit overflowed")?;
+        let mut statement = database.connection().prepare(
+            r#"
+            SELECT id, number, camp_id, title, status, updated_at
+            FROM mission
+            WHERE (?1 IS NULL OR number < ?1)
+              AND (?2 IS NULL OR status = ?2)
+              AND (
+                    ?3 IS NULL
+                    OR instr(lower(title), lower(?3)) > 0
+                    OR id = ?3
+                  )
+            ORDER BY number DESC
+            LIMIT ?4
+            "#,
+        )?;
+        let mut missions = statement
+            .query_map(
+                params![before_number, status, input.query.as_deref(), row_limit],
+                |row| {
+                    let number = row.get::<_, i64>(1)?;
+                    let status = row.get::<_, String>(4)?;
+                    Ok((
+                        number,
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        status,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(number, mission_id, camp_id, title, status, updated_at)| {
+                Ok((
+                    number,
+                    MissionListItem {
+                        mission_id,
+                        camp_id,
+                        title,
+                        status: serde_json::from_value(json!(status))?,
+                        updated_at,
+                    },
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let has_more = missions.len() > limit;
+        if has_more {
+            missions.truncate(limit);
+        }
+        let next_cursor = if has_more {
+            missions
+                .last()
+                .map(|(number, _)| {
+                    encode_mission_list_cursor(&MissionListCursor {
+                        schema_version: 1,
+                        query: input.query.clone(),
+                        status: input.status,
+                        before_number: *number,
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(MissionListPage {
+            missions: missions.into_iter().map(|(_, mission)| mission).collect(),
+            next_cursor,
+            has_more,
+        })
+    }
+
     pub fn list(&self, database: &Database) -> Result<Vec<MissionRecord>> {
         let mut statement = database
             .connection()
@@ -462,6 +672,38 @@ impl MissionService {
             })
             .collect()
     }
+}
+
+fn encode_mission_list_cursor(cursor: &MissionListCursor) -> Result<String> {
+    let bytes = serde_json::to_vec(cursor).context("Mission list cursor could not be encoded")?;
+    Ok(bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
+}
+
+fn decode_mission_list_cursor(value: &str) -> Result<MissionListCursor> {
+    if value.is_empty() || value.len() > 2048 || !value.len().is_multiple_of(2) {
+        return Err(MissionAgentInputError::invalid_cursor().into());
+    }
+    let bytes = (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&value[index..index + 2], 16))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| MissionAgentInputError::invalid_cursor())?;
+    let cursor = serde_json::from_slice::<MissionListCursor>(&bytes)
+        .map_err(|_| MissionAgentInputError::invalid_cursor())?;
+    if cursor.schema_version != 1
+        || cursor.before_number < 1
+        || cursor
+            .query
+            .as_ref()
+            .is_some_and(|query| query.trim().is_empty() || query.chars().count() > 200)
+        || encode_mission_list_cursor(&cursor)? != value
+    {
+        return Err(MissionAgentInputError::invalid_cursor().into());
+    }
+    Ok(cursor)
 }
 
 pub(crate) fn mission_for_camp(
@@ -1277,12 +1519,19 @@ mod tests {
         assert_eq!(initial.attachments[0].id, first.id);
         assert_eq!(initial.attachments[1].id, directory.id);
         assert_eq!(initial.details_version, 1);
+        let initial_agent = initial.agent_info();
+        assert_eq!(initial_agent.mission_id, mission_id);
+        assert_eq!(initial_agent.attachments[0].attachment_id, first.id);
+        assert_eq!(initial_agent.attachments[0].file_count, Some(1));
         assert_eq!(
-            initial.agent_info().attachments,
-            vec![
-                first_path.to_string_lossy().into_owned(),
-                directory_path.to_string_lossy().into_owned()
-            ]
+            initial_agent.attachments[0].path,
+            first_path.to_string_lossy()
+        );
+        assert_eq!(initial_agent.attachments[1].attachment_id, directory.id);
+        assert_eq!(initial_agent.attachments[1].file_count, None);
+        assert_eq!(
+            initial_agent.attachments[1].path,
+            directory_path.to_string_lossy()
         );
         let public_record = serde_json::to_string(&initial).unwrap();
         assert!(public_record.contains("first brief.md"));
@@ -1313,12 +1562,18 @@ mod tests {
         assert_eq!(current.attachments.len(), 2);
         assert_eq!(current.attachments[0].id, directory.id);
         assert_eq!(current.attachments[1].id, second.id);
+        let current_agent = current.agent_info();
+        assert_eq!(current_agent.attachments[0].attachment_id, directory.id);
+        assert_eq!(current_agent.attachments[0].file_count, None);
         assert_eq!(
-            current.agent_info().attachments,
-            vec![
-                directory_path.to_string_lossy().into_owned(),
-                second_path.to_string_lossy().into_owned()
-            ]
+            current_agent.attachments[0].path,
+            directory_path.to_string_lossy()
+        );
+        assert_eq!(current_agent.attachments[1].attachment_id, second.id);
+        assert_eq!(current_agent.attachments[1].file_count, Some(1));
+        assert_eq!(
+            current_agent.attachments[1].path,
+            second_path.to_string_lossy()
         );
         assert_eq!(
             service
@@ -1352,5 +1607,169 @@ mod tests {
             crate::local_attachment_source::parse_source_attachments(&published_json).unwrap(),
             vec![directory, second]
         );
+    }
+
+    #[test]
+    fn agent_mission_ids_and_list_pagination_are_opaque_and_filter_bound() {
+        let mut database = crate::test_support::seeded_runtime_database_owned();
+        let workspace = database.directory().join("mission-list-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let service = MissionService::default();
+        let mut internal_ids = Vec::new();
+        for title in ["Alpha", "Beta 附件", "Gamma", "Delta"] {
+            let created = service
+                .create(
+                    &mut database,
+                    &command(CreateMissionCommand {
+                        title: title.into(),
+                        description: format!("{title} details"),
+                        project_path: workspace.to_string_lossy().into_owned(),
+                        project_binding_kind: ProjectBindingKind::Directory,
+                        member_agent_ids: vec!["agent_1".into()],
+                        default_lead_agent_id: "agent_1".into(),
+                        tags: vec![],
+                        source_attachments: vec![],
+                    }),
+                )
+                .unwrap();
+            internal_ids.push(
+                created.result.payload["missionId"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        service
+            .status(
+                &mut database,
+                &command(StatusMissionCommand {
+                    mission_id: internal_ids[2].clone(),
+                    status: MissionStatus::Completed,
+                    source_message_id: None,
+                }),
+            )
+            .unwrap();
+
+        let first = service
+            .list_for_agent(
+                &database,
+                &MissionListInput {
+                    limit: Some(2),
+                    ..MissionListInput::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            first
+                .missions
+                .iter()
+                .map(|mission| mission.mission_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![internal_ids[3].as_str(), internal_ids[2].as_str()]
+        );
+        assert!(first.has_more);
+        service
+            .create(
+                &mut database,
+                &command(CreateMissionCommand {
+                    title: "Epsilon".into(),
+                    description: "Created between keyset pages".into(),
+                    project_path: workspace.to_string_lossy().into_owned(),
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    member_agent_ids: vec!["agent_1".into()],
+                    default_lead_agent_id: "agent_1".into(),
+                    tags: vec![],
+                    source_attachments: vec![],
+                }),
+            )
+            .unwrap();
+        let second = service
+            .list_for_agent(
+                &database,
+                &MissionListInput {
+                    limit: Some(2),
+                    cursor: first.next_cursor.clone(),
+                    ..MissionListInput::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .missions
+                .iter()
+                .map(|mission| mission.mission_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![internal_ids[1].as_str(), internal_ids[0].as_str()]
+        );
+        assert!(!second.has_more);
+        assert!(second.next_cursor.is_none());
+
+        for invalid in [
+            MissionListInput {
+                limit: Some(0),
+                ..MissionListInput::default()
+            },
+            MissionListInput {
+                cursor: Some("not-a-cursor".into()),
+                ..MissionListInput::default()
+            },
+        ] {
+            assert!(service.list_for_agent(&database, &invalid).is_err());
+        }
+
+        let by_title = service
+            .list_for_agent(
+                &database,
+                &MissionListInput {
+                    query: Some("附件".into()),
+                    ..MissionListInput::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(by_title.missions[0].mission_id, internal_ids[1]);
+        let by_id = service
+            .list_for_agent(
+                &database,
+                &MissionListInput {
+                    query: Some(internal_ids[2].clone()),
+                    ..MissionListInput::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(by_id.missions[0].title, "Gamma");
+        let completed = service
+            .list_for_agent(
+                &database,
+                &MissionListInput {
+                    status: Some(MissionStatus::Completed),
+                    ..MissionListInput::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(completed.missions[0].mission_id, internal_ids[2]);
+
+        let mismatched_cursor = service
+            .list_for_agent(
+                &database,
+                &MissionListInput {
+                    status: Some(MissionStatus::Completed),
+                    limit: Some(2),
+                    cursor: first.next_cursor,
+                    ..MissionListInput::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(
+            mismatched_cursor
+                .downcast_ref::<MissionAgentInputError>()
+                .unwrap()
+                .code(),
+            "mission.invalid_cursor"
+        );
+
+        let selected = service.get(&database, &internal_ids[3]).unwrap().unwrap();
+        assert_eq!(selected.info.mission_id, internal_ids[3]);
+        assert_eq!(selected.agent_info().mission_id, internal_ids[3]);
+        assert!(service.get(&database, "rvm_missing").unwrap().is_none());
     }
 }

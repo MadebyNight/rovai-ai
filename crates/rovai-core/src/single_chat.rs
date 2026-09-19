@@ -32,7 +32,7 @@ use crate::{
 };
 
 pub const SINGLE_CHAT_OPERATION_POLICY: &str = "single_chat_v1";
-pub const SINGLE_CHAT_OPERATION_POLICY_VERSION: i64 = 1;
+pub const SINGLE_CHAT_OPERATION_POLICY_VERSION: i64 = 2;
 pub const SINGLE_CHAT_RESPONSE_DELIVERY: &str = "conversation_message";
 pub const SINGLE_CHAT_HISTORY_TOOL_NAME: &str = "single_chat.history";
 
@@ -2346,7 +2346,7 @@ fn admit_single_chat_message(
             ?10, NULL, 'runtime_managed_v2',
             ?11, ?12, ?13, ?14, ?15, ?16, ?15, ?16,
             ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25,
-            'single_chat', 'conversation_message', 'single_chat_v1', 1, ?3,
+            'single_chat', 'conversation_message', 'single_chat_v1', 2, ?3,
             'queued', ?26, 1, ?5, ?5
         )
         "#,
@@ -2609,15 +2609,11 @@ pub fn authorize_builtin_operation(
         return Ok(None);
     };
     if response_delivery != SINGLE_CHAT_RESPONSE_DELIVERY
-        || operation_policy != SINGLE_CHAT_OPERATION_POLICY
-        || policy_version != SINGLE_CHAT_OPERATION_POLICY_VERSION
+        || !single_chat_operation_policy_is_supported(&operation_policy, policy_version)
     {
         anyhow::bail!("Single Chat AgentRun has an invalid frozen operation policy");
     }
-    let allowed = matches!(
-        operation,
-        "camp.search" | "camp.read" | SINGLE_CHAT_HISTORY_TOOL_NAME
-    );
+    let allowed = single_chat_operation_is_allowed(policy_version, operation);
     if !allowed {
         return Ok(Some(CommandHandlerResult::rejected(
             "single_chat.operation_denied",
@@ -2682,7 +2678,7 @@ fn load_single_chat_history_target(
               AND agent_run.invocation_kind = 'single_chat'
               AND agent_run.response_delivery = 'conversation_message'
               AND agent_run.operation_policy = 'single_chat_v1'
-              AND agent_run.operation_policy_version = 1
+              AND agent_run.operation_policy_version IN (1, 2)
               AND agent_run.status = 'running'
               AND agent_run.cancel_requested_at IS NULL
               AND camp_turn.kind = 'single_chat'
@@ -2697,6 +2693,18 @@ fn load_single_chat_history_target(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?)
+}
+
+pub fn single_chat_operation_policy_is_supported(policy: &str, version: i64) -> bool {
+    policy == SINGLE_CHAT_OPERATION_POLICY
+        && matches!(version, 1..=SINGLE_CHAT_OPERATION_POLICY_VERSION)
+}
+
+fn single_chat_operation_is_allowed(policy_version: i64, operation: &str) -> bool {
+    matches!(
+        operation,
+        "camp.search" | "camp.read" | SINGLE_CHAT_HISTORY_TOOL_NAME
+    ) || (policy_version >= 2 && matches!(operation, "mission.list" | "mission.get"))
 }
 
 #[cfg(test)]
@@ -3104,6 +3112,17 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT operation_policy_version FROM agent_run WHERE id=?1",
+                    [&run_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            SINGLE_CHAT_OPERATION_POLICY_VERSION
+        );
         database
             .connection()
             .execute(
@@ -3393,6 +3412,10 @@ mod tests {
 
     #[test]
     fn built_in_policy_is_a_closed_allowlist_and_restart_cancels_only_the_reply() {
+        assert!(!single_chat_operation_is_allowed(1, "mission.list"));
+        assert!(!single_chat_operation_is_allowed(1, "mission.get"));
+        assert!(single_chat_operation_is_allowed(2, "mission.list"));
+        assert!(single_chat_operation_is_allowed(2, "mission.get"));
         let (mut database, camp_id) = fixture();
         let service = SingleChatService::default();
         let (conversation_id, _) =
@@ -3437,6 +3460,14 @@ mod tests {
             .unwrap()
             .is_none()
         );
+        for mission_operation in ["mission.list", "mission.get"] {
+            assert!(
+                authorize_builtin_operation(&database, &run_id, 1, mission_operation, &json!({}),)
+                    .unwrap()
+                    .is_none(),
+                "{mission_operation} must remain read-only and available in Single Chat"
+            );
+        }
         for denied_operation in [
             "camp.message.send",
             "team.gather",

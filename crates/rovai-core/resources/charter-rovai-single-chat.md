@@ -22,7 +22,7 @@ Single Chat
 - Once this Single Chat is ended, do not use its transcript as context for a later Single Chat.
 
 Rovai operations
-- You may use only `rovai camp search`, `rovai camp read`, and `rovai single-chat history`.
+- You may use only `rovai camp search`, `rovai camp read`, `rovai single-chat history`, and `rovai mission list|get`.
 - `rovai camp search` and `rovai camp read` are restricted to the current Camp and the current turn's frozen public boundary.
 - `rovai single-chat history` reads only messages before CURRENT_INPUT in the current Single Chat. Core determines the target conversation.
 - Use Single Chat history only when CURRENT_INPUT depends on earlier messages that are not already present in the current context.

@@ -12,7 +12,7 @@ last_updated: 2026-09-19
 <!-- architecture-index:begin -->
 | 架构 | 内容 |
 | --- | --- |
-| [Missions](missions.md) | 使命定义、独立业务状态、可重建持久工作区、显式清理、累计 Git Diff 与现有 Camp 的职责边界 |
+| [Missions](missions.md) | 内部 ID 贯通 Agent、UI 展示编号、全局只读/当前写入、使命定义、结构化附件、持久工作区与累计 Git Diff |
 | [统一 Rust Host](unified-rust-host.md) | Desktop 与三平台 Server 共用的应用运行层、Web、身份、source refs 和平台验证边界 |
 | [Rovai AI 多 Agent 协作架构](system-views.md) | 系统全景、Peer 与轻量 Lead、身份与 Runtime、Conversation/AgentRun、A2A、协作组织与任务责任、Rovai CLI Toolkit、动态上下文、记忆治理与成长、技术栈与单次 AgentRun 生命周期的可视化介绍 |
 | [Runtime 图片](runtime-images.md) | 结构化观察与保留、Adapter 确认的原生生图公屏来源、混合文件生命周期、Camp-scoped 按需读取、消息内来源合并及作者感知 Gallery variant；与显式渠道文件交付分离 |
@@ -23,7 +23,7 @@ last_updated: 2026-09-19
 | [Desktop Navigation Refresh](desktop-navigation-refresh.md) | Core 提交后失效提示、Renderer 全局 generation drain、Main-owned Sidecar Project 首次冻结/成员同步、失败退避、可见性与低频安全刷新边界 |
 | [Availability-first Runtime](availability-first-runtime.md) | Desktop bootstrap/full-core 分层、data-dir lease、SQLite 准入票据、copy migration、Supervisor generation/revision 与请求 fencing |
 | [AgentRun Recovery](agent-run-recovery.md) | AgentRun、Input Delivery、Native Turn 与 execution isolation 分离，未接受运输恢复、accepted/unknown 自动失败、cleanup 门禁与精确 Run Stop |
-| [Built-in Tool Runtime](builtin-tool-runtime.md) | 无 Gather 的当前 operation catalog、完整结果运输、`camp.read` 实时可见状态、Core Router、Runtime Fleet、Dynamic Context、ContextManifest/ACK 与外部 MCP 的关系 |
+| [Built-in Tool Runtime](builtin-tool-runtime.md) | 无 Gather 的当前 operation catalog、Mission 全局 read seam、完整结果运输、Core Router、Runtime Fleet、Dynamic Context、ContextManifest/ACK 与外部 MCP 的关系 |
 | [Single Chat](single-chat.md) | 复用 Conversation/CampTurn/AgentRun 的私有会话模式、专用 Context、封闭 Built-in policy、公共 Source Refs、Conversation-local FIFO、exact-ID 结束、串行面板刷新与迟到隔离 |
 | [Scheduled Automation](scheduled-automation.md) | Desktop/Core 本机计划、started/skipped(overlap) admission、普通 Delivery claim、occurrence 收口与独立渠道通知 |
 | [Camp Identity](camp-identity.md) | 唯一 `rvcamp_` CampId 的生成、持久化、Context/Tool/path 流转、clean break 与 Native Session identity seam |

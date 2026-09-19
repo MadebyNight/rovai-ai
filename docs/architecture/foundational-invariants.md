@@ -113,7 +113,7 @@ last_updated: 2026-09-19
 - AgentRun 仍冻结 workspace 路径及起止 Git capability、HEAD 与 branch observation 作为既有终态审计事实；历史 boolean dirty 保留读取，新 observation 不采集 dirty。这些 per-Run audit facts 不参与
   文件变化卡片归约，也不成为 Project/导航身份。导航继续按规范目录路径分组，不引入 Project 表或 Repository
   Scope。
-- Mission 累计 Git Diff 与读取/写入权限由独立的 [Mission v4](../contracts/mission-v4.md) 拥有：首个 preparing 读取源工作树当时的本地分支与 HEAD，持久 worktree 的固定 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence。显式清理同时删除受管 Worktree 与本地 Mission 分支；分支仍在时的恢复保留基准，两个资源都不存在时下一次 preparing 从源项目当前 HEAD 重建并更新基准。删除 Mission 默认原地保留资源；只有明确选择 cleanup 且前台清理成功后才随删除处置，不建立后台保留资源管理。
+- Mission 累计 Git Diff 与读取/写入权限由独立的 [Mission v5](../contracts/mission-v5.md) 拥有：首个 preparing 读取源工作树当时的本地分支与 HEAD，持久 worktree 的固定 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence。所有有效 AgentRun 可用内部 `rvm_...` ID 全局发现/读取 Mission，但 `update/status` 仍只作用于当前公共 Mission；`M-xxx` 只在用户界面展示。显式清理同时删除受管 Worktree 与本地 Mission 分支；分支仍在时的恢复保留基准，两个资源都不存在时下一次 preparing 从源项目当前 HEAD 重建并更新基准。删除 Mission 默认原地保留资源；只有明确选择 cleanup 且前台清理成功后才随删除处置，不建立后台保留资源管理。
 - **Quick Chat / 快速对话** 是应用受管 workspace 的规范领域与产品分组术语，不是 Camp 或 Project。Rust variant 使用 `QuickChat`，存储与 IPC 值使用 `quick_chat`，JavaScript/TypeScript property 使用 `quickChat`，CSS/test identifier 与受管目录名使用 `quick-chat`。旧称只允许存在于历史快照和迁移证据；当前代码、合同与投影不保留 alias、deprecated field、dual read 或旧 wire value 翻译。
 
 <a id="camp-composer"></a>
@@ -406,6 +406,7 @@ last_updated: 2026-09-19
 - CLI 子进程通过当前 Run 的受保护本地 IPC endpoint 与新 lease 继承调用身份，不从可复用 Runtime 进程身份继承权力。Runtime 及它启动的子进程共享当前 Run/Member 归属和同一 scope/version/quota/fence，不根据父进程名、命令文本或层级猜测模型意图。Run release 先 fence lease，迟到子进程调用不得归属于后续 Run。
 - Unix Socket 和受保护 Windows Named Pipe 共享 Local IPC v2 语义：每 App 一个 endpoint，基于 OS identity 加 process/lease token 的双重校验，当前用户专用权限、framing、超时与断连不明时不盲重发。Rovai-owned request/response/Runtime adapter 不再使用统一逻辑总量上限；一次调用完整成功或明确失败，不允许 success + truncated，也不要求 Agent 通过 preview/blobRef/offset 补读。
 - 当前 catalog 不包含 Gather。多人协作使用普通多目标 send；Core 不提供 Barrier、captured return 或 completion。CLI/Skill/help 不能继续宣传历史能力。
+- Mission read side 以有效 Run/epoch/lease/Binding 认证后全局读取，不把目标 Camp membership 或历史 ContextManifest 当 ACL；`mission.list/get` 不切换当前 Mission，`mission.update/status` 不接受目标 ID。数据库关系、内部事件、Agent Mission 操作和新 Context 共用唯一内部 `rvm_...` ID；number 派生的 `M-xxx` 只用于人类界面，不作为 Agent selector 或结果字段。
 - 一次已由 Core 验证的 CLI invocation 在主 Activity 中以 canonical operation 呈现。Runtime Shell Evidence 只在具有显式 Core request/receipt 与结构化 command identity 关联时折叠为 supporting transport；无法证明时保留两项独立 Evidence，不用文本、时间或目录猜测。
 
 <a id="user-automation-trial"></a>

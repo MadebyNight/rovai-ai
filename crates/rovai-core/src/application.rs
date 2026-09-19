@@ -103,7 +103,7 @@ use rovai_core::{
         BuiltinToolInvocationEnvelope, BuiltinToolIpcRequest, BuiltinToolIpcRequestBody,
         BuiltinToolIpcResponse, COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
         COMPACTION_OBSERVATION_IPC_KIND, CompactionHookIpcRequest, CompactionHookIpcResponse,
-        builtin_tool_catalog_digest, builtin_tool_description, recovery_for_error_code,
+        builtin_tool_catalog_digest, builtin_tool_description, recovery_for_operation_error,
     },
     camp_attachment::{
         CampAttachmentStore, desktop_target_for_source_attachment,
@@ -4840,7 +4840,7 @@ impl Core {
                             &operation,
                             &request_id,
                             BuiltinToolError {
-                                recovery: recovery_for_error_code(&code),
+                                recovery: recovery_for_operation_error(&operation, &code),
                                 code,
                                 message: error.message,
                                 details: error.details,
@@ -5328,7 +5328,7 @@ impl Core {
                         }?;
                     serde_json::to_value(output).map_err(Into::into)
                 }
-                "mission.get" | "mission.update" | "mission.status" => {
+                "mission.list" | "mission.get" | "mission.update" | "mission.status" => {
                     crate::team_tool_catalog::validate_builtin_tool_input(
                         &request.tool_name,
                         &request.input,
@@ -5339,19 +5339,49 @@ impl Core {
                             "Mission input does not match its schema",
                         )
                     })?;
-                    let mission = crate::mission::mission_for_camp(
-                        database.connection(),
-                        &authenticated_run.camp_id,
-                    )?
-                    .ok_or_else(|| {
-                        automation_tool_error(
-                            "mission.current_unavailable",
-                            "The current public Camp has no Mission",
-                        )
-                    })?;
-                    if mission_operation_is_read_only(&request.tool_name) {
+                    let service = crate::mission::MissionService::default();
+                    let read_only = mission_operation_is_read_only(&request.tool_name);
+                    if read_only && request.tool_name == "mission.list" {
+                        let input: crate::mission::MissionListInput =
+                            serde_json::from_value(request.input)?;
+                        let page = service
+                            .list_for_agent(&database, &input)
+                            .map_err(map_mission_agent_input_error)?;
+                        Ok(serde_json::to_value(page)?)
+                    } else if read_only {
+                        let input: crate::mission::MissionGetInput =
+                            serde_json::from_value(request.input)?;
+                        let mission = if let Some(mission_id) = input.mission_id.as_deref() {
+                            service.get(&database, mission_id)?.ok_or_else(|| {
+                                automation_tool_error(
+                                    "mission.not_found",
+                                    "The requested Mission does not exist",
+                                )
+                            })?
+                        } else {
+                            crate::mission::mission_for_camp(
+                                database.connection(),
+                                &authenticated_run.camp_id,
+                            )?
+                            .ok_or_else(|| {
+                                automation_tool_error(
+                                    "mission.current_unavailable",
+                                    "The current Camp has no Mission; provide --mission-id or use mission list",
+                                )
+                            })?
+                        };
                         Ok(serde_json::to_value(mission.agent_info())?)
                     } else {
+                        let mission = crate::mission::mission_for_camp(
+                            database.connection(),
+                            &authenticated_run.camp_id,
+                        )?
+                        .ok_or_else(|| {
+                            automation_tool_error(
+                                "mission.current_unavailable",
+                                "The current public Camp has no Mission",
+                            )
+                        })?;
                         let actor = ActorRef::Agent {
                             agent_id: authenticated_run.agent_id.clone(),
                             source_agent_run_id: authenticated_run.agent_run_id.clone(),
@@ -5367,7 +5397,6 @@ impl Core {
                                 "Current Camp membership is required",
                             ));
                         }
-                        let service = crate::mission::MissionService::default();
                         let execution = if request.tool_name == "mission.update" {
                             let input: crate::mission::MissionUpdateInput =
                                 serde_json::from_value(request.input)?;
@@ -5814,7 +5843,7 @@ impl Core {
                             &evidence_tool_name,
                             request_id,
                             BuiltinToolError {
-                                recovery: recovery_for_error_code(&code),
+                                recovery: recovery_for_operation_error(&evidence_tool_name, &code),
                                 code,
                                 message,
                                 details,
@@ -22381,7 +22410,15 @@ fn automation_tool_error(code: &str, message: &str) -> anyhow::Error {
 }
 
 fn mission_operation_is_read_only(operation: &str) -> bool {
-    operation == "mission.get"
+    matches!(operation, "mission.list" | "mission.get")
+}
+
+fn map_mission_agent_input_error(error: anyhow::Error) -> anyhow::Error {
+    if let Some(input_error) = error.downcast_ref::<crate::mission::MissionAgentInputError>() {
+        automation_tool_error(input_error.code(), input_error.message())
+    } else {
+        error
+    }
 }
 
 fn agent_builtin_command_envelope<P>(
@@ -22521,7 +22558,7 @@ fn builtin_tool_rejection(
         BuiltinToolError {
             code: code.to_string(),
             message: message.to_string(),
-            recovery: recovery_for_error_code(code),
+            recovery: recovery_for_operation_error(operation, code),
             details: None,
         },
     ) {
@@ -22798,7 +22835,8 @@ mod tests {
     }
 
     #[test]
-    fn mission_get_is_read_only_while_mission_mutations_require_write_authority() {
+    fn mission_reads_are_read_only_while_mission_mutations_require_write_authority() {
+        assert!(mission_operation_is_read_only("mission.list"));
         assert!(mission_operation_is_read_only("mission.get"));
         assert!(!mission_operation_is_read_only("mission.update"));
         assert!(!mission_operation_is_read_only("mission.status"));

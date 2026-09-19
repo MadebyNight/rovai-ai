@@ -1363,7 +1363,7 @@ fn print_root_help() {
 }
 
 fn root_help_text(managed_runtime: bool) -> String {
-    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
+    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission list|get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
     if !managed_runtime {
         text.push_str("\nUser Automation:\n  rovai app --help\n\nAgent operations keep their process-private transport. `rovai app` uses the running Desktop App's separate User Automation transport.\n");
     }
@@ -1828,7 +1828,15 @@ fn write_indented_help(output: &mut String, help: &str) {
 
 fn operation_help_examples(operation: &str) -> &'static [&'static str] {
     match operation {
-        "mission.get" => &["rovai mission get"],
+        "mission.list" => &[
+            "rovai mission list",
+            "rovai mission list --query \"附件\"",
+            "rovai mission list --status needs_you",
+        ],
+        "mission.get" => &[
+            "rovai mission get",
+            "rovai mission get --mission-id rvm_example",
+        ],
         "mission.update" => &["rovai mission update --title \"目录导航\""],
         "mission.status" => &["rovai mission status --status in_progress"],
         "camp.message.send" => &CAMP_MESSAGE_SEND_HELP_EXAMPLES,
