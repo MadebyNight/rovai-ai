@@ -72,6 +72,14 @@ function attachmentLocator(value: unknown, expectedCampId: string): LocalAttachm
       attachmentRefId
     }
   }
+  if (input.owner === 'mission') {
+    return {
+      owner: input.owner,
+      campId: ownerCampId,
+      missionId: string(input.missionId, 128),
+      attachmentRefId
+    }
+  }
   if (input.owner === 'single_chat_composer') {
     return {
       owner: input.owner,
