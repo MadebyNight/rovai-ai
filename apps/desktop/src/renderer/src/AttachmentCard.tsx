@@ -88,7 +88,7 @@ export function AttachmentCard({
   const locatorRef = useRef(locator)
   locatorRef.current = locator
   const timeline = presentation !== 'composer'
-  const contextMenuAvailable = timeline || Boolean(menuItems)
+  const contextMenuAvailable = timeline || locator.owner === 'composer' || Boolean(menuItems)
   const primaryActionAvailable = contextMenuAvailable || attachment.previewKind !== 'image'
   const agentPresentation = presentation === 'agent-timeline'
   const composerImage = presentation === 'composer' && attachment.previewKind === 'image'

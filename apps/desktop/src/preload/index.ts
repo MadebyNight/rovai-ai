@@ -391,6 +391,19 @@ const api: RovaiApi = {
     },
     preview(locator) {
       return ipcRenderer.invoke('rovai:composer-attachment-preview', locator)
+    },
+    restore(campId, attachments) {
+      return ipcRenderer.invoke('rovai:composer-attachment-restore', campId, attachments)
+    },
+    discard(campId, attachmentRefIds) {
+      return ipcRenderer.invoke(
+        'rovai:composer-attachment-discard',
+        campId,
+        attachmentRefIds
+      )
+    },
+    location(locator) {
+      return ipcRenderer.invoke('rovai:composer-attachment-location', locator)
     }
   },
   missionAttachments: {

@@ -410,7 +410,8 @@ impl Database {
         self.migrate_mission_delivery_v160()?;
         self.migrate_mission_attachments_v161()?;
         self.migrate_mission_workspace_lifecycle_v162()?;
-        self.migrate_camp_message_agent_run_v163()
+        self.migrate_camp_message_agent_run_v163()?;
+        self.migrate_agent_run_notification_v164()
     }
 }
 

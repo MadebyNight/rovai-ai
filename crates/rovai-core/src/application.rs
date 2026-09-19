@@ -803,6 +803,14 @@ async fn join_or_abort_until(
     }
 }
 
+fn abort_agent_run_coordination<S, M>(
+    scheduler: &tokio::task::JoinHandle<S>,
+    maintenance: &tokio::task::JoinHandle<M>,
+) {
+    scheduler.abort();
+    maintenance.abort();
+}
+
 async fn drain_join_set_until<T: 'static>(
     tasks: &mut tokio::task::JoinSet<T>,
     graceful_deadline: tokio::time::Instant,
@@ -15826,11 +15834,25 @@ async fn run_core(
         output_tx.clone(),
         acp_shutdown_rx,
     ));
+    let (maintenance_shutdown_tx, maintenance_shutdown_rx) = oneshot::channel();
+    let (maintenance_exited_tx, maintenance_exited_rx) = oneshot::channel();
+    let maintenance_core = core.clone();
+    let maintenance_output = output_tx.clone();
+    let mut maintenance_handle = tokio::spawn(async move {
+        process_agent_run_maintenance(
+            maintenance_core,
+            maintenance_output,
+            maintenance_shutdown_rx,
+        )
+        .await;
+        let _ = maintenance_exited_tx.send(());
+    });
     let (scheduler_shutdown_tx, scheduler_shutdown_rx) = oneshot::channel();
     let mut scheduler_handle = tokio::spawn(process_agent_run_scheduler(
         core.clone(),
         output_tx.clone(),
         scheduler_shutdown_rx,
+        maintenance_exited_rx,
     ));
     let (network_recovery_shutdown_tx, network_recovery_shutdown_rx) = oneshot::channel();
     let mut network_recovery_handle = tokio::spawn(process_network_recovery(
@@ -16052,6 +16074,7 @@ async fn run_core(
         core.planned_shutdown.close_launch_admission();
         let _ = network_recovery_shutdown_tx.send(());
         let _ = scheduler_shutdown_tx.send(());
+        let _ = maintenance_shutdown_tx.send(());
         let _ = attachment_projection_shutdown_tx.send(());
         let _ = runtime_check_shutdown_tx.send(());
         let _ = fleet_sweeper_shutdown_tx.send(());
@@ -16068,7 +16091,7 @@ async fn run_core(
         if !launch_quiesced {
             eprintln!("planned shutdown launch handoff exceeded the prompt cancellation grace");
             deadline_expired = true;
-            scheduler_handle.abort();
+            abort_agent_run_coordination(&scheduler_handle, &maintenance_handle);
             let launch_abort_deadline = std::cmp::min(
                 fence_settlement_deadline,
                 tokio::time::Instant::now() + PLANNED_SHUTDOWN_GUARD_GRACE,
@@ -16157,6 +16180,12 @@ async fn run_core(
         .await;
         let scheduler_quiesced = join_or_abort_until(
             &mut scheduler_handle,
+            interrupt_deadline,
+            fence_settlement_deadline,
+        )
+        .await;
+        let maintenance_quiesced = join_or_abort_until(
+            &mut maintenance_handle,
             interrupt_deadline,
             fence_settlement_deadline,
         )
@@ -16293,6 +16322,7 @@ async fn run_core(
             && background_requests_quiesced
             && network_recovery_quiesced
             && scheduler_quiesced
+            && maintenance_quiesced
             && attachment_projection_quiesced
             && runtime_checks_quiesced
             && fleet_sweeper_quiesced
@@ -16402,6 +16432,7 @@ async fn run_core(
             || !runtime_discovery_quiesced
             || !background_requests_quiesced
             || !scheduler_quiesced
+            || !maintenance_quiesced
             || !attachment_projection_quiesced
             || !runtime_checks_quiesced
             || !fleet_sweeper_quiesced
@@ -16460,6 +16491,8 @@ async fn run_core(
         let _ = network_recovery_handle.await;
         let _ = scheduler_shutdown_tx.send(());
         let _ = scheduler_handle.await;
+        let _ = maintenance_shutdown_tx.send(());
+        let _ = maintenance_handle.await;
         let _ = attachment_projection_shutdown_tx.send(());
         let _ = attachment_projection_handle.await;
         let _ = runtime_check_shutdown_tx.send(());
@@ -21385,13 +21418,8 @@ async fn process_agent_run_scheduler(
     core: Arc<Core>,
     output: mpsc::UnboundedSender<String>,
     mut shutdown: oneshot::Receiver<()>,
+    mut maintenance_exited: oneshot::Receiver<()>,
 ) {
-    let (maintenance_shutdown_tx, maintenance_shutdown_rx) = oneshot::channel();
-    let mut maintenance_handle = tokio::spawn(process_agent_run_maintenance(
-        core.clone(),
-        output.clone(),
-        maintenance_shutdown_rx,
-    ));
     let mut delivery_batch_fallback = tokio::time::interval_at(
         tokio::time::Instant::now() + DELIVERY_BATCH_FALLBACK_INTERVAL,
         DELIVERY_BATCH_FALLBACK_INTERVAL,
@@ -21401,7 +21429,6 @@ async fn process_agent_run_scheduler(
     let mut delivery_batch_workers = HashMap::new();
     let mut delivery_batch_inflight = HashSet::new();
     let mut scan_delivery_batches = true;
-    let mut maintenance_exited = false;
     'scheduler: loop {
         if scan_delivery_batches {
             scan_delivery_batches = false;
@@ -21465,21 +21492,12 @@ async fn process_agent_run_scheduler(
                     None => {}
                 }
             },
-            result = &mut maintenance_handle => {
-                maintenance_exited = true;
-                match result {
-                    Ok(()) => eprintln!("agent-run maintenance task exited unexpectedly"),
-                    Err(error) => eprintln!("agent-run maintenance task failed: {error}"),
-                }
+            _ = &mut maintenance_exited => {
+                eprintln!("agent-run maintenance task exited unexpectedly");
                 break 'scheduler;
             },
             _ = &mut shutdown => break 'scheduler,
         }
-    }
-    if !maintenance_exited {
-        let _ = maintenance_shutdown_tx.send(());
-        maintenance_handle.abort();
-        let _ = maintenance_handle.await;
     }
     delivery_batch_dispatches.abort_all();
     while delivery_batch_dispatches.join_next().await.is_some() {}
@@ -22773,6 +22791,40 @@ mod tests {
                 text: text.to_string(),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn forced_scheduler_abort_also_reclaims_supervised_maintenance() {
+        struct DropFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let scheduler_dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let maintenance_dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let scheduler_flag = scheduler_dropped.clone();
+        let maintenance_flag = maintenance_dropped.clone();
+        let scheduler = tokio::spawn(async move {
+            let _guard = DropFlag(scheduler_flag);
+            std::future::pending::<()>().await;
+        });
+        let maintenance = tokio::spawn(async move {
+            let _guard = DropFlag(maintenance_flag);
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+
+        abort_agent_run_coordination(&scheduler, &maintenance);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), scheduler)
+            .await
+            .expect("scheduler cancellation must settle");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), maintenance)
+            .await
+            .expect("maintenance cancellation must settle");
+        assert!(scheduler_dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(maintenance_dropped.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

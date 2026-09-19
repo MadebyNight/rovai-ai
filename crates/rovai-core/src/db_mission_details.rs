@@ -498,6 +498,13 @@ mod tests {
         database.migrate_camp_message_agent_run_v163().unwrap();
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.60"
+                    && marker.projection_schema_version == 113
+        ));
+        database.migrate_agent_run_notification_v164().unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
             DatabaseContractClassification::Current(_)
         ));
         crate::collaboration::delete_camp_aggregate(database.connection(), camp_id).unwrap();

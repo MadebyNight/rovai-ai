@@ -2,7 +2,7 @@
 document_type: architecture
 authority: desktop-application-update-component-boundary
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Desktop App Updates
@@ -14,7 +14,7 @@ last_updated: 2026-09-18
 | Release packaging pipeline | Owns one version-bound Markdown source, embeds it into every platform update manifest and fails release verification when source and manifest differ. |
 | Electron Main update service | Owns the single snapshot, check source coalescing, timers, release normalization, prompt generations, download/install mutexes and updater degradation. |
 | `electron-updater` adapter | Reads packaged channel configuration, performs provider checks/downloads and synchronously stages the platform installer; it never decides Renderer presentation. |
-| Preload bridge | Exposes the closed App Update v3 API to the current Main Window, forwards typed snapshots and carries the private quit-preparation request; no provider object, installer path or credential crosses the bridge. |
+| Preload bridge | Exposes the closed App Update v4 API to the current Main Window, forwards typed snapshots and carries the private quit-preparation request; no provider object, installer path or credential crosses the bridge. |
 | Renderer update controller | Hydrates with `get`, subscribes once, shares the same snapshot across Shell and About, and reports action-call failures without replacing Main facts. |
 | App Shell prompt/badges | Projects Main-owned prompt generation and actionable release states without reusing Notification Episode authority. |
 | About & Updates | Projects all operation/result states, explicit actions, safe release notes and the narrowly admitted fallback links. |
@@ -130,7 +130,7 @@ updater-unavailable or download-failed states.
 
 ## References
 
-- [App Update v3](../contracts/app-update-v3.md)
+- [App Update v4](../contracts/app-update-v4.md)
 - [Planned Shutdown](planned-shutdown.md)
 - [App Shell navigation](../ui/components/app-shell-navigation.md)
 - [macOS packaging](../development/packaging.md)

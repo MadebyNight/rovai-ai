@@ -1074,7 +1074,8 @@ export function SingleChatPanel({
       }
       const sources: VisibleNotificationSources = { campId,
         conversationId: currentSnapshot?.conversation.id ?? null, surfaceVisible: canObserve,
-        snapshotSequence: 0, messageIds: [], campTurnIds: [...campTurnIds].sort(), approvalIds: [...approvalIds].sort() }
+        snapshotSequence: 0, messageIds: [], campTurnIds: [...campTurnIds].sort(),
+        agentRunIds: [], approvalIds: [...approvalIds].sort() }
       const signature = JSON.stringify(sources)
       if (signature !== lastVisibleSources.current) {
         lastVisibleSources.current = signature

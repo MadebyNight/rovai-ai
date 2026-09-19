@@ -1,4 +1,4 @@
-import type { CampComposerDraftView, ComposerDocument } from '@contracts'
+import type { CampComposerDraftView, CampMessageView, ComposerDocument } from '@contracts'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DraftMutationCoordinator,
@@ -27,6 +27,10 @@ function draft(campId: string, revision: number, text = ''): CampComposerDraftVi
     updatedAt: null,
     expiresAt: null
   }
+}
+
+function message(id: string): CampMessageView {
+  return { id } as CampMessageView
 }
 
 describe('DraftMutationCoordinator', () => {
@@ -112,7 +116,7 @@ describe('DraftMutationCoordinator', () => {
     })
     coordinator.beginEpoch('camp-a', draft('camp-a', 4, 'same'))
 
-    const reply = coordinator.startReply('message-1')
+    const reply = coordinator.startReply(message('message-1'))
     const unchanged = coordinator.saveContent(document('same'))
     await Promise.all([reply, unchanged])
 
@@ -159,7 +163,7 @@ describe('DraftMutationCoordinator', () => {
     coordinator.beginEpoch('camp-a', draft('camp-a', 10, 'local'))
 
     const reload = coordinator.load()
-    const reply = coordinator.startReply('message-1')
+    const reply = coordinator.startReply(message('message-1'))
     await Promise.resolve()
 
     expect(calls).toEqual([{ kind: 'load' }])

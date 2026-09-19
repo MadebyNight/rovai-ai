@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
 model_context_change: true
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Rovai-ai v1.60：Camp 消息与多输入 AgentRun
@@ -44,7 +44,8 @@ ChannelDelivery 继续维护自己的业务状态。
 - 不开放用户业务重试。明确未接受且无副作用风险的同 Run 运输恢复继续保留；accepted/unknown 永不重放。
 - accepted/unknown 在内部保留类型化证据，主界面只显示普通红色失败；旧执行真正隔离前，后继 Delivery 不得 claim。
 - 本地 Principal Composer 消息仅在任何目标尚未 claim、且未进入冻结 Runtime 上下文时允许原文擦除式撤回。
-- 删除持久 Composer Draft、旧未公开 Pending 及其恢复状态；Renderer 当前编辑只存在于当前窗口，发送失败不清空。
+- 删除 Core 持久 Composer Draft、旧未公开 Pending 及其恢复状态；已激活 Camp 的当前编辑由 Desktop
+  按 Camp 本地恢复，发送失败或结果未知不清空。
 - Channel 收敛为异步消息桥；Channel-bound Camp 的 Agent 公开消息默认产生独立、可去重 ChannelDelivery。
 - Automation occurrence 只有 `started` 或 `skipped(overlap)` 两种入口结果，仍通过普通 Delivery claim 创建首个 Run。
 - 普通 batch claim 由单一事件唤醒 Scheduler 负责；Core 启动时检查存量，并以不重置 deadline 的全局 30 秒只读优先
@@ -68,17 +69,18 @@ ChannelDelivery 继续维护自己的业务状态。
 Skill、Migration 与自动化验证已完成，并以 Delivery-first 主链取代旧 public Camp 执行模型。此处记录的是
 仓库实现完成状态，不把未执行的安装包、第三方真实 Runtime 或真实渠道 Smoke 描述为发布资格。
 `main` 的 Mission workspace lifecycle 拥有 Migration 162/schema 112；Delivery-first clean break 因此使用
-Migration 163/schema 113，并显式接纳已运行旧功能分支 162 的精确物理结构作为收敛来源。
+Migration 163/schema 113，并显式接纳已运行旧功能分支 162 的精确物理结构作为收敛来源。AgentRun
+Notification source 兼容扩展使用 Migration 164/schema 114。
 
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.59 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.60 |
-| Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输、渠道/Automation 与事件唤醒调度取舍 |
-| Contracts | 已更新 | [模型上下文变更说明](model-context-change-camp-message-run.md)与当前合同索引已发布 Context、Run Facts、Message Delivery、Camp Read 与 Built-in Transport 新版本 |
-| Architecture | 已更新 | 长期 Architecture、系统图源与生成图已同步 Delivery-first 主链、普通多目标消息和 `RUN_INPUT` |
-| UI | 已更新 | 当前 UI 规范与 Renderer 已同步等待预览、精确 Run Stop、红色失败、撤回与 Renderer-local Composer |
+| Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输、渠道/Automation、事件唤醒调度、本机 Composer 恢复与 AgentRun 通知取舍 |
+| Contracts | 已更新 | [模型上下文变更说明](model-context-change-camp-message-run.md)与当前合同索引已发布 Context、Run Facts、Message Delivery、Camp Read、Built-in Transport、Composer、Notification 与 Planned Shutdown 新版本 |
+| Architecture | 已更新 | 长期 Architecture、系统图源与生成图已同步 Delivery-first 主链、普通多目标消息、`RUN_INPUT`、受监督调度任务、本机 Composer authority 与 AgentRun attention |
+| UI | 已更新 | 当前 UI 规范与 Renderer 已同步等待预览、精确 Run Stop、红色失败、撤回、按 Camp 草稿恢复、continuation、发送前附件与 AgentRun 定位 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类；只改变 Run 输入、运输完整性和终态/隔离调度 |
 | Runtime compatibility | 确认无需更新 | 不改变已发布 Runtime 资格；大结果与新上下文使用独立 smoke 验证，不把本版推导为平台晋级 |
 | Documentation routing | 已更新 | 版本索引、当前 Architecture、Contract 与 Decision 路由均指向已实施的 v1.60 权威 |

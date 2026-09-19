@@ -2,6 +2,7 @@ import { newCommandId } from '../../shared/command-id'
 import type {
   CampComposerDraftView,
   CampComposerReplyRecipient,
+  CampMessageView,
   ComposerDocument,
   MessageQuoteAction
 } from '@contracts'
@@ -13,7 +14,7 @@ export type DraftMutation =
   | { kind: 'save_content'; content: ComposerDocument }
   | { kind: 'add_source_attachment'; file: File }
   | { kind: 'remove_source_attachment'; attachmentId: string }
-  | { kind: 'start_reply'; replyToCampMessageId: string }
+  | { kind: 'start_reply'; message: CampMessageView }
   | { kind: 'cancel_reply' }
   | { kind: 'resolve_reply_recipient'; recipient: CampComposerReplyRecipient }
   | { kind: 'dismiss_continuation'; sourceCampMessageId: string }
@@ -131,10 +132,10 @@ export class DraftMutationCoordinator {
     ))
   }
 
-  startReply(replyToCampMessageId: string): Promise<CampComposerDraftView> {
+  startReply(message: CampMessageView): Promise<CampComposerDraftView> {
     return this.enqueue('start_reply', (current) => this.bindings.mutate(
       current,
-      { kind: 'start_reply', replyToCampMessageId }
+      { kind: 'start_reply', message }
     ))
   }
 

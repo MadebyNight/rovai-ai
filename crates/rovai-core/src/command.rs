@@ -1,9 +1,9 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, io::Write};
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -342,25 +342,61 @@ where
 }
 
 pub fn canonical_json_digest(value: &Value) -> Result<String> {
-    let canonical = canonicalize_json(value.clone());
-    let bytes = serde_json::to_vec(&canonical).context("failed to serialize canonical JSON")?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    canonical_json_digest_with(|writer| write_canonical_json(writer, value))
 }
 
-fn canonicalize_json(value: Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.into_iter().map(canonicalize_json).collect()),
-        Value::Object(values) => {
-            let mut entries = values.into_iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            let mut canonical = Map::new();
-            for (key, value) in entries {
-                canonical.insert(key, canonicalize_json(value));
-            }
-            Value::Object(canonical)
+pub(crate) fn canonical_json_digest_with(
+    write: impl FnOnce(&mut dyn Write) -> Result<()>,
+) -> Result<String> {
+    struct DigestWriter<'a>(&'a mut Sha256);
+
+    impl Write for DigestWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
         }
-        scalar => scalar,
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
+
+    let mut digest = Sha256::new();
+    write(&mut DigestWriter(&mut digest))?;
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+pub(crate) fn write_canonical_json(writer: &mut dyn Write, value: &Value) -> Result<()> {
+    match value {
+        Value::Array(values) => {
+            writer.write_all(b"[")?;
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    writer.write_all(b",")?;
+                }
+                write_canonical_json(writer, value)?;
+            }
+            writer.write_all(b"]")?;
+        }
+        Value::Object(values) => {
+            writer.write_all(b"{")?;
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    writer.write_all(b",")?;
+                }
+                serde_json::to_writer(&mut *writer, key)
+                    .context("failed to serialize canonical JSON object key")?;
+                writer.write_all(b":")?;
+                write_canonical_json(writer, value)?;
+            }
+            writer.write_all(b"}")?;
+        }
+        scalar => serde_json::to_writer(writer, scalar)
+            .context("failed to serialize canonical JSON scalar")?,
+    }
+    Ok(())
 }
 
 fn replay_or_conflict<C>(

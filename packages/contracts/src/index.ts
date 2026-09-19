@@ -2463,6 +2463,7 @@ export type NotificationActionKind =
   | 'open_approval'
   | 'open_camp_message'
   | 'open_camp_turn'
+  | 'open_agent_run'
   | 'open_single_chat'
   | 'open_camp'
   | 'acknowledge_only'
@@ -2495,6 +2496,7 @@ export interface NotificationActionView {
   available: boolean
   campId: string
   campTurnId: string | null
+  agentRunId: string | null
   messageId: string | null
   approvalId: string | null
   acknowledgementId: string | null
@@ -2514,6 +2516,7 @@ export interface NotificationEpisodeView {
     channelSource?: CampChannelSource | null
   }
   campTurnId: string | null
+  agentRunId: string | null
   primarySemantic: NotificationSemantic
   unread: boolean
   resolved: boolean
@@ -2530,7 +2533,7 @@ export interface NotificationEpisodeView {
 }
 
 export interface NotificationEpisodeInbox {
-  schemaVersion: 7
+  schemaVersion: 8
   throughChangeSequence: number
   unreadCount: number
   items: NotificationEpisodeView[]
@@ -2581,7 +2584,7 @@ export type NotificationHeadsUpInvalidation =
   }
 
 export interface NotificationEpisodeChangeBatch {
-  schemaVersion: 7
+  schemaVersion: 8
   requestedAfterChangeSequence: number
   nextChangeSequence: number
   throughChangeSequence: number
@@ -3966,6 +3969,11 @@ export interface RovaiApi {
   composerAttachments: {
     prepare(campId: string, expectedRevision: number, file: File): Promise<LocalAttachmentSourceView>
     preview(locator: LocalAttachmentOwnerLocator): Promise<AttachmentPreviewResult>
+    /** Desktop-local authority restore; absent on remote/browser adapters. */
+    restore?(campId: string, attachments: LocalAttachmentSourceView[]): Promise<LocalAttachmentSourceView[]>
+    /** Releases Desktop-local authority after remove, send, or Camp deletion. */
+    discard?(campId: string, attachmentRefIds?: string[]): Promise<void>
+    location?(locator: LocalAttachmentOwnerLocator): Promise<string | null>
   }
   missionAttachments: MissionAttachmentsApi
   singleChatAttachments: {

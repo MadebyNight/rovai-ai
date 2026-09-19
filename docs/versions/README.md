@@ -2,7 +2,7 @@
 document_type: versions-index
 authority: version-lifecycle
 current_version: v1.60
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Rovai-ai 版本记录

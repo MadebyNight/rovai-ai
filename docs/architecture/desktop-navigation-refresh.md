@@ -45,7 +45,7 @@ mutation 在 `Core::handle` 成功返回、数据库 guard 释放后通知；若
 则在事务提交和 guard 释放后、开始该收尾前立即通知，不能因后置清理失败丢失已成立的 mutation。Runtime
 start、cancel、cleanup/isolation 收口与 terminal 在对应状态写入成功后通知。被拒绝的命令不发失效通知。
 
-public Composer 是 Renderer-local，逐字输入、未发送引用与附件操作不改变 Core Navigation。
+Active public Composer 是 Desktop-local，逐字输入、未发送引用与附件操作不改变 Core Navigation。
 Pending Camp 不因本地输入成为导航或恢复目标。Camp create/rename/delete、用户消息发布/激活、
 Camp viewed、Delivery claim/settlement 以及 Run started/cancelled/terminal 都必须最终进入同一失效入口。
 

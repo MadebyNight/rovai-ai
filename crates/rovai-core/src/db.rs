@@ -284,7 +284,7 @@ impl MainCampMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.60";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 113;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 114;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -722,6 +722,7 @@ struct CurrentMigrationState {
     v161: bool,
     v162: bool,
     v163: bool,
+    v164: bool,
 }
 
 impl CurrentMigrationState {
@@ -743,11 +744,19 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v164 {
+            let mut previous = *self;
+            previous.v164 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v163
+                && previous.admits("v1.60", 113, classifier);
+        }
         if self.v163 {
             let mut previous = *self;
             previous.v163 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
-                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            return contract == "v1.60"
+                && schema == 113
                 && self.v162
                 && previous.admits("v1.59", 112, classifier);
         }
@@ -2988,6 +2997,8 @@ pub(crate) fn classify_database_contract(
     let dsh_schema_matches = migrations.v157 && dsh_runtime_v157_schema_matches(connection)?;
     let camp_message_agent_run_schema_matches = (migrations.v162 || migrations.v163)
         && camp_message_agent_run_v163_schema_matches(connection)?;
+    let agent_run_notification_schema_matches =
+        migrations.v164 && agent_run_notification_v164_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
         &marker,
         migrations,
@@ -3054,6 +3065,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v163
             && (!mission_workspace_lifecycle_schema_matches
                 || !camp_message_agent_run_schema_matches))
+        || (migrations.v164 && !agent_run_notification_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3268,6 +3280,49 @@ fn camp_message_agent_run_v163_schema_matches(connection: &Connection) -> rusqli
             .contains("CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))")
         && context_guards == 3
         && indexes == 4)
+}
+
+fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let columns: i64 = connection.query_row(
+        r#"
+        SELECT
+            EXISTS(SELECT 1 FROM pragma_table_info('notification_episode')
+                   WHERE name = 'agent_run_id')
+          + EXISTS(SELECT 1 FROM pragma_table_info('notification_occurrence')
+                   WHERE name = 'agent_run_id')
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    let triggers: i64 = connection.query_row(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'trigger' AND name IN (
+            'notification_agent_run_terminal_insert',
+            'notification_agent_run_terminal_update'
+        )
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    let occurrence_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master \
+         WHERE type = 'table' AND name = 'notification_occurrence'",
+        [],
+        |row| row.get(0),
+    )?;
+    let satisfaction_trigger: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master \
+         WHERE type = 'trigger' AND name = 'notification_completion_satisfied_by_user_turn'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(columns == 2
+        && triggers == 2
+        && occurrence_schema.contains("'agent_run'")
+        && occurrence_schema.contains("agent_run_id = source_id")
+        && satisfaction_trigger.contains("occurrence.source_type = 'agent_run'")
+        && satisfaction_trigger.contains("agent_run.anchor_message_id <> NEW.id"))
 }
 
 fn private_client_draft_v154_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -4070,7 +4125,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 160),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 161),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 162),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 163)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 163),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 164)
         "#,
         [],
         |row| {
@@ -4169,6 +4225,7 @@ fn load_current_migration_state(
                 v161: row.get(91)?,
                 v162: row.get(92)?,
                 v163: row.get(93)?,
+                v164: row.get(94)?,
             })
         },
     )
@@ -7147,6 +7204,9 @@ impl Database {
             if !self.schema_migration_applied(163)? {
                 migration_step!("migration_163", self.migrate_camp_message_agent_run_v163());
             }
+            if !self.schema_migration_applied(164)? {
+                migration_step!("migration_164", self.migrate_agent_run_notification_v164());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7833,6 +7893,9 @@ impl Database {
         }
         if !self.schema_migration_applied(163)? {
             migration_step!("migration_163", self.migrate_camp_message_agent_run_v163());
+        }
+        if !self.schema_migration_applied(164)? {
+            migration_step!("migration_164", self.migrate_agent_run_notification_v164());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -24572,7 +24635,12 @@ impl Database {
                 )?;
                 let classification = classify_database_contract(&tx)?;
                 anyhow::ensure!(
-                    matches!(&classification, DatabaseContractClassification::Current(_)),
+                    matches!(
+                        &classification,
+                        DatabaseContractClassification::SupportedMigrationSource(marker)
+                            if marker.contract_version == "v1.60"
+                                && marker.projection_schema_version == 113
+                    ),
                     "legacy Delivery-first v162 convergence failed schema admission: \
                      classification={classification:?}, mission_workspace={}, delivery_first={}, context={}",
                     mission_details::v162_schema_matches(&tx)?,
@@ -25435,6 +25503,302 @@ impl Database {
                     "mission_start",
                     "channel_turn_request",
                 ],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
+        result?;
+        foreign_keys_result?;
+        Ok(())
+    }
+
+    fn migrate_agent_run_notification_v164(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.60"
+                            && marker.projection_schema_version == 113
+                ),
+                "AgentRun Notification migration requires the exact v1.60/schema 113 source"
+            );
+
+            let episode_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_episode'",
+                [],
+                |row| row.get(0),
+            )?;
+            let episode_objects = migration_schema_objects(&tx, "notification_episode", true)?;
+            let episode_v164 = episode_schema
+                .replace(
+                    "CREATE TABLE \"notification_episode\"",
+                    "CREATE TABLE notification_episode_v164",
+                )
+                .replace(
+                    "CREATE TABLE notification_episode (",
+                    "CREATE TABLE notification_episode_v164 (",
+                )
+                .replacen(
+                    "camp_turn_id TEXT,\n                source_message_id TEXT,",
+                    "camp_turn_id TEXT,\n                agent_run_id TEXT,\n                source_message_id TEXT,",
+                    1,
+                )
+                .replacen(
+                    "(kind = 'collaboration' AND camp_turn_id IS NOT NULL\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+                    "(kind = 'collaboration'\n                        AND ((camp_turn_id IS NOT NULL) <> (agent_run_id IS NOT NULL))\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+                    1,
+                )
+                .replacen(
+                    "(kind = 'message' AND camp_turn_id IS NULL\n                        AND source_message_id IS NOT NULL AND approval_generation IS NULL)",
+                    "(kind = 'message' AND camp_turn_id IS NULL AND agent_run_id IS NULL\n                        AND source_message_id IS NOT NULL AND approval_generation IS NULL)",
+                    1,
+                )
+                .replacen(
+                    "(kind = 'approval' AND camp_turn_id IS NULL\n                        AND source_message_id IS NULL AND approval_generation >= 1)",
+                    "(kind = 'approval' AND camp_turn_id IS NULL AND agent_run_id IS NULL\n                        AND source_message_id IS NULL AND approval_generation >= 1)",
+                    1,
+                );
+            anyhow::ensure!(
+                episode_v164.contains("CREATE TABLE notification_episode_v164")
+                    && episode_v164.contains("agent_run_id TEXT")
+                    && episode_v164.contains("(agent_run_id IS NOT NULL)"),
+                "v164 could not extend Notification Episode AgentRun identity"
+            );
+            tx.execute_batch(&episode_v164)?;
+            let episode_columns = table_columns(&tx, "notification_episode")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &episode_objects)?;
+            tx.execute_batch(&format!(
+                "INSERT INTO notification_episode_v164({episode_columns}) \
+                 SELECT {episode_columns} FROM notification_episode; \
+                 DROP TABLE notification_episode; \
+                 ALTER TABLE notification_episode_v164 RENAME TO notification_episode;"
+            ))?;
+            restore_rebuild_schema_objects(&tx, "notification_episode", episode_objects)?;
+
+            let occurrence_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_occurrence'",
+                [],
+                |row| row.get(0),
+            )?;
+            let occurrence_objects =
+                migration_schema_objects(&tx, "notification_occurrence", true)?;
+            let occurrence_v164 = occurrence_schema
+                .replace(
+                    "CREATE TABLE \"notification_occurrence\"",
+                    "CREATE TABLE notification_occurrence_v164",
+                )
+                .replace(
+                    "CREATE TABLE notification_occurrence (",
+                    "CREATE TABLE notification_occurrence_v164 (",
+                )
+                .replacen(
+                    "'approval', 'camp_message', 'camp_turn'",
+                    "'approval', 'camp_message', 'camp_turn', 'agent_run'",
+                    1,
+                )
+                .replacen(
+                    "camp_turn_id TEXT,\n                source_message_id TEXT,",
+                    "camp_turn_id TEXT,\n                agent_run_id TEXT,\n                source_message_id TEXT,",
+                    1,
+                )
+                .replacen(
+                    "(semantic = 'user_mention' AND source_type = 'camp_message'\n                        AND source_message_id = source_id AND approval_id IS NULL)",
+                    "(semantic = 'user_mention' AND source_type = 'camp_message'\n                        AND source_message_id = source_id AND approval_id IS NULL\n                        AND agent_run_id IS NULL)",
+                    1,
+                )
+                .replacen(
+                    "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_type = 'camp_turn' AND camp_turn_id = source_id\n                        AND source_message_id IS NULL AND approval_id IS NULL)",
+                    "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_message_id IS NULL AND approval_id IS NULL\n                        AND ((source_type = 'camp_turn' AND camp_turn_id = source_id\n                              AND agent_run_id IS NULL)\n                          OR (source_type = 'agent_run' AND agent_run_id = source_id\n                              AND camp_turn_id IS NULL)))",
+                    1,
+                )
+                .replacen(
+                    "(semantic = 'approval_pending' AND source_type = 'approval'\n                        AND approval_id = source_id AND source_message_id IS NULL)",
+                    "(semantic = 'approval_pending' AND source_type = 'approval'\n                        AND approval_id = source_id AND source_message_id IS NULL\n                        AND agent_run_id IS NULL)",
+                    1,
+                );
+            anyhow::ensure!(
+                occurrence_v164.contains("CREATE TABLE notification_occurrence_v164")
+                    && occurrence_v164.contains("'agent_run'")
+                    && occurrence_v164.contains("agent_run_id = source_id"),
+                "v164 could not extend Notification Occurrence AgentRun source"
+            );
+            tx.execute_batch(&occurrence_v164)?;
+            let occurrence_columns = table_columns(&tx, "notification_occurrence")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &occurrence_objects)?;
+            tx.execute_batch(&format!(
+                "INSERT INTO notification_occurrence_v164({occurrence_columns}) \
+                 SELECT {occurrence_columns} FROM notification_occurrence; \
+                 DROP TABLE notification_occurrence; \
+                 ALTER TABLE notification_occurrence_v164 RENAME TO notification_occurrence;"
+            ))?;
+            restore_rebuild_schema_objects(&tx, "notification_occurrence", occurrence_objects)?;
+
+            tx.execute_batch(
+                r#"
+                CREATE TRIGGER notification_agent_run_terminal_insert
+                AFTER INSERT ON agent_run
+                WHEN NEW.invocation_kind = 'batch'
+                  AND NEW.camp_id IS NOT NULL
+                  AND NEW.camp_turn_id IS NULL
+                  AND NEW.status IN ('succeeded', 'failed', 'cancelled')
+                  AND NOT (NEW.status = 'cancelled' AND NEW.cancel_requested_at IS NOT NULL)
+                BEGIN
+                    UPDATE notification_change_clock
+                    SET current_sequence = current_sequence + 1 WHERE singleton = 1;
+
+                    INSERT INTO notification_episode(
+                        id, aggregation_key, recipient_user_id, kind, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_generation,
+                        version, attention_revision, created_change_sequence,
+                        last_change_sequence, sort_at, created_at, updated_at
+                    ) VALUES (
+                        lower(hex(randomblob(16))), 'agent-run:local_user:' || NEW.id,
+                        'local_user', 'collaboration', NEW.camp_id, NULL, NEW.id, NULL, NULL,
+                        0, 0,
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at)
+                    ) ON CONFLICT(aggregation_key) DO NOTHING;
+
+                    INSERT INTO notification_occurrence(
+                        id, episode_id, recipient_user_id, semantic,
+                        source_type, source_id, source_revision, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_id,
+                        admitted_episode_version, admitted_attention_revision,
+                        admitted_change_sequence, occurred_at
+                    )
+                    SELECT lower(hex(randomblob(16))), episode.id, 'local_user',
+                           CASE NEW.status WHEN 'succeeded' THEN 'turn_completed'
+                                WHEN 'failed' THEN 'turn_failed' ELSE 'turn_incomplete' END,
+                           'agent_run', NEW.id, NEW.version, NEW.camp_id,
+                           NULL, NEW.id, NULL, NULL, episode.version + 1,
+                           episode.attention_revision + 1,
+                           clock.current_sequence, COALESCE(NEW.ended_at, NEW.updated_at)
+                    FROM notification_episode AS episode
+                    JOIN notification_change_clock AS clock ON clock.singleton = 1
+                    WHERE episode.aggregation_key = 'agent-run:local_user:' || NEW.id
+                    ON CONFLICT(
+                        recipient_user_id, semantic, source_type, source_id, source_revision
+                    ) DO NOTHING;
+                END;
+
+                CREATE TRIGGER notification_agent_run_terminal_update
+                AFTER UPDATE OF status ON agent_run
+                WHEN NEW.invocation_kind = 'batch'
+                  AND NEW.camp_id IS NOT NULL
+                  AND NEW.camp_turn_id IS NULL
+                  AND OLD.status NOT IN ('succeeded', 'failed', 'cancelled')
+                  AND NEW.status IN ('succeeded', 'failed', 'cancelled')
+                  AND NOT (NEW.status = 'cancelled' AND NEW.cancel_requested_at IS NOT NULL)
+                BEGIN
+                    UPDATE notification_change_clock
+                    SET current_sequence = current_sequence + 1 WHERE singleton = 1;
+
+                    INSERT INTO notification_episode(
+                        id, aggregation_key, recipient_user_id, kind, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_generation,
+                        version, attention_revision, created_change_sequence,
+                        last_change_sequence, sort_at, created_at, updated_at
+                    ) VALUES (
+                        lower(hex(randomblob(16))), 'agent-run:local_user:' || NEW.id,
+                        'local_user', 'collaboration', NEW.camp_id, NULL, NEW.id, NULL, NULL,
+                        0, 0,
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at)
+                    ) ON CONFLICT(aggregation_key) DO NOTHING;
+
+                    INSERT INTO notification_occurrence(
+                        id, episode_id, recipient_user_id, semantic,
+                        source_type, source_id, source_revision, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_id,
+                        admitted_episode_version, admitted_attention_revision,
+                        admitted_change_sequence, occurred_at
+                    )
+                    SELECT lower(hex(randomblob(16))), episode.id, 'local_user',
+                           CASE NEW.status WHEN 'succeeded' THEN 'turn_completed'
+                                WHEN 'failed' THEN 'turn_failed' ELSE 'turn_incomplete' END,
+                           'agent_run', NEW.id, NEW.version, NEW.camp_id,
+                           NULL, NEW.id, NULL, NULL, episode.version + 1,
+                           episode.attention_revision + 1,
+                           clock.current_sequence, COALESCE(NEW.ended_at, NEW.updated_at)
+                    FROM notification_episode AS episode
+                    JOIN notification_change_clock AS clock ON clock.singleton = 1
+                    WHERE episode.aggregation_key = 'agent-run:local_user:' || NEW.id
+                    ON CONFLICT(
+                        recipient_user_id, semantic, source_type, source_id, source_revision
+                    ) DO NOTHING;
+                END;
+
+                DROP TRIGGER notification_completion_satisfied_by_user_turn;
+                CREATE TRIGGER notification_completion_satisfied_by_user_turn
+                AFTER INSERT ON camp_message
+                WHEN NEW.author_type = 'user' AND NEW.author_id = 'local_user'
+                BEGIN
+                    UPDATE notification_occurrence_disposition
+                    SET satisfied_at = NEW.created_at, updated_at = NEW.created_at
+                    WHERE satisfied_at IS NULL AND occurrence_id IN (
+                        SELECT occurrence.id
+                        FROM notification_occurrence AS occurrence
+                        LEFT JOIN camp_turn ON camp_turn.id = occurrence.camp_turn_id
+                        LEFT JOIN agent_run ON agent_run.id = occurrence.agent_run_id
+                        WHERE occurrence.camp_id = NEW.camp_id
+                          AND occurrence.semantic = 'turn_completed'
+                          AND occurrence.occurred_at <= NEW.created_at
+                          AND (
+                              (occurrence.source_type = 'camp_turn'
+                               AND NEW.camp_turn_id IS NOT NULL
+                               AND camp_turn.kind <> 'single_chat'
+                               AND occurrence.camp_turn_id <> NEW.camp_turn_id)
+                              OR
+                              (occurrence.source_type = 'agent_run'
+                               AND agent_run.invocation_kind = 'batch'
+                               AND agent_run.anchor_message_id <> NEW.id)
+                          )
+                    );
+                END;
+
+                INSERT INTO schema_migration(version, applied_at)
+                VALUES (164, datetime('now'));
+                UPDATE rovai_data_contract
+                SET projection_schema_version = 114,
+                    reset_reason = NULL, updated_at = datetime('now')
+                WHERE singleton = 1;
+                "#,
+            )?;
+
+            anyhow::ensure!(
+                agent_run_notification_v164_schema_matches(&tx)?,
+                "AgentRun Notification migration did not create the required schema"
+            );
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "AgentRun Notification migration failed current schema admission"
+            );
+            validate_migration_foreign_keys(
+                &tx,
+                &["notification_episode", "notification_occurrence"],
             )?;
             tx.commit()?;
             Ok(())
@@ -30660,7 +31024,148 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v163_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=164)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute(
+            "DELETE FROM notification_episode WHERE agent_run_id IS NOT NULL",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    tx.execute_batch(
+        "DROP TRIGGER notification_agent_run_terminal_insert; \
+         DROP TRIGGER notification_agent_run_terminal_update;",
+    )
+    .unwrap();
+
+    let episode_schema: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_episode'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let episode_objects = migration_schema_objects(&tx, "notification_episode", true).unwrap();
+    let episode_v163 = episode_schema
+        .replace(
+            "CREATE TABLE \"notification_episode\"",
+            "CREATE TABLE notification_episode_v163",
+        )
+        .replace(
+            "CREATE TABLE notification_episode (",
+            "CREATE TABLE notification_episode_v163 (",
+        )
+        .replacen("                agent_run_id TEXT,\n", "", 1)
+        .replacen(
+            "(kind = 'collaboration'\n                        AND ((camp_turn_id IS NOT NULL) <> (agent_run_id IS NOT NULL))\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+            "(kind = 'collaboration' AND camp_turn_id IS NOT NULL\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+            1,
+        )
+        .replacen(" AND agent_run_id IS NULL", "", 2);
+    tx.execute_batch(&episode_v163).unwrap();
+    let episode_columns = table_columns(&tx, "notification_episode_v163")
+        .unwrap()
+        .into_iter()
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    drop_rebuild_triggers(&tx, &episode_objects).unwrap();
+    tx.execute_batch(&format!(
+        "INSERT INTO notification_episode_v163({episode_columns}) \
+         SELECT {episode_columns} FROM notification_episode; \
+         DROP TABLE notification_episode; \
+         ALTER TABLE notification_episode_v163 RENAME TO notification_episode;"
+    ))
+    .unwrap();
+    restore_rebuild_schema_objects(&tx, "notification_episode", episode_objects).unwrap();
+
+    let occurrence_schema: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_occurrence'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let occurrence_objects =
+        migration_schema_objects(&tx, "notification_occurrence", true).unwrap();
+    let occurrence_v163 = occurrence_schema
+        .replace(
+            "CREATE TABLE \"notification_occurrence\"",
+            "CREATE TABLE notification_occurrence_v163",
+        )
+        .replace(
+            "CREATE TABLE notification_occurrence (",
+            "CREATE TABLE notification_occurrence_v163 (",
+        )
+        .replacen("'approval', 'camp_message', 'camp_turn', 'agent_run'", "'approval', 'camp_message', 'camp_turn'", 1)
+        .replacen("                agent_run_id TEXT,\n", "", 1)
+        .replacen("\n                        AND agent_run_id IS NULL", "", 2)
+        .replacen(
+            "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_message_id IS NULL AND approval_id IS NULL\n                        AND ((source_type = 'camp_turn' AND camp_turn_id = source_id\n                              AND agent_run_id IS NULL)\n                          OR (source_type = 'agent_run' AND agent_run_id = source_id\n                              AND camp_turn_id IS NULL)))",
+            "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_type = 'camp_turn' AND camp_turn_id = source_id\n                        AND source_message_id IS NULL AND approval_id IS NULL)",
+            1,
+        );
+    tx.execute_batch(&occurrence_v163).unwrap();
+    let occurrence_columns = table_columns(&tx, "notification_occurrence_v163")
+        .unwrap()
+        .into_iter()
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    drop_rebuild_triggers(&tx, &occurrence_objects).unwrap();
+    tx.execute_batch(&format!(
+        "INSERT INTO notification_occurrence_v163({occurrence_columns}) \
+         SELECT {occurrence_columns} FROM notification_occurrence; \
+         DROP TABLE notification_occurrence; \
+         ALTER TABLE notification_occurrence_v163 RENAME TO notification_occurrence;"
+    ))
+    .unwrap();
+    restore_rebuild_schema_objects(&tx, "notification_occurrence", occurrence_objects).unwrap();
+    tx.execute_batch(
+        r#"
+        DROP TRIGGER notification_completion_satisfied_by_user_turn;
+        CREATE TRIGGER notification_completion_satisfied_by_user_turn
+        AFTER INSERT ON camp_message
+        WHEN NEW.author_type = 'user' AND NEW.author_id = 'local_user'
+          AND NEW.camp_turn_id IS NOT NULL
+        BEGIN
+            UPDATE notification_occurrence_disposition
+            SET satisfied_at = NEW.created_at, updated_at = NEW.created_at
+            WHERE satisfied_at IS NULL AND occurrence_id IN (
+                SELECT occurrence.id FROM notification_occurrence AS occurrence
+                JOIN camp_turn ON camp_turn.id = occurrence.camp_turn_id
+                WHERE occurrence.camp_id = NEW.camp_id
+                  AND occurrence.semantic = 'turn_completed'
+                  AND camp_turn.kind <> 'single_chat'
+                  AND occurrence.camp_turn_id <> NEW.camp_turn_id
+                  AND occurrence.occurred_at <= NEW.created_at
+            );
+        END;
+        DELETE FROM schema_migration WHERE version=164;
+        UPDATE rovai_data_contract SET projection_schema_version=113 WHERE singleton=1;
+        "#,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+}
+
+#[cfg(test)]
 pub(crate) fn downgrade_current_schema_to_v162_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v163_source_for_test(connection);
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=163)",
@@ -34171,6 +34676,7 @@ mod tests {
             Uuid::new_v4()
         ));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v163_source_for_test(database.connection());
         database
             .connection()
             .execute_batch(
@@ -34206,6 +34712,7 @@ mod tests {
 
         assert!(database.schema_migration_applied(163).unwrap());
         assert!(mission_details::v162_schema_matches(database.connection()).unwrap());
+        database.migrate_agent_run_notification_v164().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -34255,6 +34762,7 @@ mod tests {
 
         database.migrate_camp_message_agent_run_v163().unwrap();
         assert!(camp_message_agent_run_v163_schema_matches(database.connection()).unwrap());
+        database.migrate_agent_run_notification_v164().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -34739,6 +35247,7 @@ mod tests {
             v161: version >= 161,
             v162: version >= 162,
             v163: version >= 163,
+            v164: version >= 164,
         }
     }
 
@@ -34887,10 +35396,16 @@ mod tests {
                 162,
             ),
             (
+                "v1.60/schema 113 before AgentRun notifications",
+                CURRENT_DATA_CONTRACT_VERSION,
+                113,
+                163,
+            ),
+            (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                163,
+                164,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -35362,7 +35877,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(162);
+        let current = migration_state_through(164);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -35816,7 +36331,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(163));
+        assert_eq!(state, migration_state_through(164));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -36530,6 +37045,14 @@ mod tests {
         assert!(database.schema_migration_applied(162).unwrap());
         database.migrate_camp_message_agent_run_v163().unwrap();
         assert!(database.schema_migration_applied(163).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.60"
+                    && marker.projection_schema_version == 113
+        ));
+        database.migrate_agent_run_notification_v164().unwrap();
+        assert!(database.schema_migration_applied(164).unwrap());
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)

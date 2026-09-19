@@ -3,7 +3,7 @@ document_type: ui-component
 authority: notification-attention-presentation
 status: accepted
 target_version: cross-version
-last_updated: 2026-09-07
+last_updated: 2026-09-19
 ---
 
 # 应用内提醒与会话未读
@@ -46,8 +46,8 @@ Occurrence。
 
 ## 精确可见确认与错误
 
-会话区只在前台“会话”视图采集当前时间线视口内的 `messageId/campTurnId` 和实际展开可见的 pending
-`approvalId`。Core 只确认已观察 Journal 边界内匹配的 Active Attention；普通打开会话因此可以自然
+会话区只在前台“会话”视图采集当前时间线视口内的 `messageId/campTurnId`、实际展开且进入执行视口的
+`agentRunId` 和可见 pending `approvalId`。Core 只确认已观察 Journal 边界内匹配的 Active Attention；普通打开会话因此可以自然
 读掉已经看到的来源，但屏幕外历史与稍后新到达的来源保持未读。
 
 浮层动作先持久化其 exact acknowledgement，再导航。保存失败保留注意力；保存成功但定位失败不恢复
@@ -62,8 +62,8 @@ Occurrence。
 
 ## References
 
-- [Notification Episode v6](../../contracts/notification-episode-v6.md)
-- [Current User Attention v5](../../contracts/current-user-attention-v5.md)
+- [Notification Episode v7](../../contracts/notification-episode-v7.md)
+- [Current User Attention v6](../../contracts/current-user-attention-v6.md)
 - [App Shell 与统一侧栏](app-shell-navigation.md)
 - [DESIGN.md](../../../DESIGN.md)
 
@@ -72,7 +72,8 @@ Occurrence。
 
 卡片宽 340px，只展示“会话来源 + 一条信息”，正文最多两行。公屏采用含渠道来源的会话名；单聊采用
 “会话名 · 与成员单聊”，优先保留私有来源标识，完整来源可悬停查看。没有重复类型标题、时间或技术页脚。
-本轮完成文案为“本轮已完成”，不推断必然有最终回复。
+本轮完成文案为“本轮已完成”，不推断必然有最终回复。Delivery-first batch AgentRun 使用 exact
+`open_agent_run` 动作打开对应成员的执行记录并定位到该 Run；历史 CampTurn 继续使用 `open_camp_turn`。
 
 公屏与每段单聊分别判断当前阅读区域，当前对话完成不弹，阅读旧消息时用对话内的新回复入口。
 审批 / 失败 / 未完成 / Mention 的精确内容尚不可见时仍弹；不把同 Camp 的另一段单聊当成已读。

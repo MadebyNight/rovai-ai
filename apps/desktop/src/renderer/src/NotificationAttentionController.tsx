@@ -132,11 +132,11 @@ export function filterVisibleNotificationHeadsUp(
     return !sources.some((source) => source.campId === action.campId
       && source.surfaceVisible !== false
       && (source.conversationId ?? null) === (action.singleChat?.conversationId ?? null)
-      && (entry.signal.semantic === 'turn_completed'
-        || (entry.signal.semantic === 'approval_pending' && action.approvalId !== null && source.approvalIds.includes(action.approvalId))
+      && ((entry.signal.semantic === 'approval_pending' && action.approvalId !== null && source.approvalIds.includes(action.approvalId))
         || (entry.signal.semantic === 'user_mention' && action.messageId !== null && source.messageIds.includes(action.messageId))
-        || (['turn_failed', 'turn_incomplete'].includes(entry.signal.semantic)
-          && action.campTurnId !== null && source.campTurnIds.includes(action.campTurnId))))
+        || (['turn_completed', 'turn_failed', 'turn_incomplete'].includes(entry.signal.semantic)
+          && ((action.agentRunId !== null && source.agentRunIds.includes(action.agentRunId))
+            || (action.campTurnId !== null && source.campTurnIds.includes(action.campTurnId))))))
   }
   const entries = current.entries.filter(retain)
   const overflowEntries = current.overflowEntries.filter(retain)
@@ -194,7 +194,7 @@ export async function readNotificationChangePages(
   let candidateCursor = startCursor
   for (let page = 0; page < maximumPages; page += 1) {
     const batch = await requestPage(candidateCursor)
-    if (batch.schemaVersion !== 7) throw new Error('提醒增量合同不兼容。')
+    if (batch.schemaVersion !== 8) throw new Error('提醒增量合同不兼容。')
     if (batch.requestedAfterChangeSequence !== candidateCursor) {
       throw new Error('提醒增量游标边界不一致。')
     }
@@ -248,7 +248,7 @@ type VisibleAcknowledgementIntent = {
   key: string
   request: { commandId: string; command: {
     campId: string; observedThroughChangeSequence: number; visibleMessageIds: string[];
-    visibleCampTurnIds: string[]; visibleApprovalIds: string[]
+    visibleCampTurnIds: string[]; visibleAgentRunIds: string[]; visibleApprovalIds: string[]
   } }
 }
 
@@ -261,11 +261,13 @@ export function visibleAcknowledgementIntent(
 ): VisibleAcknowledgementIntent {
   // Both cursors are global fences, not changes to this Camp's visible sources.
   const key = JSON.stringify({ campId: sources.campId, admittedThrough,
-    messageIds: sources.messageIds, campTurnIds: sources.campTurnIds, approvalIds: sources.approvalIds })
+    messageIds: sources.messageIds, campTurnIds: sources.campTurnIds,
+    agentRunIds: sources.agentRunIds, approvalIds: sources.approvalIds })
   if (previous?.key === key) return previous
   return { key, request: { commandId: newId(), command: {
     campId: sources.campId, observedThroughChangeSequence,
     visibleMessageIds: [...sources.messageIds], visibleCampTurnIds: [...sources.campTurnIds],
+    visibleAgentRunIds: [...sources.agentRunIds],
     visibleApprovalIds: [...sources.approvalIds]
   } } }
 }
@@ -294,6 +296,7 @@ export function NotificationAttentionController({
     snapshotSequence: Math.max(...readingSources.map((source) => source.snapshotSequence)),
     messageIds: [...new Set(readingSources.flatMap((source) => source.messageIds))].sort(),
     campTurnIds: [...new Set(readingSources.flatMap((source) => source.campTurnIds))].sort(),
+    agentRunIds: [...new Set(readingSources.flatMap((source) => source.agentRunIds))].sort(),
     approvalIds: [...new Set(readingSources.flatMap((source) => source.approvalIds))].sort()
   }, [readingSources])
   const [preference, setPreference] = useState<NotificationPreference | null>(null)
@@ -344,7 +347,7 @@ export function NotificationAttentionController({
       'notifications.inbox',
       { filter: 'unread', limit: 1 }
     )
-    if (inbox.schemaVersion !== 7) throw new Error('提醒基线合同不兼容。')
+    if (inbox.schemaVersion !== 8) throw new Error('提醒基线合同不兼容。')
     setHasUnreadAttention(inbox.unreadCount > 0)
     return inbox
   }, [])
@@ -574,6 +577,7 @@ export function NotificationAttentionController({
     ) return undefined
     const sourceCount = visibleSources.messageIds.length
       + visibleSources.campTurnIds.length
+      + visibleSources.agentRunIds.length
       + visibleSources.approvalIds.length
     if (sourceCount === 0) return undefined
     const intent = visibleAcknowledgementIntent(visibleSources,

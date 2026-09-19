@@ -95,7 +95,7 @@ invalidation，因为后一个终态可能在首个 read transaction 开始后�
 Navigation 仍按真实 publication/terminal event 求活动与完成游标；进入聚合前过滤其他事件，避免对维护
 receipt 执行无效 join/group。它和 Camp Open 共用 Core 数据库锁，但不因此把 event_log 变为 Open 的
 业务依赖。可见来源 acknowledge 的去重也不使用全局 cursor 或 Snapshot watermark 作为来源变化，见
-[Notification Episode v6](../contracts/notification-episode-v6.md)。
+[Notification Episode v7](../contracts/notification-episode-v7.md)。
 
 缓存只保存最近的 Camp 业务投影；collection 保持有界，执行详情将实测高度虚拟列表与跨 Camp 保留的有界数据缓存分开。cache hit 可立即
 恢复阅读面，但仍由 high-water refresh 验证；cache miss 不把

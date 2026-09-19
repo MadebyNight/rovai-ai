@@ -2,14 +2,15 @@
 document_type: ui-component-contract
 authority: renderer-camp-workspace
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Camp 会话工作区
 
 ## Public Camp v1.60 当前边界
 
-- 输入内容只存在于当前 Renderer；切 Camp、刷新和退出不持久化或恢复。发送失败保留当前内容，发送成功才清空。
+- 已激活 Camp 的输入内容不进入 Core Draft/Pending；Desktop 按 Camp 保存本机快照，切换、刷新、重建窗口和普通重启后恢复。
+  发送失败或结果未知保留当前内容，确认发送成功才清空已发送快照。
 - 等待阶段展示“等待 · N 条”Delivery 预览，不渲染尚不存在的 queued Run 卡。Scheduler claim 后才出现真实 Run。
 - 执行区“停止”只 CAS 当前精确 Run。没有公屏通用停止、队列暂停/恢复、Camp 全部停止、业务重试或手工放行入口；终态后队列按正常规则继续。
 - accepted/outcome-unknown 对用户显示普通红色失败，不显示“结果未知”产品状态；诊断和 evidence 仍保留内部真实分类。旧执行尚未隔离时，后继消息继续显示等待，不制造必败 Run。
@@ -17,9 +18,10 @@ last_updated: 2026-09-18
 - Channel-bound Camp 的 Agent 公共发言默认外发；没有 `--to-channel` 或 Run 级外发开关。
 
 字段与状态见 [Message Delivery v9](../../contracts/message-delivery-v9.md)、
-[Camp Composer Draft v14](../../contracts/camp-composer-draft-v14.md)和
-[Camp History v7](../../contracts/camp-history-v7.md)。本文件后续仍描述的持久 public Draft、Pending、
-recipient continuation、CampTurn Stop、Gather 或业务重试均为历史交互，不再适用于当前 public Camp。
+[Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)和
+[Camp History v7](../../contracts/camp-history-v7.md)。本文件后续仍描述的 Core-owned public Draft/Pending、
+CampTurn Stop、Gather 或业务重试均为历史交互，不再适用于当前 public Camp；本机草稿与 recipient
+continuation 是当前 Desktop 行为。
 
 ## 成员 Fast 响应模式
 
@@ -103,8 +105,8 @@ Camp open/refresh 仅返回 Run 摘要与 Evidence 总数；可见展开的 Run 
 冷启动恢复与应用内切换的呈现边界不同。Main Window Session 一旦给出恢复目标，全局 StartupGate 必须
 关闭并显示对应一级页面框架；Camp shell 可暂时显示标题区、局部状态与结构占位，但不得伪装成 meaningful
 content，也不得在 `camps.enter` 成功前提交权威 Camp。成功 enter 的 Active Camp 保持 Active；meaningful
-未激活的 Pending Camp 外壳保持 Pending，但 public Composer 不恢复旧未发送草稿。Members 与 Memory 同样在
-自己的内容区域读取，
+未激活的 Pending Camp 外壳保持 Pending。若该 Camp 已有有效 Desktop-local Composer snapshot，则在 Camp
+权威进入后恢复，但本机草稿本身不会激活 Camp 或使其进入导航。Members 与 Memory 同样在自己的内容区域读取，
 不能继续占用全屏“正在恢复上次位置”。失败留在局部 surface 重试；仅明确 `camps.exists === false` 的已删除
 Camp 可以回到 Quick Chat。Notification navigation、恢复位置写入和已读确认要等权威 route commit。
 
@@ -301,7 +303,7 @@ Agent 公共消息继续左对齐，仅正文使用与用户消息相同的雾�
 一层紧凑父引用，作者与摘要同样只占一个可视行，超出显示省略号；点击通过 same-Camp anchor load 定位并
 聚焦原消息。父消息不可用时显示“引用的消息当前不可用”，不落到最近消息。不递归展开祖先、不缩进
 时间线，也不创建私密 thread。失效作者错误和替代成员选择独立展开，不受单行引用规则裁切。领域与字段边界见
-[Camp Composer Draft v14](../../contracts/camp-composer-draft-v14.md)，评审方向见
+[Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)，评审方向见
 [HTML 交互稿](https://github.com/murray17/rovai-ai/blob/0de773a75231038e384c03cd761fea56344a6e4f/docs/prototypes/message-reply-chain/README.md)。
 
 渠道 `external_quote` 复用相同的回复图标、作者与单行摘要，无独立底色或边框；附件名称并入摘要，长内容省略。
@@ -312,34 +314,34 @@ Agent 公共消息继续左对齐，仅正文使用与用户消息相同的雾�
 附件和所有可见 Mention，并让光标继续停在正文开头。有选区、光标不在开头或 IME 正在合成时不得触发该
 快捷行为，仍由结构化编辑器处理正文或原子 Mention。
 
-## Recipient continuation（public Camp 已退役）
-
-以下内容只解释历史 UI。v1.60 public Composer 不持久化 continuation，也不从 reply 或 anchor 推导目标；当前发送只使用显式目标。
+## Recipient continuation
 
 当最近一条已接受 user message 的最终路由恰好是一个非 Lead 成员，且当前 Draft 没有 reply、显式
 Mention、修复或手动接收者修改时，Composer 输入面上方的独立无框路由轨显示“继续发给 @成员”。
 路由轨与输入面共用同一条宽度轨道，但不计入正文编辑区高度。标签不是正文 Mention，也不创建父引用；
-发送成功时 Core 才把对象物化为 canonical Structured Mention。
+确认发送成功时 Desktop 才在下一份空白 Camp-local Draft 中记录该对象，下一次提交前把它物化为普通
+Member recipient，Core 仍只接收和校验普通显式目标。
 
-“已接受”以正式发布到公共会话为准：私有 Pending 入队不改变候选，自动出队发布后与手动发送一样刷新
-空白 Composer 的 Core 路由投影，不等待新一轮执行结束。刷新不得覆盖已输入正文、附件、显式接收者或
-已经冻结来源的 Draft；迟到的读取结果也不得覆盖其间开始的编辑或另一个 Camp。
+“已接受”以正式发布到公共会话为准，不等待新一轮执行结束。候选来自该条本地用户消息唯一、显式、
+非 Lead 的最终接收者，不取最后发言 Agent，也不从 reply 或 anchor 推导。恢复不得覆盖另一个 Camp，
+成员状态变化要在显示和发送前重新校验。
 
 标签与默认 Lead 文案占用同一行。标签出现时不显示默认文案；显式 Member Mention、多人 Mention、
 `@所有队员` 和 reply 出现时两者都隐藏。点击标签的关闭按钮只取消当前来源延续并恢复
-“默认由队长 @{name} 接收”；同一 source 在导航、重载或重新进入 Camp 后不得复现。
+“默认由队长 @{name} 接收”；该 dismiss 写回 Camp-local snapshot，同一 source 在导航、重载或重新进入
+Camp 后不得复现。
 
 默认接收人与 continuation 均将 `@姓名` 用同一 `--mention-ink` 与字重突出；界面角色名称使用“队长”。
 默认接收人提示只表达当前路由，不向正文插入 Mention。
 
-reply 比 continuation 优先。回复 Agent 后取消引用，自动加入的 Mention 保留，因此延续不恢复；回复用户
-消息未产生 Mention 且用户未改址时，取消可恢复此前只被隐藏的标签。用户主动改变过接收者后，即使再删光
-Mention，本 Draft 也只回到默认 Lead，不能让路由控件反复出现。
+reply、显式 Member Mention、多人 Mention 和 `@所有队员` 都比 continuation 优先。取消 reply 后若用户尚未
+显式改址，可以恢复此前只被隐藏的 continuation；用户主动改址后，即使再删光 Mention，本 Draft 也只回到
+默认 Lead，不能让路由控件反复出现。
 
 标签出现后对象在空白 Draft 失效时，标签消失并持久抑制该来源；正文或附件已经存在时，保留全部 Draft，
 展开“原接收者当前不可接收，请选择其他成员”，禁用发送并把焦点交给第一个有效替代选择。不得隐藏错误、
 自动插入失效 Mention 或改投 Lead。字段和竞态边界见
-[Camp Composer Draft v13（历史）](../../contracts/camp-composer-draft-v13.md)，交互探索见
+[Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)，交互探索见
 [延续路由原型](https://github.com/murray17/rovai-ai/blob/0de773a75231038e384c03cd761fea56344a6e4f/docs/prototypes/composer-continuation-routing/index.html)。
 
 ## Camp 内单聊
@@ -823,13 +825,14 @@ Header、Task 卡、时间线和 Composer 不增加 Run-local 入口。accepted/
 - Approval 与 Runtime Recovery 继续位于 Composer 上方，宽度随会话列变化；关键说明不截断，操作可换行。
   较长审批内容在 Dock 内滚动，不能因为文件区变宽而移入详情浮层或消失。
 
-## Camp Composer（历史持久 Draft 规则已退役）
+## Camp Composer
 
-本节未迁移的 Draft/Pending/leave-guard 细节只解释历史实现；public Camp 当前以本文开头的 Renderer-local 边界为准。
+Core Draft/Pending/revision/lease 规则已退役；public Camp 当前以 Desktop-local、按 Camp 隔离的唯一 snapshot
+为准，不建立跨客户端合并或恢复列表。
 
 Composer 与消息轨道共享中心轴但拥有独立宽度；`.composer-box` 与 `.composer-route-rail` 必须同宽、
 居中、同轴，Inspector 显隐不得改变这些关系。发送、Stop、Approval Dock、
-附件、Skill 候选、Mention、reply intent 和 continuation intent 都使用同一 Core-owned Draft；任何浮层
+附件、Skill 候选、Mention、reply intent 和 continuation intent 都使用同一 Camp-local Draft；任何浮层
 都不能建立第二份草稿真源。回复条位于附件队列之上、正文编辑器之内，并与 Composer 共用开放工作面，
 不创建 focus trap。鼠标点击 Composer 任意位置都不增加编辑器内层描边；键盘进入保留输入光标，不增加局部焦点框或光晕。
 
@@ -837,16 +840,16 @@ Composer 与消息轨道共享中心轴但拥有独立宽度；`.composer-box` �
 ready 后原位显示默认 Lead 或 continuation。显式 Mention、reply 或错误状态不显示路由时保留空白行，
 避免路由加载或显隐挤动会话内容。占位不提前声明接收者，也不提前启用编辑或发送。
 
-新建会话成功后的首次打开，将同一 Camp 的 Core Draft 读取与 Open 投影并行准备，在首次绘制前一次性交给
-Draft Coordinator，因此直接呈现已就绪的默认接收人，不重复读取或闪现模糊占位。该交接不缓存供后续导航复用；
-普通重新进入仍读取当前草稿。读取失败继续走 loading/error 与重试流程，不能用空时间线推定 revision-zero Draft。
+新建会话成功后的首次打开，把该 Camp 的本地 snapshot 与 Open 投影并行准备，在首次绘制前一次性交给
+Draft Coordinator，因此直接呈现已恢复内容或就绪的默认接收人。普通重新进入读取相同 Camp-local snapshot；
+读取失败继续走 loading/error 与重试流程，不能用空时间线推定空 Draft。
 
 Draft 首次读取只有 loading、ready 和 error。loading 与 error 时正文、附件、Reply/Continuation 和发送不可操作；
 error 在 Composer 上方原位显示“草稿无法加载”、具体错误与“重新加载草稿”，不能渲染可编辑的 revision-zero 空
-Draft。发送和路由 mutation 在第一个异步等待前同步禁用编辑器；Core 路由 mutation 改变正文时在解除禁用前回写
-Lexical。发送失败保留正文并恢复交互，成功则读取下一 Draft 后清空/替换。任何普通导航真正卸载或替换当前 Camp
-Composer 前都使用同一 leave guard：先禁用当前 Composer，等待附件与 Draft queue 并 await flush；失败留在当前
-Camp、显示保存错误并恢复交互。打开新会话 Dialog、展开或选择 Project 等未卸载 Composer 的动作不伪装成已离开。
+Draft。发送和路由 mutation 在第一个异步等待前同步禁用编辑器；本地路由 mutation 改变正文时在解除禁用前回写
+Lexical。发送失败保留正文并恢复交互，成功则以空 Draft/continuation 替换。导航或卸载前的同步本地保存失败时，
+留在当前 Camp、显示保存错误并恢复交互；打开新会话 Dialog、展开或选择 Project 等未卸载 Composer 的动作不
+伪装成已离开。附件预览、打开与 reveal 由 Main 的 Camp+attachment authority 重验，不依赖 Core Draft locator。
 
 Composer 为空时根据当前用户可见的 Camp 会话/任务时间线选择输入提示：没有有效历史时显示
 “集结队伍，写下这次冒险的目标…”；已有历史时显示
@@ -898,7 +901,7 @@ Message Mention 通知导航必须以 `campId + sourceMessageId` 加载和定位
 长名称必须省略且可取得完整名称。拖放命中、反馈和卡片合同见
 [会话区文件与文件夹拖放](conversation-drop-zone.md)，领域边界见
 [Camp Attachment v9](../../contracts/camp-attachment-v9.md)，发送边界见
-[Camp Composer Draft v14](../../contracts/camp-composer-draft-v14.md)。
+[Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)。
 
 准备区固定使用 D 档：普通文件项高 48px、约 11px 圆角并始终显示浅边框，采用用户侧中性图形、文件名和
 独立格式标签，不显示大小；图片是 48×48px 圆角缩略块，不显示文件名。两者共处一条不换行的附件带，删除
@@ -986,14 +989,14 @@ Mobile 的执行标签由用户主动打开；发送或排队后发布 Run 不�
 不使用等宽字体、星期或 `DAY N`。消息时间戳、详情入口、消息、任务卡片、文件变化卡片和 Composer 保持既有呈现。
 
 Camp Header 显示会话定位、待审批摘要和详情直接入口；文件 Tabs 占据独立文件列。不增加 Stop、分享或 `•••`。主动退出、
-重启或更新不持久保存 public Composer；Renderer 可以在进入关闭前提供轻量未发送内容提醒。收到
+重启或更新保留已激活 Camp 的 Desktop-local Composer snapshot，并在进入关闭前收口已经开始的本地输入操作。收到
 `runtime.state = shutting_down` 后才阻止全局新交互；400ms 内完成则直接
 退出，超过门槛才显示无操作按钮的 modal 关闭等待面。
 标题为“正在安全退出”，正文说明正在保存本地状态并关闭后台服务，并以条件文案说明尚未完成的 AgentRun
 会一并取消。关闭开始后不再刷新 Camp 投影，取消结算产生的晚到请求拒绝也不显示为错误横幅或 Toast。
 业务事务将所有目标 Run 结算为已取消，Input/Action 不确定证据留在底层审计并继续进入 shutdown report，
 但不产生公共“外部效果待确认”。精确 AgentRun Stop 显示“已取消”。精确边界见
-[Planned Shutdown v7](../../contracts/planned-shutdown-v7.md)。
+[Planned Shutdown v8](../../contracts/planned-shutdown-v8.md)。
 
 ## Theme, keyboard and failure states
 

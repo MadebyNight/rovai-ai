@@ -2,14 +2,14 @@
 document_type: architecture
 architecture: planned-shutdown
 authority: planned-core-lifecycle-and-cancel-all-settlement
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Planned Shutdown
 
 本文组合主动退出、重启和更新时的 Core 生命周期结构。当前产品定义是：退出 Rovai 即取消所有非终态
 AgentRun，完成本地收口，再结束进程。精确 wire、字段、幂等和 deadline 由
-[Planned Shutdown v7](../contracts/planned-shutdown-v7.md)拥有；Runtime terminal 与未知外部效果边界由
+[Planned Shutdown v8](../contracts/planned-shutdown-v8.md)拥有；Runtime terminal 与未知外部效果边界由
 [Runtime 恢复与关闭不变量](foundational-invariants.md#runtime-recovery-shutdown)拥有。没有 durable shutdown
 cycle 的异常崩溃、强杀、断电继续由 [AgentRun Recovery](agent-run-recovery.md)处理。
 
@@ -81,6 +81,10 @@ planned_shutdown_cancelled 原因，不冒充新 protocol 3 request。业务事�
 不为新执行写 CampTurn Stop intent；历史 CampTurn 仅保留原审计与渠道收口事实。
 未知 Action/Input、历史输出和外部效果证据不删除，terminal_resolution_source 不伪造为 Runtime terminal。
 
+普通 batch Scheduler 与保留旧 500ms 职责的 maintenance 是 `run_core` 直接拥有的 sibling task。关闭监督器
+分别发出信号并等待两者；launch handoff 超时时也同时 abort 并等待，二者都 quiesced 才能通过 writer fence。
+因此父调度器被强制取消不会留下 detached maintenance 或仍占用 launch permit 的慢 preflight。
+
 ## 5. Startup compensation
 
 Core 在普通 AgentRun recovery 前按 request 顺序处理 pending cycle：v3 使用 cancel-all transaction 并补齐
@@ -117,17 +121,17 @@ persist durable cancel-all intent and settle business obligations
 Electron Main 是唯一 shutdown caller。第一次可控 quit 在 Renderer 仍存活时由既有 `AppQuitCoordinator` 阻止并冻结
 reason；Windows/Linux 主窗口关闭同样在窗口销毁前进入该入口。Main 先通过私有一次性响应通道请求 Renderer 准备退出，
 Renderer 只复用匹配 active Camp 的本地 preparation，等待已经开始的附件、引用、发送和 Lexical flush 操作完成。
-它不把 public Composer 写入 Core，也不形成 Draft 恢复承诺。成功后 Main 才停止应用服务、禁止 Core 自动重启、
+它不把 public Composer 写入 Core；已完成的本机 Camp-local snapshot 由 Composer 自己拥有。成功后 Main 才停止应用服务、禁止 Core 自动重启、
 发送一次 v3 request，并等待 report 与 child 真实 exit；重复 quit 不创建第二轮准备或 drain。
 
 macOS 独立关闭主窗口（红色关闭 / Cmd+W）也在 Renderer 销毁前等待同一 preparation，成功后只恢复该窗口的原生
 close，不进入服务 drain、Core shutdown 或 App exit；关闭窗口不取消 AgentRun/Runtime。失败保留窗口并允许重试。
 关窗与 Cmd+Q 重叠时共享该窗口正在进行的 preparation，只有 quit caller 执行 Planned Shutdown。具体关窗语义见
-[Camp Composer Draft v14](../contracts/camp-composer-draft-v14.md)。
+[Camp Composer Draft v15](../contracts/camp-composer-draft-v15.md)。
 
 Renderer 准备失败或响应通道失败时，本次退出终止：不停止服务、不调用 `core.shutdown()`、不执行 `app.exit()`；当前
-Camp、Lexical 内容和交互仍留在本窗口，下一次 quit 可重新尝试。没有存活且已加载的 Renderer 时不存在内存 Composer
-authority，因此准备为 no-op。退出一旦继续，未发送 public Composer 内容随 Renderer 销毁且不恢复。外层 watchdog
+Camp、Lexical 内容和交互仍留在本窗口，下一次 quit 可重新尝试。没有存活且已加载的 Renderer 时 preparation 为
+no-op；已持久的 Camp-local snapshot 不依赖该响应继续存在。外层 watchdog
 仍只负责 Core 已开始关闭后完全失去响应的最终强制结束，不能伪造领域 terminal。
 
 Renderer 只在准备成功、Core shutdown 已开始后消费 `runtime.state = shutting_down`。它立即建立覆盖当前页面的交互 guard；若关闭在 400ms 内

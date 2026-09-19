@@ -89,7 +89,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Identity v1（当前）](camp-identity-v1.md) | 唯一 `rvcamp_` UUIDv7/Crockford 主键、strict boundary、SQLite/JSON/path 使用与 Native Session identity 分离 |
 | [Desktop Runtime Availability v2（当前）](desktop-runtime-availability-v2.md) | 严格 lease/ticket 后原位逐版本事务、receipt 续跑、旧 manifest 恢复、独立瞬时重试与统一会话启动反馈；generation/capability 不变 |
 | [Desktop Runtime Availability v1（历史）](desktop-runtime-availability-v1.md) | Bootstrap/Full Core、SQLite 准入、copy/switch 与结构化 failure；旧 manifest 恢复仍保留，普通升级执行策略由 v2 替代 |
-| [First-run Onboarding v4（当前）](first-run-onboarding-v4.md) | v3 admission/provisioning 不变；第四页 starter 改为 Renderer-local 输入，不持久 public Draft |
+| [First-run Onboarding v5（当前）](first-run-onboarding-v5.md) | v4 admission/provisioning 不变；Active Camp starter 进入可恢复的 Desktop-local Composer snapshot |
+| [First-run Onboarding v4（历史）](first-run-onboarding-v4.md) | v3 admission/provisioning 不变；第四页 starter 改为 mounted Renderer 输入，不持久 public Draft |
 | [First-run Onboarding v3（历史）](first-run-onboarding-v3.md) | v2 schema/flow 不变；首次安装改用 Full Core authority origin，损坏偏好只在内存降级且保留原文件 |
 | [First-run Onboarding v2（历史）](first-run-onboarding-v2.md) | v1 admission/provisioning 不变；schema 2 增加无可用 Runtime 时无产品副作用的 `runtime_deferred` 终态；其 pre-Core 文件存在性 admission 已由 v3 替代 |
 | [First-run Onboarding v1（历史）](first-run-onboarding-v1.md) | Desktop 首次安装判定、三页 mandatory 状态、幂等 provisioning、`初次集结` 与第四页 Draft-only 入口；不允许无 Runtime 完成 |
@@ -306,13 +307,15 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Message Send v5 (historical)](camp-message-send-v5.md) | v4 Core 效果与 wire 不变；收窄 `mentionUser` / `--to-user` 的消息局部使用边界，但正文不解析显示名 alias |
 | [Camp Message Send v4 (historical)](camp-message-send-v4.md) | v3 显式 Agent 寻址/caller return 加初版 `--to-user`、Structured Current User Mention 与原子通知 |
 | [Camp Message Send v4 Errata](camp-message-send-v4-errata.md) | 历史 v4 Current User Attention 生命周期与 locator-present exact verification 勘误；其修正已由 v5 继承 |
-| [Notification Episode v6（当前）](notification-episode-v6.md) | Schema 7；精确单聊来源与导航、当前阅读区抑制、单卡队列和剩余时间暂停 |
+| [Notification Episode v7（当前）](notification-episode-v7.md) | Schema 8；batch AgentRun 精确来源、导航与可见确认；历史 CampTurn 继续兼容 |
+| [Notification Episode v6（历史）](notification-episode-v6.md) | Schema 7；精确单聊来源与导航、当前阅读区抑制、单卡队列和剩余时间暂停 |
 | [Notification Episode v5（历史）](notification-episode-v5.md) | v4 生命周期不变；camp 增加只读 channelSource，schema 6 与原始 title 不变 |
 | [Notification Episode v4（历史）](notification-episode-v4.md) | v3 精确 signal 生命周期加会话可见来源的有界批量确认与即时角标刷新 |
 | [Notification Episode v3 (historical)](notification-episode-v3.md) | v2 精确 signal 加 Journal acknowledgement/Clear/remove invalidation、顺序式队列归约与 reset 清空；不含普通会话可见来源确认 |
 | [Notification Episode v2 (historical)](notification-episode-v2.md) | v1 三层模型加 Active Attention、exact HeadsUpSignal、事务式 Renderer cursor、pending-first Approval 与 acknowledge-only action；不含 signal 入队后的精确失效合同 |
 | [Notification Episode v1 (historical)](notification-episode-v1.md) | 初版 immutable Occurrence、separate Disposition、materialized Episode、minimal Change Journal、bounded write、typed action、heads-up 与 retention |
-| [Current User Attention v5（当前）](current-user-attention-v5.md) | 公屏 / 单聊独立可见来源，抑制与已读分离 |
+| [Current User Attention v6（当前）](current-user-attention-v6.md) | 公屏 / 单聊边界不变；新增 exact AgentRun 可见来源与执行台定位 |
+| [Current User Attention v5（历史）](current-user-attention-v5.md) | 公屏 / 单聊独立可见来源，抑制与已读分离 |
 | [Current User Attention v4（历史）](current-user-attention-v4.md) | v3 逐来源确认加普通进入会话后的精确可见即已读，不要求通知动作或 DOM 焦点 |
 | [Current User Attention v3 (historical)](current-user-attention-v3.md) | v2 精确确认加同 CampTurn 一卡、逐 Mention acknowledgement、最早未确认 action 与导航版本绑定；不含普通会话可见即已读 |
 | [Current User Attention v2 (historical)](current-user-attention-v2.md) | v1 当前用户注意力加 Message Mention 独立已读、锚点导航、焦点确认与 Markdown 保真；不含 Episode 聚合 |
@@ -335,7 +338,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Published Attachment View v2（历史）](camp-published-attachment-view-v2.md) | v1 root/journal/generation fence 不变；增加稳定 semantic catalog/receipt、可重建物理轴与无全局 DB 锁 copy phase |
 | [Camp Published Attachment View v1（历史）](camp-published-attachment-view-v1.md) | 实例/Camp 隔离 root、publication journal、ready catalog、generation、物理 Manifest receipt、quota、rebuild 与安全清理 |
 | [Camp Attachment v1（历史）](camp-attachment-v1.md) | 普通文件/目录联合、Core-owned 只读快照、限制、Draft 原子消费、Snapshot 29 与旧 Runtime Authority path |
-| [Camp Composer Draft v14（当前）](camp-composer-draft-v14.md) | public Camp 输入只存在于当前 Renderer；无 Core Draft、Pending、恢复或跨客户端合并 |
+| [Camp Composer Draft v15（当前）](camp-composer-draft-v15.md) | 无 Core Draft/Pending；Desktop 按 Camp 本地恢复完整输入、continuation、anchored reply 与发送前附件预览 |
+| [Camp Composer Draft v14（历史）](camp-composer-draft-v14.md) | public Camp 输入只存在于当前 Renderer；无 Core Draft、Pending、恢复或跨客户端合并 |
 | [Camp Composer Draft v13（历史）](camp-composer-draft-v13.md) | Host 验证编辑归属、Web 单调 revision 与 Pending 原子移回；由 v14 clean break 替代 |
 | [Camp Composer Draft v12（历史）](camp-composer-draft-v12.md) | macOS 独立关窗等待既有 Draft preparation；客户端归属由 v13 扩展 |
 | [Camp Composer Draft v11（历史）](camp-composer-draft-v11.md) | v10 wire/事务不变；可控正常退出在 Planned Shutdown 前复用 active-Camp leave guard 持久化最新 Lexical EditorState；macOS 独立关窗 fence 由 v12 补齐 |
@@ -349,13 +353,15 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Composer Draft v3（历史）](camp-composer-draft-v3.md) | v2 reply/continuation 边界不变；ready 附件可以独立构成用户发送 payload，空正文忠实持久化并保留原子消费 |
 | [Camp Composer Draft v2（历史）](camp-composer-draft-v2.md) | v1 reply 边界加 durable recipient continuation、source suppression、发送物化、显式修复与无 Default Lead fallback；仍继承正文非空发送要求 |
 | [Camp Composer Draft v1 (historical)](camp-composer-draft-v1.md) | Structured Content、附件引用、持久 reply intent、exact revision mutation、显式接收者修复与 Draft-only user send；不含 continuation |
-| [Planned Shutdown v7（当前）](planned-shutdown-v7.md) | v6 Core wire/report 不变；退出前只收口已开始的 Renderer-local 输入操作，不持久或恢复 public Composer |
+| [Planned Shutdown v8（当前）](planned-shutdown-v8.md) | protocol 3 不变；本地 Composer 可恢复，Scheduler/maintenance 由 shutdown supervisor 共同回收 |
+| [Planned Shutdown v7（历史）](planned-shutdown-v7.md) | v6 Core wire/report 不变；退出前只收口已开始的 Renderer-local 输入操作，不持久或恢复 public Composer |
 | [Planned Shutdown v6（历史）](planned-shutdown-v6.md) | v5 Core wire/report 不变；Main 在服务 drain 与 Core shutdown 前等待 Renderer 完成最新 Composer Draft fence |
 | [Planned Shutdown v5（历史）](planned-shutdown-v5.md) | v4 wire/report 不变；退出取消 Run 统一为 cancelled，内部未知效果计数保留；Desktop Composer 前置 fence 由 v6 替代 |
 | [Planned Shutdown v4（历史）](planned-shutdown-v4.md) | wire 仍为 protocol 3；先业务结算再 Runtime 清理，未知终态与原 report 保留 |
 | [Planned Shutdown v3（历史）](planned-shutdown-v3.md) | 退出、重启或更新统一取消全部非终态 AgentRun；稳定快照后立即关闭 terminal/route 准入，保留未知效果并使用 v3 report |
 | [Planned Shutdown v2（历史）](planned-shutdown-v2.md) | v1 generation-local reliable terminal 加 durable shutdown cycle、product fence、启动补偿、终态 unknown-effect 保留与 v2 report |
-| [App Update v3（当前）](app-update-v3.md) | v2 snapshot/API 与 updater-first staging 不变；安装接受后只收口已开始的 Renderer-local 操作 |
+| [App Update v4（当前）](app-update-v4.md) | v3 snapshot/API 与 updater-first staging 不变；安装退出保留 Desktop-local Active Camp Composer snapshot，并共同回收 Scheduler/maintenance |
+| [App Update v3（历史）](app-update-v3.md) | v2 snapshot/API 与 updater-first staging 不变；安装接受后只收口已开始的 Renderer-local 操作 |
 | [App Update v2（历史）](app-update-v2.md) | v1 snapshot/API 与 updater-first staging 不变；安装已接受后先完成 active Composer Draft fence |
 | [App Update v1（历史）](app-update-v1.md) | Desktop 主动检查、独立 release/prompt 事实、显式下载与安装、精确提醒 dismiss、状态投影和 updater-first 受控退出；Composer 前置 fence 由 v2 替代 |
 | [Windows Private Storage v2（当前）](windows-private-storage-v2.md) | v1 私有存储不变；增加 `<data_dir>\runtime-files`、受保护 View containers 与精确 Camp root 暴露边界 |

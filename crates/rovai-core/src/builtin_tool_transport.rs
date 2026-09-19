@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{command::canonical_json_digest, team_tool_catalog::builtin_tool_definitions};
+use crate::{
+    command::{canonical_json_digest, canonical_json_digest_with, write_canonical_json},
+    team_tool_catalog::builtin_tool_definitions,
+};
 
 pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 27;
 pub const BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = 2;
@@ -997,14 +1000,22 @@ pub fn builtin_tool_receipt(
     ok: bool,
     result_or_error: &Value,
 ) -> Result<String> {
-    let digest = canonical_json_digest(&json!({
-        "domain": "rovai.builtin-tool-receipt.v1",
-        "contractVersion": BUILTIN_TOOL_RECEIPT_VERSION,
-        "operation": operation,
-        "requestId": request_id,
-        "ok": ok,
-        "resultOrError": result_or_error,
-    }))?;
+    // Keep the receipt-v1 canonical preimage byte-for-byte compatible without
+    // rebuilding the potentially large result tree as an owned serde_json::Value.
+    let digest = canonical_json_digest_with(|writer| {
+        writer.write_all(b"{\"contractVersion\":")?;
+        serde_json::to_writer(&mut *writer, &BUILTIN_TOOL_RECEIPT_VERSION)?;
+        writer.write_all(b",\"domain\":\"rovai.builtin-tool-receipt.v1\",\"ok\":")?;
+        serde_json::to_writer(&mut *writer, &ok)?;
+        writer.write_all(b",\"operation\":")?;
+        serde_json::to_writer(&mut *writer, operation)?;
+        writer.write_all(b",\"requestId\":")?;
+        serde_json::to_writer(&mut *writer, request_id)?;
+        writer.write_all(b",\"resultOrError\":")?;
+        write_canonical_json(writer, result_or_error)?;
+        writer.write_all(b"}")?;
+        Ok(())
+    })?;
     Ok(format!("sha256:{digest}"))
 }
 
@@ -1168,6 +1179,36 @@ mod tests {
         assert!(first.strip_prefix("sha256:").is_some_and(
             |digest| digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit())
         ));
+    }
+
+    #[test]
+    fn receipt_v1_keeps_the_existing_canonical_digest_goldens() {
+        let cases = [
+            (
+                "request-nested",
+                true,
+                json!({"z": {"b": 2, "a": 1}, "a": [3, {"y": false, "x": null}]}),
+                "sha256:389b2f8a36e6fcd6dae1db47e458f4ee8d8808ba359f2faf01d10e63a2234a5f",
+            ),
+            (
+                "request-unicode",
+                true,
+                json!({"text": "花\n\"路\"\\终点", "emoji": "🌸"}),
+                "sha256:c742b2c0a482e4d2cca810ac78d651eb9e1aa3c687ee397e1aad4ca7cd480a2c",
+            ),
+            (
+                "request-number",
+                false,
+                json!({"code": "broken", "details": {"values": [0, -7, 42, 1.5]}}),
+                "sha256:71941838dfe46717927b8592b9b0c33da0206a0a4f8818d3aa56b211828bab1f",
+            ),
+        ];
+        for (request_id, ok, result_or_error, expected) in cases {
+            assert_eq!(
+                builtin_tool_receipt("camp.read", request_id, ok, &result_or_error).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]

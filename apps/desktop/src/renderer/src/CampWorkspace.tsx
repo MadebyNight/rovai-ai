@@ -80,6 +80,14 @@ import {
   type ComposerLocalStatus
 } from './composer-document'
 import {
+  composerBodyForContent,
+  emptyLocalCampComposerDraft,
+  loadLocalCampComposerDraft,
+  materializeLocalContinuation,
+  nextLocalCampComposerDraftAfterSend,
+  saveLocalCampComposerDraft
+} from './camp-composer-local-store'
+import {
   DraftMutationCoordinator,
   draftCoordinatorChangeRefreshesProjection,
   type DraftMutation
@@ -426,21 +434,12 @@ async function mutateComposerDraft(
   mutation: DraftMutation,
   snapshot: CampSnapshot
 ): Promise<CampComposerDraftView> {
-  const bodyFor = (content: ComposerDocument): string => content.segments.map((segment) => {
-    if (segment.kind === 'text') return segment.text
-    const atom = segment.atom
-    if (atom.type === 'all_members') return '@所有成员'
-    if (atom.type === 'skill') return `$${atom.nameAtSend}`
-    return `@${snapshot.members.find((member) => member.agentId === atom.agentId)?.displayName
-      ?? atom.labelFallback
-      ?? atom.agentId}`
-  }).join('')
   const update = (changes: Partial<CampComposerDraftView>): CampComposerDraftView => {
     const content = changes.content ?? draft.content
     return {
       ...draft,
       ...changes,
-      body: changes.body ?? bodyFor(content),
+      body: changes.body ?? composerBodyForContent(content, snapshot.members),
       revision: draft.revision + 1,
       updatedAt: new Date().toISOString()
     }
@@ -488,10 +487,14 @@ async function mutateComposerDraft(
       return update({ attachments: [...draft.attachments, attachment] })
     }
     case 'remove_source_attachment':
+      await client.composerAttachments.discard?.(draft.campId, [mutation.attachmentId])
+        .catch(() => undefined)
       return update({ attachments: draft.attachments.filter(({ id }) => id !== mutation.attachmentId) })
     case 'start_reply': {
-      const message = snapshot.messages.find(({ id }) => id === mutation.replyToCampMessageId)
-      if (!message || message.withdrawn) throw new Error('camp_message.invalid_reply')
+      const message = mutation.message
+      if (message.withdrawn || message.id.startsWith('optimistic:')) {
+        throw new Error('camp_message.invalid_reply')
+      }
       const authorMember = message.authorType === 'agent'
         ? snapshot.members.find(({ agentId }) => agentId === message.authorId) ?? null
         : null
@@ -539,18 +542,7 @@ async function mutateComposerDraft(
 }
 
 function emptyLocalComposerDraft(campId: string): CampComposerDraftView {
-  return {
-    campId,
-    body: '',
-    content: emptyComposerDocument(),
-    quotes: [],
-    revision: 1,
-    attachments: [],
-    replyIntent: null,
-    continuationIntent: null,
-    updatedAt: null,
-    expiresAt: null
-  }
+  return emptyLocalCampComposerDraft(campId)
 }
 
 export function composerRecipientSummary(
@@ -906,7 +898,7 @@ export type NotificationFocusTarget = {
   requestId: number
   conversationId?: string
   agentRunId?: string
-  kind: 'approval' | 'camp_turn' | 'camp_message' | 'single_chat'
+  kind: 'approval' | 'camp_turn' | 'agent_run' | 'camp_message' | 'single_chat'
   campTurnId: string | null
   messageId?: string
   approvalId?: string
@@ -919,6 +911,7 @@ export type VisibleNotificationSources = {
   snapshotSequence: number
   messageIds: string[]
   campTurnIds: string[]
+  agentRunIds: string[]
   approvalIds: string[]
 }
 
@@ -1675,18 +1668,87 @@ export function CampWorkspace({
   } | null>(null)
   const activeCampIdRef = useRef(snapshot.camp.id)
   const activeSnapshotRef = useRef(snapshot)
+  const initialComposerDraftRef = useRef(initialComposerDraft)
   const activationStateRef = useRef(snapshot.camp.activationState)
   activeCampIdRef.current = snapshot.camp.id
   activeSnapshotRef.current = snapshot
+  initialComposerDraftRef.current = initialComposerDraft
   activationStateRef.current = snapshot.camp.activationState
   const draftCoordinatorRef = useRef<DraftMutationCoordinator | null>(null)
   if (!draftCoordinatorRef.current) {
     draftCoordinatorRef.current = new DraftMutationCoordinator({
-      load: async (campId) => emptyLocalComposerDraft(campId),
+      load: async (campId) => {
+        const initial = initialComposerDraftRef.current?.campId === campId
+          ? initialComposerDraftRef.current
+          : null
+        let draft = (activationStateRef.current === 'active'
+          ? loadLocalCampComposerDraft(campId)
+          : null) ?? initial ?? emptyLocalComposerDraft(campId)
+        if (draft.attachments.length > 0 && client.composerAttachments.restore) {
+          draft = {
+            ...draft,
+            attachments: await client.composerAttachments.restore(campId, draft.attachments)
+          }
+        }
+        if (draft.replyIntent) {
+          const reply = draft.replyIntent
+          const sourceAvailable = await client.request<CampMessageAroundSnapshot>(
+            'camp.messages.around',
+            { campId, messageId: reply.replyToCampMessageId }
+          ).then((around) => around.campId === campId
+            && around.anchorMessageId === reply.replyToCampMessageId
+            && around.sourceAvailable
+          ).catch(() => false)
+          if (!sourceAvailable) {
+            draft = {
+              ...draft,
+              replyIntent: {
+                ...reply,
+                targetState: 'message_unavailable',
+                recipientSelectionRequired: true
+              }
+            }
+          }
+        }
+        const continuation = draft.continuationIntent
+        if (continuation) {
+          const member = activeSnapshotRef.current.members.find(
+            ({ agentId }) => agentId === continuation.recipient.agentId
+          )
+          const available = member?.membershipStatus === 'active'
+            && member.profilePresence === 'present'
+          draft = {
+            ...draft,
+            continuationIntent: {
+              ...continuation,
+              recipient: {
+                ...continuation.recipient,
+                displayName: member?.displayName ?? continuation.recipient.displayName,
+                recipientAvailability: available ? 'available' : 'unavailable'
+              },
+              recipientSelectionRequired: !available
+            }
+          }
+        }
+        return {
+          ...draft,
+          body: composerBodyForContent(draft.content, activeSnapshotRef.current.members)
+        }
+      },
       mutate: async (draft, mutation) => {
         return mutateComposerDraft(client, draft, mutation, activeSnapshotRef.current)
       },
-      onChange: (_draft, _epoch, kind) => {
+      onChange: (draft, _epoch, kind) => {
+        if (draft && activationStateRef.current === 'active') {
+          try {
+            saveLocalCampComposerDraft(draft)
+            setComposerPersistenceError(null)
+          } catch (error) {
+            setComposerPersistenceError(
+              error instanceof Error ? error : new Error(readErrorMessage(error))
+            )
+          }
+        }
         if (draftCoordinatorChangeRefreshesProjection(kind)) {
           setComposerDraftProjectionVersion((version) => version + 1)
         }
@@ -1702,6 +1764,7 @@ export function CampWorkspace({
   const dragLeaveTimer = useRef<number | null>(null)
   const dragActivityTimer = useRef<number | null>(null)
   const attachmentPreparationQueue = useRef<Promise<void>>(Promise.resolve())
+  const workspaceShellRef = useRef<HTMLElement>(null)
   const timelineScrollRef = useRef<HTMLDivElement>(null)
   const earlierMessageLoadInFlightRef = useRef(false)
   const conversationFindSurfaceRef = useRef<HTMLDivElement>(null)
@@ -1750,6 +1813,7 @@ export function CampWorkspace({
   } | null>(null)
   const timelinePositionSaveTimer = useRef<number | null>(null)
   const lastVisibleNotificationSources = useRef<string | null>(null)
+  const preparedNotificationAgentRunRequest = useRef<number | null>(null)
   const showingFirstRunWelcome = firstRunCamp !== null
     && snapshot.messages.length === 0
     && snapshot.agentRuns.length === 0
@@ -2230,6 +2294,7 @@ export function CampWorkspace({
     composerDraftAvailable: composerDraft !== null,
     preparingAttachmentCount: preparingAttachments.length,
     failedAttachmentCount: failedAttachments.length
+      + (composerDraft?.attachments.some(({ availability }) => availability !== 'available') ? 1 : 0)
   })
   const executionDrawerProcess = executionDrawerAgentId
     ? executionProcessByAgentId.get(executionDrawerAgentId) ?? null
@@ -2825,7 +2890,7 @@ export function CampWorkspace({
     ) return
     setReplyInteractionError(null)
     try {
-      const draft = await mutateRoutingDraft(() => draftCoordinator.startReply(message.id))
+      const draft = await mutateRoutingDraft(() => draftCoordinator.startReply(message))
       if (composerDraftNeedsReplyRepair(draft)) {
         window.requestAnimationFrame(() => {
           window.requestAnimationFrame(() => recipientRepairFirstOptionRef.current?.focus())
@@ -2997,18 +3062,18 @@ export function CampWorkspace({
       snapshot: null,
       error: null
     })
-    // Camp Composer state is intentionally owned only by this mounted Renderer.
-    // Switching Camps or remounting starts a fresh local editor.
-    const entryDraft = emptyLocalComposerDraft(campId)
-    draftCoordinator.beginEpoch(campId, entryDraft)
-    setDraftLoadState({ state: 'ready' })
+    // Each Camp owns an independent local editor. The persisted record is only
+    // a local Composer capability; Core Draft/Pending state is not recreated.
+    const epoch = draftCoordinator.beginEpoch(campId)
+    let cancelled = false
+    setDraftLoadState({ state: 'loading' })
     setComposerPersistenceError(null)
     setComposerLocalStatus({
       hasContent: false,
       hasExplicitRecipient: false,
       hasUnavailableAtom: false
     })
-    initializedComposerRoute.current = { revision: entryDraft.revision, publishedMessageSequence }
+    initializedComposerRoute.current = null
     setPreparingAttachments([])
     setFailedAttachments([])
     setAttachmentDragState(null)
@@ -3018,7 +3083,22 @@ export function CampWorkspace({
     setReplyInteractionError(null)
     autoSuppressedContinuationSourceRef.current = null
     draftCampId.current = campId
-    onInitialComposerDraftConsumed?.(entryDraft)
+    void draftCoordinator.load().then((entryDraft) => {
+      if (cancelled || draftCoordinator.getEpoch() !== epoch || draftCampId.current !== campId) return
+      initializedComposerRoute.current = {
+        revision: entryDraft.revision,
+        publishedMessageSequence
+      }
+      setDraftLoadState({ state: 'ready' })
+      onInitialComposerDraftConsumed?.(entryDraft)
+    }).catch((error) => {
+      if (cancelled || draftCoordinator.getEpoch() !== epoch || draftCampId.current !== campId) return
+      setDraftLoadState({
+        state: 'error',
+        error: error instanceof Error ? error : new Error(readErrorMessage(error))
+      })
+    })
+    return () => { cancelled = true }
   }, [snapshot.camp.id])
 
   useEffect(() => {
@@ -3051,7 +3131,22 @@ export function CampWorkspace({
   useEffect(() => {
     if (!notificationFocus?.active || ['approval', 'single_chat'].includes(notificationFocus.kind)) return
     setConversationView('conversation')
-  }, [notificationFocus])
+    if (notificationFocus.kind !== 'agent_run' || !notificationFocus.agentRunId) return
+    if (preparedNotificationAgentRunRequest.current === notificationFocus.requestId) return
+    const run = snapshot.agentRuns.find((candidate) => candidate.id === notificationFocus.agentRunId)
+    if (!run) return
+    preparedNotificationAgentRunRequest.current = notificationFocus.requestId
+    if (executionPlacement === 'inspector') {
+      setExecutionInspectorActive(true)
+      onOpenInspector?.(inspectorTab)
+    }
+    setExecutionDrawerAgentId(run.agentId)
+    setExecutionDrawerFocusedRunId(run.id)
+    setExecutionDrawerFocusRequest((request) => ({
+      sequence: request.sequence + 1,
+      moveDomFocus: true
+    }))
+  }, [executionPlacement, inspectorTab, notificationFocus, onOpenInspector, snapshot.agentRuns])
 
   useEffect(() => {
     if (!notificationFocus?.active || notificationFocus.kind === 'single_chat') return undefined
@@ -3088,6 +3183,20 @@ export function CampWorkspace({
         const target = messageId
           ? timelineScrollRef.current?.querySelector<HTMLElement>(
               `[data-message-id="${CSS.escape(messageId)}"]`
+            ) ?? null
+          : null
+        if (target) {
+          presentTarget(target)
+        } else {
+          frame = window.requestAnimationFrame(present)
+        }
+        return
+      }
+      if (notificationFocus.kind === 'agent_run') {
+        const runId = notificationFocus.agentRunId
+        const target = runId
+          ? workspaceShellRef.current?.querySelector<HTMLElement>(
+              `[data-agent-run-id="${CSS.escape(runId)}"]`
             ) ?? null
           : null
         if (target) {
@@ -3388,16 +3497,18 @@ export function CampWorkspace({
     const publish = (): void => {
       frame = null
       const timeline = timelineScrollRef.current
-      const canObserve = conversationView === 'conversation'
-        && !singleChatVisible
+      const campForeground = !singleChatVisible
         && document.visibilityState === 'visible'
         && document.hasFocus()
+      const canObserveConversation = campForeground
+        && conversationView === 'conversation'
         && timeline !== null
         && !timeline.hidden
       const messageIds = new Set<string>()
       const campTurnIds = new Set<string>()
+      const agentRunIds = new Set<string>()
       const approvalIds = new Set<string>()
-      if (canObserve && timeline) {
+      if (canObserveConversation && timeline) {
         const viewport = timeline.getBoundingClientRect()
         for (const node of timeline.querySelectorAll<HTMLElement>('[data-message-id]')) {
           if (!node.getClientRects().length || !rectanglesOverlap(node.getBoundingClientRect(), viewport)) continue
@@ -3419,12 +3530,24 @@ export function CampWorkspace({
           if (approvalId) approvalIds.add(approvalId)
         }
       }
+      if (campForeground) {
+        for (const node of workspaceShellRef.current?.querySelectorAll<HTMLElement>(
+          '.execution-drawer [data-agent-run-id]'
+        ) ?? []) {
+          const viewport = node.closest<HTMLElement>('.execution-drawer-body')
+          if (!viewport || !node.getClientRects().length || viewport.hidden) continue
+          if (!rectanglesOverlap(node.getBoundingClientRect(), viewport.getBoundingClientRect())) continue
+          const agentRunId = node.dataset.agentRunId
+          if (agentRunId) agentRunIds.add(agentRunId)
+        }
+      }
       const sources: VisibleNotificationSources = {
         campId: snapshot.camp.id,
-        surfaceVisible: canObserve,
+        surfaceVisible: canObserveConversation || agentRunIds.size > 0,
         snapshotSequence: snapshot.throughGlobalSequence,
         messageIds: [...messageIds].sort(),
         campTurnIds: [...campTurnIds].sort(),
+        agentRunIds: [...agentRunIds].sort(),
         approvalIds: [...approvalIds].sort()
       }
       const signature = JSON.stringify(sources)
@@ -3437,11 +3560,18 @@ export function CampWorkspace({
       frame = window.requestAnimationFrame(publish)
     }
     const timeline = timelineScrollRef.current
+    const workspace = workspaceShellRef.current
     const observer = new MutationObserver(schedule)
     if (timeline) observer.observe(timeline, { subtree: true, childList: true, attributes: true })
     if (approvalDockRef.current) observer.observe(approvalDockRef.current, { subtree: true, childList: true, attributes: true })
+    if (bottomExecutionDrawerHostRef.current) observer.observe(bottomExecutionDrawerHostRef.current, { subtree: true, childList: true, attributes: true })
+    if (inspectorExecutionDrawerHostRef.current) observer.observe(inspectorExecutionDrawerHostRef.current, { subtree: true, childList: true, attributes: true })
     schedule()
     timeline?.addEventListener('scroll', schedule, { passive: true })
+    workspace?.addEventListener('scroll', schedule, {
+      capture: true,
+      passive: true
+    })
     window.addEventListener('resize', schedule)
     window.addEventListener('focus', schedule)
     document.addEventListener('visibilitychange', schedule)
@@ -3449,6 +3579,7 @@ export function CampWorkspace({
       if (frame !== null) window.cancelAnimationFrame(frame)
       observer.disconnect()
       timeline?.removeEventListener('scroll', schedule)
+      workspace?.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
       window.removeEventListener('focus', schedule)
       document.removeEventListener('visibilitychange', schedule)
@@ -3482,24 +3613,39 @@ export function CampWorkspace({
       const flushed = await composerHandle.flush()
       const frozenDraft = flushed.draft ?? draftCoordinator.getCurrentDraft()
       if (!frozenDraft) throw new Error('Composer Draft 尚未就绪。')
-      const sendReceipt = await onSend(frozenDraft)
+      const routedDraft = materializeLocalContinuation(frozenDraft, snapshot.members)
+      const sendReceipt = await onSend(routedDraft)
+      if (!sendReceipt) throw new Error('消息未被当前 Camp 接受。')
       if (mountedCampId.current === campId
-        && (sendReceipt?.deliveryIds.length || sendReceipt?.agentRunIds.length)) {
+        && (sendReceipt.deliveryIds.length || sendReceipt.agentRunIds.length)) {
         setSubmittedExecutionRequests((current) => [...current, sendReceipt])
       }
       try {
-        const nextDraft = await draftCoordinator.load()
+        const discardAttachments = client.composerAttachments.discard?.(
+          campId,
+          frozenDraft.attachments.map(({ id }) => id)
+        )
+        if (discardAttachments) await discardAttachments.catch(() => undefined)
+        const nextDraft = nextLocalCampComposerDraftAfterSend({
+          sent: routedDraft,
+          campMessageId: sendReceipt.campMessageId,
+          addressedAgentIds: sendReceipt.addressedAgentIds,
+          members: snapshot.members
+        })
         if (draftCampId.current === campId) {
+          draftCoordinator.acceptAuthoritativeDraft(nextDraft)
           initializedComposerRoute.current = {
             revision: nextDraft.revision,
             publishedMessageSequence: Math.max(
               publishedMessageSequence,
-              sendReceipt?.publishedMessageSequence ?? 0
+              sendReceipt.publishedMessageSequence ?? 0
             )
           }
           composerHandle.replaceDocument(nextDraft.content, 'end')
           setComposerPersistenceError(null)
           setDraftLoadState({ state: 'ready' })
+        } else {
+          saveLocalCampComposerDraft(nextDraft)
         }
       } catch (error) {
         if (draftCampId.current === campId) {
@@ -4008,11 +4154,12 @@ export function CampWorkspace({
   ) : null
 
   return (
-    <section className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <RevealNotificationConversation active={!!notificationFocus?.active
-          && (notificationFocus.kind === 'camp_message' || notificationFocus.kind === 'camp_turn')}
+          && (notificationFocus.kind === 'camp_message' || notificationFocus.kind === 'camp_turn'
+            || notificationFocus.kind === 'agent_run')}
           onHidePreview={filePreview?.hidePane} />
         <section
           className="timeline-pane"
@@ -5205,7 +5352,7 @@ export function CampWorkspace({
             )}
             {composerPersistenceError && (
               <span className="composer-reply-status" role="status" aria-live="polite">
-                当前输入更新失败；内容仍保留在本窗口。{composerPersistenceError.message}
+                本机草稿保存失败；当前窗口内内容仍保留。{composerPersistenceError.message}
               </span>
             )}
           </div>

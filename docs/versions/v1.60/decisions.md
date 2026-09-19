@@ -3,7 +3,7 @@ document_type: version-decisions
 version: v1.60
 lifecycle: current
 authority: decision-rationale
-last_updated: 2026-09-17
+last_updated: 2026-09-19
 ---
 
 # v1.60 版本决定
@@ -68,6 +68,9 @@ Runtime 输入是另一条边界：Scheduler 必须知道能冻结多少必要�
 未声明能力默认 96 KiB，不再把 1 MiB 写成通用上限。合批选择与最终交付复用同一消息投影和序列化口径，
 正文、quotes、逐消息 source attachments 与 Skills 不再由另一份估算 DTO 近似。
 
+Envelope 接收链只做一次完整验证。Canonical result 检查和 receipt digest 直接遍历借用的结果树；原样
+projection 移动所有权。receipt v1 的字段、排序、转义、数字与 digest 保持不变，不为性能清理建立第二份 wire。
+
 <a id="v1-60-d05"></a>
 ## V1.60-D05：Channel 与 Automation 复用普通消息和 Delivery，只保留自己的业务结果
 
@@ -101,6 +104,9 @@ batch Run 后不进入 claim 写事务。原 500ms 职责保留在一个独立�
 Run、Automation、取消和 Single Chat，但不得领取普通 Delivery、派发普通 queued batch Run，或用慢 preparation 占住
 普通 batch 协调循环。
 
+Scheduler 与旧维护循环由 `run_core` 作为 sibling task 统一监督。正常退出和强制 launch-handoff 超时都必须
+取消并等待两者，不能因父 Scheduler future 被 abort 而遗留无句柄的慢 maintenance preflight。
+
 <a id="v1-60-d07"></a>
 ## V1.60-D07：Camp Read 使用直接意图字段，不保留模式翻译层
 
@@ -115,3 +121,34 @@ timeline/thread 固定向前读取。
 
 `mode`、`direction`、`around`、`after` 和 generic `cursor` 从当前请求合同删除，CLI 不建立旧字段到新字段的
 兼容翻译。这是开发期 clean break；输出可继续携带既有 mode/direction 描述结果形状，但不恢复旧请求面。
+
+<a id="v1-60-d08"></a>
+## V1.60-D08：Active Camp 未发送输入由 Desktop 按 Camp 本地恢复，不恢复 Core Draft
+
+- 状态：accepted
+- 日期：2026-09-19
+- 当前权威：Camp Composer Draft v15 与 Public Camp Composer 架构
+
+删除 Core Draft/Pending/revision/lease 不应同时删除用户在 Active Camp 中切换、刷新或重启后的未发送输入。
+选择由 Desktop 保存一份按 Camp 隔离的有界 snapshot，包含结构化正文、quotes、reply、continuation 与附件身份；
+Core 仍只在发送时接收一个冻结快照，不参与 autosave、跨客户端合并或恢复协调。
+
+附件路径 authority 留在 Main，以 Camp+attachment identity 重验预览、open、reveal 和发送；Renderer snapshot
+不能替换路径。Continuation 只来自上一条 accepted 本地用户消息的唯一显式非 Lead 接收者，并在下一次发送前
+转换为普通 recipient。搜索/around 已显示的消息可直接形成本地 reply snapshot，发送时再由 Core 重验 ID。
+Pending Camp 的首次输入仍遵循自己的非恢复合同。
+
+<a id="v1-60-d09"></a>
+## V1.60-D09：Delivery-first 完成通知直接引用 exact AgentRun
+
+- 状态：accepted
+- 日期：2026-09-19
+- 当前权威：Notification Episode v7 与 Current User Attention v6
+
+新 batch AgentRun 没有 CampTurn，继续用 Turn-only occurrence/action 会丢失正式完成/失败提醒与精确导航。
+选择让每个终态 batch AgentRun 产生自己的 immutable occurrence，Episode/action 携带 `agentRunId` 并以
+`open_agent_run` 打开对应成员的执行记录。历史 CampTurn 通知继续只读兼容，不为新 Run 伪造 Turn，也不创建
+多人 completion aggregate。
+
+确认仍按 exact source：只有该 Run 的执行节点进入当前可见执行视口才提交 `visibleAgentRunIds`；打开同一 Camp、
+另一 Run 或来源消息都不能顺带确认。Migration 164/schema 114 只增加来源、投影与终态 trigger，不改写历史通知。

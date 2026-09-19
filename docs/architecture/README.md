@@ -1,7 +1,7 @@
 ---
 document_type: architecture-index
 authority: long-lived-architecture-routing
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # 长期系统架构
@@ -36,13 +36,13 @@ last_updated: 2026-09-18
 | [Native Session Bootstrap Redelivery](native-session-bootstrap-redelivery.md) | compaction detector、Session Observer、Bootstrap/Member Identity 重投递、Redelivery v2、Dynamic Context 与 accepted-input 水位 |
 | [Notification Episode](notification-episodes.md) | Occurrence/Disposition/Episode/Change Journal 原子投影、可见来源精确确认、read hydration、并发边界与保留 |
 | [Online Memory Capture](online-memory-capture.md) | best-effort Skill discovery、complete exact-Scope View、copyable target、active body aggregate quota、durable rejection、Agent Memory Facade、原子 Supersession、隔离 Hearth Review、formal publication、clean break 与 Forget 闭包 |
-| [Planned Shutdown](planned-shutdown.md) | Core execution/terminal 双准入、durable shutdown cycle、退出时 AgentRun 全量取消、product fence 启动补偿、分层 deadline、route reap 与 Desktop child-exit 边界；public Composer 不再持久化 |
+| [Planned Shutdown](planned-shutdown.md) | Core execution/terminal 双准入、durable shutdown cycle、退出时 AgentRun 全量取消、Scheduler/maintenance 共同监督、分层 deadline、route reap 与 Desktop-local Composer/child-exit 边界 |
 | [Public Camp Message、Delivery 与 AgentRun](public-a2a-message-delivery.md) | 公共消息、per-target waiting Delivery、claim 时创建多输入 Run、实时可见性、精确 Stop、隔离与 Channel/Automation 复用 |
 | [Camp Activation Lifecycle](camp-activation-lifecycle.md) | 一键 Pending 瞬态表面、Renderer-local 首条输入、首消息原子激活与空 Pending 清理的组件权威 |
-| [Public Camp Composer](camp-composer-draft.md) | Renderer-local EditorState、一次发送快照、失败保留和无持久 Draft/Pending/恢复的当前边界 |
+| [Public Camp Composer](camp-composer-draft.md) | Desktop-local Active Camp snapshot、一次发送快照、失败保留、continuation、附件 authority 和无 Core Draft/Pending 的当前边界 |
 | [Camp Open Read Path](camp-open-read-path.md) | Desktop 两阶段冷启动壳层、enter/reconcile、不读 event_log 的业务 open projection、渐进消息、当前会话精确查找/anchored 定位、Run detail、high-water/cache 与 meaningful-paint 后台维护边界 |
 | [Camp Attachments：原路径引用、默认输出与旧记录兼容](camp-published-attachment-view.md) | 用户与 Agent Source Refs、默认输出位置、实际路径呈现、Camp 自有目录删除及历史 Managed/Authority/View 兼容边界 |
-| [First-run Onboarding](first-run-onboarding.md) | Full Core authority-origin 首次安装 admission、schema 2 三页状态、无 Runtime 延后完成、幂等 provisioning 与 Draft-only 第四页边界 |
+| [First-run Onboarding](first-run-onboarding.md) | Full Core authority-origin 首次安装 admission、schema 2 三页状态、无 Runtime 延后完成、幂等 provisioning 与 Desktop-local Active Camp starter 第四页边界 |
 | [File Preview](file-preview.md) | 显式 Markdown 消息资源入口、来源上下文解析、Main canonical 路径投影、窗口内 Camp Tab shell、项目内子文件独立恢复来源、无副作用恢复、binding generation、具体文件能力/重开、分页、Root Grant、watcher、HTML 协议与资源生命周期 |
 | [当前基础架构不变量](foundational-invariants.md) | Core、Camp、身份、协作、Runtime、Context、Memory、Skill、Evidence、Qualification 与 Renderer 的跨主题当前规范内核 |
 | [Skill Projection Reconciliation](skill-projection-reconciliation.md) | Skill Library desired state、bundled bootstrap 快速路径、root access ledger、事件驱动 dirty、当前 Run 完整校验 preflight、start-time SkillExposureSnapshot 与无历史目录扫描边界 |

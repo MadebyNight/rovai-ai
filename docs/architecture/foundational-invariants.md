@@ -94,7 +94,7 @@ last_updated: 2026-09-18
 - Camp 可以持久存在于零消息、零 Conversation 状态。消息发布仅原子创建 CampMessage 和每目标 Delivery；Conversation 只在 Scheduler 原子 claim 时为精确目标惰性创建。发布不执行 Workspace 文件系统、Git、Runtime discovery、可执行文件或 fingerprint 检查，多目标提交保持 all-or-none。
 - Camp 名称经过空白规范化并受 Unicode scalar 上限约束，持久记录 `default | generated | user` 来源。只有第一条已接受用户执行提交可把默认名确定性改为生成名；用户命名永不被自动覆盖。生成名从权威 Structured Content 中去掉连续的行首寻址 mention 后计算，不从原始 Markdown 猜测。
 - 飞书/钉钉渠道 Camp 复用同一默认命名与原子生成流程；渠道类型由既有绑定只读投影，前缀只在 Renderer 展示，不写入 title 或模型输入。闭合的历史绑定仍保留来源，不批量改写旧名称。字段见 [Channel Camp Naming v1](../contracts/channel-camp-naming-v1.md)。
-- Camp activation 是 Core-owned `pending | active` 状态。显式创建 Dialog 直接建立 Active Camp；经确认的一键入口建立 Pending Camp，其未发送内容只存在于当前 mounted Renderer。Pending Camp 的第一条已接受用户提交在消息事务中同时激活 Camp、发布消息并创建 Delivery。Pending Camp 不因本地输入进入导航或恢复；未发送输入在切换、刷新或退出后不恢复，空 Pending Camp 只能经受控丢弃或启动清理删除。
+- Camp activation 是 Core-owned `pending | active` 状态。显式创建 Dialog 直接建立 Active Camp；经确认的一键入口建立 Pending Camp。Pending Camp 的第一条已接受用户提交在消息事务中同时激活 Camp、发布消息并创建 Delivery。本机按 Camp 保存的未发送 Composer snapshot 不激活 Camp、不创建公共事实，也不单独使 Pending Camp 进入导航；空 Pending Camp 仍只能经受控丢弃或启动清理删除。
 
 <a id="camp-workspace"></a>
 
@@ -120,18 +120,18 @@ last_updated: 2026-09-18
 
 ### Composer Draft 与用户发送
 
-- public Camp 的未发送内容只由当前 mounted Renderer 的 Lexical EditorState 拥有；Core 不保存 Draft、revision、autosave、恢复锁、编辑 session 或未公开 Pending。Single Chat 的私有 Draft/Pending 是独立合同，不随本 clean break 改变。
+- public Camp 的未发送内容由 Desktop-local、按 Camp 隔离的 Composer snapshot 拥有；Core 不保存 Draft、revision、autosave、恢复锁、编辑 session 或未公开 Pending。Single Chat 的私有 Draft/Pending 是独立合同，不随本 clean break 改变。
 - 发送在第一个异步边界前锁定 Composer，并一次快照 `ComposerDocument`、quotes、reply anchor、显式目标、Skills 与 source refs。Core 原子发布 CampMessage 和 waiting Deliveries；成功才清空，拒绝或明确失败保持当前 Renderer 内容。未知结果通过原 command ID 核对，不能先清空再猜测。
-- Camp 切换、刷新、关窗和 App 退出不持久化或恢复 public Composer。Renderer 可以提供轻量 dirty warning，但不能重新引入 Core Draft、第二份本地草稿或恢复列表。
-- 用户输入的派生正文非空或至少一个 source attachment 时才可发送；纯附件消息忠实保存空正文。Reply anchor 只表达显示关系，不自动推导目标或 continuation。
-- 已发布的本地 Principal 消息可在首次目标 claim 前撤回；撤回取消 waiting Delivery 并擦除受控原文，不把内容移回输入框。完整当前合同见 [Camp Composer Draft v14](../contracts/camp-composer-draft-v14.md)。
+- Camp 切换、刷新、关窗和普通 App 重启从同一 Camp-local snapshot 恢复 public Composer；删除 Camp 或确认发送成功清理/替换对应 snapshot。不得重新引入 Core Draft、跨客户端合并或第二份 Renderer 草稿真源。
+- 用户输入的派生正文非空或至少一个 source attachment 时才可发送；纯附件消息忠实保存空正文。Reply anchor 只表达显示关系，不自动推导目标。Continuation 只来自最近一条已接受本地用户消息的唯一显式非 Lead 接收者，并在下一次发送前物化为普通 recipient。
+- 已发布的本地 Principal 消息可在首次目标 claim 前撤回；撤回取消 waiting Delivery 并擦除受控原文，不把内容移回输入框。完整当前合同见 [Camp Composer Draft v15](../contracts/camp-composer-draft-v15.md)。
 
 <a id="camp-resources"></a>
 
 ### 附件、首次运行与删除
 
 - 用户 Camp Attachment 是 owner JSON 内的 `file | directory` source path ref，不是附件实体或 Rovai 文件资产。Native File 直接保存绝对路径，pathless bytes/Blob 只写一次 OS Temp；Core 观察 kind/展示 metadata，但不复制到长期附件目录，不计算 digest，不冻结或监控内容。
-- public Composer 只在当前 Renderer 保存 source refs，发布后由 CampMessage 保存；旧 public Pending/Pending Edit 不再是当前 owner。成功发布只复制 JSON；新用户输入不写 `prepared_attachment`、`managed_attachment`、`message_attachment`、`camp_message_attachment_ref`，也不进入 Managed v2 ingest、staging/promote、catalog 或 reconciler。
+- public Composer 在 Desktop-local Camp snapshot 保存附件身份，Main 以 `(campId, attachmentId)` 持有原路径 authority；发布后由 CampMessage 保存 source refs，旧 public Pending/Pending Edit 不再是当前 owner。成功发布只复制 JSON；新用户输入不写 `prepared_attachment`、`managed_attachment`、`message_attachment`、`camp_message_attachment_ref`，也不进入 Managed v2 ingest、staging/promote、catalog 或 reconciler。
 - Source Ref 接受原路径引用语义：修改影响后续读取；移动、删除、失权或 OS Temp 清理可使访问失败。历史列表按记录投影 `availability = unknown`，只有具体读取/操作才检查状态；不因一个源失效阻断整个 Camp。新 Agent send/history 返回实际路径，`CURRENT_INPUT.attachments` 保持路径 string[]。界面通过 exact owner 元数据解析可展示、复制完整本机路径并定位，服务器路径注明远程位置；展示路径不读取全文。
 - 用户输入 Runtime source resolver 在现有 `spawn_blocking` 边界中用 `fs::metadata` 加 `File::open` 或 `fs::read_dir` 重检 exists/host-readable/kind，成功后逐字返回 stored source path。workspace 内外不分流、不 canonicalize、不复制、不创建 symlink 或 `ROVAI_RUN_TMP/source-attachments`；顶层 symlink 保持 metadata 跟随语义，目录子项不枚举，nested/dangling symlink 和特殊节点不预先拒绝。宿主可读不保证 Runtime 可读；路径投影不改变工作目录、read root 或权限，实际访问失败由原生工具报告，Core 不增加 Runtime preflight、重试、合成错误或 fallback。 新 Agent Source Ref 的已登记路径直接进入当前输入，普通 Run 不以可读性或首次内容验证为前置；原生读取失败由对应文件操作报告。
 - 新 Agent file ingress 统一按实际路径登记 Source Ref；所有位置与跨 Camp 均不复制、链接、staging、冻结或 chmod。默认输出目录是现有 instanceKey 下的 `attachments/<campId>/`，只作为最终文件的普通生成位置，不强制附件 ID 层级、不申请 ID、不增加外部 requestId。Managed v2 的 intent/digest/receipt/promote 仅服务历史记录兼容，不进入新发布和普通 Run 准入。

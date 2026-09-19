@@ -1756,6 +1756,17 @@ describe('task event projections', () => {
       campId: 'camp-other',
       messages: [anchor]
     })).toBe(snapshot)
+
+    const recentRun = { id: 'run-recent' } as AgentRunView
+    const historicalRun = { id: 'run-notification-source' } as AgentRunView
+    const runSnapshot = { ...snapshot, agentRuns: [recentRun] }
+    expect(campSnapshotWithCurrentAnchor(runSnapshot, 'camp-1', {
+      campId: 'camp-1',
+      agentRuns: [historicalRun]
+    }).agentRuns.map(({ id }) => id)).toEqual([
+      'run-recent',
+      'run-notification-source'
+    ])
   })
 
   it('requires a message rectangle to intersect the timeline viewport before auto-read', () => {
@@ -1802,8 +1813,27 @@ describe('task event projections', () => {
       kind: 'camp_turn',
       campTurnId: 'turn-1'
     }, { ...messageAction, kind: 'open_camp_turn', messageId: null })).toBe(true)
+    const agentRunAction = {
+      ...messageAction,
+      kind: 'open_agent_run',
+      messageId: null,
+      campTurnId: null,
+      agentRunId: 'run-1'
+    } as NotificationActionView
     expect(notificationFocusMatchesAction({
       requestId: 4,
+      kind: 'agent_run',
+      campTurnId: null,
+      agentRunId: 'run-1'
+    }, agentRunAction)).toBe(true)
+    expect(notificationFocusMatchesAction({
+      requestId: 5,
+      kind: 'agent_run',
+      campTurnId: null,
+      agentRunId: 'run-stale'
+    }, agentRunAction)).toBe(false)
+    expect(notificationFocusMatchesAction({
+      requestId: 6,
       kind: 'approval',
       campTurnId: null,
       approvalId: 'approval-1'
@@ -1815,7 +1845,7 @@ describe('task event projections', () => {
       ['private-original', 'private-run', true], ['private-successor', 'private-run', false],
       ['private-original', 'another-run', false]
     ] as const) {
-      expect(notificationFocusMatchesAction({ requestId: 5, kind: 'single_chat', campTurnId: 'turn-1',
+      expect(notificationFocusMatchesAction({ requestId: 7, kind: 'single_chat', campTurnId: 'turn-1',
         conversationId, agentRunId }, privateAction)).toBe(expected)
     }
   })

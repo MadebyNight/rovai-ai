@@ -56,4 +56,4 @@ written to Core merely because the user switches Camps, refreshes, closes a wind
 
 - [Camp lifecycle invariants](foundational-invariants.md#camp-lifecycle)
 - [Pending Camp Activation v2](../contracts/pending-camp-activation-v2.md)
-- [Camp Composer Draft v14](../contracts/camp-composer-draft-v14.md)
+- [Camp Composer Draft v15](../contracts/camp-composer-draft-v15.md)
