@@ -255,6 +255,13 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverStatus, setDragOverStatus] = useState<MissionStatus | null>(null)
+  const [pageHidden, setPageHidden] = useState(false)
+  useEffect(() => {
+    const update = (): void => setPageHidden(document.hidden)
+    update()
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
   const catalog = [...new Set(missions.flatMap(m => m.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   const paths = [...new Set(missions.map(m => m.projectPath))]
   const filtered = missions.filter(m => (!stateFilter.length || stateFilter.includes(m.status)) && (!tags.length || tags.some(t => m.tags.includes(t))) && (!projectFilter.length || projectFilter.includes(m.projectPath)) && `${m.title}\n${m.description}\n${m.tags.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
@@ -263,14 +270,14 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
       if (!(event.target instanceof Element) || event.target.closest('button,a,input') || window.getSelection()?.toString()) return
       event.currentTarget.querySelector<HTMLButtonElement>('.mission-card-open')?.focus({ preventScroll: true }); onOpen(m)
     }
-    return <article key={m.missionId} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}${draggingId === m.missionId ? ' is-dragging' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)} draggable
+    return <article key={m.missionId} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}${draggingId === m.missionId ? ' is-dragging' : ''}${m.hasUnread ? ' is-unread' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)} draggable
       onDragStart={event => { setDraggingId(m.missionId); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', m.missionId) }}
       onDragEnd={() => { setDraggingId(null); setDragOverStatus(null) }}
       onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); const bounds = e.currentTarget.getBoundingClientRect(); e.currentTarget.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left, clientY: bounds.bottom })) } }}>
-      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><div className="mission-card-top-actions"><MissionRunning mission={m}/></div></div>
+      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><div className="mission-card-top-actions"><MissionRunning mission={m} pageHidden={pageHidden}/></div></div>
       <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.title}</h3></button>
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
-      <div className="mission-card-footer"><MissionAvatars m={m} onClick={e => actions.roster(m, e)}/>{m.hasUnread && <span className="mission-unread-message"><NavigationIcon name="messages"/>未读</span>}<time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
+      <div className="mission-card-footer"><MissionAvatars m={m} compact onClick={e => actions.roster(m, e)}/>{m.hasUnread && <span className="mission-unread-message" role="img" aria-label="有未读回复" title="有未读回复；与执行状态独立"><span className="mission-unread-dot" aria-hidden="true"/><span aria-hidden="true">未读</span></span>}<time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
     </article>
   }
   return <section className="mission-board-content mission-board-page" hidden={hidden} aria-label="使命板">
@@ -306,13 +313,17 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
   </section>
 }
 
-function MissionRunning({ mission }: { mission: MissionRecord }) {
+function MissionRunning({ mission, pageHidden }: { mission: MissionRecord; pageHidden: boolean }) {
   const visible = mission.runningAgentIds.slice(0, 3)
   if (!visible.length) return null
-  return <span className="mission-running" aria-label={`${mission.runningAgentIds.length} 位队员执行中`}>
+  return <span className="mission-running" role="img" aria-label={`${mission.runningAgentIds.length} 位队员执行中`}>
     <span className="mission-running-avatars" aria-hidden="true">{visible.map(id => <Avatar key={id} id={id}/>)}</span>
-    {mission.runningAgentIds.length > 3 && <small aria-hidden="true">+{mission.runningAgentIds.length - 3}</small>}
-    <RunningText text="执行中"/>
+    {mission.runningAgentIds.length > 3 && <small aria-hidden="true"><span className="mission-overflow-label">+{mission.runningAgentIds.length - 3}</span></small>}
+    <RunningText text="执行中" active={false}/>
+    <svg className="camp-execution-orbits" aria-hidden="true" focusable="false" data-paused={pageHidden}>
+      <rect width="100%" height="100%" rx="5" pathLength="100"/>
+      <rect className="is-ember" width="100%" height="100%" rx="5" pathLength="100"/>
+    </svg>
   </span>
 }
 

@@ -80,6 +80,12 @@ Notification source 兼容扩展使用 Migration 164/schema 114。
 首次 A2A 路由修复、公共读取范围与 Mission read/mutation 分层不改变 schema；存量 waiting Delivery 在普通 claim
 事务中自愈，历史 Manifest 不回写。
 
+## 使命卡片 v5.1 对齐增量
+
+使命卡片按确认稿统一执行双弧整组轨道、最多五人的响应式重叠成员组、无框 `+N` 与实心蓝点未读提示。
+执行中组继续最多显示三个头像；卡片变窄时优先收起成员头像，不挤压未读和时间。浅色与深色主题分别使用
+满足正文对比度的未读语义色。这一展示增量不改变 Mission 数据、运行状态或 IPC 合同。
+
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
@@ -88,7 +94,7 @@ Notification source 兼容扩展使用 Migration 164/schema 114。
 | Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输、渠道/Automation、事件唤醒调度、本机 Composer 恢复、AgentRun 通知、公共读取范围与首次目标路由取舍 |
 | Contracts | 已更新 | [模型上下文变更说明](model-context-change-camp-message-run.md)与当前合同索引已发布 Context、Run Facts、Message Delivery、Camp Read、Built-in Transport、Mission、Composer、Notification 与 Planned Shutdown 新版本 |
 | Architecture | 已更新 | 长期 Architecture、系统图源与生成图已同步 Delivery-first 主链、目标 Conversation 自愈、公共历史读范围、`RUN_INPUT`、受监督调度任务、本机 Composer authority 与 AgentRun attention |
-| UI | 已更新 | 当前 UI 规范与 Renderer 已同步等待预览、精确 Run Stop、红色失败、撤回、按 Camp 草稿恢复、continuation、发送前附件与 AgentRun 定位 |
+| UI | 已更新 | 当前 UI 规范与 Renderer 已同步等待预览、精确 Run Stop、红色失败、撤回、按 Camp 草稿恢复、continuation、发送前附件与 AgentRun 定位；使命卡片使用整组双弧、最多五人的响应式重叠成员组、无框 `+N` 与蓝点未读提示 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类；只改变 Run 输入、运输完整性和终态/隔离调度 |
 | Runtime compatibility | 确认无需更新 | 不改变已发布 Runtime 资格；大结果与新上下文使用独立 smoke 验证，不把本版推导为平台晋级 |
 | Documentation routing | 已更新 | 版本索引、当前 Architecture、Contract 与 Decision 路由均指向已实施的 v1.60 权威 |

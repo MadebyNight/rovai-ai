@@ -136,6 +136,18 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] 运行 `pnpm docs:test`、`pnpm docs:check`、diff-aware 文档门禁、TypeScript、Rust 定向及全量测试；
   UI/真实 Runtime 验收只使用隔离 userData、Skill Library、MCP config 和临时数据库。
 
+## 2026-09-19 使命卡片 v5.1 展示增量
+
+执行中成员组保持最多三个头像，蓝色与琥珀色双弧改为包围头像、`+N` 和“执行中”的整组轨道，文字不再扫光；
+页面隐藏及 reduced motion 继续暂停轨道动画。底部成员组使用 23px 头像和 7px 重叠，常规宽度最多显示五人，
+卡片变窄时按实际可用宽度减少头像并以无底色、无描边的半粗体 `+N` 汇总。未读状态改为 8px 实心蓝点和
+12px 半粗体“未读”，同时加重标题；浅色与深色主题分别使用可读的语义色。该增量不改变 Mission 数据、
+运行状态或 IPC 合同。
+
+定向验证覆盖常规与窄卡片的成员数量重算、头像尺寸和重叠、两个 `+N` 的光学垂直对齐、未读标记、执行双弧、
+静态文字与恢复宽度。单 worker 完整 Vitest 207 个文件／2132 项、`pnpm typecheck`、`pnpm build:desktop`、
+隔离 Electron `pnpm test:mission-board`、浅色／深色截图复核及文档治理门禁均通过。
+
 ## Rust 测试准入与退役记录
 
 本次删除的 active Rust 测试随生产合同在同一改动中退出：public Gather/Barrier/completion、持久
