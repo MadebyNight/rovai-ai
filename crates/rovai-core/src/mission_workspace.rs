@@ -1456,8 +1456,21 @@ mod tests {
         .await
         .unwrap();
         git.validate(&workspace).await.unwrap();
+        let expected = git.branch_oid(&workspace).await.unwrap().unwrap();
+        fs::remove_dir_all(&workspace.worktree_path).unwrap();
+        assert!(
+            git.delete_branch_expected(&workspace, &expected)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("mission.branch_in_use")
+        );
         git.cleanup(&workspace).await.unwrap();
         assert!(!Path::new(&workspace.worktree_path).exists());
+        assert_eq!(
+            git.branch_oid(&workspace).await.unwrap().as_deref(),
+            Some(expected.as_str())
+        );
         assert!(
             !git.candidate_available(
                 &repo,
@@ -1468,6 +1481,19 @@ mod tests {
             .unwrap()
         );
         git.cleanup(&workspace).await.unwrap();
+        git.delete_branch_expected(&workspace, &expected)
+            .await
+            .unwrap();
+        assert!(git.branch_oid(&workspace).await.unwrap().is_none());
+        assert!(
+            git.candidate_available(
+                &repo,
+                Path::new(&workspace.worktree_path),
+                &workspace.branch
+            )
+            .await
+            .unwrap()
+        );
         assert!(git.validate(&workspace).await.is_err());
         let non_git = repo.root.parent().unwrap().join("plain");
         fs::create_dir(&non_git).unwrap();

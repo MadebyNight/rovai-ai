@@ -31,18 +31,26 @@ app.whenReady().then(async () => {
       const ordinary=document.querySelector('.camp-group-children .camp-nav-row')
       const open=pinned?.querySelector('.camp-nav-open')
       const icon=pinned?.querySelector('.pinned-camp-icon')
-      const marker=pinned?.querySelector('.camp-marker-slot')
+      const status=pinned?.querySelector('.camp-status-slot')
+      const ordinaryStatus=ordinary?.querySelector('.camp-status-slot')
+      const unread=status?.querySelector('.camp-unread-dot')
       const title=pinned?.querySelector('.truncate')?.getBoundingClientRect()
       const ordinaryTitle=ordinary?.querySelector('.truncate')?.getBoundingClientRect()
-      if(!pinned||!ordinary||!open||!icon||!marker||!title||!ordinaryTitle)return null
-      const iconRect=icon.getBoundingClientRect(),markerRect=marker.getBoundingClientRect()
+      if(!pinned||!ordinary||!open||!icon||!status||!ordinaryStatus||!unread||!title||!ordinaryTitle)return null
+      const iconRect=icon.getBoundingClientRect(),statusRect=status.getBoundingClientRect()
+      const ordinaryStatusRect=ordinaryStatus.getBoundingClientRect(),unreadRect=unread.getBoundingClientRect()
       return {
         iconDisplay:getComputedStyle(icon).display,
         iconWidth:iconRect.width,
         iconHidden:icon.getAttribute('aria-hidden'),
-        markerWidth:markerRect.width,
-        markerPosition:getComputedStyle(marker).position,
-        markerOverlapsIcon:markerRect.left<iconRect.right&&markerRect.right>iconRect.left,
+        statusWidth:statusRect.width,
+        statusHeight:statusRect.height,
+        statusKind:status.dataset.status,
+        ordinaryStatusKind:ordinaryStatus.dataset.status,
+        statusCenterDelta:Math.abs((statusRect.left+statusRect.width/2)-(ordinaryStatusRect.left+ordinaryStatusRect.width/2)),
+        unreadWidth:unreadRect.width,
+        unreadCenterDelta:Math.hypot((statusRect.left+statusRect.width/2)-(unreadRect.left+unreadRect.width/2),(statusRect.top+statusRect.height/2)-(unreadRect.top+unreadRect.height/2)),
+        leadingMarkers:document.querySelectorAll('#global-navigation .camp-marker-slot').length,
         openPosition:getComputedStyle(open).position,
         rowLabel:open.getAttribute('aria-label'),
         titleDelta:Math.abs(title.left-ordinaryTitle.left)
@@ -50,12 +58,17 @@ app.whenReady().then(async () => {
     })()`)
     assert.ok(desktopPinned, 'Desktop pinned and ordinary conversation rows are visible')
     assert.ok(['flex','inline-flex'].includes(desktopPinned.iconDisplay),'Desktop pinned conversation shows its bubble icon')
-    assert.equal(desktopPinned.iconWidth,12,'Desktop bubble icon stays visually subordinate')
+    assert.equal(desktopPinned.iconWidth,17,'Desktop bubble icon uses the shared navigation glyph slot')
     assert.equal(desktopPinned.iconHidden,'true','Visible row text keeps the decorative bubble out of the accessibility tree')
-    assert.equal(desktopPinned.markerWidth,5,'Desktop unread marker stays compact')
-    assert.equal(desktopPinned.markerPosition,'absolute','Desktop unread marker does not consume horizontal space')
-    assert.equal(desktopPinned.markerOverlapsIcon,true,'Desktop unread marker sits on the bubble edge')
-    assert.equal(desktopPinned.openPosition,'relative','Desktop marker is anchored to its own conversation row')
+    assert.equal(desktopPinned.statusWidth,12,'Desktop status slot is 12px wide')
+    assert.equal(desktopPinned.statusHeight,12,'Desktop status slot is 12px high')
+    assert.equal(desktopPinned.statusKind,'unread','Desktop unread state uses the trailing slot')
+    assert.equal(desktopPinned.ordinaryStatusKind,'none','Desktop idle state preserves an empty trailing slot')
+    assert.ok(desktopPinned.statusCenterDelta<1,'Desktop status slots share one trailing axis')
+    assert.equal(desktopPinned.unreadWidth,7,'Desktop unread dot stays 7px inside the status slot')
+    assert.ok(desktopPinned.unreadCenterDelta<1,'Desktop unread dot is centered inside the status slot')
+    assert.equal(desktopPinned.leadingMarkers,0,'Desktop navigation has no leading status marker')
+    assert.equal(desktopPinned.openPosition,'relative','Desktop row keeps its stable positioning context')
     assert.equal(desktopPinned.rowLabel,'置顶对话，有新回复')
     assert.ok(desktopPinned.titleDelta<1,'Desktop pinned and project conversation titles share one text baseline')
     await capture('desktop-pinned-conversation-day')
@@ -159,7 +172,7 @@ app.whenReady().then(async () => {
     await run('window.navigationTest.setDisabled(true)');await settle()
     assert.equal(await run('document.querySelector(".navigation-collapse-button").disabled'),true)
     assert.equal(await run('document.querySelector(".navigation-resize-handle").tabIndex'),-1)
-    console.log(JSON.stringify({ok:true,checks:'Desktop pinned conversation icon/alignment/unread marker, pointer threshold/reversal/cancellation, full collapse/inert, keyboard/menu, storage, unchanged content renders, draft retention, Windows/menu, macOS/Web fixed settings and collapsed recovery, memory-only shared history, keyboard/side button navigation, input consumption and history reset'}))
+    console.log(JSON.stringify({ok:true,checks:'Desktop pinned conversation icon/alignment/trailing status slot, pointer threshold/reversal/cancellation, full collapse/inert, keyboard/menu, storage, unchanged content renders, draft retention, Windows/menu, macOS/Web fixed settings and collapsed recovery, memory-only shared history, keyboard/side button navigation, input consumption and history reset'}))
     window.destroy();app.quit()
   } catch(error) {console.error(error);console.error(await run('JSON.stringify({events:window.pointerEvents?.slice(-30),shell:document.querySelector(".navigation-shell").outerHTML.slice(0,300)})'));await capture('failure');app.exit(1)}
 }).catch(error=>{console.error(error);app.exit(1)})

@@ -339,6 +339,16 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(css).toMatch(/\.project-heading-row\.current-project\s*\{[^}]*background: var\(--surface-selected\)/)
   })
 
+  it('aligns sidebar titles independently from one fixed trailing status slot', () => {
+    expect(css).toMatch(/\.unified-sidebar\s*\{[^}]*--nav-child-indent: 24px[^}]*--nav-status-slot: 12px[^}]*--nav-unread-size: 7px/)
+    expect(css).toMatch(/\.camp-group-children\s*\{[^}]*padding-left: var\(--nav-child-indent\)/)
+    expect(css).toMatch(/\.camp-nav-open\s*\{[^}]*gap: 7px[^}]*padding: 2px 3px 2px 8px/)
+    expect(css).toMatch(/\.pinned-navigation > \.camp-nav-row > \.camp-nav-open > \.pinned-camp-icon\s*\{[^}]*width: 17px[^}]*height: 17px[^}]*flex: 0 0 17px/)
+    expect(css).toMatch(/\.camp-status-slot\s*\{[^}]*width: var\(--nav-status-slot\)[^}]*height: var\(--nav-status-slot\)[^}]*flex: 0 0 var\(--nav-status-slot\)[^}]*place-items: center[^}]*margin-left: auto/)
+    expect(css).toMatch(/\.camp-status-slot > \.camp-unread-dot\s*\{[^}]*width: var\(--nav-unread-size\)[^}]*height: var\(--nav-unread-size\)[^}]*background: var\(--conversation-unread\)/)
+    expect(css).not.toContain('.pinned-navigation .camp-marker-slot')
+  })
+
   it('uses one transparent-gutter 8px scrollbar thumb across visible scrollers', () => {
     const gutterSize = Number.parseFloat(day['--scrollbar-gutter-size'])
     const thumbInset = Number.parseFloat(day['--scrollbar-thumb-inset'])
@@ -384,6 +394,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
   it('keeps selection and unread state visible in Windows Forced Colors', () => {
     expect(css).toMatch(/@media \(forced-colors: active\)[\s\S]*\.camp-nav-row\.selected[\s\S]*outline: 2px solid Highlight/)
     expect(css).toMatch(/@media \(forced-colors: active\)[\s\S]*\.rail-badge-dot[\s\S]*background: Highlight/)
+    expect(css).toMatch(/@media \(forced-colors: active\)[\s\S]*\.camp-unread-dot[\s\S]*background: Highlight/)
   })
 
   it('uses solid, rule-free headers for the approved Memory, Appearance, and Reminder pages', () => {

@@ -12,6 +12,23 @@ import { coreDataDirectoryArguments, removeEphemeralRuntimeCampFilesRoot } from 
 
 const repository = resolve(import.meta.dirname, '../..')
 const executable = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+
+test('phone navigation keeps hierarchy geometry while status stays in a 12px trailing slot', async () => {
+  const [desktopCss, mobileCss] = await Promise.all([
+    readFile(join(repository, 'apps/desktop/src/renderer/src/styles.css'), 'utf8'),
+    readFile(join(repository, 'apps/web/src/mobile.css'), 'utf8')
+  ])
+  assert.match(desktopCss, /\.camp-status-slot\s*\{[^}]*width: var\(--nav-status-slot\)[^}]*height: var\(--nav-status-slot\)[^}]*place-items: center/s)
+  assert.match(desktopCss, /\.camp-status-slot > \.camp-unread-dot\s*\{[^}]*width: var\(--nav-unread-size\)[^}]*height: var\(--nav-unread-size\)/s)
+  assert.match(mobileCss, /\.unified-sidebar\s*\{[^}]*--nav-child-indent: 28px;[^}]*--nav-unread-size: 6px;/s)
+  assert.match(mobileCss, /\.camp-nav-open\s*\{[^}]*padding: 0 12px;/s)
+  assert.match(mobileCss, /\.camp-group-children\s*\{[^}]*padding-left: var\(--nav-child-indent\)/s)
+  assert.match(mobileCss, /\.pinned-navigation > \.camp-nav-row > \.camp-nav-open > \.pinned-camp-icon\s*\{[^}]*flex: 0 0 20px;[^}]*width: 20px;[^}]*height: 20px;/s)
+  assert.match(mobileCss, /\.pinned-camp-icon > svg\s*\{[^}]*width: 20px;[^}]*height: 20px;[^}]*flex: none;/s)
+  assert.match(mobileCss, /\.mobile-bottom-navigation svg\s*\{[^}]*width: 21px;[^}]*height: 21px;/s)
+  assert.doesNotMatch(mobileCss, /camp-marker-slot/)
+})
+
 // Real Host + production Web entry. No Electron profile, Runtime, or daily data.
 test('phone workbench uses shared navigation, schedules and per-tab drafts', { timeout: 180_000 }, async t => {
   if (process.platform !== 'darwin' || !await access(executable).then(() => true, () => false)) { t.skip('Requires macOS Chrome; does not qualify real phones or other OSes'); return }
@@ -84,7 +101,7 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     })()`)
     assert.ok(pinnedAlignment, 'pinned and ordinary Web conversation rows are visible')
     assert.ok(['flex', 'inline-flex'].includes(pinnedAlignment.iconDisplay), 'Web pinned conversation shows its bubble icon')
-    assert.equal(pinnedAlignment.icon.width, 12, 'Web bubble icon stays visually subordinate')
+    assert.equal(pinnedAlignment.icon.width, 17, 'Web bubble icon uses the shared navigation glyph slot')
     assert.ok(pinnedAlignment.titleDelta < 1, 'Web pinned and project conversation titles share one text baseline')
     await capture('web-pinned-conversation')
     await browser.evaluate(`document.querySelector('.pinned-navigation .camp-nav-row .camp-menu-trigger').focus()`)
@@ -97,11 +114,15 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     await browser.wait(`document.documentElement.dataset.mobileWeb==='true' && document.querySelector('.mobile-bottom-navigation')!==null`)
     stage = 'conversation list'
     await capture('conversations')
-    const rowAlignment = await browser.evaluate(`([...document.querySelectorAll('.camp-group-children .camp-nav-row')].filter(row=>row.getClientRects().length>0).map(row=>{const marker=row.querySelector('.camp-marker-slot').getBoundingClientRect();const title=row.querySelector('.truncate').getBoundingClientRect();const box=row.getBoundingClientRect();return {rowCenter:box.top+box.height/2,markerCenter:marker.top+marker.height/2,titleCenter:title.top+title.height/2,x:box.x,width:box.width}}))`)
+    assert.equal(await browser.evaluate(`document.querySelectorAll('#global-navigation .camp-marker-slot').length`), 0, 'phone navigation has no leading status marker')
+    const rowAlignment = await browser.evaluate(`([...document.querySelectorAll('.camp-group-children .camp-nav-row')].filter(row=>row.getClientRects().length>0).map(row=>{const status=row.querySelector('.camp-status-slot').getBoundingClientRect();const title=row.querySelector('.truncate').getBoundingClientRect();const box=row.getBoundingClientRect();return {rowCenter:box.top+box.height/2,statusCenter:status.top+status.height/2,titleCenter:title.top+title.height/2,titleLeft:title.left,statusWidth:status.width,statusHeight:status.height,x:box.x,width:box.width}}))`)
     assert.ok(rowAlignment.length > 0, 'conversation rows are visible')
     for (const row of rowAlignment) {
-      assert.ok(Math.abs(row.rowCenter - row.markerCenter) < 1, 'reminder position is vertically centered in its row')
-      assert.ok(Math.abs(row.titleCenter - row.markerCenter) < 1, 'reminder position is vertically aligned with the title')
+      assert.ok(Math.abs(row.rowCenter - row.statusCenter) < 1, 'status slot is vertically centered in its row')
+      assert.ok(Math.abs(row.titleCenter - row.statusCenter) < 1, 'status slot is vertically aligned with the title')
+      assert.ok(Math.abs(row.titleLeft - 48) < 1, 'project conversation titles keep the 48px phone text axis')
+      assert.equal(row.statusWidth, 12, 'status slot width is 12px')
+      assert.equal(row.statusHeight, 12, 'status slot height is 12px')
     }
     await browser.click(byLabel('选择工作目录'))
     await browser.wait(`document.querySelector('.web-workspace-picker')?.textContent.includes('选择项目目录') && !document.querySelector('.web-workspace-list[aria-busy=true]')`)
@@ -336,24 +357,13 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     await browser.click(byLabel('增大会话字号'))
     await browser.wait(`document.querySelector('.mobile-font-slider output')?.textContent==='14'`)
     await browser.click(byLabel('返回设置'))
-    for (const label of ['通用', 'Skills', 'MCP', '运行时', '远程连接']) {
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('.settings-sidebar-menu button')].some(e=>e.textContent.trim()==='远程连接')`), false, 'remote connection stays hidden from the current settings navigation')
+    for (const label of ['通用', 'Skills', 'MCP', '运行时']) {
       await click(label)
       // The Runtime page has its own status-dependent content; the shared settings panel is stable.
       await browser.wait(`document.querySelector('.settings-panel')!==null`)
       if (label === 'Skills') await browser.wait(`!document.querySelector('.settings-panel').innerText.includes('正在读取')`)
       if (label === 'MCP') await browser.wait(`document.querySelector('.mcp-first-connection')!==null`)
-      if (label === '远程连接') {
-        await browser.wait(`Boolean(${element('退出登录')})`)
-        assert.equal(await browser.evaluate(`(${element('退出登录')}).textContent`), '退出登录')
-        assert.equal(await browser.evaluate(`getComputedStyle(${element('退出登录')}).letterSpacing`), 'normal')
-        assert.equal(await browser.evaluate(`getComputedStyle(${element('退出登录')}).whiteSpace`), 'nowrap')
-        await click('退出登录')
-        await browser.wait(`document.querySelector('#administrator-token')!==null`)
-        await verifySignedOutLogin(browser, 'desktop', output)
-        await fill('#administrator-token', service.administratorToken)
-        await browser.click(`document.querySelector('.web-login button[type=submit]')`)
-        await browser.wait(`document.querySelector('.web-login-overlay')===null && Boolean(${element('退出登录')})`)
-      }
       await capture(`settings-${label}`)
       await browser.click(byLabel('返回设置'))
     }
@@ -457,11 +467,14 @@ test('phone execution shares Desktop evidence, wraps avatars and retains Run dis
       const rail = await browser.evaluate(`(()=>{const e=document.querySelector('.run-pulse-list');return {scroll:e.scrollWidth,width:e.clientWidth,rows:[...new Set([...e.children].map(c=>c.getBoundingClientRect().top))].length}})()`)
       assert.equal(rail.scroll, rail.width); assert.ok(rail.rows > 1)
       await browser.capture(join(output, `execution-${theme}.png`))
-      await browser.click(`document.querySelector('.execution-process-stage .execution-disclosure summary')`)
-      await browser.wait(`document.querySelector('.execution-process-stage .execution-disclosure').open===true`)
+      if (!await browser.evaluate(`document.querySelector('.execution-process-stage.status-running .execution-disclosure').open`)) {
+        await browser.click(`document.querySelector('.execution-process-stage.status-running .execution-disclosure summary')`)
+      }
+      await browser.wait(`document.querySelector('.execution-process-stage.status-running .execution-disclosure').open===true`)
       await browser.click(`document.querySelectorAll('.run-pulse-chip')[1]`)
       await browser.click(`document.querySelectorAll('.run-pulse-chip')[0]`)
-      await browser.wait(`document.querySelectorAll('.execution-process-stage').length===3 && document.querySelector('.execution-process-stage .execution-disclosure').open===true`)
+      await browser.wait(`document.querySelectorAll('.execution-process-stage').length===3 && document.querySelector('.execution-process-stage.status-running .execution-disclosure').open===true`)
+      await browser.wait(`document.querySelector('.tool-group-summary')!==null`)
       await browser.click(`document.querySelector('.tool-group-summary')`)
       await browser.wait(`document.querySelector('.tool-activity-group')?.open===true`)
       await browser.wait(`document.querySelectorAll('.tool-group-items .tool-call-summary').length>=2`)
@@ -537,6 +550,7 @@ test('standalone Server phone settings expose update controls, initial login and
     await browser.wait(`document.querySelector('.mobile-bottom-navigation')!==null`)
     await browser.click(`[...document.querySelectorAll('.mobile-bottom-navigation button')].find(e=>e.textContent==='设置')`)
     assert.equal(await browser.evaluate(`[...document.querySelectorAll('.settings-sidebar-menu button')].some(e=>e.textContent.trim()==='渠道')`), false)
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('.settings-sidebar-menu button')].some(e=>e.textContent.trim()==='远程连接')`), false)
     await browser.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent==='关于与更新')`)
     await browser.wait(`document.querySelector('.about-update-actions')!==null`)
     await browser.wait(`/版本 v?\\d+\\.\\d+/.test(document.querySelector('.about-identity').textContent)`)
@@ -545,12 +559,8 @@ test('standalone Server phone settings expose update controls, initial login and
     assert.match(await browser.evaluate(`document.querySelector('.about-update-source').textContent`), /Server GitHub Release/)
     await browser.capture(join(output, 'server-about.png'))
     await browser.click(`document.querySelector('[aria-label="返回设置"]')`)
-    await browser.click(`[...document.querySelectorAll('.settings-sidebar-menu button')].find(e=>e.textContent==='远程连接')`)
-    await browser.click(`[...document.querySelectorAll('button')].find(e=>e.getClientRects().length && e.textContent.trim()==='退出登录')`)
-    await browser.wait(`document.querySelector('#administrator-token')!==null`)
-    await verifySignedOutLogin(browser, 'server', output)
     assert.deepEqual(browser.errors, [])
-    await writeFile(join(output, 'server-validation.json'), JSON.stringify({ realServer: true, actualUpdateInstall: false, runtime: false, checks: ['server-hides-channels', 'server-update-controls', 'update-auth-and-closed-operations', 'host-specific-login', 'logout-initial-login', 'real-version'] }, null, 2))
+    await writeFile(join(output, 'server-validation.json'), JSON.stringify({ realServer: true, actualUpdateInstall: false, runtime: false, checks: ['server-hides-channels', 'server-hides-remote-connection', 'server-update-controls', 'update-auth-and-closed-operations', 'host-specific-login', 'real-version'] }, null, 2))
   } finally {
     await browser?.close()
     child.kill('SIGINT'); const deadline = setTimeout(() => child.kill('SIGKILL'), 5000)
@@ -572,11 +582,4 @@ async function verifyInitialLogin(browser, kind, output) {
   }
   await browser.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] })
   await browser.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
-}
-async function verifySignedOutLogin(browser, kind, output) {
-  assert.equal(await browser.evaluate(`document.querySelector('#web-login-title').textContent`), '登录 Rovai AI')
-  assert.equal(await browser.evaluate(`document.querySelector('.web-login-description').textContent`), '继续你的协作。')
-  assert.equal(await browser.evaluate(`document.querySelector('#administrator-token').value`), '')
-  assert.equal(await browser.evaluate(`document.querySelector('#administrator-token').type`), 'password')
-  await browser.capture(join(output, `login-${kind}-after-logout.png`))
 }

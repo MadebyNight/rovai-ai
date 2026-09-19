@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-app-shell-navigation
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # App Shell 与统一侧栏
@@ -51,8 +51,13 @@ Camp（包括快速对话）按最近一条已发布用户消息排序，桌面�
 
 Camp 行显示稳定标题和必要状态。三点菜单是置顶/取消置顶、重命名、复制会话 ID 和删除的唯一
 入口；复制只写稳定 Camp ID 原文。Camp 顶栏不得重复这些操作。
-Desktop 与宽屏 WebUI 的置顶 Camp 在标题左侧显示 12px 对话图标，标题与 Project 子列表中的 Camp 共用文字基线；
-未读点叠在图标边缘，不额外占据水平位置。MobileUI 沿用 20px 对话图标与手机行高。
+Desktop 与宽屏 WebUI 的置顶 Camp 在标题左侧显示 17px 对话图标；置顶项目标题、置顶项目内 Camp、
+普通项目内 Camp 与独立置顶 Camp 共用文字轴。Project 子 Camp 只用层级缩进，不渲染空图标或左侧状态占位。
+每个 Camp 行右侧始终保留 12×12px 状态槽：正在打开或运行时显示 loading，否则有新回复时显示 7px
+`--conversation-unread` 蓝点，无状态时留空；loading 与未读同时成立时只显示 loading，未读事实及可访问名称继续保留。
+状态变化不得移动标题或改变长标题的可用宽度。MobileUI 使用同一状态 DOM，蓝点为 6px，并沿用 20px
+列表会话图标、44px 会话行与 48px Project 行；底栏“对话”图标保持 21px。
+会话图标统一采用 24×24 画布、1.7 描边的横向圆角气泡与短尾，单线条、无填充、无阴影；其他导航图标不变。
 
 自动生成的 Camp 标题不把开头连续的真实队员 Mention / 所有队员 Mention 当作标题内容；只保留
 首段正文开始后的文字，正文中后部的 Mention 和手写 `@文字` 继续作为普通标题文字。Camp 行不把

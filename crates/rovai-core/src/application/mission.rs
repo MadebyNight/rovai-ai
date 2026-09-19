@@ -61,6 +61,10 @@ async fn observe_mission_source_attachments(
     .context("Mission Source Attachment observation task failed")?
 }
 
+fn worktree_cleanup_required(worktree_removed: bool, branch_removed: bool) -> bool {
+    !(worktree_removed && branch_removed)
+}
+
 impl Core {
     async fn mission_git(&self) -> Result<MissionGit> {
         MissionGit::new(
@@ -325,7 +329,10 @@ impl Core {
             "mission.execution_host_unavailable"
         );
         anyhow::ensure!(workspace.state != "preparing", "mission.workspace_in_use");
-        if workspace.cleanup_finished() {
+        if !worktree_cleanup_required(
+            workspace.cleanup_worktree_removed,
+            workspace.cleanup_branch_removed,
+        ) {
             return Ok(workspace);
         }
 
@@ -356,7 +363,9 @@ impl Core {
         workspace.state = "cleanup_pending".into();
         workspace.cleanup_command_id = Some(command_id.to_string());
         workspace.cleanup_expected_branch_oid = expected_oid.clone();
-        workspace.cleanup_worktree_removed = !worktree_exists;
+        // Git can retain an owned worktree registration after the directory disappears. Repeat
+        // the idempotent worktree cleanup on every incomplete attempt, then checkpoint success.
+        workspace.cleanup_worktree_removed = false;
         workspace.cleanup_branch_removed = actual_branch_oid.is_none();
         workspace.diagnostic = None;
         {
@@ -372,19 +381,17 @@ impl Core {
         }
         self.mission_diff_snapshots.lock().await.release(mission_id);
 
-        if !workspace.cleanup_worktree_removed {
-            if let Err(error) = git.cleanup(&workspace).await {
-                self.mark_mission_workspace_cleanup_failed(&workspace.id, &error)
-                    .await?;
-                return Err(error);
-            }
-            workspace.cleanup_worktree_removed = true;
-            let database = self.database.lock().await;
-            database.connection().execute(
-                "UPDATE mission_workspace SET cleanup_worktree_removed=1,updated_at=?2 WHERE id=?1",
-                params![workspace.id, chrono::Utc::now().to_rfc3339()],
-            )?;
+        if let Err(error) = git.cleanup(&workspace).await {
+            self.mark_mission_workspace_cleanup_failed(&workspace.id, &error)
+                .await?;
+            return Err(error);
         }
+        workspace.cleanup_worktree_removed = true;
+        let database = self.database.lock().await;
+        database.connection().execute(
+            "UPDATE mission_workspace SET cleanup_worktree_removed=1,updated_at=?2 WHERE id=?1",
+            params![workspace.id, chrono::Utc::now().to_rfc3339()],
+        )?;
 
         if !workspace.cleanup_branch_removed {
             let expected_oid = expected_oid.context("mission.branch_identity_missing")?;
@@ -861,4 +868,17 @@ async fn select_candidate(
         });
     }
     anyhow::bail!("mission.workspace_names_exhausted")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worktree_cleanup_required;
+
+    #[test]
+    fn incomplete_cleanup_retries_worktree_step_even_after_its_checkpoint() {
+        assert!(worktree_cleanup_required(false, false));
+        assert!(worktree_cleanup_required(false, true));
+        assert!(worktree_cleanup_required(true, false));
+        assert!(!worktree_cleanup_required(true, true));
+    }
 }

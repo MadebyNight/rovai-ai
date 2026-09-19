@@ -352,6 +352,18 @@ async function assertSidebarContract(cdp, context) {
         if (rows.length < 2) return null
         return rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top
       })(),
+      navigationGeometry: (() => {
+        const projectTitle = projectGroups[0]?.querySelector('.project-select-row .truncate')?.getBoundingClientRect()
+        const campTitle = projectGroups[0]?.querySelector('.camp-nav-row .truncate')?.getBoundingClientRect()
+        const status = projectGroups[0]?.querySelector('.camp-status-slot')?.getBoundingClientRect()
+        if (!projectTitle || !campTitle || !status) return null
+        return {
+          titleDelta: Math.abs(projectTitle.left - campTitle.left),
+          statusWidth: status.width,
+          statusHeight: status.height,
+          leadingMarkers: document.querySelectorAll('#global-navigation .camp-marker-slot').length
+        }
+      })(),
       sectionFont: getComputedStyle(document.querySelector('#projects-heading')).fontSize,
       plusCenterDelta: (() => {
         const sectionPlus = document.querySelector('.navigation-section-title .section-create-button')
@@ -388,6 +400,12 @@ async function assertSidebarContract(cdp, context) {
   assert(state.campRowHeight !== null && Math.abs(state.campRowHeight - 28) < 0.6
       && state.campRowPitch !== null && Math.abs(state.campRowPitch - 28) < 0.6,
   `${context} Camp rows did not keep the approved 28px pitch: ${JSON.stringify(state)}`)
+  assert(state.navigationGeometry
+      && state.navigationGeometry.titleDelta < 0.6
+      && Math.abs(state.navigationGeometry.statusWidth - 12) < 0.6
+      && Math.abs(state.navigationGeometry.statusHeight - 12) < 0.6
+      && state.navigationGeometry.leadingMarkers === 0,
+  `${context} Camp titles or trailing status geometry drifted: ${JSON.stringify(state.navigationGeometry)}`)
   assert(state.coarsePointer
       ? state.projectMenuOpacity > 0.95 && state.projectCreateOpacity > 0.95
         && state.campMenuOpacity > 0.95 && state.campMenuPointerEvents === 'auto'

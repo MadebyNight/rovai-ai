@@ -1035,6 +1035,8 @@ function CampRow({
   const pressMenu = useNavigationPressMenu(mobile)
   const title = formatCampTitle(camp)
   const hasNewReply = camp.marker === 'unread_completed'
+  const loadingStatus = opening ? 'opening' : camp.marker === 'loading' ? 'loading' : null
+  const status = loadingStatus ?? (hasNewReply ? 'unread' : 'none')
   const menuLabels = campNavigationMenuLabels(pinned)
   const menuItems: SidebarActionMenuItem[] = camp.activationState === 'pending'
     ? []
@@ -1072,20 +1074,18 @@ function CampRow({
         type="button"
         aria-current={active ? 'page' : undefined}
         aria-busy={opening || undefined}
-        aria-label={`${hasNewReply ? `${title}，有新回复` : title}${opening ? '，正在打开' : ''}`}
+        aria-label={`${title}${hasNewReply ? '，有新回复' : ''}${opening ? '，正在打开' : camp.marker === 'loading' ? '，正在运行' : ''}`}
         title={hasNewReply ? `${title} · 有新回复` : title}
         onClick={() => onCamp(camp)}
       >
-        <span className="camp-marker-slot" aria-hidden="true">
-          {hasNewReply && <i className="task-dot camp-marker-unread_completed" />}
-        </span>
         {pinned && <span className="pinned-camp-icon" aria-hidden="true"><NavigationIcon name="messages" /></span>}
         <span className="truncate">{title}</span>
-        {hasNewReply && <span className="sr-only">有新回复</span>}
         {camp.activationState === 'pending' && <span className="camp-draft-badge">草稿</span>}
-        {opening
-          ? <span className="camp-loading-spinner camp-open-spinner" role="img" aria-label="正在打开对话" />
-          : camp.marker === 'loading' && <span className="camp-loading-spinner camp-marker-loading" role="img" aria-label="正在运行" />}
+        <span className="camp-status-slot" data-status={status} aria-hidden="true">
+          {loadingStatus
+            ? <span className={`camp-loading-spinner ${opening ? 'camp-open-spinner' : 'camp-marker-loading'}`} />
+            : hasNewReply && <i className="camp-unread-dot" />}
+        </span>
       </button>
       <SidebarActionMenu
         target={`camp:${camp.id}`}

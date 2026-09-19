@@ -2879,6 +2879,8 @@ describe('task event projections', () => {
     expect(markup).toContain('data-navigation-icon="settings"')
     expect(markup).toContain('id="pinned-heading">置顶')
     expect(markup).toContain('class="pinned-camp-icon"')
+    expect(markup).toContain('M8.1 4.75h7.8c3.13 0 5.35 2.15 5.35 5.1')
+    expect(markup).toContain('class="camp-unread-dot"')
     expect(markup).toContain('快速对话讨论')
     expect(markup).toContain('rovai-ai')
     expect(markup).toContain(longTitle)
@@ -2993,7 +2995,7 @@ describe('task event projections', () => {
     expect(settings).toContain('settings-app-update-badge')
   })
 
-  it('keeps navigation marker slots stable and lets the project row control selection and disclosure', () => {
+  it('keeps one stable trailing status slot with loading ahead of unread', () => {
     const makeCamp = (id: string, marker: 'none' | 'unread_completed' | 'loading') => ({
       id,
       title: `${id} 对话`,
@@ -3020,12 +3022,17 @@ describe('task event projections', () => {
           projectPath: '/repo',
           lastActivityAt: '2026-08-05T00:00:00Z',
           lastActivityGlobalSequence: 1,
-          totalCount: 3,
-          recentCamps: [makeCamp('plain', 'none'), makeCamp('unread', 'unread_completed'), makeCamp('running', 'loading')]
+          totalCount: 4,
+          recentCamps: [
+            makeCamp('plain', 'none'),
+            makeCamp('unread', 'unread_completed'),
+            makeCamp('opening', 'unread_completed'),
+            makeCamp('running', 'loading')
+          ]
         }]
       },
       activeCampId: 'plain',
-      openingCampId: 'unread',
+      openingCampId: 'opening',
       onNewConversation: () => undefined,
       onMembers: () => undefined,
       onMemory: () => undefined,
@@ -3039,16 +3046,20 @@ describe('task event projections', () => {
       onError: () => undefined
     }))
 
-    expect(markup.match(/class="camp-marker-slot"/g)).toHaveLength(3)
-    expect(markup).not.toContain('camp-marker-none')
-    expect(markup).toContain('camp-marker-unread_completed')
-    expect(markup).toContain('camp-marker-loading')
-    expect(markup).toContain('aria-busy="true" aria-label="unread 对话，有新回复，正在打开"')
-    expect(markup).toContain('title="unread 对话 · 有新回复"')
-    expect(markup).toContain('<span class="sr-only">有新回复</span>')
-    expect(markup).toContain('class="camp-loading-spinner camp-open-spinner" role="img" aria-label="正在打开对话"')
-    expect(markup).toContain('role="img" aria-label="正在运行"')
-    expect(markup.match(/class="camp-draft-badge">草稿/g)).toHaveLength(3)
+    expect(markup.match(/class="camp-status-slot"/g)).toHaveLength(4)
+    expect(markup).not.toContain('class="camp-marker-slot"')
+    expect(markup).toContain('data-status="none"')
+    expect(markup).toContain('data-status="unread"')
+    expect(markup).toContain('data-status="opening"')
+    expect(markup).toContain('data-status="loading"')
+    expect(markup.match(/class="camp-unread-dot"/g)).toHaveLength(1)
+    expect(markup).toContain('aria-busy="true" aria-label="opening 对话，有新回复，正在打开"')
+    expect(markup).toContain('aria-label="running 对话，正在运行"')
+    expect(markup).toContain('title="opening 对话 · 有新回复"')
+    expect(markup).toContain('class="camp-loading-spinner camp-open-spinner"')
+    expect(markup).toContain('class="camp-loading-spinner camp-marker-loading"')
+    expect(markup).not.toContain('role="img" aria-label="正在运行"')
+    expect(markup.match(/class="camp-draft-badge">草稿/g)).toHaveLength(4)
     expect(markup).toContain('aria-expanded="true" aria-controls="camp-group-content-directory--repo"')
     expect(markup).toContain('project-folder-open')
     expect(markup).toContain('project-folder-closed')
