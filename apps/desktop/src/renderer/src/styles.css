@@ -1839,18 +1839,38 @@ html.file-preview-resizing .file-preview-pane { pointer-events: none; }
   font-size: 10px;
 }
 .file-preview-markdown { width: 100%; overflow: auto; overscroll-behavior: contain; padding: 30px clamp(20px, 4cqi, 52px) 64px; scrollbar-gutter: stable; }
-.file-preview-markdown .safe-markdown { max-width: 780px; margin: 0 auto; overflow-wrap: anywhere; }
+.file-preview-markdown-document { width: 100%; max-width: 780px; min-width: 0; margin: 0 auto; }
+.file-preview-markdown-document > .safe-markdown { max-width: none; margin: 0; overflow-wrap: anywhere; }
 .file-preview-markdown .safe-markdown > * { min-width: 0; }
 .file-preview-markdown .safe-markdown :is(pre, .markdown-table-scroll) { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.file-preview-metadata { display: block; min-width: 0; margin: 0 0 30px; padding: 9px 12px 10px; border: 1px solid var(--conversation-code-line); border-radius: 8px; color: var(--evidence-ink); background: var(--conversation-code-block-canvas); box-shadow: none; text-align: start; user-select: text; }
+.file-preview-metadata-caption { margin: 0 0 8px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 16px; }
+.file-preview-metadata-fields { display: grid; gap: 6px; margin: 0; padding: 0; }
+.file-preview-metadata-row { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; }
+.file-preview-metadata-row :is(dt, dd) { min-width: 0; margin: 0; padding: 0; border: 0; background: none; font: 400 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.file-preview-metadata-row dt { color: var(--muted); }
+.file-preview-metadata-row dd { color: var(--evidence-ink); }
+.file-preview-metadata-value { font: inherit; }
+.file-preview-metadata-warning { display: flex; align-items: flex-start; gap: 6px; margin: 0 0 9px; color: var(--attention); font-size: 12px; line-height: 1.5; }
+.file-preview-metadata-warning svg { width: 14px; height: 14px; flex: 0 0 14px; margin-top: 2px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
+.file-preview-metadata-raw { min-width: 0; max-width: 100%; margin: 0; padding: 0; overflow: visible; border: 0; color: var(--evidence-ink); background: transparent; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-preview-metadata-raw code { padding: 0; border-radius: 0; color: inherit; background: transparent; font: inherit; }
 @container file-preview-pane (min-width: 960px) {
   .file-preview-markdown { padding-top: 38px; }
-  .file-preview-markdown .safe-markdown { max-width: 1120px; }
+  .file-preview-markdown-document { max-width: 1120px; }
   .file-preview-markdown .safe-markdown > * { width: 100%; max-width: 860px; }
   .file-preview-markdown .safe-markdown > :is(pre, .markdown-table-scroll) { max-width: none; }
 }
 @container file-preview-pane (min-width: 1200px) {
   .file-preview-markdown .safe-markdown > * { max-width: 930px; }
   .file-preview-markdown .safe-markdown > :is(pre, .markdown-table-scroll) { max-width: none; }
+}
+@container file-preview-pane (max-width: 480px) {
+  .file-preview-metadata-row { grid-template-columns: 104px minmax(0, 1fr); }
+}
+@container file-preview-pane (max-width: 330px) {
+  .file-preview-metadata-fields { gap: 10px; }
+  .file-preview-metadata-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
 }
 .file-preview-markdown .safe-markdown img { display: block; max-width: 100%; height: auto; margin: 18px auto; border-radius: 7px; box-shadow: var(--shadow-card); }
 .safe-markdown .markdown-file-reference,

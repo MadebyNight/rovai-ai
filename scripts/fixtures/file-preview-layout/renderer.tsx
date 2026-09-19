@@ -1,4 +1,5 @@
 import { searchFileDocuments } from '../../../apps/desktop/src/renderer/src/file-find-client'
+import { createFileFindDomIndex } from '../../../apps/desktop/src/renderer/src/file-find-dom'
 import { EMPTY_FILE_FIND } from '../../../apps/desktop/src/renderer/src/file-find'
 import { EditorView } from '@codemirror/view'
 import { isFileFindTarget } from '../../../apps/desktop/src/renderer/src/FilePreviewFind'
@@ -42,6 +43,17 @@ const markdownFile: ResolvedFilePreview = {
   target: { heading: '核心阅读' }
 }
 const markdownSource = [
+  '---',
+  'document_type: file-preview-fixture',
+  'authority: renderer-file-preview',
+  'last_updated: 2026-09-19',
+  'tags: [markdown, accessibility]',
+  'owners:',
+  '  renderer: desktop-team',
+  '  review: design-team',
+  `description: ${'long-metadata-value/'.repeat(18)}`,
+  '---',
+  '',
   '# 文件预览',
   '',
   '正文以舒适字号呈现，并保留清楚的文档层级。文件**预览**支持跨行内格式查找。',
@@ -767,6 +779,10 @@ Object.assign(window, { previewTest: {
       toggleBackground: getComputedStyle(element('.file-preview-toggle')!).backgroundColor
     }
   },
+  findableMarkdownText() {
+    const root = element('.file-preview-tab-panel:not([hidden]) .file-preview-markdown')!
+    return createFileFindDomIndex(root, '.file-preview-markdown-document').text
+  },
   async setSourceSearch(query: string) {
     const input = document.querySelector<HTMLInputElement>('.file-preview-tab-panel:not([hidden]) .file-find-form > input')!
     if (!input) throw new Error('The file find input is not open')
@@ -786,7 +802,12 @@ Object.assign(window, { previewTest: {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
     const panel = element('.file-preview-tab-panel:not([hidden])')!
+    const previewDocument = panel.querySelector<HTMLElement>('.file-preview-markdown-document')!
     const documentRoot = panel.querySelector<HTMLElement>('.safe-markdown.is-document')!
+    const metadata = panel.querySelector<HTMLElement>('.file-preview-metadata')!
+    const metadataDescription = [...metadata.querySelectorAll<HTMLElement>('.file-preview-metadata-row')]
+      .find((row) => row.querySelector('dt')?.textContent === 'description')!
+    const metadataDescriptionValue = metadataDescription.querySelector<HTMLElement>('dd')!
     const code = panel.querySelector<HTMLElement>('.markdown-code-block code')!
     const syntax = code.querySelector<HTMLElement>('span')!
     const table = panel.querySelector<HTMLElement>('table')!
@@ -804,9 +825,21 @@ Object.assign(window, { previewTest: {
       editorCount: panel.querySelectorAll('.cm-editor').length,
       tableFontSize: getComputedStyle(table).fontSize,
       tableScrolls: tableScroll.scrollWidth > tableScroll.clientWidth,
-      documentWidth: documentRoot.getBoundingClientRect().width,
+      documentWidth: previewDocument.getBoundingClientRect().width,
       paneWidth: panel.getBoundingClientRect().width,
-      pageOverflow: document.documentElement.scrollWidth > innerWidth
+      pageOverflow: document.documentElement.scrollWidth > innerWidth,
+      metadata: {
+        text: metadata.textContent,
+        background: getComputedStyle(metadata).backgroundColor,
+        borderColor: getComputedStyle(metadata).borderColor,
+        borderRadius: getComputedStyle(metadata).borderRadius,
+        width: metadata.getBoundingClientRect().width,
+        overflows: metadata.scrollWidth > metadata.clientWidth + 1,
+        descriptionWraps: metadataDescriptionValue.getBoundingClientRect().height
+          > Number.parseFloat(getComputedStyle(metadataDescriptionValue).lineHeight),
+        columns: getComputedStyle(metadataDescription).gridTemplateColumns,
+        headingCount: metadata.querySelectorAll('h1,h2,h3,h4,h5,h6').length
+      }
     }
   },
   bookmark() {

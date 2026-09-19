@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-file-preview
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Camp 文件预览区
@@ -202,6 +202,18 @@ Viewer 不显示右上角复制按钮、整行工具栏或 `Ready` 状态。除 
 - 代码/文本通过同一个只读 CodeMirror 6 Viewer 显示行号、搜索、定位、选择与系统复制，大文件分页；
 - 图片/SVG 提供适应、原始尺寸、缩放和重置，不把 SVG 注入宿主 DOM；
 - Diff/Patch 按文件和 hunk 展示，解析失败回退文本。
+
+Markdown 文件预览在渲染正文前，仅检查文件第一个字符位置（允许 UTF-8 BOM）是否存在由两行 `---` 闭合的
+YAML mapping Front Matter。有效字段从正文中分离，按原顺序显示在常显的 `Metadata` 定义列表中；数组和嵌套
+mapping 使用可选择、可搜索的等宽多行文本保留结构，未知字段与长值完整换行，不变成 Badge、状态或审批语义。
+该区块直接复用 `--conversation-code-block-canvas`、`--conversation-code-line`、8px 圆角和现有文字语义 token，
+亮暗主题使用同一 DOM。预览窄于 480px 时收窄键列，窄于 330px 时键值纵向排列，不产生区块内滚动或页面横向溢出。
+
+空 mapping 或空 Front Matter 不显示区块、不保留间距。具有 mapping 键形态的闭合文件头若格式错误、包含重复键、
+未知 YAML tag、不可安全展开的 alias 或不支持的值，则以同一区块中的代码文本保留完整原始文件头，同时正文继续渲染；不显示解析器内部错误。
+未闭合文件头、非 mapping YAML、文件正文中的分隔线和代码围栏内 YAML 均保持普通 Markdown，不因猜测而被提取。
+这一投影只属于 Markdown 文件 Viewer，不修改文件内容、消息 `SafeMarkdown`、文件能力或读取协议。文件内查找与
+`Cmd/Ctrl+A` 以 `Metadata + 正文` 的完整可见文档为范围；Tab、刷新、切换 Camp 与阅读位置仍由既有预览会话拥有。
 
 代码 Viewer 固定使用 14px、400 字重、1.6 行高的系统等宽字体栈和 14px 顶部留白，长行在 Viewer 内横向滚动。
 `readOnly` 与 `editable=false` 禁止修改，但不移除焦点、文本选择、无行号复制和 `Cmd/Ctrl+F`。CodeMirror 的默认

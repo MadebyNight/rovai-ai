@@ -247,13 +247,22 @@ app.whenReady().then(async () => {
     assert.equal(day.tableScrolls, true)
     assert.ok(day.documentWidth <= 780 && day.documentWidth < day.paneWidth)
     assert.equal(day.pageOverflow, false)
+    assert.match(day.metadata.text, /Metadatadocument_typefile-preview-fixture/)
+    assert.match(day.metadata.text, /tags- markdown\s+- accessibility/)
+    assert.match(day.metadata.text, /ownersrenderer: desktop-team\s+review: design-team/)
+    assert.equal(day.metadata.background, 'rgb(244, 245, 245)')
+    assert.equal(day.metadata.borderColor, 'rgb(217, 222, 225)')
+    assert.equal(day.metadata.borderRadius, '8px')
+    assert.equal(day.metadata.overflows, false)
+    assert.equal(day.metadata.descriptionWraps, true)
+    assert.equal(day.metadata.headingCount, 0, 'Metadata never enters the document heading hierarchy')
 
     await click('.file-preview-tab-panel:not([hidden]) .safe-markdown h1')
     for (const modifier of process.platform === 'darwin' ? ['meta', 'control'] : ['control']) {
       await key('a', [modifier])
-      const text = await assertScopedSelection('.file-preview-tab-panel:not([hidden]) .safe-markdown')
-      assert.ok(text.includes('文件预览') && text.includes('滚轮经过宽表格'),
-        'Select all includes the complete active Markdown document')
+      const text = await assertScopedSelection('.file-preview-tab-panel:not([hidden]) .file-preview-markdown-document')
+      assert.ok(text.includes('document_type') && text.includes('文件预览') && text.includes('滚轮经过宽表格'),
+        'Select all includes Metadata and the complete active Markdown document')
       await run('window.getSelection().removeAllRanges()')
     }
     await key('f', [process.platform === 'darwin' ? 'meta' : 'control'])
@@ -288,17 +297,36 @@ app.whenReady().then(async () => {
       type: 'mouseWheel', x: reader.x, y: reader.y, deltaX: 0, deltaY: 180
     })
     await snapshot()
-    assert.ok(await run(`document.querySelector(
+    const readingPosition = await run(`document.querySelector(
       '.file-preview-tab-panel:not([hidden]) .file-preview-markdown'
-    ).scrollTop > 0`), 'Vertical wheel input over a wide table continues scrolling the Markdown reader')
+    ).scrollTop`)
+    assert.ok(readingPosition > 0, 'Vertical wheel input over a wide table continues scrolling the Markdown reader')
     await capture('markdown-reader-day')
 
     await run('window.previewTest.setTheme("night")')
     const night = await run('window.previewTest.markdownSnapshot()')
     assert.notEqual(night.syntaxColor, day.syntaxColor)
+    assert.equal(night.metadata.background, 'rgb(37, 44, 48)')
+    assert.equal(night.metadata.borderColor, 'rgb(62, 73, 79)')
     assert.equal(night.editorCount, 0)
     assert.equal(night.pageOverflow, false)
+    assert.equal(await run(`document.querySelector(
+      '.file-preview-tab-panel:not([hidden]) .file-preview-markdown'
+    ).scrollTop`), readingPosition, 'Theme changes preserve Markdown reading position')
     await capture('markdown-reader-night')
+
+    await click('[role="tab"][aria-label="preview-layout.ts"]')
+    await click('[role="tab"][aria-label="preview-reader.md"]')
+    assert.equal(await run(`document.querySelector(
+      '.file-preview-tab-panel:not([hidden]) .file-preview-markdown'
+    ).scrollTop`), readingPosition, 'Tab switches preserve Markdown reading position')
+
+    await viewport(1111)
+    const narrow = await run('window.previewTest.markdownSnapshot()')
+    assert.match(narrow.metadata.columns, /^104px /)
+    assert.equal(narrow.metadata.overflows, false)
+    assert.equal(narrow.pageOverflow, false)
+    await capture('markdown-reader-narrow-night')
     await viewport(2560, 1440)
     for (const theme of ['day', 'night']) {
       await run(`window.previewTest.setTheme(${JSON.stringify(theme)})`)
@@ -983,17 +1011,23 @@ app.whenReady().then(async () => {
     assert.equal(found.marked, 2, 'A match can span Markdown inline formatting without changing text')
     assert.equal(found.current, '文件预览')
     assert.equal(found.nativePanel, false)
-    await run('window.findDocumentNode = document.querySelector(".file-preview-markdown .safe-markdown")')
+    await run('window.findDocumentNode = document.querySelector(".file-preview-markdown-document")')
     await click('.file-find-form [aria-label="下一个匹配"]')
     assert.equal((await run('window.previewTest.findSnapshot()')).count, '2 / 2')
     await capture('file-find-markdown-day')
-    await click('.timeline-pane')
+    await click('.timeline-track > h2')
     assert.equal((await run('window.previewTest.findSnapshot()')).visible, false)
-    assert.equal(await run('window.findDocumentNode === document.querySelector(".file-preview-markdown .safe-markdown")'), true)
+    assert.equal(await run('window.findDocumentNode === document.querySelector(".file-preview-markdown-document")'), true)
     await key('f', [process.platform === 'darwin' ? 'meta' : 'control'])
     assert.equal((await run('window.previewTest.findSnapshot()')).visible, false, 'Conversation shortcut does not open file find')
     await run('document.querySelector(".conversation-find-form input").value = "会话专用"')
     await click('.file-preview-find-trigger')
+    assert.match(await run('window.previewTest.findableMarkdownText()'), /document_type/,
+      'The Markdown find index includes visible Metadata fields')
+    await run('window.previewTest.setSourceSearch("document_type")')
+    found = await run('window.previewTest.findSnapshot()')
+    assert.equal(found.count, '1 / 1', 'File find includes visible Metadata fields')
+    assert.equal(found.current, 'document_type')
     await run('window.previewTest.setSourceSearch("文件预览")')
     found = await run('window.previewTest.findSnapshot()')
     assert.equal(found.conversationQuery, '会话专用')
