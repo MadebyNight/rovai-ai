@@ -990,6 +990,9 @@ html[data-rovai-platform="win32"] .bootstrap-shell-brand { padding-left: 20px; }
 @keyframes shutdown-feedback-in { from { opacity: 0; } }
 @keyframes shutdown-progress { from { transform: translateX(0); } to { transform: translateX(365%); } }
 .app-toast span { font-size: 12px; line-height: 1.45; }
+.app-toast-action { min-width: 44px; min-height: 28px; flex: none; padding: 0 7px; border: 0; border-radius: 5px; color: inherit; background: transparent; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.app-toast-action:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.app-toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .app-toast .icon-button { width: 26px; min-height: 26px; }
 .memory-review-notice { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin: 16px 22px 0; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--attention) 38%, var(--line)); border-radius: 8px; background: var(--attention-soft); }
 .memory-review-notice > div:first-child { display: grid; min-width: 0; gap: 3px; }

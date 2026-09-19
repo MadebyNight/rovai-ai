@@ -43,10 +43,17 @@ pub struct MissionWorkspace {
     pub cleanup_command_id: Option<String>,
     #[serde(skip)]
     pub cleanup_expected_branch_oid: Option<String>,
-    #[serde(skip)]
     pub cleanup_worktree_removed: bool,
-    #[serde(skip)]
     pub cleanup_branch_removed: bool,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionWorkspaceCleanupProjection {
+    pub state: String,
+    pub worktree_removed: bool,
+    pub branch_removed: bool,
     pub diagnostic: Option<String>,
 }
 
@@ -1202,10 +1209,10 @@ pub fn cleanup_projection(
     connection: &Connection,
     mission_id: &str,
     camp_id: &str,
-) -> Result<(bool, bool, bool)> {
+) -> Result<(bool, bool, bool, Option<MissionWorkspaceCleanupProjection>)> {
     let workspaces = load_workspaces(connection, mission_id)?;
     let Some(workspace) = workspaces.first() else {
-        return Ok((false, false, false));
+        return Ok((false, false, false, None));
     };
     let resources_present = workspace.managed_resources_remain();
     let current_host: String = connection.query_row(
@@ -1216,9 +1223,33 @@ pub fn cleanup_projection(
     let available = resources_present
         && workspace.execution_host_id == current_host
         && workspace.camp_id == camp_id
-        && workspace.state != "preparing"
+        && workspace.state == "ready"
         && !workspace_in_use(connection, workspace)?;
-    Ok((true, resources_present, available))
+    let cleanup = if workspace.cleanup_finished() {
+        Some(MissionWorkspaceCleanupProjection {
+            state: "cleaned".into(),
+            worktree_removed: true,
+            branch_removed: true,
+            diagnostic: None,
+        })
+    } else if workspace.state == "cleanup_pending" {
+        Some(MissionWorkspaceCleanupProjection {
+            state: "cleaning".into(),
+            worktree_removed: workspace.cleanup_worktree_removed,
+            branch_removed: workspace.cleanup_branch_removed,
+            diagnostic: None,
+        })
+    } else if workspace.state == "cleanup_failed" {
+        Some(MissionWorkspaceCleanupProjection {
+            state: "failed".into(),
+            worktree_removed: workspace.cleanup_worktree_removed,
+            branch_removed: workspace.cleanup_branch_removed,
+            diagnostic: workspace.diagnostic.clone(),
+        })
+    } else {
+        None
+    };
+    Ok((true, resources_present, available, cleanup))
 }
 
 struct TemporaryIndex {

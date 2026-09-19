@@ -13,10 +13,13 @@ drafts, published files and execution. Renderer does not create a parallel conve
 
 `MissionService` applies atomic commands through the existing gateway. The scheduler enters preparing
 only after execution admission; the application coordinator then resolves or recovers the Mission workspace
-outside the SQLite lock. It serializes preparation, explicit cleanup and deletion, persists association before
-Git work, and rechecks claim fences before launching the Runtime. Non-Git projects retain their original cwd.
-A worktree is retained throughout ordinary Mission use. Standalone cleanup records two foreground steps in its
-existing association; a later preparing phase restores the branch/worktree according to actual resource state.
+outside the SQLite lock. Preparation and cleanup admission share a short fence so an accepted cleanup intent
+cannot race reuse of the same workspace. The durable intent then runs under a separate serialized cleanup worker,
+so Git removal does not hold preparation or ordinary Mission operations for unrelated workspaces. Preparation
+persists association before Git work and rechecks claim fences before launching the Runtime. Non-Git projects
+retain their original cwd. A worktree is retained throughout ordinary Mission use. Standalone cleanup records
+two asynchronous steps in its existing association; a later preparing phase restores the branch/worktree
+according to actual resource state.
 
 `MissionGit` reads the source checkout's current local branch and `HEAD` when the first admitted Run enters
 preparing, and again only when both previously managed Git resources have been removed. It uses the resolved
@@ -25,6 +28,9 @@ verifies the owned resource set once, persists the branch OID on the first attem
 worktree before checking branch use and conditionally deleting the local Mission branch at that OID. Its two
 durable checkpoints let retries skip the completed worktree step and reuse the saved OID; an absent resource is
 idempotent without widening cleanup beyond the verified path, registration or staging root.
+The command commits `cleanup_pending` before notifying the worker; startup/periodic recovery scans unfinished
+pending rows only. Failure becomes `cleanup_failed` and is never automatically retried. Successful live cleanup
+keeps both completed checkpoints for reconstruction; successful orphan cleanup removes the workspace row.
 It computes cumulative changes against a fixed initial commit with an independent temporary index. Opening
 the cumulative-change browser establishes a bounded, expiring process-local snapshot containing the file-ID
 to old/new-path mapping and that index. A single-file request resolves only through this snapshot and runs a
@@ -70,10 +76,12 @@ No Mission business version is taught to Agents; field patches use last-committe
 Desktop/wide Web share Mission navigation and the existing CampWorkspace. Drawer and full conversation
 preserve one mounted composer/preview owner. Mobile is intentionally outside this increment. Renderer consumes
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
-branch in place; optional cleanup must finish before the Mission is deleted and has no retained-resource UI or
-background retry. Protocol and failure behavior live in [Mission v6](../contracts/mission-v6.md); UI in
+branch in place. Optional cleanup records its intent in the same transaction that deletes the Mission, removes
+the card immediately, and exposes only failed orphan work through the existing cleanup route; retained resources
+never enter that route. Protocol and failure behavior live in [Mission v7](../contracts/mission-v7.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14). Global discovery and current-only mutation are explained
 by [V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01). Status/message decoupling is explained by
-[V1.62-D01](../versions/v1.62/decisions.md#v1-62-d01).
+[V1.62-D01](../versions/v1.62/decisions.md#v1-62-d01); asynchronous cleanup ordering is explained by
+[V1.62-D02](../versions/v1.62/decisions.md#v1-62-d02).

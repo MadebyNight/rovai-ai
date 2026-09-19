@@ -33,6 +33,10 @@ type MissionActions = {
   tags(mission: MissionRecord, event: MouseEvent<HTMLElement>): void
   status(mission: MissionRecord, status: MissionStatus): void
   start(mission: MissionRecord): void
+  cleanup(mission: MissionRecord): Promise<void>
+  cleanupFeedback(mission: MissionRecord): 'cleaning' | 'success' | 'failed' | null
+  dismissCleanupSuccesses(): void
+  notifyError(message: string, action?: { label: string; onSelect(): void }): void
   busyId: string | null
 }
 const Actions = createContext<MissionActions | null>(null)
@@ -53,8 +57,8 @@ export function missionDate(value: string): string {
 }
 
 /** Shared overlays keep card actions identical in the board, drawer and full conversation. */
-export function MissionInteractionProvider({ missions, projects, agents, onChanged, onWorkspaceCleaned, onDeleted, onError, children }: {
-  missions: MissionRecord[]; projects: ProjectNavigationGroup[]; agents: AgentProfile[]; onChanged(campId: string): Promise<void>; onWorkspaceCleaned(campId: string): Promise<void>; onDeleted(campId: string): Promise<void>; onError(message: string): void; children: ReactNode
+export function MissionInteractionProvider({ missions, projects, agents, onChanged, onWorkspaceCleaned, onDeleted, onOpen, onError, children }: {
+  missions: MissionRecord[]; projects: ProjectNavigationGroup[]; agents: AgentProfile[]; onChanged(campId: string): Promise<void>; onWorkspaceCleaned(campId: string): Promise<void>; onDeleted(campId: string): Promise<void>; onOpen(mission: MissionRecord): void; onError(message: string, action?: { label: string; onSelect(): void }): void; children: ReactNode
 }) {
   const client = useCampClient()
   const [position, setPosition] = useState<(ContextPosition & { kind: 'menu' | 'tags' | 'members' }) | null>(null)
@@ -62,9 +66,16 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
   const [cleaning, setCleaning] = useState<MissionRecord | null>(null)
   const [deleting, setDeleting] = useState<MissionRecord | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [cleanupFeedbacks, setCleanupFeedbacks] = useState<Record<string, 'cleaning' | 'success'>>({})
   const starts = useRef(new Map<string, string>())
+  const cleanupRequests = useRef(new Set<string>())
+  const cleanupTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const observedCleanupStates = useRef(new Map<string, NonNullable<MissionRecord['workspaceCleanup']>['state'] | undefined>())
   const catalog = [...new Set(missions.flatMap(m => m.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   const selected = missions.find(m => m.missionId === position?.id)
+  const selectedForMenu = selected && (cleanupFeedbacks[selected.missionId] === 'cleaning' || selected.workspaceCleanup?.state === 'cleaning')
+    ? { ...selected, cleanupAvailable: false }
+    : selected
   const anchor = (kind: 'menu' | 'tags' | 'members', m: MissionRecord, event: MouseEvent<HTMLElement>) => {
     event.preventDefault(); event.stopPropagation()
     const rect = event.currentTarget.getBoundingClientRect()
@@ -90,12 +101,68 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
     catch (error) { if (error instanceof MissionCommandRejected) starts.current.delete(m.missionId); throw error }
     finally { setBusyId(null) }
   }
+  async function cleanup(m: MissionRecord) {
+    if (cleanupRequests.current.has(m.missionId) || cleanupFeedbacks[m.missionId] === 'cleaning' || m.workspaceCleanup?.state === 'cleaning') return
+    cleanupRequests.current.add(m.missionId)
+    try {
+      await missionCommand(client, 'missions.workspace.cleanup', { missionId: m.missionId })
+      setCleanupFeedbacks(current => ({ ...current, [m.missionId]: 'cleaning' }))
+      void onWorkspaceCleaned(m.campId).catch(error => onError(`使命 Worktree 清理已开始，但信息刷新失败：${missionError(error)}`))
+    } finally {
+      cleanupRequests.current.delete(m.missionId)
+    }
+  }
+  const dismissCleanupSuccesses = () => {
+    cleanupTimers.current.forEach(timer => clearTimeout(timer)); cleanupTimers.current.clear()
+    setCleanupFeedbacks(current => Object.values(current).includes('success')
+      ? Object.fromEntries(Object.entries(current).filter(([, state]) => state !== 'success'))
+      : current)
+  }
+  useEffect(() => {
+    const present = new Set(missions.map(mission => mission.missionId))
+    for (const missionId of observedCleanupStates.current.keys()) {
+      if (!present.has(missionId)) observedCleanupStates.current.delete(missionId)
+    }
+    for (const mission of missions) {
+      const missionId = mission.missionId
+      const cleanup = mission.workspaceCleanup
+      const state = cleanup?.state
+      const observed = observedCleanupStates.current.has(missionId)
+      const previous = observedCleanupStates.current.get(missionId)
+      observedCleanupStates.current.set(missionId, state)
+      if (!observed) continue
+      const locallyCleaning = cleanupFeedbacks[missionId] === 'cleaning'
+      const transitioned = state !== previous
+      if (cleanup?.state === 'failed' && (locallyCleaning || transitioned)) {
+        setCleanupFeedbacks(current => {
+          if (!(missionId in current)) return current
+          const next = { ...current }; delete next[missionId]; return next
+        })
+        const label = cleanup.worktreeRemoved && !cleanup.branchRemoved ? '分支清理失败' : 'Worktree 清理失败'
+        onError(`${`M-${String(mission.number).padStart(3, '0')}`} ${label}`, { label: '查看', onSelect: () => onOpen(mission) })
+      } else if (state === 'cleaned' && (locallyCleaning || transitioned)) {
+        setCleanupFeedbacks(current => current[missionId] === 'success' ? current : { ...current, [missionId]: 'success' })
+        if (!cleanupTimers.current.has(missionId)) {
+          cleanupTimers.current.set(missionId, setTimeout(() => {
+            cleanupTimers.current.delete(missionId)
+            setCleanupFeedbacks(current => {
+              if (current[missionId] !== 'success') return current
+              const next = { ...current }; delete next[missionId]; return next
+            })
+          }, 4_000))
+        }
+      }
+    }
+  }, [cleanupFeedbacks, missions, onError, onOpen])
+  useEffect(() => () => { cleanupTimers.current.forEach(timer => clearTimeout(timer)) }, [])
   const actions: MissionActions = {
     edit: setEditing, menu: (m, e) => anchor('menu', m, e), roster: (m, e) => anchor('members', m, e), tags: (m, e) => anchor('tags', m, e),
-    status: (m, status) => report(change(m, 'status', { status })), start: m => report(start(m)), busyId
+    status: (m, status) => report(change(m, 'status', { status })), start: m => report(start(m)), cleanup,
+    cleanupFeedback: m => cleanupFeedbacks[m.missionId] ?? (m.workspaceCleanup?.state === 'cleaning' || m.workspaceCleanup?.state === 'failed' ? m.workspaceCleanup.state : null),
+    dismissCleanupSuccesses, notifyError: onError, busyId
   }
   return <MissionPeopleProvider agents={agents}><Actions.Provider value={actions}>{children}
-    <MissionContextMenu key={`${position?.id}:${position?.x}:${position?.y}`} m={selected} position={position?.kind === 'menu' ? position : null} catalog={catalog} onClose={() => setPosition(null)}
+    <MissionContextMenu key={`${position?.id}:${position?.x}:${position?.y}`} m={selectedForMenu} position={position?.kind === 'menu' ? position : null} catalog={catalog} onClose={() => setPosition(null)}
       onEdit={() => { if (selected) setEditing(selected); setPosition(null) }}
       onStatus={status => { if (selected) actions.status(selected, status) }}
       onLead={id => { if (selected) report((async () => {
@@ -110,11 +177,9 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
       {position.kind === 'tags' ? <LabelsEditor key={selected.missionId} m={selected} catalog={catalog} onSave={tags => change(selected, 'update', { tags })}/> : <MissionRoster m={selected}/>}
     </MissionPopover>}
     {editing && <MissionEdit key={editing.missionId} mission={editing} projects={projects} agents={agents} catalog={catalog} onClose={() => setEditing(null)} onSaved={() => onChanged(editing.campId)} onSave={patch => change(editing, 'update', patch)}/>}
-    {cleaning && <MissionWorkspaceCleanup key={cleaning.missionId} mission={cleaning} onClose={() => setCleaning(null)} onCleaned={() => {
-      const campId = cleaning.campId
-      setCleaning(null)
-      void onWorkspaceCleaned(campId).catch(error => onError(`使命 Worktree 已清理，但信息刷新失败：${missionError(error)}`))
-    }}/>}
+    {cleaning && (
+      <MissionWorkspaceCleanup key={cleaning.missionId} mission={cleaning} onClose={() => setCleaning(null)} onRequested={async () => { await cleanup(cleaning); setCleaning(null) }}/>
+    )}
     {deleting && <MissionDelete key={deleting.missionId} mission={deleting} onClose={() => setDeleting(null)} onDelete={async workspaceDisposition => {
       const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: deleting.campId })
       await missionCommand(client, 'camps.delete', { campId: deleting.campId, expectedVersion: snapshot.camp.version, force: true, workspaceDisposition })
@@ -218,17 +283,16 @@ function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onCl
     </Dialog.Portal>
   </Dialog.Root>
 }
-function MissionWorkspaceCleanup({ mission, onCleaned, onClose }: { mission: MissionRecord; onCleaned(): void; onClose(): void }) {
+function MissionWorkspaceCleanup({ mission, onRequested, onClose }: { mission: MissionRecord; onRequested(): Promise<void>; onClose(): void }) {
   const client = useCampClient(), [delivery, setDelivery] = useState<MissionDelivery | null>(null), [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('')
   useEffect(() => { let current = true; setError(''); void client.request<MissionDelivery>('missions.delivery', { missionId: mission.missionId }).then(data => { if (current) setDelivery(data) }).catch(error => { if (current) setError(missionError(error)) }); return () => { current = false } }, [client, mission.missionId, retry])
   async function cleanup() {
     setBusy(true); setError('')
     try {
-      await missionCommand(client, 'missions.workspace.cleanup', { missionId: mission.missionId })
-      onCleaned()
+      await onRequested()
     } catch (error) { setError(missionError(error)) } finally { setBusy(false) }
   }
-  return <CompactDialog title="清理使命 Worktree" className="mission-worktree-cleanup-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary" onClick={() => void cleanup()} disabled={busy || !delivery?.workspace}>{busy ? '正在清理…' : '清理'}</button></>}>
+  return <CompactDialog title="清理使命 Worktree" className="mission-worktree-cleanup-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary" onClick={() => void cleanup()} disabled={busy || !delivery?.workspace}>{busy ? '正在安排清理…' : '清理'}</button></>}>
     <p>将删除此使命的 Worktree 和本地分支。</p>
     {delivery?.workspace && <div className="mission-delete-workspaces"><div><code>{delivery.workspace.worktreePath}</code><small>{delivery.workspace.branch}</small></div></div>}
     {!delivery && !error && <p role="status">正在读取关联工作区…</p>}
@@ -257,28 +321,131 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverStatus, setDragOverStatus] = useState<MissionStatus | null>(null)
   const [pageHidden, setPageHidden] = useState(false)
+  const [activeLane, setActiveLane] = useState<MissionStatus>('needs_you')
+  const boardScroll = useRef<HTMLDivElement>(null)
+  const laneScrolls = useRef(new Map<MissionStatus, HTMLDivElement>())
+  const laneScrollMemory = useRef(new Map<MissionStatus, number>())
+  const boardHorizontalMemory = useRef(0)
+  const dragPointer = useRef<{ x: number; y: number; status: MissionStatus } | null>(null)
+  const dragFrame = useRef<number | null>(null)
+  const dragFrameTime = useRef(0)
+  useEffect(() => { if (hidden) actions.dismissCleanupSuccesses() }, [hidden])
   useEffect(() => {
     const update = (): void => setPageHidden(document.hidden)
     update()
     document.addEventListener('visibilitychange', update)
     return () => document.removeEventListener('visibilitychange', update)
   }, [])
+  useEffect(() => () => {
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current)
+  }, [])
   const catalog = [...new Set(missions.flatMap(m => m.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   const paths = [...new Set(missions.map(m => m.projectPath))]
   const filtered = missions.filter(m => (!stateFilter.length || stateFilter.includes(m.status)) && (!tags.length || tags.some(t => m.tags.includes(t))) && (!projectFilter.length || projectFilter.includes(m.projectPath)) && `${m.title}\n${m.description}\n${m.tags.join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+  const visibleStatuses = statuses.filter(status => !stateFilter.length || stateFilter.includes(status.id))
+  const updateActiveLane = (): void => {
+    const host = boardScroll.current
+    if (!host || view !== 'board') return
+    const edge = host.getBoundingClientRect().left + 2
+    let nearest: { status: MissionStatus; distance: number } | null = null
+    for (const status of visibleStatuses) {
+      const column = laneScrolls.current.get(status.id)?.closest<HTMLElement>('.mission-column')
+      if (!column) continue
+      const distance = Math.abs(column.getBoundingClientRect().left - edge)
+      if (!nearest || distance < nearest.distance) nearest = { status: status.id, distance }
+    }
+    if (nearest) setActiveLane(current => current === nearest.status ? current : nearest.status)
+  }
+  const changeView = (next: 'board' | 'list'): void => {
+    if (next === view) return
+    if (view === 'board') {
+      laneScrolls.current.forEach((lane, status) => laneScrollMemory.current.set(status, lane.scrollTop))
+      boardHorizontalMemory.current = boardScroll.current?.scrollLeft ?? 0
+    }
+    setView(next)
+  }
+  useLayoutEffect(() => {
+    if (view !== 'board') return
+    laneScrolls.current.forEach((lane, status) => { lane.scrollTop = laneScrollMemory.current.get(status) ?? 0 })
+    if (boardScroll.current) boardScroll.current.scrollLeft = boardHorizontalMemory.current
+    updateActiveLane()
+  }, [view])
+  useLayoutEffect(() => {
+    laneScrollMemory.current.clear()
+    laneScrolls.current.forEach(lane => { lane.scrollTop = 0 })
+    updateActiveLane()
+  }, [query, stateFilter.join('\u0000'), tags.join('\u0000'), projectFilter.join('\u0000')])
+  const edgeSpeed = (point: number, start: number, end: number): number => {
+    const margin = Math.min(64, (end - start) / 3)
+    if (point < start + margin && point >= start - 12) return -Math.max(1, (start + margin - point) / margin) * 9
+    if (point > end - margin && point <= end + 12) return Math.max(1, (point - end + margin) / margin) * 9
+    return 0
+  }
+  const queueDragScroll = (): void => {
+    if (dragFrame.current !== null) return
+    const scroll = (time: number): void => {
+      const pointer = dragPointer.current
+      if (!pointer) { dragFrame.current = null; dragFrameTime.current = 0; return }
+      const scale = Math.min(2, Math.max(.5, (time - (dragFrameTime.current || time - 16)) / 16))
+      dragFrameTime.current = time
+      const lane = laneScrolls.current.get(pointer.status)
+      if (lane) {
+        const bounds = lane.getBoundingClientRect()
+        lane.scrollTop += edgeSpeed(pointer.y, bounds.top, bounds.bottom) * scale
+      }
+      const host = boardScroll.current
+      if (host) {
+        const bounds = host.getBoundingClientRect()
+        if (pointer.y >= bounds.top && pointer.y <= bounds.bottom) host.scrollLeft += edgeSpeed(pointer.x, bounds.left, bounds.right) * scale
+      }
+      dragFrame.current = requestAnimationFrame(scroll)
+    }
+    dragFrame.current = requestAnimationFrame(scroll)
+  }
+  const stopDragging = (): void => {
+    dragPointer.current = null
+    dragFrameTime.current = 0
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current)
+    dragFrame.current = null
+    setDraggingId(null)
+    setDragOverStatus(null)
+  }
+  useEffect(() => {
+    if (!draggingId) return
+    const cancel = (event: KeyboardEvent): void => { if (event.key === 'Escape') stopDragging() }
+    document.addEventListener('keydown', cancel)
+    return () => document.removeEventListener('keydown', cancel)
+  }, [draggingId])
+  const focusAdjacentLane = (status: MissionStatus, direction: -1 | 1): void => {
+    const index = visibleStatuses.findIndex(candidate => candidate.id === status)
+    const next = visibleStatuses[index + direction]
+    const lane = next && laneScrolls.current.get(next.id)
+    const host = boardScroll.current
+    if (!lane || !host) return
+    lane.focus({ preventScroll: true })
+    const laneBounds = lane.closest<HTMLElement>('.mission-column')?.getBoundingClientRect()
+    const hostBounds = host.getBoundingClientRect()
+    if (laneBounds && (laneBounds.left < hostBounds.left || laneBounds.right > hostBounds.right)) {
+      host.scrollLeft += laneBounds.left - hostBounds.left
+    }
+  }
   function card(m: MissionRecord) {
+    const cleanupFeedback = actions.cleanupFeedback(m)
     const openFromContainer = (event: MouseEvent<HTMLElement>) => {
       if (!(event.target instanceof Element) || event.target.closest('button,a,input') || window.getSelection()?.toString()) return
       event.currentTarget.querySelector<HTMLButtonElement>('.mission-card-open')?.focus({ preventScroll: true }); onOpen(m)
     }
-    return <article key={m.missionId} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}${draggingId === m.missionId ? ' is-dragging' : ''}${m.hasUnread ? ' is-unread' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)} draggable
+    return <article key={m.missionId} data-mission-id={m.missionId} aria-busy={cleanupFeedback === 'cleaning' || undefined} className={`mission-board-card${selectedId === m.missionId ? ' selected' : ''}${draggingId === m.missionId ? ' is-dragging' : ''}${m.hasUnread ? ' is-unread' : ''}`} onClick={openFromContainer} onContextMenu={e => actions.menu(m, e)} draggable
       onDragStart={event => { setDraggingId(m.missionId); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', m.missionId) }}
-      onDragEnd={() => { setDraggingId(null); setDragOverStatus(null) }}
+      onDragEnd={stopDragging}
       onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); const bounds = e.currentTarget.getBoundingClientRect(); e.currentTarget.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left, clientY: bounds.bottom })) } }}>
-      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><div className="mission-card-top-actions"><MissionRunning mission={m} pageHidden={pageHidden}/></div></div>
+      <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><div className="mission-card-top-actions"><MissionRunning mission={m} pageHidden={pageHidden}/><button type="button" className="mission-card-more" aria-label={`M-${String(m.number).padStart(3, '0')} 的操作`} aria-haspopup="menu" title="使命操作" onClick={event => actions.menu(m, event)}><Icon name="more"/></button></div></div>
       <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.title}</h3></button>
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-card-footer"><MissionAvatars m={m} compact onClick={e => actions.roster(m, e)}/>{m.hasUnread && <span className="mission-unread-message" role="img" aria-label="有未读回复" title="有未读回复；与执行状态独立"><span className="mission-unread-dot" aria-hidden="true"/><span aria-hidden="true">未读</span></span>}<time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
+      {cleanupFeedback && (
+        <MissionCleanupCardStatus mission={m} state={cleanupFeedback} onOpen={() => onOpen(m)}/>
+      )}
     </article>
   }
   return <section className="mission-board-content mission-board-page" hidden={hidden} aria-label="使命板">
@@ -289,21 +456,41 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
       <MissionFilter label="项目" icon={<NavigationIcon name="folder-open"/>} values={projectFilter} onChange={setProjectFilter} options={paths.map(path => ({ id: path, keywords: path, icon: <NavigationIcon name="folder-open"/>, label: missionProject(missions.find(m => m.projectPath === path)!, projects) }))}/>
       {!!(stateFilter.length + tags.length + projectFilter.length) && <button className="mission-clear-filters" aria-label="清除筛选" onClick={() => { setStateFilter([]); setTags([]); setProjectFilter([]) }}><DialogControlIcon name="close"/></button>}
     </div><label className="mission-search"><NavigationIcon name="search"/><input aria-label="搜索使命" placeholder="搜索使命…" value={query} onChange={e => setQuery(e.target.value)}/></label>
-    <Menu.Root><Menu.Trigger asChild><button className="mission-filter mission-view-trigger" aria-label={`切换视图，当前${view === 'board' ? '看板' : '列表'}`}><Icon name={view}/><Icon name="chevron"/></button></Menu.Trigger><Menu.Portal><Menu.Content className="compact-menu" align="end" sideOffset={6}><Menu.RadioGroup value={view} onValueChange={v => setView(v as 'board' | 'list')}>{(['board', 'list'] as const).map(v => <Menu.RadioItem className="compact-option" value={v} key={v}><Icon name={v}/><span>{v === 'board' ? '看板' : '列表'}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator></Menu.RadioItem>)}</Menu.RadioGroup></Menu.Content></Menu.Portal></Menu.Root>
+    <Menu.Root><Menu.Trigger asChild><button className="mission-filter mission-view-trigger" aria-label={`切换视图，当前${view === 'board' ? '看板' : '列表'}`}><Icon name={view}/><Icon name="chevron"/></button></Menu.Trigger><Menu.Portal><Menu.Content className="compact-menu" align="end" sideOffset={6}><Menu.RadioGroup value={view} onValueChange={v => changeView(v as 'board' | 'list')}>{(['board', 'list'] as const).map(v => <Menu.RadioItem className="compact-option" value={v} key={v}><Icon name={v}/><span>{v === 'board' ? '看板' : '列表'}</span><Menu.ItemIndicator><Icon name="check"/></Menu.ItemIndicator></Menu.RadioItem>)}</Menu.RadioGroup></Menu.Content></Menu.Portal></Menu.Root>
     </div>
     {error && <div className="mission-load-error" role="alert"><span>{error}</span><button onClick={() => void onRefresh()}>重试</button></div>}
     <MissionCleanupNotice/>
-    <div className="mission-board-scroll">
+    <p className="sr-only" id="mission-board-lane-help">每个状态列可独立滚动。可拖动卡片，或通过卡片操作菜单修改状态。</p>
+    {view === 'board' && <nav className="mission-lane-nav" aria-label="切换状态列">{visibleStatuses.map(status => <button type="button" key={status.id} aria-pressed={activeLane === status.id} onClick={() => {
+      const host = boardScroll.current
+      const column = laneScrolls.current.get(status.id)?.closest<HTMLElement>('.mission-column')
+      if (!host || !column) return
+      const hostBounds = host.getBoundingClientRect(), columnBounds = column.getBoundingClientRect()
+      host.scrollLeft += columnBounds.left - hostBounds.left
+      setActiveLane(status.id)
+    }}>{status.label}<small>{filtered.filter(mission => mission.status === status.id).length}</small></button>)}</nav>}
+    <div ref={boardScroll} className="mission-board-scroll" data-view={view} onScroll={event => { if (event.target === event.currentTarget) updateActiveLane() }} onDragLeave={event => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        dragPointer.current = null
+        if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current)
+        dragFrame.current = null
+        dragFrameTime.current = 0
+        setDragOverStatus(null)
+      }
+    }}>
       {loading && !missions.length && <p role="status" className="mission-section-empty">正在加载使命…</p>}
-      {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${stateFilter.length || statuses.length}, minmax(200px, 1fr))`}}>
-        {statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className={`mission-column${dragOverStatus === s.id ? ' is-drop-target' : ''}`} key={s.id}
-          onDragOver={event => { if (!draggingId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverStatus(s.id) }}
+      {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${visibleStatuses.length}, minmax(var(--mission-column-min-width, 200px), 1fr))`}}>
+        {visibleStatuses.map(s => <section className={`mission-column${dragOverStatus === s.id ? ' is-drop-target' : ''}`} key={s.id}
+          onDragOver={event => { if (!draggingId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; dragPointer.current = { x: event.clientX, y: event.clientY, status: s.id }; setDragOverStatus(s.id); queueDragScroll() }}
           onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverStatus(current => current === s.id ? null : current) }}
-          onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggingId; const mission = missions.find(candidate => candidate.missionId === id); setDraggingId(null); setDragOverStatus(null); if (mission && mission.status !== s.id) actions.status(mission, s.id) }}>
-          <header><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header>
-          <div className="mission-column-cards">{filtered.filter(m => m.status === s.id).map(card)}</div>
+          onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggingId; const mission = missions.find(candidate => candidate.missionId === id); stopDragging(); if (mission && mission.status !== s.id) actions.status(mission, s.id) }}>
+          <header><StatusIcon status={s.id}/><h2 id={`mission-lane-${s.id}`}>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header>
+          <div ref={node => { if (node) laneScrolls.current.set(s.id, node); else laneScrolls.current.delete(s.id) }} className="mission-column-cards" data-status={s.id} tabIndex={0} role="region" aria-labelledby={`mission-lane-${s.id}`} aria-describedby="mission-board-lane-help" onKeyDown={event => {
+            if (event.target !== event.currentTarget) return
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); focusAdjacentLane(s.id, event.key === 'ArrowLeft' ? -1 : 1) }
+          }}>{filtered.filter(m => m.status === s.id).map(card)}</div>
         </section>)}
-      </div> : <div className="mission-grouped-list">{statuses.filter(s => !stateFilter.length || stateFilter.includes(s.id)).map(s => <section className="mission-list-group" key={s.id}>
+      </div> : <div className="mission-grouped-list">{visibleStatuses.map(s => <section className="mission-list-group" key={s.id}>
         <button className="mission-group-heading" aria-expanded={!collapsedGroups.includes(s.id)} onClick={() => setCollapsedGroups(current => current.includes(s.id) ? current.filter(id => id !== s.id) : [...current, s.id])}>
           <Icon name="chevron"/><StatusIcon status={s.id}/><h2>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span>
         </button>
@@ -312,6 +499,18 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     </div>
     {!loading && missions.length > 0 && !filtered.length && <p className="mission-section-empty" role="status">没有符合筛选条件的使命。</p>}
   </section>
+}
+
+function MissionCleanupCardStatus({ mission, state, onOpen }: { mission: MissionRecord; state: 'cleaning' | 'success' | 'failed'; onOpen(): void }) {
+  const branchOnly = mission.workspaceCleanup?.worktreeRemoved && !mission.workspaceCleanup.branchRemoved
+  if (state === 'failed') return <div className="mission-card-cleanup-status is-failed" role="alert">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.75 14.25 13H1.75L8 1.75Z"/><path d="M8 5.1v4.2M8 11.7v.1"/></svg>
+    <span>{branchOnly ? '分支清理失败' : 'Worktree 清理失败'}</span><span aria-hidden="true">·</span><button type="button" onClick={onOpen}>查看</button>
+  </div>
+  return <div className={`mission-card-cleanup-status is-${state}`} role="status" aria-live="polite" aria-atomic="true">
+    {state === 'cleaning' ? <span className="mission-cleanup-spinner" aria-hidden="true"/> : <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 8.1 3 3 6.5-6.5"/></svg>}
+    <span>{state === 'cleaning' ? branchOnly ? '正在清理本地分支…' : '正在清理 Worktree…' : 'Worktree 已清理'}</span>
+  </div>
 }
 
 function MissionRunning({ mission, pageHidden }: { mission: MissionRecord; pageHidden: boolean }) {
@@ -328,25 +527,47 @@ function MissionRunning({ mission, pageHidden }: { mission: MissionRecord; pageH
   </span>
 }
 
-/** Historical orphan cleanup only; retained v3 workspaces never enter these states. */
+/** Deleted-Mission cleanup recovery; retained workspaces never enter this route. */
 function MissionCleanupNotice() {
-  const client = useCampClient(), [rows, setRows] = useState<MissionWorkspace[]>([]), [open, setOpen] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState<string | null>(null)
+  const client = useCampClient(), { notifyError } = useMissionActions(), [rows, setRows] = useState<MissionWorkspace[]>([]), [open, setOpen] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState<string | null>(null)
+  const previousStates = useRef<Map<string, MissionWorkspace['state']> | null>(null)
   useEffect(() => {
-    let current = true
-    const load = () => { void client.request<MissionWorkspace[]>('missions.cleanup.list').then(rows => { if (current) { setRows(rows); setError('') } }).catch(error => { if (current) setError(missionError(error)) }) }
+    let current = true, sequence = 0
+    const load = () => {
+      const request = ++sequence
+      void client.request<MissionWorkspace[]>('missions.cleanup.list').then(next => {
+        if (!current || request !== sequence) return
+        const previous = previousStates.current
+        if (previous) next.filter(row => row.state === 'cleanup_failed' && previous.get(row.id) !== 'cleanup_failed').forEach(row => {
+          const label = row.cleanupWorktreeRemoved && !row.cleanupBranchRemoved ? '分支清理失败' : 'Worktree 清理失败'
+          notifyError(`使命 ${row.branch} ${label}`, { label: '查看', onSelect: () => setOpen(true) })
+        })
+        previousStates.current = new Map(next.map(row => [row.id, row.state]))
+        setRows(next); setError('')
+      }).catch(error => { if (current && request === sequence) setError(missionError(error)) })
+    }
     load()
     const poll = setInterval(load, 30_000), unsubscribe = client.onEvent?.(event => { if (event.method === 'navigation.invalidated') load() }), invalidated = client.onInvalidated?.(load)
     return () => { current = false; clearInterval(poll); unsubscribe?.(); invalidated?.() }
-  }, [client])
+  }, [client, notifyError])
   async function retry(workspace: MissionWorkspace) {
     setBusy(workspace.id); setError('')
     try {
       await client.request('missions.cleanup.retry', { workspaceId: workspace.id })
-      setRows(await client.request<MissionWorkspace[]>('missions.cleanup.list'))
+      const next = await client.request<MissionWorkspace[]>('missions.cleanup.list')
+      previousStates.current = new Map(next.map(row => [row.id, row.state]))
+      setRows(next)
     } catch (error) { setError(missionError(error)) } finally { setBusy(null) }
   }
   return <>{(rows.length > 0 || error) && <div className="mission-cleanup-notice"><button onClick={() => setOpen(true)}>{error ? '工作区清理状态暂不可用' : `${rows.length} 个工作区待清理`}</button></div>}
-    {open && <CompactDialog title="工作区清理" className="mission-cleanup-list" onClose={() => setOpen(false)}>{error && <p role="alert">{error}</p>}{rows.map(row => <section key={row.id}><div><code>{row.worktreePath}</code><small>分支保留：{row.branch}</small></div>{row.diagnostic && <p role="alert">{row.diagnostic}</p>}<button className="compact-cancel" onClick={() => void retry(row)} disabled={busy !== null}>{busy === row.id ? '正在清理…' : '重新清理'}</button></section>)}{!rows.length && !error && <p role="status">工作区已清理完成。</p>}</CompactDialog>}
+    {open && <CompactDialog title="工作区清理" className="mission-cleanup-list" onClose={() => setOpen(false)}>{error && <p role="alert">{error}</p>}{rows.map(row => {
+      const branchOnly = row.cleanupWorktreeRemoved && !row.cleanupBranchRemoved
+      return <section key={row.id}><div><code>{row.worktreePath}</code><small>本地分支：{row.branch}</small><small>Worktree：{row.cleanupWorktreeRemoved ? '已清理' : '待清理'} · 本地分支：{row.cleanupBranchRemoved ? '已清理' : '待清理'}</small></div>
+        {row.state === 'cleanup_pending' && <p role="status">{branchOnly ? '正在清理本地分支…' : '正在清理 Worktree…'}</p>}
+        {row.diagnostic && <><p className="mission-cleanup-failure-title" role="alert">{branchOnly ? '分支清理失败' : 'Worktree 清理失败'}</p><p>{row.diagnostic}</p></>}
+        {row.state === 'cleanup_failed' && <button className="compact-cancel" onClick={() => void retry(row)} disabled={busy !== null}>{busy === row.id ? '正在安排重试…' : '重试未完成步骤'}</button>}
+      </section>
+    })}{!rows.length && !error && <p role="status">工作区已清理完成。</p>}</CompactDialog>}
   </>
 }
 

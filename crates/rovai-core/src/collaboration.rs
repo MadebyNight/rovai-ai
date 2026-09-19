@@ -1392,6 +1392,36 @@ impl CollaborationService {
             }
 
             let forced = !blockers.is_empty();
+            if envelope.payload.workspace_disposition == MissionWorkspaceDisposition::Retain {
+                let cleanup_running: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM mission_workspace WHERE camp_id=?1 AND state='cleanup_pending' AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1))",
+                    [&envelope.payload.camp_id],
+                    |row| row.get(0),
+                )?;
+                if cleanup_running {
+                    return Ok(CommandHandlerResult::rejected(
+                        "camp.workspace_cleanup_pending",
+                        json!({"campId": envelope.payload.camp_id}),
+                    ));
+                }
+            }
+            transaction.execute(
+                "DELETE FROM mission_workspace WHERE camp_id=?1 AND cleanup_worktree_removed=1 AND cleanup_branch_removed=1",
+                [&envelope.payload.camp_id],
+            )?;
+            let workspace_cleanup_scheduled = match envelope.payload.workspace_disposition {
+                MissionWorkspaceDisposition::Cleanup => transaction.execute(
+                    "UPDATE mission_workspace SET generation=generation+CASE WHEN state='ready' THEN 1 ELSE 0 END,state='cleanup_pending',cleanup_command_id=CASE WHEN state='cleanup_pending' THEN cleanup_command_id ELSE ?2 END,diagnostic=NULL,updated_at=?3 WHERE camp_id=?1 AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1)",
+                    params![envelope.payload.camp_id, envelope.command_id, chrono::Utc::now().to_rfc3339()],
+                )?,
+                MissionWorkspaceDisposition::Retain => {
+                    transaction.execute(
+                        "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,diagnostic=NULL,updated_at=?2 WHERE camp_id=?1 AND state IN ('cleanup_pending','cleanup_failed') AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1)",
+                        params![envelope.payload.camp_id, chrono::Utc::now().to_rfc3339()],
+                    )?;
+                    0
+                }
+            };
             delete_camp_aggregate(transaction, &envelope.payload.camp_id)?;
             Ok(CommandHandlerResult::applied(
                 "camp.deleted",
@@ -1399,6 +1429,7 @@ impl CollaborationService {
                     "campId": envelope.payload.camp_id,
                     "forced": forced,
                     "bypassedBlockers": if forced { blockers } else { Vec::new() },
+                    "workspaceCleanupScheduled": workspace_cleanup_scheduled > 0,
                 }),
                 None,
             ))
@@ -8684,7 +8715,7 @@ mod slow_tests {
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }
     #[test]
-    fn camp_rename_lead_change_and_quiescent_delete_are_versioned() {
+    fn camp_rename_lead_change_and_quiescent_delete_with_cleanup_are_versioned() {
         let (mut database, directory) = test_database();
         let service = CollaborationService::default();
         let camp_id =
@@ -8844,6 +8875,22 @@ mod slow_tests {
                 rusqlite::params![camp_id, agent_run_id],
             )
             .unwrap();
+        let execution_host_id: String = database
+            .connection()
+            .query_row(
+                "SELECT id FROM mission_execution_host WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        database.connection().execute(
+            "INSERT INTO mission(id,number,camp_id,title,description,status,tags_json,source_attachments_json,created_at,updated_at) VALUES('mission-before-delete',1,?1,'cleanup intent','','completed','[]','[]','created','updated')",
+            [&camp_id],
+        ).unwrap();
+        database.connection().execute(
+            "INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,diagnostic,created_at,updated_at) VALUES('workspace-before-delete','mission-before-delete',?1,?2,'/repo','/repo','/repo/.git','/worktree','/worktree','main','rovai/mission/001','base','owner','ready','old diagnostic','created','updated')",
+            params![camp_id, execution_host_id],
+        ).unwrap();
         let delete_version = camp_version(&database, &camp_id);
         let delete_envelope = user_envelope(
             "delete-camp",
@@ -8852,7 +8899,7 @@ mod slow_tests {
                 camp_id: camp_id.clone(),
                 expected_version: delete_version,
                 force: false,
-                workspace_disposition: Default::default(),
+                workspace_disposition: MissionWorkspaceDisposition::Cleanup,
             },
         );
         let delete = service
@@ -8862,7 +8909,25 @@ mod slow_tests {
             .delete_camp(&mut database, &delete_envelope)
             .expect("delete should replay");
         assert_eq!(delete.result.code, "camp.deleted");
+        assert_eq!(delete.result.payload["workspaceCleanupScheduled"], true);
         assert!(replay.replayed);
+        let cleanup_intent: (String, Option<String>, i64, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT state,cleanup_command_id,generation,diagnostic FROM mission_workspace WHERE id='workspace-before-delete'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            cleanup_intent,
+            (
+                "cleanup_pending".into(),
+                Some("delete-camp".into()),
+                2,
+                None
+            )
+        );
         assert_eq!(row_count(&database, "camp"), 0);
         assert_eq!(row_count(&database, "camp_member"), 0);
         assert_eq!(row_count(&database, "conversation"), 0);

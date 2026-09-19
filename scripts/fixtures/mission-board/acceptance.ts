@@ -8,6 +8,12 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   }
   const button = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
     .find(el => el.getAttribute('aria-label') === label || el.textContent?.trim() === label)!
+  const switchMissionView = async (label: '看板' | '列表'): Promise<void> => {
+    document.querySelector<HTMLButtonElement>('.mission-view-trigger')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    await until(() => document.querySelector('[role=menuitemradio]'), 'View menu opens')
+    Array.from(document.querySelectorAll<HTMLElement>('[role=menuitemradio]')).find(node => node.textContent === label)!.click()
+    await until(() => label === '看板' ? document.querySelectorAll('.mission-column').length > 0 : document.querySelectorAll('.mission-list-group').length > 0, `${label} view renders`)
+  }
   const tab = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('[role=tab]')).find(el => el.textContent === label)
   const visiblePreview = () => document.querySelector<HTMLElement>('.file-preview-retained-host:not([hidden])')
   const fill = (element: HTMLInputElement, value: string) => {
@@ -37,7 +43,11 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(unread.textContent === '未读' && unreadDotBounds.width === 8 && unreadDotBounds.height === 8 && unreadStyle.fontSize === '12px' && unreadStyle.fontWeight === '600', 'Unread Mission uses an 8px blue dot and 12px semibold label')
   check(getComputedStyle(card.querySelector('.mission-card-open h3')!).fontWeight === '600', 'Unread Mission title gains the approved emphasis')
   check(getComputedStyle(unread).backgroundColor === 'rgba(0, 0, 0, 0)', 'Unread state remains unboxed')
-  check(!document.querySelector('.mission-card-actions'), 'Cards expose actions only through the context menu')
+  const cardMore = card.querySelector<HTMLButtonElement>('.mission-card-more')!
+  check(cardMore?.getAttribute('aria-haspopup') === 'menu', 'Cards expose an accessible ellipsis action alongside the context-menu path')
+  cardMore.click()
+  await until(() => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).some(item => item.textContent?.trim() === '状态'), 'Card ellipsis opens the shared menu with status controls')
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   const running = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.querySelector('.mission-running'))!
   const runningChildren = Array.from(running.querySelector('.mission-running')!.children).filter(node => !node.classList.contains('camp-execution-orbits')).map(node => node.getBoundingClientRect())
   check(running.querySelectorAll('.mission-running-avatars .member-avatar').length === 3, 'Running state shows at most three avatars')
@@ -74,15 +84,54 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(qa.calls.some((call:any) => call.method === 'missions.status' && call.p.command?.missionId === qa.items[2].missionId), 'Drag uses the authoritative status command')
   cases.push('board has equal lanes, stable metadata, running and unread states, and status drag-and-drop')
 
+  qa.seedScrollableLanes()
+  await until(() => {
+    const columns = Array.from(document.querySelectorAll<HTMLElement>('.mission-column-cards'))
+    return columns.length === 4 && columns.every(column => column.scrollHeight > column.clientHeight + 40)
+  }, 'Each status lane receives enough content to own vertical scrolling')
+  const laneScroll = (status: string) => document.querySelector<HTMLElement>(`.mission-column-cards[data-status="${status}"]`)
+    ?? Array.from(document.querySelectorAll<HTMLElement>('.mission-column')).find(column => column.querySelector('h2')?.id === `mission-lane-${status}`)!.querySelector<HTMLElement>('.mission-column-cards')!
+  const needsLaneScroll = laneScroll('needs_you'), idleLaneScroll = laneScroll('not_started'), progressLaneScroll = laneScroll('in_progress'), completedLaneScroll = laneScroll('completed')
+  const laneHeaderTops = Array.from(document.querySelectorAll<HTMLElement>('.mission-column > header')).map(header => header.getBoundingClientRect().top)
+  needsLaneScroll.scrollTop = 88; idleLaneScroll.scrollTop = 126; completedLaneScroll.scrollTop = 164
+  await frames()
+  check(getComputedStyle(needsLaneScroll).overflowY === 'auto' && getComputedStyle(needsLaneScroll).overscrollBehaviorY === 'contain' && getComputedStyle(boardScroll).overflowY === 'hidden', 'Wheel ownership is contained by each lane instead of the board page')
+  check(Array.from(document.querySelectorAll<HTMLElement>('.mission-column > header')).every((header,index) => Math.abs(header.getBoundingClientRect().top - laneHeaderTops[index]) <= 1), 'Lane names and counts stay fixed while cards scroll')
+  const unaffectedBeforeDrag = { needsYou: needsLaneScroll.scrollTop, completed: completedLaneScroll.scrollTop }
+  progressLaneScroll.scrollTop = 0
+  const autoScrollSource = document.querySelector<HTMLElement>('[data-mission-id="scroll-not_started-0"]')!
+  const autoScrollTransfer = new DataTransfer(), progressBounds = progressLaneScroll.getBoundingClientRect()
+  autoScrollSource.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: autoScrollTransfer }))
+  await frames()
+  progressLaneScroll.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, clientX: progressBounds.left + progressBounds.width / 2, clientY: progressBounds.bottom - 2, dataTransfer: autoScrollTransfer }))
+  await until(() => progressLaneScroll.scrollTop > 8, 'Dragging at a target lane edge automatically scrolls only that lane')
+  progressLaneScroll.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, clientX: progressBounds.left + progressBounds.width / 2, clientY: progressBounds.bottom - 2, dataTransfer: autoScrollTransfer }))
+  await until(() => qa.items.find((item:any) => item.missionId === 'scroll-not_started-0')?.status === 'in_progress', 'Edge-scrolled drag still commits the cross-lane status move')
+  check(Math.abs(needsLaneScroll.scrollTop - unaffectedBeforeDrag.needsYou) <= 1 && Math.abs(completedLaneScroll.scrollTop - unaffectedBeforeDrag.completed) <= 1, 'Cross-lane status updates do not reset untouched lanes')
+  const refreshReads = qa.calls.filter((call:any) => call.method === 'missions.list').length
+  qa.invalidateMissionDetails()
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.list').length > refreshReads, 'An asynchronous Mission refresh reaches the board')
+  check(Math.abs(needsLaneScroll.scrollTop - unaffectedBeforeDrag.needsYou) <= 1 && Math.abs(completedLaneScroll.scrollTop - unaffectedBeforeDrag.completed) <= 1, 'Asynchronous results preserve independent lane positions')
+  const positionsBeforeViewChange = new Map(Array.from(document.querySelectorAll<HTMLElement>('.mission-column-cards')).map(column => [column.getAttribute('aria-labelledby')!, column.scrollTop]))
+  await switchMissionView('列表')
+  await switchMissionView('看板')
+  const positionsAfterViewChange = new Map(Array.from(document.querySelectorAll<HTMLElement>('.mission-column-cards')).map(column => [column.getAttribute('aria-labelledby')!, column.scrollTop]))
+  check([...positionsBeforeViewChange].every(([status,position]) => Math.abs((positionsAfterViewChange.get(status) ?? -1) - position) <= 1), 'Switching to list and back restores every independent lane position')
+  let lanePositionsBeforeDetails = positionsAfterViewChange
+
   button('状态筛选').click()
   await until(() => document.querySelector('.mission-unified-filter'), 'Status filter opens')
   check(!document.querySelector('.mission-filter-search'), 'Status filter has no search')
   check(!document.querySelector('.mission-unified-filter')?.textContent?.includes('全部'), 'No redundant all option')
   document.querySelector<HTMLButtonElement>('.mission-filter-options [role=checkbox]')!.click()
   await until(() => document.querySelector('.mission-filter-options [aria-checked=true]'), 'Status selection commits')
+  await until(() => document.querySelectorAll('.mission-column-cards').length === 1, 'Status selection narrows the visible lanes')
+  check(Math.abs(document.querySelector<HTMLElement>('.mission-column-cards')!.scrollTop) <= 1, 'Changing filters starts the new lane result at the top')
   check(getComputedStyle(document.querySelector('.mission-filter-options [aria-checked=true] .mission-filter-check')!).backgroundColor !== 'rgba(0, 0, 0, 0)', 'Selected checkbox is filled')
   document.querySelector<HTMLButtonElement>('.mission-filter-group button')!.click()
   button('清除筛选').click()
+  await until(() => document.querySelectorAll('.mission-column-cards').length === 4, 'Clearing status filters restores every lane')
+  check(Array.from(document.querySelectorAll<HTMLElement>('.mission-column-cards')).every(column => Math.abs(column.scrollTop) <= 1), 'Cleared filters keep each restored lane at the top')
   button('项目筛选').click()
   await until(() => document.querySelector('input[aria-label="搜索项目"]'), 'Project filter has search')
   button('项目筛选').click()
@@ -167,6 +216,10 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
     const pane = visiblePreview()?.getBoundingClientRect()
     return anchor && pane && Math.abs(anchor.x - pane.x) < 2 && Math.abs(anchor.right - pane.right) < 2
   }
+  lanePositionsBeforeDetails = new Map(Array.from(document.querySelectorAll<HTMLElement>('.mission-column-cards')).map((column,index) => {
+    column.scrollTop = Math.min(column.scrollHeight - column.clientHeight, 72 + index * 29)
+    return [column.getAttribute('aria-labelledby')!, column.scrollTop]
+  }))
   document.querySelector<HTMLElement>('.mission-board-card')!.click()
   await until(() => document.querySelector('.mission-drawer #camp-message[contenteditable="true"]') && tab('活动'), 'Card opens the real Camp Composer and activity')
   await until(previewFits, 'Preview stays aligned after drawer entrance')
@@ -315,12 +368,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-full'), 'Keyboard expansion')
   button('返回使命板').click()
   await until(() => !document.querySelector('.mission-workspace-host'), 'Return to board')
+  const lanePositionsAfterDetails = new Map(Array.from(document.querySelectorAll<HTMLElement>('.mission-column-cards')).map(column => [column.getAttribute('aria-labelledby')!, column.scrollTop]))
+  check([...lanePositionsBeforeDetails].every(([status,position]) => Math.abs((lanePositionsAfterDetails.get(status) ?? -1) - position) <= 1), 'Opening details and returning preserves every lane position')
+  qa.clearScrollableLanes()
+  await until(() => !document.querySelector('[data-mission-id^="scroll-"]'), 'Independent-scroll fixtures clear without disturbing the real Missions')
+  cases.push('status lanes scroll independently, preserve positions and auto-scroll the drag target edge')
   cases.push('drawer resize hides preview before messages; explicit compact preview and source navigation preserve state')
 
-  document.querySelector<HTMLButtonElement>('.mission-view-trigger')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
-  await until(() => document.querySelector('[role=menuitemradio]'), 'View menu')
-  Array.from(document.querySelectorAll<HTMLElement>('[role=menuitemradio]')).find(n => n.textContent === '列表')!.click()
-  await until(() => document.querySelectorAll('.mission-list-group').length === 4, 'List is grouped by status')
+  await switchMissionView('列表')
+  check(document.querySelectorAll('.mission-list-group').length === 4, 'List is grouped by status')
   document.querySelector<HTMLButtonElement>('.mission-group-heading')!.click()
   await until(() => document.querySelector('.mission-list-cards[hidden]'), 'List group folds')
   cases.push('list view uses independently collapsible status groups')
@@ -476,16 +532,65 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(button('清理').classList.contains('compact-primary') && !button('清理').classList.contains('danger'), 'Cleanup uses the neutral primary action')
   qa.failNextMissionRefresh()
   button('清理').click()
-  await until(() => !document.querySelector('.mission-worktree-cleanup-dialog') && qa.missionRefreshPending(), 'Successful cleanup closes before its background refresh finishes')
-  await until(() => document.querySelector('.app-toast')?.textContent?.includes('使命 Worktree 已清理，但信息刷新失败'), 'A later refresh failure is reported separately from successful cleanup')
-  await until(() => cleanupMission.workspaceResourcesPresent === false, 'Explicit cleanup refreshes the Mission projection')
+  await until(() => !document.querySelector('.mission-worktree-cleanup-dialog') && qa.missionRefreshPending(), 'Accepted cleanup closes before its background refresh finishes')
+  await until(() => cleanupCard.querySelector('.mission-card-cleanup-status')?.textContent?.includes('正在清理 Worktree'), 'The card owns cleanup progress after the dialog unmounts')
+  await until(() => document.querySelector('.app-toast')?.textContent?.includes('使命 Worktree 清理已开始，但信息刷新失败'), 'A later refresh failure is reported separately without claiming cleanup succeeded')
+  button('关闭提示').click()
   check(qa.calls.some((call:any) => call.method === 'missions.workspace.cleanup' && call.p.command?.missionId === cleanupMission.missionId), 'Cleanup uses the authoritative Mission workspace command')
-  const refreshedCleanupCard = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes(cleanupMission.title))!
-  refreshedCleanupCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: refreshedCleanupCard.getBoundingClientRect().left + 20, clientY: refreshedCleanupCard.getBoundingClientRect().top + 20 }))
-  await until(() => document.querySelector('[role=menu]'), 'Mission action menu reopens after cleanup')
-  check(!cleanupAction(), 'Completed cleanup hides the action from the Core capability projection')
+  cleanupCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: cleanupCard.getBoundingClientRect().left + 20, clientY: cleanupCard.getBoundingClientRect().top + 20 }))
+  await until(() => document.querySelector('[role=menu]'), 'Mission action menu reopens while cleanup is pending')
+  check(!cleanupAction(), 'Pending cleanup prevents a duplicate cleanup request')
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-  cases.push('workspace cleanup is Core-gated, concise, neutral, explicit, and disappears after completion')
+  qa.failMissionCleanup(cleanupMission.missionId, true)
+  await until(() => cleanupCard.querySelector('.mission-card-cleanup-status')?.textContent?.includes('分支清理失败'), 'Partial failure persists on the card and names the unfinished branch step')
+  await until(() => document.querySelector('.app-toast')?.textContent?.includes('M-018 分支清理失败') && document.querySelector('.app-toast-action')?.textContent === '查看', 'Cleanup failure raises the existing actionable error Toast with the Mission identifier')
+  document.querySelector<HTMLButtonElement>('.app-toast-action')!.click()
+  await until(() => document.querySelector('.mission-drawer') && document.querySelector('.mission-workspace-cleanup-failure'), 'Toast action opens the Mission cleanup details')
+  const failureDetails = document.querySelector<HTMLElement>('.mission-workspace-cleanup-failure')!
+  check(failureDetails.textContent?.includes('分支清理失败') && failureDetails.textContent?.includes('mission.branch_changed') && failureDetails.textContent?.includes('Worktree已清理') && failureDetails.textContent?.includes('本地分支待清理'), 'Cleanup details show the reason and both actual resource states')
+  button('重试未完成步骤').click()
+  await until(() => cleanupMission.workspaceCleanup?.state === 'cleaning' && cleanupCard.querySelector('.mission-card-cleanup-status')?.textContent?.includes('正在清理本地分支'), 'Retry returns only the unfinished branch step to progress')
+  check(qa.calls.filter((call:any) => call.method === 'missions.workspace.cleanup' && call.p.command?.missionId === cleanupMission.missionId).length === 2, 'Retry uses the same authoritative cleanup command exactly once')
+  qa.completeMissionCleanup(cleanupMission.missionId)
+  await until(() => cleanupCard.querySelector('.mission-card-cleanup-status')?.textContent?.includes('Worktree 已清理') && document.querySelector('.mission-workspace-cleared'), 'Completion gives brief card feedback while details retain the cleaned fact')
+  button('展开为完整会话').click()
+  await until(() => document.querySelector('.mission-full'), 'Leaving the board clears transient cleanup success feedback')
+  button('返回使命板').click()
+  await until(() => !document.querySelector('.mission-workspace-host'), 'Cleanup Mission returns to the board')
+  check(!cleanupCard.querySelector('.mission-card-cleanup-status') && cleanupMission.workspaceCleanup?.state === 'cleaned', 'Re-entering the board does not replay cleanup success')
+  cleanupCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: cleanupCard.getBoundingClientRect().left + 20, clientY: cleanupCard.getBoundingClientRect().top + 20 }))
+  await until(() => document.querySelector('[role=menu]'), 'Mission action menu reopens after cleanup')
+  check(!cleanupAction(), 'Completed cleanup keeps the menu action unavailable')
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  cases.push('workspace cleanup persists progress, partial failure, actionable recovery and one-shot success independently of its dialog')
+
+  const deleteMission = qa.items.find((item:any) => item.title === '使命累计变更回归测试')
+  const deleteCard = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes(deleteMission.title))!
+  const deleteGroup = deleteCard.closest<HTMLElement>('.mission-list-group')
+  if (deleteGroup?.querySelector('.mission-list-cards')?.hasAttribute('hidden')) { deleteGroup.querySelector<HTMLButtonElement>('.mission-group-heading')!.click(); await frames() }
+  deleteCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: deleteCard.getBoundingClientRect().left + 20, clientY: deleteCard.getBoundingClientRect().top + 20 }))
+  await until(() => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).some(item => item.textContent?.trim() === '删除'), 'Delete-with-cleanup Mission menu opens')
+  Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '删除')!.click()
+  await until(() => document.querySelector('.mission-delete-dialog') && !button('删除使命').disabled, 'Delete-with-cleanup dialog resolves')
+  document.querySelector<HTMLInputElement>('.mission-delete-workspace-option input')!.click()
+  button('删除使命').click()
+  await until(() => !Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).some(node => node.textContent?.includes(deleteMission.title)) && qa.orphanCleanups[0]?.state === 'cleanup_pending', 'Mission card disappears as soon as deletion and cleanup intent commit')
+  qa.failOrphanCleanup(true)
+  await until(() => document.querySelector('.mission-cleanup-notice')?.textContent?.includes('1 个工作区待清理'), 'Deleted Mission cleanup failure remains on the existing workspace route')
+  await until(() => document.querySelector('.app-toast')?.textContent?.includes('使命 rovai/mission/015 分支清理失败'), 'Deleted Mission cleanup failure also raises an actionable Toast')
+  document.querySelector<HTMLButtonElement>('.app-toast-action')!.click()
+  await until(() => document.querySelector('.mission-cleanup-list')?.textContent?.includes('分支清理失败'), 'Deleted Mission Toast opens the workspace cleanup route')
+  const orphanDetails = document.querySelector<HTMLElement>('.mission-cleanup-list')!
+  check(orphanDetails.textContent?.includes('Worktree：已清理 · 本地分支：待清理') && orphanDetails.textContent?.includes('mission.branch_changed'), 'Orphan details preserve the partial checkpoint and failure reason without restoring the card')
+  button('重试未完成步骤').click()
+  await until(() => qa.orphanCleanups[0]?.state === 'cleanup_pending' && orphanDetails.textContent?.includes('正在清理本地分支'), 'Orphan retry schedules only the unfinished step')
+  qa.completeOrphanCleanup()
+  await until(() => orphanDetails.textContent?.includes('工作区已清理完成'), 'Orphan route observes background cleanup completion')
+  check(!Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).some(node => node.textContent?.includes(deleteMission.title)), 'Cleanup failure and success never restore the deleted Mission card')
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  await until(() => !document.querySelector('.mission-cleanup-list'), 'Orphan cleanup dialog closes')
+  await switchMissionView('看板')
+  cases.push('delete-with-cleanup removes the card before resource work and recovers later failure through the orphan cleanup route')
   return { ok: true, cases }
 }
 
