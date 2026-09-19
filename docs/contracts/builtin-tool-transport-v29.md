@@ -24,7 +24,8 @@ The complete catalog contains 26 operations. Public Native Sessions can discover
 its existing history reads. Read errors use correctable-input recovery for invalid filters, cursors, explicit
 misses and a missing current Mission. Mutation authority and terminal recovery remain unchanged.
 
-The public Session Charter revision is 9. Native Session Bootstrap stays v3, Bootstrap Formatter stays 3,
+The current public Session Charter revision is 10. Revision 10 changes only the Mission-specific completion
+guidance and does not change this catalog or transport. Native Session Bootstrap stays v3, Bootstrap Formatter stays 3,
 public ContextManifest/Formatter stay 26, Single Chat ContextManifest/Formatter stay 25, and IPC, Envelope,
 receipt and Agent Output Projection versions do not change. Bundled CLI and Core advertise only v29 together;
 v28 remains historical and there is no mixed v28/v29 mode.

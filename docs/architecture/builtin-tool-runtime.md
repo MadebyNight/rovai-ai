@@ -197,7 +197,7 @@ CLI、Runtime Adapter、Bootstrap 与 Skill 都不重写正文或教学该 gramm
 该 schema 继续进入当前 catalog digest。
 当前 v29 contract/CLI command version、`builtin_cli.transport.v29` capability 与 IPC protocol 2 必须同时进入
 Binding compatibility 和 digest。Camp History 使用 v8；Native Binding context contract 加入内部
-`sessionCharterRevision: 9`；Mission catalog 入口变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
+`sessionCharterRevision: 10`；Mission 完成判断教学的变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
 使用 Formatter 26 / ContextManifest 26，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
 
 `ROVAI_RUN_TMP` 是 Runtime Host 启动时继承的稳定精确路径，不是 process root、Camp workspace 或附件存储。

@@ -270,7 +270,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Memory Capture v3（当前）](memory-capture-v3.md) | v2 边界加 complete exact-Scope View、copyable Revision target、active body aggregate quota、64 KiB production projection limit 与 Memory-domain clean break |
 | [Memory Capture v2 (historical)](memory-capture-v2.md) | v1 捕获/Review/Forget 边界加 flat Agent-relative Scope identity、revise target assertion、durable domain rejection 与 Supersession 原子顺序 |
 | [Memory Capture v1 (historical)](memory-capture-v1.md) | 初版 best-effort 在线捕获、actor-bounded add/revise、隔离 Hearth Review Item、双 CAS、候选清除与 Forget safeguard；不含 Scope-identified revise |
-| [Built-in Tool Transport v29（当前）](builtin-tool-transport-v29.md) | 继承 v28，增加 `mission.list`、指定 Mission 读取、结构化附件、v29 catalog/capability 与 Charter revision 9 |
+| [Built-in Tool Transport v29（当前）](builtin-tool-transport-v29.md) | 继承 v28，增加 `mission.list`、指定 Mission 读取、结构化附件与 v29 catalog/capability；当前 Charter revision 10 不改变 transport |
 | [Built-in Tool Transport v28（历史）](builtin-tool-transport-v28.md) | 继承 v27，发布公共 Camp 读取范围、当前 Mission 只读 `mission.get` 与 v28 catalog/capability |
 | [Built-in Tool Transport v27（历史）](builtin-tool-transport-v27.md) | 继承 v26，为 `mission.get` 增加有序附件原路径数组，并删除 Gather 与统一结果大小上限；Agent-facing 结果完整成功或明确失败 |
 | [Built-in Tool Transport v26（历史）](builtin-tool-transport-v26.md) | 保留 v25 的附件原路径与输出合同，并增加三个当前 Camp Mission 操作；不暴露业务版本或工作区 |
@@ -402,7 +402,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
 | [Run Input Skill Links v2（当前）](current-input-skill-links-v2.md) | Structured Skill Mention、claim-time 批次快照、verified resolver 与 per-message `RUN_INPUT.messages[].skills` |
 | [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v26（当前 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、执行配置与可见性 evidence；实时 read 不受其限制 |
+| [ContextManifest Evidence v26（当前 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、Mission-only Charter revision 10、执行配置与可见性 evidence；实时 read 不受其限制 |
 | [ContextManifest Evidence v25（当前 Single Chat / 历史 public）](context-manifest-evidence-v25.md) | Single Chat 继续使用；冻结 public 22–25 原样保留 |
 | [ContextManifest Evidence v24（历史）](context-manifest-evidence-v24.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [ContextManifest Evidence v23（历史）](context-manifest-evidence-v23.md) | v21 selection/evidence 不变；Formatter/Manifest 22 增加 ExternalPrincipal direct source 与 ExternalQuote deterministic projection |

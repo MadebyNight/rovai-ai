@@ -2901,7 +2901,7 @@ fn build_session_charter(
         file_guidance,
         adapter_guidance,
         if is_mission {
-            "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Change status only when the whole Mission's state changes, not merely when your Run ends."
+            "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.\n- Change status only when the whole Mission's state changes, not merely when your Run ends."
         } else {
             ""
         },
@@ -13893,6 +13893,12 @@ mod slow_tests {
         let charter = build_session_charter(&snapshot, false, false).unwrap();
         assert!(charter.ends_with(&format!("\n- {CODEX_FINAL_CAMP_ANSWER_GUIDANCE}")));
         assert_eq!(charter.matches(CODEX_FINAL_CAMP_ANSWER_GUIDANCE).count(), 1);
+        let mission_suffix = "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.\n- Change status only when the whole Mission's state changes, not merely when your Run ends.";
+        let mission_charter = build_session_charter(&snapshot, false, true).unwrap();
+        assert_eq!(mission_charter, format!("{charter}{mission_suffix}"));
+        assert!(!charter.contains("Rovai Mission Contract"));
+        assert_eq!(mission_charter.matches("Rovai Mission Contract").count(), 1);
+        assert_eq!(mission_charter.matches("rovai mission get").count(), 2);
         let shared_charter = charter
             .strip_suffix(&format!("\n- {CODEX_FINAL_CAMP_ANSWER_GUIDANCE}"))
             .unwrap()
@@ -13920,7 +13926,7 @@ mod slow_tests {
         assert!(BUILTIN_CLI_CHARTER.len() <= 2_560);
         assert_eq!(
             BUILTIN_CLI_CHARTER,
-            "Rovai Built-in CLI Contract\n\n- Use the local `rovai` CLI for the complete built-in operation catalog: `rovai send`; `rovai member create`; `rovai task create|get|list|update`; `rovai camp list|search|read`; `rovai history search`; and `rovai memory view|search|read|write`.\n- Use `rovai --help` when the operation is unclear, and consult the selected operation's exact `--help` when the required syntax is unclear. Reuse help already available in the current Native Session when possible. Do not assume that a command family has its own help entry.\n- Commands accept exactly one input source: direct flags, one JSON object from stdin/heredoc, or `--input-file <path>`. Do not merge sources.\n- `rovai send` always publishes one public Camp message. When the current responsibility has a Camp-visible answer, result, status, or summary, successfully call it before ending; Runtime narration and Runtime final responses are not Camp messages.\n- Use `--public-only` when the message must not wake an Agent.\n- Without `--public-only`, `--to` may schedule work. Agent addressing is not CC; use it only for a concrete new action or blocking question, never for acknowledgement, agreement, thanks, closure, standby, no-new-information, or repeated conclusions. Member calls do not require courtesy replies.\n- Ordinary Camp messages are already visible to the Principal. Use `--to-principal` when this message creates a new need for the Principal to decide, answer, or act, or when an important-result notification is explicitly requested.\n- A successful `rovai send` proves only that its message and effects were committed; it does not prove that recipient work has started or completed.\n"
+            "Rovai Built-in CLI Contract\n\n- Use the local `rovai` CLI for the complete built-in operation catalog: `rovai send`; `rovai member create`; `rovai task create|get|list|update`; `rovai camp list|search|read`; `rovai history search`; `rovai memory view|search|read|write`; and `rovai mission list|get|update|status`.\n- Use `rovai --help` when the operation is unclear, and consult the selected operation's exact `--help` when the required syntax is unclear. Reuse help already available in the current Native Session when possible. Do not assume that a command family has its own help entry.\n- Commands accept exactly one input source: direct flags, one JSON object from stdin/heredoc, or `--input-file <path>`. Do not merge sources.\n- `rovai send` always publishes one public Camp message. When the current responsibility has a Camp-visible answer, result, status, or summary, successfully call it before ending; Runtime narration and Runtime final responses are not Camp messages.\n- Use `--public-only` when the message must not wake an Agent.\n- Without `--public-only`, `--to` may schedule work. Agent addressing is not CC; use it only for a concrete new action or blocking question, never for acknowledgement, agreement, thanks, closure, standby, no-new-information, or repeated conclusions. Member calls do not require courtesy replies.\n- Ordinary Camp messages are already visible to the Principal. Use `--to-principal` when this message creates a new need for the Principal to decide, answer, or act, or when an important-result notification is explicitly requested.\n- A successful `rovai send` proves only that its message and effects were committed; it does not prove that recipient work has started or completed.\n"
         );
         assert!(!BUILTIN_CLI_CHARTER.contains("inline Agent addressing"));
         assert!(
@@ -14052,6 +14058,11 @@ mod slow_tests {
             !camp_has_active_feishu_binding(fixture.database.connection(), &fixture.camp_id)
                 .unwrap()
         );
+
+        snapshot.invocation_kind = "single_chat".to_string();
+        let single_chat_charter = build_session_charter(&snapshot, false, true).unwrap();
+        assert_eq!(single_chat_charter, SINGLE_CHAT_SESSION_CHARTER.trim());
+        assert!(!single_chat_charter.contains("Rovai Mission Contract"));
         fixture.cleanup();
     }
 

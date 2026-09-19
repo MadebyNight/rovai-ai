@@ -102,7 +102,8 @@ Memory Entrypoint；Dynamic Context 选择专用 Charter/Guidance，排除 Self 
 新 Single Chat Run 冻结 operation policy version 2：除现有 `camp.search`、`camp.read` 与
 `single_chat.history` 外，只增加全局只读 `mission.list/get`。Mission read 不切换当前 Camp/Mission，也不取得
 写权限。历史 version 1 Run 保留原三项 allowlist；terminal/history 路径接受两种已知冻结版本，未知版本
-fail closed。Charter revision 9 教学该入口，但完整 `cli-operations` Skill 仍从 Single Chat exposure 排除。
+fail closed。Charter revision 9 引入该入口；当前 revision 10 不改变 Single Chat Charter 正文，只轮换共享
+Binding compatibility。完整 `cli-operations` Skill 仍从 Single Chat exposure 排除。
 
 ## 输出与迟到事件
 

@@ -10,7 +10,8 @@ last_updated: 2026-09-19
 # v1.61 实施与验收
 
 范围见[版本概览](README.md)，模型输入边界见
-[确认说明 revision 2](model-context-change-mission-discovery.md)。
+[Mission 发现确认说明 revision 2](model-context-change-mission-discovery.md)与
+[完成判断确认说明 revision 1](model-context-change-mission-completion.md)。
 
 ## Gate 0：确认与当前权威
 
@@ -47,11 +48,21 @@ last_updated: 2026-09-19
 - [x] TypeScript、文档/Skill 治理、格式与 diff 检查通过。
 - [x] 分支保持一条功能提交并推送；PR #437 的远端 gate 通过，最终合并与 `origin/main` 祖先验证由本次交付收尾执行。
 
+## Gate 5：Mission 完成判断增量
+
+- [x] 开发者在完整 Mission 定义可见后确认完成实现、PR 和 `main` 合并；独立变更说明冻结 revision 1。
+- [x] Mission 专属 Charter 增加按需读取与完整定义完成判断，普通 Camp 与 Single Chat 正文不变。
+- [x] Session Charter revision 从 9 轮换到 10；Bootstrap/Formatter/Manifest/Run Facts/Built-in 与 schema 均不变。
+- [ ] Rust 定向与 PR 门禁、Clippy、文档治理、远端 required checks 和合入后祖先验证通过。
+
 ## Rust 测试准入记录
 
 新增测试拥有既有 owner 无法证明的事务/协议边界：Mission service 的内部 ID、数值分页与筛选绑定游标；
 Migration 165 的 exact v1.60/schema 114 来源、DDL 重建及 current admission；Single Chat policy v2 的新读白名单。
 它们分别防止字符串排序/游标串用、Charter 已放开但数据库拒绝新 Run，以及私聊读权限只改文案未改 Core。
+完成判断增量不新增平行 fixture，而是扩展既有 Session Charter 唯一 golden owner，加入 Mission 三条追加内容、
+普通 Camp 排除与 Single Chat 逐字不变断言；最小验证命令为
+`cargo test -p rovai-core --features slow-tests --lib context::slow_tests::session_charter_publishes_one_cli_only_builtin_contract -- --exact`。
 删除测试为零。
 
 ## 实施收口
