@@ -189,7 +189,12 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog opens')
   await until(() => document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'First selected file diff loads')
   const diffDialogWidth = document.querySelector('.mission-diff-dialog')!.getBoundingClientRect().width
+  const diffReadingBounds = document.querySelector('.mission-diff-reading')!.getBoundingClientRect()
+  const diffHeaderIconBounds = document.querySelector('.mission-diff-reading > header > .node-icon')!.getBoundingClientRect()
+  const firstDiffLineBounds = document.querySelector('.mission-diff-reading .mission-diff-line')!.getBoundingClientRect()
   check(Math.abs(diffDialogWidth - 1320) <= 1, `Cumulative diff dialog uses the approved desktop width (${diffDialogWidth}px)`)
+  check(Math.abs(diffHeaderIconBounds.width - 14) <= 1 && Math.abs(diffHeaderIconBounds.height - 16) <= 1, `Diff header file icon stays at 14×16 (${diffHeaderIconBounds.width}×${diffHeaderIconBounds.height})`)
+  check(firstDiffLineBounds.top >= diffReadingBounds.top && firstDiffLineBounds.top < diffReadingBounds.bottom, 'First diff line stays inside the visible reading area')
   check(document.querySelector('.diff-dialog-baseline code')?.textContent === 'aaaaaaaaaaaa' && document.querySelector('.diff-dialog-summary')?.textContent?.includes('7 个文件'), 'Dialog header shows the fixed baseline and cumulative totals')
   check(!document.querySelector('.mission-diff-dialog .compact-footer'), 'Diff dialog closes only from the top control or Escape')
   check(!document.querySelector('.mission-diff-dialog')!.textContent?.includes('Git 文件模式'), 'Cumulative diff omits raw Git mode rows')
