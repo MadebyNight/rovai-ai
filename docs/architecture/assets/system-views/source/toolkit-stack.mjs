@@ -46,7 +46,7 @@ export function renderToolkitArchitecture() {
     + card(46, 460, 310, 66, 'cli-operations', '', P.peer, 20)
     + card(380, 460, 314, 66, 'memory-stewardship', '', P.peer, 20)
     + area(764, 295, 722, 259, 'Rovai CLI · 平台动作', P.toolkit, '固定命令 · 精确 --help')
-    + ['send', 'gather', 'task', 'camp / history', 'memory', 'member', 'automation', 'single-chat'].map((name, i) =>
+    + ['send', 'mission', 'task', 'camp / history', 'memory', 'member', 'automation', 'single-chat'].map((name, i) =>
       chip(792 + i % 4 * 169, 376 + Math.floor(i / 4) * 78, 155, name, P.toolkit, name.length > 12 ? 16 : 18)).join('')
     + connection('M221 290 V228', P.peer, { width: 2.3 })
     + label(250, 267, 'Skill Projection', 18, { color: P.peer.main })
@@ -67,7 +67,7 @@ export function renderToolkitArchitecture() {
     + label(69, 852, 'BuiltinToolRouter', 25, { color: P.context.main, weight: 600 })
     + label(1429, 852, 'Run · Lease · Native Binding → 领域服务', 22, { color: P.context.main, anchor: 'end' })
     + [
-      ['消息与协作', 'A2A · Task · Gather'],
+      ['消息与协作', 'A2A · Task · Mission'],
       ['历史检索', 'Camp · Single Chat'],
       ['Memory', 'View · Search · Write'],
       ['队员资料', 'Member Profile'],

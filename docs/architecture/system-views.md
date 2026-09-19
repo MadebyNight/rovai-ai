@@ -3,7 +3,7 @@ document_type: architecture
 architecture: system-views
 authority: architecture-explanation-and-navigation
 status: accepted
-last_updated: 2026-09-09
+last_updated: 2026-09-18
 ---
 
 # Rovai AI 多 Agent 协作架构
@@ -51,17 +51,18 @@ Rovai 以长期队员为协作主体，通过 Camp 组织共同工作，并连�
 
 ### 图 04：A2A 委托、成果交接与返回
 
-叮叮请芝士评审方案，芝士再请咕咕复现边界问题。公共消息保留协作来路，定向投递推动接收者执行，成果沿调用关系逐级交回。
+叮叮请芝士评审方案，芝士再请咕咕复现边界问题。公共消息保留协作来路，定向 Delivery 推动接收者执行；
+返回结果时仍由发送者显式选择目标，Core 不从调用祖先或回复锚点自动推断 return 路由。
 
-![四格分镜：叮叮发出评审请求，Core 发布和投递，芝士继续委托咕咕，成果返回直属调用者](assets/system-views/04-a2a-handoff.svg)
+![四格分镜：叮叮发出评审请求，Core 发布和投递，芝士继续委托咕咕，发送者显式选择芝士与叮叮作为返回目标](assets/system-views/04-a2a-handoff.svg)
 
 ## 五、协作组织与任务责任
 
 ### 图 05：对等协作、长期责任与协作方法
 
-以完成 CSV 导出功能为例，叮叮担任本次 Default Lead，芝士负责评审，咕咕负责验证。三位同伴直接协作，根据工作的持续性与组织需要选用 Task、协作 Skill 和 Gather。
-
-![漫画示意：三位同伴围桌协作、Task 责任便签、协作 Skill 手册与 Gather 同题并行汇总](assets/system-views/05-gather.svg)
+以完成 CSV 导出功能为例，叮叮担任本次 Default Lead，芝士负责评审，咕咕负责验证。三位同伴直接协作：
+跨 Run 的持续责任使用 Task，协作方法使用 Skill，同一请求需要多人参与时直接发送一条多目标公开消息。
+成员回复都是普通消息，进入发起者的 FIFO；Core 不建立 Barrier，也不保证“收齐后一次唤醒”。
 
 ## 六、一次 AgentRun 的生命周期
 
@@ -83,9 +84,9 @@ Skill 经原生发现路径提供协作方法，Agent 使用 `rovai` CLI 调用�
 
 ### 图 08：从 Session Bootstrap 到动态上下文
 
-Session Bootstrap 在顶部展开会话约定、队员身份和记忆入口三层；每次 Run 的动态输入再按职责展开六层。Context Profile 决定可见范围和输入预算，ContextManifest 记录实际选择，本次输入完整保留。
+Session Bootstrap 在顶部展开会话约定、队员身份和记忆入口三层；每次 Run 的动态输入再按职责展开同伴、责任、增量公共历史、运行事实、工作区和有序输入六层。Context Profile 决定可见范围和输入预算，ContextManifest 记录实际选择，本批输入完整保留。
 
-![九层输入：顶部三层稳定会话引导，下方同伴、责任、历史、事实、指引与本次输入六层动态上下文](assets/system-views/08-dynamic-context.svg)
+![九层输入：顶部三层稳定会话引导，下方同伴、责任、增量公共历史、运行事实、工作区与 RUN_INPUT 六层动态上下文](assets/system-views/08-dynamic-context.svg)
 
 ### 图 09：长会话中的稳定引导与动态输入
 

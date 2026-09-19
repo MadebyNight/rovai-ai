@@ -2,7 +2,7 @@
 document_type: architecture
 authority: notification-episode-architecture
 status: accepted
-last_updated: 2026-08-14
+last_updated: 2026-09-19
 ---
 
 # Notification Episode 架构
@@ -10,7 +10,7 @@ last_updated: 2026-08-14
 ## 组件关系
 
 ```text
-CampMessage / CampTurn / Approval source transaction
+CampMessage / CampTurn / AgentRun / Approval source transaction
   └─ Notification write projection
        ├─ immutable Occurrence
        ├─ mutable Occurrence Disposition
@@ -49,7 +49,7 @@ Clear 改写。
 
 ## Read hydration
 
-持久 Episode 不复制展示数据。Core 在 read transaction 中连接当前 Camp、CampTurn、Approval、CampMessage
+持久 Episode 不复制展示数据。Core 在 read transaction 中连接当前 Camp、CampTurn、AgentRun、Approval、CampMessage
 与 AgentProfile，生成 closed `primarySemantic`、reason counts/states、message summary、current display name
 和 typed actions。来源不存在或 tombstoned 时 action `available=false`；Episode identity 与用户 disposition
 仍保留。标题/显示名/availability 改变不会写 Journal 或增加 attention revision。
@@ -65,7 +65,7 @@ Eligible Attention；其旧 pending signal 按 identity 失效。Episode `primar
 推荐/展示动作，不是全部 attention identity 的索引。
 
 会话区是可见性传感器，不拥有通知集合。它只在前台“会话”视图中收集与时间线视口相交的
-`messageId/campTurnId`，以及实际展开可见的 pending `approvalId`。Core 的
+`messageId/campTurnId/agentRunId`，以及实际展开可见的 pending `approvalId`。Core 的
 `acknowledgeVisibleSources()` 再以当前用户、Camp、Active Attention 与 Renderer 已观察 Journal high-water
 交叉验证并原子确认；因此普通导航可以自然消角标，但屏幕外来源和边界后新到达的通知不会被顺带读掉。
 Episode 推荐动作从不参与该来源集合。
@@ -101,8 +101,8 @@ cascade 和 Journal trigger 收口。
 ## References
 
 - [通知事实与投影](foundational-invariants.md#core-notifications)
-- [Notification Episode v6](../contracts/notification-episode-v6.md)
-- [Current User Attention v5](../contracts/current-user-attention-v5.md)
+- [Notification Episode v7](../contracts/notification-episode-v7.md)
+- [Current User Attention v6](../contracts/current-user-attention-v6.md)
 
 
 ## 公屏与单聊注意力
@@ -111,3 +111,6 @@ cascade 和 Journal trigger 收口。
 阅读身份。单聊的终态摘要与审批 Dock 回报精确可见来源，公屏在单聊面板打开时停止回报可见来源。
 当前阅读区域完成只抑制临时卡片，已读仍要求实际可见内容。Migration 146 限定完成 satisfaction 的对话
 范围，单聊结束按原 Occurrence invalidation 撤回队列。卡片只包含来源与信息，剩余提醒由轻入口按需查看。
+
+Delivery-first batch Run 由 Migration 164 增加 `agent_run` Occurrence source；不创建 CampTurn。Renderer 的
+`open_agent_run` 动作打开对应成员的执行历史并定位 exact Run，只有该执行节点实际可见才回报确认。

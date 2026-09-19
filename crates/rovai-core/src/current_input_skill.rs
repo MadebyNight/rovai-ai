@@ -148,6 +148,59 @@ pub struct PreparedCurrentInputSkillResolution {
     pub links: Vec<CurrentInputSkillLink>,
 }
 
+/// Builds the same Runtime-facing Skill links used by `RUN_INPUT` while a
+/// Delivery batch is still being selected. Projection reconciliation happens
+/// later at execution preparation, but its destination is deterministic from
+/// the frozen adapter and execution root.
+pub(crate) fn projected_skill_links_for_claim(
+    connection: &Connection,
+    selection: &SkillSelectionSnapshot,
+    adapter_kind: AdapterKind,
+    execution_root: &Path,
+) -> Result<Vec<CurrentInputSkillLink>> {
+    validate_selection_snapshot(selection)?;
+    let delivery_groups = AgentRuntimeAdapterRegistry::default()
+        .skill_discovery(adapter_kind)
+        .delivery_groups;
+    let canonical_root = execution_root
+        .canonicalize()
+        .unwrap_or_else(|_| execution_root.to_path_buf());
+    let mut links = Vec::new();
+    for selected in &selection.entries {
+        if !selected.eligible_at_send {
+            continue;
+        }
+        let Some(state) = load_skill_state(connection, &selected.skill_id, &delivery_groups)?
+        else {
+            continue;
+        };
+        if state.lifecycle_status != "active"
+            || !state.enabled
+            || state.name != selected.name_at_send
+        {
+            continue;
+        }
+        let Some(group) = delivery_groups.iter().find(|group| {
+            state
+                .matching_group_keys
+                .iter()
+                .any(|key| key == group.as_str())
+        }) else {
+            continue;
+        };
+        links.push(CurrentInputSkillLink {
+            name: selected.name_at_send.clone(),
+            path: canonical_root
+                .join(group.relative_path())
+                .join(&selected.name_at_send)
+                .join("SKILL.md")
+                .to_string_lossy()
+                .to_string(),
+        });
+    }
+    Ok(links)
+}
+
 pub fn freeze_skill_selection(
     transaction: &Transaction<'_>,
     content: &[StructuredCampMessageSegment],

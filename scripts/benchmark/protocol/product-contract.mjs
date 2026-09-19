@@ -31,8 +31,8 @@ export async function collectProductContractFingerprint({
   const health = coreHealth ? sanitizeCoreHealth(coreHealth) : null
   const coreDigest = coreExecutable ? await digestExecutable(coreExecutable) : null
   const deliveryProfileSymbol = capture(source.contextDelivery.contents,
-    /pub fn current_context_delivery_profile\(\)[^{]*\{\s*(CONTEXT_DELIVERY_PROFILE_V\d+)\.validate\(\)/u,
-    'Current Context Delivery Profile symbol')
+    /pub fn current_public_camp_batch_context_delivery_profile\(\)[^{]*\{\s*(PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V\d+)\.validate\(\)/u,
+    'Current Public Camp Context Delivery Profile symbol')
 
   const fields = {
     releaseBuildIdentity: available({
@@ -57,12 +57,12 @@ export async function collectProductContractFingerprint({
       constantAuthority(source.readModel, 'READ_MODEL_SCHEMA_VERSION')
     ),
     contextManifestVersion: available(
-      Number.parseInt(capture(source.contextContract.contents, /CONTEXT_MANIFEST_VERSION:\s*i64\s*=\s*(\d+)/u, 'ContextManifest version'), 10),
-      constantAuthority(source.contextContract, 'CONTEXT_MANIFEST_VERSION')
+      Number.parseInt(capture(source.contextContract.contents, /PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION:\s*i64\s*=\s*(\d+)/u, 'Public Camp ContextManifest version'), 10),
+      constantAuthority(source.contextContract, 'PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION')
     ),
     contextFormatterVersion: available(
-      Number.parseInt(capture(source.contextContract.contents, /AGENT_RUN_CONTEXT_FORMATTER_VERSION:\s*i64\s*=\s*(\d+)/u, 'Context Formatter version'), 10),
-      constantAuthority(source.contextContract, 'AGENT_RUN_CONTEXT_FORMATTER_VERSION')
+      Number.parseInt(capture(source.contextContract.contents, /PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION:\s*i64\s*=\s*(\d+)/u, 'Public Camp Context Formatter version'), 10),
+      constantAuthority(source.contextContract, 'PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION')
     ),
     contextDeliveryProfileVersion: available(
       Number.parseInt(capture(source.contextDelivery.contents, new RegExp(`${deliveryProfileSymbol}:[\\s\\S]*?profile_version:\\s*(\\d+)`, 'u'), 'Context Delivery Profile version'), 10),

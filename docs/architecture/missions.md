@@ -41,9 +41,10 @@ to Mission Run Facts until an input carrying that version is accepted. `mission 
 
 Mission keeps its shared UI projection path-free. The dedicated `MissionAgentInfo` projection is the only
 seam that joins current definition fields with ordered `source_attachments[].source_path`; it is built only
-after current-Run/current-member authorization for `mission get`. It does no filesystem observation, so
-stored references remain discoverable even when the source later disappears. Built-in invocation evidence
-continues to project definition facts without the raw attachment paths.
+after authenticating the calling Run for `mission get`; the read does not reuse Camp mutation authorization.
+`mission.update` and `mission.status` still require the current active membership and exact execution fence.
+The read does no filesystem observation, so stored references remain discoverable even when the source later
+disappears. Built-in invocation evidence continues to project definition facts without the raw attachment paths.
 
 The opaque ID remains the relational key. A monotonic integer is the human/Git naming identity: UI renders
 `M-018`, while the paired branch and sibling worktree use `rovai/mission/018` and `<repo>-mission-018`.
@@ -55,7 +56,7 @@ Desktop/wide Web share Mission navigation and the existing CampWorkspace. Drawer
 preserve one mounted composer/preview owner. Mobile is intentionally outside this increment. Renderer consumes
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
 branch in place; optional cleanup must finish before the Mission is deleted and has no retained-resource UI or
-background retry. Protocol and failure behavior live in [Mission v3](../contracts/mission-v3.md); UI in
+background retry. Protocol and failure behavior live in [Mission v4](../contracts/mission-v4.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14).

@@ -213,7 +213,7 @@ pub(super) fn v161_schema_matches(connection: &Connection) -> rusqlite::Result<b
         )?)
 }
 
-fn apply_workspace_lifecycle_schema(connection: &Connection) -> Result<()> {
+pub(super) fn apply_workspace_lifecycle_schema(connection: &Connection) -> Result<()> {
     for (column, definition) in [
         (
             "preparation_kind",
@@ -389,7 +389,9 @@ impl Database {
         anyhow::ensure!(
             matches!(
                 classify_database_contract(&tx)?,
-                DatabaseContractClassification::Current(_)
+                DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.59"
+                        && marker.projection_schema_version == 112
             ),
             "Mission workspace lifecycle migration failed schema admission"
         );
@@ -447,24 +449,7 @@ mod tests {
             "INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES('workspace-row',?1,?2,?3,'/repo','/repo','/repo/.git','/worktree','/worktree','main','rovai/mission/001','base','owner','ready','created','updated')",
             params![mission_id, camp_id, host],
         ).unwrap();
-        database
-            .connection()
-            .execute_batch(
-                "DELETE FROM schema_migration WHERE version=162;
-             UPDATE rovai_data_contract SET projection_schema_version=111 WHERE singleton=1;
-             CREATE TRIGGER mission_camp_delete_cleanup BEFORE DELETE ON camp
-             BEGIN
-                 UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
-                 WHERE camp_id=OLD.id AND state IN ('ready','preparing');
-             END;
-             ALTER TABLE mission_workspace DROP COLUMN cleanup_branch_removed;
-             ALTER TABLE mission_workspace DROP COLUMN cleanup_worktree_removed;
-             ALTER TABLE mission_workspace DROP COLUMN cleanup_expected_branch_oid;
-             ALTER TABLE mission_workspace DROP COLUMN cleanup_command_id;
-             ALTER TABLE mission_workspace DROP COLUMN generation;
-             ALTER TABLE mission_workspace DROP COLUMN preparation_kind;",
-            )
-            .unwrap();
+        crate::db::downgrade_current_schema_to_v161_source_for_test(database.connection());
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
             DatabaseContractClassification::SupportedMigrationSource(ref marker)
@@ -497,7 +482,9 @@ mod tests {
         assert!(v162_schema_matches(database.connection()).unwrap());
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
-            DatabaseContractClassification::Current(_)
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59"
+                    && marker.projection_schema_version == 112
         ));
         let retained: (String, i64, String, bool, bool) = database
             .connection()
@@ -508,6 +495,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(retained, ("ready".into(), 1, "create".into(), false, false));
+        database.migrate_camp_message_agent_run_v163().unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.60"
+                    && marker.projection_schema_version == 113
+        ));
+        database.migrate_agent_run_notification_v164().unwrap();
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::Current(_)
+        ));
         crate::collaboration::delete_camp_aggregate(database.connection(), camp_id).unwrap();
         assert_eq!(
             database

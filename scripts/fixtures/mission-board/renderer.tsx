@@ -71,10 +71,11 @@ function admitMissionNotification(missionId: string, kind: 'open_camp_message' |
  s.coverage.messages = { ...s.coverage.messages, totalCount: s.messages.length, loadedCount: s.messages.length, newestLoadedSequence: source.sequence }
  const semantic = kind === 'open_camp_message' ? 'user_mention' : 'turn_incomplete'
  const action: NotificationActionView = { actionId: `mission-action-${n}`, kind, available: true,
-  campId: mission.campId, campTurnId: null, messageId: kind === 'open_camp_message' ? messageId : null, approvalId: null, acknowledgementId: `mission-occurrence-${n}`,
+  campId: mission.campId, campTurnId: null, agentRunId: null,
+  messageId: kind === 'open_camp_message' ? messageId : null, approvalId: null, acknowledgementId: `mission-occurrence-${n}`,
   observedEpisodeVersion: n, singleChat: null }
  const episode: NotificationEpisodeView = { id: `mission-episode-${n}`, kind: 'collaboration', episodeVersion: n,
-  attentionRevision: n, changeSequence: n, camp: { id: mission.campId, title: mission.title }, campTurnId: null,
+  attentionRevision: n, changeSequence: n, camp: { id: mission.campId, title: mission.title }, campTurnId: null, agentRunId: null,
   primarySemantic: semantic, unread: true, resolved: false, satisfied: false, pendingApprovalCount: 0, mentionCount: 1,
   unacknowledgedMentionCount: 1, mention: null, reasons: [], primaryAction: action, secondaryActions: [], createdAt: now, updatedAt: now }
  notificationJournal.push({ changeSequence: n, episodeId: episode.id, episodeVersion: n, attentionRevision: n, operation: 'upsert',
@@ -116,9 +117,9 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='camp.composerDraft.get'){if(!drafts.has(c.campId))drafts.set(c.campId,{...structuredClone(initialDraft),campId:c.campId,body:'',content:{schemaVersion:1,segments:[]},attachments:[]});return structuredClone(drafts.get(c.campId))}
  if(method==='camp.composerDraft.save'){const d=drafts.get(c.campId);Object.assign(d,{content:c.content,body:c.content.segments.map((s:any)=>s.text??'').join(''),revision:d.revision+1});return structuredClone(d)}
  if(method==='camp.pendingInputs.get')return {campId:c.campId,executionActive:false,items:[],editSession:null,submissionOutcomes:[]}
- if(method==='notifications.inbox')return {schemaVersion:7,items:[],unreadCount:0,throughChangeSequence:notificationSequence,nextCursor:null}
+ if(method==='notifications.inbox')return {schemaVersion:8,items:[],unreadCount:0,throughChangeSequence:notificationSequence,nextCursor:null}
  if(method==='notifications.preference.get')return {version:1,updatedAt:now,headsUpEnabled:true,approvalHeadsUpEnabled:true,userMentionHeadsUpEnabled:true,turnCompletedHeadsUpEnabled:true,turnIncompleteHeadsUpEnabled:true}
- if(method==='notifications.changesSince')return {schemaVersion:7,requestedAfterChangeSequence:c.afterChangeSequence,nextChangeSequence:notificationSequence,throughChangeSequence:notificationSequence,retainedFloorChangeSequence:0,hasMore:false,resetRequired:false,changes:notificationJournal.filter(change=>change.changeSequence>c.afterChangeSequence)}
+ if(method==='notifications.changesSince')return {schemaVersion:8,requestedAfterChangeSequence:c.afterChangeSequence,nextChangeSequence:notificationSequence,throughChangeSequence:notificationSequence,retainedFloorChangeSequence:0,hasMore:false,resetRequired:false,changes:notificationJournal.filter(change=>change.changeSequence>c.afterChangeSequence)}
  if(method==='notifications.acknowledgeVisibleSources'||method==='notifications.acknowledge')return applied()
  if(method==='events.subscribe')return {schemaVersion:1,events:[],throughGlobalSequence:10}
  if(method==='workspaces.inspect')return {name:'rovai-ai',projectPath:p.path,gitObservation:{state:'git_valid',branch:'main',head:'a'.repeat(40),repositoryRoot:p.path,objectFormat:'sha1',dirty:false,reason:null}}

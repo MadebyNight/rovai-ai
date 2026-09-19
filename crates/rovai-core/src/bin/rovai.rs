@@ -14,9 +14,8 @@ use rovai_core::builtin_tool_cli_output::{
     validate_schema,
 };
 use rovai_core::builtin_tool_transport::{
-    BUILTIN_TOOL_CONTRACT_VERSION, BUILTIN_TOOL_IPC_PROTOCOL_VERSION,
-    BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES, BuiltinToolArgument, BuiltinToolCliContext,
-    BuiltinToolCliIdentity, BuiltinToolDescription, BuiltinToolIpcRequest,
+    BUILTIN_TOOL_CONTRACT_VERSION, BUILTIN_TOOL_IPC_PROTOCOL_VERSION, BuiltinToolArgument,
+    BuiltinToolCliContext, BuiltinToolCliIdentity, BuiltinToolDescription, BuiltinToolIpcRequest,
     BuiltinToolIpcRequestBody, BuiltinToolIpcResponse, COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
     COMPACTION_OBSERVATION_IPC_KIND, COMPACTION_OBSERVATION_OUTBOX_SCHEMA_VERSION,
     CompactionHookIpcRequest, CompactionHookIpcResponse, CompactionObservationOutboxRecord,
@@ -32,7 +31,7 @@ use rovai_core::command::canonical_json_digest;
 use rovai_core::platform::local_ipc::LocalIpcClientStream;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 
 #[path = "rovai/app_cli.rs"]
@@ -42,9 +41,6 @@ const CORE_TIMEOUT: Duration = Duration::from_secs(30);
 const CORE_ATTEMPTS: usize = 3;
 const COMPACTION_HOOK_TIMEOUT: Duration = Duration::from_millis(500);
 const COMPACTION_HOOK_ATTEMPTS: usize = 3;
-const CAMP_READ_DEFAULT_MODE: &str = "timeline";
-const CAMP_READ_DEFAULT_DIRECTION: &str = "before";
-const CAMP_READ_DEFAULT_LIMIT: i64 = 20;
 
 fn main() -> ExitCode {
     let args = env::args().skip(1).collect::<Vec<_>>();
@@ -133,7 +129,7 @@ async fn run() -> Result<u8> {
     }
 
     let (operation, input) = match args.as_slice() {
-        [command, rest @ ..] if matches!(command.as_str(), "send" | "gather") => {
+        [command, rest @ ..] if command == "send" => {
             let identity = builtin_tool_identity_by_command(command, "")
                 .with_context(|| format!("unknown Rovai command: rovai {command}"))?;
             let description = builtin_tool_description(identity.operation)?;
@@ -191,22 +187,21 @@ async fn run() -> Result<u8> {
 
     match response {
         BuiltinToolIpcResponse::Envelope { envelope } => {
-            envelope.validate()?;
-            let projected = match project_envelope(&envelope) {
+            let exit_code = envelope_exit_code(&envelope);
+            let operation = envelope.operation.clone();
+            let projected = match project_envelope(envelope) {
                 Ok(projected) => projected,
                 Err(error) => {
-                    record_output_contract_mismatch(&envelope.operation, &error);
+                    record_output_contract_mismatch(&operation, &error);
                     println!(
                         "{}",
-                        serde_json::to_string(&output_contract_mismatch_agent_error(
-                            &envelope.operation
-                        ))?
+                        serde_json::to_string(&output_contract_mismatch_agent_error(&operation))?
                     );
                     return Ok(2);
                 }
             };
             println!("{}", serde_json::to_string(&projected)?);
-            Ok(envelope_exit_code(&envelope))
+            Ok(exit_code)
         }
         BuiltinToolIpcResponse::Error { .. } => {
             print_safe_cli_error();
@@ -306,7 +301,7 @@ async fn run_compaction_hook(args: &[String]) -> Result<()> {
     }))?;
     let request_id = Uuid::new_v4().to_string();
     let observed_at = chrono::Utc::now().to_rfc3339();
-    let mut request = CompactionHookIpcRequest {
+    let request = CompactionHookIpcRequest {
         kind: COMPACTION_OBSERVATION_IPC_KIND.to_string(),
         ipc_protocol_version: COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
         process_id,
@@ -321,13 +316,6 @@ async fn run_compaction_hook(args: &[String]) -> Result<()> {
         display_auth,
         summary_text,
     };
-    if request.summary_text.is_some()
-        && serde_json::to_vec(&request)?.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES
-    {
-        // The optional display sidecar must never make the lifecycle observation
-        // undeliverable. Keep the exact observation and omit only oversized UI text.
-        request.summary_text = None;
-    }
     let outbox_record = CompactionObservationOutboxRecord {
         schema_version: COMPACTION_OBSERVATION_OUTBOX_SCHEMA_VERSION,
         request_id,
@@ -406,9 +394,6 @@ async fn send_compaction_hook(
     request: &CompactionHookIpcRequest,
 ) -> Result<CompactionHookIpcResponse> {
     let serialized = serde_json::to_vec(request)?;
-    if serialized.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES {
-        bail!("compaction hook request is too large");
-    }
     let response = exchange_local_ipc_frame(endpoint, &serialized, COMPACTION_HOOK_TIMEOUT)
         .await
         .map_err(|(_, error)| error)?;
@@ -446,9 +431,7 @@ fn operation_help(args: &[String]) -> Result<Option<BuiltinToolDescription>> {
 
 fn invocation_identity(args: &[String]) -> Option<BuiltinToolCliIdentity> {
     match args {
-        [command, ..] if matches!(command.as_str(), "send" | "gather") => {
-            builtin_tool_identity_by_command(command, "")
-        }
+        [command, ..] if command == "send" => builtin_tool_identity_by_command(command, ""),
         [group, action, ..] => builtin_tool_identity_by_command(group, action),
         _ => None,
     }
@@ -555,13 +538,6 @@ struct CliInputFailure {
     details: Option<Value>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct CliAppliedDefaults {
-    mode: bool,
-    direction: bool,
-    limit: bool,
-}
-
 impl CliInputFailure {
     fn generic() -> Self {
         Self {
@@ -576,55 +552,10 @@ fn parse_and_validate_operation_input(
     args: &[String],
 ) -> std::result::Result<Value, CliInputFailure> {
     let input = parse_operation_input(description, args).map_err(|_| CliInputFailure::generic())?;
-    let (input, applied_defaults) = apply_operation_defaults(&description.name, input)
-        .map_err(|_| CliInputFailure::generic())?;
     if validate_schema(&input, &description.input_schema).is_err() {
-        return Err(explain_input_validation_failure(
-            description,
-            &input,
-            applied_defaults,
-        ));
+        return Err(explain_input_validation_failure(description, &input));
     }
     Ok(input)
-}
-
-fn apply_operation_defaults(
-    operation: &str,
-    mut input: Value,
-) -> Result<(Value, CliAppliedDefaults)> {
-    let mut applied = CliAppliedDefaults::default();
-    if operation != "camp.read" {
-        return Ok((input, applied));
-    }
-
-    let object = input
-        .as_object_mut()
-        .context("camp.read input must be an object")?;
-    if !object.contains_key("mode") {
-        object.insert(
-            "mode".to_string(),
-            Value::String(CAMP_READ_DEFAULT_MODE.to_string()),
-        );
-        applied.mode = true;
-    }
-    if object.get("mode").and_then(Value::as_str) == Some(CAMP_READ_DEFAULT_MODE) {
-        if !object.contains_key("direction") {
-            object.insert(
-                "direction".to_string(),
-                Value::String(CAMP_READ_DEFAULT_DIRECTION.to_string()),
-            );
-            applied.direction = true;
-        }
-        if !object.contains_key("limit") {
-            object.insert(
-                "limit".to_string(),
-                Value::Number(CAMP_READ_DEFAULT_LIMIT.into()),
-            );
-            applied.limit = true;
-        }
-    }
-
-    Ok((input, applied))
 }
 
 fn discriminated_input_variants(
@@ -797,7 +728,6 @@ fn camel_to_kebab_cli(value: &str) -> String {
 fn explain_input_validation_failure(
     description: &BuiltinToolDescription,
     input: &Value,
-    applied_defaults: CliAppliedDefaults,
 ) -> CliInputFailure {
     let Some(object) = input.as_object() else {
         return CliInputFailure::generic();
@@ -829,41 +759,11 @@ fn explain_input_validation_failure(
         "issues".to_string(),
         serde_json::to_value(&issues).unwrap_or_else(|_| Value::Array(Vec::new())),
     );
-    let message = if description.name == "camp.read" && applied_defaults.mode {
-        format_camp_read_default_mode_failure(&issues).unwrap_or_else(|| {
-            format_cli_input_issue_message(&description.name, mode.as_deref(), &issues)
-        })
-    } else {
-        format_cli_input_issue_message(&description.name, mode.as_deref(), &issues)
-    };
+    let message = format_cli_input_issue_message(&description.name, mode.as_deref(), &issues);
     CliInputFailure {
         message,
         details: Some(Value::Object(details)),
     }
-}
-
-fn format_camp_read_default_mode_failure(issues: &[CliInputIssue]) -> Option<String> {
-    let issue = issues
-        .iter()
-        .find(|issue| issue.reason == CliInputIssueReason::NotAllowedForMode)?;
-    let flag = issue.flag.as_deref().unwrap_or(&issue.field);
-    let mut message = format!(
-        "--mode defaults to timeline, which does not accept {flag}.\nUse an explicit message-anchored mode:"
-    );
-    if issue.valid_modes.iter().any(|mode| mode == "item") {
-        message.push_str("\n  rovai camp read --mode item --message-id '<message-id>'");
-    }
-    if issue.valid_modes.iter().any(|mode| mode == "around") {
-        message.push_str(
-            "\n  rovai camp read --mode around --message-id '<message-id>' --before 5 --after 5",
-        );
-    }
-    if issue.valid_modes.iter().any(|mode| mode == "thread") {
-        message.push_str(
-            "\n  rovai camp read --mode thread --message-id '<message-id>' --direction <before|after>",
-        );
-    }
-    Some(message)
 }
 
 fn explain_discriminated_input_failure(
@@ -1357,9 +1257,6 @@ async fn send_with_retry(
 ) -> std::result::Result<BuiltinToolIpcResponse, BuiltinToolIpcFailure> {
     let serialized =
         serde_json::to_vec(request).map_err(|_| BuiltinToolIpcFailure::BeforeDispatch)?;
-    if serialized.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES {
-        return Err(BuiltinToolIpcFailure::BeforeDispatch);
-    }
     let mut dispatch_became_indeterminate = false;
     for attempt in 0..CORE_ATTEMPTS {
         match exchange_local_ipc_frame(endpoint, &serialized, CORE_TIMEOUT).await {
@@ -1410,7 +1307,7 @@ async fn exchange_local_ipc_frame(
     .await
     .map_err(|error| (LocalIpcRoundTripFailure::AfterDispatch, error.into()))?
     .map_err(|error| (LocalIpcRoundTripFailure::AfterDispatch, error.into()))?;
-    tokio::time::timeout(timeout, read_bounded_response(stream))
+    tokio::time::timeout(timeout, read_response_frame(stream))
         .await
         .map_err(|error| (LocalIpcRoundTripFailure::AfterDispatch, error.into()))?
         .map_err(|error| {
@@ -1423,21 +1320,20 @@ async fn exchange_local_ipc_frame(
         })
 }
 
-async fn read_bounded_response(stream: impl AsyncRead + Unpin) -> std::io::Result<String> {
-    let reader = BufReader::new(stream);
-    let mut limited = reader.take((BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 2) as u64);
+async fn read_response_frame(stream: impl AsyncRead + Unpin) -> std::io::Result<String> {
+    let mut reader = BufReader::new(stream);
     let mut frame = Vec::new();
-    let read = limited.read_until(b'\n', &mut frame).await?;
+    let read = reader.read_until(b'\n', &mut frame).await?;
     if read == 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "Built-in Tool IPC response ended before a frame",
         ));
     }
-    if frame.last() != Some(&b'\n') || frame.len() > BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 1 {
+    if frame.last() != Some(&b'\n') {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "Built-in Tool IPC response exceeds the frame limit",
+            "Built-in Tool IPC response ended before a complete frame",
         ));
     }
     frame.pop();
@@ -1467,7 +1363,7 @@ fn print_root_help() {
 }
 
 fn root_help_text(managed_runtime: bool) -> String {
-    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai gather\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
+    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai member create\n  rovai task create|get|list|update\n  rovai camp list|search|read\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs. Each Agent operation supports direct flags, JSON stdin/heredoc, or --input-file <path>.\n".to_string();
     if !managed_runtime {
         text.push_str("\nUser Automation:\n  rovai app --help\n\nAgent operations keep their process-private transport. `rovai app` uses the running Desktop App's separate User Automation transport.\n");
     }
@@ -1606,19 +1502,8 @@ fn operation_help_text(description: &BuiltinToolDescription) -> String {
         description.summary
     )
     .expect("writing help to a String cannot fail");
-    if description.name == "camp.read" {
-        writeln!(
-            output,
-            "Default behavior:\n  With no --mode, camp read uses:\n    --mode {CAMP_READ_DEFAULT_MODE} --direction {CAMP_READ_DEFAULT_DIRECTION} --limit {CAMP_READ_DEFAULT_LIMIT}\n\n  This reads the newest {CAMP_READ_DEFAULT_LIMIT} visible messages from the current Camp,\n  or from --camp-id when one is supplied.\n\n  Use --direction after to begin with the oldest visible page.\n  Use an explicit item, around, or thread mode for message-anchored reads.\n"
-        )
-        .expect("writing help to a String cannot fail");
-    }
     let rendered_discriminated = discriminated_input_variants(description).is_some_and(|input| {
-        if description.name == "camp.read" {
-            render_camp_read_input_help(&mut output, description, &input);
-        } else {
-            render_discriminated_input_help(&mut output, description, &input);
-        }
+        render_discriminated_input_help(&mut output, description, &input);
         true
     });
     if !rendered_discriminated {
@@ -1631,13 +1516,6 @@ fn operation_help_text(description: &BuiltinToolDescription) -> String {
         for example in examples {
             writeln!(output, "  {example}").expect("writing help to a String cannot fail");
         }
-    }
-    if description.name == "team.gather" {
-        writeln!(
-            output,
-            "\nGather is asynchronous. After acceptance, end the current Lead Run. Do not poll, repeat Gather, or wait synchronously; Rovai delivers one FIFO completion after every member Run is terminal. Member progress returns stay public, but only the last accepted return from each current Run/retry generation is included as its captured result, so the member's final send must contain the complete conclusion. Captured returns do not consume the ordinary A2A allowance and are limited to 16 per Item/retry generation."
-        )
-        .expect("writing help to a String cannot fail");
     }
     output
 }
@@ -1668,13 +1546,6 @@ fn render_flat_input_help(output: &mut String, description: &BuiltinToolDescript
         }
         if description.name == "camp.message.send" && argument.field == "publicOnly" {
             write_indented_help(output, CAMP_MESSAGE_SEND_PUBLIC_ONLY_HELP);
-        }
-        if description.name == "team.gather" && argument.field == "to" {
-            writeln!(
-                output,
-                "      Canonical member target; repeat for each additional distinct member."
-            )
-            .expect("writing help to a String cannot fail");
         }
         if description.name == "camp.message.send" && argument.field == "mentionUser" {
             write_indented_help(output, CAMP_MESSAGE_SEND_TO_PRINCIPAL_HELP);
@@ -1712,7 +1583,7 @@ fn render_flat_input_help(output: &mut String, description: &BuiltinToolDescript
         {
             writeln!(
                 output,
-                "      Optional. Omit for the current Camp; pass an authorized frozen historical Camp ID to target that Camp only."
+                "      Optional. Omit for the current Camp; pass any extant public Camp ID to target that Camp only."
             )
             .expect("writing help to a String cannot fail");
         }
@@ -1808,94 +1679,6 @@ fn render_discriminated_input_help(
     }
 }
 
-fn render_camp_read_input_help(
-    output: &mut String,
-    description: &BuiltinToolDescription,
-    input: &CliDiscriminatedInput,
-) {
-    use std::fmt::Write as _;
-
-    let common_fields = discriminated_common_fields(input);
-    if !common_fields.is_empty() {
-        writeln!(output, "Common options:\n  Optional:")
-            .expect("writing help to a String cannot fail");
-        for field in &common_fields {
-            render_cli_input_field(output, description, field);
-        }
-        writeln!(output).expect("writing help to a String cannot fail");
-    }
-
-    let mode_values = input
-        .variants
-        .iter()
-        .map(|variant| compact_cli_value(&variant.discriminator_value))
-        .collect::<Vec<_>>();
-    writeln!(
-        output,
-        "Mode selection:\n  Optional:\n    --mode <{}>\n        JSON field: mode\n        Allowed values: {}\n        Default: {CAMP_READ_DEFAULT_MODE}.\n",
-        mode_values.join("|"),
-        mode_values.join(", ")
-    )
-    .expect("writing help to a String cannot fail");
-
-    for variant in &input.variants {
-        let mode = compact_cli_value(&variant.discriminator_value);
-        writeln!(output, "Mode {mode}:").expect("writing help to a String cannot fail");
-        for required in [true, false] {
-            let mut fields = variant
-                .fields
-                .iter()
-                .filter(|field| {
-                    field.field != input.discriminator_field
-                        && !common_fields
-                            .iter()
-                            .any(|common| common.field == field.field)
-                        && camp_read_help_field_required(&mode, field) == required
-                })
-                .collect::<Vec<_>>();
-            fields.sort_by_key(|field| field.field.as_str());
-            if fields.is_empty() {
-                continue;
-            }
-            writeln!(
-                output,
-                "  {}:",
-                if required { "Required" } else { "Optional" }
-            )
-            .expect("writing help to a String cannot fail");
-            for field in fields {
-                render_cli_input_field(output, description, field);
-                if mode == "timeline" && field.field == "direction" {
-                    writeln!(output, "        Default: {CAMP_READ_DEFAULT_DIRECTION}.")
-                        .expect("writing help to a String cannot fail");
-                }
-                if matches!(mode.as_str(), "thread" | "timeline") && field.field == "limit" {
-                    writeln!(output, "        Default: {CAMP_READ_DEFAULT_LIMIT}.")
-                        .expect("writing help to a String cannot fail");
-                }
-            }
-        }
-        let examples = operation_help_examples_for_variant(&description.name, &mode);
-        if !examples.is_empty() {
-            writeln!(output, "  Examples:").expect("writing help to a String cannot fail");
-            for example in examples {
-                writeln!(output, "    {example}").expect("writing help to a String cannot fail");
-            }
-        }
-        writeln!(output).expect("writing help to a String cannot fail");
-    }
-
-    writeln!(
-        output,
-        "Direction semantics:\n  before = move toward lower sequence numbers / older messages.\n           Without a cursor, begin with the newest visible page.\n  after  = move toward higher sequence numbers / newer messages.\n           Without a cursor, begin with the oldest visible page.\n\nReuse nextCursor with the same mode and direction.\nDo not use older, newer, backward, or forward as direction values."
-    )
-    .expect("writing help to a String cannot fail");
-}
-
-fn camp_read_help_field_required(mode: &str, field: &CliInputField) -> bool {
-    field.required && !(mode == CAMP_READ_DEFAULT_MODE && field.field == "direction")
-}
-
 fn discriminated_common_fields(input: &CliDiscriminatedInput) -> Vec<&CliInputField> {
     let Some(first) = input.variants.first() else {
         return Vec::new();
@@ -1984,11 +1767,11 @@ fn render_cli_input_field(
     if matches!(description.name.as_str(), "camp.search" | "camp.read") && field.field == "campId" {
         writeln!(
             output,
-            "        Omit for the current Camp; pass an authorized frozen historical Camp ID to target that Camp only."
+            "        Omit for the current Camp; pass any extant public Camp ID to target that Camp only."
         )
         .expect("writing help to a String cannot fail");
     }
-    if description.name == "camp.read" && field.field == "cursor" {
+    if description.name == "camp.read" && field.field == "before" {
         writeln!(
             output,
             "        Pass the nextCursor returned by the previous page."
@@ -2020,25 +1803,6 @@ fn operation_help_examples_for_variant(
     discriminator_value: &str,
 ) -> &'static [&'static str] {
     match (operation, discriminator_value) {
-        ("camp.read", "item") => &[
-            "rovai camp read --mode item --message-id '<message-id>'",
-            "rovai camp read --camp-id '<camp-id>' --mode item --message-id '<message-id>' --body-offset 0 --body-limit 4000",
-        ],
-        ("camp.read", "around") => &[
-            "rovai camp read --mode around --message-id '<message-id>' --before 5 --after 5",
-            "rovai camp read --before 5 --message-id '<message-id>' --mode around",
-        ],
-        ("camp.read", "thread") => &[
-            "rovai camp read --mode thread --message-id '<message-id>' --direction before --limit 20",
-            "rovai camp read --camp-id '<camp-id>' --mode thread --message-id '<message-id>' --direction after --cursor 123 --limit 20",
-        ],
-        ("camp.read", "timeline") => &[
-            "rovai camp read",
-            "rovai camp read --camp-id '<camp-id>'",
-            "rovai camp read --limit 5",
-            "rovai camp read --direction after --limit 20",
-            "rovai camp read --cursor 123",
-        ],
         ("memory.view", "hearth") => &["rovai memory view --scope hearth"],
         ("memory.view", "companion") => &["rovai memory view --scope companion"],
         ("memory.view", "relationship") => {
@@ -2066,10 +1830,6 @@ fn operation_help_examples(operation: &str) -> &'static [&'static str] {
         "mission.update" => &["rovai mission update --title \"目录导航\""],
         "mission.status" => &["rovai mission status --status in_progress"],
         "camp.message.send" => &CAMP_MESSAGE_SEND_HELP_EXAMPLES,
-        "team.gather" => &[
-            "rovai gather --to agent_2 --to agent_3 --body '请分别分析并公开回复'",
-            "rovai gather --input-file gather.json",
-        ],
         "member.create" => &[
             "rovai member create --creation-key 2b945f3f-4b45-4ae5-92b2-739fce600338 --display-name 'Nova' --team-role 'Researcher'",
             "rovai member create --input-file confirmed-member.json",
@@ -2089,12 +1849,10 @@ fn operation_help_examples(operation: &str) -> &'static [&'static str] {
         ],
         "camp.read" => &[
             "rovai camp read",
-            "rovai camp read --camp-id '<camp-id>'",
-            "rovai camp read --limit 5",
-            "rovai camp read --direction after --limit 20",
-            "rovai camp read --mode item --message-id '<message-id>'",
-            "rovai camp read --mode around --message-id '<message-id>' --before 5 --after 5",
-            "rovai camp read --mode thread --message-id '<message-id>' --direction after --limit 20",
+            "rovai camp read --limit 20",
+            "rovai camp read --before 123",
+            "rovai camp read --message-id '<message-id>'",
+            "rovai camp read --thread '<message-id>' --limit 20",
         ],
         "history.search" => &["rovai history search --query 'amount'"],
         "single_chat.history" => &[
@@ -2139,27 +1897,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ipc_response_reader_requires_one_bounded_newline_delimited_utf8_frame() {
+    async fn ipc_response_reader_requires_one_complete_newline_delimited_utf8_frame() {
         assert_eq!(
-            read_bounded_response(std::io::Cursor::new(b"{\"ok\":true}\n"))
+            read_response_frame(std::io::Cursor::new(b"{\"ok\":true}\n"))
                 .await
                 .unwrap(),
             r#"{"ok":true}"#
         );
         assert_eq!(
-            read_bounded_response(std::io::Cursor::new(b"{}"))
+            read_response_frame(std::io::Cursor::new(b"{}"))
                 .await
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
-        let oversized = vec![b'x'; BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES + 2];
+        let large = format!("{{\"body\":\"{}\"}}\n", "x".repeat(2 * 1024 * 1024));
         assert_eq!(
-            read_bounded_response(std::io::Cursor::new(oversized))
+            read_response_frame(std::io::Cursor::new(large.as_bytes()))
                 .await
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::InvalidData
+                .unwrap(),
+            large.trim_end()
         );
     }
 
@@ -2270,12 +2027,7 @@ mod tests {
                 .operation,
             "camp.message.send"
         );
-        assert_eq!(
-            builtin_tool_identity_by_command("gather", "")
-                .unwrap()
-                .operation,
-            "team.gather"
-        );
+        assert!(builtin_tool_identity_by_command("gather", "").is_none());
         assert!(builtin_tool_identity_by_command("memory", "propose-hearth").is_none());
         assert!(
             invocation_identity(&["memory".to_string(), "propose-hearth".to_string()]).is_none()
@@ -2301,7 +2053,6 @@ mod tests {
     fn exact_help_surface_covers_the_current_catalog_and_no_family_aliases() {
         let exact_paths: &[&[&str]] = &[
             &["send", "--help"],
-            &["gather", "--help"],
             &["member", "create", "--help"],
             &["task", "create", "--help"],
             &["task", "get", "--help"],
@@ -2324,7 +2075,7 @@ mod tests {
             &["automation", "update", "--help"],
             &["automation", "delete", "--help"],
         ];
-        assert_eq!(exact_paths.len(), 23);
+        assert_eq!(exact_paths.len(), 22);
         for path in exact_paths {
             let args = path
                 .iter()
@@ -2352,43 +2103,6 @@ mod tests {
         let help = operation_help_text(&view);
         assert!(help.contains("One of: hearth, companion, relationship."));
         assert!(help.contains("Required only when --scope relationship"));
-        let gather = builtin_tool_description("team.gather").unwrap();
-        let gather_help = operation_help_text(&gather);
-        assert!(gather_help.contains("only the last accepted return"));
-        assert!(gather_help.contains("limited to 16 per Item/retry generation"));
-        assert!(
-            gather_help
-                .contains("Canonical member target; repeat for each additional distinct member.")
-        );
-        assert!(!gather_help.contains("inline"));
-        assert!(
-            parse_and_validate_operation_input(
-                &gather,
-                &[
-                    "--to".to_string(),
-                    "agent_2".to_string(),
-                    "--to".to_string(),
-                    "agent_3".to_string(),
-                    "--body".to_string(),
-                    "Compare the two approaches".to_string(),
-                ],
-            )
-            .is_ok()
-        );
-        assert!(
-            parse_and_validate_operation_input(
-                &gather,
-                &[
-                    "--to".to_string(),
-                    "agent_2".to_string(),
-                    "--to".to_string(),
-                    "agent_2".to_string(),
-                    "--body".to_string(),
-                    "Compare the two approaches".to_string(),
-                ],
-            )
-            .is_err()
-        );
     }
 
     #[test]
@@ -2396,7 +2110,7 @@ mod tests {
         let search = builtin_tool_description("camp.search").unwrap();
         let search_help = operation_help_text(&search);
         assert!(search_help.contains("Omit for the current Camp"));
-        assert!(search_help.contains("authorized frozen historical Camp ID"));
+        assert!(search_help.contains("any extant public Camp ID"));
         assert!(
             search
                 .arguments
@@ -2418,268 +2132,70 @@ mod tests {
 
         let read = builtin_tool_description("camp.read").unwrap();
         let read_help = operation_help_text(&read);
-        assert!(read_help.contains("Default behavior:"));
-        assert!(read_help.contains("--mode timeline --direction before --limit 20"));
-        assert!(read_help.contains("newest 20 visible messages"));
+        for flag in ["--limit", "--before", "--message-id", "--thread"] {
+            assert!(read_help.contains(flag), "missing {flag} from help");
+        }
+        for removed in ["--mode", "--direction", "--cursor", "--after"] {
+            assert!(!read_help.contains(removed), "stale {removed} in help");
+        }
         assert!(read_help.contains("Omit for the current Camp"));
-        assert_eq!(read_help.matches("--camp-id <string>").count(), 1);
-        assert_eq!(
-            read_help
-                .matches("--mode <item|around|thread|timeline>")
-                .count(),
-            1
-        );
-        assert!(read_help.contains("Default: timeline."));
-        let item_index = read_help.find("Mode item:").unwrap();
-        let around_index = read_help.find("Mode around:").unwrap();
-        let thread_index = read_help.find("Mode thread:").unwrap();
-        let timeline_index = read_help.find("Mode timeline:").unwrap();
-        assert!(
-            item_index < around_index
-                && around_index < thread_index
-                && thread_index < timeline_index
-        );
-        assert!(read_help.contains("--direction <before|after>"));
-        assert!(read_help.contains("Allowed values: before, after"));
-        assert!(read_help.contains("--cursor <integer>"));
-        assert!(read_help.contains("Minimum: 1"));
-        assert!(read_help.contains("Maximum: 20"));
-        assert!(read_help[timeline_index..].contains("Default: before."));
-        assert!(read_help[thread_index..timeline_index].contains("Default: 20."));
-        assert!(read_help.contains("Do not use older, newer, backward, or forward"));
-        assert!(read_help.contains("Reuse nextCursor with the same mode and direction"));
-        assert!(read_help[item_index..around_index].contains("--body-offset <integer>"));
-        assert!(read_help[around_index..thread_index].contains("--before <integer>"));
-        assert!(!read_help[timeline_index..].contains("--before <integer>"));
-        assert_eq!(
-            parse_and_validate_operation_input(
-                &read,
-                &[
-                    "--mode".to_string(),
-                    "item".to_string(),
-                    "--message-id".to_string(),
-                    "msg_123".to_string(),
-                ],
-            )
-            .unwrap(),
-            json!({"mode": "item", "messageId": "msg_123"})
-        );
-        assert_eq!(
-            parse_and_validate_operation_input(
-                &read,
-                &[
-                    "--before".to_string(),
-                    "5".to_string(),
-                    "--message-id".to_string(),
-                    "msg_123".to_string(),
-                    "--mode".to_string(),
-                    "around".to_string(),
-                ],
-            )
-            .unwrap(),
-            json!({"mode": "around", "messageId": "msg_123", "before": 5})
-        );
+        assert_eq!(read_help.matches("--camp-id").count(), 1);
         assert_eq!(
             operation_help_examples("camp.read"),
             [
                 "rovai camp read",
-                "rovai camp read --camp-id '<camp-id>'",
-                "rovai camp read --limit 5",
-                "rovai camp read --direction after --limit 20",
-                "rovai camp read --mode item --message-id '<message-id>'",
-                "rovai camp read --mode around --message-id '<message-id>' --before 5 --after 5",
-                "rovai camp read --mode thread --message-id '<message-id>' --direction after --limit 20",
+                "rovai camp read --limit 20",
+                "rovai camp read --before 123",
+                "rovai camp read --message-id '<message-id>'",
+                "rovai camp read --thread '<message-id>' --limit 20",
             ]
         );
-        assert_eq!(
-            apply_operation_defaults("camp.read", json!({})).unwrap(),
+        for (args, expected) in [
+            (vec!["--limit", "20"], json!({"limit": 20})),
+            (vec!["--before", "123"], json!({"before": 123})),
             (
-                json!({"mode": "timeline", "direction": "before", "limit": 20}),
-                CliAppliedDefaults {
-                    mode: true,
-                    direction: true,
-                    limit: true,
-                },
-            )
-        );
-        assert_eq!(
-            parse_and_validate_operation_input(
-                &read,
-                &[
-                    "--camp-id".to_string(),
-                    "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),
-                ],
-            )
-            .unwrap(),
-            json!({
-                "campId": "rvcamp_01h47kvsy5fk1shh6w1g60eecf",
-                "mode": "timeline",
-                "direction": "before",
-                "limit": 20
-            })
-        );
-        assert_eq!(
-            parse_and_validate_operation_input(&read, &["--limit".to_string(), "5".to_string()],)
-                .unwrap(),
-            json!({"mode": "timeline", "direction": "before", "limit": 5})
-        );
-        assert_eq!(
-            parse_and_validate_operation_input(
-                &read,
-                &["--direction".to_string(), "after".to_string()],
-            )
-            .unwrap(),
-            json!({"mode": "timeline", "direction": "after", "limit": 20})
-        );
-        assert_eq!(
-            parse_and_validate_operation_input(
-                &read,
-                &["--mode".to_string(), "timeline".to_string()],
-            )
-            .unwrap(),
-            json!({"mode": "timeline", "direction": "before", "limit": 20})
-        );
-        let default_mode_conflict = parse_and_validate_operation_input(
-            &read,
-            &["--message-id".to_string(), "msg_123".to_string()],
-        )
-        .unwrap_err();
-        assert_eq!(
-            default_mode_conflict.message,
-            "--mode defaults to timeline, which does not accept --message-id.\nUse an explicit message-anchored mode:\n  rovai camp read --mode item --message-id '<message-id>'\n  rovai camp read --mode around --message-id '<message-id>' --before 5 --after 5\n  rovai camp read --mode thread --message-id '<message-id>' --direction <before|after>"
-        );
-        assert_eq!(
-            default_mode_conflict.details.unwrap()["issues"][0],
-            json!({
-                "field": "messageId",
-                "flag": "--message-id",
-                "reason": "not_allowed_for_mode",
-                "validModes": ["item", "around", "thread"]
-            })
-        );
-        let unknown_mode = parse_and_validate_operation_input(
-            &read,
-            &["--mode".to_string(), "archive".to_string()],
-        )
-        .unwrap_err();
-        assert_eq!(
-            unknown_mode.details.unwrap()["issues"][0]["reason"],
-            "unknown_mode"
-        );
-        for direction in ["backward", "older", "newer", "forward"] {
-            let failure = parse_and_validate_operation_input(
-                &read,
-                &[
-                    "--mode".to_string(),
-                    "timeline".to_string(),
-                    "--direction".to_string(),
-                    direction.to_string(),
-                ],
-            )
-            .unwrap_err();
+                vec!["--message-id", "msg_123"],
+                json!({"messageId": "msg_123"}),
+            ),
+            (
+                vec!["--thread", "msg_123", "--limit", "20"],
+                json!({"thread": "msg_123", "limit": 20}),
+            ),
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(
-                failure.details.unwrap()["issues"][0],
-                json!({
-                    "field": "direction",
-                    "flag": "--direction",
-                    "reason": "invalid_enum",
-                    "allowedValues": ["before", "after"]
-                })
+                parse_and_validate_operation_input(&read, &args).unwrap(),
+                expected
             );
         }
-        let missing_thread_direction = parse_and_validate_operation_input(
-            &read,
-            &[
-                "--mode".to_string(),
-                "thread".to_string(),
-                "--message-id".to_string(),
-                "msg_123".to_string(),
-            ],
-        )
-        .unwrap_err();
-        assert_eq!(
-            missing_thread_direction.message,
-            "camp.read thread requires --direction <before|after>."
+        for removed in ["--mode", "--direction", "--cursor", "--after"] {
+            assert!(
+                parse_operation_input(&read, &[removed.to_string(), "legacy".to_string()]).is_err()
+            );
+        }
+        assert!(
+            parse_and_validate_operation_input(
+                &read,
+                &[
+                    "--message-id".to_string(),
+                    "msg_123".to_string(),
+                    "--before".to_string(),
+                    "10".to_string(),
+                ],
+            )
+            .is_err()
         );
-        assert_eq!(
-            missing_thread_direction.details.as_ref().unwrap(),
-            &json!({
-                "operation": "camp.read",
-                "mode": "thread",
-                "issues": [{
-                    "field": "direction",
-                    "flag": "--direction",
-                    "reason": "missing_required",
-                    "allowedValues": ["before", "after"]
-                }]
-            })
-        );
-        let wrong_mode_field = parse_and_validate_operation_input(
-            &read,
-            &[
-                "--mode".to_string(),
-                "timeline".to_string(),
-                "--before".to_string(),
-                "5".to_string(),
-            ],
-        )
-        .unwrap_err();
-        assert_eq!(
-            wrong_mode_field.message,
-            "camp.read timeline --before is valid only in around mode."
-        );
-        assert_eq!(
-            wrong_mode_field.details.as_ref().unwrap()["issues"],
-            json!([{
-                "field": "before",
-                "flag": "--before",
-                "reason": "not_allowed_for_mode",
-                "validModes": ["around"]
-            }])
-        );
-        let cursor_zero = parse_and_validate_operation_input(
-            &read,
-            &[
-                "--mode".to_string(),
-                "timeline".to_string(),
-                "--direction".to_string(),
-                "before".to_string(),
-                "--cursor".to_string(),
-                "0".to_string(),
-            ],
-        )
-        .unwrap_err();
-        assert_eq!(
-            cursor_zero.details.unwrap()["issues"][0]["reason"],
-            "below_minimum"
-        );
-        assert_eq!(
-            cursor_zero.message,
-            "camp.read timeline requires --cursor to be at least 1."
-        );
-
-        let input_file =
-            env::temp_dir().join(format!("rovai-camp-read-input-{}.json", Uuid::new_v4()));
-        fs::write(&input_file, r#"{"mode":"timeline"}"#).unwrap();
-        let input_file_value = parse_and_validate_operation_input(
-            &read,
-            &[
-                "--input-file".to_string(),
-                input_file.to_string_lossy().into_owned(),
-            ],
-        )
-        .unwrap();
-        fs::remove_file(input_file).unwrap();
-        assert_eq!(
-            input_file_value,
-            json!({"mode": "timeline", "direction": "before", "limit": 20})
-        );
-        let stdin_value = parse_json_object(br#"{"direction":"after"}"#, "stdin").unwrap();
-        assert_eq!(
-            apply_operation_defaults("camp.read", stdin_value)
-                .unwrap()
-                .0,
-            json!({"mode": "timeline", "direction": "after", "limit": 20})
+        assert!(
+            parse_and_validate_operation_input(
+                &read,
+                &[
+                    "--message-id".to_string(),
+                    "msg_123".to_string(),
+                    "--thread".to_string(),
+                    "msg_456".to_string(),
+                ],
+            )
+            .is_err()
         );
         assert_eq!(
             operation_help_examples("history.search"),

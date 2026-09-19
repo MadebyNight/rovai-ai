@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -22,12 +22,12 @@ use crate::{
     },
     context_index::index_camp_message,
     db::Database,
+    delivery_queue::settle_run_deliveries,
     execution_budget::{CampTurnExecutionBudgetExhaustionReason, camp_turn_execution_budget_now},
-    gather::completion_delivery_for_member_run,
     git::GitObservation,
     message_delivery::{
         AgentRunDeliverySettlement, CAMP_MESSAGE_SEND_MAX_BODY_BYTES, DeliveryDispatchTrigger,
-        cancel_pending_turn_deliveries, dispatch_delivery, dispatch_pending_for_recipient,
+        cancel_pending_turn_deliveries, dispatch_pending_for_recipient,
         settle_materialized_delivery_for_agent_run,
     },
     network_recovery::NetworkFailureCategory,
@@ -632,6 +632,26 @@ fn validate_frozen_runtime_columns(
     Ok(())
 }
 
+pub(crate) fn runtime_cleanup_blocked_since_connection(
+    connection: &Connection,
+    conversation_id: &str,
+    excluded_agent_run_id: Option<&str>,
+) -> Result<Option<String>> {
+    Ok(connection.query_row(
+        r#"
+        SELECT MIN(cancel_requested_at)
+        FROM agent_run
+        WHERE conversation_id = ?1
+          AND (?2 IS NULL OR id <> ?2)
+          AND cancel_requested_at IS NOT NULL
+          AND cancel_acknowledged_at IS NULL
+          AND status IN ('succeeded', 'failed', 'cancelled')
+        "#,
+        params![conversation_id, excluded_agent_run_id],
+        |row| row.get(0),
+    )?)
+}
+
 #[derive(Debug, Default)]
 pub struct ExecutionRuntimeService {
     gateway: DomainCommandGateway,
@@ -663,7 +683,8 @@ impl ExecutionRuntimeService {
         let targets = {
             let mut statement = transaction.prepare(
                 r#"
-                SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+                SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                       COALESCE(agent_run.camp_turn_id, ''),
                        agent_run.execution_epoch
                 FROM agent_run
                 JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
@@ -736,12 +757,12 @@ impl ExecutionRuntimeService {
             let target = transaction
                 .query_row(
                     r#"
-                SELECT camp_turn.camp_id,
+                SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id),
                        json_extract(agent_run.runtime_model_selection_json, '$.source'),
                        agent_run.runtime_observed_model_id,
                        agent_run.cancel_requested_at
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                 WHERE agent_run.id = ?1
                   AND agent_run.execution_epoch = ?2
                 "#,
@@ -1134,6 +1155,20 @@ impl ExecutionRuntimeService {
                 .query_map([camp_id], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
+        let batch_run_ids = {
+            let mut statement = transaction.prepare(
+                r#"
+                SELECT id
+                FROM agent_run
+                WHERE camp_id = ?1 AND camp_turn_id IS NULL
+                  AND status IN ('queued', 'running', 'waiting')
+                ORDER BY created_at, id
+                "#,
+            )?;
+            statement
+                .query_map([camp_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
         let now = chrono::Utc::now().to_rfc3339();
         let actor = ActorRef::System {
             component_id: "camp-deletion".into(),
@@ -1145,6 +1180,18 @@ impl ExecutionRuntimeService {
             )?;
             settle_abortive_camp_turn_in_tx(&transaction, &turn_id, "camp_deleted", &actor, &now)?;
         }
+        for run_id in batch_run_ids {
+            settle_abortive_agent_run_in_tx(&transaction, &run_id, "camp_deleted", &actor, &now)?;
+        }
+        transaction.execute(
+            r#"
+            UPDATE camp_message_delivery
+            SET status = 'cancelled', failure_code = 'camp_deleted', ended_at = ?2,
+                version = version + 1, updated_at = ?2
+            WHERE camp_id = ?1 AND status = 'waiting'
+            "#,
+            params![camp_id, now],
+        )?;
         transaction.commit()?;
         Ok(Ok(blockers))
     }
@@ -1159,8 +1206,8 @@ impl ExecutionRuntimeService {
             SELECT agent_run.id, agent_run.execution_epoch,
                    agent_run.runtime_adapter_kind
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE camp_turn.camp_id = ?1
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
               AND (agent_run.status IN ('queued', 'running', 'waiting') OR (agent_run.cancel_requested_at IS NOT NULL AND agent_run.cancel_acknowledged_at IS NULL))
             ORDER BY agent_run.id
             "#,
@@ -1196,7 +1243,8 @@ impl ExecutionRuntimeService {
         }
         let mut statement = database.connection().prepare(
             r#"
-            SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+            SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   COALESCE(agent_run.camp_turn_id, ''),
                    agent_run.version, agent_run.execution_epoch, agent_run.status,
                    agent_run.wait_reason, COALESCE(agent_run.runtime_adapter_kind, ''),
                    camp.project_binding_kind, camp.project_path,
@@ -1205,8 +1253,8 @@ impl ExecutionRuntimeService {
                        camp.project_path
                    )
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            JOIN camp ON camp.id = camp_turn.camp_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             WHERE agent_run.cancel_requested_at IS NOT NULL
               AND agent_run.cancel_acknowledged_at IS NULL
               AND agent_run.status IN ('succeeded', 'failed', 'cancelled')
@@ -1238,21 +1286,63 @@ impl ExecutionRuntimeService {
         database: &Database,
         limit: i64,
     ) -> Result<Vec<QueuedAgentRunCandidate>> {
+        self.list_dispatchable_agent_runs_scoped(database, limit, 0, "all", None)
+    }
+
+    pub fn list_dispatchable_batch_agent_runs(
+        &self,
+        database: &Database,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<QueuedAgentRunCandidate>> {
+        self.list_dispatchable_agent_runs_scoped(database, limit, offset, "batch", None)
+    }
+
+    pub fn list_dispatchable_non_batch_agent_runs(
+        &self,
+        database: &Database,
+        limit: i64,
+    ) -> Result<Vec<QueuedAgentRunCandidate>> {
+        self.list_dispatchable_agent_runs_scoped(database, limit, 0, "non_batch", None)
+    }
+
+    pub fn load_dispatchable_agent_run(
+        &self,
+        database: &Database,
+        agent_run_id: &str,
+    ) -> Result<Option<QueuedAgentRunCandidate>> {
+        Ok(self
+            .list_dispatchable_agent_runs_scoped(database, 1, 0, "exact", Some(agent_run_id))?
+            .pop())
+    }
+
+    fn list_dispatchable_agent_runs_scoped(
+        &self,
+        database: &Database,
+        limit: i64,
+        offset: i64,
+        scope: &str,
+        exact_agent_run_id: Option<&str>,
+    ) -> Result<Vec<QueuedAgentRunCandidate>> {
         if !(1..=100).contains(&limit) {
             anyhow::bail!("AgentRun scheduler limit must be between 1 and 100");
+        }
+        if offset < 0 {
+            anyhow::bail!("AgentRun scheduler offset must not be negative");
         }
         let now = camp_turn_execution_budget_now().to_rfc3339();
         let mut statement = database.connection().prepare(
             r#"
-            SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+            SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   COALESCE(agent_run.camp_turn_id, ''),
                    agent_run.conversation_id, conversation.agent_id,
                    agent_run.task_id, agent_run.version,
                    agent_run.permission_semantics, camp.project_binding_kind,
                    camp.project_path, agent_run.effective_config_json,
                    agent_run.workspace_json
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            JOIN camp ON camp.id = camp_turn.camp_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             JOIN conversation ON conversation.id = agent_run.conversation_id
             JOIN camp_member
               ON camp_member.camp_id = camp.id
@@ -1267,10 +1357,25 @@ impl ExecutionRuntimeService {
               AND camp_member.status = 'active'
               AND camp_member.leave_requested_at IS NULL
               AND agent_profile.profile_status = 'present'
-              AND camp_turn.status IN ('running', 'waiting')
-              AND camp_turn.cancel_requested_at IS NULL
-              AND camp_turn.execution_budget_exhausted_at IS NULL
-              AND (camp_turn.execution_budget_deadline_at > ?1 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
+              AND (
+                  ?3 = 'all'
+                  OR (?3 = 'batch'
+                      AND agent_run.status = 'queued'
+                      AND agent_run.invocation_kind = 'batch')
+                  OR (?3 = 'non_batch' AND agent_run.invocation_kind <> 'batch')
+                  OR (?3 = 'exact' AND agent_run.id = ?4)
+              )
+              AND (
+                  agent_run.invocation_kind = 'batch'
+                  OR (
+                      camp_turn.status IN ('running', 'waiting')
+                      AND camp_turn.cancel_requested_at IS NULL
+                      AND camp_turn.execution_budget_exhausted_at IS NULL
+                      AND (camp_turn.execution_budget_deadline_at > ?1
+                           OR (camp_turn.execution_budget_deadline_at IS NULL
+                               AND camp_turn.execution_budget_schema_version = 2))
+                  )
+              )
               AND NOT (
                   agent_run.status = 'waiting'
                   AND agent_run.wait_reason = 'runtime_recovery'
@@ -1300,26 +1405,29 @@ impl ExecutionRuntimeService {
                              AND earlier_run.id < agent_run.id))
               )
             ORDER BY agent_run.created_at, agent_run.id
-            LIMIT ?2
+            LIMIT ?2 OFFSET ?5
             "#,
         )?;
         let rows = statement
-            .query_map(params![now, limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, Option<String>>(11)?,
-                ))
-            })?
+            .query_map(
+                params![now, limit, scope, exact_agent_run_id, offset],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                    ))
+                },
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(
@@ -1373,7 +1481,8 @@ impl ExecutionRuntimeService {
             .connection()
             .query_row(
                 r#"
-                SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+                SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                       COALESCE(agent_run.camp_turn_id, ''),
                        agent_run.conversation_id, conversation.version,
                        conversation.agent_id, agent_run.task_id,
                        agent_run.version, agent_run.permission_semantics,
@@ -1406,17 +1515,24 @@ impl ExecutionRuntimeService {
                        camp.project_binding_kind, camp.project_path,
                        agent_run.runtime_compatibility_digest
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                JOIN camp ON camp.id = camp_turn.camp_id
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
                 JOIN conversation ON conversation.id = agent_run.conversation_id
                 WHERE agent_run.id = ?1
                   AND agent_run.status IN ('running', 'waiting')
                   AND agent_run.cancel_requested_at IS NULL
                   AND agent_run.execution_epoch = ?2
-                  AND camp_turn.status IN ('running', 'waiting')
-                  AND camp_turn.cancel_requested_at IS NULL
-                  AND camp_turn.execution_budget_exhausted_at IS NULL
-                  AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
+                  AND (
+                      agent_run.invocation_kind = 'batch'
+                      OR (
+                          camp_turn.status IN ('running', 'waiting')
+                          AND camp_turn.cancel_requested_at IS NULL
+                          AND camp_turn.execution_budget_exhausted_at IS NULL
+                          AND (camp_turn.execution_budget_deadline_at > ?3
+                               OR (camp_turn.execution_budget_deadline_at IS NULL
+                                   AND camp_turn.execution_budget_schema_version = 2))
+                      )
+                  )
                 "#,
                 params![agent_run_id, execution_epoch, now],
                 |row| {
@@ -1696,13 +1812,18 @@ impl ExecutionRuntimeService {
                        OR (status = 'waiting' AND wait_reason = 'runtime_recovery'
                            AND runtime_recovery_required = 1))
                   AND cancel_requested_at IS NULL
-                  AND EXISTS (
-                      SELECT 1 FROM camp_turn
-                      WHERE camp_turn.id = agent_run.camp_turn_id
-                        AND camp_turn.status IN ('running', 'waiting')
-                        AND camp_turn.cancel_requested_at IS NULL
-                        AND camp_turn.execution_budget_exhausted_at IS NULL
-                        AND (camp_turn.execution_budget_deadline_at > ?9 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
+                  AND (
+                      agent_run.invocation_kind = 'batch'
+                      OR EXISTS (
+                          SELECT 1 FROM camp_turn
+                          WHERE camp_turn.id = agent_run.camp_turn_id
+                            AND camp_turn.status IN ('running', 'waiting')
+                            AND camp_turn.cancel_requested_at IS NULL
+                            AND camp_turn.execution_budget_exhausted_at IS NULL
+                            AND (camp_turn.execution_budget_deadline_at > ?9
+                                 OR (camp_turn.execution_budget_deadline_at IS NULL
+                                     AND camp_turn.execution_budget_schema_version = 2))
+                      )
                   )
                 "#,
                 params![
@@ -1788,8 +1909,9 @@ impl ExecutionRuntimeService {
             let camp_id = transaction
                 .query_row(
                     r#"
-                    SELECT camp_turn.camp_id
-                    FROM agent_run JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id)
+                    FROM agent_run
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE agent_run.id = ?1
                     "#,
                     [&envelope.payload.agent_run_id],
@@ -1805,7 +1927,6 @@ impl ExecutionRuntimeService {
                     "AgentRun is outside the Camp",
                 ));
             }
-            let budget_now = camp_turn_execution_budget_now().to_rfc3339();
             let audit_now = chrono::Utc::now().to_rfc3339();
             let updated = transaction.execute(
                 r#"
@@ -1826,21 +1947,12 @@ impl ExecutionRuntimeService {
                       status = 'waiting'
                       AND wait_reason = 'recovery_blocked'
                   )
-                  AND EXISTS (
-                      SELECT 1 FROM camp_turn
-                      WHERE camp_turn.id = agent_run.camp_turn_id
-                        AND camp_turn.status IN ('running', 'waiting')
-                        AND camp_turn.cancel_requested_at IS NULL
-                        AND camp_turn.execution_budget_exhausted_at IS NULL
-                        AND (camp_turn.execution_budget_deadline_at > ?5 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
-                  )
                 "#,
                 params![
                     envelope.payload.agent_run_id,
                     envelope.payload.expected_version,
                     envelope.payload.execution_epoch,
                     audit_now,
-                    budget_now,
                 ],
             )?;
             if updated != 1 {
@@ -1992,14 +2104,18 @@ impl ExecutionRuntimeService {
                     "source": envelope.payload.source,
                 }),
             )?;
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &run.camp_id,
-                &run.camp_turn_id,
-                &envelope.actor,
-                Some(run.execution_epoch),
-                &now,
-            )?;
+            let camp_turn_status = if run.camp_turn_id.is_empty() {
+                "waiting".to_string()
+            } else {
+                recompute_camp_turn(
+                    transaction,
+                    &run.camp_id,
+                    &run.camp_turn_id,
+                    &envelope.actor,
+                    Some(run.execution_epoch),
+                    &now,
+                )?
+            };
             Ok(CommandHandlerResult::accepted(
                 "agent_run.network_recovery_waiting",
                 json!({
@@ -2286,13 +2402,14 @@ impl ExecutionRuntimeService {
             let target = transaction
                 .query_row(
                     r#"
-                    SELECT camp_turn.camp_id, agent_run.camp_turn_id,
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                           COALESCE(agent_run.camp_turn_id, ''),
                            agent_run.status, agent_run.wait_reason,
                            agent_run.version, agent_run.execution_epoch,
                            agent_run.runtime_recovery_required,
                            agent_run.cancel_requested_at
                     FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE agent_run.id = ?1
                     "#,
                     [&envelope.payload.agent_run_id],
@@ -2425,25 +2542,35 @@ impl ExecutionRuntimeService {
                     agent_run_error_code: Some("accepted_input_outcome_unknown"),
                     terminal_resolution_source: None,
                     terminal_reason_code: None,
-                    final_output: None,
                     actor: &envelope.actor,
                     execution_epoch: Some(execution_epoch),
                     now: &now,
                 },
             )?;
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &camp_id,
-                &camp_turn_id,
-                &envelope.actor,
-                Some(execution_epoch),
-                &now,
-            )?;
+            let camp_turn_status = if camp_turn_id.is_empty() {
+                settle_run_deliveries(
+                    transaction,
+                    &envelope.payload.agent_run_id,
+                    "cancelled",
+                    Some("user_requested_agent_run_stop"),
+                    &now,
+                )?;
+                None
+            } else {
+                Some(recompute_camp_turn(
+                    transaction,
+                    &camp_id,
+                    &camp_turn_id,
+                    &envelope.actor,
+                    Some(execution_epoch),
+                    &now,
+                )?)
+            };
             Ok(CommandHandlerResult::applied(
                 "agent_run.accepted_input_outcome_unknown",
                 json!({
                     "agentRunId": envelope.payload.agent_run_id,
-                    "campTurnId": camp_turn_id,
+                    "campTurnId": (!camp_turn_id.is_empty()).then_some(camp_turn_id),
                     "campTurnStatus": camp_turn_status,
                     "acceptedInputPreserved": true,
                 }),
@@ -2568,13 +2695,14 @@ impl ExecutionRuntimeService {
             let target = transaction
                 .query_row(
                     r#"
-                    SELECT camp_turn.camp_id, agent_run.camp_turn_id,
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                           COALESCE(agent_run.camp_turn_id, ''),
                            agent_run.status, agent_run.wait_reason,
                            agent_run.version, agent_run.execution_epoch,
                            agent_run.cancel_requested_at,
                            camp_turn.cancel_requested_at
                     FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE agent_run.id = ?1
                     "#,
                     [&envelope.payload.agent_run_id],
@@ -2651,19 +2779,23 @@ impl ExecutionRuntimeService {
                 &now,
             )?;
             settled_run_id = Some(settlement.agent_run_id.clone());
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &camp_id,
-                &camp_turn_id,
-                &envelope.actor,
-                Some(execution_epoch),
-                &now,
-            )?;
+            let camp_turn_status = if camp_turn_id.is_empty() {
+                None
+            } else {
+                Some(recompute_camp_turn(
+                    transaction,
+                    &camp_id,
+                    &camp_turn_id,
+                    &envelope.actor,
+                    Some(execution_epoch),
+                    &now,
+                )?)
+            };
             Ok(CommandHandlerResult::applied(
                 settlement.terminal_code,
                 json!({
                     "agentRunId": envelope.payload.agent_run_id,
-                    "campTurnId": camp_turn_id,
+                    "campTurnId": (!camp_turn_id.is_empty()).then_some(camp_turn_id),
                     "campTurnStatus": camp_turn_status,
                     "status": settlement.terminal_status,
                 }),
@@ -2682,10 +2814,11 @@ impl ExecutionRuntimeService {
         conversation_id: &str,
         agent_run_id: &str,
     ) -> Result<Option<String>> {
-        Ok(database.connection().query_row(
-            "SELECT MIN(cancel_requested_at) FROM agent_run WHERE conversation_id = ?1 AND id <> ?2 AND cancel_requested_at IS NOT NULL AND cancel_acknowledged_at IS NULL AND status IN ('succeeded', 'failed', 'cancelled')",
-            params![conversation_id, agent_run_id], |row| row.get(0),
-        )?)
+        runtime_cleanup_blocked_since_connection(
+            database.connection(),
+            conversation_id,
+            Some(agent_run_id),
+        )
     }
 
     pub fn defer_runtime_cleanup(
@@ -2740,12 +2873,12 @@ impl ExecutionRuntimeService {
             let target = transaction
                 .query_row(
                     r#"
-                    SELECT camp_turn.camp_id, agent_run.status,
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id), agent_run.status,
                            agent_run.execution_epoch,
                            agent_run.ending_git_observation_json,
                            agent_run.cancel_requested_at IS NOT NULL
                     FROM agent_run
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE agent_run.id = ?1
                     "#,
                     [&envelope.payload.agent_run_id],
@@ -2889,13 +3022,20 @@ impl ExecutionRuntimeService {
                            agent_run.runtime_native_session_compatibility_key
                     FROM conversation
                     JOIN agent_run ON agent_run.conversation_id = conversation.id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE conversation.id = ?1 AND agent_run.id = ?2
                       AND agent_run.cancel_requested_at IS NULL
-                      AND camp_turn.status IN ('running', 'waiting')
-                      AND camp_turn.cancel_requested_at IS NULL
-                      AND camp_turn.execution_budget_exhausted_at IS NULL
-                      AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
+                      AND (
+                            agent_run.camp_turn_id IS NULL
+                         OR (
+                                camp_turn.status IN ('running', 'waiting')
+                            AND camp_turn.cancel_requested_at IS NULL
+                            AND camp_turn.execution_budget_exhausted_at IS NULL
+                            AND (camp_turn.execution_budget_deadline_at > ?3
+                                 OR (camp_turn.execution_budget_deadline_at IS NULL
+                                     AND camp_turn.execution_budget_schema_version = 2))
+                         )
+                      )
                     "#,
                     params![
                         envelope.payload.conversation_id,
@@ -3069,7 +3209,10 @@ impl ExecutionRuntimeService {
                             native_binding_id = ?5,
                             native_binding_generation = ?6,
                             native_binding_secret_digest = NULL,
-                            last_accepted_public_boundary_sequence = 0,
+                            last_accepted_public_boundary_sequence = CASE
+                                WHEN kind = 'single_chat' THEN 0
+                                ELSE last_accepted_public_boundary_sequence
+                            END,
                             native_charter_digest = NULL,
                             native_collaboration_state_digest = NULL,
                             version = version + 1, updated_at = ?7
@@ -3287,7 +3430,10 @@ impl ExecutionRuntimeService {
                     native_session_compatibility_key = NULL,
                     native_binding_id = NULL,
                     native_binding_secret_digest = NULL,
-                    last_accepted_public_boundary_sequence = 0,
+                    last_accepted_public_boundary_sequence = CASE
+                        WHEN kind = 'single_chat' THEN 0
+                        ELSE last_accepted_public_boundary_sequence
+                    END,
                     native_charter_digest = NULL,
                             native_collaboration_state_digest = NULL,
                     version = version + 1,
@@ -3539,25 +3685,36 @@ impl ExecutionRuntimeService {
                     agent_run_error_code: None,
                     terminal_resolution_source: Some("runtime_terminal"),
                     terminal_reason_code,
-                    final_output: Some(&envelope.payload.final_output),
                     actor: &envelope.actor,
                     execution_epoch: Some(envelope.payload.execution_epoch),
                     now: &target.now,
                 },
             )?;
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &target.camp_id,
-                &target.camp_turn_id,
-                &envelope.actor,
-                Some(envelope.payload.execution_epoch),
-                &target.now,
-            )?;
+            let camp_turn_status = if target.camp_turn_id.is_empty() {
+                settle_run_deliveries(
+                    transaction,
+                    &target.agent_run_id,
+                    "succeeded",
+                    None,
+                    &target.now,
+                )?;
+                None
+            } else {
+                Some(recompute_camp_turn(
+                    transaction,
+                    &target.camp_id,
+                    &target.camp_turn_id,
+                    &envelope.actor,
+                    Some(envelope.payload.execution_epoch),
+                    &target.now,
+                )?)
+            };
             Ok(CommandHandlerResult::applied(
                 "agent_run.succeeded",
                 json!({
                     "agentRunId": target.agent_run_id,
-                    "campTurnId": target.camp_turn_id,
+                    "campTurnId": (!target.camp_turn_id.is_empty())
+                        .then_some(target.camp_turn_id),
                     "campTurnStatus": camp_turn_status,
                     "finalCampMessageId": final_camp_message_id,
                     "finalOutputDigest": final_output_digest,
@@ -3891,25 +4048,36 @@ impl ExecutionRuntimeService {
                     agent_run_error_code: Some(&envelope.payload.error_code),
                     terminal_resolution_source: None,
                     terminal_reason_code: None,
-                    final_output: None,
                     actor: &envelope.actor,
                     execution_epoch: Some(target.execution_epoch),
                     now: &target.now,
                 },
             )?;
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &target.camp_id,
-                &target.camp_turn_id,
-                &envelope.actor,
-                Some(target.execution_epoch),
-                &target.now,
-            )?;
+            let camp_turn_status = if target.camp_turn_id.is_empty() {
+                settle_run_deliveries(
+                    transaction,
+                    &target.agent_run_id,
+                    "failed",
+                    Some(&envelope.payload.error_code),
+                    &target.now,
+                )?;
+                None
+            } else {
+                Some(recompute_camp_turn(
+                    transaction,
+                    &target.camp_id,
+                    &target.camp_turn_id,
+                    &envelope.actor,
+                    Some(target.execution_epoch),
+                    &target.now,
+                )?)
+            };
             Ok(CommandHandlerResult::applied(
                 "agent_run.dispatch_rejected",
                 json!({
                     "agentRunId": target.agent_run_id,
-                    "campTurnId": target.camp_turn_id,
+                    "campTurnId": (!target.camp_turn_id.is_empty())
+                        .then_some(target.camp_turn_id),
                     "campTurnStatus": camp_turn_status,
                 }),
                 Some(entity_ref("agent_run", &target.agent_run_id)),
@@ -3993,6 +4161,17 @@ impl ExecutionRuntimeService {
                 SET status = 'failed', wait_reason = NULL, wait_deadline_at = NULL,
                     runtime_recovery_required = 0,
                     execution_lease_owner = NULL, execution_lease_expires_at = NULL,
+                    cancel_requested_at = CASE
+                        WHEN ?9 IS NULL THEN COALESCE(cancel_requested_at, ?5)
+                        ELSE cancel_requested_at
+                    END,
+                    cancel_reason_code = CASE
+                        WHEN ?9 IS NULL THEN COALESCE(
+                            cancel_reason_code,
+                            'runtime_terminal_unconfirmed'
+                        )
+                        ELSE cancel_reason_code
+                    END,
                     terminal_resolution_source = ?9,
                     terminal_reason_code = NULL,
                     last_error_code = ?2, last_error_details_ref = ?3,
@@ -4043,25 +4222,36 @@ impl ExecutionRuntimeService {
                     agent_run_error_code: Some(&envelope.payload.error_code),
                     terminal_resolution_source,
                     terminal_reason_code: None,
-                    final_output: None,
                     actor: &envelope.actor,
                     execution_epoch: Some(envelope.payload.execution_epoch),
                     now: &target.now,
                 },
             )?;
-            let camp_turn_status = recompute_camp_turn(
-                transaction,
-                &target.camp_id,
-                &target.camp_turn_id,
-                &envelope.actor,
-                Some(envelope.payload.execution_epoch),
-                &target.now,
-            )?;
+            let camp_turn_status = if target.camp_turn_id.is_empty() {
+                settle_run_deliveries(
+                    transaction,
+                    &target.agent_run_id,
+                    "failed",
+                    Some(&envelope.payload.error_code),
+                    &target.now,
+                )?;
+                None
+            } else {
+                Some(recompute_camp_turn(
+                    transaction,
+                    &target.camp_id,
+                    &target.camp_turn_id,
+                    &envelope.actor,
+                    Some(envelope.payload.execution_epoch),
+                    &target.now,
+                )?)
+            };
             Ok(CommandHandlerResult::applied(
                 "agent_run.failed",
                 json!({
                     "agentRunId": target.agent_run_id,
-                    "campTurnId": target.camp_turn_id,
+                    "campTurnId": (!target.camp_turn_id.is_empty())
+                        .then_some(target.camp_turn_id),
                     "campTurnStatus": camp_turn_status,
                 }),
                 Some(entity_ref("agent_run", &target.agent_run_id)),
@@ -4216,7 +4406,8 @@ impl ExecutionRuntimeService {
         let targets = {
             let mut statement = transaction.prepare(
                 r#"
-                SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+                SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                       agent_run.camp_turn_id,
                        agent_run.execution_epoch, agent_run.cancel_requested_at,
                        agent_run.cancel_reason_code,
                        COALESCE(
@@ -4224,8 +4415,8 @@ impl ExecutionRuntimeService {
                            camp.project_path
                        )
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                JOIN camp ON camp.id = camp_turn.camp_id
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
                 WHERE agent_run.status IN ('queued', 'running', 'waiting')
                 ORDER BY agent_run.created_at, agent_run.id
                 "#,
@@ -4235,7 +4426,7 @@ impl ExecutionRuntimeService {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, Option<String>>(4)?,
                         row.get::<_, Option<String>>(5)?,
@@ -4276,6 +4467,24 @@ impl ExecutionRuntimeService {
                     .filter(|run| run.external_effect_evidence_preserved)
                     .map(|run| run.agent_run_id),
             );
+        }
+        for (agent_run_id, _, camp_turn_id, _, _, _, _) in &targets {
+            if camp_turn_id.is_none() {
+                let settlement = settle_abortive_agent_run_in_tx(
+                    &transaction,
+                    agent_run_id,
+                    if cycle.0 == 3 {
+                        "app_shutdown_cancel_all"
+                    } else {
+                        "planned_shutdown_cancelled"
+                    },
+                    &actor,
+                    &now,
+                )?;
+                if settlement.external_effect_evidence_preserved {
+                    effect_evidence_run_ids.insert(agent_run_id.clone());
+                }
+            }
         }
         let mut fenced_agent_runs = Vec::with_capacity(targets.len());
         for (agent_run_id, _, _, execution_epoch, _, _, execution_root) in targets {
@@ -4354,11 +4563,15 @@ impl ExecutionRuntimeService {
             {
                 anyhow::bail!("AgentRun already has a conflicting terminal settlement");
             }
-            let camp_turn_status = transaction.query_row(
-                "SELECT status FROM camp_turn WHERE id = ?1",
-                [&target.camp_turn_id],
-                |row| row.get::<_, String>(0),
-            )?;
+            let camp_turn_status = if target.camp_turn_id.is_empty() {
+                target.status.clone()
+            } else {
+                transaction.query_row(
+                    "SELECT status FROM camp_turn WHERE id = ?1",
+                    [&target.camp_turn_id],
+                    |row| row.get::<_, String>(0),
+                )?
+            };
             transaction.commit()?;
             crate::execution_text::flush_settled(database)?;
             return Ok(PlannedShutdownTerminalSettlement {
@@ -4463,20 +4676,30 @@ impl ExecutionRuntimeService {
                 agent_run_error_code: Some(&terminal.error_code),
                 terminal_resolution_source: Some("runtime_terminal"),
                 terminal_reason_code: Some(terminal_reason_code),
-                final_output: None,
                 actor: &actor,
                 execution_epoch: Some(terminal.execution_epoch),
                 now: &target.now,
             },
         )?;
-        let camp_turn_status = recompute_camp_turn(
-            &transaction,
-            &target.camp_id,
-            &target.camp_turn_id,
-            &actor,
-            Some(terminal.execution_epoch),
-            &target.now,
-        )?;
+        let camp_turn_status = if target.camp_turn_id.is_empty() {
+            settle_run_deliveries(
+                &transaction,
+                &target.agent_run_id,
+                agent_run_status,
+                Some(&terminal.error_code),
+                &target.now,
+            )?;
+            agent_run_status.to_string()
+        } else {
+            recompute_camp_turn(
+                &transaction,
+                &target.camp_id,
+                &target.camp_turn_id,
+                &actor,
+                Some(terminal.execution_epoch),
+                &target.now,
+            )?
+        };
         transaction.commit()?;
         crate::execution_text::flush_settled(database)?;
         pump_target_after_run_terminal(database, &terminal.agent_run_id)?;
@@ -4671,6 +4894,7 @@ struct TerminalTarget {
     operation_policy: String,
     operation_policy_version: i64,
     destination_conversation_id: Option<String>,
+    anchor_message_id: Option<String>,
     now: String,
 }
 
@@ -4792,7 +5016,6 @@ fn persist_single_chat_success(
             agent_run_error_code: None,
             terminal_resolution_source: Some("runtime_terminal"),
             terminal_reason_code,
-            final_output: Some(&envelope.payload.final_output),
             actor: &envelope.actor,
             execution_epoch: Some(envelope.payload.execution_epoch),
             now: &target.now,
@@ -4993,11 +5216,13 @@ fn persist_recipient_free_agent_publication(
             reply_to_camp_message_id, camp_turn_id, agent_run_id,
             tombstoned_at, version, created_at, updated_at,
             effective_recipient_ids_json, recipient_set_digest,
-            recipient_presentation_json, source_operation_id
+            recipient_presentation_json, source_operation_id,
+            origin_kind, recall_state
         ) VALUES (
             ?1, ?2, ?3, 'agent', ?4, ?5, ?6, ?7, ?8,
-            'default', ?9, NULL, ?10, ?5,
-            NULL, 1, ?11, ?11, '[]', NULL, '{}', NULL
+            'default', ?9, ?10, ?11, ?5,
+            NULL, 1, ?12, ?12, '[]', NULL, '{}', NULL,
+            'agent', 'ineligible'
         )
         "#,
         params![
@@ -5010,7 +5235,8 @@ fn persist_recipient_free_agent_publication(
             structured_content_json,
             content_digest,
             addressed_agents_json,
-            target.camp_turn_id,
+            target.anchor_message_id,
+            (!target.camp_turn_id.is_empty()).then_some(target.camp_turn_id.as_str()),
             target.now,
         ],
     )?;
@@ -5047,7 +5273,8 @@ fn load_terminal_target(
     transaction
         .query_row(
             r#"
-            SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+            SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   COALESCE(agent_run.camp_turn_id, ''),
                    conversation.id, conversation.kind, conversation.ended_at,
                    conversation.agent_id,
                    agent_run.runtime_adapter_kind,
@@ -5059,9 +5286,10 @@ fn load_terminal_target(
                    agent_run.terminal_reason_code,
                    agent_run.invocation_kind, agent_run.response_delivery,
                    agent_run.operation_policy, agent_run.operation_policy_version,
-                   agent_run.destination_conversation_id
+                   agent_run.destination_conversation_id,
+                   agent_run.anchor_message_id
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             JOIN conversation ON conversation.id = agent_run.conversation_id
             WHERE agent_run.id = ?1
             "#,
@@ -5089,6 +5317,7 @@ fn load_terminal_target(
                     operation_policy: row.get(18)?,
                     operation_policy_version: row.get(19)?,
                     destination_conversation_id: row.get(20)?,
+                    anchor_message_id: row.get(21)?,
                     now: chrono::Utc::now().to_rfc3339(),
                 })
             },
@@ -5320,9 +5549,11 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
     }
     let RunFacts { camp_id, camp_turn_id, conversation_id, execution_epoch, status,
         requested_at, previous_reason, cleanup_ack } = transaction.query_row(
-        "SELECT turn.camp_id, run.camp_turn_id, run.conversation_id, run.execution_epoch,
+        "SELECT COALESCE(run.camp_id, turn.camp_id), COALESCE(run.camp_turn_id, ''),
+                run.conversation_id, run.execution_epoch,
                 run.status, run.cancel_requested_at, run.cancel_reason_code, run.cancel_acknowledged_at
-         FROM agent_run AS run JOIN camp_turn AS turn ON turn.id = run.camp_turn_id WHERE run.id = ?1",
+         FROM agent_run AS run LEFT JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
+         WHERE run.id = ?1",
         [agent_run_id],
         |row| Ok(RunFacts { camp_id: row.get(0)?, camp_turn_id: row.get(1)?, conversation_id: row.get(2)?,
             execution_epoch: row.get(3)?, status: row.get(4)?, requested_at: row.get(5)?,
@@ -5342,12 +5573,20 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
                 agent_run_error_code: error_code.as_deref(),
                 terminal_resolution_source: None,
                 terminal_reason_code: None,
-                final_output: None,
                 actor,
                 execution_epoch: Some(execution_epoch),
                 now,
             },
         )?;
+        if camp_turn_id.is_empty() {
+            settle_run_deliveries(
+                transaction,
+                agent_run_id,
+                &status,
+                error_code.as_deref(),
+                now,
+            )?;
+        }
         return Ok(AbortiveRunSettlement {
             agent_run_id: agent_run_id.to_string(),
             camp_id,
@@ -5378,6 +5617,7 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
     )?;
     let external_effect_evidence_preserved =
         accepted_input_preserved || action_effect_evidence || runtime_delivery_evidence;
+    let runtime_cleanup_required = status != "queued" || external_effect_evidence_preserved;
     let closure = close_abortive_run_effects(
         transaction,
         agent_run_id,
@@ -5388,6 +5628,7 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
         "UPDATE agent_run SET status = ?2, wait_reason = NULL, wait_deadline_at = NULL,
              runtime_recovery_required = 0, execution_lease_owner = NULL, execution_lease_expires_at = NULL,
              cancel_requested_at = COALESCE(cancel_requested_at, ?3), cancel_reason_code = ?4,
+             cancel_acknowledged_at = COALESCE(cancel_acknowledged_at, ?7),
              last_error_code = ?5, last_error_details_ref = ?6, manual_retry_allowed = 0,
              terminal_resolution_source = NULL, terminal_reason_code = NULL, public_runtime_failure_json = NULL,
              ended_at = ?3, updated_at = ?3, version = version + 1
@@ -5398,7 +5639,8 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
             now,
             reason_code,
             Option::<&str>::None,
-            Option::<&str>::None
+            Option::<&str>::None,
+            (!runtime_cleanup_required).then_some(now),
         ],
     )?;
     if requested_at.is_none() {
@@ -5437,12 +5679,20 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
             agent_run_error_code: Some(reason_code),
             terminal_resolution_source: None,
             terminal_reason_code: None,
-            final_output: None,
             actor,
             execution_epoch: Some(execution_epoch),
             now,
         },
     )?;
+    if camp_turn_id.is_empty() {
+        settle_run_deliveries(
+            transaction,
+            agent_run_id,
+            "cancelled",
+            Some(reason_code),
+            now,
+        )?;
+    }
     Ok(AbortiveRunSettlement {
         agent_run_id: agent_run_id.to_string(),
         camp_id,
@@ -5451,7 +5701,7 @@ pub(crate) fn settle_abortive_agent_run_in_tx(
         execution_epoch,
         terminal_status: "cancelled".into(),
         terminal_code: "agent_run.cancelled".into(),
-        runtime_cleanup_required: true,
+        runtime_cleanup_required,
         external_effect_evidence_preserved,
     })
 }
@@ -5803,19 +6053,29 @@ fn pump_target_after_run_terminal(database: &mut Database, agent_run_id: &str) -
         .connection()
         .query_row(
             r#"
-            SELECT camp_turn.camp_id, conversation.agent_id
+            SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   conversation.agent_id, agent_run.invocation_kind
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             JOIN conversation ON conversation.id = agent_run.conversation_id
             WHERE agent_run.id = ?1
             "#,
             [agent_run_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((camp_id, recipient_agent_id)) = target else {
+    let Some((camp_id, recipient_agent_id, invocation_kind)) = target else {
         return Ok(());
     };
+    if invocation_kind == "batch" {
+        return Ok(());
+    }
     let _ = dispatch_pending_for_recipient(
         database,
         &camp_id,
@@ -5823,16 +6083,6 @@ fn pump_target_after_run_terminal(database: &mut Database, agent_run_id: &str) -
         DeliveryDispatchTrigger::TargetRunEnded,
         true,
     )?;
-    if let Some(completion_delivery_id) =
-        completion_delivery_for_member_run(database.connection(), agent_run_id)?
-    {
-        let _ = dispatch_delivery(
-            database,
-            &completion_delivery_id,
-            DeliveryDispatchTrigger::Accepted,
-            true,
-        )?;
-    }
     Ok(())
 }
 
@@ -5853,45 +6103,47 @@ fn claim_admission_rejection(
             "AgentRun version is stale",
         )));
     }
-    if run.execution_budget_exhausted_at.is_some() {
-        return Ok(Some(rejected(
-            "agent_run.execution_budget_exhausted",
-            "CampTurn Execution Budget is already exhausted",
-        )));
-    }
-    if !matches!(run.camp_turn_status.as_str(), "running" | "waiting")
-        || run.camp_turn_cancel_requested_at.is_some()
-    {
-        return Ok(Some(rejected(
-            "agent_run.turn_fenced",
-            "CampTurn is no longer accepting AgentRun execution",
-        )));
-    }
-    let budget_now = camp_turn_execution_budget_now();
-    let audit_now_text = chrono::Utc::now().to_rfc3339();
-    if crate::execution_budget::execution_deadline_elapsed(
-        run.execution_budget_deadline_at.as_deref(),
-        budget_now,
-    )? {
-        let exhaustion = exhaust_camp_turn_execution_budget(
-            transaction,
-            &run.camp_turn_id,
-            CampTurnExecutionBudgetExhaustionReason::Elapsed,
-            &envelope.command_id,
-            &audit_now_text,
-            &envelope.actor,
-            None,
-        )?;
-        return Ok(Some(CommandHandlerResult::rejected(
-            "agent_run.execution_budget_exhausted",
-            json!({
-                "message": "CampTurn Execution Budget deadline has elapsed",
-                "reason": "elapsed",
-                "campTurnId": run.camp_turn_id,
-                "deadlineAt": run.execution_budget_deadline_at,
-                "agentRunsFenced": exhaustion.agent_runs_fenced,
-            }),
-        )));
+    if !run.camp_turn_id.is_empty() {
+        if run.execution_budget_exhausted_at.is_some() {
+            return Ok(Some(rejected(
+                "agent_run.execution_budget_exhausted",
+                "CampTurn Execution Budget is already exhausted",
+            )));
+        }
+        if !matches!(run.camp_turn_status.as_str(), "running" | "waiting")
+            || run.camp_turn_cancel_requested_at.is_some()
+        {
+            return Ok(Some(rejected(
+                "agent_run.turn_fenced",
+                "CampTurn is no longer accepting AgentRun execution",
+            )));
+        }
+        let budget_now = camp_turn_execution_budget_now();
+        let audit_now_text = chrono::Utc::now().to_rfc3339();
+        if crate::execution_budget::execution_deadline_elapsed(
+            run.execution_budget_deadline_at.as_deref(),
+            budget_now,
+        )? {
+            let exhaustion = exhaust_camp_turn_execution_budget(
+                transaction,
+                &run.camp_turn_id,
+                CampTurnExecutionBudgetExhaustionReason::Elapsed,
+                &envelope.command_id,
+                &audit_now_text,
+                &envelope.actor,
+                None,
+            )?;
+            return Ok(Some(CommandHandlerResult::rejected(
+                "agent_run.execution_budget_exhausted",
+                json!({
+                    "message": "CampTurn Execution Budget deadline has elapsed",
+                    "reason": "elapsed",
+                    "campTurnId": run.camp_turn_id,
+                    "deadlineAt": run.execution_budget_deadline_at,
+                    "agentRunsFenced": exhaustion.agent_runs_fenced,
+                }),
+            )));
+        }
     }
     let valid_state = run.status == "queued"
         || (run.status == "waiting"
@@ -5981,7 +6233,8 @@ fn load_claimable_run(transaction: &Transaction<'_>, run_id: &str) -> Result<Opt
     transaction
         .query_row(
             r#"
-            SELECT agent_run.id, camp_turn.camp_id, agent_run.camp_turn_id,
+            SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   COALESCE(agent_run.camp_turn_id, ''),
                    agent_run.conversation_id,
                    agent_run.task_id,
                    agent_run.input_ready_at,
@@ -5989,10 +6242,14 @@ fn load_claimable_run(transaction: &Transaction<'_>, run_id: &str) -> Result<Opt
                    agent_run.status, agent_run.wait_reason,
                    agent_run.runtime_recovery_required,
                    agent_run.execution_epoch, agent_run.cancel_requested_at,
-                   agent_run.version, camp_turn.status,
+                   agent_run.version, COALESCE(camp_turn.status, 'running'),
                    camp_turn.cancel_requested_at,
                    camp_turn.execution_budget_exhausted_at,
-                   CASE WHEN camp_turn.execution_budget_schema_version = 2 THEN camp_turn.execution_budget_deadline_at ELSE COALESCE(camp_turn.execution_budget_deadline_at, 'invalid') END,
+                   CASE
+                     WHEN agent_run.camp_turn_id IS NULL THEN NULL
+                     WHEN camp_turn.execution_budget_schema_version = 2 THEN camp_turn.execution_budget_deadline_at
+                     ELSE COALESCE(camp_turn.execution_budget_deadline_at, 'invalid')
+                   END,
                    CASE WHEN camp_member.status = 'active'
                              AND camp_member.leave_requested_at IS NULL
                              AND agent_profile.profile_status = 'present'
@@ -6000,8 +6257,8 @@ fn load_claimable_run(transaction: &Transaction<'_>, run_id: &str) -> Result<Opt
                    agent_profile.default_capabilities_json,
                    camp_member.capability_overrides_json
             FROM agent_run
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            JOIN camp ON camp.id = camp_turn.camp_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             JOIN conversation ON conversation.id = agent_run.conversation_id
             JOIN agent_profile ON agent_profile.id = conversation.agent_id
             JOIN camp_member
@@ -6539,7 +6796,6 @@ mod tests {
             TestCampMessageAddress, TestCampMessageCommand,
         },
         command::CommandResultStatus,
-        execution_budget::CampTurnExecutionBudgetRequest,
         planned_shutdown::{
             ActiveExecutionKey, PlannedShutdownCoordinator, RuntimeRouteBinding,
             RuntimeTerminalAdmission, RuntimeTerminalObservation,
@@ -6969,6 +7225,7 @@ mod tests {
             String,
             i64,
             i64,
+            i64,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -6978,6 +7235,7 @@ mod tests {
                 r#"
                 SELECT camp_id, agent_id, version,
                        native_binding_generation,
+                       last_accepted_public_boundary_sequence,
                        native_adapter_installation_id, native_session_id,
                        native_binding_id
                 FROM conversation WHERE id = 'restart-conversation'
@@ -6992,6 +7250,7 @@ mod tests {
                         row.get(4)?,
                         row.get(5)?,
                         row.get(6)?,
+                        row.get(7)?,
                     ))
                 },
             )
@@ -7000,7 +7259,8 @@ mod tests {
         assert_eq!(state.1, "agent_1");
         assert_eq!(state.2, 2);
         assert_eq!(state.3, 7);
-        assert!(state.4.is_none() && state.5.is_none() && state.6.is_none());
+        assert_eq!(state.4, 12);
+        assert!(state.5.is_none() && state.6.is_none() && state.7.is_none());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -7092,10 +7352,7 @@ mod tests {
                 ),
             )
             .unwrap();
-        let camp_turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let camp_turn_id = String::new();
         let agent_run_id = sent.result.payload["agentRunIds"][0]
             .as_str()
             .unwrap()
@@ -7900,18 +8157,35 @@ mod tests {
             .unwrap();
             assert_ne!(terminal.result.status, CommandResultStatus::Rejected);
 
-            let source: Option<String> = database
+            let state: (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ) = database
                 .connection()
                 .query_row(
-                    "SELECT terminal_resolution_source FROM agent_run WHERE id = ?1",
+                    r#"
+                    SELECT terminal_resolution_source, cancel_requested_at,
+                           cancel_reason_code, cancel_acknowledged_at
+                    FROM agent_run WHERE id = ?1
+                    "#,
                     [&agent_run_id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .unwrap();
             assert_eq!(
-                source.as_deref(),
+                state.0.as_deref(),
                 runtime_terminal_observed.then_some("runtime_terminal")
             );
+            if runtime_terminal_observed {
+                assert!(state.1.is_none());
+                assert!(state.2.is_none());
+            } else {
+                assert!(state.1.is_some());
+                assert_eq!(state.2.as_deref(), Some("runtime_terminal_unconfirmed"));
+            }
+            assert!(state.3.is_none());
             assert_eq!(
                 service
                     .count_runtime_terminal_settlements(
@@ -7938,10 +8212,9 @@ mod tests {
             terminal_reason_code: Option<String>,
             last_error_code: Option<String>,
             input_delivery_status: String,
-            aggregate_reason_code: Option<String>,
         }
 
-        let (directory, mut database, camp_id, camp_turn_id, agent_run_id, execution_epoch) =
+        let (directory, mut database, camp_id, _camp_turn_id, agent_run_id, execution_epoch) =
             claimed_run_for_planned_shutdown("required");
         insert_test_runtime_input(&database, &agent_run_id, execution_epoch, "accepted");
         let service = ExecutionRuntimeService::default();
@@ -7966,12 +8239,10 @@ mod tests {
                        agent_run.terminal_resolution_source,
                        agent_run.terminal_reason_code,
                        agent_run.last_error_code,
-                       runtime_input_delivery.status,
-                       camp_turn.aggregate_reason_code
+                       runtime_input_delivery.status
                 FROM agent_run
                 JOIN runtime_input_delivery
                   ON runtime_input_delivery.agent_run_id = agent_run.id
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                 WHERE agent_run.id = ?1
                 "#,
                 [&agent_run_id],
@@ -7986,7 +8257,6 @@ mod tests {
                         terminal_reason_code: row.get(6)?,
                         last_error_code: row.get(7)?,
                         input_delivery_status: row.get(8)?,
-                        aggregate_reason_code: row.get(9)?,
                     })
                 },
             )
@@ -8005,10 +8275,6 @@ mod tests {
         );
         assert!(state.last_error_code.is_none());
         assert_eq!(state.input_delivery_status, "accepted");
-        assert_eq!(
-            state.aggregate_reason_code.as_deref(),
-            Some("required_run_incomplete")
-        );
         assert_eq!(
             service
                 .count_runtime_terminal_settlements(
@@ -8029,13 +8295,6 @@ mod tests {
             .unwrap();
         assert_eq!(run.status, "cancelled");
         assert!(!run.has_unsettled_external_effects);
-        let turn = snapshot
-            .turns
-            .iter()
-            .find(|turn| turn.id == camp_turn_id)
-            .unwrap();
-        assert_eq!(turn.status, "failed");
-
         let pending: (bool, bool) = database.connection().query_row(
             "SELECT settled_at IS NULL, fenced_agent_run_count IS NULL FROM planned_shutdown_cycle WHERE core_generation = 'generation-accepted'",
             [], |row| Ok((row.get(0)?, row.get(1)?)),
@@ -8088,57 +8347,72 @@ mod tests {
     }
 
     #[test]
-    fn controlled_shutdown_fence_closes_an_existing_accepted_input_recovery_blocker() {
-        let (directory, mut database, camp_id, _camp_turn_id, agent_run_id, execution_epoch) =
+    fn startup_recovery_terminalizes_an_accepted_unknown_input_without_a_waiting_blocker() {
+        let (directory, mut database, _camp_id, _camp_turn_id, agent_run_id, execution_epoch) =
             claimed_run_for_planned_shutdown("required");
         insert_test_runtime_input(&database, &agent_run_id, execution_epoch, "accepted");
-        let recovery = database.prepare_v2_recovery().unwrap();
-        assert_eq!(recovery.accepted_input_recovery_blockers_created, 1);
-        let before: (String, Option<String>, i64) = database
+        database
             .connection()
-            .query_row(
-                "SELECT status, wait_reason, runtime_recovery_required FROM agent_run WHERE id = ?1",
+            .execute(
+                r#"
+                UPDATE conversation
+                SET last_accepted_public_boundary_sequence = 12
+                WHERE id = (
+                    SELECT conversation_id FROM agent_run WHERE id = ?1
+                )
+                "#,
                 [&agent_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(before.0, "waiting");
-        assert_eq!(before.1.as_deref(), Some("recovery_blocked"));
-        assert_eq!(before.2, 0);
-
-        let service = ExecutionRuntimeService::default();
-        service
-            .record_controlled_shutdown_cycle(&mut database, "generation-existing-blocker", 2)
-            .unwrap();
-        let settlement = service
-            .settle_controlled_shutdown_cycle(&mut database, "generation-existing-blocker")
-            .unwrap();
-        assert_eq!(settlement.fenced_agent_runs.len(), 1);
-        let after: (String, Option<String>, i64, Option<String>) = database
+        let recovery = database.prepare_v2_recovery().unwrap();
+        assert_eq!(recovery.accepted_input_recovery_blockers_created, 1);
+        let state: (
+            String,
+            Option<String>,
+            i64,
+            Option<String>,
+            Option<String>,
+            String,
+            i64,
+        ) = database
             .connection()
             .query_row(
                 r#"
-                SELECT status, wait_reason, runtime_recovery_required, last_error_code
-                FROM agent_run WHERE id = ?1
+                SELECT agent_run.status, agent_run.wait_reason,
+                       agent_run.runtime_recovery_required,
+                       agent_run.last_error_code, agent_run.cancel_requested_at,
+                       camp_message_delivery.status,
+                       conversation.last_accepted_public_boundary_sequence
+                FROM agent_run
+                JOIN camp_message_delivery
+                  ON camp_message_delivery.claimed_agent_run_id = agent_run.id
+                JOIN conversation ON conversation.id = agent_run.conversation_id
+                WHERE agent_run.id = ?1
                 "#,
                 [&agent_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
             )
             .unwrap();
-        assert_eq!(after.0, "cancelled");
-        assert!(after.1.is_none());
-        assert_eq!(after.2, 0);
-        assert!(after.3.is_none());
-        let snapshot = ReadModelService
-            .camp_snapshot(&mut database, &camp_id)
-            .unwrap();
-        let run = snapshot
-            .agent_runs
-            .iter()
-            .find(|run| run.id == agent_run_id)
-            .unwrap();
-        assert_eq!(run.status, "cancelled");
-        assert!(!run.has_unsettled_external_effects);
+        assert_eq!(state.0, "failed");
+        assert!(state.1.is_none());
+        assert_eq!(state.2, 0);
+        assert_eq!(state.3.as_deref(), Some("accepted_input_outcome_unknown"));
+        assert!(
+            state.4.is_some(),
+            "cleanup remains explicitly unacknowledged"
+        );
+        assert_eq!(state.5, "failed");
+        assert_eq!(state.6, 12);
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -8365,8 +8639,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn planned_shutdown_cancelled_is_run_local_and_required_run_fails_turn_incomplete() {
-        let (directory, mut database, _camp_id, camp_turn_id, agent_run_id, execution_epoch) =
+    async fn planned_shutdown_cancelled_is_run_local_and_settles_its_delivery() {
+        let (directory, mut database, _camp_id, _camp_turn_id, agent_run_id, execution_epoch) =
             claimed_run_for_planned_shutdown("required");
         let permit = planned_terminal_permit(
             &agent_run_id,
@@ -8390,47 +8664,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(settlement.agent_run_status, "cancelled");
-        assert_eq!(settlement.camp_turn_status, "failed");
-        let state: (
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<String>,
-        ) = database
+        assert_eq!(settlement.camp_turn_status, "cancelled");
+        let state: (String, Option<String>, Option<String>, String) = database
             .connection()
             .query_row(
                 r#"
                 SELECT agent_run.status,
                        agent_run.terminal_resolution_source,
                        agent_run.terminal_reason_code,
-                       camp_turn.status,
-                       camp_turn.aggregate_reason_code,
-                       camp_turn.cancel_requested_at
+                       camp_message_delivery.status
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                WHERE agent_run.id = ?1 AND camp_turn.id = ?2
+                JOIN camp_message_delivery
+                  ON camp_message_delivery.claimed_agent_run_id = agent_run.id
+                WHERE agent_run.id = ?1
                 "#,
-                params![agent_run_id, camp_turn_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
+                params![agent_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
         assert_eq!(state.0, "cancelled");
         assert_eq!(state.1.as_deref(), Some("runtime_terminal"));
         assert_eq!(state.2.as_deref(), Some("planned_shutdown_cancelled"));
-        assert_eq!(state.3, "failed");
-        assert_eq!(state.4.as_deref(), Some("required_run_incomplete"));
-        assert!(state.5.is_none());
+        assert_eq!(state.3, "cancelled");
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -8928,7 +9183,8 @@ mod tests {
                 ),
             )
             .unwrap();
-        let mut run_ids = Vec::new();
+        let mut first_run_id = None;
+        let mut later_delivery_id = None;
         for index in 0..2 {
             let turn = collaboration
                 .send_test_camp_message(
@@ -8953,13 +9209,22 @@ mod tests {
                     ),
                 )
                 .unwrap();
-            run_ids.push(
-                turn.result.payload["agentRunIds"][0]
-                    .as_str()
-                    .unwrap()
-                    .to_string(),
-            );
+            let agent_run_ids = turn.result.payload["agentRunIds"].as_array().unwrap();
+            if index == 0 {
+                assert_eq!(agent_run_ids.len(), 1);
+                first_run_id = Some(agent_run_ids[0].as_str().unwrap().to_string());
+            } else {
+                assert!(agent_run_ids.is_empty());
+                later_delivery_id = Some(
+                    turn.result.payload["deliveryIds"][0]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                );
+            }
         }
+        let first_run_id = first_run_id.unwrap();
+        let later_delivery_id = later_delivery_id.unwrap();
         let runtime = ExecutionRuntimeService::default();
         let claim = runtime
             .claim_agent_run(
@@ -8968,7 +9233,7 @@ mod tests {
                     "claim-first-run",
                     &camp_id,
                     ClaimAgentRunCommand {
-                        agent_run_id: run_ids[0].clone(),
+                        agent_run_id: first_run_id.clone(),
                         expected_version: 1,
                         lease_owner: "runtime-host-1".to_string(),
                         lease_seconds: 60,
@@ -8988,7 +9253,7 @@ mod tests {
         assert_eq!(claim.result.status, CommandResultStatus::Accepted);
         assert_eq!(claim.result.payload["executionEpoch"], 1);
         let execution = runtime
-            .load_agent_run_execution(&database, &run_ids[0], 1)
+            .load_agent_run_execution(&database, &first_run_id, 1)
             .unwrap()
             .expect("claimed AgentRun should materialize");
         assert_eq!(execution.runtime.installation_id, "adapter-test-codex");
@@ -9079,25 +9344,15 @@ mod tests {
             .unwrap();
         assert_eq!(resume_status, "succeeded");
 
-        let busy = runtime
-            .claim_agent_run(
-                &mut database,
-                &scheduler_envelope(
-                    "claim-second-run",
-                    &camp_id,
-                    ClaimAgentRunCommand {
-                        agent_run_id: run_ids[1].clone(),
-                        expected_version: 1,
-                        lease_owner: "runtime-host-1".to_string(),
-                        lease_seconds: 60,
-                        workspace: None,
-                        starting_git_observation: None,
-                    },
-                ),
+        let later_delivery_state: (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT status, claimed_agent_run_id FROM camp_message_delivery WHERE id = ?1",
+                [&later_delivery_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(busy.result.status, CommandResultStatus::Rejected);
-        assert_eq!(busy.result.code, "agent_run.conversation_busy");
+        assert_eq!(later_delivery_state, ("waiting".to_string(), None));
 
         let marked = runtime
             .mark_for_recovery(
@@ -9111,7 +9366,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: MarkAgentRunForRecoveryCommand {
-                        agent_run_id: run_ids[0].clone(),
+                        agent_run_id: first_run_id.clone(),
                         expected_version: 2,
                         execution_epoch: 1,
                         reason: "host_lost".to_string(),
@@ -9132,7 +9387,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: ClaimAgentRunCommand {
-                        agent_run_id: run_ids[0].clone(),
+                        agent_run_id: first_run_id.clone(),
                         expected_version: 3,
                         lease_owner: "runtime-host-2".to_string(),
                         lease_seconds: 60,
@@ -9151,7 +9406,7 @@ mod tests {
             .connection()
             .query_row(
                 "SELECT starting_git_observation_json FROM agent_run WHERE id = ?1",
-                [&run_ids[0]],
+                [&first_run_id],
                 |row| row.get(0),
             )
             .unwrap();
@@ -9175,7 +9430,7 @@ mod tests {
                     expected_versions: Vec::new(),
                     execution_epoch: None,
                     payload: MarkAgentRunForRecoveryCommand {
-                        agent_run_id: run_ids[0].clone(),
+                        agent_run_id: first_run_id,
                         expected_version: 4,
                         execution_epoch: 1,
                         reason: "late_host_callback".to_string(),
@@ -9589,205 +9844,6 @@ mod tests {
     }
 
     #[test]
-    fn persisted_deadline_exhausts_after_reopen_and_fences_dispatch_recovery_and_replay() {
-        let (mut database, directory) = crate::test_support::seeded_runtime_database();
-        let workspace = directory.join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let collaboration = CollaborationService::default();
-        let camp = collaboration
-            .create_camp(
-                &mut database,
-                &user_envelope(
-                    "budget-restart-create-camp",
-                    None,
-                    CreateCampCommand::for_test_with_members(
-                        workspace.to_string_lossy().to_string(),
-                        &["agent_2"],
-                        "agent_2",
-                    ),
-                ),
-            )
-            .unwrap();
-        let camp_id = camp.result.payload["campId"].as_str().unwrap().to_string();
-        collaboration
-            .add_camp_member(
-                &mut database,
-                &user_envelope(
-                    "budget-restart-add-member",
-                    Some(&camp_id),
-                    AddCampMemberCommand {
-                        camp_id: camp_id.clone(),
-                        agent_id: "agent_2".to_string(),
-                        expected_membership_generation: 1,
-                        capability_overrides: json!({}),
-                        source: None,
-                    },
-                ),
-            )
-            .unwrap();
-        let sent = collaboration
-            .send_test_camp_message(
-                &mut database,
-                &user_envelope(
-                    "budget-restart-send",
-                    Some(&camp_id),
-                    TestCampMessageCommand {
-                        camp_id: camp_id.clone(),
-                        draft_revision: None,
-                        body: "执行一个受 deadline 约束的职责".to_string(),
-                        prepared_attachment_ids: Vec::new(),
-                        address: TestCampMessageAddress::Default,
-                        reply_to_camp_message_id: None,
-                        execution: Some(ExecutionRequest {
-                            task_id: None,
-                            purpose: "验证持久化 deadline".to_string(),
-                            completion_role: "required".to_string(),
-                            budget: Some(CampTurnExecutionBudgetRequest {
-                                elapsed_seconds: Some(60),
-                                max_agent_run_responsibilities: 1,
-                                max_accepted_a2a: 0,
-                            }),
-                        }),
-                    },
-                ),
-            )
-            .unwrap();
-        let camp_turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let agent_run_id = sent.result.payload["agentRunIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let deadline_at: String = database
-            .connection()
-            .query_row(
-                "SELECT execution_budget_deadline_at FROM camp_turn WHERE id = ?1",
-                [&camp_turn_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        drop(database);
-
-        let mut database = Database::open(&directory).unwrap();
-        let observed_after_deadline = chrono::DateTime::parse_from_rfc3339(&deadline_at)
-            .unwrap()
-            .with_timezone(&chrono::Utc)
-            + chrono::Duration::seconds(1);
-        let runtime = ExecutionRuntimeService::default();
-        let expired = runtime
-            .expire_elapsed_camp_turn_execution_budgets(
-                &mut database,
-                observed_after_deadline,
-                observed_after_deadline,
-                10,
-            )
-            .unwrap();
-        assert_eq!(expired.len(), 1);
-        assert_eq!(expired[0].camp_turn_id, camp_turn_id);
-        assert_eq!(expired[0].deadline_at, deadline_at);
-        assert_eq!(expired[0].agent_runs_fenced, 1);
-        assert!(
-            runtime
-                .list_dispatchable_agent_runs(&database, 10)
-                .unwrap()
-                .is_empty()
-        );
-        let state: (String, String, String, i64, String) = database
-            .connection()
-            .query_row(
-                r#"
-                SELECT execution_budget_deadline_at,
-                       execution_budget_exhaustion_reason,
-                       execution_budget_exhaustion_command_id,
-                       (SELECT COUNT(*) FROM event_log
-                        WHERE event_type = 'camp_turn.execution_budget_exhausted'),
-                       (SELECT cancel_reason_code FROM agent_run WHERE id = ?2)
-                FROM camp_turn WHERE id = ?1
-                "#,
-                params![camp_turn_id, agent_run_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(state.0, deadline_at);
-        assert_eq!(state.1, "elapsed");
-        assert_eq!(
-            state.2,
-            format!("camp-turn-execution-budget-expiry:{camp_turn_id}")
-        );
-        assert_eq!(state.3, 1);
-        assert_eq!(state.4, "execution_budget_exhausted");
-
-        let run_version: i64 = database
-            .connection()
-            .query_row(
-                "SELECT version FROM agent_run WHERE id = ?1",
-                [&agent_run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let claim = runtime
-            .claim_agent_run(
-                &mut database,
-                &CommandEnvelope {
-                    command_id: "budget-restart-claim".to_string(),
-                    actor: ActorRef::System {
-                        component_id: "runtime-recovery-coordinator".to_string(),
-                    },
-                    camp_id: Some(camp_id.clone()),
-                    expected_versions: Vec::new(),
-                    execution_epoch: None,
-                    payload: ClaimAgentRunCommand {
-                        agent_run_id: agent_run_id.clone(),
-                        expected_version: run_version,
-                        lease_owner: "recovery-after-deadline".to_string(),
-                        lease_seconds: 60,
-                        workspace: None,
-                        starting_git_observation: None,
-                    },
-                },
-            )
-            .unwrap();
-        assert_eq!(claim.result.code, "agent_run.execution_budget_exhausted");
-        let no_second_expiry = runtime
-            .expire_elapsed_camp_turn_execution_budgets(
-                &mut database,
-                observed_after_deadline + chrono::Duration::seconds(1),
-                observed_after_deadline + chrono::Duration::seconds(1),
-                10,
-            )
-            .unwrap();
-        assert!(no_second_expiry.is_empty());
-
-        let candidate = runtime
-            .list_cancellation_candidates(&database, 10)
-            .unwrap()
-            .into_iter()
-            .find(|candidate| candidate.agent_run_id == agent_run_id)
-            .unwrap();
-        runtime
-            .record_runtime_cleanup_completed(
-                &database,
-                &candidate.agent_run_id,
-                candidate.execution_epoch,
-            )
-            .unwrap();
-        assert_eq!(candidate.status, "cancelled");
-
-        drop(database);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
     fn user_agent_run_cancellation_is_run_local_and_stably_idempotent() {
         let (mut database, directory) = crate::test_support::seeded_runtime_database_fast();
         let workspace = directory.join("workspace");
@@ -9851,10 +9907,6 @@ mod tests {
                 ),
             )
             .unwrap();
-        let camp_turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
         let run_ids = sent.result.payload["agentRunIds"].as_array().unwrap();
         assert_eq!(run_ids.len(), 2);
         let target_run_id = run_ids[0].as_str().unwrap().to_string();
@@ -9901,14 +9953,6 @@ mod tests {
             .execute(
                 "UPDATE runtime_input_delivery SET dispatch_started_at = prepared_at WHERE agent_run_id = ?1",
                 [&target_run_id],
-            )
-            .unwrap();
-        let turn_before: (String, i64, Option<String>) = database
-            .connection()
-            .query_row(
-                "SELECT status, version, cancel_requested_at FROM camp_turn WHERE id = ?1",
-                [&camp_turn_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         let camp_messages_before: i64 = database
@@ -10036,44 +10080,6 @@ mod tests {
         assert!(projected_target.cancel_acknowledged_at.is_none());
         assert_eq!(projected_target.status, "cancelled");
         assert!(!projected_target.has_unsettled_external_effects);
-        let sibling_version: i64 = database
-            .connection()
-            .query_row(
-                "SELECT version FROM agent_run WHERE id = ?1",
-                [&sibling_run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        database
-            .connection()
-            .execute(
-                r#"
-                UPDATE agent_run
-                SET status = 'waiting', wait_reason = 'recovery_blocked',
-                    updated_at = ?2
-                WHERE id = ?1
-                "#,
-                params![sibling_run_id, chrono::Utc::now().to_rfc3339()],
-            )
-            .unwrap();
-        let blocked = runtime
-            .request_agent_run_cancellation(
-                &mut database,
-                &user_envelope(
-                    "run-cancel-recovery-blocked",
-                    Some(&camp_id),
-                    CancelAgentRunCommand {
-                        camp_id: camp_id.clone(),
-                        agent_run_id: sibling_run_id.clone(),
-                        expected_version: sibling_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(
-            blocked.result.code,
-            "agent_run.recovery_blocker_requires_resolution"
-        );
         let sibling_cancel_requested: Option<String> = database
             .connection()
             .query_row(
@@ -10083,15 +10089,6 @@ mod tests {
             )
             .unwrap();
         assert!(sibling_cancel_requested.is_none());
-        let turn_after: (String, i64, Option<String>) = database
-            .connection()
-            .query_row(
-                "SELECT status, version, cancel_requested_at FROM camp_turn WHERE id = ?1",
-                [&camp_turn_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(turn_after, turn_before);
         let public_state: (i64, i64) = database
             .connection()
             .query_row(
@@ -10130,184 +10127,6 @@ mod tests {
             .unwrap();
         assert_eq!(legacy_target.status, "cancelled");
         assert!(!legacy_target.has_unsettled_external_effects);
-
-        drop(database);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn camp_turn_cancellation_is_persisted_and_finalized_from_authoritative_state() {
-        let (mut database, directory) = crate::test_support::seeded_runtime_database_fast();
-        let workspace = directory.join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let collaboration = CollaborationService::default();
-        let camp = collaboration
-            .create_camp(
-                &mut database,
-                &user_envelope(
-                    "cancel-create-camp",
-                    None,
-                    CreateCampCommand::for_test_with_members(
-                        workspace.to_string_lossy().to_string(),
-                        &["agent_2"],
-                        "agent_2",
-                    ),
-                ),
-            )
-            .unwrap();
-        let camp_id = camp.result.payload["campId"].as_str().unwrap().to_string();
-        collaboration
-            .add_camp_member(
-                &mut database,
-                &user_envelope(
-                    "cancel-add-member",
-                    Some(&camp_id),
-                    AddCampMemberCommand {
-                        camp_id: camp_id.clone(),
-                        agent_id: "agent_2".to_string(),
-                        expected_membership_generation: 1,
-                        capability_overrides: json!({}),
-                        source: None,
-                    },
-                ),
-            )
-            .unwrap();
-        let sent = collaboration
-            .send_test_camp_message(
-                &mut database,
-                &user_envelope(
-                    "cancel-send",
-                    Some(&camp_id),
-                    TestCampMessageCommand {
-                        camp_id: camp_id.clone(),
-                        draft_revision: None,
-                        body: "开始一项可取消职责".to_string(),
-                        prepared_attachment_ids: Vec::new(),
-                        address: TestCampMessageAddress::Default,
-                        reply_to_camp_message_id: None,
-                        execution: Some(ExecutionRequest {
-                            task_id: None,
-                            purpose: "验证停止运行".to_string(),
-                            completion_role: "required".to_string(),
-                            budget: None,
-                        }),
-                    },
-                ),
-            )
-            .unwrap();
-        let camp_turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let agent_run_id = sent.result.payload["agentRunIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let runtime = ExecutionRuntimeService::default();
-        let cancel_envelope = user_envelope(
-            "cancel-turn",
-            Some(&camp_id),
-            CancelCampTurnCommand {
-                camp_id: camp_id.clone(),
-                camp_turn_id: camp_turn_id.clone(),
-                expected_version: 1,
-            },
-        );
-        let requested = runtime
-            .request_camp_turn_cancellation(&mut database, &cancel_envelope)
-            .unwrap();
-        assert_eq!(requested.result.status, CommandResultStatus::Applied);
-        assert_eq!(requested.result.code, "camp_turn.cancelled");
-        let replay = runtime
-            .request_camp_turn_cancellation(&mut database, &cancel_envelope)
-            .unwrap();
-        assert!(replay.replayed);
-
-        let candidates = runtime.list_cancellation_candidates(&database, 10).unwrap();
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].agent_run_id, agent_run_id);
-        assert_eq!(candidates[0].status, "cancelled");
-        assert_eq!(candidates[0].execution_root, workspace.to_string_lossy());
-        runtime
-            .record_runtime_cleanup_completed(
-                &database,
-                &candidates[0].agent_run_id,
-                candidates[0].execution_epoch,
-            )
-            .unwrap();
-        assert_eq!(requested.result.status, CommandResultStatus::Applied);
-        assert_eq!(requested.result.payload["campTurnStatus"], "cancelled");
-        let state: (String, String, i64, i64, Option<String>) = database
-            .connection()
-            .query_row(
-                r#"
-                SELECT agent_run.status, camp_turn.status,
-                       agent_run.cancel_requested_at IS NOT NULL,
-                       agent_run.cancel_acknowledged_at IS NOT NULL,
-                       agent_run.ending_git_observation_json
-                FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                WHERE agent_run.id = ?1
-                "#,
-                [&agent_run_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(&state.0, "cancelled");
-        assert_eq!(&state.1, "cancelled");
-        assert_eq!((state.2, state.3), (1, 1));
-        assert!(state.4.is_none());
-
-        let observation = test_git_observation(
-            crate::git::GitCapabilityState::GitValid,
-            Some("2222222222222222222222222222222222222222"),
-        );
-        let recorded = runtime
-            .record_cancelled_agent_run_ending_git_observation(
-                &mut database,
-                &CommandEnvelope {
-                    command_id: "cancel-ending-git".to_string(),
-                    actor: ActorRef::System {
-                        component_id: "agent-run-git-observer".to_string(),
-                    },
-                    camp_id: Some(camp_id.clone()),
-                    expected_versions: Vec::new(),
-                    execution_epoch: None,
-                    payload: RecordCancelledAgentRunEndingGitObservationCommand {
-                        agent_run_id: agent_run_id.clone(),
-                        execution_epoch: candidates[0].execution_epoch,
-                        ending_git_observation: observation.clone(),
-                    },
-                },
-            )
-            .unwrap();
-        assert_eq!(recorded.result.status, CommandResultStatus::Applied);
-        let persisted_observation: String = database
-            .connection()
-            .query_row(
-                "SELECT ending_git_observation_json FROM agent_run WHERE id = ?1",
-                [&agent_run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            serde_json::from_str::<GitObservation>(&persisted_observation).unwrap(),
-            observation
-        );
-        assert!(
-            runtime
-                .list_cancellation_candidates(&database, 10)
-                .unwrap()
-                .is_empty()
-        );
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();

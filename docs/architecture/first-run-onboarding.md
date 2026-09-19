@@ -2,7 +2,7 @@
 document_type: architecture
 authority: desktop-first-run-component-boundary
 status: accepted
-last_updated: 2026-08-30
+last_updated: 2026-09-18
 ---
 
 # First-run Onboarding
@@ -17,7 +17,7 @@ last_updated: 2026-08-30
 | Provisioning saga | Converts the saved selection into idempotent existing Core commands, records stage checkpoints and commits the Camp restore target before completion. |
 | Core member/runtime services | Retain or create the selected profile and apply the selected model plus Adapter-owned default permissions with normal command/version rules. |
 | Core Camp service | Creates the durable Active Quick Chat Camp and remains the sole authority for membership, Default Lead and messages. |
-| Camp Composer Draft | Owns starter text after page 3; starter selection never bypasses the normal Draft save or user-send boundary. |
+| Desktop-local Composer | Owns the Active Camp starter snapshot after page 3; starter selection only replaces that local input and never bypasses the user-send boundary. |
 | Restorable location store | Makes the real fourth-page Camp reopenable; it does not own onboarding completion. |
 
 ## Startup and state flow
@@ -38,7 +38,7 @@ Electron ready
            -> create Active Quick Chat Camp "初次集结"
            -> commit Camp restorable location
            -> completed(onboarding)
-           -> render the real Camp with draft-only starter rows
+           -> render the real Camp with local-input starter rows
         -> usable Runtime count = 0 or scan produced no reliable result:
            -> rescan, or completed(runtime_deferred)
            -> render the normal App shell without onboarding product mutations
@@ -57,9 +57,9 @@ by the existing command replay contract without payload drift. Recovery uses the
 on the selected Installation still being discoverable. A crash after a checkpoint skips that stage. The restorable
 location is ordered before `complete`, preventing a completed state that has no durable fourth-page destination.
 
-The fourth page is optional in lifecycle terms but durable in product terms. It uses the normal Active Camp, normal
-Navigation and normal Composer Draft. The only onboarding-specific Renderer projection is the empty-Camp greeting and
-starter row presentation; after the user sends a message, the Camp behaves like any other Quick Chat.
+The fourth page is optional in lifecycle terms but durable in product terms. It uses the normal Active Camp and normal
+Navigation. Its Composer input is Desktop-local and restorable by Camp; the only onboarding-specific projection is the empty-Camp greeting
+and starter row presentation. After the user sends a message, the Camp behaves like any other Quick Chat.
 
 `runtime_deferred` is a second completed lifecycle outcome, not a fourth page and not a paused onboarding state. It is
 available only before provisioning begins. Its three product identities are null, it commits no Camp restore target,
@@ -80,13 +80,13 @@ and member configuration surfaces.
   restorable-location mutations.
 - `初次集结` contains exactly the selected member and makes that member Default Lead.
 - Completion happens after the real Camp and its restore target exist, not after starter interaction.
-- A starter choice is a durable Draft mutation and cannot produce execution side effects.
+- A starter choice updates only the Desktop-local Active Camp Composer snapshot; it cannot create Core Draft, public-message or execution side effects.
 - Upgrades never receive a synthetic onboarding Camp.
 
 ## References
 
 - [Camp 资源不变量](foundational-invariants.md#camp-resources)
-- [First-run Onboarding v3](../contracts/first-run-onboarding-v3.md)
+- [First-run Onboarding v5](../contracts/first-run-onboarding-v5.md)
 - [Availability-first Runtime](availability-first-runtime.md)
 - [Camp Activation Lifecycle](camp-activation-lifecycle.md)
 - [Camp Composer Draft](camp-composer-draft.md)

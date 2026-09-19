@@ -332,7 +332,6 @@ fn is_control_request(method: &str) -> bool {
     matches!(
         method,
         "core.shutdown"
-            | "campTurns.cancel"
             | "agentRuns.cancel"
             | "singleChat.end"
             | "runtime.pendingExecution.cancel"

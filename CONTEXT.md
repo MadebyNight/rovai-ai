@@ -5,7 +5,7 @@ Rovai-ai is a local multi-Agent workbench in which long-lived Agent identities c
 ## Domain Glossary
 
 **Mission**:
-A durable purpose and independently maintained business status for exactly one public Camp. Core keeps an opaque internal ID plus a stable, monotonically allocated public number; display, Mission Git branch and worktree names derive from the number. The Camp retains ownership of membership, conversations, messages, drafts and execution. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision. Only the latest title and description are retained.
+A durable purpose and independently maintained business status for exactly one public Camp. Core keeps an opaque internal ID plus a stable, monotonically allocated public number; display, Mission Git branch and worktree names derive from the number. The Camp retains ownership of membership, conversations, published messages and execution; public unsent Composer content remains Renderer-local. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision. Only the latest title and description are retained.
 _Avoid_: Task alias, Run state, separate chat store, lead-only definition
 
 **Mission Workspace**:
@@ -13,39 +13,11 @@ The Git worktree association prepared by Core at the first admitted Mission Run'
 _Avoid_: per-Turn snapshot, Agent sandbox, directory inferred from a title
 
 
-**Gather**:
-A durable Default-Lead operation that publishes one shared public request, accepts one responsibility per canonical
-recipient, and schedules exactly one original-Lead completion after every GatherItem is terminal. It is not a private
-inbox, a polling protocol, or a collection of ordinary Lead continuations.
-_Avoid_: message batch, parallel send alias, temporary suppression window, current-Lead handoff
-
-**GatherItem**:
-One member responsibility identified by its forward Message Delivery `dispatchDeliveryId`. A visible member return is
-result evidence but never the Item terminal authority; the pre-run Delivery terminal or current-generation member Run
-terminal owns settlement.
-_Avoid_: recipient text, message ID responsibility, mention-derived state, early-return completion
-
-**Gather-Captured Delivery**:
-An exact public return from the current GatherItem target Run and retry generation to the frozen initiator. Its
-CampMessage, Structured Mention and reply remain public, while the Delivery settles without an attempt or Lead AgentRun.
-It uses an independent per-Item/current-generation bound instead of the ordinary accepted-A2A ledger.
-_Avoid_: hidden message, parsed-body capture, suppress-wake flag, unbounded capture
-
-**Gather Barrier**:
-The transaction boundary that observes the last terminal Item, freezes mandatory completion input, CAS-marks the Gather
-ready and creates one Completion Delivery. The Barrier never materializes an AgentRun directly.
-_Avoid_: process-local counter, periodic scan, direct Lead spawn, mutable result snapshot
-
-**Completion Delivery**:
-A required internal Message Delivery queued in the frozen initiator Conversation's normal recipient FIFO. It is causal
-to the Gather request but is not an Effective Recipient of that public CampMessage.
-_Avoid_: public recipient, private message, Default-Lead reroute, Session-ID route authority
-
-**Gather-Completed Current Input**:
-The mandatory typed input for a `gather_completion` Run, containing the complete accepted Gather request, every Item,
-the last current-generation captured result, bounded fallback and safe error. Optional public history may duplicate it
-but cannot replace or partially omit it.
-_Avoid_: recent-history inference, live Gather reconstruction, partial item list
+**Gather (Retired)**:
+A historical multi-recipient Barrier capability removed from the current CLI, Core scheduler, model context and official
+Skills. Current collaboration uses ordinary multi-target public messages and ordinary replies; Core does not capture
+returns, count replies or produce a completion Run. Frozen historical Gather records remain read-only evidence.
+_Avoid_: current operation, multi-send alias, renamed aggregate, reply counter, completion wakeup
 
 **Camp**:
 A shared collaboration aggregate containing participants, public discussion, private Agent continuities, resources, and outcomes. Its Core-owned Activation State is `pending | active`: explicit Dialog creation becomes Active immediately and may validly contain no public messages, while one-click creation begins as a Pending Camp Draft and becomes Active only with its first accepted user message. A Camp created without a user-configured name starts as `未命名对话`; its first accepted user message generates the name only while the user has never explicitly named or renamed that Camp. The product may present an Active Camp as a conversation, but domain code must not call it a Conversation. User deletion permanently removes the Camp aggregate; Rovai-ai does not model Camp archive or trash.
@@ -68,8 +40,11 @@ A transient user preparation inside the explicit creation Dialog. It has no dura
 _Avoid_: Pending Camp Draft, Conversation, first-message creation
 
 **Pending Camp Draft**:
-A Core-owned Camp with `activationState = pending`, created only by a confirmed one-click new-conversation entry. It already owns the selected Workspace Binding, Initial Camp Membership, Default Lead, stable Camp ID, structured Composer Draft, and source attachment refs or mutually exclusive legacy Prepared Attachments, but it is not yet a formal Active Camp. An empty Pending Camp Draft is absent from Navigation and Restorable Location and may be removed only by guarded leave/startup cleanup. Non-whitespace body or attachments make it navigable and restorable with the product label `草稿`. Its first accepted user message atomically changes it to Active in the same transaction as message persistence; every rejected send leaves the exact Pending state and Draft Revision unchanged.
-_Avoid_: Renderer-only Draft, hidden Active Camp, sequential first-message Camp creation
+A Core-owned Camp shell with `activationState = pending`, created only by a confirmed one-click new-conversation entry.
+It owns Workspace Binding, Initial Camp Membership, Default Lead and stable Camp ID, but not persisted Composer content.
+Its first accepted user message atomically changes it to Active in the publication transaction. Renderer-local unsent
+content does not make the Camp durable, restorable or Agent-visible.
+_Avoid_: persisted Composer Draft, hidden Active Camp, unpublished Pending input, sequential first-message Camp creation
 
 **Camp Creation**:
 The user-only, idempotent Core action that atomically creates one Camp row and its selected CampMember relationships, including Camp name and origin, Camp Workspace Binding, Camp Collaboration Mode, Default Lead, and Activation State. Explicit Dialog creation requests Active; confirmed one-click creation requests Pending. It validates collaboration structure but performs no Runtime Resolution or execution Readiness admission. The disabled `lead_coordinated` option is rejected by Core as unsupported rather than guarded only by Renderer state. Camp Creation creates no Conversation, CampMessage, CampTurn, AgentRun, Native Session, or Native Session Bootstrap; those records begin only when later behavior requires them.
@@ -84,12 +59,17 @@ A durable user instruction that binds one Prompt, Member, workspace reference, s
 _Avoid_: cron job, background Camp, scheduled Camp, recurring Conversation
 
 **Automation Occurrence**:
-One planned or explicitly requested trigger of an Automation at a stable scheduled instant. It may be claimed for execution or recorded as missed/overlapping, but it is never postponed into a second trigger.
-_Avoid_: retry, delayed run, catch-up batch, Scheduler tick
+One planned or explicitly requested trigger of an Automation at a stable scheduled instant. Admission is either
+`started` when no prior occurrence is active, or `skipped(overlap)` when one is. It is never queued or postponed into a
+second trigger. A started occurrence owns a new Camp, first system message and waiting Delivery; AgentRun creation still
+requires the ordinary scheduler claim.
+_Avoid_: queued occurrence, retry, delayed run, catch-up batch, Scheduler tick
 
 **AutomationRun**:
-The immutable outcome record of one claimed Automation Occurrence, anchored to exactly one new CampTurn when execution is admitted. Its execution result is independent from any later channel notification outcome.
-_Avoid_: AgentRun, CampTurn, notification job, reusable execution
+The immutable outcome record of one started Automation Occurrence, linked to its new Camp, trigger message and Delivery
+and to an AgentRun only after ordinary claim. Its business result and time limit are independent from any later channel
+notification outcome.
+_Avoid_: AgentRun, queued occurrence, notification job, reusable execution
 
 **Automation Notification Delivery**:
 One provider-scoped attempt series to send a frozen AutomationRun result or failure to the selected Member Bot's current Owner private chat. It is delivery evidence and never part of the AutomationRun execution outcome.
@@ -100,7 +80,7 @@ The lifetime of one top-level Rovai-ai window, from its creation during applicat
 _Avoid_: application process lifetime, Native Session, Core session, Navigation refresh
 
 **Restorable Location**:
-The most recently and authoritatively loaded stable first-level product location eligible to become the target of a later Main Window Session. It is Quick Chat, one current Active Camp or meaningful Pending Camp Draft, the Member workspace with an optional current Member and tab, or the Memory workspace; an empty Pending Camp, Settings, and transient surfaces are never Restorable Locations.
+The most recently and authoritatively loaded stable first-level product location eligible to become the target of a later Main Window Session. It is Quick Chat, one current Active Camp, the Member workspace with an optional current Member and tab, or the Memory workspace; Pending Camp shells, Settings, Renderer-local Composer content and transient surfaces are never Restorable Locations.
 _Avoid_: last rendered surface, Settings route, Dialog stack, unvalidated local navigation snapshot
 
 **Startup Location Preference**:
@@ -156,36 +136,36 @@ The Scheduler-owned order in which independently accepted Message Deliveries bec
 _Avoid_: Agent ID sort as priority, author intent order, Renderer arrival order, FIFO across recipients
 
 **Recipient Identity Eligibility**:
-The admission-time identity condition for one Effective Recipient: its Agent ID resolves to a present, current Camp Member, is not the sending Agent, and satisfies the structural fan-out and lineage limits. It says nothing about that Member's Runtime readiness or current capacity; those are Delivery scheduling facts.
+The admission-time identity condition for one Effective Recipient: its Agent ID resolves to a present, current Camp Member and is not the sending Agent. It says nothing about that Member's Runtime readiness or current capacity; those are Delivery scheduling facts. No collaboration-budget, depth, fanout or ancestor-lineage limit participates.
 _Avoid_: Runtime online status, process availability, execution guarantee, Default Lead fallback
 
-**Message Fanout Limit**:
-The atomic upper bound on one addressed Camp Message Send: its Effective Recipients may consume no more than the current CampTurn's remaining accepted-A2A budget and never more than the product ceiling of sixteen. A public-only send consumes no A2A slot; exceeding the bound rejects the entire send without a Public A2A Message or Delivery.
-_Avoid_: per-recipient partial acceptance, independent hidden cap, Runtime concurrency limit, public-message count
+**Collaboration Budget (Retired)**:
+The former CampTurn cumulative A2A, Run, elapsed, fanout and depth accounting. Current public Camp execution has no replacement budget ledger. Provider quotas, context capacity and process limits remain technical constraints but are not collaboration budgets.
+_Avoid_: unlimited-permission flag, renamed root budget, runtime concurrency, context byte limit
 
 **Addressing Resolution Failure**:
 The fail-closed result of a Camp Message Send whose explicit target or Agent Addressing Token cannot resolve to a Recipient Identity Eligible Camp Member. Core persists no Public A2A Message or Message Delivery and returns one structured error envelope containing the complete set of offending sources, their original values, stable reasons, and the instruction to use a new `requestId` after correction; it never leaks Camp-external roster candidates. Runtime readiness is not an addressing failure and is represented by Delivery scheduling state instead.
 _Avoid_: partial fan-out, public message with a dropped target, silent literal fallback, Runtime execution failure
 
-**Message Reply Reference**:
-The Core-managed public-message relation from an Agent-authored Camp Message Send to the CampMessage that triggered its current AgentRun. It supports thread presentation and bounded Context reference closure but never contributes an Effective Recipient or wakes an Agent.
-_Avoid_: addressing source, Agent-selected parent ID, Reply-to Default Target, execution route
+**Message Anchor**:
+The single `anchorMessageId` used for public reply/thread presentation. An Agent output defaults to its Run's last frozen input message; a user reply uses the explicitly chosen message. It does not identify the only cause, select a recipient, infer caller return, grant permission or prove that all Run inputs were answered.
+_Avoid_: addressing source, trigger identity, input-message set, execution route, completion evidence
 
 **Immediate Caller**:
-The AgentRun at the direct parent position of the current A2A call lineage. Addressing its Agent through `--to` or an Agent Addressing Token selects Caller Return semantics; no other ancestor receives this exception.
-_Avoid_: message author inferred from reply, arbitrary ancestor, Default Lead, original user
+The author of the message that directly requested another Agent's work, retained only as ordinary message provenance. Returning to that Agent uses an explicit ordinary target and creates an ordinary Delivery; no active lineage exception is required.
+_Avoid_: implicit recipient, permission source, ancestor-cycle guard, Native Session route
 
 **Caller Return**:
-A Message Delivery addressed explicitly to the current AgentRun's Immediate Caller. It wakes that caller through a new continuation AgentRun, restores the caller's prior parent/root/depth lineage, and remains a budgeted Delivery rather than a recursive forward edge.
-_Avoid_: `--return-to`, implicit reply recipient, Native Session resume, unbudgeted response
+A historical name for an explicit ordinary send back to the direct request author. Current Core does not assign a distinct edge kind, restore lineage or apply a budget exception; `A → B → A` is normal explicit messaging.
+_Avoid_: current Delivery kind, `--return-to`, implicit reply recipient, Native Session resume
 
 **All Members Mention**:
 The single explicit structured `@所有队员` reference in one user-authored Camp message. At accepted send it expands to and freezes the exact set of present CampMembers addressed by that message, while remaining one atomic token in the Composer and history; later membership or Presence changes never rewrite its historical recipient set.
 _Avoid_: `@所有成员`, dynamic broadcast, future-member subscription, expanded Member Mention list, unaddressed message
 
 **Mention Fanout**:
-The one accepted-send boundary that deduplicates all structured Mention targets and atomically creates one queued direct AgentRun for each exact recipient. Every Run in that fanout shares the message and creation boundary; the scheduler performs their independent pre-launch checks concurrently so one recipient never waits for a previous recipient's Runtime to finish, while exact operating-system process start timestamps are not claimed to be identical.
-_Avoid_: sequential mention handling, Lead-first dispatch, identical wall-clock process start, one shared AgentRun
+The accepted-send boundary that deduplicates all structured Mention targets and atomically creates one waiting Delivery for each exact recipient. Each Camp+Agent lane claims independently; no AgentRun exists until claim, and several messages for the same target may become one batch Run.
+_Avoid_: queued direct AgentRun, Lead-first dispatch, identical wall-clock process start, one shared cross-recipient AgentRun
 
 **Member Personality Traits**:
 The ordered set of zero to six user-authored labels shown as `性格底色` for one AgentProfile, summarizing stable expression, judgment, and collaboration tendencies. Traits are descriptive identity context, not Memory, an ability score, a Capability, a Team Role, or a behavioral instruction.
@@ -428,16 +408,16 @@ The structured `skillId + nameAtSend` reference created only when a user selects
 _Avoid_: parsed Slash text, Slash Command, Skill path, Runtime-native Skill reference
 
 **Skill Selection Snapshot**:
-The immutable per-AgentRun record of each first-occurring Skill Mention and whether that exact Skill was active, enabled, name-matched, and assigned to one frozen Runtime Delivery Group at accepted Direct send. It contains no path or Exposure and later enablement cannot retroactively make an ineligible selection available.
-_Avoid_: Draft selection, current Skill Library view, SkillExposureSnapshot, Runtime load receipt
+The immutable per-AgentRun record created at Delivery claim from the ordered batch's first occurrence of each Skill Mention, recording whether that exact Skill is active, enabled, name-matched, and assigned to one Runtime Delivery Group frozen for the new Run. It contains no path or Exposure; waiting Delivery carries no Skill eligibility, and later changes cannot rewrite a frozen Run selection.
+_Avoid_: send-time Run snapshot, Draft selection, current Skill Library view, SkillExposureSnapshot, Runtime load receipt
 
 **Current Input Skill Resolution**:
-The immutable ContextManifest evidence that intersects one Skill Selection Snapshot with start-time Skill Library availability and the verified SkillExposureSnapshot, recording an included file path or exact omission reason for every selection. It does not replace the full Exposure or exact rendered-payload evidence.
+The legacy name of immutable ContextManifest evidence that intersects one batch Skill Selection Snapshot with materialization-time Skill Library availability and the verified SkillExposureSnapshot, recording an included file path or exact omission reason for every selection. Public Formatter 26 applies the result to relevant RUN_INPUT messages; Single Chat retains the original CURRENT_INPUT projection. It does not replace the full Exposure or exact rendered-payload evidence.
 _Avoid_: SkillProjection reconciliation, Skill eligibility authority, model field, Runtime Input Delivery
 
 **Current Input Skill Link**:
-The optional model-visible `{name,path}` entry in `CURRENT_INPUT.skills` for a structured selection that was eligible at send, remains available at start time, and resolves to a ready Rovai projection's absolute `SKILL.md`. It is not an Attachment, permission, Prompt Skill fallback, Runtime load receipt, or proof the model read the file.
-_Avoid_: inline Skill content, Provider Skill item, project directory, SkillExposureSnapshot, model-read proof
+The optional model-visible `{name,path}` entry projected into a public `RUN_INPUT.messages[].skills` item whose message selected that Skill and whose batch resolution found a ready Rovai projection's absolute `SKILL.md`. Single Chat retains `CURRENT_INPUT.skills`. It is not an Attachment, permission, Prompt Skill fallback, Runtime load receipt, or proof the model read the file.
+_Avoid_: batch-global model field, inline Skill content, Provider Skill item, project directory, SkillExposureSnapshot, model-read proof
 
 **Skill Enablement**:
 The application-global delivery pause state of one Rovai Skill. A new official or imported Skill starts enabled; disabling it suspends all Rovai-managed delivery without deleting or changing its Skill Group Assignments, those Assignments remain editable while disabled, and re-enabling restores delivery from the saved Assignments.
@@ -592,7 +572,10 @@ The Camp-wide positive Core revision advanced by every effective Member addition
 _Avoid_: Collaboration State version, Member count, event sequence, model-visible roster revision
 
 **Camp Membership Cutover**:
-The atomic removal of one Current CampMember. Core ends the exact membership lifetime, repairs Default Lead, releases open Task assignments, and terminally settles the existing directed set of member Runs, recipient/source/Gather Deliveries and their persisted target Runs. Unrelated same-Turn work continues. It preserves history and unknown external effects; Runtime cleanup follows independently.
+The atomic removal of one Current CampMember. Core ends the exact membership lifetime, repairs Default Lead, releases open
+Task assignments, cancels waiting Deliveries and terminally settles old-lifetime Runs, approvals and temporary authority.
+Rejoining preserves history and compatible Session continuity but starts no execution until a new message creates a new
+Delivery. It preserves unknown external effects; Runtime cleanup follows independently.
 _Avoid_: best-effort leave, UI-only removal, rollback of external effects, synchronous process termination
 
 **Camp Membership Reconciliation**:
@@ -872,16 +855,16 @@ The immutable, content-identified workspace captured after the Delivered Workspa
 _Avoid_: live Run Workspace, reference implementation, mutable verifier copy, Git commit identity
 
 **Trial Budget**:
-The Qualification Case-specific projection of elapsed-time, AgentRun, and accepted A2A ceilings into one frozen CampTurn Execution Budget. Inconsistently observable token or account costs remain evidence rather than a hard budget.
-_Avoid_: Runner polling threshold, Core default maximum, model context window, token-only allowance, advisory target
+The Qualification Runner's external, Case-specific observation window or test-resource bound. It may stop or invalidate a Trial according to that sealed evaluation protocol, but it is not injected into public Camp scheduling and cannot become a Camp, Agent, Run or collaboration allowance. Token and account costs remain evidence unless the evaluation protocol explicitly scores them.
+_Avoid_: Core collaboration limit, CampTurn field, product guarantee, model context window, Agent permission
 
-**CampTurn Execution Budget**:
-An immutable elapsed-time, AgentRun, and accepted-A2A resource ceiling frozen by Core when a CampTurn is admitted and checked atomically before Core accepts or reserves further execution responsibility. Its absolute deadline survives Core restart, and the contract is general execution safety that a Qualification Case may configure rather than Benchmark state inferred from Runner snapshots.
-_Avoid_: Trial result, Runner-owned counter, post-acceptance cancellation threshold, mutable quota
+**CampTurn Execution Budget (Retired)**:
+The former Core-owned elapsed-time, AgentRun and accepted-A2A ceiling for one CampTurn. Current public Camp execution has no replacement collaboration ledger or fixed propagation ceiling; historical frozen facts remain readable only.
+_Avoid_: current scheduler input, renamed Camp/Agent allowance, Provider quota, context capacity, Trial Budget
 
-**Budget Exhaustion**:
-The terminal CampTurn condition recorded when an otherwise authorized, non-replayed request would exceed its frozen CampTurn Execution Budget, or when its elapsed-time deadline is reached. Core rejects the new responsibility without partial side effects and fences the Turn; invalid requests, authorization denials, and idempotent receipt replays neither consume nor exhaust the budget.
-_Avoid_: accepted over-limit call, recoverable Tool denial, ordinary quota rejection, Runner-observed overrun
+**Budget Exhaustion (Retired)**:
+The historical terminal CampTurn condition produced by the retired execution budget. New public messages and Deliveries never enter this state; technical capacity and business time limits report their own explicit failures.
+_Avoid_: current failure reason, context overflow, Provider quota, Automation timeout, process capacity
 
 **Sealed Qualification Pack**:
 A versioned, non-public collection of scored Qualification Cases kept outside the open-source repository, from which only one case's starting workspace and user request are released into a Trial. Its verifier, reference material, and complete scoring contract remain withheld from the Run Workspace and from published reports.
@@ -900,7 +883,7 @@ The sole qualification result for a scorable Formal Qualification Trial: pass on
 _Avoid_: composite score, verifier verdict, collaboration audit, Judge score, provisional result
 
 **Orchestration Convergence**:
-The result that all execution responsibilities and Runtime processes belonging to an Autonomous Qualification Trial settle within its fixed time, AgentRun, and A2A budgets, with no unfinished Run, Message Delivery, approval, or unsettled external effect. A failed or cancelled Run may still be mechanically converged after every resulting responsibility settles; Post-Dispatch Human Intervention is a separate Hard Outcome fact.
+The result that all execution responsibilities and Runtime processes belonging to an Autonomous Qualification Trial settle inside the external evaluation window, with no unfinished Run, Message Delivery, approval, or unsettled external effect. A failed or cancelled Run may still be mechanically converged after every resulting responsibility settles; Post-Dispatch Human Intervention is a separate Hard Outcome fact. It does not install a Core collaboration budget.
 _Avoid_: every Run succeeded, autonomy result, Human Intervention, correct code alone, Lead final message, unlimited delegation
 
 **Collaboration Evidence Matrix**:
@@ -908,7 +891,9 @@ A non-composite diagnostic projection of one Autonomous Qualification Trial's ac
 _Avoid_: formal Trial collaboration gate, collaboration score, leaderboard, Agent self-assessment, delivery verdict
 
 **Message Delivery Lifecycle**:
-The objective chain linking one accepted Message Delivery to its queued, materialized, failed, cancelled, or settled state, any recipient Run created from it, and the terminal failure or completion facts of that execution responsibility. A recipient Run's later Public A2A Message is a separate send; when explicitly addressed to its Immediate Caller, its Delivery is classified as Caller Return rather than inferred from completion or reply metadata.
+The objective chain linking one accepted Message Delivery through waiting, atomic batch claim, claimed AgentRun and
+settled/failed/cancelled terminal evidence. A later public message is a separate send with ordinary explicit targets;
+reply anchors and completion do not create or classify a return edge.
 _Avoid_: message count, semantic Handoff result, Task completion, inferred feedback absorption
 
 **Message Delivery Settlement**:
@@ -919,13 +904,11 @@ _Avoid_: successful handoff, response closure, feedback absorption, useful deleg
 Two Message Deliveries from separately accepted sends by the same source Run with different canonical identities but the same recipient, Task link, and canonical content digest. An idempotent replay is one acceptance and is never a duplicate; this is qualification evidence, not a Core time-window suppression rule, and semantic similarity remains a Judge question.
 _Avoid_: repeated route, idempotent replay, similar request, repeated reviewer use
 
-**Forward Delivery Cycle**:
-A forward Message Delivery whose target is already on its source AgentRun's ancestor lineage. The Immediate Caller is reachable only through Caller Return; all other ancestor targets remain cycles.
-_Avoid_: Caller Return, repeated direction without ancestry, source Resume, multi-stage review
-
-**A2A Lineage Guard**:
-The Core admission invariant for a new Message Delivery: a forward target increments the source lineage depth and may not appear on that lineage, while Caller Return restores the Immediate Caller's prior lineage without admitting another ancestor. Self-send, forward depth overflow, non-immediate ancestor targeting, and any remaining CampTurn A2A/Run budget failure are rejected atomically before the Public A2A Message or Delivery is persisted; there is no additional per-Run send-count or time-window quota.
-_Avoid_: semantic loop classifier, arbitrary ancestor return, Renderer recursion check, unbounded ping-pong
+**A2A Lineage Guard (Retired)**:
+The former ancestor/depth admission rule tied to one Run lineage. Multi-input Runs have no unique causal lineage, so
+current Core retains only self-send rejection and ordinary target eligibility. Repeated explicit Agent targets are allowed
+and are not classified by a cycle detector.
+_Avoid_: current invariant, caller-return exception, hidden depth limit, collaboration budget
 
 **Delivery Semantic Disposition**:
 The Semantic Engineering Review finding that work or information associated with an independent Message Delivery was integrated, rejected, superseded, abandoned, or remains indeterminate. It is never inferred by Core from matching code, Task state, a later send, or message timing and never changes Hard Outcome.
@@ -1120,15 +1103,22 @@ A model-visible canonical operation plus a complete input object that maps witho
 _Avoid_: approximate locator, transport command, missing required input, authorization token, sequence envelope
 
 **Compact Message Continuation Offset**:
-The optional `nextBodyOffset` on a truncated Shared Conversation message. It counts Unicode scalar values in the complete rendered body and is exactly the `bodyOffset` for a `camp.read` item formed with the Shared Conversation's top-level Camp ID and that message's ID. It identifies a suffix boundary but grants no access and does not itself request retrieval.
-_Avoid_: byte offset, UTF-16 offset, complete locator object, authorization token, automatic retrieval
+The retired `nextBodyOffset` used by historical truncated Shared Conversation messages. Current public Context includes
+only complete messages and uses `historyReadCursor` for omitted whole messages.
+_Avoid_: current field, byte offset, authorization token, automatic retrieval
 
 **AgentRun Dynamic Context**:
-The immutable model-facing payload for exactly one AgentRun, composed in order from conditional peer-only Collaboration State v2, Self Active Task Projection, Shared Conversation and Run Facts plus the mandatory final complete Current Input. It contains no Member Identity Bootstrap Projection, self identity patch, full Task snapshot, or independently synthesized objective, responsibility, or deliverable.
+The immutable model-facing payload for exactly one AgentRun. Public Camp Formatter 26 composes optional Collaboration
+State, Self Active Tasks and Shared Conversation, mandatory Run Facts, optional Workspace, and mandatory multi-message
+RUN_INPUT. Single Chat retains Formatter 25 and final CURRENT_INPUT. It contains no Member Identity Bootstrap Projection,
+self identity patch, full Task snapshot, or independently synthesized deliverable.
 _Avoid_: Native Session Bootstrap, Member Identity Context, mutable live prompt, Work Brief, Task Context
 
 **ContextManifest**:
-The immutable Core evidence that freezes one AgentRun's previous and current public-message boundaries, Cross-Camp History Fence, selected raw source references, context-delivery profile evidence, stable Bootstrap Evidence reference, target Runtime/formatter versions, complete Collaboration State v2 projection digest, Self Active Task Evidence, Shared Message projection evidence, typed Run Fact references, Skill Exposure and Current Input Skill Resolution, and exact rendered AgentRun Dynamic Context. Public boundaries and projection evidence are internal; Recovery reuses the dynamic payload byte-for-byte. The Manifest neither stores nor proves the transient Member Identity Bootstrap Projection, complete Bootstrap, combined first payload, transport acceptance, Skill load, or model understanding.
+The immutable Core evidence that freezes one AgentRun's ordered input-message references, anchor, previous/current public
+tails, visibility fence, execution configuration, context-delivery profile, Bootstrap reference, formatter versions,
+Collaboration/Task/Shared/Run Fact/Workspace/Skill selection and exact rendered Dynamic Context. Recovery reuses the
+payload byte-for-byte. It does not bound later live camp.read and never proves transport acceptance or model understanding.
 _Avoid_: audit projection, Runtime Input Delivery, complete Runtime prompt evidence, Member Identity Snapshot, prompt template, live context query, proof the model understood input
 
 **Runtime Input Delivery**:
@@ -1140,12 +1130,16 @@ One Provider-owned model execution created by submitting one prompt inside a Nat
 _Avoid_: Native Session, AgentRun, Runtime Input Delivery, JSON-RPC request ID, Rovai correlation ID
 
 **Accepted-Input Recovery Blocker**:
-The durable `waiting/recovery_blocked` AgentRun state established after Core restarts with an accepted Runtime Input Delivery but no verified way to reconcile that same old Native Turn. It clears `runtime_recovery_required`, preserves the accepted evidence and execution epoch, stays outside ordinary scheduling, and forbids automatic redelivery or a claim that recovery is in progress.
-_Avoid_: Runtime Recovery, Session Resume, delivery_unknown, automatic retry, suspended prompt, recovered Turn
+The historical user-visible waiting state for an accepted input whose Native Turn could not be reconciled. Current public
+Camp execution instead terminalizes the Run as an ordinary visible failure, preserves typed unknown evidence internally,
+and keeps successor Deliveries waiting only until real process isolation is confirmed.
+_Avoid_: current UI state, Runtime Recovery, automatic retry, suspended prompt, recovered Turn
 
 **Recovery Blocker Resolution**:
-The versioned local-user decision to end one Accepted-Input Recovery Blocker as `failed/accepted_input_outcome_unknown` after inspecting the execution environment. It preserves accepted input and execution evidence, cannot confirm success or fabricate final output, and never retries the old input or automatically creates a successor Run.
-_Avoid_: success confirmation, cancellation that erases ambiguity, AgentRun retry, automatic successor, input redelivery
+The retired local-user action that manually ended an Accepted-Input Recovery Blocker. Current product has no such button:
+Adapter cleanup/isolation evidence controls scheduler release, while users may continue sending new messages that remain
+as waiting Deliveries until release is safe.
+_Avoid_: current action, success confirmation, force release, AgentRun retry, input redelivery
 
 **Native Turn Reconciliation Capability**:
 An Adapter capability, provisionally named `native_turn.reconcile.v1`, proven only by a real cross-process experiment showing a Provider-generated stable Turn ID, lookup or reattach without a new model call, distinct running/completed/failed/not-found/ambiguous results, rereadable terminal output and idempotent repetition. Session load, compatibility, installation generation and a reused Session ID cannot imply it.
@@ -1156,43 +1150,68 @@ A bounded schema-v2 model-facing directory of Peer Member Identity Projections, 
 _Avoid_: self identity patch, `members`, `defaultLead` identity object, routing authority, availability promise, Capability list, raw presence/readiness state, current task, current Turn participant state
 
 **Shared Conversation**:
-The deterministic bounded model-facing representation of public history from the frozen AgentRun Camp newly eligible for the current Native Session. One top-level Camp ID applies to its latest ordered raw messages, any required Public Reference Context Closure and optional Core-derived Originating Public User Message. Included bodies use per-message Unicode-scalar prefix truncation and optional Compact Message Continuation Offsets; an Omitted Public Messages Envelope appears only when whole eligible messages were excluded. Current Input is excluded, while Public A2A Messages participate as ordinary public history; the previous/current public boundaries remain internal.
-_Avoid_: Context Briefing, Task state, private Conversation, Execution Evidence, current trigger
+The deterministic model-facing incremental public window for one `(CampId, AgentId)`, bounded by the last successfully
+accepted public tail and the current claim tail. It preserves original order and self-authored messages, emits at most the
+latest fifteen complete eligible messages, and uses paired `omittedCount/historyReadCursor` when earlier candidates do
+not fit. A message may also appear in RUN_INPUT; only RUN_INPUT creates processing responsibility.
+_Avoid_: summary, private Conversation, unread receipt, current-input replacement, Native Session-local watermark
 
 **Run Fact**:
-A typed, compact model-facing fact already determined by authoritative Core state and directly relevant to the current AgentRun. Run Facts schema v3 provides the current Camp's default permanent output location once, as top-level `attachmentOutputRoot`; it is neither an attachment catalog root nor a filesystem authorization. Other facts can describe a frozen Task reference, lost Session continuity, an unsettled external effect, Gather member return semantics or exhausted delegation budget. Optional facts are omitted when absent, but the section itself is mandatory. A fact guides current decisions but is not an authorization token, mutable source snapshot or prose warning.
+A typed, compact model-facing fact already determined by authoritative Core state and directly relevant to the current AgentRun. Public Run Facts schema v5 provides `attachmentOutputRoot` plus optional Mission, Task, Session continuity and real external-effect facts. Gather, delegation budget and conversationMode are absent; Single Chat retains its v4 shape. Optional facts are omitted when absent, but the section itself is mandatory. A fact guides current decisions but is not an authorization token, mutable source snapshot or prose warning.
 _Avoid_: Run Notice, Control Signal, Work Brief, inferred warning, operation authorization, Task snapshot
 
 **Current Input**:
-The complete, never-truncated user message or Public A2A Message content that triggered one AgentRun, with trusted source type and concrete attachment paths when applicable: actual Agent source paths or resolved historical compatibility paths. A2A source metadata contains only the Core-derived `senderAgentId` and `senderName`; internal Run, Task, Delivery, lineage, and correlation IDs remain outside model input. For a Message Delivery, Core must first prove that complete Current Input, the direct Public Reference Context parent, and mandatory structure fit the frozen target Runtime limit before materializing an AgentRun; otherwise the already accepted Delivery fails terminally with `context_payload_too_large`, while its Public Message and sibling Deliveries remain unchanged.
-_Avoid_: Shared Conversation duplicate, Work Brief, model-generated source metadata, source reply alias
+The complete single-message instruction used by Single Chat and historical frozen public Runs. New public Camp Runs use
+RUN_INPUT instead; CURRENT_INPUT must not be synthesized from one arbitrary message in a multi-input Run.
+_Avoid_: current public Run input, batch anchor, Work Brief, source reply alias
+
+**Run Input**:
+The mandatory ordered `RUN_INPUT.messages[]` for one public AgentRun. It contains every message atomically claimed for
+that Run with trusted identity, sequence, complete body, optional anchor, quotes, attachments, Skills and mention flag.
+It is the only processing-responsibility truth; the last item deterministically supplies the Run anchor. No message is
+truncated, summarized or split across native prompts.
+_Avoid_: one trigger, additionalMessages, source-type branch, Shared Conversation, per-output response list
 
 **Accepted Public Context Boundary**:
-The one monotonic public CampMessage sequence boundary maintained for each Native Session. It records the current public boundary frozen by the most recent AgentRun whose input the Runtime accepted and ACKed; a new Native Session starts at zero. A new Run considers untombstoned public messages in `(previousAcceptedBoundary, currentManifestBoundary]`, and successful acceptance advances directly to the full current boundary even when whole messages were omitted from automatic context. Failure before ACK does not advance it. It is neither per-message read state nor a lower bound for `camp.read` or `camp.search`.
-_Avoid_: proof of reading, unread-message set, retrieval cursor, model-visible boundary
+The monotonic public CampMessage sequence boundary maintained for each `(CampId, AgentId)`. It records the claim tail
+frozen by the latest exact AgentRun input accepted on the correct binding/generation and survives Native Session
+replacement. Prepared, rejected, unknown, claim-only and stale acknowledgements do not advance it. It selects the next
+automatic incremental window but never limits live `camp.read` or proves model understanding.
+_Avoid_: Native Session-local state, proof of reading, unread-message set, retrieval cursor, model-visible boundary
 
 **Accepted Collaboration Projection Digest**:
 The complete canonical Collaboration State v2 projection digest last advanced by an accepted Runtime Input ACK for one current Native Binding generation. Every ContextManifest records the complete current digest and independently records whether the section was included; send failure, `delivery_unknown`, process loss and unaccepted input do not advance the Conversation watermark. It is not a digest of internal Member State, a delta, a rendered fragment, Member Identity, or proof that the model understood the directory.
 _Avoid_: member state digest, inclusion flag, self identity version, presence watermark, model-read proof
 
 **Bounded Raw Public Messages**:
-The latest fixed-count base subset of eligible public CampMessages, rendered in ascending sequence order after each body is reduced to an exact Unicode-scalar prefix. If the resulting bodies exceed the public-history character budget, whole base messages are removed oldest-first; a separately required Public Reference Context Closure may add only the current trigger's direct ancestors under the closure budget and de-duplicates by message ID. No Mention, attachment relation, keyword, importance, or unrelated reply graph changes the base selection.
-_Avoid_: summarized history, relevance window, blanket reply-tree expansion, token budget bypass
+The latest fixed-count complete subset of visible CampMessages inside one accepted-boundary-to-claim-tail window. Bodies,
+quotes and metadata are indivisible; after the fifteen-message bound, whole oldest candidates are removed until the
+remaining Runtime payload budget fits, then emitted in ascending sequence.
+_Avoid_: summarized history, body prefix, relevance window, reply-tree expansion, RUN_INPUT eviction
 
 **Originating Public User Message**:
-The Core-derived first public user CampMessage in the current A2A delivery lineage, inherited unchanged by nested deliveries. It is a separate Shared Conversation item, does not consume the recent-message count, follows the normal body-prefix and history-budget rules, and is deduplicated when already present among recent messages or a Public Reference Context Closure. `replyToMessageId` is a direct public CampMessage relation that may also contribute the current trigger's bounded closure.
-_Avoid_: Agent-authored origin, A2A body, reply alias, duplicated history item
+The retired lineage-specific history container from single-trigger public Runs. Current Shared Conversation has one
+ordered `messages[]` list and does not synthesize an origin item.
+_Avoid_: current context field, batch root, mandatory ancestor
 
 **Public Reference Context Closure**:
-The Core-derived, bounded ancestor chain for the current AgentRun trigger: starting from its canonical `replyToCampMessageId`, Core follows direct public-parent edges toward the root and selects at most three ancestor messages under Context Delivery Profile v3, prioritizing the direct parent and then nearer ancestors. It stops at a missing/tombstoned/inaccessible parent, lineage boundary, cycle, or the three-message limit, de-duplicates every message by stable ID, consumes the ordinary public-history character/body budgets, and displaces the oldest base recent messages first. Closure members are public-context inputs rather than new Current Inputs, Deliveries, or routing targets; recent-history selection never recursively expands the references of unrelated messages.
-_Avoid_: Renderer quote parsing, full Camp reply graph, sibling expansion, Delivery copy, implicit private context
+The retired automatic ancestor-expansion container. Current Shared Conversation exposes `anchorMessageId` but does not
+inject anchor ancestors; an Agent can use live `camp.read` when earlier context is required.
+_Avoid_: current context field, implicit private context, routing source, full reply graph
 
 **Omitted Public Messages Envelope**:
-A compact model-visible aggregate emitted only when one or more whole eligible public messages do not enter Shared Conversation. It reports the exact omitted count and the omitted set's minimum/maximum sequence values without claiming continuity or executability; gaps may exist, while exact bounded IDs and aggregate reasons remain Context Projection Evidence. Body truncation on an included message is separate and uses a Compact Message Continuation Offset.
-_Avoid_: navigation instruction, executable sequence range, omission evidence, truncation-only warning, inferred missing content, automatic retrieval request
+A paired model-visible `omittedCount + historyReadCursor` emitted only when one or more visible candidates in the frozen
+incremental window do not enter Shared Conversation. The cursor is an opaque starting point for live `camp.read`; it does
+not restore the frozen snapshot or guarantee the same count later.
+_Avoid_: executable sequence range, body continuation, Manifest replay cursor, automatic retrieval request
 
 **Context Delivery Profile**:
-An immutable application-owned versioned configuration that defines deterministic public-context and Self Active Task candidate selection, ordering, Unicode-scalar truncation, eviction priority and numeric budgets independently from model field shape and formatter wording. Current Profile v3 retains `maxPublicMessages = 15`, `maxPublicHistoryChars = 24000`, `maxMessageBodyChars = 2000`, and `maxPublicReferenceChainMessages = 3`, and adds `maxSelfActiveTasks = 8` with public history evicted before the Task selection tail under Runtime payload pressure. It has no Member UI, IPC, or user-persisted setting, and each ContextManifest records the exact version plus resolved snapshot or digest used by the Run. Historical Profile versions are not current readers. Model serialization belongs to the Context Formatter, while Evidence shape belongs to the ContextManifest version.
+A versioned application configuration for deterministic model-input selection. Current public Profile v7 gives mandatory
+fixed sections and the largest complete FIFO RUN_INPUT prefix priority, defaults an unspecified Runtime payload capability
+to 96 KiB without a common 1 MiB clamp, and uses the same message projection and serializer for claim sizing and final
+delivery. Body, viewer-visible quotes, each message's own source attachments and Skills are indivisible; only remaining
+bytes are spent on optional context. Shared history uses at most 15 complete messages and never truncates a message.
+Single Chat retains Profile v6.
 _Avoid_: formatter constants, model DTO schema, Evidence schema, Member Runtime Parameters, mutable user preference, summary model configuration
 
 **Cross-Camp History Search**:
@@ -1200,8 +1219,14 @@ An explicit, on-demand lookup by a running Agent within its Cross-Camp History F
 _Avoid_: global Camp history, Archived Camp search, former-membership history, Memory recall, private Conversation search
 
 **Camp History Retrieval**:
-The model-facing discovery and raw-read surface for original public CampMessages. Camp and relevance discovery return bounded Top-K anchors without pagination; canonical Camp IDs and stable message IDs locate evidence, while only reply-tree and original-timeline collections continue with Camp sequence cursors. Every Camp locator is the exact `rvcamp_...` Camp primary identity rather than a Runtime-native identifier, alias, or mapping. Attachment content remains outside the surface, and every call rederives authority from its current AgentRun rather than from an ID or cursor. `camp.read` and `camp.search` may return any currently authorized raw message at or below the ContextManifest boundary, including messages already delivered automatically; they do not filter for “unread” content, and they cannot reveal later messages above that frozen boundary.
-_Avoid_: Summary retrieval, unread-only retrieval, relevance-result traversal, attachment file access, bearer cursor, Memory recall, Native Session locator
+The model-facing discovery and raw-read surface for original public CampMessages. Every call rederives live authorization
+and recipient-specific visibility; `camp.read` is not bounded by the current ContextManifest and can see later currently
+visible messages. It pages by `limit <= 20` and cursor, then returns the selected page completely without aggregate-size
+shrinking. Its current request shapes are timeline `before/limit`, exact `messageId`, and thread `thread/before/limit`;
+retired `mode/direction/around` fields are neither accepted nor translated. Recallable, suppressed and withdrawn messages
+remain unavailable, every quote source is separately visibility-checked for the viewer, and reading has no claim or ACK
+side effect.
+_Avoid_: Manifest-bounded read, unread-only retrieval, truncated success, attachment file access, bearer cursor, Memory recall
 
 **Cross-Camp History Fence**:
 The immutable maximum scope of one AgentRun's Cross-Camp History Search, pairing the exact set of eligible Camp Discovery Snapshots with one global public-message boundary. Live membership, Member Presence, Camp deletion and tombstones may only narrow it; later joins, renames and messages cannot expand or rewrite it.
@@ -1244,7 +1269,7 @@ The automatic in-place replacement of a missing AdapterInstallation launch path 
 _Avoid_: name-only rebinding, new Installation, rewriting frozen Run Runtime Configuration
 
 **Adapter Capability Snapshot**:
-The latest successful persisted deep-probe evidence for one AdapterInstallation, covering its observed executable identity, authentication, models, permissions, protocols, and capabilities. It is authoritative input for which model identifiers and model-option values a Runtime-specific Member editor may offer, while the Core Adapter remains authoritative for recognized native permission fields, values, defaults, and schema version. Unknown fields are never automatically rendered or passed through. The snapshot informs configuration and Runtime Readiness but remains advisory until the Execution Dispatch Check independently verifies the launch target.
+The latest successful persisted deep-probe evidence for one AdapterInstallation, covering its observed executable identity, authentication, models, permissions, protocols, and capabilities. It is authoritative input for which model identifiers and model-option values a Runtime-specific Member editor may offer, while the Core Adapter remains authoritative for recognized native permission fields, values, defaults, and schema version. Unknown fields are never automatically rendered or passed through. The snapshot informs configuration and Runtime Readiness but remains advisory until Delivery claim freezes the current configuration and the Execution Dispatch Check independently verifies the launch target.
 _Avoid_: Runtime Discovery Observation, permanent compatibility claim, generic arbitrary-option form, execution admission
 
 **Adapter Probe Attempt**:
@@ -1540,8 +1565,9 @@ The bounded normalized text or structured payload of one AgentRun Execution Evid
 _Avoid_: silent truncation, local Blob path, raw protocol log, Markdown execution of tool output
 
 **CampTurn Stop**:
-The user-requested, idempotent termination of an active CampTurn's execution scope, including its Runs, pending Deliveries and Gather obligations. Core commits business terminal states before background Runtime cleanup; accepted or possibly effective input remains failed/outcome-unknown and is never automatically resent. Public history and external-effect evidence remain durable. Composer owns the whole-Turn control, while the shared Execution Drawer exposes the separate User-authorized Run-local Stop.
-_Avoid_: stop current UI row only, external transaction rollback, Task cancellation, process signal without fencing
+The retired whole-tree stop operation. Current public UI exposes only exact AgentRun Stop with `agentRunId + version` CAS;
+it does not pause the Camp+Agent lane, cancel waiting Deliveries, stop a causal subtree or target a successor Run.
+_Avoid_: current control, Camp pause, queue cancellation, external transaction rollback
 
 **Planned Shutdown**:
 The bounded Core lifecycle for an intentional quit, restart or update. The existing protocol 3 request persists a shutdown cycle and terminally settles business obligations, then closes launch/routes, drains writers and reaps managed Runtime processes. It creates Run cancellation audit but no CampTurn Stop intent. Unknown effects survive as terminal failures, and cleanup deadlines do not keep business Runs active. The original report and Desktop watchdog remain in force.
@@ -1580,43 +1606,82 @@ An immutable Camp system message presentation for a Task state change, carrying 
 _Avoid_: A2A message, mutable current-state card, parsed English system body, Execution Evidence, synthetic message ordering
 
 **Public A2A Message**:
-An immutable Agent-authored public Camp message that may address zero or more Camp Members. It is visible to the user and every eligible Camp Member, participates in public history, search, and Shared Conversation, and appears only once regardless of recipient count; delivery and target execution remain separate facts.
+A published Agent-authored public Camp message that may address zero or more Camp Members. Subject to current authorization
+and recipient-specific suppression, it participates in public history, search and Shared Conversation and appears only
+once regardless of target count; delivery and target execution remain separate facts. Agent messages are not eligible for
+Principal original-text withdrawal.
 _Avoid_: private handoff, per-recipient message copy, delivery status message, user-only projection
 
+**Recallable Principal Message**:
+A local-Composer Principal CampMessage whose every target Delivery remains unclaimed and whose content has not entered any
+frozen Runtime input or ContextManifest. It is visible to the Principal but suppressed from every Agent-facing context,
+read, search, thread and quote path. The first target claim atomically and permanently closes recall.
+_Avoid_: unsent draft, Agent message, Channel inbound, Automation prompt, cognitive undo
+
+**Withdrawn Message**:
+The terminal identity left after a recallable Principal message is withdrawn. Rovai removes readable body, structured
+content, own quotes, attachment links, search indexes and caches from its active data, cancels waiting Deliveries, and
+retains only non-plaintext identity/order/actor/time/cancellation facts. Human UI may show a withdrawal notice, but Agents
+receive no tombstone or pagination item. This is application-level logical erasure, not forensic deletion of WAL, backup,
+clipboard, user source files or third-party copies.
+_Avoid_: soft delete with readable body, Agent tombstone, quote-snapshot cascade, forensic erase guarantee
+
+**Erased-Terminal Command Receipt**:
+The body-free terminal idempotency state for a withdrawn publication command. A replay in the same actor, command type and
+Camp scope returns `message.withdrawn`; a scope/type mismatch conflicts. Neither path executes the send handler or compares
+new content, and a new message requires a new command ID.
+_Avoid_: content hash, HMAC requirement, original success replay, recoverable body
+
 **Message Delivery**:
-The recipient-specific A2A execution responsibility created by one accepted Public A2A Message. Each Delivery freezes `forward | return` edge kind, the lineage of its future target Run, recipient identity and membership lifetime, source Run lifetime where required, recipient-local queue position, execution basis, and `pending | running | failed | cancelled | settled | interrupted_before_dispatch` lifecycle. A valid old source Run may address a Member added after its Context freeze because target admission uses the current roster; once accepted, an ended source lifetime cannot materialize or retry that Delivery. `pending` distinguishes an initial no-attempt state from a post-attempt temporary wait condition, while `interrupted_before_dispatch` is a manual-intervention state because no dispatch attempt was established before a Core crash.
-_Avoid_: per-recipient message, passive read receipt, AgentRun, public timeline item, frozen target roster
+The recipient-specific processing responsibility created by one accepted public CampMessage. It freezes Camp, message,
+recipient membership lifetime and recipient-local queue sequence, and follows
+`waiting | claimed | settled | failed | cancelled`. A waiting Delivery is the only queued work; it does not freeze
+Runtime configuration or imply an AgentRun exists.
+_Avoid_: per-recipient message, read receipt, queued AgentRun, public timeline item, completion aggregate
 
 **Delivery Wait Condition**:
-The recipient-scoped temporary reason that keeps a Message Delivery pending after a real dispatch attempt, such as `target_busy`, `runtime_unavailable`, or `capacity_unavailable`. Only the corresponding recipient/Camp execution event may invoke another Dispatch Pump; a wait condition is not a terminal failure or proof that a Run started.
-_Avoid_: generic pending flag, timer deadline, global retry reason, Runtime completion
+The current scheduler admission reason that leaves a Delivery in `waiting`, such as an active lane, unavailable Runtime
+or unconfirmed execution isolation. It is not a dispatch attempt, a terminal failure or proof that a Run started.
+_Avoid_: retry state, queued Run, timer deadline, Runtime completion
 
 **Delivery Dispatch Attempt**:
-The durable boundary proving that Core actually began a recipient-scoped Dispatch Pump for one Message Delivery. A Delivery with no established Attempt after its acceptance transaction and a Core crash becomes `interrupted_before_dispatch`; once an Attempt exists, temporary blocking is represented by a Delivery Wait Condition. An explicit retry appends another Attempt to the same frozen Delivery and never reparses or broadens its recipients.
-_Avoid_: message acceptance, queued row existence, process start proof, inferred Runtime work
+The historical v1–v8 attempt object. Current Delivery-first scheduling has one atomic claim transaction instead of a
+durable pre-claim attempt and business-retry generation.
+_Avoid_: current scheduler boundary, message acceptance, process start proof
 
 **Interrupted Before Dispatch**:
-The explicit manual-intervention Delivery state when the Message and Delivery commit but no Delivery Dispatch Attempt is established before Core failure. It is not revived by Core/App startup, Camp opening, a new message, or unrelated capacity changes; the user sees that the collaboration never started and may retry or cancel only that Delivery explicitly, while the containing CampTurn remains unsettled until that decision.
-_Avoid_: ordinary Runtime wait, automatic recovery, partial send, failed AgentRun
+The retired manual-intervention state from the attempt-based scheduler. In the current model a crash before atomic claim
+leaves the Delivery waiting, while a crash after claim recovers the same immutable Run.
+_Avoid_: current state, user retry, ordinary Runtime wait, failed AgentRun
 
 **Delivery Manual Intervention**:
-The user-controlled resolution required for an `interrupted_before_dispatch` Delivery. Until the user retries or cancels that specific Delivery, its CampTurn remains unsettled; the intervention never resumes every pending Delivery in the Camp or creates a replacement public message.
-_Avoid_: Camp-level resume, automatic restart, Agent-authored retry, duplicate fan-out
+The retired user retry/cancel surface for an interrupted legacy Delivery. Current public Camp has no business-retry
+entry; waiting work claims automatically when admission becomes safe.
+_Avoid_: current UI, queue resume, automatic duplicate, force release
 
 **Message Delivery Queue**:
-The durable recipient-scoped FIFO of Message Deliveries for one Camp/Agent target, ordered by a Core-assigned local queue position rather than canonical multi-recipient order, timestamps, or `--to` order. A recipient is busy while its target Run is active; only a direct recipient event may let the pump claim the eligible head and materialize exactly one AgentRun, without skipping or batching deliveries.
-_Avoid_: Inbox, global priority queue, queued AgentRun, reply batch, timer window
+The durable recipient-scoped FIFO of waiting Deliveries for one `(CampId, AgentId)`, ordered by message sequence. The
+scheduler claims the largest complete eligible prefix in one transaction and materializes one multi-input AgentRun;
+it never skips a blocking head or appends later messages to a frozen Run.
+_Avoid_: Inbox, global priority queue, queued AgentRun, source-specific queue, timer window
 
 **Message Delivery Dispatch Pump**:
-A recipient-scoped, one-shot attempt to materialize the FIFO head of a Message Delivery Queue. Delivery acceptance and the exact event named by its current Delivery Wait Condition may invoke a Pump; Core/App startup restores durable state but does not scan or automatically dispatch historical Camps, and an `interrupted_before_dispatch` Delivery enters the Pump only through explicit Delivery Manual Intervention.
-_Avoid_: periodic sweep, startup replay, global pending scan, timer polling, in-memory queue authority
+A recipient-scoped scheduler wake that attempts one atomic batch claim. It may observe no eligible prefix and leave every
+Delivery waiting; it never creates an empty or predictably blocked Run.
+_Avoid_: durable attempt, manual retry, global priority scan, in-memory queue authority
 
 **Delivery Context Materialization Gate**:
-The recipient-scoped pre-Run boundary inside a Delivery Dispatch Attempt that assembles and freezes the Context Delivery Profile v3 payload against the Delivery's frozen execution basis and target Runtime limit. Success permits exactly one AgentRun to be materialized; if complete Current Input, the direct reference parent, and mandatory structure still cannot fit after optional public history and Self Active Tasks are removed in profile order, the Delivery becomes terminal `failed/context_payload_too_large` with no AgentRun or Runtime start. The Public Message and sibling Deliveries remain committed, and this deterministic failure is neither a wait condition nor an automatic-retry trigger.
-_Avoid_: send-transaction preflight, ghost AgentRun, Runtime capacity wait, whole-message rollback
+The claim-time boundary that resolves current execution configuration, chooses the largest complete FIFO RUN_INPUT prefix
+and freezes Profile 7/Manifest 26. If the head message alone cannot fit after optional context yields, Core creates one
+explicit preflight-failed Run without starting Runtime, settles that Delivery failed and lets later work continue.
+_Avoid_: send-transaction preflight, truncated input, Runtime capacity wait, whole-message rollback
 
 **Camp Message Send**:
-The authenticated current-AgentRun action exposed as `camp.message.send` and `rovai send`, and the sole Agent-intent path for an Agent to publish into its Camp. Its Camp scope and Message Reply Reference derive only from the authenticated current Run; Core resolves and deduplicates Effective Agent Recipients from explicit targets and valid inline Agent Addressing Tokens, may independently add Current User Attention for `--to-user`, classifies an Immediate Caller recipient as Caller Return, and leaves a recipient-free send without user attention public-only. Missing-Send Recovery Publication is a Core terminal safety action rather than an Agent send and cannot carry recipients, Current User Attention, or send intent.
+The authenticated current-AgentRun action exposed as `camp.message.send` and `rovai send`, and the sole Agent-intent path
+for publishing into its Camp. Core resolves explicit targets, rejects self-send, atomically writes one public message and
+one waiting Delivery per target, may add independent Principal attention, and applies the Run's frozen anchor for display.
+No caller-return, depth, fanout budget or Gather capture is inferred. In a Channel-bound Camp the same transaction creates
+one idempotent ChannelDelivery for the published Agent message.
 _Avoid_: Missing-Send Recovery Publication, Member Call, `team.call_member`, private message, user as Agent recipient, per-recipient public copy, compatibility alias
 
 **Camp Message Send Idempotency**:
@@ -1624,20 +1689,23 @@ The exact replay rule keyed by the canonical Camp Message Send input and one inv
 _Avoid_: time-window dedupe, semantic similarity suppression, retry by body digest, Renderer duplicate filter
 
 **Delivery Retry Identity**:
-The explicit user-issued identity for one new Dispatch Attempt on an existing interrupted Message Delivery. Replaying the same retry identity is idempotent, and a retry cannot alter the frozen Public Message, recipient, or Delivery payload.
-_Avoid_: new Public A2A Message, new recipient fan-out, automatic retry token, content-based retry
+The retired explicit user-issued identity for a legacy Delivery retry. Current public Delivery has no business-retry command; a new intentional message uses a new publication command ID.
+_Avoid_: current command, automatic retry token, content-based retry
 
 **A2A Delivery Slot Reservation**:
-The acceptance-time accounting unit that preserves the per-CampTurn maximum of sixteen accepted A2A target AgentRuns even while Message Deliveries remain pending. Every accepted forward or return Message Delivery allocates exactly one slot for its recipient Run; allocated slots are never recycled within the Turn.
-_Avoid_: post-Run counting, free return, unbounded pending queue, reusable concurrency permit, Runtime worker slot
+The retired CampTurn accounting unit for accepted A2A work. Current execution has no replacement slot, root budget or cumulative collaboration ledger.
+_Avoid_: current quota, renamed budget, Runtime worker slot, queue capacity
 
 **A2A Target AgentRun**:
-A new AgentRun for one eligible CampMember inside the same CampTurn, created by exactly one Message Delivery after the recipient-scoped dispatch and Context gate succeed. A forward Delivery enters one logical A2A depth deeper; a Caller Return creates a continuation at the Immediate Caller's prior depth and parent lineage, while both remain ordinary budgeted Runs with no reply batching, new CampTurn, or Runtime retry.
-_Avoid_: Lead Turn, new CampTurn, reopened CampTurn, Native Session resume, unbudgeted response, reply batch
+A batch AgentRun created only when the scheduler atomically claims one or more waiting Deliveries for the same Camp and
+Agent. It freezes current execution configuration, ordered input messages and one anchor, with no CampTurn, lineage or
+source-specific invocation kind.
+_Avoid_: queued Run, one-Delivery-only Run, caller continuation, Native Session resume
 
 **CampTurn Collaboration Settlement**:
-The authoritative aggregation that keeps a CampTurn non-terminal while any Message Delivery is pending, `interrupted_before_dispatch`, or any AgentRun is `queued`, `running`, or `waiting`. Once those accepted execution responsibilities settle, `CampTurn.cancelled` is possible only from an explicit CampTurn cancellation intent; without that intent, a cancelled required Run is incomplete responsibility and yields a failed aggregate, while optional failed or cancelled Runs do not block completion. Core never requires the original sender or Default Lead to run again; missing integration may be a semantic-review finding but never a response obligation or settlement blocker.
-_Avoid_: AgentRun-only aggregation, early completion, Outcome-as-recovery, business-result verification
+The historical aggregate for a CampTurn execution tree. New public messages have no universal completion set; each
+Delivery records processing, each Run records execution, and Task/Mission/Automation/Channel own their business outcome.
+_Avoid_: current authority, ResponsibilitySet replacement, business-result verification
 
 **Application-Managed File Safety**:
 The path, symlink, ownership, permission, size, and atomic-write protections applied when Rovai-ai manages its own blobs, projections, private configurations, sockets, logs, or temporary files. It is independent of Runtime-Managed Permission and remains Core-enforced.
@@ -1652,28 +1720,36 @@ The legacy immutable Core-owned payload and private metadata stored under `<data
 _Avoid_: new Agent attachment, new Desktop user attachment, Runtime attachment root, Published Attachment Path, original user file, second authoritative copy
 
 **Prepared Attachment**:
-A legacy Draft-private reference to one Authority Attachment inside a Camp Composer Draft. Upgraded Drafts keep existing Prepared rows unchanged until direct send, removal, or discard, but no new public Desktop ingress creates one. A Draft with any Prepared Attachment has no source refs, cannot add either attachment form, and cannot enter the source-ref Pending flow; removing the last row returns later additions to source-ref mode.
-_Avoid_: Local Attachment Source Ref, new user attachment, Published Attachment, Runtime-readable file, mixed Draft
+A historical Draft-private reference to one Authority Attachment. Migration 163 removes public Draft/Pending references
+without deleting user source files or attachments still referenced by published messages; no current public ingress or
+recovery UI creates or activates Prepared Attachment state.
+_Avoid_: current user attachment, Local Attachment Source Ref, Published Attachment, Runtime-readable file
 
 **Camp Composer Draft**:
-The private, durable user preparation for one future CampMessage, containing a ComposerDocument V2 and ordered Local Attachment Source Refs, or mutually exclusive legacy Prepared Attachments, plus Reply/Continuation intent and one exact Revision. It may survive Camp navigation or application restart, is invisible to Agents and public history, and is consumed only by an accepted direct send or complete-intent transfer to Pending.
-_Avoid_: CampMessage, New Conversation Draft, Agent context, public draft
+The Renderer-local, non-durable user preparation for one future public CampMessage, containing current editor content,
+source attachment references, quotes, reply anchor, explicit recipients and selected Skills. It exists only while the
+Renderer surface remains mounted; success clears it and send failure preserves it. Single Chat owns a separate private
+draft contract.
+_Avoid_: Core record, revisioned autosave, Pending queue, recovery model, public message
 
 **Camp Composer Draft Revision**:
-The opaque, monotonically advancing identity of one exact Camp Composer Draft state. A send can consume only the referenced current Revision, so a newer Draft remains a distinct unsent preparation.
-_Avoid_: updated timestamp, Renderer counter, CampMessage version, best-effort autosave marker
+The retired Core identity for persisted public Draft state. Current public send snapshots the mounted Renderer content
+and uses only the publication command identity for idempotency.
+_Avoid_: current field, Renderer counter, CampMessage version
 
 **ComposerDocument**:
 The closed version-2 Draft/Pending domain protocol containing only adjacent-normalized `Text(text)` and typed `Atom(member | all_members | skill)` segments. Newlines are characters inside Text; Lexical Paragraph/LineBreak nodes, selection, history, node keys, DOM and presentation never enter it. Core derives plain `body` from this document and maps it to public Structured Camp Message Content only at publication.
 _Avoid_: Lexical JSON, rich-text document, public Message Content, independent body state, presentation label
 
 **Draft Mutation Coordinator**:
-The single Renderer owner of the complete current `CampComposerDraftView`. It serializes content, source attachment, Reply, Continuation and recipient mutations against the latest Core Revision, replaces authority only with a complete Core response, and fences late responses by editing epoch. React and Composer Draft Sync may observe or project it but must not cache a competing complete View.
-_Avoid_: latest autosave result cache, React Draft state, per-feature revision ref, parallel attachment/content mutation
+The retired public-Camp bridge that serialized mutations against a Core Draft revision. Current Renderer components share
+one local editor state and create a single immutable send snapshot; no Core Draft view exists to coordinate.
+_Avoid_: current authority, autosave result cache, second local draft
 
 **Composer Local Sync**:
-The Renderer-local Lexical persistence state for one editing epoch: latest EditorState, local/saved version, dirty flag, debounce/single-flight work and saved/dirty/saving/error status. It serializes only at save/flush boundaries and obtains complete Draft authority from Draft Mutation Coordinator; it never owns a Core Revision or complete Draft View.
-_Avoid_: controlled Composer value, Core Draft authority, per-keystroke serialization, swallowed explicit flush error
+The mounted Renderer's live Lexical editing state. It may track local dirty/submitting/error UI, but performs no public
+Camp autosave, Core flush or restart recovery. A lightweight leave warning remains a Renderer-only product choice.
+_Avoid_: Core Draft authority, persistence protocol, cross-window merge, swallowed send error
 
 **Structured Camp Message Content**:
 The authoritative ordered public content of one CampMessage, using the closed `Text`, `MemberMention(agentId)`, `AllMembersMention`, `SkillMention(skillId, nameAtSend)` and Core-generated `CurrentUserMention(local_user)` segments. Core maps user ComposerDocument into it only during accepted publication. Plain-text display, search, Context and historical accessibility projections derive from it; Draft/Pending persistence uses ComposerDocument instead.
@@ -1696,24 +1772,36 @@ The stable read-only compatibility path for an available legacy Published Attach
 _Avoid_: default attachment output directory, Authority storage path, Context-scoped grant, Managed Blob path
 
 **Run Workspace**:
-The immutable absolute, existing startup and recovery working directory of one AgentRun. It carries no filesystem authority and is not a model-controlled built-in operation field. An A2A target Run receives the source Run Workspace path by deterministic Core rule, while the recipient continues to use its own Adapter Permission Configuration. A sender may instead describe another filesystem path in ordinary message or Task content; the recipient interprets that instruction and accesses or switches to the path through its own Runtime without changing the frozen Run Workspace.
-_Avoid_: permission boundary, sandbox root, inherited sender permission, project ownership
+The immutable absolute, existing startup and recovery working directory frozen from the target Agent and Camp's current execution configuration at Delivery claim. It carries no filesystem authority and is not a model-controlled built-in operation field. User, A2A, Automation, Channel and Mission messages cannot transfer or enlarge a sender workspace; a path written in message or Task content remains ordinary instruction interpreted under the recipient Run's own permissions.
+_Avoid_: permission boundary, sandbox root, inherited sender workspace, message-carried configuration, project ownership
 
-**A2A Parent Run**:
-The direct parent on an AgentRun's active A2A call lineage. A forward Delivery assigns its source Run as the target's parent; a Caller Return restores the Immediate Caller's previous parent, while preserving the return source separately as Delivery causality. Core derives and freezes all identities from the current Runtime binding; no LLM input may supply or override them.
-_Avoid_: Message Delivery source, built-in operation argument, model-generated Run ID, Task ownership, permission inheritance
+**A2A Parent Run (Retired)**:
+The former single-lineage parent attached to an AgentRun created for one A2A Delivery. Multi-input Runs may combine ordinary messages from several sources, so current Core preserves message/Delivery provenance without assigning one execution parent or ancestor chain.
+_Avoid_: current Run field, Message Delivery source, caller-return route, permission inheritance, cycle guard
 
 **A2A Context Transfer**:
-The bounded collaboration handoff in which the sending LLM supplies only the necessary `content`, recipient and optional historical Task link. Core deterministically assembles the target AgentRun input from that handoff, the recipient's own Conversation continuity, authorized Camp context, and frozen context boundaries; it never copies the sender's complete prompt, private Conversation, hidden reasoning, or generic model-supplied references.
-_Avoid_: serialized sender prompt, LLM-generated context blob, private Conversation inheritance, Task ownership transfer
+An ordinary public CampMessage sent to one or more explicit Agent targets. Its body, structured references and source facts enter each target's FIFO like user, Channel, Mission or Automation input and may be batched with adjacent compatible messages. It never copies the sender's complete prompt, private Conversation, hidden reasoning, Runtime permissions or workspace authority.
+_Avoid_: serialized sender prompt, LLM-generated context blob, private Conversation inheritance, source-specific Run, Task ownership transfer
 
-**Execution Admission**:
-The authoritative SQLite transaction that resolves exact Camp targets, validates Member Presence, frozen Runtime configuration, Rovai-ai business Capabilities, Task state and domain invariants, then atomically persists each required Conversation, CampMessage, CampTurn and queued AgentRun. It performs no Workspace filesystem check, Git observation, Runtime discovery, executable read or fingerprint calculation. The first accepted user submission also changes a `default` Camp Name Origin to `generated` in the same transaction.
-_Avoid_: execution preflight, Runtime permission policy, disabled Composer, Renderer readiness guess, partial delivery, automatic Lead fallback
+**Message Publication Admission**:
+The authoritative SQLite transaction that validates the author and exact Camp targets, publishes one CampMessage and creates one waiting Message Delivery per target. For a Pending Camp's first local-user message it also activates and, when applicable, names the Camp. It creates no AgentRun, freezes no Runtime configuration and performs no Workspace, Git, Runtime or executable check.
+_Avoid_: Delivery claim, queued AgentRun, send-time Runtime readiness, partial target publication, automatic Lead fallback
+
+**Execution Admission (Retired)**:
+The former combined transaction that published a message and immediately created CampTurn/queued AgentRun facts. Current public execution separates Message Publication Admission from Delivery Claim.
+_Avoid_: current write seam, Message Publication Admission, Delivery Claim, Single Chat admission
+
+**Delivery Claim**:
+The Scheduler-owned atomic transaction for one `(CampId, AgentId)` lane. It independently verifies prior execution
+isolation for that lane and cleanup for the actual shared execution root, resolves the current Runtime capacity once,
+and selects the complete FIFO head prefix through the same serialized message projection used for delivery. It then
+freezes the execution configuration and Skill selection, creates one immutable multi-input AgentRun and its ordered
+inputs/anchor, and binds every selected Delivery. No later message can join that Run.
+_Avoid_: message publication, queued Run placeholder, source-specific batch, skip-ahead selection, Runtime launch
 
 **Execution Dispatch Check**:
-The scheduler-owned pre-launch boundary for one queued AgentRun. For a Mission, Core first creates or reuses its recorded workspace after execution admission, without changing the original Camp project binding. It performs a lightweight canonical Workspace safety check, validates the current Runtime state and executable identity against the frozen Run Runtime Configuration, obtains the existing verified Managed/legacy Camp Attachment read admission, and resolves trigger-Message Local Attachment Source Refs to their original executionRoot-contained paths or current `ROVAI_RUN_TMP`. A source validation or ordinary Run-local copy failure fails that AgentRun without removing its already-published Message or materializing a Managed attachment. Existing failed Managed/legacy verification keeps its bounded reconciliation behavior before Claim. The check then records the starting Git observation before claiming and starting the Run. Failure marks the queued Run failed and lets its CampTurn fail or wait for repair/retry without writing a false start observation.
-_Avoid_: message-send preflight, CampMessage admission, Git permission policy, Renderer readiness guess
+The pre-launch boundary for one already claimed AgentRun. For a Mission, Core first creates or reuses its recorded workspace without changing the original Camp binding. It revalidates canonical Workspace safety, current Runtime/executable identity against the Run-frozen configuration, execution-isolation fences, Skill exposure and referenced attachment access, then records starting Git observation before Runtime launch. Failure marks that Run failed and settles its bound Deliveries without removing the published messages, creating business retry or writing a false start observation.
+_Avoid_: message-send preflight, Message Publication Admission, Delivery Claim, Renderer readiness guess, CampTurn settlement
 
 **Capability**:
 A Core-enforced business authorization atom that allows an Agent to request a class of Rovai-ai domain mutation outside the uniform Built-in Tool Catalog contract. It is distinct from record visibility, operation-specific invariants, and Adapter filesystem/Shell/network permissions; it cannot vary which canonical built-in operations an eligible Member may invoke.
@@ -1804,7 +1892,7 @@ The Core-owned dotted identity of one Rovai built-in business operation, such as
 _Avoid_: Tool name, Agent-facing command spelling, MCP tool, generic invoke target, Runtime-native alias
 
 **Built-in Tool Transport**:
-The sole model-facing path from an Agent Runtime through the `rovai` CLI and local Core IPC to Rovai-owned canonical Team, Task, Camp History, and Memory operations. It is a required AgentRun execution facility and remains separate from user-configured external MCP Runtime Projection.
+The sole model-facing path from an Agent Runtime through the `rovai` CLI and local Core IPC to Rovai-owned canonical Team, Task, Camp History, Automation, Mission and Memory operations. It is a required AgentRun execution facility and remains separate from user-configured external MCP Runtime Projection. Rovai-owned layers either deliver one complete logical result or fail explicitly; uniform size thresholds may not produce truncated success or an Agent-visible blob continuation protocol. Gather is not a current operation.
 _Avoid_: external MCP proxy, Runtime-native tool alias, optional degraded capability, duplicated domain handler
 
 **Built-in Tool Catalog**:

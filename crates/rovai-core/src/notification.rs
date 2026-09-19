@@ -17,7 +17,7 @@ use crate::{
 
 const DEFAULT_PAGE_LIMIT: usize = 50;
 const MAX_PAGE_LIMIT: usize = 100;
-const NOTIFICATION_EPISODE_SCHEMA_VERSION: i64 = 7;
+const NOTIFICATION_EPISODE_SCHEMA_VERSION: i64 = 8;
 const MESSAGE_SUMMARY_MAX_SCALARS: usize = 160;
 
 /// Retention only removes inactive, terminal Episodes. A delete first records a remove
@@ -218,6 +218,7 @@ pub enum NotificationActionKind {
     OpenApproval,
     OpenCampMessage,
     OpenCampTurn,
+    OpenAgentRun,
     OpenSingleChat,
     OpenCamp,
     AcknowledgeOnly,
@@ -310,6 +311,7 @@ pub struct NotificationActionView {
     pub available: bool,
     pub camp_id: String,
     pub camp_turn_id: Option<String>,
+    pub agent_run_id: Option<String>,
     pub message_id: Option<String>,
     pub approval_id: Option<String>,
     pub acknowledgement_id: Option<String>,
@@ -327,6 +329,7 @@ pub struct NotificationEpisodeView {
     pub change_sequence: i64,
     pub camp: NotificationCampView,
     pub camp_turn_id: Option<String>,
+    pub agent_run_id: Option<String>,
     pub primary_semantic: NotificationSemantic,
     pub unread: bool,
     pub resolved: bool,
@@ -437,6 +440,7 @@ pub struct AcknowledgeVisibleNotificationSourcesCommand {
     pub observed_through_change_sequence: i64,
     pub visible_message_ids: Vec<String>,
     pub visible_camp_turn_ids: Vec<String>,
+    pub visible_agent_run_ids: Vec<String>,
     pub visible_approval_ids: Vec<String>,
 }
 
@@ -783,6 +787,7 @@ impl NotificationEpisodeService {
             let payload = &envelope.payload;
             let source_count = payload.visible_message_ids.len()
                 + payload.visible_camp_turn_ids.len()
+                + payload.visible_agent_run_ids.len()
                 + payload.visible_approval_ids.len();
             if payload.camp_id.trim().is_empty()
                 || payload.observed_through_change_sequence < 0
@@ -792,6 +797,7 @@ impl NotificationEpisodeService {
                     .visible_message_ids
                     .iter()
                     .chain(&payload.visible_camp_turn_ids)
+                    .chain(&payload.visible_agent_run_ids)
                     .chain(&payload.visible_approval_ids)
                     .any(|source_id| source_id.trim().is_empty())
             {
@@ -817,6 +823,11 @@ impl NotificationEpisodeService {
                 .iter()
                 .map(String::as_str)
                 .collect::<HashSet<_>>();
+            let visible_agent_run_ids = payload
+                .visible_agent_run_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
             let visible_approval_ids = payload
                 .visible_approval_ids
                 .iter()
@@ -825,7 +836,8 @@ impl NotificationEpisodeService {
             let occurrence_ids = {
                 let mut statement = transaction.prepare(
                     r#"
-                    SELECT occurrence.id, occurrence.semantic, occurrence.source_id,
+                    SELECT occurrence.id, occurrence.semantic, occurrence.source_type,
+                           occurrence.source_id,
                            disposition.resolved_at
                     FROM notification_occurrence AS occurrence
                     JOIN notification_occurrence_disposition AS disposition
@@ -853,16 +865,21 @@ impl NotificationEpisodeService {
                                 row.get::<_, String>(0)?,
                                 row.get::<_, String>(1)?,
                                 row.get::<_, String>(2)?,
-                                row.get::<_, Option<String>>(3)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
                             ))
                         },
                     )?
                     .filter_map(|candidate| match candidate {
-                        Ok((id, semantic, source_id, resolved_at)) => {
+                        Ok((id, semantic, source_type, source_id, resolved_at)) => {
                             let visible = match semantic.as_str() {
                                 "user_mention" => visible_message_ids.contains(source_id.as_str()),
                                 "turn_completed" | "turn_failed" | "turn_incomplete" => {
-                                    visible_camp_turn_ids.contains(source_id.as_str())
+                                    if source_type == "agent_run" {
+                                        visible_agent_run_ids.contains(source_id.as_str())
+                                    } else {
+                                        visible_camp_turn_ids.contains(source_id.as_str())
+                                    }
                                 }
                                 "approval_pending" => {
                                     resolved_at.is_none()
@@ -1067,6 +1084,7 @@ struct RawEpisode {
     camp_title: String,
     camp_channel_source: Option<CampChannelSource>,
     camp_turn_id: Option<String>,
+    agent_run_id: Option<String>,
     version: i64,
     attention_revision: i64,
     last_change_sequence: i64,
@@ -1090,6 +1108,8 @@ struct RawOccurrence {
     semantic: NotificationSemantic,
     occurred_at: String,
     camp_turn_id: Option<String>,
+    agent_run_id: Option<String>,
+    source_type: String,
     source_message_id: Option<String>,
     approval_id: Option<String>,
     admitted_attention_revision: i64,
@@ -1234,7 +1254,8 @@ fn load_episode_page(
         r#"
         WITH ranked AS (
             SELECT episode.id, episode.kind, episode.camp_id, camp.title,
-                   episode.camp_turn_id, episode.version, episode.attention_revision,
+                   episode.camp_turn_id, episode.agent_run_id,
+                   episode.version, episode.attention_revision,
                    episode.last_change_sequence,
                    COALESCE((
                        SELECT MAX(boundary_occurrence.occurred_at)
@@ -1334,7 +1355,7 @@ fn load_episode_page(
                   )
               )
         )
-        SELECT id, kind, camp_id, title, camp_turn_id, version,
+        SELECT id, kind, camp_id, title, camp_turn_id, agent_run_id, version,
                attention_revision, last_change_sequence, boundary_sort_at,
                created_at, updated_at, cleared_through_attention_revision, priority,
                channel_provider, channel_conversation_kind
@@ -1397,7 +1418,8 @@ fn load_raw_episode_by_id(
         .query_row(
             r#"
             SELECT episode.id, episode.kind, episode.camp_id, camp.title,
-                   episode.camp_turn_id, episode.version, episode.attention_revision,
+                   episode.camp_turn_id, episode.agent_run_id,
+                   episode.version, episode.attention_revision,
                    episode.last_change_sequence, episode.sort_at,
                    episode.created_at, episode.updated_at,
                    disposition.cleared_through_attention_revision, 0,
@@ -1427,16 +1449,17 @@ fn raw_episode_from_row(row: &Row<'_>) -> rusqlite::Result<RawEpisode> {
         kind: row.get(1)?,
         camp_id: row.get(2)?,
         camp_title: row.get(3)?,
-        camp_channel_source: camp_channel_source_from_row(row, 13)?,
+        camp_channel_source: camp_channel_source_from_row(row, 14)?,
         camp_turn_id: row.get(4)?,
-        version: row.get(5)?,
-        attention_revision: row.get(6)?,
-        last_change_sequence: row.get(7)?,
-        sort_at: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        cleared_through_attention_revision: row.get(11)?,
-        priority: row.get(12)?,
+        agent_run_id: row.get(5)?,
+        version: row.get(6)?,
+        attention_revision: row.get(7)?,
+        last_change_sequence: row.get(8)?,
+        sort_at: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        cleared_through_attention_revision: row.get(12)?,
+        priority: row.get(13)?,
     })
 }
 
@@ -1454,7 +1477,8 @@ fn load_heads_up_signal(
         .query_row(
             r#"
             SELECT occurrence.id, occurrence.semantic, occurrence.occurred_at,
-                   occurrence.camp_turn_id, occurrence.source_message_id,
+                   occurrence.camp_turn_id, occurrence.agent_run_id,
+                   occurrence.source_type, occurrence.source_message_id,
                    occurrence.approval_id, occurrence.admitted_attention_revision,
                    occurrence.admitted_change_sequence,
                    CASE WHEN disposition.acknowledged_at IS NOT NULL THEN 1 ELSE 0 END,
@@ -1467,7 +1491,11 @@ fn load_heads_up_signal(
                        WHEN occurrence.semantic = 'approval_pending'
                            THEN CASE WHEN approval.id IS NOT NULL
                                           AND approval.status = 'pending' THEN 1 ELSE 0 END
-                       ELSE CASE WHEN turn.id IS NOT NULL THEN 1 ELSE 0 END
+                       ELSE CASE
+                           WHEN occurrence.source_type = 'agent_run'
+                               THEN CASE WHEN source_run.id IS NOT NULL THEN 1 ELSE 0 END
+                           ELSE CASE WHEN turn.id IS NOT NULL THEN 1 ELSE 0 END
+                       END
                    END,
                    message.author_id, profile.display_name,
                    message.structured_content_json
@@ -1479,6 +1507,9 @@ fn load_heads_up_signal(
              AND message.camp_id = occurrence.camp_id
             LEFT JOIN agent_profile AS profile ON profile.id = message.author_id
             LEFT JOIN camp_turn AS turn ON turn.id = occurrence.camp_turn_id
+            LEFT JOIN agent_run AS source_run
+              ON source_run.id = occurrence.agent_run_id
+             AND source_run.camp_id = occurrence.camp_id
             LEFT JOIN approval ON approval.id = occurrence.approval_id
             WHERE occurrence.episode_id = ?1
               AND occurrence.admitted_change_sequence = ?2
@@ -1491,16 +1522,18 @@ fn load_heads_up_signal(
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, bool>(8)?,
-                    row.get::<_, bool>(9)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
                     row.get::<_, bool>(10)?,
                     row.get::<_, bool>(11)?,
-                    row.get::<_, Option<String>>(12)?,
-                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, bool>(12)?,
+                    row.get::<_, bool>(13)?,
                     row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             },
         )
@@ -1510,6 +1543,8 @@ fn load_heads_up_signal(
         persisted_semantic,
         occurred_at,
         camp_turn_id,
+        agent_run_id,
+        source_type,
         source_message_id,
         approval_id,
         admitted_attention_revision,
@@ -1530,6 +1565,8 @@ fn load_heads_up_signal(
         semantic: NotificationSemantic::parse(&persisted_semantic)?,
         occurred_at,
         camp_turn_id,
+        agent_run_id,
+        source_type,
         source_message_id,
         approval_id,
         admitted_attention_revision,
@@ -1575,7 +1612,8 @@ fn hydrate_episode(
     let mut statement = connection.prepare(
         r#"
         SELECT occurrence.id, occurrence.semantic, occurrence.occurred_at,
-               occurrence.camp_turn_id, occurrence.source_message_id,
+               occurrence.camp_turn_id, occurrence.agent_run_id,
+               occurrence.source_type, occurrence.source_message_id,
                occurrence.approval_id, occurrence.admitted_attention_revision,
                occurrence.admitted_change_sequence,
                CASE WHEN disposition.acknowledged_at IS NOT NULL THEN 1 ELSE 0 END,
@@ -1588,7 +1626,11 @@ fn hydrate_episode(
                    WHEN occurrence.semantic = 'approval_pending'
                        THEN CASE WHEN approval.id IS NOT NULL
                                       AND approval.status = 'pending' THEN 1 ELSE 0 END
-                   ELSE CASE WHEN turn.id IS NOT NULL THEN 1 ELSE 0 END
+                   ELSE CASE
+                       WHEN occurrence.source_type = 'agent_run'
+                           THEN CASE WHEN source_run.id IS NOT NULL THEN 1 ELSE 0 END
+                       ELSE CASE WHEN turn.id IS NOT NULL THEN 1 ELSE 0 END
+                   END
                END,
                message.author_id, profile.display_name,
                message.structured_content_json
@@ -1600,6 +1642,9 @@ fn hydrate_episode(
          AND message.camp_id = occurrence.camp_id
         LEFT JOIN agent_profile AS profile ON profile.id = message.author_id
         LEFT JOIN camp_turn AS turn ON turn.id = occurrence.camp_turn_id
+        LEFT JOIN agent_run AS source_run
+          ON source_run.id = occurrence.agent_run_id
+         AND source_run.camp_id = occurrence.camp_id
         LEFT JOIN approval ON approval.id = occurrence.approval_id
         WHERE occurrence.episode_id = ?1
         ORDER BY occurrence.occurred_at ASC, occurrence.id ASC
@@ -1613,16 +1658,18 @@ fn hydrate_episode(
             row.get::<_, String>(2)?,
             row.get::<_, Option<String>>(3)?,
             row.get::<_, Option<String>>(4)?,
-            row.get::<_, Option<String>>(5)?,
-            row.get::<_, i64>(6)?,
-            row.get::<_, i64>(7)?,
-            row.get::<_, bool>(8)?,
-            row.get::<_, bool>(9)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, i64>(8)?,
+            row.get::<_, i64>(9)?,
             row.get::<_, bool>(10)?,
             row.get::<_, bool>(11)?,
-            row.get::<_, Option<String>>(12)?,
-            row.get::<_, Option<String>>(13)?,
+            row.get::<_, bool>(12)?,
+            row.get::<_, bool>(13)?,
             row.get::<_, Option<String>>(14)?,
+            row.get::<_, Option<String>>(15)?,
+            row.get::<_, Option<String>>(16)?,
         ))
     })?;
     let tuples = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1635,6 +1682,8 @@ fn hydrate_episode(
                 semantic,
                 occurred_at,
                 camp_turn_id,
+                agent_run_id,
+                source_type,
                 source_message_id,
                 approval_id,
                 admitted_attention_revision,
@@ -1652,6 +1701,8 @@ fn hydrate_episode(
                     semantic: NotificationSemantic::parse(&semantic)?,
                     occurred_at,
                     camp_turn_id,
+                    agent_run_id,
+                    source_type,
                     source_message_id,
                     approval_id,
                     admitted_attention_revision,
@@ -1795,13 +1846,38 @@ fn hydrate_episode(
             None,
             None,
             None,
+            None,
             "turn",
+        ));
+    }
+    if primary_action.kind != NotificationActionKind::OpenAgentRun
+        && let Some(agent_run_id) = raw.agent_run_id.as_deref()
+    {
+        let available = connection
+            .query_row(
+                "SELECT 1 FROM agent_run WHERE id = ?1 AND camp_id = ?2",
+                params![agent_run_id, raw.camp_id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        secondary_actions.push(action_view(
+            &raw,
+            NotificationActionKind::OpenAgentRun,
+            available,
+            None,
+            Some(agent_run_id.to_string()),
+            None,
+            None,
+            None,
+            "agent-run",
         ));
     }
     secondary_actions.push(action_view(
         &raw,
         NotificationActionKind::OpenCamp,
         true,
+        None,
         None,
         None,
         None,
@@ -1821,6 +1897,7 @@ fn hydrate_episode(
             channel_source: raw.camp_channel_source,
         },
         camp_turn_id: raw.camp_turn_id.clone(),
+        agent_run_id: raw.agent_run_id.clone(),
         primary_semantic,
         unread,
         resolved,
@@ -1934,6 +2011,7 @@ fn action_for_occurrence(
             occurrence.source_available,
             None,
             None,
+            None,
             occurrence.approval_id.clone(),
             acknowledgement_id,
             &occurrence.id,
@@ -1943,6 +2021,7 @@ fn action_for_occurrence(
             NotificationActionKind::OpenCampMessage,
             occurrence.source_available,
             occurrence.camp_turn_id.clone(),
+            None,
             occurrence.source_message_id.clone(),
             None,
             acknowledgement_id,
@@ -1950,16 +2029,35 @@ fn action_for_occurrence(
         ),
         NotificationSemantic::TurnCompleted
         | NotificationSemantic::TurnFailed
-        | NotificationSemantic::TurnIncomplete => action_view(
-            episode,
-            NotificationActionKind::OpenCampTurn,
-            occurrence.source_available,
-            occurrence.camp_turn_id.clone(),
-            None,
-            None,
-            acknowledgement_id,
-            &occurrence.id,
-        ),
+        | NotificationSemantic::TurnIncomplete => {
+            if occurrence.source_type == "agent_run"
+                && let Some(agent_run_id) = occurrence.agent_run_id.clone()
+            {
+                action_view(
+                    episode,
+                    NotificationActionKind::OpenAgentRun,
+                    occurrence.source_available,
+                    None,
+                    Some(agent_run_id),
+                    None,
+                    None,
+                    acknowledgement_id,
+                    &occurrence.id,
+                )
+            } else {
+                action_view(
+                    episode,
+                    NotificationActionKind::OpenCampTurn,
+                    occurrence.source_available,
+                    occurrence.camp_turn_id.clone(),
+                    None,
+                    None,
+                    None,
+                    acknowledgement_id,
+                    &occurrence.id,
+                )
+            }
+        }
     };
     // Resolve the frozen Run destination, including approval occurrences whose own turn is null.
     // Missing private identities fail closed; never fall back to a member's successor conversation.
@@ -2034,6 +2132,7 @@ fn acknowledge_only_action(
         None,
         None,
         None,
+        None,
         Some(occurrence.id.clone()),
         &occurrence.id,
     )
@@ -2045,6 +2144,7 @@ fn action_view(
     kind: NotificationActionKind,
     available: bool,
     camp_turn_id: Option<String>,
+    agent_run_id: Option<String>,
     message_id: Option<String>,
     approval_id: Option<String>,
     acknowledgement_id: Option<String>,
@@ -2059,6 +2159,7 @@ fn action_view(
         available,
         camp_id: episode.camp_id.clone(),
         camp_turn_id,
+        agent_run_id,
         message_id,
         approval_id,
         acknowledgement_id,
@@ -2248,6 +2349,51 @@ mod slow_tests {
                 "#,
                 params![turn_id, camp_id, status],
             )
+            .unwrap();
+    }
+
+    fn insert_batch_run(database: &Database, camp_id: &str, run_id: &str) {
+        database
+            .connection()
+            .execute_batch(&format!(
+                r#"
+                INSERT INTO conversation(
+                    id, camp_id, agent_id, summary_through_message_sequence,
+                    last_message_sequence, version, created_at, updated_at
+                ) VALUES (
+                    'conversation-{run_id}', '{camp_id}', 'agent_1', 0, 0, 1,
+                    '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
+                );
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id, body,
+                    structured_content_json, content_digest, address_mode,
+                    addressed_agent_ids_json, version, created_at, updated_at
+                ) VALUES (
+                    'message-{run_id}', '{camp_id}', 1, 'user', 'local_user', '执行',
+                    '[{{"kind":"text","text":"执行"}}]', 'message-{run_id}',
+                    'explicit', '["agent_1"]', 1,
+                    '2026-08-01T00:01:00Z', '2026-08-01T00:01:00Z'
+                );
+                UPDATE camp SET last_message_sequence = 1 WHERE id = '{camp_id}';
+                INSERT INTO agent_run(
+                    id, camp_turn_id, conversation_id,
+                    initial_camp_context_through_sequence,
+                    initial_conversation_context_through_sequence,
+                    responsibility_key, responsibility_generation,
+                    start_reason, purpose, completion_role,
+                    effective_config_json, workspace_json, permission_semantics,
+                    status, idempotency_key, invocation_kind,
+                    camp_id, anchor_message_id, current_public_tail_sequence,
+                    version, created_at, updated_at
+                ) VALUES (
+                    '{run_id}', NULL, 'conversation-{run_id}', 1, 0,
+                    'batch:{run_id}', 0, 'initial', 'batch fixture', 'required',
+                    '{{}}', NULL, 'runtime_managed_v2', 'queued', 'batch:{run_id}', 'batch',
+                    '{camp_id}', 'message-{run_id}', 1,
+                    1, '2026-08-01T00:01:00Z', '2026-08-01T00:01:00Z'
+                );
+                "#,
+            ))
             .unwrap();
     }
 
@@ -3017,6 +3163,102 @@ mod slow_tests {
     }
 
     #[test]
+    fn batch_agent_run_terminal_notification_navigates_and_acknowledges_exact_run() {
+        let (directory, mut database) = test_database();
+        insert_camp(&database, "camp-batch-notification", "Batch notification");
+        insert_batch_run(
+            &database,
+            "camp-batch-notification",
+            "run-batch-notification",
+        );
+        let baseline = change_clock(database.connection()).unwrap().0;
+        database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_run
+                SET status = 'succeeded', version = 2,
+                    ended_at = '2026-08-01T00:02:00Z',
+                    updated_at = '2026-08-01T00:02:00Z'
+                WHERE id = 'run-batch-notification'
+                "#,
+                [],
+            )
+            .unwrap();
+
+        let service = NotificationEpisodeService::default();
+        let inbox = service
+            .inbox(
+                &mut database,
+                CURRENT_USER_ID,
+                NotificationEpisodeFilter::All,
+                None,
+                50,
+            )
+            .unwrap();
+        assert_eq!(inbox.schema_version, 8);
+        assert_eq!(inbox.items.len(), 1);
+        let episode = &inbox.items[0];
+        assert_eq!(episode.camp_turn_id, None);
+        assert_eq!(
+            episode.agent_run_id.as_deref(),
+            Some("run-batch-notification")
+        );
+        assert_eq!(
+            episode.primary_action.kind,
+            NotificationActionKind::OpenAgentRun
+        );
+        assert_eq!(
+            episode.primary_action.agent_run_id.as_deref(),
+            Some("run-batch-notification")
+        );
+        assert_eq!(episode.primary_action.camp_turn_id, None);
+
+        let changes = service
+            .changes_since(&mut database, CURRENT_USER_ID, baseline, 50)
+            .unwrap();
+        assert_eq!(changes.schema_version, 8);
+        assert!(changes.changes.iter().any(|change| {
+            change.heads_up_signal.as_ref().is_some_and(|signal| {
+                signal.action.kind == NotificationActionKind::OpenAgentRun
+                    && signal.action.agent_run_id.as_deref() == Some("run-batch-notification")
+            })
+        }));
+
+        service
+            .acknowledge_visible_sources(
+                &mut database,
+                &envelope(
+                    "ack-visible-batch-run",
+                    Some("camp-batch-notification"),
+                    AcknowledgeVisibleNotificationSourcesCommand {
+                        camp_id: "camp-batch-notification".to_string(),
+                        observed_through_change_sequence: inbox.through_change_sequence,
+                        visible_message_ids: Vec::new(),
+                        visible_camp_turn_ids: Vec::new(),
+                        visible_agent_run_ids: vec!["run-batch-notification".to_string()],
+                        visible_approval_ids: Vec::new(),
+                    },
+                ),
+            )
+            .unwrap();
+        let acknowledged = service
+            .inbox(
+                &mut database,
+                CURRENT_USER_ID,
+                NotificationEpisodeFilter::All,
+                None,
+                50,
+            )
+            .unwrap();
+        assert_eq!(acknowledged.unread_count, 0);
+        assert!(!acknowledged.items[0].unread);
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn approval_zero_to_nonzero_cycles_create_generations_and_resolution_does_not_read() {
         let (directory, mut database) = test_database();
         insert_camp(&database, "camp-attention", "Approval");
@@ -3518,6 +3760,7 @@ mod slow_tests {
                             "message-visible-after".to_string(),
                         ],
                         visible_camp_turn_ids: vec!["turn-visible".to_string()],
+                        visible_agent_run_ids: Vec::new(),
                         visible_approval_ids: Vec::new(),
                     },
                 ),
@@ -3554,6 +3797,7 @@ mod slow_tests {
                             .through_change_sequence,
                         visible_message_ids: vec!["message-visible-after".to_string()],
                         visible_camp_turn_ids: vec!["turn-visible".to_string()],
+                        visible_agent_run_ids: Vec::new(),
                         visible_approval_ids: Vec::new(),
                     },
                 ),

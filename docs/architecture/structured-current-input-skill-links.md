@@ -3,152 +3,81 @@ document_type: architecture
 architecture: structured-current-input-skill-links
 authority: structured-skill-selection-and-context-resolution-boundaries
 status: accepted
-last_updated: 2026-08-17
+last_updated: 2026-09-18
 ---
 
-# Structured Current Input Skill Links Architecture
+# Structured Run Input Skill Links Architecture
 
-本文件说明 Picker identity、发送时冻结、SkillProjection preflight、start-time resolution、Context Formatter
-和 Runtime Adapter 的 Module seam。长期决定见
-[ContextManifest 与 Run Facts 不变量](foundational-invariants.md#context-manifest-run-facts)，字段级合同见
-[Current Input Skill Links v1](../contracts/current-input-skill-links-v1.md)与
-[ContextManifest Evidence v17](../contracts/context-manifest-evidence-v17.md)。
+本文件说明 Picker identity、claim-time 批次冻结、SkillProjection preflight、start-time resolution、Context
+Formatter 和 Runtime Adapter 的 Module seam。字段级合同见
+[Run Input Skill Links v2](../contracts/current-input-skill-links-v2.md)和
+[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)。Single Chat 继续使用 v1。
 
 ## Authority flow
 
 ```text
 Composer Picker
-  -> Structured SkillMention in shared CampMessage
-  -> per-recipient SkillSelectionSnapshot at Direct send
+  -> structured SkillMention in each CampMessage
+  -> waiting Delivery (no execution config or Skill freeze)
+  -> Scheduler claims an ordered message prefix
+  -> one batch SkillSelectionSnapshot + frozen Runtime groups
   -> full current-root SkillProjection preflight
-  -> start-time RunSkillAvailabilityView
-  -> CurrentInputSkillResolver
-  -> CURRENT_INPUT.skills + ContextManifest resolution evidence
+  -> RunSkillAvailabilityView + deterministic resolver
+  -> relevant RUN_INPUT.messages[].skills + Manifest 26 evidence
   -> unchanged Runtime Adapter payload transport
 ```
 
 | 层 | 拥有 | 不拥有 |
 | --- | --- | --- |
-| Structured Content | `skillId/nameAtSend` 与稳定 `/nameAtSend` Marker | Run path、Revision、Group、eligibility |
-| Skill Selection Snapshot | 每个 Direct Run 的发送时资格、first occurrence 与 omission reason | start-time availability、filesystem state |
-| SkillProjectionReconciler | 当前 root 投影写入、ownership/digest verification、完整 Exposure | 用户选择、模型字段、Runtime load |
-| CurrentInputSkillResolver | selection/availability/Exposure 的确定交集、稳定候选选择与 resolution | filesystem mutation、Library mutation、Adapter transport |
-| Context Formatter | optional sibling `skills[{name,path}]` 与 exact Dynamic Context bytes | eligibility、path discovery、accepted ACK |
-| Runtime Adapter | 既有完整 prepared/runtime payload transport | Skill 解析、Provider Skill item、load receipt |
+| Structured Content | 每条消息的 `skillId/nameAtSend` 与稳定 `/nameAtSend` marker | Run path、Runtime group、eligibility |
+| Delivery queue | 消息顺序和 claim 边界 | Skill eligibility、Runtime config、projection path |
+| Skill Selection Snapshot | claim 时整批 first-occurrence 去重、当前资格与 digest | start-time filesystem health、模型读取证明 |
+| SkillProjectionReconciler | 当前 root 投影写入、ownership/digest verification 与完整 Exposure | 用户选择、模型字段、Runtime load |
+| Skill resolver | selection/availability/Exposure 的确定交集和稳定候选 | filesystem/Library mutation、Adapter transport |
+| Context Formatter | 将已解析 link 只投影到实际选择它的 Run Input message | eligibility、path discovery、accepted ACK |
+| Runtime Adapter | 完整 prepared payload transport | Skill 解析、Provider Skill item、权限授予 |
 
-## Module interfaces
+## Module seams
 
-### Structured Content Module
+Structured Content Module 保持 closed `skill_mention` 协议。Picker 是唯一创建入口；手写或粘贴 Slash 文本只是
+Text。CampMessage 保存身份和 body marker，不保存 execution root、投影路径或当时 Runtime 配置。
 
-Interface 是 closed `StructuredCampMessageSegment` 与统一 body projection。Picker 是唯一创建
-`SkillMention` 的 Renderer route；手写/paste 只创建 Text。Module 隐藏 token editing、normalization、digest
-和 `/nameAtSend` rendering，调用方不查询 Skill Library 或 path。
+Scheduler claim 在同一事务确定有序 `input_message_ids`、当前 Agent execution config 和 Runtime groups，然后把
+整批 structured content 交给 selection freezer。freezer 按消息顺序和 segment 顺序保留同 Skill ID 的第一次出现，
+读取 claim 时的 Skill lifecycle/enablement/name/assignment，返回一个 Run-level snapshot 与 canonical digest。
+等待阶段不创建 empty Run snapshot，也不因输入来源类型拆批。
 
-### Skill Selection Freezer Module
+SkillProjectionReconciler 仍是唯一可创建、修复、切换或删除 projection entry 的 Module。Resolver 只读取冻结
+selection、当前 desired-state availability、verified Exposure 和冻结 group precedence；它不写 filesystem、扫描
+Runtime-native inventory、猜 path 或回调 Reconciler。
 
-Interface：
+Formatter 26 接收已解析的 Run-level included entries以及每条输入自己的 Skill names。它为每条消息独立生成可选
+`skills[{name,path}]`；未选择或未解析成功时省略字段。同一 Skill 可出现在多条真正选择它的消息中，但解析/evidence
+仍只做一份。Manifest 26 在同一 preparation critical section 冻结 selection、Exposure、resolution、消息映射和
+exact rendered bytes。
 
-```text
-freeze_for_run(
-  database transaction,
-  structured content,
-  frozen Adapter delivery groups
-) -> SkillSelectionSnapshot v1
-```
-
-实现隐藏 first-occurrence dedupe、Library row/enablement/name、Assignment intersection、reason precedence 与
-canonical digest。Direct send 调用一次并把结果与 AgentRun 原子写入；所有非 Direct materialization 使用
-统一 empty constructor。调用方不得组合独立 SQL 查询重建同一规则。
-
-### SkillProjectionReconciler Module
-
-Interface 保持现状：当前 root + Runtime capability -> verified `PreparedSkillExposure`。它是唯一可以创建、
-修复、切换或删除 projection entry 的 Module；新 Resolver 不建立 filesystem Adapter seam，也不回调
-Reconciler。
-
-### Current Input Skill Resolver Module
-
-Interface：
+## Claim、恢复与失败
 
 ```text
-resolve(
-  SkillSelectionSnapshot v1,
-  ordered RunSkillAvailabilityView,
-  PreparedSkillExposure v2,
-  frozen Delivery Group precedence
-) -> CurrentInputSkillResolution v1
+atomic Delivery claim
+  -> freeze Run + ordered inputs + execution config + batch Skill selection
+  -> reconcile and verify full current-root projection
+  -> materialize Formatter 26 / Profile 7
+  -> persist Manifest 26
+  -> deliver exact payload
 ```
 
-这是一个深 Module：caller 只提供四个已冻结输入并消费 projection entries + complete evidence；ID/name
-matching、send/start 双时点、group compatibility、candidate ordering、`SKILL.md` path derivation 和 omission
-reason 都留在实现内部。Module 返回结果、不产生 side effect；它的 Interface 同时是主要测试面。
+- claim-time missing/inactive/disabled/name/group mismatch：selection ineligible，正文保留，对应 link 省略；
+- materialization-time desired-state mismatch 或无 compatible ready candidate：resolution omitted，Run 继续；
+- full Exposure error/stale/digest/ownership failure：preflight fail closed，不交付部分 Context；
+- selection/resolution/Exposure digest tamper：materialization/recovery fail closed；
+- 已存在 Manifest 的同 Run 恢复：复用 frozen evidence 与 bytes，不读取后来变化的 Library/filesystem。
 
-### Context Formatter Module
-
-Formatter 只接收 Resolver 已完成的 included model entries；不读取 Library、Assignment 或 filesystem。它在
-Current Input 对象中增加 optional `skills`，继续使用 canonical JSON，并保持 `CURRENT_INPUT` 最后。
-Manifest persistence 在同一 critical section 保存 resolution 与 exact payload evidence。
-
-## Direct send and delayed delivery
-
-用户 Composer Direct send 在同一事务确定 Structured Content、正文、接收者、每个接收者 effective Runtime
-config 与 AgentRun。因此每个 Run 的 selection snapshot 使用同一 accepted-send boundary。
-
-A2A/Gather Message Delivery 可能稍后才物化 AgentRun，但不接受 Picker identity。它们保存 versioned empty
-snapshot；不能在物化时解析 Slash body，也不能借用物化时 Library 状态伪造发送时资格。
-
-共享 CampMessage 永不保存 execution root 或 path。多接收者 Run 可以因冻结 Adapter Groups 与 root Exposure
-不同，得到不同 resolution；这种差异只存在于 Run/Manifest。
-
-## Start-time critical section
-
-首次 materialization 的顺序是：
-
-```text
-claim/freeze AgentRun
-  -> full current-root projection reconcile + verify
-  -> enter serialized Context preparation transaction
-  -> revalidate Run/binding/boundaries
-  -> load persisted selection snapshot + verify digest
-  -> read RunSkillAvailabilityView from current Library desired state
-  -> resolve against PreparedSkillExposure
-  -> render Formatter v19 bytes
-  -> persist Manifest v16 evidence atomically
-```
-
-Exposure 的 filesystem preflight 可以先于 Manifest transaction 完成，但 Manifest transaction 必须重新验证
-Run 与冻结 Exposure binding，并在同一个 immutable Manifest 中绑定 selection digest、Exposure digest、
-availability/resolution 和 rendered bytes。已有 Manifest 的 active Run recovery 直接复用其冻结证据，不再
-读取 current desired state 或 filesystem。
-
-## Failure classification
-
-| 条件 | 结果 |
-| --- | --- |
-| send-time missing/inactive/disabled/name/group mismatch | snapshot ineligible；正文保留；link 永久省略 |
-| start-time missing/inactive/disabled/name/group mismatch | resolution omitted；正文保留；Run 继续 |
-| shadowed/pending-removal/no ready compatible candidate | resolution omitted；Run 继续 |
-| valid ready candidate | include `name` + absolute `entryPath/SKILL.md` |
-| any full Exposure error/stale/digest/ownership failure | preflight fail closed；不创建 Context input |
-| selection/resolution/Exposure digest tamper | recovery/materialization fail closed |
-
-“静默”只描述用户消息和模型字段：Core 仍在 Manifest resolution 中保存 omission reason。它不把完整性错误
-降级为 omission，也不在 Renderer 制造成功或 Runtime load 状态。
-
-## Projection lifecycle and safety
-
-- Resolver 不写 filesystem、不扫描 Runtime-native inventory、不从 name/root 猜路径；
-- `entryPath` 是投影 entry 目录，model path 必须 join `SKILL.md`，不能直接输出目录；
-- active-Run protection 可以暂时保留旧 link，但 start-time desired-state check 阻止新 Run 使用已
-  disabled/unassigned/deleting 的 Skill；
-- 普通 Run terminal 不删除 projection；既有 reconciliation/dirty/removed-root lifecycle 不变；
-- path 只证明 Core 选择了经过 preflight 的文件，不证明 Runtime/model read，也不授权任何 operation。
+Skill link 只是 Agent 指令/上下文，不授予 Core operation、工具、文件系统或 Runtime 权限，也不证明模型读取。
 
 ## References
 
 - [Skill Projection Reconciliation](skill-projection-reconciliation.md)
 - [Built-in Tool Runtime](builtin-tool-runtime.md)
-- [Camp Composer Draft](camp-composer-draft.md)
-- [Skill Library 与投影不变量](foundational-invariants.md#skills-library-projection)
-- [ContextManifest 与 Run Facts 不变量](foundational-invariants.md#context-manifest-run-facts)
-- [ContextManifest 与 Run Facts 不变量](foundational-invariants.md#context-manifest-run-facts)
+- [Camp Composer](camp-composer-draft.md)
+- [ContextManifest and Run Facts invariants](foundational-invariants.md#context-manifest-run-facts)

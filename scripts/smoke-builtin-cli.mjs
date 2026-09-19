@@ -1095,7 +1095,7 @@ function verificationScript(input) {
     assigneeAgentId: input.agentId
   })
   const campRead = (messageIdExpression) =>
-    `jq -n --arg messageId "${messageIdExpression}" '{mode:"item",messageId:$messageId}'`
+    `jq -n --arg messageId "${messageIdExpression}" '{messageId:$messageId}'`
   const memoryWrite = JSON.stringify({
     action: 'add',
     scope: 'companion',
@@ -1198,11 +1198,13 @@ camp_search_help="$("$CLI" camp search --help)"
 printf '%s\n' "$camp_search_help" | grep -Fq -- "rovai camp search --query 'amount'"
 printf '%s\n' "$camp_search_help" | grep -Fq -- "rovai camp search --camp-id '<camp-id>' --query 'amount'"
 camp_read_help="$("$CLI" camp read --help)"
-printf '%s\n' "$camp_read_help" | grep -Fq -- 'Default behavior:'
-printf '%s\n' "$camp_read_help" | grep -Fq -- '--mode timeline --direction before --limit 20'
+printf '%s\n' "$camp_read_help" | grep -Fq -- 'rovai camp read --limit 20'
+printf '%s\n' "$camp_read_help" | grep -Fq -- 'rovai camp read --before 123'
 printf '%s\n' "$camp_read_help" | grep -Fq -- "rovai camp read --camp-id '<camp-id>'"
-printf '%s\n' "$camp_read_help" | grep -Fq -- "rovai camp read --mode item --message-id '<message-id>'"
-printf '%s\n' "$camp_read_help" | grep -Fq -- "rovai camp read --camp-id '<camp-id>' --mode item --message-id '<message-id>'"
+printf '%s\n' "$camp_read_help" | grep -Fq -- "rovai camp read --message-id '<message-id>'"
+printf '%s\n' "$camp_read_help" | grep -Fq -- "rovai camp read --thread '<message-id>' --limit 20"
+! printf '%s\n' "$camp_read_help" | grep -Fq -- '--mode'
+! printf '%s\n' "$camp_read_help" | grep -Fq -- '--direction'
 history_search_help="$("$CLI" history search --help)"
 printf '%s\n' "$history_search_help" | grep -Fq -- "rovai history search --query 'amount'"
 set +e
@@ -1409,12 +1411,12 @@ camp_read_default_stdin="$(printf '%s\n' ${shellQuote(JSON.stringify({ campId: i
 assert_success "$camp_read_default_stdin" 'camp.read'
 printf '%s\n' "$camp_read_default_stdin" | "$JQ" -e '.mode == "timeline" and .direction == "before"' >/dev/null
 cat > "$RUN_TMP/camp-read-default.json" <<'ROVAI_JSON'
-${JSON.stringify({ campId: input.campId, direction: 'after', limit: 5 })}
+${JSON.stringify({ campId: input.campId, limit: 5 })}
 ROVAI_JSON
 STEP=camp_read_default_input_file
 camp_read_default_input_file="$("$CLI" camp read --input-file "$RUN_TMP_NATIVE/camp-read-default.json")"
 assert_success "$camp_read_default_input_file" 'camp.read'
-printf '%s\n' "$camp_read_default_input_file" | "$JQ" -e '.mode == "timeline" and .direction == "after"' >/dev/null
+printf '%s\n' "$camp_read_default_input_file" | "$JQ" -e '.mode == "timeline" and .direction == "before"' >/dev/null
 STEP=camp_read
 ${campRead('$message_id')} > "$RUN_TMP/camp-read.json"
 camp_read="$("$CLI" camp read --input-file "$RUN_TMP_NATIVE/camp-read.json")"
@@ -1435,7 +1437,7 @@ printf '%s\n' "$camp_search_historical" | "$JQ" -e --arg campId ${shellQuote(inp
   .results | any(.campId == $campId and .messageId == $messageId and (has("campTitle") | not))
 ' >/dev/null
 STEP=camp_read_historical_public_a2a
-camp_read_historical="$("$CLI" camp read --camp-id ${shellQuote(input.historyCampId)} --mode item --message-id ${shellQuote(input.historyPublicA2aMessageId)})"
+camp_read_historical="$("$CLI" camp read --camp-id ${shellQuote(input.historyCampId)} --message-id ${shellQuote(input.historyPublicA2aMessageId)})"
 assert_success "$camp_read_historical" 'camp.read'
 printf '%s\n' "$camp_read_historical" | "$JQ" -e \
   --arg campId ${shellQuote(input.historyCampId)} \
@@ -1454,7 +1456,7 @@ printf '%s\n' "$camp_search_historical_attachment" | "$JQ" -e --arg messageId ${
   .results | any(.messageId == $messageId and (has("campTitle") | not))
 ' >/dev/null
 STEP=camp_read_historical_attachment
-camp_read_historical_attachment="$("$CLI" camp read --camp-id ${shellQuote(input.historyCampId)} --mode item --message-id ${shellQuote(input.historyAttachmentMessageId)})"
+camp_read_historical_attachment="$("$CLI" camp read --camp-id ${shellQuote(input.historyCampId)} --message-id ${shellQuote(input.historyAttachmentMessageId)})"
 assert_success "$camp_read_historical_attachment" 'camp.read'
 printf '%s\n' "$camp_read_historical_attachment" | "$JQ" -e \
   --arg campId ${shellQuote(input.historyCampId)} \
@@ -1613,7 +1615,7 @@ printf '%s\n' "$camp_list" | jq -e '((has("contractVersion") | not) and (.camps 
 read_item() {
   local message_id="$1"
   "$JQ" -n --arg campId ${shellQuote(input.campId)} --arg messageId "$message_id" \
-    '{mode:"item",campId:$campId,messageId:$messageId}' | "$CLI" camp read
+    '{campId:$campId,messageId:$messageId}' | "$CLI" camp read
 }
 
 public_message_id="$("$JQ" -er '.publicMessageId' "$SEND_EVIDENCE")"

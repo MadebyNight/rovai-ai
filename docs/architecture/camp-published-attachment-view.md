@@ -48,7 +48,8 @@ Run Facts 只投影顶层 attachmentOutputRoot，含义是默认输出位置；�
 
 ## 读取与预览
 
-模型仍收到 `CURRENT_INPUT.attachments: string[]`。用户 Source Ref 保持原 Run 前宿主重检；新 Agent 引用
+公开 Camp 模型在每条 `RUN_INPUT.messages[].attachments: string[]` 接收路径；Single Chat 继续使用
+`CURRENT_INPUT.attachments`。用户 Source Ref 保持原 Run 前宿主重检；新 Agent 引用
 直接投影记录位置，单个源失效由实际读取报告。History 为 Agent 外部源返回路径，列表从记录读取。
 路径元数据查询复用 exact owner 授权，不读取全文；本机可显示/复制/定位所有已解析位置，远程标为服务器路径。
 新文件读取当前内容，包括替换保存；旧文件仍按历史合同验证，展示路径不会改变旧权限。

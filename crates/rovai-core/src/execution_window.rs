@@ -16,6 +16,26 @@ use crate::{
 
 pub const DEFAULT_WINDOW_LIMIT: i64 = 24;
 
+fn agent_run_belongs_to_camp(
+    connection: &Connection,
+    camp_id: &str,
+    agent_run_id: &str,
+) -> Result<bool> {
+    Ok(connection.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM agent_run
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            WHERE agent_run.id = ?1
+              AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?2
+        )
+        "#,
+        params![agent_run_id, camp_id],
+        |row| row.get(0),
+    )?)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionWindowPage {
@@ -67,11 +87,7 @@ pub fn read_range(
         "Execution window cursor must be positive"
     );
     let transaction = database.connection_mut().transaction()?;
-    let belongs: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM agent_run JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-         WHERE agent_run.id = ?1 AND camp_turn.camp_id = ?2)",
-        params![agent_run_id, camp_id], |row| row.get(0),
-    )?;
+    let belongs = agent_run_belongs_to_camp(&transaction, camp_id, agent_run_id)?;
     ensure!(belongs, "AgentRun does not exist in this Camp");
     let through_sequence: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence), 0) FROM agent_run_execution_evidence WHERE agent_run_id = ?1",
@@ -248,11 +264,7 @@ pub fn read_changes(
         "Invalid execution change cursor or refresh set"
     );
     let transaction = database.connection_mut().transaction()?;
-    let belongs: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM agent_run JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-         WHERE agent_run.id = ?1 AND camp_turn.camp_id = ?2)",
-        params![agent_run_id, camp_id], |row| row.get(0),
-    )?;
+    let belongs = agent_run_belongs_to_camp(&transaction, camp_id, agent_run_id)?;
     ensure!(belongs, "AgentRun does not exist in this Camp");
     let through_sequence: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence), 0) FROM agent_run_execution_evidence WHERE agent_run_id = ?1",
@@ -463,12 +475,6 @@ fn supporting_builtin_operation(
                 "agentAddressingMode",
                 "effectiveRecipients",
                 "deliveryIds",
-            ]),
-            "team.gather" => Some(&[
-                "gatherId",
-                "requestMessageId",
-                "effectiveRecipients",
-                "completion",
             ]),
             "team.create_task" => Some(&[
                 "taskId",

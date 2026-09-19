@@ -3,7 +3,7 @@ document_type: architecture
 architecture: desktop-navigation-refresh
 authority: desktop-navigation-invalidation-and-refresh-boundaries
 status: accepted
-last_updated: 2026-09-12
+last_updated: 2026-09-18
 ---
 
 # Desktop Navigation Refresh 架构
@@ -43,12 +43,11 @@ authoritative mutation transaction commits
 **先提交，后通知**。普通请求型
 mutation 在 `Core::handle` 成功返回、数据库 guard 释放后通知；若提交后仍有可能失败的文件清理或投影收尾，
 则在事务提交和 guard 释放后、开始该收尾前立即通知，不能因后置清理失败丢失已成立的 mutation。Runtime
-start、cancel、recovery blocker resolution 与 terminal 在对应状态写入成功后通知。被拒绝的命令不发失效通知。
+start、cancel、cleanup/isolation 收口与 terminal 在对应状态写入成功后通知。被拒绝的命令不发失效通知。
 
-Pending Camp 的 Composer Draft 只有在 `activation_state = pending` 时影响 Navigation，因此 Core 在通知前只做
-一次窄 activation 查询；Active Camp 的逐字 Draft 保存不产生全局 Snapshot 风暴。Camp create/rename/delete、
-Pending Draft/attachment、用户消息 admission、Camp viewed、Run queued/started/cancelled/terminal 与 recovery
-blocker resolution 都必须最终进入同一失效入口。
+Active public Composer 是 Desktop-local，逐字输入、未发送引用与附件操作不改变 Core Navigation。
+Pending Camp 不因本地输入成为导航或恢复目标。Camp create/rename/delete、用户消息发布/激活、
+Camp viewed、Delivery claim/settlement 以及 Run started/cancelled/terminal 都必须最终进入同一失效入口。
 
 ## Coordinator semantics
 
@@ -72,7 +71,7 @@ Promise 完成只表示新 Snapshot 已提交到 Renderer state，不承诺浏�
 Navigation 的 `lastActivityAt` / `lastActivityGlobalSequence` 只由已发布的用户 CampMessage 推进：
 `author_type = user` 或 `external_principal`（包括飞书、钉钉等渠道用户），通过统一公共消息 publication seam
 读取。队员消息（含 A2A）、系统消息、工具活动以及 AgentRun/CampTurn 状态均不推进排序。
-没有已发布用户消息时使用 Camp 的 `created_at` 和 sequence 0；Pending Draft 编辑、附件准备、查看和重命名
+没有已发布用户消息时使用 Camp 的 `created_at` 和 sequence 0；Renderer-local 输入、未发送附件、查看和重命名
 不改变这个初始排序时间。时间降序、global sequence 降序、Camp ID 升序的确定性比较规则保持不变。
 
 `latestCompletionGlobalSequence`、loading 与完成未读 marker 继续独立读取 Run/Turn 事实与查看水位；

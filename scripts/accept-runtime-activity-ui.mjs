@@ -60,7 +60,7 @@ const longToolOutput = Array.from({ length: 8_432 }, (_, index) => {
 }).join('\n')
 const directoryAttachmentSource = join(fixtureRoot, '项目资料')
 const fixtureExecutionRoot = join(fixtureRoot, 'workspace')
-const codexExpectedCommand = 'rovai camp read --mode timeline --direction before --limit 20'
+const codexExpectedCommand = 'rovai camp read --limit 20'
 const claudeExpectedCommand = "printf '%s\\n' 'ROVAI_CLAUDE_EMPTY_OUTPUT_OK'"
 const webSearchQueries = ['password=公开验收词 token=保持原样', '第二项公开查询']
 
@@ -70,7 +70,7 @@ const runtimes = [
     evidenceKind: 'command', eventType: 'activity.completed', payload: {
       item: {
         id: 'op-codex', type: 'commandExecution', status: 'completed', title: null,
-        command: '/bin/zsh -lc "rovai camp read --mode timeline --direction before --limit 20"',
+        command: '/bin/zsh -lc "rovai camp read --limit 20"',
         commandActions: [{ type: 'unknown', name: null, path: null }],
         output: longToolOutput
       }

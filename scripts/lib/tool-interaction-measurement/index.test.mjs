@@ -62,7 +62,7 @@ test('Camp History uses pre-registered opportunity denominator and deduplicates 
       coreInteraction({
         toolCallId: 'tool-read-1',
         canonicalTool: 'camp.read',
-        input: { campId: 'camp-1', mode: 'item', messageId: 'message-relevant' },
+        input: { campId: 'camp-1', messageId: 'message-relevant' },
         result: {
           campId: 'camp-1',
           mode: 'item',
@@ -382,7 +382,7 @@ test('non-use control passes only with complete Core coverage; missing coverage 
       ...coreInteraction({
         toolCallId: 'runtime-only',
         canonicalTool: 'camp.read',
-        input: { mode: 'item', messageId: 'message-1' },
+        input: { messageId: 'message-1' },
         result: { items: [{ messageId: 'message-1' }] },
         evidenceId: 'runtime-only'
       }),
@@ -802,7 +802,7 @@ test('private replay source reproduces deterministic oracle assessment without e
   const toolEvidence = completeEvidence([coreInteraction({
     toolCallId: 'tool-source',
     canonicalTool: 'camp.read',
-    input: { mode: 'item', messageId: 'message-source' },
+    input: { messageId: 'message-source' },
     result: { items: [{ messageId: 'message-source' }], itemCount: 1 },
     evidenceId: 'tool-source'
   })])
@@ -858,7 +858,7 @@ function campMeasurement({ oracleCanary }) {
     toolEvidence: completeEvidence([coreInteraction({
       toolCallId: 'tool-pack',
       canonicalTool: 'camp.read',
-      input: { mode: 'item', messageId: 'message-pack' },
+      input: { messageId: 'message-pack' },
       result: {
         items: [{ messageId: 'message-pack', bodyTruncated: false }],
         itemCount: 1,

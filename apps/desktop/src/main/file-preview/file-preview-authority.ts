@@ -114,12 +114,21 @@ function attachmentAuthorityTarget(
 }
 
 export class CoreFilePreviewSourceAuthority implements FilePreviewSourceAuthority {
-  constructor(private readonly core: CoreRequester) {}
+  constructor(
+    private readonly core: CoreRequester,
+    private readonly resolveLocalAttachment?: (
+      locator: Extract<OpenFilePreviewRequest, { kind: 'attachment' }>['locator']
+    ) => Promise<DesktopAttachmentTarget | null>
+  ) {}
 
   async resolve(
     request: Exclude<OpenFilePreviewRequest, { kind: 'child_of_handle' | 'authorized_root' }>
   ): Promise<FilePreviewAuthorityResult | null> {
     if (request.kind === 'attachment') {
+      if (request.locator.owner === 'composer' && this.resolveLocalAttachment) {
+        const target = await this.resolveLocalAttachment(request.locator)
+        return target ? attachmentAuthorityTarget(request, target) : null
+      }
       const value = await this.core.request<unknown>(
         'camp.attachments.desktopOpenTarget' as CoreMethod,
         request.locator

@@ -23,7 +23,7 @@ it('does not create visible ack commands for global cursor churn, and freezes un
   let ids = 0
   const newId = (): string => `command-${++ids}`
   const sources = { campId: 'camp-1', snapshotSequence: 20,
-    messageIds: ['m1'], campTurnIds: ['t1'], approvalIds: [] }
+    messageIds: ['m1'], campTurnIds: ['t1'], agentRunIds: [], approvalIds: [] }
   const first = visibleAcknowledgementIntent(sources, 10, 20, null, newId)
   const retry = visibleAcknowledgementIntent({ ...sources, snapshotSequence: 900 }, 10, 900, first, newId)
   expect(retry).toBe(first)
@@ -43,7 +43,7 @@ it('keeps the acknowledgement identity independently for each Camp across A/B/A 
   const newId = (): string => `command-${++ids}`
   const commands = new Map<string, ReturnType<typeof visibleAcknowledgementIntent>>()
   const source = (campId: string) => ({ campId, snapshotSequence: 20,
-    messageIds: [`message-${campId}`], campTurnIds: [], approvalIds: [] })
+    messageIds: [`message-${campId}`], campTurnIds: [], agentRunIds: [], approvalIds: [] })
   const a = visibleAcknowledgementIntent(source('camp-a'), 10, 20, null, newId)
   commands.set('camp-a', a)
   const b = visibleAcknowledgementIntent(source('camp-b'), 11, 20, null, newId)
@@ -66,6 +66,7 @@ function action(
     available: true,
     campId: 'camp-1',
     campTurnId: kind === 'open_camp_turn' ? 'turn-1' : null,
+    agentRunId: kind === 'open_agent_run' ? 'run-1' : null,
     messageId: kind === 'open_camp_message' ? 'message-1' : null,
     approvalId: kind === 'open_approval' ? 'approval-1' : null,
     acknowledgementId: `occurrence:${episodeId}`,
@@ -86,6 +87,7 @@ function episode(
     changeSequence: 1,
     camp: { id: 'camp-1', title: 'Current title' },
     campTurnId: semantic === 'approval_pending' ? null : 'turn-1',
+    agentRunId: null,
     primarySemantic: semantic,
     unread: true,
     resolved: false,
@@ -379,7 +381,7 @@ describe('Notification attention controller', () => {
     const request = async (cursor: number): Promise<NotificationEpisodeChangeBatch> => {
       requests.push(cursor)
       if (cursor === 0) return {
-        schemaVersion: 7,
+        schemaVersion: 8,
         requestedAfterChangeSequence: 0,
         nextChangeSequence: 1,
         throughChangeSequence: 2,
@@ -393,7 +395,7 @@ describe('Notification attention controller', () => {
     await expect(readNotificationChangePages(0, request)).rejects.toThrow('page two failed')
     expect(requests).toEqual([0, 1])
     const retried = await readNotificationChangePages(0, async (cursor) => ({
-      schemaVersion: 7,
+      schemaVersion: 8,
       requestedAfterChangeSequence: cursor,
       nextChangeSequence: 2,
       throughChangeSequence: 2,
@@ -424,11 +426,11 @@ it('suppresses completion only on its exact reading surface, without changing un
   const privateChange = change(episode('turn_completed'), 1)
   privateChange.headsUpSignal!.action.singleChat = { conversationId: 'private-1', agentId: 'agent-1', agentDisplayName: '洛克', agentRunId: 'run-1' }
   const state = applyNotificationHeadsUpChanges({ entries: [], overflowEntries: [] }, [privateChange])
-  const publicSource = { campId: 'camp-1', snapshotSequence: 1, messageIds: [], campTurnIds: [], approvalIds: [], surfaceVisible: true }
+  const publicSource = { campId: 'camp-1', snapshotSequence: 1, messageIds: [], campTurnIds: [], agentRunIds: [], approvalIds: [], surfaceVisible: true }
   for (const conversationId of [undefined, 'private-2', 'successor-1']) {
     expect(filterVisibleNotificationHeadsUp(state, [{ ...publicSource, conversationId }], true)).toBe(state)
   }
-  const privateSource = { ...publicSource, conversationId: 'private-1' }
+  const privateSource = { ...publicSource, conversationId: 'private-1', campTurnIds: ['turn-1'] }
   expect(filterVisibleNotificationHeadsUp(state, [privateSource], false)).toBe(state)
   expect(filterVisibleNotificationHeadsUp(state, [{ ...privateSource, surfaceVisible: false }], true)).toBe(state)
   expect(filterVisibleNotificationHeadsUp(state, [privateSource], true).entries).toEqual([])
@@ -437,6 +439,26 @@ it('suppresses completion only on its exact reading surface, without changing un
   const failedState = applyNotificationHeadsUpChanges({ entries: [], overflowEntries: [] }, [failure])
   expect(filterVisibleNotificationHeadsUp(failedState, [publicSource], true)).toBe(failedState)
   expect(filterVisibleNotificationHeadsUp(failedState, [{ ...publicSource, campTurnIds: ['turn-1'] }], true).entries).toEqual([])
+
+  const agentRun = change(episode('turn_completed', {
+    campTurnId: null,
+    agentRunId: 'run-1'
+  }), 3)
+  agentRun.headsUpSignal!.action = action('episode-1', 'open_agent_run')
+  const agentRunState = applyNotificationHeadsUpChanges(
+    { entries: [], overflowEntries: [] },
+    [agentRun]
+  )
+  expect(filterVisibleNotificationHeadsUp(
+    agentRunState,
+    [{ ...publicSource, campTurnIds: ['turn-1'] }],
+    true
+  )).toBe(agentRunState)
+  expect(filterVisibleNotificationHeadsUp(
+    agentRunState,
+    [{ ...publicSource, agentRunIds: ['run-1'] }],
+    true
+  ).entries).toEqual([])
 })
 
 it('retains exact urgent occurrences when completion arrives, then advances only on request', () => {

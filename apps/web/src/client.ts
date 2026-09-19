@@ -3,7 +3,7 @@ import { browserEditingRecovery } from './editing-recovery'
 import { RECOVERY_KEY, type RecoveryStorage } from './tab-recovery'
 import { fileDigest } from './file-digest'
 import { newCommandId } from '../../desktop/src/shared/command-id'
-import type { CampComposerDraftView, ChannelSettingsSnapshot, FilePreviewBinaryContent, FilePreviewOperationResult } from '@contracts'
+import type { ChannelSettingsSnapshot, FilePreviewBinaryContent, FilePreviewOperationResult, LocalAttachmentSourceView } from '@contracts'
 class HttpRequestError extends Error {
   constructor(readonly status: number, readonly code: string) { super(`请求未完成（${code}）。`) }
 }
@@ -27,7 +27,6 @@ export const WEB_OPERATIONS = [
   'members.removalPreview',
   'members.remove',
   'members.reorder',
-  'agentRuns.resolveRecoveryBlocker',
   'runtime.subsystems.retry',
   'notifications.inbox',
   'notifications.changesSince',
@@ -130,22 +129,12 @@ export const WEB_OPERATIONS = [
   'mcp.config.get',
   'agentRunEvidence.list',
   'agentRunEvidence.getContent',
-  'camp.composerDraft.get',
-  'camp.composerDraft.save',
-  'camp.composerDraft.discard',
-  'camp.composerDraft.startReply',
-  'camp.composerDraft.cancelReply',
-  'camp.composerDraft.resolveReplyRecipient',
-  'camp.composerDraft.dismissContinuation',
-  'camp.composerDraft.resolveContinuationRecipient',
-  'camp.composerDraft.removeAttachment',
   'messageQuotes.mutateDraft',
-  'camp.pendingInputs.get',
-  'camp.pendingInputs.edit',
+  'messageQuotes.capture',
   'camp.messages.send',
+  'camp.messages.withdraw',
   'action.approvals.resolve',
   'agentRuns.cancel',
-  'campTurns.cancel',
   'commands.reconcile',
   'camps.create',
   'camps.creationPreflight',
@@ -179,7 +168,6 @@ const RECONCILABLE_COMMANDS = new Set<WebOperation>([
   'camps.delete',
   'camps.discardPending',
   'camps.members.fast.set',
-  'agentRuns.resolveRecoveryBlocker',
   'members.remove',
   'members.reorder',
   'notifications.preference.update',
@@ -215,10 +203,10 @@ const RECONCILABLE_COMMANDS = new Set<WebOperation>([
   'automations.delete',
   'automations.run',
 
-  'camp.messages.send', 'action.approvals.resolve', 'agentRuns.cancel', 'campTurns.cancel',
+  'camp.messages.send', 'camp.messages.withdraw', 'action.approvals.resolve', 'agentRuns.cancel',
   'camps.create', 'camps.changeDefaultLead', 'camps.members.add', 'camps.members.remove',
   'members.create', 'members.update', 'members.avatar.set', 'members.runtime.set', 'members.runtime.clear',
-  'camp.pendingInputs.edit', 'messageQuotes.mutateDraft'
+  'messageQuotes.mutateDraft'
 ])
 
 export type ConnectionState = 'connecting' | 'live' | 'offline' | 'expired'
@@ -571,12 +559,11 @@ export class ConsoleClient {
     } catch { /* Still unknown if reconciliation itself could not complete. */ }
   }
 
-  async uploadFile(campId: string, expectedRevision: number, file: File): Promise<CampComposerDraftView> {
-    return this.uploadTo<CampComposerDraftView>(campId, expectedRevision, file)
+  async uploadFile(campId: string, expectedRevision: number, file: File): Promise<LocalAttachmentSourceView> {
+    return this.uploadTo<LocalAttachmentSourceView>(campId, expectedRevision, file)
   }
 
   async uploadTo<T>(campId: string, expectedRevision: number, file: File, target?:
-    | { kind: 'camp_pending'; pendingInputId: string; editToken: string }
     | { kind: 'single_chat'; conversationId: string }
     | { kind: 'single_chat_pending'; conversationId: string; pendingInputId: string; editToken: string }
   ): Promise<T> {

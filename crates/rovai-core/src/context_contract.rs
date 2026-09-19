@@ -2,10 +2,12 @@ use serde_json::{Value, json};
 
 pub const NATIVE_SESSION_BOOTSTRAP_CONTRACT_VERSION: &str = "native_session_bootstrap_v3";
 pub const BOOTSTRAP_FORMATTER_VERSION: i64 = 3;
-pub const SESSION_CHARTER_REVISION: i64 = 7;
+pub const SESSION_CHARTER_REVISION: i64 = 8;
 pub const CODEX_SESSION_GUIDANCE_REVISION: i64 = 1;
 pub const AGENT_RUN_CONTEXT_FORMATTER_VERSION: i64 = 25;
 pub const CONTEXT_MANIFEST_VERSION: i64 = 25;
+pub const PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION: i64 = 26;
+pub const PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION: i64 = 26;
 
 pub(crate) fn native_binding_context_contract() -> Value {
     json!({
@@ -39,7 +41,9 @@ mod tests {
             "contextManifestVersion": fixture["contextManifestVersion"],
         });
         let current = native_binding_context_contract();
-        assert_eq!(current["sessionCharterRevision"], 7);
+        assert_eq!(current["sessionCharterRevision"], 8);
+        assert_eq!(PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION, 26);
+        assert_eq!(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION, 26);
         assert_eq!(
             current,
             json!({

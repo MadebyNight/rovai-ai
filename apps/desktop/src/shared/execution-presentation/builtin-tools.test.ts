@@ -52,7 +52,7 @@ describe('Built-in input presentation', () => {
   it('uses the CLI catalog for all display names without changing internal identities', () => {
     const source = readFileSync('crates/rovai-core/src/builtin_tool_transport.rs', 'utf8')
     const identities = [...source.matchAll(/BuiltinToolCliIdentity\s*\{\s*operation: "([^"]+)",\s*group: "([^"]+)",\s*action: "([^"]*)"/gu)]
-    expect(identities).toHaveLength(26)
+    expect(identities).toHaveLength(25)
     expect(BUILTIN_CLI_NAMES).toEqual(Object.fromEntries(identities.map(([, operation, group, action]) =>
       [operation, ['rovai', group, action].filter(Boolean).join(' ')])))
     for (const [operation, name] of Object.entries(BUILTIN_CLI_NAMES)) {
@@ -95,8 +95,8 @@ describe('Built-in input presentation', () => {
       expect(markup).not.toMatch(/<details|<summary|已隐藏|\{\}|结果|messageId/)
     })
 
-  it('omits send/gather bodies and projection metadata while preserving actual public parameters', () => {
-    for (const operation of ['camp.message.send', 'team.gather']) {
+  it('omits send bodies and projection metadata while preserving actual public parameters', () => {
+    for (const operation of ['camp.message.send']) {
       const [step] = steps([builtin(operation, { body: 'message', recipientAgentIds: ['agent-5'],
         mentionsCurrentUser: false, recipientAgentIdsCount: 1, recipientAgentIdsOmittedCount: 0,
         contentCharCount: 7, contentDigest: 'hash', contentSecretDetected: false })])
@@ -114,7 +114,6 @@ describe('Rovai Shell carrier presentation', () => {
   it.each([
     ["rovai send --public-only --body 'message with spaces'", "rovai send --public-only --body 'message with spaces'"],
     ['rovai send --body="message" --to agent-5', 'rovai send --body="message" --to agent-5'],
-    ["env KEY=value npx --yes rovai gather --body 'message' --to agent-5", "env KEY=value npx --yes rovai gather --body 'message' --to agent-5"],
     ["rovai send 'message' --input-file /tmp/request.json", "rovai send 'message' --input-file /tmp/request.json"],
     ["rovai send --body 'line one\nline two' && git status", "rovai send --body 'line one line two' && git status"],
     ["rovai send <<'JSON'\n{\"body\":\"message\",\"publicOnly\":true}\nJSON", "rovai send <<'JSON' ; {\"body\":\"message\",\"publicOnly\":true} ; JSON"],

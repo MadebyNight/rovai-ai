@@ -1071,7 +1071,6 @@ export interface CampMemberRemovalPreview {
   openAssignedTaskCount: number
   pendingDeliveryCount: number
   runningDeliveryCount: number
-  openGatherItemCount: number
   removable: boolean
   blockerCode: 'camp.member_not_active' | 'camp.last_member_required' | null
 }
@@ -1244,6 +1243,9 @@ export interface CampMessageView {
   campTurnId: string | null
   presentation: CampTimelinePresentation | null
   createdAt: string
+  withdrawn: boolean
+  canWithdraw: boolean
+  version: number
 }
 
 export interface CampMessageAttachmentView {
@@ -1255,6 +1257,8 @@ export interface CampMessageAttachmentView {
   byteSize: number | null
   previewKind: 'image' | 'none'
   availability: LocalAttachmentAvailability
+  /** Present only while an unsent local Composer owns this attachment. */
+  sourcePath?: string
 }
 
 export type LocalAttachmentAvailability =
@@ -1764,7 +1768,9 @@ export type AgentRunCancelReasonCode =
 
 export interface AgentRunView {
   id: string
-  campTurnId: string
+  campTurnId: string | null
+  inputMessageIds?: string[]
+  anchorMessageId?: string | null
   conversationId: string
   agentId: string
   taskId: string | null
@@ -1788,7 +1794,7 @@ export interface AgentRunView {
   runtimeModel: { modelId: string | null } | null
   executionEpoch: number
   permissionSemantics: 'core_enforced_v1' | 'runtime_managed_v2'
-  invocationKind: 'direct' | 'a2a' | 'gather_completion' | 'single_chat'
+  invocationKind: 'direct' | 'a2a' | 'gather_completion' | 'single_chat' | 'batch'
   triggerDeliveryGeneration: number
   a2aParentAgentRunId: string | null
   a2aRootAgentRunId: string | null
@@ -1812,7 +1818,7 @@ export interface AgentRunDiagnosticView {
   agentRunId: string
   executionEpoch: number
   campId: string
-  campTurnId: string
+  campTurnId: string | null
   conversationId: string
   agentId: string
   status: AgentRunView['status']
@@ -2457,6 +2463,7 @@ export type NotificationActionKind =
   | 'open_approval'
   | 'open_camp_message'
   | 'open_camp_turn'
+  | 'open_agent_run'
   | 'open_single_chat'
   | 'open_camp'
   | 'acknowledge_only'
@@ -2489,6 +2496,7 @@ export interface NotificationActionView {
   available: boolean
   campId: string
   campTurnId: string | null
+  agentRunId: string | null
   messageId: string | null
   approvalId: string | null
   acknowledgementId: string | null
@@ -2508,6 +2516,7 @@ export interface NotificationEpisodeView {
     channelSource?: CampChannelSource | null
   }
   campTurnId: string | null
+  agentRunId: string | null
   primarySemantic: NotificationSemantic
   unread: boolean
   resolved: boolean
@@ -2524,7 +2533,7 @@ export interface NotificationEpisodeView {
 }
 
 export interface NotificationEpisodeInbox {
-  schemaVersion: 7
+  schemaVersion: 8
   throughChangeSequence: number
   unreadCount: number
   items: NotificationEpisodeView[]
@@ -2575,7 +2584,7 @@ export type NotificationHeadsUpInvalidation =
   }
 
 export interface NotificationEpisodeChangeBatch {
-  schemaVersion: 7
+  schemaVersion: 8
   requestedAfterChangeSequence: number
   nextChangeSequence: number
   throughChangeSequence: number
@@ -3877,11 +3886,9 @@ export type CoreMethod =
   | 'singleChat.composerDraft.removeAttachment'
   | 'singleChat.pendingInputs.addSourceAttachmentFromPath'
   | 'singleChat.pendingInputs.edit'
-  | 'campTurns.cancel'
   | 'agentRuns.cancel'
   | 'agentRuns.diagnostic.get'
   | 'executionTrace.export'
-  | 'agentRuns.resolveRecoveryBlocker'
   | 'camps.snapshot'
   | 'agentRunFileChanges.get'
   | 'agentRunImages.read'
@@ -3896,19 +3903,10 @@ export type CoreMethod =
   | 'tasks.update'
   | 'tasks.list'
   | 'tasks.get'
-  | 'camp.composerDraft.get'
-  | 'camp.pendingInputs.get'
-  | 'camp.pendingInputs.edit'
-  | 'camp.composerDraft.save'
   | 'messageQuotes.mutateDraft'
-  | 'camp.composerDraft.startReply'
-  | 'camp.composerDraft.cancelReply'
-  | 'camp.composerDraft.resolveReplyRecipient'
-  | 'camp.composerDraft.dismissContinuation'
-  | 'camp.composerDraft.resolveContinuationRecipient'
-  | 'camp.composerDraft.removeAttachment'
-  | 'camp.composerDraft.discard'
+  | 'messageQuotes.capture'
   | 'camp.messages.send'
+  | 'camp.messages.withdraw'
   | 'userAutomation.camp.send'
   | 'action.approvals.resolve'
   | 'notifications.inbox'
@@ -3969,14 +3967,13 @@ export interface RovaiApi {
   navigationPreferences: NavigationPreferencesApi
   memberAvatars: MemberAvatarsApi
   composerAttachments: {
-    prepare(campId: string, expectedRevision: number, file: File): Promise<CampComposerDraftView>
-    preparePending(input: {
-      campId: string
-      pendingInputId: string
-      expectedRevision: number
-      editToken: string
-    }, file: File): Promise<CampPendingInputsView>
+    prepare(campId: string, expectedRevision: number, file: File): Promise<LocalAttachmentSourceView>
     preview(locator: LocalAttachmentOwnerLocator): Promise<AttachmentPreviewResult>
+    /** Desktop-local authority restore; absent on remote/browser adapters. */
+    restore?(campId: string, attachments: LocalAttachmentSourceView[]): Promise<LocalAttachmentSourceView[]>
+    /** Releases Desktop-local authority after remove, send, or Camp deletion. */
+    discard?(campId: string, attachmentRefIds?: string[]): Promise<void>
+    location?(locator: LocalAttachmentOwnerLocator): Promise<string | null>
   }
   missionAttachments: MissionAttachmentsApi
   singleChatAttachments: {

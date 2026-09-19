@@ -7,7 +7,7 @@ last_updated: 2026-09-19
 
 # Mission board
 
-Desktop and wide Web expose the 使命板 navigation entry and retain its surface, route and interaction model.
+Desktop and wide Web expose one 使命板 navigation entry between 记忆 and 定时任务, and retain its surface, route and interaction model.
 When one or more Missions need the user, a blue dot sits at the entry's right edge and is vertically centered;
 the accessible label includes the count, but the visual indicator never renders a numeral. `needs_you` remains
 independent of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate
@@ -139,6 +139,6 @@ focus request even when there is no notification acknowledgement waiter; snapsho
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 
-Business and ownership rules are defined by [Mission v3](../../contracts/mission-v3.md), not this presentation
+Business and ownership rules are defined by [Mission v4](../../contracts/mission-v4.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

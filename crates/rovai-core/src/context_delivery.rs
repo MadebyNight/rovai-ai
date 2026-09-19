@@ -16,7 +16,7 @@ pub struct ContextDeliveryProfile {
 
 impl ContextDeliveryProfile {
     pub fn validate(self) -> Result<Self> {
-        if self.profile_version != 6 {
+        if !matches!(self.profile_version, 6 | 7) {
             anyhow::bail!("unsupported Context Delivery Profile version");
         }
         if self.max_public_messages == 0
@@ -56,8 +56,18 @@ pub const CONTEXT_DELIVERY_PROFILE_V6: ContextDeliveryProfile = ContextDeliveryP
     ..CONTEXT_DELIVERY_PROFILE_V5
 };
 
+pub const PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7: ContextDeliveryProfile =
+    ContextDeliveryProfile {
+        profile_version: 7,
+        ..CONTEXT_DELIVERY_PROFILE_V6
+    };
+
 pub fn current_context_delivery_profile() -> Result<ContextDeliveryProfile> {
     CONTEXT_DELIVERY_PROFILE_V6.validate()
+}
+
+pub fn current_public_camp_batch_context_delivery_profile() -> Result<ContextDeliveryProfile> {
+    PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7.validate()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,10 +103,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_v6_is_current_and_retains_frozen_v5_digest() {
+    fn profile_v6_remains_current_for_single_chat_and_v7_owns_public_batches() {
         assert_eq!(
             current_context_delivery_profile().unwrap(),
             CONTEXT_DELIVERY_PROFILE_V6
+        );
+        assert_eq!(
+            current_public_camp_batch_context_delivery_profile().unwrap(),
+            PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7
         );
         assert_eq!(
             CONTEXT_DELIVERY_PROFILE_V5.canonical_digest().unwrap(),
@@ -108,7 +122,7 @@ mod tests {
     fn profile_validation_rejects_unknown_versions_and_invalid_limits() {
         for invalid in [
             ContextDeliveryProfile {
-                profile_version: 3,
+                profile_version: 8,
                 ..CONTEXT_DELIVERY_PROFILE_V6
             },
             ContextDeliveryProfile {

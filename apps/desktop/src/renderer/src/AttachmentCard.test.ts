@@ -19,9 +19,10 @@ const fileAttachment: CampMessageAttachmentView = {
   availability: 'available'
 }
 
-const composerLocators: Array<[string, LocalAttachmentOwnerLocator]> = [[
+const composerLocators: Array<[string, LocalAttachmentOwnerLocator, boolean]> = [[
   'Camp composer',
-  { owner: 'composer', campId: 'camp-1', attachmentRefId: fileAttachment.id }
+  { owner: 'composer', campId: 'camp-1', attachmentRefId: fileAttachment.id },
+  true
 ], [
   'single-chat composer',
   {
@@ -29,11 +30,12 @@ const composerLocators: Array<[string, LocalAttachmentOwnerLocator]> = [[
     campId: 'camp-1',
     conversationId: 'conversation-1',
     attachmentRefId: fileAttachment.id
-  }
+  },
+  false
 ]]
 
 describe('AttachmentCard composer actions', () => {
-  it.each(composerLocators)('exposes a preview button in the %s without adding a context menu', (_name, locator) => {
+  it.each(composerLocators)('exposes preview and applicable context actions in the %s', (_name, locator, hasContextMenu) => {
     const markup = renderToStaticMarkup(createElement(AttachmentCard, {
       attachment: fileAttachment,
       locator,
@@ -42,7 +44,7 @@ describe('AttachmentCard composer actions', () => {
 
     expect(markup).toMatch(/<button class="attachment-open(?: [^"]*)?"/)
     expect(markup).toContain('aria-label="打开文件预览 report.md"')
-    expect(markup).not.toContain('attachment-context-anchor')
+    expect(markup.includes('attachment-context-anchor')).toBe(hasContextMenu)
   })
 
   it('exposes a primary open button for a composer directory', () => {
@@ -66,10 +68,10 @@ describe('AttachmentCard composer actions', () => {
 
     expect(markup).toMatch(/<button class="attachment-open(?: [^"]*)?"/)
     expect(markup).toContain('aria-label="打开文件夹 research"')
-    expect(markup).not.toContain('attachment-context-anchor')
+    expect(markup).toContain('attachment-context-anchor')
   })
 
-  it('keeps a composer image non-interactive until its thumbnail is ready', () => {
+  it('keeps a composer image openable while its thumbnail is loading', () => {
     const imageAttachment: CampMessageAttachmentView = {
       ...fileAttachment,
       id: 'attachment-image',
@@ -87,7 +89,8 @@ describe('AttachmentCard composer actions', () => {
       presentation: 'composer'
     }))
 
-    expect(markup).toContain('<div class="attachment-open">')
-    expect(markup).not.toMatch(/<button class="attachment-open(?: [^"]*)?"/)
+    expect(markup).toMatch(/<button class="attachment-open(?: [^"]*)?"/)
+    expect(markup).toContain('aria-label="打开文件预览 diagram.png"')
+    expect(markup).toContain('attachment-context-anchor')
   })
 })

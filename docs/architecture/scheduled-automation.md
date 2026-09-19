@@ -2,95 +2,59 @@
 document_type: architecture
 authority: scheduled-automation-architecture
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-18
 ---
 
 # Scheduled Automation Architecture
 
-Scheduled Automation 是共享 Rust Host/Core 内的持久计划控制面。它只决定何时领取一份已授权定义、如何建立普通 Camp
-执行图，以及怎样从 CampTurn 结算运行；具体模型执行、公共消息、渠道凭据和投递仍分别由现有 Runtime、
-Collaboration 与 Channel 组件拥有。
+Scheduled Automation 是共享 Rust Host/Core 内的持久计划控制面。它拥有定义、schedule、occurrence、时间上限、结果与
+Owner 通知；消息、Delivery、AgentRun 和 Runtime 执行复用公开 Camp 的统一主链。字段合同见
+[Scheduled Automation v3](../contracts/scheduled-automation-v3.md)。
 
-## 组件职责
+## 组件和流程
 
 ```text
-Desktop / Web Automation Workspace ── Core Client ──► AutomationService
-                                                       │
-                                      SQLite definition/run/delivery
-                                                       │
-Core Automation Scheduler ── claim/settle/recover ─────┤
-                                                       ▼
-                         Collaboration admission transaction
-                         Camp → Message → CampTurn → root AgentRun
-                                                       │ commit
-                                                       ▼
-                                            existing Runtime Scheduler
-                                                       │
-                                  public result / terminal CampTurn
-                                                       ▼
-                  Automation settlement → NotificationDelivery → Channel Host
+Scheduler due/manual trigger
+  ├─ previous active → skipped(overlap)
+  └─ previous inactive → one transaction
+       ├─ started occurrence + frozen definition snapshot
+       ├─ new Camp + membership
+       ├─ first system-authored CampMessage
+       └─ waiting Delivery
+            └─ unified Scheduler claim → multi-input AgentRun
 ```
 
-- **Renderer** 只编辑和读取定义、分页读取运行历史、请求立即运行、打开返回的 Camp，不计算权威时间或运行状态。
-- **AutomationService** 拥有字段规范化、版本、schedule 计算、occurrence 领取、执行快照、并发门禁、结算和恢复。
-- **CollaborationService** 在调用方事务内建立一个普通单队员 Camp 执行图，返回稳定关联；它不自行提交或启动 Runtime。
-- **Runtime Scheduler** 只看到事务提交后的普通 queued AgentRun，继续执行已有 preflight、lease、Native Session 和 fence。
-- **Channel Hosts** 把 Automation NotificationDelivery 合并进各 provider 的既有按需 claim/settle 循环。
+- Renderer/Web 只编辑定义、读取历史、请求立即运行并打开 Camp，不计算权威时间。
+- AutomationService 原子领取 occurrence、推进 `nextRunAt`、冻结定义、维护时间上限和业务终态。
+- Collaboration/Delivery service 创建普通消息与 waiting Delivery；它不为 Automation 创建特殊 Run。
+- Runtime Scheduler 使用与用户、A2A 和 Channel 相同的 claim、Context、isolation 和 terminal seam。
+- Channel Host 只处理 occurrence 终态派生的独立 Owner notification outbox。
 
-## 数据与控制流
+一个 Automation 同时最多一个未终结 occurrence。下一次触发看到 active 时直接记录 `skipped(overlap)`；没有 queued
+occurrence、overlap slot、queue timeout 或 maximum queue delay。成功 admission 后 occurrence 即为 started，无法立即
+claim 时只有 Delivery 等待，time limit 仍从 occurrence admission 起计算。
 
-Automation 定义是未来 occurrence 的可变配置。AutomationRun 是一次领取后不可变的业务证据；其 snapshot 不通过外键
-依赖仍可删除的定义。CampTurn 保存唯一 `automation_run_id`，AutomationRun 保存 Camp、Turn 与 root Run 三个链接，
-数据库触发器拒绝半链接、改绑和终态回写。
+首条 prompt 进入 `RUN_INPUT.messages[]` 时只是 system-authored 普通消息，没有 `mission_start`/`automation` input kind，
+也不形成批次边界。后续普通消息可以与它按冻结时机合批。消息来源不会扩大 Runtime、文件、网络、Built-in 或 External
+MCP 权限。
 
-定义的 `lastRun` 与 Desktop 历史 RPC 共用 AutomationRun/NotificationDelivery 读取投影。历史按创建时间与运行 ID
-降序分页，读取不触发 scheduler 或 settlement；Renderer 刷新已展开页，确保 newer skipped 不遮住 older active 的状态变化。
+## 恢复和结算
 
-计划扫描只处理 `enabled` 且到期的少量定义，并在 immediate transaction 中重新读取。`nextRunAt` 的推进与 occurrence
-行写入处于同一事务，因此重复扫描不会重复消费。活跃运行使用 partial unique index 保护；业务预检查只用于返回清晰的
-`skipped(overlap)`。
+重启、等待、交互或超时都不重新派发 prompt。已经 accepted/outcome-unknown 的输入永不作为未执行重入队；后继处理遵循
+普通 execution-isolation fence。Automation occurrence 通过自己记录的消息、Delivery、Run 与结果关系结算，不能用 Camp
+空闲或某个 Run 终态自动推导业务完成。
 
-Rust Host 的调度循环每 500ms 驱动计划，不依赖 Electron、浏览器或 HTTP/SSE 连接。Desktop 只传递原生暂停／恢复控制，
-不再提交 tick。Core 启动、Desktop 明确的恢复事件与 macOS 原生时钟观察拥有恢复边界；普通 tick 不推进该边界。
-macOS 比较包含睡眠的 continuous time 与不包含睡眠的 absolute time，按夹逼读数界定误差；有争议的读数跳过本次领取。
-发现睡眠差值后以读数完成后的时间推进恢复边界，并跳过该次领取，避免跨睡眠采样使用旧边界。线程排队或墙上时钟调整
-不作为恢复事件。其他平台仍保留 Desktop 原生事件适配，独立 Host 的系统唤醒资格须在对应实机补验。计划求值统一使用五段 Cron 引擎，
-定义更新只有在规范化 schedule 实值变化或重新开启时重算 `nextRunAt`。显式 manual run 不受 `enabled` 限制，且不改写
-定义的计划状态。
+通知与执行分离：settlement 冻结 provider-scoped delivery，实际发送重验当前 Bot/Owner；通知失败只更新 outbox，不改变
+occurrence、消息、Run 或重跑模型。定义删除保留已有 Camp、occurrence 和投递证据。
 
-执行 Camp 使用 Automation 名称作为初始标题、冻结 ProjectRef 解析出的 workspace、所选队员作为唯一 CampMember 与
-Default Lead。首条用户消息就是冻结 Prompt；没有 Renderer Composer Draft、Pending Camp 或后续复用会话。
+## Host 与时间
 
-## 恢复与结算
-
-启动恢复先于普通 Runtime recovery：没有终态的 AutomationRun 不会重新派发。若其 CampTurn 仍活跃，Core 使用
-`automationRunId + campTurnId` 的精确内部取消事务写入现有 execution fence；然后才让 AutomationRun 终态化并释放
-partial unique gate。物理 Runtime 退出继续由既有进程管理收口。
-
-周期 settlement 遍历全部活跃 AutomationRun，读取结构化 AgentRun/Approval/CampTurn 状态，不解析模型文本。
-CampTurn 完成时只在 root AgentRun 的
-正式公开消息中冻结一个结果 ID。后续删除、编辑或同 Camp 交流不能替换该 ID，也不能复活终态 AutomationRun。
-
-通知是从 AutomationRun 终态派生的独立 outbox。投递 payload 在结算时冻结，实际 claim 时解析当前 Bot/Owner 绑定；
-重试只更新 NotificationDelivery。Provider 没有当前目标时投递明确失败，运行事实保持不变。
-
-## 进程与权限边界
-
-共享 Host 可独立运行，不新增第二套 daemon、云端 scheduler 或 OS 登录唤醒任务。Core 生命周期和设备唤醒状态决定能否到点执行，恢复只
-记录一次 missed。已启用定义是调度执行授权；定义管理属于当前 Owner，Agent 只能经 current Built-in lease 和
-用户明确意图使用封闭操作。
-
-Automation 来源不改变 AgentRun 的文件、网络、Built-in、External MCP 或 Runtime 权限。执行仍能产生普通外部效果，
-因此系统通过禁止恢复重派发来避免把未知中断变成重复执行。
-
-macOS 时钟接口依据 [Apple mach_time.h](https://github.com/apple/darwin-xnu/blob/main/osfmk/mach/mach_time.h)。
-纯时钟 owner 覆盖延迟、回拨、不确定采样与跨读数睡眠；`host-web.test.mjs` 的时钟 owner 使用未配置 Runtime 的隔离计划，
-覆盖 Web 关闭、独立 Host 和重启的领取次数，不把它当成真实 Runtime 或实体睡眠验收。
+Rust Host 驱动计划，不依赖 Renderer 或 HTTP 连接。App 退出/设备休眠期间不逐条补跑；恢复只记录最近 missed 并计算未来
+时间。计划时间、时钟回拨和平台唤醒资格继续由既有 Host 时间边界拥有。
 
 ## References
 
-- [Scheduled Automation v2](../contracts/scheduled-automation-v2.md)
-- [Built-in Tool Runtime](builtin-tool-runtime.md)
-- [Collaboration admission invariants](foundational-invariants.md#collaboration-admission)
+- [Scheduled Automation v3](../contracts/scheduled-automation-v3.md)
+- [Public Camp Message、Delivery 与 AgentRun](public-a2a-message-delivery.md)
 - [Runtime recovery and shutdown](foundational-invariants.md#runtime-recovery-shutdown)
-- [V1.54-D01](../versions/v1.54/decisions.md#v1-54-d01)
+- [V1.60-D05](../versions/v1.60/decisions.md#v1-60-d05)

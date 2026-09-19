@@ -31,6 +31,7 @@ import type {
   MonitoringFilter,
   LocalAttachmentAvailability,
   LocalAttachmentOwnerLocator,
+  LocalAttachmentSourceView,
   RuntimeUsageSnapshot,
   NavigationPin,
   SaveMemberAvatarAssetInput,
@@ -108,6 +109,7 @@ import {
   revealDesktopAttachmentTarget,
   type DesktopAttachmentTarget
 } from './attachment-desktop'
+import { LocalComposerAttachmentRegistry } from './local-composer-attachments'
 import {
   prepareWindowsBootstrapRoot,
   prepareWindowsDataRoot,
@@ -286,9 +288,7 @@ const allowedMethods = new Set<CoreMethod>([
   'singleChat.send',
   'singleChat.end',
   'singleChat.pendingInputs.edit',
-  'campTurns.cancel',
   'agentRuns.cancel',
-  'agentRuns.resolveRecoveryBlocker',
   'camps.snapshot',
   'agentRunFileChanges.get',
   'agentRunImages.read',
@@ -304,19 +304,10 @@ const allowedMethods = new Set<CoreMethod>([
   'tasks.list',
   'tasks.get',
   'camp.attachments.location',
-  'camp.composerDraft.get',
-  'camp.pendingInputs.get',
-  'camp.pendingInputs.edit',
-  'camp.composerDraft.save',
   'messageQuotes.mutateDraft',
-  'camp.composerDraft.startReply',
-  'camp.composerDraft.cancelReply',
-  'camp.composerDraft.resolveReplyRecipient',
-  'camp.composerDraft.dismissContinuation',
-  'camp.composerDraft.resolveContinuationRecipient',
-  'camp.composerDraft.removeAttachment',
-  'camp.composerDraft.discard',
+  'messageQuotes.capture',
   'camp.messages.send',
+  'camp.messages.withdraw',
   'userAutomation.camp.send',
   'action.approvals.resolve',
   'notifications.inbox',
@@ -500,8 +491,12 @@ executionView.onChanged((snapshot) => {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
   mainWindow.webContents.send('rovai:execution-web-settings-changed', snapshot)
 })
+const localComposerAttachments = new LocalComposerAttachmentRegistry(
+  join(app.getPath('userData'), 'local-composer-attachments-v1.json')
+)
 const filePreview = new FilePreviewService(
-  new CoreFilePreviewSourceAuthority(core),
+  new CoreFilePreviewSourceAuthority(core, async (locator) =>
+    (await localComposerAttachments.resolveTarget(locator))?.target ?? null),
   {
     previewProtectedRoots() {
       return [
@@ -1643,6 +1638,8 @@ const MAX_COMPOSER_PREVIEW_BYTES = 8 * 1024 * 1024
 async function resolveDesktopAttachmentTarget(
   locator: LocalAttachmentOwnerLocator
 ): Promise<{ target: DesktopAttachmentTarget | null; availability: LocalAttachmentAvailability }> {
+  const local = await localComposerAttachments.resolveTarget(locator)
+  if (local) return local
   try {
     const value = await core.request<unknown>(
       'camp.attachments.desktopOpenTarget' as CoreMethod,
@@ -1769,38 +1766,27 @@ function requireDraftRevision(value: unknown): number {
   return value as number
 }
 
-type PendingAttachmentOwner = {
+type SingleChatPendingAttachmentOwner = {
   campId: string
+  conversationId: string
   pendingInputId: string
   expectedRevision: number
   editToken: string
 }
 
-type SingleChatPendingAttachmentOwner = PendingAttachmentOwner & {
-  conversationId: string
-}
-
-function requirePendingAttachmentOwner(value: unknown): PendingAttachmentOwner {
+function requireSingleChatPendingAttachmentOwner(
+  value: unknown
+): SingleChatPendingAttachmentOwner {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Pending Attachment Owner 无效。')
+    throw new Error('Single Chat Pending Attachment Owner 无效。')
   }
   const input = value as Record<string, unknown>
   return {
     campId: requireIpcString(input.campId, 'Camp ID'),
+    conversationId: requireIpcString(input.conversationId, 'Conversation ID'),
     pendingInputId: requireIpcString(input.pendingInputId, 'Pending Input ID'),
     expectedRevision: requireDraftRevision(input.expectedRevision),
     editToken: requireIpcString(input.editToken, 'Edit Token')
-  }
-}
-
-function requireSingleChatPendingAttachmentOwner(
-  value: unknown
-): SingleChatPendingAttachmentOwner {
-  const owner = requirePendingAttachmentOwner(value)
-  const input = value as Record<string, unknown>
-  return {
-    ...owner,
-    conversationId: requireIpcString(input.conversationId, 'Conversation ID')
   }
 }
 
@@ -1810,6 +1796,15 @@ function temporarySourceAttachmentPath(displayName: string): string {
     ? requestedExtension
     : ''
   return join(app.getPath('temp'), `rovai-${randomUUID()}${safeExtension}`)
+}
+
+async function stageLocalComposerAttachment(
+  campId: string,
+  sourcePath: string,
+  displayName: string,
+  mediaType: string | null
+): Promise<LocalAttachmentSourceView> {
+  return localComposerAttachments.prepare({ campId, sourcePath, displayName, mediaType })
 }
 
 type MissionAttachmentIpcInput = {
@@ -1909,13 +1904,14 @@ ipcMain.handle(
     displayName: unknown,
     mediaType: unknown
   ) => {
-    return core.request('camp.sourceAttachments.addFromPath' as CoreMethod, {
-      campId: requireIpcString(campId, 'Camp ID'),
-      expectedRevision: requireDraftRevision(expectedRevision),
-      sourcePath: requireIpcString(sourcePath, '附件路径'),
-      displayName: requireIpcString(displayName, '附件名称'),
-      mediaType: typeof mediaType === 'string' && mediaType.trim() ? mediaType : null
-    })
+    const resolvedCampId = requireIpcString(campId, 'Camp ID')
+    requireDraftRevision(expectedRevision)
+    return stageLocalComposerAttachment(
+      resolvedCampId,
+      requireIpcString(sourcePath, '附件路径'),
+      requireIpcString(displayName, '附件名称'),
+      typeof mediaType === 'string' && mediaType.trim() ? mediaType : null
+    )
   }
 )
 
@@ -1930,87 +1926,85 @@ ipcMain.handle(
     input: unknown
   ) => {
     const resolvedCampId = requireIpcString(campId, 'Camp ID')
-    const resolvedRevision = requireDraftRevision(expectedRevision)
+    requireDraftRevision(expectedRevision)
     const resolvedDisplayName = requireIpcString(displayName, '附件名称')
     if (!(input instanceof Uint8Array) || input.byteLength > MAX_COMPOSER_ATTACHMENT_BYTES) {
       throw new Error('附件无效或超过 25 MiB。')
     }
-    if (!core.getSnapshot().capabilities.coreRequests) {
-      throw new Error('Core is not available for attachment references')
-    }
     const temporaryPath = temporarySourceAttachmentPath(resolvedDisplayName)
-    let referenced = false
+    let staged = false
     try {
       await writeFile(temporaryPath, input, { flag: 'wx', mode: 0o600 })
-      const draft = await core.request('camp.sourceAttachments.addFromPath' as CoreMethod, {
-        campId: resolvedCampId,
-        expectedRevision: resolvedRevision,
-        sourcePath: temporaryPath,
-        displayName: resolvedDisplayName,
-        mediaType: typeof mediaType === 'string' && mediaType.trim() ? mediaType : null
-      })
-      referenced = true
-      return draft
-    } finally {
-      if (!referenced) await unlink(temporaryPath).catch(() => undefined)
-    }
-  }
-)
-
-ipcMain.handle(
-  'rovai:pending-attachment-prepare-path',
-  async (
-    _event,
-    owner: unknown,
-    sourcePath: unknown,
-    displayName: unknown,
-    mediaType: unknown
-  ) => {
-    const resolvedOwner = requirePendingAttachmentOwner(owner)
-    return core.request('camp.pendingInputs.addSourceAttachmentFromPath' as CoreMethod, {
-      ...resolvedOwner,
-      sourcePath: requireIpcString(sourcePath, '附件路径'),
-      displayName: requireIpcString(displayName, '附件名称'),
-      mediaType: typeof mediaType === 'string' && mediaType.trim() ? mediaType : null
-    })
-  }
-)
-
-ipcMain.handle(
-  'rovai:pending-attachment-prepare-bytes',
-  async (
-    _event,
-    owner: unknown,
-    displayName: unknown,
-    mediaType: unknown,
-    input: unknown
-  ) => {
-    const resolvedOwner = requirePendingAttachmentOwner(owner)
-    const resolvedDisplayName = requireIpcString(displayName, '附件名称')
-    if (!(input instanceof Uint8Array) || input.byteLength > MAX_COMPOSER_ATTACHMENT_BYTES) {
-      throw new Error('附件无效或超过 25 MiB。')
-    }
-    if (!core.getSnapshot().capabilities.coreRequests) {
-      throw new Error('Core is not available for attachment references')
-    }
-    const temporaryPath = temporarySourceAttachmentPath(resolvedDisplayName)
-    let referenced = false
-    try {
-      await writeFile(temporaryPath, input, { flag: 'wx', mode: 0o600 })
-      const queue = await core.request(
-        'camp.pendingInputs.addSourceAttachmentFromPath' as CoreMethod,
-        {
-          ...resolvedOwner,
-          sourcePath: temporaryPath,
-          displayName: resolvedDisplayName,
-          mediaType: typeof mediaType === 'string' && mediaType.trim() ? mediaType : null
-        }
+      const attachment = await stageLocalComposerAttachment(
+        resolvedCampId,
+        temporaryPath,
+        resolvedDisplayName,
+        typeof mediaType === 'string' && mediaType.trim() ? mediaType : null
       )
-      referenced = true
-      return queue
+      staged = true
+      return attachment
     } finally {
-      if (!referenced) await unlink(temporaryPath).catch(() => undefined)
+      if (!staged) await unlink(temporaryPath).catch(() => undefined)
     }
+  }
+)
+
+ipcMain.handle(
+  'rovai:composer-attachment-restore',
+  async (_event, campId: unknown, attachments: unknown) => {
+    const resolvedCampId = requireIpcString(campId, 'Camp ID')
+    if (!Array.isArray(attachments) || attachments.length > 10) {
+      throw new Error('Composer 附件列表无效。')
+    }
+    const requested = attachments.map((value): LocalAttachmentSourceView => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Composer 附件无效。')
+      }
+      const attachment = value as Partial<LocalAttachmentSourceView>
+      if (!isAttachmentId(attachment.id)
+        || typeof attachment.displayName !== 'string'
+        || !attachment.displayName.trim()
+        || Array.from(attachment.displayName).length > 120
+        || (attachment.kind !== 'file' && attachment.kind !== 'directory')
+        || (attachment.fileCount !== null
+          && (!Number.isSafeInteger(attachment.fileCount) || Number(attachment.fileCount) < 0))
+        || (attachment.mediaType !== null
+          && (typeof attachment.mediaType !== 'string' || attachment.mediaType.length > 512))
+        || (attachment.byteSize !== null
+          && (!Number.isSafeInteger(attachment.byteSize) || Number(attachment.byteSize) < 0))
+        || (attachment.previewKind !== 'image' && attachment.previewKind !== 'none')
+        || !['unknown', 'available', 'missing', 'unreadable', 'kind_changed']
+          .includes(String(attachment.availability))) {
+        throw new Error('Composer 附件无效。')
+      }
+      return {
+        id: attachment.id,
+        displayName: attachment.displayName,
+        kind: attachment.kind,
+        fileCount: attachment.fileCount,
+        mediaType: attachment.mediaType,
+        byteSize: attachment.byteSize,
+        previewKind: attachment.previewKind,
+        availability: attachment.availability
+      } as LocalAttachmentSourceView
+    })
+    return localComposerAttachments.restore(resolvedCampId, requested)
+  }
+)
+
+ipcMain.handle(
+  'rovai:composer-attachment-discard',
+  async (_event, campId: unknown, attachmentRefIds: unknown) => {
+    const resolvedCampId = requireIpcString(campId, 'Camp ID')
+    if (attachmentRefIds !== undefined && (
+      !Array.isArray(attachmentRefIds)
+      || attachmentRefIds.length > 10
+      || attachmentRefIds.some((id) => !isAttachmentId(id))
+    )) throw new Error('Composer 附件清理范围无效。')
+    await localComposerAttachments.discard(
+      resolvedCampId,
+      attachmentRefIds as string[] | undefined
+    )
   }
 )
 
@@ -2018,6 +2012,8 @@ ipcMain.handle(
   'rovai:composer-attachment-preview',
   async (_event, value: unknown) => {
     const locator = requireAttachmentOwnerLocator(value)
+    const local = await localComposerAttachments.preview(locator)
+    if (local) return local
     try {
       const source = await core.request<{
         path: string
@@ -2042,6 +2038,14 @@ ipcMain.handle(
     } catch (error) {
       return { preview: null, availability: attachmentAvailabilityFromError(error) }
     }
+  }
+)
+
+ipcMain.handle(
+  'rovai:composer-attachment-location',
+  async (_event, value: unknown) => {
+    const locator = requireAttachmentOwnerLocator(value)
+    return localComposerAttachments.location(locator)
   }
 )
 

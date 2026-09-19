@@ -62,7 +62,10 @@ export function createCampAdapter(transport: ConsoleClient, selectWorkspaceDirec
       preparePending: (input, file) => transport.uploadTo(input.campId, input.expectedRevision, file, { kind: 'single_chat_pending', conversationId: input.conversationId, pendingInputId: input.pendingInputId, editToken: input.editToken }),
       remove: (conversationId, expectedDraftRevision, attachmentRefId) => transport.request('singleChat.composerDraft.removeAttachment', { conversationId, expectedDraftRevision, attachmentRefId })
     },
-    composerAttachments: { prepare: (campId, revision, file) => transport.uploadFile(campId, revision, file), preparePending: (input, file) => transport.uploadTo(input.campId, input.expectedRevision, file, { kind: 'camp_pending', pendingInputId: input.pendingInputId, editToken: input.editToken }), preview: unimplemented },
+    composerAttachments: {
+      prepare: (campId, revision, file) => transport.uploadFile(campId, revision, file),
+      preview: unimplemented
+    },
     attachments: { kind: 'download', download: unimplemented }
   }
   const fileListeners = new Set<(event: FilePreviewExternalUpdateEvent) => void>()

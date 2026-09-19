@@ -1,7 +1,7 @@
 ---
 document_type: contracts-index
 authority: protocol-contract-routing
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # 长期接口合同
@@ -13,7 +13,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 | 合同 | 范围 |
 | --- | --- |
-| [Mission v3（当前）](mission-v3.md) | 继承 v2，以显式处置控制使命删除，支持可重建工作区、前台分步清理与条件分支删除 |
+| [Mission v4（当前）](mission-v4.md) | 继承 v3；`mission.get` 为所有受认证队员的只读操作，update/status 保留写权限门禁 |
+| [Mission v3（历史）](mission-v3.md) | 继承 v2，以显式处置控制使命删除，支持可重建工作区、前台分步清理与条件分支删除 |
 | [Mission v2（历史）](mission-v2.md) | 继承 v1，并让当前 Mission 的受认证 Agent 显式读取有序附件原路径；删除即排队清理的规则由 v3 局部替代 |
 | [Mission v1（历史）](mission-v1.md) | 身份、业务状态、当前成员操作、工作区准备与清理、固定基准累计变更；附件 raw path 始终私有的结论由 v2 局部替代 |
 
@@ -41,7 +42,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Host Web v1（历史）](host-web-v1.md) | 同一 Core 的初始只读网络入口；新会话由 v2 替代 |
 | [Current User Profile v1（当前）](current-user-profile-v1.md) | Desktop 本地名称/头像、原子保存、历史作者与结构化提及投影；不改变 Core identity、正文或模型上下文 |
 | [Domain Command Result v1（当前）](domain-command-result-v1.md) | Domain Command 结果的事务、幂等回放、专用列唯一正文、内部 marker、新旧事件双读与 schema 95 回退边界 |
-| [Scheduled Automation v2（当前）](scheduled-automation-v2.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
+| [Scheduled Automation v3（当前）](scheduled-automation-v3.md) | occurrence 只分 started/skipped(overlap)，首消息进入普通 Delivery→claim→AgentRun 主链 |
+| [Scheduled Automation v2（历史）](scheduled-automation-v2.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
 | [Scheduled Automation v1（历史）](scheduled-automation-v1.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
 | [Single Chat v5（当前）](single-chat-v5.md) | 待发送消息原子移回普通输入框、覆盖草稿、释放 FIFO；旧编辑 session 兼容 |
 | [Single Chat v4（历史）](single-chat-v4.md) | v3 私有会话与注意力不变；Source Attachment Run 前宿主重检后原样投影 source path |
@@ -81,18 +83,21 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Runtime Launch and Verification v30（历史）](runtime-launch-and-verification-v30.md) | v29 保留；增加 Pi JSONL Host、专属 Ready/exact resume、managed receipt、动态 Skills/MCP、Action/Usage 与三平台未准入边界 |
 | [Runtime Launch and Verification v29（历史）](runtime-launch-and-verification-v29.md) | v28 保留；现有 Check Manager 的 Fast metadata 与单执行原生覆盖 |
 | [Runtime Usage Monitoring v4（当前）](runtime-usage-monitoring-v4.md) | v3 保留；可选实际档位、observed 优先与未知撤回估价 |
-| [Pending Camp Input v4（当前）](pending-camp-input-v4.md) | v3 FIFO 与发布不变；原子移回调用客户端的普通草稿、释放队列，旧编辑会话保留归属、显式接管与写入围栏 |
+| [Pending Camp Input v4（历史）](pending-camp-input-v4.md) | public Camp Pending 已由 Composer v14 clean break 删除；本合同只解释历史数据 |
 | [Pending Camp Input v3（历史）](pending-camp-input-v3.md) | canonical/edit content 改为 ComposerDocument V2；编辑归属由 v4 补齐 |
 | [Pending Camp Input v2（历史）](pending-camp-input-v2.md) | v1 FIFO/edit token 不变；原生保存 source refs，working refs 支持添加/删除/排序与附件-only，发布失败精确 needs-repair；content wire 由 v3 替代 |
 | [Pending Camp Input v1（历史）](pending-camp-input-v1.md) | 私有下一轮输入、FIFO、编辑 token、暂停、原子发布与无附件边界 |
 | [Camp Identity v1（当前）](camp-identity-v1.md) | 唯一 `rvcamp_` UUIDv7/Crockford 主键、strict boundary、SQLite/JSON/path 使用与 Native Session identity 分离 |
 | [Desktop Runtime Availability v2（当前）](desktop-runtime-availability-v2.md) | 严格 lease/ticket 后原位逐版本事务、receipt 续跑、旧 manifest 恢复、独立瞬时重试与统一会话启动反馈；generation/capability 不变 |
 | [Desktop Runtime Availability v1（历史）](desktop-runtime-availability-v1.md) | Bootstrap/Full Core、SQLite 准入、copy/switch 与结构化 failure；旧 manifest 恢复仍保留，普通升级执行策略由 v2 替代 |
-| [First-run Onboarding v3（当前）](first-run-onboarding-v3.md) | v2 schema/flow 不变；首次安装改用 Full Core authority origin，损坏偏好只在内存降级且保留原文件 |
+| [First-run Onboarding v5（当前）](first-run-onboarding-v5.md) | v4 admission/provisioning 不变；Active Camp starter 进入可恢复的 Desktop-local Composer snapshot |
+| [First-run Onboarding v4（历史）](first-run-onboarding-v4.md) | v3 admission/provisioning 不变；第四页 starter 改为 mounted Renderer 输入，不持久 public Draft |
+| [First-run Onboarding v3（历史）](first-run-onboarding-v3.md) | v2 schema/flow 不变；首次安装改用 Full Core authority origin，损坏偏好只在内存降级且保留原文件 |
 | [First-run Onboarding v2（历史）](first-run-onboarding-v2.md) | v1 admission/provisioning 不变；schema 2 增加无可用 Runtime 时无产品副作用的 `runtime_deferred` 终态；其 pre-Core 文件存在性 admission 已由 v3 替代 |
 | [First-run Onboarding v1（历史）](first-run-onboarding-v1.md) | Desktop 首次安装判定、三页 mandatory 状态、幂等 provisioning、`初次集结` 与第四页 Draft-only 入口；不允许无 Runtime 完成 |
 | [Camp Membership v2（当前）](camp-membership-v2.md) | 原定向 lifetime 范围内同事务结算；reconciliation 只保留已完成审计 |
 | [Camp Membership v1（历史）](camp-membership-v1.md) | 动态添加/移除、至少一位成员、generation/version、atomic cutover、durable reconciliation、exact lifetime fence 与受信外部来源 |
+| [Channel Message Bridge v1（当前）](channel-message-bridge-v1.md) | 入站在消息与 Delivery 提交后完成；Channel-bound Camp 的 Agent 公共消息默认创建独立 outbox |
 | [Channel Storage v3（当前）](channel-storage-v3.md) | 凭据与存储边界不变；整轮中止使用 nullable retry suppression，迟到 sent 保留证据 |
 | [Channel Storage v2（历史）](channel-storage-v2.md) | v1 存储与秘密边界不变；飞书三态检查、独立 Bot 启动及钉钉 completed 同应用凭据恢复 |
 | [Channel Camp Naming v1（当前）](channel-camp-naming-v1.md) | 五种渠道复用普通自动命名、原始 title 与只读 channelSource 分离、闭合绑定来源保留和 Renderer 前缀 |
@@ -243,14 +248,18 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [User Automation v3（历史）](user-automation-v3.md) | 继承 v2；受限只读 Trace 导出与 Host 日报准备配置，不授予 Agent 用户级 IPC |
 | [User Automation v2（历史）](user-automation-v2.md) | v1 transport、Trial 与安全投影不变；Camp 创建只做目录准入，Git observation 不扫描工作树且新 dirty 为 null |
 | [User Automation v1（历史）](user-automation-v1.md) | 普通用户 `rovai app` 的独立本机 IPC、Runtime OS 隔离、原子 Camp/Run 自动化、真实 shell exit、双 cursor Diagnostic Trial、安全投影与私有 bundle |
-| [Network Interruption Recovery v1（当前）](network-interruption-recovery-v1.md) | App/Core 持续运行期间的严格网络分类、Core 内存固定退避、Input Delivery 安全门禁、ACP terminal 接管、online/resume wake 与三态投影 |
-| [Accepted Input Recovery v5（当前）](accepted-input-recovery-v5.md) | v4 发送边界不变；普通恢复失败与业务取消终态分离 |
+| [Network Interruption Recovery v2（当前）](network-interruption-recovery-v2.md) | v1 分类/退避/wake 不变；同 Run 恢复不再依赖 CampTurn 或协作预算 |
+| [Network Interruption Recovery v1（历史）](network-interruption-recovery-v1.md) | App/Core 持续运行期间的严格网络分类、Core 内存固定退避、ACP terminal 接管与 CampTurn 时期准入 |
+| [Accepted Input Recovery v6（当前）](accepted-input-recovery-v6.md) | accepted/unknown 自动失败且不重放；旧执行隔离确认独立门禁后继 Delivery |
+| [Accepted Input Recovery v5（历史）](accepted-input-recovery-v5.md) | v4 发送边界不变；普通恢复失败与业务取消终态分离 |
 | [Accepted Input Recovery v4（历史）](accepted-input-recovery-v4.md) | 新增 `dispatch_started_at`；发送/取消事务排序，迟到回执只补证据 |
 | [Accepted Input Recovery v3（历史）](accepted-input-recovery-v3.md) | v2 outcome-unknown 边界不变；Manifest 21 使用语义 View receipt，并增加 Migration 100 clean break |
 | [Accepted Input Recovery v2（历史）](accepted-input-recovery-v2.md) | v1 正常恢复边界不变；增加 Migration 99 对旧 Formatter 20 非终态输入的 evidence-aware clean break |
 | [Accepted Input Recovery v1（历史）](accepted-input-recovery-v1.md) | accepted Runtime input 的启动分类、`recovery_blocked`、Scheduler fence、用户命令与 Stop/预算 outcome-unknown 收敛；不含 Migration 99 |
 | [Collaboration State v2（当前）](collaboration-state-v2.md) | peer-only routing identity、稳定 CampMember 选择、Lead ID/Boolean、完整 projection digest、独立 inclusion、accepted ACK 与 v0.50 clean break |
-| [Camp History v6（当前）](camp-history-v6.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
+| [Camp History v8（当前）](camp-history-v8.md) | 所有受认证队员可读取全部存续公共 Camp；目标 membership 不是 ACL，旧 Manifest 漏项动态兼容，`camp.read` 实时 |
+| [Camp History v7（历史）](camp-history-v7.md) | 调用时实时可见性、recipient suppression、撤回过滤与完整分页结果；其继承的目标 Camp 授权由 v8 替代 |
+| [Camp History v6（历史）](camp-history-v6.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流 |
 | [Camp History Retrieval v5（历史）](camp-history-v5.md) | v3 读取/授权/身份语义不变；CLI 在 Schema 前把省略 mode 安全补全为 timeline/before/20，消息锚点模式仍显式 |
 | [Camp History Retrieval v3（历史）](camp-history-v3.md) | v2 Agent projection/授权/读取语义不变；所有显式 target 与输出只接受唯一 canonical Camp ID |
 | [Camp History Retrieval v2（历史）](camp-history-v2.md) | v1 查询、授权、publication fence 与附件边界不变；Agent body/snippet/offset 使用 `agent_v1` Principal 投影，并为 `@Principal` 提供结构化候选路径 |
@@ -258,7 +267,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Memory Capture v3（当前）](memory-capture-v3.md) | v2 边界加 complete exact-Scope View、copyable Revision target、active body aggregate quota、64 KiB production projection limit 与 Memory-domain clean break |
 | [Memory Capture v2 (historical)](memory-capture-v2.md) | v1 捕获/Review/Forget 边界加 flat Agent-relative Scope identity、revise target assertion、durable domain rejection 与 Supersession 原子顺序 |
 | [Memory Capture v1 (historical)](memory-capture-v1.md) | 初版 best-effort 在线捕获、actor-bounded add/revise、隔离 Hearth Review Item、双 CAS、候选清除与 Forget safeguard；不含 Scope-identified revise |
-| [Built-in Tool Transport v27（当前）](builtin-tool-transport-v27.md) | 继承 v26，并为 `mission.get` 增加始终存在的有序附件原路径数组 |
+| [Built-in Tool Transport v28（当前）](builtin-tool-transport-v28.md) | 继承 v27，发布公共 Camp 读取范围、只读 `mission.get` 与 v28 catalog/capability；Charter revision 8 不变 |
+| [Built-in Tool Transport v27（历史）](builtin-tool-transport-v27.md) | 继承 v26，为 `mission.get` 增加有序附件原路径数组，并删除 Gather 与统一结果大小上限；Agent-facing 结果完整成功或明确失败 |
 | [Built-in Tool Transport v26（历史）](builtin-tool-transport-v26.md) | 保留 v25 的附件原路径与输出合同，并增加三个当前 Camp Mission 操作；不暴露业务版本或工作区 |
 | [Built-in Tool Transport v25（历史）](builtin-tool-transport-v25.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [Built-in Tool Transport v24（历史）](builtin-tool-transport-v24.md) | v22 transport 与 Single Chat history 不变；新增七项 Scheduled Automation 操作，catalog 扩为二十三项 |
@@ -281,7 +291,9 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Built-in Tool Transport v7 (historical)](builtin-tool-transport-v7.md) | v0.67 的 Camp Message Send v4、exact Camp read addressing 与初版渐进式 CLI 教学；不作为 v0.73 CLI context/catalog 入口 |
 | [Built-in Tool Transport v7 Errata](builtin-tool-transport-v7-errata.md) | 历史 v7 locator-present recovery 勘误；其 self-write exact-read 语义已由 v8/v9 继承 |
 | [Durable Task v3（当前）](durable-task-v3.md) | User/Lead 责任定义、Assignee execution-state update、Camp-wide read、explicit owner、unassigned holding 与 advisory actions |
-| [Camp Message Send v20（当前）](camp-message-send-v20.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
+| [Camp Message Send v22（当前）](camp-message-send-v22.md) | 继承 v21；发布事务为每个显式目标幂等建立 Camp-member Conversation 路由后创建 waiting Delivery |
+| [Camp Message Send v21（历史）](camp-message-send-v21.md) | 公共消息原子创建 waiting Deliveries、显式目标、Run anchor、Channel 默认外发与撤回幂等终态；路由完整性由 v22 补足 |
+| [Camp Message Send v20（历史）](camp-message-send-v20.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流 |
 | [Camp Message Send v19（历史）](camp-message-send-v19.md) | Agent-visible target 教学只推荐 `--to`，Charter revision 5；v18 inline compatibility parser 与发送效果不变 |
 | [Camp Message Send v18（历史）](camp-message-send-v18.md) | Agent body help 收敛到 payload；行首连续有效队员 alias 兼容解析，invalid alias tail 保持普通 Text |
 | [Camp Message Send v17（历史）](camp-message-send-v17.md) | v16 发送语义与 CLI help 不变；Principal 寻址教学去歧义，Charter revision 4 |
@@ -299,20 +311,23 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Message Send v5 (historical)](camp-message-send-v5.md) | v4 Core 效果与 wire 不变；收窄 `mentionUser` / `--to-user` 的消息局部使用边界，但正文不解析显示名 alias |
 | [Camp Message Send v4 (historical)](camp-message-send-v4.md) | v3 显式 Agent 寻址/caller return 加初版 `--to-user`、Structured Current User Mention 与原子通知 |
 | [Camp Message Send v4 Errata](camp-message-send-v4-errata.md) | 历史 v4 Current User Attention 生命周期与 locator-present exact verification 勘误；其修正已由 v5 继承 |
-| [Notification Episode v6（当前）](notification-episode-v6.md) | Schema 7；精确单聊来源与导航、当前阅读区抑制、单卡队列和剩余时间暂停 |
+| [Notification Episode v7（当前）](notification-episode-v7.md) | Schema 8；batch AgentRun 精确来源、导航与可见确认；历史 CampTurn 继续兼容 |
+| [Notification Episode v6（历史）](notification-episode-v6.md) | Schema 7；精确单聊来源与导航、当前阅读区抑制、单卡队列和剩余时间暂停 |
 | [Notification Episode v5（历史）](notification-episode-v5.md) | v4 生命周期不变；camp 增加只读 channelSource，schema 6 与原始 title 不变 |
 | [Notification Episode v4（历史）](notification-episode-v4.md) | v3 精确 signal 生命周期加会话可见来源的有界批量确认与即时角标刷新 |
 | [Notification Episode v3 (historical)](notification-episode-v3.md) | v2 精确 signal 加 Journal acknowledgement/Clear/remove invalidation、顺序式队列归约与 reset 清空；不含普通会话可见来源确认 |
 | [Notification Episode v2 (historical)](notification-episode-v2.md) | v1 三层模型加 Active Attention、exact HeadsUpSignal、事务式 Renderer cursor、pending-first Approval 与 acknowledge-only action；不含 signal 入队后的精确失效合同 |
 | [Notification Episode v1 (historical)](notification-episode-v1.md) | 初版 immutable Occurrence、separate Disposition、materialized Episode、minimal Change Journal、bounded write、typed action、heads-up 与 retention |
-| [Current User Attention v5（当前）](current-user-attention-v5.md) | 公屏 / 单聊独立可见来源，抑制与已读分离 |
+| [Current User Attention v6（当前）](current-user-attention-v6.md) | 公屏 / 单聊边界不变；新增 exact AgentRun 可见来源与执行台定位 |
+| [Current User Attention v5（历史）](current-user-attention-v5.md) | 公屏 / 单聊独立可见来源，抑制与已读分离 |
 | [Current User Attention v4（历史）](current-user-attention-v4.md) | v3 逐来源确认加普通进入会话后的精确可见即已读，不要求通知动作或 DOM 焦点 |
 | [Current User Attention v3 (historical)](current-user-attention-v3.md) | v2 精确确认加同 CampTurn 一卡、逐 Mention acknowledgement、最早未确认 action 与导航版本绑定；不含普通会话可见即已读 |
 | [Current User Attention v2 (historical)](current-user-attention-v2.md) | v1 当前用户注意力加 Message Mention 独立已读、锚点导航、焦点确认与 Markdown 保真；不含 Episode 聚合 |
 | [Current User Attention v1 (historical)](current-user-attention-v1.md) | 当前用户身份、结构化内容与原子通知基线；不含独立已读、锚点窗口与 Markdown 保真勘误 |
 | [Missing-Send Recovery Publication v2（当前）](missing-send-recovery-publication-v2.md) | v1 candidate/replay 不变；普通输出与 Missing-Send 均受 frozen membership lifetime publication fence 约束 |
 | [Missing-Send Recovery Publication v1（历史）](missing-send-recovery-publication-v1.md) | 成功 AgentRun 的 typed final candidate、同 Run accepted-send 抑制、recipient-free 原子恢复消息与 terminal replay/竞态语义 |
-| [Pending Camp Activation v1（当前）](pending-camp-activation-v1.md) | 一键 Pending 创建、Snapshot/Navigation activation state、首消息原子激活、mutation guard 与窄 discard/启动清理 |
+| [Pending Camp Activation v2（当前）](pending-camp-activation-v2.md) | 一键 Pending 保留首消息原子激活，未发送输入改为 Renderer-local，不进入导航或恢复 |
+| [Pending Camp Activation v1（历史）](pending-camp-activation-v1.md) | 一键 Pending 创建、Draft-backed Navigation/恢复、首消息原子激活与受控清理 |
 | [Camp Attachment v10（当前）](camp-attachment-v10.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [Camp Attachment v9（历史）](camp-attachment-v9.md) | Desktop Source Ref 运行前做宿主重检，随后向 Context 原样投影 stored source path；不再 canonicalize、分流或复制 |
 | [Camp Attachment v8（历史）](camp-attachment-v8.md) | Desktop 新用户附件只存 owner source refs，Pending 原生携带，外部 Runtime 路径复制到当前 Run Temp；该交付语义由 v9 替代 |
@@ -327,7 +342,9 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Published Attachment View v2（历史）](camp-published-attachment-view-v2.md) | v1 root/journal/generation fence 不变；增加稳定 semantic catalog/receipt、可重建物理轴与无全局 DB 锁 copy phase |
 | [Camp Published Attachment View v1（历史）](camp-published-attachment-view-v1.md) | 实例/Camp 隔离 root、publication journal、ready catalog、generation、物理 Manifest receipt、quota、rebuild 与安全清理 |
 | [Camp Attachment v1（历史）](camp-attachment-v1.md) | 普通文件/目录联合、Core-owned 只读快照、限制、Draft 原子消费、Snapshot 29 与旧 Runtime Authority path |
-| [Camp Composer Draft v13（当前）](camp-composer-draft-v13.md) | v12 退出围栏保留；Host 验证编辑归属、Web 单调 revision 与 Pending 原子移回；Migration 150 保留旧数据 |
+| [Camp Composer Draft v15（当前）](camp-composer-draft-v15.md) | 无 Core Draft/Pending；Desktop 按 Camp 本地恢复完整输入、continuation、anchored reply 与发送前附件预览 |
+| [Camp Composer Draft v14（历史）](camp-composer-draft-v14.md) | public Camp 输入只存在于当前 Renderer；无 Core Draft、Pending、恢复或跨客户端合并 |
+| [Camp Composer Draft v13（历史）](camp-composer-draft-v13.md) | Host 验证编辑归属、Web 单调 revision 与 Pending 原子移回；由 v14 clean break 替代 |
 | [Camp Composer Draft v12（历史）](camp-composer-draft-v12.md) | macOS 独立关窗等待既有 Draft preparation；客户端归属由 v13 扩展 |
 | [Camp Composer Draft v11（历史）](camp-composer-draft-v11.md) | v10 wire/事务不变；可控正常退出在 Planned Shutdown 前复用 active-Camp leave guard 持久化最新 Lexical EditorState；macOS 独立关窗 fence 由 v12 补齐 |
 | [Camp Composer Draft v10（历史）](camp-composer-draft-v10.md) | v9 wire/事务不变；现有 leave guard 覆盖所有真正卸载 active Camp Composer 的普通 Renderer 导航；App 退出边界由 v11 替代 |
@@ -340,12 +357,16 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Composer Draft v3（历史）](camp-composer-draft-v3.md) | v2 reply/continuation 边界不变；ready 附件可以独立构成用户发送 payload，空正文忠实持久化并保留原子消费 |
 | [Camp Composer Draft v2（历史）](camp-composer-draft-v2.md) | v1 reply 边界加 durable recipient continuation、source suppression、发送物化、显式修复与无 Default Lead fallback；仍继承正文非空发送要求 |
 | [Camp Composer Draft v1 (historical)](camp-composer-draft-v1.md) | Structured Content、附件引用、持久 reply intent、exact revision mutation、显式接收者修复与 Draft-only user send；不含 continuation |
-| [Planned Shutdown v6（当前）](planned-shutdown-v6.md) | v5 Core wire/report 不变；Main 在服务 drain 与 Core shutdown 前等待 Renderer 完成最新 Composer Draft fence，失败保留 App 供重试 |
+| [Planned Shutdown v8（当前）](planned-shutdown-v8.md) | protocol 3 不变；本地 Composer 可恢复，Scheduler/maintenance 由 shutdown supervisor 共同回收 |
+| [Planned Shutdown v7（历史）](planned-shutdown-v7.md) | v6 Core wire/report 不变；退出前只收口已开始的 Renderer-local 输入操作，不持久或恢复 public Composer |
+| [Planned Shutdown v6（历史）](planned-shutdown-v6.md) | v5 Core wire/report 不变；Main 在服务 drain 与 Core shutdown 前等待 Renderer 完成最新 Composer Draft fence |
 | [Planned Shutdown v5（历史）](planned-shutdown-v5.md) | v4 wire/report 不变；退出取消 Run 统一为 cancelled，内部未知效果计数保留；Desktop Composer 前置 fence 由 v6 替代 |
 | [Planned Shutdown v4（历史）](planned-shutdown-v4.md) | wire 仍为 protocol 3；先业务结算再 Runtime 清理，未知终态与原 report 保留 |
 | [Planned Shutdown v3（历史）](planned-shutdown-v3.md) | 退出、重启或更新统一取消全部非终态 AgentRun；稳定快照后立即关闭 terminal/route 准入，保留未知效果并使用 v3 report |
 | [Planned Shutdown v2（历史）](planned-shutdown-v2.md) | v1 generation-local reliable terminal 加 durable shutdown cycle、product fence、启动补偿、终态 unknown-effect 保留与 v2 report |
-| [App Update v2（当前）](app-update-v2.md) | v1 snapshot/API 与 updater-first staging 不变；安装已接受后先完成 active Composer Draft fence，再进入同一 Planned Shutdown |
+| [App Update v4（当前）](app-update-v4.md) | v3 snapshot/API 与 updater-first staging 不变；安装退出保留 Desktop-local Active Camp Composer snapshot，并共同回收 Scheduler/maintenance |
+| [App Update v3（历史）](app-update-v3.md) | v2 snapshot/API 与 updater-first staging 不变；安装接受后只收口已开始的 Renderer-local 操作 |
+| [App Update v2（历史）](app-update-v2.md) | v1 snapshot/API 与 updater-first staging 不变；安装已接受后先完成 active Composer Draft fence |
 | [App Update v1（历史）](app-update-v1.md) | Desktop 主动检查、独立 release/prompt 事实、显式下载与安装、精确提醒 dismiss、状态投影和 updater-first 受控退出；Composer 前置 fence 由 v2 替代 |
 | [Windows Private Storage v2（当前）](windows-private-storage-v2.md) | v1 私有存储不变；增加 `<data_dir>\runtime-files`、受保护 View containers 与精确 Camp root 暴露边界 |
 | [Windows Private Storage v1（历史）](windows-private-storage-v1.md) | `%LOCALAPPDATA%` 布局、local NTFS admission、创建时 protected DACL、handle identity 与 long-path blocker；不含 Runtime Files Root |
@@ -360,12 +381,14 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Message Send v1 (historical)](camp-message-send-v1.md) | v0.45 `camp.message.send` / `rovai send`、Addressing Token、recipient resolution、fanout、lineage 与错误 |
 | [Camp Message Send v2 (historical)](camp-message-send-v2.md) | v0.46 隐式 Camp 与 Agent 输入 reply default target；不作为 v0.62 send 入口 |
 | [Camp Message Send v3 (historical)](camp-message-send-v3.md) | v0.62 caller return 与 Core-managed reply reference；不含 v0.65 Current User Attention |
-| [Gather v5（当前）](gather-v5.md) | v4 lifecycle 不变；schema/help 只推荐 canonical `--to`，保留 distinct repeat 与 `uniqueItems` 校验 |
+| [Gather v5（历史、已退役）](gather-v5.md) | 当前 catalog、CLI、Scheduler 与模型输入已删除 Gather；本合同仅解释冻结历史 |
 | [Gather v4（历史）](gather-v4.md) | v3 input/projection 不变；冻结 initiator membership lifetime，成员移除级联取消并只由正式 terminal settlement 推进 |
 | [Gather v3（历史）](gather-v3.md) | v2 lifecycle/limits 不变；Completion Input 使用 `agent_v1` request/captured 投影、projected digest 与 schema v3 |
 | [Gather v2（历史）](gather-v2.md) | v1 lifecycle 加当前代最后 captured result、独立回传限额、完整 request 与 completion input v2 |
 | [Gather v1（历史）](gather-v1.md) | GatherRecord/Item、Default Lead 接受、持久 capture/Barrier、completion snapshot/FIFO 与旧 capture budget/input v1 |
-| [Message Delivery v8（当前）](message-delivery-v8.md) | v7 取消语义不变；Managed v2 Message 直接普通 dispatch，`projection_blocked` 只收口 legacy v1 operation |
+| [Message Delivery v10（当前）](message-delivery-v10.md) | 继承 v9；claim 原子修复历史 waiting lane 缺失的 Camp-member Conversation，启动扫描与兜底自动恢复 |
+| [Message Delivery v9（历史）](message-delivery-v9.md) | waiting Delivery 是唯一队列；claim 原子创建不可变的多输入 AgentRun，无预算、Gather 或业务重试 |
+| [Message Delivery v8（历史）](message-delivery-v8.md) | Managed v2 Message 的旧 dispatch/attempt 模型 |
 | [Message Delivery v7（历史）](message-delivery-v7.md) | v6 membership lifetime 不变；允许 `cancelled + terminal + attempt=0`，统一显式/批量取消转换并保证迟到回调与重启不复活 |
 | [Message Delivery v6（历史）](message-delivery-v6.md) | v5 lifecycle/gate 不变；admission 冻结 recipient membership version，离开后再添加不能复活 dispatch/retry |
 | [Message Delivery v5（历史）](message-delivery-v5.md) | v4 联合/FIFO 不变；增加无 attempt 的 `projection_blocked` gate、成功释放与失败 settlement |
@@ -373,8 +396,10 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v3（历史）](message-delivery-v3.md) | public/captured/completion 判别联合、Delivery-level completion role 与初版 Gather settlement |
 | [Message Delivery v2 (historical)](message-delivery-v2.md) | `forward | return` 冻结边、target lineage、caller continuation，以及 v1 queue/attempt/recovery/settlement |
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
-| [Current Input Skill Links v1（当前）](current-input-skill-links-v1.md) | Structured Skill Mention、per-Run send snapshot、start-time resolver 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v25（当前）](context-manifest-evidence-v25.md) | 合并 v24 的附件输出路径与 Mission 事实、可信开始输入、独立 WORKSPACE；冻结 22/23/24 保留 |
+| [Run Input Skill Links v2（当前）](current-input-skill-links-v2.md) | Structured Skill Mention、claim-time 批次快照、verified resolver 与 per-message `RUN_INPUT.messages[].skills` |
+| [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
+| [ContextManifest Evidence v26（当前 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、执行配置与可见性 evidence；实时 read 不受其限制 |
+| [ContextManifest Evidence v25（当前 Single Chat / 历史 public）](context-manifest-evidence-v25.md) | Single Chat 继续使用；冻结 public 22–25 原样保留 |
 | [ContextManifest Evidence v24（历史）](context-manifest-evidence-v24.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [ContextManifest Evidence v23（历史）](context-manifest-evidence-v23.md) | v21 selection/evidence 不变；Formatter/Manifest 22 增加 ExternalPrincipal direct source 与 ExternalQuote deterministic projection |
 | [ContextManifest Evidence v21（历史）](context-manifest-evidence-v21.md) | Formatter 21 bytes 不变；View receipt v2 只冻结稳定附件语义；不含 ExternalPrincipal/ExternalQuote |
@@ -384,13 +409,16 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v17（历史）](context-manifest-evidence-v17.md) | Formatter v19、`agent_v1` message audience、closed forward/return A2A guidance evidence、Gather v3 与 exact frozen recovery |
 | [ContextManifest Evidence v16（历史）](context-manifest-evidence-v16.md) | Formatter v18、Skill selection/availability/Exposure/resolution、exact payload 与 Migration 91 clean-break recovery |
 | [ContextManifest Evidence v15（历史）](context-manifest-evidence-v15.md) | Formatter v17、compact history/offset、Run Facts exact bytes/evidence 与旧 v15 recovery 边界 |
-| [Run Facts v3（当前）](run-facts-v3.md) | 保持既有事实；新增紧凑 mission identity/status，workspace 在独立 section |
+| [Run Facts v5（当前 public Camp）](run-facts-v5.md) | 删除 gather/delegation/conversationMode，Mission notice 指向 RUN_INPUT |
+| [Run Facts v4（当前 Single Chat / 历史 public）](run-facts-v4.md) | Single Chat 保留 conversationMode；旧 public frozen payload 原样解释 |
+| [Run Facts v3（历史）](run-facts-v3.md) | 紧凑 Mission identity/status 与独立 workspace 的旧 shape |
 | [Run Facts v2（historical）](run-facts-v2.md) | v1 optional facts 不变；增加每个 AgentRun mandatory `campResources` Published Attachment root |
 | [Run Facts v1（历史）](run-facts-v1.md) | Task reference、Session continuity、external effect、Gather generation fallback 与 delegation budget 的 optional 结构化模型事实 |
 | [ContextManifest Evidence v14（历史）](context-manifest-evidence-v14.md) | Formatter v16、Gather result notice、完整 request/current generation evidence 与旧 v14/v15 exact recovery |
 | [ContextManifest Evidence v13（历史）](context-manifest-evidence-v13.md) | Formatter v15、`gather_completion` 与 completion input v1 frozen evidence |
 | [ContextManifest Evidence v12 (historical)](context-manifest-evidence-v12.md) | v11 self-active semantics 加 Formatter v14 的 `mentionsCurrentUser`、Structured Content/projected body evidence 与 frozen recovery |
-| [Context Delivery Profile v6（当前）](context-delivery-profile-v6.md) | 沿用 Profile 5 数值与选文；实际 preparing workspace 参与直接与 A2A 最终预算 |
+| [Context Delivery Profile v7（当前 public Camp）](context-delivery-profile-v7.md) | mandatory RUN_INPUT 优先、默认 96 KiB、完整 FIFO prefix 与最新完整历史后缀 |
+| [Context Delivery Profile v6（当前 Single Chat / 历史 public）](context-delivery-profile-v6.md) | Single Chat 与冻结 public Manifest 继续使用 |
 | [Context Delivery Profile v5（historical）](context-delivery-profile-v5.md) | v3 数值与 Task/reference 语义不变；当前 Agent 自身消息在 recent top-15 和 whole-history omission 前失去候选资格 |
 | [Context Delivery Profile v3（历史）](context-delivery-profile-v3.md) | v2 public context 加 self-active Task selection/order/max 8 与 public-history-first budget priority；自身消息仍属于 recent candidate |
 | [ContextManifest Evidence v11 (historical)](context-manifest-evidence-v11.md) | Formatter v13 与 self-active empty/omission 语义；不含 Current User Mention metadata |

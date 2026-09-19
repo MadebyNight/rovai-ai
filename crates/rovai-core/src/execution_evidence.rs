@@ -885,8 +885,8 @@ impl ExecutionEvidenceService {
                 SELECT evidence.payload_preview_json, evidence.content_blob_id
                 FROM agent_run_execution_evidence AS evidence
                 JOIN agent_run ON agent_run.id = evidence.agent_run_id
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                WHERE evidence.id = ?1 AND camp_turn.camp_id = ?2
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                WHERE evidence.id = ?1 AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?2
                 "#,
                 params![evidence_id, camp_id],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
@@ -1817,7 +1817,7 @@ mod tests {
             DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES, MaterializeContextRequest,
         },
         runtime::{
-            AgentRunWorkspace, CancelCampTurnCommand, ClaimAgentRunCommand, ExecutionRuntimeService,
+            AgentRunWorkspace, CancelAgentRunCommand, ClaimAgentRunCommand, ExecutionRuntimeService,
         },
         team_tool::TeamToolService,
     };
@@ -3004,10 +3004,6 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let camp_turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
         let runtime = ExecutionRuntimeService::default();
         let candidate = runtime
             .list_dispatchable_agent_runs(&database, 10)
@@ -3335,16 +3331,16 @@ mod tests {
         };
         assert!(!context.rendered_payload.contains("EVIDENCE_ONLY_"));
 
-        let turn_version: i64 = database
+        let run_version: i64 = database
             .connection()
             .query_row(
-                "SELECT version FROM camp_turn WHERE id = ?1",
-                [&camp_turn_id],
+                "SELECT version FROM agent_run WHERE id = ?1",
+                [&run_id],
                 |row| row.get(0),
             )
             .unwrap();
         runtime
-            .request_camp_turn_cancellation(
+            .request_agent_run_cancellation(
                 &mut database,
                 &CommandEnvelope {
                     command_id: Uuid::new_v4().to_string(),
@@ -3354,10 +3350,10 @@ mod tests {
                     camp_id: Some(camp_id.clone()),
                     expected_versions: Vec::new(),
                     execution_epoch: None,
-                    payload: CancelCampTurnCommand {
+                    payload: CancelAgentRunCommand {
                         camp_id,
-                        camp_turn_id,
-                        expected_version: turn_version,
+                        agent_run_id: run_id.clone(),
+                        expected_version: run_version,
                     },
                 },
             )

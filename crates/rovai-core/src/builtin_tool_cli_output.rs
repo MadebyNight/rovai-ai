@@ -51,7 +51,6 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
                 },
                 "effectiveRecipients": {
                     "type": "array",
-                    "maxItems": 16,
                     "uniqueItems": true,
                     "items": {"type": "string"}
                 },
@@ -65,24 +64,9 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
                 },
                 "deliveryIds": {
                     "type": "array",
-                    "maxItems": 16,
                     "uniqueItems": true,
                     "items": {"type": "string"}
                 }
-            }
-        })),
-        "team.gather" => Ok(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["gatherId", "requestMessageId", "effectiveRecipients", "completion"],
-            "properties": {
-                "gatherId": {"type": "string"},
-                "requestMessageId": {"type": "string"},
-                "effectiveRecipients": {
-                    "type": "array", "minItems": 1, "maxItems": 16,
-                    "uniqueItems": true, "items": {"type": "string"}
-                },
-                "completion": {"const": "deferred"}
             }
         })),
         "memory.write" => Ok(json!({
@@ -139,31 +123,32 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
     }
 }
 
-pub fn project_envelope(envelope: &BuiltinToolInvocationEnvelope) -> Result<Value> {
+pub fn project_envelope(envelope: BuiltinToolInvocationEnvelope) -> Result<Value> {
     envelope.validate()?;
-    let projected = if envelope.ok {
-        let result = envelope
-            .result
-            .as_ref()
-            .context("successful Built-in Tool envelope has no result")?;
-        project_success(&envelope.operation, result)?
+    let BuiltinToolInvocationEnvelope {
+        ok,
+        operation,
+        result,
+        error,
+        ..
+    } = envelope;
+    let projected = if ok {
+        let result = result.context("successful Built-in Tool envelope has no result")?;
+        project_success(&operation, result)?
     } else {
-        let error = envelope
-            .error
-            .as_ref()
-            .context("rejected Built-in Tool envelope has no error")?;
-        project_error(error)?
+        let error = error.context("rejected Built-in Tool envelope has no error")?;
+        project_error(&error)?
     };
-    validate_projected_document(&envelope.operation, envelope.ok, &projected)?;
+    validate_projected_document(&operation, ok, &projected)?;
     Ok(projected)
 }
 
-fn project_success(operation: &str, result: &Value) -> Result<Value> {
-    let object = result
-        .as_object()
-        .context("Canonical Operation Result must be an object")?;
+fn project_success(operation: &str, result: Value) -> Result<Value> {
     match operation {
         "camp.message.send" => {
+            let object = result
+                .as_object()
+                .context("Canonical Operation Result must be an object")?;
             let mut projected = json!({
             "messageId": object
                 .get("messageId")
@@ -186,40 +171,47 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
             }
             Ok(projected)
         }
-        "team.gather" => Ok(json!({
-            "gatherId": object
-                .get("gatherId")
-                .context("team.gather result has no gatherId")?,
-            "requestMessageId": object
-                .get("requestMessageId")
-                .context("team.gather result has no requestMessageId")?,
-            "effectiveRecipients": object
-                .get("effectiveRecipients")
-                .context("team.gather result has no effectiveRecipients")?,
-            "completion": object
-                .get("completion")
-                .context("team.gather result has no completion")?,
-        })),
-        "memory.write" => match object.get("outcome").and_then(Value::as_str) {
+        "memory.write" => match result
+            .as_object()
+            .context("Canonical Operation Result must be an object")?
+            .get("outcome")
+            .and_then(Value::as_str)
+        {
             Some("effective") => Ok(json!({
                 "outcome": "effective",
-                "memoryId": object
+                "memoryId": result
+                    .as_object()
+                    .expect("memory result was checked above")
                     .get("memoryId")
                     .context("effective memory.write result has no memoryId")?,
-                "revisionId": object
+                "revisionId": result
+                    .as_object()
+                    .expect("memory result was checked above")
                     .get("revisionId")
                     .context("effective memory.write result has no revisionId")?,
             })),
             Some("review_pending") => Ok(json!({
                 "outcome": "review_pending",
-                "reviewItemId": object
+                "reviewItemId": result
+                    .as_object()
+                    .expect("memory result was checked above")
                     .get("reviewItemId")
                     .context("pending memory.write result has no reviewItemId")?,
             })),
             _ => bail!("memory.write result has an unknown outcome"),
         },
-        "team.create_task" => project_task_mutation(object, false),
-        "team.update_task" => project_task_mutation(object, true),
+        "team.create_task" => project_task_mutation(
+            result
+                .as_object()
+                .context("Canonical Operation Result must be an object")?,
+            false,
+        ),
+        "team.update_task" => project_task_mutation(
+            result
+                .as_object()
+                .context("Canonical Operation Result must be an object")?,
+            true,
+        ),
         "member.create"
         | "team.get_task"
         | "team.list_tasks"
@@ -240,7 +232,7 @@ fn project_success(operation: &str, result: &Value) -> Result<Value> {
         | "automation.run"
         | "automation.close"
         | "automation.update"
-        | "automation.delete" => Ok(result.clone()),
+        | "automation.delete" => Ok(result),
         _ => bail!("unknown built-in operation for Agent output projection"),
     }
 }
@@ -526,7 +518,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            project_envelope(&envelope).unwrap(),
+            project_envelope(envelope).unwrap(),
             json!({
                 "messageId": "msg_123",
                 "agentAddressingMode": "automatic",
@@ -550,7 +542,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            project_envelope(&envelope).unwrap(),
+            project_envelope(envelope).unwrap(),
             json!({"error": {
                 "code": "builtin_tool.outcome_indeterminate",
                 "message": "The operation may already have committed. Confirm the exact current state before proceeding; do not blindly repeat the mutation. If confirmation is unavailable, report the uncertainty.",
@@ -569,13 +561,9 @@ mod tests {
                 "sequence": 1,
                 "authorType": "agent",
                 "authorId": "agent_27",
-                "replyToMessageId": null,
+                "anchorMessageId": null,
                 "createdAt": "2026-01-01T00:00:00Z",
                 "body": "hello",
-                "bodyOffset": 0,
-                "bodyLength": 5,
-                "bodyTruncated": false,
-                "nextBodyOffset": null,
                 "attachmentCount": 1,
                 "attachments": [{
                     "attachmentId": "attachment_123",
@@ -597,7 +585,7 @@ mod tests {
             completed_core_result,
         )
         .unwrap();
-        assert!(project_envelope(&envelope).is_err());
+        assert!(project_envelope(envelope).is_err());
 
         let projected = output_contract_mismatch_agent_error("camp.read");
         validate_schema(&projected, &agent_error_schema()).unwrap();
@@ -693,7 +681,7 @@ mod tests {
                 canonical,
             )
             .unwrap();
-            assert_eq!(project_envelope(&envelope).unwrap(), expected);
+            assert_eq!(project_envelope(envelope).unwrap(), expected);
         }
     }
 
@@ -726,7 +714,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                project_envelope(&envelope).unwrap(),
+                project_envelope(envelope).unwrap(),
                 *expected_agent_output,
                 "{operation} Envelope projection drifted from its golden output"
             );

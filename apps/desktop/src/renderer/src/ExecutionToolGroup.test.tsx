@@ -1,8 +1,16 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { CompactionEventRow, ExecutionToolGroupStateContext, ToolActivityGroup, ToolCallRow } from './ExecutionToolGroup'
+import { describe, expect, it, vi } from 'vitest'
+import type { AgentRunExecutionEvidenceView } from '@contracts'
+import {
+  CompactionEventRow,
+  ExecutionToolGroupStateContext,
+  ToolActivityGroup,
+  ToolCallRow,
+  selectCompletePresentableExecutionEvidence
+} from './ExecutionToolGroup'
 import type { ToolProgressItem } from './execution-tool-grouping'
 import type { ActivityIconKind } from './ui-model'
+import { openAgentRunActivityFilePreview } from './agent-run-file-preview'
 
 const tool = (id: string, iconKind: ActivityIconKind, status: ToolProgressItem['step']['status']): ToolProgressItem => ({
   kind: 'tool', key: `tool:${id}`, step: {
@@ -20,6 +28,77 @@ const renderGroup = (items: ToolProgressItem[], expanded = false, liveTail = fal
 )
 
 describe('command disclosure presentation', () => {
+  it('routes a non-truncated canonical Command Diff through its exact Run activity evidence', async () => {
+    const evidence = {
+      id: 'diff-evidence',
+      agentRunId: 'direct-camp-run',
+      executionEpoch: 1,
+      sequence: 1,
+      eventType: 'activity.completed',
+      kind: 'file_change',
+      phase: 'completed',
+      payload: {},
+      contentBlobId: null,
+      contentByteCount: 512,
+      isTruncated: false,
+      occurredAt: '2026-09-19T00:00:00Z',
+      canonical: {
+        operationId: 'edit-mission',
+        classifierVersion: 'activity-v4',
+        activityDomain: 'file',
+        semanticKind: 'file.write',
+        toolName: 'apply_patch',
+        presentationHint: null,
+        phase: 'terminal',
+        outcome: 'succeeded',
+        sourceAuthority: 'runtime',
+        credibility: 'runtime_structured',
+        coverageLevel: 'fine_grained',
+        sourceEvidenceIds: ['diff-evidence'],
+        firstEvidenceSequence: 1,
+        lastEvidenceSequence: 1,
+        revision: 1,
+        diffProjection: {
+          schemaVersion: 1,
+          source: 'runtime_reported',
+          revision: 1,
+          sourceEvidenceIds: ['diff-evidence'],
+          status: 'available',
+          semanticKind: 'unified_diff_snapshot',
+          entries: [{
+            path: 'crates/rovai-core/src/application/mission.rs',
+            changeKind: 'update',
+            additions: 1,
+            deletions: 1,
+            diff: '@@ -1 +1 @@\n-old\n+new\n'
+          }]
+        }
+      }
+    } satisfies AgentRunExecutionEvidenceView
+    const selected = selectCompletePresentableExecutionEvidence([evidence])
+    const open = vi.fn().mockResolvedValue({ kind: 'preview', tabId: 'mission-file' })
+
+    await expect(openAgentRunActivityFilePreview({
+      filePreview: { open },
+      campId: 'mission-camp',
+      evidence: selected.byToolId.get('edit-mission'),
+      path: 'crates/rovai-core/src/application/mission.rs',
+      onError: vi.fn()
+    })).resolves.toBe(true)
+
+    expect(open).toHaveBeenCalledWith({
+      kind: 'run_activity_file',
+      campId: 'mission-camp',
+      agentRunId: 'direct-camp-run',
+      executionEpoch: 1,
+      evidenceId: 'diff-evidence',
+      rawReference: 'crates/rovai-core/src/application/mission.rs'
+    }, undefined, { fileName: 'crates/rovai-core/src/application/mission.rs' }, {
+      commitOnSuccess: true,
+      previewOnly: true
+    })
+  })
+
   it.each(['terminal', 'file-read', 'file-write', 'web'] as ActivityIconKind[])(
     'selects the same %s instruction for both the current title and icon', icon => {
       const markup = renderGroup([tool('old', 'terminal', 'completed'), tool('current', icon, 'running'), tool('later', 'unknown', 'completed')])

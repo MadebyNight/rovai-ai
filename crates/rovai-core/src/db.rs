@@ -283,8 +283,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.59";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 112;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.60";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 114;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -721,6 +721,8 @@ struct CurrentMigrationState {
     v160: bool,
     v161: bool,
     v162: bool,
+    v163: bool,
+    v164: bool,
 }
 
 impl CurrentMigrationState {
@@ -742,10 +744,26 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v164 {
+            let mut previous = *self;
+            previous.v164 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v163
+                && previous.admits("v1.60", 113, classifier);
+        }
+        if self.v163 {
+            let mut previous = *self;
+            previous.v163 = false;
+            return contract == "v1.60"
+                && schema == 113
+                && self.v162
+                && previous.admits("v1.59", 112, classifier);
+        }
         if self.v162 {
             let mut previous = *self;
             previous.v162 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 112
                 && self.v161
                 && previous.admits("v1.59", 111, classifier);
@@ -753,7 +771,7 @@ impl CurrentMigrationState {
         if self.v161 {
             let mut previous = *self;
             previous.v161 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 111
                 && self.v160
                 && previous.admits("v1.59", 110, classifier);
@@ -761,7 +779,7 @@ impl CurrentMigrationState {
         if self.v160 {
             let mut previous = *self;
             previous.v160 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 110
                 && self.v159
                 && previous.admits("v1.59", 109, classifier);
@@ -769,7 +787,7 @@ impl CurrentMigrationState {
         if self.v159 {
             let mut previous = *self;
             previous.v159 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 109
                 && self.v158
                 && previous.admits("v1.59", 108, classifier);
@@ -777,7 +795,7 @@ impl CurrentMigrationState {
         if self.v158 {
             let mut previous = *self;
             previous.v158 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 108
                 && self.v157
                 && previous.admits("v1.59", 107, classifier);
@@ -785,7 +803,7 @@ impl CurrentMigrationState {
         if self.v157 {
             let mut previous = *self;
             previous.v157 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 107
                 && self.v156
                 && previous.admits("v1.59", 106, classifier);
@@ -793,7 +811,7 @@ impl CurrentMigrationState {
         if self.v156 {
             let mut previous = *self;
             previous.v156 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 106
                 && self.v155
                 && previous.admits("v1.59", 105, classifier);
@@ -801,7 +819,7 @@ impl CurrentMigrationState {
         if self.v155 {
             let mut previous = *self;
             previous.v155 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
+            return contract == "v1.59"
                 && schema == 105
                 && self.v154
                 && previous.admits("v1.59", 104, classifier);
@@ -809,9 +827,9 @@ impl CurrentMigrationState {
         if !self.v154 && contract == "v1.59" && schema == 103 {
             let mut completed = *self;
             completed.v154 = true;
-            return completed.admits(CURRENT_DATA_CONTRACT_VERSION, 104, classifier);
+            return completed.admits("v1.59", 104, classifier);
         }
-        if self.v154 && (contract != CURRENT_DATA_CONTRACT_VERSION || schema != 104) {
+        if self.v154 && (contract != "v1.59" || schema != 104) {
             return false;
         }
         let through_v69 = self.v66 && self.v67 && self.v68 && self.v69;
@@ -870,7 +888,7 @@ impl CurrentMigrationState {
         {
             return false;
         }
-        let current = contract == CURRENT_DATA_CONTRACT_VERSION
+        let current = contract == "v1.59"
             && schema == 104
             && classifier == V147_CLASSIFIER_VERSION
             && self.v142
@@ -2977,8 +2995,21 @@ pub(crate) fn classify_database_contract(
         && marker.projection_schema_version == 92
         && marker.classifier_version == V142_CLASSIFIER_VERSION;
     let dsh_schema_matches = migrations.v157 && dsh_runtime_v157_schema_matches(connection)?;
-    let mission_context_schema_matches =
-        migrations.v158 && mission_context::schema_matches(connection)?;
+    let camp_message_agent_run_schema_matches = (migrations.v162 || migrations.v163)
+        && camp_message_agent_run_v163_schema_matches(connection)?;
+    let agent_run_notification_schema_matches =
+        migrations.v164 && agent_run_notification_v164_schema_matches(connection)?;
+    let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
+        &marker,
+        migrations,
+        camp_message_agent_run_schema_matches,
+    );
+    let mission_context_schema_matches = migrations.v158
+        && if migrations.v163 || legacy_delivery_first_v162 {
+            mission_context::schema_matches_v163(connection)?
+        } else {
+            mission_context::schema_matches(connection)?
+        };
     let mission_details_schema_matches =
         migrations.v159 && mission_details::v159_schema_matches(connection)?;
     let mission_delivery_schema_matches =
@@ -2996,6 +3027,7 @@ pub(crate) fn classify_database_contract(
         && mission_context_schema_matches
         && mission_delivery_schema_matches;
     if (!legacy_client_source
+        && !legacy_delivery_first_v162
         && !migrations.admits(
             &marker.contract_version,
             marker.projection_schema_version,
@@ -3026,7 +3058,14 @@ pub(crate) fn classify_database_contract(
             && !mission_details_schema_matches)
         || (migrations.v160 && !mission_delivery_schema_matches)
         || (migrations.v161 && !mission_attachment_schema_matches)
-        || (migrations.v162 && !mission_workspace_lifecycle_schema_matches)
+        || (migrations.v162
+            && !migrations.v163
+            && !legacy_delivery_first_v162
+            && !mission_workspace_lifecycle_schema_matches)
+        || (migrations.v163
+            && (!mission_workspace_lifecycle_schema_matches
+                || !camp_message_agent_run_schema_matches))
+        || (migrations.v164 && !agent_run_notification_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3057,6 +3096,23 @@ pub(crate) fn classify_database_contract(
             marker,
         ))
     }
+}
+
+fn legacy_delivery_first_v162_source(
+    marker: &DatabaseContractMarker,
+    mut migrations: CurrentMigrationState,
+    camp_message_agent_run_schema_matches: bool,
+) -> bool {
+    if marker.contract_version != "v1.60"
+        || marker.projection_schema_version != 112
+        || !migrations.v162
+        || migrations.v163
+        || !camp_message_agent_run_schema_matches
+    {
+        return false;
+    }
+    migrations.v162 = false;
+    migrations.admits("v1.59", 111, &marker.classifier_version)
 }
 
 // The pushed Host preview used receipt 150 before main allocated that number.
@@ -3124,6 +3180,149 @@ fn apply_automation_time_limit_schema_v155(tx: &Transaction<'_>) -> Result<()> {
 
 fn automation_time_limit_v155_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
     connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('automation') WHERE name='runtime_timeout_seconds' AND type='INTEGER' AND dflt_value='3600' AND [notnull]=0)", [], |row| row.get(0))
+}
+
+fn camp_message_agent_run_v163_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let required_columns = [
+        ("agent_run", "camp_id"),
+        ("agent_run", "anchor_message_id"),
+        ("agent_run", "current_public_tail_sequence"),
+        ("camp_message", "origin_kind"),
+        ("camp_message", "recall_state"),
+        ("camp_message", "withdrawn_by_id"),
+        ("camp_message", "withdrawn_at"),
+        ("camp_message_delivery", "queue_sequence"),
+        ("camp_message_delivery", "claimed_agent_run_id"),
+        ("agent_run_input", "ordinal"),
+        ("agent_run_input", "delivery_id"),
+        ("channel_delivery", "channel_binding_id"),
+        ("channel_turn_request", "delivery_ids_json"),
+        ("automation_run", "trigger_message_id"),
+        ("automation_run", "trigger_delivery_id"),
+        ("mission_start", "delivery_id"),
+    ];
+    for (table, column) in required_columns {
+        let present: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            params![table, column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            return Ok(false);
+        }
+    }
+    let camp_turn_nullable: bool = connection.query_row(
+        "SELECT COALESCE((SELECT [notnull] = 0 FROM pragma_table_info('agent_run') WHERE name = 'camp_turn_id'), 0)",
+        [],
+        |row| row.get(0),
+    )?;
+    let console_camp_turn_nullable: bool = connection.query_row(
+        "SELECT COALESCE((SELECT [notnull] = 0 FROM pragma_table_info('channel_execution_console') WHERE name = 'camp_turn_id'), 0)",
+        [],
+        |row| row.get(0),
+    )?;
+    let agent_run_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'agent_run'",
+        [],
+        |row| row.get(0),
+    )?;
+    let context_manifest_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'context_manifest'",
+        [],
+        |row| row.get(0),
+    )?;
+    let automation_run_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'automation_run'",
+        [],
+        |row| row.get(0),
+    )?;
+    let mission_start_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'mission_start'",
+        [],
+        |row| row.get(0),
+    )?;
+    let indexes: i64 = connection.query_row(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'index' AND name IN (
+            'camp_message_delivery_waiting_idx',
+            'camp_message_delivery_run_idx',
+            'agent_run_input_message_idx',
+            'agent_run_active_batch_lane_idx'
+        )
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    let context_guards: i64 = connection.query_row(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'trigger' AND name IN (
+            'context_manifest_v26_only_insert',
+            'context_manifest_quote_profile_insert',
+            'runtime_input_delivery_attachment_auth_insert'
+        )
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(camp_turn_nullable
+        && console_camp_turn_nullable
+        && agent_run_schema.contains("'batch'")
+        && agent_run_schema.contains("invocation_kind = 'batch'")
+        && context_manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26)")
+        && context_manifest_schema
+            .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)")
+        && context_manifest_schema.contains("run_facts_schema_version IN (1, 2, 3, 4, 5)")
+        && automation_run_schema.contains("trigger_message_id TEXT UNIQUE")
+        && automation_run_schema.contains("trigger_delivery_id TEXT UNIQUE")
+        && mission_start_schema
+            .contains("CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))")
+        && context_guards == 3
+        && indexes == 4)
+}
+
+fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let columns: i64 = connection.query_row(
+        r#"
+        SELECT
+            EXISTS(SELECT 1 FROM pragma_table_info('notification_episode')
+                   WHERE name = 'agent_run_id')
+          + EXISTS(SELECT 1 FROM pragma_table_info('notification_occurrence')
+                   WHERE name = 'agent_run_id')
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    let triggers: i64 = connection.query_row(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'trigger' AND name IN (
+            'notification_agent_run_terminal_insert',
+            'notification_agent_run_terminal_update'
+        )
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    let occurrence_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master \
+         WHERE type = 'table' AND name = 'notification_occurrence'",
+        [],
+        |row| row.get(0),
+    )?;
+    let satisfaction_trigger: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master \
+         WHERE type = 'trigger' AND name = 'notification_completion_satisfied_by_user_turn'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(columns == 2
+        && triggers == 2
+        && occurrence_schema.contains("'agent_run'")
+        && occurrence_schema.contains("agent_run_id = source_id")
+        && satisfaction_trigger.contains("occurrence.source_type = 'agent_run'")
+        && satisfaction_trigger.contains("agent_run.anchor_message_id <> NEW.id"))
 }
 
 fn private_client_draft_v154_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -3432,7 +3631,7 @@ fn message_quote_v148_schema_matches(connection: &Connection) -> rusqlite::Resul
             return Ok(false);
         }
     }
-    let guards: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name IN ('context_manifest_v23_only_insert','context_manifest_v24_only_insert','context_manifest_v25_only_insert','context_manifest_quote_profile_insert')", [], |row| row.get(0))?;
+    let guards: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name IN ('context_manifest_v23_only_insert','context_manifest_v24_only_insert','context_manifest_v25_only_insert','context_manifest_v26_only_insert','context_manifest_quote_profile_insert')", [], |row| row.get(0))?;
     Ok(guards == 2)
 }
 
@@ -3925,7 +4124,9 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 159),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 160),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 161),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 162)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 162),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 163),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 164)
         "#,
         [],
         |row| {
@@ -4023,6 +4224,8 @@ fn load_current_migration_state(
                 v160: row.get(90)?,
                 v161: row.get(91)?,
                 v162: row.get(92)?,
+                v163: row.get(93)?,
+                v164: row.get(94)?,
             })
         },
     )
@@ -6128,13 +6331,20 @@ impl Database {
         let accepted_input_recovery_blockers_created = transaction.execute(
             r#"
             UPDATE agent_run
-            SET status = 'waiting',
-                wait_reason = 'recovery_blocked',
+            SET status = 'failed',
+                wait_reason = NULL,
                 wait_deadline_at = NULL,
                 runtime_recovery_required = 0,
                 execution_lease_owner = NULL,
                 execution_lease_expires_at = NULL,
                 last_error_code = 'accepted_input_outcome_unknown',
+                manual_retry_allowed = 0,
+                cancel_requested_at = COALESCE(cancel_requested_at, ?1),
+                cancel_reason_code = COALESCE(
+                    cancel_reason_code,
+                    'accepted_input_outcome_unknown'
+                ),
+                ended_at = COALESCE(ended_at, ?1),
                 version = version + 1,
                 updated_at = ?1
             WHERE status = 'waiting'
@@ -6176,6 +6386,48 @@ impl Database {
             "#,
             [&now],
         )? as i64;
+        transaction.execute(
+            r#"
+            UPDATE camp_message_delivery
+            SET status = 'failed', failure_code = 'accepted_input_outcome_unknown',
+                ended_at = ?1, version = version + 1, updated_at = ?1
+            WHERE status = 'claimed'
+              AND claimed_agent_run_id IN (
+                  SELECT id FROM agent_run
+                  WHERE status = 'failed'
+                    AND last_error_code = 'accepted_input_outcome_unknown'
+                    AND cancel_requested_at = ?1
+              )
+            "#,
+            [&now],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE conversation
+            SET native_adapter_installation_id = NULL,
+                native_session_id = NULL,
+                native_binding_compatibility_digest = NULL,
+                native_installation_generation = NULL,
+                native_session_compatibility_key = NULL,
+                native_binding_id = NULL,
+                native_binding_secret_digest = NULL,
+                last_accepted_public_boundary_sequence = CASE
+                    WHEN kind = 'single_chat' THEN 0
+                    ELSE last_accepted_public_boundary_sequence
+                END,
+                native_charter_digest = NULL,
+                native_collaboration_state_digest = NULL,
+                version = version + 1,
+                updated_at = ?1
+            WHERE id IN (
+                SELECT conversation_id FROM agent_run
+                WHERE status = 'failed'
+                  AND last_error_code = 'accepted_input_outcome_unknown'
+                  AND cancel_requested_at = ?1
+            )
+            "#,
+            [&now],
+        )?;
         let summary = V2RecoverySummary {
             runs_waiting_for_recovery,
             accepted_input_recovery_blockers_created,
@@ -6949,6 +7201,12 @@ impl Database {
                     self.migrate_mission_workspace_lifecycle_v162()
                 );
             }
+            if !self.schema_migration_applied(163)? {
+                migration_step!("migration_163", self.migrate_camp_message_agent_run_v163());
+            }
+            if !self.schema_migration_applied(164)? {
+                migration_step!("migration_164", self.migrate_agent_run_notification_v164());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7632,6 +7890,12 @@ impl Database {
                 "migration_162",
                 self.migrate_mission_workspace_lifecycle_v162()
             );
+        }
+        if !self.schema_migration_applied(163)? {
+            migration_step!("migration_163", self.migrate_camp_message_agent_run_v163());
+        }
+        if !self.schema_migration_applied(164)? {
+            migration_step!("migration_164", self.migrate_agent_run_notification_v164());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -24337,6 +24601,1214 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_camp_message_agent_run_v163(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let marker = tx.query_row(
+                "SELECT contract_version, projection_schema_version, classifier_version \
+                 FROM rovai_data_contract WHERE singleton=1",
+                [],
+                |row| {
+                    Ok(DatabaseContractMarker {
+                        contract_version: row.get(0)?,
+                        projection_schema_version: row.get(1)?,
+                        classifier_version: row.get(2)?,
+                    })
+                },
+            )?;
+            let migrations = load_current_migration_state(&tx)?;
+            let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
+                &marker,
+                migrations,
+                camp_message_agent_run_v163_schema_matches(&tx)?,
+            );
+            if legacy_delivery_first_v162 {
+                mission_details::apply_workspace_lifecycle_schema(&tx)?;
+                tx.execute_batch(
+                    "INSERT INTO schema_migration VALUES(163,datetime('now')); \
+                     UPDATE rovai_data_contract \
+                     SET projection_schema_version=113,reset_reason=NULL,updated_at=datetime('now') \
+                     WHERE singleton=1;",
+                )?;
+                let classification = classify_database_contract(&tx)?;
+                anyhow::ensure!(
+                    matches!(
+                        &classification,
+                        DatabaseContractClassification::SupportedMigrationSource(marker)
+                            if marker.contract_version == "v1.60"
+                                && marker.projection_schema_version == 113
+                    ),
+                    "legacy Delivery-first v162 convergence failed schema admission: \
+                     classification={classification:?}, mission_workspace={}, delivery_first={}, context={}",
+                    mission_details::v162_schema_matches(&tx)?,
+                    camp_message_agent_run_v163_schema_matches(&tx)?,
+                    mission_context::schema_matches_v163(&tx)?,
+                );
+                validate_migration_foreign_keys(&tx, &["mission_workspace"])?;
+                tx.commit()?;
+                return Ok(());
+            }
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.59"
+                            && marker.projection_schema_version == 112
+                ),
+                "Camp Message / AgentRun migration requires the exact v1.59/schema 112 source"
+            );
+
+            tx.execute_batch(
+                r#"
+                ALTER TABLE camp_message ADD COLUMN origin_kind TEXT NOT NULL DEFAULT 'legacy'
+                    CHECK(origin_kind IN (
+                        'legacy', 'local_composer', 'agent', 'automation',
+                        'channel', 'mission', 'system'
+                    ));
+                ALTER TABLE camp_message ADD COLUMN recall_state TEXT NOT NULL DEFAULT 'ineligible'
+                    CHECK(recall_state IN ('ineligible', 'recallable', 'closed', 'withdrawn'));
+                ALTER TABLE camp_message ADD COLUMN withdrawn_by_id TEXT;
+                ALTER TABLE camp_message ADD COLUMN withdrawn_at TEXT;
+                "#,
+            )?;
+
+            let source_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_run'",
+                [],
+                |row| row.get(0),
+            )?;
+            let objects = migration_schema_objects(&tx, "agent_run", true)?;
+            let target_schema = if source_schema.contains("CREATE TABLE \"agent_run\"") {
+                source_schema.replacen(
+                    "CREATE TABLE \"agent_run\"",
+                    "CREATE TABLE agent_run_v162",
+                    1,
+                )
+            } else {
+                source_schema.replacen("CREATE TABLE agent_run", "CREATE TABLE agent_run_v162", 1)
+            };
+            let target_schema = target_schema
+                .replacen(
+                    "camp_turn_id TEXT NOT NULL REFERENCES camp_turn(id)",
+                    "camp_turn_id TEXT REFERENCES camp_turn(id)",
+                    1,
+                )
+                .replacen(
+                    "CHECK(invocation_kind IN ('direct', 'a2a', 'gather_completion', 'single_chat'))",
+                    "CHECK(invocation_kind IN ('direct', 'a2a', 'gather_completion', 'single_chat', 'batch'))",
+                    1,
+                )
+                .replacen(
+                    "'camp_attachment_view_v1_clean_break'\n                    )",
+                    "'camp_attachment_view_v1_clean_break',\n                        'camp_message_agent_run_v1_clean_break',\n                        'migrated_to_delivery_first_queue',\n                        'gather_removed'\n                    )",
+                    1,
+                )
+                .replacen(
+                    "destination_conversation_id TEXT REFERENCES conversation(id), workspace_preparing_at TEXT,",
+                    r#"destination_conversation_id TEXT REFERENCES conversation(id),
+                camp_id TEXT REFERENCES camp(id),
+                anchor_message_id TEXT REFERENCES camp_message(id),
+                current_public_tail_sequence INTEGER CHECK(current_public_tail_sequence >= 0),
+                workspace_preparing_at TEXT,"#,
+                    1,
+                )
+                .replacen(
+                    r#"CHECK (
+                        input_ready_at IS NULL
+                        OR (
+                            (trigger_camp_message_id IS NOT NULL)
+                          + (trigger_conversation_message_id IS NOT NULL)
+                           = 1
+                        )
+                    )"#,
+                    r#"CHECK (
+                        input_ready_at IS NULL
+                        OR invocation_kind = 'batch'
+                        OR (
+                            (trigger_camp_message_id IS NOT NULL)
+                          + (trigger_conversation_message_id IS NOT NULL)
+                           = 1
+                        )
+                    ),
+                    CHECK (
+                        (invocation_kind = 'batch'
+                            AND camp_id IS NOT NULL
+                            AND camp_turn_id IS NULL
+                            AND anchor_message_id IS NOT NULL
+                            AND current_public_tail_sequence IS NOT NULL)
+                        OR
+                        (invocation_kind <> 'batch'
+                            AND camp_id IS NULL
+                            AND anchor_message_id IS NULL
+                            AND current_public_tail_sequence IS NULL)
+                    )"#,
+                    1,
+                );
+            if !target_schema.contains("CREATE TABLE agent_run_v162")
+                || !target_schema.contains("camp_turn_id TEXT REFERENCES camp_turn(id)")
+                || !target_schema.contains("'batch'")
+                || !target_schema.contains("current_public_tail_sequence")
+                || !target_schema.contains("'migrated_to_delivery_first_queue'")
+                || !target_schema.contains("'gather_removed'")
+                || target_schema.contains("camp_turn_id TEXT NOT NULL REFERENCES camp_turn(id)")
+            {
+                anyhow::bail!("v162 could not extend the AgentRun schema");
+            }
+            tx.execute_batch(&target_schema)
+                .context("v163 failed to create the replacement AgentRun table")?;
+            let columns = table_columns(&tx, "agent_run")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &objects)?;
+            tx.execute_batch(&format!(
+                r#"
+                INSERT INTO agent_run_v162({columns}) SELECT {columns} FROM agent_run;
+                DROP TABLE agent_run;
+                ALTER TABLE agent_run_v162 RENAME TO agent_run;
+                "#,
+            ))
+            .context("v163 failed to replace the AgentRun table")?;
+            restore_rebuild_schema_objects(&tx, "agent_run", objects)
+                .context("v163 failed to restore AgentRun indexes or triggers")?;
+
+            // Execution consoles follow an AgentRun. New Delivery-first Runs have no
+            // CampTurn, while historical consoles retain their original Turn link.
+            let console_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_execution_console'",
+                [],
+                |row| row.get(0),
+            )?;
+            let console_objects = migration_schema_objects(&tx, "channel_execution_console", true)?;
+            let console_v162 =
+                if console_schema.contains("CREATE TABLE \"channel_execution_console\"") {
+                    console_schema.replacen(
+                        "CREATE TABLE \"channel_execution_console\"",
+                        "CREATE TABLE channel_execution_console_v162",
+                        1,
+                    )
+                } else {
+                    console_schema.replacen(
+                        "CREATE TABLE channel_execution_console",
+                        "CREATE TABLE channel_execution_console_v162",
+                        1,
+                    )
+                }
+                .replacen(
+                    "camp_turn_id TEXT NOT NULL REFERENCES camp_turn(id)",
+                    "camp_turn_id TEXT REFERENCES camp_turn(id)",
+                    1,
+                );
+            if !console_v162.contains("CREATE TABLE channel_execution_console_v162")
+                || !console_v162.contains("camp_turn_id TEXT REFERENCES camp_turn(id)")
+                || console_v162.contains("camp_turn_id TEXT NOT NULL REFERENCES camp_turn(id)")
+            {
+                anyhow::bail!("v162 could not detach execution consoles from CampTurn");
+            }
+            tx.execute_batch(&console_v162)?;
+            drop_rebuild_triggers(&tx, &console_objects)?;
+            tx.execute_batch(
+                "INSERT INTO channel_execution_console_v162 SELECT * FROM channel_execution_console; \
+                 DROP TABLE channel_execution_console; \
+                 ALTER TABLE channel_execution_console_v162 RENAME TO channel_execution_console;",
+            )?;
+            restore_rebuild_schema_objects(&tx, "channel_execution_console", console_objects)?;
+            tx.execute_batch(
+                r#"
+                DROP TRIGGER IF EXISTS channel_execution_console_identity_immutable;
+                CREATE TRIGGER channel_execution_console_identity_immutable
+                BEFORE UPDATE ON channel_execution_console
+                FOR EACH ROW
+                WHEN OLD.agent_run_id <> NEW.agent_run_id
+                  OR OLD.request_id <> NEW.request_id
+                  OR OLD.channel_conversation_id <> NEW.channel_conversation_id
+                  OR OLD.camp_turn_id IS NOT NEW.camp_turn_id
+                  OR OLD.agent_id <> NEW.agent_id
+                  OR OLD.target_app_id <> NEW.target_app_id
+                BEGIN
+                    SELECT RAISE(ABORT, 'channel execution console identity is immutable');
+                END;
+                "#,
+            )?;
+
+            let manifest_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'context_manifest'",
+                [],
+                |row| row.get(0),
+            )?;
+            let batch_fact_branch = "(context_manifest_version = 26 AND formatter_version = 26 AND run_facts_schema_version = 5 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
+            let current_fact_branch = "(context_manifest_version = 25 AND formatter_version = 25 AND run_facts_schema_version = 4 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
+            let manifest_v162 = manifest_schema
+                .replace(
+                    "CREATE TABLE \"context_manifest\"",
+                    "CREATE TABLE context_manifest_v162",
+                )
+                .replace(
+                    "CREATE TABLE context_manifest (",
+                    "CREATE TABLE context_manifest_v162 (",
+                )
+                .replace(
+                    "formatter_version IN (20, 21, 22, 23, 24, 25)",
+                    "formatter_version IN (20, 21, 22, 23, 24, 25, 26)",
+                )
+                .replace(
+                    "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25)",
+                    "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)",
+                )
+                .replace(
+                    "run_facts_schema_version IN (1, 2, 3, 4)",
+                    "run_facts_schema_version IN (1, 2, 3, 4, 5)",
+                )
+                .replace(
+                    "CHECK(context_delivery_profile_version IN (4, 5, 6))",
+                    "CHECK(context_delivery_profile_version IN (4, 5, 6, 7))",
+                )
+                .replace(
+                    current_fact_branch,
+                    &format!("{batch_fact_branch}\n OR\n {current_fact_branch}"),
+                );
+            if !manifest_v162.contains("CREATE TABLE context_manifest_v162")
+                || !manifest_v162.contains(batch_fact_branch)
+                || !manifest_v162.contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26)")
+                || !manifest_v162.contains("context_delivery_profile_version IN (4, 5, 6, 7)")
+            {
+                anyhow::bail!("v162 could not extend the ContextManifest schema");
+            }
+            let manifest_objects = migration_schema_objects(&tx, "context_manifest", true)?;
+            tx.execute_batch(&manifest_v162)
+                .context("v163 failed to create the replacement ContextManifest table")?;
+            drop_rebuild_triggers(&tx, &manifest_objects)?;
+            tx.execute_batch(
+                "INSERT INTO context_manifest_v162 SELECT * FROM context_manifest; \
+                 DROP TABLE context_manifest; \
+                 ALTER TABLE context_manifest_v162 RENAME TO context_manifest;",
+            )?;
+            restore_rebuild_schema_objects(
+                &tx,
+                "context_manifest",
+                manifest_objects
+                    .into_iter()
+                    .filter(|(_, name, _)| {
+                        !matches!(
+                            name.as_str(),
+                            "context_manifest_v25_only_insert"
+                                | "context_manifest_quote_profile_insert"
+                                | "runtime_input_delivery_attachment_auth_insert"
+                        )
+                    })
+                    .collect(),
+            )?;
+            tx.execute_batch(
+                r#"
+                DROP TRIGGER IF EXISTS runtime_input_delivery_attachment_auth_insert;
+                CREATE TRIGGER context_manifest_v26_only_insert
+                BEFORE INSERT ON context_manifest
+                WHEN NOT (
+                    (NEW.context_manifest_version = 26
+                     AND EXISTS(
+                        SELECT 1 FROM agent_run
+                        WHERE id = NEW.agent_run_id AND invocation_kind = 'batch'
+                     ))
+                    OR
+                    (NEW.context_manifest_version = 25
+                     AND EXISTS(
+                        SELECT 1 FROM agent_run
+                        WHERE id = NEW.agent_run_id AND invocation_kind = 'single_chat'
+                     ))
+                    OR
+                    (NEW.context_manifest_version IN (22, 23, 24, 25)
+                     AND NEW.formatter_version = NEW.context_manifest_version
+                     AND EXISTS(
+                        SELECT 1
+                        FROM agent_run AS run
+                        JOIN message_delivery AS delivery
+                          ON delivery.id = run.trigger_message_delivery_id
+                        WHERE run.id = NEW.agent_run_id
+                          AND json_extract(
+                              delivery.frozen_snapshot_json,
+                              '$.frozenContext.manifestSelection.contextManifestVersion'
+                          ) = NEW.context_manifest_version
+                          AND json_extract(
+                              delivery.frozen_snapshot_json,
+                              '$.frozenContext.manifestSelection.contextDeliveryProfileVersion'
+                          ) = NEW.context_delivery_profile_version
+                          AND json_extract(
+                              delivery.frozen_snapshot_json,
+                              '$.frozenContext.renderedPayloadDigest'
+                          ) = NEW.rendered_payload_digest
+                     ))
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'new public Camp ContextManifest must use v26; Single Chat remains v25'
+                    );
+                END;
+
+                CREATE TRIGGER context_manifest_quote_profile_insert
+                BEFORE INSERT ON context_manifest
+                WHEN (NEW.context_manifest_version = 26
+                      AND NEW.context_delivery_profile_version <> 7)
+                  OR (NEW.context_manifest_version = 25
+                      AND NEW.context_delivery_profile_version <> 6)
+                  OR (NEW.context_manifest_version = 24
+                      AND (NEW.context_delivery_profile_version NOT IN (5, 6)
+                          OR (NEW.context_delivery_profile_version = 6
+                              AND NEW.camp_attachment_view_receipt_version IS NOT 2)))
+                  OR (NEW.context_manifest_version = 23
+                      AND NEW.context_delivery_profile_version <> 5)
+                  OR (NEW.context_manifest_version < 23
+                      AND NEW.context_delivery_profile_version <> 4)
+                BEGIN
+                    SELECT RAISE(ABORT, 'ContextManifest profile pairing is invalid');
+                END;
+
+                CREATE TRIGGER runtime_input_delivery_attachment_auth_insert
+                BEFORE INSERT ON runtime_input_delivery
+                WHEN NEW.runtime_request_digest IS NULL OR NOT (
+                    (NEW.runtime_attachment_auth_receipt_version IS 1
+                     AND NEW.runtime_attachment_auth_receipt_json IS NOT NULL
+                     AND NEW.runtime_attachment_auth_receipt_digest IS NOT NULL)
+                    OR
+                    (NEW.runtime_attachment_auth_receipt_version IS NULL
+                     AND NEW.runtime_attachment_auth_receipt_json IS NULL
+                     AND NEW.runtime_attachment_auth_receipt_digest IS NULL
+                     AND EXISTS(
+                        SELECT 1 FROM context_manifest
+                        WHERE id = NEW.context_manifest_id
+                          AND context_manifest_version IN (24, 25, 26)
+                          AND camp_attachment_view_receipt_version IS NULL
+                     ))
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'Runtime Input Delivery attachment evidence does not match its manifest'
+                    );
+                END;
+                "#,
+            )?;
+
+            let channel_delivery_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channel_delivery'",
+                [],
+                |row| row.get(0),
+            )?;
+            let channel_delivery_objects = migration_schema_objects(&tx, "channel_delivery", true)?;
+            let channel_delivery_v162 =
+                if channel_delivery_schema.contains("CREATE TABLE \"channel_delivery\"") {
+                    channel_delivery_schema.replacen(
+                        "CREATE TABLE \"channel_delivery\"",
+                        "CREATE TABLE channel_delivery_v162",
+                        1,
+                    )
+                } else {
+                    channel_delivery_schema.replacen(
+                        "CREATE TABLE channel_delivery",
+                        "CREATE TABLE channel_delivery_v162",
+                        1,
+                    )
+                };
+            let channel_delivery_v162 = channel_delivery_v162
+                .replacen(
+                    "pending_binding_id TEXT REFERENCES pending_camp_binding(id) ON DELETE CASCADE,",
+                    "pending_binding_id TEXT REFERENCES pending_camp_binding(id) ON DELETE CASCADE,\n                channel_binding_id TEXT REFERENCES channel_conversation_binding(id) ON DELETE CASCADE,",
+                    1,
+                )
+                .replacen(
+                    r#"CHECK(
+                    (request_id IS NOT NULL AND pending_binding_id IS NULL
+                        AND delivery_kind <> 'project_selection')
+                    OR (request_id IS NULL AND pending_binding_id IS NOT NULL
+                        AND delivery_kind = 'project_selection')
+                )"#,
+                    r#"CHECK(
+                    (request_id IS NOT NULL
+                        AND pending_binding_id IS NULL
+                        AND channel_binding_id IS NULL
+                        AND delivery_kind <> 'project_selection')
+                    OR (request_id IS NULL
+                        AND pending_binding_id IS NOT NULL
+                        AND channel_binding_id IS NULL
+                        AND delivery_kind = 'project_selection')
+                    OR (request_id IS NULL
+                        AND pending_binding_id IS NULL
+                        AND channel_binding_id IS NOT NULL
+                        AND delivery_kind IN ('agent_output', 'agent_attachment'))
+                )"#,
+                    1,
+                );
+            if !channel_delivery_v162.contains("CREATE TABLE channel_delivery_v162")
+                || !channel_delivery_v162.contains("channel_binding_id TEXT REFERENCES")
+                || !channel_delivery_v162
+                    .contains("delivery_kind IN ('agent_output', 'agent_attachment')")
+            {
+                anyhow::bail!("v162 could not add bound-Camp Channel deliveries");
+            }
+            tx.execute_batch(&channel_delivery_v162)?;
+            let channel_delivery_columns = table_columns(&tx, "channel_delivery")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &channel_delivery_objects)?;
+            tx.execute_batch(&format!(
+                "INSERT INTO channel_delivery_v162({channel_delivery_columns}) \
+                 SELECT {channel_delivery_columns} FROM channel_delivery; \
+                 DROP TABLE channel_delivery; \
+                 ALTER TABLE channel_delivery_v162 RENAME TO channel_delivery;"
+            ))?;
+            restore_rebuild_schema_objects(&tx, "channel_delivery", channel_delivery_objects)?;
+            tx.execute_batch(
+                r#"
+                CREATE INDEX channel_delivery_binding_idx
+                    ON channel_delivery(
+                        channel_binding_id, status, delivery_kind,
+                        source_camp_message_id, attachment_ordinal
+                    )
+                    WHERE channel_binding_id IS NOT NULL;
+                "#,
+            )?;
+
+            tx.execute_batch(
+                r#"
+                CREATE TABLE camp_message_delivery (
+                    id TEXT PRIMARY KEY,
+                    camp_id TEXT NOT NULL REFERENCES camp(id) ON DELETE CASCADE,
+                    message_id TEXT NOT NULL REFERENCES camp_message(id) ON DELETE CASCADE,
+                    recipient_agent_id TEXT NOT NULL REFERENCES agent_profile(id),
+                    recipient_membership_version_at_admission INTEGER NOT NULL CHECK(
+                        recipient_membership_version_at_admission >= 1
+                    ),
+                    queue_sequence INTEGER NOT NULL CHECK(queue_sequence >= 1),
+                    status TEXT NOT NULL DEFAULT 'waiting' CHECK(status IN (
+                        'waiting', 'claimed', 'settled', 'failed', 'cancelled'
+                    )),
+                    claimed_agent_run_id TEXT REFERENCES agent_run(id),
+                    failure_code TEXT,
+                    version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+                    created_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    ended_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(message_id, recipient_agent_id),
+                    UNIQUE(camp_id, recipient_agent_id, queue_sequence),
+                    CHECK(
+                        (status = 'waiting'
+                            AND claimed_agent_run_id IS NULL
+                            AND claimed_at IS NULL
+                            AND ended_at IS NULL)
+                        OR
+                        (status = 'claimed'
+                            AND claimed_agent_run_id IS NOT NULL
+                            AND claimed_at IS NOT NULL
+                            AND ended_at IS NULL)
+                        OR
+                        (status IN ('settled', 'failed')
+                            AND claimed_agent_run_id IS NOT NULL
+                            AND claimed_at IS NOT NULL
+                            AND ended_at IS NOT NULL)
+                        OR
+                        (status = 'cancelled' AND ended_at IS NOT NULL)
+                    )
+                );
+                CREATE INDEX camp_message_delivery_waiting_idx
+                    ON camp_message_delivery(camp_id, recipient_agent_id, queue_sequence)
+                    WHERE status = 'waiting';
+                CREATE INDEX camp_message_delivery_run_idx
+                    ON camp_message_delivery(claimed_agent_run_id, queue_sequence)
+                    WHERE claimed_agent_run_id IS NOT NULL;
+
+                CREATE TABLE agent_run_input (
+                    agent_run_id TEXT NOT NULL REFERENCES agent_run(id) ON DELETE CASCADE,
+                    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+                    delivery_id TEXT NOT NULL UNIQUE
+                        REFERENCES camp_message_delivery(id),
+                    message_id TEXT NOT NULL REFERENCES camp_message(id),
+                    message_sequence INTEGER NOT NULL CHECK(message_sequence >= 1),
+                    message_content_digest TEXT NOT NULL,
+                    PRIMARY KEY(agent_run_id, ordinal),
+                    UNIQUE(agent_run_id, message_id),
+                    UNIQUE(agent_run_id, message_sequence)
+                );
+                CREATE INDEX agent_run_input_message_idx
+                    ON agent_run_input(message_id, agent_run_id);
+                CREATE UNIQUE INDEX agent_run_active_batch_lane_idx
+                    ON agent_run(camp_id, conversation_id)
+                    WHERE invocation_kind = 'batch'
+                      AND status IN ('queued', 'running', 'waiting');
+
+                -- Preserve already-published responsibilities that never crossed
+                -- a frozen Runtime-input boundary. A legacy queued Run is only a
+                -- mutable scheduling placeholder; the new queue owns that work.
+                INSERT INTO camp_message_delivery(
+                    id, camp_id, message_id, recipient_agent_id,
+                    recipient_membership_version_at_admission, queue_sequence,
+                    status, claimed_agent_run_id, failure_code, version,
+                    created_at, claimed_at, ended_at, updated_at
+                )
+                SELECT
+                    COALESCE(delivery.id, run.id), turn.camp_id, message.id,
+                    conversation.agent_id,
+                    COALESCE(
+                        delivery.recipient_membership_version_at_admission,
+                        member.version
+                    ),
+                    message.sequence, 'waiting', NULL, NULL, 1,
+                    run.created_at, NULL, NULL, run.updated_at
+                FROM agent_run AS run
+                JOIN conversation ON conversation.id = run.conversation_id
+                JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
+                JOIN camp_message AS message
+                  ON message.id = run.trigger_camp_message_id
+                JOIN camp_member AS member
+                  ON member.camp_id = turn.camp_id
+                 AND member.agent_id = conversation.agent_id
+                LEFT JOIN message_delivery AS delivery
+                  ON delivery.target_agent_run_id = run.id
+                 AND delivery.message_id = message.id
+                WHERE run.status = 'queued'
+                  AND run.invocation_kind IN ('direct', 'a2a')
+                  AND conversation.kind = 'camp_member'
+                  AND member.status = 'active'
+                  AND member.leave_requested_at IS NULL
+                  AND message.tombstoned_at IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM context_manifest
+                      WHERE context_manifest.agent_run_id = run.id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM runtime_input_delivery
+                      WHERE runtime_input_delivery.agent_run_id = run.id
+                  )
+                  AND (
+                      delivery.id IS NULL
+                      OR (
+                          delivery.status = 'running'
+                          AND delivery.dispatch_phase = 'materialized'
+                          AND delivery.delivery_kind = 'public_a2a'
+                          AND delivery.dispatch_disposition = 'dispatch'
+                      )
+                  )
+                  AND (
+                      delivery.recipient_membership_version_at_admission IS NULL
+                      OR delivery.recipient_membership_version_at_admission = member.version
+                  );
+
+                -- Legacy Delivery rows that were accepted publicly but never
+                -- materialized remain user work. Preserve their FIFO identity;
+                -- old attempts and recovery controls do not survive the cutover.
+                INSERT INTO camp_message_delivery(
+                    id, camp_id, message_id, recipient_agent_id,
+                    recipient_membership_version_at_admission, queue_sequence,
+                    status, claimed_agent_run_id, failure_code, version,
+                    created_at, claimed_at, ended_at, updated_at
+                )
+                SELECT
+                    delivery.id, delivery.camp_id, delivery.message_id,
+                    delivery.recipient_agent_id,
+                    COALESCE(
+                        delivery.recipient_membership_version_at_admission,
+                        member.version
+                    ),
+                    message.sequence, 'waiting', NULL, NULL, 1,
+                    delivery.created_at, NULL, NULL, delivery.updated_at
+                FROM message_delivery AS delivery
+                JOIN camp_message AS message ON message.id = delivery.message_id
+                JOIN camp_member AS member
+                  ON member.camp_id = delivery.camp_id
+                 AND member.agent_id = delivery.recipient_agent_id
+                WHERE delivery.status = 'pending'
+                  AND delivery.dispatch_phase IN (
+                      'never_attempted', 'attempted_waiting', 'projection_blocked'
+                  )
+                  AND delivery.target_agent_run_id IS NULL
+                  AND delivery.delivery_kind = 'public_a2a'
+                  AND delivery.dispatch_disposition = 'dispatch'
+                  AND member.status = 'active'
+                  AND member.leave_requested_at IS NULL
+                  AND message.tombstoned_at IS NULL
+                  AND (
+                      delivery.recipient_membership_version_at_admission IS NULL
+                      OR delivery.recipient_membership_version_at_admission = member.version
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM camp_message_delivery AS current
+                      WHERE current.message_id = delivery.message_id
+                        AND current.recipient_agent_id = delivery.recipient_agent_id
+                  );
+
+                UPDATE message_delivery_attempt
+                SET status = 'cancelled', wait_condition = NULL,
+                    failure_code = 'camp_message_agent_run_v1_clean_break',
+                    ended_at = COALESCE(ended_at, datetime('now'))
+                WHERE status IN ('attempting', 'waiting')
+                  AND delivery_id IN (SELECT id FROM camp_message_delivery);
+
+                UPDATE message_delivery
+                SET status = 'cancelled', dispatch_phase = 'terminal',
+                    wait_condition = NULL, active_dispatch_attempt_id = NULL,
+                    manual_intervention_required = 0,
+                    failure_code = 'camp_message_agent_run_v1_clean_break',
+                    failure_detail_json = '{"reason":"migrated_to_delivery_first_queue"}',
+                    version = version + 1,
+                    ended_at = COALESCE(ended_at, datetime('now')),
+                    updated_at = datetime('now')
+                WHERE status IN ('pending', 'running')
+                  AND id IN (SELECT id FROM camp_message_delivery);
+
+                UPDATE agent_run
+                SET status = 'cancelled', wait_reason = NULL,
+                    wait_deadline_at = NULL, runtime_recovery_required = 0,
+                    execution_lease_owner = NULL,
+                    execution_lease_expires_at = NULL,
+                    last_error_code = 'camp_message_agent_run_v1_clean_break',
+                    manual_retry_allowed = 0,
+                    terminal_resolution_source = 'migration',
+                    terminal_reason_code = 'migrated_to_delivery_first_queue',
+                    ended_at = COALESCE(ended_at, datetime('now')),
+                    version = version + 1, updated_at = datetime('now')
+                WHERE status = 'queued'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM camp_message_delivery AS current
+                      LEFT JOIN message_delivery AS legacy
+                        ON legacy.id = current.id
+                      WHERE current.id = agent_run.id
+                         OR legacy.target_agent_run_id = agent_run.id
+                  );
+
+                -- Gather has no current scheduler or completion semantics. Any
+                -- residual aggregate is closed without synthesizing completion;
+                -- already-published member requests above continue as ordinary
+                -- Delivery-first work when they were still safe to requeue.
+                UPDATE gather_item
+                SET status = 'cancelled', terminal_source = 'delivery',
+                    error_code = 'gather_removed',
+                    terminal_resolution_source = 'migration',
+                    terminal_reason_code = 'camp_message_agent_run_v1_clean_break',
+                    version = version + 1,
+                    ended_at = COALESCE(ended_at, datetime('now')),
+                    updated_at = datetime('now')
+                WHERE status IN ('pending', 'running');
+
+                UPDATE gather_record
+                SET status = 'cancelled',
+                    cancellation_reason_code = 'gather_removed',
+                    cancelled_at = COALESCE(cancelled_at, datetime('now')),
+                    version = version + 1, updated_at = datetime('now')
+                WHERE status IN (
+                    'collecting', 'ready', 'completing'
+                );
+
+                UPDATE message_delivery
+                SET status = 'cancelled', dispatch_phase = 'terminal',
+                    wait_condition = NULL, active_dispatch_attempt_id = NULL,
+                    manual_intervention_required = 0,
+                    failure_code = 'gather_removed',
+                    failure_detail_json = '{"reason":"gather_removed"}',
+                    version = version + 1,
+                    ended_at = COALESCE(ended_at, datetime('now')),
+                    updated_at = datetime('now')
+                WHERE delivery_kind = 'gather_completion'
+                  AND status = 'pending';
+
+                UPDATE agent_run
+                SET status = 'cancelled', wait_reason = NULL,
+                    wait_deadline_at = NULL, runtime_recovery_required = 0,
+                    execution_lease_owner = NULL,
+                    execution_lease_expires_at = NULL,
+                    last_error_code = 'gather_removed', manual_retry_allowed = 0,
+                    terminal_resolution_source = 'migration',
+                    terminal_reason_code = 'gather_removed',
+                    ended_at = COALESCE(ended_at, datetime('now')),
+                    version = version + 1, updated_at = datetime('now')
+                WHERE invocation_kind = 'gather_completion'
+                  AND status = 'queued';
+
+                UPDATE camp_turn
+                SET status = 'cancelled', ended_at = COALESCE(ended_at, datetime('now')),
+                    version = version + 1, updated_at = datetime('now')
+                WHERE status IN ('running', 'waiting')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM agent_run
+                      WHERE agent_run.camp_turn_id = camp_turn.id
+                        AND agent_run.status IN ('queued', 'running', 'waiting')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM message_delivery
+                      WHERE message_delivery.camp_turn_id = camp_turn.id
+                        AND message_delivery.status IN ('pending', 'running')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM gather_record
+                      WHERE gather_record.camp_turn_id = camp_turn.id
+                        AND gather_record.status IN ('collecting', 'ready', 'completing')
+                  );
+
+                DELETE FROM pending_input_edit_session;
+                DELETE FROM pending_camp_input;
+                DELETE FROM camp_composer_draft;
+
+                INSERT INTO schema_migration(version, applied_at)
+                VALUES (163, datetime('now'));
+                UPDATE rovai_data_contract
+                SET contract_version = 'v1.60', projection_schema_version = 113,
+                    reset_reason = NULL, updated_at = datetime('now')
+                WHERE singleton = 1;
+                "#,
+            )
+            .context("v163 failed to create Delivery-first queue schema")?;
+
+            tx.execute_batch(
+                r#"
+                ALTER TABLE channel_turn_request
+                ADD COLUMN delivery_ids_json TEXT NOT NULL DEFAULT '[]'
+                    CHECK(json_valid(delivery_ids_json)
+                          AND json_type(delivery_ids_json) = 'array');
+                "#,
+            )?;
+
+            let automation_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='automation_run'",
+                [],
+                |row| row.get(0),
+            )?;
+            let automation_objects = migration_schema_objects(&tx, "automation_run", true)?;
+            let automation_v162 = automation_schema
+                .replace(
+                    "CREATE TABLE \"automation_run\"",
+                    "CREATE TABLE automation_run_v162",
+                )
+                .replace(
+                    "CREATE TABLE automation_run (",
+                    "CREATE TABLE automation_run_v162 (",
+                )
+                .replace(
+                    "result_message_id TEXT,",
+                    "result_message_id TEXT,\n                trigger_message_id TEXT UNIQUE REFERENCES camp_message(id),\n                trigger_delivery_id TEXT UNIQUE REFERENCES camp_message_delivery(id),",
+                )
+                .replace(
+                    r#"CHECK(
+                    (camp_id IS NULL AND camp_turn_id IS NULL AND root_agent_run_id IS NULL)
+                    OR (camp_id IS NOT NULL AND camp_turn_id IS NOT NULL AND root_agent_run_id IS NOT NULL)
+                )"#,
+                    r#"CHECK(
+                    (camp_id IS NULL
+                        AND camp_turn_id IS NULL
+                        AND root_agent_run_id IS NULL
+                        AND trigger_message_id IS NULL
+                        AND trigger_delivery_id IS NULL)
+                    OR
+                    (camp_id IS NOT NULL AND (
+                        (camp_turn_id IS NOT NULL
+                            AND root_agent_run_id IS NOT NULL
+                            AND trigger_message_id IS NULL
+                            AND trigger_delivery_id IS NULL)
+                        OR
+                        (camp_turn_id IS NULL
+                            AND root_agent_run_id IS NULL
+                            AND trigger_message_id IS NOT NULL
+                            AND trigger_delivery_id IS NOT NULL)
+                    ))
+                )"#,
+                );
+            if !automation_v162.contains("CREATE TABLE automation_run_v162")
+                || !automation_v162.contains("trigger_delivery_id TEXT UNIQUE")
+                || !automation_v162.contains("trigger_message_id IS NOT NULL")
+            {
+                anyhow::bail!("v162 could not extend Automation occurrence linkage");
+            }
+            tx.execute_batch(&automation_v162)?;
+            let automation_columns = table_columns(&tx, "automation_run")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &automation_objects)?;
+            tx.execute_batch(&format!(
+                "INSERT INTO automation_run_v162({automation_columns}) \
+                 SELECT {automation_columns} FROM automation_run; \
+                 DROP TABLE automation_run; \
+                 ALTER TABLE automation_run_v162 RENAME TO automation_run;"
+            ))?;
+            restore_rebuild_schema_objects(&tx, "automation_run", automation_objects)?;
+
+            let mission_start_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='mission_start'",
+                [],
+                |row| row.get(0),
+            )?;
+            let mission_start_v162 = mission_start_schema
+                .replace(
+                    "CREATE TABLE \"mission_start\"",
+                    "CREATE TABLE mission_start_v162",
+                )
+                .replace(
+                    "CREATE TABLE mission_start (",
+                    "CREATE TABLE mission_start_v162 (",
+                )
+                .replace(
+                    "camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,",
+                    "camp_turn_id TEXT UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,\n    delivery_id TEXT UNIQUE REFERENCES camp_message_delivery(id),",
+                );
+            let Some((mission_start_prefix, mission_start_suffix)) =
+                mission_start_v162.rsplit_once("created_at TEXT NOT NULL")
+            else {
+                anyhow::bail!("v162 could not extend Mission start linkage");
+            };
+            if mission_start_suffix.trim() != ")" {
+                anyhow::bail!("v162 could not extend Mission start linkage");
+            }
+            let mission_start_v162 = format!(
+                "{mission_start_prefix}created_at TEXT NOT NULL,\n    CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))\n)"
+            );
+            if !mission_start_v162.contains("CREATE TABLE mission_start_v162")
+                || !mission_start_v162.contains("delivery_id TEXT UNIQUE")
+                || !mission_start_v162.contains("camp_turn_id IS NOT NULL")
+            {
+                anyhow::bail!("v162 could not extend Mission start linkage");
+            }
+            let mission_start_objects = migration_schema_objects(&tx, "mission_start", true)?;
+            tx.execute_batch(&mission_start_v162)?;
+            drop_rebuild_triggers(&tx, &mission_start_objects)?;
+            tx.execute_batch(
+                r#"
+                INSERT INTO mission_start_v162(
+                    message_id, mission_id, camp_turn_id, command_id, created_at
+                )
+                SELECT message_id, mission_id, camp_turn_id, command_id, created_at
+                FROM mission_start;
+                DROP TABLE mission_start;
+                ALTER TABLE mission_start_v162 RENAME TO mission_start;
+                "#,
+            )?;
+            restore_rebuild_schema_objects(&tx, "mission_start", mission_start_objects)?;
+            anyhow::ensure!(
+                camp_message_agent_run_v163_schema_matches(&tx)?
+                    && mission_details::v162_schema_matches(&tx)?,
+                "Camp Message / AgentRun migration did not create the required schema"
+            );
+            validate_migration_foreign_keys(
+                &tx,
+                &[
+                    "agent_run",
+                    "camp_message_delivery",
+                    "agent_run_input",
+                    "automation_run",
+                    "mission_start",
+                    "channel_turn_request",
+                ],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
+        result?;
+        foreign_keys_result?;
+        Ok(())
+    }
+
+    fn migrate_agent_run_notification_v164(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.60"
+                            && marker.projection_schema_version == 113
+                ),
+                "AgentRun Notification migration requires the exact v1.60/schema 113 source"
+            );
+
+            let episode_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_episode'",
+                [],
+                |row| row.get(0),
+            )?;
+            let episode_objects = migration_schema_objects(&tx, "notification_episode", true)?;
+            let episode_v164 = episode_schema
+                .replace(
+                    "CREATE TABLE \"notification_episode\"",
+                    "CREATE TABLE notification_episode_v164",
+                )
+                .replace(
+                    "CREATE TABLE notification_episode (",
+                    "CREATE TABLE notification_episode_v164 (",
+                )
+                .replacen(
+                    "camp_turn_id TEXT,\n                source_message_id TEXT,",
+                    "camp_turn_id TEXT,\n                agent_run_id TEXT,\n                source_message_id TEXT,",
+                    1,
+                )
+                .replacen(
+                    "(kind = 'collaboration' AND camp_turn_id IS NOT NULL\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+                    "(kind = 'collaboration'\n                        AND ((camp_turn_id IS NOT NULL) <> (agent_run_id IS NOT NULL))\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+                    1,
+                )
+                .replacen(
+                    "(kind = 'message' AND camp_turn_id IS NULL\n                        AND source_message_id IS NOT NULL AND approval_generation IS NULL)",
+                    "(kind = 'message' AND camp_turn_id IS NULL AND agent_run_id IS NULL\n                        AND source_message_id IS NOT NULL AND approval_generation IS NULL)",
+                    1,
+                )
+                .replacen(
+                    "(kind = 'approval' AND camp_turn_id IS NULL\n                        AND source_message_id IS NULL AND approval_generation >= 1)",
+                    "(kind = 'approval' AND camp_turn_id IS NULL AND agent_run_id IS NULL\n                        AND source_message_id IS NULL AND approval_generation >= 1)",
+                    1,
+                );
+            anyhow::ensure!(
+                episode_v164.contains("CREATE TABLE notification_episode_v164")
+                    && episode_v164.contains("agent_run_id TEXT")
+                    && episode_v164.contains("(agent_run_id IS NOT NULL)"),
+                "v164 could not extend Notification Episode AgentRun identity"
+            );
+            tx.execute_batch(&episode_v164)?;
+            let episode_columns = table_columns(&tx, "notification_episode")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &episode_objects)?;
+            tx.execute_batch(&format!(
+                "INSERT INTO notification_episode_v164({episode_columns}) \
+                 SELECT {episode_columns} FROM notification_episode; \
+                 DROP TABLE notification_episode; \
+                 ALTER TABLE notification_episode_v164 RENAME TO notification_episode;"
+            ))?;
+            restore_rebuild_schema_objects(&tx, "notification_episode", episode_objects)?;
+
+            let occurrence_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_occurrence'",
+                [],
+                |row| row.get(0),
+            )?;
+            let occurrence_objects =
+                migration_schema_objects(&tx, "notification_occurrence", true)?;
+            let occurrence_v164 = occurrence_schema
+                .replace(
+                    "CREATE TABLE \"notification_occurrence\"",
+                    "CREATE TABLE notification_occurrence_v164",
+                )
+                .replace(
+                    "CREATE TABLE notification_occurrence (",
+                    "CREATE TABLE notification_occurrence_v164 (",
+                )
+                .replacen(
+                    "'approval', 'camp_message', 'camp_turn'",
+                    "'approval', 'camp_message', 'camp_turn', 'agent_run'",
+                    1,
+                )
+                .replacen(
+                    "camp_turn_id TEXT,\n                source_message_id TEXT,",
+                    "camp_turn_id TEXT,\n                agent_run_id TEXT,\n                source_message_id TEXT,",
+                    1,
+                )
+                .replacen(
+                    "(semantic = 'user_mention' AND source_type = 'camp_message'\n                        AND source_message_id = source_id AND approval_id IS NULL)",
+                    "(semantic = 'user_mention' AND source_type = 'camp_message'\n                        AND source_message_id = source_id AND approval_id IS NULL\n                        AND agent_run_id IS NULL)",
+                    1,
+                )
+                .replacen(
+                    "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_type = 'camp_turn' AND camp_turn_id = source_id\n                        AND source_message_id IS NULL AND approval_id IS NULL)",
+                    "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_message_id IS NULL AND approval_id IS NULL\n                        AND ((source_type = 'camp_turn' AND camp_turn_id = source_id\n                              AND agent_run_id IS NULL)\n                          OR (source_type = 'agent_run' AND agent_run_id = source_id\n                              AND camp_turn_id IS NULL)))",
+                    1,
+                )
+                .replacen(
+                    "(semantic = 'approval_pending' AND source_type = 'approval'\n                        AND approval_id = source_id AND source_message_id IS NULL)",
+                    "(semantic = 'approval_pending' AND source_type = 'approval'\n                        AND approval_id = source_id AND source_message_id IS NULL\n                        AND agent_run_id IS NULL)",
+                    1,
+                );
+            anyhow::ensure!(
+                occurrence_v164.contains("CREATE TABLE notification_occurrence_v164")
+                    && occurrence_v164.contains("'agent_run'")
+                    && occurrence_v164.contains("agent_run_id = source_id"),
+                "v164 could not extend Notification Occurrence AgentRun source"
+            );
+            tx.execute_batch(&occurrence_v164)?;
+            let occurrence_columns = table_columns(&tx, "notification_occurrence")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &occurrence_objects)?;
+            tx.execute_batch(&format!(
+                "INSERT INTO notification_occurrence_v164({occurrence_columns}) \
+                 SELECT {occurrence_columns} FROM notification_occurrence; \
+                 DROP TABLE notification_occurrence; \
+                 ALTER TABLE notification_occurrence_v164 RENAME TO notification_occurrence;"
+            ))?;
+            restore_rebuild_schema_objects(&tx, "notification_occurrence", occurrence_objects)?;
+
+            tx.execute_batch(
+                r#"
+                CREATE TRIGGER notification_agent_run_terminal_insert
+                AFTER INSERT ON agent_run
+                WHEN NEW.invocation_kind = 'batch'
+                  AND NEW.camp_id IS NOT NULL
+                  AND NEW.camp_turn_id IS NULL
+                  AND NEW.status IN ('succeeded', 'failed', 'cancelled')
+                  AND NOT (NEW.status = 'cancelled' AND NEW.cancel_requested_at IS NOT NULL)
+                BEGIN
+                    UPDATE notification_change_clock
+                    SET current_sequence = current_sequence + 1 WHERE singleton = 1;
+
+                    INSERT INTO notification_episode(
+                        id, aggregation_key, recipient_user_id, kind, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_generation,
+                        version, attention_revision, created_change_sequence,
+                        last_change_sequence, sort_at, created_at, updated_at
+                    ) VALUES (
+                        lower(hex(randomblob(16))), 'agent-run:local_user:' || NEW.id,
+                        'local_user', 'collaboration', NEW.camp_id, NULL, NEW.id, NULL, NULL,
+                        0, 0,
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at)
+                    ) ON CONFLICT(aggregation_key) DO NOTHING;
+
+                    INSERT INTO notification_occurrence(
+                        id, episode_id, recipient_user_id, semantic,
+                        source_type, source_id, source_revision, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_id,
+                        admitted_episode_version, admitted_attention_revision,
+                        admitted_change_sequence, occurred_at
+                    )
+                    SELECT lower(hex(randomblob(16))), episode.id, 'local_user',
+                           CASE NEW.status WHEN 'succeeded' THEN 'turn_completed'
+                                WHEN 'failed' THEN 'turn_failed' ELSE 'turn_incomplete' END,
+                           'agent_run', NEW.id, NEW.version, NEW.camp_id,
+                           NULL, NEW.id, NULL, NULL, episode.version + 1,
+                           episode.attention_revision + 1,
+                           clock.current_sequence, COALESCE(NEW.ended_at, NEW.updated_at)
+                    FROM notification_episode AS episode
+                    JOIN notification_change_clock AS clock ON clock.singleton = 1
+                    WHERE episode.aggregation_key = 'agent-run:local_user:' || NEW.id
+                    ON CONFLICT(
+                        recipient_user_id, semantic, source_type, source_id, source_revision
+                    ) DO NOTHING;
+                END;
+
+                CREATE TRIGGER notification_agent_run_terminal_update
+                AFTER UPDATE OF status ON agent_run
+                WHEN NEW.invocation_kind = 'batch'
+                  AND NEW.camp_id IS NOT NULL
+                  AND NEW.camp_turn_id IS NULL
+                  AND OLD.status NOT IN ('succeeded', 'failed', 'cancelled')
+                  AND NEW.status IN ('succeeded', 'failed', 'cancelled')
+                  AND NOT (NEW.status = 'cancelled' AND NEW.cancel_requested_at IS NOT NULL)
+                BEGIN
+                    UPDATE notification_change_clock
+                    SET current_sequence = current_sequence + 1 WHERE singleton = 1;
+
+                    INSERT INTO notification_episode(
+                        id, aggregation_key, recipient_user_id, kind, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_generation,
+                        version, attention_revision, created_change_sequence,
+                        last_change_sequence, sort_at, created_at, updated_at
+                    ) VALUES (
+                        lower(hex(randomblob(16))), 'agent-run:local_user:' || NEW.id,
+                        'local_user', 'collaboration', NEW.camp_id, NULL, NEW.id, NULL, NULL,
+                        0, 0,
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        (SELECT current_sequence FROM notification_change_clock WHERE singleton = 1),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at),
+                        COALESCE(NEW.ended_at, NEW.updated_at)
+                    ) ON CONFLICT(aggregation_key) DO NOTHING;
+
+                    INSERT INTO notification_occurrence(
+                        id, episode_id, recipient_user_id, semantic,
+                        source_type, source_id, source_revision, camp_id,
+                        camp_turn_id, agent_run_id, source_message_id, approval_id,
+                        admitted_episode_version, admitted_attention_revision,
+                        admitted_change_sequence, occurred_at
+                    )
+                    SELECT lower(hex(randomblob(16))), episode.id, 'local_user',
+                           CASE NEW.status WHEN 'succeeded' THEN 'turn_completed'
+                                WHEN 'failed' THEN 'turn_failed' ELSE 'turn_incomplete' END,
+                           'agent_run', NEW.id, NEW.version, NEW.camp_id,
+                           NULL, NEW.id, NULL, NULL, episode.version + 1,
+                           episode.attention_revision + 1,
+                           clock.current_sequence, COALESCE(NEW.ended_at, NEW.updated_at)
+                    FROM notification_episode AS episode
+                    JOIN notification_change_clock AS clock ON clock.singleton = 1
+                    WHERE episode.aggregation_key = 'agent-run:local_user:' || NEW.id
+                    ON CONFLICT(
+                        recipient_user_id, semantic, source_type, source_id, source_revision
+                    ) DO NOTHING;
+                END;
+
+                DROP TRIGGER notification_completion_satisfied_by_user_turn;
+                CREATE TRIGGER notification_completion_satisfied_by_user_turn
+                AFTER INSERT ON camp_message
+                WHEN NEW.author_type = 'user' AND NEW.author_id = 'local_user'
+                BEGIN
+                    UPDATE notification_occurrence_disposition
+                    SET satisfied_at = NEW.created_at, updated_at = NEW.created_at
+                    WHERE satisfied_at IS NULL AND occurrence_id IN (
+                        SELECT occurrence.id
+                        FROM notification_occurrence AS occurrence
+                        LEFT JOIN camp_turn ON camp_turn.id = occurrence.camp_turn_id
+                        LEFT JOIN agent_run ON agent_run.id = occurrence.agent_run_id
+                        WHERE occurrence.camp_id = NEW.camp_id
+                          AND occurrence.semantic = 'turn_completed'
+                          AND occurrence.occurred_at <= NEW.created_at
+                          AND (
+                              (occurrence.source_type = 'camp_turn'
+                               AND NEW.camp_turn_id IS NOT NULL
+                               AND camp_turn.kind <> 'single_chat'
+                               AND occurrence.camp_turn_id <> NEW.camp_turn_id)
+                              OR
+                              (occurrence.source_type = 'agent_run'
+                               AND agent_run.invocation_kind = 'batch'
+                               AND agent_run.anchor_message_id <> NEW.id)
+                          )
+                    );
+                END;
+
+                INSERT INTO schema_migration(version, applied_at)
+                VALUES (164, datetime('now'));
+                UPDATE rovai_data_contract
+                SET projection_schema_version = 114,
+                    reset_reason = NULL, updated_at = datetime('now')
+                WHERE singleton = 1;
+                "#,
+            )?;
+
+            anyhow::ensure!(
+                agent_run_notification_v164_schema_matches(&tx)?,
+                "AgentRun Notification migration did not create the required schema"
+            );
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "AgentRun Notification migration failed current schema admission"
+            );
+            validate_migration_foreign_keys(
+                &tx,
+                &["notification_episode", "notification_occurrence"],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
+        result?;
+        foreign_keys_result?;
+        Ok(())
+    }
+
     fn migrate_dsh_runtime_v157(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
@@ -29552,7 +31024,708 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v163_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=164)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute(
+            "DELETE FROM notification_episode WHERE agent_run_id IS NOT NULL",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    tx.execute_batch(
+        "DROP TRIGGER notification_agent_run_terminal_insert; \
+         DROP TRIGGER notification_agent_run_terminal_update;",
+    )
+    .unwrap();
+
+    let episode_schema: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_episode'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let episode_objects = migration_schema_objects(&tx, "notification_episode", true).unwrap();
+    let episode_v163 = episode_schema
+        .replace(
+            "CREATE TABLE \"notification_episode\"",
+            "CREATE TABLE notification_episode_v163",
+        )
+        .replace(
+            "CREATE TABLE notification_episode (",
+            "CREATE TABLE notification_episode_v163 (",
+        )
+        .replacen("                agent_run_id TEXT,\n", "", 1)
+        .replacen(
+            "(kind = 'collaboration'\n                        AND ((camp_turn_id IS NOT NULL) <> (agent_run_id IS NOT NULL))\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+            "(kind = 'collaboration' AND camp_turn_id IS NOT NULL\n                        AND source_message_id IS NULL AND approval_generation IS NULL)",
+            1,
+        )
+        .replacen(" AND agent_run_id IS NULL", "", 2);
+    tx.execute_batch(&episode_v163).unwrap();
+    let episode_columns = table_columns(&tx, "notification_episode_v163")
+        .unwrap()
+        .into_iter()
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    drop_rebuild_triggers(&tx, &episode_objects).unwrap();
+    tx.execute_batch(&format!(
+        "INSERT INTO notification_episode_v163({episode_columns}) \
+         SELECT {episode_columns} FROM notification_episode; \
+         DROP TABLE notification_episode; \
+         ALTER TABLE notification_episode_v163 RENAME TO notification_episode;"
+    ))
+    .unwrap();
+    restore_rebuild_schema_objects(&tx, "notification_episode", episode_objects).unwrap();
+
+    let occurrence_schema: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification_occurrence'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let occurrence_objects =
+        migration_schema_objects(&tx, "notification_occurrence", true).unwrap();
+    let occurrence_v163 = occurrence_schema
+        .replace(
+            "CREATE TABLE \"notification_occurrence\"",
+            "CREATE TABLE notification_occurrence_v163",
+        )
+        .replace(
+            "CREATE TABLE notification_occurrence (",
+            "CREATE TABLE notification_occurrence_v163 (",
+        )
+        .replacen("'approval', 'camp_message', 'camp_turn', 'agent_run'", "'approval', 'camp_message', 'camp_turn'", 1)
+        .replacen("                agent_run_id TEXT,\n", "", 1)
+        .replacen("\n                        AND agent_run_id IS NULL", "", 2)
+        .replacen(
+            "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_message_id IS NULL AND approval_id IS NULL\n                        AND ((source_type = 'camp_turn' AND camp_turn_id = source_id\n                              AND agent_run_id IS NULL)\n                          OR (source_type = 'agent_run' AND agent_run_id = source_id\n                              AND camp_turn_id IS NULL)))",
+            "(semantic IN ('turn_completed', 'turn_failed', 'turn_incomplete')\n                        AND source_type = 'camp_turn' AND camp_turn_id = source_id\n                        AND source_message_id IS NULL AND approval_id IS NULL)",
+            1,
+        );
+    tx.execute_batch(&occurrence_v163).unwrap();
+    let occurrence_columns = table_columns(&tx, "notification_occurrence_v163")
+        .unwrap()
+        .into_iter()
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    drop_rebuild_triggers(&tx, &occurrence_objects).unwrap();
+    tx.execute_batch(&format!(
+        "INSERT INTO notification_occurrence_v163({occurrence_columns}) \
+         SELECT {occurrence_columns} FROM notification_occurrence; \
+         DROP TABLE notification_occurrence; \
+         ALTER TABLE notification_occurrence_v163 RENAME TO notification_occurrence;"
+    ))
+    .unwrap();
+    restore_rebuild_schema_objects(&tx, "notification_occurrence", occurrence_objects).unwrap();
+    tx.execute_batch(
+        r#"
+        DROP TRIGGER notification_completion_satisfied_by_user_turn;
+        CREATE TRIGGER notification_completion_satisfied_by_user_turn
+        AFTER INSERT ON camp_message
+        WHEN NEW.author_type = 'user' AND NEW.author_id = 'local_user'
+          AND NEW.camp_turn_id IS NOT NULL
+        BEGIN
+            UPDATE notification_occurrence_disposition
+            SET satisfied_at = NEW.created_at, updated_at = NEW.created_at
+            WHERE satisfied_at IS NULL AND occurrence_id IN (
+                SELECT occurrence.id FROM notification_occurrence AS occurrence
+                JOIN camp_turn ON camp_turn.id = occurrence.camp_turn_id
+                WHERE occurrence.camp_id = NEW.camp_id
+                  AND occurrence.semantic = 'turn_completed'
+                  AND camp_turn.kind <> 'single_chat'
+                  AND occurrence.camp_turn_id <> NEW.camp_turn_id
+                  AND occurrence.occurred_at <= NEW.created_at
+            );
+        END;
+        DELETE FROM schema_migration WHERE version=164;
+        UPDATE rovai_data_contract SET projection_schema_version=113 WHERE singleton=1;
+        "#,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+}
+
+#[cfg(test)]
+pub(crate) fn downgrade_current_schema_to_v162_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v163_source_for_test(connection);
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=163)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    // Current-schema fixtures sometimes create a fresh Delivery-first Run before
+    // exercising an older migration. Translate that test-only execution fact to
+    // the closest representable v162 CampTurn shape before removing v163 tables.
+    // No production migration ever runs this reverse adapter.
+    connection
+        .execute_batch(
+            r#"
+            INSERT INTO camp_turn(
+                id, camp_id, trigger_type, trigger_id, status,
+                version, created_at, updated_at, ended_at
+            )
+            SELECT
+                'v161-fixture-turn:' || run.id,
+                run.camp_id,
+                'system_event',
+                'v162-fixture-run:' || run.id,
+                CASE run.status
+                    WHEN 'succeeded' THEN 'completed'
+                    WHEN 'failed' THEN 'failed'
+                    WHEN 'cancelled' THEN 'cancelled'
+                    ELSE 'running'
+                END,
+                1, run.created_at, run.updated_at,
+                CASE WHEN run.status IN ('succeeded','failed','cancelled')
+                    THEN COALESCE(run.ended_at, run.updated_at) ELSE NULL END
+            FROM agent_run AS run
+            WHERE run.invocation_kind = 'batch';
+
+            UPDATE channel_execution_console
+            SET camp_turn_id = 'v161-fixture-turn:' || agent_run_id
+            WHERE camp_turn_id IS NULL
+              AND agent_run_id IN (
+                  SELECT id FROM agent_run WHERE invocation_kind = 'batch'
+              );
+
+            UPDATE agent_run
+            SET camp_turn_id = 'v161-fixture-turn:' || id,
+                invocation_kind = 'direct',
+                trigger_camp_message_id = anchor_message_id,
+                camp_id = NULL,
+                anchor_message_id = NULL,
+                current_public_tail_sequence = NULL
+            WHERE invocation_kind = 'batch';
+
+            DELETE FROM agent_run_input;
+            DELETE FROM camp_message_delivery;
+            "#,
+        )
+        .unwrap();
+    let manifest_version_guard: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='context_manifest_version_immutable'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER context_manifest_version_immutable;")
+        .unwrap();
+    let v161_profile = crate::context_delivery::CONTEXT_DELIVERY_PROFILE_V6;
+    connection
+        .execute(
+            r#"
+            UPDATE context_manifest
+            SET context_manifest_version=25,
+                formatter_version=25,
+                run_facts_schema_version=4,
+                run_fact_payload_json=json_set(run_fact_payload_json,'$.schemaVersion',4),
+                context_delivery_profile_version=6,
+                context_delivery_profile_json=?1,
+                context_delivery_profile_digest=?2
+            WHERE context_manifest_version=26
+            "#,
+            params![
+                serde_json::to_string(&v161_profile).unwrap(),
+                v161_profile.canonical_digest().unwrap(),
+            ],
+        )
+        .unwrap();
+    connection.execute_batch(&manifest_version_guard).unwrap();
+    let unsupported_rows: i64 = connection
+        .query_row(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM agent_run WHERE invocation_kind='batch')
+              + (SELECT COUNT(*) FROM camp_message_delivery)
+              + (SELECT COUNT(*) FROM agent_run_input)
+              + (SELECT COUNT(*) FROM channel_delivery WHERE channel_binding_id IS NOT NULL)
+              + (SELECT COUNT(*) FROM automation_run
+                   WHERE trigger_message_id IS NOT NULL OR trigger_delivery_id IS NOT NULL)
+              + (SELECT COUNT(*) FROM mission_start WHERE delivery_id IS NOT NULL)
+              + (SELECT COUNT(*) FROM context_manifest WHERE context_manifest_version=26)
+            "#,
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        unsupported_rows, 0,
+        "v162 migration fixture cannot represent v163-only business rows"
+    );
+
+    fn renamed_table_schema(sql: String, table: &str, replacement: &str) -> String {
+        let quoted = format!("CREATE TABLE \"{table}\"");
+        let plain = format!("CREATE TABLE {table}");
+        if sql.contains(&quoted) {
+            sql.replacen(&quoted, &format!("CREATE TABLE {replacement}"), 1)
+        } else {
+            sql.replacen(&plain, &format!("CREATE TABLE {replacement}"), 1)
+        }
+    }
+    fn quoted_columns(connection: &Connection, table: &str, excluded: &[&str]) -> String {
+        table_columns(connection, table)
+            .unwrap()
+            .into_iter()
+            .filter(|column| !excluded.contains(&column.as_str()))
+            .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+
+    let source_schema: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let objects = migration_schema_objects(&transaction, "agent_run", true).unwrap();
+    let batch_columns = r#"destination_conversation_id TEXT REFERENCES conversation(id),
+                camp_id TEXT REFERENCES camp(id),
+                anchor_message_id TEXT REFERENCES camp_message(id),
+                current_public_tail_sequence INTEGER CHECK(current_public_tail_sequence >= 0),
+                workspace_preparing_at TEXT,"#;
+    let batch_check = r#"CHECK (
+                        input_ready_at IS NULL
+                        OR invocation_kind = 'batch'
+                        OR (
+                            (trigger_camp_message_id IS NOT NULL)
+                          + (trigger_conversation_message_id IS NOT NULL)
+                           = 1
+                        )
+                    ),
+                    CHECK (
+                        (invocation_kind = 'batch'
+                            AND camp_id IS NOT NULL
+                            AND camp_turn_id IS NULL
+                            AND anchor_message_id IS NOT NULL
+                            AND current_public_tail_sequence IS NOT NULL)
+                        OR
+                        (invocation_kind <> 'batch'
+                            AND camp_id IS NULL
+                            AND anchor_message_id IS NULL
+                            AND current_public_tail_sequence IS NULL)
+                    )"#;
+    let legacy_check = r#"CHECK (
+                        input_ready_at IS NULL
+                        OR (
+                            (trigger_camp_message_id IS NOT NULL)
+                          + (trigger_conversation_message_id IS NOT NULL)
+                           = 1
+                        )
+                    )"#;
+    let v162_terminal_reasons = "'camp_attachment_view_v1_clean_break',\n                        'camp_message_agent_run_v1_clean_break',\n                        'migrated_to_delivery_first_queue',\n                        'gather_removed'\n                    )";
+    let v161_terminal_reasons = "'camp_attachment_view_v1_clean_break'\n                    )";
+    let legacy_schema = renamed_table_schema(source_schema, "agent_run", "agent_run_v161")
+        .replacen(
+            "camp_turn_id TEXT REFERENCES camp_turn(id)",
+            "camp_turn_id TEXT NOT NULL REFERENCES camp_turn(id)",
+            1,
+        )
+        .replacen(
+            "CHECK(invocation_kind IN ('direct', 'a2a', 'gather_completion', 'single_chat', 'batch'))",
+            "CHECK(invocation_kind IN ('direct', 'a2a', 'gather_completion', 'single_chat'))",
+            1,
+        )
+        .replacen(v162_terminal_reasons, v161_terminal_reasons, 1)
+        .replacen(batch_columns, "destination_conversation_id TEXT REFERENCES conversation(id), workspace_preparing_at TEXT,", 1)
+        .replacen(batch_check, legacy_check, 1);
+    assert!(!legacy_schema.contains("invocation_kind = 'batch'"));
+    assert!(!legacy_schema.contains("migrated_to_delivery_first_queue"));
+    transaction.execute_batch(&legacy_schema).unwrap();
+    let columns = quoted_columns(
+        &transaction,
+        "agent_run",
+        &[
+            "camp_id",
+            "anchor_message_id",
+            "current_public_tail_sequence",
+        ],
+    );
+    drop_rebuild_triggers(&transaction, &objects).unwrap();
+    transaction
+        .execute_batch(&format!(
+            "INSERT INTO agent_run_v161({columns}) SELECT {columns} FROM agent_run; \
+             DROP TABLE agent_run; ALTER TABLE agent_run_v161 RENAME TO agent_run;"
+        ))
+        .unwrap();
+    restore_rebuild_schema_objects(
+        &transaction,
+        "agent_run",
+        objects
+            .into_iter()
+            .filter(|(_, name, _)| name != "agent_run_active_batch_lane_idx")
+            .collect(),
+    )
+    .unwrap();
+
+    let console_schema: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='channel_execution_console'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let console_objects =
+        migration_schema_objects(&transaction, "channel_execution_console", true).unwrap();
+    let legacy_console = renamed_table_schema(
+        console_schema,
+        "channel_execution_console",
+        "channel_execution_console_v161",
+    )
+    .replacen(
+        "camp_turn_id TEXT REFERENCES camp_turn(id)",
+        "camp_turn_id TEXT NOT NULL REFERENCES camp_turn(id)",
+        1,
+    );
+    transaction.execute_batch(&legacy_console).unwrap();
+    drop_rebuild_triggers(&transaction, &console_objects).unwrap();
+    transaction
+        .execute_batch(
+            "INSERT INTO channel_execution_console_v161 SELECT * FROM channel_execution_console; \
+             DROP TABLE channel_execution_console; \
+             ALTER TABLE channel_execution_console_v161 RENAME TO channel_execution_console;",
+        )
+        .unwrap();
+    restore_rebuild_schema_objects(&transaction, "channel_execution_console", console_objects)
+        .unwrap();
+    transaction
+        .execute_batch(
+            r#"
+            DROP TRIGGER IF EXISTS channel_execution_console_identity_immutable;
+            CREATE TRIGGER channel_execution_console_identity_immutable
+            BEFORE UPDATE ON channel_execution_console
+            FOR EACH ROW
+            WHEN OLD.agent_run_id <> NEW.agent_run_id
+              OR OLD.request_id <> NEW.request_id
+              OR OLD.channel_conversation_id <> NEW.channel_conversation_id
+              OR OLD.camp_turn_id <> NEW.camp_turn_id
+              OR OLD.agent_id <> NEW.agent_id
+              OR OLD.target_app_id <> NEW.target_app_id
+            BEGIN
+                SELECT RAISE(ABORT, 'channel execution console identity is immutable');
+            END;
+            "#,
+        )
+        .unwrap();
+
+    let manifest_schema: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='context_manifest'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let manifest_objects =
+        migration_schema_objects(&transaction, "context_manifest", true).unwrap();
+    let batch_fact_branch = "(context_manifest_version = 26 AND formatter_version = 26 AND run_facts_schema_version = 5 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
+    let current_fact_branch = "(context_manifest_version = 25 AND formatter_version = 25 AND run_facts_schema_version = 4 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
+    let legacy_manifest =
+        renamed_table_schema(manifest_schema, "context_manifest", "context_manifest_v161")
+            .replacen(
+                "formatter_version IN (20, 21, 22, 23, 24, 25, 26)",
+                "formatter_version IN (20, 21, 22, 23, 24, 25)",
+                1,
+            )
+            .replacen(
+                "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)",
+                "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25)",
+                1,
+            )
+            .replacen(
+                "run_facts_schema_version IN (1, 2, 3, 4, 5)",
+                "run_facts_schema_version IN (1, 2, 3, 4)",
+                1,
+            )
+            .replacen(
+                "CHECK(context_delivery_profile_version IN (4, 5, 6, 7))",
+                "CHECK(context_delivery_profile_version IN (4, 5, 6))",
+                1,
+            )
+            .replacen(
+                &format!("{batch_fact_branch}\n OR\n {current_fact_branch}"),
+                current_fact_branch,
+                1,
+            );
+    transaction.execute_batch(&legacy_manifest).unwrap();
+    drop_rebuild_triggers(&transaction, &manifest_objects).unwrap();
+    transaction
+        .execute_batch(
+            "INSERT INTO context_manifest_v161 SELECT * FROM context_manifest; \
+             DROP TABLE context_manifest; \
+             ALTER TABLE context_manifest_v161 RENAME TO context_manifest;",
+        )
+        .unwrap();
+    restore_rebuild_schema_objects(
+        &transaction,
+        "context_manifest",
+        manifest_objects
+            .into_iter()
+            .filter(|(_, name, _)| {
+                !matches!(
+                    name.as_str(),
+                    "context_manifest_v26_only_insert"
+                        | "context_manifest_quote_profile_insert"
+                        | "runtime_input_delivery_attachment_auth_insert"
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    mission_context::restore_v161_context_guards_for_test(&transaction);
+
+    let channel_schema: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='channel_delivery'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let channel_objects = migration_schema_objects(&transaction, "channel_delivery", true).unwrap();
+    let current_channel_check = r#"CHECK(
+                    (request_id IS NOT NULL
+                        AND pending_binding_id IS NULL
+                        AND channel_binding_id IS NULL
+                        AND delivery_kind <> 'project_selection')
+                    OR (request_id IS NULL
+                        AND pending_binding_id IS NOT NULL
+                        AND channel_binding_id IS NULL
+                        AND delivery_kind = 'project_selection')
+                    OR (request_id IS NULL
+                        AND pending_binding_id IS NULL
+                        AND channel_binding_id IS NOT NULL
+                        AND delivery_kind IN ('agent_output', 'agent_attachment'))
+                )"#;
+    let legacy_channel_check = r#"CHECK(
+                    (request_id IS NOT NULL AND pending_binding_id IS NULL
+                        AND delivery_kind <> 'project_selection')
+                    OR (request_id IS NULL AND pending_binding_id IS NOT NULL
+                        AND delivery_kind = 'project_selection')
+                )"#;
+    let legacy_channel = renamed_table_schema(
+        channel_schema,
+        "channel_delivery",
+        "channel_delivery_v161",
+    )
+    .replacen(
+        "pending_binding_id TEXT REFERENCES pending_camp_binding(id) ON DELETE CASCADE,\n                channel_binding_id TEXT REFERENCES channel_conversation_binding(id) ON DELETE CASCADE,",
+        "pending_binding_id TEXT REFERENCES pending_camp_binding(id) ON DELETE CASCADE,",
+        1,
+    )
+    .replacen(current_channel_check, legacy_channel_check, 1);
+    transaction.execute_batch(&legacy_channel).unwrap();
+    let channel_columns = quoted_columns(&transaction, "channel_delivery", &["channel_binding_id"]);
+    drop_rebuild_triggers(&transaction, &channel_objects).unwrap();
+    transaction
+        .execute_batch(&format!(
+            "INSERT INTO channel_delivery_v161({channel_columns}) SELECT {channel_columns} FROM channel_delivery; \
+             DROP TABLE channel_delivery; ALTER TABLE channel_delivery_v161 RENAME TO channel_delivery;"
+        ))
+        .unwrap();
+    restore_rebuild_schema_objects(
+        &transaction,
+        "channel_delivery",
+        channel_objects
+            .into_iter()
+            .filter(|(_, name, _)| name != "channel_delivery_binding_idx")
+            .collect(),
+    )
+    .unwrap();
+
+    let automation_schema: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='automation_run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let automation_objects =
+        migration_schema_objects(&transaction, "automation_run", true).unwrap();
+    let current_automation_check = r#"CHECK(
+                    (camp_id IS NULL
+                        AND camp_turn_id IS NULL
+                        AND root_agent_run_id IS NULL
+                        AND trigger_message_id IS NULL
+                        AND trigger_delivery_id IS NULL)
+                    OR
+                    (camp_id IS NOT NULL AND (
+                        (camp_turn_id IS NOT NULL
+                            AND root_agent_run_id IS NOT NULL
+                            AND trigger_message_id IS NULL
+                            AND trigger_delivery_id IS NULL)
+                        OR
+                        (camp_turn_id IS NULL
+                            AND root_agent_run_id IS NULL
+                            AND trigger_message_id IS NOT NULL
+                            AND trigger_delivery_id IS NOT NULL)
+                    ))
+                )"#;
+    let legacy_automation_check = r#"CHECK(
+                    (camp_id IS NULL AND camp_turn_id IS NULL AND root_agent_run_id IS NULL)
+                    OR (camp_id IS NOT NULL AND camp_turn_id IS NOT NULL AND root_agent_run_id IS NOT NULL)
+                )"#;
+    let legacy_automation = renamed_table_schema(
+        automation_schema,
+        "automation_run",
+        "automation_run_v161",
+    )
+    .replacen(
+        "result_message_id TEXT,\n                trigger_message_id TEXT UNIQUE REFERENCES camp_message(id),\n                trigger_delivery_id TEXT UNIQUE REFERENCES camp_message_delivery(id),",
+        "result_message_id TEXT,",
+        1,
+    )
+    .replacen(current_automation_check, legacy_automation_check, 1);
+    transaction.execute_batch(&legacy_automation).unwrap();
+    let automation_columns = quoted_columns(
+        &transaction,
+        "automation_run",
+        &["trigger_message_id", "trigger_delivery_id"],
+    );
+    drop_rebuild_triggers(&transaction, &automation_objects).unwrap();
+    transaction
+        .execute_batch(&format!(
+            "INSERT INTO automation_run_v161({automation_columns}) SELECT {automation_columns} FROM automation_run; \
+             DROP TABLE automation_run; ALTER TABLE automation_run_v161 RENAME TO automation_run;"
+        ))
+        .unwrap();
+    restore_rebuild_schema_objects(&transaction, "automation_run", automation_objects).unwrap();
+
+    let mission_start_schema: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='mission_start'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mission_start_objects =
+        migration_schema_objects(&transaction, "mission_start", true).unwrap();
+    let legacy_mission_start = renamed_table_schema(
+        mission_start_schema,
+        "mission_start",
+        "mission_start_v161",
+    )
+    .replacen(
+        "camp_turn_id TEXT UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,\n    delivery_id TEXT UNIQUE REFERENCES camp_message_delivery(id),",
+        "camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,",
+        1,
+    )
+    .replacen(
+        "created_at TEXT NOT NULL,\n    CHECK((camp_turn_id IS NOT NULL) <> (delivery_id IS NOT NULL))\n)",
+        "created_at TEXT NOT NULL\n)",
+        1,
+    );
+    transaction.execute_batch(&legacy_mission_start).unwrap();
+    let mission_start_columns = quoted_columns(&transaction, "mission_start", &["delivery_id"]);
+    drop_rebuild_triggers(&transaction, &mission_start_objects).unwrap();
+    transaction
+        .execute_batch(&format!(
+            "INSERT INTO mission_start_v161({mission_start_columns}) SELECT {mission_start_columns} FROM mission_start; \
+             DROP TABLE mission_start; ALTER TABLE mission_start_v161 RENAME TO mission_start;"
+        ))
+        .unwrap();
+    restore_rebuild_schema_objects(&transaction, "mission_start", mission_start_objects).unwrap();
+
+    transaction
+        .execute_batch(
+            r#"
+            DROP TABLE agent_run_input;
+            DROP TABLE camp_message_delivery;
+            ALTER TABLE channel_turn_request DROP COLUMN delivery_ids_json;
+            ALTER TABLE camp_message DROP COLUMN withdrawn_at;
+            ALTER TABLE camp_message DROP COLUMN withdrawn_by_id;
+            ALTER TABLE camp_message DROP COLUMN recall_state;
+            ALTER TABLE camp_message DROP COLUMN origin_kind;
+            DELETE FROM schema_migration WHERE version=163;
+            UPDATE rovai_data_contract
+            SET contract_version='v1.59', projection_schema_version=112
+            WHERE singleton=1;
+            "#,
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    assert!(matches!(
+        classify_database_contract(connection).unwrap(),
+        DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.59" && marker.projection_schema_version == 112
+    ));
+}
+
+#[cfg(test)]
+pub(crate) fn downgrade_current_schema_to_v161_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v162_source_for_test(connection);
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=162)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute_batch(
+            r#"
+            CREATE TRIGGER IF NOT EXISTS mission_camp_delete_cleanup BEFORE DELETE ON camp
+            BEGIN
+                UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
+                WHERE camp_id=OLD.id AND state IN ('ready','preparing');
+            END;
+            ALTER TABLE mission_workspace DROP COLUMN cleanup_branch_removed;
+            ALTER TABLE mission_workspace DROP COLUMN cleanup_worktree_removed;
+            ALTER TABLE mission_workspace DROP COLUMN cleanup_expected_branch_oid;
+            ALTER TABLE mission_workspace DROP COLUMN cleanup_command_id;
+            ALTER TABLE mission_workspace DROP COLUMN generation;
+            ALTER TABLE mission_workspace DROP COLUMN preparation_kind;
+            DELETE FROM schema_migration WHERE version=162;
+            UPDATE rovai_data_contract
+            SET contract_version='v1.59', projection_schema_version=111
+            WHERE singleton=1;
+            "#,
+        )
+        .unwrap();
+    assert!(matches!(
+        classify_database_contract(connection).unwrap(),
+        DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.59" && marker.projection_schema_version == 111
+    ));
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v156_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v161_source_for_test(connection);
+    mission_context::downgrade_for_test(connection);
     let dsh_applied = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=157)",
@@ -29590,6 +31763,7 @@ fn downgrade_current_schema_to_v154_source_for_test(connection: &Connection) {
 
 #[cfg(test)]
 fn downgrade_current_schema_to_v155_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v161_source_for_test(connection);
     mission_context::downgrade_for_test(connection);
     downgrade_current_schema_to_v156_source_for_test(connection);
     attachment_paths::downgrade_for_test(connection);
@@ -32450,6 +34624,311 @@ mod tests {
     use super::*;
 
     #[test]
+    fn current_schema_uses_delivery_first_multi_input_agent_runs() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-v160-delivery-schema-{}", Uuid::new_v4()));
+        let database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        assert!(camp_message_agent_run_v163_schema_matches(database.connection()).unwrap());
+        let marker = database
+            .connection()
+            .query_row(
+                "SELECT contract_version, projection_schema_version FROM rovai_data_contract WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            marker,
+            (
+                CURRENT_DATA_CONTRACT_VERSION.to_string(),
+                CURRENT_PROJECTION_SCHEMA_VERSION
+            )
+        );
+        let batch_contract: (i64, i64) = database
+            .connection()
+            .query_row(
+                r#"
+                SELECT
+                    (SELECT [notnull] FROM pragma_table_info('agent_run')
+                        WHERE name = 'camp_turn_id'),
+                    (SELECT COUNT(*) FROM pragma_table_info('agent_run_input'))
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            batch_contract.0, 0,
+            "CampTurn must be optional for new Runs"
+        );
+        assert!(
+            batch_contract.1 >= 6,
+            "ordered RunInput relation is missing"
+        );
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v163_converges_the_pushed_delivery_first_v162_lineage() {
+        let directory = std::env::temp_dir().join(format!(
+            "rovai-v163-delivery-first-v162-convergence-{}",
+            Uuid::new_v4()
+        ));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v163_source_for_test(database.connection());
+        database
+            .connection()
+            .execute_batch(
+                r#"
+                DELETE FROM schema_migration WHERE version=163;
+                CREATE TRIGGER mission_camp_delete_cleanup BEFORE DELETE ON camp
+                BEGIN
+                    UPDATE mission_workspace SET state='cleanup_pending',updated_at=datetime('now')
+                    WHERE camp_id=OLD.id AND state IN ('ready','preparing');
+                END;
+                ALTER TABLE mission_workspace DROP COLUMN cleanup_branch_removed;
+                ALTER TABLE mission_workspace DROP COLUMN cleanup_worktree_removed;
+                ALTER TABLE mission_workspace DROP COLUMN cleanup_expected_branch_oid;
+                ALTER TABLE mission_workspace DROP COLUMN cleanup_command_id;
+                ALTER TABLE mission_workspace DROP COLUMN generation;
+                ALTER TABLE mission_workspace DROP COLUMN preparation_kind;
+                UPDATE rovai_data_contract
+                SET contract_version='v1.60', projection_schema_version=112
+                WHERE singleton=1;
+                "#,
+            )
+            .unwrap();
+        assert!(camp_message_agent_run_v163_schema_matches(database.connection()).unwrap());
+        assert!(!mission_details::v162_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.60"
+                    && marker.projection_schema_version == 112
+        ));
+
+        database.migrate_camp_message_agent_run_v163().unwrap();
+
+        assert!(database.schema_migration_applied(163).unwrap());
+        assert!(mission_details::v162_schema_matches(database.connection()).unwrap());
+        database.migrate_agent_run_notification_v164().unwrap();
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v163_accepts_mission_start_schema_rebuilt_by_v160() {
+        let directory = std::env::temp_dir().join(format!(
+            "rovai-v163-v160-mission-start-schema-{}",
+            Uuid::new_v4()
+        ));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v162_source_for_test(database.connection());
+        database
+            .connection()
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 CREATE TABLE mission_start_v160 (
+                    message_id TEXT PRIMARY KEY NOT NULL REFERENCES camp_message(id) ON DELETE CASCADE,
+                    mission_id TEXT NOT NULL REFERENCES mission(id) ON DELETE CASCADE,
+                    camp_turn_id TEXT NOT NULL UNIQUE REFERENCES camp_turn(id) ON DELETE CASCADE,
+                    command_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO mission_start_v160(message_id,mission_id,camp_turn_id,command_id,created_at)
+                SELECT message_id,mission_id,camp_turn_id,command_id,created_at FROM mission_start;
+                DROP TABLE mission_start;
+                ALTER TABLE mission_start_v160 RENAME TO mission_start;
+                PRAGMA foreign_keys=ON;",
+            )
+            .unwrap();
+
+        let source_schema = database
+            .connection()
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name='mission_start'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(source_schema.contains("created_at TEXT NOT NULL\n                )"));
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.59" && marker.projection_schema_version == 112
+        ));
+
+        database.migrate_camp_message_agent_run_v163().unwrap();
+        assert!(camp_message_agent_run_v163_schema_matches(database.connection()).unwrap());
+        database.migrate_agent_run_notification_v164().unwrap();
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v163_requeues_unfrozen_public_work_and_retires_the_legacy_run_placeholder() {
+        use crate::{
+            collaboration::{CollaborationService, CreateCampCommand},
+            command::{ActorRef, CommandEnvelope},
+            delivery_queue::{claim_waiting_delivery_batches, enqueue_message_deliveries},
+        };
+
+        let (mut database, directory) = crate::test_support::seeded_runtime_database_fast();
+        let workspace = directory.join("v162-requeue-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let created = CollaborationService::default()
+            .create_camp(
+                &mut database,
+                &CommandEnvelope {
+                    command_id: "create-v162-requeue-camp".to_string(),
+                    actor: ActorRef::User {
+                        user_id: "local_user".to_string(),
+                    },
+                    camp_id: None,
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: CreateCampCommand::for_test_with_members(
+                        workspace.to_string_lossy().into_owned(),
+                        &["agent_1"],
+                        "agent_1",
+                    ),
+                },
+            )
+            .unwrap();
+        let camp_id = created.result.payload["campId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO conversation(
+                    id, camp_id, agent_id, last_message_sequence,
+                    version, created_at, updated_at
+                ) VALUES (
+                    'v162-requeue-conversation', ?1, 'agent_1', 0,
+                    1, datetime('now'), datetime('now')
+                )
+                "#,
+                [&camp_id],
+            )
+            .unwrap();
+        let transaction = database.connection_mut().transaction().unwrap();
+        transaction
+            .execute(
+                r#"
+                UPDATE camp
+                SET last_message_sequence = 1, version = version + 1,
+                    updated_at = datetime('now')
+                WHERE id = ?1;
+                "#,
+                [&camp_id],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                r#"
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id, body,
+                    structured_content_json, content_digest,
+                    address_mode, addressed_agent_ids_json,
+                    effective_recipient_ids_json, recipient_presentation_json,
+                    origin_kind, recall_state, version, created_at, updated_at
+                ) VALUES (
+                    'v162-requeue-message', ?1, 1, 'user', 'local_user',
+                    'preserve this accepted work',
+                    '[{"kind":"text","text":"preserve this accepted work"}]',
+                    'sha256:v162-requeue-message', 'explicit', '["agent_1"]',
+                    '["agent_1"]', '{}', 'local_composer', 'recallable',
+                    1, datetime('now'), datetime('now')
+                )
+                "#,
+                [&camp_id],
+            )
+            .unwrap();
+        enqueue_message_deliveries(
+            &transaction,
+            &camp_id,
+            "v162-requeue-message",
+            1,
+            &["agent_1".to_string()],
+            "2026-09-18T00:00:00Z",
+        )
+        .unwrap();
+        transaction.commit().unwrap();
+        let legacy_run_id = claim_waiting_delivery_batches(&mut database, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        downgrade_current_schema_to_v162_source_for_test(database.connection());
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT status || ':' || invocation_kind FROM agent_run WHERE id = ?1",
+                    [&legacy_run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "queued:direct"
+        );
+
+        database.migrate_camp_message_agent_run_v163().unwrap();
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT status || ':' || last_error_code FROM agent_run WHERE id = ?1",
+                    [&legacy_run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "cancelled:camp_message_agent_run_v1_clean_break"
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    r#"
+                    SELECT status || ':' || recipient_agent_id || ':' || queue_sequence
+                    FROM camp_message_delivery
+                    WHERE message_id = 'v162-requeue-message'
+                    "#,
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "waiting:agent_1:1"
+        );
+
+        let successor_run_id = claim_waiting_delivery_batches(&mut database, 1)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_ne!(successor_run_id, legacy_run_id);
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT message_id FROM agent_run_input WHERE agent_run_id = ?1",
+                    [&successor_run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "v162-requeue-message"
+        );
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn migration_foreign_key_checks_cover_inbound_dependents_not_unrelated_history() {
         let mut connection = Connection::open_in_memory().unwrap();
         connection
@@ -32767,6 +35246,8 @@ mod tests {
             v160: version >= 160,
             v161: version >= 161,
             v162: version >= 162,
+            v163: version >= 163,
+            v164: version >= 164,
         }
     }
 
@@ -32909,10 +35390,22 @@ mod tests {
                 161,
             ),
             (
+                "v1.59/schema 112 before Camp Message / AgentRun clean break",
+                "v1.59",
+                112,
+                162,
+            ),
+            (
+                "v1.60/schema 113 before AgentRun notifications",
+                CURRENT_DATA_CONTRACT_VERSION,
+                113,
+                163,
+            ),
+            (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                162,
+                164,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -33384,7 +35877,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(160);
+        let current = migration_state_through(164);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -33838,7 +36331,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(162));
+        assert_eq!(state, migration_state_through(164));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -34437,6 +36930,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
+        downgrade_current_schema_to_v162_source_for_test(database.connection());
         database
             .connection()
             .execute_batch("PRAGMA foreign_keys=OFF;")
@@ -34549,6 +37043,16 @@ mod tests {
         ));
         database.migrate_mission_workspace_lifecycle_v162().unwrap();
         assert!(database.schema_migration_applied(162).unwrap());
+        database.migrate_camp_message_agent_run_v163().unwrap();
+        assert!(database.schema_migration_applied(163).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.60"
+                    && marker.projection_schema_version == 113
+        ));
+        database.migrate_agent_run_notification_v164().unwrap();
+        assert!(database.schema_migration_applied(164).unwrap());
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)
@@ -34863,7 +37367,7 @@ mod tests {
     }
 
     #[test]
-    fn v153_preserves_desktop_drafts_and_rolls_back_partial_editor_migration() {
+    fn v153_preserves_drafts_at_its_boundary_and_v162_clean_breaks_camp_drafts() {
         // This migration owns a new composite FK plus durable editor proofs.
         // A failed receipt must leave the v149 source usable; a pure schema
         // comparison cannot prove preservation/rollback of existing drafts.
@@ -34945,15 +37449,36 @@ mod tests {
         database.migrate_mission_context_v158().unwrap();
         assert_eq!(database.connection().query_row("SELECT revision,updated_at,client_id FROM single_chat_composer_draft WHERE conversation_id=?1", [&conversation_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).unwrap(), (7,"2026-09-13T00:00:00Z".into(),"desktop".into()));
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
-        assert_eq!(store.load_draft(&database, camp_id).unwrap(), draft);
+        assert!(
+            store
+                .load_draft(&database, camp_id)
+                .unwrap()
+                .content
+                .segments
+                .is_empty()
+        );
         drop(database);
         let mut reopened = Database::open(&directory).unwrap();
-        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        assert!(
+            store
+                .load_draft(&reopened, camp_id)
+                .unwrap()
+                .content
+                .segments
+                .is_empty()
+        );
         assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
         // Same owner also verifies the already-pushed preview source: the old
         // receipt 150 must be joined without rebuilding or discarding Web editors.
         let editor = crate::draft_client::resolve_editor(&reopened, None).unwrap();
         downgrade_current_schema_to_v153_source_for_test(reopened.connection());
+        let preview_draft = store
+            .save_body(
+                &mut reopened,
+                camp_id,
+                "Legacy preview draft is cleaned at v162",
+            )
+            .unwrap();
         reopened
             .connection()
             .execute_batch("PRAGMA foreign_keys=OFF;")
@@ -35012,7 +37537,7 @@ mod tests {
             classify_database_contract(reopened.connection()).unwrap(),
             DatabaseContractClassification::SupportedMigrationSource(_)
         ));
-        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), preview_draft);
         reopened
             .connection()
             .execute_batch("DROP TRIGGER reject_preview_join;")
@@ -35020,7 +37545,14 @@ mod tests {
         drop(reopened);
         let reopened = Database::open(&directory).unwrap();
         assert!(connection_has_current_data_contract(reopened.connection()).unwrap());
-        assert_eq!(store.load_draft(&reopened, camp_id).unwrap(), draft);
+        assert!(
+            store
+                .load_draft(&reopened, camp_id)
+                .unwrap()
+                .content
+                .segments
+                .is_empty()
+        );
         let resumed = crate::draft_client::resolve_editor(
             &reopened,
             Some(crate::draft_client::EditorResume {
@@ -35281,12 +37813,17 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
         // Materialize with the current writer, then restore the historical source shape.
         downgrade_current_schema_to_v98_source_for_test(database.0.connection());
+        let turn_id: String = database
+            .0
+            .connection()
+            .query_row(
+                "SELECT camp_turn_id FROM agent_run WHERE id = ?1",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
         database
             .0
             .connection()
@@ -35403,7 +37940,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(manifest_schema.contains("CHECK(formatter_version IN (20, 21, 22, 23, 24, 25))"));
+        assert!(
+            manifest_schema.contains("CHECK(formatter_version IN (20, 21, 22, 23, 24, 25, 26))")
+        );
         let conversation: (Option<String>, Option<String>, i64, i64) = reopened
             .connection()
             .query_row(
@@ -35504,16 +38043,20 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
         let message_id = sent.result.payload["campMessageId"]
             .as_str()
             .unwrap()
             .to_string();
         // Materialize with the current writer, then restore the historical source shape.
         downgrade_current_schema_to_v98_source_for_test(database.connection());
+        let turn_id: String = database
+            .connection()
+            .query_row(
+                "SELECT camp_turn_id FROM agent_run WHERE id = ?1",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
         let (agent_id, conversation_id): (String, String) = database
             .connection()
             .query_row(
@@ -35728,8 +38271,12 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(manifest_schema.contains("CHECK(formatter_version IN (20, 21, 22, 23, 24, 25))"));
-        assert!(manifest_schema.contains("CHECK(context_delivery_profile_version IN (4, 5, 6))"));
+        assert!(
+            manifest_schema.contains("CHECK(formatter_version IN (20, 21, 22, 23, 24, 25, 26))")
+        );
+        assert!(
+            manifest_schema.contains("CHECK(context_delivery_profile_version IN (4, 5, 6, 7))")
+        );
         assert!(!manifest_schema.contains("CHECK(context_delivery_profile_version = 3)"));
         let run: (String, Option<String>) = reopened
             .connection()
@@ -40267,14 +42814,19 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let camp_turn_id = sent.result.payload["campTurnId"]
-            .as_str()
-            .unwrap()
-            .to_string();
         let message_id = sent.result.payload["campMessageId"]
             .as_str()
             .unwrap()
             .to_string();
+        downgrade_current_schema_to_v110_source_for_test(database.connection());
+        let camp_turn_id: String = database
+            .connection()
+            .query_row(
+                "SELECT camp_turn_id FROM agent_run WHERE id = ?1",
+                [&source_run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         let delivery_id = Uuid::new_v4().to_string();
         database
@@ -40315,8 +42867,6 @@ mod tests {
                 ],
             )
             .unwrap();
-
-        downgrade_current_schema_to_v110_source_for_test(database.connection());
         let source_marker: (String, i64, i64, i64) = database
             .connection()
             .query_row(
@@ -40715,7 +43265,7 @@ mod tests {
                 DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES, MaterializeContextRequest,
             },
             managed_blob::ManagedBlobStore,
-            runtime::{AgentRunWorkspace, ClaimAgentRunCommand, ExecutionRuntimeService},
+            runtime::{ClaimAgentRunCommand, ExecutionRuntimeService},
             team_tool::TeamToolService,
         };
 
@@ -40824,17 +43374,15 @@ mod tests {
                         expected_version: accepted_version,
                         lease_owner: "migration-99-test".to_string(),
                         lease_seconds: 60,
-                        workspace: Some(AgentRunWorkspace {
-                            execution_root: workspace.display().to_string(),
-                            access: "read_only".to_string(),
-                            isolation: "shared".to_string(),
-                        }),
+                        workspace: None,
                         starting_git_observation: None,
                     },
                 },
             )
             .unwrap();
-        let accepted_epoch = claim.result.payload["executionEpoch"].as_i64().unwrap();
+        let accepted_epoch = claim.result.payload["executionEpoch"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("unexpected claim result: {claim:?}"));
         TeamToolService::default()
             .prepare_binding_credential(&mut database, &accepted_run_id, accepted_epoch, false)
             .unwrap();
@@ -46350,7 +48898,7 @@ mod tests {
             connection,
             "trigger",
             &[
-                "context_manifest_v25_only_insert",
+                "context_manifest_v26_only_insert",
                 "context_manifest_version_immutable",
                 "runtime_input_delivery_attachment_auth_insert",
                 "camp_attachment_view_camp_insert",
@@ -46393,7 +48941,9 @@ mod tests {
                 .unwrap();
             assert_eq!(default, "'[]'", "{table}");
         }
-        assert!(manifest_schema.contains("CHECK(context_delivery_profile_version IN (4, 5, 6))"));
+        assert!(
+            manifest_schema.contains("CHECK(context_delivery_profile_version IN (4, 5, 6, 7))")
+        );
         assert!(manifest_schema.contains("collaboration_state_included INTEGER NOT NULL"));
         let delivery_schema: String = connection
             .query_row(

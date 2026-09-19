@@ -716,7 +716,7 @@ Delivery/Run、stale-version conflict、旧 lease fencing、后继三条 exact r
 和 Git workspace，并运行真实模型 AgentRun。每个 Runtime 都完成 13 个 canonical operation、16 条目标
 Core Evidence、direct/stdin/input-file 三种 send 输入、public-only `--to-user`、Agent+user 双轴发送、
 stale-version recovery、完成后的旧 lease fencing 和后继 AgentRun 新 lease。由于当前 Run 的 Context 是
-冻结快照，三条新消息的 exact `camp.read(mode="item")` addressing 由后继 Run 验证；这不是同一 Run
+冻结快照，三条新消息的 exact `camp.read(messageId=...)` addressing 由后继 Run 验证；这不是同一 Run
 读取接受后新消息的伪影。每个 Case 同时拒绝旧/虚构 send input，并验证 compact success stdout 不暴露
 `local_user` 或 Notification ID。
 

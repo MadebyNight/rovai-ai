@@ -271,7 +271,16 @@ impl MissionService {
         self.gateway.execute(database,envelope,|tx| {
             if !matches!(envelope.actor,ActorRef::User{..}) { return Ok(reject("mission.user_required")); }
             let Some(mission)=load_record(tx,&envelope.payload.mission_id)? else { return Ok(reject("mission.not_found")); };
-            let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_run r JOIN conversation c ON c.id=r.conversation_id WHERE c.camp_id=?1 AND r.status IN ('queued','running','waiting'))",[&mission.camp_id],|r|r.get(0))?;
+            let active:bool=tx.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM mission_start AS start
+                    JOIN camp_message_delivery AS delivery ON delivery.id=start.delivery_id
+                    WHERE start.mission_id=?1 AND delivery.status IN ('waiting','claimed')
+                )",
+                [&mission.info.mission_id],
+                |r|r.get(0)
+            )?;
             let result=if active {
                 CommandHandlerResult::applied("mission.already_running",json!({"missionId":mission.info.mission_id,"campId":mission.camp_id,"alreadyRunning":true}),None)
             } else { admit_mission_start(tx,&envelope.actor,&envelope.command_id,&mission)? };
@@ -903,6 +912,16 @@ mod tests {
                     |r| r.get::<_, i64>(0)
                 )
                 .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM camp_message_delivery WHERE status='waiting'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
             1
         );
         let info = serde_json::to_value(service.get(&db, &id).unwrap().unwrap().info).unwrap();
@@ -922,6 +941,12 @@ mod tests {
         assert_eq!(result.result.code, "mission.invalid_source_message");
 
         // The running member remains allowed after another member becomes lead.
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
+                .unwrap()
+                .len(),
+            1
+        );
         let runtime = crate::runtime::ExecutionRuntimeService::default();
         let candidate = runtime
             .list_dispatchable_agent_runs(&db, 10)
@@ -1114,6 +1139,12 @@ mod tests {
                 .unwrap()
                 .cleanup_available
         );
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
+                .unwrap()
+                .len(),
+            1
+        );
         db.connection()
             .execute(
                 "UPDATE agent_run SET status='succeeded',ended_at='ended',updated_at='ended' WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
@@ -1145,6 +1176,10 @@ mod tests {
             .unwrap();
         let other_mission_id = other.result.payload["missionId"].as_str().unwrap();
         let other_camp_id = other.result.payload["campId"].as_str().unwrap();
+        db.connection().execute(
+            "INSERT INTO mission_workspace(id,mission_id,camp_id,execution_host_id,source_directory,repository_root,git_common_dir,worktree_path,working_directory,base_branch,branch,base_sha,preparation_token,state,created_at,updated_at) VALUES('projection-workspace-other',?1,?2,?3,'/other/repo','/other/repo','/other/repo/.git','/other-worktree','/other-worktree','main','rovai/mission/002','base','owner','ready','created','updated')",
+            params![other_mission_id, other_camp_id, host],
+        ).unwrap();
         service
             .start(
                 &mut db,
@@ -1153,6 +1188,12 @@ mod tests {
                 }),
             )
             .unwrap();
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
+                .unwrap()
+                .len(),
+            1
+        );
         db.connection()
             .execute(
                 "UPDATE agent_run SET workspace_json=json_object('executionRoot','/worktree') WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",

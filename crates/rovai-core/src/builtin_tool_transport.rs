@@ -7,16 +7,18 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{command::canonical_json_digest, team_tool_catalog::builtin_tool_definitions};
+use crate::{
+    command::{canonical_json_digest, canonical_json_digest_with, write_canonical_json},
+    team_tool_catalog::builtin_tool_definitions,
+};
 
-pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 27;
+pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 28;
 pub const BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = 2;
 pub const BUILTIN_TOOL_ENVELOPE_VERSION: u32 = 1;
 pub const BUILTIN_TOOL_RECEIPT_VERSION: u32 = 1;
-pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 27;
+pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 28;
 pub const BUILTIN_TOOL_AGENT_OUTPUT_CONTRACT_VERSION: u32 = 3;
-pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v27";
-pub const BUILTIN_TOOL_MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
+pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v28";
 pub const ROVAI_AGENT_CLI_ENV: &str = "ROVAI_AGENT_CLI";
 pub const ROVAI_CLI_CONTEXT_ENV: &str = "ROVAI_CLI_CONTEXT";
 pub const ROVAI_RUN_TMP_ENV: &str = "ROVAI_RUN_TMP";
@@ -177,15 +179,10 @@ pub struct BuiltinToolCliIdentity {
     pub action: &'static str,
 }
 
-pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 26] = [
+pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 25] = [
     BuiltinToolCliIdentity {
         operation: "camp.message.send",
         group: "send",
-        action: "",
-    },
-    BuiltinToolCliIdentity {
-        operation: "team.gather",
-        group: "gather",
         action: "",
     },
     BuiltinToolCliIdentity {
@@ -445,10 +442,10 @@ impl BuiltinToolInvocationEnvelope {
         }
         uuid::Uuid::parse_str(&self.request_id)
             .context("Built-in Tool envelope requestId must be a UUID")?;
-        let outcome = match (self.ok, self.result.as_ref(), self.error.as_ref()) {
+        let expected_receipt = match (self.ok, self.result.as_ref(), self.error.as_ref()) {
             (true, Some(result), None) => {
-                canonical_operation_result(result.clone())?;
-                result.clone()
+                validate_canonical_operation_result(result)?;
+                builtin_tool_receipt(&self.operation, &self.request_id, true, result)?
             }
             (false, None, Some(error)) => {
                 if error.code.trim().is_empty() || error.message.trim().is_empty() {
@@ -461,12 +458,11 @@ impl BuiltinToolInvocationEnvelope {
                 {
                     bail!("Built-in Tool error details must be an object");
                 }
-                serde_json::to_value(error)?
+                let error = serde_json::to_value(error)?;
+                builtin_tool_receipt(&self.operation, &self.request_id, false, &error)?
             }
             _ => bail!("Built-in Tool envelope must contain exactly one of result or error"),
         };
-        let expected_receipt =
-            builtin_tool_receipt(&self.operation, &self.request_id, self.ok, &outcome)?;
         if self.receipt != expected_receipt {
             bail!("Built-in Tool envelope receipt does not cover its outcome");
         }
@@ -680,6 +676,11 @@ fn catalog_digest_operations() -> Result<Vec<CatalogDigestOperation>> {
 }
 
 pub fn canonical_operation_result(value: Value) -> Result<Value> {
+    validate_canonical_operation_result(&value)?;
+    Ok(value)
+}
+
+fn validate_canonical_operation_result(value: &Value) -> Result<()> {
     let result = value
         .as_object()
         .context("Canonical Operation Result must be an object")?;
@@ -688,7 +689,7 @@ pub fn canonical_operation_result(value: Value) -> Result<Value> {
             bail!("Canonical Operation Result contains forbidden field {forbidden}");
         }
     }
-    Ok(value)
+    Ok(())
 }
 
 fn direct_arguments(input_schema: &Value) -> Vec<BuiltinToolArgument> {
@@ -837,34 +838,12 @@ fn error_contracts(operation: &str) -> Vec<BuiltinToolErrorContract> {
             for code in [
                 "message.addressing_invalid",
                 "message.public_only_conflict",
-                "message.fanout_exceeded",
-                "message.a2a_depth_exhausted",
                 "message.task_recipient_ambiguous",
                 "message.invalid_task",
-                "message.execution_budget_exceeded",
             ] {
                 errors.push(BuiltinToolErrorContract {
                     code: code.to_string(),
                     recovery: BuiltinToolRecovery::FixInput,
-                });
-            }
-        }
-        "team.gather" => {
-            for (code, recovery) in [
-                ("gather.default_lead_required", BuiltinToolRecovery::Stop),
-                ("gather.no_recipients", BuiltinToolRecovery::FixInput),
-                ("gather.addressing_invalid", BuiltinToolRecovery::FixInput),
-                ("gather.fanout_exceeded", BuiltinToolRecovery::FixInput),
-                ("gather.turn_not_active", BuiltinToolRecovery::Stop),
-                (
-                    "gather.execution_budget_exceeded",
-                    BuiltinToolRecovery::Stop,
-                ),
-                ("gather.idempotency_conflict", BuiltinToolRecovery::Stop),
-            ] {
-                errors.push(BuiltinToolErrorContract {
-                    code: code.to_string(),
-                    recovery,
                 });
             }
         }
@@ -951,7 +930,6 @@ fn error_contracts(operation: &str) -> Vec<BuiltinToolErrorContract> {
 pub fn projection_identity(operation: &str) -> Result<&'static str> {
     match operation {
         "camp.message.send" => Ok("camp-message-send-v2"),
-        "team.gather" => Ok("gather-v1"),
         "memory.write" => Ok("memory-write-v2"),
         "member.create"
         | "team.create_task"
@@ -998,9 +976,6 @@ pub fn recovery_for_error_code(code: &str) -> BuiltinToolRecovery {
                 | "message.task_recipient_ambiguous"
                 | "message.invalid_task"
                 | "message.execution_budget_exceeded"
-                | "gather.no_recipients"
-                | "gather.addressing_invalid"
-                | "gather.fanout_exceeded"
                 | "member.invalid_creation_key"
                 | "member.invalid_identity"
                 | "member.avatar_invalid"
@@ -1025,14 +1000,22 @@ pub fn builtin_tool_receipt(
     ok: bool,
     result_or_error: &Value,
 ) -> Result<String> {
-    let digest = canonical_json_digest(&json!({
-        "domain": "rovai.builtin-tool-receipt.v1",
-        "contractVersion": BUILTIN_TOOL_RECEIPT_VERSION,
-        "operation": operation,
-        "requestId": request_id,
-        "ok": ok,
-        "resultOrError": result_or_error,
-    }))?;
+    // Keep the receipt-v1 canonical preimage byte-for-byte compatible without
+    // rebuilding the potentially large result tree as an owned serde_json::Value.
+    let digest = canonical_json_digest_with(|writer| {
+        writer.write_all(b"{\"contractVersion\":")?;
+        serde_json::to_writer(&mut *writer, &BUILTIN_TOOL_RECEIPT_VERSION)?;
+        writer.write_all(b",\"domain\":\"rovai.builtin-tool-receipt.v1\",\"ok\":")?;
+        serde_json::to_writer(&mut *writer, &ok)?;
+        writer.write_all(b",\"operation\":")?;
+        serde_json::to_writer(&mut *writer, operation)?;
+        writer.write_all(b",\"requestId\":")?;
+        serde_json::to_writer(&mut *writer, request_id)?;
+        writer.write_all(b",\"resultOrError\":")?;
+        write_canonical_json(writer, result_or_error)?;
+        writer.write_all(b"}")?;
+        Ok(())
+    })?;
     Ok(format!("sha256:{digest}"))
 }
 
@@ -1107,9 +1090,9 @@ mod tests {
 
     #[test]
     fn cli_mapping_is_complete_unique_and_contract_valid() {
-        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 27);
-        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 27);
-        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v27");
+        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 28);
+        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 28);
+        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v28");
         validate_builtin_tool_contract().unwrap();
         let operations = BUILTIN_TOOL_CLI_IDENTITIES
             .iter()
@@ -1119,8 +1102,8 @@ mod tests {
             .iter()
             .map(|identity| (identity.group, identity.action))
             .collect::<BTreeSet<_>>();
-        assert_eq!(operations.len(), 26);
-        assert_eq!(commands.len(), 26);
+        assert_eq!(operations.len(), 25);
+        assert_eq!(commands.len(), 25);
     }
 
     #[test]
@@ -1196,6 +1179,36 @@ mod tests {
         assert!(first.strip_prefix("sha256:").is_some_and(
             |digest| digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit())
         ));
+    }
+
+    #[test]
+    fn receipt_v1_keeps_the_existing_canonical_digest_goldens() {
+        let cases = [
+            (
+                "request-nested",
+                true,
+                json!({"z": {"b": 2, "a": 1}, "a": [3, {"y": false, "x": null}]}),
+                "sha256:389b2f8a36e6fcd6dae1db47e458f4ee8d8808ba359f2faf01d10e63a2234a5f",
+            ),
+            (
+                "request-unicode",
+                true,
+                json!({"text": "花\n\"路\"\\终点", "emoji": "🌸"}),
+                "sha256:c742b2c0a482e4d2cca810ac78d651eb9e1aa3c687ee397e1aad4ca7cd480a2c",
+            ),
+            (
+                "request-number",
+                false,
+                json!({"code": "broken", "details": {"values": [0, -7, 42, 1.5]}}),
+                "sha256:71941838dfe46717927b8592b9b0c33da0206a0a4f8818d3aa56b211828bab1f",
+            ),
+        ];
+        for (request_id, ok, result_or_error, expected) in cases {
+            assert_eq!(
+                builtin_tool_receipt("camp.read", request_id, ok, &result_or_error).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]

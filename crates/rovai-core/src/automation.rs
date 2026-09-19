@@ -23,7 +23,10 @@ use crate::{
     },
     current_user::CURRENT_USER_ID,
     db::Database,
-    runtime::{cancel_automation_camp_turn_in_tx, pump_targets_after_runs_terminal},
+    runtime::{
+        cancel_automation_camp_turn_in_tx, pump_targets_after_runs_terminal,
+        settle_abortive_agent_run_in_tx,
+    },
 };
 
 pub const AUTOMATION_RUNTIME_TIMEOUT_SECONDS: i64 = 60 * 60;
@@ -1119,6 +1122,38 @@ impl AutomationService {
                 &timestamp(now),
             )?;
             cancelled_agent_runs.extend(settlement.runs.into_iter().map(|run| run.agent_run_id));
+        } else if let Some(delivery_id) = state.trigger_delivery_id.as_deref() {
+            let claimed_run_id: Option<String> = transaction
+                .query_row(
+                    "SELECT claimed_agent_run_id FROM camp_message_delivery WHERE id = ?1",
+                    [delivery_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            if let Some(agent_run_id) = claimed_run_id {
+                let actor = ActorRef::System {
+                    component_id: "automation-occurrence".to_string(),
+                };
+                settle_abortive_agent_run_in_tx(
+                    &transaction,
+                    &agent_run_id,
+                    "interrupted",
+                    &actor,
+                    &timestamp(now),
+                )?;
+                cancelled_agent_runs.push(agent_run_id);
+            } else {
+                transaction.execute(
+                    r#"
+                    UPDATE camp_message_delivery
+                    SET status = 'cancelled', failure_code = 'automation_interrupted',
+                        ended_at = ?2, version = version + 1, updated_at = ?2
+                    WHERE id = ?1 AND status = 'waiting'
+                    "#,
+                    params![delivery_id, timestamp(now)],
+                )?;
+            }
         }
         let _ = finalize_run_in_tx(
             &transaction,
@@ -1154,6 +1189,11 @@ impl AutomationService {
             };
             let mut cancelled_agent_runs = Vec::new();
             match state.camp_turn_id.as_deref() {
+                None if state.trigger_delivery_id.is_some() => {
+                    transaction.commit()?;
+                    let _ = settle_one_run(database, &run_id, now)?;
+                    continue;
+                }
                 None => {
                     let _ = finalize_run_in_tx(
                         &transaction,
@@ -1241,7 +1281,7 @@ fn claim_occurrence_in_tx(
     scheduled_for: DateTime<Utc>,
     trigger_kind: &str,
     _scheduled: bool,
-    user_id: &str,
+    _user_id: &str,
     quick_chat_path: &Path,
 ) -> Result<ClaimedOccurrence> {
     if automation_has_active_run(transaction, &record.id)? {
@@ -1293,21 +1333,28 @@ fn claim_occurrence_in_tx(
         transaction,
         ScheduledAutomationAdmissionInput {
             automation_run_id: run_id.clone(),
-            unbounded_time: record.runtime_timeout_seconds.is_none(),
             automation_name: record.name.clone(),
             prompt: record.prompt.clone(),
             member_id: record.member_id.clone(),
             project_binding_kind: record.project_ref.binding_kind(),
             project_path: record.project_ref.execution_path(quick_chat_path),
-            user_id: user_id.to_string(),
             now: now_text.clone(),
         },
     )?;
     match admission {
         Ok(admission) => {
             transaction.execute(
-                "UPDATE automation_run SET camp_id = ?2, camp_turn_id = ?3, root_agent_run_id = ?4, updated_at = ?5 WHERE id = ?1",
-                params![run_id, admission.camp_id, admission.camp_turn_id, admission.root_agent_run_id, now_text],
+                "UPDATE automation_run
+                 SET camp_id = ?2, trigger_message_id = ?3,
+                     trigger_delivery_id = ?4, updated_at = ?5
+                 WHERE id = ?1",
+                params![
+                    run_id,
+                    admission.camp_id,
+                    admission.camp_message_id,
+                    admission.delivery_id,
+                    now_text
+                ],
             )?;
             Ok(ClaimedOccurrence {
                 run_id,
@@ -1407,33 +1454,57 @@ struct RunState {
     notify_channels: Vec<AutomationNotifyChannel>,
     camp_turn_id: Option<String>,
     root_agent_run_id: Option<String>,
+    trigger_delivery_id: Option<String>,
     timeout_at: Option<DateTime<Utc>>,
 }
 
 fn load_run_state(transaction: &Transaction<'_>, run_id: &str) -> Result<Option<RunState>> {
-    transaction.query_row(
-        "SELECT id, status, member_id, notify_channels_json, camp_turn_id, root_agent_run_id, timeout_at FROM automation_run WHERE id = ?1",
-        [run_id],
-        |row| {
-            let channels: String = row.get(3)?;
-            let timeout: Option<String> = row.get(6)?;
-            Ok((
-                row.get::<_, String>(0)?, row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?, channels, row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?, timeout,
-            ))
-        },
-    ).optional()?.map(|(id, status, member_id, channels, camp_turn_id, root_agent_run_id, timeout)| {
-        Ok(RunState {
-            id,
-            status,
-            member_id,
-            notify_channels: serde_json::from_str(&channels)?,
-            camp_turn_id,
-            root_agent_run_id,
-            timeout_at: timeout.as_deref().map(parse_timestamp).transpose()?,
-        })
-    }).transpose()
+    transaction
+        .query_row(
+            "SELECT id, status, member_id, notify_channels_json, camp_turn_id,
+                root_agent_run_id, trigger_delivery_id, timeout_at
+         FROM automation_run WHERE id = ?1",
+            [run_id],
+            |row| {
+                let channels: String = row.get(3)?;
+                let timeout: Option<String> = row.get(7)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    channels,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    timeout,
+                ))
+            },
+        )
+        .optional()?
+        .map(
+            |(
+                id,
+                status,
+                member_id,
+                channels,
+                camp_turn_id,
+                root_agent_run_id,
+                trigger_delivery_id,
+                timeout,
+            )| {
+                Ok(RunState {
+                    id,
+                    status,
+                    member_id,
+                    notify_channels: serde_json::from_str(&channels)?,
+                    camp_turn_id,
+                    root_agent_run_id,
+                    trigger_delivery_id,
+                    timeout_at: timeout.as_deref().map(parse_timestamp).transpose()?,
+                })
+            },
+        )
+        .transpose()
 }
 
 fn settle_one_run(database: &mut Database, run_id: &str, now: DateTime<Utc>) -> Result<bool> {
@@ -1449,16 +1520,12 @@ fn settle_one_run(database: &mut Database, run_id: &str, now: DateTime<Utc>) -> 
         return Ok(false);
     }
     let Some(turn_id) = state.camp_turn_id.as_deref() else {
-        let changed = finalize_run_in_tx(
-            &transaction,
-            &state,
-            "failed",
-            Some("interrupted"),
-            None,
-            now,
-        )?;
+        let settlement = settle_delivery_occurrence_in_tx(&transaction, &state, now)?;
         transaction.commit()?;
-        return Ok(changed);
+        if let Some(agent_run_id) = settlement.cancelled_agent_run_id {
+            pump_targets_after_runs_terminal(database, &[agent_run_id])?;
+        }
+        return Ok(settlement.changed);
     };
     let turn_status = transaction
         .query_row(
@@ -1540,6 +1607,224 @@ fn settle_one_run(database: &mut Database, run_id: &str, now: DateTime<Utc>) -> 
     transaction.commit()?;
     pump_targets_after_runs_terminal(database, &run_ids)?;
     Ok(changed)
+}
+
+struct DeliveryOccurrenceSettlement {
+    changed: bool,
+    cancelled_agent_run_id: Option<String>,
+}
+
+fn settle_delivery_occurrence_in_tx(
+    transaction: &Transaction<'_>,
+    state: &RunState,
+    now: DateTime<Utc>,
+) -> Result<DeliveryOccurrenceSettlement> {
+    let delivery_id = state
+        .trigger_delivery_id
+        .as_deref()
+        .context("Automation occurrence has neither a Delivery nor a CampTurn")?;
+    let (delivery_status, claimed_agent_run_id, delivery_failure): (
+        String,
+        Option<String>,
+        Option<String>,
+    ) = transaction.query_row(
+        r#"
+        SELECT status, claimed_agent_run_id, failure_code
+        FROM camp_message_delivery WHERE id = ?1
+        "#,
+        [delivery_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let timed_out = state.timeout_at.is_some_and(|deadline| now >= deadline);
+    if delivery_status == "waiting" {
+        if !timed_out {
+            return Ok(DeliveryOccurrenceSettlement {
+                changed: false,
+                cancelled_agent_run_id: None,
+            });
+        }
+        let now_text = timestamp(now);
+        transaction.execute(
+            r#"
+            UPDATE camp_message_delivery
+            SET status = 'cancelled', failure_code = 'automation_timeout',
+                ended_at = ?2, version = version + 1, updated_at = ?2
+            WHERE id = ?1 AND status = 'waiting'
+            "#,
+            params![delivery_id, now_text],
+        )?;
+        return Ok(DeliveryOccurrenceSettlement {
+            changed: finalize_run_in_tx(transaction, state, "failed", Some("timeout"), None, now)?,
+            cancelled_agent_run_id: None,
+        });
+    }
+
+    if delivery_status == "settled" {
+        let run_id = claimed_agent_run_id
+            .as_deref()
+            .context("settled Automation Delivery has no AgentRun")?;
+        let result_message_id = automation_result_message(transaction, run_id)?;
+        let (status, reason) = if result_message_id.is_some() {
+            ("completed", None)
+        } else {
+            ("failed", Some("no_result"))
+        };
+        return Ok(DeliveryOccurrenceSettlement {
+            changed: finalize_run_in_tx(
+                transaction,
+                state,
+                status,
+                reason,
+                result_message_id.as_deref(),
+                now,
+            )?,
+            cancelled_agent_run_id: None,
+        });
+    }
+    if matches!(delivery_status.as_str(), "failed" | "cancelled") {
+        return Ok(DeliveryOccurrenceSettlement {
+            changed: finalize_run_in_tx(
+                transaction,
+                state,
+                "failed",
+                Some(
+                    delivery_failure
+                        .as_deref()
+                        .filter(|reason| *reason == "automation_timeout")
+                        .map_or("execution_failed", |_| "timeout"),
+                ),
+                None,
+                now,
+            )?,
+            cancelled_agent_run_id: None,
+        });
+    }
+
+    let run_id = claimed_agent_run_id
+        .as_deref()
+        .context("claimed Automation Delivery has no AgentRun")?;
+    let run = transaction.query_row(
+        "SELECT status, wait_reason, last_error_code FROM agent_run WHERE id = ?1",
+        [run_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        },
+    )?;
+    if matches!(run.0.as_str(), "succeeded" | "failed" | "cancelled") {
+        crate::delivery_queue::settle_run_deliveries(
+            transaction,
+            run_id,
+            &run.0,
+            run.2.as_deref(),
+            &timestamp(now),
+        )?;
+        if run.0 == "succeeded" {
+            let result_message_id = automation_result_message(transaction, run_id)?;
+            let (status, reason) = if result_message_id.is_some() {
+                ("completed", None)
+            } else {
+                ("failed", Some("no_result"))
+            };
+            return Ok(DeliveryOccurrenceSettlement {
+                changed: finalize_run_in_tx(
+                    transaction,
+                    state,
+                    status,
+                    reason,
+                    result_message_id.as_deref(),
+                    now,
+                )?,
+                cancelled_agent_run_id: None,
+            });
+        }
+        return Ok(DeliveryOccurrenceSettlement {
+            changed: finalize_run_in_tx(
+                transaction,
+                state,
+                "failed",
+                Some("execution_failed"),
+                None,
+                now,
+            )?,
+            cancelled_agent_run_id: None,
+        });
+    }
+
+    let interaction_required = run.0 == "waiting"
+        && matches!(run.1.as_deref(), Some("approval" | "user_input"))
+        || transaction.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM action_execution AS action
+                JOIN approval ON approval.action_id = action.id
+                WHERE action.agent_run_id = ?1 AND approval.status = 'pending'
+            )
+            "#,
+            [run_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+    let reason = if interaction_required {
+        Some("interaction_required")
+    } else if timed_out {
+        Some("timeout")
+    } else {
+        None
+    };
+    let Some(reason) = reason else {
+        return Ok(DeliveryOccurrenceSettlement {
+            changed: false,
+            cancelled_agent_run_id: None,
+        });
+    };
+    let actor = ActorRef::System {
+        component_id: "automation-occurrence".to_string(),
+    };
+    settle_abortive_agent_run_in_tx(transaction, run_id, reason, &actor, &timestamp(now))?;
+    Ok(DeliveryOccurrenceSettlement {
+        changed: finalize_run_in_tx(transaction, state, "failed", Some(reason), None, now)?,
+        cancelled_agent_run_id: Some(run_id.to_string()),
+    })
+}
+
+fn automation_result_message(
+    transaction: &Transaction<'_>,
+    agent_run_id: &str,
+) -> Result<Option<String>> {
+    let final_message_id = transaction
+        .query_row(
+            r#"
+            SELECT message.id
+            FROM agent_run AS run
+            JOIN camp_message AS message ON message.id = run.final_camp_message_id
+            WHERE run.id = ?1 AND message.source_agent_run_id = run.id
+              AND message.author_type = 'agent' AND message.tombstoned_at IS NULL
+              AND json_array_length(message.effective_recipient_ids_json) = 0
+            "#,
+            [agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if final_message_id.is_some() {
+        return Ok(final_message_id);
+    }
+    transaction
+        .query_row(
+            r#"
+            SELECT id FROM camp_message
+            WHERE source_agent_run_id = ?1 AND author_type = 'agent'
+              AND tombstoned_at IS NULL
+              AND json_array_length(effective_recipient_ids_json) = 0
+            ORDER BY sequence DESC, id DESC LIMIT 1
+            "#,
+            [agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(Into::into)
 }
 
 fn settle_terminal_turn_in_tx(
@@ -2346,70 +2631,41 @@ mod tests {
         automation_run_id: &str,
         body: &str,
     ) -> String {
+        crate::delivery_queue::claim_waiting_delivery_batches(database, 100).unwrap();
         let transaction = database.connection_mut().transaction().unwrap();
-        let (camp_id, camp_turn_id, root_agent_run_id, member_id): (
-            String,
-            String,
-            String,
-            String,
-        ) = transaction
+        let (camp_id, root_agent_run_id, member_id): (String, String, String) = transaction
             .query_row(
-                "SELECT camp_id, camp_turn_id, root_agent_run_id, member_id FROM automation_run WHERE id = ?1",
+                r#"
+                SELECT occurrence.camp_id, delivery.claimed_agent_run_id, occurrence.member_id
+                FROM automation_run AS occurrence
+                JOIN camp_message_delivery AS delivery
+                  ON delivery.id = occurrence.trigger_delivery_id
+                WHERE occurrence.id = ?1 AND delivery.status = 'claimed'
+                "#,
                 [automation_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         let now = timestamp(Utc::now());
-        transaction
-            .execute(
-                "UPDATE camp SET last_message_sequence = last_message_sequence + 1, version = version + 1, updated_at = ?2 WHERE id = ?1",
-                params![camp_id, now],
-            )
-            .unwrap();
-        let sequence: i64 = transaction
-            .query_row(
-                "SELECT last_message_sequence FROM camp WHERE id = ?1",
-                [&camp_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let message_id = Uuid::new_v4().to_string();
-        let content = vec![crate::camp_content::StructuredCampMessageSegment::Text {
-            text: body.to_string(),
-        }];
-        let content_json = serde_json::to_string(&content).unwrap();
-        let content_digest = crate::camp_content::canonical_content_digest(&content).unwrap();
-        transaction
-            .execute(
-                r#"
-                INSERT INTO camp_message(
-                    id, camp_id, sequence, author_type, author_id,
-                    source_agent_run_id, body, structured_content_json,
-                    content_digest, address_mode, addressed_agent_ids_json,
-                    reply_to_camp_message_id, camp_turn_id, agent_run_id,
-                    tombstoned_at, version, created_at, updated_at,
-                    effective_recipient_ids_json, recipient_set_digest,
-                    recipient_presentation_json, source_operation_id
-                ) VALUES (
-                    ?1, ?2, ?3, 'agent', ?4, ?5, ?6, ?7, ?8,
-                    'default', '[]', NULL, ?9, ?5, NULL, 1, ?10, ?10,
-                    '[]', NULL, '{}', NULL
-                )
-                "#,
-                params![
-                    message_id,
-                    camp_id,
-                    sequence,
-                    member_id,
-                    root_agent_run_id,
-                    body,
-                    content_json,
-                    content_digest,
-                    camp_turn_id,
-                    now,
-                ],
-            )
-            .unwrap();
+        let result_command_id = format!("{automation_run_id}:test-result");
+        let sent = crate::message_delivery::persist_queued_agent_message(
+            &transaction,
+            &crate::message_delivery::SendQueuedAgentMessage {
+                command_id: &result_command_id,
+                camp_id: &camp_id,
+                source_agent_run_id: &root_agent_run_id,
+                author_agent_id: &member_id,
+                execution_epoch: 0,
+                body,
+                explicit_recipients: &[],
+                agent_addressing_mode: crate::message_delivery::AgentAddressingMode::PublicOnly,
+                mention_user: false,
+                task_id: None,
+                source_files: &[],
+            },
+        )
+        .unwrap();
+        let message_id = sent.payload["messageId"].as_str().unwrap().to_string();
         transaction
             .execute(
                 r#"
@@ -2424,12 +2680,14 @@ mod tests {
                 params![root_agent_run_id, message_id, now],
             )
             .unwrap();
-        transaction
-            .execute(
-                "UPDATE camp_turn SET status = 'completed', ended_at = ?2, updated_at = ?2 WHERE id = ?1",
-                params![camp_turn_id, now],
-            )
-            .unwrap();
+        crate::delivery_queue::settle_run_deliveries(
+            &transaction,
+            &root_agent_run_id,
+            "succeeded",
+            None,
+            &now,
+        )
+        .unwrap();
         transaction.commit().unwrap();
         message_id
     }
@@ -2479,12 +2737,15 @@ mod tests {
                 )
                 .unwrap();
             let run_id = run.result.payload["runId"].as_str().unwrap();
-            let (timeout, deadline, elapsed, schema): (Option<String>, Option<String>, Option<i64>, i64) = database.connection().query_row(
-                "SELECT run.timeout_at, turn.execution_budget_deadline_at, turn.execution_budget_elapsed_seconds, turn.execution_budget_schema_version FROM automation_run run JOIN camp_turn turn ON turn.id=run.camp_turn_id WHERE run.id=?1", [run_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).unwrap();
+            let timeout: Option<String> = database
+                .connection()
+                .query_row(
+                    "SELECT timeout_at FROM automation_run WHERE id=?1",
+                    [run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
             assert_eq!(timeout.is_none(), limit.is_none());
-            assert_eq!(deadline.is_none(), limit.is_none());
-            assert_eq!(elapsed.is_none(), limit.is_none());
-            assert_eq!(schema, if limit.is_none() { 2 } else { 1 });
             let active_change = service
                 .configure_time_limit(
                     &mut database,
@@ -2505,11 +2766,9 @@ mod tests {
                 limit.is_some()
             );
             if limit.is_none() {
-                let expired = crate::runtime::ExecutionRuntimeService::default()
-                    .expire_elapsed_camp_turn_execution_budgets(&mut database, future, future, 100)
+                service
+                    .interrupt_before_runtime(&mut database, run_id)
                     .unwrap();
-                assert!(expired.is_empty());
-                service.recover_interrupted(&mut database).unwrap();
             }
             let reason: String = database
                 .connection()
@@ -2629,20 +2888,17 @@ mod tests {
         assert_eq!(replayed_run.result.payload, first.result.payload);
 
         let normalized_prompt = original_prompt.trim();
-        let snapshot: (i64, String, String, String, String, String, String) = database
+        let snapshot: (i64, String, String, String, String, String, bool, bool) = database
             .connection()
             .query_row(
                 r#"
                 SELECT run.automation_version, run.prompt, run.project_ref_json,
-                       camp.project_path, message.body, agent_run.purpose,
-                       turn.automation_run_id
+                       camp.project_path, message.body, delivery.status,
+                       run.camp_turn_id IS NULL, run.root_agent_run_id IS NULL
                 FROM automation_run AS run
                 JOIN camp ON camp.id = run.camp_id
-                JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
-                JOIN agent_run ON agent_run.id = run.root_agent_run_id
-                JOIN camp_message AS message
-                  ON message.camp_turn_id = run.camp_turn_id
-                 AND message.author_type = 'user'
+                JOIN camp_message AS message ON message.id = run.trigger_message_id
+                JOIN camp_message_delivery AS delivery ON delivery.id = run.trigger_delivery_id
                 WHERE run.id = ?1
                 "#,
                 [&automation_run_id],
@@ -2655,6 +2911,7 @@ mod tests {
                         row.get(4)?,
                         row.get(5)?,
                         row.get(6)?,
+                        row.get(7)?,
                     ))
                 },
             )
@@ -2664,11 +2921,31 @@ mod tests {
         assert_eq!(snapshot.2, r#"{"kind":"quick_chat"}"#);
         assert_eq!(snapshot.3, quick_chat_path.to_string_lossy());
         assert_eq!(snapshot.4, normalized_prompt);
-        assert_eq!(
-            snapshot.5,
-            "This is a scheduled Rovai run. Execute the saved instruction once and return the final result."
-        );
-        assert_eq!(snapshot.6, automation_run_id);
+        assert_eq!(snapshot.5, "waiting");
+        assert!(snapshot.6);
+        assert!(snapshot.7);
+
+        let claimed = crate::delivery_queue::claim_waiting_delivery_batches(&mut database, 100)
+            .expect("Scheduler should claim the Automation Delivery");
+        assert_eq!(claimed.len(), 1);
+        let frozen: (String, String, String) = database
+            .connection()
+            .query_row(
+                r#"
+                SELECT run.purpose, input.message_id, occurrence.trigger_message_id
+                FROM automation_run AS occurrence
+                JOIN camp_message_delivery AS delivery
+                  ON delivery.id = occurrence.trigger_delivery_id
+                JOIN agent_run AS run ON run.id = delivery.claimed_agent_run_id
+                JOIN agent_run_input AS input ON input.agent_run_id = run.id
+                WHERE occurrence.id = ?1
+                "#,
+                [&automation_run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(frozen.0, "Handle the claimed Camp message batch");
+        assert_eq!(frozen.1, frozen.2);
 
         let original_name = service
             .get(&database, &automation_id)
@@ -2724,15 +3001,16 @@ mod tests {
         assert_eq!(counts, (2, 1));
 
         service
-            .recover_interrupted(&mut database)
-            .expect("recovery should settle the claimed run");
+            .interrupt_before_runtime(&mut database, &automation_run_id)
+            .expect("explicit interruption should settle the claimed run");
         let recovered: (String, String, String) = database
             .connection()
             .query_row(
                 r#"
-                SELECT run.status, run.reason, turn.status
+                SELECT run.status, run.reason, delivery.status
                 FROM automation_run AS run
-                JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
+                JOIN camp_message_delivery AS delivery
+                  ON delivery.id = run.trigger_delivery_id
                 WHERE run.id = ?1
                 "#,
                 [&automation_run_id],
@@ -2935,8 +3213,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(skipped, ("skipped".into(), "overlap".into()));
+        let manual_run_id = manual.result.payload["runId"].as_str().unwrap();
         service
-            .recover_interrupted(&mut database)
+            .interrupt_before_runtime(&mut database, manual_run_id)
             .expect("manual run should settle for cleanup");
 
         let closed_manual = service

@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-composer-atoms-and-structured-mentions
 status: accepted
-last_updated: 2026-09-09
+last_updated: 2026-09-19
 ---
 
 # 结构化 Mention 与 Composer Atom
@@ -87,12 +87,12 @@ Member 人物信息卡保持非模态，宽 392px，采用“布局 2”：左�
 
 ## Reply 与 Continuation
 
-点击当前可寻址 Agent 消息的“回复”仍是明确 Member Atom 来源：Core 在设置 Draft reply target 的同一 revision
-mutation 中把 canonical Member Atom 插入正文开头；已有相同 Atom 或 All Members 时复用。reply relation 本身
+点击当前可寻址 Agent 消息的“回复”仍是明确 Member Atom 来源：Renderer 用已经可见的完整消息建立 Camp-local
+reply intent，并把 canonical Member Atom 插入正文开头；已有相同 Atom 或 All Members 时复用。reply relation 本身
 不参与发送寻址。原作者失效时保留引用并要求用户显式换人，不生成 lookalike、不删除意图、不回退 Default Lead。
 
-“继续发给”仍只投影最近 accepted user message 的唯一非 Lead 显式接收者。第一次正文/附件 mutation 冻结后，
-Core 在发送前物化 canonical Member Atom；对象失效时阻断并要求显式换人。用户手动改址后，即使删除全部 Member
+“继续发给”仍只投影最近 accepted user message 的唯一非 Lead 显式接收者。Desktop 把 intent 写入同一 Camp-local
+snapshot，并在发送前物化 canonical Member Atom；对象失效时阻断并要求显式换人。用户手动改址后，即使删除全部 Member
 Atom，也不从同一来源自动生成。
 
 ## Clipboard
@@ -143,7 +143,7 @@ Agent 消息中的 Current User Mention 保持为 Markdown 正文之前的行内
 
 | 层级 | 权威入口 |
 | --- | --- |
-| Draft/Pending V2、identity、旧读新写、App 退出 fence 与 exact revision | [Camp Composer Draft v12](../../contracts/camp-composer-draft-v12.md)与[Pending Camp Input v3](../../contracts/pending-camp-input-v3.md) |
+| public Composer 本地所有权、发送快照、失败保留与退出边界 | [Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)与[Pending Camp Activation v2](../../contracts/pending-camp-activation-v2.md) |
 | Lexical/React/Core 所有权、局部编辑、同步与 replacement | [Composer 架构](../../architecture/camp-composer-draft.md) |
 | Reply/Continuation 来源、物化与无 fallback | [Composer Draft 不变量](../../architecture/foundational-invariants.md#camp-composer) |
 | Renderer 视觉、Typeahead、Popover、IME、键盘与 Clipboard | 本文 |

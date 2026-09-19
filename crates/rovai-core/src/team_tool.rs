@@ -34,13 +34,11 @@ use crate::{
     },
     db::Database,
     execution_budget::{PRODUCT_MAX_ACCEPTED_A2A, camp_turn_execution_budget_now},
-    gather::GATHER_TOOL_NAME,
     local_attachment_source::LocalAttachmentSourceRef,
     member_studio::MEMBER_CREATE_TOOL_NAME,
     message_delivery::{
         AgentAddressingMode, CAMP_MESSAGE_SEND_MAX_BODY_BYTES, CAMP_MESSAGE_SEND_TOOL_NAME,
-        PublicA2aOperation, SendPublicA2aMessage, dispatch_accepted_deliveries,
-        persist_public_a2a_message,
+        SendQueuedAgentMessage, persist_queued_agent_message,
     },
     runtime::AgentRunWorkspace,
     single_chat::SINGLE_CHAT_HISTORY_TOOL_NAME,
@@ -50,7 +48,7 @@ pub const TEAM_CREATE_TASK_TOOL_NAME: &str = "team.create_task";
 pub const TEAM_GET_TASK_TOOL_NAME: &str = "team.get_task";
 pub const TEAM_UPDATE_TASK_TOOL_NAME: &str = "team.update_task";
 pub const TEAM_LIST_TASKS_TOOL_NAME: &str = "team.list_tasks";
-pub const TEAM_TOOL_NAMES: [&str; 26] = [
+pub const TEAM_TOOL_NAMES: [&str; 25] = [
     "mission.get",
     "mission.update",
     "mission.status",
@@ -62,7 +60,6 @@ pub const TEAM_TOOL_NAMES: [&str; 26] = [
     AUTOMATION_UPDATE_TOOL_NAME,
     AUTOMATION_DELETE_TOOL_NAME,
     CAMP_MESSAGE_SEND_TOOL_NAME,
-    GATHER_TOOL_NAME,
     MEMBER_CREATE_TOOL_NAME,
     TEAM_CREATE_TASK_TOOL_NAME,
     TEAM_GET_TASK_TOOL_NAME,
@@ -99,14 +96,6 @@ pub struct CampMessageSendInput {
     pub task_id: Option<String>,
     #[serde(default)]
     pub files: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GatherInput {
-    pub body: String,
-    #[serde(default)]
-    pub to: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -198,29 +187,6 @@ pub struct CampMessageSendInvocation {
     pub source_files: Vec<LocalAttachmentSourceRef>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GatherCommand {
-    native_binding_id: String,
-    credential_digest: String,
-    runtime_tool_call_id: String,
-    camp_id: String,
-    body: String,
-    to: Vec<String>,
-}
-
-impl sealed::Sealed for GatherCommand {}
-impl DomainCommand for GatherCommand {
-    const TYPE: &'static str = GATHER_TOOL_NAME;
-}
-
-pub struct GatherInvocation {
-    pub native_binding_id: String,
-    pub binding_credential: String,
-    pub runtime_tool_call_id: String,
-    pub input: GatherInput,
-}
-
 pub struct TeamTaskToolInvocation<T> {
     pub native_binding_id: String,
     pub binding_credential: String,
@@ -265,9 +231,6 @@ struct SenderIdentity {
     agent_id: String,
     agent_run_id: String,
     execution_epoch: i64,
-    camp_turn_id: String,
-    a2a_root_agent_run_id: Option<String>,
-    a2a_depth: i64,
     credential_digest: String,
 }
 
@@ -440,11 +403,11 @@ impl TeamToolService {
                 let supplied_credential_digest = credential_digest(binding_credential);
                 let mut statement = database.connection().prepare(
                     r#"
-                    SELECT camp_turn.camp_id, conversation.agent_id,
+                    SELECT COALESCE(agent_run.camp_id, camp_turn.camp_id), conversation.agent_id,
                            agent_run.id, agent_run.execution_epoch
                     FROM conversation
                     JOIN agent_run ON agent_run.conversation_id = conversation.id
-                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                     WHERE conversation.native_binding_id = ?1
                       AND conversation.native_binding_secret_digest = ?2
                       AND (?3 IS NULL OR (agent_run.id = ?3 AND agent_run.execution_epoch = ?4))
@@ -539,9 +502,9 @@ impl TeamToolService {
             .connection()
             .query_row(
                 r#"
-                SELECT turn.camp_id, run.workspace_json
+                SELECT COALESCE(run.camp_id, turn.camp_id), run.workspace_json
                 FROM agent_run AS run
-                JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
+                LEFT JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
                 WHERE run.id = ?1 AND run.execution_epoch = ?2
                   AND run.status IN ('running','waiting')
                 "#,
@@ -599,29 +562,6 @@ impl TeamToolService {
                     "uniqueItems": true,
                     "items": {"type": "string", "minLength": 1},
                     "description": "Optional local file or directory paths to attach, in order. Pass each actual path directly. Rovai registers a reference without copying, moving, linking or changing permissions. Later reads use the current file at that path. Temporary files may become unavailable when their source is cleaned up."
-                }
-            }
-        })
-    }
-
-    pub fn gather_input_schema() -> Value {
-        json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["body"],
-            "properties": {
-                "body": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": CAMP_MESSAGE_SEND_MAX_BODY_BYTES,
-                    "description": "One shared public topic for every Gather recipient."
-                },
-                "to": {
-                    "type": "array",
-                    "maxItems": 16,
-                    "uniqueItems": true,
-                    "items": {"type": "string", "minLength": 1},
-                    "description": "Canonical Agent IDs to gather from. Effective recipients are frozen in canonical byte order."
                 }
             }
         })
@@ -808,8 +748,8 @@ impl TeamToolService {
                        agent_run.runtime_installation_generation,
                        agent_run.runtime_native_session_compatibility_key
                 FROM agent_run
-                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                JOIN camp ON camp.id = camp_turn.camp_id
+                LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
                 JOIN conversation ON conversation.id = agent_run.conversation_id
                 JOIN camp_member
                   ON camp_member.camp_id = camp.id
@@ -819,10 +759,17 @@ impl TeamToolService {
                   AND agent_run.execution_epoch = ?2
                   AND agent_run.status = 'running'
                   AND agent_run.cancel_requested_at IS NULL
-                  AND camp_turn.status IN ('running', 'waiting')
-                  AND camp_turn.cancel_requested_at IS NULL
-                  AND camp_turn.execution_budget_exhausted_at IS NULL
-                  AND (camp_turn.execution_budget_deadline_at > ?3 OR (camp_turn.execution_budget_deadline_at IS NULL AND camp_turn.execution_budget_schema_version = 2))
+                  AND (
+                        agent_run.camp_turn_id IS NULL
+                     OR (
+                            camp_turn.status IN ('running', 'waiting')
+                        AND camp_turn.cancel_requested_at IS NULL
+                        AND camp_turn.execution_budget_exhausted_at IS NULL
+                        AND (camp_turn.execution_budget_deadline_at > ?3
+                             OR (camp_turn.execution_budget_deadline_at IS NULL
+                                 AND camp_turn.execution_budget_schema_version = 2))
+                     )
+                  )
                   AND camp_member.status = 'active'
                   AND camp_member.leave_requested_at IS NULL
                   AND camp_member.version = CAST(
@@ -943,7 +890,10 @@ impl TeamToolService {
                     native_binding_id = ?4,
                     native_binding_generation = ?5,
                     native_binding_secret_digest = ?6,
-                    last_accepted_public_boundary_sequence = 0,
+                    last_accepted_public_boundary_sequence = CASE
+                        WHEN kind = 'single_chat' THEN 0
+                        ELSE last_accepted_public_boundary_sequence
+                    END,
                     native_charter_digest = NULL,
                     native_collaboration_state_digest = NULL,
                     version = version + 1,
@@ -1228,224 +1178,23 @@ impl TeamToolService {
                     "internal camp identity invariant violated for public message send"
                 ));
             }
-            persist_public_a2a_message(
+            persist_queued_agent_message(
                 transaction,
-                &SendPublicA2aMessage {
+                &SendQueuedAgentMessage {
                     command_id: &envelope.command_id,
                     camp_id: &current.camp_id,
-                    camp_turn_id: &current.camp_turn_id,
                     source_agent_run_id: &current.agent_run_id,
                     author_agent_id: &current.agent_id,
                     execution_epoch: current.execution_epoch,
-                    current_a2a_root_agent_run_id: current.a2a_root_agent_run_id.as_deref(),
-                    current_a2a_depth: current.a2a_depth,
                     body: &envelope.payload.body,
                     explicit_recipients: &envelope.payload.to,
                     agent_addressing_mode: envelope.payload.agent_addressing_mode,
                     mention_user: envelope.payload.mention_user,
                     task_id: envelope.payload.task_id.as_deref(),
                     source_files: &invocation.source_files,
-                    operation: PublicA2aOperation::Send,
                 },
             )
         })?;
-        if !execution.replayed
-            && execution.result.status != crate::command::CommandResultStatus::Rejected
-        {
-            let delivery_ids = execution.result.payload["deliveryIds"]
-                .as_array()
-                .context("accepted public send has no deliveryIds")?
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_string)
-                        .context("accepted public send has an invalid deliveryId")
-                })
-                .collect::<Result<Vec<_>>>()?;
-            dispatch_accepted_deliveries(database, &delivery_ids)?;
-        }
-        Ok(execution)
-    }
-
-    pub fn gather(
-        &self,
-        database: &mut Database,
-        invocation: &GatherInvocation,
-    ) -> Result<CommandExecution> {
-        self.gather_authorized(database, invocation, None)
-    }
-
-    pub fn gather_attested(
-        &self,
-        database: &mut Database,
-        invocation: &GatherInvocation,
-        agent_run_id: &str,
-        execution_epoch: i64,
-    ) -> Result<CommandExecution> {
-        if agent_run_id.trim().is_empty() || execution_epoch <= 0 {
-            return Err(invocation_error(
-                "team_tool.invalid_attested_run",
-                "Attested AgentRun identity is incomplete",
-            ));
-        }
-        self.gather_authorized(database, invocation, Some((agent_run_id, execution_epoch)))
-    }
-
-    fn gather_authorized(
-        &self,
-        database: &mut Database,
-        invocation: &GatherInvocation,
-        attested_run: Option<(&str, i64)>,
-    ) -> Result<CommandExecution> {
-        validate_gather_invocation(invocation)?;
-        let supplied_credential_digest = credential_digest(&invocation.binding_credential);
-        let command_id = team_command_id(
-            &invocation.native_binding_id,
-            &supplied_credential_digest,
-            &invocation.runtime_tool_call_id,
-        )?;
-        if let Some(recorded) =
-            load_recorded_team_command_identity(database.connection(), &command_id)?
-        {
-            if attested_run.is_some_and(|(agent_run_id, execution_epoch)| {
-                recorded.source_agent_run_id != agent_run_id
-                    || recorded.execution_epoch != execution_epoch
-            }) {
-                return Err(invocation_error(
-                    "team_tool.binding_fenced",
-                    "Recorded Gather belongs to a different attested AgentRun",
-                ));
-            }
-            let command = GatherCommand {
-                native_binding_id: invocation.native_binding_id.clone(),
-                credential_digest: supplied_credential_digest.clone(),
-                runtime_tool_call_id: invocation.runtime_tool_call_id.clone(),
-                camp_id: recorded.camp_id.clone(),
-                body: invocation.input.body.clone(),
-                to: invocation.input.to.clone(),
-            };
-            let replay_envelope = CommandEnvelope {
-                command_id: command_id.clone(),
-                actor: ActorRef::Agent {
-                    agent_id: recorded.agent_id,
-                    source_agent_run_id: recorded.source_agent_run_id,
-                },
-                camp_id: Some(recorded.camp_id),
-                expected_versions: Vec::new(),
-                execution_epoch: Some(recorded.execution_epoch),
-                payload: command,
-            };
-            return self
-                .gateway
-                .replay_if_recorded(database, &replay_envelope)?
-                .context("recorded Gather disappeared before replay");
-        }
-
-        let sender = resolve_sender_identity(
-            database.connection(),
-            &invocation.native_binding_id,
-            &supplied_credential_digest,
-            attested_run,
-        )?;
-        ChannelService::default().ensure_topic_roster_members(
-            database,
-            &sender.camp_id,
-            &invocation.input.to,
-            &command_id,
-        )?;
-        let command = GatherCommand {
-            native_binding_id: invocation.native_binding_id.clone(),
-            credential_digest: supplied_credential_digest.clone(),
-            runtime_tool_call_id: invocation.runtime_tool_call_id.clone(),
-            camp_id: sender.camp_id.clone(),
-            body: invocation.input.body.clone(),
-            to: invocation.input.to.clone(),
-        };
-        let envelope = CommandEnvelope {
-            command_id,
-            actor: ActorRef::Agent {
-                agent_id: sender.agent_id.clone(),
-                source_agent_run_id: sender.agent_run_id.clone(),
-            },
-            camp_id: Some(sender.camp_id.clone()),
-            expected_versions: Vec::new(),
-            execution_epoch: Some(sender.execution_epoch),
-            payload: command,
-        };
-        let execution = self.gateway.execute(database, &envelope, |transaction| {
-            let current = match resolve_sender_identity_by_digest(
-                transaction,
-                &envelope.payload.native_binding_id,
-                &envelope.payload.credential_digest,
-                attested_run,
-            ) {
-                Ok(current) => current,
-                Err(error) if error.downcast_ref::<TeamToolInvocationError>().is_some() => {
-                    return Ok(rejected(
-                        "team_tool.binding_fenced",
-                        "Native Binding, AgentRun, or execution epoch is no longer current",
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
-            if current.agent_run_id != sender.agent_run_id
-                || current.execution_epoch != sender.execution_epoch
-                || current.agent_id != sender.agent_id
-                || current.camp_id != sender.camp_id
-                || current.credential_digest != sender.credential_digest
-            {
-                return Ok(rejected(
-                    "team_tool.binding_fenced",
-                    "Native Binding changed before the Gather transaction",
-                ));
-            }
-            let initiator_conversation_id: String = transaction.query_row(
-                "SELECT conversation_id FROM agent_run WHERE id = ?1",
-                [&current.agent_run_id],
-                |row| row.get(0),
-            )?;
-            let gather_id = Uuid::new_v4().to_string();
-            persist_public_a2a_message(
-                transaction,
-                &SendPublicA2aMessage {
-                    command_id: &envelope.command_id,
-                    camp_id: &current.camp_id,
-                    camp_turn_id: &current.camp_turn_id,
-                    source_agent_run_id: &current.agent_run_id,
-                    author_agent_id: &current.agent_id,
-                    execution_epoch: current.execution_epoch,
-                    current_a2a_root_agent_run_id: current.a2a_root_agent_run_id.as_deref(),
-                    current_a2a_depth: current.a2a_depth,
-                    body: &envelope.payload.body,
-                    explicit_recipients: &envelope.payload.to,
-                    agent_addressing_mode: AgentAddressingMode::Automatic,
-                    mention_user: false,
-                    task_id: None,
-                    source_files: &[],
-                    operation: PublicA2aOperation::Gather {
-                        gather_id: &gather_id,
-                        initiator_conversation_id: &initiator_conversation_id,
-                    },
-                },
-            )
-        })?;
-        if !execution.replayed
-            && execution.result.status != crate::command::CommandResultStatus::Rejected
-        {
-            let delivery_ids = execution.result.payload["dispatchDeliveryIds"]
-                .as_array()
-                .context("accepted Gather has no dispatchDeliveryIds")?
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_string)
-                        .context("accepted Gather has an invalid dispatchDeliveryId")
-                })
-                .collect::<Result<Vec<_>>>()?;
-            dispatch_accepted_deliveries(database, &delivery_ids)?;
-        }
         Ok(execution)
     }
 
@@ -1775,33 +1524,6 @@ fn validate_public_send_invocation(invocation: &CampMessageSendInvocation) -> Re
     Ok(())
 }
 
-fn validate_gather_invocation(invocation: &GatherInvocation) -> Result<()> {
-    validate_invocation_identity(
-        &invocation.native_binding_id,
-        &invocation.binding_credential,
-        &invocation.runtime_tool_call_id,
-    )?;
-    if invocation.input.body.trim().is_empty() {
-        return Err(invocation_error(
-            "gather.invalid_input",
-            "a non-empty shared body is required",
-        ));
-    }
-    if invocation.input.body.len() > CAMP_MESSAGE_SEND_MAX_BODY_BYTES {
-        return Err(invocation_error(
-            "gather.invalid_input",
-            "Gather body exceeds the 32 KiB limit",
-        ));
-    }
-    if invocation.input.to.len() > 16 {
-        return Err(invocation_error(
-            "gather.fanout_exceeded",
-            "The explicit Gather recipient input exceeds 16",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_task_invocation_identity<T>(invocation: &TeamTaskToolInvocation<T>) -> Result<()> {
     validate_invocation_identity(
         &invocation.native_binding_id,
@@ -1864,8 +1586,6 @@ fn resolve_sender_identity_by_digest(
             r#"
             SELECT conversation.camp_id, conversation.agent_id,
                    agent_run.id, agent_run.execution_epoch,
-                   agent_run.camp_turn_id,
-                   agent_run.a2a_root_agent_run_id, agent_run.a2a_depth,
                    agent_run.runtime_adapter_kind,
                    agent_run.runtime_capabilities_json,
                    conversation.native_binding_secret_digest,
@@ -1877,7 +1597,7 @@ fn resolve_sender_identity_by_digest(
              AND camp_member.agent_id = conversation.agent_id
             JOIN agent_profile ON agent_profile.id = conversation.agent_id
             JOIN agent_run ON agent_run.conversation_id = conversation.id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             WHERE conversation.native_binding_id = ?1
               AND conversation.native_binding_secret_digest = ?2
               AND (
@@ -1886,8 +1606,13 @@ fn resolve_sender_identity_by_digest(
               )
               AND agent_run.status = 'running'
               AND agent_run.cancel_requested_at IS NULL
-              AND camp_turn.status IN ('running', 'waiting')
-              AND camp_turn.cancel_requested_at IS NULL
+              AND (
+                    agent_run.camp_turn_id IS NULL
+                 OR (
+                        camp_turn.status IN ('running', 'waiting')
+                    AND camp_turn.cancel_requested_at IS NULL
+                 )
+              )
               AND camp_member.status = 'active'
               AND camp_member.leave_requested_at IS NULL
               AND camp_member.version = CAST(
@@ -1908,14 +1633,11 @@ fn resolve_sender_identity_by_digest(
                         agent_id: row.get(1)?,
                         agent_run_id: row.get(2)?,
                         execution_epoch: row.get(3)?,
-                        camp_turn_id: row.get(4)?,
-                        a2a_root_agent_run_id: row.get(5)?,
-                        a2a_depth: row.get(6)?,
-                        credential_digest: row.get(9)?,
+                        credential_digest: row.get(6)?,
                     },
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
-                    row.get::<_, String>(10)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(7)?,
                 ))
             },
         )
@@ -2037,27 +1759,25 @@ mod tests {
     use crate::{
         agent_profile::configure_test_runtime,
         collaboration::{RemoveCampMemberCommand, end_camp_membership},
-        context::ContextMaterialization,
+        context::{
+            CharterDeliveryMode, ContextMaterialization, ContextService,
+            DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES, MaterializeContextRequest,
+        },
+        managed_blob::ManagedBlobStore,
         memory::{MEMORY_AGENT_MUTATIONS_PER_RUN, MemoryCreationOrigin, RetireMemoryCommand},
         memory_retrieval::{MemoryCacheState, MemoryReadInput, MemorySearchInput},
-        message_delivery::{RetryMessageDeliveryCommand, dispatch_pending_for_recipient},
-        runtime::{CancelAgentRunCommand, FailAgentRunCommand},
+        message_delivery::{
+            DeliveryDispatchOutcome, DeliveryDispatchTrigger, dispatch_pending_for_recipient,
+        },
+        runtime::{CancelAgentRunCommand, CancelCampTurnCommand, FailAgentRunCommand},
     };
     use crate::{
-        camp_attachment::CampAttachmentStore,
-        camp_attachment_publication::AuthorityAttachment,
-        camp_attachment_publication::CampAttachmentPublicationCoordinator,
         camp_attachment_view::CampAttachmentViewStore,
         collaboration::{
             AddCampMemberCommand, CollaborationService, CreateCampCommand, CreateTaskCommand,
             ExecutionRequest, TestCampMessageAddress, TestCampMessageCommand,
         },
         command::{CommandGatewayError, CommandResultStatus},
-        context::{
-            CharterDeliveryMode, ContextService, DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
-            MaterializeContextRequest,
-        },
-        managed_blob::ManagedBlobStore,
         memory::{
             AcceptHearthReviewItemCommand, CreateMemoryCommand, ForgetMemoryCommand,
             MEMORY_BODY_MAX_BYTES, MemoryKind, MemoryScopeKind, MemoryService, MemoryTarget,
@@ -2067,14 +1787,9 @@ mod tests {
             MemoryRetrievalInvocation, MemoryRetrievalService, MemoryViewInput, MemoryViewOutput,
         },
         memory_tool::{MemoryToolService, MemoryWriteToolInput, MemoryWriteToolInvocation},
-        message_delivery::{
-            CancelMessageDeliveryCommand, DeliveryDispatchOutcome, DeliveryDispatchTrigger,
-            MessageDeliveryService, mark_unstarted_deliveries_interrupted_before_dispatch,
-        },
         runtime::{
-            BindNativeSessionCommand, CancelCampTurnCommand, ClaimAgentRunCommand,
-            ExecutionRuntimeService, MissingSendRecoveryBoundary, MissingSendRecoveryCandidate,
-            SucceedAgentRunCommand,
+            BindNativeSessionCommand, ClaimAgentRunCommand, ExecutionRuntimeService,
+            MissingSendRecoveryBoundary, MissingSendRecoveryCandidate, SucceedAgentRunCommand,
         },
     };
 
@@ -2419,18 +2134,6 @@ mod tests {
                 .collect()
         }
 
-        fn gather_invocation(&self, call_id: &str, body: &str, to: &[&str]) -> GatherInvocation {
-            GatherInvocation {
-                native_binding_id: self.credential.native_binding_id.clone(),
-                binding_credential: self.credential.binding_credential.clone(),
-                runtime_tool_call_id: call_id.to_string(),
-                input: GatherInput {
-                    body: body.to_string(),
-                    to: to.iter().map(|value| (*value).to_string()).collect(),
-                },
-            }
-        }
-
         fn task_invocation<T>(&self, call_id: &str, input: T) -> TeamTaskToolInvocation<T> {
             TeamTaskToolInvocation {
                 native_binding_id: self.credential.native_binding_id.clone(),
@@ -2545,6 +2248,7 @@ mod tests {
             .unwrap()
         }
 
+        #[cfg(feature = "slow-tests")]
         fn claim_bind_and_issue(
             &mut self,
             agent_run_id: &str,
@@ -2706,207 +2410,9 @@ mod tests {
         }
     }
 
-    fn send_projection_blocked_attachment(
-        fixture: &mut Fixture,
-        call_id: &str,
-    ) -> (String, String) {
-        let file_name = format!("{call_id}.txt");
-        let authority_path = fixture.directory.join(&file_name);
-        std::fs::write(&authority_path, b"zero-attempt cancellation fixture").unwrap();
-        let attachment_store = CampAttachmentStore::new(&fixture.directory);
-        let draft = attachment_store
-            .save_body(
-                &mut fixture.database,
-                &fixture.camp_id,
-                "agent attachment fixture",
-            )
-            .unwrap();
-        let draft = attachment_store
-            .prepare_from_path(
-                &mut fixture.database,
-                &fixture.camp_id,
-                draft.revision,
-                &authority_path,
-                &file_name,
-            )
-            .unwrap();
-        let attachment_id = draft.attachments.last().unwrap().id.clone();
-        let authority: AuthorityAttachment = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT id, display_name, media_type, byte_size,
-                       content_digest, storage_path, preview_kind
-                FROM prepared_attachment WHERE id = ?1
-                "#,
-                [&attachment_id],
-                |row| {
-                    Ok(AuthorityAttachment {
-                        attachment_id: row.get(0)?,
-                        display_name: row.get(1)?,
-                        media_type: row.get(2)?,
-                        byte_size: row.get::<_, i64>(3)? as u64,
-                        content_digest: row.get(4)?,
-                        storage_path: std::path::PathBuf::from(row.get::<_, String>(5)?),
-                        preview_kind: row.get(6)?,
-                    })
-                },
-            )
-            .unwrap();
-        let (camp_turn_id, a2a_root_agent_run_id, a2a_depth): (String, Option<String>, i64) =
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    r#"
-                SELECT camp_turn_id, a2a_root_agent_run_id, a2a_depth
-                FROM agent_run WHERE id = ?1
-                "#,
-                    [&fixture.source_run_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .unwrap();
-        let command_id = format!("legacy-projection-fixture-{call_id}");
-        let transaction = fixture.database.connection_mut().transaction().unwrap();
-        let sent = persist_public_a2a_message(
-            &transaction,
-            &SendPublicA2aMessage {
-                command_id: &command_id,
-                camp_id: &fixture.camp_id,
-                camp_turn_id: &camp_turn_id,
-                source_agent_run_id: &fixture.source_run_id,
-                author_agent_id: "agent_1",
-                execution_epoch: fixture.source_epoch,
-                current_a2a_root_agent_run_id: a2a_root_agent_run_id.as_deref(),
-                current_a2a_depth: a2a_depth,
-                body: "legacy projection cancellation fixture",
-                explicit_recipients: &["agent_2".to_string()],
-                agent_addressing_mode: AgentAddressingMode::Automatic,
-                mention_user: false,
-                task_id: None,
-                source_files: &[],
-                operation: PublicA2aOperation::Send,
-            },
-        )
-        .unwrap();
-        assert_eq!(sent.status, CommandResultStatus::Accepted);
-        let message_id = sent.payload["messageId"].as_str().unwrap();
-        let delivery_id = sent.payload["deliveryIds"][0].as_str().unwrap().to_string();
-        let publication = CampAttachmentPublicationCoordinator
-            .commit_agent_intent(
-                &transaction,
-                &fixture.camp_id,
-                message_id,
-                &command_id,
-                std::slice::from_ref(&authority),
-            )
-            .unwrap()
-            .unwrap();
-        let now = chrono::Utc::now().to_rfc3339();
-        transaction
-            .execute(
-                r#"
-                INSERT INTO message_attachment(
-                    id, camp_id, camp_message_id, conversation_message_id,
-                    position, display_name, media_type, byte_size,
-                    content_digest, storage_path, preview_kind,
-                    created_by_type, created_by_id, created_at,
-                    runtime_projection_state, publication_operation_id,
-                    publication_semantic_revision
-                ) VALUES (
-                    ?1, ?2, ?3, NULL, 0, ?4, ?5, ?6,
-                    ?7, ?8, ?9, 'agent', 'agent_1', ?10,
-                    'pending', ?11, ?12
-                )
-                "#,
-                params![
-                    authority.attachment_id,
-                    fixture.camp_id,
-                    message_id,
-                    authority.display_name,
-                    authority.media_type,
-                    authority.byte_size as i64,
-                    authority.content_digest,
-                    authority.storage_path.to_string_lossy(),
-                    authority.preview_kind,
-                    now,
-                    publication.operation_id,
-                    publication.semantic_revision,
-                ],
-            )
-            .unwrap();
-        CampAttachmentPublicationCoordinator
-            .gate_deliveries(
-                &transaction,
-                std::slice::from_ref(&delivery_id),
-                &publication.operation_id,
-            )
-            .unwrap();
-        let operation_id = publication.operation_id;
-        transaction.commit().unwrap();
-        let gate: (String, i64, Option<String>) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT dispatch_phase, dispatch_attempt_count, pre_dispatch_gate
-                FROM message_delivery WHERE id = ?1
-                "#,
-                [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            gate,
-            (
-                "projection_blocked".to_string(),
-                0,
-                Some("attachment_projection".to_string()),
-            )
-        );
-        (delivery_id, operation_id)
-    }
-
-    fn promote_queued_publication(
-        fixture: &mut Fixture,
-        view: &CampAttachmentViewStore,
-        expected_operation_id: &str,
-    ) {
-        let plan = view
-            .plan_queued_publication(&mut fixture.database, &fixture.camp_id)
-            .unwrap()
-            .expect("queued attachment publication should exist");
-        assert_eq!(plan.operation_id(), expected_operation_id);
-        let attachment_store = CampAttachmentStore::new(&fixture.directory);
-        let copied = CampAttachmentViewStore::copy_publication(&attachment_store, plan).unwrap();
-        let prepared = view
-            .finish_publication_staging(&mut fixture.database, copied)
-            .unwrap();
-        view.gate_publication(&mut fixture.database, &prepared)
-            .unwrap();
-        view.promote_publication(&mut fixture.database, &prepared)
-            .unwrap();
-    }
-
-    struct DeliveryCancellationSnapshot {
-        status: String,
-        dispatch_phase: String,
-        dispatch_attempt_count: i64,
-        wait_condition: Option<String>,
-        active_dispatch_attempt_id: Option<String>,
-        pre_dispatch_gate: Option<String>,
-        projection_operation_id: Option<String>,
-        manual_intervention_required: i64,
-        failure_code: Option<String>,
-        ended_at: Option<String>,
-        version: i64,
-    }
-
     #[cfg(feature = "slow-tests")]
     fn public_send_schema_keeps_inline_fallback_out_of_agent_body_help() {
         let schema = TeamToolService::camp_message_send_input_schema();
-        let gather_schema = TeamToolService::gather_input_schema();
         let body_description = schema["properties"]["body"]["description"]
             .as_str()
             .unwrap();
@@ -2926,31 +2432,10 @@ mod tests {
         }
         assert!(to_description.contains("canonical Agent ID"));
         assert!(to_description.contains("Display names are not accepted here"));
-        assert_eq!(
-            gather_schema["properties"]["body"]["description"],
-            "One shared public topic for every Gather recipient."
-        );
-        assert_eq!(
-            gather_schema["properties"]["to"]["description"],
-            "Canonical Agent IDs to gather from. Effective recipients are frozen in canonical byte order."
-        );
-        assert_eq!(gather_schema["properties"]["to"]["uniqueItems"], true);
-        assert!(
-            !gather_schema["properties"]["body"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("inline")
-        );
-        assert!(
-            !gather_schema["properties"]["to"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("inline")
-        );
     }
 
     #[test]
-    fn confirmed_direct_run_can_create_one_idempotent_member_but_a2a_cannot() {
+    fn confirmed_user_input_can_create_one_idempotent_member_but_agent_input_cannot() {
         let mut fixture = Fixture::new();
         let authenticated_run = AuthenticatedTeamToolRun {
             camp_id: fixture.camp_id.clone(),
@@ -3019,7 +2504,13 @@ mod tests {
             .database
             .connection()
             .execute(
-                "UPDATE agent_run SET invocation_kind = 'a2a' WHERE id = ?1",
+                r#"
+                UPDATE camp_message
+                SET author_type = 'agent', author_id = 'agent_2'
+                WHERE id IN (
+                    SELECT message_id FROM agent_run_input WHERE agent_run_id = ?1
+                )
+                "#,
                 [&fixture.source_run_id],
             )
             .unwrap();
@@ -3059,137 +2550,154 @@ mod tests {
 
     #[test]
     fn public_send_atomically_persists_one_message_and_canonical_deliveries() {
-        for unbounded in [false, true] {
-            let mut fixture = Fixture::new();
-            if unbounded {
-                fixture.database.connection().execute(
-                "UPDATE camp_turn SET execution_budget_schema_version=2, execution_budget_deadline_at=NULL, execution_budget_elapsed_seconds=NULL WHERE id=(SELECT camp_turn_id FROM agent_run WHERE id=?1)",
-                [&fixture.source_run_id],
-            ).unwrap();
-            }
-            let service = TeamToolService::default();
-            let before_slots: i64 = fixture
+        let mut fixture = Fixture::new();
+        let service = TeamToolService::default();
+        let invocation = fixture.public_send_invocation(
+            "public-send-union",
+            "Please inspect this @agent_2",
+            &["agent_2"],
+        );
+        let sent = service
+            .send_public_message(&mut fixture.database, &invocation)
+            .unwrap();
+        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+        assert_eq!(sent.result.code, "camp_message.send_accepted");
+        assert_eq!(sent.result.payload["visibility"], "camp_public");
+        assert_eq!(
+            sent.result.payload["effectiveRecipients"],
+            json!(["agent_2"])
+        );
+        assert_eq!(
+            sent.result.payload["deliveryIds"].as_array().unwrap().len(),
+            1
+        );
+
+        let message_id = sent.result.payload["messageId"].as_str().unwrap();
+        let message: (String, String, String, String) = fixture
             .database
             .connection()
             .query_row(
-                "SELECT a2a_run_slots_allocated FROM camp_turn WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)",
-                [&fixture.source_run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-            let invocation = fixture.public_send_invocation(
-                "public-send-union",
-                "Please inspect this @agent_2",
-                &["agent_2"],
-            );
-            let sent = service
-                .send_public_message(&mut fixture.database, &invocation)
-                .unwrap();
-            assert_eq!(sent.result.status, CommandResultStatus::Accepted);
-            assert_eq!(sent.result.code, "camp_message.send_accepted");
-            assert_eq!(sent.result.payload["visibility"], "camp_public");
-            assert_eq!(
-                sent.result.payload["effectiveRecipients"],
-                json!(["agent_2"])
-            );
-            assert_eq!(
-                sent.result.payload["deliveryIds"].as_array().unwrap().len(),
-                1
-            );
-
-            let message_id = sent.result.payload["messageId"].as_str().unwrap();
-            let message: (String, String, String, String) = fixture
-                .database
-                .connection()
-                .query_row(
-                    r#"
+                r#"
                 SELECT body, effective_recipient_ids_json,
                        recipient_presentation_json, source_operation_id
                 FROM camp_message WHERE id = ?1
                 "#,
-                    [message_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .unwrap();
-            assert_eq!(message.0, "Please inspect this @芝士");
-            assert_eq!(message.1, r#"["agent_2"]"#);
-            assert_eq!(
-                serde_json::from_str::<Value>(&message.2).unwrap()["inlineOrder"],
-                json!(["agent_2"])
-            );
-            assert!(!message.3.is_empty());
+                [message_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(message.0, "Please inspect this @芝士");
+        assert_eq!(message.1, r#"["agent_2"]"#);
+        assert_eq!(
+            serde_json::from_str::<Value>(&message.2).unwrap()["inlineOrder"],
+            json!(["agent_2"])
+        );
+        assert!(!message.3.is_empty());
 
-            struct DeliveryAuditRow {
-                recipient_agent_id: String,
-                edge_kind: String,
-                target_parent_agent_run_id: Option<String>,
-                return_to_agent_run_id: Option<String>,
-                status: String,
-                dispatch_attempt_count: i64,
-                a2a_depth: i64,
-                target_agent_run_id: Option<String>,
-            }
-            let delivery = fixture
-                .database
-                .connection()
-                .query_row(
-                    r#"
-                SELECT recipient_agent_id, edge_kind,
-                       target_parent_agent_run_id, return_to_agent_run_id,
-                       status, dispatch_attempt_count,
-                       a2a_depth, target_agent_run_id
-                FROM message_delivery WHERE message_id = ?1
-                "#,
-                    [message_id],
-                    |row| {
-                        Ok(DeliveryAuditRow {
-                            recipient_agent_id: row.get(0)?,
-                            edge_kind: row.get(1)?,
-                            target_parent_agent_run_id: row.get(2)?,
-                            return_to_agent_run_id: row.get(3)?,
-                            status: row.get(4)?,
-                            dispatch_attempt_count: row.get(5)?,
-                            a2a_depth: row.get(6)?,
-                            target_agent_run_id: row.get(7)?,
-                        })
-                    },
-                )
-                .unwrap();
-            assert_eq!(delivery.recipient_agent_id, "agent_2");
-            assert_eq!(delivery.edge_kind, "forward");
-            assert_eq!(
-                delivery.target_parent_agent_run_id.as_deref(),
-                Some(fixture.source_run_id.as_str())
-            );
-            assert_eq!(delivery.return_to_agent_run_id, None);
-            assert_eq!(delivery.status, "running");
-            assert_eq!(delivery.dispatch_attempt_count, 1);
-            assert_eq!(delivery.a2a_depth, 1);
-            assert!(delivery.target_agent_run_id.is_some());
-            let after_slots: i64 = fixture
+        let delivery: (String, String, Option<String>) = fixture
             .database
             .connection()
             .query_row(
-                "SELECT a2a_run_slots_allocated FROM camp_turn WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)",
-                [&fixture.source_run_id],
-                |row| row.get(0),
+                r#"
+                SELECT recipient_agent_id, status, claimed_agent_run_id
+                FROM camp_message_delivery WHERE message_id = ?1
+                "#,
+                [message_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-            assert_eq!(after_slots, before_slots + 1);
-            let replay = service
-                .send_public_message(&mut fixture.database, &invocation)
-                .unwrap();
-            assert!(replay.replayed);
-            assert_eq!(replay.result.payload["messageId"], message_id);
+        assert_eq!(
+            delivery,
+            ("agent_2".to_string(), "waiting".to_string(), None)
+        );
 
-            let source_run_id = fixture.source_run_id.clone();
-            fixture.succeed_run(&source_run_id, fixture.source_epoch, "source completed");
-            let durable_replay = service
-                .send_public_message(&mut fixture.database, &invocation)
+        let replay = service
+            .send_public_message(&mut fixture.database, &invocation)
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.result.payload["messageId"], message_id);
+
+        let source_run_id = fixture.source_run_id.clone();
+        fixture.succeed_run(&source_run_id, fixture.source_epoch, "source completed");
+        let durable_replay = service
+            .send_public_message(&mut fixture.database, &invocation)
+            .unwrap();
+        assert!(durable_replay.replayed);
+        assert_eq!(durable_replay.result.payload["messageId"], message_id);
+    }
+
+    #[test]
+    fn public_sends_to_first_time_recipient_create_one_conversation_and_one_batch_run() {
+        let mut fixture = Fixture::new();
+        fixture
+            .database
+            .connection()
+            .execute(
+                "DELETE FROM conversation WHERE camp_id = ?1 AND agent_id = 'agent_2'",
+                [&fixture.camp_id],
+            )
+            .unwrap();
+        let conversation_count = |database: &Database| {
+            database
+                .connection()
+                .query_row(
+                    r#"
+                    SELECT COUNT(*) FROM conversation
+                    WHERE camp_id = ?1 AND agent_id = 'agent_2'
+                      AND kind = 'camp_member'
+                    "#,
+                    [&fixture.camp_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(conversation_count(&fixture.database), 0);
+
+        let invocation = fixture.public_send_invocation(
+            "public-send-first-time-recipient",
+            "Please take the next action",
+            &["agent_2"],
+        );
+        let sent = TeamToolService::default()
+            .send_public_message(&mut fixture.database, &invocation)
+            .unwrap();
+        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+        assert_eq!(conversation_count(&fixture.database), 1);
+        let second = fixture.public_send_invocation(
+            "public-send-first-time-recipient-again",
+            "Please also include this follow-up",
+            &["agent_2"],
+        );
+        let sent = TeamToolService::default()
+            .send_public_message(&mut fixture.database, &second)
+            .unwrap();
+        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+        assert_eq!(conversation_count(&fixture.database), 1);
+
+        let claimed =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut fixture.database, 100)
                 .unwrap();
-            assert!(durable_replay.replayed);
-            assert_eq!(durable_replay.result.payload["messageId"], message_id);
-        }
+        assert_eq!(claimed.len(), 1);
+        let (recipient_agent_id, invocation_kind, input_count): (String, String, i64) = fixture
+            .database
+            .connection()
+            .query_row(
+                r#"
+                SELECT conversation.agent_id, agent_run.invocation_kind,
+                       COUNT(*)
+                FROM agent_run
+                JOIN conversation ON conversation.id = agent_run.conversation_id
+                JOIN agent_run_input ON agent_run_input.agent_run_id = agent_run.id
+                WHERE agent_run.id = ?1
+                GROUP BY conversation.agent_id, agent_run.invocation_kind
+                "#,
+                [&claimed[0]],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(recipient_agent_id, "agent_2");
+        assert_eq!(invocation_kind, "batch");
+        assert_eq!(input_count, 2);
     }
 
     #[test]
@@ -3370,23 +2878,19 @@ mod tests {
             .unwrap();
         assert!(replay.replayed);
         assert_eq!(replay.result.payload, resent.result.payload);
-        let gate: (String, i64, Option<String>, Option<String>) = fixture
+        let delivery_state: (String, Option<String>) = fixture
             .database
             .connection()
             .query_row(
                 r#"
-                SELECT dispatch_phase, dispatch_attempt_count,
-                       pre_dispatch_gate, projection_operation_id
-                FROM message_delivery WHERE id = ?1
+                SELECT status, claimed_agent_run_id
+                FROM camp_message_delivery WHERE id = ?1
                 "#,
                 [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_ne!(gate.0, "projection_blocked");
-        assert!(gate.1 > 0);
-        assert_eq!(gate.2, None);
-        assert_eq!(gate.3, None);
+        assert_eq!(delivery_state, ("waiting".to_string(), None));
     }
 
     #[test]
@@ -3427,45 +2931,30 @@ mod tests {
             .send_public_message(&mut fixture.database, &invocation)
             .unwrap();
         let delivery_id = sent.result.payload["deliveryIds"][0].as_str().unwrap();
-        let state: (String, i64, Option<String>, Option<String>, i64, i64) = fixture
+        let state: (String, Option<String>, i64, i64) = fixture
             .database
             .connection()
             .query_row(
                 r#"
-                SELECT delivery.dispatch_phase, delivery.dispatch_attempt_count,
-                       delivery.pre_dispatch_gate, delivery.projection_operation_id,
+                SELECT delivery.status, delivery.claimed_agent_run_id,
                        (SELECT COUNT(*) FROM managed_attachment WHERE camp_id = delivery.camp_id),
                        (SELECT COUNT(*) FROM camp_attachment_view_operation
                         WHERE camp_id = delivery.camp_id)
-                FROM message_delivery AS delivery WHERE delivery.id = ?1
+                FROM camp_message_delivery AS delivery WHERE delivery.id = ?1
                 "#,
                 [delivery_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
-        assert_ne!(state.0, "projection_blocked");
-        assert!(
-            state.1 > 0,
-            "recipient dispatch must begin before the source Run ends"
-        );
-        assert_eq!(state.2, None);
-        assert_eq!(state.3, None);
-        assert_eq!(state.4, 0);
+        assert_eq!(state.0, "waiting");
+        assert_eq!(state.1, None);
+        assert_eq!(state.2, 0);
         assert_eq!(
             sent.result.payload["attachments"].as_array().unwrap().len(),
             4
         );
         assert_eq!(
-            state.5, 0,
+            state.3, 0,
             "new send must not enter legacy Camp publication"
         );
         assert_eq!(
@@ -3484,320 +2973,6 @@ mod tests {
     }
 
     #[test]
-    fn camp_turn_stop_cancels_projection_blocked_delivery_and_restart_cannot_revive_it() {
-        let mut fixture = Fixture::new();
-        let (delivery_id, operation_id) =
-            send_projection_blocked_attachment(&mut fixture, "cancel-projection-on-turn-stop");
-        let (camp_turn_id, turn_version): (String, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT turn.id, turn.version
-                FROM message_delivery AS delivery
-                JOIN camp_turn AS turn ON turn.id = delivery.camp_turn_id
-                WHERE delivery.id = ?1
-                "#,
-                [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let stopped = ExecutionRuntimeService::default()
-            .request_camp_turn_cancellation(
-                &mut fixture.database,
-                &user_envelope(
-                    "cancel-projection-blocked-turn",
-                    Some(&fixture.camp_id),
-                    CancelCampTurnCommand {
-                        camp_id: fixture.camp_id.clone(),
-                        camp_turn_id,
-                        expected_version: turn_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(stopped.result.status, CommandResultStatus::Applied);
-
-        let cancelled: DeliveryCancellationSnapshot = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT status, dispatch_phase, dispatch_attempt_count,
-                       wait_condition, active_dispatch_attempt_id,
-                       pre_dispatch_gate, projection_operation_id,
-                       manual_intervention_required, failure_code, ended_at, version
-                FROM message_delivery WHERE id = ?1
-                "#,
-                [&delivery_id],
-                |row| {
-                    Ok(DeliveryCancellationSnapshot {
-                        status: row.get(0)?,
-                        dispatch_phase: row.get(1)?,
-                        dispatch_attempt_count: row.get(2)?,
-                        wait_condition: row.get(3)?,
-                        active_dispatch_attempt_id: row.get(4)?,
-                        pre_dispatch_gate: row.get(5)?,
-                        projection_operation_id: row.get(6)?,
-                        manual_intervention_required: row.get(7)?,
-                        failure_code: row.get(8)?,
-                        ended_at: row.get(9)?,
-                        version: row.get(10)?,
-                    })
-                },
-            )
-            .unwrap();
-        assert_eq!(&cancelled.status, "cancelled");
-        assert_eq!(&cancelled.dispatch_phase, "terminal");
-        assert_eq!(cancelled.dispatch_attempt_count, 0);
-        assert_eq!(
-            (
-                &cancelled.wait_condition,
-                &cancelled.active_dispatch_attempt_id,
-                &cancelled.pre_dispatch_gate,
-                &cancelled.projection_operation_id,
-            ),
-            (&None, &None, &None, &None)
-        );
-        assert_eq!(cancelled.manual_intervention_required, 0);
-        assert_eq!(
-            cancelled.failure_code.as_deref(),
-            Some("camp_turn_cancelled")
-        );
-        assert!(cancelled.ended_at.is_some());
-
-        let view = CampAttachmentViewStore::for_test(&fixture.database).unwrap();
-        promote_queued_publication(&mut fixture, &view, &operation_id);
-        assert!(
-            view.resolve_semantic_publication_success(&mut fixture.database, &operation_id)
-                .unwrap()
-                .is_empty()
-        );
-        let after_late_success: (String, String, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT status, dispatch_phase, dispatch_attempt_count, version
-                FROM message_delivery WHERE id = ?1
-                "#,
-                [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            after_late_success,
-            (
-                "cancelled".to_string(),
-                "terminal".to_string(),
-                0,
-                cancelled.version,
-            )
-        );
-        drop(view);
-
-        let mut reopened = crate::db::Database::open(&fixture.directory).unwrap();
-        mark_unstarted_deliveries_interrupted_before_dispatch(&mut reopened).unwrap();
-        assert_eq!(
-            crate::message_delivery::dispatch_delivery(
-                &mut reopened,
-                &delivery_id,
-                DeliveryDispatchTrigger::Accepted,
-                true,
-            )
-            .unwrap(),
-            DeliveryDispatchOutcome::NotDispatchable
-        );
-        let after_restart: (String, String, i64, Option<String>, Option<String>) = reopened
-            .connection()
-            .query_row(
-                r#"
-                SELECT status, dispatch_phase, dispatch_attempt_count,
-                       projection_operation_id, ended_at
-                FROM message_delivery WHERE id = ?1
-                "#,
-                [&delivery_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            after_restart,
-            (
-                "cancelled".to_string(),
-                "terminal".to_string(),
-                0,
-                None,
-                cancelled.ended_at,
-            )
-        );
-    }
-
-    #[test]
-    fn explicit_zero_attempt_cancellation_handles_projection_and_interrupted_states() {
-        let mut fixture = Fixture::new();
-        let (projection_delivery_id, operation_id) =
-            send_projection_blocked_attachment(&mut fixture, "explicit-projection-cancel");
-        let projection_version: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT version FROM message_delivery WHERE id = ?1",
-                [&projection_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let cancelled = MessageDeliveryService::default()
-            .cancel(
-                &mut fixture.database,
-                &user_envelope(
-                    "cancel-zero-attempt-projection",
-                    Some(&fixture.camp_id),
-                    CancelMessageDeliveryCommand {
-                        delivery_id: projection_delivery_id.clone(),
-                        expected_version: projection_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(cancelled.result.code, "message_delivery.cancelled");
-        let projection_state: (
-            String,
-            String,
-            i64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT status, dispatch_phase, dispatch_attempt_count,
-                       pre_dispatch_gate, projection_operation_id, failure_code
-                FROM message_delivery WHERE id = ?1
-                "#,
-                [&projection_delivery_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            projection_state,
-            (
-                "cancelled".to_string(),
-                "terminal".to_string(),
-                0,
-                None,
-                None,
-                Some("explicit_cancelled".to_string()),
-            )
-        );
-        let view = CampAttachmentViewStore::for_test(&fixture.database).unwrap();
-        assert!(
-            view.resolve_semantic_publication_terminal_failure(
-                &mut fixture.database,
-                &operation_id,
-                "late_projection_failure",
-            )
-            .unwrap()
-            .is_empty()
-        );
-        drop(view);
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT status || ':' || dispatch_phase || ':' || dispatch_attempt_count FROM message_delivery WHERE id = ?1",
-                    [&projection_delivery_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "cancelled:terminal:0"
-        );
-
-        let (interrupted_delivery_id, _) =
-            send_projection_blocked_attachment(&mut fixture, "interrupted-then-cancelled");
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                UPDATE message_delivery
-                SET dispatch_phase = 'never_attempted',
-                    pre_dispatch_gate = NULL, projection_operation_id = NULL,
-                    version = version + 1
-                WHERE id = ?1 AND status = 'pending'
-                  AND dispatch_phase = 'projection_blocked'
-                  AND dispatch_attempt_count = 0
-                "#,
-                [&interrupted_delivery_id],
-            )
-            .unwrap();
-        mark_unstarted_deliveries_interrupted_before_dispatch(&mut fixture.database).unwrap();
-        let interrupted_version: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT version FROM message_delivery
-                WHERE id = ?1 AND status = 'interrupted_before_dispatch'
-                  AND dispatch_phase = 'terminal' AND dispatch_attempt_count = 0
-                "#,
-                [&interrupted_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let cancelled = MessageDeliveryService::default()
-            .cancel(
-                &mut fixture.database,
-                &user_envelope(
-                    "cancel-interrupted-zero-attempt",
-                    Some(&fixture.camp_id),
-                    CancelMessageDeliveryCommand {
-                        delivery_id: interrupted_delivery_id.clone(),
-                        expected_version: interrupted_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(cancelled.result.code, "message_delivery.cancelled");
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    r#"
-                    SELECT status || ':' || dispatch_phase || ':' ||
-                           dispatch_attempt_count || ':' ||
-                           manual_intervention_required || ':' || failure_code
-                    FROM message_delivery WHERE id = ?1
-                    "#,
-                    [&interrupted_delivery_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "cancelled:terminal:0:0:explicit_cancelled"
-        );
-    }
-
-    #[test]
     fn public_only_rejects_routing_fields_and_bypasses_every_agent_addressing_effect() {
         let mut fixture = Fixture::new();
         let service = TeamToolService::default();
@@ -3807,7 +2982,7 @@ mod tests {
             .query_row(
                 r#"
                 SELECT COUNT(*),
-                       (SELECT SUM(a2a_run_slots_allocated) FROM camp_turn)
+                       (SELECT COUNT(*) FROM camp_message_delivery)
                 FROM camp_message
                 "#,
                 [],
@@ -3880,7 +3055,7 @@ mod tests {
                        effective_recipient_ids_json,
                        (SELECT COUNT(*) FROM camp_message_mention
                         WHERE camp_message_id = message.id),
-                       (SELECT COUNT(*) FROM message_delivery
+                       (SELECT COUNT(*) FROM camp_message_delivery
                         WHERE message_id = message.id)
                 FROM camp_message AS message
                 WHERE id = ?1
@@ -3916,7 +3091,7 @@ mod tests {
             .query_row(
                 r#"
                 SELECT payload_json FROM event_log
-                WHERE event_type = 'camp_message.public_a2a_sent'
+                WHERE event_type = 'camp_message.sent'
                   AND entity_id = ?1
                 "#,
                 [message_id],
@@ -3924,23 +3099,17 @@ mod tests {
             )
             .map(|payload| serde_json::from_str(&payload).unwrap())
             .unwrap();
-        assert_eq!(event["schemaVersion"], 2);
-        assert_eq!(event["operation"], "send");
-        assert_eq!(event["agentAddressingMode"], "public_only");
-        assert_eq!(event["recipientFree"], true);
-        assert_eq!(event["effectiveRecipients"], json!([]));
+        assert_eq!(event["addressSource"], "agent_send");
+        assert_eq!(event["addressedAgentIds"], json!([]));
         assert_eq!(event["deliveryIds"], json!([]));
-        assert!(event.get("publicOnly").is_none());
-        let after_slots: i64 = fixture
+        let after_deliveries: i64 = fixture
             .database
             .connection()
-            .query_row(
-                "SELECT SUM(a2a_run_slots_allocated) FROM camp_turn",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM camp_message_delivery", [], |row| {
+                row.get(0)
+            })
             .unwrap();
-        assert_eq!(after_slots, before.1);
+        assert_eq!(after_deliveries, before.1);
         assert_eq!(
             fixture
                 .database
@@ -3960,1488 +3129,6 @@ mod tests {
         assert!(replay.replayed);
         assert_eq!(replay.result.payload["agentAddressingMode"], "public_only");
         assert_eq!(replay.result.payload["messageId"], message_id);
-    }
-
-    /// Admission owner: one Gather atomically freezes one request, canonical Items,
-    /// optional forward responsibilities and the separately reserved completion slot.
-    #[cfg(feature = "slow-tests")]
-    fn gather_acceptance_persists_unified_deliveries_and_split_budget() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.gather_invocation(
-            "gather-acceptance",
-            "请分别分析同一个主题并公开返回结论",
-            &["agent_3", "agent_2", "agent_2"],
-        );
-        let execution = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        assert_eq!(execution.result.status, CommandResultStatus::Accepted);
-        assert_eq!(execution.result.code, "gather.accepted");
-        assert_eq!(
-            execution.result.payload["effectiveRecipients"],
-            json!(["agent_2", "agent_3"])
-        );
-        assert_eq!(execution.result.payload["completion"], "deferred");
-        let gather_id = execution.result.payload["gatherId"].as_str().unwrap();
-        let persisted: (String, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status,
-                       (SELECT COUNT(*) FROM gather_item WHERE gather_id = gather.id),
-                       (SELECT COUNT(*) FROM message_delivery
-                        WHERE gather_id = gather.id
-                          AND delivery_kind = 'public_a2a'
-                          AND dispatch_disposition = 'dispatch'
-                          AND completion_role = 'optional')
-                FROM gather_record AS gather WHERE gather.id = ?1
-                "#,
-                [gather_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(persisted, ("collecting".to_string(), 2, 2));
-        let ledgers: (i64, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT accepted_a2a_allocated,
-                       agent_run_responsibilities_allocated,
-                       a2a_run_slots_allocated
-                FROM camp_turn
-                WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)
-                "#,
-                [&fixture.source_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(ledgers, (2, 3, 2));
-    }
-
-    /// Barrier owner: an exact member return stays public but cannot materialize
-    /// the Lead; the member terminal creates one FIFO completion continuation.
-    #[cfg(feature = "slow-tests")]
-    fn gather_captures_public_return_and_materializes_one_completion() {
-        let mut fixture = Fixture::new();
-        let service = TeamToolService::default();
-        let gather_invocation =
-            fixture.gather_invocation("gather-capture", "请分析并公开回复队长", &["agent_2"]);
-        let gathered = service
-            .gather(&mut fixture.database, &gather_invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let dispatch_delivery_id = gathered.result.payload["dispatchDeliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let member_run_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                [&dispatch_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let member_frozen_snapshot: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT frozen_snapshot_json FROM message_delivery WHERE id = ?1",
-                [&dispatch_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let member_frozen_snapshot: Value = serde_json::from_str(&member_frozen_snapshot).unwrap();
-        let member_run_facts: Value = serde_json::from_str(
-            member_frozen_snapshot["frozenContext"]["manifestSelection"]["runFactPayload"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(member_run_facts["gather"]["role"], "member");
-        assert_eq!(
-            member_run_facts["gather"]["authoritativeResult"],
-            "last_accepted_captured_return_current_run_retry_generation"
-        );
-        let (member_epoch, member_credential) =
-            fixture.claim_bind_and_issue(&member_run_id, "native-gather-member");
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                UPDATE camp_turn
-                SET accepted_a2a_allocated = 16,
-                    a2a_run_slots_allocated = 16
-                WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)
-                "#,
-                [&member_run_id],
-            )
-            .unwrap();
-        let budget_before_returns: (i64, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT accepted_a2a_allocated,
-                       agent_run_responsibilities_allocated,
-                       a2a_run_slots_allocated
-                FROM camp_turn
-                WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)
-                "#,
-                [&member_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        let mut captured_delivery_id = String::new();
-        let mut last_return_body = String::new();
-        for ordinal in 0..crate::gather::GATHER_CAPTURED_MESSAGES_MAX_PER_ITEM_GENERATION {
-            let body =
-                if ordinal + 1 == crate::gather::GATHER_CAPTURED_MESSAGES_MAX_PER_ITEM_GENERATION {
-                    "@agent_1 最后一条完整公开结论".to_string()
-                } else {
-                    format!("@agent_1 处理中，第 {} 条阶段回传", ordinal + 1)
-                };
-            let return_invocation = fixture.public_send_invocation_for(
-                &member_credential,
-                &format!("gather-member-return-{ordinal}"),
-                &body,
-                &["agent_1"],
-            );
-            let returned = service
-                .send_public_message(&mut fixture.database, &return_invocation)
-                .unwrap();
-            assert_eq!(returned.result.status, CommandResultStatus::Accepted);
-            if ordinal == 0 {
-                captured_delivery_id = returned.result.payload["deliveryIds"][0]
-                    .as_str()
-                    .unwrap()
-                    .to_string();
-            }
-            last_return_body = body;
-        }
-        let budget_after_returns: (i64, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT accepted_a2a_allocated,
-                       agent_run_responsibilities_allocated,
-                       a2a_run_slots_allocated
-                FROM camp_turn
-                WHERE id = (SELECT camp_turn_id FROM agent_run WHERE id = ?1)
-                "#,
-                [&member_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(budget_after_returns, budget_before_returns);
-
-        let over_limit_invocation = fixture.public_send_invocation_for(
-            &member_credential,
-            "gather-member-return-over-limit",
-            "@agent_1 超出当前 Gather Item generation 的额外回传",
-            &["agent_1"],
-        );
-        let over_limit = service
-            .send_public_message(&mut fixture.database, &over_limit_invocation)
-            .unwrap();
-        assert_eq!(over_limit.result.status, CommandResultStatus::Rejected);
-        assert_eq!(over_limit.result.code, "message.execution_budget_exceeded");
-        assert_eq!(
-            over_limit.result.payload["details"]["limitScope"],
-            "gather_captured_messages_per_item_generation"
-        );
-        let captured: (String, String, Option<String>, String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT dispatch_disposition, status, target_agent_run_id,
-                       gather_id, gather_dispatch_delivery_id
-                FROM message_delivery WHERE id = ?1
-                "#,
-                [&captured_delivery_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            captured,
-            (
-                "gather_captured".to_string(),
-                "settled".to_string(),
-                None,
-                gather_id.clone(),
-                dispatch_delivery_id.clone(),
-            )
-        );
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT COUNT(*) FROM agent_run WHERE trigger_message_delivery_id = ?1",
-                    [&captured_delivery_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap(),
-            0
-        );
-
-        fixture.succeed_run(&member_run_id, member_epoch, "不会覆盖公开回传的 fallback");
-        let completion_input: Value = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT completion_input_json FROM gather_record WHERE id = ?1",
-                [&gather_id],
-                |row| row.get::<_, String>(0),
-            )
-            .map(|value| serde_json::from_str(&value).unwrap())
-            .unwrap();
-        assert_eq!(completion_input["schemaVersion"], 3);
-        assert_eq!(completion_input["messageProjectionAudience"], "agent_v1");
-        assert_eq!(completion_input["request"]["body"], "请分析并公开回复队长");
-        assert!(
-            completion_input["request"]["projectedBodyDigest"]
-                .as_str()
-                .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
-        );
-        assert_eq!(completion_input["items"][0]["activeRetryGeneration"], 0);
-        assert_eq!(
-            completion_input["items"][0]["capturedMessages"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert!(last_return_body.ends_with("最后一条完整公开结论"));
-        assert!(
-            completion_input["items"][0]["capturedMessages"][0]["bodyExcerpt"]
-                .as_str()
-                .unwrap()
-                .ends_with("最后一条完整公开结论")
-        );
-        assert_eq!(
-            completion_input["items"][0]["capturedMessages"][0]["bodyProjectionAudience"],
-            "agent_v1"
-        );
-        assert!(
-            completion_input["items"][0]["capturedMessages"][0]["projectedBodyDigest"]
-                .as_str()
-                .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
-        );
-        assert!(completion_input["items"][0]["fallbackSummary"].is_null());
-        let ready: (String, String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status, gather.completion_delivery_id,
-                       completion.wait_condition
-                FROM gather_record AS gather
-                JOIN message_delivery AS completion
-                  ON completion.id = gather.completion_delivery_id
-                WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(ready.0, "ready");
-        assert_eq!(ready.2, "target_busy");
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(
-            &source_run_id,
-            fixture.source_epoch,
-            "Lead 结束首轮等待综合",
-        );
-
-        let completion: (String, String, String, i64, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status, gather.completion_run_id,
-                       run.invocation_kind, run.trigger_delivery_generation,
-                       delivery.frozen_snapshot_json
-                FROM gather_record AS gather
-                JOIN message_delivery AS delivery
-                  ON delivery.id = gather.completion_delivery_id
-                JOIN agent_run AS run ON run.id = gather.completion_run_id
-                WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(completion.0, "completing");
-        assert_eq!(completion.2, "gather_completion");
-        assert_eq!(completion.3, 0);
-        let frozen: Value = serde_json::from_str(&completion.4).unwrap();
-        let rendered = frozen["frozenContext"]["renderedPayload"].as_str().unwrap();
-        assert!(rendered.contains("\"type\":\"gather_completed\""));
-        assert!(rendered.contains("最后一条完整公开结论"));
-        assert!(rendered.contains("请分析并公开回复队长"));
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT COUNT(*) FROM agent_run WHERE trigger_message_delivery_id = ?1",
-                    [&ready.1],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap(),
-            1
-        );
-
-        let (completion_epoch, _) =
-            fixture.claim_bind_and_issue(&completion.1, "native-gather-completion");
-        fixture.succeed_run(&completion.1, completion_epoch, "Lead 的统一综合结论");
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT status FROM gather_record WHERE id = ?1",
-                    [&gather_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "completed"
-        );
-    }
-
-    /// Fallback owner: a successful member with no captured return freezes a
-    /// scalar-safe bounded summary and retains the original initiator route even
-    /// when the Camp Default Lead changes before the Barrier.
-    #[cfg(feature = "slow-tests")]
-    fn gather_freezes_bounded_fallback_on_the_original_initiator_route() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.gather_invocation(
-            "gather-fallback-route",
-            "请分析；无需另发消息，最终输出即可",
-            &["agent_2"],
-        );
-        let gathered = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let dispatch_delivery_id = gathered.result.payload["dispatchDeliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let member_run_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                [&dispatch_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let original_conversation_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT conversation_id FROM agent_run WHERE id = ?1",
-                [&fixture.source_run_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute(
-                "UPDATE camp SET default_lead_agent_id = 'agent_3' WHERE id = ?1",
-                [&fixture.camp_id],
-            )
-            .unwrap();
-
-        let (member_epoch, _) =
-            fixture.claim_bind_and_issue(&member_run_id, "native-gather-fallback");
-        let final_output = format!("结论🙂{}末尾", "分析".repeat(900));
-        fixture.succeed_run(&member_run_id, member_epoch, &final_output);
-
-        let (fallback, original_bytes, truncated, digest): (String, i64, bool, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT fallback_summary, fallback_summary_original_bytes,
-                       fallback_summary_truncated, fallback_summary_digest
-                FROM gather_item WHERE dispatch_delivery_id = ?1
-                "#,
-                [&dispatch_delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert!(fallback.len() <= crate::gather::GATHER_FALLBACK_SUMMARY_MAX_BYTES);
-        assert!(std::str::from_utf8(fallback.as_bytes()).is_ok());
-        assert!(fallback.starts_with("结论🙂"));
-        assert_eq!(original_bytes, final_output.len() as i64);
-        assert!(truncated);
-        assert_eq!(digest.len(), "sha256:".len() + 64);
-
-        let (
-            recipient_agent_id,
-            target_conversation_id,
-            completion_delivery_id,
-            completion_frozen_snapshot,
-            completion_input,
-        ): (String, String, String, String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT completion.recipient_agent_id,
-                       completion.target_conversation_id,
-                       completion.id, completion.frozen_snapshot_json,
-                       gather.completion_input_json
-                FROM gather_record AS gather
-                JOIN message_delivery AS completion
-                  ON completion.id = gather.completion_delivery_id
-                WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(recipient_agent_id, "agent_1");
-        assert_eq!(target_conversation_id, original_conversation_id);
-        let completion_input: Value = serde_json::from_str(&completion_input).unwrap();
-        assert_eq!(completion_input["schemaVersion"], 3);
-        assert_eq!(completion_input["messageProjectionAudience"], "agent_v1");
-        assert_eq!(
-            completion_input["request"]["body"],
-            "请分析；无需另发消息，最终输出即可"
-        );
-        assert!(
-            completion_input["request"]["projectedBodyDigest"]
-                .as_str()
-                .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
-        );
-        assert_eq!(completion_input["items"][0]["capturedMessages"], json!([]));
-        assert_eq!(
-            completion_input["items"][0]["fallbackSummary"]["body"],
-            fallback
-        );
-
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                UPDATE agent_profile
-                SET selected_runtime_adapter_kind = NULL,
-                    default_runtime_installation_id = NULL,
-                    default_model_selection_json = NULL,
-                    default_permission_config_json = NULL
-                WHERE id = 'agent_1'
-                "#,
-                [],
-            )
-            .unwrap();
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(
-            &source_run_id,
-            fixture.source_epoch,
-            "Lead 结束等待 completion",
-        );
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT wait_condition FROM message_delivery WHERE id = ?1",
-                    [&completion_delivery_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "runtime_unavailable"
-        );
-
-        // Clean-break owner: a ready pre-v3 completion is not admitted or
-        // rebuilt after the projection contract changes.
-        let mut obsolete_input = completion_input;
-        obsolete_input["schemaVersion"] = json!(2);
-        obsolete_input
-            .as_object_mut()
-            .unwrap()
-            .remove("messageProjectionAudience");
-        obsolete_input["request"]
-            .as_object_mut()
-            .unwrap()
-            .remove("projectedBodyDigest");
-        let obsolete_input_json = serde_json::to_string(&obsolete_input).unwrap();
-        let obsolete_input_digest = format!(
-            "sha256:{:x}",
-            Sha256::digest(obsolete_input_json.as_bytes())
-        );
-        let mut obsolete_frozen: Value = serde_json::from_str(&completion_frozen_snapshot).unwrap();
-        let obsolete_frozen_object = obsolete_frozen.as_object_mut().unwrap();
-        obsolete_frozen_object.insert("completionInputSchemaVersion".into(), json!(2));
-        obsolete_frozen_object.insert("completionInputDigest".into(), json!(obsolete_input_digest));
-        obsolete_frozen_object.insert(
-            "completionInputByteLength".into(),
-            json!(obsolete_input_json.len()),
-        );
-        obsolete_frozen_object.remove("frozenContext");
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                UPDATE gather_record
-                SET completion_input_schema_version = 2,
-                    completion_input_json = ?2,
-                    completion_input_digest = ?3
-                WHERE id = ?1;
-                "#,
-                params![gather_id, obsolete_input_json, obsolete_input_digest],
-            )
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute(
-                "UPDATE message_delivery SET frozen_snapshot_json = ?2 WHERE id = ?1",
-                params![
-                    completion_delivery_id,
-                    serde_json::to_string(&obsolete_frozen).unwrap()
-                ],
-            )
-            .unwrap();
-        configure_test_runtime(&fixture.database, &["agent_1"]);
-        let error = crate::message_delivery::dispatch_delivery(
-            &mut fixture.database,
-            &completion_delivery_id,
-            DeliveryDispatchTrigger::RuntimeReady,
-            true,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("Gather Completion input evidence is inconsistent"));
-        let completion_run_count: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT COUNT(*) FROM agent_run
-                WHERE trigger_message_delivery_id = ?1
-                "#,
-                [&completion_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(completion_run_count, 0);
-    }
-
-    /// Cancellation owner: cancelling a waiting Completion Delivery must also
-    /// close its Gather so later recipient pumps cannot create a continuation.
-    #[test]
-    fn cancelling_waiting_gather_completion_prevents_continuation() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.gather_invocation(
-            "gather-cancel-completion",
-            "完成后等待统一综合",
-            &["agent_2"],
-        );
-        let gathered = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let dispatch_delivery_id = gathered.result.payload["dispatchDeliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let member_run_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                [&dispatch_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let (member_epoch, _) =
-            fixture.claim_bind_and_issue(&member_run_id, "native-gather-cancel-member");
-        fixture.succeed_run(&member_run_id, member_epoch, "成员完成");
-        let (completion_delivery_id, completion_version): (String, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.completion_delivery_id, completion.version
-                FROM gather_record AS gather
-                JOIN message_delivery AS completion
-                  ON completion.id = gather.completion_delivery_id
-                WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let cancelled = MessageDeliveryService::default()
-            .cancel(
-                &mut fixture.database,
-                &user_envelope(
-                    "cancel-waiting-gather-completion",
-                    Some(&fixture.camp_id),
-                    CancelMessageDeliveryCommand {
-                        delivery_id: completion_delivery_id.clone(),
-                        expected_version: completion_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(cancelled.result.code, "message_delivery.cancelled");
-        let state: (String, String, Option<String>) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status, completion.status, gather.completion_run_id
-                FROM gather_record AS gather
-                JOIN message_delivery AS completion
-                  ON completion.id = gather.completion_delivery_id
-                WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(state, ("cancelled".into(), "cancelled".into(), None));
-        let attempt: (
-            i64,
-            Option<String>,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<String>,
-        ) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT delivery.dispatch_attempt_count, delivery.wait_condition,
-                       delivery.active_dispatch_attempt_id,
-                       attempt.status, attempt.wait_condition, attempt.ended_at
-                FROM message_delivery AS delivery
-                JOIN message_delivery_attempt AS attempt
-                  ON attempt.delivery_id = delivery.id
-                 AND attempt.ordinal = delivery.dispatch_attempt_count
-                WHERE delivery.id = ?1
-                "#,
-                [&completion_delivery_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(attempt.0, 1);
-        assert_eq!((attempt.1, attempt.2), (None, None));
-        assert_eq!(attempt.3, "cancelled");
-        assert_eq!(attempt.4, None);
-        assert!(attempt.5.is_some());
-
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(&source_run_id, fixture.source_epoch, "Lead 首轮结束");
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT COUNT(*) FROM agent_run WHERE trigger_message_delivery_id = ?1",
-                    [&completion_delivery_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap(),
-            0
-        );
-    }
-
-    /// Barrier race owner: both final member terminals use independent SQLite
-    /// connections; exactly one serialized transaction may create completion.
-    #[cfg(feature = "slow-tests")]
-    fn concurrent_last_member_terminals_create_one_completion_delivery() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.gather_invocation(
-            "gather-concurrent-barrier",
-            "并发完成后统一综合",
-            &["agent_2", "agent_3"],
-        );
-        let gathered = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let delivery_ids = gathered.result.payload["dispatchDeliveryIds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().to_string())
-            .collect::<Vec<_>>();
-        let member_runs = delivery_ids
-            .iter()
-            .map(|delivery_id| {
-                fixture
-                    .database
-                    .connection()
-                    .query_row(
-                        "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                        [delivery_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-        let member_epochs = member_runs
-            .iter()
-            .enumerate()
-            .map(|(index, run_id)| {
-                fixture
-                    .claim_bind_and_issue(run_id, &format!("native-gather-race-{index}"))
-                    .0
-            })
-            .collect::<Vec<_>>();
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(member_runs.len()));
-        let handles = member_runs
-            .into_iter()
-            .zip(member_epochs)
-            .enumerate()
-            .map(|(index, (run_id, execution_epoch))| {
-                let directory = fixture.directory.clone();
-                let camp_id = fixture.camp_id.clone();
-                let barrier = barrier.clone();
-                std::thread::spawn(move || {
-                    let mut database = Database::open(&directory).unwrap();
-                    database
-                        .connection()
-                        .execute_batch("PRAGMA busy_timeout = 10000;")
-                        .unwrap();
-                    barrier.wait();
-                    let runtime = ExecutionRuntimeService::default();
-                    let execution = runtime
-                        .load_agent_run_execution(&database, &run_id, execution_epoch)
-                        .unwrap()
-                        .unwrap();
-                    runtime
-                        .succeed_agent_run(
-                            &mut database,
-                            &CommandEnvelope {
-                                command_id: format!("succeed-concurrent-gather-member-{index}"),
-                                actor: ActorRef::System {
-                                    component_id: "runtime-adapter:codex-cli".to_string(),
-                                },
-                                camp_id: Some(camp_id),
-                                expected_versions: Vec::new(),
-                                execution_epoch: None,
-                                payload: SucceedAgentRunCommand {
-                                    agent_run_id: run_id.clone(),
-                                    expected_version: execution.version,
-                                    execution_epoch,
-                                    native_turn_id: format!("native-turn-{run_id}"),
-                                    final_output: format!("成员 {index} 完成"),
-                                    missing_send_recovery_candidate: None,
-                                    ending_git_observation: None,
-                                },
-                            },
-                        )
-                        .unwrap()
-                })
-            })
-            .collect::<Vec<_>>();
-        for handle in handles {
-            assert_eq!(
-                handle.join().unwrap().result.status,
-                CommandResultStatus::Applied
-            );
-        }
-        let state: (String, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status,
-                       (SELECT COUNT(*) FROM gather_item
-                        WHERE gather_id = gather.id AND status = 'succeeded'),
-                       (SELECT COUNT(*) FROM message_delivery
-                        WHERE gather_id = gather.id
-                          AND delivery_kind = 'gather_completion')
-                FROM gather_record AS gather WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(state, ("ready".into(), 2, 1));
-    }
-
-    /// Stop-vs-Barrier race owner: regardless of which immediate transaction
-    /// serializes first, the durable final state is one cancelled Gather with no
-    /// active or materialized completion.
-    #[cfg(feature = "slow-tests")]
-    fn camp_turn_stop_racing_last_gather_member_cancels_completion() {
-        let mut fixture = Fixture::new();
-        let invocation =
-            fixture.gather_invocation("gather-stop-barrier-race", "与用户 Stop 竞态", &["agent_2"]);
-        let gathered = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let dispatch_delivery_id = gathered.result.payload["dispatchDeliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let (member_run_id, camp_turn_id): (String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT delivery.target_agent_run_id, delivery.camp_turn_id
-                FROM message_delivery AS delivery WHERE delivery.id = ?1
-                "#,
-                [&dispatch_delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let member_epoch = fixture
-            .claim_bind_and_issue(&member_run_id, "native-gather-stop-race")
-            .0;
-        let turn_version: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT version FROM camp_turn WHERE id = ?1",
-                [&camp_turn_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-
-        let terminal_handle = {
-            let directory = fixture.directory.clone();
-            let camp_id = fixture.camp_id.clone();
-            let run_id = member_run_id.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let mut database = Database::open(&directory).unwrap();
-                database
-                    .connection()
-                    .execute_batch("PRAGMA busy_timeout = 10000;")
-                    .unwrap();
-                let runtime = ExecutionRuntimeService::default();
-                let execution = runtime
-                    .load_agent_run_execution(&database, &run_id, member_epoch)
-                    .unwrap()
-                    .unwrap();
-                barrier.wait();
-                runtime
-                    .succeed_agent_run(
-                        &mut database,
-                        &CommandEnvelope {
-                            command_id: "succeed-gather-stop-race-member".to_string(),
-                            actor: ActorRef::System {
-                                component_id: "runtime-adapter:codex-cli".to_string(),
-                            },
-                            camp_id: Some(camp_id),
-                            expected_versions: Vec::new(),
-                            execution_epoch: None,
-                            payload: SucceedAgentRunCommand {
-                                agent_run_id: run_id.clone(),
-                                expected_version: execution.version,
-                                execution_epoch: member_epoch,
-                                native_turn_id: format!("native-turn-{run_id}"),
-                                final_output: "成员恰好完成".to_string(),
-                                missing_send_recovery_candidate: None,
-                                ending_git_observation: None,
-                            },
-                        },
-                    )
-                    .unwrap()
-            })
-        };
-        let stop_handle = {
-            let directory = fixture.directory.clone();
-            let camp_id = fixture.camp_id.clone();
-            let turn_id = camp_turn_id.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let mut database = Database::open(&directory).unwrap();
-                database
-                    .connection()
-                    .execute_batch("PRAGMA busy_timeout = 10000;")
-                    .unwrap();
-                barrier.wait();
-                ExecutionRuntimeService::default()
-                    .request_camp_turn_cancellation(
-                        &mut database,
-                        &user_envelope(
-                            "cancel-gather-stop-race-turn",
-                            Some(&camp_id),
-                            CancelCampTurnCommand {
-                                camp_id: camp_id.clone(),
-                                camp_turn_id: turn_id,
-                                expected_version: turn_version,
-                            },
-                        ),
-                    )
-                    .unwrap()
-            })
-        };
-        let terminal = terminal_handle.join().unwrap();
-        let stopped = stop_handle.join().unwrap();
-        assert_ne!(stopped.result.status, CommandResultStatus::Rejected);
-        assert!(matches!(
-            terminal.result.status,
-            CommandResultStatus::Applied | CommandResultStatus::Rejected
-        ));
-
-        let final_state: (String, Option<String>, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status, gather.completion_run_id,
-                       (SELECT COUNT(*) FROM message_delivery
-                        WHERE gather_id = gather.id
-                          AND delivery_kind = 'gather_completion'
-                          AND status IN ('pending', 'running'))
-                FROM gather_record AS gather WHERE gather.id = ?1
-                "#,
-                [&gather_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(final_state, ("cancelled".into(), None, 0));
-    }
-
-    /// Membership lifecycle owner: once the frozen initiator leaves, later
-    /// member completion cannot create or reroute a completion to the successor
-    /// Default Lead.
-    #[cfg(feature = "slow-tests")]
-    fn gather_is_cancelled_when_original_initiator_leaves() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.gather_invocation(
-            "gather-initiator-leave",
-            "原 Lead 离场后不得转交",
-            &["agent_2"],
-        );
-        let gathered = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let dispatch_delivery_id = gathered.result.payload["dispatchDeliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let member_run_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                [&dispatch_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let member_epoch = fixture
-            .claim_bind_and_issue(&member_run_id, "native-gather-initiator-leave")
-            .0;
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(&source_run_id, fixture.source_epoch, "Lead 先结束当前 Run");
-
-        let now = chrono::Utc::now().to_rfc3339();
-        let actor = ActorRef::User {
-            user_id: "local_user".to_string(),
-        };
-        let transaction = fixture
-            .database
-            .connection_mut()
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .unwrap();
-        end_camp_membership(
-            &transaction,
-            &fixture.camp_id,
-            "agent_1",
-            None,
-            "test_membership_ended",
-            "gather-initiator-membership-ended",
-            &actor,
-            None,
-            &now,
-        )
-        .unwrap();
-        transaction.commit().unwrap();
-        let (run_status, _run_version, cancel_requested_at): (String, i64, Option<String>) =
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT status, version, cancel_requested_at FROM agent_run WHERE id = ?1",
-                    [&member_run_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .unwrap();
-        assert_eq!(run_status, "cancelled");
-        assert!(cancel_requested_at.is_some());
-        ExecutionRuntimeService::default()
-            .record_runtime_cleanup_completed(&fixture.database, &member_run_id, member_epoch)
-            .unwrap();
-
-        let final_state: (
-            String,
-            Option<String>,
-            Option<String>,
-            String,
-            String,
-            String,
-            String,
-        ) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status, gather.completion_delivery_id,
-                       gather.completion_run_id, camp.default_lead_agent_id,
-                       (SELECT status FROM message_delivery WHERE id = ?2),
-                       (SELECT status FROM agent_run WHERE id = ?3),
-                       (SELECT status || ':' || settled_run_count || '/' || target_run_count
-                        FROM camp_membership_reconciliation
-                        WHERE command_id = 'gather-initiator-membership-ended')
-                FROM gather_record AS gather
-                JOIN camp ON camp.id = gather.camp_id
-                WHERE gather.id = ?1
-                "#,
-                params![gather_id, dispatch_delivery_id, member_run_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            final_state,
-            (
-                "cancelled".into(),
-                None,
-                None,
-                "agent_2".into(),
-                "cancelled".into(),
-                "cancelled".into(),
-                "completed:1/1".into(),
-            )
-        );
-    }
-
-    /// FIFO owner: a newer Gather completion cannot overtake an older pending
-    /// completion when Runtime readiness changes between their Barrier commits.
-    #[cfg(feature = "slow-tests")]
-    fn multiple_gather_completions_share_original_lead_fifo() {
-        let mut fixture = Fixture::new();
-        let service = TeamToolService::default();
-        let first_invocation =
-            fixture.gather_invocation("gather-fifo-first", "第一组", &["agent_2"]);
-        let first = service
-            .gather(&mut fixture.database, &first_invocation)
-            .unwrap();
-        let second_invocation =
-            fixture.gather_invocation("gather-fifo-second", "第二组", &["agent_3"]);
-        let second = service
-            .gather(&mut fixture.database, &second_invocation)
-            .unwrap();
-        let gather_ids = [&first, &second].map(|execution| {
-            execution.result.payload["gatherId"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        });
-        let member_run_ids = [&first, &second].map(|execution| {
-            let delivery_id = execution.result.payload["dispatchDeliveryIds"][0]
-                .as_str()
-                .unwrap();
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                    [delivery_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap()
-        });
-        let member_epochs = member_run_ids
-            .iter()
-            .enumerate()
-            .map(|(index, run_id)| {
-                fixture
-                    .claim_bind_and_issue(run_id, &format!("native-gather-fifo-member-{index}"))
-                    .0
-            })
-            .collect::<Vec<_>>();
-        let source_run_id = fixture.source_run_id.clone();
-        fixture.succeed_run(&source_run_id, fixture.source_epoch, "Lead 等待两组结果");
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                UPDATE agent_profile
-                SET selected_runtime_adapter_kind = NULL,
-                    default_runtime_installation_id = NULL,
-                    default_model_selection_json = NULL,
-                    default_permission_config_json = NULL
-                WHERE id = 'agent_1'
-                "#,
-                [],
-            )
-            .unwrap();
-
-        fixture.succeed_run(&member_run_ids[0], member_epochs[0], "第一组结果");
-        let first_completion_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT completion_delivery_id FROM gather_record WHERE id = ?1",
-                [&gather_ids[0]],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT wait_condition FROM message_delivery WHERE id = ?1",
-                    [&first_completion_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "runtime_unavailable"
-        );
-
-        configure_test_runtime(&fixture.database, &["agent_1"]);
-        fixture.succeed_run(&member_run_ids[1], member_epochs[1], "第二组结果");
-        let second_completion_id: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT completion_delivery_id FROM gather_record WHERE id = ?1",
-                [&gather_ids[1]],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT wait_condition FROM message_delivery WHERE id = ?1",
-                    [&second_completion_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "target_busy"
-        );
-
-        let dispatched = dispatch_pending_for_recipient(
-            &mut fixture.database,
-            &fixture.camp_id,
-            "agent_1",
-            DeliveryDispatchTrigger::RuntimeReady,
-            true,
-        )
-        .unwrap();
-        assert!(matches!(
-            dispatched.as_slice(),
-            [crate::message_delivery::DeliveryDispatchOutcome::Materialized { .. }]
-        ));
-        let first_completion_run: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT completion_run_id FROM gather_record WHERE id = ?1",
-                [&gather_ids[0]],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            fixture
-                .database
-                .connection()
-                .query_row(
-                    "SELECT status FROM gather_record WHERE id = ?1",
-                    [&gather_ids[1]],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-            "ready"
-        );
-
-        let (completion_epoch, _) =
-            fixture.claim_bind_and_issue(&first_completion_run, "native-gather-fifo-completion");
-        fixture.succeed_run(&first_completion_run, completion_epoch, "第一组统一综合");
-        let second_state: (String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT status, completion_run_id FROM gather_record WHERE id = ?1",
-                [&gather_ids[1]],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(second_state.0, "completing");
-        assert!(!second_state.1.is_empty());
-    }
-
-    /// Retry owner: a failed materialized member responsibility may reuse its
-    /// Delivery/Item with a new generation while collecting, but the same failed
-    /// Delivery cannot reopen the Gather after another Item commits the Barrier.
-    #[cfg(feature = "slow-tests")]
-    fn gather_forward_retry_reuses_item_and_ready_wins() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.gather_invocation(
-            "gather-forward-retry",
-            "失败时允许用户重试同一责任",
-            &["agent_2", "agent_3"],
-        );
-        let gathered = TeamToolService::default()
-            .gather(&mut fixture.database, &invocation)
-            .unwrap();
-        let gather_id = gathered.result.payload["gatherId"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let delivery_ids = gathered.result.payload["dispatchDeliveryIds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().to_string())
-            .collect::<Vec<_>>();
-        let member_runs = delivery_ids
-            .iter()
-            .map(|delivery_id| {
-                fixture
-                    .database
-                    .connection()
-                    .query_row(
-                        "SELECT target_agent_run_id FROM message_delivery WHERE id = ?1",
-                        [delivery_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-        let (first_epoch, first_credential) =
-            fixture.claim_bind_and_issue(&member_runs[0], "native-gather-retry-first");
-        let second_epoch = fixture
-            .claim_bind_and_issue(&member_runs[1], "native-gather-retry-second")
-            .0;
-        let old_return = fixture.public_send_invocation_for(
-            &first_credential,
-            "gather-retry-generation-zero-return",
-            "@agent_1 旧 generation 结论 A",
-            &["agent_1"],
-        );
-        let old_returned = TeamToolService::default()
-            .send_public_message(&mut fixture.database, &old_return)
-            .unwrap();
-        assert_eq!(old_returned.result.status, CommandResultStatus::Accepted);
-        fixture.fail_run(&member_runs[0], first_epoch, "member_attempt_one_failed");
-        let failed_version: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT version FROM message_delivery WHERE id = ?1",
-                [&delivery_ids[0]],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let retried = MessageDeliveryService::default()
-            .retry(
-                &mut fixture.database,
-                &user_envelope(
-                    "retry-gather-forward-once",
-                    Some(&fixture.camp_id),
-                    RetryMessageDeliveryCommand {
-                        delivery_id: delivery_ids[0].clone(),
-                        expected_version: failed_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(retried.result.code, "message_delivery.retry_requested");
-        assert_eq!(retried.result.payload["retryGeneration"], 1);
-        let (retry_run_id, item_generation, item_status): (String, i64, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT item.target_agent_run_id, item.active_retry_generation,
-                       item.status
-                FROM gather_item AS item
-                WHERE item.dispatch_delivery_id = ?1
-                "#,
-                [&delivery_ids[0]],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_ne!(retry_run_id, member_runs[0]);
-        assert_eq!((item_generation, item_status.as_str()), (1, "running"));
-        let (retry_epoch, retry_credential) =
-            fixture.claim_bind_and_issue(&retry_run_id, "native-gather-retry-generation-one");
-        let current_return = fixture.public_send_invocation_for(
-            &retry_credential,
-            "gather-retry-generation-one-return",
-            "@agent_1 当前 generation 结论 B",
-            &["agent_1"],
-        );
-        let current_returned = TeamToolService::default()
-            .send_public_message(&mut fixture.database, &current_return)
-            .unwrap();
-        assert_eq!(
-            current_returned.result.status,
-            CommandResultStatus::Accepted
-        );
-        fixture.fail_run(&retry_run_id, retry_epoch, "member_attempt_two_failed");
-        fixture.succeed_run(&member_runs[1], second_epoch, "另一成员完成");
-
-        let completion_input: Value = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT completion_input_json FROM gather_record WHERE id = ?1",
-                [&gather_id],
-                |row| row.get::<_, String>(0),
-            )
-            .map(|value| serde_json::from_str(&value).unwrap())
-            .unwrap();
-        let retried_item = completion_input["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["dispatchDeliveryId"] == delivery_ids[0])
-            .unwrap();
-        assert_eq!(retried_item["activeRetryGeneration"], 1);
-        assert_eq!(retried_item["targetAgentRunId"], retry_run_id);
-        assert_eq!(
-            retried_item["capturedMessages"].as_array().unwrap().len(),
-            1
-        );
-        assert_eq!(retried_item["capturedMessages"][0]["retryGeneration"], 1);
-        assert!(
-            retried_item["capturedMessages"][0]["bodyExcerpt"]
-                .as_str()
-                .unwrap()
-                .ends_with("当前 generation 结论 B")
-        );
-        assert!(
-            !completion_input
-                .to_string()
-                .contains("旧 generation 结论 A")
-        );
-
-        let ready_failed_version: i64 = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT version FROM message_delivery WHERE id = ?1",
-                [&delivery_ids[0]],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let rejected = MessageDeliveryService::default()
-            .retry(
-                &mut fixture.database,
-                &user_envelope(
-                    "retry-gather-forward-after-ready",
-                    Some(&fixture.camp_id),
-                    RetryMessageDeliveryCommand {
-                        delivery_id: delivery_ids[0].clone(),
-                        expected_version: ready_failed_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(rejected.result.status, CommandResultStatus::Rejected);
-        assert_eq!(rejected.result.code, "message_delivery.retry_not_allowed");
-        let final_state: (String, String, i64, i64) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT gather.status, item.status,
-                       item.active_retry_generation,
-                       (SELECT COUNT(*) FROM message_delivery
-                        WHERE gather_id = gather.id
-                          AND delivery_kind = 'gather_completion')
-                FROM gather_record AS gather
-                JOIN gather_item AS item ON item.gather_id = gather.id
-                WHERE gather.id = ?1 AND item.dispatch_delivery_id = ?2
-                "#,
-                params![gather_id, delivery_ids[0]],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(final_state, ("ready".into(), "failed".into(), 1, 1));
     }
 
     #[cfg(feature = "slow-tests")]
@@ -5665,14 +3352,12 @@ mod tests {
     fn current_user_attention_is_orthogonal_atomic_and_replay_safe() {
         let mut fixture = Fixture::new();
         let service = TeamToolService::default();
-        let before_slots: i64 = fixture
+        let before_deliveries: i64 = fixture
             .database
             .connection()
-            .query_row(
-                "SELECT SUM(a2a_run_slots_allocated) FROM camp_turn",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM camp_message_delivery", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let mut invocation = fixture.public_send_invocation(
             "public-current-user-attention",
@@ -5721,16 +3406,14 @@ mod tests {
         assert_eq!(notification.0, "user_mention");
         assert_eq!(notification.1, "local_user");
         assert_eq!(notification.2, message_id);
-        let after_slots: i64 = fixture
+        let after_deliveries: i64 = fixture
             .database
             .connection()
-            .query_row(
-                "SELECT SUM(a2a_run_slots_allocated) FROM camp_turn",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM camp_message_delivery", [], |row| {
+                row.get(0)
+            })
             .unwrap();
-        assert_eq!(after_slots, before_slots);
+        assert_eq!(after_deliveries, before_deliveries);
 
         let replay = service
             .send_public_message(&mut fixture.database, &invocation)
@@ -6620,59 +4303,6 @@ Use this exact public input @agent_2";
         }
     }
 
-    #[test]
-    fn public_delivery_source_lineage_mismatch_fails_closed_after_preflight() {
-        let mut fixture = Fixture::new();
-        let invocation = fixture.public_send_invocation(
-            "frozen-public-source-mismatch",
-            "Preserve this sender lineage @agent_2",
-            &["agent_2"],
-        );
-        let sent = TeamToolService::default()
-            .send_public_message(&mut fixture.database, &invocation)
-            .unwrap();
-        let delivery_id = sent.result.payload["deliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let (target_run_id, message_id): (String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT target_agent_run_id, message_id FROM message_delivery WHERE id = ?1",
-                [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let (target_epoch, _) =
-            fixture.claim_bind_and_issue(&target_run_id, "native-source-mismatch");
-        fixture
-            .database
-            .connection()
-            .execute(
-                "UPDATE camp_message SET source_agent_run_id = NULL WHERE id = ?1",
-                [&message_id],
-            )
-            .unwrap();
-
-        let error = ContextService
-            .materialize(
-                &mut fixture.database,
-                &ManagedBlobStore::new(&fixture.directory),
-                &MaterializeContextRequest {
-                    agent_run_id: &target_run_id,
-                    execution_epoch: target_epoch,
-                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
-                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
-                },
-            )
-            .unwrap_err();
-        assert!(
-            format!("{error:#}")
-                .contains("A2A Current Input CampMessage requires a source AgentRun")
-        );
-    }
-
     #[cfg(feature = "slow-tests")]
     fn task_linked_public_delivery_reuses_exact_run_fact_bytes() {
         let mut fixture = Fixture::new();
@@ -7404,13 +5034,13 @@ Use this exact public input @agent_2";
     fn invalid_addressing_reports_all_offenders_and_leaves_no_partial_facts() {
         let mut fixture = Fixture::new();
         let service = TeamToolService::default();
-        let before: (i64, i64, i64) = fixture
+        let before: (i64, i64) = fixture
             .database
             .connection()
             .query_row(
-                "SELECT (SELECT COUNT(*) FROM camp_message), (SELECT COUNT(*) FROM message_delivery), (SELECT SUM(a2a_run_slots_allocated) FROM camp_turn)",
+                "SELECT (SELECT COUNT(*) FROM camp_message), (SELECT COUNT(*) FROM camp_message_delivery)",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         let invocation = fixture.public_send_invocation(
@@ -7442,13 +5072,13 @@ Use this exact public input @agent_2";
             rejected.result.payload["details"]["newRequestIdRequired"],
             true
         );
-        let after: (i64, i64, i64) = fixture
+        let after: (i64, i64) = fixture
             .database
             .connection()
             .query_row(
-                "SELECT (SELECT COUNT(*) FROM camp_message), (SELECT COUNT(*) FROM message_delivery), (SELECT SUM(a2a_run_slots_allocated) FROM camp_turn)",
+                "SELECT (SELECT COUNT(*) FROM camp_message), (SELECT COUNT(*) FROM camp_message_delivery)",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert_eq!(after, before);
@@ -8104,7 +5734,7 @@ Use this exact public input @agent_2";
     }
 
     #[cfg(feature = "slow-tests")]
-    fn dispatch_and_retry_reject_delivery_from_ended_source_membership() {
+    fn dispatch_rejects_delivery_from_ended_source_membership() {
         let mut fixture = Fixture::new();
         let busy_run_id = fixture.queue_direct_run("queue-source-fence-recipient", "agent_2");
         let invocation = fixture.public_send_invocation(
@@ -8122,7 +5752,7 @@ Use this exact public input @agent_2";
 
         let now = chrono::Utc::now().to_rfc3339();
         // Bypass the normal cutover cancellation to exercise the independent
-        // dispatch/retry fence against a later membership lifetime.
+        // dispatch fence against a later membership lifetime.
         fixture
             .database
             .connection()
@@ -8166,37 +5796,24 @@ Use this exact public input @agent_2";
             }] if status == "failed" && failure_code == "source_membership_changed"
         ));
 
-        let delivery_version: i64 = fixture
+        let delivery_state: (String, Option<String>) = fixture
             .database
             .connection()
             .query_row(
-                "SELECT version FROM message_delivery WHERE id = ?1",
+                "SELECT status, failure_code FROM message_delivery WHERE id = ?1",
                 [&delivery_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        let retried = MessageDeliveryService::default()
-            .retry(
-                &mut fixture.database,
-                &user_envelope(
-                    "retry-source-fenced-delivery",
-                    Some(&fixture.camp_id),
-                    RetryMessageDeliveryCommand {
-                        delivery_id,
-                        expected_version: delivery_version,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(retried.result.status, CommandResultStatus::Rejected);
+        assert_eq!(delivery_state.0, "failed");
         assert_eq!(
-            retried.result.code,
-            "message_delivery.source_membership_changed"
+            delivery_state.1.as_deref(),
+            Some("source_membership_changed")
         );
     }
 
     #[cfg(feature = "slow-tests")]
-    fn a_terminal_delivery_cannot_be_retried_after_the_recipient_leaves_and_rejoins() {
+    fn terminal_delivery_stays_terminal_after_the_recipient_leaves_and_rejoins() {
         let mut fixture = Fixture::new();
         let invocation = fixture.public_send_invocation(
             "delivery-before-membership-cutover",
@@ -8274,12 +5891,12 @@ Use this exact public input @agent_2";
             .unwrap();
         assert_eq!(readded.result.status, CommandResultStatus::Applied);
 
-        let delivery_state: (String, Option<String>, i64, Option<i64>, i64) = fixture
+        let delivery_state: (String, Option<String>, Option<i64>, i64) = fixture
             .database
             .connection()
             .query_row(
                 r#"
-                SELECT delivery.status, delivery.failure_code, delivery.version,
+                SELECT delivery.status, delivery.failure_code,
                        delivery.recipient_membership_version_at_admission,
                        member.version
                 FROM message_delivery AS delivery
@@ -8289,38 +5906,12 @@ Use this exact public input @agent_2";
                 WHERE delivery.id = ?1
                 "#,
                 [&delivery_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
         assert_eq!(delivery_state.0, "failed");
         assert_eq!(delivery_state.1.as_deref(), Some("target_agent_run_failed"));
-        assert_ne!(delivery_state.3, Some(delivery_state.4));
-        let retried = MessageDeliveryService::default()
-            .retry(
-                &mut fixture.database,
-                &user_envelope(
-                    "retry-delivery-after-rejoin",
-                    Some(&fixture.camp_id),
-                    RetryMessageDeliveryCommand {
-                        delivery_id,
-                        expected_version: delivery_state.2,
-                    },
-                ),
-            )
-            .unwrap();
-        assert_eq!(retried.result.status, CommandResultStatus::Rejected);
-        assert_eq!(
-            retried.result.code,
-            "message_delivery.recipient_membership_changed"
-        );
+        assert_ne!(delivery_state.2, Some(delivery_state.3));
     }
 
     #[cfg(feature = "slow-tests")]
@@ -9411,7 +7002,12 @@ Use this exact public input @agent_2";
                 },
             )
             .unwrap();
-        assert_eq!(directed.result.status, CommandResultStatus::Applied);
+        assert_eq!(
+            directed.result.status,
+            CommandResultStatus::Applied,
+            "unexpected memory result: {:?}",
+            directed.result
+        );
         let directed_memory = MemoryService::default()
             .get(
                 &fixture.database,
@@ -10378,14 +7974,6 @@ Use this exact public input @agent_2";
         );
     }
 
-    // Historical v0.34 acceptance selectors remain executable after the v0.45
-    // clean break. Their current assertion is that the retired private protocol
-    // cannot re-enter the Runtime-visible tool catalog.
-    #[test]
-    fn depth_and_execution_budget_exhaustion_reject_without_partial_effects_and_replay() {
-        assert!(!TEAM_TOOL_NAMES.contains(&"team.call_member"));
-    }
-
     #[cfg(feature = "slow-tests")]
     fn recipient_completion_without_another_call_never_contacts_the_source() {
         assert!(!TEAM_TOOL_NAMES.contains(&"team.call_member"));
@@ -10397,7 +7985,7 @@ Use this exact public input @agent_2";
     }
 
     #[cfg(feature = "slow-tests")]
-    fn controlled_resume_retains_binding_across_session_metadata_transition() {
+    fn binding_transitions_preserve_public_accepted_boundary() {
         let mut fixture = Fixture::new();
         let conversation_id: String = fixture
             .database
@@ -10412,7 +8000,12 @@ Use this exact public input @agent_2";
             .database
             .connection()
             .execute(
-                "UPDATE conversation SET native_session_compatibility_key = NULL WHERE id = ?1",
+                r#"
+                UPDATE conversation
+                SET native_session_compatibility_key = NULL,
+                    last_accepted_public_boundary_sequence = 12
+                WHERE id = ?1
+                "#,
                 [&conversation_id],
             )
             .unwrap();
@@ -10431,46 +8024,41 @@ Use this exact public input @agent_2";
             fixture.credential.native_binding_id
         );
         assert_eq!(resumed.native_session_id.as_deref(), Some("native-source"));
+
+        let replaced = TeamToolService::default()
+            .prepare_binding_credential(
+                &mut fixture.database,
+                &fixture.source_run_id,
+                fixture.source_epoch,
+                true,
+            )
+            .unwrap();
+        assert!(replaced.binding_replaced);
+        assert_eq!(replaced.native_session_id, None);
+        assert_eq!(
+            fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT last_accepted_public_boundary_sequence FROM conversation WHERE id = ?1",
+                    [&conversation_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            12
+        );
+    }
+
+    // Historical v0.34 acceptance selectors remain executable after the
+    // Delivery-first clean break. The retired private call protocol must not
+    // re-enter the Runtime-visible tool catalog under a new implementation.
+    #[test]
+    fn depth_and_execution_budget_exhaustion_reject_without_partial_effects_and_replay() {
+        assert!(!TEAM_TOOL_NAMES.contains(&"team.call_member"));
     }
 
     #[cfg(feature = "slow-tests")]
     mod slow_tests {
-        #[test]
-        fn public_send_schema_keeps_inline_fallback_out_of_agent_body_help() {
-            super::public_send_schema_keeps_inline_fallback_out_of_agent_body_help();
-        }
-        #[test]
-        fn gather_acceptance_persists_unified_deliveries_and_split_budget() {
-            super::gather_acceptance_persists_unified_deliveries_and_split_budget();
-        }
-        #[test]
-        fn gather_captures_public_return_and_materializes_one_completion() {
-            super::gather_captures_public_return_and_materializes_one_completion();
-        }
-        #[test]
-        fn gather_freezes_bounded_fallback_on_the_original_initiator_route() {
-            super::gather_freezes_bounded_fallback_on_the_original_initiator_route();
-        }
-        #[test]
-        fn concurrent_last_member_terminals_create_one_completion_delivery() {
-            super::concurrent_last_member_terminals_create_one_completion_delivery();
-        }
-        #[test]
-        fn camp_turn_stop_racing_last_gather_member_cancels_completion() {
-            super::camp_turn_stop_racing_last_gather_member_cancels_completion();
-        }
-        #[test]
-        fn gather_is_cancelled_when_original_initiator_leaves() {
-            super::gather_is_cancelled_when_original_initiator_leaves();
-        }
-        #[test]
-        fn multiple_gather_completions_share_original_lead_fifo() {
-            super::multiple_gather_completions_share_original_lead_fifo();
-        }
-        #[test]
-        fn gather_forward_retry_reuses_item_and_ready_wins() {
-            super::gather_forward_retry_reuses_item_and_ready_wins();
-        }
         #[test]
         fn public_send_resolves_line_leading_display_name_cluster_before_delivery() {
             super::public_send_resolves_line_leading_display_name_cluster_before_delivery();
@@ -10564,8 +8152,8 @@ Use this exact public input @agent_2";
             super::every_agent_business_tool_binding_is_fenced_after_leave_and_readd();
         }
         #[test]
-        fn a_terminal_delivery_cannot_be_retried_after_the_recipient_leaves_and_rejoins() {
-            super::a_terminal_delivery_cannot_be_retried_after_the_recipient_leaves_and_rejoins();
+        fn terminal_delivery_stays_terminal_after_the_recipient_leaves_and_rejoins() {
+            super::terminal_delivery_stays_terminal_after_the_recipient_leaves_and_rejoins();
         }
         #[test]
         fn an_existing_run_can_address_a_member_added_after_its_context_was_frozen() {
@@ -10584,8 +8172,8 @@ Use this exact public input @agent_2";
             super::running_outbound_delivery_target_is_reconciled_when_source_membership_ends();
         }
         #[test]
-        fn dispatch_and_retry_reject_delivery_from_ended_source_membership() {
-            super::dispatch_and_retry_reject_delivery_from_ended_source_membership();
+        fn dispatch_rejects_delivery_from_ended_source_membership() {
+            super::dispatch_rejects_delivery_from_ended_source_membership();
         }
         #[test]
         fn public_send_rejects_a_left_recipient_and_accepts_a_new_membership() {
@@ -10636,8 +8224,8 @@ Use this exact public input @agent_2";
             super::reverse_member_call_is_an_independent_forward_edge();
         }
         #[test]
-        fn controlled_resume_retains_binding_across_session_metadata_transition() {
-            super::controlled_resume_retains_binding_across_session_metadata_transition();
+        fn binding_transitions_preserve_public_accepted_boundary() {
+            super::binding_transitions_preserve_public_accepted_boundary();
         }
     }
 }

@@ -794,6 +794,9 @@ impl Core {
                         )?
                     }
                 };
+                if super::command_result_has_delivery_work(&execution.result.payload) {
+                    self.delivery_batch_scheduler_notify.notify_one();
+                }
                 emit_navigation_invalidated(&self.output, &request.method, None);
                 Ok(serde_json::to_value(execution.result)?)
             }

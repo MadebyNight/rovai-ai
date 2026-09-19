@@ -69,7 +69,6 @@ pub(super) fn reconcile(
         "camps.delete" => camp!(DeleteCampCommand),
         "camps.discardPending" => camp!(DiscardPendingCampCommand),
         "camps.members.fast.set" => camp!(rovai_core::camp_fast::SetCampMemberFastCommand),
-        "agentRuns.resolveRecoveryBlocker" => camp!(ResolveAcceptedInputRecoveryBlockerCommand),
         "members.remove" => user!(RemoveMemberCommand),
         "members.reorder" => user!(ReorderAgentProfilesCommand),
         "notifications.preference.update" => user!(UpdateNotificationPreferenceCommand),
@@ -179,8 +178,7 @@ pub(super) fn reconcile(
         }
 
         "camp.messages.send" => {
-            let mut params: SendCampMessageParams = serde_json::from_value(query.params)?;
-            params.draft_client = client.clone();
+            let params: SendCampMessageParams = serde_json::from_value(query.params)?;
             let mut value = receipt(database, params.envelope())?;
             if value["state"] == "recorded" {
                 value["result"] = json!({"commandResult":value["result"].take(), "replayed":true, "preflight":null, "pendingExecution":null});
@@ -192,7 +190,6 @@ pub(super) fn reconcile(
             receipt(database, params.envelope())
         }
         "agentRuns.cancel" => camp!(CancelAgentRunCommand),
-        "campTurns.cancel" => camp!(CancelCampTurnCommand),
         "camps.changeDefaultLead" => camp!(ChangeDefaultLeadCommand),
         "camps.members.add" => camp!(AddCampMemberCommand),
         "camps.members.remove" => camp!(RemoveCampMemberCommand),
@@ -201,20 +198,6 @@ pub(super) fn reconcile(
         "members.avatar.set" => user!(SetAgentProfileAvatarCommand),
         "members.runtime.set" => user!(SetMemberRuntimeConfigurationCommand),
         "members.runtime.clear" => user!(ClearMemberRuntimeConfigurationCommand),
-        "camp.pendingInputs.edit" => {
-            let mut params: UserCommandParams<
-                rovai_core::pending_camp_input::EditPendingCampInputCommand,
-            > = serde_json::from_value(query.params)?;
-            params.command.draft_client = client.clone();
-            receipt(
-                database,
-                user_camp_command_envelope(
-                    params.command_id,
-                    params.command.camp_id.clone(),
-                    params.command,
-                ),
-            )
-        }
         "messageQuotes.mutateDraft" => {
             let mut params: UserCommandParams<rovai_core::message_quote::MutateQuoteDraftCommand> =
                 serde_json::from_value(query.params)?;

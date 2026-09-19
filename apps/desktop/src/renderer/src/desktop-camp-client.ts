@@ -27,6 +27,10 @@ export const desktopCampClient: CampClient = {
   get missionAttachments() { return window.rovai.missionAttachments },
   get composerAttachments() { return window.rovai.composerAttachments },
   attachmentLocation: async locator => {
+    if (locator.owner === 'composer') {
+      const path = await window.rovai.composerAttachments.location?.(locator)
+      return path ? { path, location: 'local' } : null
+    }
     const path = await window.rovai.request<string | null>('camp.attachments.location', locator)
     return path ? { path, location: 'local' } : null
   },

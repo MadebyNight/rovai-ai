@@ -266,6 +266,7 @@ mod tests {
                 Uuid::new_v4()
             ));
         let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        super::super::downgrade_current_schema_to_v161_source_for_test(database.connection());
         super::super::mission_context::downgrade_for_test(database.connection());
         downgrade_for_test(database.connection());
         database.connection().execute_batch("CREATE TEMP TRIGGER reject_attachment_path_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=156 BEGIN SELECT RAISE(ABORT,'attachment path receipt failure'); END;").unwrap();

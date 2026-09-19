@@ -1465,15 +1465,15 @@ mod tests {
                     "kept-classifier-time"
                 );
             }
-            let draft: (String, i64) = migrated
-                .connection()
-                .query_row(
-                    "SELECT body, revision FROM camp_composer_draft WHERE camp_id = 'camp-join'",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .unwrap();
-            assert_eq!(draft, ("kept draft".to_string(), 7), "{source}");
+            assert_eq!(
+                migrated
+                    .connection()
+                    .query_row("SELECT COUNT(*) FROM camp_composer_draft", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{source}: v1.60 must clean-break legacy Camp drafts"
+            );
             if source == "channel_v125" {
                 let credential: (String, i64) = migrated.connection().query_row(
                 "SELECT payload_json, revision FROM channel_credentials WHERE credential_ref = 'fixture-ref'",
@@ -1489,19 +1489,15 @@ mod tests {
             ).unwrap();
                 assert_eq!(session, (r#"{"fixture":"kept session"}"#.to_string(), 5));
             }
-            if source.starts_with("main_") {
-                let pending: (String, i64) = migrated.connection().query_row(
-                "SELECT structured_content_json, revision FROM pending_camp_input WHERE id = 'pending-join'",
-                [], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).unwrap();
-                assert_eq!(
-                    pending,
-                    (
-                        r#"[{"kind":"text","text":"kept queued input"}]"#.to_string(),
-                        3
-                    )
-                );
-            }
+            assert_eq!(
+                migrated
+                    .connection()
+                    .query_row("SELECT COUNT(*) FROM pending_camp_input", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{source}: v1.60 must clean-break legacy unpublished Pending input"
+            );
             if source.starts_with("main_fast") {
                 let retained: bool = migrated.connection().query_row(
                 "SELECT fast_override = 1 AND f.runtime_binding_revision = a.runtime_binding_revision

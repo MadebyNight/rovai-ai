@@ -19,8 +19,6 @@ use std::{
 use uuid::Uuid;
 
 const MEMORY_BYTES: usize = 64 * 1024;
-// JSON escaping can expand every byte sixfold; remain below the existing 64 MiB Blob limit.
-const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OPEN_BLOCKS: usize = 128;
 
 #[derive(Default)]
@@ -45,13 +43,10 @@ struct Body {
     memory: String,
     spool: Option<(File, PathBuf)>,
     bytes: usize,
-    truncated: bool,
 }
 
 impl Body {
     fn append(&mut self, root: &std::path::Path, text: &str) -> Result<()> {
-        let (text, truncated) = bounded_text(text, MAX_BODY_BYTES.saturating_sub(self.bytes));
-        self.truncated |= truncated;
         if self.spool.is_none() && self.bytes + text.len() > MEMORY_BYTES {
             let directory = root.join("managed-blobs/tmp");
             std::fs::create_dir_all(&directory)?;
@@ -78,7 +73,6 @@ impl Body {
             if let Err(error) = file.write_all(text.as_bytes()) {
                 // Do not let a partially written UTF-8 frame corrupt all previously accepted text.
                 file.set_len(self.bytes as u64)?;
-                self.truncated = true;
                 return Err(error.into());
             }
         } else {
@@ -92,9 +86,7 @@ impl Body {
             let mut reader = file.try_clone()?;
             reader.seek(SeekFrom::Start(0))?;
             let mut text = String::with_capacity(self.bytes);
-            reader
-                .take(MAX_BODY_BYTES as u64 + 1)
-                .read_to_string(&mut text)?;
+            reader.read_to_string(&mut text)?;
             Ok(text)
         } else {
             Ok(self.memory.clone())
@@ -102,16 +94,6 @@ impl Body {
     }
 }
 
-fn bounded_text(text: &str, maximum: usize) -> (&str, bool) {
-    if text.len() <= maximum {
-        return (text, false);
-    }
-    let mut end = maximum;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (&text[..end], true)
-}
 impl Drop for Body {
     fn drop(&mut self) {
         if let Some((file, path)) = self.spool.take() {
@@ -169,7 +151,7 @@ impl TextBlock {
     fn payload(&self, text: String, status: &str) -> Value {
         json!({"blockId":self.id,"itemId":self.id,"nativeItemId":self.native_id,
             "text":text,"status":status,"textLength":self.utf16_len,"blockStartedAt":self.started_at,
-            "contentLimitExceeded":self.body.truncated})
+            "contentLimitExceeded":false})
     }
     fn event(&self, payload: Value, phase: &str) -> AgentRunExecutionEvidence {
         AgentRunExecutionEvidence {
@@ -427,9 +409,7 @@ fn finish(
         Some(text) => text.to_owned(),
         None => block.body.text()?,
     };
-    let (text, truncated) = bounded_text(&text, MAX_BODY_BYTES);
-    let incomplete = truncated || (authoritative.is_none() && block.body.truncated);
-    let status = if incomplete { "interrupted" } else { status };
+    let incomplete = false;
     let mut payload = block.payload(text.to_owned(), status);
     payload["contentLimitExceeded"] = json!(incomplete);
     payload["textLength"] = json!(text.encode_utf16().count());
@@ -894,22 +874,5 @@ mod slow_tests {
             failed.result.code
         );
         assert_eq!(database.connection().total_changes(), writes);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn text_limit_preserves_a_complete_utf8_prefix() {
-        for (input, maximum, expected, truncated) in [
-            ("正文🙂", 10, "正文🙂", false),
-            ("正文🙂", 8, "正文", true),
-            ("正文🙂", 2, "", true),
-            ("", 0, "", false),
-        ] {
-            assert_eq!(bounded_text(input, maximum), (expected, truncated));
-        }
     }
 }

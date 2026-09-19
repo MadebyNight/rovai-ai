@@ -17,7 +17,7 @@ inventory 与 system-required policy 见
 [Skill Library 与投影不变量](foundational-invariants.md#skills-library-projection)。
 bundled bootstrap 与执行完整性时机见
 [Skill Library 与投影不变量](foundational-invariants.md#skills-library-projection)。用户结构化选择与
-`CURRENT_INPUT.skills` 的交叉边界见
+public `RUN_INPUT.messages[].skills`（Single Chat 仍为 `CURRENT_INPUT.skills`）的交叉边界见
 [ContextManifest 与 Run Facts 不变量](foundational-invariants.md#context-manifest-run-facts)和
 [Structured Current Input Skill Links](structured-current-input-skill-links.md)。
 Windows copy backend 的 crash recovery 与执行根准入见
@@ -216,8 +216,8 @@ lifetime load proof。
 已存在 ContextManifest 的 active Run 恢复时复用其已持久化 SkillExposureSnapshot，不把 Snapshot
 重新解释为当下 filesystem health，也不因此扫描其他 roots。
 
-为 `CURRENT_INPUT.skills` 解析时，Exposure 仍只是 start-time 物理可见性证据。Core 必须额外读取该 Run
-发送时 `SkillSelectionSnapshot` 与 Manifest materialization 时的 Library desired-state view；否则发送后
+为 public `RUN_INPUT.messages[].skills` 解析时，Exposure 仍只是 start-time 物理可见性证据。Core 必须额外读取该 Run
+claim 时冻结的整批 `SkillSelectionSnapshot` 与 Manifest materialization 时的 Library desired-state view；否则发送后
 启用会回溯获得路径，或 active-Run protection 保留的旧 link 会绕过后来 disable/unassign/delete。
 Resolver 只接受 `ready`、同 ID/同名且与冻结 Runtime Group 相容的候选，并把 `entryPath` 解释为目录，
 模型文件为其下 `SKILL.md`。这条只读解析不缩窄本节的全量 fail-closed preflight。

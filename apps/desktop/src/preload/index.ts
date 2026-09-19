@@ -389,28 +389,21 @@ const api: RovaiApi = {
         bytes
       )
     },
-    async preparePending(input, file) {
-      const sourcePath = webUtils.getPathForFile(file)
-      if (sourcePath) {
-        return ipcRenderer.invoke(
-          'rovai:pending-attachment-prepare-path',
-          input,
-          sourcePath,
-          file.name,
-          file.type || null
-        )
-      }
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      return ipcRenderer.invoke(
-        'rovai:pending-attachment-prepare-bytes',
-        input,
-        file.name,
-        file.type || null,
-        bytes
-      )
-    },
     preview(locator) {
       return ipcRenderer.invoke('rovai:composer-attachment-preview', locator)
+    },
+    restore(campId, attachments) {
+      return ipcRenderer.invoke('rovai:composer-attachment-restore', campId, attachments)
+    },
+    discard(campId, attachmentRefIds) {
+      return ipcRenderer.invoke(
+        'rovai:composer-attachment-discard',
+        campId,
+        attachmentRefIds
+      )
+    },
+    location(locator) {
+      return ipcRenderer.invoke('rovai:composer-attachment-location', locator)
     }
   },
   missionAttachments: {

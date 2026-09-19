@@ -168,34 +168,27 @@ fn require_direct_user_trigger(
         .connection()
         .query_row(
             r#"
-            SELECT agent_run.invocation_kind, camp_message.author_type, camp_message.camp_id
+            SELECT EXISTS(
+                SELECT 1
+                FROM agent_run_input
+                JOIN camp_message ON camp_message.id = agent_run_input.message_id
+                WHERE agent_run_input.agent_run_id = agent_run.id
+                  AND camp_message.author_type = 'user'
+                  AND camp_message.camp_id = ?3
+            )
             FROM agent_run
-            LEFT JOIN camp_message
-              ON camp_message.id = agent_run.trigger_camp_message_id
             WHERE agent_run.id = ?1
               AND agent_run.execution_epoch = ?2
             "#,
             params![
                 authenticated_run.agent_run_id,
-                authenticated_run.execution_epoch
+                authenticated_run.execution_epoch,
+                authenticated_run.camp_id,
             ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            },
+            |row| row.get::<_, bool>(0),
         )
         .optional()?;
-    if trigger
-        .as_ref()
-        .is_some_and(|(invocation_kind, author_type, camp_id)| {
-            invocation_kind == "direct"
-                && author_type.as_deref() == Some("user")
-                && camp_id.as_deref() == Some(authenticated_run.camp_id.as_str())
-        })
-    {
+    if trigger == Some(true) {
         return Ok(());
     }
     Err(MemberCreateError {

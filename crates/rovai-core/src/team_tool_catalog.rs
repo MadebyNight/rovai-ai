@@ -16,7 +16,6 @@ use crate::{
         HistorySearchInput,
     },
     camp_message_send_teaching::CAMP_MESSAGE_SEND_SUMMARY,
-    gather::GATHER_TOOL_NAME,
     member_studio::{MEMBER_CREATE_TOOL_NAME, MemberCreateInput, member_create_input_schema},
     memory_retrieval::{
         MEMORY_READ_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME, MEMORY_VIEW_TOOL_NAME, MemoryReadInput,
@@ -26,7 +25,7 @@ use crate::{
     message_delivery::CAMP_MESSAGE_SEND_TOOL_NAME,
     single_chat::{SINGLE_CHAT_HISTORY_TOOL_NAME, SingleChatHistoryInput, SingleChatService},
     team_tool::{
-        CampMessageSendInput, GatherInput, TEAM_CREATE_TASK_TOOL_NAME, TEAM_GET_TASK_TOOL_NAME,
+        CampMessageSendInput, TEAM_CREATE_TASK_TOOL_NAME, TEAM_GET_TASK_TOOL_NAME,
         TEAM_LIST_TASKS_TOOL_NAME, TEAM_UPDATE_TASK_TOOL_NAME, TeamCreateTaskInput,
         TeamGetTaskInput, TeamListTasksInput, TeamToolService, TeamUpdateTaskInput,
     },
@@ -43,7 +42,6 @@ pub fn validate_builtin_tool_input(canonical_name: &str, input: &Value) -> Resul
         CAMP_MESSAGE_SEND_TOOL_NAME => {
             serde_json::from_value::<CampMessageSendInput>(input.clone()).map(|_| ())
         }
-        GATHER_TOOL_NAME => serde_json::from_value::<GatherInput>(input.clone()).map(|_| ()),
         MEMBER_CREATE_TOOL_NAME => {
             serde_json::from_value::<MemberCreateInput>(input.clone()).map(|_| ())
         }
@@ -146,7 +144,7 @@ fn camp_search_success_schema(include_camp_title: bool) -> Value {
         "sequence": {"type": "integer", "minimum": 1},
         "authorType": {"type": "string"},
         "authorId": {"type": "string"},
-        "replyToMessageId": {"type": ["string", "null"]},
+        "anchorMessageId": {"type": ["string", "null"]},
         "createdAt": {"type": "string", "format": "date-time"},
         "snippet": {"type": "string", "maxLength": 200},
         "quotes": crate::message_quote::model_quotes_schema("camp_messages")
@@ -157,7 +155,7 @@ fn camp_search_success_schema(include_camp_title: bool) -> Value {
         "sequence",
         "authorType",
         "authorId",
-        "replyToMessageId",
+        "anchorMessageId",
         "createdAt",
         "snippet",
     ];
@@ -190,23 +188,18 @@ fn collection_message_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "messageId", "sequence", "authorType", "authorId", "replyToMessageId",
-            "createdAt", "body", "bodyOffset", "bodyLength", "bodyTruncated",
-            "nextBodyOffset", "attachmentCount"
+            "messageId", "sequence", "authorType", "authorId", "anchorMessageId",
+            "createdAt", "body", "attachmentCount"
         ],
         "properties": {
             "messageId": {"type": "string"},
             "sequence": {"type": "integer", "minimum": 1},
             "authorType": {"type": "string"},
             "authorId": {"type": "string"},
-            "replyToMessageId": {"type": ["string", "null"]},
+            "anchorMessageId": {"type": ["string", "null"]},
             "createdAt": {"type": "string", "format": "date-time"},
-            "body": {"type": "string", "maxLength": 500},
+            "body": {"type": "string"},
             "quotes": crate::message_quote::model_quotes_schema("camp_messages"),
-            "bodyOffset": {"const": 0},
-            "bodyLength": {"type": "integer", "minimum": 0},
-            "bodyTruncated": {"type": "boolean"},
-            "nextBodyOffset": {"type": ["integer", "null"], "minimum": 1},
             "attachmentCount": {"type": "integer", "minimum": 0}
         }
     })
@@ -236,9 +229,8 @@ fn item_message_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "messageId", "sequence", "authorType", "authorId", "replyToMessageId",
-            "createdAt", "body", "bodyOffset", "bodyLength", "bodyTruncated",
-            "nextBodyOffset", "attachmentCount", "attachments", "attachmentsTruncated",
+            "messageId", "sequence", "authorType", "authorId", "anchorMessageId",
+            "createdAt", "body", "attachmentCount", "attachments", "attachmentsTruncated",
             "attachmentOmittedCount", "addressing"
         ],
         "properties": {
@@ -246,14 +238,10 @@ fn item_message_schema() -> Value {
             "sequence": {"type": "integer", "minimum": 1},
             "authorType": {"type": "string"},
             "authorId": {"type": "string"},
-            "replyToMessageId": {"type": ["string", "null"]},
+            "anchorMessageId": {"type": ["string", "null"]},
             "createdAt": {"type": "string", "format": "date-time"},
-            "body": {"type": "string", "maxLength": 4000},
+            "body": {"type": "string"},
             "quotes": crate::message_quote::model_quotes_schema("camp_messages"),
-            "bodyOffset": {"type": "integer", "minimum": 0},
-            "bodyLength": {"type": "integer", "minimum": 0},
-            "bodyTruncated": {"type": "boolean"},
-            "nextBodyOffset": {"type": ["integer", "null"], "minimum": 1},
             "attachmentCount": {"type": "integer", "minimum": 0},
             "attachments": {
                 "type": "array", "maxItems": 10,
@@ -288,24 +276,6 @@ fn camp_read_item_schema() -> Value {
                 "type": "array", "minItems": 1, "maxItems": 1,
                 "items": item_message_schema()
             }
-        }
-    })
-}
-
-fn camp_read_around_schema() -> Value {
-    json!({
-        "additionalProperties": false,
-        "required": [
-            "campId", "mode",
-            "anchorMessageId", "items", "hasMoreBefore", "hasMoreAfter"
-        ],
-        "properties": {
-            "campId": {"type": "string"},
-            "mode": {"const": "around"},
-            "anchorMessageId": {"type": "string"},
-            "items": {"type": "array", "minItems": 1, "maxItems": 21, "items": collection_message_schema()},
-            "hasMoreBefore": {"type": "boolean"},
-            "hasMoreAfter": {"type": "boolean"}
         }
     })
 }
@@ -354,7 +324,6 @@ fn camp_read_success_schema() -> Value {
         "type": "object",
         "oneOf": [
             camp_read_item_schema(),
-            camp_read_around_schema(),
             camp_read_thread_schema(),
             camp_read_timeline_schema()
         ]
@@ -890,7 +859,7 @@ fn mission_mutation_schema() -> Value {
 
 pub fn builtin_tool_definitions() -> Vec<Value> {
     vec![
-        json!({"name":"mission.get","title":"Read the current Mission","description":"Read the current Camp's Mission, including its current attachment source paths.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"required":["missionId","title","description","status","sourceMessageId","attachments"],"properties":{"missionId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"]},"sourceMessageId":{"type":["string","null"]},"attachments":{"type":"array","items":{"type":"string"}}}}}),
+        json!({"name":"mission.get","title":"Read the current Mission","description":"Read the current Camp's Mission, including its current attachment source paths. This read grants no Mission write authority.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"required":["missionId","title","description","status","sourceMessageId","attachments"],"properties":{"missionId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"]},"sourceMessageId":{"type":["string","null"]},"attachments":{"type":"array","items":{"type":"string"}}}}}),
         json!({"name":"mission.update","title":"Update the current Mission","description":"Update the current Mission's title or description without starting work.","inputSchema":{"type":"object","additionalProperties":false,"anyOf":[{"required":["title"]},{"required":["description"]}],"properties":{"title":{"type":"string","minLength":1,"maxLength":200},"description":{"type":"string","maxLength":12000}}},"outputSchema":mission_mutation_schema()}),
         json!({"name":"mission.status","title":"Set the current Mission status","description":"Set the current Mission's status without starting or stopping work.","inputSchema":{"type":"object","additionalProperties":false,"required":["status"],"properties":{"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"],"description":"One of: needs_you, not_started, in_progress, completed."},"sourceMessageId":{"type":"string","minLength":1,"description":"Required for needs_you or completed; reference an existing public message in this Camp."}}},"outputSchema":mission_mutation_schema()}),
         json!({
@@ -994,63 +963,41 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                    "status", "messageId", "visibility", "campTurnId",
+                    "status", "messageId", "visibility",
                     "agentAddressingMode",
                     "effectiveRecipients", "recipientPresentation", "recipientSetDigest",
-                    "deliveryIds",
-                    "allocatedAgentRunResponsibilities"
+                    "deliveryIds", "attachments"
                 ],
                 "properties": {
                     "status": {"const": "accepted"},
                     "messageId": {"type": "string"},
                     "visibility": {"const": "camp_public"},
-                    "campTurnId": {"type": "string"},
+                    "anchorMessageId": {"type": ["string", "null"]},
                     "agentAddressingMode": {
                         "type": "string",
                         "enum": ["automatic", "public_only"]
                     },
                     "effectiveRecipients": {
-                        "type": "array", "maxItems": 16, "uniqueItems": true,
+                        "type": "array", "uniqueItems": true,
                         "items": {"type": "string"}
                     },
                     "recipientPresentation": {"type": "object"},
                     "recipientSetDigest": {"type": "string"},
                     "deliveryIds": {
-                        "type": "array", "maxItems": 16, "uniqueItems": true,
+                        "type": "array", "uniqueItems": true,
                         "items": {"type": "string"}
                     },
-                    "allocatedAgentRunResponsibilities": {"type": "integer", "minimum": 1}
-                }
-            }
-        }),
-        json!({
-            "name": GATHER_TOOL_NAME,
-            "title": "Gather parallel member responses",
-            "description": "Current Default Lead only. Publish one shared topic to canonical members, then end the current Run. Members reply normally and remain publicly visible; Rovai waits for every member Run to finish and later delivers exactly one FIFO continuation with the complete frozen result set. Do not poll, repeat the Gather, or keep the Lead Run occupied while waiting.",
-            "inputSchema": TeamToolService::gather_input_schema(),
-            "outputSchema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                    "status", "gatherId", "requestMessageId", "campTurnId",
-                    "effectiveRecipients", "dispatchDeliveryIds", "completion",
-                    "allocatedAgentRunResponsibilities"
-                ],
-                "properties": {
-                    "status": {"const": "accepted"},
-                    "gatherId": {"type": "string"},
-                    "requestMessageId": {"type": "string"},
-                    "campTurnId": {"type": "string"},
-                    "effectiveRecipients": {
-                        "type": "array", "minItems": 1, "maxItems": 16,
-                        "uniqueItems": true, "items": {"type": "string"}
-                    },
-                    "dispatchDeliveryIds": {
-                        "type": "array", "minItems": 1, "maxItems": 16,
-                        "uniqueItems": true, "items": {"type": "string"}
-                    },
-                    "completion": {"const": "deferred"},
-                    "allocatedAgentRunResponsibilities": {"type": "integer", "minimum": 2}
+                    "attachments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["attachmentId", "path"],
+                            "properties": {
+                                "attachmentId": {"type": "string"},
+                                "path": {"type": "string"}
+                            }
+                        }
+                    }
                 }
             }
         }),
@@ -1092,28 +1039,28 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
         json!({
             "name": CAMP_LIST_TOOL_NAME,
             "title": "Discover other Camps",
-            "description": "Return a bounded Top-K of other Camps frozen into this AgentRun and still authorized now. Search only frozen Camp names; omit query for recent Camps. This tool never searches messages and never paginates.",
+            "description": "Return a bounded Top-K of other public Camps frozen into this AgentRun. Target-Camp membership is not a read permission. Search only frozen Camp names; omit query for recent Camps. This tool never searches messages and never paginates.",
             "inputSchema": CampHistoryService::camp_list_input_schema(),
             "outputSchema": camp_list_success_schema()
         }),
         json!({
             "name": CAMP_SEARCH_TOOL_NAME,
             "title": "Search one public Camp timeline",
-            "description": "Search one public Camp timeline. Omit campId to search the current Camp. Pass campId to search one other Camp available to the current AgentRun. Search is discovery, not traversal: use a stable messageId with camp.read. Summaries and attachments are not searched.",
+            "description": "Search one public Camp timeline. Omit campId to search the current Camp, or pass any extant public Camp ID; target-Camp membership is not a read permission. Search is discovery, not traversal: use a stable messageId with camp.read. Summaries and attachments are not searched.",
             "inputSchema": CampHistoryService::camp_search_input_schema(),
             "outputSchema": camp_search_success_schema(false)
         }),
         json!({
             "name": HISTORY_SEARCH_TOOL_NAME,
-            "title": "Search authorized Camp history",
-            "description": "Discover messages across authorized historical Camps when the target Camp is unknown. Camp titles are metadata, not hits. Once a Camp is known, prefer camp.search and camp.read with stable IDs. Summaries and attachments are not searched.",
+            "title": "Search public Camp history",
+            "description": "Discover messages across public historical Camps when the target Camp is unknown. Target-Camp membership is not a read permission. Camp titles are metadata, not hits. Once a Camp is known, prefer camp.search and camp.read with stable IDs. Summaries and attachments are not searched.",
             "inputSchema": CampHistoryService::history_search_input_schema(),
             "outputSchema": camp_search_success_schema(true)
         }),
         json!({
             "name": CAMP_READ_TOOL_NAME,
             "title": "Read original Camp messages",
-            "description": "Read messages from exactly one Camp. With no mode, return the newest 20 visible messages from the current or explicitly selected Camp (mode=timeline, direction=before, limit=20). Use direction=after to begin with the oldest visible page. Use explicit item, around, or thread modes for message-anchored reads. Around is bounded and does not paginate; thread and timeline use exclusive integer sequence cursors. Reuse nextCursor with the same mode and direction. IDs and cursors locate content but never grant access.",
+            "description": "Read messages from exactly one public Camp. Target-Camp membership is not a read permission. With no message selector, return the newest visible messages from the current or explicitly selected Camp; use before as the exclusive sequence cursor and limit for paging. Use messageId for one exact message, or thread for a thread page ending before the optional cursor. Reuse nextCursor as before. IDs and cursors locate content but never bypass message visibility.",
             "inputSchema": CampHistoryService::camp_read_input_schema(),
             "outputSchema": camp_read_success_schema()
         }),
@@ -1353,20 +1300,30 @@ mod tests {
             }),
         )
         .unwrap();
-        validate_builtin_tool_input(
-            CAMP_READ_TOOL_NAME,
-            &json!({"mode": "item", "messageId": "message_123"}),
-        )
-        .unwrap();
+        validate_builtin_tool_input(CAMP_READ_TOOL_NAME, &json!({"messageId": "message_123"}))
+            .unwrap();
         validate_builtin_tool_input(
             CAMP_READ_TOOL_NAME,
             &json!({
                 "campId": "7b5db24c-4a43-4cab-9217-d982b08f7691",
-                "mode": "timeline",
-                "direction": "after"
+                "before": 42,
+                "limit": 20
             }),
         )
         .unwrap();
+        validate_builtin_tool_input(
+            CAMP_READ_TOOL_NAME,
+            &json!({"thread": "message_123", "limit": 20}),
+        )
+        .unwrap();
+        for legacy in [
+            json!({"mode": "timeline"}),
+            json!({"direction": "before"}),
+            json!({"cursor": 42}),
+            json!({"after": 5}),
+        ] {
+            assert!(validate_builtin_tool_input(CAMP_READ_TOOL_NAME, &legacy).is_err());
+        }
     }
 
     #[test]
@@ -1380,13 +1337,9 @@ mod tests {
                 "sequence": 1,
                 "authorType": "agent",
                 "authorId": "agent_1",
-                "replyToMessageId": null,
+                "anchorMessageId": null,
                 "createdAt": "2026-08-18T00:00:00Z",
                 "body": "evidence",
-                "bodyOffset": 0,
-                "bodyLength": 8,
-                "bodyTruncated": false,
-                "nextBodyOffset": null,
                 "attachmentCount": 1,
                 "attachments": [{
                     "attachmentId": "attachment_123",

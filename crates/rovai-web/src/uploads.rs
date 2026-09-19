@@ -268,8 +268,7 @@ pub async fn reconcile(
 fn project_upload(intent: &UploadIntent, value: serde_json::Value) -> serde_json::Value {
     use rovai_core::web_upload::UploadTarget;
     let operation = match intent.target {
-        UploadTarget::Camp => operations::Operation::DraftGet,
-        UploadTarget::CampPending { .. } => operations::Operation::PendingInputs,
+        UploadTarget::Camp => return value,
         UploadTarget::SingleChat { .. } | UploadTarget::SingleChatPending { .. } => {
             operations::Operation::SingleChatGet
         }
