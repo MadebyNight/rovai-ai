@@ -9,7 +9,7 @@ last_updated: 2026-09-19
 # Public Camp Message、Delivery 与 AgentRun
 
 本架构定义公开 Camp 的统一消息执行主链。字段合同见 [Camp Message Send v22](../contracts/camp-message-send-v22.md)、
-[Message Delivery v10](../contracts/message-delivery-v10.md)、[ContextManifest 26](../contracts/context-manifest-evidence-v26.md)
+[Message Delivery v10](../contracts/message-delivery-v10.md)、[ContextManifest 27](../contracts/context-manifest-evidence-v27.md)
 与 [Camp History v8](../contracts/camp-history-v8.md)。Single Chat 不使用本主链。
 
 ## 三类事实
@@ -42,6 +42,12 @@ Anchor 只表达默认回复展示关系，不能推导目标、caller return、
 用户显式回复使用自己选择的 anchor。Core 不再维护 forward/return、root、depth、ancestor cycle 或 A2A 预算；只有
 self-send 继续拒绝。显示名兼容解析若仍存在，只在发送事务内解析为 canonical Agent ID，后续队列不重新解析正文。
 
+自动上下文投影不会改变这条路由权威。`addressMode = default` 且只有一个冻结接收者时，Core 在新 public
+AgentRun 的 `RUN_INPUT` 与 `SHARED_CONVERSATION` 正文前派生该接收者的 Member Mention，并随 Manifest
+evidence 冻结显示名和精确 bytes；claim 事务把当时的显示名保存到对应 AgentRunInput，避免 claim 后改名造成
+两处投影漂移，并同时冻结该 RunInput 的 context version。用户保存正文、Structured Content、实时 Camp Read/Search、Quote、FTS、
+Channel 与 Renderer 均保持原样；显式目标不重复添加，public-only 不添加，非法默认目标状态 fail closed。
+
 ## Delivery-first 调度
 
 每个 `(CampId, AgentId)` 有一条按消息 sequence 排序的 waiting Delivery 队列。等待阶段不创建 queued Run，也不冻结
@@ -73,7 +79,7 @@ Single Chat 与维护职责，但不再扫描普通 batch 队列，也不能领�
 completion 的协调循环。
 
 必要 `RUN_INPUT` 优先于可选历史。队首单条也超过当前 Runtime profile 时，Core 创建明确的 preflight-failed Run，
-不向 Runtime 发送截断内容，并让队列随后继续。完整选择规则见 [Profile 7](../contracts/context-delivery-profile-v7.md)。
+不向 Runtime 发送截断内容，并让队列随后继续。完整选择规则见 [Profile 8](../contracts/context-delivery-profile-v8.md)。
 
 ## 可见性与撤回
 
@@ -105,4 +111,8 @@ ChannelDelivery；outbox 失败不重跑模型。Automation admission 创建 sta
 ## 历史切换
 
 Migration 163 把尚未进入冻结/accepted Runtime input 的旧公开等待责任转成新 waiting Delivery，并终态化旧的可变 Run
-占位。历史 Run、CampTurn、Gather、Manifest 与 evidence 原样只读；冻结或 outcome-unknown 输入绝不重新入队。
+占位。Migration 166/schema 116 扩展新 public Formatter/Manifest 27 与 Profile 8，并在 AgentRunInput 增加
+context version 与 nullable 的 claim-time 接收者显示名快照；既有 RunInput 回填 v26，因此升级时已经 claim、
+尚未 materialize 的 Run 也保持 Profile 7。消息表不回写，冻结 v26/Profile 7 Run exact replay。历史 Run、
+CampTurn、Gather、Manifest 与 evidence 原样只读；冻结或
+outcome-unknown 输入绝不重新入队。

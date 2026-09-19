@@ -522,8 +522,7 @@ pub fn render_plain_text_with_current_user(
             StructuredCampMessageSegment::MemberMention { agent_id } => {
                 let name = member_name(agent_id)
                     .ok_or_else(|| anyhow!("Member Mention identity does not exist"))?;
-                rendered.push('@');
-                rendered.push_str(&name);
+                rendered.push_str(&render_member_mention_plain_text(&name));
             }
             StructuredCampMessageSegment::AllMembersMention => rendered.push_str("@所有队员"),
             StructuredCampMessageSegment::CurrentUserMention { user_id } => {
@@ -572,6 +571,10 @@ pub fn render_plain_text_with_current_user(
         }
     }
     Ok(rendered)
+}
+
+pub(crate) fn render_member_mention_plain_text(display_name: &str) -> String {
+    format!("@{display_name}")
 }
 
 fn segment_projects_nonempty(segment: &StructuredCampMessageSegment) -> bool {

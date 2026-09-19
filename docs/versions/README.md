@@ -213,4 +213,4 @@ last_updated: 2026-09-19
 | v1.58 | `historical` | 上下文 Gate、分层真实回归、每日 Trace 分析与 Source Attachment 原路径投影 | [v1.58/README.md](v1.58/README.md) |
 | v1.59 | `historical` | 统一 Rust Host、共享 Web 服务与三平台 Server；实施中快照 | [v1.59/README.md](v1.59/README.md) |
 | v1.60 | `historical` | Camp 消息、Delivery 队列与多输入 AgentRun clean break；实现及自动化验证已完成 | [v1.60/README.md](v1.60/README.md) |
-| v1.61 | `current` | Mission 全局发现、内部 Agent ID、UI 展示编号、结构化附件与当前 Mission 写入边界 | [v1.61/README.md](v1.61/README.md) |
+| v1.61 | `current` | Mission 全局发现、内部 Agent ID、UI 展示编号、结构化附件、当前 Mission 写入边界与默认接收者提示 | [v1.61/README.md](v1.61/README.md) |

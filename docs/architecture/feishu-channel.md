@@ -11,7 +11,7 @@ last_updated: 2026-09-18
 字段、状态和恢复合同见 [Feishu Channel v16](../contracts/feishu-channel-v16.md)，当前异步入站/外发语义见
 [Channel Message Bridge v1](../contracts/channel-message-bridge-v1.md)，credential 与 Developer Session 持久化见
 [Channel Storage v3](../contracts/channel-storage-v3.md)，模型输入证据见
-[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)，取舍理由见
+[ContextManifest Evidence v27](../contracts/context-manifest-evidence-v27.md)，取舍理由见
 [v1.35 决策记录](../versions/v1.35/decisions.md)。
 
 ## 组件与权威

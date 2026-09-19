@@ -10,14 +10,16 @@ last_updated: 2026-09-19
 # v1.61 实施与验收
 
 范围见[版本概览](README.md)，模型输入边界见
-[Mission 发现确认说明 revision 2](model-context-change-mission-discovery.md)与
-[完成判断确认说明 revision 1](model-context-change-mission-completion.md)。
+[Mission 发现确认说明 revision 2](model-context-change-mission-discovery.md)、
+[完成判断确认说明 revision 1](model-context-change-mission-completion.md)与
+[默认队长接收提示 revision 1](model-context-change-default-lead-mention.md)。
 
 ## Gate 0：确认与当前权威
 
 - [x] 以当前 `main` 调查 Mission v4、Built-in v28、public/Single Chat Charter、Context 与数据库约束。
 - [x] 开发者阅读完整方案后确认 revision 1，并明确要求完成 PR 后合并到 `main`；随后确认 revision 2 的内部 ID 方案。
 - [x] 发布 Mission v5、Built-in v29、Single Chat v6 及版本决定，更新长期 Architecture 和文档路由。
+- [x] 开发者二次确认默认队长接收提示 revision 1，并授权实现、PR 与合并 `main`。
 
 ## Gate 1：Mission read side 与标识
 
@@ -34,6 +36,10 @@ last_updated: 2026-09-19
 - [x] Migration 165/schema 115 原子扩展 AgentRun policy-version 约束，普通 Camp version 1 不变。
 - [x] public 与 Single Chat Charter 使用确认后的最小入口文案，Session Charter revision 升至 9。
 - [x] 新 Run Facts/旧 Formatter 新生成 Mission 引用继续使用内部 `rvm_...`；历史冻结字节不改写。
+- [x] public Formatter/Manifest 27 与 Profile 8 只在 Agent 自动上下文派生 default-recipient Mention；
+  `camp_message`、Structured Content、Delivery、读取/搜索、Quote、Channel 与 Single Chat 不变。
+- [x] Migration 166/schema 116 冻结每个 AgentRunInput 的 context version 与 claim-time 接收者显示名；
+  迁移前已 claim 的输入保持 v26/Profile 7，v27 恢复复用 exact payload。
 
 ## Gate 3：CLI、Skill 与封闭协议
 
@@ -47,6 +53,8 @@ last_updated: 2026-09-19
 - [x] Rust 定向与全量测试覆盖 ID、列表/游标、附件、授权、Context、policy migration 和 CLI 契约。
 - [x] TypeScript、文档/Skill 治理、格式与 diff 检查通过。
 - [x] 分支保持一条功能提交并推送；PR #437 的远端 gate 通过，最终合并与 `origin/main` 祖先验证由本次交付收尾执行。
+- [x] 默认接收投影覆盖 default/explicit/public-only、附件-only、Unicode 空白、非法目标、改名冻结、
+  历史 v26 未物化 Run 与 v166 迁移；相关 Core、slow、TypeScript 与文档门禁通过。
 
 ## Gate 5：Mission 完成判断增量
 
@@ -63,6 +71,8 @@ Migration 165 的 exact v1.60/schema 114 来源、DDL 重建及 current admissio
 完成判断增量不新增平行 fixture，而是扩展既有 Session Charter 唯一 golden owner，加入 Mission 三条追加内容、
 普通 Camp 排除与 Single Chat 逐字不变断言；最小验证命令为
 `cargo test -p rovai-core --features slow-tests --lib context::slow_tests::session_charter_publishes_one_cli_only_builtin_contract -- --exact`。
+默认接收提示新增 owner 证明投影只作用于正确的 default-addressed 消息、claim-time 显示名与 context version
+不可漂移，以及 Migration 166 从 exact v1.61/schema 115 升级而不改写消息；纯 renderer 单测无法证明这些事务边界。
 删除测试为零。
 
 ## 实施收口
@@ -73,4 +83,4 @@ Migration 165 的 exact v1.60/schema 114 来源、DDL 重建及 current admissio
 - `pnpm typecheck`、`pnpm docs:test`、`pnpm docs:check`、diff-aware 文档治理与 Skill 检查通过。
 - 完整 Vitest 运行有 2 个负载敏感的 `evaluation-host` 超时，其余 2,151 项通过；该文件隔离复跑 4/4 通过，
   PR #437 的 TypeScript/Vitest gate 完整通过。
-- 产品契约指纹已同步 v1.61/schema 115/Built-in 29，并由独立测试及远端 gate 验证。
+- 产品契约指纹已同步 v1.61/schema 116/Built-in 29，并由独立测试验证；Built-in catalog 本次不变。

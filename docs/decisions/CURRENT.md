@@ -20,13 +20,14 @@ last_updated: 2026-09-19
   [V1.60-D02](../versions/v1.60/decisions.md#v1-60-d02)；单一事件唤醒 claim owner 与固定全局兜底理由：
   [V1.60-D06](../versions/v1.60/decisions.md#v1-60-d06)。Camp Read 直接请求合同与旧模式 clean break 理由：
   [V1.60-D07](../versions/v1.60/decisions.md#v1-60-d07)；首次目标路由与存量 waiting 自愈理由：
-  [V1.60-D11](../versions/v1.60/decisions.md#v1-60-d11)。
+  [V1.60-D11](../versions/v1.60/decisions.md#v1-60-d11)。默认路由在 Agent 自动上下文中显式呈现冻结接收者、
+  同时保持用户原文与路由权威分离的理由：[V1.61-D03](../versions/v1.61/decisions.md#v1-61-d03)。
 - 撤回与 Desktop-local Composer：[Camp Composer Draft v15](../contracts/camp-composer-draft-v15.md)、
   [Camp History v8](../contracts/camp-history-v8.md)；理由：[V1.60-D03](../versions/v1.60/decisions.md#v1-60-d03)、
   [V1.60-D08](../versions/v1.60/decisions.md#v1-60-d08)、
   [V1.60-D10](../versions/v1.60/decisions.md#v1-60-d10)。
-- 多输入 Context 与完整运输：[ContextManifest v26](../contracts/context-manifest-evidence-v26.md)、
-  [Profile 7](../contracts/context-delivery-profile-v7.md)、[Run Facts v5](../contracts/run-facts-v5.md)、
+- 多输入 Context 与完整运输：[ContextManifest v27](../contracts/context-manifest-evidence-v27.md)、
+  [Profile 8](../contracts/context-delivery-profile-v8.md)、[Run Facts v5](../contracts/run-facts-v5.md)、
   [Built-in Transport v29](../contracts/builtin-tool-transport-v29.md)；理由：
   [V1.60-D04](../versions/v1.60/decisions.md#v1-60-d04)。
 - Channel/Automation 复用普通消息：[Channel Message Bridge v1](../contracts/channel-message-bridge-v1.md)、
@@ -78,7 +79,7 @@ last_updated: 2026-09-19
 ## Channels 与 External Principals
 
 - 内部调度合同：[Channel Host Maintenance v5](../contracts/channel-host-maintenance-v5.md)；Core 领域表拥有 outstanding 真源，Main 使用事件快路径与仅在有工作时存在的十分钟恢复 watchdog；飞书快路径只跟随当前执行卡 Run，启动恢复不先扫描历史群，真实业务命令与 Outbox 恢复不变。按需调度选择理由见 [V1.37-D07](../versions/v1.37/decisions.md#v1-37-d07)。
-- 当前规范：[Channel Message Bridge v1](../contracts/channel-message-bridge-v1.md)、[Channel Storage v3](../contracts/channel-storage-v3.md)、[飞书渠道架构](../architecture/feishu-channel.md)、[Feishu Channel v16](../contracts/feishu-channel-v16.md)、[钉钉渠道架构](../architecture/dingtalk-channel.md)、[DingTalk Channel v13](../contracts/dingtalk-channel-v13.md)、[Camp Membership v2](../contracts/camp-membership-v2.md)、[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)和[渠道设置](../ui/components/channel-settings.md)。
+- 当前规范：[Channel Message Bridge v1](../contracts/channel-message-bridge-v1.md)、[Channel Storage v3](../contracts/channel-storage-v3.md)、[飞书渠道架构](../architecture/feishu-channel.md)、[Feishu Channel v16](../contracts/feishu-channel-v16.md)、[钉钉渠道架构](../architecture/dingtalk-channel.md)、[DingTalk Channel v13](../contracts/dingtalk-channel-v13.md)、[Camp Membership v2](../contracts/camp-membership-v2.md)、[ContextManifest Evidence v27](../contracts/context-manifest-evidence-v27.md)和[渠道设置](../ui/components/channel-settings.md)。
 - 飞书理由来源：[V1.35-D01（已由 D09 取代）](../versions/v1.35/decisions.md#v1-35-d01)、[V1.35-D02](../versions/v1.35/decisions.md#v1-35-d02)、[V1.35-D03（Topic root structural-parent 部分已由 V1.37-D06 取代）](../versions/v1.35/decisions.md#v1-35-d03)、[V1.35-D04（话题扩张部分已由 D15 取代）](../versions/v1.35/decisions.md#v1-35-d04)、[V1.35-D05](../versions/v1.35/decisions.md#v1-35-d05)、[V1.35-D06](../versions/v1.35/decisions.md#v1-35-d06)、[V1.35-D07](../versions/v1.35/decisions.md#v1-35-d07)、[V1.35-D08](../versions/v1.35/decisions.md#v1-35-d08)、[V1.35-D09（私聊投递部分已由 D12 取代）](../versions/v1.35/decisions.md#v1-35-d09)、[V1.35-D10](../versions/v1.35/decisions.md#v1-35-d10)、[V1.35-D11](../versions/v1.35/decisions.md#v1-35-d11)、[V1.35-D12](../versions/v1.35/decisions.md#v1-35-d12)、[V1.35-D13（终态展示与 view state 已由 D16 取代）](../versions/v1.35/decisions.md#v1-35-d13)、[V1.35-D14（命令展示与 callback 已由 D16 取代）](../versions/v1.35/decisions.md#v1-35-d14)、[V1.35-D15](../versions/v1.35/decisions.md#v1-35-d15)、[V1.35-D16（执行卡正文/分页已由 V1.37-D05 取代）](../versions/v1.35/decisions.md#v1-35-d16)、[V1.37-D05](../versions/v1.37/decisions.md#v1-37-d05)、[V1.37-D06](../versions/v1.37/decisions.md#v1-37-d06)、[V1.37-D08](../versions/v1.37/decisions.md#v1-37-d08)及[V1.37-D10](../versions/v1.37/decisions.md#v1-37-d10)。
 - 钉钉与共享渠道存储理由来源：[V1.36-D01（存储由 D04、OAuth 控制面由 D05 取代）](../versions/v1.36/decisions.md#v1-36-d01)、[V1.36-D02](../versions/v1.36/decisions.md#v1-36-d02)、[V1.36-D03](../versions/v1.36/decisions.md#v1-36-d03)、[V1.36-D04](../versions/v1.36/decisions.md#v1-36-d04)、[V1.36-D05](../versions/v1.36/decisions.md#v1-36-d05)、[V1.37-D09](../versions/v1.37/decisions.md#v1-37-d09)、[V1.37-D10](../versions/v1.37/decisions.md#v1-37-d10)、[V1.37-D11（群目标 ID 相等假设已由 D12 取代）](../versions/v1.37/decisions.md#v1-37-d11)、[V1.37-D12](../versions/v1.37/decisions.md#v1-37-d12)、[V1.37-D13](../versions/v1.37/decisions.md#v1-37-d13)、[V1.37-D14](../versions/v1.37/decisions.md#v1-37-d14)、[V1.37-D15](../versions/v1.37/decisions.md#v1-37-d15)、[V1.38-D01](../versions/v1.38/decisions.md#v1-38-d01)和[V1.38-D02](../versions/v1.38/decisions.md#v1-38-d02)。
 
@@ -94,7 +95,7 @@ last_updated: 2026-09-19
 
 ## Mission
 
-- 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v5](../contracts/mission-v5.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v26](../contracts/context-manifest-evidence-v26.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
+- 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v5](../contracts/mission-v5.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v27](../contracts/context-manifest-evidence-v27.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
 - 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D12](../versions/v1.59/decisions.md#v1-59-d12)；附件原路径读取的初始理由：[V1.59-D13](../versions/v1.59/decisions.md#v1-59-d13)；删除默认保留、前台最小清理与 Session 延续的理由：[V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14)；内部 ID 贯通 Agent/模型、UI 展示编号、全局发现和当前 Mission 写入边界的当前理由：[V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01)。
 
 ## Single Chat
@@ -131,7 +132,7 @@ last_updated: 2026-09-19
 
 ## Session、Context 与 Bootstrap
 
-- 当前规范：[Context 基础不变量](../architecture/foundational-invariants.md#context-session-bootstrap)、[Native Session Bootstrap Redelivery](../architecture/native-session-bootstrap-redelivery.md)、[Structured Skill Links](../architecture/structured-current-input-skill-links.md)、[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)、[Context Delivery Profile v7](../contracts/context-delivery-profile-v7.md)、[Run Facts v5](../contracts/run-facts-v5.md)和[Run Input Skill Links v2](../contracts/current-input-skill-links-v2.md)；Single Chat 继续使用 v25/v6/v4 与 Skill Links v1。
+- 当前规范：[Context 基础不变量](../architecture/foundational-invariants.md#context-session-bootstrap)、[Native Session Bootstrap Redelivery](../architecture/native-session-bootstrap-redelivery.md)、[Structured Skill Links](../architecture/structured-current-input-skill-links.md)、[ContextManifest Evidence v27](../contracts/context-manifest-evidence-v27.md)、[Context Delivery Profile v8](../contracts/context-delivery-profile-v8.md)、[Run Facts v5](../contracts/run-facts-v5.md)和[Run Input Skill Links v2](../contracts/current-input-skill-links-v2.md)；Single Chat 继续使用 v25/v6/v4 与 Skill Links v1。
 - 理由来源：[v0.21](../versions/v0.21/decisions.md)、[v0.35](../versions/v0.35/decisions.md)、[v0.44](../versions/v0.44/decisions.md)、[v0.48](../versions/v0.48/decisions.md)、[v0.50](../versions/v0.50/decisions.md)、[v0.52](../versions/v0.52/decisions.md)、[v0.54](../versions/v0.54/decisions.md)、[v0.89](../versions/v0.89/decisions.md)、[v0.90](../versions/v0.90/decisions.md)、[v0.94](../versions/v0.94/decisions.md)、[v0.98](../versions/v0.98/decisions.md)、[v1.07](../versions/v1.07/decisions.md)、[V1.15-D03](../versions/v1.15/decisions.md#v1-15-d03)、[V1.15-D04](../versions/v1.15/decisions.md#v1-15-d04)、[V1.15-D06](../versions/v1.15/decisions.md#v1-15-d06)、[V1.28-D05](../versions/v1.28/decisions.md#v1-28-d05)。
 - Pi managed system prompt 与 `native_system_prompt_preserved` 的初始理由见 [V1.39-D03](../versions/v1.39/decisions.md#v1-39-d03)、[V1.39-D10](../versions/v1.39/decisions.md#v1-39-d10)及已确认的[模型上下文 revision 3](../versions/v1.39/model-context-change-pi-managed-system-prompt.md)；其中 Receipt 准入已由 [V1.48-D01](../versions/v1.48/decisions.md#v1-48-d01) 退役。普通 Prompt 不解释 Slash、图片走独立结构化通道的当前边界见[模型上下文 revision 1](../versions/v1.44/model-context-change-pi-native-prompt.md)。
 

@@ -192,12 +192,10 @@ pub(super) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> 
 /// lets a Mission start point at either its historical CampTurn or its new
 /// Delivery-first admission record.
 pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<bool> {
-    if !contains_schema(
+    let common_manifest = contains_schema(
         connection,
         "context_manifest",
         &[
-            "formatter_version IN (20, 21, 22, 23, 24, 25, 26)",
-            "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)",
             "run_facts_schema_version IN (1, 2, 3, 4, 5)",
             CURRENT_FACT_BRANCH,
             PATH_FACT_BRANCH,
@@ -205,7 +203,15 @@ pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<b
             "workspace_fact_digest",
             "workspace_fact_included",
         ],
-    )? || !contains_schema(
+    )?;
+    let context_v26 = contains_schema(
+        connection,
+        "context_manifest",
+        &[
+            "formatter_version IN (20, 21, 22, 23, 24, 25, 26)",
+            "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)",
+        ],
+    )? && contains_schema(
         connection,
         "context_manifest_v26_only_insert",
         &[
@@ -213,18 +219,41 @@ pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<b
             "invocation_kind = 'batch'",
             "invocation_kind = 'single_chat'",
         ],
-    )? || !contains_schema(
+    )? && contains_schema(
+        connection,
+        "runtime_input_delivery_attachment_auth_insert",
+        &["context_manifest_version IN (24, 25, 26)"],
+    )?;
+    let context_v27 = contains_schema(
+        connection,
+        "context_manifest",
+        &[
+            "formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27)",
+            "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27)",
+        ],
+    )? && contains_schema(
+        connection,
+        "context_manifest_v27_only_insert",
+        &[
+            "NEW.context_manifest_version IN (26, 27)",
+            "batch_input.context_manifest_version",
+            "invocation_kind = 'batch'",
+            "invocation_kind = 'single_chat'",
+        ],
+    )? && contains_schema(
+        connection,
+        "runtime_input_delivery_attachment_auth_insert",
+        &["context_manifest_version IN (24, 25, 26, 27)"],
+    )?;
+    let profile_pairing = contains_schema(
         connection,
         "context_manifest_quote_profile_insert",
         &[
             "NEW.context_manifest_version = 26",
             "NEW.context_manifest_version = 25",
         ],
-    )? || !contains_schema(
-        connection,
-        "runtime_input_delivery_attachment_auth_insert",
-        &["context_manifest_version IN (24, 25, 26)"],
-    )? {
+    )?;
+    if !common_manifest || !(context_v26 || context_v27) || !profile_pairing {
         return Ok(false);
     }
 
@@ -412,7 +441,8 @@ impl Database {
         self.migrate_mission_workspace_lifecycle_v162()?;
         self.migrate_camp_message_agent_run_v163()?;
         self.migrate_agent_run_notification_v164()?;
-        self.migrate_single_chat_operation_policy_v165()
+        self.migrate_single_chat_operation_policy_v165()?;
+        self.migrate_default_recipient_mention_v166()
     }
 }
 

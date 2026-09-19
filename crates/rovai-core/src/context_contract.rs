@@ -6,8 +6,8 @@ pub const SESSION_CHARTER_REVISION: i64 = 10;
 pub const CODEX_SESSION_GUIDANCE_REVISION: i64 = 1;
 pub const AGENT_RUN_CONTEXT_FORMATTER_VERSION: i64 = 25;
 pub const CONTEXT_MANIFEST_VERSION: i64 = 25;
-pub const PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION: i64 = 26;
-pub const PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION: i64 = 26;
+pub const PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION: i64 = 27;
+pub const PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION: i64 = 27;
 
 pub(crate) fn native_binding_context_contract() -> Value {
     json!({
@@ -42,8 +42,8 @@ mod tests {
         });
         let current = native_binding_context_contract();
         assert_eq!(current["sessionCharterRevision"], 10);
-        assert_eq!(PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION, 26);
-        assert_eq!(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION, 26);
+        assert_eq!(PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION, 27);
+        assert_eq!(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION, 27);
         assert_eq!(
             current,
             json!({

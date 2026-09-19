@@ -35,8 +35,8 @@ Runtime Input Delivery Evidence 与 Profile/Formatter/Manifest 权责见
 omission 的 bounded aggregate 边界见
 [公共上下文不变量](foundational-invariants.md#context-public-history)和
 [ContextManifest 与 Run Facts 不变量](foundational-invariants.md#context-manifest-run-facts)、
-[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)、
-[Context Delivery Profile v7](../contracts/context-delivery-profile-v7.md)及
+[ContextManifest Evidence v27](../contracts/context-manifest-evidence-v27.md)、
+[Context Delivery Profile v8](../contracts/context-delivery-profile-v8.md)及
 [Run Facts v5](../contracts/run-facts-v5.md)。Task authority 与
 self-active awareness 见
 [ContextManifest 与 Run Facts 不变量](foundational-invariants.md#context-manifest-run-facts)；真实空集合
@@ -198,7 +198,7 @@ CLI、Runtime Adapter、Bootstrap 与 Skill 都不重写正文或教学该 gramm
 当前 v29 contract/CLI command version、`builtin_cli.transport.v29` capability 与 IPC protocol 2 必须同时进入
 Binding compatibility 和 digest。Camp History 使用 v8；Native Binding context contract 加入内部
 `sessionCharterRevision: 10`；Mission 完成判断教学的变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
-使用 Formatter 26 / ContextManifest 26，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
+使用 Formatter 27 / ContextManifest 27，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
 
 `ROVAI_RUN_TMP` 是 Runtime Host 启动时继承的稳定精确路径，不是 process root、Camp workspace 或附件存储。
 每次新 lease 在 active context 写入前 fail-closed 清空并重建该目录；unbind/fence 只做 best-effort 清理，后继
@@ -434,7 +434,7 @@ Session Charter 只说明：
 - Public Message、Message Delivery、Memory 和 read 工具保持各自稳定业务原则；
 - Core 在每次 invocation 重做授权，任何模型可见 ID/fact 都不是 authorization token；
 - Dynamic Context 可以按确定性容量省略 section 或完整消息，但不裁剪已选择消息正文。public
-  `SHARED_CONVERSATION` 使用 Profile v7 的 Camp+Agent accepted 增量窗口，保留自身消息和原始顺序；超过
+  `SHARED_CONVERSATION` 使用 Profile v8 的 Camp+Agent accepted 增量窗口，保留自身消息和原始顺序；超过
   15 条时返回最新 15 条及 `omittedCount + historyReadCursor`；
 - public `RUN_FACTS` v5 字段化表达附件输出位置以及可选 Mission、Task、Session continuity 和真实
   external effect；不包含 Gather、delegation 或替代预算字段。命令特定教学不回填 Charter。
@@ -532,13 +532,13 @@ canonical `--to`，Structured Current User Mention 的 Agent audience 仍投影�
 既有 eligible Bootstrap boundary 原子读取，不进入 AgentRun Dynamic Context，不持久化 Identity
 Blob、snapshot、digest 或 history。身份编辑不轮换 Session，也不构造下一 Run 的 patch。
 
-public Context Formatter v26 的 `COLLABORATION_STATE` schema v2 只描述 peers。Core 从 stable current
+public Context Formatter v27 的 `COLLABORATION_STATE` schema v2 只描述 peers。Core 从 stable current
 CampMembers 中排除 `snapshot.agent_id`；away 和 leave-requested 关系保留到正式 `left`。每个 peer
 只含 Agent ID、Name、Team Role 和 Professional Responsibilities；Default Lead 只以
 `defaultLeadAgentId` 和派生的 `selfIsDefaultLead` 表达。调用资格仍在 BuiltinToolRouter/Domain
 Service admission 时按当前 membership、Presence、Runtime、Capability、quota 与 fence 重判。
 
-Core 先构建完整 v2 projection，再计算 `collaboration_state_digest`。ContextManifest v26 无论本轮是否
+Core 先构建完整 v2 projection，再计算 `collaboration_state_digest`。ContextManifest v27 无论本轮是否
 渲染 section 都冻结该完整 digest，并以 `collaborationStateIncluded` 单独记录 inclusion。只有 Runtime
 Input accepted ACK 才把 `conversation.native_collaboration_state_digest` 推进到 Delivery 冻结的完整
 digest；failure、`delivery_unknown` 和未 accepted 输入不推进。因此 self identity 编辑和其他不改变
@@ -546,15 +546,15 @@ digest；failure、`delivery_unknown` 和未 accepted 输入不推进。因此 s
 
 ### Self Active Task Projection
 
-Profile v7 继续对目标 Agent 当前 Camp 中自己负责的 active Task 按 `updatedAt DESC, taskId DESC` 选择最多
-八项。Formatter v26 在 `COLLABORATION_STATE` 后、`SHARED_CONVERSATION` 前独立输出 compact
+Profile v8 继续对目标 Agent 当前 Camp 中自己负责的 active Task 按 `updatedAt DESC, taskId DESC` 选择最多
+八项。Formatter v27 在 `COLLABORATION_STATE` 后、`SHARED_CONVERSATION` 前独立输出 compact
 `SELF_ACTIVE_TASKS`，每项只有 `taskId/title/status`。真实 candidate 空集合必须输出
 `{"tasks":[]}`，以覆盖同一 Native Session 的旧责任认知；只有候选存在但 Runtime payload budget
 将所有 Task entry 淘汰时才省略整个 section。Default Lead 不获得其他成员 Task 的隐式 projection。
 公共历史先为 Runtime budget 让位，随后从 Task tail 移除，并以 aggregate `omittedCount` 说明
 selection/budget omission。
 
-ContextManifest v26 冻结 inclusion、有序 `taskId/version/updatedAt` references、optional omission count
+ContextManifest v27 冻结 inclusion、有序 `taskId/version/updatedAt` references、optional omission count
 与 exact projection digest；真实空集合为 `included:true`、空 refs 与 empty projection digest，预算
 全量淘汰为 `included:false`、空 refs 与 positive omission count。A2A preflight 和 direct
 materialization 使用同一 selector。该 Evidence 不创建 freshness watermark、delta 或 ACK，恢复只
@@ -563,19 +563,19 @@ Task 并由 Core 重授权。
 
 ### Shared Conversation 与 Run Facts
 
-public Formatter 26 按 `COLLABORATION_STATE? → SELF_ACTIVE_TASKS? → SHARED_CONVERSATION? → RUN_FACTS →
+public Formatter 27 按 `COLLABORATION_STATE? → SELF_ACTIVE_TASKS? → SHARED_CONVERSATION? → RUN_FACTS →
 WORKSPACE? → RUN_INPUT` 输出。`RUN_INPUT.messages[]` 完整、有序且非空；没有 `CURRENT_INPUT`、
 `A2A_GUIDANCE` 或来源型特殊分支。Single Chat 继续使用 Formatter 25 与 `CURRENT_INPUT`。
 
 同一 Structured `CurrentUserMention(local_user)` 在 Human/FTS 投影为 `@你`，在 Agent Current Input、Shared
 Conversation 与 Camp History 的 Principal 投影为 `@Principal`；content digest 不变，Agent offset/digest 只在
 `agent_v1` 空间计算。Shared selector 使用 Camp+Agent accepted 水位到 claim 尾部，保留自身消息，取最新 15 条
-并在剩余预算内选择完整后缀；省略时成对返回 count/cursor。Manifest 26 冻结选择、可见性、输入和 exact bytes。
+并在剩余预算内选择完整后缀；省略时成对返回 count/cursor。Manifest 27 冻结选择、可见性、输入和 exact bytes。
 Run Facts v5 删除 Gather 与 delegation；附件输出位置仍不构成文件权限。
 
 每条 public Run Input 可按 [Run Input Skill Links v2](../contracts/current-input-skill-links-v2.md)增加
 optional `skills[{name,path}]`。Picker identity、per-message send snapshot、start-time desired state 与
-verified Exposure 由 Core resolver 组合；正文和附件不变，零 entry 省略字段。ContextManifest 26 保存
+verified Exposure 由 Core resolver 组合；正文和附件不变，零 entry 省略字段。ContextManifest 27 保存
 完整 included/omitted resolution 与 exact bytes；Runtime Adapter 仍只发送既有完整 payload，不解释 Skill
 或创建 Provider-specific input item。
 

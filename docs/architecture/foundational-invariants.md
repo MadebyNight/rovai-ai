@@ -352,7 +352,7 @@ last_updated: 2026-09-19
 - Manifest 对 public Run 冻结完整有序 AgentRunInput、最后一条 anchor、执行配置、Skill resolution、visibility fence、accepted 增量窗口、所选 shared message、omission/cursor 与 exact rendered bytes/digest。输入附件使用各消息 `RUN_INPUT.messages[].attachments`；历史 frozen Manifest 继续按原版本解释。
 - 模型投影可以 compact，但不得丢失、重命名或自由文本化 authoritative fact。稳定产品规则留在 Session Charter，per-Run 事实只出现一次；每个 schema/formatter/profile/manifest/section 版本跟随实际 owner 独立推进，不用一个全局数字伪造同步升级。
 - public `RUN_FACTS` v5 只允许 `attachmentOutputRoot`、Mission、Task、Session continuity 与真实 external effect；删除 Gather、delegation 和 conversationMode，不输出改名预算对象。Single Chat 继续使用 v4。
-- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。版本与完整 evidence 见 [ContextManifest v26](../contracts/context-manifest-evidence-v26.md)。
+- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 Agent 自动上下文中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v27](../contracts/context-manifest-evidence-v27.md)。
 - Self-active Task snapshot 只选当前成员在当前 Camp 显式负责的非终态 Task，按 Profile 的稳定 order/limit/budget priority 冻结。真实空集合产生显式 empty snapshot；候选存在但被上限/预算全部排除时整段省略并记 aggregate omitted count，不泄露被排除 ID。Renderer/Skill 不得临时改排序。
 - Structured Skill selection 以 per-message snapshot、verified exposure 和只读 resolver 形成可选 `RUN_INPUT.messages[].skills` 链接，并按消息顺序去重整个批次。Skill 不授予工具或权限；解析失败作为本批事实显式呈现，不跳过 FIFO 队首。
 

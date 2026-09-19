@@ -416,7 +416,7 @@ The immutable per-AgentRun record created at Delivery claim from the ordered bat
 _Avoid_: send-time Run snapshot, Draft selection, current Skill Library view, SkillExposureSnapshot, Runtime load receipt
 
 **Current Input Skill Resolution**:
-The legacy name of immutable ContextManifest evidence that intersects one batch Skill Selection Snapshot with materialization-time Skill Library availability and the verified SkillExposureSnapshot, recording an included file path or exact omission reason for every selection. Public Formatter 26 applies the result to relevant RUN_INPUT messages; Single Chat retains the original CURRENT_INPUT projection. It does not replace the full Exposure or exact rendered-payload evidence.
+The legacy name of immutable ContextManifest evidence that intersects one batch Skill Selection Snapshot with materialization-time Skill Library availability and the verified SkillExposureSnapshot, recording an included file path or exact omission reason for every selection. Public Formatter 27 applies the result to relevant RUN_INPUT messages; Single Chat retains the original CURRENT_INPUT projection. It does not replace the full Exposure or exact rendered-payload evidence.
 _Avoid_: SkillProjection reconciliation, Skill eligibility authority, model field, Runtime Input Delivery
 
 **Current Input Skill Link**:
@@ -1112,11 +1112,19 @@ only complete messages and uses `historyReadCursor` for omitted whole messages.
 _Avoid_: current field, byte offset, authorization token, automatic retrieval
 
 **AgentRun Dynamic Context**:
-The immutable model-facing payload for exactly one AgentRun. Public Camp Formatter 26 composes optional Collaboration
+The immutable model-facing payload for exactly one AgentRun. Public Camp Formatter 27 composes optional Collaboration
 State, Self Active Tasks and Shared Conversation, mandatory Run Facts, optional Workspace, and mandatory multi-message
 RUN_INPUT. Single Chat retains Formatter 25 and final CURRENT_INPUT. It contains no Member Identity Bootstrap Projection,
 self identity patch, full Task snapshot, or independently synthesized deliverable.
 _Avoid_: Native Session Bootstrap, Member Identity Context, mutable live prompt, Work Brief, Task Context
+
+**Default Recipient Mention Projection**:
+The ContextManifest v27-only Agent-facing Member Mention derived for a default-addressed public CampMessage from its one
+frozen recipient identity. Claim stores the then-current display name on AgentRunInput; the projection appears only in
+RUN_INPUT and Shared Conversation bodies and is frozen with that evidence, a RunInput context-version marker and the exact
+payload digests. Pre-Migration-166 claimed RunInput remains on v26 without this projection. It does not modify
+authored content, addressing, Delivery, live Camp reads or quotes.
+_Avoid_: authored Member Mention, literal @ text, route authority, current Default Lead lookup, persisted message body
 
 **ContextManifest**:
 The immutable Core evidence that freezes one AgentRun's ordered input-message references, anchor, previous/current public
@@ -1210,10 +1218,11 @@ not restore the frozen snapshot or guarantee the same count later.
 _Avoid_: executable sequence range, body continuation, Manifest replay cursor, automatic retrieval request
 
 **Context Delivery Profile**:
-A versioned application configuration for deterministic model-input selection. Current public Profile v7 gives mandatory
+A versioned application configuration for deterministic model-input selection. Current public Profile v8 gives mandatory
 fixed sections and the largest complete FIFO RUN_INPUT prefix priority, defaults an unspecified Runtime payload capability
 to 96 KiB without a common 1 MiB clamp, and uses the same message projection and serializer for claim sizing and final
-delivery. Body, viewer-visible quotes, each message's own source attachments and Skills are indivisible; only remaining
+delivery. A derived default-recipient Mention is part of the exact body and payload budget. Body, viewer-visible quotes,
+each message's own source attachments and Skills are indivisible; only remaining
 bytes are spent on optional context. Shared history uses at most 15 complete messages and never truncates a message.
 Single Chat retains Profile v6.
 _Avoid_: formatter constants, model DTO schema, Evidence schema, Member Runtime Parameters, mutable user preference, summary model configuration
@@ -1676,7 +1685,7 @@ _Avoid_: durable attempt, manual retry, global priority scan, in-memory queue au
 
 **Delivery Context Materialization Gate**:
 The claim-time boundary that resolves current execution configuration, chooses the largest complete FIFO RUN_INPUT prefix
-and freezes Profile 7/Manifest 26. If the head message alone cannot fit after optional context yields, Core creates one
+and freezes Profile 8/Manifest 27. If the head message alone cannot fit after optional context yields, Core creates one
 explicit preflight-failed Run without starting Runtime, settles that Delivery failed and lets later work continue.
 _Avoid_: send-transaction preflight, truncated input, Runtime capacity wait, whole-message rollback
 

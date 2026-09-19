@@ -402,7 +402,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
 | [Run Input Skill Links v2（当前）](current-input-skill-links-v2.md) | Structured Skill Mention、claim-time 批次快照、verified resolver 与 per-message `RUN_INPUT.messages[].skills` |
 | [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v26（当前 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、Mission-only Charter revision 10、执行配置与可见性 evidence；实时 read 不受其限制 |
+| [ContextManifest Evidence v27（当前 public Camp）](context-manifest-evidence-v27.md) | 继承 v26 多输入、增量窗口与 Mission-only Charter revision 10；默认寻址消息在 Agent 自动上下文中派生冻结接收者 Mention，不修改用户原文或实时 read |
+| [ContextManifest Evidence v26（历史 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、Mission-only Charter revision 10、执行配置与可见性 evidence；冻结 Run 原样恢复 |
 | [ContextManifest Evidence v25（当前 Single Chat / 历史 public）](context-manifest-evidence-v25.md) | Single Chat 继续使用；冻结 public 22–25 原样保留 |
 | [ContextManifest Evidence v24（历史）](context-manifest-evidence-v24.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；详见合同 |
 | [ContextManifest Evidence v23（历史）](context-manifest-evidence-v23.md) | v21 selection/evidence 不变；Formatter/Manifest 22 增加 ExternalPrincipal direct source 与 ExternalQuote deterministic projection |
@@ -421,7 +422,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v14（历史）](context-manifest-evidence-v14.md) | Formatter v16、Gather result notice、完整 request/current generation evidence 与旧 v14/v15 exact recovery |
 | [ContextManifest Evidence v13（历史）](context-manifest-evidence-v13.md) | Formatter v15、`gather_completion` 与 completion input v1 frozen evidence |
 | [ContextManifest Evidence v12 (historical)](context-manifest-evidence-v12.md) | v11 self-active semantics 加 Formatter v14 的 `mentionsCurrentUser`、Structured Content/projected body evidence 与 frozen recovery |
-| [Context Delivery Profile v7（当前 public Camp）](context-delivery-profile-v7.md) | mandatory RUN_INPUT 优先、默认 96 KiB、完整 FIFO prefix 与最新完整历史后缀 |
+| [Context Delivery Profile v8（当前 public Camp）](context-delivery-profile-v8.md) | 继承 v7 数值；默认接收 Mention 进入精确正文与 payload 预算 |
+| [Context Delivery Profile v7（历史 public Camp）](context-delivery-profile-v7.md) | mandatory RUN_INPUT 优先、默认 96 KiB、完整 FIFO prefix 与最新完整历史后缀 |
 | [Context Delivery Profile v6（当前 Single Chat / 历史 public）](context-delivery-profile-v6.md) | Single Chat 与冻结 public Manifest 继续使用 |
 | [Context Delivery Profile v5（historical）](context-delivery-profile-v5.md) | v3 数值与 Task/reference 语义不变；当前 Agent 自身消息在 recent top-15 和 whole-history omission 前失去候选资格 |
 | [Context Delivery Profile v3（历史）](context-delivery-profile-v3.md) | v2 public context 加 self-active Task selection/order/max 8 与 public-history-first budget priority；自身消息仍属于 recent candidate |
