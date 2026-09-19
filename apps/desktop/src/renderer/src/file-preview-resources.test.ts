@@ -98,6 +98,29 @@ describe('window-owned preview resources', () => {
     expect(session.getSnapshot()).toMatchObject({ tabs: [], activeTabId: null, paneVisible: false })
   })
 
+  it('keeps execution beside Activity and files without acquiring a file handle', async () => {
+    const { owner, api } = fixture()
+    owner.activate('execution-camp')
+    const session = owner.session('execution-camp')
+    session.actions.openMissionActivity('mission-a')
+    const activityId = session.getSnapshot().activeTabId!
+    session.actions.openExecution()
+    const executionId = session.getSnapshot().activeTabId!
+    session.actions.openExecution()
+    expect(session.getSnapshot()).toMatchObject({
+      activeTabId: executionId,
+      paneVisible: true,
+      tabs: [
+        { id: executionId, kind: 'execution' },
+        { id: activityId, kind: 'mission_activity', missionId: 'mission-a' }
+      ]
+    })
+    expect(api.open).not.toHaveBeenCalled()
+    expect(api.readText).not.toHaveBeenCalled()
+    session.actions.close(executionId)
+    expect(session.getSnapshot()).toMatchObject({ activeTabId: activityId, paneVisible: true })
+  })
+
   it('retains activity selection and reading position per Camp across cooling and restoration', async () => {
     const { owner, api } = fixture()
     owner.activate('mission-a')

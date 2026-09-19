@@ -129,6 +129,7 @@ import {
   executionPlacementSaveFailureMessage,
   executionDisclosureOpenAfterActivity,
   executionDisclosureIsLiveOpen,
+  executionQueueBatches,
   firstSubmittedAgentRun,
   formatStopElapsed,
   groupExecutionEventsByRunId,
@@ -3840,6 +3841,11 @@ describe('task event projections', () => {
       .toBe(false)
     expect(isViewingNonTerminalAgentRun(null, 'run-muwa', groupedSnapshot.agentRuns))
       .toBe(false)
+    expect(isViewingNonTerminalAgentRun(
+      '__execution_overview__',
+      null,
+      groupedSnapshot.agentRuns
+    )).toBe(true)
     expect(taskCreationBlocksSubmittedRunAutoFocus(true, true, 'tasks')).toBe(true)
     expect(taskCreationBlocksSubmittedRunAutoFocus(true, true, 'members')).toBe(false)
     expect(taskCreationBlocksSubmittedRunAutoFocus(true, true, 'execution')).toBe(false)
@@ -3849,11 +3855,25 @@ describe('task event projections', () => {
     expect(executionConsoleIsVisible('inspector', true, 'execution')).toBe(true)
     expect(executionConsoleIsVisible('inspector', true, 'tasks')).toBe(false)
     expect(executionConsoleIsVisible('inspector', false, 'execution')).toBe(false)
+    expect(executionConsoleIsVisible('right', false, 'tasks', true)).toBe(true)
+    expect(executionConsoleIsVisible('right', true, 'execution', false)).toBe(false)
     expect(executionPlacementChangeShouldStart('bottom', 'inspector', false)).toBe(true)
     expect(executionPlacementChangeShouldStart('bottom', 'inspector', true)).toBe(false)
     expect(executionPlacementChangeShouldStart('bottom', 'bottom', false)).toBe(false)
     expect(executionPlacementSaveFailureMessage('bottom')).toBe('未能保存，仍在底部。')
+    expect(executionPlacementSaveFailureMessage('right')).toBe('未能保存，仍在右侧。')
     expect(executionPlacementSaveFailureMessage('inspector')).toBe('未能保存，仍在详情浮层。')
+    expect(executionQueueBatches([
+      submittedSecondRun,
+      { ...submittedSecondRun, id: 'run-submitted-third', campTurnId: 'turn-submitted-later', createdAt: '2026-07-28T06:01:00Z' },
+      submittedFirstRun
+    ]).map((batch) => ({
+      agentId: batch.agentId,
+      runIds: batch.runs.map((run) => run.id)
+    }))).toEqual([
+      { agentId: 'agent_2', runIds: ['run-submitted-third', 'run-submitted-second'] },
+      { agentId: 'agent_3', runIds: ['run-submitted-first'] }
+    ])
     expect(executionDrawerIsNearBottom(648, 1_000, 320)).toBe(true)
     expect(executionDrawerIsNearBottom(647, 1_000, 320)).toBe(false)
     expect(executionDrawerHeightBounds(600, 54, 920)).toEqual({ min: 160, max: 434 })
@@ -3914,8 +3934,8 @@ describe('task event projections', () => {
     expect(markup.indexOf('class="message-bubble"'))
       .toBeLessThan(markup.indexOf('class="message-copy-button"'))
     expect(markup).toContain('aria-label="Agent 执行台"')
-    expect(markup).toContain('aria-label="将执行台移到详情浮层并记住此位置"')
-    expect(markup).toContain('>移到浮层</span>')
+    expect(markup).toContain('aria-label="切换执行台位置，当前底部"')
+    expect(markup).toContain('class="execution-placement-button"')
     expect(markup).toContain('class="run-pulse-title"')
     expect(markup).toContain('class="run-pulse-chip is-selected"')
     expect((markup.match(/class="run-pulse-chip(?: is-selected)?"/g) ?? [])).toHaveLength(1)
@@ -3998,7 +4018,7 @@ describe('task event projections', () => {
       .toBeLessThan(inspectorTabList.indexOf('>队员</span><small>'))
     expect(inspectorMarkup).toMatch(/data-detail="execution"[^>]*aria-expanded="true"/)
     expect(inspectorMarkup).toContain('data-placement="inspector"')
-    expect(inspectorMarkup).toContain('>移到底部</span>')
+    expect(inspectorMarkup).toContain('aria-label="切换执行台位置，当前浮层"')
     expect(inspectorMarkup).not.toContain('class="run-pulse run-pulse-bottom"')
 
     const terminalInspectorMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
@@ -4141,7 +4161,7 @@ describe('task event projections', () => {
     }))
     expect(cancellingMarkup).toContain('正在提交停止请求')
     expect(cancellingMarkup).toContain('execution-disclosure run-live is-cancelling')
-    expect(cancellingMarkup).toContain('class="execution-run-stop-state tone-attention"')
+    expect(cancellingMarkup).toMatch(/aria-label="终止沐瓦的本次执行"[^>]*disabled/)
     expect(cancellingMarkup).not.toContain('aria-label="停止当前运行"')
     expect(cancellingMarkup).not.toContain('class="composer-primary-action is-stop"')
     expect(cancellingMarkup).not.toMatch(/<textarea[^>]*disabled/)

@@ -90,6 +90,7 @@ beforeEach(() => {
     paneVisible: true,
     resolvedTheme: 'day',
     open: vi.fn(),
+    openExecution: vi.fn(),
     openMissionActivity: vi.fn(),
     openFileChanges: vi.fn(),
     selectChangedFile: vi.fn(),

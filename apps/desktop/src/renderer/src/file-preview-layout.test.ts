@@ -34,10 +34,10 @@ describe('File preview split geometry', () => {
     expect(filePreviewWidthForRatio(2_000, preferredRatio)).toBe(1_300)
   })
 
-  it('gives Mission Activity a narrower stable split without changing ordinary files', () => {
-    expect(filePreviewSplitMinWidth(true)).toBe(721)
+  it('keeps one stable split and close threshold across files, Activity, and Execution', () => {
+    expect(filePreviewSplitMinWidth(true)).toBe(841)
     expect(filePreviewSplitMinWidth(false)).toBe(841)
-    expect(filePreviewCloseThreshold(true)).toBe(220)
+    expect(filePreviewCloseThreshold(true)).toBe(320)
     expect(filePreviewCloseThreshold(false)).toBe(320)
   })
 

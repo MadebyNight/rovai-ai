@@ -53,7 +53,8 @@ export interface FileChangesPreviewTabModel {
 }
 
 export type MissionActivityTabModel = import('./file-preview-session').MissionActivityTabSnapshot
-export type PreviewTabModel = FilePreviewTabModel | FileChangesPreviewTabModel | MissionActivityTabModel
+export type ExecutionTabModel = import('./file-preview-session').ExecutionTabSnapshot
+export type PreviewTabModel = FilePreviewTabModel | FileChangesPreviewTabModel | MissionActivityTabModel | ExecutionTabModel
 
 export type FilePreviewOpenOutcome =
   | { kind: 'preview'; tabId: string }
@@ -94,6 +95,7 @@ export interface FilePreviewContextValue {
   ): Promise<FilePreviewOpenOutcome>
   openFileChanges(campId: string, changes: AgentRunFileChangesView, evidenceFileId?: string): string | undefined
   openMissionActivity(missionId: string): void
+  openExecution(): void
   loadChanges(tabId: string, read: () => Promise<AgentRunFileChangesDetailView>, retry?: boolean): Promise<void>
   selectChangedFile(tabId: string, evidenceFileId: string): void
   showPane(): void
@@ -251,7 +253,7 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
 
   const saveSession = (targetCampId: string) => {
     const snapshot: FilePreviewSessionSnapshot = {
-      tabs: tabsRef.current.map((tab) => tab.kind === 'mission_activity' ? { ...tab } : tab.kind === 'file_change'
+      tabs: tabsRef.current.map((tab) => tab.kind === 'mission_activity' || tab.kind === 'execution' ? { ...tab } : tab.kind === 'file_change'
         ? { kind: 'file_change', id: tab.id, campId: tab.campId, changes: tab.changes, selectedEvidenceFileId: tab.selectedEvidenceFileId, reading: tab.reading }
         : {
           kind: 'file',
@@ -895,6 +897,15 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
     setOpenFeedback(previous => ({ tabId, sequence: (previous?.sequence ?? 0) + 1, isNew: !existing }))
   }
 
+  const openExecution = (): void => {
+    if (disposed || !campId) return
+    const existing = tabsRef.current.find(tab => tab.kind === 'execution')
+    const tabId = existing?.id ?? newCommandId()
+    if (!existing) setTabs(tabs => [{ kind: 'execution', id: tabId }, ...tabs])
+    activate(tabId)
+    setOpenFeedback(previous => ({ tabId, sequence: (previous?.sequence ?? 0) + 1, isNew: !existing }))
+  }
+
   const move = (tabId: string, direction: -1 | 1) => {
     setTabs((current) => {
       const index = current.findIndex((tab) => tab.id === tabId)
@@ -1176,7 +1187,7 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
     retired,
     cool: () => { scopeGenerationRef.current += 1; committedLoads.clear(); for (const tab of tabsRef.current) session.evict(tab.id); session.id = newCommandId(); bindingPromiseRef.current = owner.sync() },
     setBinding: (binding: Promise<void>) => { bindingPromiseRef.current = binding },
-    actions: { open, openFileChanges, openMissionActivity, loadChanges, selectChangedFile, showPane, hidePane, activate, move, close, closeMany, download, openInSystem, revealInFolder, copyPath, toggleHtmlSource, reload, reopen, retry, changePage, saveReading, loadHtmlSource, saveHtmlSource, completeHtmlRefresh, displayed },
+    actions: { open, openFileChanges, openMissionActivity, openExecution, loadChanges, selectChangedFile, showPane, hidePane, activate, move, close, closeMany, download, openInSystem, revealInFolder, copyPath, toggleHtmlSource, reload, reopen, retry, changePage, saveReading, loadHtmlSource, saveHtmlSource, completeHtmlRefresh, displayed },
     ensureActive: () => { if (paneVisibleRef.current && activeTabIdRef.current) restoreTab(activeTabIdRef.current, true) },
     externalUpdate: (previewKeys: string[]) => {
       const changed = new Set(previewKeys)
@@ -1198,7 +1209,7 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
     evict: (tabId: string, handleOnly = false, alreadyReleased = false, htmlOnly = false) => {
       const tab = tabsRef.current.find(tab => tab.id === tabId)
       if (!tab) return
-      if (tab.kind === 'mission_activity') return
+      if (tab.kind === 'mission_activity' || tab.kind === 'execution') return
       if (tab.kind === 'file_change') {
         changeRequests.delete(tabId)
         setTabs(tabs => tabs.map(entry => entry.id === tabId ? { ...tab, detail: undefined, detailBytes: undefined, detailStatus: undefined } : entry))

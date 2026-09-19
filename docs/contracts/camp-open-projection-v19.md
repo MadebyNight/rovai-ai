@@ -5,7 +5,7 @@ authority: camp-open-and-execution-window-read-boundaries
 status: accepted
 version: 19
 source_version: v1.58
-last_updated: 2026-09-13
+last_updated: 2026-09-19
 ---
 
 # Camp Open Projection v19
@@ -97,4 +97,4 @@ DOM 使用实测高度的虚拟列表，只挂载视口及相邻缓冲区；屏�
 
 完整详情沿用 Camp-scoped `agentRunEvidence.getContent`，新增可选 `canonical` 返回当前操作的 Diff。
 原始 `agentRunEvidence.list`、完整 Snapshot、Blob、审计和模型观察语义保持原边界。
-渲染规则见 [Run Process Detail Surface v34](run-process-detail-surface-v34.md)。
+渲染规则见 [Run Process Detail Surface v35](run-process-detail-surface-v35.md)。

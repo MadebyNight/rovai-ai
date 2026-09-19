@@ -36,7 +36,7 @@ export function AppHeader({
   const title = campTitle ?? '正在打开对话'
   const pendingApprovals = camp?.approvals.filter((approval) => approval.status === 'pending').length ?? 0
   const previewControls = filePreview && <div className="file-preview-toggle-group">
-    {filePreview.activeTab?.kind !== 'mission_activity' && <FileFindButton />}
+    {filePreview.activeTab?.kind !== 'mission_activity' && filePreview.activeTab?.kind !== 'execution' && <FileFindButton />}
     <button className="file-preview-toggle" type="button" aria-label={previewVisible ? '收起文件预览' : '展开文件预览'}
       title={previewVisible ? '收起文件预览' : '展开文件预览'} aria-expanded={previewVisible} aria-controls="file-preview-pane"
       onClick={previewVisible ? filePreview.hidePane : filePreview.showPane}>

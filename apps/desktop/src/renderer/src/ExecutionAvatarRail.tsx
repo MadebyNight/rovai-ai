@@ -4,6 +4,7 @@ import { MemberAvatar, type MemberAvatarProps } from './MemberAvatar'
 import { ExecutionStatusGlyph, type ExecutionStatusShape } from './ExecutionStatusGlyph'
 
 export interface ExecutionAvatarRailItem extends Pick<MemberAvatarProps, 'agentId' | 'avatarRef' | 'displayName'> {
+  overview?: boolean
   statusLabel: string
   statusTone: string
   stateShape: ExecutionStatusShape
@@ -194,7 +195,7 @@ export function ExecutionAvatarRail({
           ref={button => { if (button) buttons.current.set(item.agentId, button); else buttons.current.delete(item.agentId) }}
           type="button"
           className={`run-pulse-chip${selectedAgentId === item.agentId ? ' is-selected' : ''}`}
-          aria-label={`打开${item.displayName}的执行过程，${item.statusLabel}`}
+          aria-label={item.overview ? '打开全部队员执行总览' : `打开${item.displayName}的执行过程，${item.statusLabel}`}
           aria-pressed={selectedAgentId === item.agentId}
           aria-expanded={selectedAgentId === item.agentId}
           aria-controls="agent-execution-drawer"
@@ -210,10 +211,14 @@ export function ExecutionAvatarRail({
           onBlur={() => setFocusedAgentId(null)}
           onClick={event => onOpen(item.agentId, event.currentTarget)}
         >
-          <MemberAvatar agentId={item.agentId} avatarRef={item.avatarRef} displayName={item.displayName} size="list" decorative />
-          <span className={`run-pulse-chip-state tone-${item.statusTone} state-${item.stateShape}`} role="img" aria-label={item.statusLabel}>
-            <ExecutionStatusGlyph status={item.stateShape} />
-          </span>
+          {item.overview
+            ? <span className="run-pulse-overview-mark" aria-hidden="true">总</span>
+            : <>
+                <MemberAvatar agentId={item.agentId} avatarRef={item.avatarRef} displayName={item.displayName} size="list" decorative />
+                <span className={`run-pulse-chip-state tone-${item.statusTone} state-${item.stateShape}`} role="img" aria-label={item.statusLabel}>
+                  <ExecutionStatusGlyph status={item.stateShape} />
+                </span>
+              </>}
         </button>
       </li>)}
     </ul>
@@ -228,7 +233,7 @@ export function ExecutionAvatarRail({
       onClick={() => scrollByFour(1)}
     ><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" /></svg></button>
     {tooltipItem && <span ref={tooltipRef} id={tooltipId} className="run-pulse-avatar-tooltip" role="tooltip">
-      {tooltipItem.displayName} · {tooltipItem.statusLabel}
+      {tooltipItem.overview ? '总览 · 全部队员' : `${tooltipItem.displayName} · ${tooltipItem.statusLabel}`}
     </span>}
   </div>
 }

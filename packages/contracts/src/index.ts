@@ -2784,7 +2784,7 @@ export interface AppUpdatesApi {
 
 export type StartupLocationMode = 'last_location' | 'quick_chat'
 
-export type ExecutionConsolePlacement = 'bottom' | 'inspector'
+export type ExecutionConsolePlacement = 'right' | 'inspector' | 'bottom'
 
 export type SettingsSection =
   | 'remote'
@@ -3895,6 +3895,7 @@ export type CoreMethod =
   | 'camp.messages.page'
   | 'camp.messages.around'
   | 'camp.messages.find'
+  | 'camp.messages.withdraw'
   | 'agentRunEvidence.getContent'
   | 'agentRunEvidence.list'
   | 'agentRunExecution.page'

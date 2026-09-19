@@ -34,10 +34,10 @@ describe('execution console layout', () => {
     expect(styleBlock('.execution-process-stage.status-running .execution-process-card')).toMatch(
       /background:\s*var\(--execution-running-surface\)/
     )
-    expect(styleBlock('.execution-process-stage.is-focused .execution-process-card')).not.toMatch(
+    expect(styleBlock('.execution-process-stage.is-focused .execution-process-card') ?? '').not.toMatch(
       /background:/
     )
-    expect(styleBlock('.execution-process-stage.is-focused.status-running .execution-process-card')).not.toMatch(
+    expect(styleBlock('.execution-process-stage.is-focused.status-running .execution-process-card') ?? '').not.toMatch(
       /background:/
     )
   })

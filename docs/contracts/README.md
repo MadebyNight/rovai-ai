@@ -153,7 +153,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v16（当前）](file-preview-v16.md) | Command 修改文件以 exact Run Activity Evidence 授权，并优先解析来源 AgentRun executionRoot；同名相对路径按实际文件身份去重 |
+| [File Preview v17（当前）](file-preview-v17.md) | Execution、Mission Activity 与文件共享标签集合、分栏宿主与已保存宽度 |
+| [File Preview v16（历史）](file-preview-v16.md) | Command 修改文件以 exact Run Activity Evidence 授权，并优先解析来源 AgentRun executionRoot；同名相对路径按实际文件身份去重 |
 | [File Preview v15（历史）](file-preview-v15.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；Command Activity 文件来源由 v16 替代 |
 | [File Preview v14（历史）](file-preview-v14.md) | 继承 v13 窗口保留与 LRU；受管 HTML 无空闲到期，页面通信与资源诊断分离、有限重连 |
 | [File Preview v13（历史）](file-preview-v13.md) | 窗口预览会话、分层 LRU、句柄容量回收、独立候选刷新与有限 HTML 后台保留 |
@@ -298,7 +299,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Built-in Tool Transport v7 (historical)](builtin-tool-transport-v7.md) | v0.67 的 Camp Message Send v4、exact Camp read addressing 与初版渐进式 CLI 教学；不作为 v0.73 CLI context/catalog 入口 |
 | [Built-in Tool Transport v7 Errata](builtin-tool-transport-v7-errata.md) | 历史 v7 locator-present recovery 勘误；其 self-write exact-read 语义已由 v8/v9 继承 |
 | [Durable Task v3（当前）](durable-task-v3.md) | User/Lead 责任定义、Assignee execution-state update、Camp-wide read、explicit owner、unassigned holding 与 advisory actions |
-| [Camp Message Send v22（当前）](camp-message-send-v22.md) | 继承 v21；发布事务为每个显式目标幂等建立 Camp-member Conversation 路由后创建 waiting Delivery |
+| [Camp Message Send v23（当前）](camp-message-send-v23.md) | 继承 v22；用户消息轻量处理回执、权威 `canWithdraw`、确认弹窗与 Desktop/Web 撤回运输 |
+| [Camp Message Send v22（历史）](camp-message-send-v22.md) | 继承 v21；发布事务为每个显式目标幂等建立 Camp-member Conversation 路由后创建 waiting Delivery |
 | [Camp Message Send v21（历史）](camp-message-send-v21.md) | 公共消息原子创建 waiting Deliveries、显式目标、Run anchor、Channel 默认外发与撤回幂等终态；路由完整性由 v22 补足 |
 | [Camp Message Send v20（历史）](camp-message-send-v20.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流 |
 | [Camp Message Send v19（历史）](camp-message-send-v19.md) | Agent-visible target 教学只推荐 `--to`，Charter revision 5；v18 inline compatibility parser 与发送效果不变 |
@@ -435,7 +437,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v9 (historical)](context-manifest-evidence-v9.md) | bounded public omission evidence；不作为 Formatter v13 恢复入口 |
 | [Context Delivery Profile v2 (historical)](context-delivery-profile-v2.md) | 公共引用链与历史 budget 的旧当前合同；不选择 self-active Task |
 | [Context Delivery Profile v1 (historical)](context-delivery-profile-v1.md) | AgentRun 公共消息窗口、Unicode scalar 正文截断、历史字符预算与遗漏提示 |
-| [Run Process Detail Surface v34（当前）](run-process-detail-surface-v34.md) | 运行中连续追加、可见范围渲染、回看缓存免重复读取 |
+| [Run Process Detail Surface v35（当前）](run-process-detail-surface-v35.md) | 三位置执行台、右侧共享 Tab、进入恢复、紧凑 Run 卡片、排队批次与折叠历史 |
+| [Run Process Detail Surface v34（历史）](run-process-detail-surface-v34.md) | 运行中连续追加、可见范围渲染、回看缓存免重复读取 |
 | [Run Process Detail Surface v33（历史）](run-process-detail-surface-v33.md) | 执行按窗口加载，关闭组不挂载子行，Diff 按条读取，取消执行内容脱敏 |
 | [Run Process Detail Surface v32（历史）](run-process-detail-surface-v32.md) | v31 布局和普通工具结果不变；Built-in 使用 CLI 名称、仅显示公开入参，省略正文并折叠可靠关联的 Shell 载体 |
 | [Run Process Detail Surface v31（历史）](run-process-detail-surface-v31.md) | v30 公开指令不变；统一终态步骤摘要、子行状态形状、Tool 详情与文件入口，并收敛 Evidence 历史压缩及默认模型观察写入边界 |

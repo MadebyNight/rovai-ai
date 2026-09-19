@@ -69,6 +69,11 @@ describe('Camp timeline reading positions', () => {
       { scrollTop: 700, scrollHeight: 1_000, clientHeight: 300 },
       { scrollTop: 700, scrollHeight: 1_000, clientHeight: 180 }
     )).toBe(true)
+    expect(campTimelineFollowingLatestAfterScroll(
+      { scrollTop: 700, followingLatest: true },
+      { scrollTop: 700, scrollHeight: 1_000, clientHeight: 180 },
+      { scrollTop: 700, scrollHeight: 1_000, clientHeight: 180 }
+    )).toBe(true)
   })
 
   it('stops following after user scrolls within unchanged timeline geometry', () => {

@@ -135,7 +135,7 @@ import { runtimeEditorInstallation } from './MemberRuntimeParameters'
 import { SafeMarkdown } from './SafeMarkdown'
 import { FilePreviewPane } from './FilePreviewPane'
 import { FilePreviewResizeHandle, FilePreviewWorkspace, useOptionalFilePreviewLayout } from './FilePreviewLayout'
-import { useOptionalFilePreview } from './FilePreviewContext'
+import { useExecutionPreviewHost, useOptionalFilePreview } from './FilePreviewContext'
 import {
   agentRunFileChangeHasReviewableDiff,
   agentRunFileChangesPreviewTarget,
@@ -575,6 +575,8 @@ export type AgentExecutionProcess = {
   runs: AgentRunView[]
 }
 
+const EXECUTION_OVERVIEW_SCOPE = '__execution_overview__'
+
 export function agentRunCountsAsExecuting(run: Pick<AgentRunView, 'status' | 'waitReason'>): boolean {
   return NON_TERMINAL_RUNS.has(run.status)
     && run.waitReason !== 'recovery_blocked'
@@ -722,6 +724,9 @@ export function isViewingNonTerminalAgentRun(
   focusedRunId: string | null,
   runs: readonly AgentRunView[]
 ): boolean {
+  if (selectedAgentId === EXECUTION_OVERVIEW_SCOPE) {
+    return runs.some((run) => NON_TERMINAL_RUNS.has(run.status))
+  }
   if (!selectedAgentId || !focusedRunId) return false
   const focusedRun = runs.find((run) =>
     run.id === focusedRunId && run.agentId === selectedAgentId
@@ -740,10 +745,12 @@ export function taskCreationBlocksSubmittedRunAutoFocus(
 export function executionConsoleIsVisible(
   placement: ExecutionConsolePlacement,
   inspectorVisible: boolean,
-  inspectorSurfaceTab: CampInspectorSurfaceTab
+  inspectorSurfaceTab: CampInspectorSurfaceTab,
+  rightVisible = false
 ): boolean {
-  return placement === 'bottom'
-    || (inspectorVisible && inspectorSurfaceTab === 'execution')
+  if (placement === 'bottom') return true
+  if (placement === 'right') return rightVisible
+  return inspectorVisible && inspectorSurfaceTab === 'execution'
 }
 
 export function executionPlacementChangeShouldStart(
@@ -757,9 +764,9 @@ export function executionPlacementChangeShouldStart(
 export function executionPlacementSaveFailureMessage(
   current: ExecutionConsolePlacement
 ): string {
-  return current === 'bottom'
-    ? '未能保存，仍在底部。'
-    : '未能保存，仍在详情浮层。'
+  if (current === 'bottom') return '未能保存，仍在底部。'
+  if (current === 'right') return '未能保存，仍在右侧。'
+  return '未能保存，仍在详情浮层。'
 }
 
 export function attachmentDropIsBlocked({
@@ -1524,7 +1531,7 @@ export function CampWorkspace({
   cancellingTurnIds = new Set<string>(),
   cancellingRunIds = new Set<string>(),
   confirmingRunIds = new Set<string>(),
-  onCancelAgentRun,
+  onCancelAgentRun = async () => undefined,
   stopping,
   executionPlacement = 'inspector',
   onExecutionPlacementChange = async () => undefined,
@@ -1613,6 +1620,7 @@ export function CampWorkspace({
   const { profile: currentUserProfile } = useCurrentUserProfile()
   const currentUserName = currentUserDisplayName(currentUserProfile)
   const filePreview = useOptionalFilePreview()
+  const executionPreviewHost = useExecutionPreviewHost(snapshot.camp.id)
   const notifyError = onNotifyError ?? onNotify
   const openCurrentAgentRunFile = useCallback((
     changes: AgentRunFileChangesView,
@@ -1649,7 +1657,13 @@ export function CampWorkspace({
   const composerLockAwaitingDisabledCommitRef = useRef(false)
   const [replyInteractionError, setReplyInteractionError] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [withdrawalMessage, setWithdrawalMessage] = useState<CampMessageView | null>(null)
   const [withdrawingMessageId, setWithdrawingMessageId] = useState<string | null>(null)
+  const [withdrawalError, setWithdrawalError] = useState<string | null>(null)
+  useEffect(() => {
+    setWithdrawalMessage(null)
+    setWithdrawalError(null)
+  }, [snapshot.camp.id])
   const [starterNotice, setStarterNotice] = useState<string | null>(null)
   const [mentionPopover, setMentionPopover] = useState<MentionPopoverRequest | null>(null)
   const [composerSkillCatalog, setComposerSkillCatalog] = useState<{
@@ -1846,6 +1860,7 @@ export function CampWorkspace({
   const [executionPlacementError, setExecutionPlacementError] = useState<{
     message: string
     detail: string | null
+    target: ExecutionConsolePlacement
   } | null>(null)
   const [executionInspectorActive, setExecutionInspectorActive] = useState(
     executionPlacement === 'inspector'
@@ -1866,11 +1881,14 @@ export function CampWorkspace({
   const executionDrawerReturnAgentIdRef = useRef<string | null>(null)
   const bottomPlacementButtonRef = useRef<HTMLButtonElement>(null)
   const inspectorPlacementButtonRef = useRef<HTMLButtonElement>(null)
+  const rightPlacementButtonRef = useRef<HTMLButtonElement>(null)
   const bottomExecutionDrawerHostRef = useRef<HTMLDivElement>(null)
   const inspectorExecutionDrawerHostRef = useRef<HTMLDivElement>(null)
   const executionReadingPosition = useRef<ExecutionConsoleReadingPosition | null>(null)
+  const executionPlacementMenuReadingPosition = useRef<ExecutionConsoleReadingPosition | null>(null)
   const pendingExecutionReadingPosition = useRef<ExecutionConsoleReadingPosition | null>(null)
   const executionReadingRestoreFrames = useRef<[number, number] | null>(null)
+  const executionReadingCaptureFrames = useRef<[number, number] | null>(null)
   const executionPlacementRequest = useRef(false)
   const executionPlacementMounted = useRef(true)
   const workspaceEntrySnapshotHandled = useRef(workspaceEntrySnapshotReady)
@@ -1913,9 +1931,11 @@ export function CampWorkspace({
   }, [conversationView, worldMapEnabled])
   useLayoutEffect(() => {
     if (!executionDrawerPortal) return
-    const host = executionPlacement === 'inspector'
-      ? inspectorExecutionDrawerHostRef.current
-      : bottomExecutionDrawerHostRef.current
+    const host = executionPlacement === 'right'
+      ? executionPreviewHost
+      : executionPlacement === 'inspector'
+        ? inspectorExecutionDrawerHostRef.current
+        : bottomExecutionDrawerHostRef.current
     if (!host) return
     if (executionDrawerPortal.parentElement !== host) host.appendChild(executionDrawerPortal)
 
@@ -1937,7 +1957,7 @@ export function CampWorkspace({
       executionReadingRestoreFrames.current = [firstFrame, secondFrame]
     })
     executionReadingRestoreFrames.current = [firstFrame, firstFrame]
-  }, [executionDrawerPortal, executionPlacement, inspectorVisible])
+  }, [executionDrawerPortal, executionPlacement, executionPreviewHost, inspectorVisible])
   useEffect(() => {
     executionPlacementMounted.current = true
     return () => {
@@ -1946,7 +1966,45 @@ export function CampWorkspace({
         window.cancelAnimationFrame(executionReadingRestoreFrames.current[0])
         window.cancelAnimationFrame(executionReadingRestoreFrames.current[1])
       }
+      if (executionReadingCaptureFrames.current) {
+        window.cancelAnimationFrame(executionReadingCaptureFrames.current[0])
+        window.cancelAnimationFrame(executionReadingCaptureFrames.current[1])
+      }
       executionDrawerPortal?.remove()
+    }
+  }, [executionDrawerPortal])
+  useEffect(() => {
+    if (!executionDrawerPortal) return undefined
+    const captureAfterInteraction = (): void => {
+      if (executionReadingCaptureFrames.current) {
+        window.cancelAnimationFrame(executionReadingCaptureFrames.current[0])
+        window.cancelAnimationFrame(executionReadingCaptureFrames.current[1])
+      }
+      const firstFrame = window.requestAnimationFrame(() => {
+        const secondFrame = window.requestAnimationFrame(() => {
+          executionReadingCaptureFrames.current = null
+          const position = captureExecutionConsoleReadingPosition(
+            executionDrawerPortal.querySelector<HTMLElement>('.execution-drawer'),
+            executionReadingPosition.current
+          )
+          if (position) executionReadingPosition.current = position
+        })
+        executionReadingCaptureFrames.current = [firstFrame, secondFrame]
+      })
+      executionReadingCaptureFrames.current = [firstFrame, firstFrame]
+    }
+    executionDrawerPortal.addEventListener('wheel', captureAfterInteraction, { capture: true, passive: true })
+    executionDrawerPortal.addEventListener('pointerup', captureAfterInteraction, true)
+    executionDrawerPortal.addEventListener('keyup', captureAfterInteraction, true)
+    return () => {
+      executionDrawerPortal.removeEventListener('wheel', captureAfterInteraction, true)
+      executionDrawerPortal.removeEventListener('pointerup', captureAfterInteraction, true)
+      executionDrawerPortal.removeEventListener('keyup', captureAfterInteraction, true)
+      if (executionReadingCaptureFrames.current) {
+        window.cancelAnimationFrame(executionReadingCaptureFrames.current[0])
+        window.cancelAnimationFrame(executionReadingCaptureFrames.current[1])
+        executionReadingCaptureFrames.current = null
+      }
     }
   }, [executionDrawerPortal])
   useEffect(() => {
@@ -2085,12 +2143,15 @@ export function CampWorkspace({
     executionDrawerReturnAgentIdRef.current = null
     if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
+    } else if (runningRun && executionPlacement === 'right') {
+      filePreview?.openExecution()
     }
   }, [
     executionPlacement,
     inspectorTab,
     mobile,
     onOpenInspector,
+    filePreview,
     snapshot.agentRuns,
     workspaceEntrySnapshotReady,
     suppressExecutionAutoOpen
@@ -2102,12 +2163,15 @@ export function CampWorkspace({
     if (suppressExecutionAutoOpen) return
     if (!mobile && workspaceEntryRunningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
+    } else if (workspaceEntryRunningRun && executionPlacement === 'right') {
+      filePreview?.openExecution()
     }
   }, [
     executionPlacement,
     inspectorTab,
     mobile,
     onOpenInspector,
+    filePreview,
     workspaceEntryRunningRun,
     workspaceEntrySnapshotReady,
     suppressExecutionAutoOpen
@@ -2128,8 +2192,10 @@ export function CampWorkspace({
     executionDrawerReturnAgentIdRef.current = null
     if (!mobile && runningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
+    } else if (runningRun && executionPlacement === 'right') {
+      filePreview?.openExecution()
     }
-  }, [executionPlacement, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id, suppressExecutionAutoOpen])
+  }, [executionPlacement, filePreview, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id, suppressExecutionAutoOpen])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -2149,9 +2215,11 @@ export function CampWorkspace({
       currentAgentTrigger.focus({ preventScroll: true })
       return
     }
-    const fallback = executionPlacement === 'inspector'
-      ? inspectorPlacementButtonRef.current
-      : bottomPlacementButtonRef.current
+    const fallback = executionPlacement === 'right'
+      ? rightPlacementButtonRef.current
+      : executionPlacement === 'inspector'
+        ? inspectorPlacementButtonRef.current
+        : bottomPlacementButtonRef.current
     fallback?.focus({ preventScroll: true })
   }, [executionDrawerAgentId, executionPlacement])
 
@@ -2297,10 +2365,18 @@ export function CampWorkspace({
     failedAttachmentCount: failedAttachments.length
       + (composerDraft?.attachments.some(({ availability }) => availability !== 'available') ? 1 : 0)
   })
-  const executionDrawerProcess = executionDrawerAgentId
-    ? executionProcessByAgentId.get(executionDrawerAgentId) ?? null
-    : null
-  const executionDrawerProfile = executionDrawerProcess
+  const executionDrawerOverview = executionDrawerAgentId === EXECUTION_OVERVIEW_SCOPE
+  const executionDrawerProcess = executionDrawerOverview
+    ? {
+        agentId: EXECUTION_OVERVIEW_SCOPE,
+        runs: executionProcesses.flatMap((process) => process.runs).sort((left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+        )
+      }
+    : executionDrawerAgentId
+      ? executionProcessByAgentId.get(executionDrawerAgentId) ?? null
+      : null
+  const executionDrawerProfile = executionDrawerProcess && !executionDrawerOverview
     ? profileById.get(executionDrawerProcess.agentId) ?? null
     : null
   const executionDrawerInstallation = executionDrawerProfile?.runtimeConfiguration
@@ -3870,6 +3946,22 @@ export function CampWorkspace({
     })
   }
 
+  const confirmMessageWithdrawal = async (): Promise<void> => {
+    if (!withdrawalMessage || withdrawingMessageId || !onWithdrawMessage) return
+    const message = withdrawalMessage
+    setWithdrawingMessageId(message.id)
+    setWithdrawalError(null)
+    try {
+      await onWithdrawMessage(message)
+      setWithdrawalMessage(null)
+      onNotify('消息已撤回')
+    } catch (error) {
+      setWithdrawalError(readErrorMessage(error, '撤回失败，请重试。'))
+    } finally {
+      setWithdrawingMessageId(null)
+    }
+  }
+
   const chooseStarterPrompt = (prompt: string, announceDraft = false): void => {
     composerHandleRef.current?.setDocument(composerDocumentFromText(prompt), 'end')
     if (announceDraft) setStarterNotice('内容已填入，可编辑后发送。')
@@ -3880,10 +3972,62 @@ export function CampWorkspace({
     onInspectorTabChange?.(tab)
   }
 
+  const rememberExecutionReadingPosition = (): ExecutionConsoleReadingPosition | null => {
+    const position = captureExecutionConsoleReadingPosition(
+      executionDrawerPortal?.querySelector<HTMLElement>('.execution-drawer') ?? null,
+      executionReadingPosition.current
+    )
+    executionReadingPosition.current = position
+    return position
+  }
+
+  const restoreExecutionReadingPositionAfterLayout = (
+    position: ExecutionConsoleReadingPosition | null
+  ): void => {
+    if (!position || !executionDrawerPortal) return
+    if (executionReadingRestoreFrames.current) {
+      window.cancelAnimationFrame(executionReadingRestoreFrames.current[0])
+      window.cancelAnimationFrame(executionReadingRestoreFrames.current[1])
+    }
+    const firstFrame = window.requestAnimationFrame(() => {
+      const secondFrame = window.requestAnimationFrame(() => {
+        executionReadingRestoreFrames.current = null
+        restoreExecutionConsoleReadingPosition(
+          executionDrawerPortal.querySelector<HTMLElement>('.execution-drawer'),
+          position
+        )
+      })
+      executionReadingRestoreFrames.current = [firstFrame, secondFrame]
+    })
+    executionReadingRestoreFrames.current = [firstFrame, firstFrame]
+  }
+
+  const captureExecutionPlacementMenuReadingPosition = (): void => {
+    const position = executionReadingPosition.current
+      ?? captureExecutionConsoleReadingPosition(
+        executionDrawerPortal?.querySelector<HTMLElement>('.execution-drawer') ?? null
+      )
+    executionPlacementMenuReadingPosition.current = position
+    executionReadingPosition.current = position
+  }
+
+  const trackExecutionPlacementMenu = (open: boolean): void => {
+    if (open && executionPlacementMenuReadingPosition.current === null) {
+      captureExecutionPlacementMenuReadingPosition()
+    }
+  }
+
   const selectInspectorSurfaceTab = (tab: CampInspectorSurfaceTab): void => {
     if (tab === 'execution') {
       setExecutionInspectorActive(true)
+      restoreExecutionReadingPositionAfterLayout(executionReadingPosition.current)
       return
+    }
+    if (executionPlacement === 'inspector' && executionInspectorActive) {
+      rememberExecutionReadingPosition()
+      executionDrawerPortal
+        ?.querySelector<HTMLElement>('.execution-drawer-body')
+        ?.removeAttribute('data-execution-reading-intent')
     }
     setExecutionInspectorActive(false)
     selectInspectorTab(tab)
@@ -3909,9 +4053,11 @@ export function CampWorkspace({
   const focusPlacementButton = (placement: ExecutionConsolePlacement): void => {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        const target = placement === 'inspector'
-          ? inspectorPlacementButtonRef.current
-          : bottomPlacementButtonRef.current
+        const target = placement === 'right'
+          ? rightPlacementButtonRef.current
+          : placement === 'inspector'
+            ? inspectorPlacementButtonRef.current
+            : bottomPlacementButtonRef.current
         target?.focus({ preventScroll: true })
       })
     })
@@ -3926,22 +4072,33 @@ export function CampWorkspace({
     executionPlacementRequest.current = true
     setExecutionPlacementPending(true)
     setExecutionPlacementError(null)
+    const readingPosition = executionPlacementMenuReadingPosition.current
+      ?? executionReadingPosition.current
+      ?? captureExecutionConsoleReadingPosition(
+        executionDrawerPortal?.querySelector<HTMLElement>('.execution-drawer') ?? null,
+        executionReadingPosition.current
+      )
+    executionPlacementMenuReadingPosition.current = null
     try {
       const confirmedPlacement = await onExecutionPlacementChange(target)
       if (!executionPlacementMounted.current) return
       if (confirmedPlacement && confirmedPlacement !== target) {
         throw new Error('保存后的执行台位置与请求不一致')
       }
-      const readingPosition = captureExecutionConsoleReadingPosition(
-        executionDrawerPortal?.querySelector<HTMLElement>('.execution-drawer') ?? null,
-        executionReadingPosition.current
-      )
       executionReadingPosition.current = readingPosition
       pendingExecutionReadingPosition.current = readingPosition
       if (target === 'inspector') {
+        const executionTab = filePreview?.tabs.find((tab) => tab.kind === 'execution')
+        if (executionTab) filePreview?.close(executionTab.id)
         setExecutionInspectorActive(true)
         onOpenInspector?.(inspectorTab)
+      } else if (target === 'right') {
+        setExecutionInspectorActive(false)
+        onCloseInspector()
+        filePreview?.openExecution()
       } else {
+        const executionTab = filePreview?.tabs.find((tab) => tab.kind === 'execution')
+        if (executionTab) filePreview?.close(executionTab.id)
         setExecutionInspectorActive(false)
         onCloseInspector()
       }
@@ -3950,20 +4107,13 @@ export function CampWorkspace({
       if (!executionPlacementMounted.current) return
       setExecutionPlacementError({
         message: executionPlacementSaveFailureMessage(executionPlacement),
-        detail: readErrorMessage(nextError, null)
+        detail: readErrorMessage(nextError, null),
+        target
       })
     } finally {
       executionPlacementRequest.current = false
       if (executionPlacementMounted.current) setExecutionPlacementPending(false)
     }
-  }
-
-  const moveExecutionToInspector = (): void => {
-    void moveExecution('inspector')
-  }
-
-  const moveExecutionToBottom = (): void => {
-    void moveExecution('bottom')
   }
 
   const loadEarlierMessages = async (): Promise<void> => {
@@ -4037,6 +4187,8 @@ export function CampWorkspace({
     if (executionPlacement === 'inspector' && options.reveal !== false) {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
+    } else if (executionPlacement === 'right' && options.reveal !== false) {
+      filePreview?.openExecution()
     }
     const requestedRun = options.runId
       ? process.runs.find((run) => run.id === options.runId) ?? null
@@ -4054,6 +4206,26 @@ export function CampWorkspace({
     setExecutionDrawerFocusRequest((request) => ({
       sequence: request.sequence + 1,
       moveDomFocus: options.moveDomFocus ?? true
+    }))
+  }
+
+  const openExecutionOverview = (
+    trigger: HTMLButtonElement | null = null,
+    moveDomFocus = true
+  ): void => {
+    if (executionPlacement === 'inspector') {
+      setExecutionInspectorActive(true)
+      onOpenInspector?.(inspectorTab)
+    } else if (executionPlacement === 'right') {
+      filePreview?.openExecution()
+    }
+    if (trigger) executionDrawerTriggerRef.current = trigger
+    executionDrawerReturnAgentIdRef.current = EXECUTION_OVERVIEW_SCOPE
+    setExecutionDrawerAgentId(EXECUTION_OVERVIEW_SCOPE)
+    setExecutionDrawerFocusedRunId(null)
+    setExecutionDrawerFocusRequest((request) => ({
+      sequence: request.sequence + 1,
+      moveDomFocus
     }))
   }
 
@@ -4081,7 +4253,11 @@ export function CampWorkspace({
     if (executionConsoleIsVisible(
       executionPlacement,
       inspectorVisible,
-      inspectorSurfaceTab
+      inspectorSurfaceTab,
+      Boolean(
+        filePreview?.paneVisible
+        && filePreview.activeTab?.kind === 'execution'
+      )
     ) && isViewingNonTerminalAgentRun(
       executionDrawerAgentId,
       executionDrawerFocusedRunId,
@@ -4098,6 +4274,7 @@ export function CampWorkspace({
     executionPlacement,
     inspectorSurfaceTab,
     inspectorVisible,
+    filePreview,
     snapshot.agentRuns,
     submittedExecutionRequests,
     mobile,
@@ -4135,12 +4312,13 @@ export function CampWorkspace({
       key={executionDrawerProcess.agentId}
       placement={executionPlacement}
       process={executionDrawerProcess}
+      overview={executionDrawerOverview}
       memberFast={memberFast}
       member={memberById.get(executionDrawerProcess.agentId) ?? null}
       profile={executionDrawerProfile}
       installation={executionDrawerInstallation}
-      deliveries={snapshot.messageDeliveries}
       turns={snapshot.turns}
+      messages={visibleCampMessages}
       progressByRunId={executionProgressByRunId}
       windowedEvidence={openCoverage !== null}
       executionEventsByRunId={executionEventsByRunId}
@@ -4156,9 +4334,12 @@ export function CampWorkspace({
       onClose={closeExecutionProcess}
       onCancelAgentRun={onCancelAgentRun}
       memberById={memberById}
+      onRevealMessage={(messageId) => void revealReplyParent(messageId)}
       onFileOpenError={notifyError}
     />
   ) : null
+  const rightExecutionVisible = executionPlacement === 'right'
+    && Boolean(filePreview?.paneVisible && filePreview.activeTab?.kind === 'execution')
 
   return (
     <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
@@ -4573,6 +4754,11 @@ export function CampWorkspace({
                     delivery.deliveryKind === 'public_a2a'
                     && delivery.messageId === campMessage.id
                   )
+                  const userMessageRuns = campMessage.authorType === 'user'
+                    ? snapshot.agentRuns.filter((run) =>
+                        (run.inputMessageIds ?? []).includes(campMessage.id)
+                      )
+                    : []
                   const replyParentId = campMessage.replyToCampMessageId
                   const replyParent = replyParentId ? replyParentById.get(replyParentId) ?? null : null
                   const replyParentUnavailable = Boolean(
@@ -4612,15 +4798,6 @@ export function CampWorkspace({
                     ].join('\n'),
                     campMessage.content
                   )
-                  const handleWithdraw = campMessage.canWithdraw && onWithdrawMessage
-                    ? (): void => {
-                        if (withdrawingMessageId) return
-                        setWithdrawingMessageId(campMessage.id)
-                        void onWithdrawMessage(campMessage)
-                          .catch((error) => notifyError?.(error instanceof Error ? error.message : String(error)))
-                          .finally(() => setWithdrawingMessageId((current) => current === campMessage.id ? null : current))
-                      }
-                    : undefined
                   const messageClasses = [
                     'timeline-node conversation-bubble', campMessage.authorType,
                     campMessage.authorType === 'agent' && 'public-agent-message',
@@ -4712,8 +4889,6 @@ export function CampWorkspace({
                                 showActions={campMessage.authorType !== 'agent'}
                                 onReply={humanAuthored ? undefined : handleReply}
                                 onCopy={handleCopy}
-                                onWithdraw={handleWithdraw}
-                                withdrawing={withdrawingMessageId === campMessage.id}
                               >
                                 <MessageQuotes history quotes={campMessage.quotes ?? []} onReveal={revealQuote} />
                                 {replyParentId && (
@@ -4815,6 +4990,24 @@ export function CampWorkspace({
                                   />
                                 )}
                               </MessageSurface>
+                              {campMessage.authorType === 'user' && (
+                                <UserMessageDeliveryReceipt
+                                  message={campMessage}
+                                  runs={userMessageRuns}
+                                  memberById={memberById}
+                                  onOpenExecution={(run, trigger) => openExecutionProcess(
+                                    run.agentId,
+                                    trigger,
+                                    { runId: run.id }
+                                  )}
+                                  onWithdraw={campMessage.canWithdraw && onWithdrawMessage
+                                    ? () => {
+                                        setWithdrawalError(null)
+                                        setWithdrawalMessage(campMessage)
+                                      }
+                                    : undefined}
+                                />
+                              )}
                               <CampMessageDeliveryFooter
                                 deliveries={campMessageDeliveries}
                                 memberById={memberById}
@@ -4914,7 +5107,10 @@ export function CampWorkspace({
               entryHost={detailEntryHost}
               activeTab={inspectorSurfaceTab}
               visible={inspectorVisible}
-              showExecution={executionPlacement === 'inspector'}
+              showExecution={executionPlacement !== 'bottom'}
+              executionExpanded={executionPlacement === 'inspector'
+                ? inspectorVisible && inspectorSurfaceTab === 'execution'
+                : rightExecutionVisible}
               runningMembers={runningMembers}
               executionCount={executionProcesses.length}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
@@ -4922,6 +5118,12 @@ export function CampWorkspace({
               singleChatVisible={singleChatVisible}
               onOpenSingleChat={onOpenSingleChat}
               onOpen={(tab) => {
+                if (tab === 'execution' && executionPlacement === 'right') {
+                  onCloseInspector()
+                  if (executionDrawerAgentId === null) openExecutionOverview(null, false)
+                  else filePreview?.openExecution()
+                  return
+                }
                 selectInspectorSurfaceTab(tab)
                 onOpenInspector?.(tab === 'execution' ? inspectorTab : tab)
               }}
@@ -4940,7 +5142,10 @@ export function CampWorkspace({
                   railActive={inspectorVisible && inspectorSurfaceTab === 'execution'}
                   revealRequest={executionDrawerFocusRequest.sequence}
                   onOpen={openExecutionProcess}
-                  onMovePlacement={moveExecutionToBottom}
+                  onOpenOverview={openExecutionOverview}
+                  onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
+                  onPlacementMenuOpenChange={trackExecutionPlacementMenu}
+                  onMovePlacement={moveExecution}
                   placementPending={executionPlacementPending}
                   placementError={executionPlacementError}
                 />
@@ -4959,7 +5164,7 @@ export function CampWorkspace({
                         className="quiet-button compact"
                         type="button"
                         disabled={executionPlacementPending}
-                        onClick={moveExecutionToBottom}
+                        onClick={() => void moveExecution('bottom')}
                       >{executionPlacementPending ? '正在保存…' : '移到底部'}</button>
                       {executionPlacementError && <span role="alert">{executionPlacementError.message}</span>}
                     </>}
@@ -5023,7 +5228,10 @@ export function CampWorkspace({
               stopping={stopping}
               selectedAgentId={executionDrawerAgentId}
               onOpen={openExecutionProcess}
-              onMovePlacement={moveExecutionToInspector}
+              onOpenOverview={openExecutionOverview}
+              onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
+              onPlacementMenuOpenChange={trackExecutionPlacementMenu}
+              onMovePlacement={moveExecution}
               placementPending={executionPlacementPending}
               placementError={executionPlacementError}
             />
@@ -5462,7 +5670,77 @@ export function CampWorkspace({
           onClose={closeMentionPopover}
         />
       )}
+      {executionPlacement === 'right' && executionPreviewHost && createPortal(
+        <>
+          {executionProcesses.length > 0 && <RunPulse
+            key={snapshot.camp.id}
+            placement="right"
+            placementButtonRef={rightPlacementButtonRef}
+            processes={executionProcesses}
+            memberById={memberById}
+            stopping={stopping}
+            selectedAgentId={executionDrawerAgentId}
+            revealRequest={executionDrawerFocusRequest.sequence}
+            onOpen={openExecutionProcess}
+            onOpenOverview={openExecutionOverview}
+            onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
+            onPlacementMenuOpenChange={trackExecutionPlacementMenu}
+            onMovePlacement={moveExecution}
+            placementPending={executionPlacementPending}
+            placementError={executionPlacementError}
+          />}
+          {!executionDrawer && (
+            <div className="execution-sidecar-empty execution-preview-empty">
+              {executionProcesses.length > 0 ? '选择一位队员，查看连续执行历史。' : '暂无执行记录'}
+            </div>
+          )}
+        </>,
+        executionPreviewHost
+      )}
       {executionDrawerPortal && createPortal(executionDrawer, executionDrawerPortal)}
+      <Dialog.Root
+        open={withdrawalMessage !== null}
+        onOpenChange={(open) => {
+          if (!open && !withdrawingMessageId) {
+            setWithdrawalMessage(null)
+            setWithdrawalError(null)
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay app-dialog-overlay" />
+          <AppDialogContent className="message-withdraw-dialog" tone="danger" width="compact">
+            <AppDialogHeader
+              icon="warning"
+              title="撤回这条消息？"
+              description="所有接收队员均未读，可直接撤回。"
+              closeDisabled={withdrawingMessageId !== null}
+            />
+            {withdrawalError && <AppDialogBody>
+              <p className="message-withdraw-error" role="alert">{withdrawalError}</p>
+            </AppDialogBody>}
+            <AppDialogFooter>
+              <button
+                className="quiet-button"
+                type="button"
+                aria-label="取消撤回"
+                disabled={withdrawingMessageId !== null}
+                onClick={() => {
+                  setWithdrawalMessage(null)
+                  setWithdrawalError(null)
+                }}
+              >取消</button>
+              <button
+                className="danger-button"
+                type="button"
+                aria-label="确认撤回消息"
+                disabled={withdrawingMessageId !== null}
+                onClick={() => void confirmMessageWithdrawal()}
+              >{withdrawingMessageId ? '正在撤回…' : '撤回'}</button>
+            </AppDialogFooter>
+          </AppDialogContent>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   )
 }
@@ -5516,6 +5794,9 @@ function RunPulse({
   railActive = true,
   revealRequest = 0,
   onOpen,
+  onOpenOverview,
+  onPlacementMenuIntent,
+  onPlacementMenuOpenChange,
   onMovePlacement,
   placementPending,
   placementError
@@ -5529,9 +5810,12 @@ function RunPulse({
   railActive?: boolean
   revealRequest?: number
   onOpen(agentId: string, trigger: HTMLButtonElement): void
-  onMovePlacement(): void
+  onOpenOverview(trigger: HTMLButtonElement): void
+  onPlacementMenuIntent(): void
+  onPlacementMenuOpenChange(open: boolean): void
+  onMovePlacement(target: ExecutionConsolePlacement): Promise<void>
   placementPending: boolean
-  placementError: { message: string; detail: string | null } | null
+  placementError: { message: string; detail: string | null; target: ExecutionConsolePlacement } | null
 }): JSX.Element {
   const visibleProcesses = processes.slice().sort((left, right) => {
     const leftPosition = memberById.get(left.agentId)?.memberOrder ?? Number.MAX_SAFE_INTEGER
@@ -5542,17 +5826,13 @@ function RunPulse({
     process.runs.some(agentRunCountsAsExecuting)
   ).length
   if (visibleProcesses.length === 0) return <></>
-  const placementLabel = placementPending
-    ? '正在保存'
-    : placement === 'bottom' ? '移到浮层' : '移到底部'
-  const placementAriaLabel = placement === 'bottom'
-    ? '将执行台移到详情浮层并记住此位置'
-    : '将执行台移到会话底部并记住此位置'
-  const placementTitle = placement === 'bottom'
-    ? '移到浮层并记住此位置'
-    : '移到底部并记住此位置'
+  const placementLabel = placement === 'right'
+    ? '固定到右侧'
+    : placement === 'inspector'
+      ? '浮层'
+      : '底部'
   return (
-    <div className={`run-pulse run-pulse-${placement}`} aria-label="Agent 执行台">
+    <div className={`run-pulse run-pulse-${placement}${placement === 'right' ? ' run-pulse-inspector' : ''}`} aria-label="Agent 执行台">
       <div className="run-pulse-heading">
         {placement === 'bottom' && <span className="run-pulse-title">
           <span className="run-pulse-mark" aria-hidden="true">
@@ -5560,15 +5840,19 @@ function RunPulse({
               <path d="M1.5 9h4.2l2.1-5.2 3.4 10.4 3.1-7.4 2.2 4.1h3.1l1.4-2.1h3.5" />
             </svg>
           </span>
-          <strong>执行台</strong>
+          <strong>执行</strong>
         </span>}
-        <span className="run-pulse-count" aria-live="polite">
-          {stopping ? '正在提交停止请求 · ' : activeProcessCount > 0 ? `${activeProcessCount} 位执行中 · ` : ''}
-          {visibleProcesses.length} 位队员
-        </span>
       </div>
-      {placement === 'inspector' ? <ExecutionAvatarRail
-        items={visibleProcesses.flatMap(process => {
+      {placement !== 'bottom' ? <ExecutionAvatarRail
+        items={[{
+          agentId: EXECUTION_OVERVIEW_SCOPE,
+          avatarRef: null,
+          displayName: '总览',
+          overview: true,
+          statusLabel: '全部队员',
+          statusTone: activeProcessCount > 0 ? 'info' : 'neutral',
+          stateShape: activeProcessCount > 0 ? 'running' : 'recorded'
+        }, ...visibleProcesses.flatMap(process => {
           const run = preferredAgentProcessRun(process.runs)
           if (!run) return []
           const member = memberById.get(process.agentId)
@@ -5581,12 +5865,31 @@ function RunPulse({
             statusTone: presentation.tone,
             stateShape: runPulseStateShape(run, stopping)
           }]
-        })}
+        })]}
         selectedAgentId={selectedAgentId}
         revealRequest={revealRequest}
         active={railActive}
-        onOpen={onOpen}
+        onOpen={(agentId, trigger) => {
+          if (agentId === EXECUTION_OVERVIEW_SCOPE) onOpenOverview(trigger)
+          else onOpen(agentId, trigger)
+        }}
       /> : <ul className="run-pulse-list" aria-label="队员执行过程入口">
+        <li>
+          <button
+            type="button"
+            className={`run-pulse-chip run-pulse-overview-chip${selectedAgentId === EXECUTION_OVERVIEW_SCOPE ? ' is-selected' : ''}`}
+            aria-label="打开全部队员执行总览"
+            aria-pressed={selectedAgentId === EXECUTION_OVERVIEW_SCOPE}
+            aria-expanded={selectedAgentId === EXECUTION_OVERVIEW_SCOPE}
+            aria-controls="agent-execution-drawer"
+            title="总览 · 全部队员"
+            data-agent-id={EXECUTION_OVERVIEW_SCOPE}
+            onClick={(event) => onOpenOverview(event.currentTarget)}
+          >
+            <span className="run-pulse-overview-mark" aria-hidden="true">总</span>
+            <span className="run-pulse-chip-copy"><strong><span>总览</span></strong></span>
+          </button>
+        </li>
         {visibleProcesses.map((process) => {
           const run = preferredAgentProcessRun(process.runs)
           if (!run) return null
@@ -5638,23 +5941,53 @@ function RunPulse({
         })}
       </ul>}
       <div className="execution-placement-control">
-        <button
-          ref={placementButtonRef}
-          className="execution-placement-button"
-          type="button"
-          aria-label={placementAriaLabel}
-          aria-busy={placementPending}
-          title={placementPending ? '正在保存执行台位置' : placementTitle}
-          disabled={placementPending}
-          onClick={onMovePlacement}
-        >
-          <ExecutionPlacementIcon target={placement === 'bottom' ? 'inspector' : 'bottom'} />
-          <span>{placementLabel}</span>
-        </button>
+        <DropdownMenu.Root onOpenChange={onPlacementMenuOpenChange}>
+          <DropdownMenu.Trigger asChild>
+            <button
+              ref={placementButtonRef}
+              className="execution-placement-button"
+              type="button"
+              aria-label={`切换执行台位置，当前${placementLabel}`}
+              aria-busy={placementPending}
+              title={placementPending ? '正在保存执行台位置' : `切换执行台位置 · ${placementLabel}`}
+              disabled={placementPending}
+              onPointerDownCapture={onPlacementMenuIntent}
+              onKeyDownCapture={(event) => {
+                if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+                  onPlacementMenuIntent()
+                }
+              }}
+            >
+              <ExecutionPlacementSwitchIcon />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className="execution-placement-menu" sideOffset={6} align="end">
+              <div className="execution-placement-menu-heading">切换执行台位置</div>
+              {([
+                ['right', '固定到右侧', '与会话并排，不遮挡正文'],
+                ['inspector', '浮层', '保持会话宽度，按需展开'],
+                ['bottom', '底部', '宽幅查看过程与工具输出']
+              ] as const).map(([target, title, description]) => (
+                <DropdownMenu.Item
+                  className={`execution-placement-option${placement === target ? ' is-selected' : ''}`}
+                  data-placement={target}
+                  key={target}
+                  disabled={placementPending}
+                  onSelect={() => { void onMovePlacement(target) }}
+                >
+                  <ExecutionPlacementIcon target={target} />
+                  <span><strong>{title}</strong><small>{description}</small></span>
+                  {placement === target && <svg className="execution-placement-check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8 3 3 6-6" /></svg>}
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
         {placementError && (
           <span className="execution-placement-feedback" role="alert" title={placementError.detail ?? undefined}>
             <span>{placementError.message}</span>
-            <button type="button" onClick={onMovePlacement}>重试</button>
+            <button type="button" onClick={() => void onMovePlacement(placementError.target)}>重试</button>
           </span>
         )}
       </div>
@@ -5663,10 +5996,16 @@ function RunPulse({
 }
 
 function ExecutionPlacementIcon({ target }: { target: ExecutionConsolePlacement }): JSX.Element {
+  if (target === 'right') return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="2.5" y="3" width="15" height="14" rx="1.5" />
+      <path d="M12.5 3v14" />
+    </svg>
+  )
   return target === 'inspector' ? (
     <svg viewBox="0 0 20 20" aria-hidden="true">
-      <path d="M15.5 3.5v13" />
-      <path d="m7 6.5 3.5 3.5L7 13.5" />
+      <rect x="4" y="5" width="12" height="10" rx="1.5" />
+      <path d="M6.5 7.5h7" />
     </svg>
   ) : (
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -5676,15 +6015,103 @@ function ExecutionPlacementIcon({ target }: { target: ExecutionConsolePlacement 
   )
 }
 
+function ExecutionPlacementSwitchIcon(): JSX.Element {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M3 8h18M8 8v13m3-8h7m-2-2 2 2-2 2m-5 3h7m-5-2-2 2 2 2" />
+  </svg>
+}
+
+type ExecutionQueueBatch = {
+  agentId: string
+  runs: AgentRunView[]
+  createdAt: string
+}
+
+function executionTriggerMessage(
+  run: AgentRunView,
+  turns: CampSnapshot['turns'],
+  messageById: ReadonlyMap<string, CampMessageView>
+): CampMessageView | null {
+  const turn = turns.find((candidate) => candidate.id === run.campTurnId)
+  if (!turn || turn.triggerType !== 'camp_message') return null
+  return messageById.get(turn.triggerId) ?? null
+}
+
+function executionMessageSummary(message: CampMessageView | null, run: AgentRunView): string {
+  const body = message?.body.trim().replace(/\s+/gu, ' ')
+  if (body) return body
+  const attachment = message?.attachments[0]?.displayName
+  if (attachment) return message!.attachments.length > 1
+    ? `${attachment} 等 ${message!.attachments.length} 个附件`
+    : attachment
+  return run.purpose.trim().replace(/\s+/gu, ' ') || '执行记录'
+}
+
+export function executionQueueBatches(runs: readonly AgentRunView[]): ExecutionQueueBatch[] {
+  const byAgent = new Map<string, AgentRunView[]>()
+  for (const run of runs) {
+    if (run.status !== 'queued') continue
+    byAgent.set(run.agentId, [...(byAgent.get(run.agentId) ?? []), run])
+  }
+  return [...byAgent.entries()].map(([agentId, queuedRuns]) => {
+    const newestFirst = queuedRuns.slice().sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
+    )
+    return { agentId, runs: newestFirst, createdAt: newestFirst[0]?.createdAt ?? '' }
+  }).sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt) || left.agentId.localeCompare(right.agentId)
+  )
+}
+
+function executionRunDurationLabel(run: AgentRunView, now: number): string {
+  const start = Date.parse(run.startedAt ?? run.createdAt)
+  const end = NON_TERMINAL_RUNS.has(run.status)
+    ? now
+    : Date.parse(run.endedAt ?? run.updatedAt)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return '—'
+  const elapsedSeconds = Math.max(0, Math.floor((end - start) / 1_000))
+  const minutes = Math.floor(elapsedSeconds / 60)
+  const seconds = elapsedSeconds % 60
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}时 ${minutes % 60}分`
+  return `${minutes}分 ${String(seconds).padStart(2, '0')}秒`
+}
+
+function ExecutionRunMetric({ run }: { run: AgentRunView }): JSX.Element {
+  const live = NON_TERMINAL_RUNS.has(run.status) && run.status !== 'queued'
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!live) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [live])
+  return <span className={`execution-run-metric${live ? ' is-live' : ''}${run.status === 'queued' ? ' is-queued' : ''}`}>
+    {run.status === 'queued' ? '排队中' : executionRunDurationLabel(run, now)}
+  </span>
+}
+
+function ExecutionCardChevron({ expanded }: { expanded: boolean }): JSX.Element {
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d={expanded ? 'm4 10 4-4 4 4' : 'm4 6 4 4 4-4'} /></svg>
+}
+
+function ExecutionStopIcon(): JSX.Element {
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1" /></svg>
+}
+
+function ExecutionBatchIcon(): JSX.Element {
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 5 5-2 5 2-5 2zM3 8l5 2 5-2M3 11l5 2 5-2" /></svg>
+}
+
 function ExecutionDrawer({
   memberFast,
   placement,
   process,
+  overview,
   member,
   profile,
   installation,
-  deliveries,
   turns,
+  messages,
   progressByRunId,
   windowedEvidence,
   executionEventsByRunId,
@@ -5700,16 +6127,18 @@ function ExecutionDrawer({
   onClose,
   onCancelAgentRun,
   memberById,
+  onRevealMessage,
   onFileOpenError
 }: {
   memberFast: CampMemberFastControls
   placement: ExecutionConsolePlacement
   process: AgentExecutionProcess
+  overview: boolean
   member: CampSnapshot['members'][number] | null
   profile: AgentProfile | null
   installation: AdapterInstallation | null
-  deliveries: MessageDeliveryView[]
   turns: CampSnapshot['turns']
+  messages: CampMessageView[]
   progressByRunId: Map<string, LiveExecutionProgress>
   windowedEvidence: boolean
   executionEventsByRunId: Map<string, LiveRuntimeEvent[]>
@@ -5723,8 +6152,9 @@ function ExecutionDrawer({
   focusedRunId: string | null
   focusRequest: ExecutionDrawerFocusRequest
   onClose(): void
-  onCancelAgentRun?(run: AgentRunView): Promise<void>
+  onCancelAgentRun(run: AgentRunView): Promise<void>
   memberById: Map<string, CampSnapshot['members'][number]>
+  onRevealMessage(messageId: string): void
   onFileOpenError(message: string): void
 }): JSX.Element {
   const mobile = useMobileLayout()
@@ -5748,7 +6178,7 @@ function ExecutionDrawer({
       })
     }
   }), [expandedGroups])
-  const fastControl = memberFast.get(process.agentId)
+  const fastControl = overview ? null : memberFast.get(process.agentId)
   const drawerRef = useRef<HTMLElement>(null)
   const drawerBodyRef = useRef<HTMLDivElement>(null)
   const resizeGestureRef = useRef<{
@@ -5769,32 +6199,27 @@ function ExecutionDrawer({
   const resolvedFocusedRun = process.runs.find((run) => run.id === focusedRunId)
     ?? preferredAgentProcessRun(process.runs)
   const resolvedFocusedRunId = resolvedFocusedRun?.id ?? null
-  const owningTurn = resolvedFocusedRun
-    ? turns.find((turn) => turn.id === resolvedFocusedRun.campTurnId) ?? null
-    : null
-  const turnStopping = Boolean(
-    resolvedFocusedRun?.campTurnId
-      && cancellingTurnIds.has(resolvedFocusedRun.campTurnId)
+  const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<string>>(
+    () => new Set(resolvedFocusedRunId ? [resolvedFocusedRunId] : [])
   )
-  const runStopping = Boolean(
-    resolvedFocusedRun
-    && (
-      cancellingRunIds.has(resolvedFocusedRun.id)
-      || submittingStopRunIds.has(resolvedFocusedRun.id)
-      || resolvedFocusedRun.cancelRequestedAt !== null
-    )
+  const [expandedQueueAgents, setExpandedQueueAgents] = useState<ReadonlySet<string>>(
+    () => new Set()
   )
-  const runStopConfirming = Boolean(
-    resolvedFocusedRun && confirmingRunIds.has(resolvedFocusedRun.id)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const messageById = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages]
   )
-  const stopViewState = onCancelAgentRun && resolvedFocusedRun
-    ? agentRunStopViewState(resolvedFocusedRun, owningTurn, {
-        cancelling: runStopping,
-        confirming: runStopConfirming,
-        turnCancelling: turnStopping
-      })
-    : 'hidden'
-  const latestRun = process.runs.at(-1)
+  const newestFirstRuns = useMemo(() => process.runs.slice().sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
+  ), [process.runs])
+  const currentRuns = newestFirstRuns.filter((run) =>
+    NON_TERMINAL_RUNS.has(run.status) && run.status !== 'queued'
+  )
+  const queueBatches = executionQueueBatches(newestFirstRuns)
+  const historyRuns = newestFirstRuns.filter((run) => !NON_TERMINAL_RUNS.has(run.status))
+  const unresolvedFailureCount = historyRuns.filter((run) => run.status === 'failed').length
+  const latestRun = resolvedFocusedRun ?? currentRuns[0] ?? null
   const latestProgress = latestRun
     ? progressByRunId.get(latestRun.id)
     : undefined
@@ -5803,7 +6228,9 @@ function ExecutionDrawer({
     latestRun?.waitReason ?? null,
     windowedEvidence ? latestRun?.executionEvidenceCount : latestProgress?.items ?? []
   ])
+  const followedProgressKey = useRef(progressFollowKey)
   const followingLatestRef = useRef(false)
+  const resumeFollowingLatestFrames = useRef<[number, number] | null>(null)
   const [followingLatest, setFollowingLatestState] = useState(false)
   const [latestRequest, setLatestRequest] = useState(0)
   const [hasNewer, setHasNewer] = useState(false)
@@ -5815,6 +6242,37 @@ function ExecutionDrawer({
     if (drawerBodyRef.current) drawerBodyRef.current.dataset.followingLatest = String(following)
     setFollowingLatestState((current) => current === following ? current : following)
   }
+  const resumeFollowingLatestAfterReadingInteraction = (): void => {
+    if (resumeFollowingLatestFrames.current) {
+      window.cancelAnimationFrame(resumeFollowingLatestFrames.current[0])
+      window.cancelAnimationFrame(resumeFollowingLatestFrames.current[1])
+    }
+    const firstFrame = window.requestAnimationFrame(() => {
+      const secondFrame = window.requestAnimationFrame(() => {
+        resumeFollowingLatestFrames.current = null
+        const body = drawerBodyRef.current
+        if (!body || !latestRun || !NON_TERMINAL_RUNS.has(latestRun.status)) return
+        if (executionDrawerIsNearBottom(body.scrollTop, body.scrollHeight, body.clientHeight)) {
+          setFollowingLatest(true)
+        }
+      })
+      resumeFollowingLatestFrames.current = [firstFrame, secondFrame]
+    })
+    resumeFollowingLatestFrames.current = [firstFrame, firstFrame]
+  }
+  const markExecutionReadingIntent = (): void => {
+    const body = drawerBodyRef.current
+    if (body) body.dataset.executionReadingIntent = String(window.performance.now())
+  }
+  const finishExecutionReadingInteraction = (): void => {
+    markExecutionReadingIntent()
+    resumeFollowingLatestAfterReadingInteraction()
+  }
+  useEffect(() => () => {
+    if (!resumeFollowingLatestFrames.current) return
+    window.cancelAnimationFrame(resumeFollowingLatestFrames.current[0])
+    window.cancelAnimationFrame(resumeFollowingLatestFrames.current[1])
+  }, [])
   useExecutionDisclosureAnchor(drawerBodyRef, `${campId}:${process.agentId}`, () => setFollowingLatest(false))
   const appliedHeight = placement === 'bottom' && preferredHeight !== null && heightBounds
     ? clampExecutionDrawerHeight(preferredHeight, heightBounds)
@@ -5968,7 +6426,7 @@ function ExecutionDrawer({
   }, [appliedHeight])
 
   useEffect(() => {
-    if (placement === 'inspector') return
+    if (placement !== 'bottom') return
     const drawer = drawerRef.current
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented) return
@@ -5998,16 +6456,16 @@ function ExecutionDrawer({
     if (!runId) return undefined
     const run = processRef.current.runs.find((candidate) => candidate.id === runId) ?? null
     const followLatest = Boolean(run && NON_TERMINAL_RUNS.has(run.status))
+    followedProgressKey.current = progressFollowKey
+    setExpandedRunIds((current) => current.has(runId) ? current : new Set(current).add(runId))
     setFollowingLatest(followLatest)
     const frame = window.requestAnimationFrame(() => {
       const target = drawerRef.current?.querySelector<HTMLElement>(
         `[data-agent-run-id="${CSS.escape(runId)}"]`
       )
-      if (followLatest && drawerBodyRef.current) {
-        scrollExecutionDrawerToLatest(drawerBodyRef.current)
-      } else {
-        target?.scrollIntoView({ block: 'nearest' })
-      }
+      const body = drawerBodyRef.current
+      if (followLatest && body) scrollExecutionDrawerToLatest(body)
+      else target?.scrollIntoView({ block: 'start' })
       if (focusRequest.moveDomFocus) target?.focus({ preventScroll: true })
     })
     return () => window.cancelAnimationFrame(frame)
@@ -6015,6 +6473,8 @@ function ExecutionDrawer({
 
   useLayoutEffect(() => {
     if (!followingLatestRef.current || !latestRun) return undefined
+    if (followedProgressKey.current === progressFollowKey) return undefined
+    followedProgressKey.current = progressFollowKey
     const terminal = !NON_TERMINAL_RUNS.has(latestRun.status)
     const frame = window.requestAnimationFrame(() => {
       const body = drawerBodyRef.current
@@ -6024,11 +6484,12 @@ function ExecutionDrawer({
     return () => window.cancelAnimationFrame(frame)
   }, [progressFollowKey, latestRun?.id])
 
-  const displayName = member?.displayName ?? profile?.displayName ?? process.agentId
-  const drawerTitle = executionDrawerTitle(
-    displayName,
-    profile?.runtimeConfiguration?.adapterKind ?? null
-  )
+  const displayName = overview
+    ? '全部队员'
+    : member?.displayName ?? profile?.displayName ?? process.agentId
+  const drawerTitle = overview
+    ? '总览'
+    : executionDrawerTitle(displayName, profile?.runtimeConfiguration?.adapterKind ?? null)
   const runtimeConfiguration = profile?.runtimeConfiguration
     ? memberRuntimeConfigurationPresentation(profile.runtimeConfiguration, installation)
     : null
@@ -6042,17 +6503,211 @@ function ExecutionDrawer({
   const defaultMaxHeight = heightBounds && typeof window !== 'undefined'
     ? defaultExecutionDrawerMaxHeight(window.innerWidth, window.innerHeight, heightBounds)
     : null
-  const drawerStyle: CSSProperties | undefined = placement === 'inspector'
+  const drawerStyle: CSSProperties | undefined = placement !== 'bottom'
     ? undefined
     : appliedHeight === null
       ? defaultMaxHeight === null ? undefined : { maxHeight: defaultMaxHeight }
       : { height: appliedHeight, minHeight: appliedHeight, maxHeight: appliedHeight }
 
+  const toggleRun = (runId: string): void => {
+    setExpandedRunIds((current) => {
+      const next = new Set(current)
+      if (next.has(runId)) next.delete(runId)
+      else next.add(runId)
+      return next
+    })
+  }
+
+  const stopRun = (run: AgentRunView): void => {
+    setSubmittingStopRunIds((current) => new Set(current).add(run.id))
+    void onCancelAgentRun(run).finally(() => {
+      setSubmittingStopRunIds((current) => {
+        if (!current.has(run.id)) return current
+        const next = new Set(current)
+        next.delete(run.id)
+        return next
+      })
+    })
+  }
+
+  const runStopState = (run: AgentRunView): AgentRunStopViewState => {
+    const owningTurn = turns.find((turn) => turn.id === run.campTurnId) ?? null
+    return agentRunStopViewState(run, owningTurn, {
+      cancelling: cancellingRunIds.has(run.id)
+        || submittingStopRunIds.has(run.id)
+        || run.cancelRequestedAt !== null,
+      confirming: confirmingRunIds.has(run.id),
+      turnCancelling: run.campTurnId !== null && cancellingTurnIds.has(run.campTurnId)
+    })
+  }
+
+  const renderRunCard = (run: AgentRunView): JSX.Element => {
+    const cancelling = (run.campTurnId !== null && cancellingTurnIds.has(run.campTurnId))
+      || cancellingRunIds.has(run.id)
+      || submittingStopRunIds.has(run.id)
+      || run.cancelRequestedAt !== null
+    const focused = run.id === resolvedFocusedRunId
+    const expanded = expandedRunIds.has(run.id)
+    const state = agentRunPresentation(run, cancelling)
+    const stateShape = runPulseStateShape(run, cancelling)
+    const sourceMessage = executionTriggerMessage(run, turns, messageById)
+    const summary = executionMessageSummary(sourceMessage, run)
+    const runMember = memberById.get(run.agentId)
+    const runMemberName = runMember?.displayName ?? run.agentId
+    const stopState = runStopState(run)
+    const contentId = `execution-run-content-${run.id}`
+    return (
+      <li
+        className={`execution-process-stage status-${run.status}${focused ? ' is-focused' : ''}`}
+        data-agent-run-id={run.id}
+        key={run.id}
+        tabIndex={-1}
+        aria-current={focused ? 'step' : undefined}
+        aria-label={`${runMemberName}，${state.label}，${summary}`}
+      >
+        <span className={`execution-process-node tone-${state.tone} state-${stateShape}`} aria-hidden="true">
+          <ExecutionStatusGlyph status={stateShape} />
+        </span>
+        <article className="execution-process-card">
+          <header className="execution-run-card-header">
+            <button
+              className="execution-run-toggle"
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={contentId}
+              title={`${runMemberName} · ${summary}`}
+              onClick={() => toggleRun(run.id)}
+            >
+              {overview && <MemberAvatar agentId={run.agentId} avatarRef={runMember?.avatarRef ?? null}
+                displayName={runMemberName} size="mention" decorative />}
+              <span className="execution-run-summary">{summary}</span>
+            </button>
+            <span className="execution-run-trailing">
+              <ExecutionRunMetric run={run} />
+              <span className="execution-run-operations">
+                <button type="button" aria-label={expanded ? '收起卡片' : '展开卡片'} aria-expanded={expanded}
+                  aria-controls={contentId} onClick={() => toggleRun(run.id)}>
+                  <ExecutionCardChevron expanded={expanded} />
+                </button>
+                {(stopState === 'available' || stopState === 'stopping' || stopState === 'confirming') && (
+                  <button className="is-danger" type="button" aria-label={`终止${runMemberName}的本次执行`}
+                    title="终止本次执行" disabled={stopState !== 'available'} onClick={() => stopRun(run)}>
+                    <ExecutionStopIcon />
+                  </button>
+                )}
+              </span>
+            </span>
+          </header>
+          <div id={contentId} hidden={!expanded}>
+            <RunExecutionDisclosure
+              run={run}
+              windowedEvidence={windowedEvidence}
+              liveRevision={executionEventsByRunId.get(run.id)}
+              progress={progressByRunId.get(run.id)}
+              campId={campId}
+              truncatedEvidence={truncatedEvidenceByRunId.get(run.id)}
+              loadedEvidenceCount={loadedEvidenceCountByRunId.get(run.id) ?? 0}
+              cancelling={cancelling}
+              focused={focused}
+              expanded={expanded}
+              hideSummary
+              onFileOpenError={onFileOpenError}
+            />
+          </div>
+        </article>
+      </li>
+    )
+  }
+
+  const renderQueueBatch = (batch: ExecutionQueueBatch): JSX.Element => {
+    const expanded = expandedQueueAgents.has(batch.agentId)
+    const runMember = memberById.get(batch.agentId)
+    const runMemberName = runMember?.displayName ?? batch.agentId
+    const batchMessages = [...new Map(batch.runs.flatMap((run) => {
+      const message = executionTriggerMessage(run, turns, messageById)
+      return message ? [[message.id, message] as const] : []
+    })).values()]
+    const batchInputCount = batchMessages.length || batch.runs.length
+    const summary = executionMessageSummary(batchMessages[0] ?? null, batch.runs[0])
+    const stoppingBatch = batch.runs.some((run) => runStopState(run) !== 'available')
+    const contentId = `execution-queue-content-${batch.agentId}`
+    const toggle = (): void => setExpandedQueueAgents((current) => {
+      const next = new Set(current)
+      if (next.has(batch.agentId)) next.delete(batch.agentId)
+      else next.add(batch.agentId)
+      return next
+    })
+    return (
+      <li className="execution-process-stage status-queued" data-queue-agent-id={batch.agentId} key={`queue:${batch.agentId}`}>
+        <span className="execution-process-node tone-attention state-queued" aria-hidden="true">
+          <ExecutionStatusGlyph status="queued" />
+        </span>
+        <article className="execution-process-card">
+          <header className="execution-run-card-header">
+            <button className="execution-run-toggle" type="button" aria-expanded={expanded}
+              aria-controls={contentId} title={`${runMemberName} · ${summary}`} onClick={toggle}>
+              {overview && <MemberAvatar agentId={batch.agentId} avatarRef={runMember?.avatarRef ?? null}
+                displayName={runMemberName} size="mention" decorative />}
+              <span className="execution-run-summary">{summary}</span>
+              {batchInputCount > 1 && <span className="execution-batch-count" aria-label={`${batchInputCount} 条输入`}>
+                <ExecutionBatchIcon /><span>{batchInputCount}</span>
+              </span>}
+            </button>
+            <span className="execution-run-trailing">
+              <span className="execution-run-metric is-queued">排队中</span>
+              <span className="execution-run-operations">
+                <button type="button" aria-label={expanded ? '收起排队批次' : '展开排队批次'}
+                  aria-expanded={expanded} aria-controls={contentId} onClick={toggle}>
+                  <ExecutionCardChevron expanded={expanded} />
+                </button>
+                <button className="is-danger" type="button" aria-label={`终止${runMemberName}的本批排队`}
+                  title="终止本批排队" disabled={stoppingBatch} onClick={() => {
+                    for (const run of batch.runs) stopRun(run)
+                  }}>
+                  <ExecutionStopIcon />
+                </button>
+              </span>
+            </span>
+          </header>
+          <div className="execution-queue-inputs" id={contentId} hidden={!expanded}>
+            {batchMessages.length > 0 ? <ol>
+              {batchMessages.map((message) => {
+                const authorMember = message.authorType === 'agent' ? memberById.get(message.authorId) : null
+                const author = message.authorType === 'agent'
+                  ? authorMember?.displayName ?? message.authorId
+                  : '你'
+                return <li key={message.id}>
+                  {message.authorType === 'agent'
+                    ? <MemberAvatar agentId={message.authorId} avatarRef={authorMember?.avatarRef ?? null}
+                        displayName={author} size="mention" decorative />
+                    : <span className="execution-input-user" aria-hidden="true">你</span>}
+                  <div>
+                    <div><strong>{author}</strong><button type="button" onClick={() => onRevealMessage(message.id)}>
+                      定位原消息
+                    </button></div>
+                    <p title={message.body}>{message.body || message.attachments.map((item) => item.displayName).join('、')}</p>
+                  </div>
+                </li>
+              })}
+            </ol> : <p className="execution-queue-empty">排队输入当前未载入。</p>}
+          </div>
+        </article>
+      </li>
+    )
+  }
+
+  const currentEntries = [
+    ...currentRuns.map((run) => ({ kind: 'run' as const, createdAt: run.createdAt, id: run.id, run })),
+    ...queueBatches.map((batch) => ({ kind: 'queue' as const, createdAt: batch.createdAt, id: batch.agentId, batch }))
+  ].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
+  )
+
   return (
     <section
       id="agent-execution-drawer"
       ref={drawerRef}
-      className={`execution-drawer execution-drawer-${placement}${preferredHeight !== null && placement === 'bottom' ? ' is-user-sized' : ''}${resizing ? ' is-resizing' : ''}`}
+      className={`execution-drawer execution-drawer-${placement}${placement === 'right' ? ' execution-drawer-inspector' : ''}${preferredHeight !== null && placement === 'bottom' ? ' is-user-sized' : ''}${resizing ? ' is-resizing' : ''}`}
       role="region"
       aria-labelledby="execution-drawer-title"
       tabIndex={-1}
@@ -6086,13 +6741,15 @@ function ExecutionDrawer({
       )}
         <header className="execution-drawer-header">
           <div className="execution-drawer-agent">
-            <MemberAvatar
-              agentId={process.agentId}
-              avatarRef={member?.avatarRef ?? profile?.avatarRef ?? null}
-              displayName={displayName}
-              size="list"
-              decorative
-            />
+            {overview
+              ? <span className="execution-overview-mark" aria-hidden="true">总</span>
+              : <MemberAvatar
+                  agentId={process.agentId}
+                  avatarRef={member?.avatarRef ?? profile?.avatarRef ?? null}
+                  displayName={displayName}
+                  size="list"
+                  decorative
+                />}
             <div>
               <div className="execution-drawer-title-line">
                 <h2 id="execution-drawer-title">{drawerTitle}</h2>
@@ -6108,56 +6765,30 @@ function ExecutionDrawer({
                   </span>
                 )}
               </div>
-              <p>
-                {!runHistoryComplete && '当前载入 '}{process.runs.length} 次执行
-                {!runHistoryComplete && ' · 更早执行尚未载入'}
-              </p>
             </div>
           </div>
-          {(placement === 'bottom' || stopViewState !== 'hidden') && <div className="execution-drawer-actions">
-            {stopViewState === 'stopped' ? (
-              <span className="execution-run-stop-state tone-neutral" role="status">已停止</span>
-            ) : stopViewState === 'stopping' ? (
-              <span className="execution-run-stop-state tone-attention" role="status">正在提交停止请求…</span>
-            ) : stopViewState === 'confirming' ? (
-              <span className="execution-run-stop-state tone-attention" role="status">正在确认停止状态</span>
-            ) : null}
-            {stopViewState === 'available' && resolvedFocusedRun && onCancelAgentRun && (
-              <button
-                type="button"
-                className="execution-drawer-action-button is-danger"
-                aria-label="停止当前运行"
-                onClick={() => {
-                  const runId = resolvedFocusedRun.id
-                  setSubmittingStopRunIds((current) => new Set(current).add(runId))
-                  void onCancelAgentRun(resolvedFocusedRun).finally(() => {
-                    setSubmittingStopRunIds((current) => {
-                      if (!current.has(runId)) return current
-                      const next = new Set(current)
-                      next.delete(runId)
-                      return next
-                    })
-                  })
-                }}
-              >
-                <span className="execution-drawer-action-face">停止</span>
-              </button>
-            )}
-            {placement === 'bottom' && (
+          {placement === 'bottom' && <div className="execution-drawer-actions">
               <button type="button" className="execution-drawer-action-button execution-drawer-collapse-button" onClick={onClose} aria-label="收起执行详情">
                 <span className="execution-drawer-action-face">
                   <span>收起</span>
                   <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="m4 10 4-4 4 4" /></svg>
                 </span>
               </button>
-            )}
           </div>}
         </header>
         <div
           ref={drawerBodyRef}
           className="execution-drawer-body"
-          aria-label={`${displayName}的连续执行历史`}
+          aria-label={overview ? '全部队员的执行总览' : `${displayName}的连续执行历史`}
           data-following-latest={followingLatest ? 'true' : 'false'}
+          onWheelCapture={finishExecutionReadingInteraction}
+          onPointerDownCapture={markExecutionReadingIntent}
+          onPointerMoveCapture={(event) => {
+            if (event.buttons !== 0) markExecutionReadingIntent()
+          }}
+          onPointerUpCapture={finishExecutionReadingInteraction}
+          onKeyDownCapture={markExecutionReadingIntent}
+          onKeyUpCapture={finishExecutionReadingInteraction}
           onScroll={(event) => {
             const body = event.currentTarget
             if (body.dataset.executionDisclosureAnchor === 'true') return
@@ -6167,71 +6798,41 @@ function ExecutionDrawer({
             const eligible = Boolean(
               latestRun && NON_TERMINAL_RUNS.has(latestRun.status)
             )
-            setFollowingLatest(eligible && executionDrawerIsNearBottom(
+            const nearBottom = executionDrawerIsNearBottom(
               body.scrollTop,
               body.scrollHeight,
               body.clientHeight
-            ))
+            )
+            if (!eligible || !nearBottom) setFollowingLatest(false)
           }}
         >
           <ExecutionLatestContext.Provider value={latestContext}>
           <ExecutionReadingContext.Provider value={setFollowingLatest}>
           <ExecutionToolGroupStateContext.Provider value={groupState}>
-          <ol className="execution-process-timeline">
-            {process.runs.map((run) => {
-              const cancelling = NON_TERMINAL_RUNS.has(run.status) && (
-                cancellingRunIds.has(run.id)
-                || run.cancelRequestedAt !== null
-                || Boolean(run.campTurnId && cancellingTurnIds.has(run.campTurnId))
-              )
-              const focused = run.id === resolvedFocusedRunId
-              const state = agentRunPresentation(run, cancelling)
-              const stateShape = runPulseStateShape(run, cancelling)
-              return (
-                <li
-                  className={`execution-process-stage status-${run.status}${focused ? ' is-focused' : ''}`}
-                  data-agent-run-id={run.id}
-                  key={run.id}
-                  tabIndex={-1}
-                  aria-current={focused ? 'step' : undefined}
-                  aria-label={`${runIntervalLabel(run)}，${state.label}`}
-                >
-                  <span className={`execution-process-node tone-${state.tone} state-${stateShape}`} aria-hidden="true">
-                    <ExecutionStatusGlyph status={stateShape} />
-                  </span>
-                  <article className="execution-process-card">
-                    <header className="execution-run-boundary">
-                      <div className="execution-run-boundary-main">
-                        <div className="execution-run-time-row">
-                          <time>{runIntervalLabel(run)}</time>
-                          <span className={`execution-run-boundary-state tone-${state.tone}`}>{state.label}</span>
-                          {focused && NON_TERMINAL_RUNS.has(run.status) && (
-                            <span className="current-run-badge">当前执行</span>
-                          )}
-                        </div>
-                      </div>
-                    </header>
-                    {agentRunTerminalNote(run) && (
-                      <p className="execution-terminal-note">{agentRunTerminalNote(run)}</p>
-                    )}
-                    <AgentRunDeliveryRecipients sourceAgentRunId={run.id} deliveries={deliveries} memberById={memberById} />
-                    <RunExecutionDisclosure
-                      run={run}
-                      windowedEvidence={windowedEvidence}
-                      liveRevision={executionEventsByRunId.get(run.id)}
-                      progress={progressByRunId.get(run.id)}
-                      campId={campId}
-                      truncatedEvidence={truncatedEvidenceByRunId.get(run.id)}
-                      loadedEvidenceCount={loadedEvidenceCountByRunId.get(run.id) ?? 0}
-                      cancelling={cancelling}
-                      focused={focused}
-                      onFileOpenError={onFileOpenError}
-                    />
-                  </article>
-                </li>
-              )
-            })}
-          </ol>
+          <section aria-label="当前执行与排队">
+            {currentEntries.length > 0
+              ? <ol className="execution-process-timeline">{currentEntries.map((entry) =>
+                  entry.kind === 'run' ? renderRunCard(entry.run) : renderQueueBatch(entry.batch)
+                )}</ol>
+              : <div className="execution-current-empty">当前没有执行</div>}
+          </section>
+          <section className="execution-history-section" aria-label="执行历史">
+            <button className="execution-history-toggle" type="button" aria-expanded={historyOpen}
+              aria-controls={`execution-history-${process.agentId}`} onClick={() => setHistoryOpen((open) => !open)}>
+              <ExecutionCardChevron expanded={historyOpen} />
+              <span>执行历史</span>
+              {historyRuns.length > 0 && <span className="execution-history-count">{historyRuns.length}</span>}
+              {unresolvedFailureCount > 0 && <span className="execution-history-alert">
+                <ExecutionStatusGlyph status="failed" />{unresolvedFailureCount} 项失败待处理
+              </span>}
+            </button>
+            <div className="execution-history-list" id={`execution-history-${process.agentId}`} hidden={!historyOpen}>
+              {historyRuns.length > 0
+                ? <ol className="execution-process-timeline">{historyRuns.map(renderRunCard)}</ol>
+                : <div className="execution-current-empty">暂无执行历史</div>}
+              {!runHistoryComplete && <p className="execution-history-partial">更早执行尚未载入</p>}
+            </div>
+          </section>
           <div className="execution-reading-space" aria-hidden="true" />
           </ExecutionToolGroupStateContext.Provider>
           </ExecutionReadingContext.Provider>
@@ -6365,6 +6966,98 @@ function CampMessageDeliveryFooter({
         })}
       </span>
     </footer>
+  )
+}
+
+function userMessageRunStatusLabel(run: AgentRunView | null): string {
+  if (!run) return '未读'
+  if (run.status === 'queued') return '待处理'
+  if (run.status === 'running') return '处理中'
+  if (run.status === 'waiting') return '等待中'
+  if (run.status === 'succeeded') return '已完成'
+  if (run.status === 'failed') return '未完成'
+  return '已停止'
+}
+
+function UserMessageDeliveryReceipt({
+  message,
+  runs,
+  memberById,
+  onOpenExecution,
+  onWithdraw
+}: {
+  message: CampMessageView
+  runs: AgentRunView[]
+  memberById: Map<string, CampSnapshot['members'][number]>
+  onOpenExecution(run: AgentRunView, trigger: HTMLButtonElement): void
+  onWithdraw?(): void
+}): JSX.Element | null {
+  if (message.id.startsWith('optimistic:') || message.addressedAgentIds.length === 0) return null
+  const runByAgentId = new Map<string, AgentRunView>()
+  for (const run of runs.slice().sort((left, right) => right.createdAt.localeCompare(left.createdAt))) {
+    if (!runByAgentId.has(run.agentId)) runByAgentId.set(run.agentId, run)
+  }
+  const ordered = message.addressedAgentIds.map((agentId) => ({
+    agentId,
+    run: runByAgentId.get(agentId) ?? null
+  }))
+  const pending = ordered.filter(({ run }) => !run || (run.status === 'queued' && !run.cancelRequestedAt))
+  const inProgress = ordered.filter(({ run }) => run?.status === 'running' || run?.status === 'waiting')
+  const incomplete = ordered.filter(({ run }) => run?.status === 'failed' || run?.status === 'cancelled')
+  const canWithdraw = message.canWithdraw && Boolean(onWithdraw)
+  const presentation = pending.length > 0
+    ? { className: 'is-queued', label: `待处理 · ${pending.length}` }
+    : incomplete.length > 0
+      ? { className: 'is-error', label: `未完成 · ${incomplete.length}` }
+      : inProgress.length > 0
+        ? { className: 'is-progress', label: `处理中 · ${inProgress.length}` }
+        : null
+  if (!presentation) return null
+  return (
+    <div className="user-message-receipt-row">
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button
+            className={`user-message-receipt ${presentation.className}`}
+            type="button"
+            aria-label={`查看消息处理状态，${presentation.label}`}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              {presentation.className === 'is-error'
+                ? <><circle cx="8" cy="8" r="5.6" /><path d="M8 5v3.5M8 11h.01" /></>
+                : presentation.className === 'is-progress'
+                  ? <path d="M2 8h2.4l1.2-3 2 6 1.8-4.4 1.3 2.5H14" />
+                  : <><circle cx="8" cy="8" r="5.6" /><path d="M8 4.7V8l2.2 1.4" /></>}
+            </svg>
+            <span>{presentation.label}</span>
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="user-message-receipt-menu" sideOffset={5} align="end">
+            <h3>消息处理状态</h3>
+            {ordered.map(({ agentId, run }) => {
+              const member = memberById.get(agentId)
+              const displayName = member?.displayName ?? agentId
+              return <div className="user-message-receipt-recipient" key={agentId}>
+                <MemberAvatar agentId={agentId} avatarRef={member?.avatarRef ?? null} displayName={displayName} size="mention" decorative />
+                <span><strong>{displayName}</strong><small>{userMessageRunStatusLabel(run)}</small></span>
+                {run && <DropdownMenu.Item asChild>
+                  <button type="button" onClick={(event) => onOpenExecution(run, event.currentTarget)}>查看执行</button>
+                </DropdownMenu.Item>}
+              </div>
+            })}
+            {canWithdraw && <div className="user-message-receipt-actions">
+              <DropdownMenu.Item asChild>
+                <button type="button" onClick={onWithdraw}>撤回消息</button>
+              </DropdownMenu.Item>
+            </div>}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+      {canWithdraw && <button className="user-message-withdraw" type="button" aria-label="撤回尚未领取的消息" title="撤回消息" onClick={onWithdraw}>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 4H2.5v2.5M2.8 6.2A5.4 5.4 0 1 1 3 10" /></svg>
+      </button>}
+    </div>
   )
 }
 
@@ -8973,6 +9666,8 @@ export function RunExecutionDisclosure({
   finalBody = null,
   cancelling = false,
   focused = false,
+  expanded,
+  hideSummary = false,
   onFileOpenError = () => undefined
 }: {
   run: AgentRunView
@@ -8985,6 +9680,8 @@ export function RunExecutionDisclosure({
   finalBody?: string | null
   cancelling?: boolean
   focused?: boolean
+  expanded?: boolean
+  hideSummary?: boolean
   onFileOpenError?(message: string): void
 }): JSX.Element | null {
   const client = useCampClient()
@@ -9007,18 +9704,24 @@ export function RunExecutionDisclosure({
   const previousNonTerminal = useRef(nonTerminal)
   const [historicalEvidence, setHistoricalEvidence] = useState<AgentRunExecutionEvidenceView[] | null>(null)
   const [historyStatus, setHistoryStatus] = useState<RunExecutionHistoryStatus>('idle')
-  const shouldActivateContent = windowedEvidence
-    ? open || active || cancellingActive
-    : open || focused || nonTerminal
+  const shouldActivateContent = expanded !== undefined
+    ? expanded
+    : windowedEvidence
+      ? open || active || cancellingActive
+      : open || focused || nonTerminal
   const [contentMounted, setContentMounted] = useState(() => shouldActivateContent)
   useEffect(() => {
+    if (expanded !== undefined) {
+      previousNonTerminal.current = nonTerminal
+      return
+    }
     const completed = previousNonTerminal.current && !nonTerminal
     if (mobile) { previousNonTerminal.current = nonTerminal; return }
     setOpen((currentOpen) => completed
       ? hasPublicFailure
       : executionDisclosureOpenAfterActivity(currentOpen, active || cancellingActive || hasPublicFailure))
     previousNonTerminal.current = nonTerminal
-  }, [active, cancellingActive, hasPublicFailure, nonTerminal, mobile])
+  }, [active, cancellingActive, expanded, hasPublicFailure, nonTerminal, mobile])
   useEffect(() => {
     if (shouldActivateContent) setContentMounted(true)
   }, [shouldActivateContent])
@@ -9058,6 +9761,12 @@ export function RunExecutionDisclosure({
     }
   }
 
+  useEffect(() => {
+    if (!hideSummary || !expanded) return
+    setContentMounted(true)
+    void loadHistoricalEvidence()
+  }, [expanded, hideSummary])
+
   const shouldMountContent = windowedEvidence ? shouldActivateContent : contentMounted || shouldActivateContent
   const content = shouldMountContent ? (
     <RunExecutionContent
@@ -9077,6 +9786,13 @@ export function RunExecutionDisclosure({
   ) : null
 
   const liveOpen = !mobile && (active || cancellingActive)
+  if (hideSummary) {
+    return expanded
+      ? <div className={`execution-disclosure ${nonTerminal
+        ? `run-live ${cancellingActive ? 'is-cancelling' : 'is-running'}`
+        : 'worked is-terminal'}`}>{content}</div>
+      : null
+  }
   return (
     <details
       className={`execution-disclosure ${liveOpen

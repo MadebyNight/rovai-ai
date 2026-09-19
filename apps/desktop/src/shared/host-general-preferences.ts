@@ -16,17 +16,21 @@ export function creationPreferences(snapshot: GeneralPreferencesSnapshot): Creat
 /** Presentation stays local; the Host owns only the shared creation choices. */
 export function withHostConversationPreferences(local: Omit<GeneralPreferencesApi, 'get'> & { get(): GeneralPreferencesSnapshot | Promise<GeneralPreferencesSnapshot> }, request: Request): GeneralPreferencesApi {
   let observed: CreationPreferences | null = null
-  const merge = async (shared: CreationPreferences): Promise<GeneralPreferencesSnapshot> => {
+  const mergeSnapshot = (localSnapshot: GeneralPreferencesSnapshot, shared: CreationPreferences): GeneralPreferencesSnapshot => {
     if (!shared || Object.keys(shared).sort().join(',') !== 'newConversationDefaults,newConversationDefaultsRequireConfirmation,oneClickNewConversationEnabled') {
       throw new Error('Host 的默认队员设置不完整，请重试。')
     }
-    const snapshot = parseGeneralPreferences({ ...await local.get(), ...shared })
+    const snapshot = parseGeneralPreferences({ ...localSnapshot, ...shared })
     if (!snapshot) throw new Error('Host 的默认队员设置无效，请重试。')
     observed = creationPreferences(snapshot)
     return snapshot
   }
+  const merge = async (shared: CreationPreferences): Promise<GeneralPreferencesSnapshot> => mergeSnapshot(await local.get(), shared)
   const get = async (): Promise<GeneralPreferencesSnapshot> => merge(await request('preferences.newConversation.get'))
-  const localChange = async (change: Promise<GeneralPreferencesSnapshot>): Promise<GeneralPreferencesSnapshot> => { await change; return get() }
+  const localChange = async (change: Promise<GeneralPreferencesSnapshot>): Promise<GeneralPreferencesSnapshot> => {
+    const localSnapshot = await change
+    return observed ? mergeSnapshot(localSnapshot, observed) : get()
+  }
   return {
     get,
     setStartupLocationMode: value => localChange(local.setStartupLocationMode(value)),

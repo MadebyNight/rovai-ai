@@ -3,7 +3,7 @@ document_type: architecture
 architecture: camp-attachments
 authority: live-source-references-and-legacy-attachment-reads
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Camp Attachments：原路径引用、默认输出与历史读取
@@ -56,7 +56,7 @@ Run Facts 只投影顶层 attachmentOutputRoot，含义是默认输出位置；�
 
 Desktop/Web 复用现有预览缓存与更新反馈，候选刷新失败保留旧内容，切 Camp 不冷加载。
 HTML 按真实来源目录解析资源；Web 资源能力绑定已有句柄、Session 和源记录，每次限制在授权目录，
-不授予页面业务凭据，iframe 和直接资源导航均保持 CSP 沙箱。细节见 [File Preview v16](../contracts/file-preview-v16.md)。
+不授予页面业务凭据，iframe 和直接资源导航均保持 CSP 沙箱。细节见 [File Preview v17](../contracts/file-preview-v17.md)。
 
 ## 归属与生命周期
 

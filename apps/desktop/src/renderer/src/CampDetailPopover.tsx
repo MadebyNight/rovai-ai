@@ -125,6 +125,7 @@ export function CampDetailEntries({
   visible,
   panelId,
   showExecution,
+  executionExpanded = visible && activeTab === 'execution',
   runningMembers,
   executionCount,
   taskCount,
@@ -135,6 +136,7 @@ export function CampDetailEntries({
   visible: boolean
   panelId: string
   showExecution: boolean
+  executionExpanded?: boolean
   runningMembers: readonly RunningCampMember[]
   executionCount: number
   taskCount: number
@@ -150,7 +152,7 @@ export function CampDetailEntries({
       {showExecution && <CampExecutionEntry
         members={runningMembers}
         executionCount={executionCount}
-        expanded={visible && activeTab === 'execution'}
+        expanded={executionExpanded}
         panelId={panelId}
         onSelect={onSelect}
       />}
@@ -179,6 +181,7 @@ export function CampDetailPopover({
   activeTab,
   visible,
   showExecution,
+  executionExpanded = visible && activeTab === 'execution',
   runningMembers,
   executionCount,
   taskCount,
@@ -193,6 +196,7 @@ export function CampDetailPopover({
   activeTab: CampDetailTab
   visible: boolean
   showExecution: boolean
+  executionExpanded?: boolean
   runningMembers: readonly RunningCampMember[]
   executionCount: number
   taskCount: number
@@ -239,7 +243,7 @@ export function CampDetailPopover({
   const entries = mobile ? <>
     <div className="mobile-camp-tabs" role="group" aria-label="当前会话视图" hidden={secondary}>
       <button type="button" aria-pressed={!visible} onClick={onClose}>对话</button>
-      <CampExecutionEntry mobile members={runningMembers} executionCount={executionCount} expanded={visible && activeTab === 'execution'} panelId={panelId}
+      <CampExecutionEntry mobile members={runningMembers} executionCount={executionCount} expanded={executionExpanded} panelId={panelId}
         onSelect={(tab, trigger) => { triggerRef.current = trigger; onOpen(tab) }} />
     </div>
     <DropdownMenu.Root modal={false}>
@@ -269,6 +273,7 @@ export function CampDetailPopover({
     visible={visible}
     panelId={panelId}
     showExecution={showExecution}
+    executionExpanded={executionExpanded}
     runningMembers={runningMembers}
     executionCount={executionCount}
     taskCount={taskCount}
