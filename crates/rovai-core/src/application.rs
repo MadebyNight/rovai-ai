@@ -11,10 +11,7 @@ pub use transport::{
 };
 #[path = "core_subsystems.rs"]
 mod core_subsystems;
-use crate::{
-    acp, antigravity, builtin_tool_runtime, claude, codex, health, mission_workspace, pi,
-    runtime_fleet,
-};
+use crate::{acp, antigravity, builtin_tool_runtime, claude, codex, health, pi, runtime_fleet};
 #[path = "runtime_check_environment.rs"]
 mod runtime_check_environment;
 #[path = "startup_settings.rs"]
@@ -139,9 +136,9 @@ use rovai_core::{
     collaboration::{
         AddCampMemberCommand, CampActivationState, CampCollaborationMode, ChangeDefaultLeadCommand,
         CollaborationService, CreateCampCommand, CreateTaskCommand, DeleteCampCommand,
-        DiscardPendingCampCommand, ExecutionRequest, MissionWorkspaceDisposition,
-        ProjectBindingKind, ReconcileDefaultLeadCommand, RemoveCampMemberCommand,
-        RenameCampCommand, SendUserAutomationCampMessageCommand, SendUserCampMessageCommand,
+        DiscardPendingCampCommand, ExecutionRequest, ProjectBindingKind,
+        ReconcileDefaultLeadCommand, RemoveCampMemberCommand, RenameCampCommand,
+        SendUserAutomationCampMessageCommand, SendUserCampMessageCommand,
         TaskAcceptanceCriteriaUpdate, TaskAssigneeFilter, TaskAssigneeUpdate, TaskListQuery,
         TaskStatus, UpdateTaskCommand, WithdrawCampMessageCommand,
     },
@@ -2027,6 +2024,8 @@ struct Core {
     runtime_search_environment: RwLock<Arc<RuntimeSearchEnvironment>>,
     runtime_search_update: Mutex<()>,
     mission_workspace_gate: Mutex<()>,
+    mission_workspace_cleanup_gate: Mutex<()>,
+    mission_workspace_cleanup_notify: Notify,
     mission_diff_snapshots: Mutex<crate::mission_workspace::MissionDiffSnapshotCache>,
     #[cfg(test)]
     runtime_search_capture: Option<runtime_check_environment::TestSearchCapture>,
@@ -8334,13 +8333,21 @@ impl Core {
                 let camp_id = params.command.camp_id.clone();
                 let command_id = params.command_id.clone();
                 let force = params.command.force;
-                let workspace_disposition = params.command.workspace_disposition;
                 let envelope =
                     user_camp_command_envelope(params.command_id, camp_id.clone(), params.command);
                 if let Some(replay) = {
                     let database = self.database.lock().await;
                     DomainCommandGateway.replay_if_recorded(&database, &envelope)?
                 } {
+                    if replay
+                        .result
+                        .payload
+                        .get("workspaceCleanupScheduled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        self.mission_workspace_cleanup_notify.notify_one();
+                    }
                     return Ok(serde_json::to_value(replay.result)?);
                 }
                 let (runtime_cleanup_targets, prior_blockers) = if force {
@@ -8374,36 +8381,6 @@ impl Core {
                     self.runtime_fleet
                         .force_fence_camp_for_deletion(&camp_id)
                         .await?;
-                }
-                let mission_id = {
-                    let database = self.database.lock().await;
-                    crate::mission::mission_for_camp(database.connection(), &camp_id)?
-                        .map(|mission| mission.info.mission_id)
-                };
-                if let Some(mission_id) = mission_id.as_deref() {
-                    match workspace_disposition {
-                        MissionWorkspaceDisposition::Cleanup => {
-                            let has_workspace = {
-                                let database = self.database.lock().await;
-                                !mission_workspace::load_workspaces(
-                                    database.connection(),
-                                    mission_id,
-                                )?
-                                .is_empty()
-                            };
-                            if has_workspace {
-                                self.cleanup_live_mission_workspace_locked(mission_id, &command_id)
-                                    .await?;
-                            }
-                        }
-                        MissionWorkspaceDisposition::Retain => {
-                            let database = self.database.lock().await;
-                            database.connection().execute(
-                                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,diagnostic=NULL,updated_at=?2 WHERE camp_id=?1 AND state IN ('cleanup_pending','cleanup_failed') AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1)",
-                                rusqlite::params![camp_id, chrono::Utc::now().to_rfc3339()],
-                            )?;
-                        }
-                    }
                 }
                 let (_view_mutation, _) = self.acquire_camp_attachment_mutation(&camp_id).await?;
                 let mut database = self.database.lock().await;
@@ -8460,12 +8437,17 @@ impl Core {
                     .get("campId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                let workspace_cleanup_scheduled = execution
+                    .result
+                    .payload
+                    .get("workspaceCleanupScheduled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 drop(database);
                 if should_remove_attachments && let Some(camp_id) = deleted_camp_id {
                     self.forget_deleted_camp_runtimes(&camp_id).await;
-                    if let Err(error) = self.cleanup_mission_workspaces_locked(Some(&camp_id)).await
-                    {
-                        eprintln!("Mission cleanup pending: {error:#}");
+                    if workspace_cleanup_scheduled {
+                        self.mission_workspace_cleanup_notify.notify_one();
                     }
                     if let Err(error) = self.finish_camp_attachment_cleanup(cleanup.as_ref()).await
                     {
@@ -15896,6 +15878,8 @@ async fn run_core(
         runtime_search_environment: RwLock::new(runtime_search_environment.clone()),
         runtime_search_update: Mutex::new(()),
         mission_workspace_gate: Mutex::new(()),
+        mission_workspace_cleanup_gate: Mutex::new(()),
+        mission_workspace_cleanup_notify: Notify::new(),
         mission_diff_snapshots: Mutex::new(
             crate::mission_workspace::MissionDiffSnapshotCache::default(),
         ),
@@ -21763,11 +21747,20 @@ async fn process_agent_run_maintenance(
             _ = core.agent_run_cancellation_notify.notified() => {
                 core.dispatch_agent_run_cancellations(&output).await;
             },
+            _ = core.mission_workspace_cleanup_notify.notified() => {
+                let cleanup_core=Arc::clone(&core);
+                tokio::spawn(async move {
+                    let _cleanup=cleanup_core.mission_workspace_cleanup_gate.lock().await;
+                    if let Err(error)=cleanup_core.cleanup_mission_workspaces_locked(None).await {
+                        eprintln!("Mission cleanup pending: {error:#}");
+                    }
+                });
+            },
             _ = mcp_cleanup_interval.tick() => {
                 core.cleanup_mcp_projections_best_effort().await;
                 let cleanup_core=Arc::clone(&core);
                 tokio::spawn(async move {
-                    if let Ok(_preparation)=cleanup_core.mission_workspace_gate.try_lock()
+                    if let Ok(_cleanup)=cleanup_core.mission_workspace_cleanup_gate.try_lock()
                         && let Err(error)=cleanup_core.cleanup_mission_workspaces_locked(None).await {
                         eprintln!("Mission cleanup pending: {error:#}");
                     }
@@ -23392,6 +23385,8 @@ mod tests {
             output,
             runtime_search_update: Mutex::new(()),
             mission_workspace_gate: Mutex::new(()),
+            mission_workspace_cleanup_gate: Mutex::new(()),
+            mission_workspace_cleanup_notify: Notify::new(),
             mission_diff_snapshots: Mutex::new(
                 crate::mission_workspace::MissionDiffSnapshotCache::default(),
             ),

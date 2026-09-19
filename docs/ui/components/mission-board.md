@@ -13,8 +13,8 @@ the accessible label includes the count, but the visual indicator never renders 
 independent of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate
 Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user to desktop.
 
-Cards open from their entire surface, including keyboard activation. Card actions have no visible ellipsis;
-right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
+Cards open from their entire surface, including keyboard activation. A compact ellipsis appears on hover,
+focus or coarse pointers; right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
 (`M-018`), never an opaque ID suffix. The footer keeps the lead first and shows at most five 23px member
 avatars with 7px overlap; when unread and time leave less room, it reduces the visible count and recalculates
 a borderless, backgroundless semibold `+N`. The complete ordered roster remains available from the same
@@ -33,10 +33,22 @@ low-frequency board/list menu share the toolbar without vertical separators. The
 surface in Day and its Night equivalent. Its title/subtitle use the same 34px overview-page top inset as
 Memory and Scheduled Automation, align with shell controls, and lead into four equally tall,
 very light neutral rounded lanes, including empty lanes. List mode groups and folds rows by status.
-Lanes retain at least 200px at narrow widths or increased zoom; the board scrolls horizontally rather than squeezing card content.
-Dragging a card to another lane submits the same authoritative status command as the menu; both user and
-Agent status activity render only the actor and resulting status. Tags reuse the eight stable identity colors,
-independent of Mission status.
+In board mode the page title, filters, and each lane's status name/count remain fixed. The board host owns only
+horizontal movement, while each lane's card region is a focusable, independently scrolling vertical region with
+contained overscroll. Reaching one lane's end therefore never moves another lane or the whole board. Stable
+status keys preserve lane DOM and scroll positions through detail opening, cleanup feedback, list refresh and
+status changes in other lanes. Switching temporarily to list mode saves and restores the four lane offsets;
+changing search or filters instead starts the newly defined result set at the top. Lanes retain at least 200px
+normally and 278px at the narrow desktop breakpoint; the bounded board region scrolls horizontally rather than
+squeezing card content. At that breakpoint, a compact status strip moves the horizontal viewport directly to a
+lane and exposes the same filtered counts; it does not introduce a mobile Mission surface.
+
+Dragging a card to another lane submits the same authoritative status command as the menu. While dragging near
+the target lane's top or bottom edge, only that lane auto-scrolls; the horizontal host may also reveal an adjacent
+lane near its left/right edge. Escape or drag end stops the frame loop. Ellipsis/right click/Shift+F10 status controls remain
+the single-pointer and keyboard alternative to dragging, and focused lane regions use Left/Right to move between
+visible lanes without resetting vertical positions. Both user and Agent status activity render only the actor and
+resulting status. Tags reuse the eight stable identity colors, independent of Mission status.
 
 Creation uses an 820px writing dialog. Mission name is an unboxed heading field; the unboxed description
 fills the remaining writing plane. Source attachments sit between them and support file selection, paste,
@@ -132,17 +144,28 @@ the Mission title, worktree path or branch. When a workspace record exists it ad
 The existing card/list right-click menu shows `清理使命 Worktree` only from Core's `cleanupAvailable`; there is
 no conversation-header ellipsis or retained-workspace page. Its dialog states that it removes the Worktree and
 local branch, lists the two identifiers, and uses only neutral `取消` / `清理` actions. A cleanup failure keeps
-the Mission and returns to the same explicit retry path; delete-with-cleanup does not delete the Mission first.
-After the cleanup command succeeds, the dialog closes without waiting for the Mission list or current Camp to
-refresh. Those two projections refresh asynchronously; a refresh failure uses the ordinary notification path
-and explicitly says cleanup already succeeded, rather than reopening or placing an error inside the dialog.
-The legacy orphan-cleanup notice remains only for pre-v3 rows already pending or failed; resources retained by
-the v3 delete choice never enter that route or appear there.
+the Mission and returns to the same explicit retry path. After Core durably accepts the cleanup intent, the
+dialog closes without waiting for Git work, the Mission list or the current Camp to refresh. The card adds one
+full-width bottom resource row without changing its business-status lane: spinner plus `正在清理 Worktree…`
+while pending, persistent `Worktree 清理失败 · 查看` (or `分支清理失败 · 查看`) after failure, and
+`✓ Worktree 已清理` for about four seconds after an observed success. Leaving/re-entering or refreshing does
+not replay success. The cleanup menu item is unavailable while pending, failed or complete.
+
+Failure also uses the existing bottom-right danger Toast, names `M-NNN` and provides `查看`. Toast expiry does
+not remove the card error. The Activity delivery section shows the reason, exact path/branch, actual Worktree
+and branch checkpoints, and `重试未完成步骤`; a partial branch failure never suggests the removed Worktree is
+recoverable. A refresh failure is separately worded as cleanup having started but status refresh failing and
+cannot revert a later success.
+
+Delete-with-cleanup removes the card after Camp deletion and cleanup-intent persistence commit, without waiting
+for filesystem work. A later failure raises the same actionable Toast and remains in the existing
+`工作区待清理` dialog, which shows both checkpoints and retries only unfinished work; it never restores the card.
+Retained resources never enter that route. No percentage, countdown, pause action or new task center is added.
 Each explicit source-link click positions and highlights its message once. After presentation, clear that
 focus request even when there is no notification acknowledgement waiter; snapshot updates must not replay
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 
-Business and ownership rules are defined by [Mission v6](../../contracts/mission-v6.md), not this presentation
+Business and ownership rules are defined by [Mission v7](../../contracts/mission-v7.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

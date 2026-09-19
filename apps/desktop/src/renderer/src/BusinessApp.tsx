@@ -929,11 +929,17 @@ export function bootstrapAuthorityCopy(snapshot: SupervisorSnapshot | null): {
   }
 }
 
+type AppToastValue = {
+  message: string
+  tone: 'neutral' | 'danger'
+  action?: { label: string; onSelect(): void }
+}
+
 export function AppToast({
   toast,
   onClose
 }: {
-  toast: { message: string; tone: 'neutral' | 'danger' }
+  toast: AppToastValue
   onClose(): void
 }): React.JSX.Element {
   return (
@@ -943,6 +949,7 @@ export function AppToast({
       aria-live={toast.tone === 'danger' ? 'assertive' : 'polite'}
     >
       <span>{toast.message}</span>
+      {toast.action && <button className="app-toast-action" type="button" onClick={() => { onClose(); toast.action?.onSelect() }}>{toast.action.label}</button>}
       <button className="icon-button" type="button" aria-label="关闭提示" onClick={onClose}>×</button>
     </div>
   )
@@ -1078,12 +1085,12 @@ export function BusinessApp({
   const [newConversationAttention, setNewConversationAttention] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [toast, setToast] = useState<{ message: string; tone: 'neutral' | 'danger' } | null>(null)
+  const [toast, setToast] = useState<AppToastValue | null>(null)
   const notify = useCallback((message: string): void => {
     setToast({ message, tone: 'neutral' })
   }, [])
-  const notifyError = useCallback((message: string): void => {
-    setToast({ message, tone: 'danger' })
+  const notifyError = useCallback((message: string, action?: { label: string; onSelect(): void }): void => {
+    setToast({ message, tone: 'danger', action })
   }, [])
   const [openingCampId, setOpeningCampId] = useState<string | null>(null)
   const [runtimeRecovery, setRuntimeRecovery] = useState<CampRuntimeRecovery | null>(null)
@@ -3952,8 +3959,8 @@ export function BusinessApp({
   return (
     <MobileLayoutProvider value={mobile}>
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
-      missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify}/> : null}>
-    <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onWorkspaceCleaned={refreshMissionAfterWorkspaceCleanup} onDeleted={onMissionDeleted} onError={notifyError}>
+      missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify} onWorkspaceCleanupRequested={refreshMissionAfterWorkspaceCleanup}/> : null}>
+    <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onWorkspaceCleaned={refreshMissionAfterWorkspaceCleanup} onDeleted={onMissionDeleted} onOpen={mission => { void openMission(mission).catch(error => notifyError(missionError(error))) }} onError={notifyError}>
     <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
         platform={client.platform}

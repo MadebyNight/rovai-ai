@@ -32,6 +32,7 @@ const items:MissionRecord[]=[
 if(query.has('pointerCatalog')) items[1].tags.push(...Array.from({length:16},(_,i)=>`扩展标签 ${String(i+1).padStart(2,'0')}`))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
 let failNextMissionRefresh=false, missionRefreshPending=false
+const orphanCleanups:any[]=[]
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
  {id:'file-b',path:'src/runtime/worker.ts',oldPath:'src/runtime/runner.ts',kind:'renamed',additions:1,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
@@ -61,7 +62,21 @@ const nav={schemaVersion:3,throughGlobalSequence:10,quickChat:{totalCount:0,rece
 const prefs={...DEFAULT_GENERAL_PREFERENCES,newConversationDefaults:{memberAgentIds:profiles.map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId}}
 const navigationPrefs={schemaVersion:4,pins:[],removedProjects:[],projectOrder:projects.map(p=>p.projectKey),projectNames:{}}
 const changed=()=>events.forEach(fn=>fn({method:'navigation.invalidated',params:{}}))
+const seedScrollableLanes=(count=10)=>{
+ if(items.some(item=>item.missionId.startsWith('scroll-')))return
+ const states=['needs_you','not_started','in_progress','completed'] as const
+ states.forEach((status,statusIndex)=>Array.from({length:count},(_,index)=>{
+  const seed=structuredClone(items[0])
+  items.push({...seed,missionId:`scroll-${status}-${index}`,campId:`rvcamp_scroll_${status}_${index}`,number:300+statusIndex*count+index,title:`${status} 滚动样本 ${String(index+1).padStart(2,'0')}`,description:'用于验证状态列独立滚动与拖拽边缘自动滚动。',status,tags:[],attachments:[],createdAt:now,updatedAt:now,memberAgentIds:profiles.slice(0,2).map(agent=>agent.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:[],hasUnread:false,workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false,workspaceCleanup:undefined})
+ }))
+ changed()
+}
+const clearScrollableLanes=()=>{for(let index=items.length-1;index>=0;--index)if(items[index].missionId.startsWith('scroll-'))items.splice(index,1);changed()}
 const applied=(payload:any={})=>({status:'applied',code:'ok',payload})
+const workspaceFor=(m:MissionRecord,state?:'cleanup_pending'|'cleanup_failed'|'cleaned')=>{
+ const n=String(m.number).padStart(3,'0'),cleanup=m.workspaceCleanup
+ return {id:`workspace-${m.missionId}`,missionId:m.missionId,campId:m.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:state??(cleanup?.state==='cleaning'?'cleanup_pending':cleanup?.state==='failed'?'cleanup_failed':cleanup?.state==='cleaned'||!m.workspaceResourcesPresent?'cleaned':'ready'),cleanupWorktreeRemoved:cleanup?.worktreeRemoved??!m.workspaceResourcesPresent,cleanupBranchRemoved:cleanup?.branchRemoved??!m.workspaceResourcesPresent,diagnostic:cleanup?.diagnostic??null}
+}
 function admitMissionNotification(missionId: string, kind: 'open_camp_message' | 'open_camp' = 'open_camp_message'): string {
  const mission = items.find(item => item.missionId === missionId)!
  const s = snapshot(mission) as any, n = ++notificationSequence
@@ -105,7 +120,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
   if(failNextMissionRefresh){failNextMissionRefresh=false;missionRefreshPending=true;await new Promise(resolve=>setTimeout(resolve,150));missionRefreshPending=false;throw new Error('fixture mission refresh failed')}
   return structuredClone(items)
  }
- if(method==='missions.cleanup.list')return []
+ if(method==='missions.cleanup.list')return structuredClone(orphanCleanups)
  if(method==='members.list')return profiles
  if(method==='runtime.installations.list')return installations
  if(method==='memory.hearthReviewItems.list')return []
@@ -130,7 +145,16 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
   Object.assign(m!,c,{detailsVersion:m!.detailsVersion+(detailsChanged?1:0),updatedAt:new Date().toISOString()});delete (m! as any).expectedDetailsVersion;changed();return applied({missionId:m!.missionId,changed:detailsChanged||c.tags!==undefined})
  }
  if(method==='missions.status'){m!.status=c.status;changed();return applied({missionId:m!.missionId,changed:true})}
- if(method==='missions.workspace.cleanup'){m!.workspaceResourcesPresent=false;m!.cleanupAvailable=false;changed();return applied({missionId:m!.missionId})}
+ if(method==='missions.workspace.cleanup'){
+  if(m!.workspaceCleanup?.state==='cleaning')return {...applied({missionId:m!.missionId}),status:'rejected',code:'mission.workspace_cleanup_pending'}
+  const previous=m!.workspaceCleanup
+  m!.workspaceCleanup={state:'cleaning',worktreeRemoved:previous?.worktreeRemoved??false,branchRemoved:previous?.branchRemoved??false,diagnostic:null};m!.cleanupAvailable=false;changed();return applied({missionId:m!.missionId,scheduled:true})
+ }
+ if(method==='missions.cleanup.retry'){
+  const row=orphanCleanups.find(row=>row.id===p.workspaceId)
+  if(row?.state==='cleanup_failed'){row.state='cleanup_pending';row.diagnostic=null;changed();return {pending:true,scheduled:true}}
+  return {pending:!!row,scheduled:false}
+ }
  if(method==='missions.start'){
   const s=snapshot(m!),sequence=Math.max(0,...s.messages.map((message:any)=>message.sequence))+1
   const trigger={...structuredClone(s.messages[0]),id:`${m!.missionId}-mission-start`,sequence,authorType:'user',authorId:'local_user',sourceAgentRunId:null,body:'开始使命',content:{schemaVersion:1,segments:[{kind:'text',text:'开始使命'}]},attachments:[],missionStart:{missionId:m!.missionId,title:m!.title,description:m!.description},createdAt:new Date().toISOString()}
@@ -140,7 +164,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  }
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
  if(method==='missions.delivery' && query.has('nonGit'))return {campId:m!.campId,workingDirectory:'/workspace/plain',git:false,workspace:null,pullRequests:[],files:[]}
- if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:{id:'workspace',missionId:m!.missionId,campId:m!.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:m!.workspaceResourcesPresent?'ready':'cleaned',diagnostic:null},pullRequests:[{id:'legacy-pr',url:'https://github.com/rovai-ai/rovai/pull/18',title:'历史关联',createdAt:now}],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
+ if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:workspaceFor(m!),pullRequests:[{id:'legacy-pr',url:'https://github.com/rovai-ai/rovai/pull/18',title:'历史关联',createdAt:now}],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
  if(method==='missions.changes')return structuredClone(missionChangedFiles)
  if(method==='missions.fileDiff'){
   const file=missionChangedFiles.find(file=>file.id===p.fileId)!
@@ -150,14 +174,22 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='missions.diffSession.release')return {released:true}
  if(method==='missions.create'){const m={...items[0],...c,number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',hasUnread:false,workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false};items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})}
  if(method==='camps.changeDefaultLead'){m!.defaultLeadAgentId=c.successorAgentId;snapshot(m!).camp.defaultLeadAgentId=c.successorAgentId;changed();return applied()}
- if(method==='camps.delete'){items.splice(items.indexOf(m!),1);changed();return applied()}
+ if(method==='camps.delete'){
+  if(c.workspaceDisposition==='cleanup'&&m!.workspaceResourcesPresent)orphanCleanups.push(workspaceFor(m!,'cleanup_pending'))
+  items.splice(items.indexOf(m!),1);changed();return applied({campId:m!.campId,workspaceCleanupScheduled:c.workspaceDisposition==='cleanup'})
+ }
  return model.client.request(method as any,p)
 }}
 const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}},generalPreferences:new Proxy({}, {get:(_,key)=>async(...args:any[])=>{if(key==='setNewConversationDefaults')prefs.newConversationDefaults=args[0];return prefs}}),navigationPreferences:new Proxy({}, {get:()=>async()=>navigationPrefs})}
 const navigationHistory={initial:{entries:[{kind:'missions' as const}],index:0},write:(state:any)=>state,go:async()=>false,listen:()=>()=>{}}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,navigationHistory,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
 ;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
+ seedScrollableLanes,clearScrollableLanes,
  failNextMissionRefresh:()=>{failNextMissionRefresh=true},missionRefreshPending:()=>missionRefreshPending,
+ failMissionCleanup:(missionId:string,partial=false)=>{const m=items.find(item=>item.missionId===missionId)!;m.workspaceCleanup={state:'failed',worktreeRemoved:partial,branchRemoved:false,diagnostic:partial?'mission.branch_changed: expected branch identity changed':'mission.git_failed: worktree could not be removed'};m.workspaceResourcesPresent=true;m.cleanupAvailable=false;changed()},
+ completeMissionCleanup:(missionId:string)=>{const m=items.find(item=>item.missionId===missionId)!;m.workspaceCleanup={state:'cleaned',worktreeRemoved:true,branchRemoved:true,diagnostic:null};m.workspaceResourcesPresent=false;m.cleanupAvailable=false;changed()},
+ failOrphanCleanup:(partial=false)=>{const row=orphanCleanups[0];if(row){row.state='cleanup_failed';row.cleanupWorktreeRemoved=partial;row.cleanupBranchRemoved=false;row.diagnostic=partial?'mission.branch_changed: expected branch identity changed':'mission.git_failed';changed()}},
+ completeOrphanCleanup:()=>{orphanCleanups.splice(0);changed()},orphanCleanups,
  sourceMessageId:(missionId:string)=>snapshot(items.find(item=>item.missionId===missionId)!).messages[1].id,
  invalidateMissionDetails:()=>changed(),
  terminalMissionRun:(campId:string)=>events.forEach(fn=>fn({method:'agent_run.terminal',params:{campId}})),

@@ -282,57 +282,26 @@ impl Core {
         Ok(Some(execution))
     }
 
-    async fn mark_mission_workspace_cleanup_failed(
+    async fn perform_mission_workspace_cleanup_locked(
         &self,
-        workspace_id: &str,
-        error: &anyhow::Error,
+        workspace: &mut MissionWorkspace,
     ) -> Result<()> {
-        let database = self.database.lock().await;
-        database.connection().execute(
-            "UPDATE mission_workspace SET state='cleanup_failed',diagnostic=?2,updated_at=?3 WHERE id=?1",
-            params![
-                workspace_id,
-                format!("{error:#}"),
-                chrono::Utc::now().to_rfc3339()
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub(super) async fn cleanup_live_mission_workspace_locked(
-        &self,
-        mission_id: &str,
-        command_id: &str,
-    ) -> Result<MissionWorkspace> {
-        let (mut workspace, host) = {
+        let host = {
             let database = self.database.lock().await;
-            MissionService::default()
-                .get(&database, mission_id)?
-                .context("mission.not_found")?;
-            let workspace = mission_workspace::load_workspaces(database.connection(), mission_id)?
-                .into_iter()
-                .next()
-                .context("mission.workspace_not_prepared")?;
-            anyhow::ensure!(
-                !mission_workspace::workspace_in_use(database.connection(), &workspace)?,
-                "mission.workspace_in_use"
-            );
-            let host = database.connection().query_row(
+            database.connection().query_row(
                 "SELECT id FROM mission_execution_host WHERE singleton=1",
                 [],
                 |row| row.get::<_, String>(0),
-            )?;
-            (workspace, host)
+            )?
         };
         anyhow::ensure!(
             workspace.execution_host_id == host,
             "mission.execution_host_unavailable"
         );
-        anyhow::ensure!(workspace.state != "preparing", "mission.workspace_in_use");
-        if workspace.cleanup_finished() {
-            return Ok(workspace);
-        }
-
+        anyhow::ensure!(
+            workspace.state == "cleanup_pending",
+            "mission.workspace_cleanup_not_pending"
+        );
         let git = self.mission_git().await?;
         let reference = git.cleanup_branch_reference(&workspace).await?;
         let verified_worktree = if worktree_cleanup_required(workspace.cleanup_worktree_removed) {
@@ -357,34 +326,20 @@ impl Core {
             };
             anyhow::ensure!(branch_present, "mission.workspace_branch_missing");
         }
-        workspace.generation += i64::from(workspace.state == "ready");
-        workspace.state = "cleanup_pending".into();
-        workspace.cleanup_command_id = Some(command_id.to_string());
         workspace.cleanup_expected_branch_oid = expected_oid.clone();
         workspace.cleanup_branch_removed |= expected_oid.is_none();
-        workspace.diagnostic = None;
         {
             let database = self.database.lock().await;
-            anyhow::ensure!(
-                !mission_workspace::workspace_in_use(database.connection(), &workspace)?,
-                "mission.workspace_in_use"
-            );
-            database.connection().execute(
-                "UPDATE mission_workspace SET generation=?2,state='cleanup_pending',cleanup_command_id=?3,cleanup_expected_branch_oid=?4,cleanup_worktree_removed=?5,cleanup_branch_removed=?6,diagnostic=NULL,updated_at=?7 WHERE id=?1",
-                params![workspace.id, workspace.generation, workspace.cleanup_command_id, workspace.cleanup_expected_branch_oid, workspace.cleanup_worktree_removed, workspace.cleanup_branch_removed, chrono::Utc::now().to_rfc3339()],
+            let changed = database.connection().execute(
+                "UPDATE mission_workspace SET cleanup_expected_branch_oid=?2,cleanup_branch_removed=?3,updated_at=?4 WHERE id=?1 AND state='cleanup_pending'",
+                params![workspace.id, workspace.cleanup_expected_branch_oid, workspace.cleanup_branch_removed, chrono::Utc::now().to_rfc3339()],
             )?;
+            anyhow::ensure!(changed == 1, "mission.workspace_cleanup_not_pending");
         }
-        self.mission_diff_snapshots.lock().await.release(mission_id);
 
         if let Some(verified_worktree) = verified_worktree {
-            if let Err(error) = git
-                .remove_verified_worktree(&workspace, verified_worktree)
-                .await
-            {
-                self.mark_mission_workspace_cleanup_failed(&workspace.id, &error)
-                    .await?;
-                return Err(error);
-            }
+            git.remove_verified_worktree(&workspace, verified_worktree)
+                .await?;
             workspace.cleanup_worktree_removed = true;
             let database = self.database.lock().await;
             database.connection().execute(
@@ -395,14 +350,8 @@ impl Core {
 
         if !workspace.cleanup_branch_removed {
             let expected_oid = expected_oid.context("mission.branch_identity_missing")?;
-            if let Err(error) = git
-                .delete_branch_expected(&workspace, &reference, &expected_oid)
-                .await
-            {
-                self.mark_mission_workspace_cleanup_failed(&workspace.id, &error)
-                    .await?;
-                return Err(error);
-            }
+            git.delete_branch_expected(&workspace, &reference, &expected_oid)
+                .await?;
             workspace.cleanup_branch_removed = true;
         }
         {
@@ -414,7 +363,7 @@ impl Core {
         }
         workspace.state = "cleanup_pending".into();
         workspace.diagnostic = None;
-        Ok(workspace)
+        Ok(())
     }
 
     pub(super) async fn cleanup_mission_workspaces_locked(
@@ -423,48 +372,60 @@ impl Core {
     ) -> Result<()> {
         let workspaces = {
             let database = self.database.lock().await;
-            let mut statement=database.connection().prepare("SELECT DISTINCT mission_id FROM mission_workspace WHERE state IN ('cleanup_pending','cleanup_failed') AND (?1 IS NULL OR camp_id=?1) AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)")?;
+            let mut statement=database.connection().prepare("SELECT DISTINCT mission_id FROM mission_workspace WHERE state='cleanup_pending' AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1) AND (?1 IS NULL OR camp_id=?1)")?;
             let ids = statement
                 .query_map([camp_id], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let mut rows = Vec::new();
             for id in ids {
-                rows.extend(mission_workspace::load_workspaces(
-                    database.connection(),
-                    &id,
-                )?);
+                rows.extend(
+                    mission_workspace::load_workspaces(database.connection(), &id)?
+                        .into_iter()
+                        .filter(|workspace| {
+                            workspace.state == "cleanup_pending"
+                                && !workspace.cleanup_finished()
+                                && camp_id.is_none_or(|camp_id| workspace.camp_id == camp_id)
+                        }),
+                );
             }
             rows
         };
         if workspaces.is_empty() {
             return Ok(());
         }
-        let git = self.mission_git().await?;
-        let host = {
-            let database = self.database.lock().await;
-            database.connection().query_row(
-                "SELECT id FROM mission_execution_host WHERE singleton=1",
-                [],
-                |r| r.get::<_, String>(0),
-            )?
-        };
-        for workspace in workspaces {
-            let result = if workspace.execution_host_id == host {
-                git.cleanup(&workspace).await
-            } else {
-                Err(anyhow::anyhow!("mission.execution_host_unavailable"))
-            };
+        for mut workspace in workspaces {
+            let result = self
+                .perform_mission_workspace_cleanup_locked(&mut workspace)
+                .await;
             let database = self.database.lock().await;
             match result {
                 Ok(()) => {
-                    database
-                        .connection()
-                        .execute("DELETE FROM mission_workspace WHERE id=?1", [workspace.id])?;
+                    let camp_exists = database.connection().query_row(
+                        "SELECT EXISTS(SELECT 1 FROM camp WHERE id=?1)",
+                        [&workspace.camp_id],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if !camp_exists {
+                        database.connection().execute(
+                            "DELETE FROM mission_workspace WHERE id=?1",
+                            [&workspace.id],
+                        )?;
+                    }
                 }
                 Err(error) => {
                     database.connection().execute("UPDATE mission_workspace SET state='cleanup_failed',diagnostic=?2,updated_at=?3 WHERE id=?1",params![workspace.id,format!("{error:#}"),chrono::Utc::now().to_rfc3339()])?;
                 }
             }
+            drop(database);
+            self.mission_diff_snapshots
+                .lock()
+                .await
+                .release(&workspace.mission_id);
+            emit_navigation_invalidated(
+                &self.output,
+                "mission.workspace.cleanup.finished",
+                Some(&workspace.camp_id),
+            );
         }
         Ok(())
     }
@@ -480,58 +441,108 @@ impl Core {
                     let database = self.database.lock().await;
                     DomainCommandGateway.replay_if_recorded(&database, &envelope)?
                 } {
+                    if replay.result.payload["scheduled"] == json!(true) {
+                        self.mission_workspace_cleanup_notify.notify_one();
+                    }
                     return Ok(serde_json::to_value(replay.result)?);
                 }
                 let _guard = self.mission_workspace_gate.lock().await;
-                let outcome = self
-                    .cleanup_live_mission_workspace_locked(&mission_id, &params.command_id)
-                    .await;
                 let mut database = self.database.lock().await;
-                let execution = DomainCommandGateway.execute(&mut database, &envelope, |_| {
-                    Ok(match &outcome {
-                        Ok(workspace) => CommandHandlerResult::applied(
-                            "mission.workspace_cleaned",
-                            json!({
-                                "missionId": mission_id,
-                                "worktreePath": workspace.worktree_path,
-                                "branch": workspace.branch,
-                            }),
+                let execution = DomainCommandGateway.execute(&mut database, &envelope, |tx| {
+                    let camp_id = tx
+                        .query_row(
+                            "SELECT camp_id FROM mission WHERE id=?1",
+                            [&mission_id],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()?;
+                    let Some(camp_id) = camp_id else {
+                        return Ok(CommandHandlerResult::rejected(
+                            "mission.not_found",
+                            json!({"missionId": mission_id}),
+                        ));
+                    };
+                    let workspace = mission_workspace::load_workspaces(tx, &mission_id)?
+                        .into_iter()
+                        .next();
+                    let Some(workspace) = workspace else {
+                        return Ok(CommandHandlerResult::rejected(
+                            "mission.workspace_not_prepared",
+                            json!({"missionId": mission_id}),
+                        ));
+                    };
+                    if workspace.cleanup_finished() {
+                        return Ok(CommandHandlerResult::applied(
+                            "mission.workspace_cleanup_already_finished",
+                            json!({"missionId": mission_id, "campId": camp_id, "scheduled": false}),
                             Some(EntityReference {
                                 entity_type: "mission".into(),
                                 entity_id: mission_id.clone(),
                             }),
-                        ),
-                        Err(error) => {
-                            let reason = format!("{error:#}");
-                            let code = [
-                                "mission.workspace_in_use",
-                                "mission.branch_changed",
-                                "mission.branch_in_use",
-                                "mission.workspace_branch_mismatch",
-                                "mission.workspace_branch_missing",
-                                "mission.execution_host_unavailable",
-                                "mission.workspace_not_prepared",
-                                "mission.not_found",
-                            ]
-                            .into_iter()
-                            .find(|code| reason.contains(code))
-                            .unwrap_or("mission.workspace_cleanup_failed");
-                            CommandHandlerResult::rejected(
-                                code,
-                                json!({"missionId": mission_id, "reason": reason}),
-                            )
-                        }
-                    })
+                        ));
+                    }
+                    if workspace.state == "cleanup_pending" {
+                        return Ok(CommandHandlerResult::rejected(
+                            "mission.workspace_cleanup_pending",
+                            json!({"missionId": mission_id}),
+                        ));
+                    }
+                    if workspace.state == "preparing"
+                        || mission_workspace::workspace_in_use(tx, &workspace)?
+                    {
+                        return Ok(CommandHandlerResult::rejected(
+                            "mission.workspace_in_use",
+                            json!({"missionId": mission_id}),
+                        ));
+                    }
+                    let current_host: String = tx.query_row(
+                        "SELECT id FROM mission_execution_host WHERE singleton=1",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    if workspace.execution_host_id != current_host {
+                        return Ok(CommandHandlerResult::rejected(
+                            "mission.execution_host_unavailable",
+                            json!({"missionId": mission_id}),
+                        ));
+                    }
+                    let generation = workspace.generation + i64::from(workspace.state == "ready");
+                    tx.execute(
+                        "UPDATE mission_workspace SET generation=?2,state='cleanup_pending',cleanup_command_id=?3,diagnostic=NULL,updated_at=?4 WHERE id=?1",
+                        params![workspace.id, generation, params.command_id, chrono::Utc::now().to_rfc3339()],
+                    )?;
+                    Ok(CommandHandlerResult::applied(
+                        "mission.workspace_cleanup_scheduled",
+                        json!({
+                            "missionId": mission_id,
+                            "campId": camp_id,
+                            "worktreePath": workspace.worktree_path,
+                            "branch": workspace.branch,
+                            "scheduled": true,
+                        }),
+                        Some(EntityReference {
+                            entity_type: "mission".into(),
+                            entity_id: mission_id.clone(),
+                        }),
+                    ))
                 })?;
+                let scheduled = execution.result.payload["scheduled"] == json!(true);
+                let camp_id = execution.result.payload["campId"]
+                    .as_str()
+                    .map(str::to_string);
                 drop(database);
-                emit_navigation_invalidated(
-                    &self.output,
-                    "missions.workspace.cleanup",
-                    outcome
-                        .as_ref()
-                        .ok()
-                        .map(|workspace| workspace.camp_id.as_str()),
-                );
+                if scheduled {
+                    self.mission_diff_snapshots
+                        .lock()
+                        .await
+                        .release(&mission_id);
+                    emit_navigation_invalidated(
+                        &self.output,
+                        "missions.workspace.cleanup",
+                        camp_id.as_deref(),
+                    );
+                    self.mission_workspace_cleanup_notify.notify_one();
+                }
                 Ok(serde_json::to_value(execution.result)?)
             }
             "missions.cleanup.list" => {
@@ -557,21 +568,34 @@ impl Core {
                 }
                 let query: Retry = serde_json::from_value(request.params.clone())?;
                 let _guard = self.mission_workspace_gate.lock().await;
-                let camp_id = {
+                let retry_command_id = uuid::Uuid::new_v4().to_string();
+                let (scheduled, camp_id, pending) = {
                     let database = self.database.lock().await;
-                    database.connection().query_row("SELECT camp_id FROM mission_workspace WHERE id=?1 AND state IN ('cleanup_pending','cleanup_failed') AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",[&query.workspace_id],|r|r.get::<_,String>(0)).optional()?
+                    let camp_id = database.connection().query_row("SELECT camp_id FROM mission_workspace WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",[&query.workspace_id],|r|r.get::<_,String>(0)).optional()?;
+                    let scheduled = if camp_id.is_some() {
+                        database.connection().execute(
+                            "UPDATE mission_workspace SET state='cleanup_pending',cleanup_command_id=?2,diagnostic=NULL,updated_at=?3 WHERE id=?1 AND state='cleanup_failed' AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1)",
+                            params![query.workspace_id, retry_command_id, chrono::Utc::now().to_rfc3339()],
+                        )? == 1
+                    } else {
+                        false
+                    };
+                    let pending = database.connection().query_row(
+                        "SELECT EXISTS(SELECT 1 FROM mission_workspace WHERE id=?1)",
+                        [&query.workspace_id],
+                        |r| r.get::<_, bool>(0),
+                    )?;
+                    (scheduled, camp_id, pending)
                 };
-                if let Some(camp_id) = camp_id {
-                    self.cleanup_mission_workspaces_locked(Some(&camp_id))
-                        .await?;
+                if scheduled {
+                    emit_navigation_invalidated(
+                        &self.output,
+                        "missions.cleanup.retry",
+                        camp_id.as_deref(),
+                    );
+                    self.mission_workspace_cleanup_notify.notify_one();
                 }
-                let database = self.database.lock().await;
-                let pending = database.connection().query_row(
-                    "SELECT EXISTS(SELECT 1 FROM mission_workspace WHERE id=?1)",
-                    [&query.workspace_id],
-                    |r| r.get::<_, bool>(0),
-                )?;
-                Ok(json!({"pending":pending}))
+                Ok(json!({"pending":pending,"scheduled":scheduled}))
             }
             "missions.list" => {
                 let database = self.database.lock().await;

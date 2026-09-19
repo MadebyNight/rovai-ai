@@ -3,6 +3,7 @@ const { mkdirSync } = require('node:fs')
 const { isAbsolute, join } = require('node:path')
 const { app, BrowserWindow } = require('electron')
 const [renderer, userData, mode = 'standard'] = process.argv.slice(2)
+let stage = 'startup'
 assert(isAbsolute(renderer) && isAbsolute(userData))
 mkdirSync(userData, { recursive: true })
 app.setPath('userData', userData); app.setPath('sessionData', join(userData, 'session'))
@@ -132,10 +133,50 @@ app.whenReady().then(async () => {
     app.exit(0)
     return
   }
-  const report = await window.webContents.executeJavaScript(mode === 'large-diff' ? 'window.missionQA.runLargeDiff()' : 'window.missionQA.run()', true)
+  let narrowLayout = null
+  if (mode === 'standard') {
+    await waitFor("!!document.querySelector('.mission-board-card')", 'Mission board did not load for narrow-window acceptance', 15000)
+    stage = 'narrow resize'
+    window.setContentSize(820, 700)
+    await waitFor('window.innerWidth === 820 && window.innerHeight === 700', 'Narrow Mission fixture did not resize')
+    try {
+      await waitFor("(() => { const nav = document.querySelector('.mission-lane-nav'); const host = document.querySelector('.mission-board-scroll'); return !!nav && !!host && getComputedStyle(nav).display === 'flex' && host.scrollWidth > host.clientWidth })()", 'Narrow Mission board did not expose horizontal lane navigation')
+    } catch (error) {
+      const diagnostic = await window.webContents.executeJavaScript(`(() => {
+        const nav = document.querySelector('.mission-lane-nav'), host = document.querySelector('.mission-board-scroll')
+        return { innerWidth, innerHeight, nav: nav ? getComputedStyle(nav).display : null, view: host?.dataset.view ?? null, clientWidth: host?.clientWidth ?? null, scrollWidth: host?.scrollWidth ?? null, columns: document.querySelectorAll('.mission-column').length }
+      })()`, true)
+      throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`)
+    }
+    const narrow = await window.webContents.executeJavaScript(`(() => {
+      const host = document.querySelector('.mission-board-scroll')
+      const widths = [...document.querySelectorAll('.mission-column')].map(column => column.getBoundingClientRect().width)
+      return { minimumLaneWidth: Math.min(...widths), hostWidth: host.clientWidth, boardWidth: host.scrollWidth }
+    })()`, true)
+    assert(narrow.minimumLaneWidth >= 277, `Narrow Mission lanes collapsed to ${narrow.minimumLaneWidth}px`)
+    stage = 'narrow lane navigation'
+    await window.webContents.executeJavaScript("document.querySelector('.mission-lane-nav button:last-child')?.click()", true)
+    await waitFor("(() => { const host = document.querySelector('.mission-board-scroll'); const button = document.querySelector('.mission-lane-nav button:last-child'); return !!host && !!button && host.scrollLeft > 20 && button.getAttribute('aria-pressed') === 'true' })()", 'Narrow status control did not move the horizontal board viewport')
+    narrowLayout = { narrowLaneWidth: Math.round(narrow.minimumLaneWidth), narrowBoardScrollable: narrow.boardWidth > narrow.hostWidth }
+    stage = 'desktop restore'
+    window.setContentSize(1440, 920)
+    await waitFor('window.innerWidth === 1440 && window.innerHeight === 920', 'Mission fixture did not restore its desktop size')
+    await window.webContents.executeJavaScript("document.querySelector('.mission-board-scroll')?.scrollTo({ left: 0, behavior: 'auto' })", true)
+  }
+  const acceptance = mode === 'large-diff' ? 'window.missionQA.runLargeDiff()' : 'window.missionQA.run()'
+  stage = 'renderer acceptance'
+  const report = await window.webContents.executeJavaScript(`Promise.resolve().then(() => ${acceptance}).catch(error => ({ ok: false, error: error?.stack ?? String(error) }))`, true)
+  if (!report.ok) {
+    console.error(report.error ?? 'Mission acceptance failed without an error detail')
+    console.log(JSON.stringify(report))
+    app.exit(1)
+    return
+  }
   if (mode === 'large-diff') {
     console.log(JSON.stringify(report)); app.exit(report.ok ? 0 : 1); return
   }
+  report.layouts = narrowLayout
+  stage = 'drawer reopen'
   await window.webContents.executeJavaScript(`(() => {
     localStorage.setItem('rovai.mission-drawer-width', '1040')
     document.querySelector('.mission-board-card')?.click()
@@ -163,6 +204,6 @@ app.whenReady().then(async () => {
   window.webContents.sendInputEvent({ type: 'mouseMove', x: expandX, y: point.y, button: 'left' })
   await waitFor("!!document.querySelector('.mission-full')", 'Pointer drag did not expand before release')
   window.webContents.sendInputEvent({ type: 'mouseUp', x: expandX, y: point.y, button: 'left', clickCount: 1 })
-  report.layouts = { pointerShrinkPreservedMessages: true, pointerExpandedBeforeRelease: true }
+  report.layouts = { ...report.layouts, pointerShrinkPreservedMessages: true, pointerExpandedBeforeRelease: true }
   console.log(JSON.stringify(report)); app.exit(report.ok ? 0 : 1)
-}).catch(error => { console.error(error); app.exit(1) })
+}).catch(error => { console.error(`Mission fixture failed during ${stage}:`, error); app.exit(1) })

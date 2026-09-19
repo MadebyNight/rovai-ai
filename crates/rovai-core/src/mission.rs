@@ -173,6 +173,8 @@ pub struct MissionRecord {
     pub workspace_ever_created: bool,
     pub workspace_resources_present: bool,
     pub cleanup_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_cleanup: Option<crate::mission_workspace::MissionWorkspaceCleanupProjection>,
 }
 
 impl MissionRecord {
@@ -755,7 +757,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         crate::camp_message_publication::public_camp_message_publication_cte()
     );
     let has_unread = connection.query_row(&unread_sql, [&camp_id], |r| r.get(0))?;
-    let (workspace_ever_created, workspace_resources_present, cleanup_available) =
+    let (workspace_ever_created, workspace_resources_present, cleanup_available, workspace_cleanup) =
         crate::mission_workspace::cleanup_projection(connection, &mission_id, &camp_id)?;
     Ok(Some(MissionRecord {
         has_unread,
@@ -786,6 +788,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         workspace_ever_created,
         workspace_resources_present,
         cleanup_available,
+        workspace_cleanup,
     }))
 }
 fn validate_content(title: Option<&str>, description: Option<&str>) -> Result<()> {
@@ -1463,6 +1466,7 @@ mod tests {
         assert!(!initial.workspace_ever_created);
         assert!(!initial.workspace_resources_present);
         assert!(!initial.cleanup_available);
+        assert!(initial.workspace_cleanup.is_none());
 
         let host: String = db
             .connection()
@@ -1480,6 +1484,7 @@ mod tests {
         assert!(idle.workspace_ever_created);
         assert!(idle.workspace_resources_present);
         assert!(idle.cleanup_available);
+        assert!(idle.workspace_cleanup.is_none());
 
         service
             .start(
@@ -1570,14 +1575,41 @@ mod tests {
                 [other_camp_id],
             )
             .unwrap();
+        db.connection()
+            .execute(
+                "UPDATE mission_workspace SET state='cleanup_pending' WHERE mission_id=?1",
+                [&mission_id],
+            )
+            .unwrap();
+        let cleaning = service.get(&db, &mission_id).unwrap().unwrap();
+        assert!(!cleaning.cleanup_available);
+        assert!(cleaning.workspace_resources_present);
+        assert_eq!(cleaning.workspace_cleanup.unwrap().state, "cleaning");
+
         db.connection().execute(
-            "UPDATE mission_workspace SET state='cleanup_pending',cleanup_worktree_removed=1,cleanup_branch_removed=1 WHERE mission_id=?1",
+            "UPDATE mission_workspace SET state='cleanup_failed',cleanup_worktree_removed=1,diagnostic='mission.branch_changed' WHERE mission_id=?1",
+            [&mission_id],
+        ).unwrap();
+        let failed = service.get(&db, &mission_id).unwrap().unwrap();
+        assert!(!failed.cleanup_available);
+        let failed_cleanup = failed.workspace_cleanup.unwrap();
+        assert_eq!(failed_cleanup.state, "failed");
+        assert!(failed_cleanup.worktree_removed);
+        assert!(!failed_cleanup.branch_removed);
+        assert_eq!(
+            failed_cleanup.diagnostic.as_deref(),
+            Some("mission.branch_changed")
+        );
+
+        db.connection().execute(
+            "UPDATE mission_workspace SET state='cleanup_pending',cleanup_worktree_removed=1,cleanup_branch_removed=1,diagnostic=NULL WHERE mission_id=?1",
             [&mission_id],
         ).unwrap();
         let cleaned = service.get(&db, &mission_id).unwrap().unwrap();
         assert!(cleaned.workspace_ever_created);
         assert!(!cleaned.workspace_resources_present);
         assert!(!cleaned.cleanup_available);
+        assert_eq!(cleaned.workspace_cleanup.unwrap().state, "cleaned");
     }
 
     #[test]

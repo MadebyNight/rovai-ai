@@ -3,19 +3,19 @@ document_type: implementation-plan
 version: v1.62
 lifecycle: current
 authority: version-implementation-plan
-status: in_progress
+status: completed
 last_updated: 2026-09-20
 ---
 
 # v1.62 实施与验收
 
-范围见[版本概览](README.md)，字段级行为见 [Mission v6](../../contracts/mission-v6.md)。
+范围见[版本概览](README.md)，字段级行为见 [Mission v7](../../contracts/mission-v7.md)。
 
 ## Gate 0：当前基线与权威
 
 - [x] 从最新 `main` 复核 Mission v5、Built-in v29、Core status 路径、catalog、CLI help 与错误恢复。
 - [x] 确认本版不修改数据库、Bootstrap、Charter、ContextManifest、Run Facts 或 Renderer wire。
-- [x] 发布 Mission v6、Built-in v30、版本决定并切换当前文档导航。
+- [x] 发布 Mission v6/Built-in v30 后继续发布 Mission v7，补齐版本决定并切换当前文档导航。
 
 ## Gate 1：Core 状态语义
 
@@ -35,15 +35,49 @@ last_updated: 2026-09-20
 ## Gate 3：验证与合并
 
 - [x] 定向 Mission、Transport 与 CLI Rust 回归通过。
-- [ ] Rust 全量、workspace check、fmt、Node/文档治理与 diff-aware 门禁通过。
+- [x] Rust 全量、workspace check、fmt、Node/文档治理与 diff-aware 门禁通过。
 - [x] 隔离的有效 AgentRun 通过 bundled CLI 无来源设置 `completed`。
-- [ ] 分支提交并推送，PR gate 通过后合并到 `main`，再验证远端祖先关系。
+- [x] 状态解耦增量 PR #443 的 required gate 通过并已合入 `main`。
+
+## Gate 4：Worktree 异步清理
+
+- [x] `missions.workspace.cleanup` 只在 Domain Command 事务中提交 pending intent；重复 pending 请求被拒绝。
+- [x] 独立 cleanup worker 使用通知快路与固定恢复 pass，按 expected OID 和两个既有 checkpoint 执行；failed
+  不进入自动恢复。
+- [x] Renderer Mission 投影增加 cleaning/failed/cleaned 与实际步骤状态；Workspace 详情公开两个 checkpoint，
+  私有命令身份和 expected OID 不外泄。
+- [x] `camps.delete(workspaceDisposition=cleanup)` 在删除聚合的同一事务保存清理意图，返回后不等待 Git；
+  orphan 成功删除记录，失败使用既有待清理入口。retain 不登记后台维护。
+- [x] 卡片、Toast、详情与 orphan dialog 分别拥有即时进度、持久失败、查看、实际状态和未完成步骤重试；
+  成功反馈为约四秒的本地 one-shot，刷新/重进不重播。
+
+## Gate 5：使命板独立列滚动
+
+- [x] Board host 仅保留横向 overflow；四个 status lane 的 card region 分别拥有纵向原生滚动、stable gutter 与
+  contained overscroll，页面标题、筛选和列头固定。
+- [x] status-keyed lane DOM 在 Mission refresh、cleanup feedback、详情抽屉与跨列状态更新中保持挂载；列表往返用
+  Renderer 瞬时内存恢复 offset，搜索/筛选变化则把新结果恢复到顶部，不用 IPC 或持久偏好。
+- [x] HTML5 drag 在目标列上下边缘使用 animation frame 自动滚动该列，在窄窗左右边缘滚动 board host；结束、
+  drop、Escape 和离开区域均清理循环。
+- [x] 每列为带名称的可聚焦 region，Left/Right 可切换列；省略号/右键/Shift+F10 共用菜单并提供 WCAG 非拖拽状态操作。
+  窄桌面窗口保留 278px 列宽与横向 scroll-snap，并以带筛选后数量的紧凑状态入口直接切换可见列。
+- [x] 保留现有视觉体系；行为参考稿不作为像素级还原或替换现有组件样式的依据。
+
+## Gate 6：清理与滚动验证
+
+- [x] 异步清理 Rust 定向/全量测试、Mission Electron 验收、TypeScript、文档治理、格式、diff 与编译检查通过。
+- [x] `pnpm build:desktop` 生产构建通过；清理/滚动增量基于 PR #443 已合入的 `main` 变基并保持一条功能提交。
 
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
 Replay、活动、执行副作用与 epoch/membership 边界；既有 Transport 与 CLI owner 扩展 v30、错误恢复和实际
 help。删除测试为零。
+
+异步清理不新增平行 Rust 测试函数：`mission_cleanup_capability_comes_from_workspace_records_and_execution_occupancy`
+继续拥有 Renderer cleanup projection 输入矩阵；`camp_rename_lead_change_and_quiescent_delete_with_cleanup_are_versioned`
+继续拥有 Camp 删除事务/replay，并增加 cleanup intent 与聚合删除原子性的断言。较低层纯函数不能证明 gateway
+transaction 与 Camp aggregate 删除。独立列滚动不改变 Core 行为，由隔离 Electron 密集卡片验收拥有。
 
 ## 实施收口
 
@@ -53,6 +87,10 @@ help。删除测试为零。
 - `cargo test -p rovai-core --bin rovai exact_help_surface_covers_the_current_catalog_and_no_family_aliases`：1 passed。
 - `cargo test -p rovai-core --bin rovai -- --test-threads=4`：29 passed；`cargo check --workspace --all-targets`、
   `cargo fmt --all -- --check`、`pnpm typecheck` 与 `git diff --check` 通过。
+- 清理增量基线 `cargo test -p rovai-core --lib -- --test-threads=4`：845 passed、0 failed、6 ignored；
+  cleanup projection、部分失败重试与 Camp 删除原子性定向用例通过。
+- `pnpm test:mission-board`：4 passed、0 failed；覆盖异步清理、独立列滚动、820px 桌面窄窗横向切换、
+  大 Diff 虚拟化、宽屏抽屉与编辑器指针交互；`pnpm build:desktop` 通过。
 - Core 全量在功能基线为 841 passed、6 ignored；rebase 后组合运行 840 passed、1 个时间敏感 Runtime
   discovery 失败、6 ignored，该失败独立 exact 复跑 1/1 通过。
 - 完整 `pnpm test` 曾取得 Vitest 2153/2153、Node 324 passed/2 skipped；rebase 后两次完整运行只命中既有

@@ -13,7 +13,7 @@ last_updated: 2026-09-20
 
 - 状态：accepted
 - 日期：2026-09-19
-- 当前权威：Mission v6 与 Mission Architecture
+- 当前权威：Mission v7 与 Mission Architecture
 
 Mission 状态是独立业务事实，公开消息是可选解释材料。要求 Agent 在设置 `needs_you` 或 `completed`
 前先发布消息，会把两项可分别授权、失败和重放的操作强制串联，并让“状态是否可更新”取决于一条消息是否已
@@ -26,3 +26,45 @@ Core 接受状态命令的条件。
 拒绝保留 `needs_you/completed` 条件必填，因为它维持不必要的跨操作耦合；拒绝自动发布或绑定最近消息，因为
 这会伪造用户可见内容或产生时序歧义；也拒绝新增 `--force`、`--skip-message` 或三态清空参数，因为现有可选字段
 与整行写入已经能无歧义表达目标状态。
+
+<a id="v1-62-d02"></a>
+## V1.62-D02：Worktree 清理先提交持久意图，Git 步骤由独立后台 owner 执行
+
+- 状态：accepted
+- 日期：2026-09-20
+- 当前权威：Mission v7 与 Mission 架构
+
+前台命令同时执行 Git 删除会把确认窗、Camp 删除和一个可能持续或失败的外部进程绑在一起；Renderer 无法在
+命令返回前可靠区分“意图已保存”和“资源已删除”，删除使命也会被后续资源失败反向阻断。选择复用既有
+`cleanup_pending/cleanup_failed`、命令身份、expected OID 与双检查点：Domain Command 只在事务中提交意图，随后
+以无负载通知唤醒单一后台 cleanup owner，固定维护 pass 仅恢复未完成 pending，failed 必须显式重试。
+
+后台 Git 工作使用独立串行 fence，不占住其他使命的准备和普通操作；同一 workspace 则由持久状态阻止重复准备
+或重复清理。删除且清理时，清理意图与 Camp/Mission 删除处于同一数据库事务，卡片可立即消失；后续失败作为
+orphan workspace 保留到显式重试成功。默认 retain 仍不加入维护路线，清理正在执行时拒绝 retain 删除，以免把
+“保留实际资源”承诺与已经开始的破坏性步骤并置。
+
+拒绝只在 Renderer 保存 loading 状态，因为重启后会失去 owner；拒绝把每个 Git 步骤建成 Task 或新增百分比状态，
+因为现有两个 durable checkpoint 已足以恢复且 Git 不提供诚实进度；也拒绝自动重试 failed，因为 branch OID 变化、
+占用或 Host 不一致需要用户看到实际状态并作出显式恢复选择。本决定不增加 schema，只增加 path-free cleanup
+投影与现有 orphan route 的当前职责。
+
+<a id="v1-62-d03"></a>
+## V1.62-D03：使命板由状态列拥有纵向滚动，外层只拥有窄窗横向移动
+
+- 状态：accepted
+- 日期：2026-09-20
+- 当前权威：使命板 UI
+
+整板纵向滚动会让短列跟随长列离开视口，用户无法同时看到各状态名称、数量与不同位置的卡片；详情开合或异步
+结果导致的重绘也容易把工作位置带回顶部。选择把纵向 scroll owner 下沉到每个稳定 status-keyed lane card region，
+标题、筛选栏和列头留在滚动区外；外层 board host 只在列宽放不下时承担受约束的横向移动。每列使用原生滚动与
+contained overscroll，不劫持 wheel；普通 Mission/cleanup 投影更新复用列 DOM，因此不会重建其他列或重置其位置。
+临时切到列表时 Renderer 保存并恢复各列 offset；搜索或筛选改变的是结果集合，因此明确从各列顶部开始。窄窗保留
+最小列宽，并以紧凑状态入口直接移动横向 viewport，不把四列压扁或串成长页面。
+
+跨列拖动继续提交同一权威 status command。拖拽指针进入目标列上下边缘时，以 animation frame 只推进目标列，
+接近外层左右边缘时才推进横向 host；drag end、drop、Escape 或离开看板都会停止循环。省略号、右键菜单和
+Shift+F10 继续作为 WCAG 所需的非拖拽替代，聚焦列可以用 Left/Right 切换可见列。拒绝一份全板 `scrollTop`，
+也拒绝用 wheel 事件手工转发四列，因为两者都会破坏原生滚动、键盘行为与位置所有权。本决定不新增持久偏好、
+IPC 或 schema，也不把行为参考稿提升为新的视觉权威。
