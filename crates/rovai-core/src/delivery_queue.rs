@@ -11,6 +11,7 @@ use crate::{
         project_batch_run_input_for_claim, runtime_max_context_payload_bytes,
         serialized_batch_run_input_len,
     },
+    context_contract::PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
     current_input_skill::{
         SkillSelectionSnapshot, freeze_skill_selection, projected_skill_links_for_claim,
     },
@@ -31,6 +32,7 @@ struct WaitingDelivery {
     sequence: i64,
     structured_content_json: Option<String>,
     content_digest: String,
+    default_recipient_display_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -443,9 +445,14 @@ fn load_waiting_prefix(
     let mut statement = transaction.prepare(
         r#"
         SELECT delivery.id, message.id, message.sequence,
-               message.structured_content_json, message.content_digest
+               message.structured_content_json, message.content_digest,
+               recipient.display_name
         FROM camp_message_delivery AS delivery
         JOIN camp_message AS message ON message.id = delivery.message_id
+        LEFT JOIN agent_profile AS recipient
+          ON message.address_mode = 'default'
+         AND json_array_length(message.addressed_agent_ids_json) = 1
+         AND recipient.id = json_extract(message.addressed_agent_ids_json, '$[0]')
         WHERE delivery.camp_id = ?1
           AND delivery.recipient_agent_id = ?2
           AND delivery.status = 'waiting'
@@ -462,6 +469,7 @@ fn load_waiting_prefix(
                 sequence: row.get(2)?,
                 structured_content_json: row.get(3)?,
                 content_digest: row.get(4)?,
+                default_recipient_display_name: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -631,8 +639,9 @@ fn insert_batch_run(
             r#"
             INSERT INTO agent_run_input(
                 agent_run_id, ordinal, delivery_id, message_id,
-                message_sequence, message_content_digest
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                message_sequence, message_content_digest,
+                context_manifest_version, default_recipient_display_name
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 agent_run_id,
@@ -641,6 +650,8 @@ fn insert_batch_run(
                 delivery.message_id,
                 delivery.sequence,
                 delivery.content_digest,
+                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+                delivery.default_recipient_display_name,
             ],
         )?;
         let terminal_status = if first_too_large { "failed" } else { "claimed" };
@@ -1038,6 +1049,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(closed, 2);
+    }
+
+    #[test]
+    fn claim_freezes_the_default_recipient_display_name_on_each_run_input() {
+        let mut fixture = Fixture::new();
+        fixture.enqueue("default-message", "正文");
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE camp_message SET address_mode = 'default' WHERE id = 'default-message'",
+                [],
+            )
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET display_name = '领取时队长' WHERE id = 'agent_1'",
+                [],
+            )
+            .unwrap();
+
+        let run_id = claim_waiting_delivery_batches(&mut fixture.database, 100)
+            .unwrap()
+            .pop()
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET display_name = '后来改名' WHERE id = 'agent_1'",
+                [],
+            )
+            .unwrap();
+        let frozen: (i64, Option<String>) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT context_manifest_version, default_recipient_display_name FROM agent_run_input WHERE agent_run_id = ?1",
+                [&run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(frozen.0, PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION);
+        assert_eq!(frozen.1.as_deref(), Some("领取时队长"));
     }
 
     #[test]

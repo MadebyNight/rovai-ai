@@ -46,3 +46,26 @@ Runtime terminal 与历史读取接受两种已知冻结版本，未知版本 fa
 
 拒绝为 Mission 建立第二套私聊专用工具，因为会复制 schema、授权和帮助；拒绝不版本化地扩大 version 1，
 因为无法审计一个历史 Run 实际冻结了哪组能力。
+
+<a id="v1-61-d03"></a>
+## V1.61-D03：默认接收提示是 Agent 自动上下文投影，不改写用户原文或路由
+
+- 状态：accepted
+- 日期：2026-09-19
+- 当前权威：默认队长接收提示 revision 1、ContextManifest v27 与 Context Delivery Profile v8
+
+没有显式 Mention 的公开消息由发布时的 Default Lead 接收，但只看旧 Agent 自动上下文无法知道这条消息的
+冻结接收者。选择在新 public batch 的 `RUN_INPUT.messages[].body` 与
+`SHARED_CONVERSATION.messages[].body` 中派生既有 Member Mention 渲染：接收者 ID 来自消息已经冻结的
+`addressedAgentIds`，显示名在 claim 时解析并随 AgentRunInput context version 一起冻结；materialization 将同一
+快照写入 Manifest evidence 和 exact payload。
+
+该提示不写入 `camp_message.body` 或 Structured Content，不把 `addressMode=default` 改成显式寻址，也不进入
+Renderer、Camp Read/Search/Thread、Quote、FTS 或 Channel。因此 Delivery 仍是处理责任和路由权威，自动前缀
+不会被误当成用户原文或产生第二次派发。零接收者 public-only 保持原文；显式目标不重复添加；默认多接收者与
+缺失身份 fail closed。
+
+这改变新 Runtime 输入的精确字节和预算，因而建立 Formatter/Manifest 27、Profile 8 与 Migration 166/schema 116。
+Profile 数值不变，但 token、分隔符和显示名进入 scalar 与 UTF-8 payload 计数。旧 v26/Profile 7 Run 继续 exact
+replay，迁移前已领取但尚未 materialize 的 RunInput 回填 v26 marker，Single Chat 保持 v25/Profile 6；不通过
+回填消息正文或在读取时重新解析当前 Default Lead 伪造历史。

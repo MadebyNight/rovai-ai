@@ -32,7 +32,7 @@ use crate::{
     },
     camp_content::{
         AGENT_MESSAGE_PROJECTION_AUDIENCE, StructuredCampMessageContent, mentions_current_user,
-        normalize_content, render_agent_plain_text,
+        normalize_content, render_agent_plain_text, render_member_mention_plain_text,
     },
     camp_message_publication::public_camp_message_publication_cte,
     command::{EntityReference, canonical_json_digest},
@@ -46,8 +46,9 @@ use crate::{
         PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
     },
     context_delivery::{
-        ContextDeliveryProfile, body_prefix, current_context_delivery_profile,
-        current_public_camp_batch_context_delivery_profile, unicode_scalar_count,
+        ContextDeliveryProfile, PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7, body_prefix,
+        current_context_delivery_profile, current_public_camp_batch_context_delivery_profile,
+        unicode_scalar_count,
     },
     current_input_skill::{
         CurrentInputSkillLink, SkillSelectionSnapshot, parse_skill_selection_snapshot,
@@ -67,6 +68,7 @@ pub const CONTEXT_FORMATTER_VERSION: i64 = AGENT_RUN_CONTEXT_FORMATTER_VERSION;
 pub const DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES: usize = 96 * 1024;
 const MIN_CONTEXT_PAYLOAD_BYTES: usize = 8 * 1024;
 const DELIVERY_FIRST_PAYLOAD_BOOTSTRAP_RESERVE_BYTES: usize = 32 * 1024;
+const HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION: i64 = 26;
 
 trait ContextReadConnection {
     fn context_connection(&self) -> &Connection;
@@ -612,10 +614,23 @@ impl ContextService {
         let collaboration_changed = bootstrap_required
             || snapshot.native_collaboration_state_digest.as_deref()
                 != Some(collaboration_state_digest.as_str());
-        let profile = if snapshot.invocation_kind == "batch" {
-            current_public_camp_batch_context_delivery_profile()?
-        } else {
-            current_context_delivery_profile()?
+        let batch_context_manifest_version = (snapshot.invocation_kind == "batch")
+            .then(|| {
+                frozen_batch_context_manifest_version(
+                    database.context_connection(),
+                    &snapshot.agent_run_id,
+                )
+            })
+            .transpose()?;
+        let profile = match batch_context_manifest_version {
+            Some(HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION) => {
+                PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7.validate()?
+            }
+            Some(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION) => {
+                current_public_camp_batch_context_delivery_profile()?
+            }
+            Some(_) => unreachable!("batch context version was validated"),
+            None => current_context_delivery_profile()?,
         };
         let profile_json = serde_json::to_value(profile)?;
         let profile_digest = profile.canonical_digest()?;
@@ -626,6 +641,7 @@ impl ContextService {
                     &snapshot,
                     previous_accepted_public_boundary_sequence,
                     profile,
+                    batch_context_manifest_version.expect("batch context version must be present"),
                 )
             })
             .transpose()?;
@@ -1052,16 +1068,14 @@ impl ContextService {
         }
         let (global_public_message_boundary, history_camps) =
             capture_cross_camp_history_fence(&transaction, &snapshot)?;
-        let context_manifest_version = if snapshot.invocation_kind == "batch" {
-            PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
-        } else {
-            CONTEXT_MANIFEST_VERSION
-        };
-        let context_formatter_version = if snapshot.invocation_kind == "batch" {
-            PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
-        } else {
-            CONTEXT_FORMATTER_VERSION
-        };
+        let context_manifest_version =
+            batch_context_manifest_version.unwrap_or(CONTEXT_MANIFEST_VERSION);
+        let context_formatter_version = batch_context_manifest_version
+            .map(|version| {
+                debug_assert!(matches!(version, 26 | 27));
+                version
+            })
+            .unwrap_or(CONTEXT_FORMATTER_VERSION);
         let run_facts_schema_version = if snapshot.invocation_kind == "batch" {
             5_i64
         } else {
@@ -3849,6 +3863,13 @@ struct SharedMessageAttachment {
     legacy_view_backed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefaultRecipientMention {
+    agent_id: String,
+    display_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SharedMessage {
     quotes: Vec<MessageQuoteSnapshot>,
@@ -3860,6 +3881,7 @@ struct SharedMessage {
     sender_id: String,
     source_conversation_id: Option<String>,
     content_digest: String,
+    default_recipient_mention: Option<DefaultRecipientMention>,
     mentions_current_user: bool,
     skill_names: Vec<String>,
     reply_to_message_id: Option<String>,
@@ -4159,7 +4181,8 @@ pub(crate) fn project_batch_run_input_for_claim(
                 SELECT message.sequence, message.author_type, message.author_id,
                        source_conversation.id, message.body,
                        message.structured_content_json,
-                       message.reply_to_camp_message_id
+                       message.reply_to_camp_message_id,
+                       message.address_mode, message.addressed_agent_ids_json
                 FROM camp_message AS message
                 LEFT JOIN agent_run AS source_run
                   ON source_run.id = message.source_agent_run_id
@@ -4181,6 +4204,8 @@ pub(crate) fn project_batch_run_input_for_claim(
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<String>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 },
             )
@@ -4192,8 +4217,16 @@ pub(crate) fn project_batch_run_input_for_claim(
             .map(batch_message_skill_names)
             .transpose()?
             .unwrap_or_default();
-        let (body, mentions_current_user) =
-            projected_current_camp_message(transaction, row.4, row.5)?;
+        let (body, mentions_current_user, default_recipient_mention) =
+            projected_public_batch_camp_message(
+                transaction,
+                row.4,
+                row.5,
+                &row.7,
+                &row.8,
+                true,
+                None,
+            )?;
         let mut message = project_shared_message(
             transaction,
             camp_id.to_string(),
@@ -4211,6 +4244,7 @@ pub(crate) fn project_batch_run_input_for_claim(
             true,
             Some(&claimed_source_message_ids),
         )?;
+        message.default_recipient_mention = default_recipient_mention;
         message.skill_names = skill_names;
         messages.push(model_batch_input_message(&message, skill_links));
     }
@@ -4223,11 +4257,44 @@ pub(crate) fn serialized_batch_run_input_len(run_input: &Value) -> Result<usize>
     Ok(rendered.len())
 }
 
+fn frozen_batch_context_manifest_version(
+    connection: &Connection,
+    agent_run_id: &str,
+) -> Result<i64> {
+    let (input_count, versioned_count, minimum, maximum): (i64, i64, Option<i64>, Option<i64>) =
+        connection.query_row(
+            r#"
+        SELECT COUNT(*), COUNT(context_manifest_version),
+               MIN(context_manifest_version), MAX(context_manifest_version)
+        FROM agent_run_input
+        WHERE agent_run_id = ?1
+        "#,
+            [agent_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    anyhow::ensure!(input_count > 0, "Batch AgentRun has no frozen RunInput");
+    anyhow::ensure!(
+        versioned_count == input_count && minimum == maximum,
+        "Batch AgentRun has an incomplete context-version snapshot"
+    );
+    let version = minimum.context("Batch AgentRun context version is missing")?;
+    anyhow::ensure!(
+        matches!(
+            version,
+            HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+                | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        ),
+        "Batch AgentRun uses an unsupported context version"
+    );
+    Ok(version)
+}
+
 fn load_batch_model_context<R: ContextReadConnection>(
     database: &R,
     snapshot: &RunSnapshot,
     previous_accepted_public_tail: i64,
     profile: ContextDeliveryProfile,
+    context_manifest_version: i64,
 ) -> Result<BatchModelContext> {
     let complete_profile = ContextDeliveryProfile {
         max_public_history_chars: usize::MAX,
@@ -4243,6 +4310,9 @@ fn load_batch_model_context<R: ContextReadConnection>(
         String,
         Option<String>,
         Option<String>,
+        String,
+        String,
+        Option<String>,
     )>|
      -> Result<Vec<SharedMessage>> {
         rows.into_iter()
@@ -4256,17 +4326,25 @@ fn load_batch_model_context<R: ContextReadConnection>(
                     stored_body,
                     structured_content_json,
                     anchor_message_id,
+                    address_mode,
+                    addressed_agent_ids_json,
+                    frozen_default_recipient_display_name,
                 )| {
                     let skill_names = structured_content_json
                         .as_deref()
                         .map(batch_message_skill_names)
                         .transpose()?
                         .unwrap_or_default();
-                    let (body, mentions_current_user) = projected_current_camp_message(
-                        database.context_connection(),
-                        stored_body,
-                        structured_content_json,
-                    )?;
+                    let (body, mentions_current_user, default_recipient_mention) =
+                        projected_public_batch_camp_message(
+                            database.context_connection(),
+                            stored_body,
+                            structured_content_json,
+                            &address_mode,
+                            &addressed_agent_ids_json,
+                            context_manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+                            frozen_default_recipient_display_name.as_deref(),
+                        )?;
                     let mut message = project_shared_message(
                         database,
                         snapshot.camp_id.clone(),
@@ -4284,6 +4362,7 @@ fn load_batch_model_context<R: ContextReadConnection>(
                         true,
                         None,
                     )?;
+                    message.default_recipient_mention = default_recipient_mention;
                     message.skill_names = skill_names;
                     Ok(message)
                 },
@@ -4296,7 +4375,9 @@ fn load_batch_model_context<R: ContextReadConnection>(
             r#"
             SELECT message.id, message.sequence, message.author_type, message.author_id,
                    source_conversation.id, message.body, message.structured_content_json,
-                   message.reply_to_camp_message_id
+                   message.reply_to_camp_message_id, message.address_mode,
+                   message.addressed_agent_ids_json,
+                   input.default_recipient_display_name
             FROM agent_run_input AS input
             JOIN camp_message AS message ON message.id = input.message_id
             LEFT JOIN agent_run AS source_run ON source_run.id = message.source_agent_run_id
@@ -4317,6 +4398,9 @@ fn load_batch_model_context<R: ContextReadConnection>(
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
@@ -4366,11 +4450,16 @@ fn load_batch_model_context<R: ContextReadConnection>(
             r#"
             SELECT message.id, message.sequence, message.author_type, message.author_id,
                    source_conversation.id, message.body, message.structured_content_json,
-                   message.reply_to_camp_message_id
+                   message.reply_to_camp_message_id, message.address_mode,
+                   message.addressed_agent_ids_json,
+                   frozen_input.default_recipient_display_name
             FROM camp_message AS message
             LEFT JOIN agent_run AS source_run ON source_run.id = message.source_agent_run_id
             LEFT JOIN conversation AS source_conversation
               ON source_conversation.id = source_run.conversation_id
+            LEFT JOIN agent_run_input AS frozen_input
+              ON frozen_input.agent_run_id = ?5
+             AND frozen_input.message_id = message.id
             WHERE {visibility}
             ORDER BY message.sequence DESC
             LIMIT 15
@@ -4383,6 +4472,7 @@ fn load_batch_model_context<R: ContextReadConnection>(
                     previous_accepted_public_tail,
                     snapshot.camp_message_boundary_sequence,
                     snapshot.agent_id,
+                    snapshot.agent_run_id,
                 ],
                 |row| {
                     Ok((
@@ -4394,6 +4484,9 @@ fn load_batch_model_context<R: ContextReadConnection>(
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
                     ))
                 },
             )?
@@ -4674,6 +4767,8 @@ struct SharedMessageProjectionEvidence {
     source_conversation_id: Option<String>,
     content_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    default_recipient_mention: Option<DefaultRecipientMention>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reply_to_message_id: Option<String>,
     projected_body_digest: String,
     mentions_current_user: bool,
@@ -4704,6 +4799,7 @@ impl SharedMessageProjectionEvidence {
             sender_id: message.sender_id.clone(),
             source_conversation_id: message.source_conversation_id.clone(),
             content_digest: message.content_digest.clone(),
+            default_recipient_mention: message.default_recipient_mention.clone(),
             reply_to_message_id: message.reply_to_message_id.clone(),
             projected_body_digest: sha256_text(&message.body),
             mentions_current_user: message.mentions_current_user,
@@ -5253,6 +5349,7 @@ fn project_shared_message<R: ContextReadConnection>(
         sender_id,
         source_conversation_id,
         content_digest,
+        default_recipient_mention: None,
         mentions_current_user,
         skill_names: Vec::new(),
         reply_to_message_id,
@@ -5588,6 +5685,63 @@ fn projected_current_camp_message(
     Ok((
         render_agent_plain_text(connection, &content)?,
         mentions_current_user(&content),
+    ))
+}
+
+fn projected_public_batch_camp_message(
+    connection: &rusqlite::Connection,
+    stored_body: String,
+    structured_content_json: Option<String>,
+    address_mode: &str,
+    addressed_agent_ids_json: &str,
+    derive_default_recipient_mention: bool,
+    frozen_default_recipient_display_name: Option<&str>,
+) -> Result<(String, bool, Option<DefaultRecipientMention>)> {
+    let (authored_body, mentions_current_user) =
+        projected_current_camp_message(connection, stored_body, structured_content_json)?;
+    if !derive_default_recipient_mention || address_mode != "default" {
+        return Ok((authored_body, mentions_current_user, None));
+    }
+
+    let addressed_agent_ids = serde_json::from_str::<Vec<String>>(addressed_agent_ids_json)
+        .context("CampMessage addressed Agent identities are invalid")?;
+    let Some(agent_id) = addressed_agent_ids.first() else {
+        return Ok((authored_body, mentions_current_user, None));
+    };
+    anyhow::ensure!(
+        addressed_agent_ids.len() == 1,
+        "Default-addressed CampMessage must have at most one recipient"
+    );
+    let display_name = match frozen_default_recipient_display_name {
+        Some(display_name) => display_name.to_string(),
+        None => connection
+            .query_row(
+                "SELECT display_name FROM agent_profile WHERE id = ?1",
+                [agent_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .context("Default-addressed CampMessage recipient identity does not exist")?,
+    };
+    let mention_token = render_member_mention_plain_text(&display_name);
+    let body = if authored_body.is_empty() {
+        mention_token
+    } else if authored_body
+        .chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+    {
+        format!("{mention_token}{authored_body}")
+    } else {
+        format!("{mention_token} {authored_body}")
+    };
+    Ok((
+        body,
+        mentions_current_user,
+        Some(DefaultRecipientMention {
+            agent_id: agent_id.clone(),
+            display_name,
+        }),
     ))
 }
 
@@ -7159,7 +7313,7 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !matches!(row.15, 22..=26) {
+    if !matches!(row.15, 22..=27) {
         anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
     }
     if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22..=25) {
@@ -7217,6 +7371,8 @@ fn load_existing_manifest(
         current_profile.profile_version = 4;
     } else if row.15 == 23 || (row.15 == 24 && row.16 == 5) {
         current_profile.profile_version = 5;
+    } else if row.15 == 26 {
+        current_profile.profile_version = 7;
     }
     if row.16 != current_profile.profile_version
         || stored_profile != current_profile
@@ -8216,6 +8372,7 @@ fn is_raw_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camp_content::StructuredCampMessageSegment;
 
     #[test]
     fn charter_delivery_modes_are_closed_over_the_product_runtime_catalog() {
@@ -8264,6 +8421,141 @@ mod tests {
     }
 
     #[test]
+    fn public_batch_default_recipient_projection_is_derived_and_fail_closed() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE agent_profile(id TEXT PRIMARY KEY, display_name TEXT NOT NULL);\
+                 INSERT INTO agent_profile VALUES ('agent-1', '爱丽丝');",
+            )
+            .unwrap();
+        let content = |text: &str| {
+            Some(
+                serde_json::to_string(&vec![StructuredCampMessageSegment::Text {
+                    text: text.to_string(),
+                }])
+                .unwrap(),
+            )
+        };
+
+        for (authored, expected) in [
+            ("正文", "@爱丽丝 正文"),
+            (" 正文", "@爱丽丝 正文"),
+            ("\n正文", "@爱丽丝\n正文"),
+            ("", "@爱丽丝"),
+        ] {
+            let (body, mentions_current_user, evidence) = projected_public_batch_camp_message(
+                &connection,
+                authored.to_string(),
+                content(authored),
+                "default",
+                r#"["agent-1"]"#,
+                true,
+                None,
+            )
+            .unwrap();
+            assert_eq!(body, expected);
+            assert!(!mentions_current_user);
+            assert_eq!(
+                serde_json::to_value(evidence).unwrap(),
+                json!({"agentId": "agent-1", "displayName": "爱丽丝"})
+            );
+        }
+
+        for (address_mode, recipients) in [("explicit", r#"["agent-1"]"#), ("default", "[]")] {
+            let (body, _, evidence) = projected_public_batch_camp_message(
+                &connection,
+                "正文".to_string(),
+                content("正文"),
+                address_mode,
+                recipients,
+                true,
+                None,
+            )
+            .unwrap();
+            assert_eq!(body, "正文");
+            assert!(evidence.is_none());
+        }
+
+        for recipients in [r#"["agent-1","agent-2"]"#, r#"["missing"]"#] {
+            assert!(
+                projected_public_batch_camp_message(
+                    &connection,
+                    "正文".to_string(),
+                    content("正文"),
+                    "default",
+                    recipients,
+                    true,
+                    None,
+                )
+                .is_err()
+            );
+        }
+
+        let (body, _, evidence) = projected_public_batch_camp_message(
+            &connection,
+            "正文".to_string(),
+            content("正文"),
+            "default",
+            r#"["agent-1"]"#,
+            true,
+            Some("领取时名字"),
+        )
+        .unwrap();
+        assert_eq!(body, "@领取时名字 正文");
+        assert_eq!(
+            serde_json::to_value(evidence).unwrap(),
+            json!({"agentId": "agent-1", "displayName": "领取时名字"})
+        );
+
+        let (body, _, evidence) = projected_public_batch_camp_message(
+            &connection,
+            "正文".to_string(),
+            content("正文"),
+            "default",
+            r#"["agent-1"]"#,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(body, "正文");
+        assert!(evidence.is_none());
+    }
+
+    #[test]
+    fn batch_context_version_snapshot_is_complete_uniform_and_historical() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE agent_run_input(
+                    agent_run_id TEXT NOT NULL,
+                    context_manifest_version INTEGER
+                );
+                INSERT INTO agent_run_input VALUES ('historical', 26);
+                INSERT INTO agent_run_input VALUES ('current', 27);
+                INSERT INTO agent_run_input VALUES ('current', 27);
+                INSERT INTO agent_run_input VALUES ('mixed', 26);
+                INSERT INTO agent_run_input VALUES ('mixed', 27);
+                INSERT INTO agent_run_input VALUES ('missing', NULL);
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            frozen_batch_context_manifest_version(&connection, "historical").unwrap(),
+            HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        );
+        assert_eq!(
+            frozen_batch_context_manifest_version(&connection, "current").unwrap(),
+            PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        );
+        for invalid in ["mixed", "missing", "absent"] {
+            assert!(frozen_batch_context_manifest_version(&connection, invalid).is_err());
+        }
+    }
+
+    #[test]
     fn batch_public_window_keeps_the_camp_agent_watermark_across_new_sessions() {
         assert_eq!(accepted_public_window_lower_bound("batch", 41, true), 41);
         assert_eq!(accepted_public_window_lower_bound("batch", 41, false), 41);
@@ -8287,6 +8579,7 @@ mod tests {
             sender_id: "agent-1".to_string(),
             source_conversation_id: None,
             content_digest: "sha256:test".to_string(),
+            default_recipient_mention: None,
             mentions_current_user: false,
             skill_names: Vec::new(),
             reply_to_message_id: None,
@@ -8324,6 +8617,7 @@ mod tests {
             sender_id: "local_user".to_string(),
             source_conversation_id: None,
             content_digest: "sha256:test".to_string(),
+            default_recipient_mention: None,
             mentions_current_user: false,
             skill_names: vec!["review-code".to_string()],
             reply_to_message_id: None,
@@ -10853,7 +11147,7 @@ mod slow_tests {
             .unwrap();
         assert!(manifest_schema.contains("run_fact_payload_json"));
         assert!(!manifest_schema.contains("run_notice_"));
-        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26)"));
+        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27)"));
         assert!(manifest_schema.contains("message_projection_audience TEXT NOT NULL"));
         assert!(manifest_schema.contains("a2a_guidance_evidence_json TEXT NOT NULL"));
         let contract: (String, i64, i64) = reopened
@@ -11041,8 +11335,95 @@ mod slow_tests {
     }
 
     #[test]
+    fn migrated_unmaterialized_batch_run_keeps_its_v26_projection() {
+        let mut fixture = fixture();
+        fixture
+            .database
+            .connection()
+            .execute_batch("DROP TRIGGER agent_run_input_context_projection_immutable;")
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_run_input
+                SET context_manifest_version = 26,
+                    default_recipient_display_name = NULL
+                WHERE agent_run_id = ?1
+                "#,
+                [&fixture.run_id],
+            )
+            .unwrap();
+
+        let store = ManagedBlobStore::new(&fixture.directory);
+        let ContextMaterialization::Ready(materialized) = ContextService
+            .materialize(
+                &mut fixture.database,
+                &store,
+                &MaterializeContextRequest {
+                    agent_run_id: &fixture.run_id,
+                    execution_epoch: fixture.execution_epoch,
+                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("historical batch Context should be ready");
+        };
+        let run_input: Value = materialized
+            .rendered_payload
+            .split_once("[RUN_INPUT]\n")
+            .and_then(|(_, suffix)| suffix.split_once("\n[/RUN_INPUT]"))
+            .map(|(payload, _)| serde_json::from_str(payload).unwrap())
+            .expect("historical batch Context must contain RUN_INPUT");
+        assert_eq!(run_input["messages"][0]["body"], "第一条公开问题");
+        let axes: (i64, i64, i64, String) = fixture
+            .database
+            .connection()
+            .query_row(
+                r#"
+                SELECT context_manifest_version, formatter_version,
+                       context_delivery_profile_version, current_input_source_json
+                FROM context_manifest WHERE id = ?1
+                "#,
+                [&materialized.manifest_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((axes.0, axes.1, axes.2), (26, 26, 7));
+        let input_evidence: Value = serde_json::from_str(&axes.3).unwrap();
+        assert!(
+            input_evidence["messages"][0]
+                .get("defaultRecipientMention")
+                .is_none()
+        );
+
+        fixture.cleanup();
+    }
+
+    #[test]
     fn attachment_only_current_input_is_empty_and_reuses_stable_camp_attachment_paths() {
         let mut fixture = fixture();
+        let claim_recipient_display_name: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT default_recipient_display_name FROM agent_run_input WHERE agent_run_id = ?1",
+                [&fixture.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let renamed_recipient_display_name = "领取后改名";
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET display_name = ?1 WHERE id = 'agent_1'",
+                [renamed_recipient_display_name],
+            )
+            .unwrap();
         let store = ManagedBlobStore::new(&fixture.directory);
         let camp_message_id: String = fixture
             .database
@@ -11173,7 +11554,28 @@ mod slow_tests {
             .map(|(payload, _)| payload)
             .expect("RUN_INPUT must be present");
         let run_input: Value = serde_json::from_str(run_input_json).unwrap();
-        assert_eq!(run_input["messages"][0]["body"], "");
+        assert_eq!(
+            run_input["messages"][0]["body"],
+            format!("@{claim_recipient_display_name}")
+        );
+        let first_shared_conversation: Value = first
+            .rendered_payload
+            .split_once("[SHARED_CONVERSATION]\n")
+            .and_then(|(_, suffix)| suffix.split_once("\n[/SHARED_CONVERSATION]"))
+            .map(|(json, _)| serde_json::from_str(json).unwrap())
+            .expect("current Context should contain Shared Conversation JSON");
+        let current_shared_input = first_shared_conversation["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| message["messageId"] == camp_message_id)
+            })
+            .expect("Run Input should also appear in the current Shared Conversation");
+        assert_eq!(
+            current_shared_input["body"],
+            format!("@{claim_recipient_display_name}")
+        );
         assert_eq!(
             run_input["messages"][0]["attachments"],
             json!([{
@@ -11276,6 +11678,24 @@ mod slow_tests {
         else {
             panic!("follow-up Context should project the former Current Input as history");
         };
+        let shared_conversation: Value = followup
+            .rendered_payload
+            .split_once("[SHARED_CONVERSATION]\n")
+            .and_then(|(_, suffix)| suffix.split_once("\n[/SHARED_CONVERSATION]"))
+            .map(|(json, _)| serde_json::from_str(json).unwrap())
+            .expect("follow-up Context should contain Shared Conversation JSON");
+        let historical_input = shared_conversation["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| message["messageId"] == camp_message_id)
+            })
+            .expect("former Run Input should appear in Shared Conversation");
+        assert_eq!(
+            historical_input["body"],
+            format!("@{renamed_recipient_display_name}")
+        );
         assert!(followup.rendered_payload.contains("requirements.txt"));
         let escaped_stable_path = serde_json::to_string(&stable_path).unwrap();
         assert!(
@@ -11300,7 +11720,32 @@ mod slow_tests {
         let evidence: Value = serde_json::from_str(&evidence_json).unwrap();
         assert!(evidence.to_string().contains(&attachment_content_digest));
         assert!(evidence.to_string().contains(&camp_message_id));
+        let historical_evidence = evidence
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .find(|message| message["messageId"] == camp_message_id)
+            })
+            .expect("former Run Input should have Shared Conversation evidence");
+        assert_eq!(
+            historical_evidence["defaultRecipientMention"],
+            json!({
+                "agentId": "agent_1",
+                "displayName": renamed_recipient_display_name,
+            })
+        );
         assert_eq!(canonical_json_digest(&evidence).unwrap(), evidence_digest);
+        let stored_body: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT body FROM camp_message WHERE id = ?1",
+                [&camp_message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_body, "");
 
         fixture
             .database
@@ -11771,9 +12216,21 @@ mod slow_tests {
             run_input["messages"][0]["skills"],
             json!([{"name": official.name, "path": expected_skill_path}])
         );
+        let recipient_display_name: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT display_name FROM agent_profile WHERE id = 'agent_1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(
             run_input["messages"][0]["body"],
-            format!("/{} 请检查当前改动", official.name)
+            format!(
+                "@{recipient_display_name} /{} 请检查当前改动",
+                official.name
+            )
         );
         let (resolution_json, resolution_digest): (String, String) = fixture
             .database
@@ -14080,6 +14537,7 @@ mod slow_tests {
                 sender_id: "user-1".to_string(),
                 source_conversation_id: None,
                 content_digest: sha256_text(&body),
+                default_recipient_mention: None,
                 mentions_current_user: false,
                 skill_names: Vec::new(),
                 reply_to_message_id: None,
@@ -14241,9 +14699,19 @@ mod slow_tests {
             .unwrap();
         let run_input: Value = serde_json::from_str(run_input_json).unwrap();
         assert_eq!(run_input["messages"][0]["senderType"], "user");
+        let recipient_display_name: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT display_name FROM agent_profile WHERE id = 'agent_1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let projected_body = format!("@{recipient_display_name} {body}");
         assert_eq!(
             run_input["messages"][0]["body"].as_str(),
-            Some(body.as_str())
+            Some(projected_body.as_str())
         );
         assert!(run_input["messages"][0].get("attachments").is_none());
         let run_input_evidence: Value = fixture
@@ -14258,7 +14726,14 @@ mod slow_tests {
             .unwrap();
         assert_eq!(
             run_input_evidence["messages"][0]["projectedBodyDigest"],
-            sha256_text(body.as_str())
+            sha256_text(projected_body.as_str())
+        );
+        assert_eq!(
+            run_input_evidence["messages"][0]["defaultRecipientMention"],
+            json!({
+                "agentId": "agent_1",
+                "displayName": recipient_display_name,
+            })
         );
         assert!(
             run_input_evidence["messages"][0]["contentDigest"]

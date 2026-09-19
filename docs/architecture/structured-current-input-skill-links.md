@@ -11,7 +11,7 @@ last_updated: 2026-09-18
 本文件说明 Picker identity、claim-time 批次冻结、SkillProjection preflight、start-time resolution、Context
 Formatter 和 Runtime Adapter 的 Module seam。字段级合同见
 [Run Input Skill Links v2](../contracts/current-input-skill-links-v2.md)和
-[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)。Single Chat 继续使用 v1。
+[ContextManifest Evidence v27](../contracts/context-manifest-evidence-v27.md)。Single Chat 继续使用 v1。
 
 ## Authority flow
 
@@ -23,7 +23,7 @@ Composer Picker
   -> one batch SkillSelectionSnapshot + frozen Runtime groups
   -> full current-root SkillProjection preflight
   -> RunSkillAvailabilityView + deterministic resolver
-  -> relevant RUN_INPUT.messages[].skills + Manifest 26 evidence
+  -> relevant RUN_INPUT.messages[].skills + Manifest 27 evidence
   -> unchanged Runtime Adapter payload transport
 ```
 
@@ -51,9 +51,9 @@ SkillProjectionReconciler 仍是唯一可创建、修复、切换或删除 proje
 selection、当前 desired-state availability、verified Exposure 和冻结 group precedence；它不写 filesystem、扫描
 Runtime-native inventory、猜 path 或回调 Reconciler。
 
-Formatter 26 接收已解析的 Run-level included entries以及每条输入自己的 Skill names。它为每条消息独立生成可选
+Formatter 27 继承 Formatter 26 的 Skill 解析：接收已解析的 Run-level included entries 以及每条输入自己的 Skill names。它为每条消息独立生成可选
 `skills[{name,path}]`；未选择或未解析成功时省略字段。同一 Skill 可出现在多条真正选择它的消息中，但解析/evidence
-仍只做一份。Manifest 26 在同一 preparation critical section 冻结 selection、Exposure、resolution、消息映射和
+仍只做一份。Manifest 27 在同一 preparation critical section 冻结 selection、Exposure、resolution、消息映射和
 exact rendered bytes。
 
 ## Claim、恢复与失败
@@ -62,8 +62,8 @@ exact rendered bytes。
 atomic Delivery claim
   -> freeze Run + ordered inputs + execution config + batch Skill selection
   -> reconcile and verify full current-root projection
-  -> materialize Formatter 26 / Profile 7
-  -> persist Manifest 26
+  -> materialize Formatter 27 / Profile 8
+  -> persist Manifest 27
   -> deliver exact payload
 ```
 

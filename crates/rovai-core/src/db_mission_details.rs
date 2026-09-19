@@ -506,6 +506,7 @@ mod tests {
         database
             .migrate_single_chat_operation_policy_v165()
             .unwrap();
+        database.migrate_default_recipient_mention_v166().unwrap();
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
             DatabaseContractClassification::Current(_)

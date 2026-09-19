@@ -13,7 +13,7 @@ last_updated: 2026-09-18
 [Channel Storage v3](../contracts/channel-storage-v3.md)，共享 Camp admission、membership 与
 模型输入分别继续由 provider-neutral 渠道核心、
 [Camp Membership v2](../contracts/camp-membership-v2.md)和
-[ContextManifest Evidence v26](../contracts/context-manifest-evidence-v26.md)拥有。取舍理由见
+[ContextManifest Evidence v27](../contracts/context-manifest-evidence-v27.md)拥有。取舍理由见
 [v1.36 决策记录](../versions/v1.36/decisions.md)和
 [V1.37-D09](../versions/v1.37/decisions.md#v1-37-d09)、
 [V1.37-D10](../versions/v1.37/decisions.md#v1-37-d10)、

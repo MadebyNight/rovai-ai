@@ -34,7 +34,7 @@ First Context materialization resolves the frozen selection against the current 
 SkillExposureSnapshot using v1's closed availability, candidate-ordering and omission rules. Any full Exposure integrity
 failure remains fail closed; an individual missing/inactive/disabled/renamed/unassigned/non-ready selection is omitted.
 
-Formatter 26 projects resolved links only onto `RUN_INPUT.messages[]` items whose own structured content selected that
+Formatter 27 inherits the Formatter 26 rule and projects resolved links only onto `RUN_INPUT.messages[]` items whose own structured content selected that
 Skill:
 
 ```json
@@ -64,7 +64,7 @@ that the Runtime or model read the file.
 
 ## Recovery and transport
 
-Manifest 26 freezes the selection, availability, resolution, Exposure and exact Formatter 26 payload. Same-Run
+Manifest 27 freezes the selection, availability, resolution, Exposure and exact Formatter 27 payload. Same-Run
 transport recovery reuses those bytes and does not reread later Library/filesystem state. Runtime Adapters transport the
 complete prepared payload unchanged and do not create Provider-specific Skill items.
 
@@ -73,6 +73,6 @@ Single Chat remains on Formatter/Manifest 25 and the v1 `CURRENT_INPUT.skills` b
 ## References
 
 - [Current Input Skill Links v1 (historical)](current-input-skill-links-v1.md)
-- [ContextManifest Evidence v26](context-manifest-evidence-v26.md)
+- [ContextManifest Evidence v27](context-manifest-evidence-v27.md)
 - [Structured Skill Links architecture](../architecture/structured-current-input-skill-links.md)
 - [Skill Projection Reconciliation](../architecture/skill-projection-reconciliation.md)
