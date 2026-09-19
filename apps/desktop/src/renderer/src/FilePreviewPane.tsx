@@ -423,7 +423,13 @@ function FilePreviewDocument({ tab }: { tab: FilePreviewTabModel }): React.JSX.E
 function ReadingPanel({ tab, children }: { tab: import('./FilePreviewContext').PreviewTabModel; children: React.ReactNode }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
   const { saveReading, isCurrentCamp } = useFilePreview()
-  const content = tab.kind === 'file' ? tab.content : tab.kind === 'file_change' ? tab.detail : isCurrentCamp ? tab.missionId : null
+  const content = tab.kind === 'file'
+    ? tab.content
+    : tab.kind === 'file_change'
+      ? tab.detail
+      : tab.kind === 'mission_activity' && isCurrentCamp
+        ? tab.missionId
+        : null
   const restoring = useRef(false)
   useLayoutEffect(() => {
     if (!tab.reading || !content || !root.current) return
@@ -468,7 +474,11 @@ export function FilePreviewPane({ tabsInPane = false }: { tabsInPane?: boolean }
   return <div ref={host} className="file-preview-pane file-preview-anchor" hidden={!paneVisible} aria-hidden="true" />
 }
 
-export function FilePreviewPaneContent({ visible, missionActivity }: { visible: boolean; missionActivity?: React.ReactNode }): React.JSX.Element {
+export function FilePreviewPaneContent({ visible, missionActivity, executionHostRef }: {
+  visible: boolean
+  missionActivity?: React.ReactNode
+  executionHostRef?(element: HTMLDivElement | null): void
+}): React.JSX.Element {
   const { tabs, activeTabId, paneVisible } = useFilePreview()
   const tabLabels = useMemo(() => previewTabLabels(tabs), [tabs])
   return (
@@ -488,7 +498,9 @@ export function FilePreviewPaneContent({ visible, missionActivity }: { visible: 
         aria-label={tabLabels.get(tab.id) ?? previewTabLabel(tab)}
         aria-labelledby={`file-preview-tab-${tab.id}`}
       >
-        <ReadingPanel tab={tab}>{tab.kind === 'mission_activity' ? missionActivity : <FileFindScope id={tab.id}>{tab.kind === 'file_change' ? <FileChangesPreview tab={tab} visible={visible && tab.id === activeTabId} /> : <FilePreviewDocument tab={tab} />}</FileFindScope>}</ReadingPanel>
+        {tab.kind === 'execution'
+          ? <div ref={executionHostRef} className="execution-preview-host" />
+          : <ReadingPanel tab={tab}>{tab.kind === 'mission_activity' ? missionActivity : <FileFindScope id={tab.id}>{tab.kind === 'file_change' ? <FileChangesPreview tab={tab} visible={visible && tab.id === activeTabId} /> : <FilePreviewDocument tab={tab} />}</FileFindScope>}</ReadingPanel>}
       </section>)}
     </section>
   )

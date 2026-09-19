@@ -185,6 +185,7 @@ pub(super) fn reconcile(
             }
             Ok(value)
         }
+        "camp.messages.withdraw" => camp!(WithdrawCampMessageCommand),
         "action.approvals.resolve" => {
             let params: ResolveActionApprovalParams = serde_json::from_value(query.params)?;
             receipt(database, params.envelope())

@@ -10,6 +10,14 @@ export const ExecutionLatestContext = createContext<{
   setHasNewer(hasNewer: boolean): void
 } | null>(null)
 
+const EXECUTION_READING_INTENT_MAX_AGE_MS = 1_500
+
+function hasRecentExecutionReadingIntent(host: HTMLElement): boolean {
+  const markedAt = Number(host.dataset.executionReadingIntent)
+  return Number.isFinite(markedAt)
+    && performance.now() - markedAt <= EXECUTION_READING_INTENT_MAX_AGE_MS
+}
+
 export function useExecutionWindow(enabled: boolean, campId: string, run: AgentRunView, liveRevision: unknown, contentRevision: unknown) {
   const client = useCampClient()
   const root = useRef<HTMLDivElement>(null)
@@ -188,6 +196,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
       delete host.dataset.executionAdjustedTop
       if (adjusted !== undefined && Math.abs(Number(adjusted) - host.scrollTop) < 1) return
       delete host.dataset.executionAnchorKey
+      if (!hasRecentExecutionReadingIntent(host)) return
       const current = store.current
       if (!current || current.loading || current.error || anchor.current) return
       const bounds = root.current?.getBoundingClientRect()

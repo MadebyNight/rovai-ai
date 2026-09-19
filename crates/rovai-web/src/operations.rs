@@ -245,6 +245,8 @@ pub enum Operation {
     CaptureQuote,
     #[serde(rename = "camp.messages.send")]
     Send,
+    #[serde(rename = "camp.messages.withdraw")]
+    WithdrawMessage,
     #[serde(rename = "action.approvals.resolve")]
     Approval,
     #[serde(rename = "agentRuns.cancel")]
@@ -458,6 +460,7 @@ impl Operation {
             Self::DraftQuote => "messageQuotes.mutateDraft",
             Self::CaptureQuote => "messageQuotes.capture",
             Self::Send => "camp.messages.send",
+            Self::WithdrawMessage => "camp.messages.withdraw",
             Self::Approval => "action.approvals.resolve",
             Self::CancelRun => "agentRuns.cancel",
             Self::Reconcile => "commands.reconcile",
@@ -625,5 +628,8 @@ mod tests {
         assert!(
             serde_json::from_value::<Operation>(json!("camp.message.send_user_draft")).is_err()
         );
+        let withdraw = serde_json::from_value::<Operation>(json!("camp.messages.withdraw"))
+            .expect("User message withdrawal should be admitted by the Web Host");
+        assert_eq!(withdraw.method(), "camp.messages.withdraw");
     }
 }

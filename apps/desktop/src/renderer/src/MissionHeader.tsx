@@ -1,20 +1,31 @@
-import { useLayoutEffect } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import type { CampSnapshot, MissionRecord } from '@contracts'
 import { AppHeader } from './AppHeader'
 import { DialogControlIcon } from './AppDialog'
 import { Icon } from './MissionControls'
 import { useFilePreview } from './FilePreviewContext'
 
-export function MissionHeader({ mission, drawer, projectName, camp, openRequest, onExpand, onFold, onClose, onFocusApprovals, detailEntryHostRef }: {
+export function MissionHeader({ mission, drawer, projectName, camp, openRequest, executionTakesPreviewPriority = false, onExpand, onFold, onClose, onFocusApprovals, detailEntryHostRef }: {
   mission: MissionRecord; drawer: boolean; projectName: string | null; camp: CampSnapshot; openRequest: number
+  executionTakesPreviewPriority?: boolean
   onExpand(): void; onFold(): void; onClose(): void; onFocusApprovals(): void
   detailEntryHostRef(host: HTMLDivElement | null): void
 }): React.JSX.Element {
   const preview = useFilePreview()
   const activityTab = preview.tabs.find(tab => tab.kind === 'mission_activity')
-  const activitySelected = preview.paneVisible && !!activityTab
+  const activitySelected = preview.paneVisible && preview.activeTabId === activityTab?.id
+  const executionPriorityOnOpen = useRef(executionTakesPreviewPriority)
+  executionPriorityOnOpen.current = executionTakesPreviewPriority
   // Presentation changes do not remount this header or reset the selected tab.
-  useLayoutEffect(() => { preview.openMissionActivity(mission.missionId) }, [mission.missionId, openRequest, preview.openMissionActivity])
+  useLayoutEffect(() => {
+    preview.openMissionActivity(mission.missionId)
+    if (executionPriorityOnOpen.current) preview.openExecution()
+  }, [
+    mission.missionId,
+    openRequest,
+    preview.openExecution,
+    preview.openMissionActivity
+  ])
   return <AppHeader campTitle={mission.title} contextLabel={projectName} camp={camp} detailEntryHostRef={detailEntryHostRef}
     onFocusApprovals={onFocusApprovals} hideTitle={drawer}
     leading={<div className="mission-session-leading">

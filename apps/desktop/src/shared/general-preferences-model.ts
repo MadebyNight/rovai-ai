@@ -1,7 +1,7 @@
 import type { ExecutionConsolePlacement, GeneralPreferencesSnapshot, NewConversationDefaults, SettingsSection, StartupLocationMode } from '@contracts'
 
 const STARTUP_LOCATION_MODES = new Set<StartupLocationMode>(['last_location', 'quick_chat'])
-const EXECUTION_CONSOLE_PLACEMENTS = new Set<ExecutionConsolePlacement>(['bottom', 'inspector'])
+const EXECUTION_CONSOLE_PLACEMENTS = new Set<ExecutionConsolePlacement>(['right', 'inspector', 'bottom'])
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   'remote',
   'general',

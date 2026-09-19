@@ -4064,12 +4064,13 @@ export function BusinessApp({
           <MissionSurface key={activeCampId} enabled={!!activeMission} full={!missionDrawer} onExpand={() => setMissionPresentation('full')} onClose={() => chooseView('missions')}>
           {activeMission && <MissionHeader mission={activeMission} drawer={missionDrawer} camp={visibleCampSnapshot} projectName={activeCampProject?.name ?? activeCampContextLabel}
             openRequest={missionOpenRequest} onExpand={() => setMissionPresentation('full')} onFold={() => setMissionPresentation('drawer')}
+            executionTakesPreviewPriority={generalPreferences.executionConsolePlacement === 'right'
+              && visibleCampSnapshot.agentRuns.some((run) => run.status === 'running')}
             onClose={() => chooseView('missions')} onFocusApprovals={focusCampApprovals} detailEntryHostRef={setCampDetailEntryHost}/>}
           <CampWorkspace
             key={activeCampId}
             missionBoard={activeMission ? <MissionIntro mission={activeMission} projects={displayNavigation?.projects ?? []}/> : null}
             previewTabsInPane={false}
-            suppressExecutionAutoOpen={missionDrawer}
             snapshot={visibleCampSnapshot}
             initialComposerDraft={campSnapshotState.initialComposerDraft}
             onInitialComposerDraftConsumed={consumeInitialComposerDraft}

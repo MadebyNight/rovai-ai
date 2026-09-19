@@ -56,6 +56,20 @@ describe('general preferences', () => {
       worldMapEnabled: false
     })
     expect(parseGeneralPreferences({
+      schemaVersion: 4,
+      startupLocationMode: 'last_location',
+      lastSettingsSection: 'general',
+      executionConsolePlacement: 'right',
+      newConversationDefaults: null,
+      newConversationDefaultsRequireConfirmation: false,
+      oneClickNewConversationEnabled: false,
+      worldMapEnabled: true
+    })).toEqual({
+      ...DEFAULT_GENERAL_PREFERENCES,
+      executionConsolePlacement: 'right',
+      worldMapEnabled: true
+    })
+    expect(parseGeneralPreferences({
       schemaVersion: 1,
       startupLocationMode: 'quick_chat',
       lastSettingsSection: 'diagnostics'

@@ -9,7 +9,10 @@ last_updated: 2026-09-20
 
 # v1.62 实施与验收
 
-范围见[版本概览](README.md)，字段级行为见 [Mission v7](../../contracts/mission-v7.md)。
+范围见[版本概览](README.md)，字段级行为见 [Mission v7](../../contracts/mission-v7.md)、
+[Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
+[File Preview v17](../../contracts/file-preview-v17.md)与
+[Camp Message Send v23](../../contracts/camp-message-send-v23.md)。
 
 ## Gate 0：当前基线与权威
 
@@ -68,6 +71,24 @@ last_updated: 2026-09-20
 - [x] 异步清理 Rust 定向/全量测试、Mission Electron 验收、TypeScript、文档治理、格式、diff 与编译检查通过。
 - [x] `pnpm build:desktop` 生产构建通过；清理/滚动增量基于 PR #443 已合入的 `main` 变基并保持一条功能提交。
 
+## Gate 7：Agent Run Card 与共享工作区
+
+- [x] 执行位置扩展为 `right | inspector | bottom`，位置菜单保存同一个安装级偏好；提交失败保留原位置。
+- [x] 右侧 Execution 作为无文件能力的合成标签接入 File Preview Session，与 Activity、普通文件复用标签集合和
+  分栏比例；切换内容不改变文件预览宽度。
+- [x] 总览、单队员当前区、聚合排队批次和折叠历史共用同一详情 DOM；卡片动作只作用于显示的 exact Run ID。
+- [x] 进入普通或 Mission 会话时只选择最新 running Run，展开后定位最新指令并按用户阅读意图跟随；后台刷新
+  不重复进入规则或抢焦点。Mission 的 Activity 先建立，右侧 Execution 在符合条件时取得当前显示。
+
+## Gate 8：消息回执、撤回与验收
+
+- [x] 当前用户消息显示聚合处理回执和按需队员明细；队员消息保留既有底色框。
+- [x] 撤回只使用 `canWithdraw + expectedVersion`，取消关闭弹窗，确认通过 Desktop/Web 的同一
+  `camp.messages.withdraw` operation 提交；成功后使用既有撤回标记。
+- [x] Renderer、File Preview、偏好保存、时间线定位、Host operation 与 Core 撤回边界的定向测试通过。
+- [x] 隔离 Electron 验收覆盖三位置往返、共享宽度、最新 running Run 自动打开、指令跟随、排队合批、停止、
+  撤回取消/确认、恢复和长 Tool 输出；类型、文档、生产构建与 macOS App 验证通过。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -78,6 +99,10 @@ help。删除测试为零。
 继续拥有 Renderer cleanup projection 输入矩阵；`camp_rename_lead_change_and_quiescent_delete_with_cleanup_are_versioned`
 继续拥有 Camp 删除事务/replay，并增加 cleanup intent 与聚合删除原子性的断言。较低层纯函数不能证明 gateway
 transaction 与 Camp aggregate 删除。独立列滚动不改变 Core 行为，由隔离 Electron 密集卡片验收拥有。
+
+Agent Run Card 增量不新增 Rust 测试 owner。撤回继续由既有多接收者 waiting Delivery 原子撤回、首个 claim 后拒绝
+和幂等命令用例拥有；Desktop/Web 只补齐同一 operation 的 Host 准入。新的偏好保存回归由共享 TypeScript owner
+覆盖，避免 unrelated Host read 阻塞已提交的保存结果。
 
 ## 实施收口
 

@@ -36,7 +36,8 @@ export function campTimelineFollowingLatestAfterScroll(
     currentGeometry.clientHeight
   )) return true
   if (previousPosition?.followingLatest !== true || !previousGeometry) return false
-  return previousGeometry.scrollHeight !== currentGeometry.scrollHeight
+  return Math.abs(previousPosition.scrollTop - currentGeometry.scrollTop) <= 1
+    || previousGeometry.scrollHeight !== currentGeometry.scrollHeight
     || previousGeometry.clientHeight !== currentGeometry.clientHeight
 }
 
