@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.59
 status: completed
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # 桌面使命实施
@@ -120,6 +120,17 @@ Worktree 和本地分支，使用中性操作。删除使命新增默认 `retain
 （832 passed、6 ignored）、`cargo test -p rovai-web`（8 passed）、`pnpm typecheck`、
 `pnpm test:desktop-bridge`、`pnpm test:mission-board`（标准场景与 1200 文件窗口化场景）、
 `pnpm test:host-web`（4 passed）、`pnpm build:web`，以及完整 documentation governance／diff-aware CI 门禁。
+
+## 2026-09-19 Worktree 清理短路径
+
+显式清理继续使用既有互斥、执行占用检查、所有权证明、expected OID 条件删除和两个持久检查点，不增加队列、
+状态机或通用锁。首次尝试在确认路径、仓库、owner marker 与分支归属后只读取一次分支 OID 并持久化；重试复用
+该 OID，已完成的 Worktree 步骤不再重做整套校验。正常路径收敛为移除已验证 Worktree、一次分支占用检查和
+一次 `update-ref -d <ref> <expectedOid>`；删除前后的重复 OID 探测已移除。资源已经不存在或删除后尚未来得及
+记录检查点时仍按幂等成功处理，异常 registration／staging 仍只删除带该使命 owner 证明的精确资源。
+
+Renderer 在 `missions.workspace.cleanup` 成功后先关闭原确认弹窗，再并发刷新 Mission 列表与当前 Camp。
+刷新失败走独立通知，明确清理已经成功，不会把弹窗恢复为清理失败；确认文案、按钮和入口保持不变。
 
 ## 主线整合与验收
 

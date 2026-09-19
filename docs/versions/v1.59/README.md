@@ -6,7 +6,7 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Rovai-ai v1.59：统一 Rust Host 与三平台 Server
@@ -24,6 +24,8 @@ Mission Camp、首次执行准备 Git worktree、固定基准累计 Diff、Agent
 前台操作：删除使命默认原地保留 Worktree／本地分支，勾选后先清理成功再删除；单独清理可从原右键入口重试，
 不增加保留资源页面、后台维护或 Session 重置。当前合同为 [Mission v3](../../contracts/mission-v3.md)
 与 [Built-in Tool Transport v27](../../contracts/builtin-tool-transport-v27.md)。
+2026-09-19 在不改变范围与安全门槛的前提下收敛了清理短路径：首次 OID 只读取一次、重试复用持久值并跳过
+已完成步骤；清理命令成功后弹窗立即关闭，Mission／Camp 刷新失败改为独立提示。
 
 ## Command 文件预览与执行台宽度修复增量
 

@@ -53,8 +53,8 @@ export function missionDate(value: string): string {
 }
 
 /** Shared overlays keep card actions identical in the board, drawer and full conversation. */
-export function MissionInteractionProvider({ missions, projects, agents, onChanged, onDeleted, onError, children }: {
-  missions: MissionRecord[]; projects: ProjectNavigationGroup[]; agents: AgentProfile[]; onChanged(campId: string): Promise<void>; onDeleted(campId: string): Promise<void>; onError(message: string): void; children: ReactNode
+export function MissionInteractionProvider({ missions, projects, agents, onChanged, onWorkspaceCleaned, onDeleted, onError, children }: {
+  missions: MissionRecord[]; projects: ProjectNavigationGroup[]; agents: AgentProfile[]; onChanged(campId: string): Promise<void>; onWorkspaceCleaned(campId: string): Promise<void>; onDeleted(campId: string): Promise<void>; onError(message: string): void; children: ReactNode
 }) {
   const client = useCampClient()
   const [position, setPosition] = useState<(ContextPosition & { kind: 'menu' | 'tags' | 'members' }) | null>(null)
@@ -110,7 +110,11 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
       {position.kind === 'tags' ? <LabelsEditor key={selected.missionId} m={selected} catalog={catalog} onSave={tags => change(selected, 'update', { tags })}/> : <MissionRoster m={selected}/>}
     </MissionPopover>}
     {editing && <MissionEdit key={editing.missionId} mission={editing} projects={projects} agents={agents} catalog={catalog} onClose={() => setEditing(null)} onSaved={() => onChanged(editing.campId)} onSave={patch => change(editing, 'update', patch)}/>}
-    {cleaning && <MissionWorkspaceCleanup key={cleaning.missionId} mission={cleaning} onClose={() => setCleaning(null)} onCleaned={async () => { await onChanged(cleaning.campId); setCleaning(null) }}/>}
+    {cleaning && <MissionWorkspaceCleanup key={cleaning.missionId} mission={cleaning} onClose={() => setCleaning(null)} onCleaned={() => {
+      const campId = cleaning.campId
+      setCleaning(null)
+      void onWorkspaceCleaned(campId).catch(error => onError(`使命 Worktree 已清理，但信息刷新失败：${missionError(error)}`))
+    }}/>}
     {deleting && <MissionDelete key={deleting.missionId} mission={deleting} onClose={() => setDeleting(null)} onDelete={async workspaceDisposition => {
       const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: deleting.campId })
       await missionCommand(client, 'camps.delete', { campId: deleting.campId, expectedVersion: snapshot.camp.version, force: true, workspaceDisposition })
@@ -213,14 +217,14 @@ function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onCl
     </Dialog.Portal>
   </Dialog.Root>
 }
-function MissionWorkspaceCleanup({ mission, onCleaned, onClose }: { mission: MissionRecord; onCleaned(): Promise<void>; onClose(): void }) {
+function MissionWorkspaceCleanup({ mission, onCleaned, onClose }: { mission: MissionRecord; onCleaned(): void; onClose(): void }) {
   const client = useCampClient(), [delivery, setDelivery] = useState<MissionDelivery | null>(null), [retry, setRetry] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('')
   useEffect(() => { let current = true; setError(''); void client.request<MissionDelivery>('missions.delivery', { missionId: mission.missionId }).then(data => { if (current) setDelivery(data) }).catch(error => { if (current) setError(missionError(error)) }); return () => { current = false } }, [client, mission.missionId, retry])
   async function cleanup() {
     setBusy(true); setError('')
     try {
       await missionCommand(client, 'missions.workspace.cleanup', { missionId: mission.missionId })
-      await onCleaned()
+      onCleaned()
     } catch (error) { setError(missionError(error)) } finally { setBusy(false) }
   }
   return <CompactDialog title="清理使命 Worktree" className="mission-worktree-cleanup-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary" onClick={() => void cleanup()} disabled={busy || !delivery?.workspace}>{busy ? '正在清理…' : '清理'}</button></>}>
