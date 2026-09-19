@@ -56,3 +56,4 @@ async function runFixture(t, expectedCases, mode = 'standard') {
 test('Mission card, drawer, delivery and retained preview share one Camp workspace', { timeout: 100_000 }, t => runFixture(t, 11))
 test('Mission file trees virtualize a large cumulative Git diff', { timeout: 100_000 }, t => runFixture(t, 1, 'large-diff'))
 test('Mission drawer expands directly from a wide saved width', { timeout: 100_000 }, t => runFixture(t, 0, 'wide-direct-expand'))
+test('Mission editor popovers accept pointer clicks and wheel scrolling', { timeout: 100_000 }, t => runFixture(t, 1, 'editor-pointer'))

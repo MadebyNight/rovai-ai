@@ -91,6 +91,7 @@ export function NewConversationDialog({
   const [tags, setTags] = useState<string[]>([])
   const [attachments, setAttachments] = useState<MissionDraftAttachment[]>([])
   const [expanded, setExpanded] = useState(false)
+  const [missionDialogContent, setMissionDialogContent] = useState<HTMLDivElement | null>(null)
   const isMission = purpose === 'mission'
   const startSubmitRef = useRef<HTMLButtonElement>(null)
   const [quickHelpOpen, setQuickHelpOpen] = useState(false)
@@ -286,6 +287,7 @@ export function NewConversationDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay new-camp-dialog-overlay" />
         <Dialog.Content
+          ref={isMission ? setMissionDialogContent : undefined}
           className={`new-camp-dialog compact-dialog ${isMission ? `mission-definition-dialog mission-create-dialog${expanded ? ' is-expanded' : ''}` : ''}`}
           aria-describedby="new-camp-dialog-description"
           onOpenAutoFocus={(event) => {
@@ -341,10 +343,10 @@ export function NewConversationDialog({
                 </NewConversationPicker>
               </div></>}
               {isMission && <div className="mission-editor-properties" aria-label="使命属性">
-                <MissionProjectPicker open={projectMenuOpen} onOpenChange={setProjectMenuOpen} projects={projects} workspace={workspace} projectLabel={projectLabel} disabled={projectActionsDisabled}
+                <MissionProjectPicker open={projectMenuOpen} onOpenChange={setProjectMenuOpen} projects={projects} workspace={workspace} projectLabel={projectLabel} disabled={projectActionsDisabled} portalContainer={missionDialogContent}
                   onQuickChat={() => { setWorkspace(null); setProjectMenuOpen(false) }} onProject={selectKnownWorkspace} onChooseDirectory={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}/>
-                <MissionTeamPicker busy={busy} members={preflight.presentMembers} availableMembers={availableMembers} selectedMemberIds={selectedMemberIds} selectedMembers={selectedMembers} leadId={leadId} profileById={profileById} enableOneClick={enableOneClick} triggerRef={memberTriggerRef} onEnableOneClick={setEnableOneClick} onToggle={toggleMember} onToggleAll={toggleAllMembers} onLead={setLeadId}/>
-                <MissionTagPicker tags={tags} catalog={missionTagCatalog} disabled={busy} onChange={setTags}/>
+                <MissionTeamPicker busy={busy} members={preflight.presentMembers} availableMembers={availableMembers} selectedMemberIds={selectedMemberIds} selectedMembers={selectedMembers} leadId={leadId} profileById={profileById} enableOneClick={enableOneClick} triggerRef={memberTriggerRef} portalContainer={missionDialogContent} onEnableOneClick={setEnableOneClick} onToggle={toggleMember} onToggleAll={toggleAllMembers} onLead={setLeadId}/>
+                <MissionTagPicker tags={tags} catalog={missionTagCatalog} disabled={busy} portalContainer={missionDialogContent} onChange={setTags}/>
               </div>}
               {!isMission && <>{workspace && <div className="compact-row-detail"><span title={projectDetail}>{projectDetail}</span>{gitPresentation.kind === 'metadata' && <span className="compact-git">{gitPresentation.label}</span>}{gitPresentation.kind === 'loading' && <span role="status">{gitPresentation.label}</span>}</div>}
               {gitPresentation.kind === 'warning' && <div className="new-camp-workspace-warning" role="alert"><div><strong>{gitPresentation.label}</strong><span>{gitPresentation.detail}</span></div></div>}
@@ -470,6 +472,7 @@ function MissionProjectPicker({
   workspace,
   projectLabel,
   disabled,
+  portalContainer,
   onOpenChange,
   onQuickChat,
   onProject,
@@ -480,6 +483,7 @@ function MissionProjectPicker({
   workspace: WorkspaceChoice | null
   projectLabel: string
   disabled: boolean
+  portalContainer: HTMLElement | null
   onOpenChange(open: boolean): void
   onQuickChat(): void
   onProject(project: ProjectNavigationGroup): void
@@ -492,7 +496,7 @@ function MissionProjectPicker({
   const quickChatMatches = !normalized || `使用快速对话 Rovai AI 管理的快速对话目录`.toLocaleLowerCase().includes(normalized)
   return <Popover.Root open={open} onOpenChange={next => { if (!disabled) onOpenChange(next); if (!next) setQuery('') }}>
     <Popover.Trigger asChild><MissionPropertyChip className="mission-editor-project-property" icon={<ProjectGlyph/>} disabled={disabled} aria-label={`项目：${projectLabel}`}>{projectLabel}</MissionPropertyChip></Popover.Trigger>
-    <Popover.Portal><Popover.Content className="compact-menu mission-editor-project-popover" align="start" sideOffset={6} collisionPadding={12}
+    <Popover.Portal container={portalContainer}><Popover.Content className="compact-menu mission-editor-project-popover" align="start" sideOffset={6} collisionPadding={12}
       onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
       <label className="mission-picker-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索项目" placeholder="搜索项目…"
         onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.closest('.mission-editor-project-popover')?.querySelector<HTMLButtonElement>('.mission-editor-project-list button:not(:disabled)')?.focus() } }}/></label>
@@ -516,6 +520,7 @@ function MissionTeamPicker({
   profileById,
   enableOneClick,
   triggerRef,
+  portalContainer,
   onEnableOneClick,
   onToggle,
   onToggleAll,
@@ -530,6 +535,7 @@ function MissionTeamPicker({
   profileById: Map<string, AgentProfile>
   enableOneClick: boolean
   triggerRef: RefObject<HTMLButtonElement | null>
+  portalContainer: HTMLElement | null
   onEnableOneClick(value: boolean): void
   onToggle(agentId: string): void
   onToggleAll(): void
@@ -559,7 +565,7 @@ function MissionTeamPicker({
         </span>
       </MissionPropertyChip>
     </Popover.Trigger>
-    <Popover.Portal><Popover.Content className="compact-menu mission-editor-team-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
+    <Popover.Portal container={portalContainer}><Popover.Content className="compact-menu mission-editor-team-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
       <div className="compact-menu-heading"><span>队员与队长 <small className="mission-editor-team-count">已选 {selectedMemberIds.length} / {members.length}</small></span><button type="button" disabled={busy || !availableMembers.length} onClick={onToggleAll}>{allSelected ? '取消全选' : '全选'}</button></div>
       <label className="mission-picker-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索队员" placeholder="搜索队员…"
         onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.closest('.mission-editor-team-popover')?.querySelector<HTMLButtonElement>('.mission-editor-team-member:not(:disabled)')?.focus() } }}/></label>

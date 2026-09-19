@@ -141,6 +141,7 @@ function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onCl
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const [dialogContent, setDialogContent] = useState<HTMLDivElement | null>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const editorRef = useRef<MissionWritingPlaneHandle>(null)
   const agentById = useMemo(() => new Map(agents.map(agent => [agent.agentId, agent])), [agents])
@@ -192,7 +193,7 @@ function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onCl
   return <Dialog.Root open onOpenChange={open => { if (!open && !busy) onClose() }}>
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay new-camp-dialog-overlay"/>
-      <Dialog.Content className={`compact-dialog mission-definition-dialog mission-edit-dialog${expanded ? ' is-expanded' : ''}`} aria-describedby="mission-edit-description"
+      <Dialog.Content ref={setDialogContent} className={`compact-dialog mission-definition-dialog mission-edit-dialog${expanded ? ' is-expanded' : ''}`} aria-describedby="mission-edit-description"
         onOpenAutoFocus={event => event.preventDefault()} onEscapeKeyDown={event => { if (busy) event.preventDefault() }}>
         <header className="compact-header mission-editor-header">
           <div className="mission-editor-heading"><Dialog.Title>编辑使命</Dialog.Title><span>{`M-${String(mission.number).padStart(3, '0')}`}</span></div>
@@ -207,7 +208,7 @@ function MissionEdit({ mission, projects, agents, catalog, onSave, onSaved, onCl
               <MissionPropertyChip icon={<TeamGlyph/>} locked className="mission-editor-team-property mission-editor-team-locked" title="编辑使命时不能更改队员或队长" aria-label={`队员与队长：${members.length} 位队员，${lead ? `队长 ${lead.displayName}` : '未设置队长'}，编辑使命时不能更改`}>
                 <span className="mission-editor-team-summary"><span className="compact-avatar-stack">{members.slice(0, 2).map(member => <MemberAvatar key={member.agentId} agentId={member.agentId} avatarRef={member.avatarRef} displayName={member.displayName} size="mention" decorative/>)}{members.length > 2 && <span className="mission-editor-team-overflow" aria-hidden="true">+{members.length - 2}</span>}</span><span className="mission-editor-team-divider" aria-hidden="true"/><span>{lead ? `队长 ${lead.displayName}` : '未设置队长'}</span></span>
               </MissionPropertyChip>
-              <MissionTagPicker tags={tags} catalog={catalog} disabled={busy} onChange={setTags}/>
+              <MissionTagPicker tags={tags} catalog={catalog} disabled={busy} portalContainer={dialogContent} onChange={setTags}/>
             </div>
             {error && <p role="alert" className="compact-inline-error mission-editor-error">{error}</p>}
           </div>
