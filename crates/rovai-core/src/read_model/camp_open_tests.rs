@@ -19,7 +19,7 @@ use std::{
 
 // These tests own the complete CampOpen SQL boundary. A pure query test cannot
 // detect an event read introduced by message hydration or another nested loader.
-fn business_fixture() -> (OwnedTestDatabase, String) {
+fn business_fixture() -> (OwnedTestDatabase, String, String, String) {
     let mut database = seeded_runtime_database_fast_owned();
     let workspace = database.directory().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -158,30 +158,42 @@ fn business_fixture() -> (OwnedTestDatabase, String) {
             addressed_agent_ids_json, camp_turn_id, version, created_at, updated_at
         ) SELECT 'open-agent-message', ?1,
                  (SELECT MAX(sequence) + 1 FROM camp_message WHERE camp_id = ?1),
-                 'agent', conversation.agent_id, agent_run.id, '交接',
+                 'agent', source_conversation.agent_id, source_run.id, '交接',
                  '[{"kind":"text","text":"交接"}]', 'sha256:open-message', 'default',
-                 '[]', agent_run.camp_turn_id, 1, ?3, ?3
-          FROM agent_run JOIN conversation ON conversation.id = agent_run.conversation_id
-          WHERE agent_run.id = ?2"#,
-            params![camp_id, completed_run, now],
+                 json_array(target_conversation.agent_id), NULL, 1, ?4, ?4
+          FROM agent_run AS source_run
+          JOIN conversation AS source_conversation
+            ON source_conversation.id = source_run.conversation_id
+          JOIN agent_run AS target_run ON target_run.id = ?3
+          JOIN conversation AS target_conversation
+            ON target_conversation.id = target_run.conversation_id
+          WHERE source_run.id = ?2"#,
+            params![camp_id, completed_run, active_run, now],
         )
         .unwrap();
-    connection.execute(
-        r#"INSERT INTO message_delivery (
-            id, camp_id, camp_turn_id, message_id, recipient_agent_id,
-            recipient_canonical_position, recipient_digest, message_body_digest,
-            source_agent_run_id, edge_kind, a2a_root_agent_run_id, target_parent_agent_run_id, a2a_depth,
-            ancestor_agent_ids_json, recipient_presentation_snapshot_json,
-            frozen_snapshot_json, queue_sequence, status, dispatch_phase,
-            created_at, updated_at, recipient_membership_version_at_admission
-        ) SELECT 'open-delivery', ?1, agent_run.camp_turn_id, 'open-agent-message',
-                 conversation.agent_id, 0, 'sha256:open-recipient', 'sha256:open-message',
-                 ?2, 'forward', ?2, ?2, 1, '[]', '{}', '{}', 1, 'pending', 'never_attempted',
-                 ?4, ?4, 1
-          FROM agent_run JOIN conversation ON conversation.id = agent_run.conversation_id
-          WHERE agent_run.id = ?3"#,
-        params![camp_id, completed_run, active_run, now],
-    ).unwrap();
+    // Exercise the current Delivery-first storage seam. Writing the retired
+    // message_delivery table here would let Camp Open drift from publication
+    // while this boundary test continued to pass.
+    connection
+        .execute(
+            r#"INSERT INTO camp_message_delivery (
+            id, camp_id, message_id, recipient_agent_id,
+            recipient_membership_version_at_admission, queue_sequence,
+            status, claimed_agent_run_id, failure_code, version,
+            created_at, claimed_at, ended_at, updated_at
+        ) SELECT 'open-delivery', ?1, 'open-agent-message', conversation.agent_id,
+                 camp_member.version,
+                 (SELECT sequence FROM camp_message WHERE id = 'open-agent-message'),
+                 'claimed', ?2, NULL, 1, ?3, ?3, NULL, ?3
+          FROM agent_run
+          JOIN conversation ON conversation.id = agent_run.conversation_id
+          JOIN camp_member
+            ON camp_member.camp_id = ?1
+           AND camp_member.agent_id = conversation.agent_id
+          WHERE agent_run.id = ?2"#,
+            params![camp_id, active_run, now],
+        )
+        .unwrap();
     let attachment_path = database.directory().join("open-attachment.txt");
     std::fs::write(&attachment_path, "attachment").unwrap();
     connection
@@ -194,7 +206,12 @@ fn business_fixture() -> (OwnedTestDatabase, String) {
             params![camp_id, message_id, attachment_path.to_string_lossy(), now],
         )
         .unwrap();
-    (database, camp_id)
+    (
+        database,
+        camp_id,
+        completed_run.to_string(),
+        active_run.to_string(),
+    )
 }
 
 fn deny_event_log(context: AuthContext<'_>) -> Authorization {
@@ -244,7 +261,7 @@ fn read_metered(database: &mut Database, camp_id: &str) -> (CampOpenProjection, 
 
 #[test]
 fn camp_open_preserves_business_state_without_reading_event_history() {
-    let (mut database, camp_id) = business_fixture();
+    let (mut database, camp_id, completed_run, active_run) = business_fixture();
     let snapshot = ReadModelService
         .camp_snapshot(&mut database, &camp_id)
         .unwrap();
@@ -276,6 +293,25 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
     let snapshot_json = serde_json::to_value(&snapshot).unwrap();
     assert_eq!(open.schema_version, 7);
     assert_eq!(open_json["camp"], snapshot_json["camp"]);
+    let delivery = open
+        .message_deliveries
+        .iter()
+        .find(|delivery| delivery.id == "open-delivery")
+        .expect("Camp Open must project current camp_message_delivery rows");
+    assert_eq!(open.message_deliveries.len(), 1);
+    assert_eq!(delivery.message_id, "open-agent-message");
+    assert_eq!(
+        delivery.target_agent_run_id.as_deref(),
+        Some(active_run.as_str())
+    );
+    assert!(matches!(
+        &delivery.kind,
+        MessageDeliveryKindView::PublicA2a {
+            source_agent_run_id,
+            recipient_canonical_position: 0,
+            ..
+        } if source_agent_run_id.as_deref() == Some(completed_run.as_str())
+    ));
     for collection in [
         "members",
         "tasks",
@@ -287,7 +323,12 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
     ] {
         let mut actual = open_json[collection].as_array().unwrap().clone();
         let mut expected = snapshot_json[collection].as_array().unwrap().clone();
-        assert!(!actual.is_empty(), "missing {collection}");
+        // Delivery-first Runs no longer create CampTurns. Historical Turns must
+        // still compare exactly when present, but an all-current fixture may
+        // legitimately have none.
+        if collection != "turns" {
+            assert!(!actual.is_empty(), "missing {collection}");
+        }
         // Open prioritizes non-terminal Runs; the full diagnostic Snapshot has
         // its own ordering. Compare complete Run objects by identity, not position.
         if collection == "agentRuns" {
@@ -330,7 +371,7 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
 
 #[test]
 fn camp_open_work_is_independent_of_unrelated_event_volume() {
-    let (mut database, camp_id) = business_fixture();
+    let (mut database, camp_id, _, _) = business_fixture();
     let (baseline, baseline_steps, _) = read_metered(&mut database, &camp_id);
     let base_sequence = baseline.through_global_sequence;
     let mut expected = serde_json::to_value(baseline).unwrap();

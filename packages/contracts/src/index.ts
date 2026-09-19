@@ -2389,7 +2389,7 @@ export interface CampMessageFindParams {
 interface MessageDeliveryBaseView {
   id: string
   messageId: string
-  campTurnId: string
+  campTurnId: string | null
   taskId: string | null
   recipientAgentId: string
   recipientMembershipVersionAtAdmission: number | null

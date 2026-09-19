@@ -833,7 +833,7 @@ pub struct CampMessageFindSnapshot {
 pub struct MessageDeliveryView {
     pub id: String,
     pub message_id: String,
-    pub camp_turn_id: String,
+    pub camp_turn_id: Option<String>,
     pub task_id: Option<String>,
     pub recipient_agent_id: String,
     pub recipient_membership_version_at_admission: Option<i64>,
@@ -862,7 +862,8 @@ pub struct MessageDeliveryView {
 )]
 pub enum MessageDeliveryKindView {
     PublicA2a {
-        source_agent_run_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_agent_run_id: Option<String>,
         dispatch_disposition: String,
         completion_role: Option<String>,
         gather_id: Option<String>,
@@ -1961,7 +1962,23 @@ fn load_camp_open_counts(transaction: &Transaction<'_>, camp_id: &str) -> Result
               (SELECT COUNT(*) FROM task WHERE camp_id = ?1),
               (SELECT COUNT(*) FROM camp_message
                WHERE camp_id = ?1 AND tombstoned_at IS NULL),
-              (SELECT COUNT(*) FROM message_delivery WHERE camp_id = ?1),
+              (SELECT COUNT(*)
+               FROM camp_message_delivery AS current_delivery
+               JOIN camp_message AS message
+                 ON message.id = current_delivery.message_id
+               WHERE current_delivery.camp_id = ?1
+                 AND message.author_type = 'agent'
+                 AND message.tombstoned_at IS NULL)
+              +
+              (SELECT COUNT(*)
+               FROM message_delivery AS legacy_delivery
+               WHERE legacy_delivery.camp_id = ?1
+                 AND legacy_delivery.delivery_kind IN ('public_a2a', 'gather_completion')
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM camp_message_delivery AS current_delivery
+                   WHERE current_delivery.id = legacy_delivery.id
+                 )),
               (SELECT COUNT(*) FROM camp_turn WHERE camp_id = ?1 AND kind = 'camp'),
               (SELECT COUNT(*)
                FROM agent_run
@@ -2814,6 +2831,102 @@ fn load_message_deliveries(
 ) -> Result<Vec<MessageDeliveryView>> {
     let mut statement = transaction.prepare(
         r#"
+        WITH projected_delivery AS (
+          SELECT current_delivery.id,
+                 current_delivery.message_id,
+                 message.camp_turn_id,
+                 source_run.task_id,
+                 current_delivery.recipient_agent_id,
+                 current_delivery.status,
+                 CASE current_delivery.status
+                   WHEN 'waiting' THEN 'never_attempted'
+                   WHEN 'claimed' THEN 'materialized'
+                   ELSE 'terminal'
+                 END AS dispatch_phase,
+                 NULL AS wait_condition,
+                 CASE current_delivery.status
+                   WHEN 'waiting' THEN 0
+                   ELSE 1
+                 END AS dispatch_attempt_count,
+                 0 AS retry_generation,
+                 NULL AS context_manifest_id,
+                 current_delivery.claimed_agent_run_id AS target_agent_run_id,
+                 0 AS manual_intervention_required,
+                 current_delivery.failure_code,
+                 current_delivery.version,
+                 current_delivery.created_at,
+                 current_delivery.updated_at,
+                 current_delivery.ended_at,
+                 'public_a2a' AS delivery_kind,
+                 'dispatch' AS dispatch_disposition,
+                 NULL AS completion_role,
+                 NULL AS gather_id,
+                 NULL AS gather_dispatch_delivery_id,
+                 COALESCE((
+                   SELECT CAST(recipient.key AS INTEGER)
+                   FROM json_each(message.addressed_agent_ids_json) AS recipient
+                   WHERE recipient.value = current_delivery.recipient_agent_id
+                   ORDER BY CAST(recipient.key AS INTEGER)
+                   LIMIT 1
+                 ), 0) AS recipient_canonical_position,
+                 'forward' AS edge_kind,
+                 NULL AS target_parent_agent_run_id,
+                 NULL AS return_to_agent_run_id,
+                 NULL AS target_conversation_id,
+                 current_delivery.recipient_membership_version_at_admission,
+                 message.source_agent_run_id,
+                 current_delivery.queue_sequence
+          FROM camp_message_delivery AS current_delivery
+          JOIN camp_message AS message
+            ON message.id = current_delivery.message_id
+          LEFT JOIN agent_run AS source_run
+            ON source_run.id = message.source_agent_run_id
+          WHERE current_delivery.camp_id = ?1
+            AND message.author_type = 'agent'
+            AND message.tombstoned_at IS NULL
+
+          UNION ALL
+
+          SELECT legacy_delivery.id,
+                 legacy_delivery.message_id,
+                 legacy_delivery.camp_turn_id,
+                 legacy_delivery.task_id,
+                 legacy_delivery.recipient_agent_id,
+                 legacy_delivery.status,
+                 legacy_delivery.dispatch_phase,
+                 legacy_delivery.wait_condition,
+                 legacy_delivery.dispatch_attempt_count,
+                 legacy_delivery.retry_generation,
+                 legacy_delivery.context_manifest_id,
+                 legacy_delivery.target_agent_run_id,
+                 legacy_delivery.manual_intervention_required,
+                 legacy_delivery.failure_code,
+                 legacy_delivery.version,
+                 legacy_delivery.created_at,
+                 legacy_delivery.updated_at,
+                 legacy_delivery.ended_at,
+                 legacy_delivery.delivery_kind,
+                 legacy_delivery.dispatch_disposition,
+                 legacy_delivery.completion_role,
+                 legacy_delivery.gather_id,
+                 legacy_delivery.gather_dispatch_delivery_id,
+                 legacy_delivery.recipient_canonical_position,
+                 legacy_delivery.edge_kind,
+                 legacy_delivery.target_parent_agent_run_id,
+                 legacy_delivery.return_to_agent_run_id,
+                 legacy_delivery.target_conversation_id,
+                 legacy_delivery.recipient_membership_version_at_admission,
+                 legacy_delivery.source_agent_run_id,
+                 legacy_delivery.queue_sequence
+          FROM message_delivery AS legacy_delivery
+          WHERE legacy_delivery.camp_id = ?1
+            AND legacy_delivery.delivery_kind IN ('public_a2a', 'gather_completion')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM camp_message_delivery AS current_delivery
+              WHERE current_delivery.id = legacy_delivery.id
+            )
+        )
         SELECT id, message_id, camp_turn_id, task_id, recipient_agent_id,
                status, dispatch_phase,
                wait_condition, dispatch_attempt_count, retry_generation,
@@ -2826,12 +2939,11 @@ fn load_message_deliveries(
                target_parent_agent_run_id, return_to_agent_run_id,
                target_conversation_id,
                recipient_membership_version_at_admission, source_agent_run_id
-        FROM message_delivery
-        WHERE camp_id = ?1
+        FROM projected_delivery
         ORDER BY
           CASE
             WHEN ?2 IS NOT NULL
-             AND status IN ('pending', 'running') THEN 0
+             AND status IN ('pending', 'running', 'waiting', 'claimed') THEN 0
             WHEN ?2 IS NOT NULL THEN 1
             ELSE 0
           END,
@@ -4135,6 +4247,20 @@ mod tests {
         // Existing read-model tests cover messages/evidence, not delivery source attribution.
         let mut connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch(r#"
+            CREATE TABLE camp_message (
+                id TEXT, camp_id TEXT, author_type TEXT, tombstoned_at TEXT,
+                camp_turn_id TEXT, addressed_agent_ids_json TEXT,
+                source_agent_run_id TEXT
+            );
+            CREATE TABLE agent_run (id TEXT, task_id TEXT);
+            CREATE TABLE camp_message_delivery (
+                id TEXT PRIMARY KEY, camp_id TEXT, message_id TEXT,
+                recipient_agent_id TEXT,
+                recipient_membership_version_at_admission INTEGER,
+                queue_sequence INTEGER, status TEXT, claimed_agent_run_id TEXT,
+                failure_code TEXT, version INTEGER, created_at TEXT,
+                updated_at TEXT, ended_at TEXT
+            );
             CREATE TABLE message_delivery (
                 id TEXT, camp_id TEXT, message_id TEXT DEFAULT 'message',
                 camp_turn_id TEXT DEFAULT 'turn', task_id TEXT,
@@ -4152,6 +4278,19 @@ mod tests {
                 target_conversation_id TEXT, recipient_membership_version_at_admission INTEGER DEFAULT 1,
                 source_agent_run_id TEXT, queue_sequence INTEGER DEFAULT 1
             );
+            INSERT INTO agent_run VALUES ('current-sender', NULL);
+            INSERT INTO camp_message VALUES
+                ('current-message', 'camp', 'agent', NULL, NULL,
+                 '["current-recipient"]', 'current-sender'),
+                ('user-message', 'camp', 'user', NULL, NULL,
+                 '["current-recipient"]', NULL);
+            INSERT INTO camp_message_delivery VALUES
+                ('current', 'camp', 'current-message', 'current-recipient', 1, 2,
+                 'claimed', 'current-target', NULL, 1,
+                 '2026-09-19T00:00:00Z', '2026-09-19T00:00:00Z', NULL),
+                ('user-current', 'camp', 'user-message', 'current-recipient', 1, 1,
+                 'waiting', NULL, NULL, 1,
+                 '2026-09-19T00:00:00Z', '2026-09-19T00:00:00Z', NULL);
             INSERT INTO message_delivery (
                 id, camp_id, status, delivery_kind, recipient_canonical_position, edge_kind,
                 source_agent_run_id, target_parent_agent_run_id, target_agent_run_id, return_to_agent_run_id
@@ -4159,7 +4298,8 @@ mod tests {
                 ('pending', 'camp', 'pending', 'public_a2a', 0, 'forward', 'sender', 'sender', NULL, NULL),
                 ('running', 'camp', 'running', 'public_a2a', 1, 'forward', 'sender', 'sender', 'receiver', NULL),
                 ('return', 'camp', 'settled', 'public_a2a', 0, 'return', 'child', 'ancestor', 'continuation', 'caller'),
-                ('captured', 'camp', 'settled', 'public_a2a', 0, 'return', 'child', NULL, NULL, 'caller');
+                ('captured', 'camp', 'settled', 'public_a2a', 0, 'return', 'child', NULL, NULL, 'caller'),
+                ('current', 'camp', 'settled', 'public_a2a', 0, 'forward', 'legacy-sender', NULL, NULL, NULL);
             UPDATE message_delivery SET dispatch_disposition = 'gather_captured', gather_id = 'gather'
                 WHERE id = 'captured';
             INSERT INTO message_delivery (
@@ -4170,12 +4310,17 @@ mod tests {
         // Full Snapshot and bounded Camp-open use the same projection with different ordering.
         for limit in [None, Some(10)] {
             let deliveries = super::load_message_deliveries(&transaction, "camp", limit).unwrap();
-            assert_eq!(deliveries.len(), 5);
+            assert_eq!(deliveries.len(), 6);
             for delivery in deliveries {
                 let value = serde_json::to_value(&delivery).unwrap();
                 match delivery.id.as_str() {
                     "pending" | "running" => assert_eq!(value["sourceAgentRunId"], "sender"),
                     "return" | "captured" => assert_eq!(value["sourceAgentRunId"], "child"),
+                    "current" => {
+                        assert_eq!(value["sourceAgentRunId"], "current-sender");
+                        assert_eq!(value["targetAgentRunId"], "current-target");
+                        assert!(value["campTurnId"].is_null());
+                    }
                     "completion" => assert!(value.get("sourceAgentRunId").is_none()),
                     _ => unreachable!(),
                 }
