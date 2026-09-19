@@ -1669,10 +1669,12 @@ export function CampWorkspace({
   const activeSnapshotRef = useRef(snapshot)
   const initialComposerDraftRef = useRef(initialComposerDraft)
   const activationStateRef = useRef(snapshot.camp.activationState)
+  const pendingCampLeaveRef = useRef(onPendingCampLeave)
   activeCampIdRef.current = snapshot.camp.id
   activeSnapshotRef.current = snapshot
   initialComposerDraftRef.current = initialComposerDraft
   activationStateRef.current = snapshot.camp.activationState
+  pendingCampLeaveRef.current = onPendingCampLeave
   const draftCoordinatorRef = useRef<DraftMutationCoordinator | null>(null)
   if (!draftCoordinatorRef.current) {
     draftCoordinatorRef.current = new DraftMutationCoordinator({
@@ -2393,8 +2395,11 @@ export function CampWorkspace({
         } }
       }
       await attachmentPreparationQueue.current
-      await composerHandle?.flush()
-      await draftCoordinator.waitForIdle()
+      const flushed = await composerHandle?.flush()
+      const draft = flushed?.draft ?? await draftCoordinator.waitForIdle()
+      const settlePending = activationStateRef.current === 'pending'
+        ? pendingCampLeaveRef.current
+        : undefined
       let completed = false
       return {
         complete(didLeave) {
@@ -2402,6 +2407,9 @@ export function CampWorkspace({
           completed = true
           for (const preparation of pendingLeavePreparations) preparation.complete(didLeave)
           if (!didLeave) composerHandle?.setInteractionLocked(false)
+          if (didLeave && settlePending) {
+            void settlePending(draft).catch(() => undefined)
+          }
         }
       }
     } catch (error) {

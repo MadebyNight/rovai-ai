@@ -7,7 +7,7 @@ last_updated: 2026-09-19
 
 # Mission board
 
-Desktop and wide Web expose the 使命板 navigation entry and retain its surface, route and interaction model.
+Desktop and wide Web expose one 使命板 navigation entry between 记忆 and 定时任务, and retain its surface, route and interaction model.
 When one or more Missions need the user, a blue dot sits at the entry's right edge and is vertically centered;
 the accessible label includes the count, but the visual indicator never renders a numeral. `needs_you` remains
 independent of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate
