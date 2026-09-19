@@ -32,4 +32,5 @@ memory mutations and every unlisted Built-in remain denied.
 Historical version-1 Single Chat Runs retain the original three-operation allowlist. Runtime terminal and
 history validation accept frozen policy versions 1 and 2; new Runs use only version 2. Migration 165 widens the
 AgentRun policy-version constraint while keeping ordinary Camp Runs on policy version 1. Session Charter
-revision 9 teaches the added read operations; Single Chat Context Formatter and ContextManifest remain 25.
+revision 9 introduced the added read operations. Current revision 10 changes only the public Mission suffix;
+Single Chat text, Context Formatter and ContextManifest remain unchanged at 25.

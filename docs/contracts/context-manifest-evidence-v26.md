@@ -43,3 +43,20 @@ The watermark belongs to Camp+Agent and survives Native Session replacement. Rec
 reuses exact Manifest bytes. The manifest freezes automatic context, but does not bound later live
 `camp.read` calls.
 
+## Mission Session Charter
+
+New Mission bindings append this exact Mission-only block to the public Session Charter:
+
+```text
+Rovai Mission Contract
+
+- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.
+- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.
+- Change status only when the whole Mission's state changes, not merely when your Run ends.
+```
+
+The additional guidance makes the saved Mission definition the completion criterion and permits an explicit
+read when that definition is absent or stale. It does not require a read when the complete definition is already
+current, create a fixed operation sequence, or change Mission authority and status semantics. Ordinary public
+Camp and Single Chat Charters remain unchanged. Session Charter revision 10 rotates new Binding compatibility;
+historical Bootstrap evidence, Manifest rows and frozen input bytes remain immutable.
