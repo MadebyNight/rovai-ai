@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: current-foundational-invariants
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # 当前基础架构不变量
@@ -113,7 +113,7 @@ last_updated: 2026-09-19
 - AgentRun 仍冻结 workspace 路径及起止 Git capability、HEAD 与 branch observation 作为既有终态审计事实；历史 boolean dirty 保留读取，新 observation 不采集 dirty。这些 per-Run audit facts 不参与
   文件变化卡片归约，也不成为 Project/导航身份。导航继续按规范目录路径分组，不引入 Project 表或 Repository
   Scope。
-- Mission 累计 Git Diff 与读取/写入权限由独立的 [Mission v5](../contracts/mission-v5.md) 拥有：首个 preparing 读取源工作树当时的本地分支与 HEAD，持久 worktree 的固定 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence。所有有效 AgentRun 可用内部 `rvm_...` ID 全局发现/读取 Mission，但 `update/status` 仍只作用于当前公共 Mission；`M-xxx` 只在用户界面展示。显式清理同时删除受管 Worktree 与本地 Mission 分支；分支仍在时的恢复保留基准，两个资源都不存在时下一次 preparing 从源项目当前 HEAD 重建并更新基准。删除 Mission 默认原地保留资源；只有明确选择 cleanup 且前台清理成功后才随删除处置，不建立后台保留资源管理。
+- Mission 累计 Git Diff 与读取/写入权限由独立的 [Mission v6](../contracts/mission-v6.md) 拥有：首个 preparing 读取源工作树当时的本地分支与 HEAD，持久 worktree 的固定 `base_sha` 与当前文件内容形成单一净变化，使用临时 index 纳入未跟踪文件，保持真实暂存区。它不读取 Runtime 的 per-Run 文件变化 Evidence。所有有效 AgentRun 可用内部 `rvm_...` ID 全局发现/读取 Mission，但 `update/status` 仍只作用于当前公共 Mission；`M-xxx` 只在用户界面展示。状态更新不依赖消息发布；来源消息对所有状态均可省略，显式提供时继续验证，省略时清除旧关联。显式清理同时删除受管 Worktree 与本地 Mission 分支；分支仍在时的恢复保留基准，两个资源都不存在时下一次 preparing 从源项目当前 HEAD 重建并更新基准。删除 Mission 默认原地保留资源；只有明确选择 cleanup 且前台清理成功后才随删除处置，不建立后台保留资源管理。
 - **Quick Chat / 快速对话** 是应用受管 workspace 的规范领域与产品分组术语，不是 Camp 或 Project。Rust variant 使用 `QuickChat`，存储与 IPC 值使用 `quick_chat`，JavaScript/TypeScript property 使用 `quickChat`，CSS/test identifier 与受管目录名使用 `quick-chat`。旧称只允许存在于历史快照和迁移证据；当前代码、合同与投影不保留 alias、deprecated field、dual read 或旧 wire value 翻译。
 
 <a id="camp-composer"></a>

@@ -2,7 +2,7 @@
 document_type: architecture
 authority: mission-architecture
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # Missions
@@ -47,6 +47,11 @@ resolves only the authenticated Run's current Camp; an explicit internal `rvm_..
 switches the current Mission. `mission.update` and `mission.status` accept no target selector and still require
 the current active membership and exact execution fence.
 
+Status mutation is independent from message publication. `sourceMessageId` is an optional association for every
+status; when present it must resolve to a current public message in the same Camp, and when omitted it clears any
+previous association. Core never publishes, searches for or implicitly chooses a message during a status update.
+This does not weaken mutation authorization or change Run admission, cancellation or completion.
+
 Database relations, internal events, Agent results and new Run Facts share that same internal ID. The stable number
 is not returned to Agents; Renderer alone formats it as `M-xxx` for user-facing Mission surfaces and managed
 workspace names. No Agent-side ID translation layer exists.
@@ -66,8 +71,9 @@ Desktop/wide Web share Mission navigation and the existing CampWorkspace. Drawer
 preserve one mounted composer/preview owner. Mobile is intentionally outside this increment. Renderer consumes
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
 branch in place; optional cleanup must finish before the Mission is deleted and has no retained-resource UI or
-background retry. Protocol and failure behavior live in [Mission v5](../contracts/mission-v5.md); UI in
+background retry. Protocol and failure behavior live in [Mission v6](../contracts/mission-v6.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14). Global discovery and current-only mutation are explained
-by [V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01).
+by [V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01). Status/message decoupling is explained by
+[V1.62-D01](../versions/v1.62/decisions.md#v1-62-d01).

@@ -1,7 +1,7 @@
 ---
 document_type: current-decision-navigation
 authority: current-authority-and-rationale-routing
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # 当前规范与决定理由导航
@@ -28,7 +28,7 @@ last_updated: 2026-09-19
   [V1.60-D10](../versions/v1.60/decisions.md#v1-60-d10)。
 - 多输入 Context 与完整运输：[ContextManifest v27](../contracts/context-manifest-evidence-v27.md)、
   [Profile 8](../contracts/context-delivery-profile-v8.md)、[Run Facts v5](../contracts/run-facts-v5.md)、
-  [Built-in Transport v29](../contracts/builtin-tool-transport-v29.md)；理由：
+  [Built-in Transport v30](../contracts/builtin-tool-transport-v30.md)；理由：
   [V1.60-D04](../versions/v1.60/decisions.md#v1-60-d04)。
 - Channel/Automation 复用普通消息：[Channel Message Bridge v1](../contracts/channel-message-bridge-v1.md)、
   [Scheduled Automation v3](../contracts/scheduled-automation-v3.md)；理由：
@@ -95,8 +95,8 @@ last_updated: 2026-09-19
 
 ## Mission
 
-- 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v5](../contracts/mission-v5.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v27](../contracts/context-manifest-evidence-v27.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
-- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D12](../versions/v1.59/decisions.md#v1-59-d12)；附件原路径读取的初始理由：[V1.59-D13](../versions/v1.59/decisions.md#v1-59-d13)；删除默认保留、前台最小清理与 Session 延续的理由：[V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14)；内部 ID 贯通 Agent/模型、UI 展示编号、全局发现和当前 Mission 写入边界的当前理由：[V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01)。
+- 当前规范：[Mission 架构](../architecture/missions.md)、[Mission v6](../contracts/mission-v6.md)、[使命板 UI](../ui/components/mission-board.md)、[ContextManifest v27](../contracts/context-manifest-evidence-v27.md)及 [`CONTEXT.md`](../../CONTEXT.md)。
+- 复用 Camp、preparing 才创建持久工作区、固定基准与无模型业务版本的理由：[V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11)；稳定公开编号、无历史正文与 accepted 投递水位的理由：[V1.59-D12](../versions/v1.59/decisions.md#v1-59-d12)；附件原路径读取的初始理由：[V1.59-D13](../versions/v1.59/decisions.md#v1-59-d13)；删除默认保留、前台最小清理与 Session 延续的理由：[V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14)；内部 ID 贯通 Agent/模型、UI 展示编号、全局发现和当前 Mission 写入边界的理由：[V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01)；状态操作与消息发布解耦的当前理由：[V1.62-D01](../versions/v1.62/decisions.md#v1-62-d01)。
 
 ## Single Chat
 
@@ -143,7 +143,7 @@ last_updated: 2026-09-19
 
 ## Skills、MCP 与 Built-ins
 
-- 当前规范：[Skill/MCP 基础不变量](../architecture/foundational-invariants.md#skills-builtin-transport)、[Built-in Tool Runtime](../architecture/builtin-tool-runtime.md)、[Skill Projection](../architecture/skill-projection-reconciliation.md)、[Built-in Tool Transport v29](../contracts/builtin-tool-transport-v29.md)、[Windows Skill Projection v1](../contracts/windows-skill-projection-v1.md)、[Skill Content Preview v1](../contracts/skill-content-preview-v1.md)和[Capability settings](../ui/components/capability-settings.md)。
+- 当前规范：[Skill/MCP 基础不变量](../architecture/foundational-invariants.md#skills-builtin-transport)、[Built-in Tool Runtime](../architecture/builtin-tool-runtime.md)、[Skill Projection](../architecture/skill-projection-reconciliation.md)、[Built-in Tool Transport v30](../contracts/builtin-tool-transport-v30.md)、[Windows Skill Projection v1](../contracts/windows-skill-projection-v1.md)、[Skill Content Preview v1](../contracts/skill-content-preview-v1.md)和[Capability settings](../ui/components/capability-settings.md)。
 - 理由来源：[v0.06](../versions/v0.06/decisions.md)、[v0.09](../versions/v0.09/decisions.md)、[v0.31](../versions/v0.31/decisions.md)、[v0.37](../versions/v0.37/decisions.md)、[v0.42](../versions/v0.42/decisions.md)、[v0.43](../versions/v0.43/decisions.md)、[v0.58](../versions/v0.58/decisions.md)、[v0.67](../versions/v0.67/decisions.md)、[v0.82](../versions/v0.82/decisions.md)、[v0.85](../versions/v0.85/decisions.md)、[v0.91](../versions/v0.91/decisions.md)、[v0.92](../versions/v0.92/decisions.md)、[v0.93](../versions/v0.93/decisions.md)、[v1.05](../versions/v1.05/decisions.md)、[v1.07](../versions/v1.07/decisions.md)、[v1.14](../versions/v1.14/decisions.md)、[V1.17-D02](../versions/v1.17/decisions.md#v1-17-d02)、[V1.19-D01](../versions/v1.19/decisions.md#v1-19-d01)、[V1.19-D02](../versions/v1.19/decisions.md#v1-19-d02)、[V1.21-D01](../versions/v1.21/decisions.md#v1-21-d01)、[V1.27-D04](../versions/v1.27/decisions.md#v1-27-d04)、[V1.28-D03](../versions/v1.28/decisions.md#v1-28-d03)。
 - Pi `.pi/skills` 只由原生 ResourceLoader 发现、Rovai 不追加路径或验证 catalog 的理由：[V1.44-D01](../versions/v1.44/decisions.md#v1-44-d01)；当前 Pi External MCP Unsupported 与旧 bridge clean removal 理由：[V1.39-D09](../versions/v1.39/decisions.md#v1-39-d09)。
 
@@ -155,7 +155,7 @@ last_updated: 2026-09-19
 
 ## Scheduled Automation
 
-- 当前规范：[Scheduled Automation 不变量](../architecture/foundational-invariants.md#scheduled-automation)、[Scheduled Automation Architecture](../architecture/scheduled-automation.md)、[Scheduled Automation v3](../contracts/scheduled-automation-v3.md)、[Automation 工作区](../ui/components/automation-workspace.md)和[Built-in Tool Transport v29](../contracts/builtin-tool-transport-v29.md)。
+- 当前规范：[Scheduled Automation 不变量](../architecture/foundational-invariants.md#scheduled-automation)、[Scheduled Automation Architecture](../architecture/scheduled-automation.md)、[Scheduled Automation v3](../contracts/scheduled-automation-v3.md)、[Automation 工作区](../ui/components/automation-workspace.md)和[Built-in Tool Transport v30](../contracts/builtin-tool-transport-v30.md)。
 - 原子领取、新 Camp 派发与不可恢复重派发的理由：[V1.54-D01](../versions/v1.54/decisions.md#v1-54-d01)；执行和渠道通知分离的理由：[V1.54-D02](../versions/v1.54/decisions.md#v1-54-d02)。
 
 ## Evidence、Runtime Activity 与 Usage
@@ -182,7 +182,7 @@ last_updated: 2026-09-19
 
 ## 外部附件 CLI 入口
 
-- 当前规范：[Camp Attachment v10](../contracts/camp-attachment-v10.md)、[Camp Message Send v22](../contracts/camp-message-send-v22.md)、[Built-in Tool Transport v29](../contracts/builtin-tool-transport-v29.md)及[附件架构](../architecture/camp-published-attachment-view.md)。新增 Agent 文件统一原路径登记；旧 snapshot 仅服务历史记录读取。
+- 当前规范：[Camp Attachment v10](../contracts/camp-attachment-v10.md)、[Camp Message Send v22](../contracts/camp-message-send-v22.md)、[Built-in Tool Transport v30](../contracts/builtin-tool-transport-v30.md)及[附件架构](../architecture/camp-published-attachment-view.md)。新增 Agent 文件统一原路径登记；旧 snapshot 仅服务历史记录读取。
 - 主要理由：[V1.32-D01](../versions/v1.32/decisions.md#v1-32-d01)：由 CLI 以 Runtime 权限适配外部路径，该历史选择由 V1.59-D08 的原路径引用决定替代。
 
 ## Camp 连续消息

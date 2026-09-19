@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.61
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -11,7 +11,7 @@ last_updated: 2026-09-20
 
 # Rovai-ai v1.61：Mission 全局发现、完成判断与默认接收提示
 
-前置：[v1.60](../v1.60/README.md)。本版把 Mission 的 Agent read side 从“读取当前 Camp Mission”扩展为
+前置：[v1.60](../v1.60/README.md)。后续：[v1.62](../v1.62/README.md)。本版把 Mission 的 Agent read side 从“读取当前 Camp Mission”扩展为
 “发现全部 Mission，并按内部 ID 读取任意 Mission”，同时保持修改只作用于当前公共 Mission；并让默认由
 Default Lead 接收的公开消息在 Agent 自动上下文中显式呈现其冻结接收者，而不改写用户原文或路由。
 

@@ -505,9 +505,6 @@ impl MissionService {
             let input = &envelope.payload;
             let Some(current) = load_record(tx, &input.mission_id)? else { return Ok(reject("mission.not_found")); };
             if !can_edit(tx, envelope, &current)? { return Ok(reject("mission.forbidden")); }
-            if matches!(envelope.actor, ActorRef::Agent {..}) && matches!(input.status, MissionStatus::NeedsYou | MissionStatus::Completed) && input.source_message_id.is_none() {
-                return Ok(reject("mission.source_message_required"));
-            }
             if let Some(source) = &input.source_message_id {
                 let sql = format!("WITH {} SELECT EXISTS(SELECT 1 FROM camp_message m JOIN public_camp_message_publication p ON p.message_id=m.id WHERE m.id=?1 AND m.camp_id=?2 AND m.tombstoned_at IS NULL)", crate::camp_message_publication::public_camp_message_publication_cte());
                 let valid: bool = tx.query_row(&sql, params![source,current.camp_id], |row| row.get(0))?;
@@ -1259,10 +1256,33 @@ mod tests {
                 source_message_id: None,
             },
         };
-        assert_eq!(
-            service.status(&mut db, &state).unwrap().result.code,
-            "mission.source_message_required"
-        );
+        let messages_before_statuses: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM camp_message", [], |row| row.get(0))
+            .unwrap();
+        let starts_before_statuses: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM mission_start", [], |row| row.get(0))
+            .unwrap();
+        let runs_before_statuses: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM agent_run", [], |row| row.get(0))
+            .unwrap();
+        for next_status in [
+            MissionStatus::NotStarted,
+            MissionStatus::InProgress,
+            MissionStatus::NeedsYou,
+            MissionStatus::Completed,
+        ] {
+            state.command_id = Uuid::new_v4().to_string();
+            state.payload.status = next_status;
+            let result = service.status(&mut db, &state).unwrap();
+            assert_eq!(result.result.status, CommandResultStatus::Applied);
+            assert_eq!(result.result.payload["changed"], true);
+            let current = service.get(&db, &id).unwrap().unwrap().info;
+            assert_eq!(current.status, next_status);
+            assert_eq!(current.source_message_id, None);
+        }
         let source: String = db
             .connection()
             .query_row(
@@ -1281,12 +1301,71 @@ mod tests {
             .unwrap();
         assert_eq!(start_body, "开始使命");
         state.command_id = Uuid::new_v4().to_string();
+        state.payload.status = MissionStatus::NeedsYou;
         state.payload.source_message_id = Some(source.clone());
         let status = service.status(&mut db, &state).unwrap();
         assert_eq!(status.result.payload["changed"], true);
+        let status_activity_count = service
+            .activity(&db, &id, None)
+            .unwrap()
+            .into_iter()
+            .filter(|activity| activity.kind == "status")
+            .count();
         assert_eq!(
             service.status(&mut db, &state).unwrap().result.payload,
             status.result.payload
+        );
+        assert_eq!(
+            service
+                .activity(&db, &id, None)
+                .unwrap()
+                .into_iter()
+                .filter(|activity| activity.kind == "status")
+                .count(),
+            status_activity_count
+        );
+        state.command_id = Uuid::new_v4().to_string();
+        assert_eq!(
+            service.status(&mut db, &state).unwrap().result.payload["changed"],
+            false
+        );
+        assert_eq!(
+            service
+                .activity(&db, &id, None)
+                .unwrap()
+                .into_iter()
+                .filter(|activity| activity.kind == "status")
+                .count(),
+            status_activity_count
+        );
+        state.command_id = Uuid::new_v4().to_string();
+        state.payload.source_message_id = None;
+        assert_eq!(
+            service.status(&mut db, &state).unwrap().result.payload["changed"],
+            true
+        );
+        assert_eq!(
+            service
+                .get(&db, &id)
+                .unwrap()
+                .unwrap()
+                .info
+                .source_message_id,
+            None
+        );
+        assert!(
+            service
+                .activity(&db, &id, None)
+                .unwrap()
+                .into_iter()
+                .any(|activity| activity.kind == "status"
+                    && activity.changes["sourceMessageId"].as_str() == Some(source.as_str()))
+        );
+        state.command_id = Uuid::new_v4().to_string();
+        state.payload.source_message_id = Some(source.clone());
+        assert_eq!(
+            service.status(&mut db, &state).unwrap().result.payload["changed"],
+            true
         );
         db.connection()
             .execute(
@@ -1294,12 +1373,43 @@ mod tests {
                 params![source, chrono::Utc::now().to_rfc3339()],
             )
             .unwrap();
+        let activities_before_invalid = service.activity(&db, &id, None).unwrap().len();
         state.command_id = Uuid::new_v4().to_string();
         state.payload.status = MissionStatus::Completed;
         assert_eq!(
             service.status(&mut db, &state).unwrap().result.code,
             "mission.invalid_source_message"
         );
+        let current = service.get(&db, &id).unwrap().unwrap().info;
+        assert_eq!(current.status, MissionStatus::NeedsYou);
+        assert_eq!(current.source_message_id, Some(source));
+        assert_eq!(
+            service.activity(&db, &id, None).unwrap().len(),
+            activities_before_invalid
+        );
+        for (query, expected) in [
+            (
+                "SELECT COUNT(*) FROM camp_message",
+                messages_before_statuses,
+            ),
+            ("SELECT COUNT(*) FROM mission_start", starts_before_statuses),
+            ("SELECT COUNT(*) FROM agent_run", runs_before_statuses),
+        ] {
+            assert_eq!(
+                db.connection()
+                    .query_row(query, [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                expected
+            );
+        }
+        state.command_id = Uuid::new_v4().to_string();
+        state.execution_epoch = Some(epoch + 1);
+        state.payload.source_message_id = None;
+        assert_eq!(
+            service.status(&mut db, &state).unwrap().result.code,
+            "mission.forbidden"
+        );
+        state.execution_epoch = Some(epoch);
         // Cross-Camp and removed-member callers cannot keep editing with a live Run.
         edit.command_id = Uuid::new_v4().to_string();
         edit.camp_id = None;
@@ -1312,6 +1422,11 @@ mod tests {
         db.connection().execute("UPDATE camp_member SET leave_requested_at=?2,leave_request_command_id='fixture-leave' WHERE camp_id=?1 AND agent_id='agent_1'",params![record.camp_id,chrono::Utc::now().to_rfc3339()]).unwrap();
         assert_eq!(
             service.update(&mut db, &edit).unwrap().result.code,
+            "mission.forbidden"
+        );
+        state.command_id = Uuid::new_v4().to_string();
+        assert_eq!(
+            service.status(&mut db, &state).unwrap().result.code,
             "mission.forbidden"
         );
     }

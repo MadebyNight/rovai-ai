@@ -1838,7 +1838,7 @@ fn operation_help_examples(operation: &str) -> &'static [&'static str] {
             "rovai mission get --mission-id rvm_example",
         ],
         "mission.update" => &["rovai mission update --title \"目录导航\""],
-        "mission.status" => &["rovai mission status --status in_progress"],
+        "mission.status" => &["rovai mission status --status needs_you"],
         "camp.message.send" => &CAMP_MESSAGE_SEND_HELP_EXAMPLES,
         "member.create" => &[
             "rovai member create --creation-key 2b945f3f-4b45-4ae5-92b2-739fce600338 --display-name 'Nova' --team-role 'Researcher'",
@@ -1986,6 +1986,38 @@ mod tests {
     }
 
     #[test]
+    fn mission_status_help_and_direct_flags_keep_source_message_optional() {
+        let description = operation_help(&[
+            "mission".to_string(),
+            "status".to_string(),
+            "--help".to_string(),
+        ])
+        .unwrap()
+        .unwrap();
+        let source_message = description
+            .arguments
+            .iter()
+            .find(|argument| argument.field == "sourceMessageId")
+            .unwrap();
+        assert!(!source_message.required);
+        assert_eq!(
+            description.input_schema["properties"]["sourceMessageId"]["description"],
+            "Optional reference to an existing public message in this Camp."
+        );
+        let help = operation_help_text(&description);
+        assert!(help.contains("rovai mission status --status needs_you"));
+        assert!(!help.contains("Required for needs_you or completed"));
+        assert_eq!(
+            parse_and_validate_operation_input(
+                &description,
+                &["--status".to_string(), "completed".to_string()],
+            )
+            .unwrap(),
+            json!({"status": "completed"})
+        );
+    }
+
+    #[test]
     fn single_chat_history_direct_flags_are_bounded_and_id_free() {
         let description = builtin_tool_description("single_chat.history").unwrap();
         let input = parse_and_validate_operation_input(
@@ -2084,8 +2116,12 @@ mod tests {
             &["automation", "close", "--help"],
             &["automation", "update", "--help"],
             &["automation", "delete", "--help"],
+            &["mission", "list", "--help"],
+            &["mission", "get", "--help"],
+            &["mission", "update", "--help"],
+            &["mission", "status", "--help"],
         ];
-        assert_eq!(exact_paths.len(), 22);
+        assert_eq!(exact_paths.len(), 26);
         for path in exact_paths {
             let args = path
                 .iter()

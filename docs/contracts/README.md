@@ -1,7 +1,7 @@
 ---
 document_type: contracts-index
 authority: protocol-contract-routing
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # 长期接口合同
@@ -13,7 +13,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 | 合同 | 范围 |
 | --- | --- |
-| [Mission v5（当前）](mission-v5.md) | 全局 `list/get`、内部 `rvm_...` Agent ID、UI 展示编号、结构化附件；读取不切换目标，update/status 仍只修改当前 Mission |
+| [Mission v6（当前）](mission-v6.md) | 继承 v5；所有状态均可省略来源消息，显式来源继续验证，省略会清除旧关联 |
+| [Mission v5（历史）](mission-v5.md) | 全局 `list/get`、内部 `rvm_...` Agent ID、UI 展示编号、结构化附件；其 needs_you/completed 来源必填由 v6 替代 |
 | [Mission v4（历史）](mission-v4.md) | 继承 v3；`mission.get` 为所有受认证队员的当前 Mission 只读操作，update/status 保留写权限门禁 |
 | [Mission v3（历史）](mission-v3.md) | 继承 v2，以显式处置控制使命删除，支持可重建工作区、前台分步清理与条件分支删除 |
 | [Mission v2（历史）](mission-v2.md) | 继承 v1，并让当前 Mission 的受认证 Agent 显式读取有序附件原路径；删除即排队清理的规则由 v3 局部替代 |
@@ -270,7 +271,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Memory Capture v3（当前）](memory-capture-v3.md) | v2 边界加 complete exact-Scope View、copyable Revision target、active body aggregate quota、64 KiB production projection limit 与 Memory-domain clean break |
 | [Memory Capture v2 (historical)](memory-capture-v2.md) | v1 捕获/Review/Forget 边界加 flat Agent-relative Scope identity、revise target assertion、durable domain rejection 与 Supersession 原子顺序 |
 | [Memory Capture v1 (historical)](memory-capture-v1.md) | 初版 best-effort 在线捕获、actor-bounded add/revise、隔离 Hearth Review Item、双 CAS、候选清除与 Forget safeguard；不含 Scope-identified revise |
-| [Built-in Tool Transport v29（当前）](builtin-tool-transport-v29.md) | 继承 v28，增加 `mission.list`、指定 Mission 读取、结构化附件与 v29 catalog/capability；当前 Charter revision 10 不改变 transport |
+| [Built-in Tool Transport v30（当前）](builtin-tool-transport-v30.md) | 继承 v29，Mission 状态来源改为可选、错误目录与实际 recovery 对齐，轮换 v30 catalog/capability |
+| [Built-in Tool Transport v29（历史）](builtin-tool-transport-v29.md) | 继承 v28，增加 `mission.list`、指定 Mission 读取、结构化附件与 v29 catalog/capability；其后 Charter revision 10 未改变 transport |
 | [Built-in Tool Transport v28（历史）](builtin-tool-transport-v28.md) | 继承 v27，发布公共 Camp 读取范围、当前 Mission 只读 `mission.get` 与 v28 catalog/capability |
 | [Built-in Tool Transport v27（历史）](builtin-tool-transport-v27.md) | 继承 v26，为 `mission.get` 增加有序附件原路径数组，并删除 Gather 与统一结果大小上限；Agent-facing 结果完整成功或明确失败 |
 | [Built-in Tool Transport v26（历史）](builtin-tool-transport-v26.md) | 保留 v25 的附件原路径与输出合同，并增加三个当前 Camp Mission 操作；不暴露业务版本或工作区 |

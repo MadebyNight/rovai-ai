@@ -90,13 +90,12 @@ async function waitForIdle(campId, minimumRuns) {
   throw new Error('Mission Run did not settle before 600 seconds')
 }
 async function sendMessage(campId, body) {
-  const draft = await client.request('camp.composerDraft.get', { campId })
-  const saved = await client.request('camp.composerDraft.save', { campId, expectedRevision: draft.revision, content: { version: 2, segments: [{ kind: 'text', text: body }] } })
-  const sent = await client.request('camp.messages.send', { commandId: crypto.randomUUID(), campId, draftRevision: saved.revision,
+  const sent = await client.request('camp.messages.send', { commandId: crypto.randomUUID(), campId,
+    content: { version: 2, segments: [{ kind: 'text', text: body }] }, sourceAttachments: [], quotes: [], replyToCampMessageId: null,
     execution: { taskId: null, purpose: '验证后续普通输入复用使命工作区', completionRole: 'required' } })
   assert.equal((sent.commandResult ?? sent).status, 'accepted', JSON.stringify(sent))
 }
-const generatedPreamble = `import assert from 'node:assert/strict';\nimport {execFileSync} from 'node:child_process';\nimport {readFileSync,writeFileSync,existsSync} from 'node:fs';\nimport {resolve,join} from 'node:path';\nconst cli=(args,input={})=>JSON.parse(execFileSync(process.env.ROVAI_AGENT_CLI,args,{input:JSON.stringify(input),encoding:'utf8'}));\nconst output=${JSON.stringify(output)};\nconst info=cli(['mission','get']);\nassert.deepEqual(Object.keys(info).sort(),['description','missionId','sourceMessageId','status','title']);\n`
+const generatedPreamble = `import assert from 'node:assert/strict';\nimport {execFileSync} from 'node:child_process';\nimport {readFileSync,writeFileSync,existsSync} from 'node:fs';\nimport {resolve,join} from 'node:path';\nconst cli=(args,input={})=>JSON.parse(execFileSync(process.env.ROVAI_AGENT_CLI,args,{input:JSON.stringify(input),encoding:'utf8'}));\nconst output=${JSON.stringify(output)};\nconst info=cli(['mission','get']);\nassert.deepEqual(Object.keys(info).sort(),['attachments','description','missionId','sourceMessageId','status','title']);\nassert.deepEqual(info.attachments,[]);\n`
 const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`
 try {
   client = startCore(); await client.request('members.list')
@@ -104,7 +103,7 @@ try {
   const members = [await createProfile('Mission Lead'), await createProfile('Mission Reviewer')]
   await configureProductRuntime(client.request, 'codex-cli', members); for (const member of members) await setRuntime(member)
   const follower = join(output, 'follower.mjs'), lead = join(output, 'lead.mjs'), continuation = join(output, 'continuation.mjs'), nonGit = join(output, 'non-git.mjs')
-  await writeFile(follower, generatedPreamble + `assert.equal(info.status,'not_started');\nconst updated=cli(['mission','update'],{description:'已由非队长核对交付与工作区'});assert.equal(updated.changed,true);\nconst sent=cli(['send'],{publicOnly:true,body:'MISSION_FOLLOWER_OK：共享工作区已验证。'});\nconst status=cli(['mission','status'],{status:'completed',sourceMessageId:sent.messageId});assert.equal(status.changed,true);\nwriteFileSync(join(output,'follower-evidence.json'),JSON.stringify({cwd:process.cwd(),info,updated,status,sent}));\n`)
+  await writeFile(follower, generatedPreamble + `assert.equal(info.status,'not_started');\nconst updated=cli(['mission','update'],{description:'已由非队长核对交付与工作区'});assert.equal(updated.changed,true);\nconst status=cli(['mission','status'],{status:'completed'});assert.equal(status.changed,true);\nconst completed=cli(['mission','get']);assert.equal(completed.status,'completed');assert.equal(completed.sourceMessageId,null);\nconst sent=cli(['send'],{publicOnly:true,body:'MISSION_FOLLOWER_OK：共享工作区与无来源状态更新已验证。'});\nwriteFileSync(join(output,'follower-evidence.json'),JSON.stringify({cwd:process.cwd(),info,updated,status,completed,sent}));\n`)
   await writeFile(lead, generatedPreamble + `assert.equal(info.status,'not_started');assert.equal(readFileSync('tracked.txt','utf8'),'base\\n');assert(!existsSync('private-untracked.txt'));\nconst updated=cli(['mission','update'],{title:'已验证持久工作区'});assert.equal(updated.changed,true);\nconst git=(...args)=>execFileSync(${JSON.stringify(gitExecutable)},args,{encoding:'utf8'}).trim();\nwriteFileSync('tracked.txt','committed\\n');git('add','tracked.txt');git('commit','-m','mission fixture committed');\nwriteFileSync('tracked.txt','staged\\n');git('add','tracked.txt');writeFileSync('tracked.txt','current net\\n');\nwriteFileSync('new.txt','new untracked\\n');writeFileSync('secret.ignored','ignored\\n');writeFileSync('delivery.md','# Mission delivery\\n实际 Agent 文件交付。\\n');\nconst sent=cli(['send'],{publicOnly:true,body:'MISSION_LEAD_FILE_OK',files:[resolve('delivery.md')]});\nconst delegated=cli(['send'],{to:[${JSON.stringify(members[1])}],body:${JSON.stringify(`执行本次使命验收：node ${shellQuote(follower)}。脚本完成后结束本轮。`)}});\nwriteFileSync(join(output,'lead-evidence.json'),JSON.stringify({cwd:process.cwd(),info,updated,sent,delegated}));\n`)
   await writeFile(continuation, generatedPreamble + `assert.equal(info.status,'completed');assert.equal(readFileSync('tracked.txt','utf8'),'current net\\n');cli(['send'],{publicOnly:true,body:'MISSION_CONTINUATION_OK'});writeFileSync(join(output,'continuation-evidence.json'),JSON.stringify({cwd:process.cwd(),info}));\n`)
   await writeFile(nonGit, generatedPreamble + `assert.equal(info.status,'not_started');cli(['send'],{publicOnly:true,body:'MISSION_NON_GIT_OK'});writeFileSync(join(output,'non-git-evidence.json'),JSON.stringify({cwd:process.cwd(),info}));\n`)
@@ -121,8 +120,8 @@ try {
   const snapshot = await waitForIdle(mission.campId, 2)
   await writeFile(join(output, 'first-snapshot.json'), JSON.stringify(snapshot, null, 2))
   const workspace = db.prepare('SELECT * FROM mission_workspace WHERE mission_id=?').get(mission.missionId)
-  assert.equal(workspace.base_sha, baseSha); assert.equal(workspace.branch, `rovai/mission/${mission.missionId}`)
-  assert.equal(workspace.worktree_path, `${source}-mission-${mission.missionId}`)
+  assert.equal(workspace.base_sha, baseSha); assert.equal(workspace.branch, 'rovai/mission/001')
+  assert.equal(workspace.worktree_path, `${source}-mission-001`)
   assert.equal(workspace.working_directory, join(workspace.worktree_path, 'packages/app'))
   assert(snapshot.agentRuns.every(run => run.workspace.path === workspace.working_directory))
   assert.equal(await readFile(join(project, 'tracked.txt'), 'utf8'), 'source dirty content\n')
@@ -132,7 +131,7 @@ try {
   assert(manifests.every(m => Object.keys(m.runFactPayload.mission).sort().join() === 'missionId,status,title'))
   assert(manifests.every(m => m.runFactRefs.some(ref => ref.missionId === mission.missionId)))
   assert.equal(db.prepare('SELECT count(*) n FROM mission_start').get().n, 1)
-  report.cases.push('Start is status-independent and idempotent; preparing creates clean fixed-base worktree; A2A and non-lead editing use the same cwd')
+  report.cases.push('Start is status-independent and idempotent; preparing creates clean fixed-base worktree; A2A and non-lead editing use the same cwd; Agent CLI completes a Mission without a source message')
   const indexBefore = git(workspace.worktree_path, 'ls-files', '--stage', '-z')
   const changes = await client.request('missions.changes', { missionId: mission.missionId })
   assert.deepEqual(changes.map(file => file.path).sort(), ['packages/app/delivery.md', 'packages/app/new.txt', 'packages/app/tracked.txt'])
@@ -141,9 +140,10 @@ try {
   assert(patch.patch.includes('-base') && patch.patch.includes('+current net')); assert(!patch.patch.includes('staged'))
   assert.equal(git(workspace.worktree_path, 'ls-files', '--stage', '-z'), indexBefore)
   const delivery = await client.request('missions.delivery', { missionId: mission.missionId })
-  assert(delivery.files.some(file => file.displayName === 'delivery.md' && file.messageId))
+  const deliveryMessage = snapshot.messages.find(message => message.body === 'MISSION_LEAD_FILE_OK')
+  assert(deliveryMessage?.attachments.some(attachment => attachment.displayName === 'delivery.md'))
   await writeFile(join(output, 'delivery.json'), JSON.stringify({ delivery, changes, patch }, null, 2))
-  report.cases.push('fixed-base net diff includes commits, index, working tree and untracked files; Agent delivery has its source')
+  report.cases.push('fixed-base net diff includes commits, index, working tree and untracked files; the published Agent message retains its source attachment')
   db.close(); db = null; await client.stop(); client = startCore(); await client.request('members.list')
   db = new DatabaseSync(join(dataDirectory, 'rovai.sqlite'), { readOnly: true }); db.exec('PRAGMA busy_timeout=5000')
   await sendMessage(mission.campId, `只验证原使命目录和当前状态：node ${shellQuote(continuation)}。不要推进或重开使命。`)
@@ -164,11 +164,11 @@ try {
   assert.equal(plainSnapshot.contextManifests[0].workspaceFactIncluded, true)
   await assert.rejects(client.request('missions.changes', { missionId: simple.missionId }), /mission.git_not_applicable/)
   report.cases.push('non-Git ordinary-message first Run keeps original directory, not_started status and no branch/Diff')
-  applied(await command('camps.delete', { campId: mission.campId, expectedVersion: resumed.camp.version, force: false }))
+  applied(await command('camps.delete', { campId: mission.campId, expectedVersion: resumed.camp.version, force: false, workspaceDisposition: 'cleanup' }))
   await assert.rejects(access(workspace.worktree_path))
-  assert.equal(git(source, 'rev-parse', '--verify', `refs/heads/${workspace.branch}`).length, 40)
+  assert.throws(() => git(source, 'rev-parse', '--verify', `refs/heads/${workspace.branch}`))
   assert.equal(db.prepare('SELECT count(*) n FROM mission_workspace WHERE mission_id=?').get(mission.missionId).n, 0)
-  report.cases.push('deletion removes the associated worktree and cleanup record while retaining its branch')
+  report.cases.push('deletion with explicit cleanup removes the associated worktree, local branch and cleanup record')
   report.runs = [...resumed.agentRuns, ...plainSnapshot.agentRuns].map(({ id, status, workspace }) => ({ id, status, workspace }))
   report.status = 'passed'
 } catch (error) {
