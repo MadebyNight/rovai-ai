@@ -1,7 +1,7 @@
 ---
 document_type: development-index
 authority: development-routing
-last_updated: 2026-09-03
+last_updated: 2026-09-20
 ---
 
 # Rovai-ai 开发者指南
@@ -57,14 +57,13 @@ pnpm core:build:debug
 ```bash
 pnpm typecheck
 pnpm test
-pnpm test:rust:staged
+cargo test -p rovai-core --lib runtime_discovery::
 ```
 
-`test:rust:staged` 只读取 Git index 中的 staged 文件。没有 Rust/Cargo 改动时跳过；单一
-Library、`rovai` CLI 或 `rovai-core` Main target 改动时先运行 `cargo check`，再运行对应
-target 测试；Cargo 配置、`src/lib.rs`、多 target、删除/重命名或无法可靠分类的改动自动回退到
-`pnpm test:rust:workspace-default`（default-feature workspace）。详细路由见
-[测试与 Smoke Test](testing.md#staged-rust-路由)。
+上面的 Rust 命令以 Runtime discovery 改动为例。局部修改直接用 Cargo 名称过滤运行相关 owner；
+涉及共享基础设施时扩大范围。同一轮集成只由一个执行者运行完整回归，不在每个 worktree 重复执行。
+兼容的 staged 路由仍见[测试与 Smoke Test](testing.md#兼容-staged-rust-路由)，但它按 target 选择范围，
+不能替代模块级定向命令。
 
 `pnpm test` 会先运行 `pnpm docs:check`，验证唯一当前版本指针、版本目录 Front Matter
 和版本索引一致，并验证 Version Decisions、迁移证据、当前权威覆盖、Architecture 索引及
@@ -80,18 +79,16 @@ PR 快速门禁必须提供真实 base SHA；`docs:check:ci` 以它验证 histor
 `decisions.md` 未被静默改写，本地普通 `docs:check` 不伪造或推测 base。合并到 `main` 后不再自动重复
 执行该门禁。
 
-push / PR 前运行完整 Rust 验证：
+push / PR 前由集成执行者运行默认 feature 的 Rust 回归：
 
 ```bash
 pnpm test:rust:pr
-cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`test:rust:pr` 明确串行执行 fast library、`rovai` CLI 和 slow integration 三个范围。
-`test:rust:workspace-default` 只运行 default-feature workspace；旧 `test:rust:full` 是该范围的
-兼容 alias，不代表 PR 或 all-features 门禁。PR 的 `CI / gate` 仅执行 `cargo fmt --all --check` 和
-`cargo check --workspace --all-targets`；Clippy、all-features 测试、数据库 slow tests 与 Windows 专项测试
-由手动 `Full check` workflow 承接。
+`test:rust:pr` 一次运行 default-feature workspace，不包含 `slow-tests` 或历史 Migration feature。
+`test:rust:full` 一次运行 all-features workspace，供手动完整验收使用。PR 的 `CI / gate` 仅执行
+`cargo fmt --all --check` 和 `cargo check --workspace --all-targets`；all-features Clippy、测试与
+Windows 专项验证由手动 `Full check` workflow 承接。
 涉及桌面构建或跨边界改动时继续运行：
 
 ```bash

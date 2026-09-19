@@ -99,9 +99,6 @@ jobs:
       - name: Run all-features Rust tests
         run: cargo test --workspace --all-features
 
-      - name: Run database smoke tests
-        run: "cargo test -p rovai-core --features slow-tests --lib slow_tests::"
-
   windows-full:
     if: inputs.scope == 'full'
     name: Windows full
