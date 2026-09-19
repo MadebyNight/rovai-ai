@@ -8268,7 +8268,7 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
 .compact-menu { z-index: 401; max-width: calc(100vw - 32px); max-height: min(360px, var(--radix-dropdown-menu-content-available-height)); min-width: 310px; overflow: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow-float); color: var(--ink); font-family: inherit; }
 .compact-option { display: flex; min-height: 46px; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 5px; font-size: 13px; cursor: pointer; user-select: none; }
 .compact-option[data-highlighted] { background: var(--surface-hover); }
-.compact-option > span:not(.member-avatar):not(.compact-checkbox):not([data-state]) { flex: 1; min-width: 0; }
+.compact-option > span:not(.member-avatar):not(.compact-checkbox):not(.mission-tag-mark):not(.mission-tag-color-dot):not([data-state]) { flex: 1; min-width: 0; }
 .compact-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .compact-option .compact-ready { color: var(--success); }
 .compact-option .compact-unavailable, .compact-unavailable { color: var(--attention); }

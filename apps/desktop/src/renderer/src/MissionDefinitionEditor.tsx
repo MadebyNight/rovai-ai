@@ -3,8 +3,7 @@ import * as Popover from '@radix-ui/react-popover'
 import type { CampMessageAttachmentView, LocalAttachmentSourceView, MissionAttachmentDraft } from '@contracts'
 import { newCommandId } from '../../shared/command-id'
 import { AttachmentCard, ComposerAttachmentStrip } from './AttachmentCard'
-import { DialogControlIcon } from './AppDialog'
-import { Icon, TagColorDot } from './MissionControls'
+import { Icon, TagColorDot, tagStyle } from './MissionControls'
 import { NavigationIcon } from './NavigationIcon'
 import { dataTransferContainsFiles, droppedAttachmentInputs, type AttachmentPreparationInput } from './attachment-drop'
 import {
@@ -171,7 +170,7 @@ type MissionPropertyChipProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'c
 
 export const MissionPropertyChip = forwardRef<HTMLButtonElement, MissionPropertyChipProps>(function MissionPropertyChip({ icon, children, locked = false, disabled = false, className = '', onClick, ...buttonProps }, ref) {
   return <button ref={ref} {...buttonProps} type="button" className={`mission-editor-property${locked ? ' is-locked' : ''}${className ? ` ${className}` : ''}`} disabled={disabled || locked} onClick={locked ? undefined : onClick}>
-    {icon}<span className="mission-editor-property-copy">{children}</span>{locked ? <svg className="mission-editor-lock" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> : <DialogControlIcon name="chevron"/>}
+    {icon}<span className="mission-editor-property-copy">{children}</span>{locked && <svg className="mission-editor-lock" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>}
   </button>
 })
 
@@ -194,12 +193,18 @@ export function MissionTagPicker({ tags, catalog, disabled, onChange }: {
     if (!normalized || exact || tooLong || tags.length >= 30) return
     onChange([...tags, normalized]); setQuery('')
   }
+  const visibleTags = tags.slice(0, 2)
   return <Popover.Root open={open} onOpenChange={value => { setOpen(value); if (!value) setQuery('') }}>
-    <Popover.Trigger asChild><MissionPropertyChip icon={<TagColorDot tag={tags[0] ?? '使命标签'}/>} disabled={disabled}>{tags.length ? tags.join('、') : '添加标签'}</MissionPropertyChip></Popover.Trigger>
+    <Popover.Trigger asChild><MissionPropertyChip className="mission-editor-tag-property" icon={<Icon name="tag"/>} disabled={disabled} aria-label={tags.length ? `标签：${tags.join('、')}` : '添加标签'}>{tags.length
+      ? <span className="mission-editor-selected-tags">{visibleTags.map(tag => <span className="mission-editor-selected-tag" style={tagStyle(tag)} key={tag}>{tag}</span>)}{tags.length > visibleTags.length && <span className="mission-editor-selected-tag-overflow">+{tags.length - visibleTags.length}</span>}</span>
+      : '添加标签'}</MissionPropertyChip></Popover.Trigger>
     <Popover.Portal><Popover.Content className="compact-menu mission-editor-tag-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
       <label className="mission-tag-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); create() } }}/></label>
       <div className="mission-tag-options" role="group" aria-label="可选标签">
-        {found.map(tag => <button type="button" className="compact-option" key={tag} role="checkbox" aria-checked={tags.includes(tag)} onClick={() => toggle(tag)}><TagColorDot tag={tag}/><span>{tag}</span>{tags.includes(tag) && <Icon name="check"/>}</button>)}
+        {found.map(tag => {
+          const selected = tags.includes(tag)
+          return <button type="button" className={`compact-option mission-editor-tag-option${selected ? ' is-selected' : ''}`} style={tagStyle(tag)} key={tag} role="checkbox" aria-checked={selected} onClick={() => toggle(tag)}><TagColorDot tag={tag}/><span>{tag}</span>{selected && <Icon name="check"/>}</button>
+        })}
         {normalized && !exact && <button type="button" className="compact-option" onClick={create} disabled={tooLong || tags.length >= 30}><Icon name="plus"/><span>新建“{normalized}”</span></button>}
         {tooLong && <p className="compact-inline-error" role="alert">标签最多 24 个字符。</p>}
       </div>
