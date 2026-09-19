@@ -3,13 +3,13 @@ document_type: architecture
 architecture: builtin-tool-runtime
 authority: builtin-tool-component-boundaries
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # Built-in Tool Runtime Architecture
 
 本文件说明 Rovai built-in operations 的长期组件结构。当前字段与版本以
-[Built-in Tool Transport v29](../contracts/builtin-tool-transport-v29.md)、
+[Built-in Tool Transport v30](../contracts/builtin-tool-transport-v30.md)、
 [Built-in Tool Agent Output Projection v1](../contracts/builtin-tool-agent-output-projection-v1.md)、
 [Camp History v8](../contracts/camp-history-v8.md)、
 [Durable Task v3](../contracts/durable-task-v3.md) 和
@@ -195,10 +195,14 @@ Domain Service 保留 line-leading 连续有效 mention 的兼容 parser，未�
 CLI、Runtime Adapter、Bootstrap 与 Skill 都不重写正文或教学该 grammar。`--public-only` 在任何 alias/member lookup 前绕过正文寻址，并与显式
 `to/taskId` 原子冲突；`agentAddressingMode` 表达 caller intent，`effectiveRecipients/deliveryIds` 表达实际结果。
 该 schema 继续进入当前 catalog digest。
-当前 v29 contract/CLI command version、`builtin_cli.transport.v29` capability 与 IPC protocol 2 必须同时进入
+当前 v30 contract/CLI command version、`builtin_cli.transport.v30` capability 与 IPC protocol 2 必须同时进入
 Binding compatibility 和 digest。Camp History 使用 v8；Native Binding context contract 加入内部
 `sessionCharterRevision: 10`；Mission 完成判断教学的变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
 使用 Formatter 27 / ContextManifest 27，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
+
+Operation-specific errors use the same catalog entry both for discovery and for the emitted invocation recovery.
+Mission status therefore exposes `sourceMessageId` as optional, omits the retired conditional-required error and
+returns `fix_input` for an explicitly invalid source instead of drifting to the generic `stop` fallback.
 
 `ROVAI_RUN_TMP` 是 Runtime Host 启动时继承的稳定精确路径，不是 process root、Camp workspace 或附件存储。
 每次新 lease 在 active context 写入前 fail-closed 清空并重建该目录；unbind/fence 只做 best-effort 清理，后继

@@ -1,7 +1,7 @@
 ---
 document_type: documentation-index
 authority: documentation-routing
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # Rovai-ai 文档导航
@@ -24,7 +24,7 @@ last_updated: 2026-09-19
 
 | 任务 | 必读资料 |
 |---|---|
-| 修改 Mission、使命工作区、累计 Git Diff、使命上下文或桌面使命板 | [使命架构](architecture/missions.md)、[Mission v5](contracts/mission-v5.md)、[ContextManifest v27](contracts/context-manifest-evidence-v27.md)及[使命板 UI](ui/components/mission-board.md) |
+| 修改 Mission、使命工作区、累计 Git Diff、使命上下文或桌面使命板 | [使命架构](architecture/missions.md)、[Mission v6](contracts/mission-v6.md)、[ContextManifest v27](contracts/context-manifest-evidence-v27.md)及[使命板 UI](ui/components/mission-board.md) |
 | 修改共享 Core 运行层、Host、Desktop Web 或独立 Server | [统一 Rust Host](architecture/unified-rust-host.md)、[当前版本](versions/README.md)、[Availability-first Runtime](architecture/availability-first-runtime.md)与[本地隔离流程](development/local-workflow.md) |
 | 修改 Runtime 结构化图片、原生生图自动展示准入、混合临时文件生命周期、Run 图片读取、图片附件 Gallery、消息附件分区/几何或本地图片与飞书显式文件交付边界 | [Runtime 图片架构](architecture/runtime-images.md)、[Runtime Images v5](contracts/runtime-images-v5.md)、[Camp Open Projection v19](contracts/camp-open-projection-v19.md)、[v1.53 交付范围](versions/v1.53/README.md)及[统一图片与文件展示](ui/components/conversation-workspace.md#runtime-图片与消息图片) |
 | 修改 Camp 成员 Fast、原生订阅资格、三态偏好、绑定代次或单次执行档位 | [Camp Member Fast v1](contracts/camp-member-fast-v1.md)、[Runtime Launch v42](contracts/runtime-launch-and-verification-v42.md)、[Usage v4](contracts/runtime-usage-monitoring-v4.md)、[Camp 会话工作区](ui/components/conversation-workspace.md) |
@@ -45,7 +45,7 @@ last_updated: 2026-09-19
 | 修改渠道 Host 唤醒/watchdog、维护回执、FIFO 提升或 delivery lease 恢复 | [Channel Host Maintenance v5](contracts/channel-host-maintenance-v5.md)、[Core 事务不变量](architecture/foundational-invariants.md#core-command-transaction)及对应 Provider 当前合同 |
 | 修改渠道 Camp 自动命名、来源前缀或手动重命名展示 | [Channel Camp Naming v1](contracts/channel-camp-naming-v1.md)、[Camp 命名不变量](architecture/foundational-invariants.md#camp-lifecycle)、[App Shell 与统一侧栏](ui/components/app-shell-navigation.md) |
 | 新增或修改 Runtime Activity 映射规则 | [Runtime Activity Mapping 维护指南](runtime-activity/README.md)及[Registry](runtime-activity/registry.md) |
-| 修改内置 Agent CLI、IPC、Envelope、receipt、完整结果运输、Single Chat history、定时 Automation、Mission、队员创建、Agent Send 或幂等合同 | [Built-in Tool Transport v29](contracts/builtin-tool-transport-v29.md)、[Built-in 运输不变量](architecture/foundational-invariants.md#skills-builtin-transport)、[Skill Library 与投影不变量](architecture/foundational-invariants.md#skills-library-projection)、[Camp Message Send v22](contracts/camp-message-send-v22.md)及[Current User Attention v6](contracts/current-user-attention-v6.md) |
+| 修改内置 Agent CLI、IPC、Envelope、receipt、完整结果运输、Single Chat history、定时 Automation、Mission、队员创建、Agent Send 或幂等合同 | [Built-in Tool Transport v30](contracts/builtin-tool-transport-v30.md)、[Built-in 运输不变量](architecture/foundational-invariants.md#skills-builtin-transport)、[Skill Library 与投影不变量](architecture/foundational-invariants.md#skills-library-projection)、[Camp Message Send v22](contracts/camp-message-send-v22.md)及[Current User Attention v6](contracts/current-user-attention-v6.md) |
 | 修改普通用户 `rovai app`、Workspace inspection、Camp/Run 终端自动化、Diagnostic Trial、双 cursor 或诊断 bundle | [User Automation v6](contracts/user-automation-v6.md)、[User Automation Architecture](architecture/user-automation.md)、[Workspace 与动态 Git 不变量](architecture/foundational-invariants.md#camp-workspace)及[当前版本](versions/v1.54/README.md) |
 | 修改 Desktop 定时任务、Automation 定义/快照、started/skipped(overlap)、普通 Delivery claim、结果、Owner 通知或 Automation 工作区 | [Scheduled Automation v3](contracts/scheduled-automation-v3.md)、[Scheduled Automation Architecture](architecture/scheduled-automation.md)、[Scheduled Automation 不变量](architecture/foundational-invariants.md#scheduled-automation)及[Automation 工作区](ui/components/automation-workspace.md) |
 | 修改 `camp.search`、`camp.read`、`history.search`、公共读取范围、实时可见性、recipient suppression、撤回过滤、Camp message publication fence 或 Agent read 附件输出 | [Camp History v8](contracts/camp-history-v8.md)、[公共上下文不变量](architecture/foundational-invariants.md#context-public-history)、[History 与寻址不变量](architecture/foundational-invariants.md#collaboration-history-addressing)、[Message Delivery 不变量](architecture/foundational-invariants.md#collaboration-delivery)、[Built-in Tool Runtime](architecture/builtin-tool-runtime.md)及[Public Camp Message/Delivery 架构](architecture/public-a2a-message-delivery.md) |
