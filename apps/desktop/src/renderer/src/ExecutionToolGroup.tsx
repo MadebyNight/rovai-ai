@@ -15,6 +15,7 @@ import {
   runtimeCompactionDetailText,
   runtimeCompactionIsExpandable,
   runtimeCompactionTitle,
+  selectCompleteExecutionEvidence,
   type ActivityIconKind,
   type LiveExecutionProgress,
   type RuntimeCompactionDisplayItem,
@@ -40,6 +41,18 @@ export function isPresentableExecutionEvidence(
   evidence: AgentRunExecutionEvidenceView
 ): evidence is PresentableExecutionEvidence {
   return evidence.kind !== 'reasoning_summary'
+}
+
+export function selectCompletePresentableExecutionEvidence(
+  evidence: AgentRunExecutionEvidenceView[]
+): ReturnType<typeof selectCompleteExecutionEvidence<PresentableExecutionEvidence>> {
+  // Truncated entries back deferred detail reads. Canonical diffs also need their
+  // exact Evidence identity even when the complete projection is already inline.
+  return selectCompleteExecutionEvidence(
+    evidence
+      .filter((item) => item.isTruncated || item.canonical?.diffProjection != null)
+      .filter(isPresentableExecutionEvidence)
+  )
 }
 
 type ToolResultLoadStatus = 'idle' | 'loading' | 'ready' | 'failed'

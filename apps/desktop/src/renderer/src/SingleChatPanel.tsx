@@ -44,7 +44,12 @@ import {
 } from './attachment-drop'
 import { MemberAvatar } from './MemberAvatar'
 import { ApprovalDock, rectanglesOverlap, type CampLeavePreparation, type NotificationFocusTarget, type VisibleNotificationSources } from './CampWorkspace'
-import { CompactionEventRow, RuntimeRetryNotice, ToolActivityGroup, isPresentableExecutionEvidence } from './ExecutionToolGroup'
+import {
+  CompactionEventRow,
+  RuntimeRetryNotice,
+  ToolActivityGroup,
+  selectCompletePresentableExecutionEvidence
+} from './ExecutionToolGroup'
 import { executionInitialFeedback, executionRunSummary } from './execution-run-summary'
 import { ComposerPrimaryAction } from './ComposerPrimaryAction'
 import { SafeMarkdown } from './SafeMarkdown'
@@ -52,7 +57,6 @@ import { shouldSubmitStructuredComposerOnEnter } from './StructuredMentionCompos
 import { readErrorMessage } from './error-message'
 import {
   buildLiveExecutionProgress,
-  selectCompleteExecutionEvidence,
   liveRuntimeEventFromExecutionEvidence,
   type ExecutionProgressItem
 } from './ui-model'
@@ -345,9 +349,10 @@ export function SingleChatRunHistory({
         || item.body.trim() !== finalMessage.body.trim())
   }, [evidence, finalMessage, run.id])
   const grouped = useMemo(() => groupConsecutiveToolItems(processItems), [processItems])
-  const completeEvidence = useMemo(() => selectCompleteExecutionEvidence(
-    evidence.filter((item) => item.isTruncated).filter(isPresentableExecutionEvidence)
-  ), [evidence])
+  const completeEvidence = useMemo(
+    () => selectCompletePresentableExecutionEvidence(evidence),
+    [evidence]
+  )
   const trailingItem = grouped.at(-1)
   const liveTailKey = run.status === 'running' && !stopping && trailingItem?.kind === 'toolGroup'
     ? trailingItem.key

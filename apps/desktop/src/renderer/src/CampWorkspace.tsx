@@ -28,7 +28,7 @@ import { CampDetailPopover } from './CampDetailPopover'
 import { SingleChatPanel } from './SingleChatPanel'
 import {
   CompactionEventRow, ExecutionToolGroupStateContext, FileOperationRow, ModifiedFileRow, RuntimeRetryNotice,
-  ToolActivityGroup, ToolCallRow, isPresentableExecutionEvidence, type ToolCallStep
+  ToolActivityGroup, ToolCallRow, selectCompletePresentableExecutionEvidence, type ToolCallStep
 } from './ExecutionToolGroup'
 import { executionInitialFeedback, executionRunSummary } from './execution-run-summary'
 import { ComposerPrimaryAction } from './ComposerPrimaryAction'
@@ -119,7 +119,6 @@ import {
   localDayKey,
   messageClockTime,
   relativeTimeLabel,
-  selectCompleteExecutionEvidence,
   timelineDayLabel,
 } from './ui-model'
 import { MemberAvatar } from './MemberAvatar'
@@ -8687,9 +8686,6 @@ function RunExecutionContent({
       run.id, { includePublicResults: false })
     return windowedEvidence ? windowPage.project(displayedEvidence, build) : build()
   }, [displayedEvidence, run.id, windowedEvidence])
-  const effectiveTruncatedEvidence = (displayedEvidence ?? truncatedEvidence)
-    .filter((evidence) => evidence.isTruncated)
-    .filter(isPresentableExecutionEvidence)
   const effectiveProgress = historicalProgress ?? progress
   const finalKey = finalBody ? comparableMessageText(finalBody) : null
   const processItems = useMemo(() => (effectiveProgress?.items ?? []).map((item) =>
@@ -8735,7 +8731,9 @@ function RunExecutionContent({
     ? processItems.reduce<RuntimeDiagnostic | null>((latest, item) =>
         item.kind === 'diagnostic' ? item.diagnostic : latest, null)
     : null
-  const completeEvidence = selectCompleteExecutionEvidence(effectiveTruncatedEvidence)
+  const completeEvidence = selectCompletePresentableExecutionEvidence(
+    displayedEvidence ?? truncatedEvidence
+  )
   const initialFeedback = executionInitialFeedback(run.status, processItems, Boolean(finalBody))
   const feedback = run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
     : run.failure?.code === 'runtime_network_interrupted' ? '正在恢复连接'

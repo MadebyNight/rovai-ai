@@ -445,8 +445,8 @@ fn run_activity_authorizes_file(
             SELECT activity.diff_projection_json
             FROM agent_run_execution_evidence AS evidence
             JOIN agent_run ON agent_run.id = evidence.agent_run_id
-            JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            JOIN camp ON camp.id = camp_turn.camp_id
+            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             JOIN canonical_runtime_activity AS activity
               ON activity.agent_run_id = evidence.agent_run_id
              AND activity.execution_epoch = evidence.execution_epoch
@@ -841,9 +841,18 @@ mod tests {
         database: &mut Database,
         data_dir: &Path,
         execution_root: &Path,
-        path: &str,
+        paths: &[&str],
     ) -> String {
-        let absolute_path = execution_root.join(path);
+        let entries = paths
+            .iter()
+            .map(|path| {
+                json!({
+                    "path": execution_root.join(path),
+                    "oldText": "before\n",
+                    "newText": "after\n"
+                })
+            })
+            .collect::<Vec<_>>();
         ExecutionEvidenceService
             .record_runtime_event(
                 database,
@@ -861,11 +870,7 @@ mod tests {
                         "protocolFamily": "acp-v1",
                         "sourceEventKind": "session/update.tool_call_update.completed",
                         "semanticKind": "complete_before_after",
-                        "entries": [{
-                            "path": absolute_path,
-                            "oldText": "before\n",
-                            "newText": "after\n"
-                        }]
+                        "entries": entries
                     }
                 }),
             )
@@ -883,12 +888,32 @@ mod tests {
         evidence_id: &str,
         path: &str,
     ) -> Option<ResolvedFilePreviewSource> {
+        resolve_run_activity_file_for_camp(
+            database,
+            data_dir,
+            "preview-camp",
+            agent_run_id,
+            execution_epoch,
+            evidence_id,
+            path,
+        )
+    }
+
+    fn resolve_run_activity_file_for_camp(
+        database: &Database,
+        data_dir: &Path,
+        camp_id: &str,
+        agent_run_id: &str,
+        execution_epoch: i64,
+        evidence_id: &str,
+        path: &str,
+    ) -> Option<ResolvedFilePreviewSource> {
         resolve_file_preview_source(
             database,
             &ManagedBlobStore::new(data_dir),
             ResolveFilePreviewSourceParams {
                 kind: "run_activity_file".to_string(),
-                camp_id: "preview-camp".to_string(),
+                camp_id: camp_id.to_string(),
                 message_id: None,
                 raw_reference: Some(path.to_string()),
                 agent_run_id: Some(agent_run_id.to_string()),
@@ -1037,7 +1062,7 @@ mod tests {
             &mut database,
             &data_dir,
             &execution_root,
-            "src/generated.ts",
+            &["src/generated.ts"],
         );
         let ResolvedFilePreviewSource::FileTarget {
             source_kind,
@@ -1089,13 +1114,149 @@ mod tests {
     }
 
     #[test]
+    fn direct_camp_run_activity_file_uses_exact_evidence_and_mission_worktree() {
+        let (mut database, data_dir, root, execution_root) = run_workspace_fixture();
+        let project_root: PathBuf = database
+            .connection()
+            .query_row(
+                "SELECT project_path FROM camp WHERE id = 'preview-camp'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map(PathBuf::from)
+            .unwrap();
+        std::fs::create_dir_all(project_root.join("src")).unwrap();
+        std::fs::create_dir_all(execution_root.join("src")).unwrap();
+        std::fs::write(project_root.join("src/shared.ts"), "project\n").unwrap();
+        std::fs::write(execution_root.join("src/shared.ts"), "mission\n").unwrap();
+        std::fs::write(
+            execution_root.join("src/worktree-only.ts"),
+            "mission only\n",
+        )
+        .unwrap();
+        let evidence_id = record_run_activity_diff(
+            &mut database,
+            &data_dir,
+            &execution_root,
+            &["src/shared.ts", "src/worktree-only.ts"],
+        );
+        database
+            .connection()
+            .execute_batch(
+                r#"
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id, body,
+                    structured_content_json, content_digest, address_mode,
+                    addressed_agent_ids_json, version, created_at, updated_at
+                ) VALUES (
+                    'preview-message', 'preview-camp', 1, 'user', 'local_user', '执行',
+                    '[{"kind":"text","text":"执行"}]', 'preview-message',
+                    'explicit', '["agent_1"]', 1,
+                    '2026-09-16T00:01:00Z', '2026-09-16T00:01:00Z'
+                );
+                UPDATE camp SET last_message_sequence = 1 WHERE id = 'preview-camp';
+                UPDATE agent_run
+                SET invocation_kind = 'batch',
+                    camp_id = 'preview-camp',
+                    camp_turn_id = NULL,
+                    anchor_message_id = 'preview-message',
+                    current_public_tail_sequence = 1
+                WHERE id = 'preview-run';
+                "#,
+            )
+            .unwrap();
+
+        for path in ["src/shared.ts", "src/worktree-only.ts"] {
+            let ResolvedFilePreviewSource::FileTarget {
+                root_path,
+                raw_reference,
+                ..
+            } = resolve_run_activity_file(
+                &database,
+                &data_dir,
+                "preview-run",
+                1,
+                &evidence_id,
+                path,
+            )
+            .expect("a direct-Camp Run should authorize its exact canonical diff path")
+            else {
+                panic!("Run activity should resolve a file target")
+            };
+            assert_eq!(Path::new(&root_path), execution_root);
+            assert_eq!(raw_reference, path);
+        }
+        assert_eq!(
+            std::fs::read_to_string(execution_root.join("src/shared.ts")).unwrap(),
+            "mission\n",
+            "the same-named file must stay rooted in the Mission worktree"
+        );
+        assert!(!project_root.join("src/worktree-only.ts").exists());
+
+        assert!(
+            resolve_run_activity_file_for_camp(
+                &database,
+                &data_dir,
+                "another-camp",
+                "preview-run",
+                1,
+                &evidence_id,
+                "src/shared.ts",
+            )
+            .is_none(),
+            "another Camp must not reuse the Run activity authority"
+        );
+        for (run_id, epoch, candidate_evidence, path) in [
+            ("other-run", 1, evidence_id.as_str(), "src/shared.ts"),
+            ("preview-run", 2, evidence_id.as_str(), "src/shared.ts"),
+            ("preview-run", 1, "other-evidence", "src/shared.ts"),
+            (
+                "preview-run",
+                1,
+                evidence_id.as_str(),
+                "src/not-reported.ts",
+            ),
+            ("preview-run", 1, evidence_id.as_str(), "../shared.ts"),
+        ] {
+            assert!(
+                resolve_run_activity_file(
+                    &database,
+                    &data_dir,
+                    run_id,
+                    epoch,
+                    candidate_evidence,
+                    path,
+                )
+                .is_none(),
+                "a mismatched direct-Camp Run activity locator must fail closed"
+            );
+        }
+        assert!(
+            resolve_run_activity_file(
+                &database,
+                &data_dir,
+                "preview-run",
+                1,
+                &evidence_id,
+                execution_root
+                    .join("src/shared.ts")
+                    .to_string_lossy()
+                    .as_ref(),
+            )
+            .is_none(),
+            "an absolute diff path must not be accepted"
+        );
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
+    #[test]
     fn run_activity_file_falls_back_to_the_project_for_a_legacy_run() {
         let (mut database, data_dir, root, execution_root) = run_workspace_fixture();
         let evidence_id = record_run_activity_diff(
             &mut database,
             &data_dir,
             &execution_root,
-            "src/generated.ts",
+            &["src/generated.ts"],
         );
         let project_root: String = database
             .connection()
