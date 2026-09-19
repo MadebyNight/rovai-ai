@@ -88,6 +88,20 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   editTitle.blur()
   const properties = Array.from(document.querySelectorAll<HTMLButtonElement>('.mission-edit-dialog .mission-editor-property'))
   check(properties.length === 3 && properties[0].disabled && properties[1].disabled && !properties[2].disabled, 'Edit locks project and team while keeping tags editable')
+  check(properties.every(property => !property.querySelector('.dialog-glyph')), 'Mission property controls do not show dropdown arrows')
+  const propertyWidths = properties.map(property => property.getBoundingClientRect().width)
+  check(propertyWidths[0] <= 157 && propertyWidths[1] <= 225 && propertyWidths[2] <= 133, 'Project, team and tag controls keep their compact width caps')
+  check(properties[1].querySelector('.mission-editor-team-overflow')?.textContent === '+2', 'Team summary collapses additional members into +N')
+  const editTagTokens = Array.from(properties[2].querySelectorAll<HTMLElement>('.mission-editor-selected-tag'))
+  check(editTagTokens.length === 2 && new Set(editTagTokens.map(token => getComputedStyle(token).backgroundColor)).size === 2, 'Each selected tag keeps its own visible background color')
+  properties[2].click()
+  await until(() => document.querySelector('.mission-editor-tag-popover'), 'Edit tag picker opens')
+  const selectedTagOptions = Array.from(document.querySelectorAll<HTMLElement>('.mission-editor-tag-option[aria-checked=true]'))
+  check(selectedTagOptions.length === 2
+    && selectedTagOptions.every(option => getComputedStyle(option).backgroundColor !== 'rgba(0, 0, 0, 0)' && option.querySelector('.mission-icon'))
+    && new Set(selectedTagOptions.map(option => getComputedStyle(option).backgroundColor)).size === 2, 'Selected tag rows retain individual backgrounds plus checkmarks')
+  properties[2].click()
+  await until(() => !document.querySelector('.mission-editor-tag-popover'), 'Edit tag picker closes')
   check(!button('添加附件').disabled, 'Edit keeps attachments editable')
   const editAttachmentStrip = document.querySelector<HTMLElement>('.mission-edit-dialog .composer-attachment-strip')!
   check(editAttachmentStrip.scrollWidth > editAttachmentStrip.clientWidth, 'Many Mission attachments stay in one bounded strip')
@@ -309,6 +323,12 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(createDescription, '关闭后仍应恢复的使命描述')
   createDescription.dispatchEvent(new Event('input', { bubbles: true }))
   const creationProperties = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.mission-create-dialog .mission-editor-property'))
+  const initialCreationProperties = creationProperties()
+  check(initialCreationProperties.every(property => !property.querySelector('.dialog-glyph')), 'Create property controls do not show dropdown arrows')
+  const creationPropertyWidths = initialCreationProperties.map(property => property.getBoundingClientRect().width)
+  check(creationPropertyWidths[0] <= 157 && creationPropertyWidths[1] <= 225 && creationPropertyWidths[2] <= 133, 'Create properties remain content-sized and bounded')
+  const largeTeamCount = Number(initialCreationProperties[1].getAttribute('aria-label')?.match(/(\d+) 位队员/)?.[1] ?? 0)
+  check(largeTeamCount >= 12 && initialCreationProperties[1].querySelector('.mission-editor-team-overflow')?.textContent === `+${largeTeamCount - 2}`, 'A large selected team stays compact while exposing the full count')
   creationProperties()[0].click()
   await until(() => document.querySelector('.mission-editor-project-popover'), 'Mission project picker opens')
   const projectList = document.querySelector<HTMLElement>('.mission-editor-project-list')!
@@ -321,6 +341,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-editor-team-popover'), 'Mission team picker opens')
   const teamList = document.querySelector<HTMLElement>('.mission-editor-team-list')!
   check(teamList.scrollHeight > teamList.clientHeight, 'Long member catalog remains vertically scrollable')
+  const teamPopover = document.querySelector<HTMLElement>('.mission-editor-team-popover')!
+  const teamFooter = teamPopover.querySelector<HTMLElement>('.mission-editor-team-footer')!
+  check(teamPopover.querySelector('.mission-editor-team-count')?.textContent === `已选 ${largeTeamCount} / ${largeTeamCount}`, 'Large-team picker reports selected and total counts')
+  teamList.scrollTop = teamList.scrollHeight
+  await frames()
+  const lastTeamRow = teamList.lastElementChild as HTMLElement
+  const teamListBounds = teamList.getBoundingClientRect(), lastTeamRowBounds = lastTeamRow.getBoundingClientRect()
+  check(teamList.scrollTop > 0 && lastTeamRowBounds.top >= teamListBounds.top - 1 && lastTeamRowBounds.bottom <= teamListBounds.bottom + 1
+    && !teamList.contains(teamFooter) && teamFooter.getClientRects().length > 0, 'Large-team picker keeps its footer fixed while the full roster scrolls')
   fill(document.querySelector<HTMLInputElement>('input[aria-label="搜索队员"]')!, '扩展队员 12')
   await until(() => document.querySelectorAll('.mission-editor-team-row').length === 1, 'Member search filters names and roles')
   button('完成').click()
@@ -331,8 +360,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   fill(tagSearch, '交互')
   await until(() => document.querySelectorAll('.mission-editor-tag-popover .mission-tag-options [role=checkbox]').length === 1, 'Tag search filters existing tags')
   const tagOption = document.querySelector<HTMLButtonElement>('.mission-editor-tag-popover .mission-tag-options [role=checkbox]')!
-  check(tagOption.querySelector('.mission-tag-color-dot')!.getBoundingClientRect().width >= 14, 'Tag choices use a prominent color dot instead of a tag glyph')
+  const tagDotBounds = tagOption.querySelector('.mission-tag-color-dot')!.getBoundingClientRect()
+  check(tagDotBounds.width >= 14 && tagDotBounds.width <= 16 && Math.abs(tagDotBounds.width - tagDotBounds.height) <= 1, 'Tag choices use a compact circular color dot instead of a tag glyph')
   tagOption.click(); await frames()
+  check(tagOption.classList.contains('is-selected') && getComputedStyle(tagOption).backgroundColor !== 'rgba(0, 0, 0, 0)' && tagOption.querySelector('.mission-icon'), 'A selected tag row uses its own background and a checkmark')
+  fill(tagSearch, '体验优化')
+  await until(() => document.querySelectorAll('.mission-editor-tag-popover .mission-tag-options [role=checkbox]').length === 1, 'Tag search can move to a second existing tag')
+  document.querySelector<HTMLButtonElement>('.mission-editor-tag-popover .mission-tag-options [role=checkbox]')!.click(); await frames()
+  const createTagTokens = Array.from(creationProperties()[2].querySelectorAll<HTMLElement>('.mission-editor-selected-tag'))
+  check(createTagTokens.length === 2 && new Set(createTagTokens.map(token => getComputedStyle(token).backgroundColor)).size === 2, 'Create trigger renders each selected tag with an independent background')
   check(document.querySelector('.mission-create-dialog') && document.querySelector('.mission-editor-tag-popover'), 'Choosing a tag stays in the current editor and picker')
   creationProperties()[2].click()
   await until(() => !document.querySelector('.mission-editor-tag-popover') && document.querySelector('.mission-create-dialog'), 'Tag picker closes back into the same Mission draft')
