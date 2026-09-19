@@ -3,7 +3,7 @@ document_type: architecture
 architecture: skill-projection-reconciliation
 authority: skill-projection-access-and-reconciliation-boundaries
 status: accepted
-last_updated: 2026-09-08
+last_updated: 2026-09-19
 ---
 
 # Skill Projection Reconciliation Architecture
@@ -52,8 +52,10 @@ Skill Library view 的 `managementPolicy` 来自 bundled official manifest，而
 [`BUNDLED_SKILLS`](../../crates/rovai-core/src/skill.rs)统一声明。该策略只决定 Library desired
 state，不改变 projection ownership、preflight、Snapshot 或 Runtime load 证明。
 
-`analyze-agent-codebase` 首次内置安装时默认停用，仍预选全部当前 Skill Delivery Groups。
-用户已保存的启停与分组选择在 bootstrap、升级或修复时保持原样。
+两项 `system_required` Skill 首次内置安装时默认启用。其余七项 `user_managed` Skill，即
+`analyze-agent-codebase`、`campfire`、`member-studio`、`worktree`、`grill-duo`、
+`grill-duo-with-docs` 与 `review-duo`，首次内置安装时均默认停用；九项仍预选全部当前
+Skill Delivery Groups。用户已保存的启停与分组选择在 bootstrap、升级或修复时保持原样。
 
 `grill-duo` 与 `grill-duo-with-docs` 作为 Rovai 维护的预置展示；其原有上游 metadata、NOTICE 和 LICENSE
 仍保留用于署名与追溯。`diagnosing-bugs`、`tasteful-ui`、`tdd`、`ui-ux-pro-max`、`writing-for-agents`

@@ -127,7 +127,7 @@ try {
       'worktree',
     ])
       && initialSkills.every((skill) => skill.origin === 'official'
-        && skill.enabled === (skill.name !== 'analyze-agent-codebase')
+        && skill.enabled === ['cli-operations', 'memory-stewardship'].includes(skill.name)
         && skill.managementPolicy === (
           ['cli-operations', 'memory-stewardship'].includes(skill.name)
             ? 'system_required'
