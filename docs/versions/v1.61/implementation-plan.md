@@ -53,7 +53,7 @@ last_updated: 2026-09-19
 - [x] 开发者在完整 Mission 定义可见后确认完成实现、PR 和 `main` 合并；独立变更说明冻结 revision 1。
 - [x] Mission 专属 Charter 增加按需读取与完整定义完成判断，普通 Camp 与 Single Chat 正文不变。
 - [x] Session Charter revision 从 9 轮换到 10；Bootstrap/Formatter/Manifest/Run Facts/Built-in 与 schema 均不变。
-- [ ] Rust 定向与 PR 门禁、Clippy、文档治理、远端 required checks 和合入后祖先验证通过。
+- [x] Mission 定向 Rust、格式、TypeScript/Node、文档治理与远端 required check 通过；合入后执行祖先验证。
 
 ## Rust 测试准入记录
 

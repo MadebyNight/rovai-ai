@@ -10,7 +10,7 @@ confirmed_revision: 1
 confirmation_source_message_id: 1df59027-9aac-4427-a973-6b2faa981483
 authority: confirmed-model-input-change-statement
 implementation_baseline: 27e117205722a03c6945ffdc3e418d572776c809
-implementation_status: in_progress
+implementation_status: completed
 last_updated: 2026-09-19
 ---
 
@@ -89,4 +89,8 @@ Rovai Mission Contract
 
 ## 实施收口
 
-实现与最终验证结果在 PR 合并前回填，不预先宣称完成。
+revision 1 已按确认文本实现，Session Charter revision 已轮换到 10。Mission/普通 Camp/Single Chat
+定向 Rust 断言、Binding contract、格式、TypeScript、完整 Node 测试、文档治理与 PR #440 隔离 CI 均通过。
+本机全量 fast-lib 在 840 passed、6 ignored 后，因同机多个 worktree 并发编译使一个未改动的两秒 Runtime
+版本探针超时；Clippy 命中三处未改动主线 lint。两项均已保留事实，不把它们误报为本变更通过证据，
+也不扩大本次已确认的 Mission-only 修改范围。
