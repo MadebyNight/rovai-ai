@@ -22,18 +22,37 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(Math.abs(missionReminderBounds.y + missionReminderBounds.height / 2 - (missionNavigationBounds.y + missionNavigationBounds.height / 2)) <= 1 && missionNavigationBounds.right - missionReminderBounds.right <= 12, 'Needs-you state uses a right-aligned, vertically centered blue reminder dot')
   await until(() => document.querySelector('.mission-board-card'), 'The Mission board must load')
   const card = document.querySelector<HTMLElement>('.mission-board-card')!
+  await until(() => card.querySelector('.mission-avatars[data-visible-count="5"]'), 'Mission roster fits its regular card width')
   check(card.querySelector('.mission-card-meta > span')?.textContent === 'M-018', 'Mission card uses the stable display number')
-  check(card.querySelectorAll('.mission-avatar-item').length === 4, 'All members appear on the card')
+  const cardRoster = card.querySelector<HTMLElement>('.mission-avatars')!
+  check(card.querySelectorAll('.mission-avatar-item').length === 5 && card.querySelector('.mission-avatar-overflow')?.textContent === '+3', 'Mission card shows five overlapping members and a hidden-member +N')
+  const cardAvatarItems = Array.from(card.querySelectorAll<HTMLElement>('.mission-avatar-item'))
+  const firstAvatarBounds = cardAvatarItems[0].getBoundingClientRect(), secondAvatarBounds = cardAvatarItems[1].getBoundingClientRect()
+  check(Math.abs(secondAvatarBounds.left - firstAvatarBounds.left - 16) <= 1, 'Mission card keeps 23px avatars with 7px overlap')
+  const rosterOverflowBounds = card.querySelector('.mission-avatar-overflow')!.getBoundingClientRect()
+  check(Math.abs(rosterOverflowBounds.y + rosterOverflowBounds.height / 2 - (firstAvatarBounds.y + firstAvatarBounds.height / 2)) <= 1, 'Roster +N is vertically centered with 23px avatars')
   check(card.querySelector('.mission-card-project')?.nextElementSibling?.classList.contains('mission-tags'), 'Tags follow the project')
-  check(card.querySelector('.mission-unread-message')?.textContent === '未读', 'Unread Mission uses the approved message icon and label')
-  check(!card.querySelector('.mission-unread-dot'), 'Unread state no longer relies on the old blue dot')
+  const unread = card.querySelector<HTMLElement>('.mission-unread-message')!, unreadDot = card.querySelector<HTMLElement>('.mission-unread-dot')!
+  const unreadStyle = getComputedStyle(unread), unreadDotBounds = unreadDot.getBoundingClientRect()
+  check(unread.textContent === '未读' && unreadDotBounds.width === 8 && unreadDotBounds.height === 8 && unreadStyle.fontSize === '12px' && unreadStyle.fontWeight === '600', 'Unread Mission uses an 8px blue dot and 12px semibold label')
+  check(getComputedStyle(card.querySelector('.mission-card-open h3')!).fontWeight === '600', 'Unread Mission title gains the approved emphasis')
+  check(getComputedStyle(unread).backgroundColor === 'rgba(0, 0, 0, 0)', 'Unread state remains unboxed')
   check(!document.querySelector('.mission-card-actions'), 'Cards expose actions only through the context menu')
   const running = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.querySelector('.mission-running'))!
-  const runningChildren = Array.from(running.querySelector('.mission-running')!.children).map(node => node.getBoundingClientRect())
+  const runningChildren = Array.from(running.querySelector('.mission-running')!.children).filter(node => !node.classList.contains('camp-execution-orbits')).map(node => node.getBoundingClientRect())
   check(running.querySelectorAll('.mission-running-avatars .member-avatar').length === 3, 'Running state shows at most three avatars')
   check(running.querySelector('.mission-running > small')?.textContent === '+1', 'Additional running members collapse into +N')
-  check(running.querySelector('.running-text-highlight'), 'Running label reuses the execution-console sweep')
+  check(!running.querySelector('.running-text-highlight'), 'Running label stays stationary without a text sweep')
+  check(running.querySelectorAll('.camp-execution-orbits rect[pathLength="100"]').length === 2, 'Running state reuses the execution-console dual orbit')
+  const runningOverflowBounds = running.querySelector('.mission-running > small')!.getBoundingClientRect(), runningAvatarBounds = running.querySelector('.mission-running-avatars .member-avatar')!.getBoundingClientRect()
+  check(Math.abs(runningOverflowBounds.y + runningOverflowBounds.height / 2 - (runningAvatarBounds.y + runningAvatarBounds.height / 2)) <= 1, 'Running +N is vertically centered with 18px avatars')
   check(new Set(runningChildren.map(bounds => Math.round(bounds.y))).size === 1, '+N and running text share one vertical row')
+  const footer = card.querySelector<HTMLElement>('.mission-card-footer')!
+  footer.style.width = '124px'
+  await until(() => Number(cardRoster.dataset.visibleCount) < 5, 'Narrow Mission footer reduces visible avatars')
+  check(Number(cardRoster.dataset.overflowCount) === 8 - Number(cardRoster.dataset.visibleCount) && footer.scrollWidth <= footer.clientWidth + 1, 'Narrow roster recalculates +N without squeezing unread or time')
+  footer.style.width = ''
+  await until(() => cardRoster.dataset.visibleCount === '5', 'Mission roster restores five avatars after width recovers')
   const lanes = [...document.querySelectorAll<HTMLElement>('.mission-column')]
   check(lanes.length === 4 && new Set(lanes.map(n => n.clientHeight)).size === 1, 'Four equal lanes')
   check(!document.querySelector('.mission-column header button'), 'No create control in status lanes')
@@ -91,7 +110,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(properties.every(property => !property.querySelector('.dialog-glyph')), 'Mission property controls do not show dropdown arrows')
   const propertyWidths = properties.map(property => property.getBoundingClientRect().width)
   check(propertyWidths[0] <= 157 && propertyWidths[1] <= 225 && propertyWidths[2] <= 133, 'Project, team and tag controls keep their compact width caps')
-  check(properties[1].querySelector('.mission-editor-team-overflow')?.textContent === '+2', 'Team summary collapses additional members into +N')
+  check(properties[1].querySelector('.mission-editor-team-overflow')?.textContent === `+${qa.items[0].memberAgentIds.length - 2}`, 'Team summary collapses additional members into +N')
   const editTagTokens = Array.from(properties[2].querySelectorAll<HTMLElement>('.mission-editor-selected-tag'))
   check(editTagTokens.length === 2 && new Set(editTagTokens.map(token => getComputedStyle(token).backgroundColor)).size === 2, 'Each selected tag keeps its own visible background color')
   properties[2].click()

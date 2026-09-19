@@ -15,11 +15,15 @@ Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user
 
 Cards open from their entire surface, including keyboard activation. Card actions have no visible ellipsis;
 right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
-(`M-018`), never an opaque ID suffix. Show all member avatars with the lead first, project followed by tags,
-and a plain relative timestamp such as “昨天”. An active card places at most three running-member avatars,
-the remaining `+N`, and the execution-console sweep text “执行中” in one muted row at the upper right.
-Unread uses a message icon plus “未读” in the footer rather than a small isolated dot. Card and list menus
-share this order: 编辑、状态、查看队员、队长、标签、删除. Click opens
+(`M-018`), never an opaque ID suffix. The footer keeps the lead first and shows at most five 23px member
+avatars with 7px overlap; when unread and time leave less room, it reduces the visible count and recalculates
+a borderless, backgroundless semibold `+N`. The complete ordered roster remains available from the same
+keyboard-accessible group. Project is followed by tags and a plain relative timestamp such as “昨天”. An
+active card places at most three running-member avatars, the remaining plain-text `+N`, and stationary
+“执行中” text in one upper-right group. The execution-console Steel/Ember dual arcs flow around that complete
+group; the text itself has no sweep animation, and reduced motion keeps the arcs static. Unread uses an 8px
+solid blue dot plus 12px semibold blue “未读” in the footer, and raises that card title from 550 to 600 without
+a background, border or flashing. Card and list menus share this order: 编辑、状态、查看队员、队长、标签、删除. Click opens
 submenus; chevrons use the existing 16px icon rhythm. Every actionable row exposes the same neutral hover and
 keyboard-focus background, while 删除 keeps the danger text and soft-danger background. Tags use a lightweight
 search/create/check popover.

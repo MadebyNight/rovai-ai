@@ -31,6 +31,7 @@ const requiredTokens = [
   '--conversation-focus-soft',
   '--conversation-route-accent',
   '--conversation-unread',
+  '--mission-unread-ink',
   '--file-update-marker',
   '--execution-running-surface',
   '--inspector-surface',
@@ -140,6 +141,7 @@ function expectTextContrast(tokens: Record<string, string>): void {
     ['--conversation-action-contrast', '--conversation-action'],
     ['--conversation-action-contrast', '--conversation-action-hover'],
     ['--conversation-action', '--surface-selected'],
+    ['--mission-unread-ink', '--home-surface'],
     ['--success', '--success-soft'],
     ['--attention', '--attention-soft'],
     ['--danger', '--danger-soft'],
@@ -213,6 +215,8 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     }
     expect(day['--file-update-marker']).toBe('#b7791f')
     expect(night['--file-update-marker']).toBe('#d2ac70')
+    expect(day['--mission-unread-ink']).toBe('#0967d2')
+    expect(night['--mission-unread-ink']).toBe('#79b8ff')
   })
 
   it('scopes the approved porcelain surfaces and Steel emphasis', () => {

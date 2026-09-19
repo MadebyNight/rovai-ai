@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useRef, useState, type ReactNode } from 'react'
+import React, { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import * as Popover from '@radix-ui/react-popover'
@@ -34,12 +34,88 @@ export function StatusMenu({ m, onStatus, compact = false }: { m: Mission; onSta
 
 export const orderedMembers = (m: Mission) => [...(m.defaultLeadAgentId ? [m.defaultLeadAgentId] : []), ...m.memberAgentIds.filter(id => id !== m.defaultLeadAgentId)]
 export type AnchorAction = (event: React.MouseEvent<HTMLElement>) => void
-export function MissionAvatars({ m, onClick }: { m: Mission; onClick?: AnchorAction }) {
+
+export const MISSION_CARD_AVATAR_LIMIT = 5
+const MISSION_CARD_AVATAR_SIZE = 23
+const MISSION_CARD_AVATAR_OVERLAP = 7
+const MISSION_CARD_OVERFLOW_GAP = 4
+
+export function missionCardVisibleAvatarCount(
+  memberCount: number,
+  availableWidth: number,
+  measureOverflow: (label: string) => number = label => label.length * 7
+): number {
+  if (memberCount <= 0) return 0
+  const maximum = Math.min(memberCount, MISSION_CARD_AVATAR_LIMIT)
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) return maximum
+  const widthFor = (count: number): number => {
+    const avatars = MISSION_CARD_AVATAR_SIZE + (count - 1) * (MISSION_CARD_AVATAR_SIZE - MISSION_CARD_AVATAR_OVERLAP)
+    const hidden = memberCount - count
+    return avatars + (hidden > 0 ? MISSION_CARD_OVERFLOW_GAP + measureOverflow(`+${hidden}`) : 0)
+  }
+  let visible = maximum
+  while (visible > 1 && widthFor(visible) > availableWidth + 0.5) visible -= 1
+  return visible
+}
+
+let missionRosterMeasureContext: CanvasRenderingContext2D | null | undefined
+function measureMissionRosterOverflow(label: string): number {
+  if (missionRosterMeasureContext === undefined && typeof document !== 'undefined') {
+    missionRosterMeasureContext = document.createElement('canvas').getContext('2d')
+  }
+  if (!missionRosterMeasureContext) return label.length * 7
+  missionRosterMeasureContext.font = '600 11.5px ui-monospace, SFMono-Regular, Menlo, monospace'
+  return missionRosterMeasureContext.measureText(label).width
+}
+
+export function MissionAvatars({ m, onClick, compact = false }: { m: Mission; onClick?: AnchorAction; compact?: boolean }) {
   const person=usePeople();
-  const label = `查看队员：${orderedMembers(m).map(id => `${person(id).displayName}${id === m.defaultLeadAgentId ? '（队长）' : ''}`).join('、')}`
-  const portraits = orderedMembers(m).map(id => <span key={id} className="mission-avatar-item" title={`${person(id).displayName}${id === m.defaultLeadAgentId ? ' · 队长' : ''}`} data-member-id={id}><Avatar id={id}/></span>)
-  return onClick ? <button className="mission-avatars" onClick={onClick} aria-label={label}>{portraits}</button>
-    : <span className="mission-avatars" role="img" aria-label={label}>{portraits}</span>
+  const memberIds = orderedMembers(m)
+  const memberKey = memberIds.join('\u0000')
+  const maximum = compact ? Math.min(memberIds.length, MISSION_CARD_AVATAR_LIMIT) : memberIds.length
+  const [visibleCount, setVisibleCount] = useState(maximum)
+  const groupRef = useRef<HTMLElement | null>(null)
+
+  useLayoutEffect(() => {
+    if (!compact) return
+    const group = groupRef.current
+    const footer = group?.parentElement
+    if (!group || !footer) return
+    const fit = (): void => {
+      const footerStyle = getComputedStyle(footer)
+      const gap = Number.parseFloat(footerStyle.columnGap || footerStyle.gap) || 0
+      const siblings = Array.from(footer.children).filter((element): element is HTMLElement => element instanceof HTMLElement && element !== group && getComputedStyle(element).display !== 'none')
+      const occupied = siblings.reduce((width, element) => {
+        const style = getComputedStyle(element)
+        // Ignore the unread/time auto-start margin: it is flexible spare space, not a constraint.
+        return width + element.getBoundingClientRect().width + (Number.parseFloat(style.marginRight) || 0)
+      }, 0)
+      const available = footer.clientWidth - occupied - gap * siblings.length
+      const next = missionCardVisibleAvatarCount(memberIds.length, available, measureMissionRosterOverflow)
+      setVisibleCount(current => current === next ? current : next)
+    }
+    fit()
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)
+    resizeObserver?.observe(footer)
+    for (const element of Array.from(footer.children)) if (element !== group) resizeObserver?.observe(element)
+    window.addEventListener('resize', fit)
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', fit)
+    }
+  }, [compact, memberKey, memberIds.length, m.hasUnread, m.updatedAt])
+
+  const visibleIds = compact ? memberIds.slice(0, Math.min(visibleCount, maximum)) : memberIds
+  const overflow = memberIds.length - visibleIds.length
+  const names = memberIds.map(id => `${person(id).displayName}${id === m.defaultLeadAgentId ? '（队长）' : ''}`)
+  const label = `查看队员：${names.join('、')}${compact && overflow ? `；当前显示 ${visibleIds.length} 位，另有 ${overflow} 位收起` : ''}`
+  const title = `${names.join('、')}${compact && overflow ? `\n+${overflow}：${memberIds.slice(visibleIds.length).map(id => person(id).displayName).join('、')}` : ''}`
+  const portraits = visibleIds.map(id => <span key={id} className="mission-avatar-item" title={`${person(id).displayName}${id === m.defaultLeadAgentId ? ' · 队长' : ''}`} data-member-id={id}><Avatar id={id}/></span>)
+  const content = <>{portraits}{overflow > 0 && <span className="mission-avatar-overflow" aria-hidden="true"><span className="mission-overflow-label">+{overflow}</span></span>}</>
+  const className = `mission-avatars${compact ? ' is-card-roster' : ''}`
+  const data = compact ? { 'data-visible-count': visibleIds.length, 'data-member-count': memberIds.length, 'data-overflow-count': overflow } : {}
+  return onClick ? <button ref={node => { groupRef.current = node }} className={className} onClick={onClick} aria-label={label} title={title} {...data}>{content}</button>
+    : <span ref={node => { groupRef.current = node }} className={className} role="img" aria-label={label} title={title} {...data}>{content}</span>
 }
 export function MissionTags({ tags, onEdit }: { tags: string[]; onEdit?: AnchorAction }) {
   return <div className="mission-tags" aria-label="使命标签">{tags.map(tag => <span className="mission-tag is-colored" style={tagStyle(tag)} key={tag} title={tag}>{tag}</span>)}
