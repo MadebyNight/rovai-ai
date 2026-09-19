@@ -3,7 +3,7 @@ document_type: ui-component
 authority: notification-attention-presentation
 status: accepted
 target_version: cross-version
-last_updated: 2026-09-07
+last_updated: 2026-09-19
 ---
 
 # 应用内提醒与会话未读
@@ -34,7 +34,9 @@ resolved Approval 的旧 pending signal 必须删除，即使该 Occurrence 仍�
 ## 会话未读点
 
 Camp 行只用小点提示“有新回复”，不显示跨会话总数。小点使用 attention 语义色，并同时通过整行
-`aria-label`、title 和屏幕阅读文本表达“有新回复”，不能只靠颜色。
+`aria-label` 与 title 表达“有新回复”，不能只靠颜色。它位于固定的 12×12px 右侧状态槽内，Desktop / 宽屏 Web
+为 7px，Mobile 为 6px；正在打开或运行时同槽优先显示 loading，未读事实不因此清除，loading 结束后仍按真实状态显示小点。
+状态槽无内容时保持尺寸，左侧不渲染未读占位，状态切换不得移动标题。
 
 Camp Snapshot 加载、后台刷新、停留在设置/记忆/队员页或应用失焦都不能消除小点。只有目标 Camp 已是
 当前“会话”页面、Snapshot identity 匹配、文档可见且窗口拥有焦点时，Renderer 才提交该 Camp 的

@@ -4,14 +4,34 @@ version: v1.59
 lifecycle: current
 authority: version-implementation-plan
 status: in_progress
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # v1.59 实施与验收
 
 范围见[版本概览](README.md)，边界见[统一 Host](../../architecture/unified-rust-host.md)。
-本批增量从 `main` 的 `eb850265` 建立仓库同级工作树 `rovai-ai-mobile-project-start`，分支为
-`rovai/mobile-project-start`。验收只使用隔离 data-dir、Skill Library、MCP config 和浏览器 profile。
+各批次的基线、分支和验收事实按对应章节记录；自动验收只使用隔离 data-dir、Skill Library、MCP config
+和浏览器 profile，不接触日常 App 数据。
+
+## 当前批次：置顶对齐与会话通知
+
+2026-09-19 从 `main` 的 `3436bb9f` 建立分支 `rovai/mission/010`，按侧栏 v2 交互稿统一 Desktop、
+宽屏 Web 与手机的导航层级。项目标题、项目内会话与置顶会话使用同一文本轴；项目内会话只通过组级缩进建立层级，
+不再为提醒状态预留左侧空槽。置顶会话采用更扁、更圆、短尾的无填充对话图标；Desktop/Web 图标槽为 17px，
+手机为不可压缩的 20px，底部“对话”入口继续使用 21px 视觉尺寸，其他导航图标不变。
+
+每行会话始终保留一个 12×12px 右侧状态槽；该尺寸是容器，不是蓝点直径。蓝点与 loading 均在槽内居中，
+loading 优先于未读，空状态仍保留槽宽以避免标题横向跳动。Desktop/Web 蓝点为 7px，手机为 6px；
+按钮可访问名称独立表达“有新回复”“正在打开”或“正在运行”，装饰图标和视觉状态不重复进入可访问树。
+本节取代下文早期手机批次中“未读蓝点位于左侧”的历史描述。
+
+验证通过 `pnpm typecheck`、定向 App/主题 Vitest 209 项、原生 Electron 导航夹具、
+`pnpm test:host-web-mobile` 4 项、`pnpm build:desktop`、macOS arm64 目录包构建以及打包 App 的
+`navigation-windows` 侧栏验收（1440×920、1040×700、日/夜主题、折叠/分页/键盘路径）。同步最新
+`main` 后，Product Contract Fingerprint 的测试期望随已生效的 projection schema 112 更新，不改变合同实现。完整
+`pnpm test` 通过 207 个 Vitest 文件 / 2127 项测试，Node 门禁 324 项通过、2 项既有平台专项跳过。
+真实 Host/Web 与打包 Desktop 验收均使用隔离数据和浏览器/App profile，未启动 Runtime；Chrome 手机视口与组件夹具
+不替代实体手机、软键盘和移动网络验收。
 
 ## 当前批次：Command 文件来源与执行台宽度
 
@@ -344,7 +364,7 @@ Node 317 通过 / 2 个既有平台专项跳过）；执行头像入口与文件
 新增展示上下文与 Web 专用样式，继续复用 BusinessApp、Camp、结构化 Composer、执行与正式管理页；
 不复制示例状态机，不改变统一 Rust Host。原生 Desktop 不启用手机布局。
 
-手机根页为五项底部导航；对话、执行、任务切换不加入返回历史。会话列表连续 44px，未读蓝点位于左侧，
+手机根页为五项底部导航；对话、执行、任务切换不加入返回历史。会话列表连续 44px，当时的未读蓝点位于左侧，
 初始 5 项、每次增加 5 项，Desktop 保留每次增加 10 项。文件预览全屏阅读后返回对话，公共/私聊分别保留草稿。
 输入框 Return 换行，@ 入口复用结构化 Mention，发送继续使用原命令与默认接收逻辑。
 
