@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: test-policy-and-command-routing
-last_updated: 2026-09-16
+last_updated: 2026-09-20
 ---
 
 # 测试与 Smoke Test
@@ -222,8 +222,12 @@ pnpm typecheck
 pnpm skills:test
 pnpm skills:check
 pnpm test
-pnpm test:rust:staged
+cargo test -p rovai-core --lib runtime_discovery::
 ```
+
+Rust 示例对应 `runtime_discovery.rs`。局部修改直接用 Cargo 名称过滤运行相关 owner；涉及共享基础设施时
+扩大范围。同一轮集成只由一个执行者运行完整回归，不在每个 worktree 重复执行。名称过滤减少执行项，
+但同一个 library 测试目标仍需编译；要降低长期编译与进程开销，应合并等价 owner，而不是扩展路径解析器。
 
 `pnpm test` 首先显式执行 `pnpm docs:test`、`pnpm docs:check`、`pnpm skills:test` 和
 `pnpm skills:check`。`docs:test` 覆盖 Manifest 和历史正文篡改、迁移目标缺失/重复、
@@ -240,7 +244,7 @@ DOCS_BASE_REF=<目标分支 base SHA> pnpm docs:check:ci
 `docs:check:ci` 缺少 base SHA 或无法读取 base object 时必须失败，不能退回本地 `origin/main`。
 这些命令不替代其余代码测试。
 
-#### Staged Rust 路由
+#### 兼容 Staged Rust 路由
 
 `pnpm test:rust:staged` 读取 `git diff --cached`，只根据 staged 快照选择 Rust 验证范围：
 
@@ -257,22 +261,25 @@ library，薄 stdio main 不再重复编译这些测试。
 
 Main 专属模块由 staged `src/main.rs` 声明、但未由 staged `src/lib.rs` 导出的模块动态确定。
 脚本使用 NUL 分隔读取路径以支持空格等合法文件名；Git 读取、模块解析或分类失败都会 fail closed
-到全量测试，不会静默跳过。
+到全量测试，不会静默跳过。该入口为既有调用方保留，不再作为日常默认：普通 Library 文件最终仍会
+运行整个 Library，无法替代上面的模块级 Cargo 过滤，也不继续扩展源码解析规则。
 
-`test:rust:workspace-default` 的“workspace”仅指 default features。旧 `test:rust:full` 保留为同一
-范围的兼容 alias，不能据此声称 slow integration、PR gate 或 all-features 已完成。显式范围为：
+`test:rust:workspace-default` 与 `test:rust:pr` 都运行 default-feature workspace；后者是 PR 集成入口。
+`test:rust:full` 运行 all-features workspace，包含 `slow-tests` 与 `legacy-migration-tests`。显式范围为：
 
 ```bash
 pnpm test:rust:workspace-default
 pnpm test:rust:slow
 pnpm test:rust:pr
+pnpm test:rust:full
 ```
+
+`test:rust:slow` 只用于定向诊断 slow owner，不再作为 `test:rust:pr` 的组成部分。
 
 ### PR 快速门禁与手动完整验证
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
 pnpm test:rust:pr
 ```
 
@@ -284,14 +291,13 @@ cargo fmt --all --check
 cargo check --workspace --all-targets
 ```
 
-Clippy、all-features 测试、database smoke 与 Windows x64 原生编译/验证只在手动
+All-features Clippy、测试与 Windows x64 原生编译/验证只在手动
 `.github/workflows/full-check.yml` 中执行；Linux 深度命令为：
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo test -p rovai-core --features slow-tests --lib slow_tests::
+pnpm test:rust:full
 ```
 
 默认 fast suite 保留 parser/serde、纯 policy、幂等冲突、权限、路径与 symlink、安全脱敏、取消和
@@ -307,9 +313,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-所有 feature-gated 测试因此都会在手动完整验证中编译并执行；历史兼容覆盖只是移出 PR 关键路径，未被
-永久禁用。自动与手动 workflow 都使用 Cargo 缓存缩短重复构建，但测试是否通过不依赖缓存命中，也不在
-job 间传递可写 `target` 目录制造顺序依赖。需要验证桌面构建时另行运行：
+所有 feature-gated 测试因此都会在手动完整验证中编译并执行；`--all-features` 已包含 slow tests，
+Full Check 不再用 `slow_tests::` 过滤器重复运行同一批数据库测试。历史兼容覆盖只是移出 PR 关键路径，
+未被永久禁用。自动与手动 workflow 都使用 Cargo 缓存缩短重复构建，但测试是否通过不依赖缓存命中，
+也不在 job 间传递可写 `target` 目录制造顺序依赖。需要验证桌面构建时另行运行：
 
 ```bash
 pnpm build:desktop

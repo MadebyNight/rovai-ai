@@ -104,10 +104,12 @@ For a Pull Request that changes Rust:
 
 ```bash
 cargo fmt --all --check
-cargo check --workspace --all-targets
 pnpm test:rust:pr
-cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+Run a module-filtered Cargo test while iterating. `test:rust:pr` is the one default-feature
+workspace regression for the integration round; the manual Full Check owns all-features Clippy
+and tests.
 
 Before submitting, also run:
 

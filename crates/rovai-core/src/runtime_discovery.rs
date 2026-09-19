@@ -1972,41 +1972,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quick_discovery_does_not_execute_the_runtime_before_version_enrichment() {
-        let directory = env::temp_dir().join(format!("rovai-discovery-layer-{}", Uuid::new_v4()));
-        fs::create_dir_all(&directory).unwrap();
-        let marker = directory.join("executed");
-        let runtime = directory.join("codex");
-        executable(
-            &runtime,
-            &format!(
-                "#!/bin/sh\nprintf ran > '{}'\nprintf 'codex 1.2.3\\n'\n",
-                marker.display()
-            ),
-        );
-        let search = test_search(vec![SearchPathEntry {
-            path: directory.clone(),
-            sources: vec![SearchPathSource::InheritedPath],
-        }]);
-        let mut observation = discover_runtime_path(AdapterKind::CodexCli, &search);
-        assert_eq!(observation.discovery_status, RuntimeDiscoveryStatus::Found);
-        assert!(!marker.exists(), "path discovery must not execute the CLI");
-
-        discover_runtime_version(&mut observation, &search).await;
-        assert_eq!(
-            observation.reported_version.as_deref(),
-            Some("codex 1.2.3"),
-            "version diagnostic: {:?}",
-            observation.diagnostic_code
-        );
-        assert!(
-            marker.exists(),
-            "version enrichment is a separate bounded step"
-        );
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[tokio::test]
     async fn installed_catalog_discovery_runs_only_bounded_identity_commands() {
         let directory = env::temp_dir().join(format!(
             "rovai-discovery-catalog-light-only-{}",
@@ -2018,10 +1983,11 @@ mod tests {
             .into_iter()
             .filter(|kind| *kind != AdapterKind::ZcodeApp)
         {
-            let version = if kind == AdapterKind::CursorAgent {
-                "2026.08.11-e8db854"
-            } else {
-                "1.2.3"
+            let version = match kind {
+                AdapterKind::CodexCli => "codex 1.2.3",
+                AdapterKind::TraeCnCli => "trae 9.9.9",
+                AdapterKind::CursorAgent => "2026.08.11-e8db854",
+                _ => "1.2.3",
             };
             executable(
                 &directory.join(kind.command_name()),
@@ -2037,13 +2003,53 @@ mod tests {
             sources: vec![SearchPathSource::InheritedPath],
         }]);
 
-        for kind in AdapterKind::ALL
+        for (index, kind) in AdapterKind::ALL
             .into_iter()
             .filter(|kind| *kind != AdapterKind::ZcodeApp)
+            .enumerate()
         {
             let mut observation = discover_runtime_path(kind, &search);
+            assert_eq!(
+                observation.discovery_status,
+                RuntimeDiscoveryStatus::Found,
+                "{} path discovery must find the fixture",
+                kind.as_str()
+            );
+            let invocations_before = fs::read_to_string(&marker).unwrap_or_default();
+            assert_eq!(
+                invocations_before.lines().count(),
+                index,
+                "{} path discovery must not execute the CLI",
+                kind.as_str()
+            );
+
             discover_runtime_version(&mut observation, &search).await;
-            assert!(observation.reported_version.is_some());
+            let expected_version = match kind {
+                AdapterKind::CodexCli => "codex 1.2.3",
+                AdapterKind::TraeCnCli => "trae 9.9.9",
+                AdapterKind::CursorAgent => "2026.08.11-e8db854",
+                _ => "1.2.3",
+            };
+            assert_eq!(
+                observation.reported_version.as_deref(),
+                Some(expected_version),
+                "{} version diagnostic: {:?}",
+                kind.as_str(),
+                observation.diagnostic_code
+            );
+            assert_eq!(
+                observation.diagnostic_code,
+                None,
+                "{} light version check must succeed",
+                kind.as_str()
+            );
+            let invocations_after = fs::read_to_string(&marker).unwrap();
+            assert_eq!(
+                invocations_after.lines().count(),
+                index + 1,
+                "{} version enrichment must execute exactly once",
+                kind.as_str()
+            );
         }
 
         let invocations = fs::read_to_string(&marker).unwrap();
@@ -2097,34 +2103,6 @@ mod tests {
                 assert!(runtime_launch_allowed(kind, purpose));
             }
         }
-    }
-
-    #[tokio::test]
-    async fn trae_version_enrichment_runs_the_same_bounded_light_check_as_other_runtimes() {
-        let directory = env::temp_dir().join(format!("rovai-trae-light-{}", Uuid::new_v4()));
-        fs::create_dir_all(&directory).unwrap();
-        let marker = directory.join("executed");
-        let runtime = directory.join("traecli");
-        executable(
-            &runtime,
-            &format!(
-                "#!/bin/sh\nprintf ran > '{}'\nprintf 'trae 9.9.9\\n'\n",
-                marker.display()
-            ),
-        );
-        let search = test_search(vec![SearchPathEntry {
-            path: directory.clone(),
-            sources: vec![SearchPathSource::InheritedPath],
-        }]);
-        let mut observation = discover_runtime_path(AdapterKind::TraeCnCli, &search);
-        discover_runtime_version(&mut observation, &search).await;
-        assert!(
-            marker.exists(),
-            "TRAE light verification must execute --version"
-        );
-        assert_eq!(observation.reported_version.as_deref(), Some("trae 9.9.9"));
-        assert_eq!(observation.diagnostic_code, None);
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
