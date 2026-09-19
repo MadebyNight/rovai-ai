@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { parseRestoreFilePreviewRequest, parseRetentionState } from './file-preview-ipc-input'
+import {
+  parseOpenFilePreviewRequest,
+  parseRestoreFilePreviewRequest,
+  parseRetentionState
+} from './file-preview-ipc-input'
+
+const missionAttachmentRequest = {
+  kind: 'attachment' as const,
+  campId: 'rvcamp_01m1s4cranehs9cdc9r7ayj5d3',
+  locator: {
+    owner: 'mission' as const,
+    campId: 'rvcamp_01m1s4cranehs9cdc9r7ayj5d3',
+    missionId: 'rvm_01m2wq5xn6eg8ama698dbgwyk8',
+    attachmentRefId: '8b85752a-76a5-4b9d-92d8-a70b6285a0d0'
+  }
+}
+
+describe('parseOpenFilePreviewRequest', () => {
+  it('accepts a Mission attachment locator', () => {
+    expect(parseOpenFilePreviewRequest(missionAttachmentRequest)).toEqual(missionAttachmentRequest)
+  })
+})
 
 describe('parseRestoreFilePreviewRequest', () => {
   it.each([
@@ -24,6 +45,7 @@ describe('parseRestoreFilePreviewRequest', () => {
         attachmentRefId: '8b85752a-76a5-4b9d-92d8-a70b6285a0d0'
       }
     },
+    missionAttachmentRequest,
     {
       kind: 'run_evidence',
       campId: 'rvcamp_01m1s4cranehs9cdc9r7ayj5d3',
