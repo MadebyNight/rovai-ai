@@ -4,7 +4,7 @@ authority: renderer-ui-routing
 status: accepted
 design_direction: porcelain-day-steel-night
 target_version: cross-version
-last_updated: 2026-09-07
+last_updated: 2026-09-19
 ---
 
 # Rovai AI UI 规范
@@ -56,7 +56,7 @@ MCP 与 Skills 的列表/详情、导入、启停和拖拽合同见 [Capability 
 
 - [设置 · 远程连接交互稿](host-remote-connection.md)：当前发布隐藏设置菜单，保留同组件交互稿、本机管理、地址发现、令牌重复读取、浏览器连接状态与独立 Server 入口。
 - [Desktop/Web 宽屏对照稿](host-web-parity.md)：阶段 1–3 当前收敛入口，行为差异表、生产组件 fixture 与实际验收边界。
-- [Mobile WebUI](host-web-mobile.md)：已接入实际 Web 入口，复用正式业务页面；底部导航、左侧蓝点、连续 Run、六种计划与手机日期/时间面板。
+- [Mobile WebUI](host-web-mobile.md)：已接入实际 Web 入口，复用正式业务页面；底部导航、右侧统一状态槽、连续 Run、六种计划与手机日期/时间面板。
   Server 提供检查、下载与安装重启，Desktop 托管只读版本说明；macOS Chrome 自动验收与实体手机待验项目分别记录。
 
 ## 平台差异

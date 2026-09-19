@@ -22,7 +22,7 @@ html[data-mobile-web="true"] .app-shell {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); background: var(--mobile-page);
 }
 html[data-mobile-web="true"] :is(.navigation-browser-control, .navigation-resize-handle, .window-drag-strip, .unified-sidebar-drag, .unified-brand, .unified-primary-nav, .conversation-jump, .sidebar-settings-entry) { display: none; }
-html[data-mobile-web="true"] .unified-sidebar { display: none; width: 100%; flex: 1; min-height: 0; padding: 0; border: 0; background: var(--mobile-page); }
+html[data-mobile-web="true"] .unified-sidebar { --nav-child-indent: 28px; --nav-unread-size: 6px; display: none; width: 100%; flex: 1; min-height: 0; padding: 0; border: 0; background: var(--mobile-page); }
 html[data-mobile-web="true"] .app-shell:is([data-mobile-view="compose"], [data-mobile-settings-list]) > .unified-sidebar { display: flex; }
 html[data-mobile-web="true"] .content { width: 100%; max-width: none; flex: 1; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; background: var(--mobile-page); }
 html[data-mobile-web="true"] .content.compose-content { display: contents; }
@@ -37,17 +37,11 @@ html[data-mobile-web="true"] .mobile-icon-button:disabled { opacity: .4; }
 html[data-mobile-web="true"] .navigation-scroll { flex: 1; min-height: 0; margin-right: 0; padding: 0 20px 12px; overscroll-behavior: contain; }
 html[data-mobile-web="true"] :is(.camp-nav-row, .camp-nav-open) { min-height: 44px; height: 44px; margin: 0; border: 0; }
 html[data-mobile-web="true"] .camp-nav-row { margin-inline: -12px; }
-html[data-mobile-web="true"] .camp-nav-open { position: relative; gap: 8px; padding: 0 12px 0 40px; font-size: 14px; }
+html[data-mobile-web="true"] .camp-nav-open { position: relative; gap: 8px; padding: 0 12px; font-size: 14px; }
 html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row > .camp-nav-open { padding-left: 12px; }
-html[data-mobile-web="true"] .camp-nav-open .camp-marker-slot {
-  position: absolute; top: 50%; left: 30px; display: flex; width: 6px; height: 6px;
-  align-items: center; justify-content: center; transform: translateY(-50%);
-}
-html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row .camp-marker-slot { left: 2px; }
-html[data-mobile-web="true"] .camp-marker-slot .task-dot { display: block; width: 6px; height: 6px; flex: none; margin: 0; }
-html[data-mobile-web="true"] .pinned-camp-icon { display: inline-flex; flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
-html[data-mobile-web="true"] .pinned-camp-icon > svg { width: 20px; height: 20px; }
-html[data-mobile-web="true"] :is(.camp-marker-unread_completed, .mobile-unread-dot) { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mobile-unread); }
+html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row > .camp-nav-open > .pinned-camp-icon { display: inline-flex; flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
+html[data-mobile-web="true"] .pinned-navigation > .camp-nav-row > .camp-nav-open > .pinned-camp-icon > svg { width: 20px; height: 20px; flex: none; }
+html[data-mobile-web="true"] .mobile-unread-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mobile-unread); }
 html[data-mobile-web="true"] :is(.camp-menu-trigger, .section-create-button, .project-create-button, .sidebar-group-create) { opacity: 1; min-width: 44px; min-height: 44px; }
 html[data-mobile-web="true"] .navigation-section-title { min-height: 36px; margin: 0 0 3px; padding: 0; color: var(--ink); }
 html[data-mobile-web="true"] .navigation-section-title > span { padding: 0; font-size: 15px; font-weight: 600; }
@@ -59,7 +53,7 @@ html[data-mobile-web="true"] .project-heading-row { min-height: 48px; grid-templ
 html[data-mobile-web="true"] .project-heading-row.current-project { background: transparent; }
 html[data-mobile-web="true"] .project-select-row { min-height: 48px; gap: 8px; padding: 0; color: var(--ink); font-size: 14px; font-weight: 500; }
 html[data-mobile-web="true"] .project-folder-glyph { width: 20px; height: 20px; flex: none; color: var(--muted); }
-html[data-mobile-web="true"] .camp-group-children { padding-left: 0; }
+html[data-mobile-web="true"] .camp-group-children { padding-left: var(--nav-child-indent); }
 html[data-mobile-web="true"] :is(.group-create-button, .group-menu-trigger, .show-more-camps, .collapse-camps) { min-width: 44px; min-height: 44px; opacity: 1; }
 html[data-mobile-web="true"] .group-create-button { grid-column: 2; width: 48px; height: 48px; padding: 12px; color: var(--ink); border-radius: 10px; pointer-events: auto; }
 html[data-mobile-web="true"] .group-create-button > svg { width: 24px; height: 24px; }

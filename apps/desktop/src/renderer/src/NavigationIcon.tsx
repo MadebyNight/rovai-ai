@@ -42,7 +42,7 @@ export function NavigationIcon({ name }: { name: NavigationIconName }): React.JS
 function navigationIconPaths(name: NavigationIconName): React.JSX.Element {
   switch (name) {
     case 'messages':
-      return <path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8A8.5 8.5 0 0 1 12.5 20a8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z" />
+      return <path d="M8.1 4.75h7.8c3.13 0 5.35 2.15 5.35 5.1v2.3c0 2.95-2.22 5.1-5.35 5.1H9.45l-3.68 2.14c-.39.23-.87-.05-.87-.5v-2.28a4.94 4.94 0 0 1-2.15-4.16v-2.6c0-2.95 2.22-5.1 5.35-5.1Z" />
     case 'circle-plus':
       return <><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12 8v8" /></>
     case 'search':
