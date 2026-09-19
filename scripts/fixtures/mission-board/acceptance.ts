@@ -414,8 +414,11 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const cleanupDialog = document.querySelector<HTMLElement>('.mission-worktree-cleanup-dialog')!
   check(cleanupDialog.textContent?.includes('将删除此使命的 Worktree 和本地分支。') && cleanupDialog.textContent?.includes('/workspace/rovai-ai-mission-018') && cleanupDialog.textContent?.includes('rovai/mission/018'), 'Cleanup dialog stays concise and identifies the exact path and branch')
   check(button('清理').classList.contains('compact-primary') && !button('清理').classList.contains('danger'), 'Cleanup uses the neutral primary action')
+  qa.failNextMissionRefresh()
   button('清理').click()
-  await until(() => !document.querySelector('.mission-worktree-cleanup-dialog') && cleanupMission.workspaceResourcesPresent === false, 'Explicit cleanup completes and refreshes the Mission projection')
+  await until(() => !document.querySelector('.mission-worktree-cleanup-dialog') && qa.missionRefreshPending(), 'Successful cleanup closes before its background refresh finishes')
+  await until(() => document.querySelector('.app-toast')?.textContent?.includes('使命 Worktree 已清理，但信息刷新失败'), 'A later refresh failure is reported separately from successful cleanup')
+  await until(() => cleanupMission.workspaceResourcesPresent === false, 'Explicit cleanup refreshes the Mission projection')
   check(qa.calls.some((call:any) => call.method === 'missions.workspace.cleanup' && call.p.command?.missionId === cleanupMission.missionId), 'Cleanup uses the authoritative Mission workspace command')
   const refreshedCleanupCard = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes(cleanupMission.title))!
   refreshedCleanupCard.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: refreshedCleanupCard.getBoundingClientRect().left + 20, clientY: refreshedCleanupCard.getBoundingClientRect().top + 20 }))

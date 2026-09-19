@@ -46,15 +46,20 @@ export function useMissions(client: CampClient, enabled: boolean) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const generation = useRef(0)
-  const refresh = useCallback(async () => {
+  const load = useCallback(async (throwOnError: boolean) => {
     if (!enabled) return
     const current = ++generation.current
     try {
       const next = await client.request<MissionRecord[]>('missions.list')
       if (current === generation.current) { setMissions(next); setError(null) }
-    } catch (error) { if (current === generation.current) setError(missionError(error)) }
+    } catch (error) {
+      if (current === generation.current) setError(missionError(error))
+      if (throwOnError) throw error
+    }
     finally { if (current === generation.current) setLoading(false) }
   }, [client, enabled])
+  const refresh = useCallback(() => load(false), [load])
+  const refreshOrThrow = useCallback(() => load(true), [load])
   useEffect(() => {
     if (!enabled) return
     void refresh()
@@ -71,5 +76,5 @@ export function useMissions(client: CampClient, enabled: boolean) {
     document.addEventListener('visibilitychange', onFocus)
     return () => { ++generation.current; if (timer) clearTimeout(timer); clearInterval(poll); event?.(); authorized?.(); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus) }
   }, [client, enabled, refresh])
-  return { missions, error, loading, refresh }
+  return { missions, error, loading, refresh, refreshOrThrow }
 }

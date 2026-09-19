@@ -2,7 +2,7 @@
 document_type: architecture
 authority: mission-architecture
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Missions
@@ -21,7 +21,10 @@ existing association; a later preparing phase restores the branch/worktree accor
 `MissionGit` reads the source checkout's current local branch and `HEAD` when the first admitted Run enters
 preparing, and again only when both previously managed Git resources have been removed. It uses the resolved
 commit, the Host-resolved Git executable and verified ownership to create, restore or clean worktrees. Cleanup
-removes the verified worktree before conditionally deleting the local Mission branch at its captured OID.
+verifies the owned resource set once, persists the branch OID on the first attempt, and removes the verified
+worktree before checking branch use and conditionally deleting the local Mission branch at that OID. Its two
+durable checkpoints let retries skip the completed worktree step and reuse the saved OID; an absent resource is
+idempotent without widening cleanup beyond the verified path, registration or staging root.
 It computes cumulative changes against a fixed initial commit with an independent temporary index. Opening
 the cumulative-change browser establishes a bounded, expiring process-local snapshot containing the file-ID
 to old/new-path mapping and that index. A single-file request resolves only through this snapshot and runs a

@@ -2,7 +2,7 @@
 document_type: ui-contract
 authority: mission-renderer-presentation
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Mission board
@@ -129,6 +129,9 @@ The existing card/list right-click menu shows `清理使命 Worktree` only from 
 no conversation-header ellipsis or retained-workspace page. Its dialog states that it removes the Worktree and
 local branch, lists the two identifiers, and uses only neutral `取消` / `清理` actions. A cleanup failure keeps
 the Mission and returns to the same explicit retry path; delete-with-cleanup does not delete the Mission first.
+After the cleanup command succeeds, the dialog closes without waiting for the Mission list or current Camp to
+refresh. Those two projections refresh asynchronously; a refresh failure uses the ordinary notification path
+and explicitly says cleanup already succeeded, rather than reopening or placing an error inside the dialog.
 The legacy orphan-cleanup notice remains only for pre-v3 rows already pending or failed; resources retained by
 the v3 delete choice never enter that route or appear there.
 Each explicit source-link click positions and highlights its message once. After presentation, clear that

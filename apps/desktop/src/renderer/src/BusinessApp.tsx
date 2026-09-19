@@ -3776,6 +3776,12 @@ export function BusinessApp({
     await missionList.refresh()
     if (activeCampIdRef.current === campId) await refreshActiveCampSnapshot(campId)
   }
+  const refreshMissionAfterWorkspaceCleanup = async (campId: string): Promise<void> => {
+    await Promise.all([
+      missionList.refreshOrThrow(),
+      activeCampIdRef.current === campId ? refreshActiveCampSnapshot(campId) : Promise.resolve()
+    ])
+  }
   const onMissionDeleted = async (campId: string): Promise<void> => {
     forgetFilePreviewSession(campId, activeCampIdRef.current === campId)
     campSnapshotCache.current.delete(campId)
@@ -3965,7 +3971,7 @@ export function BusinessApp({
     <MobileLayoutProvider value={mobile}>
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
       missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify}/> : null}>
-    <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onDeleted={onMissionDeleted} onError={notifyError}>
+    <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onWorkspaceCleaned={refreshMissionAfterWorkspaceCleanup} onDeleted={onMissionDeleted} onError={notifyError}>
     <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
         platform={client.platform}
