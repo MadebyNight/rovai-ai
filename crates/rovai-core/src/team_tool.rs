@@ -48,7 +48,8 @@ pub const TEAM_CREATE_TASK_TOOL_NAME: &str = "team.create_task";
 pub const TEAM_GET_TASK_TOOL_NAME: &str = "team.get_task";
 pub const TEAM_UPDATE_TASK_TOOL_NAME: &str = "team.update_task";
 pub const TEAM_LIST_TASKS_TOOL_NAME: &str = "team.list_tasks";
-pub const TEAM_TOOL_NAMES: [&str; 25] = [
+pub const TEAM_TOOL_NAMES: [&str; 26] = [
+    "mission.list",
     "mission.get",
     "mission.update",
     "mission.status",

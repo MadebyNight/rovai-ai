@@ -4971,7 +4971,7 @@ fn persist_single_chat_success(
           AND invocation_kind = 'single_chat'
           AND response_delivery = 'conversation_message'
           AND operation_policy = 'single_chat_v1'
-          AND operation_policy_version = 1
+          AND operation_policy_version IN (1, 2)
           AND destination_conversation_id = ?8
         "#,
         params![
@@ -5367,9 +5367,10 @@ fn validate_terminal_target(
         && (target.conversation_kind != "single_chat"
             || target.conversation_ended_at.is_some()
             || target.response_delivery != crate::single_chat::SINGLE_CHAT_RESPONSE_DELIVERY
-            || target.operation_policy != crate::single_chat::SINGLE_CHAT_OPERATION_POLICY
-            || target.operation_policy_version
-                != crate::single_chat::SINGLE_CHAT_OPERATION_POLICY_VERSION
+            || !crate::single_chat::single_chat_operation_policy_is_supported(
+                &target.operation_policy,
+                target.operation_policy_version,
+            )
             || target.destination_conversation_id.as_deref()
                 != Some(target.conversation_id.as_str()))
     {

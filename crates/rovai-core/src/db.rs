@@ -283,8 +283,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.60";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 114;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.61";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 115;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -723,6 +723,7 @@ struct CurrentMigrationState {
     v162: bool,
     v163: bool,
     v164: bool,
+    v165: bool,
 }
 
 impl CurrentMigrationState {
@@ -744,11 +745,19 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v165 {
+            let mut previous = *self;
+            previous.v165 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v164
+                && previous.admits("v1.60", 114, classifier);
+        }
         if self.v164 {
             let mut previous = *self;
             previous.v164 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
-                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            return contract == "v1.60"
+                && schema == 114
                 && self.v163
                 && previous.admits("v1.60", 113, classifier);
         }
@@ -2999,6 +3008,8 @@ pub(crate) fn classify_database_contract(
         && camp_message_agent_run_v163_schema_matches(connection)?;
     let agent_run_notification_schema_matches =
         migrations.v164 && agent_run_notification_v164_schema_matches(connection)?;
+    let single_chat_operation_policy_schema_matches =
+        migrations.v165 && single_chat_operation_policy_v165_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
         &marker,
         migrations,
@@ -3066,6 +3077,7 @@ pub(crate) fn classify_database_contract(
             && (!mission_workspace_lifecycle_schema_matches
                 || !camp_message_agent_run_schema_matches))
         || (migrations.v164 && !agent_run_notification_schema_matches)
+        || (migrations.v165 && !single_chat_operation_policy_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3323,6 +3335,23 @@ fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqli
         && occurrence_schema.contains("agent_run_id = source_id")
         && satisfaction_trigger.contains("occurrence.source_type = 'agent_run'")
         && satisfaction_trigger.contains("agent_run.anchor_message_id <> NEW.id"))
+}
+
+fn single_chat_operation_policy_v165_schema_matches(
+    connection: &Connection,
+) -> rusqlite::Result<bool> {
+    let agent_run_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'agent_run'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(agent_run_schema.contains("CHECK(operation_policy_version IN (1, 2))")
+        && agent_run_schema.contains(
+            "operation_policy = 'single_chat_v1'\n                        AND operation_policy_version IN (1, 2)",
+        )
+        && agent_run_schema.contains(
+            "operation_policy = 'camp_member_v1'\n                        AND operation_policy_version = 1",
+        ))
 }
 
 fn private_client_draft_v154_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -4126,7 +4155,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 161),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 162),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 163),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 164)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 164),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 165)
         "#,
         [],
         |row| {
@@ -4226,6 +4256,7 @@ fn load_current_migration_state(
                 v162: row.get(92)?,
                 v163: row.get(93)?,
                 v164: row.get(94)?,
+                v165: row.get(95)?,
             })
         },
     )
@@ -7207,6 +7238,12 @@ impl Database {
             if !self.schema_migration_applied(164)? {
                 migration_step!("migration_164", self.migrate_agent_run_notification_v164());
             }
+            if !self.schema_migration_applied(165)? {
+                migration_step!(
+                    "migration_165",
+                    self.migrate_single_chat_operation_policy_v165()
+                );
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -7896,6 +7933,12 @@ impl Database {
         }
         if !self.schema_migration_applied(164)? {
             migration_step!("migration_164", self.migrate_agent_run_notification_v164());
+        }
+        if !self.schema_migration_applied(165)? {
+            migration_step!(
+                "migration_165",
+                self.migrate_single_chat_operation_policy_v165()
+            );
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -25792,14 +25835,124 @@ impl Database {
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.60"
+                            && marker.projection_schema_version == 114
                 ),
-                "AgentRun Notification migration failed current schema admission"
+                "AgentRun Notification migration failed source schema admission"
             );
             validate_migration_foreign_keys(
                 &tx,
                 &["notification_episode", "notification_occurrence"],
             )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
+        result?;
+        foreign_keys_result?;
+        Ok(())
+    }
+
+    fn migrate_single_chat_operation_policy_v165(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.60"
+                            && marker.projection_schema_version == 114
+                ),
+                "Single Chat operation-policy migration requires the exact v1.60/schema 114 source"
+            );
+
+            let source_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_run'",
+                [],
+                |row| row.get(0),
+            )?;
+            let objects = migration_schema_objects(&tx, "agent_run", true)?;
+            let target_schema = if source_schema.contains("CREATE TABLE \"agent_run\"") {
+                source_schema.replacen(
+                    "CREATE TABLE \"agent_run\"",
+                    "CREATE TABLE agent_run_v165",
+                    1,
+                )
+            } else {
+                source_schema.replacen("CREATE TABLE agent_run", "CREATE TABLE agent_run_v165", 1)
+            };
+            let target_schema = target_schema
+                .replacen(
+                    "CHECK(operation_policy_version = 1)",
+                    "CHECK(operation_policy_version IN (1, 2))",
+                    1,
+                )
+                .replacen(
+                    "AND operation_policy = 'single_chat_v1'\n                        AND destination_conversation_id = conversation_id",
+                    "AND operation_policy = 'single_chat_v1'\n                        AND operation_policy_version IN (1, 2)\n                        AND destination_conversation_id = conversation_id",
+                    1,
+                )
+                .replacen(
+                    "AND operation_policy = 'camp_member_v1'\n                        AND destination_conversation_id IS NULL",
+                    "AND operation_policy = 'camp_member_v1'\n                        AND operation_policy_version = 1\n                        AND destination_conversation_id IS NULL",
+                    1,
+                );
+            anyhow::ensure!(
+                target_schema.contains("CREATE TABLE agent_run_v165")
+                    && target_schema.contains("CHECK(operation_policy_version IN (1, 2))")
+                    && target_schema.contains(
+                        "operation_policy = 'single_chat_v1'\n                        AND operation_policy_version IN (1, 2)"
+                    )
+                    && target_schema.contains(
+                        "operation_policy = 'camp_member_v1'\n                        AND operation_policy_version = 1"
+                    ),
+                "v165 could not extend the Single Chat operation-policy schema"
+            );
+            tx.execute_batch(&target_schema)
+                .context("v165 failed to create the replacement AgentRun table")?;
+            let columns = table_columns(&tx, "agent_run")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &objects)?;
+            tx.execute_batch(&format!(
+                r#"
+                INSERT INTO agent_run_v165({columns}) SELECT {columns} FROM agent_run;
+                DROP TABLE agent_run;
+                ALTER TABLE agent_run_v165 RENAME TO agent_run;
+                "#,
+            ))
+            .context("v165 failed to replace the AgentRun table")?;
+            restore_rebuild_schema_objects(&tx, "agent_run", objects)
+                .context("v165 failed to restore AgentRun indexes or triggers")?;
+
+            tx.execute_batch(
+                r#"
+                INSERT INTO schema_migration(version, applied_at)
+                VALUES (165, datetime('now'));
+                UPDATE rovai_data_contract
+                SET contract_version = 'v1.61', projection_schema_version = 115,
+                    reset_reason = NULL, updated_at = datetime('now')
+                WHERE singleton = 1;
+                "#,
+            )?;
+            anyhow::ensure!(
+                single_chat_operation_policy_v165_schema_matches(&tx)?,
+                "Single Chat operation-policy migration did not create the required schema"
+            );
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "Single Chat operation-policy migration failed current schema admission"
+            );
+            validate_migration_foreign_keys(&tx, &["agent_run"])?;
             tx.commit()?;
             Ok(())
         })();
@@ -31024,7 +31177,89 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v164_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=165)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    tx.execute(
+        "UPDATE agent_run SET operation_policy_version=1 WHERE operation_policy_version=2",
+        [],
+    )
+    .unwrap();
+    let source_schema: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_run'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let objects = migration_schema_objects(&tx, "agent_run", true).unwrap();
+    let target_schema = if source_schema.contains("CREATE TABLE \"agent_run\"") {
+        source_schema.replacen(
+            "CREATE TABLE \"agent_run\"",
+            "CREATE TABLE agent_run_v164",
+            1,
+        )
+    } else {
+        source_schema.replacen("CREATE TABLE agent_run", "CREATE TABLE agent_run_v164", 1)
+    };
+    let target_schema = target_schema
+        .replacen(
+            "CHECK(operation_policy_version IN (1, 2))",
+            "CHECK(operation_policy_version = 1)",
+            1,
+        )
+        .replacen(
+            "AND operation_policy = 'single_chat_v1'\n                        AND operation_policy_version IN (1, 2)\n                        AND destination_conversation_id = conversation_id",
+            "AND operation_policy = 'single_chat_v1'\n                        AND destination_conversation_id = conversation_id",
+            1,
+        )
+        .replacen(
+            "AND operation_policy = 'camp_member_v1'\n                        AND operation_policy_version = 1\n                        AND destination_conversation_id IS NULL",
+            "AND operation_policy = 'camp_member_v1'\n                        AND destination_conversation_id IS NULL",
+            1,
+        );
+    assert!(target_schema.contains("CREATE TABLE agent_run_v164"));
+    assert!(target_schema.contains("CHECK(operation_policy_version = 1)"));
+    tx.execute_batch(&target_schema).unwrap();
+    let columns = table_columns(&tx, "agent_run")
+        .unwrap()
+        .into_iter()
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    drop_rebuild_triggers(&tx, &objects).unwrap();
+    tx.execute_batch(&format!(
+        "INSERT INTO agent_run_v164({columns}) SELECT {columns} FROM agent_run; \
+         DROP TABLE agent_run; \
+         ALTER TABLE agent_run_v164 RENAME TO agent_run;"
+    ))
+    .unwrap();
+    restore_rebuild_schema_objects(&tx, "agent_run", objects).unwrap();
+    tx.execute_batch(
+        "DELETE FROM schema_migration WHERE version=165; \
+         UPDATE rovai_data_contract \
+         SET contract_version='v1.60',projection_schema_version=114 WHERE singleton=1;",
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v163_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v164_source_for_test(connection);
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=164)",
@@ -34670,6 +34905,35 @@ mod tests {
     }
 
     #[test]
+    fn v165_upgrades_and_admits_the_single_chat_operation_policy() {
+        let directory = std::env::temp_dir().join(format!(
+            "rovai-v165-single-chat-operation-policy-{}",
+            Uuid::new_v4()
+        ));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        assert!(single_chat_operation_policy_v165_schema_matches(database.connection()).unwrap());
+
+        downgrade_current_schema_to_v164_source_for_test(database.connection());
+        assert!(!single_chat_operation_policy_v165_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.60"
+                    && marker.projection_schema_version == 114
+        ));
+
+        database
+            .migrate_single_chat_operation_policy_v165()
+            .unwrap();
+        assert!(database.schema_migration_applied(165).unwrap());
+        assert!(single_chat_operation_policy_v165_schema_matches(database.connection()).unwrap());
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn v163_converges_the_pushed_delivery_first_v162_lineage() {
         let directory = std::env::temp_dir().join(format!(
             "rovai-v163-delivery-first-v162-convergence-{}",
@@ -34713,6 +34977,9 @@ mod tests {
         assert!(database.schema_migration_applied(163).unwrap());
         assert!(mission_details::v162_schema_matches(database.connection()).unwrap());
         database.migrate_agent_run_notification_v164().unwrap();
+        database
+            .migrate_single_chat_operation_policy_v165()
+            .unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -34763,6 +35030,9 @@ mod tests {
         database.migrate_camp_message_agent_run_v163().unwrap();
         assert!(camp_message_agent_run_v163_schema_matches(database.connection()).unwrap());
         database.migrate_agent_run_notification_v164().unwrap();
+        database
+            .migrate_single_chat_operation_policy_v165()
+            .unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -35248,6 +35518,7 @@ mod tests {
             v162: version >= 162,
             v163: version >= 163,
             v164: version >= 164,
+            v165: version >= 165,
         }
     }
 
@@ -35397,15 +35668,21 @@ mod tests {
             ),
             (
                 "v1.60/schema 113 before AgentRun notifications",
-                CURRENT_DATA_CONTRACT_VERSION,
+                "v1.60",
                 113,
                 163,
+            ),
+            (
+                "v1.60/schema 114 before Single Chat operation policy",
+                "v1.60",
+                114,
+                164,
             ),
             (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                164,
+                165,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -35877,7 +36154,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(164);
+        let current = migration_state_through(165);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -36331,7 +36608,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(164));
+        assert_eq!(state, migration_state_through(165));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -37053,6 +37330,10 @@ mod tests {
         ));
         database.migrate_agent_run_notification_v164().unwrap();
         assert!(database.schema_migration_applied(164).unwrap());
+        database
+            .migrate_single_chat_operation_policy_v165()
+            .unwrap();
+        assert!(database.schema_migration_applied(165).unwrap());
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)

@@ -656,6 +656,34 @@
       "revisionId": "revision_123"
     }
   },
+  "mission.list": {
+    "canonicalResult": {
+      "missions": [
+        {
+          "missionId": "rvm_example",
+          "campId": "rvcamp_example",
+          "title": "使命",
+          "status": "in_progress",
+          "updatedAt": "2026-09-19T00:00:00Z"
+        }
+      ],
+      "nextCursor": null,
+      "hasMore": false
+    },
+    "agentOutput": {
+      "missions": [
+        {
+          "missionId": "rvm_example",
+          "campId": "rvcamp_example",
+          "title": "使命",
+          "status": "in_progress",
+          "updatedAt": "2026-09-19T00:00:00Z"
+        }
+      ],
+      "nextCursor": null,
+      "hasMore": false
+    }
+  },
   "mission.get": {
     "canonicalResult": {
       "missionId": "rvm_example",
@@ -663,7 +691,26 @@
       "description": "完成目录导航",
       "status": "needs_you",
       "sourceMessageId": "message-1",
-      "attachments": ["/workspace/requirements.pdf", "/workspace/reference"]
+      "attachments": [
+        {
+          "attachmentId": "attachment-file",
+          "name": "requirements.pdf",
+          "kind": "file",
+          "fileCount": 1,
+          "mediaType": "application/pdf",
+          "byteSize": 42,
+          "path": "/workspace/requirements.pdf"
+        },
+        {
+          "attachmentId": "attachment-directory",
+          "name": "reference",
+          "kind": "directory",
+          "fileCount": null,
+          "mediaType": null,
+          "byteSize": null,
+          "path": "/workspace/reference"
+        }
+      ]
     },
     "agentOutput": {
       "missionId": "rvm_example",
@@ -671,7 +718,26 @@
       "description": "完成目录导航",
       "status": "needs_you",
       "sourceMessageId": "message-1",
-      "attachments": ["/workspace/requirements.pdf", "/workspace/reference"]
+      "attachments": [
+        {
+          "attachmentId": "attachment-file",
+          "name": "requirements.pdf",
+          "kind": "file",
+          "fileCount": 1,
+          "mediaType": "application/pdf",
+          "byteSize": 42,
+          "path": "/workspace/requirements.pdf"
+        },
+        {
+          "attachmentId": "attachment-directory",
+          "name": "reference",
+          "kind": "directory",
+          "fileCount": null,
+          "mediaType": null,
+          "byteSize": null,
+          "path": "/workspace/reference"
+        }
+      ]
     }
   },
   "mission.update": {

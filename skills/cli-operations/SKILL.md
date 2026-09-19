@@ -15,7 +15,7 @@ description: 当不确定当前工作应使用 CampMessage、持久 Task、Camp/
 先判断用户需要留下什么领域事实：
 
 - Camp 中可见的答复、进展说明、问题或一次性协作消息：选择 CampMessage。
-- 当前 Camp 的使命定义或整体状态：选择 Mission。
+- 查找或读取使命定义，或修改当前使命内容与整体状态：选择 Mission。
 - 当前 Default Lead 要把同一主题并行交给多个成员：选择一条带多个 `--to` 的普通 CampMessage；成员回复分别进入发起者的普通队列。
 - 跨 AgentRun 仍需追踪、可独立交接和验收的责任：选择 Task。
 - 查找 Camp、消息或稳定 ID 对应的历史事实：选择 Camp/History 读取。

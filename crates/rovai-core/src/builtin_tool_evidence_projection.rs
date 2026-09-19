@@ -86,7 +86,15 @@ pub fn project_builtin_tool_invocation(
 fn project_input(operation: &str, input: &Value) -> Result<Value> {
     let mut projected = Map::new();
     match operation {
-        "mission.get" => {}
+        "mission.list" => {
+            insert_query(&mut projected, input.get("query"));
+            insert_enum(&mut projected, "status", input.get("status"));
+            insert_i64(&mut projected, "limit", input.get("limit"));
+            insert_opaque_cursor(&mut projected, input.get("cursor"));
+        }
+        "mission.get" => {
+            insert_identifier(&mut projected, "missionId", input.get("missionId"));
+        }
         "mission.update" => {
             insert_semantic_text(&mut projected, "title", input.get("title"));
             insert_semantic_text(&mut projected, "description", input.get("description"));
@@ -328,6 +336,20 @@ fn project_memory_mutation_input(projected: &mut Map<String, Value>, input: &Val
 fn project_result(operation: &str, result: &Value) -> Result<Value> {
     let mut projected = Map::new();
     match operation {
+        "mission.list" => {
+            let missions = project_object_array(result.get("missions"), |item| {
+                let mut value = Map::new();
+                insert_identifier(&mut value, "missionId", item.get("missionId"));
+                insert_identifier(&mut value, "campId", item.get("campId"));
+                insert_enum(&mut value, "status", item.get("status"));
+                Value::Object(value)
+            });
+            projected.insert("missions".to_string(), Value::Array(missions.values));
+            projected.insert("missionCount".to_string(), json!(missions.total));
+            projected.insert("missionsTruncated".to_string(), json!(missions.truncated));
+            insert_bool(&mut projected, "hasMore", result.get("hasMore"));
+            insert_cursor_facts(&mut projected, result.get("nextCursor"));
+        }
         "mission.get" => {
             insert_identifier(&mut projected, "missionId", result.get("missionId"));
             insert_semantic_text(&mut projected, "title", result.get("title"));
@@ -845,16 +867,25 @@ mod tests {
     fn mission_get_evidence_omits_attachment_source_paths() {
         let projected = projection(
             "mission.get",
-            json!({}),
+            json!({"missionId": "rvm_example"}),
             json!({
                 "missionId": "rvm_example",
                 "title": "使命",
                 "description": "读取当前定义",
                 "status": "in_progress",
                 "sourceMessageId": null,
-                "attachments": ["/private/work/requirements.pdf", "/private/work/reference"]
+                "attachments": [{
+                    "attachmentId": "attachment_1",
+                    "name": "requirements.pdf",
+                    "kind": "file",
+                    "fileCount": 1,
+                    "mediaType": "application/pdf",
+                    "byteSize": 42,
+                    "path": "/private/work/requirements.pdf"
+                }]
             }),
         );
+        assert_eq!(projected["canonicalInput"]["missionId"], "rvm_example");
         assert_eq!(projected["canonicalResult"]["missionId"], "rvm_example");
         assert_eq!(projected["canonicalResult"]["title"], "使命");
         assert!(projected["canonicalResult"].get("attachments").is_none());

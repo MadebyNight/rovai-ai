@@ -397,13 +397,13 @@ Conversation；读到不再满足这两个条件的 terminal Snapshot 后立即�
 “结束”在默认情况下打开危险确认 Dialog。说明必须为“这段对话将被删除且无法回复。”，按钮为“取消 / 结束”，
 并提供“不再询问”复选框；选择后只把该确认偏好保存在本机。结束成功立即从产品 surface 移除该 transcript，之后与
 同一队员发起单聊显示新的空白 Conversation。具体 ended/审计保留、取消和迟到事件行为由
-[Single Chat v5](../../contracts/single-chat-v5.md)拥有，Renderer 不从旧 Runtime 事件恢复正文。
+[Single Chat v6](../../contracts/single-chat-v6.md)拥有，Renderer 不从旧 Runtime 事件恢复正文。
 
 panel 保留明确的收起按钮与 `Esc`，对象菜单和确认 Dialog 打开时 `Esc` 先关闭最上层浮层。选择器、Disclosure、停止、
 结束和发送均需可键盘到达，不添加额外焦点框；spinner 有文本或可访问名称。窄窗口中 panel 以会话区宽度为上限，
 不能遮住全局侧栏或溢出可视区；reduced motion 关闭非必要位移和旋转动画但保留状态变化。
 
-领域、权限与输出路由见 [Single Chat v5](../../contracts/single-chat-v5.md)，组件数据流见
+领域、权限与输出路由见 [Single Chat v6](../../contracts/single-chat-v6.md)，组件数据流见
 [Single Chat Architecture](../../architecture/single-chat.md)。
 
 ## Camp 执行过程

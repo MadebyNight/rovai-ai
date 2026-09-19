@@ -503,6 +503,9 @@ mod tests {
                     && marker.projection_schema_version == 113
         ));
         database.migrate_agent_run_notification_v164().unwrap();
+        database
+            .migrate_single_chat_operation_policy_v165()
+            .unwrap();
         assert!(matches!(
             classify_database_contract(database.connection()).unwrap(),
             DatabaseContractClassification::Current(_)

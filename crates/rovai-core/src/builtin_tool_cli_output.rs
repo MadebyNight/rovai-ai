@@ -105,6 +105,7 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
         | "memory.search"
         | "memory.read"
         | "single_chat.history"
+        | "mission.list"
         | "mission.get"
         | "mission.update"
         | "mission.status"
@@ -223,6 +224,7 @@ fn project_success(operation: &str, result: Value) -> Result<Value> {
         | "memory.search"
         | "memory.read"
         | "single_chat.history"
+        | "mission.list"
         | "mission.get"
         | "mission.update"
         | "mission.status"
@@ -628,6 +630,23 @@ mod tests {
             .is_err()
         );
 
+        let mission_list_schema = agent_output_schema("mission.list").unwrap();
+        validate_schema(
+            &json!({
+                "missions": [{
+                    "missionId": "rvm_example",
+                    "campId": "rvcamp_example",
+                    "title": "使命",
+                    "status": "in_progress",
+                    "updatedAt": "2026-09-19T00:00:00Z"
+                }],
+                "nextCursor": null,
+                "hasMore": false
+            }),
+            &mission_list_schema,
+        )
+        .unwrap();
+
         let mission_schema = agent_output_schema("mission.get").unwrap();
         let mission = json!({
             "missionId": "rvm_example",
@@ -635,7 +654,15 @@ mod tests {
             "description": "读取当前定义",
             "status": "in_progress",
             "sourceMessageId": null,
-            "attachments": ["/workspace/requirements.pdf", "/workspace/reference"]
+            "attachments": [{
+                "attachmentId": "attachment_1",
+                "name": "requirements.pdf",
+                "kind": "file",
+                "fileCount": 1,
+                "mediaType": "application/pdf",
+                "byteSize": 42,
+                "path": "/workspace/requirements.pdf"
+            }]
         });
         validate_schema(&mission, &mission_schema).unwrap();
         let mut missing = mission.clone();
@@ -645,7 +672,10 @@ mod tests {
         wrong_collection["attachments"] = json!("/workspace/requirements.pdf");
         assert!(validate_schema(&wrong_collection, &mission_schema).is_err());
         let mut wrong_item = mission;
-        wrong_item["attachments"] = json!([42]);
+        wrong_item["attachments"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("path");
         assert!(validate_schema(&wrong_item, &mission_schema).is_err());
     }
 

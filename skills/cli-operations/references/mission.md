@@ -1,4 +1,8 @@
-# Mission：当前 Camp 的共同目标
+# Mission：使命读取与当前使命协作
+
+已知使命 ID 时直接 get；需要查找时才 list。读取其他使命不会切换当前使命，
+update/status 仍只修改当前公共 Camp 的使命。标记 needs_you/completed 前先公开说明，
+再用该消息的 sourceMessageId 更新状态；已有说明直接复用。
 
 Mission 保存共同目标，Task 保存可独立交接的责任；不要为使命自动创建同名 Task。
 编辑描述只整理已明确的目标，不自行扩大授权或删减要求。

@@ -5,11 +5,15 @@ Rovai-ai is a local multi-Agent workbench in which long-lived Agent identities c
 ## Domain Glossary
 
 **Mission**:
-A durable purpose and independently maintained business status for exactly one public Camp. Core keeps an opaque internal ID plus a stable, monotonically allocated public number; display, Mission Git branch and worktree names derive from the number. The Camp retains ownership of membership, conversations, published messages and execution; public unsent Composer content remains Renderer-local. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision. Only the latest title and description are retained.
+A durable purpose and independently maintained business status for exactly one public Camp. Core keeps one opaque internal relational ID plus a stable, monotonically allocated display number; programs and models use the internal ID, while the UI, Mission Git branch and worktree names derive from the number. Every effective authenticated AgentRun may discover and read any Mission, while update/status remain bound to the current public Mission and its write gate. The Camp retains ownership of membership, conversations, published messages and execution; public unsent Composer content remains Renderer-local. Mission completion does not stop Runs; a Run ending does not complete the Mission. Current members update only specified definition fields, with last-committed values winning and no model-visible revision. Only the latest title and description are retained.
 _Avoid_: Task alias, Run state, separate chat store, lead-only definition
 
+**Mission ID**:
+The opaque internal `rvm_...` primary key shared by database relations, internal events, Agent Mission operations and newly generated model context. Agent results expose it only as `missionId`; they do not add a parallel number or translate between identifiers. The immutable positive Mission number remains a user-interface concern rendered as `M-xxx` with at least three decimal digits (`M-001`, `M-1000`).
+_Avoid_: display number as Agent selector, bare number, ID conversion layer, mutable title locator
+
 **Mission Workspace**:
-The Git worktree association prepared by Core at the first admitted Mission Run's preparing boundary, reused for later Runs and recovery against one fixed initial commit. Non-Git Missions use their configured original directory and have no branch or Git Diff. Workspace facts are informational and acknowledged once per native binding; they grant no filesystem authority. See [Mission v1](docs/contracts/mission-v1.md).
+The Git worktree association prepared by Core at the first admitted Mission Run's preparing boundary, reused for later Runs and recovery against one fixed initial commit. Non-Git Missions use their configured original directory and have no branch or Git Diff. Workspace facts are informational and acknowledged once per native binding; they grant no filesystem authority. See [Mission v5](docs/contracts/mission-v5.md).
 _Avoid_: per-Turn snapshot, Agent sandbox, directory inferred from a title
 
 

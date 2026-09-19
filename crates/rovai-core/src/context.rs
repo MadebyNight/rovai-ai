@@ -8360,6 +8360,127 @@ mod tests {
             }])
         );
     }
+
+    #[test]
+    fn mission_run_facts_use_the_internal_relation_id() {
+        let mut database = crate::test_support::seeded_runtime_database_owned();
+        let workspace = database.directory().join("mission-context-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let created = crate::mission::MissionService::default()
+            .create(
+                &mut database,
+                &crate::command::CommandEnvelope {
+                    command_id: Uuid::new_v4().to_string(),
+                    actor: crate::command::ActorRef::User {
+                        user_id: "test-user".to_string(),
+                    },
+                    camp_id: None,
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: crate::mission::CreateMissionCommand {
+                        title: "Context identity".to_string(),
+                        description: "Use the internal Mission ID in new context.".to_string(),
+                        project_path: workspace.to_string_lossy().into_owned(),
+                        project_binding_kind: crate::collaboration::ProjectBindingKind::Directory,
+                        member_agent_ids: vec!["agent_1".to_string()],
+                        default_lead_agent_id: "agent_1".to_string(),
+                        tags: Vec::new(),
+                        source_attachments: Vec::new(),
+                    },
+                },
+            )
+            .unwrap();
+        let internal_mission_id = created.result.payload["missionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let camp_id = created.result.payload["campId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        crate::mission::MissionService::default()
+            .start(
+                &mut database,
+                &crate::command::CommandEnvelope {
+                    command_id: Uuid::new_v4().to_string(),
+                    actor: crate::command::ActorRef::User {
+                        user_id: "test-user".to_string(),
+                    },
+                    camp_id: Some(camp_id.clone()),
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: crate::mission::StartMissionCommand {
+                        mission_id: internal_mission_id.clone(),
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut database, 100)
+                .unwrap()
+                .len(),
+            1
+        );
+        let conversation_id = database
+            .connection()
+            .query_row(
+                "SELECT id FROM conversation WHERE camp_id=?1 AND agent_id='agent_1'",
+                [&camp_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        let snapshot = RunSnapshot {
+            agent_run_id: "context-run".to_string(),
+            camp_id: camp_id.clone(),
+            camp_turn_id: "context-turn".to_string(),
+            conversation_id,
+            agent_id: "agent_1".to_string(),
+            task_id: None,
+            execution_epoch: 1,
+            invocation_kind: "batch".to_string(),
+            a2a_parent_agent_run_id: None,
+            a2a_root_agent_run_id: None,
+            a2a_depth: 0,
+            camp_message_boundary_sequence: 0,
+            conversation_message_boundary_sequence: 0,
+            trigger_camp_message_id: None,
+            trigger_message_delivery_id: None,
+            trigger_conversation_message_id: None,
+            effective_config: json!({}),
+            workspace: json!({}),
+            runtime_installation_id: None,
+            runtime_binding_compatibility_digest: None,
+            native_adapter_installation_id: None,
+            native_session_id: None,
+            native_binding_compatibility_digest: None,
+            native_binding_id: None,
+            native_binding_generation: 0,
+            last_accepted_public_boundary_sequence: 0,
+            native_charter_digest: None,
+            native_collaboration_state_digest: None,
+            default_lead_agent_id: Some("agent_1".to_string()),
+            skill_selection_snapshot: SkillSelectionSnapshot::default(),
+            skill_selection_snapshot_digest: "selection-digest".to_string(),
+        };
+
+        let selected = selected_mission_facts(database.connection(), &snapshot)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.facts.mission_id, internal_mission_id);
+        assert_eq!(selected.facts.title, "Context identity");
+        assert!(internal_mission_id.starts_with("rvm_"));
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT id FROM mission WHERE camp_id=?1",
+                    [&camp_id],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            internal_mission_id
+        );
+    }
 }
 
 #[cfg(all(test, feature = "slow-tests"))]

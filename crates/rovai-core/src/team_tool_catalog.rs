@@ -80,6 +80,9 @@ pub fn validate_builtin_tool_input(canonical_name: &str, input: &Value) -> Resul
         MEMORY_WRITE_TOOL_NAME => {
             serde_json::from_value::<MemoryWriteToolInput>(input.clone()).map(|_| ())
         }
+        "mission.list" => {
+            serde_json::from_value::<crate::mission::MissionListInput>(input.clone()).map(|_| ())
+        }
         "mission.get" => {
             serde_json::from_value::<crate::mission::MissionGetInput>(input.clone()).map(|_| ())
         }
@@ -857,9 +860,97 @@ fn mission_mutation_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["missionId","changed"],"properties":{"missionId":{"type":"string"},"changed":{"type":"boolean"}}})
 }
 
+fn mission_attachment_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "attachmentId", "name", "kind", "fileCount", "mediaType", "byteSize", "path"
+        ],
+        "properties": {
+            "attachmentId": {"type": "string"},
+            "name": {"type": "string"},
+            "kind": {"type": "string", "enum": ["file", "directory"]},
+            "fileCount": {"type": ["integer", "null"], "minimum": 0},
+            "mediaType": {"type": ["string", "null"]},
+            "byteSize": {"type": ["integer", "null"], "minimum": 0},
+            "path": {"type": "string"}
+        }
+    })
+}
+
+fn mission_status_schema() -> Value {
+    json!({"type":"string","enum":["needs_you","not_started","in_progress","completed"]})
+}
+
+fn mission_list_success_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["missions", "nextCursor", "hasMore"],
+        "properties": {
+            "missions": {
+                "type": "array",
+                "maxItems": crate::mission::MISSION_LIST_MAX_LIMIT,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["missionId", "campId", "title", "status", "updatedAt"],
+                    "properties": {
+                        "missionId": {"type": "string"},
+                        "campId": {"type": "string"},
+                        "title": {"type": "string"},
+                        "status": mission_status_schema(),
+                        "updatedAt": {"type": "string", "format": "date-time"}
+                    }
+                }
+            },
+            "nextCursor": {"type": ["string", "null"]},
+            "hasMore": {"type": "boolean"}
+        }
+    })
+}
+
 pub fn builtin_tool_definitions() -> Vec<Value> {
     vec![
-        json!({"name":"mission.get","title":"Read the current Mission","description":"Read the current Camp's Mission, including its current attachment source paths. This read grants no Mission write authority.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"required":["missionId","title","description","status","sourceMessageId","attachments"],"properties":{"missionId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"]},"sourceMessageId":{"type":["string","null"]},"attachments":{"type":"array","items":{"type":"string"}}}}}),
+        json!({
+            "name": "mission.list",
+            "title": "List Missions",
+            "description": "List all Missions in this Rovai instance, newest first. Use mission get for details.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Title substring or exact Mission ID."},
+                    "status": mission_status_schema(),
+                    "limit": {"type": "integer", "minimum": 1, "maximum": crate::mission::MISSION_LIST_MAX_LIMIT, "description": "Default 20; maximum 50."},
+                    "cursor": {"type": "string", "minLength": 1, "maxLength": 2048, "description": "Continue with the same filters."}
+                }
+            },
+            "outputSchema": mission_list_success_schema()
+        }),
+        json!({
+            "name": "mission.get",
+            "title": "Read a Mission",
+            "description": "Read any Mission in this Rovai instance. Omit --mission-id for the current Camp's Mission. Reading does not switch context.\n\nAttachments include saved metadata and source paths, not live file checks.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "missionId": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Optional opaque Mission ID returned by mission list or Run Facts, for example rvm_example."}
+                }
+            },
+            "outputSchema": {
+                "type": "object", "additionalProperties": false,
+                "required": ["missionId", "title", "description", "status", "sourceMessageId", "attachments"],
+                "properties": {
+                    "missionId": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "status": mission_status_schema(),
+                    "sourceMessageId": {"type": ["string", "null"]},
+                    "attachments": {"type": "array", "items": mission_attachment_schema()}
+                }
+            }
+        }),
         json!({"name":"mission.update","title":"Update the current Mission","description":"Update the current Mission's title or description without starting work.","inputSchema":{"type":"object","additionalProperties":false,"anyOf":[{"required":["title"]},{"required":["description"]}],"properties":{"title":{"type":"string","minLength":1,"maxLength":200},"description":{"type":"string","maxLength":12000}}},"outputSchema":mission_mutation_schema()}),
         json!({"name":"mission.status","title":"Set the current Mission status","description":"Set the current Mission's status without starting or stopping work.","inputSchema":{"type":"object","additionalProperties":false,"required":["status"],"properties":{"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"],"description":"One of: needs_you, not_started, in_progress, completed."},"sourceMessageId":{"type":"string","minLength":1,"description":"Required for needs_you or completed; reference an existing public message in this Camp."}}},"outputSchema":mission_mutation_schema()}),
         json!({
@@ -1264,12 +1355,20 @@ mod tests {
         );
         validate_builtin_tool_input(CAMP_MESSAGE_SEND_TOOL_NAME, &json!({"body": ""})).unwrap();
         validate_builtin_tool_input(TEAM_LIST_TASKS_TOOL_NAME, &json!({"limit": 100})).unwrap();
+        validate_builtin_tool_input("mission.list", &json!({})).unwrap();
+        validate_builtin_tool_input(
+            "mission.list",
+            &json!({"query": "rvm_example", "status": "in_progress", "limit": 50}),
+        )
+        .unwrap();
         validate_builtin_tool_input("mission.get", &json!({})).unwrap();
+        validate_builtin_tool_input("mission.get", &json!({"missionId": "rvm_example"})).unwrap();
         validate_builtin_tool_input("mission.update", &json!({"description": ""})).unwrap();
         validate_builtin_tool_input("mission.status", &json!({"status": "in_progress"})).unwrap();
         for (operation, input) in [
-            ("mission.get", json!({"missionId": "another"})),
             ("mission.get", json!({"version": 1})),
+            ("mission.list", json!({"limit": 51})),
+            ("mission.list", json!({"query": ""})),
             ("mission.update", json!({})),
             ("mission.update", json!({"title": "x", "version": 1})),
             (
