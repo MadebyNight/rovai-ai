@@ -319,6 +319,7 @@ const CAMP_ATTACHMENT_VIEW_QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_m
 const DELIVERY_BATCH_SCHEDULER_PAGE_LIMIT: i64 = 16;
 const DELIVERY_BATCH_FALLBACK_INTERVAL: Duration = Duration::from_secs(30);
 const NON_BATCH_AGENT_RUN_DISPATCH_LIMIT: i64 = 16;
+const ORDERED_REQUEST_QUEUE_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeCancellationIngressFence {
@@ -442,6 +443,36 @@ struct Request {
     method: String,
     #[serde(default)]
     params: Value,
+}
+
+struct ReceivedRequest {
+    request: Request,
+    received_at: Instant,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct RequestDispatchTestBarrier {
+    token: String,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[cfg(test)]
+static REQUEST_DISPATCH_TEST_BARRIER: std::sync::OnceLock<
+    std::sync::Mutex<Option<RequestDispatchTestBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn installed_request_dispatch_test_barrier(token: &str) -> Result<RequestDispatchTestBarrier> {
+    REQUEST_DISPATCH_TEST_BARRIER
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| anyhow::anyhow!("request dispatch test barrier poisoned"))?
+        .as_ref()
+        .filter(|barrier| barrier.token == token)
+        .cloned()
+        .context("request dispatch test barrier is not installed")
 }
 
 #[derive(Debug, Serialize)]
@@ -662,6 +693,8 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
             | "camp.attachments.location"
             | "camp.attachments.previewSource"
             | "camp.attachments.desktopOpenTarget"
+            | "agentRunExecution.page"
+            | "agentRunExecution.changes"
             | "agentRuns.cancel"
             | "singleChat.sourceAttachments.addFromPath"
             | "singleChat.composerDraft.removeAttachment"
@@ -676,7 +709,46 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
     )
 }
 
-async fn response_for_request(core: &Arc<Core>, request: &Request) -> Response {
+fn is_execution_window_request(method: &str) -> bool {
+    matches!(
+        method,
+        "agentRunExecution.page" | "agentRunExecution.changes"
+    )
+}
+
+fn log_execution_window_request_stage(
+    request: &Request,
+    stage: &str,
+    elapsed: Option<std::time::Duration>,
+) {
+    if !is_execution_window_request(&request.method) {
+        return;
+    }
+    let camp_id = request
+        .params
+        .get("campId")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let agent_run_id = request
+        .params
+        .get("agentRunId")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let elapsed = elapsed
+        .map(|duration| format!(" elapsed_ms={}", duration.as_millis()))
+        .unwrap_or_default();
+    eprintln!(
+        "[execution-window] request={} method={} camp={:?} run={:?} stage={}{}",
+        request.id, request.method, camp_id, agent_run_id, stage, elapsed,
+    );
+}
+
+async fn response_for_request(
+    core: &Arc<Core>,
+    request: &Request,
+    received_at: Instant,
+) -> Response {
+    log_execution_window_request_stage(request, "handling_start", Some(received_at.elapsed()));
     match Box::pin(core.handle(request)).await {
         Ok(result) => {
             if request_did_invalidate_navigation(core, request, &result).await {
@@ -686,18 +758,110 @@ async fn response_for_request(core: &Arc<Core>, request: &Request) -> Response {
                     navigation_request_camp_id(&request.params),
                 );
             }
-            Response {
+            let response = Response {
                 id: request.id.clone(),
                 result: Some(result),
                 error: None,
-            }
+            };
+            log_execution_window_request_stage(
+                request,
+                "response_ready",
+                Some(received_at.elapsed()),
+            );
+            response
         }
-        Err(error) => Response {
-            id: request.id.clone(),
-            result: None,
-            error: Some(request_error_body(&error)),
-        },
+        Err(error) => {
+            let response = Response {
+                id: request.id.clone(),
+                result: None,
+                error: Some(request_error_body(&error)),
+            };
+            log_execution_window_request_stage(
+                request,
+                "response_ready",
+                Some(received_at.elapsed()),
+            );
+            response
+        }
     }
+}
+
+fn host_web_operation(method: &str) -> Option<HostWebOperation> {
+    match method {
+        "host.web.token" => Some(HostWebOperation::Token),
+        "host.web.status" => Some(HostWebOperation::Status),
+        "host.web.start" => Some(HostWebOperation::Start),
+        "host.web.stop" => Some(HostWebOperation::Stop),
+        "host.web.rotate" => Some(HostWebOperation::Rotate),
+        "host.web.loginTicket" => Some(HostWebOperation::LoginTicket),
+        "host.channels.dispatch" => Some(HostWebOperation::ChannelDispatch),
+        "host.channels.reply" => Some(HostWebOperation::ChannelReply),
+        _ => None,
+    }
+}
+
+async fn response_for_host_request(
+    host_control: Option<&Arc<dyn HostControl>>,
+    output: &mpsc::UnboundedSender<String>,
+    request: Request,
+    operation: HostWebOperation,
+) -> Result<Response> {
+    let reply = if let Some(control) = host_control {
+        control.web(operation, request.params).await
+    } else {
+        Err(HostControlError {
+            code: "HOST_CONTROL_UNAVAILABLE",
+            message: "This process does not provide Host Web control".into(),
+        })
+    };
+    if let (HostWebOperation::ChannelDispatch, Ok(value)) = (operation, &reply) {
+        // Share the single Desktop writer, never write a second stdout stream
+        // that could interleave JSON frames.
+        output
+            .send(serde_json::to_string(
+                &json!({"method":"host.channels.request","params":value}),
+            )?)
+            .map_err(|_| anyhow::anyhow!("Desktop output is unavailable"))?;
+    }
+    Ok(match reply {
+        Ok(value) => Response {
+            id: request.id,
+            result: Some(value),
+            error: None,
+        },
+        Err(error) => Response {
+            id: request.id,
+            result: None,
+            error: Some(ErrorBody {
+                kind: "domain_rejection",
+                code: error.code.into(),
+                message: error.message,
+                retryable: false,
+                details: json!({}),
+            }),
+        },
+    })
+}
+
+async fn process_ordered_requests(
+    core: Arc<Core>,
+    mut requests: mpsc::Receiver<ReceivedRequest>,
+    output: mpsc::UnboundedSender<String>,
+    host_control: Option<Arc<dyn HostControl>>,
+) -> Result<()> {
+    while let Some(ReceivedRequest {
+        request,
+        received_at,
+    }) = requests.recv().await
+    {
+        let response = if let Some(operation) = host_web_operation(&request.method) {
+            response_for_host_request(host_control.as_ref(), &output, request, operation).await?
+        } else {
+            response_for_request(&core, &request, received_at).await
+        };
+        enqueue_response(&output, &response)?;
+    }
+    Ok(())
 }
 
 fn request_invalidates_navigation(method: &str) -> bool {
@@ -998,6 +1162,7 @@ fn normalized_camp_open_trace_id(trace_id: &str) -> Result<String> {
 
 struct CampOpenLogMetrics {
     lock_ms: u128,
+    database_ms: u128,
     reconcile_ms: u128,
     projection_ms: u128,
     serialization_ms: u128,
@@ -1012,13 +1177,14 @@ fn log_camp_open_projection(
 ) {
     let CampOpenLogMetrics {
         lock_ms,
+        database_ms,
         reconcile_ms,
         projection_ms,
         serialization_ms,
         payload_bytes,
     } = metrics;
     eprintln!(
-        "[camp-open] trace={trace_id} method={method} lock_ms={lock_ms} \
+        "[camp-open] trace={trace_id} method={method} lock_ms={lock_ms} database_ms={database_ms} \
          reconcile_ms={reconcile_ms} projection_ms={projection_ms} \
          serialization_ms={serialization_ms} payload_bytes={payload_bytes} \
          schema={} high_water={} messages={} runs={} evidence={}",
@@ -5916,6 +6082,18 @@ impl Core {
         }
         let _ = &request.params;
         match request.method.as_str() {
+            #[cfg(test)]
+            "test.requestDispatchBarrier" => {
+                let token = request
+                    .params
+                    .get("token")
+                    .and_then(Value::as_str)
+                    .context("request dispatch test barrier token is required")?;
+                let barrier = installed_request_dispatch_test_barrier(token)?;
+                barrier.entered.notify_one();
+                barrier.release.notified().await;
+                Ok(json!({ "released": true }))
+            }
             "commands.reconcile" => {
                 let database = self.database.lock().await;
                 web_commands::reconcile(
@@ -8086,11 +8264,14 @@ impl Core {
                 let lock_started_at = std::time::Instant::now();
                 let mut database = self.database.lock().await;
                 let lock_ms = lock_started_at.elapsed().as_millis();
+                let database_started_at = std::time::Instant::now();
                 let outcome = CampOpenService.enter(
                     &mut database,
                     &user_camp_command_envelope(params.command_id, camp_id, params.command),
                 )?;
                 let projection = outcome.projection;
+                let database_ms = database_started_at.elapsed().as_millis();
+                drop(database);
                 let reconcile_ms = outcome
                     .reconcile_duration
                     .map(|duration| duration.as_millis())
@@ -8105,6 +8286,7 @@ impl Core {
                     "camps.enter",
                     &CampOpenLogMetrics {
                         lock_ms,
+                        database_ms,
                         reconcile_ms,
                         projection_ms,
                         serialization_ms,
@@ -8120,8 +8302,11 @@ impl Core {
                 let lock_started_at = std::time::Instant::now();
                 let mut database = self.database.lock().await;
                 let lock_ms = lock_started_at.elapsed().as_millis();
+                let database_started_at = std::time::Instant::now();
                 let outcome = CampOpenService.open(&mut database, params.camp_id.as_str())?;
                 let projection = outcome.projection;
+                let database_ms = database_started_at.elapsed().as_millis();
+                drop(database);
                 let projection_ms = outcome.projection_duration.as_millis();
                 let serialization_started_at = std::time::Instant::now();
                 let value = serde_json::to_value(&projection)?;
@@ -8132,6 +8317,7 @@ impl Core {
                     "camps.open",
                     &CampOpenLogMetrics {
                         lock_ms,
+                        database_ms,
                         reconcile_ms: 0,
                         projection_ms,
                         serialization_ms,
@@ -8483,33 +8669,67 @@ impl Core {
             "agentRunExecution.changes" => {
                 let params: ExecutionChangesParams =
                     serde_json::from_value(request.params.clone())?;
+                let lock_started_at = Instant::now();
                 let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    rovai_core::execution_window::read_changes(
-                        &mut database,
-                        params.camp_id.as_str(),
-                        &params.agent_run_id,
-                        params.after_sequence,
-                        &params.refresh_evidence_ids,
-                        params.limit.unwrap_or(96),
-                    )?,
-                )?)
+                let lock_ms = lock_started_at.elapsed().as_millis();
+                let read_started_at = Instant::now();
+                let changes = rovai_core::execution_window::read_changes(
+                    &mut database,
+                    params.camp_id.as_str(),
+                    &params.agent_run_id,
+                    params.after_sequence,
+                    &params.refresh_evidence_ids,
+                    params.limit.unwrap_or(96),
+                )?;
+                let read_ms = read_started_at.elapsed().as_millis();
+                drop(database);
+                let serialization_started_at = Instant::now();
+                let value = serde_json::to_value(changes)?;
+                let serialization_ms = serialization_started_at.elapsed().as_millis();
+                eprintln!(
+                    "[execution-window] request={} method={} camp={:?} run={:?} stage=read_complete lock_ms={} read_ms={} serialization_ms={}",
+                    request.id,
+                    request.method,
+                    params.camp_id.as_str(),
+                    params.agent_run_id,
+                    lock_ms,
+                    read_ms,
+                    serialization_ms,
+                );
+                Ok(value)
             }
             "agentRunExecution.page" => {
                 let params: ExecutionWindowParams = serde_json::from_value(request.params.clone())?;
+                let lock_started_at = Instant::now();
                 let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    rovai_core::execution_window::read_range(
-                        &mut database,
-                        params.camp_id.as_str(),
-                        &params.agent_run_id,
-                        params.before_sequence,
-                        params.after_sequence,
-                        params
-                            .limit
-                            .unwrap_or(rovai_core::execution_window::DEFAULT_WINDOW_LIMIT),
-                    )?,
-                )?)
+                let lock_ms = lock_started_at.elapsed().as_millis();
+                let read_started_at = Instant::now();
+                let page = rovai_core::execution_window::read_range(
+                    &mut database,
+                    params.camp_id.as_str(),
+                    &params.agent_run_id,
+                    params.before_sequence,
+                    params.after_sequence,
+                    params
+                        .limit
+                        .unwrap_or(rovai_core::execution_window::DEFAULT_WINDOW_LIMIT),
+                )?;
+                let read_ms = read_started_at.elapsed().as_millis();
+                drop(database);
+                let serialization_started_at = Instant::now();
+                let value = serde_json::to_value(page)?;
+                let serialization_ms = serialization_started_at.elapsed().as_millis();
+                eprintln!(
+                    "[execution-window] request={} method={} camp={:?} run={:?} stage=read_complete lock_ms={} read_ms={} serialization_ms={}",
+                    request.id,
+                    request.method,
+                    params.camp_id.as_str(),
+                    params.agent_run_id,
+                    lock_ms,
+                    read_ms,
+                    serialization_ms,
+                );
+                Ok(value)
             }
             "agentRunEvidence.list" => {
                 let params: ExecutionEvidenceListParams =
@@ -15932,63 +16152,22 @@ async fn run_core(
     });
 
     let mut background_requests = tokio::task::JoinSet::new();
+    let (ordered_request_tx, ordered_request_rx) = mpsc::channel(ORDERED_REQUEST_QUEUE_CAPACITY);
+    let ordered_request_worker = tokio::spawn(process_ordered_requests(
+        core.clone(),
+        ordered_request_rx,
+        output_tx.clone(),
+        host_control.clone(),
+    ));
     let mut planned_shutdown_request = None;
 
     while let Some(request) = input.next_request().await? {
+        let received_at = Instant::now();
+        log_execution_window_request_stage(&request, "request_arrived", None);
         while let Some(result) = background_requests.try_join_next() {
             if let Err(error) = result {
                 eprintln!("background Core request failed: {error}");
             }
-        }
-        let host_operation = match request.method.as_str() {
-            "host.web.token" => Some(HostWebOperation::Token),
-            "host.web.status" => Some(HostWebOperation::Status),
-            "host.web.start" => Some(HostWebOperation::Start),
-            "host.web.stop" => Some(HostWebOperation::Stop),
-            "host.web.rotate" => Some(HostWebOperation::Rotate),
-            "host.web.loginTicket" => Some(HostWebOperation::LoginTicket),
-            "host.channels.dispatch" => Some(HostWebOperation::ChannelDispatch),
-            "host.channels.reply" => Some(HostWebOperation::ChannelReply),
-            _ => None,
-        };
-        if let Some(operation) = host_operation {
-            let reply = if let Some(control) = &host_control {
-                control.web(operation, request.params).await
-            } else {
-                Err(HostControlError {
-                    code: "HOST_CONTROL_UNAVAILABLE",
-                    message: "This process does not provide Host Web control".into(),
-                })
-            };
-            if let (HostWebOperation::ChannelDispatch, Ok(value)) = (operation, &reply) {
-                // Share the single Desktop writer, never write a second
-                // stdout stream that could interleave JSON frames.
-                output_tx
-                    .send(serde_json::to_string(
-                        &json!({"method":"host.channels.request","params":value}),
-                    )?)
-                    .map_err(|_| anyhow::anyhow!("Desktop output is unavailable"))?;
-            }
-            let response = match reply {
-                Ok(value) => Response {
-                    id: request.id,
-                    result: Some(value),
-                    error: None,
-                },
-                Err(error) => Response {
-                    id: request.id,
-                    result: None,
-                    error: Some(ErrorBody {
-                        kind: "domain_rejection",
-                        code: error.code.into(),
-                        message: error.message,
-                        retryable: false,
-                        details: json!({}),
-                    }),
-                },
-            };
-            enqueue_response(&output_tx, &response)?;
-            continue;
         }
         if request.method == "core.shutdown" {
             let parsed = parse_planned_shutdown_params(request.params.clone());
@@ -16021,7 +16200,7 @@ async fn run_core(
             let request_core = core.clone();
             let request_output = output_tx.clone();
             background_requests.spawn(async move {
-                let response = response_for_request(&request_core, &request).await;
+                let response = response_for_request(&request_core, &request, received_at).await;
                 if let Err(error) = enqueue_response(&request_output, &response) {
                     eprintln!("failed to write background Core response: {error:#}");
                 }
@@ -16029,9 +16208,19 @@ async fn run_core(
             continue;
         }
 
-        let response = response_for_request(&core, &request).await;
-        enqueue_response(&output_tx, &response)?;
+        ordered_request_tx
+            .send(ReceivedRequest {
+                request,
+                received_at,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("ordered Core request worker stopped unexpectedly"))?;
     }
+
+    drop(ordered_request_tx);
+    ordered_request_worker
+        .await
+        .context("ordered Core request worker failed")??;
 
     if let Some((request_id, params)) = planned_shutdown_request {
         let shutdown_started_at = tokio::time::Instant::now();
@@ -25736,6 +25925,8 @@ done
         assert!(!request_runs_outside_main_queue("camps.enter"));
         assert!(!request_runs_outside_main_queue("camps.open"));
         assert!(!request_runs_outside_main_queue("camp.messages.page"));
+        assert!(request_runs_outside_main_queue("agentRunExecution.page"));
+        assert!(request_runs_outside_main_queue("agentRunExecution.changes"));
         assert!(!request_runs_outside_main_queue(
             "camps.reconcileDefaultLead"
         ));
@@ -25745,6 +25936,135 @@ done
         assert!(request_runs_outside_main_queue(
             "runtime.pendingExecution.cancel"
         ));
+    }
+
+    #[cfg(feature = "slow-tests")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn execution_page_does_not_inherit_an_unrelated_non_database_wait() {
+        struct InstalledBarrier(RequestDispatchTestBarrier);
+
+        impl Drop for InstalledBarrier {
+            fn drop(&mut self) {
+                self.0.release.notify_waiters();
+                if let Ok(mut installed) = REQUEST_DISPATCH_TEST_BARRIER
+                    .get_or_init(Default::default)
+                    .lock()
+                {
+                    installed.take();
+                }
+            }
+        }
+
+        let token = uuid::Uuid::new_v4().to_string();
+        let barrier = RequestDispatchTestBarrier {
+            token: token.clone(),
+            entered: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+        };
+        {
+            let mut installed = REQUEST_DISPATCH_TEST_BARRIER
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap();
+            assert!(installed.replace(barrier.clone()).is_none());
+        }
+        let installed_barrier = InstalledBarrier(barrier.clone());
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "rovai-execution-page-dispatch-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let data_dir = root.join("data");
+        let runtime_camp_files_root =
+            rovai_core::storage_layout::server_runtime_root(&data_dir).unwrap();
+        let (service, runner) = embedded(
+            CoreConfig {
+                runtime_camp_files_root: runtime_camp_files_root.clone(),
+                data_dir,
+                skill_library_root: root.join("skills"),
+                mcp_config_path: Some(root.join("mcp.json")),
+                require_existing_authority: false,
+                automation_scheduler_control: None,
+                removed_skill_project_roots: RemovedSkillProjectRoots::default(),
+            },
+            Arc::new(RuntimeSearchEnvironment::for_test_paths(1, Vec::new())),
+        )
+        .unwrap();
+        let mut runner_task = tokio::spawn(runner.run());
+        tokio::time::timeout(Duration::from_secs(20), service.wait_ready())
+            .await
+            .expect("isolated Core should become ready")
+            .unwrap();
+
+        let blocked_service = service.clone();
+        let blocked_request = tokio::spawn(async move {
+            blocked_service
+                .request("test.requestDispatchBarrier", json!({ "token": token }))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), barrier.entered.notified())
+            .await
+            .expect("the unrelated ordered request should reach its controlled barrier");
+
+        let page_service = service.clone();
+        let mut page_request = tokio::spawn(async move {
+            page_service
+                .request(
+                    "agentRunExecution.page",
+                    json!({
+                        "campId": "rvcamp_dispatch_test",
+                        "agentRunId": "run-dispatch-test",
+                        "beforeSequence": null,
+                        "limit": 24
+                    }),
+                )
+                .await
+        });
+        let barrier_release_at = tokio::time::Instant::now() + Duration::from_secs(3);
+        let page_before_release =
+            tokio::time::timeout_at(barrier_release_at, &mut page_request).await;
+        let page_finished_while_blocked = page_before_release.is_ok();
+
+        tokio::time::sleep_until(barrier_release_at).await;
+        barrier.release.notify_waiters();
+        let _ = blocked_request.await;
+        let page_reply = match page_before_release {
+            Ok(completed) => completed.unwrap().unwrap(),
+            Err(_) => page_request.await.unwrap().unwrap(),
+        };
+        drop(service);
+        if tokio::time::timeout(Duration::from_secs(10), &mut runner_task)
+            .await
+            .is_err()
+        {
+            runner_task.abort();
+            let _ = runner_task.await;
+        }
+        drop(installed_barrier);
+        #[cfg(unix)]
+        if runtime_camp_files_root.join("camps").exists() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                runtime_camp_files_root.join("camps"),
+                fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+        }
+        if let Err(error) = fs::remove_dir_all(&root) {
+            eprintln!("isolated dispatch fixture cleanup deferred: {error}");
+        }
+
+        assert!(
+            page_finished_while_blocked,
+            "a cold execution page waited for unrelated non-database work"
+        );
+        assert_eq!(
+            page_reply
+                .error
+                .as_ref()
+                .and_then(|error| error.get("code")),
+            Some(&json!("CORE_REQUEST_FAILED")),
+            "the nonexistent Run should still reach the ordinary execution-page validation"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@ document_type: architecture
 architecture: camp-open-read-path
 authority: desktop-camp-enter-and-progressive-read-boundaries
 status: accepted
-last_updated: 2026-09-13
+last_updated: 2026-09-20
 ---
 
 # Camp Open Read Path 架构
@@ -21,7 +21,8 @@ last_updated: 2026-09-13
 | Renderer startup controller | 快照返回后立即显示候选目标的一级页面框架；候选 Camp 与 committed Camp 分离，只有 enter 成功才提交权威 Camp 内容 |
 | Renderer enter controller | 生成 trace/command ID、selection generation 与 high-water fence；应用内缓存未命中时保留当前 surface，投影到达后原子 commit 目标 Camp/项目并完成 meaningful paint，再恢复项目导航、确认可见来源和刷新侧栏 |
 | Electron Main bridge | allowlist typed method、记录不含内容的 IPC roundtrip/response bytes；不组装或缓存领域投影 |
-| Core Camp enter module | 在一次串行 request 中先读 activation state；Pending 直接读取投影，Active 先按原 Envelope 查 receipt 并校验 Lead，有效新 User enter 只读，需要修复时 reconcile 后再读；缺失或 rejected 时 fail closed |
+| Core request ingress | 持续接收请求；有顺序要求的命令与混合操作交给单一 FIFO worker，执行窗口 page/changes 复用既有独立派发任务，不建立优先级调度器或第二套 RPC |
+| Core Camp enter module | 在一次有序 request 中先读 activation state；Pending 直接读取投影，Active 先按原 Envelope 查 receipt 并校验 Lead，有效新 User enter 只读，需要修复时 reconcile 后再读；缺失或 rejected 时 fail closed |
 | Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、coverage 与 high-water；不读取 event_log 或 Context Manifest/Action history |
 | Camp message history read | 以 stable sequence cursor 读取 earlier page；不回放 event 构造第二真源 |
 | Camp conversation find read | 扫描当前 Camp 公开 user/agent 正文投影，返回 exact total 与一个选中命中；不改变 Agent-facing discovery search，也不返回完整结果集 |
@@ -84,7 +85,9 @@ CampMessage 或 Run detail Evidence，也不自动打开执行台或改变当前
 同一 Camp 的 event-driven refresh 只允许一个 `camps.open` 在途；在途期间到达的一个或多个 invalidation
 合并为 dirty 状态，并在当前读取完成后至多追加一次 trailing refresh。不能只复用旧 Promise 后丢弃新的
 invalidation，因为后一个终态可能在首个 read transaction 开始后才持久化。trailing refresh 期间再次变脏时，
-按同一规则继续到安静点；Camp 切换与 high-water fence 仍负责拒绝旧 Camp 或倒退投影。
+按同一规则继续到安静点；Camp 切换与 high-water fence 仍负责拒绝旧 Camp 或倒退投影。发送消息、重命名
+Camp 和更换 Default Lead 后的纯视图刷新也进入这个 coordinator，不再绕过它并行提交重复 `camps.open`；
+未知命令结果所需的定向确认读取不在该合并规则内。
 
 当前 Camp 的 `camps.open` coordinator 与全局 Navigation coordinator 是两个用途不同的 seam：前者维护已打开
 会话的完整内容和 high-water，后者只在 Core post-commit invalidation 后重读侧栏 Snapshot。终态事件可以同时
@@ -108,6 +111,12 @@ Renderer 不通过 event replay 补齐权威对象。
 可见展开的 Run 在首屏后读取一页 `agentRunExecution.page`，按详情高度估算页大小，并预取相邻更早一页。
 用户滚到边界或主动点击才继续加载；预取不挂载 DOM，也不递归读完整 Run。操作开始/完成按稳定身份合并，
 较早但仍运行的操作由最新页补充，不影响历史 cursor。完整输出和文件 Diff 在单条展开后读取。
+
+`agentRunExecution.page/changes` 不等待无关的有序 Core request 返回，也不以前一轮 `camps.enter/open` 响应
+作为前置条件。Core 的输入读取与有序 FIFO worker 分离，执行窗口沿既有独立派发路径直接进入读取；Camp
+投影和执行窗口都在离开数据库临界区后再序列化响应。因此，无需数据库事务的慢准备或响应组装不能把冷展开
+压在队尾。该边界不伪造数据库并发：运行中活动文本仍由原 `Database` 对象叠加，page/changes 与写入、Camp
+投影继续竞争同一个数据库 mutex；只有测量证明这里仍是主要等待时，才另行评估终态只读连接。
 
 Renderer 保留连续已加载区间，用实测高度占位虚拟化视口外内容；长工具组内部同样虚拟化。首屏 12–48 项，
 历史页 64 项；只有用户接近未加载边界才读下一批。正文在可见行中读取，命中缓存或在途请求则复用。

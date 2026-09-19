@@ -17,6 +17,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
   const [revision, changed] = useState(0)
   const anchor = useRef<{ key: string; top: number; host: HTMLElement } | null>(null)
   const followAfterLoad = useRef<false | 'live' | 'explicit'>(false)
+  const coldLoadStartedAt = useRef<number | null>(null)
   const pendingRefresh = useRef<number | null>(null)
   const lastScrollTop = useRef(0)
   const initialInvalidation = useRef(true)
@@ -68,12 +69,19 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     // Wait for the drawer's initial focus/scroll before deciding which opened
     // stages intersect the viewport. Offscreen failed/history stages stay cold.
     let observer: IntersectionObserver | null = null
+    const readLatest = (): void => {
+      if (!wasLoaded && coldLoadStartedAt.current === null) {
+        coldLoadStartedAt.current = performance.now()
+        console.info(`[execution-window] method=agentRunExecution.page camp=${campId} run=${run.id} stage=renderer_request`)
+      }
+      void current.latest().then(() => { if (wasLoaded) void current.refresh() })
+    }
     const frame = requestAnimationFrame(() => {
-      if (!host || !root.current) { void current.latest().then(() => { if (wasLoaded) void current.refresh() }); return }
+      if (!host || !root.current) { readLatest(); return }
       observer = new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting)) {
           observer?.disconnect()
-          void current.latest().then(() => { if (wasLoaded) void current.refresh() })
+          readLatest()
         }
       }, { root: host, rootMargin: '80px 0px' })
       observer.observe(root.current)
@@ -120,7 +128,29 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     const current = store.current
     // The initial request starts after intersection/focus. Keep the follow intent
     // until an actual page has arrived, including a successfully empty page.
-    if (!enabled || !current || current.loading || !current.loaded) return
+    if (!enabled || !current || current.loading) return
+    if (!current.loaded) {
+      const coldStartedAt = coldLoadStartedAt.current
+      if (current.error && coldStartedAt !== null) {
+        coldLoadStartedAt.current = null
+        console.info(
+          `[execution-window] method=agentRunExecution.page camp=${campId} run=${run.id} `
+          + `stage=renderer_failed elapsed_ms=${Math.round(performance.now() - coldStartedAt)}`
+        )
+      }
+      return
+    }
+    const coldStartedAt = coldLoadStartedAt.current
+    if (coldStartedAt !== null) {
+      coldLoadStartedAt.current = null
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (store.current !== current || !root.current) return
+        console.info(
+          `[execution-window] method=agentRunExecution.page camp=${campId} run=${run.id} `
+          + `stage=renderer_painted elapsed_ms=${Math.round(performance.now() - coldStartedAt)}`
+        )
+      }))
+    }
     if (scrollHost()?.dataset.executionDisclosureAnchor === 'true') {
       anchor.current = null
       followAfterLoad.current = false
@@ -141,7 +171,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     lastScrollTop.current = scrollHost()?.scrollTop ?? 0
     const adjustedHost = scrollHost()
     if (adjustedHost) adjustedHost.dataset.executionAdjustedTop = String(adjustedHost.scrollTop)
-  }, [enabled, revision, contentRevision])
+  }, [enabled, revision, contentRevision, campId, run.id])
 
   useEffect(() => {
     if (!enabled) return undefined

@@ -3163,12 +3163,10 @@ export function BusinessApp({
         }
       })
       if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
-      await loadNavigation()
-      if (activeCampId === camp.id) {
-        const { snapshot } = await requestCampProjection(camp.id, 'open')
-        campEventSequenceMarker.current = snapshot.throughGlobalSequence
-        setCampSnapshot(snapshot)
-      }
+      await Promise.all([
+        loadNavigation(),
+        activeCampId === camp.id ? refreshActiveCampSnapshot(camp.id) : Promise.resolve()
+      ])
     } finally {
       setBusy(null)
     }
@@ -3297,12 +3295,10 @@ export function BusinessApp({
         }
       })
       if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
-      const [{ snapshot }] = await Promise.all([
-        requestCampProjection(activeCampId, 'open'),
+      await Promise.all([
+        refreshActiveCampSnapshot(activeCampId),
         loadNavigation()
       ])
-      campEventSequenceMarker.current = snapshot.throughGlobalSequence
-      setCampSnapshot(snapshot)
     } catch (nextError) {
       setError(errorMessage(nextError))
       throw nextError
@@ -3570,11 +3566,9 @@ export function BusinessApp({
           campId, commandId,
           message: { ...optimisticMessage, id: campMessageId, sequence, campTurnId: null }
         }])
-        void requestCampProjection(campId, 'open')
-          .then(async ({ snapshot }) => {
+        void refreshActiveCampSnapshot(campId)
+          .then(async () => {
             if (selectionGeneration !== campSelectionGeneration.current) return
-            campEventSequenceMarker.current = snapshot.throughGlobalSequence
-            setCampSnapshot(snapshot)
             setOptimisticCampMessages((current) =>
               current.filter((entry) => entry.commandId !== commandId)
             )

@@ -5,7 +5,7 @@ authority: execution-window-and-unredacted-presentation
 status: accepted
 version: 34
 source_version: v1.58
-last_updated: 2026-09-13
+last_updated: 2026-09-20
 ---
 
 # Run Process Detail Surface v34
@@ -78,6 +78,8 @@ N 只统计当前组已读取且成功的可见逻辑操作，不代表整个 Ru
 ## 验收
 
 - Camp 首屏没有执行正文；只有可见展开的 Run 请求一页及相邻预取页，预取不递归；
+- 未命中 Renderer 缓存的首次 page/changes 直接读取该 Run，不等待无关且未占数据库事务的 Camp
+  准备或快照请求完成；共享数据库 mutex 的真实等待单独计量，不以缓存命中代替此验收；
 - 开始/完成不跨页拆散，运行中操作不因较早而消失，CLI 关联跨页仍可证明，错误目标与迟到响应被拒绝；
 - 翻页和失败重试保留阅读位置，后台刷新不抢历史位置，回到最新恢复读取；
 - 关闭的工具组无子行 DOM，展开组不读取所有结果，展开单条工具或 Diff 才读取其完整内容；
