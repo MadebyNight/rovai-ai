@@ -509,6 +509,8 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
   height: min(506px, calc(100vh - 64px));
   max-width: none;
   max-height: none;
+  /* Editor pickers portal here so Dialog owns their hit testing and scroll lock. */
+  overflow: visible;
   border: 1px solid var(--line-strong);
   border-radius: 13px;
   background: var(--surface-raised);

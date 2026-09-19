@@ -10,14 +10,76 @@ app.setPath('userData', userData); app.setPath('sessionData', join(userData, 'se
 app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: process.platform === 'linux', width: 1440, height: 920, useContentSize: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
-  await window.loadFile(renderer, mode === 'large-diff' ? { query: { largeDiff: '1' } } : undefined)
-  const waitFor = async (expression, message) => {
-    const deadline = Date.now() + 6000
+  await window.loadFile(renderer, mode === 'large-diff'
+    ? { query: { largeDiff: '1' } }
+    : mode === 'editor-pointer' ? { query: { pointerCatalog: '1' } } : undefined)
+  const waitFor = async (expression, message, timeout = 6000) => {
+    const deadline = Date.now() + timeout
     while (Date.now() < deadline) {
       if (await window.webContents.executeJavaScript(expression, true)) return
       await new Promise(resolve => setTimeout(resolve, 30))
     }
     throw new Error(message)
+  }
+  const pointFor = async selector => window.webContents.executeJavaScript(`(() => {
+    const element = document.querySelector(${JSON.stringify(selector)})
+    if (!element) return null
+    const bounds = element.getBoundingClientRect()
+    return { x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height / 2) }
+  })()`, true)
+  const click = async selector => {
+    const point = await pointFor(selector)
+    assert(point, `No pointer target for ${selector}`)
+    window.webContents.sendInputEvent({ type: 'mouseMove', ...point })
+    window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 })
+    window.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 })
+  }
+  const wheel = async selector => {
+    const point = await pointFor(selector)
+    assert(point, `No wheel target for ${selector}`)
+    await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX: 0, deltaY: 1000 })
+  }
+  const settle = () => window.webContents.executeJavaScript('new Promise(resolve => setTimeout(resolve, 250))', true)
+  if (mode === 'editor-pointer') {
+    window.webContents.debugger.attach('1.3')
+    window.setContentSize(1040, 700)
+    await waitFor('window.innerWidth === 1040 && window.innerHeight === 700', 'Mission editor pointer fixture did not resize')
+    await waitFor("!!document.querySelector('.mission-board-card')", 'Mission board did not load for editor pointer acceptance')
+    await click('.mission-new-entry')
+    await waitFor("!!document.querySelector('.mission-create-dialog')", 'Pointer click did not open Mission creation', 1500)
+    await settle()
+
+    await click('.mission-create-dialog .mission-editor-project-property')
+    await waitFor("!!document.querySelector('.mission-editor-project-popover')", 'Pointer click did not open the project picker', 1500)
+    await settle()
+    await wheel('.mission-editor-project-list')
+    await waitFor("document.querySelector('.mission-editor-project-list')?.scrollTop > 0 && document.querySelector('.mission-create-dialog')?.contains(document.querySelector('.mission-editor-project-popover'))", 'Project picker did not remain in the Mission dialog and scroll under wheel input', 1500)
+    await click('.mission-editor-project-list .compact-option:last-of-type')
+    await waitFor("!!document.querySelector('.mission-create-dialog') && !document.querySelector('.mission-editor-project-popover') && document.querySelector('.mission-editor-project-property')?.textContent?.includes('示例项目 14')", 'Project pointer selection did not commit inside the Mission dialog', 1500)
+    await settle()
+
+    await click('.mission-create-dialog .mission-editor-team-property')
+    await waitFor("!!document.querySelector('.mission-editor-team-popover')", 'Pointer click did not open the team picker', 1500)
+    await settle()
+    await waitFor("document.querySelector('.mission-create-dialog')?.contains(document.querySelector('.mission-editor-team-popover'))", 'Team picker escaped or closed after pointer input', 1500)
+    await wheel('.mission-editor-team-list')
+    await waitFor("document.querySelector('.mission-editor-team-list')?.scrollTop > 0 && !!document.querySelector('.mission-editor-team-popover')", 'Team picker did not remain open and scroll under wheel input', 1500)
+    await click('.mission-editor-team-list .mission-editor-team-row:last-child .mission-editor-team-member')
+    await waitFor("!!document.querySelector('.mission-create-dialog') && !!document.querySelector('.mission-editor-team-popover') && document.querySelector('.mission-editor-team-count')?.textContent?.includes('已选 19 / 20')", 'Team pointer selection closed the picker or failed to toggle', 1500)
+    await click('.mission-editor-team-footer .compact-primary')
+    await waitFor("!!document.querySelector('.mission-create-dialog') && !document.querySelector('.mission-editor-team-popover')", 'Team completion did not return to the Mission dialog', 1500)
+    await settle()
+
+    await click('.mission-create-dialog .mission-editor-tag-property')
+    await waitFor("!!document.querySelector('.mission-editor-tag-popover')", 'Pointer click did not open the tag picker', 1500)
+    await settle()
+    await wheel('.mission-tag-options')
+    await waitFor("document.querySelector('.mission-tag-options')?.scrollTop > 0 && document.querySelector('.mission-create-dialog')?.contains(document.querySelector('.mission-editor-tag-popover'))", 'Tag picker did not remain in the Mission dialog and scroll under wheel input', 1500)
+    await click('.mission-editor-tag-option:last-of-type')
+    await waitFor("!!document.querySelector('.mission-create-dialog') && !!document.querySelector('.mission-editor-tag-popover') && !!document.querySelector('.mission-editor-tag-option[aria-checked=true]')", 'Tag pointer selection closed the picker or failed to toggle', 1500)
+    console.log(JSON.stringify({ ok: true, cases: ['project/team/tag wheel input and pointer selection remain inside the Mission editor'] }))
+    app.exit(0)
+    return
   }
   if (mode === 'wide-direct-expand') {
     window.setContentSize(2560, 1440)

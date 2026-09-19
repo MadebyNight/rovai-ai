@@ -174,10 +174,11 @@ export const MissionPropertyChip = forwardRef<HTMLButtonElement, MissionProperty
   </button>
 })
 
-export function MissionTagPicker({ tags, catalog, disabled, onChange }: {
+export function MissionTagPicker({ tags, catalog, disabled, portalContainer, onChange }: {
   tags: string[]
   catalog: string[]
   disabled: boolean
+  portalContainer: HTMLElement | null
   onChange(tags: string[]): void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -198,7 +199,7 @@ export function MissionTagPicker({ tags, catalog, disabled, onChange }: {
     <Popover.Trigger asChild><MissionPropertyChip className="mission-editor-tag-property" icon={<Icon name="tag"/>} disabled={disabled} aria-label={tags.length ? `标签：${tags.join('、')}` : '添加标签'}>{tags.length
       ? <span className="mission-editor-selected-tags">{visibleTags.map(tag => <span className="mission-editor-selected-tag" style={tagStyle(tag)} key={tag}>{tag}</span>)}{tags.length > visibleTags.length && <span className="mission-editor-selected-tag-overflow">+{tags.length - visibleTags.length}</span>}</span>
       : '添加标签'}</MissionPropertyChip></Popover.Trigger>
-    <Popover.Portal><Popover.Content className="compact-menu mission-editor-tag-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
+    <Popover.Portal container={portalContainer}><Popover.Content className="compact-menu mission-editor-tag-popover" align="start" sideOffset={6} collisionPadding={12} onOpenAutoFocus={event => { event.preventDefault(); searchRef.current?.focus() }}>
       <label className="mission-tag-search"><NavigationIcon name="search"/><input ref={searchRef} value={query} onChange={event => setQuery(event.target.value)} aria-label="搜索或新建标签" placeholder="搜索或新建标签…" onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); create() } }}/></label>
       <div className="mission-tag-options" role="group" aria-label="可选标签">
         {found.map(tag => {
