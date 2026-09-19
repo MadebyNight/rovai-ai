@@ -17,9 +17,9 @@ last_updated: 2026-09-19
 - 本地用户消息仅在首次目标 claim 前显示撤回；成功后时间线可显示“你撤回了一条消息”，但 Agent 读取、搜索、线程和分页不包含正文或占位。
 - Channel-bound Camp 的 Agent 公共发言默认外发；没有 `--to-channel` 或 Run 级外发开关。
 
-字段与状态见 [Message Delivery v9](../../contracts/message-delivery-v9.md)、
+字段与状态见 [Message Delivery v10](../../contracts/message-delivery-v10.md)、
 [Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)和
-[Camp History v7](../../contracts/camp-history-v7.md)。本文件后续仍描述的 Core-owned public Draft/Pending、
+[Camp History v8](../../contracts/camp-history-v8.md)。本文件后续仍描述的 Core-owned public Draft/Pending、
 CampTurn Stop、Gather 或业务重试均为历史交互，不再适用于当前 public Camp；本机草稿与 recipient
 continuation 是当前 Desktop 行为。
 

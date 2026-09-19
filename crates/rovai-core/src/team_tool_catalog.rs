@@ -859,7 +859,7 @@ fn mission_mutation_schema() -> Value {
 
 pub fn builtin_tool_definitions() -> Vec<Value> {
     vec![
-        json!({"name":"mission.get","title":"Read the current Mission","description":"Read the current Camp's Mission, including its current attachment source paths.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"required":["missionId","title","description","status","sourceMessageId","attachments"],"properties":{"missionId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"]},"sourceMessageId":{"type":["string","null"]},"attachments":{"type":"array","items":{"type":"string"}}}}}),
+        json!({"name":"mission.get","title":"Read the current Mission","description":"Read the current Camp's Mission, including its current attachment source paths. This read grants no Mission write authority.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"outputSchema":{"type":"object","additionalProperties":false,"required":["missionId","title","description","status","sourceMessageId","attachments"],"properties":{"missionId":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"]},"sourceMessageId":{"type":["string","null"]},"attachments":{"type":"array","items":{"type":"string"}}}}}),
         json!({"name":"mission.update","title":"Update the current Mission","description":"Update the current Mission's title or description without starting work.","inputSchema":{"type":"object","additionalProperties":false,"anyOf":[{"required":["title"]},{"required":["description"]}],"properties":{"title":{"type":"string","minLength":1,"maxLength":200},"description":{"type":"string","maxLength":12000}}},"outputSchema":mission_mutation_schema()}),
         json!({"name":"mission.status","title":"Set the current Mission status","description":"Set the current Mission's status without starting or stopping work.","inputSchema":{"type":"object","additionalProperties":false,"required":["status"],"properties":{"status":{"type":"string","enum":["needs_you","not_started","in_progress","completed"],"description":"One of: needs_you, not_started, in_progress, completed."},"sourceMessageId":{"type":"string","minLength":1,"description":"Required for needs_you or completed; reference an existing public message in this Camp."}}},"outputSchema":mission_mutation_schema()}),
         json!({
@@ -1039,28 +1039,28 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
         json!({
             "name": CAMP_LIST_TOOL_NAME,
             "title": "Discover other Camps",
-            "description": "Return a bounded Top-K of other Camps frozen into this AgentRun and still authorized now. Search only frozen Camp names; omit query for recent Camps. This tool never searches messages and never paginates.",
+            "description": "Return a bounded Top-K of other public Camps frozen into this AgentRun. Target-Camp membership is not a read permission. Search only frozen Camp names; omit query for recent Camps. This tool never searches messages and never paginates.",
             "inputSchema": CampHistoryService::camp_list_input_schema(),
             "outputSchema": camp_list_success_schema()
         }),
         json!({
             "name": CAMP_SEARCH_TOOL_NAME,
             "title": "Search one public Camp timeline",
-            "description": "Search one public Camp timeline. Omit campId to search the current Camp. Pass campId to search one other Camp available to the current AgentRun. Search is discovery, not traversal: use a stable messageId with camp.read. Summaries and attachments are not searched.",
+            "description": "Search one public Camp timeline. Omit campId to search the current Camp, or pass any extant public Camp ID; target-Camp membership is not a read permission. Search is discovery, not traversal: use a stable messageId with camp.read. Summaries and attachments are not searched.",
             "inputSchema": CampHistoryService::camp_search_input_schema(),
             "outputSchema": camp_search_success_schema(false)
         }),
         json!({
             "name": HISTORY_SEARCH_TOOL_NAME,
-            "title": "Search authorized Camp history",
-            "description": "Discover messages across authorized historical Camps when the target Camp is unknown. Camp titles are metadata, not hits. Once a Camp is known, prefer camp.search and camp.read with stable IDs. Summaries and attachments are not searched.",
+            "title": "Search public Camp history",
+            "description": "Discover messages across public historical Camps when the target Camp is unknown. Target-Camp membership is not a read permission. Camp titles are metadata, not hits. Once a Camp is known, prefer camp.search and camp.read with stable IDs. Summaries and attachments are not searched.",
             "inputSchema": CampHistoryService::history_search_input_schema(),
             "outputSchema": camp_search_success_schema(true)
         }),
         json!({
             "name": CAMP_READ_TOOL_NAME,
             "title": "Read original Camp messages",
-            "description": "Read messages from exactly one Camp. With no message selector, return the newest visible messages from the current or explicitly selected Camp; use before as the exclusive sequence cursor and limit for paging. Use messageId for one exact message, or thread for a thread page ending before the optional cursor. Reuse nextCursor as before. IDs and cursors locate content but never grant access.",
+            "description": "Read messages from exactly one public Camp. Target-Camp membership is not a read permission. With no message selector, return the newest visible messages from the current or explicitly selected Camp; use before as the exclusive sequence cursor and limit for paging. Use messageId for one exact message, or thread for a thread page ending before the optional cursor. Reuse nextCursor as before. IDs and cursors locate content but never bypass message visibility.",
             "inputSchema": CampHistoryService::camp_read_input_schema(),
             "outputSchema": camp_read_success_schema()
         }),

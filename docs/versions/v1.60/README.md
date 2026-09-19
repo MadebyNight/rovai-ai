@@ -20,6 +20,7 @@ Conversation-local 输入、队列和上下文合同。
 
 ```text
 CampMessage publication
+→ 为每个目标建立稳定 Camp-member Conversation 路由
 → 每个目标一条有序 Message Delivery
 → Scheduler 原子 claim 队首完整前缀
 → 创建并冻结一个多输入 AgentRun
@@ -35,6 +36,8 @@ ChannelDelivery 继续维护自己的业务状态。
 ## 确认范围
 
 - 等待阶段只持久化按 `CampId + AgentId` 排序的 Delivery；claim 成功才创建 AgentRun。
+- 带目标的 publication 在同一事务中幂等建立必要 Conversation；claim 会修复旧实现已遗留的无路由 waiting lane，
+  启动扫描与 30 秒兜底均可自愈，无需数据库回写。
 - 一个 Run 冻结有序 `input_message_ids`，并以最后一项确定唯一 `anchor_message_id`。
 - 用户、A2A、Mission start、Automation 与 Channel 入站统一为普通消息并按 FIFO 合批；来源不形成批次边界。
 - claim 时读取并冻结当前 Agent 的 Runtime、模型、模式、权限、工作区和工具配置；等待 Delivery 不冻结配置。
@@ -59,6 +62,9 @@ ChannelDelivery 继续维护自己的业务状态。
 - Runtime 输入仍有确定性容量：profile 缺省 96 KiB，不再应用通用 1 MiB clamp。
 - `SHARED_CONVERSATION` 使用每个 Camp+Agent 的 accepted 增量公共消息窗口，保留原始顺序和当前 Agent 自己的消息；
   `camp.read` 则始终读取调用时最新可见状态，不受 Run 的 frozen ContextManifest 上下界限制。
+- 所有受认证队员可发现、搜索并读取所有存续 Camp 的公共历史；目标 Camp membership 只服务参与、寻址与执行，
+  不是 read ACL。旧 Manifest 漏项在 discovery 时动态补足，Single Chat 与 Runtime 私有记录不在此范围。
+- `mission.get` 是不复用 Camp mutation gate 的只读操作；`mission.update/status` 继续要求当前写入权限。
 
 字段级模型输入与 clean break 见[模型上下文变更 revision 2](model-context-change-camp-message-run.md)。
 实施顺序和验证门槛见[实施计划](implementation-plan.md)，高成本取舍见[版本决定](decisions.md)。
@@ -71,15 +77,17 @@ Skill、Migration 与自动化验证已完成，并以 Delivery-first 主链取�
 `main` 的 Mission workspace lifecycle 拥有 Migration 162/schema 112；Delivery-first clean break 因此使用
 Migration 163/schema 113，并显式接纳已运行旧功能分支 162 的精确物理结构作为收敛来源。AgentRun
 Notification source 兼容扩展使用 Migration 164/schema 114。
+首次 A2A 路由修复、公共读取范围与 Mission read/mutation 分层不改变 schema；存量 waiting Delivery 在普通 claim
+事务中自愈，历史 Manifest 不回写。
 
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.59 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.60 |
-| Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输、渠道/Automation、事件唤醒调度、本机 Composer 恢复与 AgentRun 通知取舍 |
-| Contracts | 已更新 | [模型上下文变更说明](model-context-change-camp-message-run.md)与当前合同索引已发布 Context、Run Facts、Message Delivery、Camp Read、Built-in Transport、Composer、Notification 与 Planned Shutdown 新版本 |
-| Architecture | 已更新 | 长期 Architecture、系统图源与生成图已同步 Delivery-first 主链、普通多目标消息、`RUN_INPUT`、受监督调度任务、本机 Composer authority 与 AgentRun attention |
+| Decisions | 已更新 | [版本决定](decisions.md)记录 Delivery-first、CampTurn/Gather clean break、撤回擦除、完整传输、渠道/Automation、事件唤醒调度、本机 Composer 恢复、AgentRun 通知、公共读取范围与首次目标路由取舍 |
+| Contracts | 已更新 | [模型上下文变更说明](model-context-change-camp-message-run.md)与当前合同索引已发布 Context、Run Facts、Message Delivery、Camp Read、Built-in Transport、Mission、Composer、Notification 与 Planned Shutdown 新版本 |
+| Architecture | 已更新 | 长期 Architecture、系统图源与生成图已同步 Delivery-first 主链、目标 Conversation 自愈、公共历史读范围、`RUN_INPUT`、受监督调度任务、本机 Composer authority 与 AgentRun attention |
 | UI | 已更新 | 当前 UI 规范与 Renderer 已同步等待预览、精确 Run Stop、红色失败、撤回、按 Camp 草稿恢复、continuation、发送前附件与 AgentRun 定位 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类；只改变 Run 输入、运输完整性和终态/隔离调度 |
 | Runtime compatibility | 确认无需更新 | 不改变已发布 Runtime 资格；大结果与新上下文使用独立 smoke 验证，不把本版推导为平台晋级 |

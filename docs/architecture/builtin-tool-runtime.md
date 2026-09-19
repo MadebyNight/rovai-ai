@@ -3,17 +3,17 @@ document_type: architecture
 architecture: builtin-tool-runtime
 authority: builtin-tool-component-boundaries
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Built-in Tool Runtime Architecture
 
 本文件说明 Rovai built-in operations 的长期组件结构。当前字段与版本以
-[Built-in Tool Transport v27](../contracts/builtin-tool-transport-v27.md)、
+[Built-in Tool Transport v28](../contracts/builtin-tool-transport-v28.md)、
 [Built-in Tool Agent Output Projection v1](../contracts/builtin-tool-agent-output-projection-v1.md)、
-[Camp History v7](../contracts/camp-history-v7.md)、
+[Camp History v8](../contracts/camp-history-v8.md)、
 [Durable Task v3](../contracts/durable-task-v3.md) 和
-[Camp Message Send v21](../contracts/camp-message-send-v21.md)、
+[Camp Message Send v22](../contracts/camp-message-send-v22.md)、
 [Current User Attention v6](../contracts/current-user-attention-v6.md)与
 [Missing-Send Recovery Publication v2](../contracts/missing-send-recovery-publication-v2.md) 为准；v19 及更早 Transport 只保留
 historical 语义。决策理由见
@@ -179,7 +179,7 @@ Camp History exact help 保持三段职责：目标未知时用 `history.search`
 文件用途只在 `--file` 的精确帮助中说明：发送收件人需要的交付文件，不把中间产物当成交付。
 Summary 不再说明附件快照、路径优化或纯附件示例；输入 schema、纯附件发送和路径处理均不变。
 精确教学、Principal 寻址去歧义及飞书 Session 的补充提示由
-[Camp Message Send v21](../contracts/camp-message-send-v21.md) 拥有。
+[Camp Message Send v22](../contracts/camp-message-send-v22.md) 拥有。
 
 Send `body` exact help 只说明正文 payload；Bootstrap、Send summary/schema/CLI help
 都不公开 inline fallback 机制。`--to` 只接受 canonical ID，并是 Agent 目标 authoring 的唯一推荐入口。Core
@@ -187,9 +187,9 @@ Domain Service 保留 line-leading 连续有效 mention 的兼容 parser，未�
 CLI、Runtime Adapter、Bootstrap 与 Skill 都不重写正文或教学该 grammar。`--public-only` 在任何 alias/member lookup 前绕过正文寻址，并与显式
 `to/taskId` 原子冲突；`agentAddressingMode` 表达 caller intent，`effectiveRecipients/deliveryIds` 表达实际结果。
 该 schema 继续进入当前 catalog digest。
-当前 v27 contract/CLI command version、`builtin_cli.transport.v27` capability 与 IPC protocol 2 必须同时进入
-Binding compatibility 和 digest。Camp History 使用 v5；Native Binding context contract 加入内部
-`sessionCharterRevision: 8`，使旧 public Charter Binding 不可兼容恢复。Bootstrap v3/Formatter 3 不变；public 动态 Context
+当前 v28 contract/CLI command version、`builtin_cli.transport.v28` capability 与 IPC protocol 2 必须同时进入
+Binding compatibility 和 digest。Camp History 使用 v8；Native Binding context contract 加入内部
+`sessionCharterRevision: 8`；本次读取权限修复不改变 Charter 字节或轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
 使用 Formatter 26 / ContextManifest 26，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
 
 `ROVAI_RUN_TMP` 是 Runtime Host 启动时继承的稳定精确路径，不是 process root、Camp workspace 或附件存储。
@@ -287,10 +287,11 @@ aggregate。重放不重新读源，身份漂移只清理本 operation 尚未拥
 内部实现，不扩大 generic Router interface，也不把路径或 projection 状态加入 Agent output。
 
 推导。首次调用将它写入内部 `CampMessageSendCommand.camp_id`；持久 Replay 读取已记录的
-`camp_id + source AgentRun + executionEpoch`，不重新使用当前活跃身份。Camp History service 为
-`camp.search` 和 `camp.read` 共用一个 single-target resolver：省略或显式当前 Camp 使用 current sequence
-boundary；其他 Camp 必须同时通过 ContextManifest snapshot 与 live membership/profile authorization，并使用
-冻结 global public boundary。`history.search` 保持独立 multi-Camp discovery；任何 message ID 都不授予范围。
+`camp_id + source AgentRun + executionEpoch`，不重新使用当前活跃身份。Camp History service 先认证调用方
+Run/epoch，再把所有存续公共 Camp 作为可读范围；目标 Camp membership/profile 不参与授权。`camp.read` 直接解析目标
+Camp 并使用调用时 sequence boundary；ContextManifest history catalog 不限制它。`camp.list`、跨 Camp
+`camp.search` 和 `history.search` 继续使用冻结 global public boundary 保持 discovery 时序，并为旧 Manifest
+漏掉的 Camp 动态补足 catalog。任何 message ID 都不能绕过 recall、withdrawal、recipient suppression 或 quote 可见性。
 
 ### 新 Session
 
@@ -431,7 +432,7 @@ Session Charter 只说明：
 最后一条后、Adapter 指导前追加一条文件交付提示。Quick Chat/Project 共用该 Camp 级判断；普通、钉钉、
 closed 或尚未绑定的会话不追加。已有 Binding 从 Blob 复用冻结 Charter，不重新查询渠道，因此关闭绑定或
 从本地继续聊天不改写提示，也不触发 Session rotation。下一次正常新 Binding 才读取当前关系。
-精确文本见 [Send v21](../contracts/camp-message-send-v21.md)。
+精确文本见 [Send v22](../contracts/camp-message-send-v22.md)。
 
 Charter 不承载 Task 创建克制、字段权限、Camp-wide read、local planning/A2A、wake/send、Memory
 治理或 polling 操作指导。普通 flags 属于精确 operation help；命令族选择、message→Task、多操作协调

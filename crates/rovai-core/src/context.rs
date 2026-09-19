@@ -7946,30 +7946,19 @@ fn capture_cross_camp_history_fence(
                    camp.created_at
                )
         FROM camp
-        JOIN camp_member
-          ON camp_member.camp_id = camp.id
-         AND camp_member.agent_id = ?2
-        JOIN agent_profile
-          ON agent_profile.id = camp_member.agent_id
-        WHERE camp.id <> ?3
-          AND camp_member.status = 'active'
-          AND camp_member.leave_requested_at IS NULL
-          AND agent_profile.profile_status = 'present'
+        WHERE camp.id <> ?2
         ORDER BY camp.id
         "#
     );
     let mut statement = transaction.prepare(&sql)?;
     let camps = statement
-        .query_map(
-            params![global_boundary, snapshot.agent_id, snapshot.camp_id,],
-            |row| {
-                Ok(CrossCampHistorySnapshot {
-                    camp_id: row.get(0)?,
-                    camp_title: row.get(1)?,
-                    last_visible_activity_at: row.get(2)?,
-                })
-            },
-        )?
+        .query_map(params![global_boundary, snapshot.camp_id], |row| {
+            Ok(CrossCampHistorySnapshot {
+                camp_id: row.get(0)?,
+                camp_title: row.get(1)?,
+                last_visible_activity_at: row.get(2)?,
+            })
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok((global_boundary, camps))
 }
@@ -9511,6 +9500,224 @@ mod slow_tests {
             "camp.read_unavailable"
         );
 
+        fixture.cleanup();
+    }
+
+    #[test]
+    fn public_history_is_readable_without_target_camp_membership_or_live_recheck() {
+        let mut fixture = fixture();
+        let (unjoined_camp_id, unjoined_message_id) = create_history_camp(
+            &mut fixture.database,
+            &fixture.directory,
+            "PUBLIC_HISTORY_WITHOUT_SNAPSHOT_MEMBERSHIP",
+        );
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE camp_member
+                SET status = 'left', version = version + 1
+                WHERE camp_id = ?1 AND agent_id = 'agent_1'
+                "#,
+                [&unjoined_camp_id],
+            )
+            .unwrap();
+        let (left_after_snapshot_camp_id, left_after_snapshot_message_id) = create_history_camp(
+            &mut fixture.database,
+            &fixture.directory,
+            "PUBLIC_HISTORY_WITHOUT_LIVE_MEMBERSHIP",
+        );
+        let run = materialize_history_fixture(&mut fixture);
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                DELETE FROM context_manifest_history_camp
+                WHERE camp_id = ?1
+                  AND context_manifest_id = (
+                      SELECT id FROM context_manifest WHERE agent_run_id = ?2
+                  )
+                "#,
+                params![unjoined_camp_id, fixture.run_id],
+            )
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE camp_member
+                SET status = 'left', version = version + 1
+                WHERE camp_id = ?1 AND agent_id = 'agent_1'
+                "#,
+                [&left_after_snapshot_camp_id],
+            )
+            .unwrap();
+
+        let listed = CampHistoryService
+            .list_camps(
+                &mut fixture.database,
+                &run,
+                &CampListInput {
+                    query: Some("PUBLIC_HISTORY_WITHOUT_SNAPSHOT_MEMBERSHIP".to_string()),
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(listed["camps"][0]["campId"], unjoined_camp_id);
+
+        let searched_without_snapshot = CampHistoryService
+            .search_camp(
+                &mut fixture.database,
+                &run,
+                &CampSearchInput {
+                    camp_id: Some(unjoined_camp_id.clone()),
+                    query: "PUBLIC_HISTORY_WITHOUT_SNAPSHOT_MEMBERSHIP".to_string(),
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            searched_without_snapshot["results"][0]["messageId"],
+            unjoined_message_id
+        );
+
+        let searched = CampHistoryService
+            .search_camp(
+                &mut fixture.database,
+                &run,
+                &CampSearchInput {
+                    camp_id: Some(left_after_snapshot_camp_id.clone()),
+                    query: "PUBLIC_HISTORY_WITHOUT_LIVE_MEMBERSHIP".to_string(),
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            searched["results"][0]["messageId"],
+            left_after_snapshot_message_id
+        );
+
+        let read = CampHistoryService
+            .read(
+                &mut fixture.database,
+                &run,
+                &CampReadInput {
+                    camp_id: Some(unjoined_camp_id.clone()),
+                    message_id: Some(unjoined_message_id.clone()),
+                    thread: None,
+                    before: None,
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(read["items"][0]["messageId"], unjoined_message_id);
+
+        let history = CampHistoryService
+            .search_history(
+                &mut fixture.database,
+                &run,
+                &HistorySearchInput {
+                    query: "PUBLIC_HISTORY_WITHOUT_LIVE_MEMBERSHIP".to_string(),
+                    camp_ids: Some(vec![left_after_snapshot_camp_id]),
+                    date_from: None,
+                    date_to: None,
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            history["results"][0]["messageId"],
+            left_after_snapshot_message_id
+        );
+        let history_without_snapshot = CampHistoryService
+            .search_history(
+                &mut fixture.database,
+                &run,
+                &HistorySearchInput {
+                    query: "PUBLIC_HISTORY_WITHOUT_SNAPSHOT_MEMBERSHIP".to_string(),
+                    camp_ids: Some(vec![unjoined_camp_id]),
+                    date_from: None,
+                    date_to: None,
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            history_without_snapshot["results"][0]["messageId"],
+            unjoined_message_id
+        );
+        fixture.cleanup();
+    }
+
+    #[test]
+    fn cross_camp_read_uses_live_public_history_not_the_frozen_catalog() {
+        let mut fixture = fixture();
+        let (history_camp_id, _) = create_history_camp(
+            &mut fixture.database,
+            &fixture.directory,
+            "CROSS_CAMP_BEFORE_MANIFEST",
+        );
+        let run = materialize_history_fixture(&mut fixture);
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                DELETE FROM context_manifest_history_camp
+                WHERE camp_id = ?1
+                  AND context_manifest_id = (
+                      SELECT id FROM context_manifest WHERE agent_run_id = ?2
+                  )
+                "#,
+                params![history_camp_id, fixture.run_id],
+            )
+            .unwrap();
+        let late = CollaborationService::default()
+            .send_test_camp_message(
+                &mut fixture.database,
+                &CommandEnvelope {
+                    command_id: Uuid::new_v4().to_string(),
+                    actor: ActorRef::User {
+                        user_id: "test-user".to_string(),
+                    },
+                    camp_id: Some(history_camp_id.clone()),
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: TestCampMessageCommand {
+                        camp_id: history_camp_id.clone(),
+                        draft_revision: None,
+                        body: "CROSS_CAMP_AFTER_MANIFEST".to_string(),
+                        prepared_attachment_ids: Vec::new(),
+                        address: TestCampMessageAddress::Default,
+                        reply_to_camp_message_id: None,
+                        execution: None,
+                    },
+                },
+            )
+            .unwrap();
+        let late_message_id = late.result.payload["campMessageId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let read = CampHistoryService
+            .read(
+                &mut fixture.database,
+                &run,
+                &CampReadInput {
+                    camp_id: Some(history_camp_id),
+                    message_id: Some(late_message_id.clone()),
+                    thread: None,
+                    before: None,
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(read["items"][0]["messageId"], late_message_id);
+        assert_eq!(read["items"][0]["body"], "CROSS_CAMP_AFTER_MANIFEST");
         fixture.cleanup();
     }
 

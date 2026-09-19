@@ -28,7 +28,7 @@ pub const CAMP_LIST_TOOL_NAME: &str = "camp.list";
 pub const CAMP_SEARCH_TOOL_NAME: &str = "camp.search";
 pub const HISTORY_SEARCH_TOOL_NAME: &str = "history.search";
 pub const CAMP_READ_TOOL_NAME: &str = "camp.read";
-pub const CAMP_HISTORY_CONTRACT_VERSION: u32 = 6;
+pub const CAMP_HISTORY_CONTRACT_VERSION: u32 = 8;
 
 const CAMP_LIST_DEFAULT_LIMIT: usize = 20;
 const CAMP_LIST_MAX_LIMIT: usize = 50;
@@ -270,7 +270,7 @@ impl CampHistoryService {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Deferred)?;
         let fence = load_run_fence(&transaction, run)?;
-        let mut camps = load_authorized_history_camps(&transaction, run, &fence)?;
+        let mut camps = load_history_camps(&transaction, &fence)?;
         if let Some(query) = query.as_deref() {
             let folded_query = fold_text(query);
             camps.retain(|camp| fold_text(&camp.camp_title).contains(&folded_query));
@@ -378,17 +378,17 @@ impl CampHistoryService {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Deferred)?;
         let fence = load_run_fence(&transaction, run)?;
-        let authorized = load_authorized_history_camps(&transaction, run, &fence)?;
-        let authorized_ids = authorized
+        let available = load_history_camps(&transaction, &fence)?;
+        let available_ids = available
             .iter()
             .map(|camp| camp.camp_id.as_str())
             .collect::<HashSet<_>>();
         let scope = requested_camps.map_or_else(
-            || authorized.iter().map(|camp| camp.camp_id.clone()).collect(),
+            || available.iter().map(|camp| camp.camp_id.clone()).collect(),
             |requested| {
                 requested
                     .into_iter()
-                    .filter(|camp_id| authorized_ids.contains(camp_id.as_str()))
+                    .filter(|camp_id| available_ids.contains(camp_id.as_str()))
                     .collect::<Vec<_>>()
             },
         );
@@ -448,8 +448,9 @@ impl CampHistoryService {
             }
             Err(error) => return Err(error),
         };
-        let target = resolve_camp_target(&transaction, run, &fence, requested_camp_id.as_deref())?
-            .ok_or_else(read_unavailable)?;
+        let target =
+            resolve_live_read_target(&transaction, run, &fence, requested_camp_id.as_deref())?
+                .ok_or_else(read_unavailable)?;
         validate_cursor(input.before)?;
         let value = if let Some(message_id) = input.message_id.as_deref() {
             if input.thread.is_some() || input.before.is_some() || input.limit.is_some() {
@@ -612,19 +613,12 @@ fn load_run_fence(
             JOIN conversation ON conversation.id = agent_run.conversation_id
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
-            JOIN camp_member
-              ON camp_member.camp_id = camp.id
-             AND camp_member.agent_id = ?4
-            JOIN agent_profile ON agent_profile.id = camp_member.agent_id
             WHERE manifest.agent_run_id = ?1
               AND agent_run.execution_epoch = ?2
               AND agent_run.status = 'running'
               AND conversation.agent_id = ?4
               AND camp.id = ?3
               AND manifest.history_fence_version = 1
-              AND camp_member.status = 'active'
-              AND camp_member.leave_requested_at IS NULL
-              AND agent_profile.profile_status = 'present'
             "#,
             params![
                 run.agent_run_id,
@@ -651,36 +645,52 @@ fn load_run_fence(
         })
 }
 
-fn load_authorized_history_camps(
-    transaction: &Transaction<'_>,
-    run: &AuthenticatedTeamToolRun,
-    fence: &RunFence,
-) -> Result<Vec<HistoryCamp>> {
-    let mut statement = transaction.prepare(
+fn load_history_camps(transaction: &Transaction<'_>, fence: &RunFence) -> Result<Vec<HistoryCamp>> {
+    let publication_cte = public_camp_message_publication_cte();
+    let sql = format!(
         r#"
-        SELECT snapshot.camp_id, snapshot.camp_title,
-               snapshot.last_visible_activity_at
-        FROM context_manifest_history_camp AS snapshot
-        JOIN camp ON camp.id = snapshot.camp_id
-        JOIN camp_member
-          ON camp_member.camp_id = camp.id
-         AND camp_member.agent_id = ?2
-        JOIN agent_profile ON agent_profile.id = camp_member.agent_id
-        WHERE snapshot.context_manifest_id = ?1
-          AND camp_member.status = 'active'
-          AND camp_member.leave_requested_at IS NULL
-          AND agent_profile.profile_status = 'present'
-        ORDER BY snapshot.camp_id
+        WITH {publication_cte}
+        SELECT camp.id,
+               COALESCE(snapshot.camp_title, camp.title),
+               COALESCE(
+                   snapshot.last_visible_activity_at,
+                   (
+                       SELECT message.created_at
+                       FROM camp_message AS message
+                       JOIN public_camp_message_publication AS publication
+                         ON publication.message_id = message.id
+                       WHERE message.camp_id = camp.id
+                         AND message.tombstoned_at IS NULL
+                         AND publication.global_sequence <= ?2
+                       ORDER BY publication.global_sequence DESC, message.id DESC
+                       LIMIT 1
+                   ),
+                   camp.created_at
+               )
+        FROM camp
+        LEFT JOIN context_manifest_history_camp AS snapshot
+          ON snapshot.context_manifest_id = ?1
+         AND snapshot.camp_id = camp.id
+        WHERE camp.id <> ?3
+        ORDER BY camp.id
         "#,
-    )?;
+    );
+    let mut statement = transaction.prepare(&sql)?;
     statement
-        .query_map(params![fence.manifest_id, run.agent_id], |row| {
-            Ok(HistoryCamp {
-                camp_id: row.get(0)?,
-                camp_title: row.get(1)?,
-                last_visible_activity_at: row.get(2)?,
-            })
-        })?
+        .query_map(
+            params![
+                fence.manifest_id,
+                fence.global_boundary,
+                fence.current_camp_id,
+            ],
+            |row| {
+                Ok(HistoryCamp {
+                    camp_id: row.get(0)?,
+                    camp_title: row.get(1)?,
+                    last_visible_activity_at: row.get(2)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
@@ -701,27 +711,18 @@ fn resolve_camp_target(
             viewer_agent_id: run.agent_id.clone(),
         }));
     }
-    let authorized = transaction
+    let available = transaction
         .query_row(
             r#"
             SELECT 1
-            FROM context_manifest_history_camp AS snapshot
-            JOIN camp ON camp.id = snapshot.camp_id
-            JOIN camp_member
-              ON camp_member.camp_id = camp.id
-             AND camp_member.agent_id = ?3
-            JOIN agent_profile ON agent_profile.id = camp_member.agent_id
-            WHERE snapshot.context_manifest_id = ?1
-              AND snapshot.camp_id = ?2
-              AND camp_member.status = 'active'
-              AND camp_member.leave_requested_at IS NULL
-              AND agent_profile.profile_status = 'present'
+            FROM camp
+            WHERE camp.id = ?1
             "#,
-            params![fence.manifest_id, camp_id, run.agent_id],
+            [camp_id],
             |_| Ok(()),
         )
         .optional()?;
-    if authorized.is_none() {
+    if available.is_none() {
         return Ok(None);
     }
     Ok(Some(CampTarget {
@@ -729,6 +730,27 @@ fn resolve_camp_target(
         fence: MessageFence::History {
             global_boundary: fence.global_boundary,
         },
+        viewer_agent_id: run.agent_id.clone(),
+    }))
+}
+
+fn resolve_live_read_target(
+    transaction: &Transaction<'_>,
+    run: &AuthenticatedTeamToolRun,
+    fence: &RunFence,
+    requested_camp_id: Option<&str>,
+) -> Result<Option<CampTarget>> {
+    let camp_id = requested_camp_id.unwrap_or(&fence.current_camp_id);
+    let boundary = transaction
+        .query_row(
+            "SELECT last_message_sequence FROM camp WHERE id = ?1",
+            [camp_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    Ok(boundary.map(|boundary| CampTarget {
+        camp_id: camp_id.to_string(),
+        fence: MessageFence::Current { boundary },
         viewer_agent_id: run.agent_id.clone(),
     }))
 }
@@ -887,21 +909,16 @@ fn load_history_body_candidates(
         SELECT message.id, message.camp_id, message.sequence,
                message.author_type, message.author_id,
                message.reply_to_camp_message_id, message.body,
-               message.created_at, publication.global_sequence, snapshot.camp_title
-        FROM context_manifest_history_camp AS snapshot
-        JOIN camp ON camp.id = snapshot.camp_id
-        JOIN camp_member
-          ON camp_member.camp_id = camp.id
-         AND camp_member.agent_id = ?2
-        JOIN agent_profile ON agent_profile.id = camp_member.agent_id
-        JOIN camp_message AS message ON message.camp_id = snapshot.camp_id
+               message.created_at, publication.global_sequence,
+               COALESCE(snapshot.camp_title, camp.title)
+        FROM camp
+        LEFT JOIN context_manifest_history_camp AS snapshot
+          ON snapshot.context_manifest_id = ?1
+         AND snapshot.camp_id = camp.id
+        JOIN camp_message AS message ON message.camp_id = camp.id
         JOIN public_camp_message_publication AS publication
           ON publication.message_id = message.id
-        WHERE snapshot.context_manifest_id = ?1
-          AND camp_member.status = 'active'
-          AND camp_member.leave_requested_at IS NULL
-          AND agent_profile.profile_status = 'present'
-          AND publication.global_sequence <= ?3
+        WHERE publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
           AND message.recall_state NOT IN ('recallable', 'withdrawn')
           AND NOT EXISTS (
@@ -924,22 +941,17 @@ fn load_history_body_candidates(
         SELECT message.id, message.camp_id, message.sequence,
                message.author_type, message.author_id,
                message.reply_to_camp_message_id, message.body,
-               message.created_at, publication.global_sequence, snapshot.camp_title
-        FROM context_manifest_history_camp AS snapshot
-        JOIN camp ON camp.id = snapshot.camp_id
-        JOIN camp_member
-          ON camp_member.camp_id = camp.id
-         AND camp_member.agent_id = ?2
-        JOIN agent_profile ON agent_profile.id = camp_member.agent_id
-        JOIN camp_message AS message ON message.camp_id = snapshot.camp_id
+               message.created_at, publication.global_sequence,
+               COALESCE(snapshot.camp_title, camp.title)
+        FROM camp
+        LEFT JOIN context_manifest_history_camp AS snapshot
+          ON snapshot.context_manifest_id = ?1
+         AND snapshot.camp_id = camp.id
+        JOIN camp_message AS message ON message.camp_id = camp.id
         JOIN camp_message_fts ON camp_message_fts.rowid = message.rowid
         JOIN public_camp_message_publication AS publication
           ON publication.message_id = message.id
-        WHERE snapshot.context_manifest_id = ?1
-          AND camp_member.status = 'active'
-          AND camp_member.leave_requested_at IS NULL
-          AND agent_profile.profile_status = 'present'
-          AND publication.global_sequence <= ?3
+        WHERE publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
           AND message.recall_state NOT IN ('recallable', 'withdrawn')
           AND NOT EXISTS (
@@ -1077,21 +1089,16 @@ fn merge_history_principal_candidates(
         SELECT message.id, message.camp_id, message.sequence,
                message.author_type, message.author_id,
                message.reply_to_camp_message_id, message.body,
-               message.created_at, publication.global_sequence, snapshot.camp_title
-        FROM context_manifest_history_camp AS snapshot
-        JOIN camp ON camp.id = snapshot.camp_id
-        JOIN camp_member
-          ON camp_member.camp_id = camp.id
-         AND camp_member.agent_id = ?2
-        JOIN agent_profile ON agent_profile.id = camp_member.agent_id
-        JOIN camp_message AS message ON message.camp_id = snapshot.camp_id
+               message.created_at, publication.global_sequence,
+               COALESCE(snapshot.camp_title, camp.title)
+        FROM camp
+        LEFT JOIN context_manifest_history_camp AS snapshot
+          ON snapshot.context_manifest_id = ?1
+         AND snapshot.camp_id = camp.id
+        JOIN camp_message AS message ON message.camp_id = camp.id
         JOIN public_camp_message_publication AS publication
           ON publication.message_id = message.id
-        WHERE snapshot.context_manifest_id = ?1
-          AND camp_member.status = 'active'
-          AND camp_member.leave_requested_at IS NULL
-          AND agent_profile.profile_status = 'present'
-          AND publication.global_sequence <= ?3
+        WHERE publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
           AND message.recall_state NOT IN ('recallable', 'withdrawn')
           AND NOT EXISTS (
@@ -1241,23 +1248,17 @@ fn merge_history_reference_candidates(
             SELECT message.id, message.camp_id, message.sequence,
                    message.author_type, message.author_id,
                    message.reply_to_camp_message_id, message.body,
-                   message.created_at, publication.global_sequence, snapshot.camp_title
+                   message.created_at, publication.global_sequence,
+                   COALESCE(snapshot.camp_title, camp.title)
             FROM camp_message_reference AS reference
             JOIN camp_message AS message ON message.id = reference.camp_message_id
-            JOIN context_manifest_history_camp AS snapshot
+            JOIN camp ON camp.id = message.camp_id
+            LEFT JOIN context_manifest_history_camp AS snapshot
               ON snapshot.context_manifest_id = ?1
-             AND snapshot.camp_id = message.camp_id
-            JOIN camp ON camp.id = snapshot.camp_id
-            JOIN camp_member
-              ON camp_member.camp_id = camp.id
-             AND camp_member.agent_id = ?2
-            JOIN agent_profile ON agent_profile.id = camp_member.agent_id
+             AND snapshot.camp_id = camp.id
             JOIN public_camp_message_publication AS publication
               ON publication.message_id = message.id
             WHERE reference.kind = ?3 AND reference.value = ?4
-              AND camp_member.status = 'active'
-              AND camp_member.leave_requested_at IS NULL
-              AND agent_profile.profile_status = 'present'
               AND publication.global_sequence <= ?5
               AND message.tombstoned_at IS NULL
               AND message.recall_state NOT IN ('recallable', 'withdrawn')

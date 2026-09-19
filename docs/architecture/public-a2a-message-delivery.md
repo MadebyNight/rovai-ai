@@ -3,14 +3,14 @@ document_type: architecture
 architecture: public-a2a-message-delivery
 authority: public-message-delivery-and-agent-run-boundaries
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Public Camp Message、Delivery 与 AgentRun
 
-本架构定义公开 Camp 的统一消息执行主链。字段合同见 [Camp Message Send v21](../contracts/camp-message-send-v21.md)、
-[Message Delivery v9](../contracts/message-delivery-v9.md)、[ContextManifest 26](../contracts/context-manifest-evidence-v26.md)
-与 [Camp History v7](../contracts/camp-history-v7.md)。Single Chat 不使用本主链。
+本架构定义公开 Camp 的统一消息执行主链。字段合同见 [Camp Message Send v22](../contracts/camp-message-send-v22.md)、
+[Message Delivery v10](../contracts/message-delivery-v10.md)、[ContextManifest 26](../contracts/context-manifest-evidence-v26.md)
+与 [Camp History v8](../contracts/camp-history-v8.md)。Single Chat 不使用本主链。
 
 ## 三类事实
 
@@ -34,8 +34,9 @@ Automation occurrence 与 ChannelDelivery 继续由自己的业务状态结算�
 ## 发布与寻址
 
 Core 在同一事务中验证作者、Camp membership、显式目标、self-send、正文/结构化内容、附件和命令幂等，随后写入一个
-公共消息以及每个目标一条 waiting Delivery。`--public-only` 只发布消息。多个目标共享消息内容，但没有预算、额度、
-Gather 或通用完成集合。
+公共消息，为每个目标幂等建立 `kind = camp_member` Conversation 路由，再创建一条 waiting Delivery。
+`--public-only` 只发布消息。多个目标共享消息内容，但没有预算、额度、Gather 或通用完成集合。发布不创建 Run；
+Conversation 只承担后续 lane 与 Native Session 的稳定路由身份。
 
 Anchor 只表达默认回复展示关系，不能推导目标、caller return、权限或完成。Agent 发言通常继承所属 Run 的冻结 anchor；
 用户显式回复使用自己选择的 anchor。Core 不再维护 forward/return、root、depth、ancestor cycle 或 A2A 预算；只有
@@ -46,18 +47,20 @@ self-send 继续拒绝。显示名兼容解析若仍存在，只在发送事务�
 每个 `(CampId, AgentId)` 有一条按消息 sequence 排序的 waiting Delivery 队列。等待阶段不创建 queued Run，也不冻结
 Runtime 配置。Scheduler 获得执行资格时，在一个事务中：
 
-1. 分别检查当前 membership、同一 Camp+Agent 旧执行隔离，以及实际共享 executionRoot 的清理门禁；
-2. 读取当前 Runtime、模型、模式、工作区、工具与权限配置；
-3. 用本次 Runtime payload capacity 和正式 `RUN_INPUT.messages[]` 投影/序列化结果，从队首选取能完整交付的
+1. 幂等补建历史 waiting lane 缺失的 Camp-member Conversation；只处理仍 active/present 的目标；
+2. 分别检查当前 membership、同一 Camp+Agent 旧执行隔离，以及实际共享 executionRoot 的清理门禁；
+3. 读取当前 Runtime、模型、模式、工作区、工具与权限配置；
+4. 用本次 Runtime payload capacity 和正式 `RUN_INPUT.messages[]` 投影/序列化结果，从队首选取能完整交付的
    最大连续前缀，不跳过任何中间项；每条消息按自身 ID 投影正文、quotes、source attachments 与 Skills；
-4. 创建一个 batch AgentRun 和有序 AgentRunInput；
-5. 以最后一条输入作为 Run anchor，冻结 ContextManifest 和实际执行配置；
-6. 把所选 Delivery 原子改为 claimed 并绑定该 Run。
+5. 创建一个 batch AgentRun 和有序 AgentRunInput；
+6. 以最后一条输入作为 Run anchor，冻结 ContextManifest 和实际执行配置；
+7. 把所选 Delivery 原子改为 claimed 并绑定该 Run。
 
 用户、Agent、Mission、Automation 与 Channel 来源使用同一规则，不形成批次边界。新消息不会追加到已冻结 Run。
 commit 前崩溃只留下 waiting Delivery；commit 后恢复同一 Run。设置变化影响未 claim 消息，不改变既有 Run。
 
-普通 Delivery 只有一个进程内 Scheduler 协调任务拥有 claim。Core 启动时先执行一次存量检查；新 waiting Delivery、
+普通 Delivery 只有一个进程内 Scheduler 协调任务拥有 claim。Core 启动时先执行一次存量检查；该次 claim 会自动修复
+旧实现遗留的无 Conversation waiting lane，无需 migration 或维护事件。新 waiting Delivery、
 Run 终态、Runtime ready 与相关 cleanup 完成后，在权威事务提交后发送无负载 wake。wake 只表示数据库状态可能变化，
 不保存 lane 清单，也不是工作权威。Scheduler 按页继续 claim 和 dispatch，超过单页上限时不会等待下一次定时检查；
 Runtime preparation 使用相互独立的 worker，一个慢任务或失败任务不阻塞其他 lane。
@@ -78,9 +81,10 @@ completion 的协调循环。
 此后已 claim 目标通过 `RUN_INPUT` 接收；仍未 claim 的目标继续被所有 Agent-facing 读取路径隔离；非目标 Agent 按普通
 公共规则读取。撤回成功取消所有 waiting Delivery 并擦除 Rovai 活跃数据中的原文；人类时间线占位不是 Agent MessageView。
 
-自动上下文、`camp.read`、搜索、线程、reply 展开和结构化引用共享同一可见性服务。外层消息可见不代表它引用的
-source 可见；每条 quote snapshot 在投影时按查看 Agent 和边界重新校验 source。ContextManifest 冻结自动上下文，
-但 Run 内的 `camp.read` 始终按调用时最新状态读取，不受 Manifest 上下界限制。
+自动上下文、`camp.read`、搜索、线程、reply 展开和结构化引用共享同一消息可见性服务。公共 Camp 历史对所有受认证
+队员可读；目标 Camp membership 只控制参与、寻址与执行，不是历史 ACL。外层消息可见不代表它引用的 source 可见；
+每条 quote snapshot 在投影时按查看 Agent 和边界重新校验 source。ContextManifest 冻结自动上下文和 discovery
+时序证据，但 Run 内的 `camp.read` 始终按调用时最新状态直接解析存续 Camp，不受 Manifest 上下界限制。
 
 ## 终态、停止与恢复
 

@@ -5339,21 +5339,6 @@ impl Core {
                             "Mission input does not match its schema",
                         )
                     })?;
-                    let actor = ActorRef::Agent {
-                        agent_id: authenticated_run.agent_id.clone(),
-                        source_agent_run_id: authenticated_run.agent_run_id.clone(),
-                    };
-                    if !crate::collaboration::actor_can_write_camp(
-                        database.connection(),
-                        &actor,
-                        Some(authenticated_run.execution_epoch),
-                        &authenticated_run.camp_id,
-                    )? {
-                        return Err(automation_tool_error(
-                            "mission.forbidden",
-                            "Current Camp membership is required",
-                        ));
-                    }
                     let mission = crate::mission::mission_for_camp(
                         database.connection(),
                         &authenticated_run.camp_id,
@@ -5364,9 +5349,24 @@ impl Core {
                             "The current public Camp has no Mission",
                         )
                     })?;
-                    if request.tool_name == "mission.get" {
+                    if mission_operation_is_read_only(&request.tool_name) {
                         Ok(serde_json::to_value(mission.agent_info())?)
                     } else {
+                        let actor = ActorRef::Agent {
+                            agent_id: authenticated_run.agent_id.clone(),
+                            source_agent_run_id: authenticated_run.agent_run_id.clone(),
+                        };
+                        if !crate::collaboration::actor_can_write_camp(
+                            database.connection(),
+                            &actor,
+                            Some(authenticated_run.execution_epoch),
+                            &authenticated_run.camp_id,
+                        )? {
+                            return Err(automation_tool_error(
+                                "mission.forbidden",
+                                "Current Camp membership is required",
+                            ));
+                        }
                         let service = crate::mission::MissionService::default();
                         let execution = if request.tool_name == "mission.update" {
                             let input: crate::mission::MissionUpdateInput =
@@ -22380,6 +22380,10 @@ fn automation_tool_error(code: &str, message: &str) -> anyhow::Error {
     .into()
 }
 
+fn mission_operation_is_read_only(operation: &str) -> bool {
+    operation == "mission.get"
+}
+
 fn agent_builtin_command_envelope<P>(
     command_id: String,
     run: &AuthenticatedTeamToolRun,
@@ -22791,6 +22795,14 @@ mod tests {
                 text: text.to_string(),
             }],
         }
+    }
+
+    #[test]
+    fn mission_get_is_read_only_while_mission_mutations_require_write_authority() {
+        assert!(mission_operation_is_read_only("mission.get"));
+        assert!(!mission_operation_is_read_only("mission.update"));
+        assert!(!mission_operation_is_read_only("mission.status"));
+        assert!(!mission_operation_is_read_only("mission.future_mutation"));
     }
 
     #[tokio::test]

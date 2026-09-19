@@ -25,6 +25,8 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 
 - [x] 发布新 ContextManifest、Context Delivery Profile、Run Facts、Message Delivery、Camp History、
   Built-in Tool Transport、Automation 与 Channel 合同。
+- [x] 以后续合同版本冻结首次目标 Conversation、存量 waiting 自愈、全员公共历史读取及 Mission 读写权限分层；
+  Built-in Transport v28 原子轮换 catalog/capability，Session Charter revision 8 与模型上下文字节不变。
 - [x] 更新长期 Architecture、`CONTEXT.md`、当前决定导航、UI 规范与文档任务路由。
 - [x] 在 v1.59 Mission workspace lifecycle Migration 162/schema 112 之后新增 Delivery-first Migration 163/schema 113；
   保留历史 migration、终态 CampTurn/Gather、冻结 ContextManifest 与 evidence，并将已运行旧功能分支
@@ -37,6 +39,8 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 ## Gate 2：Delivery-first 队列与多输入 Run
 
 - [x] Message Delivery 以 `(camp_id, recipient_agent_id, queue_sequence)` 形成稳定 FIFO。
+- [x] publication 在写 waiting Delivery 前幂等建立目标 Camp-member Conversation；claim 事务在 lane 查询前修复
+  active/present 存量目标的缺失 Conversation，启动扫描与固定 fallback 自动恢复，不增加 migration。
 - [x] Scheduler 在一个事务中选择可完整交付的队首最大前缀、创建 AgentRun、写入有序 AgentRunInput、
   claim 对应 Delivery，并冻结 Run 配置与输入锚点。
 - [x] 未 claim Delivery 不提前创建 Run；新消息不追加已冻结 Run；严格 FIFO，不跳过队首。
@@ -62,6 +66,8 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] Run Facts 删除 Gather 与 delegation；A2A Guidance 和特殊 Mission/Gather Current Input 分支退出。
 - [x] `camp.read` 按调用时最新状态和 recipient-specific visibility 选页，不受 frozen ContextManifest 边界限制；
   完整返回选中消息，删除 80k scalar budget 与尺寸缩页。
+- [x] `camp.list/search/read` 与 `history.search` 不再以目标 Camp membership/profile 授权；新 Manifest 捕获所有
+  存续 Camp，旧 Manifest 漏项由 discovery 查询动态补足，`camp.read` 直接实时解析目标 Camp。
 - [x] `camp.read` 请求收敛为 timeline `before/limit`、exact `messageId` 与 thread `thread/before/limit`；删除
   `mode/direction/around/after/cursor` 请求和 CLI 帮助，不增加旧模式翻译层。
 - [x] `RUN_INPUT.messages[]` 按每条 message ID 投影 source attachments，不以作者类型决定是否加载。
@@ -99,6 +105,8 @@ Gate 0 已完成；从 revision 2 实施，不擅自改变已确认语义。
 - [x] receipt v1 canonical digest 直接遍历借用结果树，不经 `json!`/`Value::clone()` 重建 payload；固定 digest
   golden 证明字段、排序、Unicode/转义、数组和数字 wire-compatible。
 - [x] Replay 保存首次定稿的完整结果；evidence 保存完整结果或受管存储身份、字节数和 digest。
+- [x] `mission.get` 与 mutation gate 分离；update/status 继续校验写权限。Catalog/CLI help 删除“authorized Camp”
+  误导，并以 Transport v28 轮换 catalog/capability；无需改变 Charter 或 Native Binding context contract。
 
 ## Gate 8：Renderer 与产品收口
 
@@ -152,6 +160,11 @@ cleanup 未确认可能放行后继、撤回命令可能重新发布。纯函数
 `cargo test -p rovai-core --lib delivery_queue::tests::` 和
 `cargo test -p rovai-core --features slow-tests --lib recallable_local_composer_message_is_erased_and_cannot_be_republished`。
 
+首次 A2A 路由与公共读取回归使用真实 SQLite 事务而不是纯函数替代：Agent send 到没有 Conversation 的首次收件人后
+必须立即可被 batch claim；历史 waiting lane 在 claim 中补建路由；目标 Camp 在 Manifest 捕获前无 membership、
+捕获后退出或被旧 Manifest 漏掉时，list/search/read/history 仍遵循公开范围；跨 Camp `camp.read` 可读取 Run 启动后
+的新消息。`mission.get` 的 operation 分类另以单元 owner 锁定为 read-only，update/status 保持 mutation。
+
 本次新增三个 Rust owner 各自覆盖无法由既有测试表达的边界：`application` 的 forced-abort drop guard 证明
 父 Scheduler 被取消时 sibling maintenance 与 launch permit 同步回收；Transport digest golden 证明借用式
 canonical writer 没有改变 receipt v1 preimage；Notification 数据库测试跨 terminal trigger、Episode hydration、
@@ -163,12 +176,12 @@ action 与 exact visible acknowledgement，低层纯函数无法证明该事务/
 ## 最终验证证据
 
 - `cargo check --workspace --all-targets`：通过。
-- `cargo test -p rovai-core --lib`：833 passed，0 failed，6 ignored，0 filtered out；ignored 均为文档声明的
+- `cargo test -p rovai-core --lib`：838 passed，0 failed，6 ignored，0 filtered out；ignored 均为文档声明的
   人工真实 Runtime smoke。
 - `cargo test -p rovai-core --bin rovai`：28 passed，0 failed。
 - `cargo test -p rovai-core --features slow-tests --lib camp_history::slow_tests::`：7 passed，0 failed。
-- `cargo test -p rovai-core --features slow-tests --lib context::slow_tests::`：42 passed，0 failed；包含
-  Delivery-first Context、Runtime Input Delivery、历史 v68-v71/v93 migration 与 live Camp Read owner。
+- `cargo test -p rovai-core --features slow-tests --lib context::slow_tests::`：44 passed，0 failed；包含
+  Delivery-first Context、Runtime Input Delivery、历史 v68-v71/v93 migration、全员公共历史与 live Camp Read owner。
 - `cargo test -p rovai-core --features slow-tests --lib --no-run`：全部 slow-test target 编译通过。
 - `pnpm typecheck`：通过。
 - `pnpm test`：文档、Skill、Electron sandbox、207 个 Vitest 文件/2,127 项测试，以及 Node 脚本

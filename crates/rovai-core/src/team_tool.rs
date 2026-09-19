@@ -2627,6 +2627,80 @@ mod tests {
     }
 
     #[test]
+    fn public_sends_to_first_time_recipient_create_one_conversation_and_one_batch_run() {
+        let mut fixture = Fixture::new();
+        fixture
+            .database
+            .connection()
+            .execute(
+                "DELETE FROM conversation WHERE camp_id = ?1 AND agent_id = 'agent_2'",
+                [&fixture.camp_id],
+            )
+            .unwrap();
+        let conversation_count = |database: &Database| {
+            database
+                .connection()
+                .query_row(
+                    r#"
+                    SELECT COUNT(*) FROM conversation
+                    WHERE camp_id = ?1 AND agent_id = 'agent_2'
+                      AND kind = 'camp_member'
+                    "#,
+                    [&fixture.camp_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(conversation_count(&fixture.database), 0);
+
+        let invocation = fixture.public_send_invocation(
+            "public-send-first-time-recipient",
+            "Please take the next action",
+            &["agent_2"],
+        );
+        let sent = TeamToolService::default()
+            .send_public_message(&mut fixture.database, &invocation)
+            .unwrap();
+        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+        assert_eq!(conversation_count(&fixture.database), 1);
+        let second = fixture.public_send_invocation(
+            "public-send-first-time-recipient-again",
+            "Please also include this follow-up",
+            &["agent_2"],
+        );
+        let sent = TeamToolService::default()
+            .send_public_message(&mut fixture.database, &second)
+            .unwrap();
+        assert_eq!(sent.result.status, CommandResultStatus::Accepted);
+        assert_eq!(conversation_count(&fixture.database), 1);
+
+        let claimed =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let (recipient_agent_id, invocation_kind, input_count): (String, String, i64) = fixture
+            .database
+            .connection()
+            .query_row(
+                r#"
+                SELECT conversation.agent_id, agent_run.invocation_kind,
+                       COUNT(*)
+                FROM agent_run
+                JOIN conversation ON conversation.id = agent_run.conversation_id
+                JOIN agent_run_input ON agent_run_input.agent_run_id = agent_run.id
+                WHERE agent_run.id = ?1
+                GROUP BY conversation.agent_id, agent_run.invocation_kind
+                "#,
+                [&claimed[0]],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(recipient_agent_id, "agent_2");
+        assert_eq!(invocation_kind, "batch");
+        assert_eq!(input_count, 2);
+    }
+
+    #[test]
     fn public_send_rejects_an_empty_body_without_files() {
         let mut fixture = Fixture::new();
         let invocation = fixture.public_send_invocation("empty-send", "   ", &[]);

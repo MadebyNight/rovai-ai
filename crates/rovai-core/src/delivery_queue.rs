@@ -65,6 +65,7 @@ pub(crate) fn enqueue_message_deliveries(
             .with_context(|| {
                 format!("Message Delivery target {recipient_agent_id} is not an active Camp member")
             })?;
+        ensure_camp_member_conversation(transaction, camp_id, recipient_agent_id, now)?;
         let delivery_id = Uuid::new_v4().to_string();
         transaction.execute(
             r#"
@@ -92,6 +93,68 @@ pub(crate) fn enqueue_message_deliveries(
         });
     }
     Ok(deliveries)
+}
+
+fn ensure_camp_member_conversation(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    agent_id: &str,
+    now: &str,
+) -> Result<()> {
+    transaction.execute(
+        r#"
+        INSERT INTO conversation(
+            id, camp_id, agent_id, kind,
+            summary_through_message_sequence, last_message_sequence,
+            version, created_at, updated_at
+        )
+        SELECT ?1, ?2, ?3, 'camp_member', 0, 0, 1, ?4, ?4
+        WHERE NOT EXISTS (
+            SELECT 1 FROM conversation
+            WHERE camp_id = ?2 AND agent_id = ?3 AND kind = 'camp_member'
+        )
+        "#,
+        params![Uuid::new_v4().to_string(), camp_id, agent_id, now],
+    )?;
+    Ok(())
+}
+
+fn reconcile_waiting_delivery_conversations(transaction: &Transaction<'_>) -> Result<()> {
+    let targets = {
+        let mut statement = transaction.prepare(
+            r#"
+            SELECT DISTINCT delivery.camp_id, delivery.recipient_agent_id
+            FROM camp_message_delivery AS delivery
+            JOIN camp_member
+              ON camp_member.camp_id = delivery.camp_id
+             AND camp_member.agent_id = delivery.recipient_agent_id
+            JOIN agent_profile ON agent_profile.id = delivery.recipient_agent_id
+            LEFT JOIN conversation
+              ON conversation.camp_id = delivery.camp_id
+             AND conversation.agent_id = delivery.recipient_agent_id
+             AND conversation.kind = 'camp_member'
+            WHERE delivery.status = 'waiting'
+              AND camp_member.status = 'active'
+              AND camp_member.leave_requested_at IS NULL
+              AND agent_profile.profile_status = 'present'
+              AND conversation.id IS NULL
+            ORDER BY delivery.camp_id, delivery.recipient_agent_id
+            "#,
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    for (camp_id, agent_id) in targets {
+        ensure_camp_member_conversation(transaction, &camp_id, &agent_id, &now)?;
+    }
+    Ok(())
 }
 
 /// Cheap, read-only gate for the ordinary batch scheduler. A false result means
@@ -137,6 +200,7 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
     let transaction = database
         .connection_mut()
         .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    reconcile_waiting_delivery_conversations(&transaction)?;
     let mut claimed_run_ids = Vec::new();
     let mut cursor: Option<(String, i64, String, String, String)> = None;
     while claimed_run_ids.len() < limit as usize {
@@ -974,6 +1038,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(closed, 2);
+    }
+
+    #[test]
+    fn claim_repairs_a_waiting_lane_without_a_camp_member_conversation() {
+        let mut fixture = Fixture::new();
+        fixture.enqueue("stranded-message", "修复旧 waiting Delivery");
+        fixture
+            .database
+            .connection()
+            .execute(
+                "DELETE FROM conversation WHERE camp_id = ?1 AND agent_id = 'agent_1'",
+                [&fixture.camp_id],
+            )
+            .unwrap();
+
+        let claimed = claim_waiting_delivery_batches(&mut fixture.database, 100).unwrap();
+        assert_eq!(claimed.len(), 1);
+        let repaired: i64 = fixture
+            .database
+            .connection()
+            .query_row(
+                r#"
+                SELECT COUNT(*) FROM conversation
+                WHERE camp_id = ?1 AND agent_id = 'agent_1'
+                  AND kind = 'camp_member'
+                "#,
+                [&fixture.camp_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(repaired, 1);
     }
 
     #[test]

@@ -1583,7 +1583,7 @@ fn render_flat_input_help(output: &mut String, description: &BuiltinToolDescript
         {
             writeln!(
                 output,
-                "      Optional. Omit for the current Camp; pass an authorized frozen historical Camp ID to target that Camp only."
+                "      Optional. Omit for the current Camp; pass any extant public Camp ID to target that Camp only."
             )
             .expect("writing help to a String cannot fail");
         }
@@ -1767,7 +1767,7 @@ fn render_cli_input_field(
     if matches!(description.name.as_str(), "camp.search" | "camp.read") && field.field == "campId" {
         writeln!(
             output,
-            "        Omit for the current Camp; pass an authorized frozen historical Camp ID to target that Camp only."
+            "        Omit for the current Camp; pass any extant public Camp ID to target that Camp only."
         )
         .expect("writing help to a String cannot fail");
     }
@@ -2110,7 +2110,7 @@ mod tests {
         let search = builtin_tool_description("camp.search").unwrap();
         let search_help = operation_help_text(&search);
         assert!(search_help.contains("Omit for the current Camp"));
-        assert!(search_help.contains("authorized frozen historical Camp ID"));
+        assert!(search_help.contains("any extant public Camp ID"));
         assert!(
             search
                 .arguments

@@ -91,7 +91,7 @@ Automation 尚有 active occurrence 时直接 skipped(overlap)。不新增 queue
 
 - 状态：accepted
 - 日期：2026-09-18
-- 当前权威：Public Camp Message/Delivery 架构与 Message Delivery v9
+- 当前权威：Public Camp Message/Delivery 架构与 Message Delivery v10
 
 固定 500ms 扫描让空闲 Core 持续申请普通队列写事务，并把正常消息启动和同 lane 接续增加至多一个 tick 的等待；
 终态、网络恢复和周期扫描又各自可能领取新 Delivery，使 claim 所有权分散。选择由单一常驻 Scheduler 拥有普通
@@ -112,7 +112,7 @@ Scheduler 与旧维护循环由 `run_core` 作为 sibling task 统一监督。�
 
 - 状态：accepted
 - 日期：2026-09-18
-- 当前权威：Camp History v7 与 Built-in Tool Runtime
+- 当前权威：Camp History v8 与 Built-in Tool Runtime
 
 旧 `Item / Around / Thread / Timeline` union 同时把用户意图和内部查询策略暴露为 `mode/direction`，CLI 又在
 发送前补写默认值，造成 direct flags、JSON 输入、Schema 与补读提示有两份合同。选择收敛为 timeline
@@ -152,3 +152,36 @@ Pending Camp 的首次输入仍遵循自己的非恢复合同。
 
 确认仍按 exact source：只有该 Run 的执行节点进入当前可见执行视口才提交 `visibleAgentRunIds`；打开同一 Camp、
 另一 Run 或来源消息都不能顺带确认。Migration 164/schema 114 只增加来源、投影与终态 trigger，不改写历史通知。
+
+<a id="v1-60-d10"></a>
+## V1.60-D10：公共 Camp 历史对所有受认证队员开放，成员关系不作为读取 ACL
+
+- 状态：accepted
+- 日期：2026-09-19
+- 当前权威：Camp History v8、Mission v4 与 Built-in Tool Transport v28
+
+CampMember 的职责是参与、寻址与执行。把它复用为公共历史 ACL，会让一个有效队员无法读取其他 Camp 的公开消息，
+并使旧 ContextManifest 中的成员快照意外变成长期权限表。选择让每个受认证队员读取所有存续 Camp 的公共历史：
+`camp.list/search/read` 与 `history.search` 不查询目标 Camp membership/profile；`camp.read` 直接使用调用时实时边界，
+旧 Manifest 漏项由 discovery 查询动态补足。Manifest 仍保存自动上下文和时序证据，不授予或撤销读取权。
+
+该开放只覆盖公共 CampMessage。Single Chat、Runtime 私有记录与文件内容 authority 不随之开放；recallable、withdrawn、
+目标 waiting suppression 和 quote-source 重验继续按查看者执行。`mission.get` 同样作为纯读取与 mutation gate 分离；
+`mission.update/status` 保留当前成员、Run 和 epoch 写入门禁。拒绝通过临时加入目标 Camp 或回写历史成员关系绕过问题，
+也不为读取建立新的 ACL 表。
+
+<a id="v1-60-d11"></a>
+## V1.60-D11：发布事务建立目标 Conversation，claim 同事务修复历史断路 lane
+
+- 状态：accepted
+- 日期：2026-09-19
+- 当前权威：Camp Message Send v22 与 Message Delivery v10
+
+Delivery 是等待责任，但 Scheduler 的 eligible lane 需要稳定 Camp-member Conversation。旧实现只写 waiting Delivery，
+首次 A2A 收件人没有 Conversation 时便永远无法进入 inner-join 候选。选择在消息发布事务中为每个显式目标幂等建立
+Conversation，再写 Delivery；仍不提前创建 Run、冻结 Runtime 或执行外部工作。
+
+仅修新消息不能恢复已经卡住的 waiting rows。claim 事务因此先补建 active/present 目标缺失的 Conversation，再执行
+原有 membership lifetime、Runtime、隔离与 cleanup 门禁。启动扫描和固定 30 秒 fallback 都会进入同一路径，旧队列
+无需 schema migration、一次性数据回写或额外维护事件即可自愈。拒绝把 Conversation join 改成可空并让无稳定路由的
+Run 继续创建，也拒绝永久后台轮询另一份修复队列。

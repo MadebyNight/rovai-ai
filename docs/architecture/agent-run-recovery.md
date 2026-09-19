@@ -2,14 +2,14 @@
 document_type: architecture
 architecture: agent-run-recovery
 authority: agent-run-session-native-turn-and-isolation-boundaries
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # AgentRun Recovery
 
 本文描述 App/Core 持续运行期间的运输恢复、Core 重启后的执行收口，以及 AgentRun 终态与旧执行隔离之间的边界。
 当前字段和行为由 [Accepted Input Recovery v6](../contracts/accepted-input-recovery-v6.md)、
-[Message Delivery v9](../contracts/message-delivery-v9.md)、
+[Message Delivery v10](../contracts/message-delivery-v10.md)、
 [Network Interruption Recovery v2](../contracts/network-interruption-recovery-v2.md) 和
 [Planned Shutdown v8](../contracts/planned-shutdown-v8.md)拥有。
 

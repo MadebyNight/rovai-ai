@@ -51,6 +51,6 @@ startup is idempotent: it does not increment an execution attempt, rewrite a ter
 ## References
 
 - [Accepted Input Recovery v5 (historical)](accepted-input-recovery-v5.md)
-- [Message Delivery v9](message-delivery-v9.md)
+- [Message Delivery v10](message-delivery-v10.md)
 - [AgentRun Recovery architecture](../architecture/agent-run-recovery.md)
 - [Runtime recovery and shutdown invariants](../architecture/foundational-invariants.md#runtime-recovery-shutdown)
