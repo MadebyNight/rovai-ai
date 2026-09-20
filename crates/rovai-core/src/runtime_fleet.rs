@@ -189,6 +189,17 @@ pub(crate) struct FakeRuntimeProcessHost {
     zcode_background: AtomicBool,
 }
 
+#[cfg(test)]
+pub(crate) fn fake_runtime_process_host(process_id: impl Into<String>) -> RuntimeProcessHost {
+    RuntimeProcessHost::Fake(Arc::new(FakeRuntimeProcessHost {
+        process_id: process_id.into(),
+        shutdown_delay: Duration::ZERO,
+        reaped: std::sync::atomic::AtomicBool::new(false),
+        shutdown_calls: std::sync::atomic::AtomicUsize::new(0),
+        zcode_background: AtomicBool::new(false),
+    }))
+}
+
 impl RuntimeProcessHost {
     fn process_id(&self) -> &str {
         match self {
@@ -1709,10 +1720,6 @@ impl AgentRuntimeFleetManager {
             .await;
     }
 
-    pub(crate) async fn invalidate_runtime_config(&self, agent_id: &str) {
-        self.invalidate_member(agent_id).await;
-    }
-
     /// Release native Session locks held by an obsolete configuration before
     /// a resumable Runtime starts its replacement Host in the same reuse scope.
     /// Active leases retain their normal retirement boundary.
@@ -1984,13 +1991,7 @@ mod tests {
     }
 
     fn fake_host(process_id: &str) -> RuntimeProcessHost {
-        RuntimeProcessHost::Fake(Arc::new(FakeRuntimeProcessHost {
-            process_id: process_id.to_string(),
-            shutdown_delay: Duration::ZERO,
-            reaped: std::sync::atomic::AtomicBool::new(false),
-            shutdown_calls: std::sync::atomic::AtomicUsize::new(0),
-            zcode_background: AtomicBool::new(false),
-        }))
+        fake_runtime_process_host(process_id)
     }
 
     fn acquire_request(run: &str, camp: &str) -> FleetAcquireRequest {
