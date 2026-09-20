@@ -508,7 +508,7 @@ waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal
 
 紧凑卡头保持 40px 最小高度；总览中的队员头像固定为 20×20px，不随 flex 收缩拉伸。左侧状态节点与卡头首行垂直居中，
 竖向时间线从首节点中心延伸到末节点中心；展开与停止操作距卡片右边保留 9px，不能被绝对定位层吞掉。字段与验收边界见
-[Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)。
+[Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)。
 
 打开过程入口时，先定位最新 running，其次最新 non-terminal，最后最新 terminal Run。用户显式
 发送成功且未在查看 non-terminal Run 时，按 Core 有序回执打开首个 Run 的精确 stage，但不夺走
@@ -521,6 +521,10 @@ Drawer，均不移动 DOM 键盘焦点。Mission 仍先打开“活动”；若 
 活动标签继续保留。打开后执行阅读区定位到最新指令，并在用户停留底部时跟随新增指令。没有 running Run 时不自动
 打开；`queued`、`waiting`、`recovery_blocked` 与 terminal 均不具备资格。用户已经停留在同一 workspace 时，
 后台 A2A、Runtime 事件、refresh 或后续状态变化不得自动打开、切换或抢焦点。
+
+使命板上的 Mission 抽屉在 `bottom` placement 下是进入与提交后自动聚焦的例外：已有 running Run 或本抽屉
+新提交消息产生 Run 时，底部队员入口继续显示真实状态，但不自动选中队员或展开 Drawer。用户显式点击总览或
+队员入口后仍打开同一个详情。普通 Camp、完整 Mission 会话及其他 placement 继续遵循上述规则。
 
 聚焦 live Run 且用户停留详情底部时可跟随最新输出；手动上滚后暂停，回到底部恢复。该跟随
 不能滚动公共消息时间线。Drawer 空间不足时收缩、滚动或变为摘要，不能遮住 Approval Dock、
@@ -569,7 +573,7 @@ Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ comm
 全部已结算逻辑操作，各终态不再追加独立数量，具体结果由展开后的 Tool 行表达。分页读取沿用相同的执行结果摘要，不改成“已载入 x 项执行记录”；组摘要只统计
 当前组已读取的逻辑操作，不表示整轮总量。已载入范围只在“加载更早记录”入口呈现。
 `x` 按去重后的可见逻辑操作计数；同一 Built-in 与已关联 Shell 载体计一步，started/result/delta 和一个 Activity 的多文件行不重复计数。
-精确计数语义见 [Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)。
+精确计数语义见 [Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)。
 
 Runtime Compaction 作为根级、非 Tool process item 同样截断前后 Tool 分组，但不进入“已完成 x 个步骤”。
 它复用普通 command 的桌面 28px 行、最右侧状态 icon、文字后展开提示与结果文本框，并保留独立压缩 SVG；同一

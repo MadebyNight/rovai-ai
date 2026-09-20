@@ -443,7 +443,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v9 (historical)](context-manifest-evidence-v9.md) | bounded public omission evidence；不作为 Formatter v13 恢复入口 |
 | [Context Delivery Profile v2 (historical)](context-delivery-profile-v2.md) | 公共引用链与历史 budget 的旧当前合同；不选择 self-active Task |
 | [Context Delivery Profile v1 (historical)](context-delivery-profile-v1.md) | AgentRun 公共消息窗口、Unicode scalar 正文截断、历史字符预算与遗漏提示 |
-| [Run Process Detail Surface v38（当前）](run-process-detail-surface-v38.md) | 继承 v37；排队卡读取当前用户 Delivery，层数按钮还原三层图标与交互稿字形 |
+| [Run Process Detail Surface v39（当前）](run-process-detail-surface-v39.md) | 继承 v38；使命板抽屉的底部执行台不因已有或新建 running Run 自动展开，显式入口保持可用 |
+| [Run Process Detail Surface v38（历史）](run-process-detail-surface-v38.md) | 继承 v37；排队卡读取当前用户 Delivery，层数按钮还原三层图标与交互稿字形 |
 | [Run Process Detail Surface v37（历史）](run-process-detail-surface-v37.md) | 继承 v36；终态步骤数恢复统计所有已结算逻辑操作，失败、停止、跳过和结果未知均计入 N |
 | [Run Process Detail Surface v36（历史）](run-process-detail-surface-v36.md) | 继承 v35；claim 前 Delivery-backed 排队卡、独立多输入入口和紧凑卡几何；其当前队列来源由 v38 校正 |
 | [Run Process Detail Surface v35（历史）](run-process-detail-surface-v35.md) | 三位置执行台、右侧共享 Tab、进入恢复、紧凑 Run 卡片、排队批次与折叠历史 |

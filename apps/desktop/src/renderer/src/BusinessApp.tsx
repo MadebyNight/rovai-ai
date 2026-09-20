@@ -339,6 +339,13 @@ export function windowDragStripPage(view: View): WindowDragStripPage | null {
     : null
 }
 
+export function missionDrawerSuppressesExecutionAutoOpen(
+  missionDrawer: boolean,
+  executionPlacement: ExecutionConsolePlacement
+): boolean {
+  return missionDrawer && executionPlacement === 'bottom'
+}
+
 export function startupGateShouldBeVisible(
   snapshot: DesktopStartupSnapshot | null
 ): boolean {
@@ -4071,6 +4078,10 @@ export function BusinessApp({
             key={activeCampId}
             missionBoard={activeMission ? <MissionIntro mission={activeMission} projects={displayNavigation?.projects ?? []}/> : null}
             previewTabsInPane={false}
+            suppressExecutionAutoOpen={missionDrawerSuppressesExecutionAutoOpen(
+              missionDrawer,
+              generalPreferences.executionConsolePlacement
+            )}
             snapshot={visibleCampSnapshot}
             initialComposerDraft={campSnapshotState.initialComposerDraft}
             onInitialComposerDraftConsumed={consumeInitialComposerDraft}
