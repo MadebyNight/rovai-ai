@@ -13,8 +13,9 @@ v23 inherits [v22](camp-message-send-v22.md) publication, routing, waiting Deliv
 including the recall boundary inherited from v21. It adds the shared Desktop/Web presentation and transport
 rules for a local Principal message after publication.
 
-Only a local user-authored message may render the lightweight processing receipt. The collapsed receipt shows
-an aggregate pending, processing or failed count; opening it reveals the addressed Agents and links only those
+Only a local user-authored message may render the lightweight processing receipt. The collapsed receipt shares
+the message action row and shows only an aggregate pending or processing count; terminal failures do not create
+an additional aggregate warning. Opening a visible receipt reveals the addressed Agents and links only those
 recipients that already have a materialized AgentRun to that exact Run. Agent-authored messages do not receive
 this routine processing receipt.
 

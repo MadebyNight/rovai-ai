@@ -2347,8 +2347,6 @@ button.file-preview-html-feedback:hover,
 .execution-history-toggle:hover { color: var(--ink); }
 .execution-history-toggle > svg:first-child { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
 .execution-history-count { display: inline-grid; min-width: 18px; height: 18px; place-items: center; padding: 0 5px; border-radius: 999px; color: var(--faint); background: var(--surface-subtle); font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.execution-history-alert { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--danger); font-size: 9.5px; }
-.execution-history-alert svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.45; }
 .execution-history-list { padding-top: 4px; }
 .execution-history-partial { margin: 7px 0 0; color: var(--faint); font-size: 9.5px; text-align: center; }
 .execution-queue-inputs { padding: 0 10px 10px; }
@@ -2952,7 +2950,6 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
   color: var(--ink);
   background: var(--surface-hover);
 }
-.user-message-receipt.is-error { color: var(--danger); }
 @media (min-width: 761px) and (pointer: fine) {
   .user-message-receipt.is-progress {
     opacity: 0;

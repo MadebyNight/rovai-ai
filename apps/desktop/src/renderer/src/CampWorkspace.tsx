@@ -6279,7 +6279,6 @@ function ExecutionDrawer({
   )
   const queueBatches = executionQueueBatches(newestFirstRuns)
   const historyRuns = newestFirstRuns.filter((run) => !NON_TERMINAL_RUNS.has(run.status))
-  const unresolvedFailureCount = historyRuns.filter((run) => run.status === 'failed').length
   const latestRun = resolvedFocusedRun ?? currentRuns[0] ?? null
   const latestProgress = latestRun
     ? progressByRunId.get(latestRun.id)
@@ -6879,9 +6878,6 @@ function ExecutionDrawer({
               <ExecutionCardChevron expanded={historyOpen} />
               <span>执行历史</span>
               {historyRuns.length > 0 && <span className="execution-history-count">{historyRuns.length}</span>}
-              {unresolvedFailureCount > 0 && <span className="execution-history-alert">
-                <ExecutionStatusGlyph status="failed" />{unresolvedFailureCount} 项失败待处理
-              </span>}
             </button>
             <div className="execution-history-list" id={`execution-history-${process.agentId}`} hidden={!historyOpen}>
               {historyRuns.length > 0
@@ -7066,15 +7062,12 @@ function UserMessageDeliveryReceipt({
   }))
   const pending = ordered.filter(({ run }) => !run || (run.status === 'queued' && !run.cancelRequestedAt))
   const inProgress = ordered.filter(({ run }) => run?.status === 'running' || run?.status === 'waiting')
-  const incomplete = ordered.filter(({ run }) => run?.status === 'failed' || run?.status === 'cancelled')
   const canWithdraw = message.canWithdraw && Boolean(onWithdraw)
   const presentation = pending.length > 0
     ? { className: 'is-queued', label: `待处理 · ${pending.length}` }
-    : incomplete.length > 0
-      ? { className: 'is-error', label: `未完成 · ${incomplete.length}` }
-      : inProgress.length > 0
-        ? { className: 'is-progress', label: `处理中 · ${inProgress.length}` }
-        : null
+    : inProgress.length > 0
+      ? { className: 'is-progress', label: `处理中 · ${inProgress.length}` }
+      : null
   if (!presentation) return null
   return (
     <div className="user-message-receipt-row">
@@ -7086,11 +7079,9 @@ function UserMessageDeliveryReceipt({
             aria-label={`查看消息处理状态，${presentation.label}`}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
-              {presentation.className === 'is-error'
-                ? <><circle cx="8" cy="8" r="5.6" /><path d="M8 5v3.5M8 11h.01" /></>
-                : presentation.className === 'is-progress'
-                  ? <path d="M2 8h2.4l1.2-3 2 6 1.8-4.4 1.3 2.5H14" />
-                  : <><circle cx="8" cy="8" r="5.6" /><path d="M8 4.7V8l2.2 1.4" /></>}
+              {presentation.className === 'is-progress'
+                ? <path d="M2 8h2.4l1.2-3 2 6 1.8-4.4 1.3 2.5H14" />
+                : <><circle cx="8" cy="8" r="5.6" /><path d="M8 4.7V8l2.2 1.4" /></>}
             </svg>
             <span>{presentation.label}</span>
           </button>

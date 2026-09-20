@@ -78,12 +78,14 @@ last_updated: 2026-09-20
 - [x] 右侧 Execution 作为无文件能力的合成标签接入 File Preview Session，与 Activity、普通文件复用标签集合和
   分栏比例；切换内容不改变文件预览宽度。
 - [x] 总览、单队员当前区、聚合排队批次和折叠历史共用同一详情 DOM；卡片动作只作用于显示的 exact Run ID。
+- [x] 执行历史标题只显示历史总数，不增加“失败待处理”汇总；失败事实仍保留在对应 Run 卡片中。
 - [x] 进入普通或 Mission 会话时只选择最新 running Run，展开后定位最新指令并按用户阅读意图跟随；后台刷新
   不重复进入规则或抢焦点。Mission 的 Activity 先建立，右侧 Execution 在符合条件时取得当前显示。
 
 ## Gate 8：消息回执、撤回与验收
 
-- [x] 当前用户消息显示聚合处理回执和按需队员明细；队员消息保留既有底色框。
+- [x] 当前用户消息的“待处理 / 处理中”聚合回执与复制按钮保持同一操作行，终态失败不增加“未完成”汇总；
+  按需队员明细和队员消息既有底色框保持不变。
 - [x] 撤回只使用 `canWithdraw + expectedVersion`，取消关闭弹窗，确认通过 Desktop/Web 的同一
   `camp.messages.withdraw` operation 提交；成功后使用既有撤回标记。
 - [x] Renderer、File Preview、偏好保存、时间线定位、Host operation 与 Core 撤回边界的定向测试通过。

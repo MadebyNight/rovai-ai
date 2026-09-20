@@ -3916,6 +3916,40 @@ describe('task event projections', () => {
       onStop: () => undefined
     }
     const markup = renderToStaticMarkup(createElement(CampWorkspace, workspaceProps))
+    const queuedMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      snapshot: {
+        ...snapshot,
+        agentRuns: [{
+          ...snapshot.agentRuns[0],
+          status: 'queued',
+          startedAt: null,
+          updatedAt: '2026-07-28T05:00:00Z'
+        }]
+      },
+      liveRuntimeEvents: []
+    }))
+    const failedReceiptMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      snapshot: {
+        ...snapshot,
+        agentRuns: [{
+          ...snapshot.agentRuns[0],
+          status: 'failed',
+          startedAt: '2026-07-28T05:00:01Z',
+          endedAt: '2026-07-28T05:00:05Z',
+          updatedAt: '2026-07-28T05:00:05Z'
+        }]
+      },
+      liveRuntimeEvents: []
+    }))
+    const failedHistoryMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      snapshot: {
+        ...groupedSnapshot,
+        agentRuns: [{ ...historicalRun, status: 'failed' }, ...snapshot.agentRuns]
+      }
+    }))
     const disabledMapMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
       ...workspaceProps,
       worldMapEnabled: false
@@ -3931,6 +3965,9 @@ describe('task event projections', () => {
     expect(markup).not.toContain('d="m15.2 9.2-3.6 3.5 3.6 3.5"')
     expect(markup).toMatch(/class="message-action-line"><div class="user-message-receipt-row">[\s\S]*class="message-actions"/)
     expect(markup).toContain('处理中 · 1')
+    expect(queuedMarkup).toMatch(/class="message-action-line"><div class="user-message-receipt-row">[\s\S]*待处理 · 1[\s\S]*class="message-actions"/)
+    expect(failedReceiptMarkup).not.toContain('未完成 · 1')
+    expect(failedHistoryMarkup).not.toContain('项失败待处理')
     expect(markup).toContain('class="message-actions" role="group" aria-label="消息操作"')
     expect(markup).toContain('class="message-surface"')
     expect(markup).toContain('class="message-mention-token is-interactive"')
