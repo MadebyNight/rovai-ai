@@ -33,6 +33,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 当前用户消息显示轻量处理回执，并在所有接收队员均未读时通过权威版本围栏直接撤回。
 - Mission 启动受理后立即隐藏入口；claim 创建 queued Run 即显示“执行中”，不等待 Runtime 连接或输出。
 - 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
+- 使命板一级入口蓝点按 Core-owned `hasUnread` 统计有未读 Agent 回复的使命，不再复用 `needs_you` 状态。
 
 字段级协议见 [Mission v8](../../contracts/mission-v8.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
@@ -45,7 +46,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 
 状态解耦、异步 cleanup、独立列滚动、Agent Run Card 与消息撤回增量已经完成实现及各自验收。
 Mission 启动与执行提示的 Core/Renderer/合同实现与全量门禁已经完成，由 PR #453 合入 `main`，并验证功能
-提交是最新 `origin/main` 的祖先。
+提交是最新 `origin/main` 的祖先。使命板入口蓝点现与卡片共用 `MissionRecord.hasUnread`，业务状态不再影响其显示。
 本版不轮换 data contract：继续使用 v1.61/schema 116；清理复用 schema 112 已有 workspace 状态、命令身份、
 expected OID 与双检查点，不新增 Migration。
 
@@ -106,7 +107,7 @@ Renderer 在点击后立即保留按钮几何、禁用并显示“正在开始�
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner 与独立列滚动取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
 | Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、[Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)与[Camp Message Send v23](../../contracts/camp-message-send-v23.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
 | Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性及 claim 后执行投影边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入 |
-| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复及一致启动/执行反馈；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
+| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈及 Core-owned 未读入口蓝点；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |
 | Documentation routing | 已更新 | 文档任务入口、合同索引、当前决定导航和版本索引指向 v1.62 及本增量的当前权威 |

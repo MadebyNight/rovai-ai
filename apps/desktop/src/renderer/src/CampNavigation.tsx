@@ -127,7 +127,7 @@ export function CampNavigation({
   onMembers,
   onAutomations = () => undefined,
   onMissions = () => undefined,
-  pendingMissionCount = 0,
+  unreadMissionCount = 0,
   onMemory,
   pendingMemoryCount,
   onSettings,
@@ -168,7 +168,7 @@ export function CampNavigation({
   onMembers(): void
   onAutomations?(): void
   onMissions?(): void
-  pendingMissionCount?: number
+  unreadMissionCount?: number
   onMemory(): void
   pendingMemoryCount: number
   onSettings(): void
@@ -399,12 +399,12 @@ export function CampNavigation({
                     className={`rail-button ${view === 'missions' ? 'active' : ''}`}
                     type="button"
                     aria-current={view === 'missions' ? 'page' : undefined}
-                    aria-label={pendingMissionCount > 0 ? `使命板，${pendingMissionCount} 个使命需要你` : '使命板'}
-                    title={pendingMissionCount > 0 ? `使命板 · ${pendingMissionCount} 个使命需要你` : '使命板'}
+                    aria-label={unreadMissionCount > 0 ? `使命板，${unreadMissionCount} 个使命有未读回复` : '使命板'}
+                    title={unreadMissionCount > 0 ? `使命板 · ${unreadMissionCount} 个使命有未读回复` : '使命板'}
                     onClick={onMissions}
                   >
                     <span className="rail-glyph" aria-hidden="true"><MissionIcon /></span><span className="rail-label">使命板</span>
-                    {pendingMissionCount > 0 && <i className="mission-rail-badge-dot" aria-hidden="true" />}
+                    {unreadMissionCount > 0 && <i className="mission-rail-badge-dot" aria-hidden="true" />}
                   </button>}
                   <button className={`rail-button ${view === 'automations' ? 'active' : ''}`} type="button" aria-current={view === 'automations' ? 'page' : undefined} aria-label="定时任务" title="定时任务" onClick={onAutomations}>
                     <span className="rail-glyph" aria-hidden="true"><NavigationIcon name="calendar-clock" /></span><span className="rail-label">定时任务</span>

@@ -2850,7 +2850,7 @@ describe('task event projections', () => {
       onNewConversation: () => undefined,
       onMembers: () => undefined,
       onMissions: () => undefined,
-      pendingMissionCount: 3,
+      unreadMissionCount: 3,
       onMemory: () => undefined,
       pendingMemoryCount: 2,
       onSettings: () => undefined,
@@ -2872,7 +2872,7 @@ describe('task event projections', () => {
     expect(markup).toContain('<strong>Rovai AI</strong>')
     expect(markup).toContain('队员')
     expect(markup).toContain('记忆，2 条普通提案待确认')
-    expect(markup).toContain('使命板，3 个使命需要你')
+    expect(markup).toContain('使命板，3 个使命有未读回复')
     expect(markup).toContain('class="mission-rail-badge-dot"')
     expect(markup.match(/<span class="rail-label">使命板<\/span>/g)).toHaveLength(1)
     expect(markup.indexOf('<span class="rail-label">使命板</span>'))
