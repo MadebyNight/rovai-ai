@@ -4304,21 +4304,23 @@ pub(crate) fn resolve_frozen_runtime_binding(
         )));
     };
     let effective_models_json = if preflight_required {
-        if !matches!(binding.model, ModelSelection::RuntimeDefault) {
-            return Ok(Err(runtime_blocker(
-                "runtime_model_requires_verification",
-                json!({ "installationId": installation_id }),
-            )));
-        }
         serde_json::to_string(&provisional_runtime_models(adapter_kind))?
     } else {
         models_json
     };
+    // Light discovery has no authoritative model catalog. Preserve a previously saved explicit
+    // selection as the queued Run's intent, but defer catalog and option validation until the
+    // existing Dispatch Preflight deep-checks the Runtime and rebinds this frozen configuration.
+    // Permissions are still validated against the statically discovered schema before claim.
+    let mut validation_binding = binding.clone();
+    if preflight_required {
+        validation_binding.model = ModelSelection::RuntimeDefault;
+    }
     if let Some(issue) = runtime_configuration_issue(
         &effective_models_json,
         permission_schema_version,
         &permission_options_json,
-        binding,
+        &validation_binding,
     )? {
         return Ok(Err(runtime_blocker(issue.code, issue.payload)));
     }

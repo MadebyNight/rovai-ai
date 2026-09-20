@@ -1052,6 +1052,85 @@ mod tests {
     }
 
     #[test]
+    fn light_ready_runtime_with_saved_explicit_model_claims_for_dispatch_preflight() {
+        let mut fixture = Fixture::new();
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_profile
+                SET default_model_selection_json = ?1
+                WHERE id = 'agent_1'
+                "#,
+                [json!({
+                    "mode": "explicit",
+                    "modelId": "gpt-test",
+                    "options": {"reasoning_effort": "high"}
+                })
+                .to_string()],
+            )
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
+                r#"
+                UPDATE adapter_capability_snapshot
+                SET authentication_status = 'unknown',
+                    probe_status = 'light_ready',
+                    capabilities_json = '[]',
+                    protocols_json = '[]',
+                    model_catalog_json = '[]',
+                    last_successful_probe_at = NULL,
+                    model_catalog_succeeded_at = NULL
+                WHERE installation_id = 'adapter-test-codex'
+                "#,
+                [],
+            )
+            .unwrap();
+        fixture.enqueue("explicit-light-ready", "请处理");
+
+        let run_id = claim_waiting_delivery_batches(&mut fixture.database, 100)
+            .unwrap()
+            .pop()
+            .expect("saved explicit model should reach queued Dispatch Preflight");
+        let (status, model_json): (String, String) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT status, runtime_model_selection_json FROM agent_run WHERE id = ?1",
+                [&run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(status, "queued");
+        assert_eq!(
+            serde_json::from_str::<Value>(&model_json).unwrap(),
+            json!({
+                "source": "explicit",
+                "modelId": "gpt-test",
+                "options": {"reasoning_effort": "high"}
+            })
+        );
+        let delivery: (String, Option<String>) = fixture
+            .database
+            .connection()
+            .query_row(
+                r#"
+                SELECT status, claimed_agent_run_id
+                FROM camp_message_delivery
+                WHERE message_id = 'explicit-light-ready'
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(delivery, ("claimed".to_string(), Some(run_id)));
+    }
+
+    #[test]
     fn claim_freezes_the_default_recipient_display_name_on_each_run_input() {
         let mut fixture = Fixture::new();
         fixture.enqueue("default-message", "正文");
