@@ -472,8 +472,8 @@ Run、target parent、return target 或同一 CampTurn 推断发送归属。投�
 移到底部后顶部执行入口消失、浮层和右侧标签收起，横向队员过程入口下方打开可调高度详情，并保留最后使用的
 “任务 / 队员”基础选择。位置偏好只拥有承载位置，
 不跨 Camp 保存 Agent/Run selection、Drawer 开合、Tool 全文或滚动位置，也不根据窗口宽度自动改变。
-重新进入 Camp 时可以从当前权威 snapshot 推导最新 running Run；这是新的瞬时 selection，不是恢复旧
-Drawer 状态，也不改写位置偏好。
+重新进入 Camp 时可以从当前权威 snapshot 推导最新 running Run，并以总览作为过程 scope、该 Run 作为精确
+focused Run；这是新的瞬时 selection，不是恢复旧 Drawer 状态，也不改写位置偏好。
 
 三个位置共享当前 Agent 与精确 Run selection、Evidence load 和状态投影，不允许同时存在多套过程列表
 或详情。位置切换通过稳定 host 移动同一个已挂载 Drawer DOM，保留 disclosure、加载状态、
@@ -517,7 +517,7 @@ waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal
 滚动容器为键盘焦点留出标题安全区，不改变跟随最新、折叠、输入清单或 exact Run 停止语义。
 总览中的队员头像固定为 20×20px，不随 flex 收缩拉伸。左侧状态节点与卡头首行垂直居中并跟随本卡标题，
 展开与停止操作距卡片右边保留 9px。字段与验收边界见
-[Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)。
+[Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)。
 
 执行浮层入口、右侧标签、消息区“处理中”回执和底部标题共用同一 24×24 心跳路径与 1.65 描边；
 queued 回执的时钟及各执行状态图形不变。
@@ -527,7 +527,8 @@ queued 回执的时钟及各执行状态图形不变。
 Composer 焦点。若用户正在可见的“任务”Tab 新建任务，Renderer 消费本次自动聚焦请求但不切走表单，
 离开表单后也不补跳；仅浏览任务、编辑既有任务或查看队员仍按回执自动打开执行。不可见的旧 Run
 selection 不算“正在查看 non-terminal Run”。从其他 Camp、一级页面或应用启动/恢复进入当前 Camp 时，若
-权威 snapshot 含 running Run，则自动选择 `createdAt + id` 最新者并展开；`inspector` placement 激活首个“执行”
+权威 snapshot 含 running Run，则自动选择总览，并以 `createdAt + id` 最新者作为精确 focused Run 展开；
+`inspector` placement 激活首个“执行”
 入口，`right` placement 打开右侧“执行”标签，底部 placement 直接展开
 Drawer，均不移动 DOM 键盘焦点。Mission 仍先打开“活动”；若 `right` 位置有 running Run，再选择“执行”，
 活动标签继续保留。打开后执行阅读区定位到最新指令，并在用户停留底部时跟随新增指令。没有 running Run 时不自动
@@ -585,7 +586,7 @@ Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ comm
 全部已结算逻辑操作，各终态不再追加独立数量，具体结果由展开后的 Tool 行表达。分页读取沿用相同的执行结果摘要，不改成“已载入 x 项执行记录”；组摘要只统计
 当前组已读取的逻辑操作，不表示整轮总量。已载入范围只在“加载更早记录”入口呈现。
 `x` 按去重后的可见逻辑操作计数；同一 Built-in 与已关联 Shell 载体计一步，started/result/delta 和一个 Activity 的多文件行不重复计数。
-精确计数语义见 [Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)。
+精确计数语义见 [Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)。
 
 Runtime Compaction 作为根级、非 Tool process item 同样截断前后 Tool 分组，但不进入“已完成 x 个步骤”。
 它复用普通 command 的桌面 28px 行、最右侧状态 icon、文字后展开提示与结果文本框，并保留独立压缩 SVG；同一

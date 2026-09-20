@@ -619,6 +619,15 @@ export function runningAgentRunForWorkspaceEntry(
     )[0] ?? null
 }
 
+export function executionWorkspaceEntrySelection(
+  runs: readonly AgentRunView[]
+): { selectedAgentId: string; focusedRun: AgentRunView } | null {
+  const focusedRun = runningAgentRunForWorkspaceEntry(runs)
+  return focusedRun
+    ? { selectedAgentId: EXECUTION_OVERVIEW_SCOPE, focusedRun }
+    : null
+}
+
 export function messageDeliveryWaitsInExecutionQueue(delivery: MessageDeliveryView): boolean {
   if (delivery.deliveryKind !== 'public_a2a'
     || delivery.dispatchDisposition !== 'dispatch'
@@ -1887,11 +1896,12 @@ export function CampWorkspace({
   )
   const [worldMapRoutesVisible, setWorldMapRoutesVisible] = useState(false)
   const [localInspectorTab, setLocalInspectorTab] = useState<CampInspectorTab>('tasks')
-  const [workspaceEntryRunningRun] = useState<AgentRunView | null>(() =>
+  const [workspaceEntrySelection] = useState(() =>
     workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
-      ? runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
+      ? executionWorkspaceEntrySelection(snapshot.agentRuns)
       : null
   )
+  const workspaceEntryRunningRun = workspaceEntrySelection?.focusedRun ?? null
   const [executionPlacementPending, setExecutionPlacementPending] = useState(false)
   const [executionPlacementError, setExecutionPlacementError] = useState<{
     message: string
@@ -1902,10 +1912,10 @@ export function CampWorkspace({
     executionPlacement === 'inspector'
   )
   const [executionDrawerAgentId, setExecutionDrawerAgentId] = useState<string | null>(
-    workspaceEntryRunningRun?.agentId ?? null
+    workspaceEntrySelection?.selectedAgentId ?? null
   )
   const [executionDrawerFocusedRunId, setExecutionDrawerFocusedRunId] = useState<string | null>(
-    workspaceEntryRunningRun?.id ?? null
+    workspaceEntrySelection?.focusedRun.id ?? null
   )
   const [executionDrawerFocusRequest, setExecutionDrawerFocusRequest] = useState<ExecutionDrawerFocusRequest>({
     sequence: workspaceEntryRunningRun ? 1 : 0,
@@ -2165,9 +2175,10 @@ export function CampWorkspace({
     workspaceEntrySnapshotHandled.current = true
     if (executionEntryInteractionCampId.current === snapshot.camp.id) return
     if (suppressExecutionAutoOpen) return
-    const runningRun = runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
-    setExecutionDrawerAgentId(runningRun?.agentId ?? null)
-    setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
+    const entrySelection = executionWorkspaceEntrySelection(snapshot.agentRuns)
+    const runningRun = entrySelection?.focusedRun ?? null
+    setExecutionDrawerAgentId(entrySelection?.selectedAgentId ?? null)
+    setExecutionDrawerFocusedRunId(entrySelection?.focusedRun.id ?? null)
     setExecutionDrawerFocusRequest((request) => ({
       sequence: request.sequence + 1,
       moveDomFocus: false
@@ -2219,11 +2230,12 @@ export function CampWorkspace({
     mountedCampId.current = snapshot.camp.id
     executionEntryInteractionCampId.current = null
     workspaceEntrySnapshotHandled.current = workspaceEntrySnapshotReady
-    const runningRun = workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
-      ? runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
+    const entrySelection = workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
+      ? executionWorkspaceEntrySelection(snapshot.agentRuns)
       : null
-    setExecutionDrawerAgentId(runningRun?.agentId ?? null)
-    setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
+    const runningRun = entrySelection?.focusedRun ?? null
+    setExecutionDrawerAgentId(entrySelection?.selectedAgentId ?? null)
+    setExecutionDrawerFocusedRunId(entrySelection?.focusedRun.id ?? null)
     setExecutionDrawerFocusRequest((request) => ({
       sequence: request.sequence + 1,
       moveDomFocus: false
