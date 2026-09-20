@@ -106,8 +106,8 @@ pub(crate) struct VerifiedWorktreeCleanup {
 }
 
 impl VerifiedWorktreeCleanup {
-    pub(crate) fn requires_branch(&self) -> bool {
-        self.target_present || self.staging_checkout_present
+    pub(crate) fn requires_managed_branch(&self) -> bool {
+        self.staging_checkout_present
     }
 }
 
@@ -591,6 +591,86 @@ impl MissionGit {
         path_occupied(Path::new(&workspace.worktree_path))
     }
 
+    async fn worktree_has_unsaved_changes(&self, workspace: &MissionWorkspace) -> Result<bool> {
+        let output = self
+            .output(
+                Path::new(&workspace.worktree_path),
+                &[
+                    "status".into(),
+                    "--porcelain=v1".into(),
+                    "-z".into(),
+                    "--untracked-files=all".into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        ensure!(
+            output.status.success(),
+            "mission.workspace_status_unavailable: {}",
+            output.stderr.lossy_text()
+        );
+        Ok(!output.stdout.bytes.is_empty())
+    }
+
+    async fn detached_head_has_retained_reference(
+        &self,
+        workspace: &MissionWorkspace,
+        managed_reference: &str,
+    ) -> Result<bool> {
+        let head = self
+            .text(
+                Path::new(&workspace.worktree_path),
+                &["rev-parse", "--verify", "HEAD^{commit}"],
+            )
+            .await?;
+        let output = self
+            .output(
+                Path::new(&workspace.repository_root),
+                &[
+                    "for-each-ref".into(),
+                    format!("--contains={head}").into(),
+                    "--format=%(refname)".into(),
+                ],
+                None,
+                None,
+            )
+            .await?;
+        ensure!(
+            output.status.success(),
+            "mission.detached_head_reachability_unavailable: {}",
+            output.stderr.lossy_text()
+        );
+        let references =
+            String::from_utf8(output.stdout.bytes).context("mission.invalid_git_text")?;
+        Ok(references
+            .lines()
+            .map(str::trim)
+            .any(|reference| !reference.is_empty() && reference != managed_reference))
+    }
+
+    async fn verify_intact_execution_workspace(&self, workspace: &MissionWorkspace) -> Result<()> {
+        self.verify_tree(Path::new(&workspace.worktree_path), workspace, true)
+            .await?;
+        ensure!(
+            fs::canonicalize(&workspace.working_directory)?
+                == Path::new(&workspace.working_directory),
+            "mission.working_directory_changed"
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn cleanup_failure_left_intact_workspace(
+        &self,
+        workspace: &MissionWorkspace,
+    ) -> bool {
+        path_occupied(Path::new(&workspace.worktree_path)).unwrap_or(false)
+            && self
+                .verify_intact_execution_workspace(workspace)
+                .await
+                .is_ok()
+    }
+
     async fn validated_branch_reference(&self, workspace: &MissionWorkspace) -> Result<String> {
         let reference = format!("refs/heads/{}", workspace.branch);
         let valid = self
@@ -762,9 +842,16 @@ impl MissionGit {
         if target_present {
             self.verify_tree(target, workspace, true).await?;
             ensure!(
-                self.current_branch(workspace).await?.as_deref() == Some(workspace.branch.as_str()),
-                "mission.workspace_branch_mismatch"
+                !self.worktree_has_unsaved_changes(workspace).await?,
+                "mission.workspace_dirty"
             );
+            if self.current_branch(workspace).await?.is_none() {
+                ensure!(
+                    self.detached_head_has_retained_reference(workspace, reference)
+                        .await?,
+                    "mission.detached_head_unreachable"
+                );
+            }
         } else {
             // Select only exact stale registrations carrying this workspace's owner marker.
             let registrations = Path::new(&workspace.git_common_dir).join("worktrees");
@@ -790,12 +877,6 @@ impl MissionGit {
                     ensure!(
                         Path::new(registered.trim_end_matches(['\r', '\n'])) == target.join(".git"),
                         "mission.cleanup_registration_mismatch"
-                    );
-                    ensure!(
-                        fs::read_to_string(entry.path().join("HEAD"))?
-                            .trim_end_matches(['\r', '\n'])
-                            == format!("ref: {reference}"),
-                        "mission.workspace_branch_mismatch"
                     );
                     stale_registrations.push(entry.path());
                 }
@@ -834,11 +915,32 @@ impl MissionGit {
         verified: VerifiedWorktreeCleanup,
     ) -> Result<()> {
         if verified.target_present {
-            self.bytes(
-                Path::new(&workspace.repository_root),
-                &["worktree", "remove", "--force", &workspace.worktree_path],
-            )
-            .await?;
+            let output = self
+                .output(
+                    Path::new(&workspace.repository_root),
+                    &[
+                        "worktree".into(),
+                        "remove".into(),
+                        workspace.worktree_path.clone().into(),
+                    ],
+                    None,
+                    None,
+                )
+                .await?;
+            if !output.status.success() {
+                if path_occupied(Path::new(&workspace.worktree_path))?
+                    && self
+                        .worktree_has_unsaved_changes(workspace)
+                        .await
+                        .unwrap_or(false)
+                {
+                    bail!("mission.workspace_dirty");
+                }
+                bail!(
+                    "mission.worktree_remove_failed: {}",
+                    output.stderr.lossy_text()
+                );
+            }
         } else {
             for registration in verified.stale_registrations {
                 fs::remove_dir_all(registration)?;
@@ -1719,12 +1821,52 @@ mod tests {
             MissionCheckoutState::Detached { .. }
         ));
         git.validate_execution_workspace(&workspace).await.unwrap();
+        let reference = git.cleanup_branch_reference(&workspace).await.unwrap();
+        git.verify_worktree_cleanup(&workspace, &reference)
+            .await
+            .unwrap();
+        fs::write(
+            Path::new(&workspace.worktree_path).join("detached-result.txt"),
+            "detached\n",
+        )
+        .unwrap();
+        git.bytes(
+            Path::new(&workspace.worktree_path),
+            &["add", "detached-result.txt"],
+        )
+        .await
+        .unwrap();
+        git.bytes(
+            Path::new(&workspace.worktree_path),
+            &["commit", "-m", "detached result"],
+        )
+        .await
+        .unwrap();
+        assert!(
+            git.verify_worktree_cleanup(&workspace, &reference)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("mission.detached_head_unreachable")
+        );
+        git.bytes(
+            Path::new(&workspace.worktree_path),
+            &["branch", "external/detached-preserved"],
+        )
+        .await
+        .unwrap();
+        git.verify_worktree_cleanup(&workspace, &reference)
+            .await
+            .unwrap();
         git.bytes(
             Path::new(&workspace.worktree_path),
             &["checkout", &workspace.branch],
         )
         .await
         .unwrap();
+        git.bytes(&repo.root, &["branch", "-D", "external/detached-preserved"])
+            .await
+            .unwrap();
         git.validate_execution_workspace(&workspace).await.unwrap();
         let managed_oid = git.branch_oid(&workspace).await.unwrap().unwrap();
         let worktree = Path::new(&workspace.worktree_path);
@@ -1746,19 +1888,39 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string()
-                .contains("mission.workspace_branch_mismatch")
+                .contains("mission.workspace_dirty")
         );
         assert_eq!(
             fs::read_to_string(worktree.join("external-untracked.txt")).unwrap(),
             "preserve\n"
         );
+        git.bytes(worktree, &["add", "external-untracked.txt"])
+            .await
+            .unwrap();
+        git.bytes(worktree, &["commit", "-m", "preserve external result"])
+            .await
+            .unwrap();
+        let external_oid = git
+            .text(worktree, &["rev-parse", "HEAD^{commit}"])
+            .await
+            .unwrap();
+        git.cleanup(&workspace).await.unwrap();
+        assert!(!worktree.exists());
+        assert_eq!(
+            git.text(&repo.root, &["rev-parse", "external/validation^{commit}"])
+                .await
+                .unwrap(),
+            external_oid
+        );
         git.bytes(&repo.root, &["branch", &workspace.branch, &managed_oid])
             .await
             .unwrap();
-        fs::remove_file(worktree.join("external-untracked.txt")).unwrap();
-        git.bytes(worktree, &["switch", &workspace.branch])
-            .await
-            .unwrap();
+        workspace.preparation_token = Uuid::new_v4().to_string();
+        workspace.preparation_kind = "restore".into();
+        workspace.state = "preparing".into();
+        git.restore(&workspace).await.unwrap();
+        workspace.state = "ready".into();
+        git.validate_execution_workspace(&workspace).await.unwrap();
         git.bytes(&repo.root, &["branch", "-D", "external/validation"])
             .await
             .unwrap();
@@ -1777,7 +1939,6 @@ mod tests {
         git.validate_execution_workspace(&workspace).await.unwrap();
         fs::write(&head_path, head_contents).unwrap();
         let expected = git.branch_oid(&workspace).await.unwrap().unwrap();
-        let reference = git.cleanup_branch_reference(&workspace).await.unwrap();
         fs::remove_dir_all(&workspace.worktree_path).unwrap();
         assert!(
             git.delete_branch_expected(&workspace, &reference, &expected)
@@ -1786,6 +1947,7 @@ mod tests {
                 .to_string()
                 .contains("mission.branch_in_use")
         );
+        fs::write(&head_path, "ref: refs/heads/external/stale-registration\n").unwrap();
         git.cleanup(&workspace).await.unwrap();
         assert!(!Path::new(&workspace.worktree_path).exists());
         assert_eq!(
@@ -2082,6 +2244,17 @@ mod tests {
                 .contains("mission.base_unavailable")
         );
         workspace.base_sha = base_sha;
+        assert!(
+            git.cleanup(&workspace)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("mission.workspace_dirty")
+        );
+        git.bytes(cwd, &["add", "-A"]).await.unwrap();
+        git.bytes(cwd, &["commit", "-m", "settle diff fixture"])
+            .await
+            .unwrap();
         git.cleanup(&workspace).await.unwrap();
     }
 }

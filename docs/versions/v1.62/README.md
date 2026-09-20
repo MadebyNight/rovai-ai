@@ -26,7 +26,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
   启动增量只为既有 path-free `MissionRecord` 增加 `startAvailable`。
 - 已确认的 Mission
   续作增量只在专属 Bootstrap 中增加一条工作目录说明并轮换 Session Charter revision。
-- Worktree 清理命令只提交持久意图；独立后台 owner 按 expected OID 和双检查点执行，failed 只显式重试。
+- Worktree 清理命令先拒绝可预见的脏现场与不安全 detached 提交；独立后台 owner 按目录归属、expected OID 和双检查点执行，未发生删除的失败可安全恢复。
 - 删除使命并清理时，清理意图与 Camp/Mission 删除同事务提交，卡片先消失，后续失败进入既有 orphan route。
 - 持久 Mission Worktree 的当前分支不再作为执行门禁；受管分支身份保留给资源清理，活动页实时展示 checkout。
 - 累计 Diff 继续使用固定 `base_sha`，checkout 与列表同次刷新，文件详情不复用旧临时 index。
@@ -39,7 +39,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
 - 使命板一级入口蓝点按 Core-owned `hasUnread` 统计有未读 Agent 回复的使命，不再复用 `needs_you` 状态。
 
-字段级协议见 [Mission v9](../../contracts/mission-v9.md)与
+字段级协议见 [Mission v10](../../contracts/mission-v10.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)和
@@ -88,8 +88,9 @@ Renderer 把资源状态固定在现有卡片层级中；确认窗不承担长�
 既有 Worktree 的执行校验只证明路径、仓库、Git 注册、owner marker、Host 与执行目录；当前分支、受管分支是否
 仍存在、detached HEAD、checkout 读取和固定基准可读性不再成为 Runtime 门禁。Rovai 不自动切分支、接管分支或
 重设基准。活动页一次返回实时 checkout 和相对固定基准的累计变化；文件详情使用新临时 index 重读当前状态，
-旧请求迟到时由 view association 和 Renderer generation 丢弃，不新增监听、哈希或持久快照。清理仍只认受管分支
-与 expected OID，当前 checkout 不匹配时保留现场并失败。
+旧请求迟到时由 view association 和 Renderer generation 丢弃，不新增监听、哈希或持久快照。清理仍只把受管分支
+与 expected OID 作为分支删除身份；Worktree 目录由路径、注册和 owner marker 独立证明。干净的非受管具名 checkout
+允许删除目录并保留其分支，脏现场和没有其他持久引用的 detached 提交继续保留。
 
 ## 使命板独立列滚动增量
 
@@ -143,7 +144,7 @@ Run/Camp，到期只重试文本并在成功后复用 block event；失败最高
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)后继续发布当前 [Mission v9](../../contracts/mission-v9.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)与 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9 后继续发布当前 [Mission v10](../../contracts/mission-v10.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)与 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
 | Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner |
 | UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |

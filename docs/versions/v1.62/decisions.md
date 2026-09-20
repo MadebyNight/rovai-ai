@@ -13,7 +13,7 @@ last_updated: 2026-09-20
 
 - 状态：accepted
 - 日期：2026-09-19
-- 当前权威：Mission v9 与 Mission Architecture
+- 当前权威：Mission v10 与 Mission Architecture
 
 Mission 状态是独立业务事实，公开消息是可选解释材料。要求 Agent 在设置 `needs_you` 或 `completed`
 前先发布消息，会把两项可分别授权、失败和重放的操作强制串联，并让“状态是否可更新”取决于一条消息是否已
@@ -32,7 +32,7 @@ Core 接受状态命令的条件。
 
 - 状态：accepted
 - 日期：2026-09-20
-- 当前权威：Mission v9 与 Mission 架构
+- 当前权威：Mission v10 与 Mission 架构
 
 前台命令同时执行 Git 删除会把确认窗、Camp 删除和一个可能持续或失败的外部进程绑在一起；Renderer 无法在
 命令返回前可靠区分“意图已保存”和“资源已删除”，删除使命也会被后续资源失败反向阻断。选择复用既有
@@ -74,7 +74,7 @@ IPC 或 schema，也不把行为参考稿提升为新的视觉权威。
 
 - 状态：accepted
 - 日期：2026-09-20
-- 当前权威：Mission v9 与 Mission 架构
+- 当前权威：Mission v10 与 Mission 架构
 
 Mission 绑定的是一个由 Rovai 验证所有权并持续复用的 Worktree；分支只是该目录当前的 Git checkout。把创建时的
 分支同时用作执行门禁、活动页标签和清理目标，会让用户或外部工具的普通切分支阻断 Runtime，并使一个可变观测
@@ -86,6 +86,10 @@ HEAD、checkout 观测失败和 Diff 基准不可用不再单独阻断有效 Wor
 同一次视图读取中，文件详情重新建立私有临时 index 并在旧关联不适用时要求刷新；进程内句柄只关联请求，不宣称
 文件系统原子快照。选择少缓存，而不是引入内容哈希、监听服务、持久快照或工作区状态机。
 
-清理仍严格使用受管分支和 expected OID；当前 checkout 不会成为可删除资源。非受管分支或 detached HEAD 使清理
-保留现场并显式失败，不自动切回。拒绝直接覆盖原分支字段，因为这会让展示写入改变清理目标；也拒绝每次切分支
-重建 Worktree、更新固定基准或只显示 `git diff HEAD`，因为这些都会改变 Mission 固定基准累计净变化语义。
+清理把 Worktree 目录和受管分支作为两个独立资源：目录归属只来自规范路径、Git 注册和 owner marker，受管分支
+只按记录的 expected OID 条件删除。具名非受管 checkout 不再阻断已验证且干净的目录删除，其分支和提交保留；受管
+分支缺失视为对应步骤已经完成，不追踪或接管改名后的分支。detached HEAD 只有在提交可从本次不会删除的持久引用
+到达时才允许删除目录。脏现场始终保留，正式 Worktree 删除不使用 `--force`，且未发生任何删除的失败可经实际资源
+审计恢复为 `ready`。拒绝直接覆盖原分支字段或删除当前 checkout，因为这会让展示观测改变资源归属；也拒绝自动
+stash、commit、切分支、建立保留分支、更新固定基准或只显示 `git diff HEAD`，因为这些都会改变用户成果或 Mission
+固定基准累计净变化语义。

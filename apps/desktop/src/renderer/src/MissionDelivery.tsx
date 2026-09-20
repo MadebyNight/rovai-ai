@@ -25,6 +25,10 @@ export function MissionActivityDocument({ mission, agents, onSource, onNotify, o
 }
 
 const kinds: Record<MissionChangedFile['kind'], string> = { added: '新增', deleted: '删除', renamed: '重命名', copied: '复制', type_changed: '类型变化', unmerged: '冲突', modified: '修改' }
+type MissionWorkspaceState = NonNullable<Delivery['workspace']>['state']
+export function missionChangesVisible(git: boolean, workspaceState: MissionWorkspaceState | null): boolean {
+  return git && workspaceState === 'ready'
+}
 export function MissionDeliveryPanel({ mission, agents, onSource, onNotify, onWorkspaceCleanupRequested }: { mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void; onNotify(message: string): void; onWorkspaceCleanupRequested(campId: string): Promise<void> }) {
   const client = useCampClient()
   const [data, setData] = useState<Delivery | null>(null), [error, setError] = useState(''), [revision, setRevision] = useState(0)
@@ -55,7 +59,7 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify, onWo
         {data.git && data.workspace && <><div className="mission-evidence-row"><span>来源</span><code>{data.workspace.baseBranch ?? 'detached HEAD'}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div></>}
         {data.workspace?.state === 'cleanup_failed' && <div className="mission-workspace-cleanup-failure" role="alert"><strong>{data.workspace.cleanupWorktreeRemoved && !data.workspace.cleanupBranchRemoved ? '分支清理失败' : 'Worktree 清理失败'}</strong><p>{data.workspace.diagnostic ?? '清理未完成，请重试。'}</p><dl><div><dt>Worktree</dt><dd>{data.workspace.cleanupWorktreeRemoved ? '已清理' : '待清理'}</dd></div><div><dt>本地分支</dt><dd>{data.workspace.cleanupBranchRemoved ? '已清理' : '待清理'}</dd></div></dl><button type="button" className="compact-cancel" disabled={cleanupBusy} onClick={() => void retryCleanup()}>{cleanupBusy ? '正在安排重试…' : '重试未完成步骤'}</button></div>}
       </div>
-      {data.git && (!data.workspace || data.workspace.state === 'ready') && <MissionChanges mission={mission} baseSha={data.workspace?.baseSha ?? null}/>}
+      {missionChangesVisible(data.git, data.workspace?.state ?? null) && <MissionChanges mission={mission} baseSha={data.workspace?.baseSha ?? null}/>}
       <section className="mission-delivery-section"><h3>队员交付 <span>{data.files.length || ''}</span></h3>{data.files.map(file => <div className="mission-delivery-file" key={`${file.messageId}:${file.attachmentId}`}>
         <div className="mission-artifact"><AttachmentCard presentation="agent-timeline" attachment={{ id: file.attachmentId, displayName: file.displayName, kind: file.kind, fileCount: file.fileCount, mediaType: file.mediaType, byteSize: file.byteSize, previewKind: file.previewKind, availability: 'unknown' }} locator={{ owner: 'message', campId: mission.campId, messageId: file.messageId, attachmentRefId: file.attachmentId }} onNotify={onNotify}/><small>{agents.find(a => a.agentId === file.agentId)?.displayName ?? '队员'} · {missionDate(file.createdAt)}</small></div>
         <button className="mission-source-link" onClick={() => onSource(file.messageId)}>查看来源</button>

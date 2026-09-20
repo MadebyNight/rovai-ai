@@ -15,6 +15,8 @@ export function missionError(error: unknown): string {
     'mission.workspace_in_use': '工作区仍被执行占用，请稍后重试。',
     'mission.branch_changed': '本地分支已发生变化，未执行删除。',
     'mission.branch_in_use': '本地分支正被其他 Worktree 使用，未执行删除。',
+    'mission.workspace_dirty': '存在未提交或未跟踪内容，未执行清理。请先保存需要保留的工作。',
+    'mission.detached_head_unreachable': 'detached HEAD 的提交没有可保留引用，未执行清理。请先创建分支或标签。',
     'mission.workspace_branch_mismatch': 'Worktree 当前分支与使命记录不一致，未执行清理。',
     'mission.workspace_branch_missing': '使命本地分支已缺失，无法确认清理范围。',
     'mission.workspace_cleanup_failed': '使命 Worktree 清理未完成，请重试。',

@@ -13,7 +13,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 | 合同 | 范围 |
 | --- | --- |
-| [Mission v9（当前）](mission-v9.md) | 继承 v8；持久 Worktree 的当前检出不再作为执行门禁，实时 checkout 与受管分支身份分离，Diff 视图不复用旧临时 index |
+| [Mission v10（当前）](mission-v10.md) | 继承 v9；Worktree 归属与受管分支删除解耦，安全保留非受管分支、脏现场与不可达 detached 提交，并恢复未发生删除的失败状态 |
+| [Mission v9（历史）](mission-v9.md) | 继承 v8；持久 Worktree 的当前检出不再作为执行门禁，实时 checkout 与受管分支身份分离，Diff 视图不复用旧临时 index；其非受管 checkout 清理拒绝由 v10 替代 |
 | [Mission v8（历史）](mission-v8.md) | 继承 v7；启动入口复用等待中的启动 Delivery 与非终态 Run，执行提示覆盖 queued/running/waiting；其分支执行门禁与 Diff session 由 v9 替代 |
 | [Mission v7（历史）](mission-v7.md) | 继承 v6；清理命令只提交持久意图，后台按双检查点执行，删除使命与保存清理意图同事务 |
 | [Mission v6（历史）](mission-v6.md) | 继承 v5；所有状态均可省略来源消息，显式来源继续验证，省略会清除旧关联 |

@@ -73,6 +73,16 @@ fn mission_workspace_read_matches(expected: &MissionWorkspace, current: &Mission
         && current.working_directory == expected.working_directory
 }
 
+fn cleanup_refusal_code(error: &anyhow::Error) -> Option<&'static str> {
+    let diagnostic = format!("{error:#}");
+    [
+        "mission.workspace_dirty",
+        "mission.detached_head_unreachable",
+    ]
+    .into_iter()
+    .find(|code| diagnostic.contains(code))
+}
+
 impl Core {
     async fn mission_git(&self) -> Result<MissionGit> {
         MissionGit::new(
@@ -151,17 +161,6 @@ impl Core {
                 saved.execution_host_id == host,
                 "mission.execution_host_unavailable"
             );
-            anyhow::ensure!(
-                matches!(
-                    saved.state.as_str(),
-                    "preparing" | "ready" | "cleanup_pending" | "cleanup_failed"
-                ),
-                "mission.workspace_cleanup_pending"
-            );
-            anyhow::ensure!(
-                matches!(saved.state.as_str(), "preparing" | "ready") || saved.cleanup_finished(),
-                "mission.workspace_cleanup_pending"
-            );
             saved
         } else {
             let Some(repository) = git.inspect(source).await? else {
@@ -172,6 +171,36 @@ impl Core {
             mission_workspace::persist_plan(database.connection(), &workspace)?;
             workspace
         };
+        if workspace.state == "cleanup_failed"
+            && !workspace.cleanup_finished()
+            && git.cleanup_failure_left_intact_workspace(&workspace).await
+        {
+            let database = self.database.lock().await;
+            let changed = database.connection().execute(
+                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_failed'",
+                params![workspace.id, chrono::Utc::now().to_rfc3339()],
+            )?;
+            if changed == 1 {
+                workspace.state = "ready".into();
+                workspace.cleanup_command_id = None;
+                workspace.cleanup_expected_branch_oid = None;
+                workspace.cleanup_worktree_removed = false;
+                workspace.cleanup_branch_removed = false;
+                workspace.diagnostic = None;
+            }
+        }
+        anyhow::ensure!(
+            matches!(
+                workspace.state.as_str(),
+                "preparing" | "ready" | "cleanup_pending" | "cleanup_failed"
+            ),
+            "mission.workspace_cleanup_pending"
+        );
+        anyhow::ensure!(
+            matches!(workspace.state.as_str(), "preparing" | "ready")
+                || workspace.cleanup_finished(),
+            "mission.workspace_cleanup_pending"
+        );
         if workspace.state != "preparing" {
             let worktree_exists = git.worktree_exists(&workspace)?;
             if worktree_exists {
@@ -340,7 +369,7 @@ impl Core {
         };
         if verified_worktree
             .as_ref()
-            .is_some_and(|verified| verified.requires_branch())
+            .is_some_and(|verified| verified.requires_managed_branch())
         {
             let branch_present = if saved_expected_oid.is_some() {
                 git.branch_exists_for_reference(&workspace, &reference)
@@ -421,6 +450,14 @@ impl Core {
             let result = self
                 .perform_mission_workspace_cleanup_locked(&mut workspace)
                 .await;
+            let intact_after_failure = if result.is_err() {
+                match self.mission_git().await {
+                    Ok(git) => git.cleanup_failure_left_intact_workspace(&workspace).await,
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
             let database = self.database.lock().await;
             match result {
                 Ok(()) => {
@@ -437,7 +474,14 @@ impl Core {
                     }
                 }
                 Err(error) => {
-                    database.connection().execute("UPDATE mission_workspace SET state='cleanup_failed',diagnostic=?2,updated_at=?3 WHERE id=?1",params![workspace.id,format!("{error:#}"),chrono::Utc::now().to_rfc3339()])?;
+                    let restored = intact_after_failure
+                        && database.connection().execute(
+                            "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_pending' AND EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",
+                            params![workspace.id, chrono::Utc::now().to_rfc3339()],
+                        )? == 1;
+                    if !restored {
+                        database.connection().execute("UPDATE mission_workspace SET state='cleanup_failed',diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='cleanup_pending'",params![workspace.id,format!("{error:#}"),chrono::Utc::now().to_rfc3339()])?;
+                    }
                 }
             }
             drop(database);
@@ -471,6 +515,31 @@ impl Core {
                     return Ok(serde_json::to_value(replay.result)?);
                 }
                 let _guard = self.mission_workspace_gate.lock().await;
+                let preflight_refusal = {
+                    let workspace = {
+                        let database = self.database.lock().await;
+                        mission_workspace::load_workspaces(database.connection(), &mission_id)?
+                            .into_iter()
+                            .next()
+                    };
+                    if let Some(workspace) = workspace.filter(|workspace| {
+                        worktree_cleanup_required(workspace.cleanup_worktree_removed)
+                            && !workspace.cleanup_finished()
+                            && !matches!(workspace.state.as_str(), "preparing" | "cleanup_pending")
+                    }) {
+                        let git = self.mission_git().await?;
+                        let reference = git.cleanup_branch_reference(&workspace).await?;
+                        match git.verify_worktree_cleanup(&workspace, &reference).await {
+                            Ok(_) => None,
+                            Err(error) => match cleanup_refusal_code(&error) {
+                                Some(code) => Some(code),
+                                None => return Err(error),
+                            },
+                        }
+                    } else {
+                        None
+                    }
+                };
                 let mut database = self.database.lock().await;
                 let execution = DomainCommandGateway.execute(&mut database, &envelope, |tx| {
                     let camp_id = tx
@@ -527,6 +596,18 @@ impl Core {
                     if workspace.execution_host_id != current_host {
                         return Ok(CommandHandlerResult::rejected(
                             "mission.execution_host_unavailable",
+                            json!({"missionId": mission_id}),
+                        ));
+                    }
+                    if let Some(code) = preflight_refusal {
+                        if workspace.state == "cleanup_failed" {
+                            tx.execute(
+                                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_failed'",
+                                params![workspace.id, chrono::Utc::now().to_rfc3339()],
+                            )?;
+                        }
+                        return Ok(CommandHandlerResult::rejected(
+                            code,
                             json!({"missionId": mission_id}),
                         ));
                     }
@@ -1012,7 +1093,7 @@ async fn select_candidate(
 
 #[cfg(test)]
 mod tests {
-    use super::{mission_workspace_read_matches, worktree_cleanup_required};
+    use super::{cleanup_refusal_code, mission_workspace_read_matches, worktree_cleanup_required};
     use crate::mission_workspace::MissionWorkspace;
 
     fn workspace() -> MissionWorkspace {
@@ -1040,11 +1121,23 @@ mod tests {
             diagnostic: None,
         }
     }
-
     #[test]
-    fn cleanup_retries_only_the_unfinished_worktree_step() {
+    fn cleanup_retries_only_unfinished_worktree_and_classifies_safe_refusals() {
         assert!(worktree_cleanup_required(false));
         assert!(!worktree_cleanup_required(true));
+        for code in [
+            "mission.workspace_dirty",
+            "mission.detached_head_unreachable",
+        ] {
+            assert_eq!(
+                cleanup_refusal_code(&anyhow::anyhow!("context: {code}")),
+                Some(code)
+            );
+        }
+        assert_eq!(
+            cleanup_refusal_code(&anyhow::anyhow!("mission.worktree_owner_mismatch")),
+            None
+        );
     }
 
     #[test]
