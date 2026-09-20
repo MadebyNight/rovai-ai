@@ -8,7 +8,7 @@ last_updated: 2026-09-20
 
 # Camp Open Read Path 架构
 
-字段与窗口见 [Camp Open Projection v21](../contracts/camp-open-projection-v21.md)与
+字段与窗口见 [Camp Open Projection v22](../contracts/camp-open-projection-v22.md)与
 [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)。本架构把“进入会话”、
 “继续阅读”、“查找完整当前会话”和“检查运行详情”分成用途明确的接口，同时保持 SQLite Read Side
 为唯一权威。
@@ -23,7 +23,7 @@ last_updated: 2026-09-20
 | Electron Main bridge | allowlist typed method、记录不含内容的 IPC roundtrip/response bytes；不组装或缓存领域投影 |
 | Core request ingress | 持续接收请求；有顺序要求的命令与混合操作交给单一 FIFO worker，执行窗口 page/changes 复用既有独立派发任务，不建立优先级调度器或第二套 RPC |
 | Core Camp enter module | 在一次有序 request 中先读 activation state；Pending 直接读取投影，Active 先按原 Envelope 查 receipt 并校验 Lead，有效新 User enter 只读，需要修复时 reconcile 后再读；缺失或 rejected 时 fail closed；不执行取消或文本维护 |
-| Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、coverage 与 high-water；不读取 event_log 或 Context Manifest/Action history，不执行业务 SQL 或 Blob/文件写入 |
+| Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、有界业务 coverage 与 high-water；保留已返回 Run 的定向原始 Evidence 计数，不计算 Camp-wide Evidence 总数；不读取 event_log 或 Context Manifest/Action history，不执行业务 SQL 或 Blob/文件写入 |
 | Camp message history read | 以 stable sequence cursor 读取 earlier page；不回放 event 构造第二真源 |
 | Camp conversation find read | 扫描当前 Camp 公开 user/agent 正文投影，返回 exact total 与一个选中命中；不改变 Agent-facing discovery search，也不返回完整结果集 |
 | Run detail read | 可见展开的 Run 使用逻辑操作窗口与相邻页预取，单条展开复用 content 接口；大 Evidence 正文继续按需读取，不随普通 Camp open 挂载 |
@@ -44,6 +44,11 @@ Open 仅读取当前 Camp 的业务表。它及其嵌套 loader、CTE、view 不
 `throughGlobalSequence` 仍从 `event_sequence` singleton 读取，不通过事件表求最大值。移除 timeline 与其
 exact count 后，打开成本不随其他 Camp 的事件历史增长；执行详情改由独立窗口读取，完整历史仍可按需访问。
 
+Open schema 8 也不再精确计算或公开 Camp-wide 原始 Evidence coverage。最多 96 个返回
+Run 仍包含各自的 `executionEvidenceCount`，该计数从 `agent_run_id` 索引路径定向获得；
+它不是全 Camp 合计，也不被最多 96 个 Run 的局部求和代替。因此打开 Camp A 的 SQL
+VM 工作量不得随 Camp B 的 Evidence 历史规模增长。
+
 此边界只约束投影读取，不撤销已执行 Active reconciliation 的 command receipt，也不修改完整
 `camp_snapshot()`、显式 History/Find、Navigation 或 `events.subscribe` 的审计与 invalidation 语义。
 无需清理旧数据、补历史字段、迁移或给旧 event 查询补索引。
@@ -61,7 +66,7 @@ app click / notification target
   -> Core reads authoritative activation state
        -> Pending: skip reconciliation
        -> Active: replay prior receipt or validate current Lead; reconcile only when needed
-  -> Core read transaction + bounded business collections + execution coverage + throughGlobalSequence
+  -> Core read transaction + bounded business collections + per-returned-Run evidence counts + throughGlobalSequence
   -> Main parses typed response
   -> Renderer atomically commits target Camp ID + project + recent Camp surface
   -> next meaningful paint
@@ -71,7 +76,7 @@ cold startup
   -> Main Window Session returns a frozen local target
   -> Renderer paints the target route shell and removes the global StartupGate
   -> Renderer queues camps.enter ahead of Overview/preferences/runtime health
-  -> Core activation-aware enter + bounded business collections + execution coverage
+  -> Core activation-aware enter + bounded business collections + per-returned-Run evidence counts
   -> Renderer commits Active Camp or meaningful Pending Camp Draft + meaningful content
   -> background navigation / campViewed / project restore
 
@@ -129,7 +134,7 @@ Renderer 保留连续已加载区间，用实测高度占位虚拟化视口外�
 运行中通过 `agentRunExecution.changes` 按原始变化水位追加/更新逻辑项，同时刷新原地变化的未完成正文。
 增量合并不改变历史 cursor，不把可见内容裁回最新一页。Camp 切换只卸载订阅与 DOM，保留有界 session 缓存；
 切回先显示最新缓存，再补齐变化。虚拟高度调整与翻页保留锚点，初始跟随意图等异步内容到达后完成。
-预算、淘汰后按需恢复和字段由 Camp Open v21 拥有。
+预算、淘汰后按需恢复和字段由 Camp Open v22 拥有。
 
 ## Complete conversation find flow
 
@@ -170,6 +175,6 @@ Memory 分别拥有局部 loading/error；全屏 StartupGate 只允许覆盖 Mai
 
 - [Core 受管内容不变量](foundational-invariants.md#core-managed-content)
 - [协作与执行准入不变量](foundational-invariants.md#collaboration-admission)
-- [Camp Open Projection v21](../contracts/camp-open-projection-v21.md)
+- [Camp Open Projection v22](../contracts/camp-open-projection-v22.md)
 - [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)
 - [Desktop Navigation Refresh](desktop-navigation-refresh.md)

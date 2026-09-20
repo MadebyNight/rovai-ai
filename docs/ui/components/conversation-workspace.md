@@ -62,11 +62,11 @@ Files Changed 历史 Review 真源。
 
 ## 打开与渐进历史
 
-Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)：
+Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v22](../../contracts/camp-open-projection-v22.md)：
 Camp/成员、最近消息、当前运行摘要、pending Approval 和 Composer 可用即完成。项目导航恢复、侧栏刷新
 与可见来源确认在首屏后执行，失败不能撤销已打开会话。只显示“正在打开对话”的 Shell 不算完成。
 
-Open schema 6 不返回审计 timeline；Renderer 适配 Snapshot 时使用空 timeline，并清空包括已加载旧页在内
+Open schema 8 不返回审计 timeline；Renderer 适配 Snapshot 时使用空 timeline，并清空包括已加载旧页在内
 的消息 `timelineGlobalSequence`。会话仍显示消息、Task、Stop 与 Files Changed：消息按 Camp-local
 `sequence`，卡片按业务时间、显式类型顺序和稳定 ID 分别排序后合并。同时间依次为消息、Task、Stop、
 Files Changed；时钟回拨时消息 sequence 优先，不能用非传递比较器混排。Files Changed 仍锚定在其来源 Run
@@ -82,7 +82,7 @@ Files Changed；时钟回拨时消息 sequence 优先，不能用非传递比较
 低强调度“加载更早消息”；加载时保持现有消息可读、按钮显示忙碌状态，失败原位允许重试。较早页 prepend
 后保持用户当前阅读锚点，不跳到顶部或最新消息。没有 earlier history 时不显示该控件。
 
-Camp open/refresh 仅返回 Run 摘要与 Evidence 总数；可见展开的 Run 才读取执行窗口，按详情高度估算首屏项数，
+Camp open/refresh 仅返回最多 96 个 Run 摘要与每个返回 Run 的原始 Evidence 计数；它不计算或返回全 Camp Evidence 总数。可见展开的 Run 才读取执行窗口，按详情高度估算首屏项数，
 并预取相邻更早一页。滚到边界或点击后才翻页，只挂载视口附近的内容；完整历史可继续按需访问，关闭的 Drawer、
 隐藏 Inspector、收起的 Run 与世界地图不读取历史。活动操作可补充到最新页，原始 Evidence 不被删除。
 普通 event refresh 保留较早消息、Draft、阅读位置、Inspector 选择和地图模式；在途执行刷新不覆盖历史阅读。
@@ -579,7 +579,7 @@ Task related execution、停止结果和世界地图入口在右侧承载时必�
 按窗口呈现。顶部“加载更早记录”复用会话区的文字箭头、已显示计数与原位加载／重试样式；向下滚动自动恢复
 已读缓存，取消“加载较新记录”按钮。“回到最新”采用最新缓存并跳转；首次展开执行中 Run 时，首屏与完整正文
 异步到达后仍定位到最新。历史阅读期间后台只更新最新缓存，不替换当前窗口或抢滚动位置。缓存预算见
-[Camp Open v21](../../contracts/camp-open-projection-v21.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
+[Camp Open v22](../../contracts/camp-open-projection-v22.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
 Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ command` 与下一行原始 JSON／文本输出，保留正文参数
 和多行输入，沿用 Shell Evidence 的按条惰性读取。Core 操作身份、图标和状态保持不变；不新增入参存储。
 缺少可靠关联时回退对应 `rovai` CLI 名称和同一 operation 的 Core 公共 `canonicalInput`，省略投影辅助事实和

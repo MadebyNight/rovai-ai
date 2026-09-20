@@ -368,7 +368,7 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
     let (open, _, _) = read_metered(&mut database, &camp_id);
     let open_json = serde_json::to_value(&open).unwrap();
     let snapshot_json = serde_json::to_value(&snapshot).unwrap();
-    assert_eq!(open.schema_version, 7);
+    assert_eq!(open.schema_version, CAMP_OPEN_SCHEMA_VERSION);
     assert_eq!(open_json["camp"], snapshot_json["camp"]);
     let delivery = open
         .message_deliveries
@@ -445,7 +445,7 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
         assert_eq!(actual, expected, "changed {collection}");
     }
     assert!(open.execution_evidence.is_empty());
-    assert!(!open.coverage.execution_evidence.complete);
+    assert!(open_json["coverage"].get("executionEvidence").is_none());
     let mut expected_messages = snapshot_json["messages"].clone();
     for message in expected_messages.as_array_mut().unwrap() {
         message["timelineGlobalSequence"] = Value::Null;
@@ -477,8 +477,35 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
 }
 
 #[test]
-fn camp_open_work_is_independent_of_unrelated_event_volume() {
+fn camp_open_work_is_independent_of_unrelated_event_and_evidence_volume() {
     let (mut database, camp_id, _, _) = business_fixture();
+    let unrelated_workspace = database.directory().join("unrelated-workspace");
+    std::fs::create_dir_all(&unrelated_workspace).unwrap();
+    let unrelated = CollaborationService::default()
+        .create_test_camp_conversation(
+            &mut database,
+            &CommandEnvelope {
+                command_id: "camp-open-unrelated-evidence-fixture".to_string(),
+                actor: ActorRef::User {
+                    user_id: "local_user".to_string(),
+                },
+                camp_id: None,
+                expected_versions: vec![],
+                execution_epoch: None,
+                payload: TestCampConversationCommand {
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    project_path: unrelated_workspace.to_string_lossy().to_string(),
+                    body: "无关会话".to_string(),
+                    address: TestCampMessageAddress::Default,
+                    purpose: "验证无关 Evidence 不影响 Camp Open".to_string(),
+                },
+            },
+        )
+        .unwrap();
+    let unrelated_run_id = unrelated.result.payload["agentRunIds"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
     let (baseline, baseline_steps, _) = read_metered(&mut database, &camp_id);
     let base_sequence = baseline.through_global_sequence;
     let mut expected = serde_json::to_value(baseline).unwrap();
@@ -531,5 +558,52 @@ fn camp_open_work_is_independent_of_unrelated_event_volume() {
             timings[4].as_secs_f64() * 1_000.0
         );
         previous_volume = volume;
+    }
+
+    let (evidence_baseline, evidence_baseline_steps, _) = read_metered(&mut database, &camp_id);
+    let mut evidence_expected = serde_json::to_value(evidence_baseline).unwrap();
+    evidence_expected
+        .as_object_mut()
+        .unwrap()
+        .remove("throughGlobalSequence");
+    let mut previous_evidence_volume = 0_i64;
+    for volume in [1_000_i64, 10_000, 100_000] {
+        let transaction = database.connection_mut().transaction().unwrap();
+        transaction
+            .execute(
+                r#"WITH RECURSIVE rows(n) AS (
+                SELECT ?1 UNION ALL SELECT n + 1 FROM rows WHERE n < ?2
+            )
+            INSERT INTO agent_run_execution_evidence(
+                id, agent_run_id, execution_epoch, sequence,
+                event_type, kind, phase, payload_preview_json,
+                content_byte_count, is_truncated, occurred_at
+            )
+            SELECT 'unrelated-evidence-' || n, ?3, 0, n,
+                   'runtime.action', 'command', 'completed', '{}',
+                   0, 0, '2026-08-31T00:00:00Z'
+            FROM rows"#,
+                params![previous_evidence_volume + 1, volume, unrelated_run_id],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        let (open, steps, elapsed) = read_metered(&mut database, &camp_id);
+        // Moving the target key away from an index edge can add a constant
+        // boundary check. The gate rejects work that scales with unrelated rows.
+        assert!(
+            steps <= evidence_baseline_steps + 4,
+            "SQL work grew with {volume} unrelated Evidence rows: baseline={evidence_baseline_steps}, actual={steps}"
+        );
+        let mut actual = serde_json::to_value(open).unwrap();
+        actual
+            .as_object_mut()
+            .unwrap()
+            .remove("throughGlobalSequence");
+        assert_eq!(actual, evidence_expected);
+        eprintln!(
+            "camp_open_scale unrelated_evidence={volume} vm_steps={evidence_baseline_steps} elapsed_ms={:.3}",
+            elapsed.as_secs_f64() * 1_000.0
+        );
+        previous_evidence_volume = volume;
     }
 }

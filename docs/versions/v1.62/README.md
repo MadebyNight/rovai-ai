@@ -85,8 +85,10 @@ running Run 会挤开会话并展开 Drawer。[Run Process Detail Surface v39](.
 
 同日完成的 Camp Open 职责增量将 `camps.open` 和 enter 的投影阶段收敛为实际零写入读取：旧取消协议修复前移到
 mandatory startup recovery，终态文本写入失败由原 block 保存退避并接入既有 AgentRun maintenance tick。
-它不新增 timer、worker、数据库表、连接、Migration 或 Renderer wire；字段级边界见
-[Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)。
+它不新增 timer、worker、数据库表、连接或 Migration。后续性能收敛将 Open wire 升级为 schema 8：
+保留最多 96 个 Run 摘要及各自的原始 Evidence 计数，移除无产品消费者的 Camp-wide Evidence
+精确 coverage 及其全表扫描。字段级边界见
+[Camp Open Projection v22](../../contracts/camp-open-projection-v22.md)。
 
 Mission 续作增量把 Session Charter revision 从 10 轮换到 11，只增加一条继续使用已准备工作目录及当前
 checkout 的默认指导。Bootstrap contract/Formatter、Context Formatter/Manifest/Profile、Schema 与 Runtime
@@ -182,14 +184,23 @@ AgentRun 的可见扫描、Mutation/Resize 观察和通知定位改为围绕稳�
 Run/Camp，到期只重试文本并在成功后复用 block event；失败最高退避至 30 秒。Camp open/read-only enter 的回归同时
 用 SQLite authorizer 阻断 DML 并检查 `managed-blobs` 文件目录，证明跨 Camp 待收尾正文不会被读取入口冲刷。
 
+## Camp Open Evidence coverage 性能收敛
+
+`camps.open` 不再为首屏计算全 Camp 原始 Execution Evidence 精确总数。该字段没有 Renderer
+消费者，却会从全局 Evidence 索引开始扫描，使目标 Camp 的打开成本随所有历史累积。
+Open schema 8 删除 `coverage.executionEvidence`，不用 0 或局部求和伪装全量；
+`coverage.agentRuns`、最多 96 个 Run 标题/状态及各自按 `agent_run_id` 索引计数的
+`executionEvidenceCount` 均保留。可见 Run 的详情继续按需分页，既有
+`reasoning_summary` 展示过滤不变。
+
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
-| Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card、运行中会话总览与当前 Camp quiet scope 均是可逆 Renderer 策略并由当前合同完整说明，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37、v38、v39 与当前 [v40](../../contracts/run-process-detail-surface-v40.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)、[Notification Episode v8](../../contracts/notification-episode-v8.md)、[Current User Attention v7](../../contracts/current-user-attention-v7.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
-| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner；通知架构明确当前 Camp quiet scope、精确已读独立和 execution Portal 边界 |
+| Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动、受管分支与实时 checkout 分离，以及移除无消费者的 Camp-wide Evidence 精确 coverage 取舍；Agent Run Card、运行中会话总览与当前 Camp quiet scope 均是可逆 Renderer 策略并由当前合同完整说明 |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37、v38、v39 与当前 [v40](../../contracts/run-process-detail-surface-v40.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)、[Notification Episode v8](../../contracts/notification-episode-v8.md)、[Current User Attention v7](../../contracts/current-user-attention-v7.md)及当前 [Camp Open Projection v22](../../contracts/camp-open-projection-v22.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner，且 Camp Open 成本不再随其他 Camp 的 Evidence 增长；通知架构明确当前 Camp quiet scope、精确已读独立和 execution Portal 边界 |
 | UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、运行中会话总览、回执和共享分栏，并补齐当前 Camp 静默与右侧 AgentRun 精确定位 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |

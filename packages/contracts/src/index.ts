@@ -2312,7 +2312,7 @@ export interface CampOpenMessageCoverage extends CampOpenCollectionCoverage {
 }
 
 export interface CampOpenProjection {
-  schemaVersion: 7
+  schemaVersion: 8
   throughGlobalSequence: number
   camp: CampSnapshot['camp']
   members: CampMemberView[]
@@ -2332,7 +2332,6 @@ export interface CampOpenProjection {
     messageDeliveries: CampOpenCollectionCoverage
     turns: CampOpenCollectionCoverage
     agentRuns: CampOpenCollectionCoverage
-    executionEvidence: CampOpenCollectionCoverage
     approvals: CampOpenCollectionCoverage
   }
 }

@@ -13,7 +13,7 @@ last_updated: 2026-09-20
 [Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
-[Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)，通知呈现见
+[Camp Open Projection v22](../../contracts/camp-open-projection-v22.md)，通知呈现见
 [Notification Episode v8](../../contracts/notification-episode-v8.md)与
 [Current User Attention v7](../../contracts/current-user-attention-v7.md)。
 
@@ -207,6 +207,16 @@ last_updated: 2026-09-20
 - [x] 修正 notification fixture 的 schema 8 与 `agentRunIds` 输入，TypeScript、Renderer 单测、隔离 Electron、
   文档治理和静态 UI detector 作为本增量门禁；不修改 Core、Migration 或 Rust 测试。
 
+## Gate 19：Camp Open Evidence coverage 性能收敛
+
+- [x] Open schema 升级为 8，移除 `coverage.executionEvidence`、对应 Rust/TypeScript 字段与
+  Camp-wide Evidence 精确计数 SQL；不用 0 或最多 96 个 Run 的局部求和伪装全量。
+- [x] 最多 96 个 Run 的标题、状态与各自 indexed raw `executionEvidenceCount` 保留；
+  可见 Run 仍按需读取执行窗口，现有 `reasoning_summary` SQL 过滤不变。
+- [x] 既有 Camp Open SQL 规模 owner 扩展无关 Camp Evidence 从 1,000 到 100,000 行的阶梯，
+  断言目标投影不变且 SQL VM 工作量不随规模增长；既有 Evidence 分页 owner 证明单 Run 原始计数仍为 85。
+- [x] 同步合同、架构、当前决定导航、Renderer schema fence 与 fixture；不增加 Migration、持久字段或新的 Rust test owner。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -263,12 +273,24 @@ Core SQL → DTO 边界，另建平行数据库 owner只会重复 setup。最小
 `cargo test -p rovai-core public_delivery_projection_preserves_causal_source_not_target_lineage` 与
 `cargo test -p rovai-core --features slow-tests camp_open_preserves_business_state_without_reading_event_history -- --nocapture`。
 
+Camp Open Evidence coverage 收敛不新增 Rust test owner。既有
+`execution_evidence_is_counted_in_snapshot_and_paged_by_agent_run` 用例继续拥有原始 Evidence 分页与
+Run-local 计数，并改为断言 Open 不公开 Camp-wide coverage；既有
+`camp_open_work_is_independent_of_unrelated_event_volume` 规模 owner 扩展为同时覆盖无关 Event 与
+Evidence 历史。这两个边界分别需要完整 Read Model 和 SQLite progress handler；纯 SQL 单元测试
+不能证明序列化 wire 或整条 Open 路径的工作量。删除测试为零。
+
 Mission 续作提示不新增 Rust test owner：既有 `session_charter_publishes_one_cli_only_builtin_contract` 继续拥有
 Mission／普通 Camp 的逐字 Charter 边界，既有 `binding_contract_freezes_each_context_axis_version` 继续拥有
 Session Charter revision 与 Binding compatibility digest。只扩展这两个 owner 的期望值和唯一性断言。
 
 ## 实施收口
 
+- Camp Open Evidence coverage 收敛：单 Run 的 85 条原始 Evidence 计数 owner、Camp Open 纯读投影
+  owner 与规模 owner 各 1/1 passed；50,000→5,000,000 条无关 Event 及 1,000→100,000 条无关
+  Evidence 下目标 Open 保持在 2450–2451 SQLite VM steps。`App.test.ts` 174/174、`pnpm typecheck`、
+  `cargo check -p rovai-core --all-targets`、`cargo fmt --all -- --check`、`pnpm docs:test`、普通与固定 base
+  的 diff-aware 文档门禁、`pnpm build:desktop` 与 `git diff --check` 通过。
 - 运行中会话总览增量：`App.test.ts` 174/174、`pnpm test:execution-avatar-rail` 2/2、`pnpm typecheck`、
   `pnpm docs:test`、`pnpm docs:check`、固定 base 的 `pnpm docs:check:ci`、`pnpm build:desktop` 与
   `git diff --check` 通过；Impeccable 静态 detector 对 `CampWorkspace.tsx` 返回零发现。
