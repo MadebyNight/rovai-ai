@@ -20,6 +20,7 @@ test('execution window pages on demand, preserves the anchor and mounts details 
 test('terminal Run artifacts retain their authors and layout across themes and widths', { timeout: 60_000 }, t => runFixture(t, '--run-artifacts'))
 test('public message groups follow rendered content height and preserve individual actions', { timeout: 60_000 }, t => runFixture(t, '--message-groups'))
 test('current user avatars and structured mentions open a live, keyboard-accessible profile card', { timeout: 60_000 }, t => runFixture(t, '--current-user-profile'))
+test('formal Camp entry readiness preserves cached-preview execution choices', { timeout: 60_000 }, t => runFixture(t, '--entry-preview-selection'))
 
 test('command interaction keeps disclosure anchors through async results and accessible states', { timeout: 120_000 }, t => runFixture(t, '--command-interaction'))
 

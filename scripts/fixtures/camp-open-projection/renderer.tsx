@@ -162,6 +162,7 @@ let current = campOpenProjectionAsSnapshot(projection(60), earlier)
 let updateSnapshot: (snapshot: typeof current) => void
 let updateCurrentUserProfile: (profile: CurrentUserProfile) => void
 let updateMessageHistory: (coverage: CampOpenMessageCoverage | null) => void
+let completeEntrySnapshot: () => void
 let closeTask: () => void
 type FixtureImageResult = { displayName: string; mediaType: string; data: string }
 const mockImageResult = (
@@ -459,8 +460,8 @@ const navigation: NavigationSnapshot = {
   }]
 }
 
-function Fixture({ executionPlacement = 'bottom', windowed = false }: {
-  executionPlacement?: 'bottom' | 'inspector'; windowed?: boolean
+function Fixture({ executionPlacement = 'bottom', windowed = false, entryPreview = false }: {
+  executionPlacement?: 'bottom' | 'inspector'; windowed?: boolean; entryPreview?: boolean
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState(current)
   const [profile, setProfile] = useState(DEFAULT_CURRENT_USER_PROFILE)
@@ -469,9 +470,11 @@ function Fixture({ executionPlacement = 'bottom', windowed = false }: {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<CampInspectorTab>(attachmentReviewMode ? 'members' : 'tasks')
   const [entryHost, setEntryHost] = useState<HTMLElement | null>(null)
+  const [entrySnapshotReady, setEntrySnapshotReady] = useState(!entryPreview)
   updateSnapshot = setSnapshot
   updateCurrentUserProfile = setProfile
   updateMessageHistory = setMessageHistory
+  completeEntrySnapshot = () => setEntrySnapshotReady(true)
   closeTask = () => setOpen(false)
   return <CurrentUserProfileContext.Provider value={{
     profile, ready: true, error: null, reload: () => {},
@@ -500,6 +503,7 @@ function Fixture({ executionPlacement = 'bottom', windowed = false }: {
         onSend={async () => {}} onChangeLead={async () => {}} onTasksChanged={async () => {}}
         onResolveApproval={() => {}} onStop={() => {}} worldMapEnabled={false} executionPlacement={activePlacement}
         onExecutionPlacementChange={async next => { setActivePlacement(next); return next }}
+        workspaceEntrySnapshotReady={entrySnapshotReady}
         openCoverage={windowed ? projection(60).coverage : null}
         inspectorVisible={open} inspectorTab={tab} detailEntryHost={entryHost}
         onInspectorTabChange={setTab}
@@ -549,6 +553,23 @@ Object.assign(window, { campOpenTest: {
     pendingCommandResults.clear()
   },
   pendingCommandResults: () => pendingCommandResults.size,
+  showEntryPreview: (sample: number) => {
+    const runningRun: AgentRunView = { ...textRun, id: `entry-running-${sample}`, agentId: agents[0].agentId,
+      status: 'running', failure: null, executionEvidenceCount: 0, cancelRequestedAt: null,
+      cancelAcknowledgedAt: null, cancelReasonCode: null, endedAt: null }
+    const historicalRun: AgentRunView = { ...textRun, id: `entry-history-${sample}`, agentId: agents[1].agentId,
+      status: 'succeeded', failure: null, executionEvidenceCount: 0, cancelRequestedAt: null,
+      cancelAcknowledgedAt: null, cancelReasonCode: null }
+    current = { ...campOpenProjectionAsSnapshot(projection(60)), tasks: [], messages: [],
+      agentRunFileChanges: [], executionEvidence: [], agentRuns: [historicalRun, runningRun] }
+    reactRoot.render(<Fixture key={`entry-preview-${sample}`} entryPreview />)
+  },
+  completeEntrySnapshot: () => completeEntrySnapshot(),
+  entryState: () => ({
+    selectedAgentId: document.querySelector<HTMLElement>('.run-pulse-chip.is-selected')?.dataset.agentId ?? null,
+    expanded: document.querySelector('.execution-bottom-collapse-button')?.getAttribute('aria-expanded') === 'true',
+    drawerLabel: document.querySelector('.execution-drawer')?.getAttribute('aria-label') ?? null
+  }),
   showHistoricalReturnWindow: () => reactRoot.render(<HistoricalReturnWindow />),
   updateReturnWindow: (revision: number, hasNewer: boolean) => updateReturnWindow({ revision, hasNewer }),
   appendCollapsedRunningExecution: () => {

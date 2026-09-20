@@ -47,6 +47,54 @@ app.whenReady().then(async () => {
       app.exit(0)
       return
     }
+    if (mode === '--entry-preview-selection') {
+      const settle = () => run('window.campOpenTest.settle()')
+      const waitFor = async expression => {
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          if (await run(expression)) return
+          await new Promise(resolve => setTimeout(resolve, 25))
+        }
+        throw new Error(`Entry preview condition timed out: ${expression}`)
+      }
+
+      await run('window.campOpenTest.showEntryPreview(1)')
+      await waitFor('document.querySelectorAll(".run-pulse-chip[data-agent-id]").length >= 3')
+      await run('document.querySelector(".run-pulse-chip[data-agent-id=agent-2]").click()')
+      await settle()
+      assert.equal((await run('window.campOpenTest.entryState()')).selectedAgentId, 'agent-2',
+        'the cached preview can select a historical Run')
+      await run('window.campOpenTest.completeEntrySnapshot()')
+      await settle()
+      let entryState = await run('window.campOpenTest.entryState()')
+      assert.equal(entryState.selectedAgentId, 'agent-2', 'formal readiness preserves the selected historical Run')
+      assert.equal(entryState.expanded, true)
+
+      await run('window.campOpenTest.showEntryPreview(2)')
+      await waitFor('document.querySelector(".run-pulse-chip[data-agent-id=agent-1]") !== null')
+      await run('document.querySelector(".run-pulse-chip[data-agent-id=agent-1]").click()')
+      await settle()
+      await run('document.querySelector(".execution-bottom-collapse-button").click()')
+      await settle()
+      assert.equal((await run('window.campOpenTest.entryState()')).selectedAgentId, null,
+        'the cached preview can explicitly close execution')
+      await run('window.campOpenTest.completeEntrySnapshot()')
+      await settle()
+      entryState = await run('window.campOpenTest.entryState()')
+      assert.equal(entryState.selectedAgentId, null, 'formal readiness does not reopen an explicitly closed execution')
+      assert.equal(entryState.expanded, false)
+
+      await run('window.campOpenTest.showEntryPreview(3)')
+      await waitFor('document.querySelector(".run-pulse-chip[data-agent-id=agent-1]") !== null')
+      await run('window.campOpenTest.completeEntrySnapshot()')
+      await settle()
+      entryState = await run('window.campOpenTest.entryState()')
+      assert.equal(entryState.selectedAgentId, 'agent-1', 'formal readiness auto-opens the running Run when untouched')
+      assert.equal(entryState.expanded, true)
+      console.log(JSON.stringify({ ok: true, mode, checks: ['historical-selection', 'closed-stays-closed', 'untouched-auto-open'] }))
+      window.destroy()
+      app.quit()
+      return
+    }
     if (mode === '--return-latest') {
       await state()
       await run('document.querySelector(".camp-timeline").scrollTop = 200')
