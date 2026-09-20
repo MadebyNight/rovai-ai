@@ -5,7 +5,7 @@ lifecycle: current
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
-model_context_change: false
+model_context_change: true
 last_updated: 2026-09-20
 ---
 
@@ -24,6 +24,8 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - catalog、真实 CLI help、实际错误恢复和 Core 使用同一语义。
 - 状态解耦不改变 Mission 修改权限、执行生命周期、数据库、Bootstrap、Run Facts、ContextManifest 或 UI wire；
   启动增量只为既有 path-free `MissionRecord` 增加 `startAvailable`。
+- 已确认的 Mission
+  续作增量只在专属 Bootstrap 中增加一条工作目录说明并轮换 Session Charter revision。
 - Worktree 清理命令只提交持久意图；独立后台 owner 按 expected OID 和双检查点执行，failed 只显式重试。
 - 删除使命并清理时，清理意图与 Camp/Mission 删除同事务提交，卡片先消失，后续失败进入既有 orphan route。
 - 持久 Mission Worktree 的当前分支不再作为执行门禁；受管分支身份保留给资源清理，活动页实时展示 checkout。
@@ -44,6 +46,9 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)。实施与验证见
 [实施计划](implementation-plan.md)，取舍理由见[版本决定](decisions.md)。
 
+Mission Bootstrap 续作提示的完整前后合同、版本边界与二次确认见
+[模型上下文变更 revision 3](model-context-change-mission-continuation.md)。
+
 ## 当前状态
 
 状态解耦、异步 cleanup、独立列滚动、Agent Run Card 与消息撤回增量已经完成实现及各自验收。
@@ -62,6 +67,10 @@ Mission Worktree checkout 增量同样不轮换 data contract：已有 `branch` 
 mandatory startup recovery，终态文本写入失败由原 block 保存退避并接入既有 AgentRun maintenance tick。
 它不新增 timer、worker、数据库表、连接、Migration 或 Renderer wire；字段级边界见
 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)。
+
+Mission 续作增量把 Session Charter revision 从 10 轮换到 11，只增加一条继续使用已准备工作目录及当前
+checkout 的默认指导。Bootstrap contract/Formatter、Context Formatter/Manifest/Profile、Schema 与 Runtime
+compaction 行为均不变。
 
 ## Worktree 异步清理增量
 
@@ -134,7 +143,7 @@ Run/Camp，到期只重试文本并在成功后复用 block event；失败最高
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)后继续发布当前 [Mission v9](../../contracts/mission-v9.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)与 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)后继续发布当前 [Mission v9](../../contracts/mission-v9.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)与 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
 | Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner |
 | UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |

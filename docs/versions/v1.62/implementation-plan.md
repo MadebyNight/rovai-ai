@@ -128,6 +128,14 @@ last_updated: 2026-09-20
   Managed Blob 目录断言覆盖目标 Camp 旧取消和其他 Camp 大文本的组合副作用。
 - [x] Open schema 7、Snapshot 34、Data Contract 99、Renderer wire、数据库锁/连接和 Migration 均不变。
 
+## Gate 12：Mission 续作提示
+
+- [x] 开发者二次确认[模型上下文变更 revision 3](model-context-change-mission-continuation.md)；revision 1 的逐 Run
+  WORKSPACE 注入与 revision 2 的压缩后补发均撤销。
+- [x] Mission 专属 Session Charter 在 `mission get` 说明后只增加已确认的续作句，并把 Charter revision 从
+  10 轮换到 11；普通 Camp、Single Chat、WORKSPACE、Runtime compaction 与数据库均不变。
+- [x] 两个既有 Rust owner、格式、文档治理与 diff 检查通过；PR 继续由 required checks 约束合入。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -162,6 +170,10 @@ Gateway/Blob 副作用。既有 Execution text 跨模块 owner 扩展 post-commi
 大正文 Blob 与命令 replay，不新增平行测试。新增 startup recovery owner 拥有跨 Camp 精确发现及重复执行幂等；
 只有启动层测试能证明 service 不再是 repair owner。
 
+Mission 续作提示不新增 Rust test owner：既有 `session_charter_publishes_one_cli_only_builtin_contract` 继续拥有
+Mission／普通 Camp 的逐字 Charter 边界，既有 `binding_contract_freezes_each_context_axis_version` 继续拥有
+Session Charter revision 与 Binding compatibility digest。只扩展这两个 owner 的期望值和唯一性断言。
+
 ## 实施收口
 
 - `cargo test -p rovai-core --lib mission_commands_keep_definition_atomic_patch_only_and_start_status_independent`：1 passed。
@@ -193,3 +205,6 @@ Gateway/Blob 副作用。既有 Execution text 跨模块 owner 扩展 post-commi
   `pnpm docs:check` 与带固定 base 的 `pnpm docs:check:ci` 通过。隔离 Electron 的正文、执行窗口、终态
   artifacts 与当前用户 profile 场景通过；其余五个 Renderer fixture 断言在本分支和干净
   `da55f981` 基线以相同位置失败，未纳入本后端增量的通过声明。
+- Mission 续作提示定向验证：`session_charter_publishes_one_cli_only_builtin_contract` 在 `slow-tests`
+  feature 下 1/1 passed，`binding_contract_freezes_each_context_axis_version` 1/1 passed；格式、文档单测、
+  普通与 diff-aware 文档门禁、`git diff --check` 均通过，未扩大为 Runtime smoke 或 App 构建。

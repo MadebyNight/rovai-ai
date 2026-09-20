@@ -2923,7 +2923,7 @@ fn build_session_charter(
         file_guidance,
         adapter_guidance,
         if is_mission {
-            "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.\n- Change status only when the whole Mission's state changes, not merely when your Run ends."
+            "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.\n- The Mission working directory is already prepared. Continue follow-up work there on its current checkout by default. Do not create or switch branches, or create another Worktree, merely because a new Run starts, context is compacted, or more changes are requested. Follow explicit user requests for a different branch or baseline.\n- Change status only when the whole Mission's state changes, not merely when your Run ends."
         } else {
             ""
         },
@@ -14399,11 +14399,17 @@ mod slow_tests {
         let charter = build_session_charter(&snapshot, false, false).unwrap();
         assert!(charter.ends_with(&format!("\n- {CODEX_FINAL_CAMP_ANSWER_GUIDANCE}")));
         assert_eq!(charter.matches(CODEX_FINAL_CAMP_ANSWER_GUIDANCE).count(), 1);
-        let mission_suffix = "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.\n- Change status only when the whole Mission's state changes, not merely when your Run ends.";
+        let mission_suffix = "\n\nRovai Mission Contract\n\n- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.\n- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.\n- The Mission working directory is already prepared. Continue follow-up work there on its current checkout by default. Do not create or switch branches, or create another Worktree, merely because a new Run starts, context is compacted, or more changes are requested. Follow explicit user requests for a different branch or baseline.\n- Change status only when the whole Mission's state changes, not merely when your Run ends.";
         let mission_charter = build_session_charter(&snapshot, false, true).unwrap();
         assert_eq!(mission_charter, format!("{charter}{mission_suffix}"));
         assert!(!charter.contains("Rovai Mission Contract"));
         assert_eq!(mission_charter.matches("Rovai Mission Contract").count(), 1);
+        assert_eq!(
+            mission_charter
+                .matches("The Mission working directory is already prepared.")
+                .count(),
+            1
+        );
         assert_eq!(mission_charter.matches("rovai mission get").count(), 2);
         let shared_charter = charter
             .strip_suffix(&format!("\n- {CODEX_FINAL_CAMP_ANSWER_GUIDANCE}"))

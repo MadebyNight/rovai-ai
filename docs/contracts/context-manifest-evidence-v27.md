@@ -14,6 +14,25 @@ Manifest 27 and Formatter 27 apply only to new public Camp Runs. They inherit th
 [Manifest 26](context-manifest-evidence-v26.md). Single Chat remains on Manifest/Formatter 25; frozen public
 Runs retain their original Manifest, Profile, payload bytes and digests.
 
+## Mission Session Charter
+
+New Mission bindings append this exact Mission-only block to the public Session Charter:
+
+```text
+Rovai Mission Contract
+
+- All current members may use `rovai mission get|update|status` to maintain this Camp's Mission.
+- Use `rovai mission get` when the current Mission's full definition is missing or outdated; judge completion against that definition.
+- The Mission working directory is already prepared. Continue follow-up work there on its current checkout by default. Do not create or switch branches, or create another Worktree, merely because a new Run starts, context is compacted, or more changes are requested. Follow explicit user requests for a different branch or baseline.
+- Change status only when the whole Mission's state changes, not merely when your Run ends.
+```
+
+The additional guidance tells follow-up Runs to continue in the already prepared Mission working directory on
+its current checkout by default. It neither locks the branch nor changes workspace preparation, cleanup, Git
+observation, Runtime compaction, or `[WORKSPACE]` delivery. Ordinary public Camp and Single Chat Charters remain
+unchanged. Session Charter revision 11 rotates new Binding compatibility; historical Bootstrap evidence,
+Manifest rows and frozen input bytes remain immutable.
+
 For an Agent-facing public batch projection, Core first renders the stored Structured Camp Message Content.
 When and only when `addressMode = default` has exactly one frozen `addressedAgentId`, Core prefixes that
 rendered body with the existing Member Mention rendering for that recipient:
