@@ -26,6 +26,24 @@ pub(super) struct Handoff {
     pipe: std::process::ChildStdin,
 }
 
+/// Releases the advisory lock explicitly before closing the file. On Unix a
+/// forked child briefly inherits open file descriptions before exec; relying
+/// on close alone can therefore retain a lock after the owning scope returns.
+struct ScopedFileLock(fs::File);
+
+impl ScopedFileLock {
+    fn acquire(file: fs::File) -> std::io::Result<Self> {
+        file.try_lock()?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for ScopedFileLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 pub(super) fn prepare(
     root: &Path,
     data: &Path,
@@ -229,22 +247,22 @@ impl Prepared {
     }
     fn apply(&self) -> Result<PathBuf> {
         self.unchanged()?;
-        let program_lease = fs::File::open(self.root.join(program("rovai-server")))?;
-        program_lease
-            .try_lock()
-            .context("another Server is using this program installation")?;
+        let _program_lease =
+            ScopedFileLock::acquire(fs::File::open(self.root.join(program("rovai-server")))?)
+                .context("another Server is using this program installation")?;
         let parent = self
             .managed_prefix
             .as_deref()
             .unwrap_or(self.root.parent().context("program parent")?);
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(parent.join(".rovai-update.lock"))?;
-        lock.try_lock()
-            .context("another Server update is in progress")?;
+        let _update_lock = ScopedFileLock::acquire(
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(parent.join(".rovai-update.lock"))?,
+        )
+        .context("another Server update is in progress")?;
         #[cfg(windows)]
         let _installer_lease = {
             use std::os::windows::fs::OpenOptionsExt;
@@ -298,7 +316,7 @@ impl Prepared {
         // The shared lease preflight above rejects other instances; loaded images
         // still prevent the directory move if an instance starts during this switch.
         #[cfg(windows)]
-        drop(program_lease);
+        drop(_program_lease);
         let backup = parent.join(format!(".rovai-previous-{}", rovai_web::new_token()?));
         switch_directory(&self.root, &self.incoming, &backup)?;
         Ok(self.root.join(program("rovai-server")))
@@ -454,6 +472,16 @@ mod tests {
         );
         #[cfg(unix)]
         {
+            // A Runtime process can fork while the update preflight is holding
+            // this lease. Its inherited descriptor must not extend the lock.
+            let lease_path = fixture.join("inherited-lease");
+            fs::write(&lease_path, "lease").unwrap();
+            let lease_file = fs::File::open(&lease_path).unwrap();
+            let inherited = lease_file.try_clone().unwrap();
+            drop(ScopedFileLock::acquire(lease_file).unwrap());
+            drop(ScopedFileLock::acquire(fs::File::open(&lease_path).unwrap()).unwrap());
+            drop(inherited);
+
             let prefix = fixture.join("managed");
             let old = prefix.join("revisions/old");
             let candidate = prefix.join("incoming");
