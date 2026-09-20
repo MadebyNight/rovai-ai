@@ -146,7 +146,6 @@ impl CleanupRefusal {
         Self { code, detail }
     }
 
-    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         self.code
     }

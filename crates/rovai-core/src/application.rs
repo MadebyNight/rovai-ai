@@ -26964,10 +26964,7 @@ done
                     )
                     .unwrap();
                 if cleanup_state.0 == "ready"
-                    && cleanup_state
-                        .1
-                        .as_deref()
-                        .is_some_and(|diagnostic| diagnostic.contains("mission.workspace_dirty"))
+                    && cleanup_state.1.as_deref() == Some("mission.workspace_dirty")
                 {
                     assert_eq!(cleanup_state.2, None);
                     assert!(!cleanup_state.3 && !cleanup_state.4);

@@ -627,7 +627,21 @@ impl Core {
                     }
                 }
                 Err(failure) => {
-                    let diagnostic = format!("{:#}", failure.error);
+                    let detailed_diagnostic = format!("{:#}", failure.error);
+                    let diagnostic = failure
+                        .error
+                        .downcast_ref::<CleanupRefusal>()
+                        .map(|refusal| refusal.code().to_string())
+                        .unwrap_or_else(|| detailed_diagnostic.clone());
+                    if let Some(refusal) = failure.error.downcast_ref::<CleanupRefusal>() {
+                        eprintln!(
+                            "[mission-worktree-cleanup] mission={:?} workspace={:?} stage=refusal_detail code={:?} detail={:?}",
+                            workspace.mission_id,
+                            workspace.id,
+                            refusal.code(),
+                            detailed_diagnostic,
+                        );
+                    }
                     let restored = failure.restore_ready
                         && !workspace.cleanup_worktree_removed
                         && database.connection().execute(
