@@ -4,7 +4,7 @@ import * as Menu from '@radix-ui/react-dropdown-menu'
 import * as Popover from '@radix-ui/react-popover'
 import { MemberAvatar } from './MemberAvatar'
 import { NavigationIcon } from './NavigationIcon'
-import { identityColorToken } from './theme'
+import { missionLabelColorToken } from './theme'
 import { DialogControlIcon } from './AppDialog'
 import type { AgentProfile, MissionRecord as Mission, MissionStatus as Status } from '@contracts'
 export const statuses: {id: Status; label: string}[] = [{id:'needs_you',label:'需要你'},{id:'not_started',label:'未开始'},{id:'in_progress',label:'进行中'},{id:'completed',label:'已完成'}]
@@ -17,7 +17,7 @@ export function Icon({ name }: { name: 'board' | 'list' | 'plus' | 'chevron' | '
   const d = { collapse: 'M3 8h5V3M21 8h-5V3M8 21v-5H3M16 21v-5h5', 'chevron-right': 'm9 6 6 6-6 6', tag: 'M3 3h8l10 10-8 8L3 11ZM7 7h.01', refresh: 'M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 11-2l3 7M4 12l3 7a7 7 0 0 0 11-2', board: 'M4 4h16v16H4zM9 4v16M15 4v16', list: 'M8 6h12M8 12h12M8 18h12M4 6h.1M4 12h.1M4 18h.1', plus: 'M12 5v14M5 12h14', chevron: 'm6 9 6 6 6-6', play: 'm8 5 11 7-11 7Z', branch: 'M6 3v12a4 4 0 0 0 4 4h2M18 7a6 6 0 0 1-6 6H6', history: 'M3 11a9 9 0 1 1 2.5 7M3 4v7h7M12 7v5l3 2', more: 'M5 12h.01M12 12h.01M19 12h.01', check: 'm5 12 4 4L19 6', expand: 'M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5' }[name]
   return <svg className="mission-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} />{name === 'branch' && <><circle cx="6" cy="3" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="14" cy="19" r="2"/></>}</svg>
 }
-export const tagStyle = (tag: string) => ({ '--mission-tag-color': identityColorToken(`mission-tag:${tag.normalize('NFC').toLocaleLowerCase()}`) } as React.CSSProperties)
+export const tagStyle = (tag: string) => ({ '--mission-tag-color': missionLabelColorToken(tag) } as React.CSSProperties)
 export function TagMark({ tag }: { tag: string }) { return <span className="mission-tag-mark" style={tagStyle(tag)}><Icon name="tag"/></span> }
 export function TagColorDot({ tag }: { tag: string }) { return <span className="mission-tag-color-dot" style={tagStyle(tag)} aria-hidden="true"/> }
 export function FilterStateIcon() { return <span className="mission-filter-state-icon" aria-hidden="true"/> }

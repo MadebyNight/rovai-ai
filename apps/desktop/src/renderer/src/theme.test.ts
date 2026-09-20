@@ -5,6 +5,7 @@ import {
   identityColorIndex,
   identityColorToken,
   initialAppearanceSnapshot,
+  missionLabelColorToken,
   resolvedThemeFromDocument,
   THEME_OPTIONS
 } from './theme'
@@ -49,6 +50,14 @@ describe('renderer theme model', () => {
     expect(first).toBeLessThanOrEqual(8)
     expect(identityColorIndex('agent_2')).toBe(first)
     expect(identityColorToken('agent_2')).toBe(`var(--identity-${first})`)
+  })
+
+  it('maps normalized Mission labels through the existing stable hash to dedicated tokens', () => {
+    const label = 'E\u0301tiquette'
+    const normalized = label.normalize('NFC').toLocaleLowerCase()
+    const expected = `var(--mission-label-${identityColorIndex(`mission-tag:${normalized}`)})`
+    expect(missionLabelColorToken(label)).toBe(expected)
+    expect(missionLabelColorToken(label)).toBe(missionLabelColorToken('Étiquette'))
   })
 })
 
