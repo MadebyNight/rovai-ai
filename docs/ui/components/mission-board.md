@@ -36,7 +36,10 @@ surface in Day and its Night equivalent. Its title/subtitle use the same 34px ov
 Memory and Scheduled Automation and align with shell controls. The title, filter bar and board use the full
 available page width instead of inheriting the ordinary 1400px reading cap, and lead into four equally tall,
 very light neutral rounded lanes, including empty lanes. Lane headings flow directly into their card regions
-without a horizontal divider. List mode groups and folds rows by status.
+without a horizontal divider at the top. Scrolling a lane down reveals a dashed divider and a subtle shadow
+below only that lane's fixed heading. Returning to the top or fitting all cards without vertical overflow
+removes both; filtering, restoring a view and resizing recalculate the cue from the actual scroll position.
+This local scroll cue does not add elevation to cards. List mode groups and folds rows by status.
 In board mode the page title, filters, and each lane's status name/count remain fixed. The board host owns only
 horizontal movement, while each lane's card region is a focusable, independently scrolling vertical region with
 contained overscroll. Reaching one lane's end therefore never moves another lane or the whole board. Stable

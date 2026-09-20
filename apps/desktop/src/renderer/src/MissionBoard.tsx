@@ -338,6 +338,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
   const [dragOverStatus, setDragOverStatus] = useState<MissionStatus | null>(null)
   const [pageHidden, setPageHidden] = useState(false)
   const [activeLane, setActiveLane] = useState<MissionStatus>('needs_you')
+  const [scrolledLanes, setScrolledLanes] = useState<Partial<Record<MissionStatus, boolean>>>({})
   const boardScroll = useRef<HTMLDivElement>(null)
   const laneScrolls = useRef(new Map<MissionStatus, HTMLDivElement>())
   const laneScrollMemory = useRef(new Map<MissionStatus, number>())
@@ -391,6 +392,18 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     laneScrolls.current.forEach(lane => { lane.scrollTop = 0 })
     updateActiveLane()
   }, [query, stateFilter.join('\u0000'), tags.join('\u0000'), projectFilter.join('\u0000')])
+  const updateLaneScroll = (status: MissionStatus, lane: HTMLDivElement): void => {
+    const scrolled = lane.scrollTop > 0 && lane.scrollHeight > lane.clientHeight
+    setScrolledLanes(current => !!current[status] === scrolled ? current : { ...current, [status]: scrolled })
+  }
+  useLayoutEffect(() => {
+    if (view !== 'board') return
+    const measure = (): void => laneScrolls.current.forEach((lane, status) => updateLaneScroll(status, lane))
+    measure()
+    const observer = new ResizeObserver(measure)
+    laneScrolls.current.forEach(lane => observer.observe(lane))
+    return () => observer.disconnect()
+  }, [view, hidden, missions, query, stateFilter, tags, projectFilter])
   const edgeSpeed = (point: number, start: number, end: number): number => {
     const margin = Math.min(64, (end - start) / 3)
     if (point < start + margin && point >= start - 12) return -Math.max(1, (start + margin - point) / margin) * 9
@@ -496,12 +509,12 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     }}>
       {loading && !missions.length && <p role="status" className="mission-section-empty">正在加载使命…</p>}
       {view === 'board' ? <div className="mission-board" style={{gridTemplateColumns: `repeat(${visibleStatuses.length}, minmax(var(--mission-column-min-width, 200px), 1fr))`}}>
-        {visibleStatuses.map(s => <section className={`mission-column${dragOverStatus === s.id ? ' is-drop-target' : ''}`} key={s.id}
+        {visibleStatuses.map(s => <section className={`mission-column${scrolledLanes[s.id] ? ' is-scrolled' : ''}${dragOverStatus === s.id ? ' is-drop-target' : ''}`} key={s.id}
           onDragOver={event => { if (!draggingId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; dragPointer.current = { x: event.clientX, y: event.clientY, status: s.id }; setDragOverStatus(s.id); queueDragScroll() }}
           onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverStatus(current => current === s.id ? null : current) }}
           onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggingId; const mission = missions.find(candidate => candidate.missionId === id); stopDragging(); if (mission && mission.status !== s.id) actions.status(mission, s.id) }}>
           <header><StatusIcon status={s.id}/><h2 id={`mission-lane-${s.id}`}>{s.label}</h2><span>{filtered.filter(m => m.status === s.id).length}</span></header>
-          <div ref={node => { if (node) laneScrolls.current.set(s.id, node); else laneScrolls.current.delete(s.id) }} className="mission-column-cards" data-status={s.id} tabIndex={0} role="region" aria-labelledby={`mission-lane-${s.id}`} aria-describedby="mission-board-lane-help" onKeyDown={event => {
+          <div ref={node => { if (node) laneScrolls.current.set(s.id, node); else laneScrolls.current.delete(s.id) }} className="mission-column-cards" data-status={s.id} tabIndex={0} role="region" aria-labelledby={`mission-lane-${s.id}`} aria-describedby="mission-board-lane-help" onScroll={event => updateLaneScroll(s.id, event.currentTarget)} onKeyDown={event => {
             if (event.target !== event.currentTarget) return
             if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); focusAdjacentLane(s.id, event.key === 'ArrowLeft' ? -1 : 1) }
           }}>{filtered.filter(m => m.status === s.id).map(card)}</div>
