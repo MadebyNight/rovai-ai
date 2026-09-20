@@ -141,7 +141,7 @@ pub fn bind(
             UploadTarget::Camp => {
                 ensure!(
                     transaction.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1 AND deleted_at IS NULL)",
+                        "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1)",
                         [&intent.camp_id],
                         |row| row.get::<_, bool>(0),
                     )?,
