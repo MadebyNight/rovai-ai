@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { NavigationSnapshot } from '@contracts'
 import { navigationIncludingCurrentWorkspace, navigationWithProjectNames } from './new-conversation-preferences'
-import { projectDirectoryName } from '../../shared/project-display-name'
+import { displayProjectPath, projectDirectoryName } from '../../shared/project-display-name'
 
 describe('project display names', () => {
   it('changes only the display projection and preserves Core identity, Camp objects and activity order', () => {
@@ -32,5 +32,16 @@ describe('project display names', () => {
     expect(display.projects[0]).toMatchObject({ name: '试验前端', projectPath: '/empty/frontend', projectKey: 'directory:/empty/frontend', totalCount: 0, recentCamps: [] })
     expect(core.projects).toEqual([])
     expect(projectDirectoryName('C:\\work\\frontend')).toBe('frontend')
+  })
+
+  it('hides Windows device prefixes without changing the stored project identity', () => {
+    const local = '\\\\?\\C:\\Users\\reiam\\Downloads\\temp'
+    const network = '\\\\?\\UNC\\server\\share\\project'
+
+    expect(displayProjectPath(local)).toBe('C:\\Users\\reiam\\Downloads\\temp')
+    expect(displayProjectPath(network)).toBe('\\\\server\\share\\project')
+    expect(displayProjectPath('/Users/reiam/project')).toBe('/Users/reiam/project')
+    expect(projectDirectoryName(local)).toBe('temp')
+    expect(local).toBe('\\\\?\\C:\\Users\\reiam\\Downloads\\temp')
   })
 })

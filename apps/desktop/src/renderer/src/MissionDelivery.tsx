@@ -12,6 +12,7 @@ import { useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { NavigationIcon } from './NavigationIcon'
 import { DialogControlIcon } from './AppDialog'
 import { writeClipboardText } from './clipboard'
+import { displayProjectPath } from '../../shared/project-display-name'
 
 export function MissionActivityDocument({ mission, agents, onSource, onNotify, onWorkspaceCleanupRequested }: {
   mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void; onNotify(message: string): void; onWorkspaceCleanupRequested(campId: string): Promise<void>
@@ -62,7 +63,7 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify, onWo
         {data.workspace?.state === 'preparing' && <p className="mission-workspace-cleared" role="status">正在准备工作区…</p>}
         {data.workspace?.state === 'cleaned' && <p className="mission-workspace-cleared">Worktree 已清理 · 下次执行时重建</p>}
         {data.workspace?.state === 'cleanup_pending' && <p className="mission-workspace-cleaning" role="status"><span className="mission-cleanup-spinner" aria-hidden="true"/>{data.workspace.cleanupWorktreeRemoved && !data.workspace.cleanupBranchRemoved ? '正在清理本地分支…' : '正在清理 Worktree…'}</p>}
-        <div className="mission-evidence-row"><span>目录</span><code>{data.workingDirectory}</code></div>
+        <div className="mission-evidence-row"><span>目录</span><code>{displayProjectPath(data.workingDirectory)}</code></div>
         {data.git && data.workspace && <><div className="mission-evidence-row"><span>来源</span><code>{data.workspace.baseBranch ?? 'detached HEAD'}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div><div className="mission-evidence-row"><span>使命分支</span><code>{data.workspace.managedBranch}</code></div></>}
         {cleanupNeedsAttention && data.workspace && <div className="mission-workspace-cleanup-failure" role="alert"><strong>{cleanupRefused ? 'Worktree 未清理' : data.workspace.cleanupWorktreeRemoved && !data.workspace.cleanupBranchRemoved ? '分支清理失败' : 'Worktree 清理失败'}</strong><p>{data.workspace.diagnostic ?? '清理未完成，请重试。'}</p><dl><div><dt>Worktree</dt><dd>{data.workspace.cleanupWorktreeRemoved ? '已清理' : '待清理'}</dd></div><div><dt>本地分支</dt><dd>{data.workspace.cleanupBranchRemoved ? '已清理' : '待清理'}</dd></div></dl><button type="button" className="compact-cancel" disabled={cleanupBusy} onClick={() => void retryCleanup()}>{cleanupBusy ? '正在安排重试…' : cleanupRefused ? '再次清理' : '重试未完成步骤'}</button></div>}
       </div>

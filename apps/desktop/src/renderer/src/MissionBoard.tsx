@@ -25,6 +25,7 @@ import {
   type MissionDraftAttachment,
   type MissionWritingPlaneHandle
 } from './MissionDefinitionEditor'
+import { displayProjectPath } from '../../shared/project-display-name'
 
 type MissionActions = {
   edit(mission: MissionRecord): void
@@ -470,7 +471,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
       onKeyDown={e => { if (e.key === 'ContextMenu' || e.key === 'F10' && e.shiftKey) { e.preventDefault(); const bounds = e.currentTarget.getBoundingClientRect(); e.currentTarget.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: bounds.left, clientY: bounds.bottom })) } }}>
       <div className="mission-card-meta"><span>{`M-${String(m.number).padStart(3, '0')}`}</span><div className="mission-card-top-actions"><MissionRunning mission={m} pageHidden={pageHidden}/></div></div>
       <button className="mission-card-open" onClick={() => onOpen(m)}><h3>{m.title}</h3></button>
-      <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
+      <div className="mission-project-tags"><span className="mission-card-project" title={displayProjectPath(m.projectPath)}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-card-footer"><MissionAvatars m={m} compact onClick={e => actions.roster(m, e)}/>{m.hasUnread && <span className="mission-unread-message" role="img" aria-label="有未读回复" title="有未读回复；与执行状态独立"><span className="mission-unread-dot" aria-hidden="true"/><span aria-hidden="true">未读</span></span>}<time dateTime={m.updatedAt} title={new Date(m.updatedAt).toLocaleString()}>{missionDate(m.updatedAt)}</time></div>
       {cleanupFeedback && (
         <MissionCleanupCardStatus mission={m} state={cleanupFeedback} onOpen={() => onOpen(m)}/>
@@ -625,7 +626,7 @@ export function MissionIntro({ mission: m, projects }: { mission: MissionRecord;
         {m.attachments.map(attachment => <AttachmentCard key={attachment.id} attachment={attachment} locator={{owner:'mission', campId:m.campId, missionId:m.missionId, attachmentRefId:attachment.id}} presentation="composer" onNotify={setAttachmentError}/>) }
       </ComposerAttachmentStrip>}
       {attachmentError && <p className="compact-inline-error mission-intro-attachment-error" role="alert">{attachmentError}</p>}
-      <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
+      <div className="mission-project-tags"><span className="mission-card-project" title={displayProjectPath(m.projectPath)}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-intro-meta"><MissionAvatars m={m}/></div>
     </section>
     {m.status === 'not_started' && m.startAvailable && !actions.startAccepted(m.missionId) && <div className="mission-start-row"><button className="mission-new mission-start" disabled={starting} aria-busy={starting} onClick={() => actions.start(m)}><Icon name="play"/>{starting ? '正在开始…' : '开始使命'}</button></div>}

@@ -12,6 +12,13 @@ export function projectDisplayNameError(name: string): string | null {
     : null
 }
 
+export function displayProjectPath(projectPath: string): string {
+  if (projectPath.startsWith('\\\\?\\UNC\\')) return `\\\\${projectPath.slice(8)}`
+  if (projectPath.startsWith('\\\\?\\')) return projectPath.slice(4)
+  return projectPath
+}
+
 export function projectDirectoryName(projectPath: string): string {
-  return projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath
+  const displayPath = displayProjectPath(projectPath)
+  return displayPath.split(/[\\/]/).filter(Boolean).at(-1) ?? displayPath
 }
