@@ -7310,11 +7310,6 @@ impl Core {
                     execution
                 };
                 if execution.result.status == CommandResultStatus::Applied {
-                    self.runtime_fleet
-                        .invalidate_runtime_config(&agent_id)
-                        .await;
-                }
-                if execution.result.status == CommandResultStatus::Applied {
                     self.pump_runtime_ready_recipient(&agent_id).await?;
                 }
                 Ok(serde_json::to_value(execution.result)?)
@@ -7344,9 +7339,6 @@ impl Core {
                     &user_command_envelope(params.command_id, params.command),
                 )?;
                 if execution.result.status == CommandResultStatus::Applied {
-                    self.runtime_fleet
-                        .invalidate_runtime_config(&agent_id)
-                        .await;
                     self.mark_skill_projections_dirty_best_effort(&mut database, true);
                 }
                 Ok(serde_json::to_value(execution.result)?)
@@ -23677,6 +23669,142 @@ mod tests {
             runtime_fleet,
             builtin_tool_leases,
         })
+    }
+
+    #[cfg(all(target_os = "macos", feature = "slow-tests"))]
+    #[tokio::test]
+    async fn member_runtime_writes_do_not_cancel_starting_fleet_reservations() {
+        for method in ["members.runtime.set", "members.runtime.clear"] {
+            let root = std::env::temp_dir().join(format!(
+                "rovai-runtime-write-fleet-test-{}-{}",
+                method.replace('.', "-"),
+                uuid::Uuid::new_v4()
+            ));
+            let core = Arc::new(runtime_resolution_test_core(&root).unwrap());
+            let (agent_id, expected_version) = {
+                let database = core.database.lock().await;
+                let profile = AgentProfileService::default()
+                    .list_profiles(&database)
+                    .unwrap()
+                    .into_iter()
+                    .next()
+                    .expect("the startup database should include a default member");
+                rovai_core::agent_profile::configure_test_runtime(
+                    &database,
+                    &[profile.agent_id.as_str()],
+                );
+                database
+                    .connection()
+                    .execute(
+                        "UPDATE adapter_installation SET auth_scope = 'default' WHERE id = 'adapter-test-codex'",
+                        [],
+                    )
+                    .unwrap();
+                (profile.agent_id, profile.version)
+            };
+
+            let startup_entered = Arc::new(Notify::new());
+            let startup_release = Arc::new(Notify::new());
+            let acquire = tokio::spawn({
+                let fleet = core.runtime_fleet.clone();
+                let agent_id = agent_id.clone();
+                let startup_entered = startup_entered.clone();
+                let startup_release = startup_release.clone();
+                async move {
+                    fleet
+                        .acquire(
+                            runtime_fleet::FleetAcquireRequest {
+                                agent_run_id: format!("run-{method}"),
+                                execution_epoch: 1,
+                                adapter_kind: AdapterKind::CodexCli,
+                                compatibility: runtime_fleet::RuntimeCompatibilityKey::member(
+                                    "camp-runtime-write",
+                                    agent_id,
+                                    "runtime-before-write",
+                                ),
+                            },
+                            move || async move {
+                                startup_entered.notify_one();
+                                startup_release.notified().await;
+                                Ok(runtime_fleet::fake_runtime_process_host(format!(
+                                    "host-{method}"
+                                )))
+                            },
+                        )
+                        .await
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(1), startup_entered.notified())
+                .await
+                .expect("Fleet startup did not reach the controlled reservation");
+
+            let command = if method == "members.runtime.set" {
+                json!({
+                    "agentId": agent_id,
+                    "expectedVersion": expected_version,
+                    "adapterKind": "codex-cli",
+                    "model": { "mode": "runtime_default" },
+                    "permissions": {
+                        "adapterKind": "codex-cli",
+                        "schemaVersion": 1,
+                        "values": {
+                            "sandbox_mode": "workspace-write",
+                            "approval_policy": "on-request"
+                        }
+                    }
+                })
+            } else {
+                json!({
+                    "agentId": agent_id,
+                    "expectedVersion": expected_version
+                })
+            };
+            let mut update = tokio::spawn({
+                let core = core.clone();
+                async move {
+                    core.handle(&Request {
+                        client: rovai_core::draft_client::DraftClient::default(),
+                        id: json!(1),
+                        method: method.to_string(),
+                        params: json!({
+                            "commandId": uuid::Uuid::new_v4().to_string(),
+                            "command": command
+                        }),
+                    })
+                    .await
+                }
+            });
+            let early_update = tokio::time::timeout(Duration::from_millis(250), &mut update)
+                .await
+                .ok();
+            let updated_before_release = early_update.is_some();
+            startup_release.notify_waiters();
+            let update_result = match early_update {
+                Some(result) => result,
+                None => update.await,
+            }
+            .expect("Runtime configuration task panicked")
+            .expect("Runtime configuration command failed");
+            let acquire_result = acquire.await.expect("Fleet acquire task panicked");
+            let acquire_error = acquire_result
+                .as_ref()
+                .err()
+                .map(|error| format!("{error:#}"));
+            core.runtime_fleet.shutdown_all().await;
+
+            assert!(
+                updated_before_release,
+                "{method} waited for and invalidated the active Fleet startup"
+            );
+            assert_eq!(update_result["status"], "applied", "{update_result:#}");
+            assert!(
+                acquire_result.is_ok(),
+                "{method} cancelled the active Fleet startup: {acquire_error:?}"
+            );
+
+            drop(core);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[cfg(all(target_os = "macos", feature = "slow-tests"))]
