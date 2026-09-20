@@ -4677,7 +4677,10 @@ describe('task event projections', () => {
     expect(markup).toContain('aria-label="使用系统应用打开 说明.txt"')
     expect(markup).toContain('aria-label="使用系统应用打开 不可用.txt"')
     expect(markup).not.toContain('aria-label="使用系统应用打开 不可用.txt" disabled=""')
-    expect(markup).not.toContain('class="message-bubble"')
+    expect(markup).toContain('class="message-bubble"')
+    expect(markup).toContain('class="default-recipient-mention-prefix" data-quote-exclude=""')
+    expect(markup).toContain('data-agent-id="agent_1"')
+    expect(markup.replace(/<[^>]*>/gu, '')).toContain('@洛可')
   })
 
   it('uses platform-native labels for revealing Timeline Attachments', () => {

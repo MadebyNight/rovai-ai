@@ -16,6 +16,11 @@ last_updated: 2026-09-20
 - accepted/outcome-unknown 对用户显示普通红色失败，不显示“结果未知”产品状态；诊断和 evidence 仍保留内部真实分类。旧执行尚未隔离时，后继消息继续显示等待，不制造必败 Run。
 - 本地用户消息仅在首次目标 claim 前显示撤回；成功后时间线可显示“你撤回了一条消息”，但 Agent 读取、搜索、线程和分页不包含正文或占位。
 - Channel-bound Camp 的 Agent 公共发言默认外发；没有 `--to-channel` 或 Run 级外发开关。
+- 本地用户或 External Principal 的公开消息使用 `addressMode=default` 且只有一个冻结
+  `addressedAgentId` 时，历史气泡在正文前派生该队员的 Member Mention；附件-only 消息也显示该 Mention。
+  身份取自消息快照，名称与可用状态沿用当前成员目录。该前缀只属于 Renderer 展示，不写回用户正文或
+  Structured Content，也不进入复制、选文引用、搜索、`camp.read` 或渠道正文；显式寻址、广播、零/多接收者和
+  Agent 发言不增加前缀。
 
 字段与状态见 [Message Delivery v10](../../contracts/message-delivery-v10.md)、
 [Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)和

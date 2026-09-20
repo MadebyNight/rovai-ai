@@ -4728,6 +4728,7 @@ export function CampWorkspace({
                   const displayBody = campMessage.body
                   const humanAuthored = campMessage.authorType === 'user'
                     || campMessage.authorType === 'external_principal'
+                  const defaultRecipientAgentId = defaultRecipientMentionAgentId(campMessage)
                   const runtimeImages = timelineItem.runtimeImageGroups.flatMap((group) => group.images)
                   const messageAuthorKey = campMessage.authorType === 'user'
                     || campMessage.authorType === 'agent'
@@ -4914,7 +4915,7 @@ export function CampWorkspace({
                                     onNotify={onNotify}
                                   />
                                 )}
-                                {displayBody.trim().length > 0 && (
+                                {(displayBody.trim().length > 0 || defaultRecipientAgentId !== null) && (
                                   campMessage.authorType === 'agent'
                                   && !campMessage.content?.some((segment) =>
                                     segment.kind === 'current_user_mention'
@@ -4947,6 +4948,7 @@ export function CampWorkspace({
                                             body={displayBody}
                                             content={campMessage.content}
                                             members={snapshot.members}
+                                            leadingRecipientAgentId={defaultRecipientAgentId}
                                             truncate={humanAuthored}
                                             forceExpanded={isConversationFindCurrent || quoteSourceId === campMessage.id}
                                             renderLeadingCurrentUserMarkdown={campMessage.authorType === 'agent'}
@@ -8500,6 +8502,18 @@ function StopOutcomeEvent({
   )
 }
 
+export function defaultRecipientMentionAgentId(
+  message: Pick<CampMessageView, 'authorType' | 'addressMode' | 'addressedAgentIds'>
+): string | null {
+  const humanAuthored = message.authorType === 'user'
+    || message.authorType === 'external_principal'
+  return humanAuthored
+    && message.addressMode === 'default'
+    && message.addressedAgentIds.length === 1
+    ? message.addressedAgentIds[0]
+    : null
+}
+
 function campMessageAuthorLabel(
   message: CampMessageView,
   memberById: ReadonlyMap<string, CampSnapshot['members'][number]>,
@@ -8687,6 +8701,7 @@ function TruncatedStructuredMessageBody({
   body,
   content,
   members,
+  leadingRecipientAgentId,
   truncate,
   forceExpanded,
   renderLeadingCurrentUserMarkdown = false,
@@ -8698,6 +8713,7 @@ function TruncatedStructuredMessageBody({
   body: string
   content: StructuredCampMessageContent | null
   members: CampSnapshot['members']
+  leadingRecipientAgentId?: string | null
   truncate: boolean
   forceExpanded: boolean
   renderLeadingCurrentUserMarkdown?: boolean
@@ -8725,6 +8741,7 @@ function TruncatedStructuredMessageBody({
       body={displayBody}
       content={displayContent}
       members={members}
+      leadingRecipientAgentId={leadingRecipientAgentId}
       renderLeadingCurrentUserMarkdown={renderLeadingCurrentUserMarkdown}
       onActivateCurrentUserMention={onActivateCurrentUserMention}
       onActivateMemberMention={onActivateMemberMention}
@@ -8814,6 +8831,7 @@ export function StructuredMessageBody({
   body,
   content,
   members,
+  leadingRecipientAgentId,
   inline = false,
   renderLeadingCurrentUserMarkdown = false,
   onActivateCurrentUserMention,
@@ -8824,6 +8842,7 @@ export function StructuredMessageBody({
   body: string
   content: StructuredCampMessageContent | null
   members: CampSnapshot['members']
+  leadingRecipientAgentId?: string | null
   inline?: boolean
   renderLeadingCurrentUserMarkdown?: boolean
   onActivateCurrentUserMention?(trigger: HTMLElement, focusPanel: boolean): void
@@ -8835,15 +8854,27 @@ export function StructuredMessageBody({
   onActivateAllMembersMention?(trigger: HTMLElement, focusPanel: boolean): void
   onFileReference?: FileReferenceActivation
 }): JSX.Element {
+  const memberById = new Map(members.map((member) => [member.agentId, member]))
+  const leadingRecipientPrefix = leadingRecipientAgentId ? (
+    <span className="default-recipient-mention-prefix" data-quote-exclude="">
+      <MemberMentionToken
+        agentId={leadingRecipientAgentId}
+        member={memberById.get(leadingRecipientAgentId)}
+        onActivate={onActivateMemberMention}
+      />
+      {body.length > 0 && !/^\s/u.test(body) ? ' ' : ''}
+    </span>
+  ) : null
   const markdownBody = renderLeadingCurrentUserMarkdown && content !== null
     ? projectLeadingCurrentUserMentionMarkdownBody(content, members)
     : null
   if (content === null) {
-    return <p><FileReferenceText text={body} onActivate={onFileReference} /></p>
+    return <p>{leadingRecipientPrefix}<FileReferenceText text={body} onActivate={onFileReference} /></p>
   }
   if (markdownBody !== null) {
     return (
       <div className="current-user-markdown-body">
+        {leadingRecipientPrefix}
         <span className="current-user-mention-prefix">
           <CurrentUserMentionToken onActivate={onActivateCurrentUserMention} />
           {markdownBody.length > 0 ? ' ' : ''}
@@ -8856,10 +8887,10 @@ export function StructuredMessageBody({
       </div>
     )
   }
-  const memberById = new Map(members.map((member) => [member.agentId, member]))
   const Tag = inline ? 'span' : 'p'
   return (
     <Tag className="structured-message-body">
+      {leadingRecipientPrefix}
       {content.map((segment, index) => {
         if (segment.kind === 'text') {
           // Core's quote separator belongs to the plain-text/context projection;
@@ -8932,45 +8963,62 @@ export function StructuredMessageBody({
             </span>
           )
         }
-        const member = memberById.get(segment.agentId)
-        const available = Boolean(
-          member
-          && member.membershipStatus === 'active'
-          && member.profilePresence !== 'removed'
-        )
-        const interactive = Boolean(available && onActivateMemberMention)
-        const showMemberProfile = (
-          trigger: HTMLElement,
-          respectTextSelection: boolean,
-          focusPanel: boolean
-        ): void => {
-          if (!interactive || !member || !onActivateMemberMention) return
-          if (respectTextSelection && window.getSelection()?.toString()) return
-          onActivateMemberMention(member.agentId, trigger, focusPanel)
-        }
         return (
-          <span
-            className={`message-mention-token${available ? '' : ' is-unavailable'}${interactive ? ' is-interactive' : ''}`}
-            data-agent-id={segment.agentId}
-            role={interactive ? 'button' : undefined}
-            tabIndex={interactive ? 0 : undefined}
-            aria-label={interactive && member ? `查看${member.displayName}的基础信息` : undefined}
-            aria-haspopup={interactive ? 'dialog' : undefined}
-            aria-expanded={interactive ? false : undefined}
-            title={available && member ? `查看${member.displayName}的基础信息` : '该队员已不可用'}
-            onClick={(event) => showMemberProfile(event.currentTarget, true, false)}
-            onKeyDown={(event) => {
-              if ((event.key !== 'Enter' && event.key !== ' ') || !interactive) return
-              event.preventDefault()
-              showMemberProfile(event.currentTarget, false, true)
-            }}
+          <MemberMentionToken
             key={`member-${index}-${segment.agentId}`}
-          >
-            @{member?.displayName ?? '不可用队员'}
-          </span>
+            agentId={segment.agentId}
+            member={memberById.get(segment.agentId)}
+            onActivate={onActivateMemberMention}
+          />
         )
       })}
     </Tag>
+  )
+}
+
+function MemberMentionToken({
+  agentId,
+  member,
+  onActivate
+}: {
+  agentId: string
+  member: CampSnapshot['members'][number] | undefined
+  onActivate?(agentId: string, trigger: HTMLElement, focusPanel: boolean): void
+}): JSX.Element {
+  const available = Boolean(
+    member
+    && member.membershipStatus === 'active'
+    && member.profilePresence !== 'removed'
+  )
+  const interactive = Boolean(available && onActivate)
+  const showMemberProfile = (
+    trigger: HTMLElement,
+    respectTextSelection: boolean,
+    focusPanel: boolean
+  ): void => {
+    if (!interactive || !member || !onActivate) return
+    if (respectTextSelection && window.getSelection()?.toString()) return
+    onActivate(member.agentId, trigger, focusPanel)
+  }
+  return (
+    <span
+      className={`message-mention-token${available ? '' : ' is-unavailable'}${interactive ? ' is-interactive' : ''}`}
+      data-agent-id={agentId}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={interactive && member ? `查看${member.displayName}的基础信息` : undefined}
+      aria-haspopup={interactive ? 'dialog' : undefined}
+      aria-expanded={interactive ? false : undefined}
+      title={available && member ? `查看${member.displayName}的基础信息` : '该队员已不可用'}
+      onClick={(event) => showMemberProfile(event.currentTarget, true, false)}
+      onKeyDown={(event) => {
+        if ((event.key !== 'Enter' && event.key !== ' ') || !interactive) return
+        event.preventDefault()
+        showMemberProfile(event.currentTarget, false, true)
+      }}
+    >
+      @{member?.displayName ?? '不可用队员'}
+    </span>
   )
 }
 
