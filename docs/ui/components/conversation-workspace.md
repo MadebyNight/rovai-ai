@@ -62,7 +62,7 @@ Files Changed 历史 Review 真源。
 
 ## 打开与渐进历史
 
-Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)：
+Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)：
 Camp/成员、最近消息、当前运行摘要、pending Approval 和 Composer 可用即完成。项目导航恢复、侧栏刷新
 与可见来源确认在首屏后执行，失败不能撤销已打开会话。只显示“正在打开对话”的 Shell 不算完成。
 
@@ -495,10 +495,11 @@ Drawer/结果阅读位置与 DOM identity，不得条件卸载后重建。底部
 与总览均把 non-terminal Run 留在当前区，terminal Run 按新到旧进入默认收起的“执行历史”；历史标题只显示
 历史总数，不增加失败待处理汇总。收起卡片只显示触发消息摘要、状态或耗时，动作在 hover/focus 后出现；只有总览卡片重复队员头像。
 展开后直接显示过程正文，不重复元数据。队员 Header 保留身份、Runtime、模型与 Fast，移除 Run 总数和冗余统计。
-尚未被 Scheduler claim、没有 `targetAgentRunId` 的 waiting public Delivery 按接收队员合为一个 Delivery-backed
+尚未被 Scheduler claim、没有 `targetAgentRunId` 的 waiting 当前 CampMessageDelivery 按接收队员合为一个 Delivery-backed
 “排队消息”卡，即使该队员尚无 AgentRun 也进入执行台当前区和队员入口。该卡只允许展开、查看输入和定位原消息，
 不显示停止；Delivery 被 claim 或离开 waiting 后，由真实 Run 或终态投递事实接管。若同一队员同时存在终态历史和
-waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal Run 仍优先于 Delivery 预览。
+waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal Run 仍优先于 Delivery 预览。用户和 Agent 作者都使用
+同一队列投影；用户消息缺少 `sourceAgentRunId` 不影响卡片准入。
 
 同一队员的 queued Run 合为一个排队批次，按不同来源消息显示层数；展开后逐条显示用户或 Agent 作者、两行摘要与
 “定位原消息”。任一 Run、queued Run 批次或 Delivery-backed 排队卡含多条不同来源消息时，卡头显示独立于展开按钮的
@@ -507,7 +508,7 @@ waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal
 
 紧凑卡头保持 40px 最小高度；总览中的队员头像固定为 20×20px，不随 flex 收缩拉伸。左侧状态节点与卡头首行垂直居中，
 竖向时间线从首节点中心延伸到末节点中心；展开与停止操作距卡片右边保留 9px，不能被绝对定位层吞掉。字段与验收边界见
-[Run Process Detail Surface v36](../../contracts/run-process-detail-surface-v36.md)。
+[Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)。
 
 打开过程入口时，先定位最新 running，其次最新 non-terminal，最后最新 terminal Run。用户显式
 发送成功且未在查看 non-terminal Run 时，按 Core 有序回执打开首个 Run 的精确 stage，但不夺走
@@ -550,7 +551,7 @@ Task related execution、停止结果和世界地图入口在右侧承载时必�
 按窗口呈现。顶部“加载更早记录”复用会话区的文字箭头、已显示计数与原位加载／重试样式；向下滚动自动恢复
 已读缓存，取消“加载较新记录”按钮。“回到最新”采用最新缓存并跳转；首次展开执行中 Run 时，首屏与完整正文
 异步到达后仍定位到最新。历史阅读期间后台只更新最新缓存，不替换当前窗口或抢滚动位置。缓存预算见
-[Camp Open v20](../../contracts/camp-open-projection-v20.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
+[Camp Open v21](../../contracts/camp-open-projection-v21.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
 Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ command` 与下一行原始 JSON／文本输出，保留正文参数
 和多行输入，沿用 Shell Evidence 的按条惰性读取。Core 操作身份、图标和状态保持不变；不新增入参存储。
 缺少可靠关联时回退对应 `rovai` CLI 名称和同一 operation 的 Core 公共 `canonicalInput`，省略投影辅助事实和
@@ -568,7 +569,7 @@ Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ comm
 全部已结算逻辑操作，各终态不再追加独立数量，具体结果由展开后的 Tool 行表达。分页读取沿用相同的执行结果摘要，不改成“已载入 x 项执行记录”；组摘要只统计
 当前组已读取的逻辑操作，不表示整轮总量。已载入范围只在“加载更早记录”入口呈现。
 `x` 按去重后的可见逻辑操作计数；同一 Built-in 与已关联 Shell 载体计一步，started/result/delta 和一个 Activity 的多文件行不重复计数。
-精确计数语义见 [Run Process Detail Surface v37](../../contracts/run-process-detail-surface-v37.md)。
+精确计数语义见 [Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)。
 
 Runtime Compaction 作为根级、非 Tool process item 同样截断前后 Tool 分组，但不进入“已完成 x 个步骤”。
 它复用普通 command 的桌面 28px 行、最右侧状态 icon、文字后展开提示与结果文本框，并保留独立压缩 SVG；同一

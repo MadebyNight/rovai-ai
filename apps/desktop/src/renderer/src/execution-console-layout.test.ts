@@ -107,6 +107,8 @@ describe('execution console layout', () => {
     )
     expect(styleBlock('.execution-batch-count')).toMatch(/height:\s*26px/)
     expect(styleBlock('.execution-batch-count')).toMatch(/cursor:\s*pointer/)
+    expect(styleBlock('.execution-batch-count')).toMatch(/font:\s*10\.5px\/1/)
+    expect(styleBlock('.execution-batch-count svg')).toMatch(/stroke-width:\s*1\.5/)
     expect(styleBlock('.execution-process-card:is(:hover, :focus-within) .execution-run-metric'))
       .toMatch(/visibility:\s*hidden/)
   })

@@ -10,10 +10,10 @@ last_updated: 2026-09-20
 # v1.62 实施与验收
 
 范围见[版本概览](README.md)，字段级行为见 [Mission v10](../../contracts/mission-v10.md)、
-[Run Process Detail Surface v37](../../contracts/run-process-detail-surface-v37.md)、
+[Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
-[Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)。
+[Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)。
 
 ## Gate 0：当前基线与权威
 
@@ -159,6 +159,17 @@ last_updated: 2026-09-20
 - [x] 单条 Tool 的实际终态、状态图形、详情、活动尾组、等待审批、分页范围与 Runtime Compaction 排除保持不变。
 - [x] 既有 Renderer 分组 owner 覆盖单个失败、混合结果及 skipped/recorded；只运行定向 Vitest、文档治理、类型检查和静态 UI detector。
 
+## Gate 15：Run Card 真实队列校正
+
+- [x] Camp Open 当前 Delivery loader 与 coverage count 不再按消息作者过滤；用户 waiting
+  `camp_message_delivery` 与 Agent 作者行使用同一有界集合。
+- [x] 既有 projection 单元 owner 同时覆盖完整 Snapshot 与有界 Open 的用户 waiting 行；既有 Camp Open
+  SQLite owner加入两条用户 waiting Delivery，证明只读投影、完整集合和 coverage 一致。
+- [x] 合批入口使用交互稿三层路径、13px 图标、1.5px 描边、10.5px 常规字重计数，并在输入清单恢复定位图标；
+  排队卡与真实多输入 Run 共用同一按钮和焦点边界。
+- [x] Renderer 定向回归、Camp Open slow owner、隔离 Electron 双状态截图、类型检查、文档门禁和 Desktop
+  生产构建通过；Rust 验证收敛为上述两条定向 owner。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -201,6 +212,15 @@ Camp Open 增量改写既有 `open_repairs_only_cancellation_marked_work_in_the_
 Gateway/Blob 副作用。既有 Execution text 跨模块 owner 扩展 post-commit 故障、未到期零扫描、maintenance retry、
 大正文 Blob 与命令 replay，不新增平行测试。新增 startup recovery owner 拥有跨 Camp 精确发现及重复执行幂等；
 只有启动层测试能证明 service 不再是 repair owner。
+
+Run Card 真实队列校正不新增 Rust test owner。既有
+`read_model::tests::public_delivery_projection_preserves_causal_source_not_target_lineage` 增加当前用户 waiting 行，
+并在 `None`/有界 limit 两条路径断言可选 `sourceAgentRunId` 与空目标 Run；修复前同一输入稳定少一行。既有
+`camp_open_preserves_business_state_without_reading_event_history` 在完整 SQLite fixture 中增加两条用户 waiting
+Delivery，证明 Open loader、coverage、完整 Snapshot 与 event-log 禁读 seam 同时成立。纯 Renderer fixture 无法证明
+Core SQL → DTO 边界，另建平行数据库 owner只会重复 setup。最小命令为
+`cargo test -p rovai-core public_delivery_projection_preserves_causal_source_not_target_lineage` 与
+`cargo test -p rovai-core --features slow-tests camp_open_preserves_business_state_without_reading_event_history -- --nocapture`。
 
 Mission 续作提示不新增 Rust test owner：既有 `session_charter_publishes_one_cli_only_builtin_contract` 继续拥有
 Mission／普通 Camp 的逐字 Charter 边界，既有 `binding_contract_freezes_each_context_axis_version` 继续拥有

@@ -1967,7 +1967,6 @@ fn load_camp_open_counts(transaction: &Transaction<'_>, camp_id: &str) -> Result
                JOIN camp_message AS message
                  ON message.id = current_delivery.message_id
                WHERE current_delivery.camp_id = ?1
-                 AND message.author_type = 'agent'
                  AND message.tombstoned_at IS NULL)
               +
               (SELECT COUNT(*)
@@ -2882,7 +2881,6 @@ fn load_message_deliveries(
           LEFT JOIN agent_run AS source_run
             ON source_run.id = message.source_agent_run_id
           WHERE current_delivery.camp_id = ?1
-            AND message.author_type = 'agent'
             AND message.tombstoned_at IS NULL
 
           UNION ALL
@@ -4310,7 +4308,7 @@ mod tests {
         // Full Snapshot and bounded Camp-open use the same projection with different ordering.
         for limit in [None, Some(10)] {
             let deliveries = super::load_message_deliveries(&transaction, "camp", limit).unwrap();
-            assert_eq!(deliveries.len(), 6);
+            assert_eq!(deliveries.len(), 7);
             for delivery in deliveries {
                 let value = serde_json::to_value(&delivery).unwrap();
                 match delivery.id.as_str() {
@@ -4320,6 +4318,11 @@ mod tests {
                         assert_eq!(value["sourceAgentRunId"], "current-sender");
                         assert_eq!(value["targetAgentRunId"], "current-target");
                         assert!(value["campTurnId"].is_null());
+                    }
+                    "user-current" => {
+                        assert!(value.get("sourceAgentRunId").is_none());
+                        assert_eq!(value["status"], "waiting");
+                        assert!(value["targetAgentRunId"].is_null());
                     }
                     "completion" => assert!(value.get("sourceAgentRunId").is_none()),
                     _ => unreachable!(),

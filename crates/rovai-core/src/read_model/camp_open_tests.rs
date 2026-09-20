@@ -259,9 +259,86 @@ fn read_metered(database: &mut Database, camp_id: &str) -> (CampOpenProjection, 
     )
 }
 
+fn append_waiting_user_deliveries(database: &mut Database, camp_id: &str, active_run: &str) {
+    {
+        let connection = database.connection();
+        let recipient_agent_id: String = connection
+            .query_row(
+                r#"SELECT conversation.agent_id
+                   FROM agent_run
+                   JOIN conversation ON conversation.id = agent_run.conversation_id
+                   WHERE agent_run.id = ?1"#,
+                [active_run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        for (index, created_at) in ["2026-08-31T00:00:01Z", "2026-08-31T00:00:02Z"]
+            .into_iter()
+            .enumerate()
+        {
+            let message_id = format!("open-user-waiting-{}", index + 1);
+            let delivery_id = format!("open-user-waiting-delivery-{}", index + 1);
+            let body = format!("排队消息 {}", index + 1);
+            let structured_content = json!([{"kind": "text", "text": body}]).to_string();
+            connection
+                .execute(
+                    r#"INSERT INTO camp_message (
+                        id, camp_id, sequence, author_type, author_id,
+                        body, structured_content_json, content_digest,
+                        address_mode, addressed_agent_ids_json,
+                        effective_recipient_ids_json, recipient_presentation_json,
+                        agent_addressing_mode, origin_kind,
+                        version, created_at, updated_at
+                    ) VALUES (
+                        ?1, ?2,
+                        (SELECT COALESCE(MAX(sequence), 0) + 1
+                         FROM camp_message WHERE camp_id = ?2),
+                        'user', 'local_user', ?3, ?4, ?5,
+                        'explicit', json_array(?6), json_array(?6), '{}',
+                        'automatic', 'local_composer', 1, ?7, ?7
+                    )"#,
+                    params![
+                        message_id,
+                        camp_id,
+                        body,
+                        structured_content,
+                        format!("sha256:open-user-waiting-{}", index + 1),
+                        recipient_agent_id,
+                        created_at,
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    r#"INSERT INTO camp_message_delivery (
+                        id, camp_id, message_id, recipient_agent_id,
+                        recipient_membership_version_at_admission,
+                        queue_sequence, status, version, created_at, updated_at
+                    ) SELECT ?1, ?2, ?3, ?4, camp_member.version,
+                             (SELECT COALESCE(MAX(queue_sequence), 0) + 1
+                              FROM camp_message_delivery
+                              WHERE camp_id = ?2 AND recipient_agent_id = ?4),
+                             'waiting', 1, ?5, ?5
+                      FROM camp_member
+                      WHERE camp_member.camp_id = ?2
+                        AND camp_member.agent_id = ?4"#,
+                    params![
+                        delivery_id,
+                        camp_id,
+                        message_id,
+                        recipient_agent_id,
+                        created_at,
+                    ],
+                )
+                .unwrap();
+        }
+    }
+}
+
 #[test]
 fn camp_open_preserves_business_state_without_reading_event_history() {
     let (mut database, camp_id, completed_run, active_run) = business_fixture();
+    append_waiting_user_deliveries(&mut database, &camp_id, &active_run);
     let snapshot = ReadModelService
         .camp_snapshot(&mut database, &camp_id)
         .unwrap();
@@ -298,7 +375,11 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
         .iter()
         .find(|delivery| delivery.id == "open-delivery")
         .expect("Camp Open must project current camp_message_delivery rows");
-    assert_eq!(open.message_deliveries.len(), 1);
+    // The fixture starts with one user-authored Delivery for each addressed
+    // Agent, then appends an Agent-authored hand-off and two waiting user
+    // Deliveries. Camp Open must project all five current queue facts rather
+    // than filtering by author.
+    assert_eq!(open.message_deliveries.len(), 5);
     assert_eq!(delivery.message_id, "open-agent-message");
     assert_eq!(
         delivery.target_agent_run_id.as_deref(),
@@ -312,6 +393,32 @@ fn camp_open_preserves_business_state_without_reading_event_history() {
             ..
         } if source_agent_run_id.as_deref() == Some(completed_run.as_str())
     ));
+    let waiting = open
+        .message_deliveries
+        .iter()
+        .filter(|delivery| delivery.id.starts_with("open-user-waiting-delivery-"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        waiting.len(),
+        2,
+        "waiting user deliveries must reach Camp Open"
+    );
+    assert!(waiting.iter().all(|delivery| {
+        delivery.status == "waiting"
+            && delivery.dispatch_phase == "never_attempted"
+            && delivery.target_agent_run_id.is_none()
+            && matches!(
+                &delivery.kind,
+                MessageDeliveryKindView::PublicA2a {
+                    source_agent_run_id: None,
+                    ..
+                }
+            )
+    }));
+    assert_eq!(open.coverage.message_deliveries.loaded_count, 5);
+    assert_eq!(open.coverage.message_deliveries.total_count, 5);
+    assert_eq!(open.coverage.message_deliveries.omitted_count, 0);
+    assert!(open.coverage.message_deliveries.complete);
     for collection in [
         "members",
         "tasks",
