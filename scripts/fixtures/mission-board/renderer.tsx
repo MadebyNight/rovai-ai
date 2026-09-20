@@ -1,4 +1,4 @@
-import {runMissionAcceptance,runMissionCheckoutViewAcceptance,runMissionLargeDiffAcceptance} from './acceptance'
+import {runMissionAcceptance,runMissionCheckoutViewAcceptance,runMissionDeleteTraceAcceptance,runMissionLargeDiffAcceptance} from './acceptance'
 import React from 'react'
 import {createRoot} from 'react-dom/client'
 import {BusinessApp} from '../../../apps/desktop/src/renderer/src/BusinessApp'
@@ -127,7 +127,10 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='navigation.snapshot')return nav
  if(method==='navigation.findCamp')return items.find(m=>m.campId===p.campId)?{...snapshot(items.find(m=>m.campId===p.campId)!).camp}:null
  if(method==='camps.exists')return !!m
- if(method==='camps.open'||method==='camps.enter')return structuredClone(snapshot(m!))
+ if(method==='camps.open'||method==='camps.enter'){
+  if(typeof p.traceId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(p.traceId))throw new Error('missing field `traceId`')
+  return structuredClone(snapshot(m!))
+ }
  if(method==='camp.messages.around')return {schemaVersion:1,campId:c.campId,anchorMessageId:c.messageId,sourceAvailable:true,messages:structuredClone(snapshot(m!).messages)}
  if(method==='navigation.campViewed')return {campId:c.campId,lastSeenGlobalSequence:c.throughGlobalSequence}
  if(method==='camp.composerDraft.get'){if(!drafts.has(c.campId))drafts.set(c.campId,{...structuredClone(initialDraft),campId:c.campId,body:'',content:{schemaVersion:1,segments:[]},attachments:[]});return structuredClone(drafts.get(c.campId))}
@@ -191,7 +194,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
 const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}},generalPreferences:new Proxy({}, {get:(_,key)=>async(...args:any[])=>{if(key==='setNewConversationDefaults')prefs.newConversationDefaults=args[0];return prefs}}),navigationPreferences:new Proxy({}, {get:()=>async()=>navigationPrefs})}
 const navigationHistory={initial:{entries:[{kind:'missions' as const}],index:0},write:(state:any)=>state,go:async()=>false,listen:()=>()=>{}}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,navigationHistory,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
-;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runCheckoutView:runMissionCheckoutViewAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
+;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runCheckoutView:runMissionCheckoutViewAcceptance,runDeleteTrace:runMissionDeleteTraceAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
  seedScrollableLanes,clearScrollableLanes,
  failNextMissionRefresh:()=>{failNextMissionRefresh=true},missionRefreshPending:()=>missionRefreshPending,
  failNextMissionStart:()=>{failNextMissionStart=true},

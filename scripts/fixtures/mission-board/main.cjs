@@ -165,7 +165,8 @@ app.whenReady().then(async () => {
   }
   const acceptance = mode === 'large-diff'
     ? 'window.missionQA.runLargeDiff()'
-    : mode === 'checkout-view' ? 'window.missionQA.runCheckoutView()' : 'window.missionQA.run()'
+    : mode === 'checkout-view' ? 'window.missionQA.runCheckoutView()'
+      : mode === 'delete-trace' ? 'window.missionQA.runDeleteTrace()' : 'window.missionQA.run()'
   stage = 'renderer acceptance'
   const report = await window.webContents.executeJavaScript(`Promise.resolve().then(() => ${acceptance}).catch(error => ({ ok: false, error: error?.stack ?? String(error) }))`, true)
   if (!report.ok) {
@@ -174,7 +175,7 @@ app.whenReady().then(async () => {
     app.exit(1)
     return
   }
-  if (mode === 'large-diff' || mode === 'checkout-view') {
+  if (mode === 'large-diff' || mode === 'checkout-view' || mode === 'delete-trace') {
     console.log(JSON.stringify(report)); app.exit(report.ok ? 0 : 1); return
   }
   report.layouts = narrowLayout

@@ -597,7 +597,13 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-delete-dialog') && !button('删除使命').disabled, 'Delete-with-cleanup dialog resolves')
   document.querySelector<HTMLInputElement>('.mission-delete-workspace-option input')!.click()
   button('删除使命').click()
-  await until(() => !Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).some(node => node.textContent?.includes(deleteMission.title)) && qa.orphanCleanups[0]?.state === 'cleanup_pending', 'Mission card disappears as soon as deletion and cleanup intent commit')
+  const deletionCommitted = () => !Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).some(node => node.textContent?.includes(deleteMission.title)) && qa.orphanCleanups[0]?.state === 'cleanup_pending'
+  const deletionError = () => document.querySelector<HTMLElement>('.mission-delete-dialog [role=alert]')?.textContent?.trim() ?? ''
+  await until(() => deletionCommitted() || deletionError(), 'Mission deletion either commits or reports its request failure')
+  check(!deletionError(), `Mission deletion must not fail before the command is admitted: ${deletionError()}`)
+  check(deletionCommitted(), 'Mission card disappears as soon as deletion and cleanup intent commit')
+  const deleteVersionRead = qa.calls.findLast((call:any) => call.method === 'camps.open' && call.p.campId === deleteMission.campId)
+  check(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deleteVersionRead?.p.traceId ?? ''), 'Mission deletion reads the exact Camp version with a valid trace ID')
   qa.failOrphanCleanup(true)
   await until(() => document.querySelector('.mission-cleanup-notice')?.textContent?.includes('1 个工作区待清理'), 'Deleted Mission cleanup failure remains on the existing workspace route')
   await until(() => document.querySelector('.app-toast')?.textContent?.includes('使命 rovai/mission/015 分支清理失败'), 'Deleted Mission cleanup failure also raises an actionable Toast')
@@ -615,6 +621,39 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await switchMissionView('看板')
   cases.push('delete-with-cleanup removes the card before resource work and recovers later failure through the orphan cleanup route')
   return { ok: true, cases }
+}
+
+export async function runMissionDeleteTraceAcceptance(): Promise<{ ok: true; cases: string[] }> {
+  const qa = (window as any).missionQA
+  const check = (value: unknown, message: string): void => { if (!value) throw new Error(message) }
+  const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  const until = async (condition: () => unknown, message: string): Promise<void> => {
+    for (let i = 0; i < 180; ++i) { await frames(); if (condition()) return }
+    throw new Error(`${message}\n${JSON.stringify({
+      feedback: [...document.querySelectorAll('[role=alert],.toast')].map(node => node.textContent),
+      recentCalls: qa.calls.slice(-8)
+    })}`)
+  }
+  const button = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+    .find(element => element.getAttribute('aria-label') === label || element.textContent?.trim() === label)
+  await until(() => document.querySelector('.mission-board-card'), 'Mission board did not load for deletion acceptance')
+  const mission = qa.items.find((item:any) => item.title === '使命累计变更回归测试')
+  const card = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes(mission.title))
+  check(card, 'Deletion acceptance Mission card is unavailable')
+  card!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: card!.getBoundingClientRect().left + 20, clientY: card!.getBoundingClientRect().top + 20 }))
+  await until(() => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).some(item => item.textContent?.trim() === '删除'), 'Mission deletion action did not open')
+  Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).find(item => item.textContent?.trim() === '删除')!.click()
+  await until(() => document.querySelector('.mission-delete-dialog') && !button('删除使命')?.disabled, 'Mission deletion confirmation did not become available')
+  button('删除使命')!.click()
+  const deletionError = () => document.querySelector<HTMLElement>('.mission-delete-dialog [role=alert]')?.textContent?.trim() ?? ''
+  const deletionCommitted = () => !Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).some(node => node.textContent?.includes(mission.title))
+  await until(() => deletionCommitted() || deletionError(), 'Mission deletion neither committed nor reported an error')
+  check(!deletionError(), `Mission deletion must not fail before the command is admitted: ${deletionError()}`)
+  check(deletionCommitted(), 'Mission deletion did not remove its card')
+  const versionRead = qa.calls.findLast((call:any) => call.method === 'camps.open' && call.p.campId === mission.campId)
+  check(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(versionRead?.p.traceId ?? ''), 'Mission deletion version read did not carry a valid trace ID')
+  check(qa.calls.some((call:any) => call.method === 'camps.delete' && call.p.command?.campId === mission.campId), 'Mission deletion command was not admitted')
+  return { ok: true, cases: ['Mission deletion reads the exact Camp version with a valid trace ID before deleting'] }
 }
 
 export async function runMissionLargeDiffAcceptance(): Promise<{ ok: true; cases: string[] }> {
