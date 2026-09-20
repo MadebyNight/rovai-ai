@@ -885,17 +885,11 @@ button.mission-avatars.is-card-roster:hover .member-avatar { filter: brightness(
 .mission-lane-nav button:hover,.mission-lane-nav button[aria-pressed="true"] { color: var(--ink); background: var(--neutral-selected); }
 .mission-lane-nav button:focus-visible { outline: 1px solid var(--ink); outline-offset: 1px; }
 .mission-lane-nav small { color: var(--faint); font: 10px ui-monospace,monospace; }
-.mission-card-more { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; margin: -3px -5px -3px 0; padding: 0; border: 0; border-radius: 5px; color: var(--faint); background: transparent; opacity: 0; cursor: pointer; }
-.mission-card-more > .mission-icon { width: 15px; height: 15px; }
-.mission-board-card:hover .mission-card-more,.mission-board-card:focus-within .mission-card-more,.mission-card-more[data-state="open"] { opacity: 1; }
-.mission-card-more:hover { color: var(--ink); background: var(--surface-hover); }
-.mission-card-more:focus-visible { opacity: 1; outline: 1px solid var(--ink); outline-offset: 1px; }
 @media (max-width: 960px) {
   .mission-lane-nav { display: flex; }
   .mission-board-scroll[data-view="board"] { --mission-column-min-width: 278px; scroll-snap-type: x proximity; }
   .mission-board-scroll[data-view="board"] .mission-column { scroll-snap-align: start; }
 }
-@media (pointer: coarse) { .mission-card-more { opacity: 1; } }
 @media (forced-colors: active) {
   .mission-board-scroll[data-view="board"] .mission-column > header { border-bottom-color: CanvasText; }
   .mission-board-scroll[data-view="board"] .mission-column-cards:focus-visible { outline-color: Highlight; }

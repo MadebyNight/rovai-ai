@@ -62,7 +62,7 @@ last_updated: 2026-09-20
   Renderer 瞬时内存恢复 offset，搜索/筛选变化则把新结果恢复到顶部，不用 IPC 或持久偏好。
 - [x] HTML5 drag 在目标列上下边缘使用 animation frame 自动滚动该列，在窄窗左右边缘滚动 board host；结束、
   drop、Escape 和离开区域均清理循环。
-- [x] 每列为带名称的可聚焦 region，Left/Right 可切换列；省略号/右键/Shift+F10 共用菜单并提供 WCAG 非拖拽状态操作。
+- [x] 每列为带名称的可聚焦 region，Left/Right 可切换列；卡片不显示省略号，右键/Shift+F10 共用菜单并提供 WCAG 非拖拽状态操作。
   窄桌面窗口保留 278px 列宽与横向 scroll-snap，并以带筛选后数量的紧凑状态入口直接切换可见列。
 - [x] 保留现有视觉体系；行为参考稿不作为像素级还原或替换现有组件样式的依据。
 

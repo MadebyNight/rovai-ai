@@ -43,11 +43,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(unread.textContent === '未读' && unreadDotBounds.width === 8 && unreadDotBounds.height === 8 && unreadStyle.fontSize === '12px' && unreadStyle.fontWeight === '600', 'Unread Mission uses an 8px blue dot and 12px semibold label')
   check(getComputedStyle(card.querySelector('.mission-card-open h3')!).fontWeight === '600', 'Unread Mission title gains the approved emphasis')
   check(getComputedStyle(unread).backgroundColor === 'rgba(0, 0, 0, 0)', 'Unread state remains unboxed')
-  const cardMore = card.querySelector<HTMLButtonElement>('.mission-card-more')!
-  check(cardMore?.getAttribute('aria-haspopup') === 'menu', 'Cards expose an accessible ellipsis action alongside the context-menu path')
-  cardMore.click()
-  await until(() => Array.from(document.querySelectorAll<HTMLElement>('[role=menuitem]')).some(item => item.textContent?.trim() === '状态'), 'Card ellipsis opens the shared menu with status controls')
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  check(!card.querySelector('.mission-card-more'), 'Mission cards expose actions only through right click and Shift+F10')
   const running = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.querySelector('.mission-running'))!
   const runningChildren = Array.from(running.querySelector('.mission-running')!.children).filter(node => !node.classList.contains('camp-execution-orbits')).map(node => node.getBoundingClientRect())
   check(running.querySelectorAll('.mission-running-avatars .member-avatar').length === 3, 'Running state shows at most three avatars')
