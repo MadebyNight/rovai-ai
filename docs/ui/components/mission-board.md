@@ -13,8 +13,8 @@ the accessible label includes the count, but the visual indicator never renders 
 independent of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate
 Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user to desktop.
 
-Cards open from their entire surface, including keyboard activation. A compact ellipsis appears on hover,
-focus or coarse pointers; right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
+Cards open from their entire surface, including keyboard activation. Card actions have no visible ellipsis;
+right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number
 (`M-018`), never an opaque ID suffix. The footer keeps the lead first and shows at most five 23px member
 avatars with 7px overlap; when unread and time leave less room, it reduces the visible count and recalculates
 a borderless, backgroundless semibold `+N`. The complete ordered roster remains available from the same
@@ -45,8 +45,8 @@ lane and exposes the same filtered counts; it does not introduce a mobile Missio
 
 Dragging a card to another lane submits the same authoritative status command as the menu. While dragging near
 the target lane's top or bottom edge, only that lane auto-scrolls; the horizontal host may also reveal an adjacent
-lane near its left/right edge. Escape or drag end stops the frame loop. Ellipsis/right click/Shift+F10 status controls remain
-the single-pointer and keyboard alternative to dragging, and focused lane regions use Left/Right to move between
+lane near its left/right edge. Escape or drag end stops the frame loop. Right click and Shift+F10 status controls remain
+the pointer and keyboard alternatives to dragging, and focused lane regions use Left/Right to move between
 visible lanes without resetting vertical positions. Both user and Agent status activity render only the actor and
 resulting status. Tags reuse the eight stable identity colors, independent of Mission status.
 

@@ -64,7 +64,7 @@ contained overscroll，不劫持 wheel；普通 Mission/cleanup 投影更新复�
 最小列宽，并以紧凑状态入口直接移动横向 viewport，不把四列压扁或串成长页面。
 
 跨列拖动继续提交同一权威 status command。拖拽指针进入目标列上下边缘时，以 animation frame 只推进目标列，
-接近外层左右边缘时才推进横向 host；drag end、drop、Escape 或离开看板都会停止循环。省略号、右键菜单和
-Shift+F10 继续作为 WCAG 所需的非拖拽替代，聚焦列可以用 Left/Right 切换可见列。拒绝一份全板 `scrollTop`，
+接近外层左右边缘时才推进横向 host；drag end、drop、Escape 或离开看板都会停止循环。卡片不显示省略号；
+右键菜单和 Shift+F10 继续作为 WCAG 所需的非拖拽替代，聚焦列可以用 Left/Right 切换可见列。拒绝一份全板 `scrollTop`，
 也拒绝用 wheel 事件手工转发四列，因为两者都会破坏原生滚动、键盘行为与位置所有权。本决定不新增持久偏好、
 IPC 或 schema，也不把行为参考稿提升为新的视觉权威。
