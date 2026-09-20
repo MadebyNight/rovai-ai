@@ -4,7 +4,7 @@ authority: renderer-theme
 status: accepted
 theme_id: steel-night
 mode: dark
-last_updated: 2026-09-09
+last_updated: 2026-09-20
 ---
 
 # Steel Night
@@ -163,6 +163,18 @@ Rail and selected surfaces stay unchanged; status, identity and evidence keep th
 | `--identity-2` | `#70b0ae` | `--identity-6` | `#b37d9a` |
 | `--identity-3` | `#a89ac8` | `--identity-7` | `#89a878` |
 | `--identity-4` | `#d0a46c` | `--identity-8` | `#b58b68` |
+
+### Mission labels
+
+Mission labels retain their normalized-text stable eight-slot hash but use a dedicated palette so changing label
+readability does not recolor members, Skills or MCP servers.
+
+| Token | Value | Token | Value |
+|---|---:|---|---:|
+| `--mission-label-1` | `#e28f7b` | `--mission-label-5` | `#81b8e8` |
+| `--mission-label-2` | `#72c5c1` | `--mission-label-6` | `#d18cac` |
+| `--mission-label-3` | `#b7a6e0` | `--mission-label-7` | `#93bb77` |
+| `--mission-label-4` | `#deb26b` | `--mission-label-8` | `#d79b6c` |
 
 ### Agent artifact families
 

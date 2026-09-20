@@ -52,7 +52,8 @@ the target lane's top or bottom edge, only that lane auto-scrolls; the horizonta
 lane near its left/right edge. Escape or drag end stops the frame loop. Right click and Shift+F10 status controls remain
 the pointer and keyboard alternatives to dragging, and focused lane regions use Left/Right to move between
 visible lanes without resetting vertical positions. Both user and Agent status activity render only the actor and
-resulting status. Tags reuse the eight stable identity colors, independent of Mission status.
+resulting status. Tags keep the existing normalized-text stable hash but resolve its eight slots through the
+Mission-only `--mission-label-1..8` palette, independent of Mission status and shared identity colors.
 
 Creation uses an 820px writing dialog. Mission name is an unboxed heading field; the unboxed description
 fills the remaining writing plane. Source attachments sit between them and support file selection, paste,
@@ -61,7 +62,7 @@ classification and `DIR` label. Overflow stays in one no-wrap strip with no visi
 horizontal scroll, ordinary-wheel conversion and focusable Left/Right/Home/End browsing match Composer.
 Project, the combined member/lead control and tags sit as compact property chips above the footer. Project and
 team popovers have focused search fields and bounded, vertically scrollable result lists; project matching uses
-name and path, while team matching uses name, role and availability. Tag choices use a prominent identity-color
+name and path, while team matching uses name, role and availability. Tag choices use a prominent Mission-label color
 dot with tight dot/name spacing, and choosing a tag remains inside the current picker and definition dialog.
 The team popover selects members and lead together and retains the existing default-team preference. The split
 primary button defaults to 新建; its dropdown offers 开始使命. Both paths stay on the board without opening the

@@ -125,6 +125,15 @@ function contrast(left: string, right: string): number {
     / (Math.min(leftLuminance, rightLuminance) + 0.05)
 }
 
+function mixHex(foreground: string, background: string, foregroundWeight: number): string {
+  const channels = [1, 3, 5].map((start) => {
+    const front = Number.parseInt(foreground.slice(start, start + 2), 16)
+    const back = Number.parseInt(background.slice(start, start + 2), 16)
+    return Math.round(front * foregroundWeight + back * (1 - foregroundWeight))
+  })
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
 function expectTextContrast(tokens: Record<string, string>): void {
   const pairs = [
     ['--ink', '--surface'],
@@ -182,6 +191,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     }
     for (let index = 1; index <= 8; index += 1) {
       expect(day[`--identity-${index}`]).toBeTruthy()
+      expect(day[`--mission-label-${index}`]).toBeTruthy()
     }
   })
 
@@ -191,6 +201,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     }
     for (let index = 1; index <= 8; index += 1) {
       expect(night[`--identity-${index}`]).toBeTruthy()
+      expect(night[`--mission-label-${index}`]).toBeTruthy()
     }
   })
 
@@ -311,6 +322,20 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(new Set(Array.from({ length: 8 }, (_, index) => night[`--identity-${index + 1}`])).size).toBe(8)
     expect(css).toMatch(/\.skill-identity-mark\s*\{[^}]*color:\s*var\(--skill-identity\)/)
     expect(css).toMatch(/\.mcp-assignment-option-mark, \.mcp-server-mark\s*\{[^}]*color:\s*var\(--mcp-identity\)/)
+  })
+
+  it('keeps Mission labels on their dedicated readable eight-color palette', () => {
+    const expectedDay = ['#ae4e3e', '#27777b', '#71579a', '#95610f', '#3f6fa7', '#914f78', '#4d752f', '#98542e']
+    const expectedNight = ['#e28f7b', '#72c5c1', '#b7a6e0', '#deb26b', '#81b8e8', '#d18cac', '#93bb77', '#d79b6c']
+    for (const [tokens, expected] of [[day, expectedDay], [night, expectedNight]] as const) {
+      const actual = Array.from({ length: 8 }, (_, index) => tokens[`--mission-label-${index + 1}`])
+      expect(actual).toEqual(expected)
+      expect(new Set(actual).size).toBe(8)
+      for (const color of actual) {
+        const background = mixHex(color, tokens['--home-surface'], 0.09)
+        expect(contrast(color, background), `${color} on ${background}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
   })
 
   it('keeps every Agent artifact icon family distinguishable in both themes', () => {

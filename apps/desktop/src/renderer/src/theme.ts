@@ -72,3 +72,8 @@ export function identityColorIndex(agentId: string): number {
 export function identityColorToken(agentId: string): string {
   return `var(--identity-${identityColorIndex(agentId)})`
 }
+
+export function missionLabelColorToken(label: string): string {
+  const normalized = label.normalize('NFC').toLocaleLowerCase()
+  return `var(--mission-label-${identityColorIndex(`mission-tag:${normalized}`)})`
+}

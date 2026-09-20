@@ -4,7 +4,7 @@ authority: renderer-theme
 status: accepted
 theme_id: porcelain-day
 mode: light
-last_updated: 2026-09-09
+last_updated: 2026-09-20
 ---
 
 # Porcelain Day
@@ -163,6 +163,18 @@ Rail and selected surfaces stay unchanged; status, identity and evidence keep th
 | `--identity-2` | `#39777a` | `--identity-6` | `#8a5c75` |
 | `--identity-3` | `#74628f` | `--identity-7` | `#547245` |
 | `--identity-4` | `#9a6a32` | `--identity-8` | `#8c6146` |
+
+### Mission labels
+
+Mission labels retain their normalized-text stable eight-slot hash but use a dedicated palette so changing label
+readability does not recolor members, Skills or MCP servers.
+
+| Token | Value | Token | Value |
+|---|---:|---|---:|
+| `--mission-label-1` | `#ae4e3e` | `--mission-label-5` | `#3f6fa7` |
+| `--mission-label-2` | `#27777b` | `--mission-label-6` | `#914f78` |
+| `--mission-label-3` | `#71579a` | `--mission-label-7` | `#4d752f` |
+| `--mission-label-4` | `#95610f` | `--mission-label-8` | `#98542e` |
 
 ### Agent artifact families
 
