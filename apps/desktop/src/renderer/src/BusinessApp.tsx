@@ -693,7 +693,7 @@ export function ControlledShutdownOverlay({
               <i />
             </span>
             <p className="shutdown-evidence-note" id="controlled-shutdown-evidence">
-              若有尚未完成的 AgentRun，将一并取消；未确认的文件、命令或工具效果会保留为待核对记录。
+              未完成的任务会取消，未确认的改动保留为待核对记录。
             </p>
           </div>
         </section>
