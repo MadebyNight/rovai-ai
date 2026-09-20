@@ -376,8 +376,9 @@ function checkoutStateLabel(state: CheckoutState): { text: string; title?: strin
 }
 
 function MissionChanges({ mission, baseSha }: { mission: MissionRecord; baseSha: string | null }) {
-  const client = useCampClient(), [view, setView] = useState<MissionWorkspaceChangesView | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0), [selected, setSelected] = useState<string | null>(null), [dialogOpen, setDialogOpen] = useState(false), [detailQuery, setDetailQuery] = useState(''), [detailExpanded, setDetailExpanded] = useState<Set<string>>(new Set()), [snapshotReady, setSnapshotReady] = useState(false), [snapshotEpoch, setSnapshotEpoch] = useState(0)
+  const client = useCampClient(), [view, setView] = useState<MissionWorkspaceChangesView | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [selected, setSelected] = useState<string | null>(null), [dialogOpen, setDialogOpen] = useState(false), [detailQuery, setDetailQuery] = useState(''), [detailExpanded, setDetailExpanded] = useState<Set<string>>(new Set()), [snapshotReady, setSnapshotReady] = useState(false), [snapshotEpoch, setSnapshotEpoch] = useState(0)
   const generation = useRef(0)
+  const refreshRunner = useRef<(() => void) | null>(null)
   const lastFocus = useRef<HTMLElement | null>(null)
   const diffStore = useRef<MissionDiffStore>({ epoch: 0, cache: new Map(), inFlight: new Map() })
   const files = view?.files ?? null
@@ -385,21 +386,7 @@ function MissionChanges({ mission, baseSha }: { mission: MissionRecord; baseSha:
   const tree = useMemo(() => missionFileTree(files ?? []), [files])
   const directoryPaths = useMemo(() => missionTreeDirectoryPaths(tree), [tree])
   useEffect(() => { setDetailExpanded(new Set(directoryPaths)) }, [directoryPaths])
-  const refreshChanges = useCallback(() => {
-    ++generation.current
-    const store = diffStore.current
-    store.epoch += 1
-    store.cache.clear()
-    store.inFlight.clear()
-    setSnapshotReady(false)
-    setSnapshotEpoch(store.epoch)
-    setView(null)
-    setError('')
-    setLoading(true)
-    setDialogOpen(false)
-    setDetailQuery('')
-    setRefresh(value => value + 1)
-  }, [])
+  const refreshChanges = useCallback(() => { refreshRunner.current?.() }, [])
   const requestDiff = useCallback((fileId: string) => {
     const viewId = view?.viewId
     if (!viewId) return Promise.reject(new Error('mission.changes_refresh_required'))
@@ -421,10 +408,62 @@ function MissionChanges({ mission, baseSha }: { mission: MissionRecord; baseSha:
     return request
   }, [client, mission.missionId, view?.viewId])
   useEffect(() => {
-    const current = ++generation.current; setLoading(true); setSnapshotReady(false); setView(null)
-    void client.request<MissionWorkspaceChangesView>('missions.changes', { missionId: mission.missionId }).then(next => { if (current === generation.current) { const files = next.files ?? []; setView(next); setSelected(selected => selected && files.some(file => file.id === selected) ? selected : null); setError(''); setSnapshotReady(Boolean(next.viewId && next.files)) } }).catch(error => { if (current === generation.current) { setView(null); setError(missionError(error)) } }).finally(() => { if (current === generation.current) setLoading(false) })
-    return () => { ++generation.current }
-  }, [client, mission.missionId, refresh])
+    let disposed = false
+    let inFlight = false
+    let pending = false
+    const invalidate = (): void => {
+      ++generation.current
+      const store = diffStore.current
+      store.epoch += 1
+      store.cache.clear()
+      store.inFlight.clear()
+      setSnapshotReady(false)
+      setSnapshotEpoch(store.epoch)
+      setView(null)
+      setError('')
+      setLoading(true)
+      setDialogOpen(false)
+      setDetailQuery('')
+    }
+    const launch = (): void => {
+      if (disposed) return
+      inFlight = true
+      const current = generation.current
+      void client.request<MissionWorkspaceChangesView>('missions.changes', { missionId: mission.missionId }).then(next => {
+        if (disposed || current !== generation.current) return
+        const files = next.files ?? []
+        setView(next)
+        setSelected(selected => selected && files.some(file => file.id === selected) ? selected : null)
+        setError('')
+        setSnapshotReady(Boolean(next.viewId && next.files))
+      }).catch(error => {
+        if (!disposed && current === generation.current) { setView(null); setError(missionError(error)) }
+      }).finally(() => {
+        inFlight = false
+        if (disposed) return
+        if (pending) {
+          pending = false
+          launch()
+        } else if (current === generation.current) {
+          setLoading(false)
+        }
+      })
+    }
+    const requestRefresh = (): void => {
+      if (disposed) return
+      invalidate()
+      if (inFlight) pending = true
+      else launch()
+    }
+    refreshRunner.current = requestRefresh
+    requestRefresh()
+    return () => {
+      disposed = true
+      pending = false
+      ++generation.current
+      if (refreshRunner.current === requestRefresh) refreshRunner.current = null
+    }
+  }, [client, mission.missionId])
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const unsubscribe = client.onEvent?.(event => {
