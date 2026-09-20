@@ -85,7 +85,7 @@ import {
 import { NewConversationDialog } from './NewConversationDialog'
 import { MissionBoard, MissionInteractionProvider, MissionIntro } from './MissionBoard'
 import { MissionActivityDocument } from './MissionDelivery'
-import { MissionCommandRejected, missionCommand, missionError, useMissions } from './useMissions'
+import { MissionCommandRejected, missionCommand, missionError, unreadMissionCount, useMissions } from './useMissions'
 import './mission.css'
 import { openRuntimeModelCatalog } from './runtime-check'
 import { MissionSurface } from './MissionSurface'
@@ -3983,7 +3983,7 @@ export function BusinessApp({
         onMembers={() => chooseView('members')}
         onAutomations={() => chooseView('automations')}
         onMissions={mobile ? undefined : () => chooseView('missions')}
-        pendingMissionCount={missionList.missions.filter(m => m.status === 'needs_you').length}
+        unreadMissionCount={unreadMissionCount(missionList.missions)}
         onMemory={() => chooseView('memory')}
         pendingMemoryCount={pendingMemoryCount}
         onSettings={openSettings}

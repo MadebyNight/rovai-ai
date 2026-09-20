@@ -8,10 +8,11 @@ last_updated: 2026-09-20
 # Mission board
 
 Desktop and wide Web expose one 使命板 navigation entry between 记忆 and 定时任务, and retain its surface, route and interaction model.
-When one or more Missions need the user, a blue dot sits at the entry's right edge and is vertically centered;
-the accessible label includes the count, but the visual indicator never renders a numeral. `needs_you` remains
-independent of unread messages and running Agents. Ordinary project/recent/pin navigation does not duplicate
-Mission Camps. Mobile has no Mission entry; a Mission deep link directs the user to desktop.
+When one or more Missions have unread Agent replies, a blue dot sits at the entry's right edge and is vertically
+centered; the accessible label includes the number of Missions with unread replies, but the visual indicator never
+renders a numeral. The indicator follows Core-owned `MissionRecord.hasUnread`, independent of Mission status and
+running Agents. Ordinary project/recent/pin navigation does not duplicate Mission Camps. Mobile has no Mission
+entry; a Mission deep link directs the user to desktop.
 
 Cards open from their entire surface, including keyboard activation. Card actions have no visible ellipsis;
 right click or Shift+F10 opens the same accessible menu. The metadata label uses the stable public number

@@ -40,6 +40,10 @@ export async function missionCommand(client: CampClient, method: CoreMethod, com
   return result
 }
 
+export function unreadMissionCount<T extends Pick<MissionRecord, 'hasUnread'>>(missions: readonly T[]): number {
+  return missions.filter(mission => mission.hasUnread).length
+}
+
 /** One list owner drives the board, navigation badge, and the current Mission card. */
 export function useMissions(client: CampClient, enabled: boolean) {
   const [missions, setMissions] = useState<MissionRecord[]>([])
