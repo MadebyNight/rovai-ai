@@ -659,6 +659,25 @@ html:not([data-rovai-platform="win32"]) .navigation-collapsed .mission-full .top
   --tree-status-neutral: color-mix(in srgb,var(--attention) 68%,var(--muted));
 }
 .mission-changes-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.mission-changes-section .mission-delivery-heading { margin-bottom: 4px; }
+.mission-changes-disclosure { display: inline-flex; min-height: 28px; align-items: center; gap: 7px; padding: 2px 3px 2px 0; margin: 0; border: 0; border-radius: 4px; color: var(--ink); background: transparent; font-size: 12.5px; font-weight: 550; text-align: left; cursor: pointer; }
+.mission-changes-disclosure > svg { width: 14px; height: 14px; flex: 0 0 14px; color: var(--muted); }
+.mission-changes-disclosure:hover { background: var(--neutral-hover); }
+.mission-changes-disclosure:active { transform: none; }
+.mission-changes-disclosure:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+.mission-changes-count { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.mission-changes-unread { margin-left: 21px !important; }
+.mission-changes-collapsed-state { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.mission-changes-read-state { display: flex; min-height: 24px; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }
+.mission-changes-read-state button,.mission-diff-read-state button { min-height: 24px; padding: 2px 0; border: 0; border-radius: 3px; color: var(--ink); background: transparent; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.mission-changes-read-state button:focus-visible,.mission-diff-read-state button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+.mission-evidence-row.mission-changes-checkout { min-height: 28px; align-items: baseline; gap: 7px; padding: 3px 0 8px; }
+.mission-changes-checkout > svg { align-self: center; }
+.mission-diff-read-state { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 22px; border-bottom: 1px solid var(--line); color: var(--muted); background: var(--surface-subtle); font-size: 11px; }
+.mission-diff-read-state button { flex-shrink: 0; }
+.mission-changes-actions .is-loading svg { animation: mission-changes-spin 1.2s linear infinite; }
+@keyframes mission-changes-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mission-changes-actions .is-loading svg { animation: none; } }
 .changes-tree-tools { display: flex; align-items: center; gap: 5px; margin: 0 0 5px; }
 .changes-tree-search { display: flex; height: 29px; min-width: 0; flex: 1; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid color-mix(in srgb,var(--line) 80%,var(--surface-raised)); border-radius: 9px; color: var(--faint); background: var(--surface-raised); }
 .changes-tree-search:focus-within { border-color: var(--dialog-field-line-hover); box-shadow: 0 0 0 1px var(--dialog-field-line-hover); }

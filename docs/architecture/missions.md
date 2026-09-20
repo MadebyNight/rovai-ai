@@ -55,6 +55,13 @@ independent temporary index, including committed, staged, unstaged and untracked
 returns checkout observation and file list together. Its bounded process-local `viewId` retains only request
 association and file metadata, not a temporary index or historical content. A file request regenerates a private
 index and current list, rejects an association that is no longer applicable, and then runs the path-scoped Diff.
+The normal list-read path uses three Git processes: one combined `rev-parse` reads and validates the Worktree root,
+Git/admin/common directories, real/shared index paths, `HEAD`, actual branch and fixed base; one private-index
+`git -c core.splitIndex=false add -A -N` prepares tracked and untracked entries; and one combined raw/numstat Diff
+produces the file set. Index and shared-index files are copied with filesystem operations, and the real index is
+never written. Repositories without a materialized index or with another exceptional layout may use an additional
+safe initialization or diagnostic call. `missions.fileDiff` repeats the current-view read before its path-scoped
+patch call so `same_view` remains authoritative; no long-lived Git-result cache, watcher, worker or timer is added.
 Multiple outstanding handles prevent a late old list request from replacing the newer handle; Renderer also
 discards superseded responses and clears file detail on refresh. This deliberately provides a current dynamic
 view, not a filesystem-atomic snapshot or a workspace versioning system. Git and actual files are the authority,
