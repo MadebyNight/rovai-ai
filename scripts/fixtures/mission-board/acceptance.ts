@@ -63,10 +63,15 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(lanes.length === 4 && new Set(lanes.map(n => n.clientHeight)).size === 1, 'Four equal lanes')
   check(!document.querySelector('.mission-column header button'), 'No create control in status lanes')
   check(document.querySelector('.mission-page-header h1')?.textContent === '使命板', 'Board page title')
-  check(parseFloat(getComputedStyle(document.querySelector('.mission-board-page')!).paddingTop) >= 30, 'Board title keeps overview-page top spacing')
+  const boardPage = document.querySelector<HTMLElement>('.mission-board-page')!
+  const boardScroll = document.querySelector<HTMLElement>('.mission-board-scroll')!
+  const boardPageStyle = getComputedStyle(boardPage)
+  const availableBoardWidth = boardPage.clientWidth - parseFloat(boardPageStyle.paddingLeft) - parseFloat(boardPageStyle.paddingRight)
+  check(parseFloat(boardPageStyle.paddingTop) >= 30, 'Board title keeps overview-page top spacing')
+  check(getComputedStyle(boardScroll).maxWidth === 'none' && Math.abs(boardScroll.getBoundingClientRect().width - availableBoardWidth) <= 1, 'Board uses the full available page width')
+  check(lanes.every(lane => parseFloat(getComputedStyle(lane.querySelector('header')!).borderBottomWidth) === 0), 'Lane headings flow into cards without horizontal dividers')
   document.documentElement.style.zoom = '2'; await frames()
   check(card.clientWidth >= 170 && card.scrollWidth <= card.clientWidth + 1, 'Zoom keeps readable cards without overlapping content')
-  const boardScroll = document.querySelector<HTMLElement>('.mission-board-scroll')!
   check(boardScroll.scrollWidth > boardScroll.clientWidth, 'Narrow board scrolls across lanes')
   document.documentElement.style.zoom = ''; await frames()
   const dragged = Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(node => node.textContent?.includes('M-016'))!

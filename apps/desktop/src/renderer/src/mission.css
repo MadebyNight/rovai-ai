@@ -397,6 +397,7 @@ button.mission-tag { cursor: pointer; }
 
 .content.mission-board-content, .content.mission-active-content { grid-column: 2; grid-row: 1 / -1; padding: 0; background: var(--home-surface); }
 .mission-board-page { --mission-lane: color-mix(in srgb,var(--ink) 1.2%,var(--home-surface)); --mission-lane-line: color-mix(in srgb,var(--line) 50%,var(--home-surface)); padding: 34px 28px 24px; background: var(--home-surface); }
+.mission-board-page > * { width: 100%; max-width: none; margin-inline: 0; }
 .mission-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 0 17px; margin-bottom: 14px; border: 0; }
 .mission-page-header h1 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 620; }
 .mission-page-header p { margin: 7px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.42; }
@@ -871,7 +872,7 @@ button.mission-avatars.is-card-roster:hover .member-avatar { filter: brightness(
 .mission-board-scroll[data-view="board"] { min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; overscroll-behavior-y: none; }
 .mission-board-scroll[data-view="board"] > .mission-board { height: 100%; min-height: 0; grid-template-rows: minmax(0,1fr); align-items: stretch; }
 .mission-board-scroll[data-view="board"] .mission-column { height: 100%; min-height: 0; overflow: hidden; padding: 0; }
-.mission-board-scroll[data-view="board"] .mission-column > header { position: relative; z-index: 1; padding-inline: 13px; border-bottom: 1px solid var(--mission-lane-line); background: var(--mission-lane); }
+.mission-board-scroll[data-view="board"] .mission-column > header { position: relative; z-index: 1; padding-inline: 13px; background: var(--mission-lane); }
 .mission-board-scroll[data-view="board"] .mission-column-cards { min-width: 0; min-height: 0; flex: 1 1 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-gutter: stable; scroll-padding-block: 9px; padding: 1px 7px 16px 9px; outline-offset: -2px; }
 .mission-board-scroll[data-view="board"] .mission-column-cards:focus-visible { outline: 1px solid var(--line-strong); }
 .mission-board-scroll[data-view="board"] .mission-column-cards > .mission-board-card { flex: 0 0 auto; }
@@ -891,6 +892,5 @@ button.mission-avatars.is-card-roster:hover .member-avatar { filter: brightness(
   .mission-board-scroll[data-view="board"] .mission-column { scroll-snap-align: start; }
 }
 @media (forced-colors: active) {
-  .mission-board-scroll[data-view="board"] .mission-column > header { border-bottom-color: CanvasText; }
   .mission-board-scroll[data-view="board"] .mission-column-cards:focus-visible { outline-color: Highlight; }
 }
