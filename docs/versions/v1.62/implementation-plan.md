@@ -12,7 +12,8 @@ last_updated: 2026-09-20
 范围见[版本概览](README.md)，字段级行为见 [Mission v9](../../contracts/mission-v9.md)、
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
-[Camp Message Send v23](../../contracts/camp-message-send-v23.md)。
+[Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
+[Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)。
 
 ## Gate 0：当前基线与权威
 
@@ -113,6 +114,18 @@ last_updated: 2026-09-20
 - [x] 既有 Rust owner 覆盖分支切换、受管分支删除、detached、观测降级、固定基准失败、同 HEAD 的 staged/
   unstaged/untracked 刷新和 cleanup fence；真实 Runtime smoke 经过调度准备链验证重启续跑。
 
+## Gate 11：Camp Open 只读职责
+
+- [x] 普通取消/成功/失败保留 Gateway 提交后文本收尾；受控关闭与 planned-shutdown 的直提交流程保留原有
+  post-commit 收尾，不在 Adapter 增加平行实现。
+- [x] 旧取消中间态在数据库 open/migration 后、其他 execution recovery 前按精确持久条件统一结算；多个 Camp
+  一次恢复，重复执行零写入，恢复失败继续阻断 ready。
+- [x] 文本收尾失败在原 block buffer 记录 500ms–30s 有界退避；既有 AgentRun maintenance tick 到期只重试文本，
+  无失败/未到期不查持久状态，成功复用 block event。
+- [x] `camps.open` 与 read-only enter 投影阶段不再调用取消 settlement 或 `flush_settled`；SQL authorizer 与
+  Managed Blob 目录断言覆盖目标 Camp 旧取消和其他 Camp 大文本的组合副作用。
+- [x] Open schema 7、Snapshot 34、Data Contract 99、Renderer wire、数据库锁/连接和 Migration 均不变。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -140,6 +153,13 @@ Worktree checkout 增量不新增平行 Rust test owner。既有 `persistent_wor
 `fixed_base_diff_is_final_net_content_without_mutating_real_index` 扩展同 HEAD 刷新、固定基准失败和多 view handle。
 `scripts/smoke-mission.mjs` 继续拥有真实调度/Runtime 证明，Electron Mission fixture 继续拥有迟到响应与活动页刷新。
 
+Camp Open 增量改写既有 `open_repairs_only_cancellation_marked_work_in_the_requested_camp` owner：旧 service 修复
+合同退出，successor `open_and_read_only_enter_never_settle_work_or_write_managed_blobs` 拥有读取入口的 SQL 与文件
+副作用边界；修复前目标取消或其他 Camp 待收尾文本会触发写入。它必须使用完整数据库，因为纯查询测试不能观察
+Gateway/Blob 副作用。既有 Execution text 跨模块 owner 扩展 post-commit 故障、未到期零扫描、maintenance retry、
+大正文 Blob 与命令 replay，不新增平行测试。新增 startup recovery owner 拥有跨 Camp 精确发现及重复执行幂等；
+只有启动层测试能证明 service 不再是 repair owner。
+
 ## 实施收口
 
 - `cargo test -p rovai-core --lib mission_commands_keep_definition_atomic_patch_only_and_start_status_independent`：1 passed。
@@ -164,3 +184,10 @@ Worktree checkout 增量不新增平行 Rust test owner。既有 `persistent_wor
 - `node scripts/smoke-mission.mjs ...` 在 rebase 后隔离 data-dir/Skill Library 通过 6 个场景，4 条真实
   AgentRun 全部 succeeded；bundled CLI 以 `{status:'completed'}` 更新并读回 `sourceMessageId: null`，
   Core 重启后的续轮保持该状态。
+- Camp Open 增量定向验证：slow Camp Open 3/3、读取复杂度 2/2、startup cancellation recovery 1/1、
+  post-commit Execution text retry 1/1；500 万 unrelated events 仍为 2143 VM steps。默认 Rust lib 全量
+  845 passed、0 failed、6 ignored；最终 retry-owner 收紧后同一故障/replay owner 再次 1/1 通过。
+- `cargo check -p rovai-core --all-targets`、`cargo fmt --all -- --check`、`git diff --check`、
+  `pnpm docs:check` 与带固定 base 的 `pnpm docs:check:ci` 通过。隔离 Electron 的正文、执行窗口、终态
+  artifacts 与当前用户 profile 场景通过；其余五个 Renderer fixture 断言在本分支和干净
+  `da55f981` 基线以相同位置失败，未纳入本后端增量的通过声明。

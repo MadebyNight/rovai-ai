@@ -8,7 +8,7 @@ last_updated: 2026-09-20
 
 # Camp Open Read Path 架构
 
-字段与窗口见 [Camp Open Projection v19](../contracts/camp-open-projection-v19.md)与
+字段与窗口见 [Camp Open Projection v20](../contracts/camp-open-projection-v20.md)与
 [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)。本架构把“进入会话”、
 “继续阅读”、“查找完整当前会话”和“检查运行详情”分成用途明确的接口，同时保持 SQLite Read Side
 为唯一权威。
@@ -22,8 +22,8 @@ last_updated: 2026-09-20
 | Renderer enter controller | 生成 trace/command ID、selection generation 与 high-water fence；应用内缓存未命中时保留当前 surface，投影到达后原子 commit 目标 Camp/项目并完成 meaningful paint，再恢复项目导航、确认可见来源和刷新侧栏 |
 | Electron Main bridge | allowlist typed method、记录不含内容的 IPC roundtrip/response bytes；不组装或缓存领域投影 |
 | Core request ingress | 持续接收请求；有顺序要求的命令与混合操作交给单一 FIFO worker，执行窗口 page/changes 复用既有独立派发任务，不建立优先级调度器或第二套 RPC |
-| Core Camp enter module | 在一次有序 request 中先读 activation state；Pending 直接读取投影，Active 先按原 Envelope 查 receipt 并校验 Lead，有效新 User enter 只读，需要修复时 reconcile 后再读；缺失或 rejected 时 fail closed |
-| Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、coverage 与 high-water；不读取 event_log 或 Context Manifest/Action history |
+| Core Camp enter module | 在一次有序 request 中先读 activation state；Pending 直接读取投影，Active 先按原 Envelope 查 receipt 并校验 Lead，有效新 User enter 只读，需要修复时 reconcile 后再读；缺失或 rejected 时 fail closed；不执行取消或文本维护 |
+| Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、coverage 与 high-water；不读取 event_log 或 Context Manifest/Action history，不执行业务 SQL 或 Blob/文件写入 |
 | Camp message history read | 以 stable sequence cursor 读取 earlier page；不回放 event 构造第二真源 |
 | Camp conversation find read | 扫描当前 Camp 公开 user/agent 正文投影，返回 exact total 与一个选中命中；不改变 Agent-facing discovery search，也不返回完整结果集 |
 | Run detail read | 可见展开的 Run 使用逻辑操作窗口与相邻页预取，单条展开复用 content 接口；大 Evidence 正文继续按需读取，不随普通 Camp open 挂载 |
@@ -31,9 +31,9 @@ last_updated: 2026-09-20
 
 ## Enter and refresh flow
 
-service 在读取投影前只对目标 Camp 做旧半取消存在性检查；命中才使用统一取消事务收口。无命中不写数据，
-普通 waiting/recovery 和其他 Camp 不变。该兼容补偿不读取 event_log，不改变 ReadModel 的只读边界。
-ReadModel 另对 #153 已写入的精确取消失败形状做只读兼容：有 cancel intent、无 Runtime terminal source 的
+service 在读取投影前不再执行取消修复或文本定稿。退役两阶段取消协议留下的持久中间态在 Full Core 启动时、
+通用 execution/input/delivery recovery 之前一次性使用统一 settlement 收口；它只匹配精确取消意图和未完成关联状态，
+重复启动不再次结算。ReadModel 另对 #153 已写入的精确取消失败形状做只读兼容：有 cancel intent、无 Runtime terminal source 的
 `failed/accepted_input_outcome_unknown` 公开为 cancelled 且无外部效果提示。它不更新原行或底层 evidence，
 也不匹配普通 Recovery Blocker resolution。
 
@@ -47,6 +47,12 @@ exact count 后，打开成本不随其他 Camp 的事件历史增长；执行�
 此边界只约束投影读取，不撤销已执行 Active reconciliation 的 command receipt，也不修改完整
 `camp_snapshot()`、显式 History/Find、Navigation 或 `events.subscribe` 的审计与 invalidation 语义。
 无需清理旧数据、补历史字段、迁移或给旧 event 查询补索引。
+
+取消、成功与失败的普通终态继续由 Domain Command Gateway 在业务事务提交后收尾文本；受控关闭和
+planned-shutdown 的直提交流程在自己的提交后调用同一入口，不在 Adapter 回调重复实现。若业务与回执已提交、
+文本定稿失败，原 block 保留单调到期时间，由既有 `process_agent_run_maintenance` tick 到期尝试一次；无失败或
+尚未到期时只读内存，不扫描 Run/Camp。成功复用 block event 更新执行台，失败有界退避；重试绝不重放业务。
+该进程内状态不承诺跨重启恢复尚未持久化的正文。
 
 ```text
 app click / notification target
@@ -123,7 +129,7 @@ Renderer 保留连续已加载区间，用实测高度占位虚拟化视口外�
 运行中通过 `agentRunExecution.changes` 按原始变化水位追加/更新逻辑项，同时刷新原地变化的未完成正文。
 增量合并不改变历史 cursor，不把可见内容裁回最新一页。Camp 切换只卸载订阅与 DOM，保留有界 session 缓存；
 切回先显示最新缓存，再补齐变化。虚拟高度调整与翻页保留锚点，初始跟随意图等异步内容到达后完成。
-预算、淘汰后按需恢复和字段由 Camp Open v19 拥有。
+预算、淘汰后按需恢复和字段由 Camp Open v20 拥有。
 
 ## Complete conversation find flow
 
@@ -164,6 +170,6 @@ Memory 分别拥有局部 loading/error；全屏 StartupGate 只允许覆盖 Mai
 
 - [Core 受管内容不变量](foundational-invariants.md#core-managed-content)
 - [协作与执行准入不变量](foundational-invariants.md#collaboration-admission)
-- [Camp Open Projection v19](../contracts/camp-open-projection-v19.md)
+- [Camp Open Projection v20](../contracts/camp-open-projection-v20.md)
 - [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)
 - [Desktop Navigation Refresh](desktop-navigation-refresh.md)

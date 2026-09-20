@@ -245,7 +245,8 @@ use rovai_core::{
         NativeSessionResumeFailure, PermissionSemantics, PlannedShutdownAbortiveTerminal,
         RebindAgentRunRuntimeCommand, RecordCancelledAgentRunEndingGitObservationCommand,
         RecordObservedRuntimeModelCommand, RejectAgentRunDispatchCommand,
-        RestartNativeSessionCommand, SucceedAgentRunCommand,
+        RestartNativeSessionCommand, SucceedAgentRunCommand, maintain_execution_text,
+        recover_legacy_pending_cancellations,
     },
     runtime_compaction_display::{
         RUNTIME_COMPACTION_DISPLAY_EVENT, RuntimeCompactionCompletionEvidence,
@@ -15777,6 +15778,7 @@ async fn run_core(
     let compaction_detector_policies =
         DesiredCompactionDetectorPolicies::from_process_environment();
     let recovery = (|| -> Result<_> {
+        recover_legacy_pending_cancellations(&mut database)?;
         rovai_core::single_chat::recover_pending_edit_sessions(&database)?;
         AutomationService::default().recover_interrupted(&mut database)?;
         let controlled = ExecutionRuntimeService::default()
@@ -21748,6 +21750,24 @@ async fn process_agent_run_maintenance(
                 core.dispatch_agent_run_cancellations(&output).await;
                 dispatch_pending_single_chat_inputs(&core).await;
                 core.dispatch_non_batch_agent_runs(&output).await;
+                let text_maintenance = {
+                    let mut database = core.database.lock().await;
+                    maintain_execution_text(&mut database)
+                };
+                if let Some(error) = text_maintenance.error {
+                    eprintln!("Execution text finalization remains pending: {error:#}");
+                }
+                for evidence in text_maintenance.finalized {
+                    let method = evidence.event_type.clone();
+                    emit(&output, &method, json!({
+                        "agentRunId": evidence.agent_run_id,
+                        "executionEpoch": evidence.execution_epoch,
+                        "nativeMethod": "execution-text-maintenance",
+                        "evidenceId": evidence.id,
+                        "payload": evidence.payload,
+                        "canonical": evidence.canonical,
+                    }));
+                }
             },
             _ = core.agent_run_cancellation_notify.notified() => {
                 core.dispatch_agent_run_cancellations(&output).await;

@@ -15,15 +15,38 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
 const MEMORY_BYTES: usize = 64 * 1024;
 const MAX_OPEN_BLOCKS: usize = 128;
+const RETRY_INITIAL_DELAY: Duration = Duration::from_millis(500);
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(crate) struct ExecutionTextBuffer {
     blocks: BTreeMap<String, TextBlock>,
+    retry: Option<FlushRetry>,
+    pending_notifications: Vec<AgentRunExecutionEvidence>,
+    #[cfg(test)]
+    fail_next_settled_finishes: usize,
+}
+
+struct FlushRetry {
+    failures: u32,
+    retry_not_before: Instant,
+}
+
+pub(crate) struct ExecutionTextMaintenanceOutcome {
+    pub(crate) attempted: bool,
+    pub(crate) finalized: Vec<AgentRunExecutionEvidence>,
+    pub(crate) error: Option<anyhow::Error>,
+}
+
+struct FlushAttempt {
+    finalized: Vec<AgentRunExecutionEvidence>,
+    error: Option<anyhow::Error>,
 }
 
 struct TextBlock {
@@ -445,12 +468,30 @@ fn finish(
     }))
 }
 
-pub(crate) fn flush_settled(database: &mut Database) -> Result<()> {
-    if database.execution_text.blocks.is_empty() {
-        return Ok(());
-    }
-    let mut buffer = std::mem::take(&mut database.execution_text);
-    let result = (|| {
+fn retry_delay(failures: u32) -> Duration {
+    let multiplier = 1_u32 << failures.saturating_sub(1).min(6);
+    RETRY_INITIAL_DELAY
+        .saturating_mul(multiplier)
+        .min(RETRY_MAX_DELAY)
+}
+
+fn schedule_retry(buffer: &mut ExecutionTextBuffer) {
+    let failures = buffer
+        .retry
+        .as_ref()
+        .map_or(1, |retry| retry.failures.saturating_add(1));
+    buffer.retry = Some(FlushRetry {
+        failures,
+        retry_not_before: Instant::now() + retry_delay(failures),
+    });
+}
+
+fn attempt_flush_settled(
+    database: &mut Database,
+    buffer: &mut ExecutionTextBuffer,
+) -> FlushAttempt {
+    let mut finalized = Vec::new();
+    let result = (|| -> Result<()> {
         let store = ManagedBlobStore::new(database.path().parent().context("database directory")?);
         let mut close = Vec::new();
         for (k, b) in &buffer.blocks {
@@ -483,18 +524,87 @@ pub(crate) fn flush_settled(database: &mut Database) -> Result<()> {
                         ));
                     }
                 }
-                _ => {
-                    close.push((k.clone(), "interrupted"));
-                }
+                _ => close.push((k.clone(), "interrupted")),
             }
         }
         for (k, status) in close {
-            finish(database, &store, &mut buffer, &k, None, status)?;
+            #[cfg(test)]
+            if buffer.fail_next_settled_finishes > 0 {
+                buffer.fail_next_settled_finishes -= 1;
+                anyhow::bail!("injected Execution text finalization failure");
+            }
+            if let Some(recorded) = finish(database, &store, buffer, &k, None, status)? {
+                finalized.push(recorded.into_evidence());
+            }
         }
         Ok(())
     })();
+    FlushAttempt {
+        finalized,
+        error: result.err(),
+    }
+}
+
+pub(crate) fn flush_settled(database: &mut Database) -> Result<()> {
+    // Once a post-commit flush fails, only the maintenance tick owns retry timing. Command
+    // replay and unrelated terminal commands must not bypass the backoff or rescan Runs.
+    if database.execution_text.retry.is_some() {
+        return Ok(());
+    }
+    if database.execution_text.blocks.is_empty() {
+        return Ok(());
+    }
+    let mut buffer = std::mem::take(&mut database.execution_text);
+    let attempt = attempt_flush_settled(database, &mut buffer);
+    let result = if let Some(error) = attempt.error {
+        buffer.pending_notifications.extend(attempt.finalized);
+        schedule_retry(&mut buffer);
+        Err(error)
+    } else {
+        Ok(())
+    };
     database.execution_text = buffer;
     result
+}
+
+pub(crate) fn maintain_settled(database: &mut Database) -> ExecutionTextMaintenanceOutcome {
+    let due = database
+        .execution_text
+        .retry
+        .as_ref()
+        .is_some_and(|retry| retry.retry_not_before <= Instant::now());
+    if !due {
+        return ExecutionTextMaintenanceOutcome {
+            attempted: false,
+            finalized: std::mem::take(&mut database.execution_text.pending_notifications),
+            error: None,
+        };
+    }
+
+    let mut buffer = std::mem::take(&mut database.execution_text);
+    let mut finalized = std::mem::take(&mut buffer.pending_notifications);
+    if buffer.blocks.is_empty() {
+        buffer.retry = None;
+        database.execution_text = buffer;
+        return ExecutionTextMaintenanceOutcome {
+            attempted: false,
+            finalized,
+            error: None,
+        };
+    }
+    let attempt = attempt_flush_settled(database, &mut buffer);
+    finalized.extend(attempt.finalized);
+    if attempt.error.is_some() {
+        schedule_retry(&mut buffer);
+    } else {
+        buffer.retry = None;
+    }
+    database.execution_text = buffer;
+    ExecutionTextMaintenanceOutcome {
+        attempted: true,
+        finalized,
+        error: attempt.error,
+    }
 }
 
 pub(crate) fn overlay(
@@ -806,6 +916,7 @@ mod slow_tests {
             live_payload(&database, &acp_ids[1]).unwrap().unwrap()["text"],
             "B1"
         );
+        let failed_text = "failed run partial".repeat(2_000);
         let failed_tail = ExecutionEvidenceService
             .record_runtime_event(
                 &mut database,
@@ -813,10 +924,11 @@ mod slow_tests {
                 run,
                 2,
                 "agent.text.delta",
-                &json!({"itemId":"A","delta":"failed run partial"}),
+                &json!({"itemId":"A","delta":failed_text.clone()}),
             )
             .unwrap()
             .unwrap();
+        let failed_tail_id = failed_tail.payload["blockId"].as_str().unwrap().to_string();
         let version = database
             .connection()
             .query_row("SELECT version FROM agent_run WHERE id=?1", [run], |r| {
@@ -842,20 +954,109 @@ mod slow_tests {
                 ending_git_observation: None,
             },
         };
-        let failed = runtime.fail_agent_run(&mut database, &command).unwrap();
-        assert_eq!(
-            failed.result.status,
-            crate::command::CommandResultStatus::Applied
-        );
-        let payload = ExecutionEvidenceService
-            .read_full_payload(
-                &database,
-                &store,
-                camp,
-                failed_tail.payload["blockId"].as_str().unwrap(),
+        let terminal_count_before: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM event_log WHERE entity_id=?1 AND event_type='agent_run.failed'",
+                [run],
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(payload["text"], "failed run partial");
+        database.execution_text.fail_next_settled_finishes = 1;
+        let failure = runtime.fail_agent_run(&mut database, &command).unwrap_err();
+        assert!(format!("{failure:#}").contains("injected Execution text finalization failure"));
+        let status: String = database
+            .connection()
+            .query_row("SELECT status FROM agent_run WHERE id=?1", [run], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, "failed");
+        let receipt_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM event_log WHERE command_id=?1 AND event_type='command.result'",
+                [&command.command_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let terminal_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM event_log WHERE entity_id=?1 AND event_type='agent_run.failed'",
+                [run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(receipt_count, 1);
+        assert_eq!(terminal_count, terminal_count_before + 1);
+        assert!(!database.execution_text.blocks.is_empty());
+        database
+            .execution_text
+            .retry
+            .as_mut()
+            .unwrap()
+            .retry_not_before = Instant::now() + Duration::from_secs(60);
+        let changes_after_commit = database.connection().total_changes();
+        database
+            .connection()
+            .authorizer(Some(
+                |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                    rusqlite::hooks::AuthAction::Read {
+                        table_name: "agent_run",
+                        ..
+                    } => rusqlite::hooks::Authorization::Deny,
+                    _ => rusqlite::hooks::Authorization::Allow,
+                },
+            ))
+            .unwrap();
+        let immediate_replay = runtime.fail_agent_run(&mut database, &command).unwrap();
+        assert!(immediate_replay.replayed);
+        assert_eq!(immediate_replay.result.code, "agent_run.failed");
+        let early = maintain_settled(&mut database);
+        database
+            .connection()
+            .authorizer(
+                None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
+            )
+            .unwrap();
+        assert!(!early.attempted);
+        assert!(early.finalized.is_empty() && early.error.is_none());
+        assert_eq!(database.connection().total_changes(), changes_after_commit);
+        assert!(!database.execution_text.blocks.is_empty());
+
+        database
+            .execution_text
+            .retry
+            .as_mut()
+            .unwrap()
+            .retry_not_before = Instant::now();
+        let maintenance = maintain_settled(&mut database);
+        assert!(maintenance.attempted);
+        assert!(maintenance.error.is_none());
+        assert_eq!(maintenance.finalized.len(), 3);
+        assert!(database.execution_text.blocks.is_empty());
+        assert!(database.execution_text.retry.is_none());
+        assert!(
+            maintenance
+                .finalized
+                .iter()
+                .all(|item| item.phase == "failed")
+        );
+
+        assert_eq!(
+            maintenance
+                .finalized
+                .iter()
+                .find(|item| item.id == failed_tail_id)
+                .unwrap()
+                .payload["text"],
+            failed_text
+        );
+        let payload = ExecutionEvidenceService
+            .read_full_payload(&database, &store, camp, &failed_tail_id)
+            .unwrap();
+        assert_eq!(payload["text"], failed_text);
         assert_eq!(payload["status"], "interrupted");
         for (id, expected) in [(&acp_ids[0], "A1A2"), (&acp_ids[1], "B1")] {
             let payload = ExecutionEvidenceService
@@ -865,14 +1066,9 @@ mod slow_tests {
             assert_eq!(payload["status"], "interrupted");
         }
         let writes = database.connection().total_changes();
-        assert_eq!(
-            runtime
-                .fail_agent_run(&mut database, &command)
-                .unwrap()
-                .result
-                .code,
-            failed.result.code
-        );
+        let replay = runtime.fail_agent_run(&mut database, &command).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.result.code, "agent_run.failed");
         assert_eq!(database.connection().total_changes(), writes);
     }
 }

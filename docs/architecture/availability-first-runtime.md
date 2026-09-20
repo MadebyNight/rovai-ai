@@ -2,7 +2,7 @@
 document_type: architecture
 authority: desktop-availability-and-authority-startup-boundary
 status: accepted
-last_updated: 2026-09-07
+last_updated: 2026-09-20
 ---
 
 # Availability-first Runtime
@@ -42,7 +42,8 @@ Electron ready
           -> Migration ticket -> exact in-place transactions/reassess/reopen
              (existing legacy manifest only -> recover old switch/reassess)
           -> Blocked -> structured refusal and clean exit
-       -> mandatory execution/input/delivery recovery (failure => typed refusal)
+       -> exact legacy cancellation settlement
+       -> remaining mandatory execution/input/delivery recovery (failure => typed refusal)
        -> ready(authority origin, initializing subsystems)
   -> Supervisor enables authoritativeWorkspace/coreRequests
   -> Renderer mounts authority-backed hooks inside the restored route
@@ -75,9 +76,11 @@ Skill/MCP/adapter 对象先无 I/O 构造。ready 后独立初始化其存储与
 preflight 分层拥有；其中任何结果都不反向污染 optional subsystem health。Adapter 私有存储真实初始化失败仍可只降级
 对应 Runtime，并由原进程内重试修复。
 
-既有 compaction 启动协调保留 best-effort 语义与 replay-before-fence 顺序，在新 Runtime 启动前运行一次；它不进入
-可重试 cleanup 集合。controlled-shutdown、accepted-input 和 delivery recovery 仍在 ready 前，失败通过结构化 refusal
-阻断执行，不能用 optional failure 策略掩盖未收敛的权威状态。
+退役两阶段取消协议的持久中间态在数据库 open/migration 后先按精确 cancel intent 与未完成关联状态查询，并复用统一
+settlement；它先于通用 execution/input/delivery recovery，避免旧取消工作被重新准入。重复启动不再次结算，失败与其他
+执行安全恢复一样通过结构化 refusal 阻断 ready。既有 compaction 启动协调保留 best-effort 语义与
+replay-before-fence 顺序，在新 Runtime 启动前运行一次；它不进入可重试 cleanup 集合。controlled-shutdown、
+accepted-input 和 delivery recovery 仍在 ready 前，不能用 optional failure 策略掩盖未收敛的权威状态。
 
 ## Windows shell storage boundary
 

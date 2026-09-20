@@ -68,6 +68,9 @@ last_updated: 2026-09-20
 ### Snapshot、订阅与 API 边界
 
 - Renderer DTO 从 SQLite 权威表和确定性派生规则生成，不维护第二套持久投影或可独立写入的 Runtime 状态缓存。每个 Snapshot 在单一读事务中捕获 `throughGlobalSequence`；增量事件只用于失效和时间线更新。
+- `camps.open` 与 `camps.enter` reconciliation 完成后的投影阶段只读取一致快照，不结算取消或终态、不定稿执行文本，
+  也不创建 SQL、Managed Blob 或文件副作用。Pending enter 与有效 Lead 的新 User enter 全程只读；确需修复 Lead 时仅
+  原有 reconciliation 命令可以写入，不能承接读取入口移出的维护职责。
 - 影响 Desktop Navigation 投影的 mutation 只在权威提交完成后发 `navigation.invalidated`；该事件不携带可直接应用的状态。Renderer 通过一个全局 generation coordinator 合并事件、focus 与低频安全刷新，串行重读完整 Snapshot，不为每个 Camp 建立 timer，也不让 Overview 附属模块失败关闭 Navigation 恢复。
 - 断连、序列缺口、未知 schema 或派生缓存不确定时，客户端丢弃相关缓存并重新获取 Snapshot，不能靠事件重放猜测权威状态。授权范围必须先于过滤和分页建立。
 - 事件 Read Side 在原批量查询中同时读取 `command.result` 专用列：历史完整 `payload_json` 原样返回，已知
@@ -542,7 +545,7 @@ last_updated: 2026-09-20
 
 ### 用户可见 evidence 与 Usage
 
-- AgentRun Execution Evidence 是独立、用户可见但默认不回流 Agent 的权威记录，不归 Task、Message、Activity presentation 或 Runtime cache 所有。工具与执行事实保持 append-only；正文、公开 thought 与 reasoning summary 各自按消息块保留，delta 只作实时运输。每块在首片占据稳定位置，由原生 item 完成结果或连续正文边界定稿；取消、失败、受控退出保存已接受内容并标明中断，不把整个 Run 简化为最后一段。小内容在 SQLite，大正文进入 Managed Blob；Camp Open 只返回执行记录计数，执行台按视口读取有界逻辑条目页并叠加页内未定稿内容；历史与实时使用同一块身份去重。首屏后只预取相邻一页，较早记录按需分页，完整工具结果与文件 diff 在对应行展开后读取。原生 `userMessage` 的空生命周期不复制 CampMessage；Migration 143 可删除 terminal 完整输出已覆盖的 command delta 和未被引用的空文本壳，但必须在同一事务修复 Canonical 来源、保持非空和无悬挂，且不改写 Canonical revision。字段与有界存储见 [Run Process Detail Surface v34](../contracts/run-process-detail-surface-v34.md#evidence-持久化与模型观察边界)。
+- AgentRun Execution Evidence 是独立、用户可见但默认不回流 Agent 的权威记录，不归 Task、Message、Activity presentation 或 Runtime cache 所有。工具与执行事实保持 append-only；正文、公开 thought 与 reasoning summary 各自按消息块保留，delta 只作实时运输。每块在首片占据稳定位置，由原生 item 完成结果或连续正文边界定稿；取消、失败、受控退出保存已接受内容并标明中断，不把整个 Run 简化为最后一段。小内容在 SQLite，大正文进入 Managed Blob；Camp Open 只返回执行记录计数，执行台按视口读取有界逻辑条目页并叠加页内未定稿内容；历史与实时使用同一块身份去重。首屏后只预取相邻一页，较早记录按需分页，完整工具结果与文件 diff 在对应行展开后读取。业务终态已提交而正文定稿失败时，同一进程内 block 记录有界退避并由既有 AgentRun maintenance tick 只重试文本；未到期时不扫描持久状态，成功后复用 block event，重试不重放领域命令。进程重启不声称恢复尚未持久化的 block。原生 `userMessage` 的空生命周期不复制 CampMessage；Migration 143 可删除 terminal 完整输出已覆盖的 command delta 和未被引用的空文本壳，但必须在同一事务修复 Canonical 来源、保持非空和无悬挂，且不改写 Canonical revision。字段与有界存储见 [Run Process Detail Surface v34](../contracts/run-process-detail-surface-v34.md#evidence-持久化与模型观察边界)。
 - Renderer 对文本、结构化数据、二进制/未知类型和链接使用安全、有界渲染；不执行 evidence 内容、不把它当作 Agent 消息、Task 完成证明或可重放命令。保留/回收由权威 Run/Camp 引用和 Managed Blob GC 决定，不因 UI 清理或 Agent 不可见而提前删除。
 - Runtime Monitoring 只拥有 Usage-derived metering：原始 observation、归一化 usage、flush/rollup 和 bounded snapshot 由当前五表合同约束。缺失 token/cache/cost 保持稀疏 unknown，不补零或跨 grain 重复计费。
 - Usage raw observation、normalized grain、flush cursor/lease、rollup 和 bounded snapshot 保持独立身份/幂等键；读取按成员/Run/时间范围限界，retention/rollup 不改写已归一化 grain 或从缺失值补数。Cost 只在精确模型、价格版本、token category/grain 可证明且不重复计费时估算；Coverage、unknown 与数据新鲜度随 Snapshot 返回，UI 不把部分支持展示成完整精确账单。

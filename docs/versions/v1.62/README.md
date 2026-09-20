@@ -58,6 +58,11 @@ Mission Worktree checkout 增量同样不轮换 data contract：已有 `branch` 
 同日完成的 Agent Run Card 与用户消息撤回增量只调整 Renderer 编排、安装级位置偏好和既有 Domain Command
 准入，不增加 Migration、Runtime 输入版本或 AgentRun 状态。
 
+同日完成的 Camp Open 职责增量将 `camps.open` 和 enter 的投影阶段收敛为实际零写入读取：旧取消协议修复前移到
+mandatory startup recovery，终态文本写入失败由原 block 保存退避并接入既有 AgentRun maintenance tick。
+它不新增 timer、worker、数据库表、连接、Migration 或 Renderer wire；字段级边界见
+[Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)。
+
 ## Worktree 异步清理增量
 
 `missions.workspace.cleanup` 在持久化 `cleanup_pending` 与命令结果后立即返回；独立 cleanup worker 使用通知快路和
@@ -112,14 +117,24 @@ Renderer 在点击后立即保留按钮几何、禁用并显示“正在开始�
 明确拒绝才恢复并提示错误。Delivery batch claim 新增普通导航失效提示，使使命板、抽屉和完整会话在 Runtime
 连接前就能刷新 queued Run。内部 Mission start 消息继续从 Timeline 过滤，业务状态不随启动或 Run 自动变化。
 
+## Camp Open 只读职责增量
+
+普通取消、成功和失败继续由现有 Domain Command Gateway 在业务提交后收尾正文，受控关闭与 planned-shutdown
+直提交流程保留自己的提交后调用。旧两阶段取消中间态只在 Core ready 前按精确持久条件扫描并统一 settlement；
+失败沿用 authority recovery 的 fail-closed 处理，重复启动零结算。
+
+文本收尾失败保留原内存 block、失败次数和单调到期时间。现有 500ms maintenance tick 在无失败或未到期时不读
+Run/Camp，到期只重试文本并在成功后复用 block event；失败最高退避至 30 秒。Camp open/read-only enter 的回归同时
+用 SQLite authorizer 阻断 DML 并检查 `managed-blobs` 文件目录，证明跨 Camp 待收尾正文不会被读取入口冲刷。
+
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)后继续发布当前 [Mission v9](../../contracts/mission-v9.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)与[Camp Message Send v23](../../contracts/camp-message-send-v23.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
-| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入 |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)后继续发布当前 [Mission v9](../../contracts/mission-v9.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)与 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner |
 | UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |
