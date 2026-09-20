@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { AgentProfile, AgentRunView, CampComposerDraftView, CampSnapshot, ExecutionConsolePlacement, MessageDeliveryView } from '@contracts'
 import { AppHeader } from '../../../apps/desktop/src/renderer/src/App'
-import { CampWorkspace } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
-import { FilePreviewProvider } from '../../../apps/desktop/src/renderer/src/FilePreviewContext'
+import { CampWorkspace, type NotificationFocusTarget, type VisibleNotificationSources } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
+import { FilePreviewProvider, useFilePreview } from '../../../apps/desktop/src/renderer/src/FilePreviewContext'
 import '../../../apps/desktop/src/renderer/src/styles.css'
 
 // The actual production workspace, with closed local fixtures. No Core, Runtime or daily data.
@@ -127,6 +127,64 @@ Object.assign(window, { rovai: {
   }
 } })
 
+let configureNotificationFixture: (() => void) | null = null
+let focusNotificationRun: ((requestId: number) => void) | null = null
+let notificationFixtureEnabled = false
+let latestVisibleNotificationSources: VisibleNotificationSources | null = null
+const visibleNotificationSourceReports: VisibleNotificationSources[] = []
+const presentedNotificationRequests: number[] = []
+let previewHarness: {
+  openExecution(): void
+  hidePane(): void
+  paneVisible: boolean
+  activeTabKind: string | null
+} | null = null
+
+function NotificationFixtureBridge(): null {
+  const preview = useFilePreview()
+  previewHarness = {
+    openExecution: preview.openExecution,
+    hidePane: preview.hidePane,
+    paneVisible: preview.paneVisible,
+    activeTabKind: preview.activeTab?.kind ?? null
+  }
+  return null
+}
+
+Object.assign(window, { executionNotificationTest: {
+  configureRight: () => configureNotificationFixture?.(),
+  openExecution: () => previewHarness?.openExecution(),
+  hideExecution: () => previewHarness?.hidePane(),
+  focusRun: (requestId: number) => focusNotificationRun?.(requestId),
+  state: () => {
+    const target = document.querySelector<HTMLElement>('[data-agent-run-id="run-agent-1"]')
+    const preview = document.querySelector<HTMLElement>('[data-preview-camp]')
+    const executionPortal = document.querySelector<HTMLElement>('.execution-drawer-portal')
+    const viewport = target?.closest<HTMLElement>('.execution-drawer-body') ?? null
+    const rect = (element: HTMLElement | null) => element?.getBoundingClientRect().toJSON() ?? null
+    return {
+      paneVisible: previewHarness?.paneVisible ?? false,
+      activeTabKind: previewHarness?.activeTabKind ?? null,
+      compact: document.querySelector('.workspace-grid')?.classList.contains('file-preview-compact') ?? false,
+      targetPresent: target !== null,
+      targetVisible: Boolean(target?.getClientRects().length),
+      targetFocused: document.activeElement === target,
+      targetInsideWorkspace: Boolean(target?.closest('.workspace-shell')),
+      targetInsideExecutionPortal: Boolean(target && executionPortal?.contains(target)),
+      portalRunCount: executionPortal?.querySelectorAll('.execution-drawer [data-agent-run-id]').length ?? 0,
+      previewHidden: preview?.hidden ?? true,
+      documentFocused: document.hasFocus(),
+      documentVisibility: document.visibilityState,
+      targetRect: rect(target),
+      viewportRect: rect(viewport),
+      viewportHidden: viewport?.hidden ?? null,
+      visibleRunIds: latestVisibleNotificationSources?.agentRunIds ?? [],
+      visibleSourceReports: visibleNotificationSourceReports.map((sources) => sources.agentRunIds),
+      presentedRequests: [...presentedNotificationRequests]
+    }
+  }
+} })
+
 function Fixture(): React.JSX.Element {
   const [count, setCount] = useState(12)
   const [recipientCount, setRecipientCount] = useState(0)
@@ -138,6 +196,23 @@ function Fixture(): React.JSX.Element {
   const [theme, setTheme] = useState('day')
   const [longTitleScenario, setLongTitleScenario] = useState(false)
   const [stoppedRuns, setStoppedRuns] = useState<string[]>([])
+  const [notificationFocus, setNotificationFocus] = useState<NotificationFocusTarget | null>(null)
+  configureNotificationFixture = () => {
+    notificationFixtureEnabled = true
+    setOpen(false)
+    setPlacement('right')
+    setNotificationFocus(null)
+    latestVisibleNotificationSources = null
+    visibleNotificationSourceReports.length = 0
+    presentedNotificationRequests.length = 0
+  }
+  focusNotificationRun = (requestId) => setNotificationFocus({
+    requestId,
+    kind: 'agent_run',
+    agentRunId: 'run-agent-1',
+    campTurnId: null,
+    active: true
+  })
   const snapshot = snapshotFor(count, revision, recipientCount)
   if (longTitleScenario) {
     snapshot.turns = snapshot.agentRuns.map(run => ({ id: run.campTurnId!, triggerType: 'camp_message',
@@ -174,6 +249,7 @@ function Fixture(): React.JSX.Element {
     })
   }
   return <FilePreviewProvider campId={campId} resolvedTheme={theme === 'night' ? 'night' : 'day'}>
+    <NotificationFixtureBridge />
     <div className="app-shell app-shell-camp">
     <aside style={{ gridRow: '1 / -1', padding: '48px 24px', background: 'var(--rail)', color: 'var(--rail-ink)' }}>
       <strong>Rovai AI · 隔离验收</strong>
@@ -203,7 +279,18 @@ function Fixture(): React.JSX.Element {
         onStop={() => {}} worldMapEnabled={false} inspectorVisible={open} detailEntryHost={entryHost}
         onCancelAgentRun={async run => { setStoppedRuns(current => [...current, run.id]) }}
         executionPlacement={placement} onExecutionPlacementChange={async value => { setPlacement(value); return value }}
-        onOpenInspector={() => setOpen(true)} onCloseInspector={() => setOpen(false)} />
+        onOpenInspector={() => setOpen(true)} onCloseInspector={() => setOpen(false)}
+        notificationFocus={notificationFocus}
+        onNotificationFocusPresented={(requestId) => {
+          presentedNotificationRequests.push(requestId)
+          setNotificationFocus((current) => current?.requestId === requestId
+            ? { ...current, active: false }
+            : current)
+        }}
+        onVisibleNotificationSources={notificationFixtureEnabled ? (sources) => {
+          latestVisibleNotificationSources = sources
+          visibleNotificationSourceReports.push(sources)
+        } : undefined} />
     </main>
   </div></FilePreviewProvider>
 }

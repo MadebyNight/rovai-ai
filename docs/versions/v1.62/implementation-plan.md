@@ -13,7 +13,9 @@ last_updated: 2026-09-20
 [Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
-[Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)。
+[Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)，通知呈现见
+[Notification Episode v8](../../contracts/notification-episode-v8.md)与
+[Current User Attention v7](../../contracts/current-user-attention-v7.md)。
 
 ## Gate 0：当前基线与权威
 
@@ -194,11 +196,26 @@ last_updated: 2026-09-20
   Renderer wire、Core、数据库或 Runtime。
 - [x] 既有 Renderer owner、隔离执行台验收、TypeScript、文档治理、diff 检查与静态 UI detector 通过；不扩大为 Rust 测试。
 
+## Gate 18：当前 Camp 静默与 AgentRun Portal 定位
+
+- [x] 窗口可见且有焦点、普通或 Mission Camp workspace 为当前 surface 时，同 Camp 全部 heads-up 语义不入队；
+  已排队卡片也移除且不在离开后重放。
+- [x] 静默不调用 acknowledge、clear 或 mark-all；消息、CampTurn、AgentRun 与审批仍只由精确可见来源确认。
+- [x] AgentRun 可见扫描、变化/尺寸观察与通知定位统一使用 execution Portal；右侧关闭时显式打开 Execution 标签。
+- [x] 紧凑布局保留 AgentRun 的右侧目标页；隔离 Electron 同时证明“右侧已开时回报 exact Run”和“右侧已关时
+  点击可打开、聚焦并完成定位”。
+- [x] 修正 notification fixture 的 schema 8 与 `agentRunIds` 输入，TypeScript、Renderer 单测、隔离 Electron、
+  文档治理和静态 UI detector 作为本增量门禁；不修改 Core、Migration 或 Rust 测试。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
 Replay、活动、执行副作用与 epoch/membership 边界；既有 Transport 与 CLI owner 扩展 v30、错误恢复和实际
 help。删除测试为零。
+
+当前 Camp 静默与 AgentRun Portal 定位不新增 Rust test owner：它不改变 Notification schema、Core unread、
+acknowledgement 或 AgentRun 投影，只调整 Renderer queue policy 与已存在 DOM 的观察/定位边界。纯函数 owner 覆盖
+全语义静默且 unread 不变，隔离 Electron 生产组件 fixture 覆盖右侧 Portal 可见、关闭后恢复与紧凑布局定位。
 
 异步清理不新增平行 Rust 测试函数：`mission_cleanup_capability_comes_from_workspace_records_and_execution_occupancy`
 继续拥有 Renderer cleanup projection 输入矩阵；`camp_rename_lead_change_and_quiescent_delete_with_cleanup_are_versioned`
@@ -287,3 +304,8 @@ Session Charter revision 与 Binding compatibility digest。只扩展这两个 o
 - Mission 续作提示定向验证：`session_charter_publishes_one_cli_only_builtin_contract` 在 `slow-tests`
   feature 下 1/1 passed，`binding_contract_freezes_each_context_axis_version` 1/1 passed；格式、文档单测、
   普通与 diff-aware 文档门禁、`git diff --check` 均通过，未扩大为 Runtime smoke 或 App 构建。
+- 当前 Camp 静默与 AgentRun Portal 定位增量验证：Attention Controller 定向单测 16/16、关联 Renderer
+  单测 193/193，`pnpm test:notification-attention` 的通知队列与右侧 Portal 两个隔离 Electron 场景 2/2，
+  `pnpm test:execution-avatar-rail` 的执行台完整交互与状态迁移 2/2 通过；`pnpm typecheck`、
+  `pnpm build:desktop`、`pnpm docs:test`、普通与 diff-aware 文档门禁、`git diff --check` 均通过，
+  Impeccable 静态 detector 对四个变更 Renderer/fixture 文件返回零问题。

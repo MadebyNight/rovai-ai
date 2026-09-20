@@ -40,6 +40,8 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - Mission 启动受理后立即隐藏入口；claim 创建 queued Run 即显示“执行中”，不等待 Runtime 连接或输出。
 - 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
 - 使命板一级入口蓝点按 Core-owned `hasUnread` 统计有未读 Agent 回复的使命，不再复用 `needs_you` 状态。
+- 当前普通或 Mission Camp workspace 位于前台时，该 Camp 全语义通知不弹临时浮层，但精确来源未读保持不变。
+- AgentRun 通知跨底部、Inspector 与右侧 Portal 使用同一可见性和定位边界；关闭的右侧执行标签可被精确恢复。
 
 字段级协议见 [Mission v11](../../contracts/mission-v11.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
@@ -57,6 +59,8 @@ Mission Bootstrap 续作提示的完整前后合同、版本边界与二次确�
 Mission 启动与执行提示的 Core/Renderer/合同实现与全量门禁已经完成，由 PR #453 合入 `main`，并验证功能
 提交是最新 `origin/main` 的祖先。使命板入口蓝点现与卡片共用 `MissionRecord.hasUnread`，业务状态不再影响其显示。
 终态工具组步骤数已恢复统计全部已结算逻辑操作；失败步骤保留失败状态，同时进入“已完成 N 个步骤”的 N。
+当前 Camp 通知静默和右侧 AgentRun Portal 定位回归也已完成；普通 Camp、完整 Mission 会话与使命板抽屉使用
+同一 quiet scope，失焦或离开该 Camp 后恢复提醒，静默不会写入 acknowledgement。
 本版不轮换 data contract：继续使用 v1.61/schema 116；清理复用 schema 112 已有 workspace 状态、命令身份、
 expected OID 与双检查点，不新增 Migration。
 
@@ -157,6 +161,17 @@ Renderer 在点击后立即保留按钮几何、禁用并显示“正在开始�
 明确拒绝才恢复并提示错误。Delivery batch claim 新增普通导航失效提示，使使命板、抽屉和完整会话在 Runtime
 连接前就能刷新 queued Run。内部 Mission start 消息继续从 Timeline 过滤，业务状态不随启动或 Run 自动变化。
 
+## 当前 Camp 通知静默与 AgentRun Portal 定位增量
+
+前台且有焦点的当前 Camp workspace 成为 Renderer-local quiet scope：完成、失败、未完成、Mention 和审批 signal
+在 Journal 归约时不进入临时队列，进入该 Camp 前已排队的同 Camp 卡片也撤下且离开后不重放。普通 Camp、完整
+Mission 会话和使命板会话抽屉共用该规则；其他 Camp、其他一级页面和后台窗口继续按偏好排队。Core unread、
+Occurrence acknowledgement、侧栏标记和精确可见来源确认均保持独立。
+
+AgentRun 的可见扫描、Mutation/Resize 观察和通知定位改为围绕稳定 execution Portal；该 Portal 可在底部、Inspector
+及位于会话根节点之外的右侧宿主间移动。右侧关闭时通知动作先打开 Execution 标签，再选择并聚焦 exact Run；
+紧凑布局只为消息/旧 CampTurn 定位让出预览区，不再关闭 AgentRun 自己的目标页。
+
 ## Camp Open 只读职责增量
 
 普通取消、成功和失败继续由现有 Domain Command Gateway 在业务提交后收尾正文，受控关闭与 planned-shutdown
@@ -172,10 +187,10 @@ Run/Camp，到期只重试文本并在成功后复用 block event；失败最高
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
-| Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37、v38、v39 与当前 [v40](../../contracts/run-process-detail-surface-v40.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
-| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner |
-| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
+| Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card、运行中会话总览与当前 Camp quiet scope 均是可逆 Renderer 策略并由当前合同完整说明，不新增高成本架构决定 |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37、v38、v39 与当前 [v40](../../contracts/run-process-detail-surface-v40.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)、[Notification Episode v8](../../contracts/notification-episode-v8.md)、[Current User Attention v7](../../contracts/current-user-attention-v7.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner；通知架构明确当前 Camp quiet scope、精确已读独立和 execution Portal 边界 |
+| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、运行中会话总览、回执和共享分栏，并补齐当前 Camp 静默与右侧 AgentRun 精确定位 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |
 | Documentation routing | 已更新 | 文档任务入口、合同索引、当前决定导航和版本索引指向 v1.62 及本增量的当前权威 |

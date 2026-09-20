@@ -15,12 +15,13 @@ const preference = { headsUpEnabled: true, approvalHeadsUpEnabled: true, userMen
   turnCompletedHeadsUpEnabled: true, turnIncompleteHeadsUpEnabled: true, version: 1, updatedAt: '2026-09-07' }
 let setSources: (source: VisibleNotificationSources | null) => void
 let sequence = 0
-const read = () => ({ campId: 'camp-other', surfaceVisible: true, snapshotSequence: 0, messageIds: [], campTurnIds: [], approvalIds: [] })
+const read = () => ({ campId: 'camp-other', surfaceVisible: true, snapshotSequence: 0,
+  messageIds: [], campTurnIds: [], agentRunIds: [], approvalIds: [] })
 Object.assign(window, { rovai: {
   request: async (method: string, request: any) => {
     if (method === 'notifications.preference.get') return preference
-    if (method === 'notifications.inbox') return { schemaVersion: 7, throughChangeSequence: sequence, unreadCount: journal.length, items: [], nextCursor: null }
-    if (method === 'notifications.changesSince') return { schemaVersion: 7, requestedAfterChangeSequence: request.afterChangeSequence,
+    if (method === 'notifications.inbox') return { schemaVersion: 8, throughChangeSequence: sequence, unreadCount: journal.length, items: [], nextCursor: null }
+    if (method === 'notifications.changesSince') return { schemaVersion: 8, requestedAfterChangeSequence: request.afterChangeSequence,
       nextChangeSequence: sequence, throughChangeSequence: sequence, retainedFloorChangeSequence: 0,
       hasMore: false, resetRequired: false, changes: journal.filter(change => change.changeSequence > request.afterChangeSequence) }
     if (method === 'notifications.acknowledge' || method === 'notifications.acknowledgeVisibleSources') {
@@ -33,13 +34,13 @@ Object.assign(window, { rovai: {
 function admit(semantic: NotificationSemantic, privateId: string | null = null, episodeId = `episode-${sequence + 1}`, agentDisplayName = '洛克') {
   const n = ++sequence
   const action: NotificationActionView = { actionId: `action-${n}`, kind: privateId ? 'open_single_chat' : semantic === 'approval_pending' ? 'open_approval' : 'open_camp_turn',
-    available: true, campId: 'camp-target', campTurnId: 'turn-target', messageId: null,
+    available: true, campId: 'camp-target', campTurnId: 'turn-target', agentRunId: null, messageId: null,
     approvalId: semantic === 'approval_pending' ? `approval-${n}` : null,
     acknowledgementId: `occurrence-${n}`, observedEpisodeVersion: n,
     singleChat: privateId ? { conversationId: privateId, agentId: 'agent-1', agentDisplayName, agentRunId: 'private-run' } : null }
   const episode: NotificationEpisodeView = { id: episodeId, kind: semantic === 'approval_pending' ? 'approval' : 'collaboration',
     episodeVersion: n, attentionRevision: n, changeSequence: n,
-    camp: { id: 'camp-target', title: '通知交互与单聊来源定位方案'.repeat(3) }, campTurnId: 'turn-target',
+    camp: { id: 'camp-target', title: '通知交互与单聊来源定位方案'.repeat(3) }, campTurnId: 'turn-target', agentRunId: null,
     primarySemantic: semantic, unread: true, resolved: false, satisfied: false, pendingApprovalCount: 0, mentionCount: 0,
     unacknowledgedMentionCount: 0, mention: null, reasons: [], primaryAction: action, secondaryActions: [], createdAt: '2026-09-07', updatedAt: '2026-09-07' }
   journal.push({ changeSequence: n, episodeId, episodeVersion: n, attentionRevision: n, operation: 'upsert',

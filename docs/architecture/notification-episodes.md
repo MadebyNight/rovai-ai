@@ -2,7 +2,7 @@
 document_type: architecture
 authority: notification-episode-architecture
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # Notification Episode 架构
@@ -29,7 +29,7 @@ Electron Main ── allowlisted JSON-RPC adapter only
 Renderer Attention Controller
   ├─ lightweight unread high-water baseline
   ├─ exact Change Journal signal queue + invalidation
-  ├─ foreground-only transient heads-up
+  ├─ foreground-only transient heads-up + attentive active-Camp quiet scope
   └─ exact visible-source acknowledgement
 ```
 
@@ -68,7 +68,13 @@ Eligible Attention；其旧 pending signal 按 identity 失效。Episode `primar
 `messageId/campTurnId/agentRunId`，以及实际展开可见的 pending `approvalId`。Core 的
 `acknowledgeVisibleSources()` 再以当前用户、Camp、Active Attention 与 Renderer 已观察 Journal high-water
 交叉验证并原子确认；因此普通导航可以自然消角标，但屏幕外来源和边界后新到达的通知不会被顺带读掉。
-Episode 推荐动作从不参与该来源集合。
+Episode 推荐动作从不参与该来源集合。执行台由稳定 Portal 在底部、Inspector 与右侧宿主间移动，AgentRun
+观察和定位以该 Portal 为边界；右侧宿主位于会话根节点之外，不能退回以会话 DOM root 推断可见性。
+
+临时浮层另有 Renderer-local quiet scope：窗口可见且有焦点、Camp workspace 是当前产品 surface 时，同 Camp
+的所有语义 signal 在 Journal 归约中不入队，已在队列中的同 Camp signal 也移除且不在离开后重放。该策略只改变
+瞬时呈现，不进入 `acknowledgeVisibleSources()` 输入，不写 Disposition，也不清除未读；其他 Camp、其他页面或
+失焦窗口仍沿用 preference、队列与暂停计时。
 
 持久通知中心、全局通知入口和未读总数徽标当前不进入生产 Renderer。Core 的 Episode/Occurrence/Journal
 与命令保持不变；Renderer 只保留轻量 Attention Controller、临时 heads-up 和会话导航未读点，避免为了
@@ -101,16 +107,17 @@ cascade 和 Journal trigger 收口。
 ## References
 
 - [通知事实与投影](foundational-invariants.md#core-notifications)
-- [Notification Episode v7](../contracts/notification-episode-v7.md)
-- [Current User Attention v6](../contracts/current-user-attention-v6.md)
+- [Notification Episode v8](../contracts/notification-episode-v8.md)
+- [Current User Attention v7](../contracts/current-user-attention-v7.md)
 
 
 ## 公屏与单聊注意力
 
 本机 Owner 通知通过精确 Run 的冻结目的地标识单聊，审批从 Action / Run 解析；不把 Camp ID 当作私有
 阅读身份。单聊的终态摘要与审批 Dock 回报精确可见来源，公屏在单聊面板打开时停止回报可见来源。
-当前阅读区域完成只抑制临时卡片，已读仍要求实际可见内容。Migration 146 限定完成 satisfaction 的对话
+当前前台 Camp workspace 对全部临时卡片保持静默，已读仍要求实际可见内容。Migration 146 限定完成 satisfaction 的对话
 范围，单聊结束按原 Occurrence invalidation 撤回队列。卡片只包含来源与信息，剩余提醒由轻入口按需查看。
 
 Delivery-first batch Run 由 Migration 164 增加 `agent_run` Occurrence source；不创建 CampTurn。Renderer 的
-`open_agent_run` 动作打开对应成员的执行历史并定位 exact Run，只有该执行节点实际可见才回报确认。
+`open_agent_run` 动作先打开对应承载位置，再选择成员并定位 exact Run；右侧位置显式打开 Execution 标签，紧凑
+布局保留该目标面板。只有 Portal 内该执行节点实际可见才回报确认。
