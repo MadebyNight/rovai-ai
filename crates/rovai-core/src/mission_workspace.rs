@@ -232,10 +232,21 @@ impl MissionGit {
             .arg("--no-optional-locks")
             .arg("--literal-pathspecs")
             .arg("-C")
-            .arg(cwd)
-            .args(args);
+            .arg(dunce::simplified(cwd));
+        for argument in args {
+            let path = Path::new(argument);
+            if path.is_absolute() {
+                // Git for Windows rewrites a verbatim `\\?\C:\...` argument to
+                // `//?/C:/...` and then rejects it while creating `.git`.
+                // Keep canonical paths for Core identity checks, but expose the
+                // equivalent ordinary path only at the Git process boundary.
+                command.arg(dunce::simplified(path));
+            } else {
+                command.arg(argument);
+            }
+        }
         if let Some(index) = index {
-            command.env("GIT_INDEX_FILE", index);
+            command.env("GIT_INDEX_FILE", dunce::simplified(index));
         }
         let output = run_bounded_command_with_input(
             &mut command,
@@ -291,7 +302,7 @@ impl MissionGit {
             fs::canonicalize(common_dir)? == common_dir,
             "mission.repository_mismatch"
         );
-        let mut scoped = vec![format!("--git-dir={}", workspace.git_common_dir).into()];
+        let mut scoped = vec!["--git-dir".into(), workspace.git_common_dir.clone().into()];
         scoped.extend_from_slice(args);
         self.output(common_dir, &scoped, None, None).await
     }
@@ -417,10 +428,11 @@ impl MissionGit {
         Ok(())
     }
     async fn admin_dir(&self, path: &Path) -> Result<PathBuf> {
-        Ok(PathBuf::from(
+        fs::canonicalize(PathBuf::from(
             self.text(path, &["rev-parse", "--path-format=absolute", "--git-dir"])
                 .await?,
         ))
+        .context("mission.worktree_registration_missing")
     }
     async fn verify_tree(
         &self,
@@ -748,7 +760,8 @@ impl MissionGit {
         };
         Ok(CleanupGitObservation {
             root: fields[0].into(),
-            admin_dir: fields[1].into(),
+            admin_dir: fs::canonicalize(fields[1])
+                .context("mission.worktree_registration_missing")?,
             common_dir: fields[2].into(),
             head_oid: fields[head_index].to_string(),
             managed_branch_oid: managed_index.map(|index| fields[index].to_string()),
@@ -1107,8 +1120,10 @@ impl MissionGit {
                         continue;
                     }
                     let registered = fs::read_to_string(entry.path().join("gitdir"))?;
+                    let expected_git_file = target.join(".git");
                     ensure!(
-                        Path::new(registered.trim_end_matches(['\r', '\n'])) == target.join(".git"),
+                        dunce::simplified(Path::new(registered.trim_end_matches(['\r', '\n'])))
+                            == dunce::simplified(&expected_git_file),
                         "mission.cleanup_registration_mismatch"
                     );
                     stale_registrations.push(entry.path());
@@ -2035,6 +2050,9 @@ mod tests {
         git.bytes(&repo, &["config", "user.email", "mission@example.invalid"])
             .await
             .unwrap();
+        git.bytes(&repo, &["config", "core.autocrlf", "false"])
+            .await
+            .unwrap();
         for (name, body) in [
             ("edit.txt", "original\n"),
             ("remove.txt", "remove\n"),
@@ -2075,6 +2093,19 @@ mod tests {
         };
         (Fixture(root), git, repository, workspace)
     }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_materialize_accepts_a_verbatim_canonical_repository_path() {
+        let (_fixture, git, _repo, mut workspace) = fixture().await;
+        assert!(workspace.repository_root.starts_with(r"\\?\"));
+
+        git.materialize(&workspace).await.unwrap();
+        workspace.state = "ready".into();
+        git.validate_execution_workspace(&workspace).await.unwrap();
+        git.cleanup(&workspace).await.unwrap();
+    }
+
     #[tokio::test]
     async fn persistent_worktree_preserves_source_recovers_owned_creation_and_retains_branch_on_delete()
      {
