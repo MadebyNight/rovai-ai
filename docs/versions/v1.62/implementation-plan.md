@@ -10,7 +10,7 @@ last_updated: 2026-09-20
 # v1.62 实施与验收
 
 范围见[版本概览](README.md)，字段级行为见 [Mission v11](../../contracts/mission-v11.md)、
-[Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)、
+[Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)。
@@ -169,6 +169,14 @@ last_updated: 2026-09-20
   排队卡与真实多输入 Run 共用同一按钮和焦点边界。
 - [x] Renderer 定向回归、Camp Open slow owner、隔离 Electron 双状态截图、类型检查、文档门禁和 Desktop
   生产构建通过；Rust 验证收敛为上述两条定向 owner。
+
+## Gate 16：使命抽屉底部执行台保持收起
+
+- [x] 仅在使命板抽屉与 `bottom` placement 同时成立时启用既有执行自动打开抑制；普通 Camp、完整 Mission、
+  `right` / `inspector` 与显式执行入口保持原行为。
+- [x] Renderer 定向 owner 同时证明普通底部执行台继续自动选择 running Run，使命抽屉的底部入口保持未选中且
+  Drawer 不挂载；不增加 Rust、Core、数据库或 wire 变更。
+- [x] TypeScript、当前 Renderer owner、文档治理、diff 检查与静态 UI detector 通过；不运行 Rust 或全量测试。
 
 ## Gate 16：Mission Worktree 清理短路径
 

@@ -59,6 +59,7 @@ import {
   effectiveCancellingRunIds,
   effectiveCancellingTurnIds,
   notificationFocusMatchesAction,
+  missionDrawerSuppressesExecutionAutoOpen,
   optimisticCampMessage,
   prepareActiveAutomationForAppQuit,
   prepareActiveCampForAppQuit,
@@ -3974,6 +3975,11 @@ describe('task event projections', () => {
       onStop: () => undefined
     }
     const markup = renderToStaticMarkup(createElement(CampWorkspace, workspaceProps))
+    const suppressedMissionDrawerMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      missionBoard: createElement('section', null, 'Mission board'),
+      suppressExecutionAutoOpen: true
+    }))
     const queuedMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
       ...workspaceProps,
       snapshot: {
@@ -4103,6 +4109,12 @@ describe('task event projections', () => {
     expect(markup).toContain('class="run-pulse-bottom-caption"')
     expect(markup).toContain('class="execution-bottom-collapse-button"')
     expect(markup).toContain('class="run-pulse-chip is-selected"')
+    expect(suppressedMissionDrawerMarkup).not.toContain('class="run-pulse-chip is-selected"')
+    expect(suppressedMissionDrawerMarkup).not.toContain('class="execution-drawer execution-drawer-bottom"')
+    expect(missionDrawerSuppressesExecutionAutoOpen(true, 'bottom')).toBe(true)
+    expect(missionDrawerSuppressesExecutionAutoOpen(false, 'bottom')).toBe(false)
+    expect(missionDrawerSuppressesExecutionAutoOpen(true, 'right')).toBe(false)
+    expect(missionDrawerSuppressesExecutionAutoOpen(true, 'inspector')).toBe(false)
     expect((markup.match(/class="run-pulse-chip(?: is-selected)?"/g) ?? [])).toHaveLength(1)
     expect(markup).not.toContain('<small>执行过程</small>')
     expect(markup).toContain('class="run-pulse-chip-copy"><strong><span>沐瓦</span></strong>')

@@ -103,8 +103,10 @@ The drawer hides the conversation title and places close/expand at the left. Ful
 project › conversation title, preceded by return-to-board and fold-to-drawer; the fold control keeps its existing
 position and uses the inward-corner collapse glyph from the approved board prototype. Both use one full-width
 AppHeader with 执行、任务、队员、单聊、活动 in the message column and the preview toggle at the far
-right. There is no Mission ellipsis action in the conversation header. Drawer runs do not automatically
-open the execution inspector or overlay; explicit execution entry remains available.
+right. There is no Mission ellipsis action in the conversation header. With bottom execution placement, entering
+the drawer or producing a Run from its Composer does not automatically select a member or expand execution;
+explicit execution entry remains available. Full Mission presentation and other execution placements keep their
+shared Camp workspace behavior.
 
 The timeline begins with a read-only 使命 card: title, description clamped to three lines with overflow
 expansion, current source attachments, roster, tags and read-only status. Attachments reuse the same Composer

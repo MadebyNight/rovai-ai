@@ -34,7 +34,8 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 跨列拖动在目标列边缘自动滚动；右键和 Shift+F10 继续提供同一非拖拽状态操作。
 - 执行台支持右侧、浮层和底部三个保存位置；右侧与 Mission 活动、文件共享标签集合和分栏比例。
 - claim 前的当前 waiting CampMessageDelivery（包括用户消息）以只读排队消息卡进入执行台；多输入 Run/队列使用独立可点击层数入口。
-- 进入普通或 Mission 会话时，只为最新 `running` Run 自动打开并定位最新指令；后台刷新不抢选择或焦点。
+- 进入普通或完整 Mission 会话时，只为最新 `running` Run 自动打开并定位最新指令；使命板抽屉的底部执行台
+  保持收起，后台刷新不抢选择或焦点。
 - 当前用户消息显示轻量处理回执，并在所有接收队员均未读时通过权威版本围栏直接撤回。
 - Mission 启动受理后立即隐藏入口；claim 创建 queued Run 即显示“执行中”，不等待 Runtime 连接或输出。
 - 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
@@ -42,7 +43,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 
 字段级协议见 [Mission v11](../../contracts/mission-v11.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
-[Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)、
+[Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)和
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)。实施与验证见
 [实施计划](implementation-plan.md)，取舍理由见[版本决定](decisions.md)。
@@ -69,6 +70,10 @@ Mission Worktree checkout 增量同样不轮换 data contract：已有 `branch` 
 Agent 作者过滤，导致用户 waiting `camp_message_delivery` 在到达前端前被遗漏；层数按钮也没有完整沿用交互稿的
 三层图标与字形。校正后 Open 和 coverage 都投影当前用户 Delivery，执行台按同一队列准入，并由
 [Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)固定入口视觉与交互。
+
+同一轮真实使命抽屉复核还发现，执行卡重构移除了抽屉原有的自动打开抑制，导致保存位置为底部时，已有或新建
+running Run 会挤开会话并展开 Drawer。当前 [Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)
+只恢复使命板抽屉的底部例外；普通 Camp、完整 Mission、其他位置和用户显式执行入口保持不变。
 
 同日完成的 Camp Open 职责增量将 `camps.open` 和 enter 的投影阶段收敛为实际零写入读取：旧取消协议修复前移到
 mandatory startup recovery，终态文本写入失败由原 block 保存退避并接入既有 AgentRun maintenance tick。
@@ -124,10 +129,10 @@ Mission Activity、普通文件共用标签集合与分栏比例；切换标签�
 并以冻结输入 ID 保持计数。层数按钮使用交互稿的三层堆叠图标、10.5px 常规字重计数与带图标的“定位原消息”。
 总览头像固定 20×20px，状态节点对齐 40px 卡头，卡片操作保留 9px 右侧留白。
 
-从其他页面、Camp 或应用恢复进入普通或 Mission 会话时，只以精确 `status=running` 的最新 Run 触发自动打开，
+从其他页面、Camp 或应用恢复进入普通或完整 Mission 会话时，只以精确 `status=running` 的最新 Run 触发自动打开，
 展开后定位最新已载入指令；用户停留底部时继续跟随，上滚后暂停。Mission 仍先建立 Activity；保存位置为右侧且
 存在 running Run 时，Execution 取得当前显示，Activity 保留为可切换标签。后台刷新和后续状态变化不重复执行
-进入规则，也不抢键盘焦点。
+进入规则，也不抢键盘焦点。使命板抽屉保存位置为底部时不自动选择或展开执行，显式入口仍可用。
 
 当前用户消息的“待处理 / 处理中”聚合回执与复制按钮保持同一操作行，终态失败不增加“未完成”汇总；
 具体接收队员按需展开。执行历史标题只显示历史总数，不增加失败待处理汇总。队员消息继续使用既有底色框。撤回入口只采用
@@ -161,7 +166,7 @@ Run/Camp，到期只重试文本并在成功后复用 block event；失败最高
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37 与当前 [v38](../../contracts/run-process-detail-surface-v38.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37、v38 与当前 [v39](../../contracts/run-process-detail-surface-v39.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
 | Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner |
 | UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
