@@ -13,7 +13,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 | 合同 | 范围 |
 | --- | --- |
-| [Mission v8（当前）](mission-v8.md) | 继承 v7；启动入口复用等待中的启动 Delivery 与非终态 Run，执行提示覆盖 queued/running/waiting |
+| [Mission v9（当前）](mission-v9.md) | 继承 v8；持久 Worktree 的当前检出不再作为执行门禁，实时 checkout 与受管分支身份分离，Diff 视图不复用旧临时 index |
+| [Mission v8（历史）](mission-v8.md) | 继承 v7；启动入口复用等待中的启动 Delivery 与非终态 Run，执行提示覆盖 queued/running/waiting；其分支执行门禁与 Diff session 由 v9 替代 |
 | [Mission v7（历史）](mission-v7.md) | 继承 v6；清理命令只提交持久意图，后台按双检查点执行，删除使命与保存清理意图同事务 |
 | [Mission v6（历史）](mission-v6.md) | 继承 v5；所有状态均可省略来源消息，显式来源继续验证，省略会清除旧关联 |
 | [Mission v5（历史）](mission-v5.md) | 全局 `list/get`、内部 `rvm_...` Agent ID、UI 展示编号、结构化附件；其 needs_you/completed 来源必填由 v6 替代 |

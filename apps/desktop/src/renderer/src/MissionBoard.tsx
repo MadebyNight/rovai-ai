@@ -306,7 +306,7 @@ function MissionWorkspaceCleanup({ mission, onRequested, onClose }: { mission: M
   }
   return <CompactDialog title="清理使命 Worktree" className="mission-worktree-cleanup-dialog" onClose={() => { if (!busy) onClose() }} footer={<><button className="compact-cancel" onClick={onClose} disabled={busy}>取消</button><button className="compact-primary" onClick={() => void cleanup()} disabled={busy || !delivery?.workspace}>{busy ? '正在安排清理…' : '清理'}</button></>}>
     <p>将删除此使命的 Worktree 和本地分支。</p>
-    {delivery?.workspace && <div className="mission-delete-workspaces"><div><code>{delivery.workspace.worktreePath}</code><small>{delivery.workspace.branch}</small></div></div>}
+    {delivery?.workspace && <div className="mission-delete-workspaces"><div><code>{delivery.workspace.worktreePath}</code><small>{delivery.workspace.managedBranch}</small></div></div>}
     {!delivery && !error && <p role="status">正在读取关联工作区…</p>}
     {error && <p className="compact-inline-error" role="alert">{error}{!delivery && <button className="mission-source-link" onClick={() => setRetry(value => value + 1)}>重试</button>}</p>}
   </CompactDialog>
@@ -552,7 +552,7 @@ function MissionCleanupNotice() {
         const previous = previousStates.current
         if (previous) next.filter(row => row.state === 'cleanup_failed' && previous.get(row.id) !== 'cleanup_failed').forEach(row => {
           const label = row.cleanupWorktreeRemoved && !row.cleanupBranchRemoved ? '分支清理失败' : 'Worktree 清理失败'
-          notifyError(`使命 ${row.branch} ${label}`, { label: '查看', onSelect: () => setOpen(true) })
+          notifyError(`使命 ${row.managedBranch} ${label}`, { label: '查看', onSelect: () => setOpen(true) })
         })
         previousStates.current = new Map(next.map(row => [row.id, row.state]))
         setRows(next); setError('')
@@ -574,7 +574,7 @@ function MissionCleanupNotice() {
   return <>{(rows.length > 0 || error) && <div className="mission-cleanup-notice"><button onClick={() => setOpen(true)}>{error ? '工作区清理状态暂不可用' : `${rows.length} 个工作区待清理`}</button></div>}
     {open && <CompactDialog title="工作区清理" className="mission-cleanup-list" onClose={() => setOpen(false)}>{error && <p role="alert">{error}</p>}{rows.map(row => {
       const branchOnly = row.cleanupWorktreeRemoved && !row.cleanupBranchRemoved
-      return <section key={row.id}><div><code>{row.worktreePath}</code><small>本地分支：{row.branch}</small><small>Worktree：{row.cleanupWorktreeRemoved ? '已清理' : '待清理'} · 本地分支：{row.cleanupBranchRemoved ? '已清理' : '待清理'}</small></div>
+      return <section key={row.id}><div><code>{row.worktreePath}</code><small>受管分支：{row.managedBranch}</small><small>Worktree：{row.cleanupWorktreeRemoved ? '已清理' : '待清理'} · 本地分支：{row.cleanupBranchRemoved ? '已清理' : '待清理'}</small></div>
         {row.state === 'cleanup_pending' && <p role="status">{branchOnly ? '正在清理本地分支…' : '正在清理 Worktree…'}</p>}
         {row.diagnostic && <><p className="mission-cleanup-failure-title" role="alert">{branchOnly ? '分支清理失败' : 'Worktree 清理失败'}</p><p>{row.diagnostic}</p></>}
         {row.state === 'cleanup_failed' && <button className="compact-cancel" onClick={() => void retry(row)} disabled={busy !== null}>{busy === row.id ? '正在安排重试…' : '重试未完成步骤'}</button>}

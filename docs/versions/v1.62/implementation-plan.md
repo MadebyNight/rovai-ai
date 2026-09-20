@@ -9,7 +9,7 @@ last_updated: 2026-09-20
 
 # v1.62 实施与验收
 
-范围见[版本概览](README.md)，字段级行为见 [Mission v8](../../contracts/mission-v8.md)、
+范围见[版本概览](README.md)，字段级行为见 [Mission v9](../../contracts/mission-v9.md)、
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)。
@@ -18,7 +18,7 @@ last_updated: 2026-09-20
 
 - [x] 从最新 `main` 复核 Mission v5、Built-in v29、Core status 路径、catalog、CLI help 与错误恢复。
 - [x] 确认本版不修改数据库、Bootstrap、Charter、ContextManifest、Run Facts 或 Renderer wire。
-- [x] 发布 Mission v6/Built-in v30 后继续发布 Mission v7/v8，补齐当前权威并切换文档导航。
+- [x] 发布 Mission v6/Built-in v30 后继续发布 Mission v7/v8/v9，补齐当前权威、版本决定并切换文档导航。
 
 ## Gate 1：Core 状态语义
 
@@ -101,6 +101,18 @@ last_updated: 2026-09-20
   全量与 Desktop 生产构建通过。
 - [x] 分支提交并推送；PR #453 required gate 通过后合入 `main`，并验证功能提交是 `origin/main` 祖先。
 
+## Gate 10：Mission Worktree checkout 与当前 Diff
+
+- [x] 既有 Worktree 的执行校验与 checkout/Diff 观测拆开；准备链不再预查受管分支 OID 或固定基准。
+- [x] 当前分支不同、受管分支缺失、detached HEAD、checkout 观测失败与 Diff 基准不可用不单独阻断 Runtime；
+  路径、仓库、注册、owner marker、Host、权限和执行占用仍是硬门禁。
+- [x] workspace 投影把已有 `branch` 映射为 `managedBranch`，活动页使用不持久化的 `checkoutState`；无 Migration。
+- [x] checkout 与文件列表由一次 changes view 返回；文件详情重建私有临时 index 并验证 view association，旧请求
+  迟到不会覆盖新视图或移除新句柄，Renderer 刷新时清除文件详情并丢弃旧响应。
+- [x] 清理继续使用受管分支与 expected OID；非受管 checkout 和 detached HEAD 保留现场，不自动切回或接管。
+- [x] 既有 Rust owner 覆盖分支切换、受管分支删除、detached、观测降级、固定基准失败、同 HEAD 的 staged/
+  unstaged/untracked 刷新和 cleanup fence；真实 Runtime smoke 经过调度准备链验证重启续跑。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -122,6 +134,11 @@ Mission 启动增量不新增独立 Rust 测试函数：既有
 claim 后仍可能重复创建 Mission start，queued Run 也不会进入执行提示；同一数据库/命令 owner 已覆盖完整事务，
 平行 fixture 只会重复 setup。最小验证命令为
 `cargo test -p rovai-core --lib mission_commands_keep_definition_atomic_patch_only_and_start_status_independent`。删除测试为零。
+
+Worktree checkout 增量不新增平行 Rust test owner。既有 `persistent_worktree_preserves_source_recovers_owned_creation_and_retains_branch_on_delete`
+扩展执行准入、detached、受管分支缺失、checkout 降级与非受管分支 cleanup fence；既有
+`fixed_base_diff_is_final_net_content_without_mutating_real_index` 扩展同 HEAD 刷新、固定基准失败和多 view handle。
+`scripts/smoke-mission.mjs` 继续拥有真实调度/Runtime 证明，Electron Mission fixture 继续拥有迟到响应与活动页刷新。
 
 ## 实施收口
 

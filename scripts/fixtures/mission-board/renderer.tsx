@@ -1,4 +1,4 @@
-import {runMissionAcceptance,runMissionLargeDiffAcceptance} from './acceptance'
+import {runMissionAcceptance,runMissionCheckoutViewAcceptance,runMissionLargeDiffAcceptance} from './acceptance'
 import React from 'react'
 import {createRoot} from 'react-dom/client'
 import {BusinessApp} from '../../../apps/desktop/src/renderer/src/BusinessApp'
@@ -31,7 +31,7 @@ const items:MissionRecord[]=[
 ].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:i===0?structuredClone(missionSourceAttachments):[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.slice(0,i===0?8:4).map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.slice(0,4).map(a=>a.agentId):[],startAvailable:status!=='in_progress',hasUnread:i===0,workspaceEverCreated:i!==2,workspaceResourcesPresent:i!==2,cleanupAvailable:i!==1&&i!==2}))
 if(query.has('pointerCatalog')) items[1].tags.push(...Array.from({length:16},(_,i)=>`扩展标签 ${String(i+1).padStart(2,'0')}`))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
-let failNextMissionRefresh=false, missionRefreshPending=false, failNextMissionStart=false
+let failNextMissionRefresh=false, missionRefreshPending=false, failNextMissionStart=false, delayNextMissionChanges=false, missionChangesSequence=0, checkoutBranch='rovai/mission/018-validation'
 const orphanCleanups:any[]=[]
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
@@ -75,7 +75,7 @@ const clearScrollableLanes=()=>{for(let index=items.length-1;index>=0;--index)if
 const applied=(payload:any={})=>({status:'applied',code:'ok',payload})
 const workspaceFor=(m:MissionRecord,state?:'cleanup_pending'|'cleanup_failed'|'cleaned')=>{
  const n=String(m.number).padStart(3,'0'),cleanup=m.workspaceCleanup
- return {id:`workspace-${m.missionId}`,missionId:m.missionId,campId:m.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',branch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:state??(cleanup?.state==='cleaning'?'cleanup_pending':cleanup?.state==='failed'?'cleanup_failed':cleanup?.state==='cleaned'||!m.workspaceResourcesPresent?'cleaned':'ready'),cleanupWorktreeRemoved:cleanup?.worktreeRemoved??!m.workspaceResourcesPresent,cleanupBranchRemoved:cleanup?.branchRemoved??!m.workspaceResourcesPresent,diagnostic:cleanup?.diagnostic??null}
+ return {id:`workspace-${m.missionId}`,missionId:m.missionId,campId:m.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',managedBranch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:state??(cleanup?.state==='cleaning'?'cleanup_pending':cleanup?.state==='failed'?'cleanup_failed':cleanup?.state==='cleaned'||!m.workspaceResourcesPresent?'cleaned':'ready'),cleanupWorktreeRemoved:cleanup?.worktreeRemoved??!m.workspaceResourcesPresent,cleanupBranchRemoved:cleanup?.branchRemoved??!m.workspaceResourcesPresent,diagnostic:cleanup?.diagnostic??null}
 }
 function admitMissionNotification(missionId: string, kind: 'open_camp_message' | 'open_camp' = 'open_camp_message'): string {
  const mission = items.find(item => item.missionId === missionId)!
@@ -168,7 +168,12 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
  if(method==='missions.delivery' && query.has('nonGit'))return {campId:m!.campId,workingDirectory:'/workspace/plain',git:false,workspace:null,pullRequests:[],files:[]}
  if(method==='missions.delivery'){const n=String(m!.number).padStart(3,'0');return {campId:m!.campId,workingDirectory:'/workspace/rovai-ai-mission-'+n,git:true,workspace:workspaceFor(m!),pullRequests:[{id:'legacy-pr',url:'https://github.com/rovai-ai/rovai/pull/18',title:'历史关联',createdAt:now}],files:[{attachmentId:'review-attachment',displayName:'interaction-review.md',kind:'file',fileCount:1,mediaType:'text/markdown',byteSize:1024,previewKind:'none',messageId:snapshot(m!).messages[1].id,agentId:profiles[0].agentId,createdAt:now}]}}
- if(method==='missions.changes')return structuredClone(missionChangedFiles)
+ if(method==='missions.changes'){
+  const viewId=`mission-view-${++missionChangesSequence}`, branch=checkoutBranch, delayed=delayNextMissionChanges
+  delayNextMissionChanges=false
+  if(delayed)await new Promise(resolve=>setTimeout(resolve,180))
+  return {checkoutState:{kind:'branch',branch,head:'b'.repeat(40)},viewId,files:structuredClone(missionChangedFiles),diffError:null}
+ }
  if(method==='missions.fileDiff'){
   const file=missionChangedFiles.find(file=>file.id===p.fileId)!
   if(file.id==='file-b')await new Promise(resolve=>setTimeout(resolve,90))
@@ -186,11 +191,12 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
 const preferences:any={appearance:{get:async()=>appearance,onChanged:()=>()=>{}},generalPreferences:new Proxy({}, {get:(_,key)=>async(...args:any[])=>{if(key==='setNewConversationDefaults')prefs.newConversationDefaults=args[0];return prefs}}),navigationPreferences:new Proxy({}, {get:()=>async()=>navigationPrefs})}
 const navigationHistory={initial:{entries:[{kind:'missions' as const}],index:0},write:(state:any)=>state,go:async()=>false,listen:()=>()=>{}}
 const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{calls.push({method:"fixture.file.open",p:req});return model.fileApi.open({...req,...(req.campId?{campId:initial.camp.id}:{})} as any)}},preferences,navigationHistory,selectWorkspaceDirectory:async()=>({name:'rovai-ai',projectPath:'/workspace/rovai-ai'})}
-;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
+;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runCheckoutView:runMissionCheckoutViewAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
  seedScrollableLanes,clearScrollableLanes,
  failNextMissionRefresh:()=>{failNextMissionRefresh=true},missionRefreshPending:()=>missionRefreshPending,
  failNextMissionStart:()=>{failNextMissionStart=true},
  claimMissionRun:(missionId:string)=>{const m=items.find(item=>item.missionId===missionId)!;m.runningAgentIds=[m.defaultLeadAgentId!];m.startAvailable=false;changed()},
+ delayNextMissionChanges:()=>{delayNextMissionChanges=true},setCheckoutBranch:(branch:string)=>{checkoutBranch=branch},
  failMissionCleanup:(missionId:string,partial=false)=>{const m=items.find(item=>item.missionId===missionId)!;m.workspaceCleanup={state:'failed',worktreeRemoved:partial,branchRemoved:false,diagnostic:partial?'mission.branch_changed: expected branch identity changed':'mission.git_failed: worktree could not be removed'};m.workspaceResourcesPresent=true;m.cleanupAvailable=false;changed()},
  completeMissionCleanup:(missionId:string)=>{const m=items.find(item=>item.missionId===missionId)!;m.workspaceCleanup={state:'cleaned',worktreeRemoved:true,branchRemoved:true,diagnostic:null};m.workspaceResourcesPresent=false;m.cleanupAvailable=false;changed()},
  failOrphanCleanup:(partial=false)=>{const row=orphanCleanups[0];if(row){row.state='cleanup_failed';row.cleanupWorktreeRemoved=partial;row.cleanupBranchRemoved=false;row.diagnostic=partial?'mission.branch_changed: expected branch identity changed':'mission.git_failed';changed()}},

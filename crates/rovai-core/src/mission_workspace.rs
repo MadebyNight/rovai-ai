@@ -30,6 +30,7 @@ pub struct MissionWorkspace {
     pub worktree_path: String,
     pub working_directory: String,
     pub base_branch: Option<String>,
+    #[serde(rename = "managedBranch")]
     pub branch: String,
     pub base_sha: String,
     #[serde(skip)]
@@ -55,6 +56,23 @@ pub struct MissionWorkspaceCleanupProjection {
     pub worktree_removed: bool,
     pub branch_removed: bool,
     pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MissionCheckoutState {
+    Branch { branch: String, head: String },
+    Detached { head: String },
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionWorkspaceChangesView {
+    pub checkout_state: MissionCheckoutState,
+    pub view_id: Option<String>,
+    pub files: Option<Vec<MissionChangedFile>>,
+    pub diff_error: Option<String>,
 }
 
 impl MissionWorkspace {
@@ -494,34 +512,55 @@ impl MissionGit {
         }
         Ok(())
     }
-    pub async fn validate(&self, workspace: &MissionWorkspace) -> Result<()> {
+    pub async fn validate_execution_workspace(&self, workspace: &MissionWorkspace) -> Result<()> {
         ensure!(workspace.state == "ready", "mission.workspace_not_ready");
         self.verify_tree(Path::new(&workspace.worktree_path), workspace, true)
             .await?;
-        ensure!(
-            self.current_branch(workspace).await?.as_deref() == Some(workspace.branch.as_str()),
-            "mission.workspace_branch_mismatch"
-        );
-        ensure!(
-            self.branch_oid(workspace).await?.is_some(),
-            "mission.workspace_branch_missing"
-        );
-        self.bytes(
-            Path::new(&workspace.worktree_path),
-            &[
-                "cat-file",
-                "-e",
-                &format!("{}^{{commit}}", workspace.base_sha),
-            ],
-        )
-        .await
-        .context("mission.base_unavailable")?;
         ensure!(
             fs::canonicalize(&workspace.working_directory)?
                 == Path::new(&workspace.working_directory),
             "mission.working_directory_changed"
         );
         Ok(())
+    }
+
+    pub async fn observe_checkout(&self, workspace: &MissionWorkspace) -> MissionCheckoutState {
+        let cwd = Path::new(&workspace.worktree_path);
+        let head = match self
+            .text(cwd, &["rev-parse", "--verify", "HEAD^{commit}"])
+            .await
+        {
+            Ok(head) if !head.is_empty() => head,
+            _ => return MissionCheckoutState::Unavailable,
+        };
+        let branch = match self
+            .output(
+                cwd,
+                &[
+                    "symbolic-ref".into(),
+                    "--quiet".into(),
+                    "--short".into(),
+                    "HEAD".into(),
+                ],
+                None,
+                None,
+            )
+            .await
+        {
+            Ok(branch) => branch,
+            Err(_) => return MissionCheckoutState::Unavailable,
+        };
+        match branch.status.code() {
+            Some(0) => match String::from_utf8(branch.stdout.bytes) {
+                Ok(branch) => MissionCheckoutState::Branch {
+                    branch: branch.trim_end_matches(['\r', '\n']).to_string(),
+                    head,
+                },
+                Err(_) => MissionCheckoutState::Unavailable,
+            },
+            Some(1) => MissionCheckoutState::Detached { head },
+            _ => MissionCheckoutState::Unavailable,
+        }
     }
     pub async fn current_branch(&self, workspace: &MissionWorkspace) -> Result<Option<String>> {
         let output = self
@@ -938,14 +977,29 @@ impl MissionGit {
         );
         parse_changes(&output.stdout.bytes)
     }
-    pub async fn changes_snapshot(
+    pub async fn prepare_diff_snapshot(
         &self,
         workspace: &MissionWorkspace,
-    ) -> Result<MissionDiffSnapshot> {
-        self.validate(workspace).await?;
+        checkout_state: MissionCheckoutState,
+    ) -> Result<PreparedMissionDiff> {
+        self.bytes(
+            Path::new(&workspace.worktree_path),
+            &[
+                "cat-file",
+                "-e",
+                &format!("{}^{{commit}}", workspace.base_sha),
+            ],
+        )
+        .await
+        .context("mission.base_unavailable")?;
         let temporary = self.temporary_index(workspace).await?;
         let files = self.changes_with_index(workspace, &temporary.index).await?;
-        Ok(MissionDiffSnapshot::new(workspace, temporary, files))
+        Ok(PreparedMissionDiff::new(
+            workspace,
+            checkout_state,
+            temporary,
+            files,
+        ))
     }
     pub async fn file_diff(
         &self,
@@ -953,12 +1007,18 @@ impl MissionGit {
         snapshot: &MissionDiffSnapshot,
         file_id: &str,
     ) -> Result<MissionFileDiff> {
-        self.validate(workspace).await?;
+        self.validate_execution_workspace(workspace).await?;
+        let checkout_state = self.observe_checkout(workspace).await;
+        let current = self
+            .prepare_diff_snapshot(workspace, checkout_state)
+            .await
+            .context("mission.changes_refresh_required")?;
         ensure!(
-            snapshot.matches(workspace),
+            snapshot.same_view(current.snapshot()),
             "mission.changes_refresh_required"
         );
-        let file = snapshot
+        let file = current
+            .snapshot()
             .file(file_id)
             .cloned()
             .context("mission.changes_refresh_required")?;
@@ -985,7 +1045,7 @@ impl MissionGit {
             .output(
                 Path::new(&workspace.worktree_path),
                 &args,
-                Some(snapshot.index()),
+                Some(current.index()),
                 None,
             )
             .await?;
@@ -1003,22 +1063,23 @@ impl MissionGit {
 const MISSION_DIFF_SNAPSHOT_LIMIT: usize = 12;
 const MISSION_DIFF_SNAPSHOT_TTL: Duration = Duration::from_secs(10 * 60);
 
-/// One current-workspace view of the Mission change list. The snapshot keeps the
-/// private index and exact rename paths together, so a file request never needs
-/// to rediscover every changed path.
+/// One current-workspace view of the Mission change list. It keeps no temporary
+/// index or historical file content; file detail reads prepare a fresh index and
+/// reject this view when the current checkout or list no longer matches it.
 #[derive(Clone)]
 pub struct MissionDiffSnapshot {
+    view_id: String,
     workspace_id: String,
     worktree_path: String,
     workspace_generation: i64,
+    checkout_state: MissionCheckoutState,
     files: Arc<Vec<MissionChangedFile>>,
     file_indices: Arc<BTreeMap<String, usize>>,
-    temporary_index: Arc<TemporaryIndex>,
 }
 impl MissionDiffSnapshot {
     fn new(
         workspace: &MissionWorkspace,
-        temporary_index: TemporaryIndex,
+        checkout_state: MissionCheckoutState,
         files: Vec<MissionChangedFile>,
     ) -> Self {
         let file_indices = files
@@ -1027,42 +1088,84 @@ impl MissionDiffSnapshot {
             .map(|(index, file)| (file.id.clone(), index))
             .collect();
         Self {
+            view_id: Uuid::new_v4().to_string(),
             workspace_id: workspace.id.clone(),
             worktree_path: workspace.worktree_path.clone(),
             workspace_generation: workspace.generation,
+            checkout_state,
             files: Arc::new(files),
             file_indices: Arc::new(file_indices),
-            temporary_index: Arc::new(temporary_index),
         }
     }
     pub fn files(&self) -> &[MissionChangedFile] {
         &self.files
+    }
+    pub fn view_id(&self) -> &str {
+        &self.view_id
     }
     fn file(&self, file_id: &str) -> Option<&MissionChangedFile> {
         self.file_indices
             .get(file_id)
             .and_then(|index| self.files.get(*index))
     }
-    fn index(&self) -> &Path {
-        &self.temporary_index.index
-    }
-    fn matches(&self, workspace: &MissionWorkspace) -> bool {
+    fn matches_workspace(&self, workspace: &MissionWorkspace) -> bool {
         self.workspace_id == workspace.id
             && self.worktree_path == workspace.worktree_path
             && self.workspace_generation == workspace.generation
     }
+    fn same_view(&self, other: &Self) -> bool {
+        self.workspace_id == other.workspace_id
+            && self.worktree_path == other.worktree_path
+            && self.workspace_generation == other.workspace_generation
+            && self.checkout_state == other.checkout_state
+            && self.files == other.files
+    }
+}
+
+pub struct PreparedMissionDiff {
+    snapshot: MissionDiffSnapshot,
+    temporary_index: TemporaryIndex,
+}
+
+impl PreparedMissionDiff {
+    fn new(
+        workspace: &MissionWorkspace,
+        checkout_state: MissionCheckoutState,
+        temporary_index: TemporaryIndex,
+        files: Vec<MissionChangedFile>,
+    ) -> Self {
+        Self {
+            snapshot: MissionDiffSnapshot::new(workspace, checkout_state, files),
+            temporary_index,
+        }
+    }
+
+    pub fn snapshot(&self) -> &MissionDiffSnapshot {
+        &self.snapshot
+    }
+
+    pub fn into_snapshot(self) -> MissionDiffSnapshot {
+        self.snapshot
+    }
+
+    fn index(&self) -> &Path {
+        &self.temporary_index.index
+    }
 }
 
 struct CachedMissionDiffSnapshot {
+    mission_id: String,
     snapshot: MissionDiffSnapshot,
     last_used: Instant,
     sequence: u64,
 }
 
-/// Process-local, bounded browsing state. It contains no historical patch text;
-/// replacing or releasing an entry drops its independent temporary Git index.
+/// Process-local, bounded request association. It contains neither a temporary
+/// Git index nor historical file content.
 #[derive(Default)]
 pub struct MissionDiffSnapshotCache {
+    // Keyed by view ID so a superseded list request that finishes late cannot
+    // overwrite the association returned by a newer request.
     entries: BTreeMap<String, CachedMissionDiffSnapshot>,
     sequence: u64,
 }
@@ -1070,9 +1173,11 @@ impl MissionDiffSnapshotCache {
     pub fn insert(&mut self, mission_id: String, snapshot: MissionDiffSnapshot) {
         self.prune_expired();
         self.sequence = self.sequence.wrapping_add(1);
+        let view_id = snapshot.view_id.clone();
         self.entries.insert(
-            mission_id,
+            view_id,
             CachedMissionDiffSnapshot {
+                mission_id,
                 snapshot,
                 last_used: Instant::now(),
                 sequence: self.sequence,
@@ -1083,7 +1188,7 @@ impl MissionDiffSnapshotCache {
                 .entries
                 .iter()
                 .min_by_key(|(_, entry)| entry.sequence)
-                .map(|(mission_id, _)| mission_id.clone())
+                .map(|(view_id, _)| view_id.clone())
             else {
                 break;
             };
@@ -1094,24 +1199,28 @@ impl MissionDiffSnapshotCache {
         &mut self,
         mission_id: &str,
         workspace: &MissionWorkspace,
+        view_id: &str,
     ) -> Option<MissionDiffSnapshot> {
         self.prune_expired();
-        let matches = self
-            .entries
-            .get(mission_id)
-            .is_some_and(|entry| entry.snapshot.matches(workspace));
-        if !matches {
-            self.entries.remove(mission_id);
+        let entry = self.entries.get(view_id)?;
+        if entry.mission_id != mission_id {
             return None;
         }
-        let entry = self.entries.get_mut(mission_id)?;
+        if !entry.snapshot.matches_workspace(workspace) {
+            self.entries.remove(view_id);
+            return None;
+        }
+        let entry = self.entries.get_mut(view_id)?;
         self.sequence = self.sequence.wrapping_add(1);
         entry.last_used = Instant::now();
         entry.sequence = self.sequence;
         Some(entry.snapshot.clone())
     }
     pub fn release(&mut self, mission_id: &str) -> bool {
-        self.entries.remove(mission_id).is_some()
+        let before = self.entries.len();
+        self.entries
+            .retain(|_, entry| entry.mission_id != mission_id);
+        self.entries.len() != before
     }
     fn prune_expired(&mut self) {
         let now = Instant::now();
@@ -1277,7 +1386,7 @@ impl Drop for TemporaryIndex {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionChangedFile {
     pub id: String,
@@ -1588,7 +1697,7 @@ mod tests {
         .unwrap();
         git.materialize(&workspace).await.unwrap();
         workspace.state = "ready".into();
-        git.validate(&workspace).await.unwrap();
+        git.validate_execution_workspace(&workspace).await.unwrap();
         git.materialize(&workspace).await.unwrap();
         assert_eq!(
             fs::read_to_string(Path::new(&workspace.worktree_path).join("edit.txt")).unwrap(),
@@ -1605,14 +1714,68 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(git.current_branch(&workspace).await.unwrap(), None);
-        assert!(git.validate(&workspace).await.is_err());
+        assert!(matches!(
+            git.observe_checkout(&workspace).await,
+            MissionCheckoutState::Detached { .. }
+        ));
+        git.validate_execution_workspace(&workspace).await.unwrap();
         git.bytes(
             Path::new(&workspace.worktree_path),
             &["checkout", &workspace.branch],
         )
         .await
         .unwrap();
-        git.validate(&workspace).await.unwrap();
+        git.validate_execution_workspace(&workspace).await.unwrap();
+        let managed_oid = git.branch_oid(&workspace).await.unwrap().unwrap();
+        let worktree = Path::new(&workspace.worktree_path);
+        git.bytes(worktree, &["switch", "-c", "external/validation"])
+            .await
+            .unwrap();
+        fs::write(worktree.join("external-untracked.txt"), "preserve\n").unwrap();
+        git.bytes(&repo.root, &["branch", "-D", &workspace.branch])
+            .await
+            .unwrap();
+        assert!(git.branch_oid(&workspace).await.unwrap().is_none());
+        git.validate_execution_workspace(&workspace).await.unwrap();
+        assert!(matches!(
+            git.observe_checkout(&workspace).await,
+            MissionCheckoutState::Branch { branch, .. } if branch == "external/validation"
+        ));
+        assert!(
+            git.cleanup(&workspace)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("mission.workspace_branch_mismatch")
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join("external-untracked.txt")).unwrap(),
+            "preserve\n"
+        );
+        git.bytes(&repo.root, &["branch", &workspace.branch, &managed_oid])
+            .await
+            .unwrap();
+        fs::remove_file(worktree.join("external-untracked.txt")).unwrap();
+        git.bytes(worktree, &["switch", &workspace.branch])
+            .await
+            .unwrap();
+        git.bytes(&repo.root, &["branch", "-D", "external/validation"])
+            .await
+            .unwrap();
+        let admin = git.admin_dir(worktree).await.unwrap();
+        let head_path = admin.join("HEAD");
+        let head_contents = fs::read(&head_path).unwrap();
+        fs::write(
+            &head_path,
+            "ref: refs/heads/checkout-observation-unavailable\n",
+        )
+        .unwrap();
+        assert_eq!(
+            git.observe_checkout(&workspace).await,
+            MissionCheckoutState::Unavailable
+        );
+        git.validate_execution_workspace(&workspace).await.unwrap();
+        fs::write(&head_path, head_contents).unwrap();
         let expected = git.branch_oid(&workspace).await.unwrap().unwrap();
         let reference = git.cleanup_branch_reference(&workspace).await.unwrap();
         fs::remove_dir_all(&workspace.worktree_path).unwrap();
@@ -1655,7 +1818,7 @@ mod tests {
             .await
             .unwrap()
         );
-        assert!(git.validate(&workspace).await.is_err());
+        assert!(git.validate_execution_workspace(&workspace).await.is_err());
         let non_git = repo.root.parent().unwrap().join("plain");
         fs::create_dir(&non_git).unwrap();
         assert!(git.inspect(&non_git).await.unwrap().is_none());
@@ -1684,7 +1847,7 @@ mod tests {
         workspace.state = "preparing".into();
         git.restore(&workspace).await.unwrap();
         workspace.state = "ready".into();
-        git.validate(&workspace).await.unwrap();
+        git.validate_execution_workspace(&workspace).await.unwrap();
         assert_eq!(
             fs::read_to_string(worktree.join("mission-result.txt")).unwrap(),
             "kept\n"
@@ -1800,7 +1963,11 @@ mod tests {
             .unwrap();
         let before = fs::read(&index).unwrap();
         let head = git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap();
-        let snapshot = git.changes_snapshot(&workspace).await.unwrap();
+        let snapshot = git
+            .prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+            .await
+            .unwrap()
+            .into_snapshot();
         let files = snapshot.files();
         for name in [
             "edit.txt",
@@ -1827,7 +1994,7 @@ mod tests {
                 .as_deref(),
             Some("rename.txt")
         );
-        let edit = files.iter().find(|f| f.path == "edit.txt").unwrap();
+        let edit = files.iter().find(|f| f.path == "edit.txt").unwrap().clone();
         assert_eq!((edit.additions, edit.deletions), (Some(1), Some(1)));
         let diff = git
             .file_diff(&workspace, &snapshot, &edit.id)
@@ -1836,7 +2003,11 @@ mod tests {
         assert!(diff.patch.contains("-original\n+final"));
         assert!(!diff.patch.contains("staged"));
         assert_eq!(diff.hunks[0].lines[0].old_line, Some(1));
-        let renamed = files.iter().find(|f| f.path == "renamed.txt").unwrap();
+        let renamed = files
+            .iter()
+            .find(|f| f.path == "renamed.txt")
+            .unwrap()
+            .clone();
         let renamed_diff = git
             .file_diff(&workspace, &snapshot, &renamed.id)
             .await
@@ -1846,20 +2017,71 @@ mod tests {
         assert_eq!(fs::read(&index).unwrap(), before);
         assert_eq!(git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap(), head);
         fs::write(cwd.join("edit.txt"), "original\n").unwrap();
+        let refreshed = git
+            .prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+            .await
+            .unwrap()
+            .into_snapshot();
+        assert!(!refreshed.files().iter().any(|f| f.path == "edit.txt"));
         assert!(
-            !git.changes_snapshot(&workspace)
-                .await
-                .unwrap()
-                .files()
-                .iter()
-                .any(|f| f.path == "edit.txt")
-        );
-        let refreshed = git.changes_snapshot(&workspace).await.unwrap();
-        assert!(
-            git.file_diff(&workspace, &refreshed, &edit.id)
+            git.file_diff(&workspace, &snapshot, &edit.id)
                 .await
                 .is_err()
         );
+        fs::write(cwd.join("staged-after-refresh.txt"), "staged\n").unwrap();
+        git.bytes(cwd, &["add", "staged-after-refresh.txt"])
+            .await
+            .unwrap();
+        fs::write(cwd.join("src/keep.txt"), "unstaged\n").unwrap();
+        fs::write(cwd.join("untracked-after-refresh.txt"), "untracked\n").unwrap();
+        let same_head_refresh = git
+            .prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+            .await
+            .unwrap()
+            .into_snapshot();
+        for path in [
+            "staged-after-refresh.txt",
+            "src/keep.txt",
+            "untracked-after-refresh.txt",
+        ] {
+            assert!(
+                same_head_refresh
+                    .files()
+                    .iter()
+                    .any(|file| file.path == path),
+                "same-HEAD refresh omitted {path}"
+            );
+        }
+        assert_eq!(git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap(), head);
+
+        let mut cache = MissionDiffSnapshotCache::default();
+        let first_view_id = refreshed.view_id().to_string();
+        let latest_view_id = same_head_refresh.view_id().to_string();
+        cache.insert(workspace.mission_id.clone(), refreshed);
+        cache.insert(workspace.mission_id.clone(), same_head_refresh.clone());
+        assert!(
+            cache
+                .get(&workspace.mission_id, &workspace, &first_view_id)
+                .is_some()
+        );
+        assert!(
+            cache
+                .get(&workspace.mission_id, &workspace, &latest_view_id)
+                .is_some()
+        );
+
+        let base_sha = workspace.base_sha.clone();
+        workspace.base_sha = "f".repeat(40);
+        git.validate_execution_workspace(&workspace).await.unwrap();
+        assert!(
+            git.prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+                .await
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("mission.base_unavailable")
+        );
+        workspace.base_sha = base_sha;
         git.cleanup(&workspace).await.unwrap();
     }
 }

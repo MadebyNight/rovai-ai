@@ -18,6 +18,7 @@ export function missionError(error: unknown): string {
     'mission.workspace_branch_mismatch': 'Worktree 当前分支与使命记录不一致，未执行清理。',
     'mission.workspace_branch_missing': '使命本地分支已缺失，无法确认清理范围。',
     'mission.workspace_cleanup_failed': '使命 Worktree 清理未完成，请重试。',
+    'mission.base_unavailable': '固定比较基准暂不可用，当前无法生成累计文件变更。',
     'mission.content_required': '请填写要修改的内容。',
     'mission.details_version_required': '使命内容版本缺失，请刷新后重试。',
     'mission.details_version_conflict': '使命内容刚刚发生变化，请基于最新内容重新编辑。',
