@@ -147,9 +147,10 @@ function Fixture(): React.JSX.Element {
         maxAgentRunResponsibilities: 32, maxAcceptedA2a: 16, allocatedAgentRunResponsibilities: 1,
         acceptedA2a: 0, exhaustedAt: null, exhaustionReason: null, exhaustionCommandId: null } }))
     snapshot.agentRuns = snapshot.agentRuns.map(run => ({ ...run,
-      status: run.agentId === 'agent-1' ? 'running' : run.status,
+      status: stoppedRuns.includes(run.id) ? 'cancelled' : run.agentId === 'agent-1' ? 'running' : run.status,
       createdAt: run.agentId === 'agent-3' ? '2026-08-31T04:01:00Z' : run.createdAt,
-      cancelRequestedAt: stoppedRuns.includes(run.id) ? now : null
+      cancelRequestedAt: stoppedRuns.includes(run.id) ? now : null,
+      endedAt: stoppedRuns.includes(run.id) ? now : run.endedAt
     }))
     snapshot.executionEvidence = snapshot.executionEvidence.map(evidence => evidence.kind === 'narration'
       ? { ...evidence, payload: { ...evidence.payload,

@@ -216,6 +216,8 @@ around-window 合入时间线，不触发 earlier page 全量加载，也不改�
 Agent 公共正文不显示“来自执行”来源条，也不投影 compact 投递卡。已交付 A2A 消息只在正文后
 显示简短转交轨迹“发送给 @队员”；底层 Delivery 状态、失败码和恢复事实仍由 Core Read Side
 拥有，不在 footer 或 Run stage 重复展示。
+该轨迹仅属于 Agent 正文；用户和外部 Principal 即使存在 Delivery 也不渲染“发送给”脚注，
+其 Delivery 仍完整保留给排队卡投影，用户处理回执与复制操作不变。
 
 用户、队员和已交付 A2A 正文支持原生鼠标拖选与系统复制。当前用户和外部 Principal 消息只提供复制；
 队员消息提供复制与回复，使用统一的 17px 线性 SVG 图标，回复采用“消息气泡 + 回折箭头”的对话回折图形。
@@ -379,11 +381,11 @@ Single Chat 数量；任一会话正在回复时复用紧凑运行 spinner，不
 
 panel 顶部先显示标题，再显示单聊对象选择栏和直接“结束”按钮，不提供省略号菜单。选择器 trigger 使用当前队员头像、
 显示名和团队角色；展开列表每个选项也显示头像、名称和角色，不把对象分成“已有单聊 / 新的单聊”两组，也不暴露
-Conversation、Binding 或 Session 状态。选择器和用户消息使用既有执行浮层的 `--execution-running-surface` 分层，
+Conversation、Binding 或 Session 状态。选择器和用户消息沿用既有 `--execution-running-surface` token 分层，
 不能新增主题专属色值。
 
-transcript 采用对话式双轨：用户正文与附件居右，队员回复居左；正文区两侧都不显示头像。用户正文继续使用既有执行
-浮层的 `--execution-running-surface`，队员消息容器不使用背景、边框或气泡，只以开放排版承载执行过程与 final。队员一次回复由“执行过程 +
+transcript 采用对话式双轨：用户正文与附件居右，队员回复居左；正文区两侧都不显示头像。用户正文继续使用既有
+`--execution-running-surface` token，队员消息容器不使用背景、边框或气泡，只以开放排版承载执行过程与 final。队员一次回复由“执行过程 +
 final message”组成。运行中过程复用当前执行台的 narration、plan、command/tool 与状态视觉；连续 Command 聚合为一个
 可展开的工具组；组件、列表组图标、命令类型图标、28px / 11.5px 四轨工具行、精确结果展开与步骤计数直接复用执行台。
 发送确认前与 Run 排队立即显示“连接中”，开始处理但尚未输出时显示“思考中”。正文、计划、工具或 final 首次出现时，
@@ -435,10 +437,9 @@ panel 保留明确的收起按钮与 `Esc`，对象菜单和确认 Dialog 打开
 
 ## Camp 执行过程
 
-底部、详情浮层与右侧标签中的执行台使用同一背景分层：外壳、队员入口区、详情操作栏、历史 Run 卡片与空白区域均使用
-`--conversation-surface`。只有 `running` Run 卡片使用独立的 `--execution-running-surface`，
-操作栏与运行卡片保持清楚的分层，具体色值由双主题合同拥有；
-“会话 / 地图”视图按钮仍使用原有 `--brand-soft`。运行底色不随历史 Run 焦点切换而消失。选中态、状态形状、
+底部、详情浮层与右侧标签中的执行台使用同一背景：外壳、队员入口区、详情操作栏、所有状态的 Run 卡片及其标题与空白区域均使用
+`--conversation-surface`；运行卡片不再使用单独底色，日夜具体色值由双主题合同拥有。
+“会话 / 地图”视图按钮仍使用原有 `--brand-soft`。选中态、状态形状、
 边框、焦点及工具结果的专用 Evidence 底色保持各自语义，不用背景分层改变执行状态或交互。
 详情操作栏与运行卡片将弱提示文字局部提升到 `--muted`，保证日夜主题的文字对比度，不改变历史 Run 与会话区文字层级。
 Runtime narration 与 plan explanation 的 SafeMarkdown 在底部和浮层复用上文的 Mist Gray 代码分层；Tool 行、
@@ -509,7 +510,10 @@ waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal
 
 卡头为最小 46px 的标题区域，摘要保持原文、12.5px/600 字重及单行省略；标题按钮具有 heading 语义。
 展开时标题和原有操作只在本卡范围内吸顶，滚过本卡后退出，不复制全局标题或脱离所属 Run 的停止按钮。
-窄于 500px 的执行详情隐藏 live 耗时，保留状态、输入层数与操作；停止平时保持中性，hover/focus 时使用危险色。
+运行中卡片默认显示 live 耗时，窄详情同样保留；仅标题行 hover 或标题内 `:focus-visible` 时，
+在固定尾部槽内切换为折叠／展开与红色终止按钮。正文 hover 不触发，鼠标移出标题恢复耗时，不挤动标题。
+折叠／展开保留 1px 边框、抬升面底色和 5px 圆角；终止始终使用 danger/danger-soft，禁用时仍保留危险色。
+粗指针或无 hover 环境同时展示耗时与操作。非运行状态保留原有静态操作，不套用 hover 切换。
 滚动容器为键盘焦点留出标题安全区，不改变跟随最新、折叠、输入清单或 exact Run 停止语义。
 总览中的队员头像固定为 20×20px，不随 flex 收缩拉伸。左侧状态节点与卡头首行垂直居中并跟随本卡标题，
 展开与停止操作距卡片右边保留 9px。字段与验收边界见
@@ -861,6 +865,8 @@ public Composer 不提供 CampTurn 或整轮停止。共享 ExecutionDrawer 顶�
 停止等待只覆盖 IPC 提交阶段，文案为“正在提交停止请求…”；Applied 后立即显示 Core 返回的实际终态并刷新。
 既有 cancel_requested_at 或 Runtime 清理未完成不产生停止 spinner；取消 Run 显示已取消并清除旧外部效果提示，
 底层发送与 Action 证据不因此删除。
+Run 卡片与步骤组均以权威终态优先：即使取消标记尚存，终态也不得被“正在停止 · 等待执行结束”覆盖；
+已完成步骤保持完成，取消 Run 中未结束的工具按既有终态投影显示已停止。
 Header、Task 卡、时间线和 Composer 不增加 Run-local 入口。accepted/unknown 只显示普通红色失败，
 不与普通 Stop 同时出现。Run-local 请求不创建 Camp 时间线消息；新 public Camp 不再生成 Turn-level 停止消息，
 历史停止占位只按已有记录只读展示。精确资格、required/optional 后果与不确定态见
