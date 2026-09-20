@@ -952,11 +952,8 @@ impl Core {
                 wait_for_mission_git_read_test_barrier(&request.method, &query.mission_id).await;
                 let git_started_at = Instant::now();
                 if request.method == "missions.changes" {
-                    git.validate_execution_workspace(workspace).await?;
-                    let checkout_state = git.observe_checkout(workspace).await;
-                    let prepared = git
-                        .prepare_diff_snapshot(workspace, checkout_state.clone())
-                        .await;
+                    let (checkout_state, prepared) =
+                        git.prepare_diff_snapshot_observed(workspace).await;
                     let git_ms = git_started_at.elapsed().as_millis();
                     let (revalidate_lock_ms, revalidate_read_ms) = self
                         .ensure_mission_workspace_read_is_current(workspace)

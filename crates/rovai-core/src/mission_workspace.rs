@@ -100,6 +100,13 @@ pub struct MissionGit {
 }
 
 #[derive(Debug)]
+pub(crate) struct MissionDiffMetadata {
+    checkout_state: MissionCheckoutState,
+    index: PathBuf,
+    shared_index: Option<PathBuf>,
+}
+
+#[derive(Debug)]
 pub(crate) struct VerifiedWorktreeCleanup {
     target_present: bool,
     admin_dir: Option<PathBuf>,
@@ -185,6 +192,14 @@ impl MissionGit {
             #[cfg(test)]
             invocations: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
+    }
+    #[cfg(test)]
+    fn reset_command_count(&self) {
+        self.invocations.lock().unwrap().clear();
+    }
+    #[cfg(test)]
+    fn command_count(&self) -> usize {
+        self.invocations.lock().unwrap().len()
     }
     async fn output(
         &self,
@@ -1202,28 +1217,124 @@ impl MissionGit {
         self.remove_verified_worktree(workspace, &verified).await
     }
 
-    async fn temporary_index(&self, workspace: &MissionWorkspace) -> Result<TemporaryIndex> {
-        let temporary = TemporaryIndex::new()?;
+    async fn diff_metadata(&self, workspace: &MissionWorkspace) -> Result<MissionDiffMetadata> {
+        ensure!(workspace.state == "ready", "mission.workspace_not_ready");
+        ensure!(
+            matches!(workspace.base_sha.len(), 40 | 64)
+                && workspace
+                    .base_sha
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "mission.base_unavailable"
+        );
         let cwd = Path::new(&workspace.worktree_path);
-        let real = self
-            .text(
+        ensure!(
+            fs::canonicalize(cwd)? == cwd,
+            "mission.worktree_path_changed"
+        );
+        ensure!(
+            fs::canonicalize(&workspace.working_directory)?
+                == Path::new(&workspace.working_directory),
+            "mission.working_directory_changed"
+        );
+        let output = self
+            .output(
                 cwd,
-                &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+                &[
+                    "rev-parse".into(),
+                    "--path-format=absolute".into(),
+                    "--show-toplevel".into(),
+                    "--git-dir".into(),
+                    "--git-common-dir".into(),
+                    "--git-path".into(),
+                    "index".into(),
+                    "--shared-index-path".into(),
+                    "HEAD^{commit}".into(),
+                    format!("{}^{{commit}}", workspace.base_sha).into(),
+                    "--abbrev-ref=strict".into(),
+                    "HEAD".into(),
+                ],
+                None,
+                None,
             )
             .await?;
-        if Path::new(&real).exists() {
-            fs::copy(&real, &temporary.index)?;
-            let shared = self
-                .text(cwd, &["rev-parse", "--shared-index-path"])
-                .await?;
-            if !shared.is_empty() {
-                let shared = if Path::new(&shared).is_absolute() {
-                    PathBuf::from(shared)
-                } else {
-                    cwd.join(shared)
-                };
+        ensure!(
+            output.status.success(),
+            "mission.base_unavailable: {}",
+            output.stderr.lossy_text()
+        );
+        let text = String::from_utf8(output.stdout.bytes).context("mission.invalid_git_text")?;
+        let fields = text.lines().collect::<Vec<_>>();
+        ensure!(
+            matches!(fields.len(), 7 | 8),
+            "mission.invalid_git_metadata"
+        );
+        let split_index_offset = fields.len() - 7;
+        let root = fs::canonicalize(fields[0])?;
+        ensure!(root == cwd, "mission.worktree_root_mismatch");
+        let common_dir = fs::canonicalize(fields[2])?;
+        ensure!(
+            common_dir == Path::new(&workspace.git_common_dir),
+            "mission.repository_mismatch"
+        );
+        let admin = fs::canonicalize(fields[1])?;
+        ensure!(
+            admin.starts_with(common_dir.join("worktrees")),
+            "mission.worktree_registration_missing"
+        );
+        let registered = fs::read_to_string(admin.join("gitdir"))?;
+        ensure!(
+            fs::canonicalize(registered.trim_end_matches(['\r', '\n']))?
+                == fs::canonicalize(cwd.join(".git"))?,
+            "mission.worktree_registration_mismatch"
+        );
+        ensure!(
+            fs::read_to_string(admin.join("rovai-mission-owner"))? == workspace.preparation_token,
+            "mission.worktree_owner_mismatch"
+        );
+        let head = fields[4 + split_index_offset].to_string();
+        let base = fields[5 + split_index_offset];
+        ensure!(base == workspace.base_sha, "mission.base_unavailable");
+        let branch = fields[6 + split_index_offset];
+        let checkout_state = if branch == "HEAD" {
+            MissionCheckoutState::Detached { head }
+        } else if branch.is_empty() {
+            MissionCheckoutState::Unavailable
+        } else {
+            MissionCheckoutState::Branch {
+                branch: branch.to_string(),
+                head,
+            }
+        };
+        let shared_index = (split_index_offset == 1 && !fields[4].is_empty()).then(|| {
+            let path = PathBuf::from(fields[4]);
+            if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            }
+        });
+        let index = PathBuf::from(fields[3]);
+        ensure!(index.is_absolute(), "mission.invalid_index_path");
+        Ok(MissionDiffMetadata {
+            checkout_state,
+            index,
+            shared_index,
+        })
+    }
+
+    async fn temporary_index(
+        &self,
+        workspace: &MissionWorkspace,
+        metadata: &MissionDiffMetadata,
+    ) -> Result<TemporaryIndex> {
+        let temporary = TemporaryIndex::new()?;
+        let cwd = Path::new(&workspace.worktree_path);
+        if metadata.index.exists() {
+            fs::copy(&metadata.index, &temporary.index)?;
+            if let Some(shared) = &metadata.shared_index {
                 fs::copy(
-                    &shared,
+                    shared,
                     temporary
                         .root
                         .join(shared.file_name().context("mission.invalid_shared_index")?),
@@ -1240,42 +1351,26 @@ impl MissionGit {
                 .await?;
             ensure!(output.status.success(), "mission.temporary_index_failed");
         }
-        let expanded = self
+        let prepared = self
             .output(
                 cwd,
-                &["update-index".into(), "--no-split-index".into()],
+                &[
+                    "-c".into(),
+                    "core.splitIndex=false".into(),
+                    "add".into(),
+                    "-A".into(),
+                    "-N".into(),
+                    "--".into(),
+                ],
                 Some(&temporary.index),
                 None,
             )
             .await?;
         ensure!(
-            expanded.status.success(),
+            prepared.status.success(),
             "mission.temporary_index_failed: {}",
-            expanded.stderr.lossy_text()
+            prepared.stderr.lossy_text()
         );
-        let untracked = self
-            .bytes(cwd, &["ls-files", "--others", "--exclude-standard", "-z"])
-            .await?;
-        if !untracked.is_empty() {
-            let output = self
-                .output(
-                    cwd,
-                    &[
-                        "add".into(),
-                        "--intent-to-add".into(),
-                        "--pathspec-from-file=-".into(),
-                        "--pathspec-file-nul".into(),
-                    ],
-                    Some(&temporary.index),
-                    Some(&untracked),
-                )
-                .await?;
-            ensure!(
-                output.status.success(),
-                "mission.untracked_index_failed: {}",
-                output.stderr.lossy_text()
-            );
-        }
         Ok(temporary)
     }
     async fn changes_with_index(
@@ -1309,22 +1404,13 @@ impl MissionGit {
         );
         parse_changes(&output.stdout.bytes)
     }
-    pub async fn prepare_diff_snapshot(
+    async fn prepare_diff_snapshot_from_metadata(
         &self,
         workspace: &MissionWorkspace,
-        checkout_state: MissionCheckoutState,
+        metadata: MissionDiffMetadata,
     ) -> Result<PreparedMissionDiff> {
-        self.bytes(
-            Path::new(&workspace.worktree_path),
-            &[
-                "cat-file",
-                "-e",
-                &format!("{}^{{commit}}", workspace.base_sha),
-            ],
-        )
-        .await
-        .context("mission.base_unavailable")?;
-        let temporary = self.temporary_index(workspace).await?;
+        let checkout_state = metadata.checkout_state.clone();
+        let temporary = self.temporary_index(workspace, &metadata).await?;
         let files = self.changes_with_index(workspace, &temporary.index).await?;
         Ok(PreparedMissionDiff::new(
             workspace,
@@ -1333,16 +1419,34 @@ impl MissionGit {
             files,
         ))
     }
+    pub(crate) async fn prepare_diff_snapshot_observed(
+        &self,
+        workspace: &MissionWorkspace,
+    ) -> (MissionCheckoutState, Result<PreparedMissionDiff>) {
+        let metadata = match self.diff_metadata(workspace).await {
+            Ok(metadata) => metadata,
+            Err(error) => return (self.observe_checkout(workspace).await, Err(error)),
+        };
+        let checkout_state = metadata.checkout_state.clone();
+        let prepared = self
+            .prepare_diff_snapshot_from_metadata(workspace, metadata)
+            .await;
+        (checkout_state, prepared)
+    }
+    pub async fn prepare_diff_snapshot(
+        &self,
+        workspace: &MissionWorkspace,
+    ) -> Result<PreparedMissionDiff> {
+        self.prepare_diff_snapshot_observed(workspace).await.1
+    }
     pub async fn file_diff(
         &self,
         workspace: &MissionWorkspace,
         snapshot: &MissionDiffSnapshot,
         file_id: &str,
     ) -> Result<MissionFileDiff> {
-        self.validate_execution_workspace(workspace).await?;
-        let checkout_state = self.observe_checkout(workspace).await;
         let current = self
-            .prepare_diff_snapshot(workspace, checkout_state)
+            .prepare_diff_snapshot(workspace)
             .await
             .context("mission.changes_refresh_required")?;
         ensure!(
@@ -2392,11 +2496,24 @@ mod tests {
             .unwrap();
         let before = fs::read(&index).unwrap();
         let head = git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap();
+        git.reset_command_count();
+        let read_started_at = Instant::now();
         let snapshot = git
-            .prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+            .prepare_diff_snapshot(&workspace)
             .await
             .unwrap()
             .into_snapshot();
+        let read_elapsed = read_started_at.elapsed();
+        assert_eq!(
+            git.command_count(),
+            3,
+            "normal split-index changes read must use metadata, temporary-index preparation and diff only"
+        );
+        eprintln!(
+            "mission changes fixture: commands={} elapsed_ms={}",
+            git.command_count(),
+            read_elapsed.as_millis()
+        );
         let files = snapshot.files();
         for name in [
             "edit.txt",
@@ -2447,7 +2564,7 @@ mod tests {
         assert_eq!(git.text(cwd, &["rev-parse", "HEAD"]).await.unwrap(), head);
         fs::write(cwd.join("edit.txt"), "original\n").unwrap();
         let refreshed = git
-            .prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+            .prepare_diff_snapshot(&workspace)
             .await
             .unwrap()
             .into_snapshot();
@@ -2464,7 +2581,7 @@ mod tests {
         fs::write(cwd.join("src/keep.txt"), "unstaged\n").unwrap();
         fs::write(cwd.join("untracked-after-refresh.txt"), "untracked\n").unwrap();
         let same_head_refresh = git
-            .prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
+            .prepare_diff_snapshot(&workspace)
             .await
             .unwrap()
             .into_snapshot();
@@ -2502,9 +2619,14 @@ mod tests {
         let base_sha = workspace.base_sha.clone();
         workspace.base_sha = "f".repeat(40);
         git.validate_execution_workspace(&workspace).await.unwrap();
+        let (checkout_state, unavailable_base) =
+            git.prepare_diff_snapshot_observed(&workspace).await;
+        assert!(matches!(
+            checkout_state,
+            MissionCheckoutState::Branch { branch, .. } if branch == workspace.branch
+        ));
         assert!(
-            git.prepare_diff_snapshot(&workspace, git.observe_checkout(&workspace).await)
-                .await
+            unavailable_base
                 .err()
                 .unwrap()
                 .to_string()
@@ -2523,5 +2645,132 @@ mod tests {
             .await
             .unwrap();
         git.cleanup(&workspace).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn private_index_preserves_conflicts_sparse_checkout_and_assume_unchanged() {
+        {
+            let (_fixture, git, _repo, mut workspace) = fixture().await;
+            git.materialize(&workspace).await.unwrap();
+            workspace.state = "ready".into();
+            let cwd = Path::new(&workspace.worktree_path);
+            git.bytes(cwd, &["switch", "-c", "conflict-side"])
+                .await
+                .unwrap();
+            fs::write(cwd.join("edit.txt"), "side\n").unwrap();
+            git.bytes(cwd, &["add", "edit.txt"]).await.unwrap();
+            git.bytes(cwd, &["commit", "-m", "side change"])
+                .await
+                .unwrap();
+            git.bytes(cwd, &["switch", &workspace.branch])
+                .await
+                .unwrap();
+            fs::write(cwd.join("edit.txt"), "managed\n").unwrap();
+            git.bytes(cwd, &["add", "edit.txt"]).await.unwrap();
+            git.bytes(cwd, &["commit", "-m", "managed change"])
+                .await
+                .unwrap();
+            let merge = git
+                .output(cwd, &["merge".into(), "conflict-side".into()], None, None)
+                .await
+                .unwrap();
+            assert!(!merge.status.success());
+            let unmerged_before = git.bytes(cwd, &["ls-files", "-u", "-z"]).await.unwrap();
+            assert!(!unmerged_before.is_empty());
+            let index = git
+                .text(
+                    cwd,
+                    &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+                )
+                .await
+                .unwrap();
+            let index_before = fs::read(&index).unwrap();
+            git.reset_command_count();
+            let snapshot = git
+                .prepare_diff_snapshot(&workspace)
+                .await
+                .unwrap()
+                .into_snapshot();
+            assert_eq!(git.command_count(), 3);
+            assert!(snapshot.files().iter().any(|file| file.path == "edit.txt"));
+            assert_eq!(fs::read(&index).unwrap(), index_before);
+            assert_eq!(
+                git.bytes(cwd, &["ls-files", "-u", "-z"]).await.unwrap(),
+                unmerged_before
+            );
+        }
+
+        {
+            let (_fixture, git, repo, mut workspace) = fixture().await;
+            fs::write(repo.root.join("src/sparse-visible.txt"), "base\n").unwrap();
+            git.bytes(&repo.root, &["add", "src/sparse-visible.txt"])
+                .await
+                .unwrap();
+            git.bytes(&repo.root, &["commit", "-m", "add sparse fixture"])
+                .await
+                .unwrap();
+            workspace.base_sha = git
+                .text(&repo.root, &["rev-parse", "HEAD^{commit}"])
+                .await
+                .unwrap();
+            git.materialize(&workspace).await.unwrap();
+            workspace.state = "ready".into();
+            let cwd = Path::new(&workspace.worktree_path);
+            git.bytes(
+                cwd,
+                &["sparse-checkout", "init", "--cone", "--sparse-index"],
+            )
+            .await
+            .unwrap();
+            git.bytes(cwd, &["sparse-checkout", "set", "src"])
+                .await
+                .unwrap();
+            git.bytes(cwd, &["update-index", "--assume-unchanged", "src/keep.txt"])
+                .await
+                .unwrap();
+            fs::write(cwd.join("src/keep.txt"), "assumed\n").unwrap();
+            fs::write(cwd.join("src/sparse-visible.txt"), "changed\n").unwrap();
+            fs::write(cwd.join("src/sparse-new.txt"), "new\n").unwrap();
+            let index = git
+                .text(
+                    cwd,
+                    &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+                )
+                .await
+                .unwrap();
+            let index_before = fs::read(&index).unwrap();
+            git.reset_command_count();
+            let snapshot = git
+                .prepare_diff_snapshot(&workspace)
+                .await
+                .unwrap()
+                .into_snapshot();
+            assert_eq!(git.command_count(), 3);
+            assert!(
+                snapshot
+                    .files()
+                    .iter()
+                    .any(|file| file.path == "src/sparse-visible.txt")
+            );
+            assert!(
+                snapshot
+                    .files()
+                    .iter()
+                    .any(|file| file.path == "src/sparse-new.txt")
+            );
+            assert!(
+                snapshot
+                    .files()
+                    .iter()
+                    .all(|file| file.path != "src/keep.txt" && !file.path.starts_with("docs/"))
+            );
+            assert_eq!(fs::read(&index).unwrap(), index_before);
+            assert!(
+                git.text(cwd, &["ls-files", "-v", "src/keep.txt"])
+                    .await
+                    .unwrap()
+                    .starts_with("h ")
+            );
+        }
     }
 }
