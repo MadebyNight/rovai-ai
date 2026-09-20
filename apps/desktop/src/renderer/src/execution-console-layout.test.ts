@@ -135,4 +135,10 @@ describe('execution console layout', () => {
     expect(styleBlock('.tool-group-line')).toMatch(/align-items:\s*center/)
     expect(styleBlock('.tool-group-line')).toMatch(/line-height:\s*16px/)
   })
+
+  it('keeps deferred Tool result loading neutral', () => {
+    expect(styleBlock('.tool-result-state')).toMatch(/color:\s*var\(--evidence-muted\)/)
+    expect(styleBlock('.tool-result-spinner')).toMatch(/border-top-color:\s*var\(--evidence-muted\)/)
+    expect(styleBlock('.tool-result-spinner')).not.toMatch(/var\(--(?:brand|info|success|attention)\)/)
+  })
 })
