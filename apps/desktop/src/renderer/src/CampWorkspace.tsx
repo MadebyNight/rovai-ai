@@ -24,6 +24,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import * as Popover from '@radix-ui/react-popover'
 import { CampDetailPopover } from './CampDetailPopover'
 import { SingleChatPanel } from './SingleChatPanel'
 import {
@@ -573,6 +574,7 @@ export function initialCampConversationView(
 export type AgentExecutionProcess = {
   agentId: string
   runs: AgentRunView[]
+  waitingDeliveries: MessageDeliveryView[]
 }
 
 const EXECUTION_OVERVIEW_SCOPE = '__execution_overview__'
@@ -616,22 +618,55 @@ export function runningAgentRunForWorkspaceEntry(
     )[0] ?? null
 }
 
-export function agentExecutionProcesses(runs: AgentRunView[]): AgentExecutionProcess[] {
-  const grouped = new Map<string, AgentRunView[]>()
+export function messageDeliveryWaitsInExecutionQueue(delivery: MessageDeliveryView): boolean {
+  if (delivery.deliveryKind !== 'public_a2a'
+    || delivery.dispatchDisposition !== 'dispatch'
+    || delivery.targetAgentRunId !== null) return false
+  if (delivery.status === 'waiting') return true
+  return delivery.status === 'pending'
+    && (delivery.dispatchPhase === 'never_attempted' || delivery.dispatchPhase === 'attempted_waiting')
+}
+
+export function agentExecutionProcesses(
+  runs: AgentRunView[],
+  deliveries: readonly MessageDeliveryView[] = []
+): AgentExecutionProcess[] {
+  const grouped = new Map<string, AgentExecutionProcess>()
   for (const run of runs) {
-    grouped.set(run.agentId, [...(grouped.get(run.agentId) ?? []), run])
+    const process = grouped.get(run.agentId) ?? {
+      agentId: run.agentId,
+      runs: [],
+      waitingDeliveries: []
+    }
+    process.runs.push(run)
+    grouped.set(run.agentId, process)
   }
-  return [...grouped.entries()]
-    .map(([agentId, agentRuns]) => ({
-      agentId,
-      runs: agentRuns.slice().sort((left, right) =>
+  for (const delivery of deliveries) {
+    if (!messageDeliveryWaitsInExecutionQueue(delivery)) continue
+    const process = grouped.get(delivery.recipientAgentId) ?? {
+      agentId: delivery.recipientAgentId,
+      runs: [],
+      waitingDeliveries: []
+    }
+    process.waitingDeliveries.push(delivery)
+    grouped.set(delivery.recipientAgentId, process)
+  }
+  return [...grouped.values()]
+    .map((process) => ({
+      ...process,
+      runs: process.runs.slice().sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+      ),
+      waitingDeliveries: process.waitingDeliveries.slice().sort((left, right) =>
         left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
       )
     }))
     .sort((left, right) => {
-      const leftLatest = left.runs.at(-1)
-      const rightLatest = right.runs.at(-1)
-      return (rightLatest?.createdAt ?? '').localeCompare(leftLatest?.createdAt ?? '')
+      const leftLatest = [left.runs.at(-1)?.createdAt, left.waitingDeliveries.at(-1)?.createdAt]
+        .filter((value): value is string => Boolean(value)).sort().at(-1) ?? ''
+      const rightLatest = [right.runs.at(-1)?.createdAt, right.waitingDeliveries.at(-1)?.createdAt]
+        .filter((value): value is string => Boolean(value)).sort().at(-1) ?? ''
+      return rightLatest.localeCompare(leftLatest)
         || left.agentId.localeCompare(right.agentId)
     })
 }
@@ -2235,8 +2270,8 @@ export function CampWorkspace({
     [snapshot.agentRuns]
   )
   const executionProcesses = useMemo(
-    () => agentExecutionProcesses(snapshot.agentRuns),
-    [snapshot.agentRuns]
+    () => agentExecutionProcesses(snapshot.agentRuns, snapshot.messageDeliveries),
+    [snapshot.agentRuns, snapshot.messageDeliveries]
   )
   const runningMembers = useMemo(
     () => runningCampMembers(snapshot.agentRuns, snapshot.members),
@@ -2373,9 +2408,12 @@ export function CampWorkspace({
   })
   const executionDrawerOverview = executionDrawerAgentId === EXECUTION_OVERVIEW_SCOPE
   const executionDrawerProcess = executionDrawerOverview
-    ? {
+      ? {
         agentId: EXECUTION_OVERVIEW_SCOPE,
         runs: executionProcesses.flatMap((process) => process.runs).sort((left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+        ),
+        waitingDeliveries: executionProcesses.flatMap((process) => process.waitingDeliveries).sort((left, right) =>
           left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
         )
       }
@@ -5814,6 +5852,30 @@ function runPulseStateShape(run: AgentRunView, stopping: boolean): RunPulseState
   return 'recorded'
 }
 
+function runPulseProcessState(
+  process: AgentExecutionProcess,
+  stopping: boolean
+): {
+  run: AgentRunView | null
+  label: string
+  tone: 'info' | 'attention' | 'success' | 'danger' | 'neutral'
+  shape: RunPulseStateShape
+} {
+  const run = preferredAgentProcessRun(process.runs)
+  if (run && NON_TERMINAL_RUNS.has(run.status)) {
+    const presentation = agentRunPresentation(run, stopping && NON_TERMINAL_RUNS.has(run.status))
+    return { run, label: presentation.label, tone: presentation.tone, shape: runPulseStateShape(run, stopping) }
+  }
+  if (process.waitingDeliveries.length > 0) {
+    return { run: null, label: '排队中', tone: 'attention', shape: 'queued' }
+  }
+  if (run) {
+    const presentation = agentRunPresentation(run)
+    return { run, label: presentation.label, tone: presentation.tone, shape: runPulseStateShape(run, false) }
+  }
+  return { run: null, label: '暂无执行', tone: 'neutral', shape: 'recorded' }
+}
+
 function RunPulse({
   placement,
   placementButtonRef,
@@ -5855,7 +5917,7 @@ function RunPulse({
     return leftPosition - rightPosition || left.agentId.localeCompare(right.agentId)
   })
   const activeProcessCount = visibleProcesses.filter((process) =>
-    process.runs.some(agentRunCountsAsExecuting)
+    process.runs.some(agentRunCountsAsExecuting) || process.waitingDeliveries.length > 0
   ).length
   if (visibleProcesses.length === 0) return <></>
   const placementLabel = placement === 'right'
@@ -5879,17 +5941,16 @@ function RunPulse({
           statusTone: activeProcessCount > 0 ? 'info' : 'neutral',
           stateShape: activeProcessCount > 0 ? 'running' : 'recorded'
         }, ...visibleProcesses.flatMap(process => {
-          const run = preferredAgentProcessRun(process.runs)
-          if (!run) return []
+          const state = runPulseProcessState(process, stopping)
+          if (!state.run && process.waitingDeliveries.length === 0) return []
           const member = memberById.get(process.agentId)
-          const presentation = agentRunPresentation(run, stopping && NON_TERMINAL_RUNS.has(run.status))
           return [{
             agentId: process.agentId,
             avatarRef: member?.avatarRef ?? null,
             displayName: member?.displayName ?? process.agentId,
-            statusLabel: presentation.label,
-            statusTone: presentation.tone,
-            stateShape: runPulseStateShape(run, stopping)
+            statusLabel: state.label,
+            statusTone: state.tone,
+            stateShape: state.shape
           }]
         })]}
         selectedAgentId={selectedAgentId}
@@ -5917,25 +5978,20 @@ function RunPulse({
           </button>
         </li>
         {visibleProcesses.map((process) => {
-          const run = preferredAgentProcessRun(process.runs)
-          if (!run) return null
+          const state = runPulseProcessState(process, stopping)
+          if (!state.run && process.waitingDeliveries.length === 0) return null
           const member = memberById.get(process.agentId)
           const memberName = member?.displayName ?? process.agentId
-          const presentation = agentRunPresentation(
-            run,
-            stopping && NON_TERMINAL_RUNS.has(run.status)
-          )
-          const stateShape = runPulseStateShape(run, stopping)
           return (
             <li key={process.agentId}>
               <button
                 type="button"
                 className={`run-pulse-chip${selectedAgentId === process.agentId ? ' is-selected' : ''}`}
-                aria-label={`打开${memberName}的执行过程，${presentation.label}`}
+                aria-label={`打开${memberName}的执行过程，${state.label}`}
                 aria-pressed={selectedAgentId === process.agentId}
                 aria-expanded={selectedAgentId === process.agentId}
                 aria-controls="agent-execution-drawer"
-                title={`${memberName} · ${presentation.label}`}
+                title={`${memberName} · ${state.label}`}
                 data-agent-id={process.agentId}
                 onClick={(event) => onOpen(process.agentId, event.currentTarget)}
               >
@@ -5950,12 +6006,12 @@ function RunPulse({
                   <strong><span>{memberName}</span></strong>
                 </span>
                 <span
-                  className={`run-pulse-chip-state tone-${presentation.tone} state-${stateShape}`}
+                  className={`run-pulse-chip-state tone-${state.tone} state-${state.shape}`}
                   role="img"
-                  aria-label={presentation.label}
-                  title={presentation.label}
+                  aria-label={state.label}
+                  title={state.label}
                 >
-                  <ExecutionStatusGlyph status={stateShape} />
+                  <ExecutionStatusGlyph status={state.shape} />
                 </span>
               </button>
             </li>
@@ -6066,11 +6122,17 @@ type ExecutionQueueBatch = {
   createdAt: string
 }
 
-function executionSourceMessages(
+type ExecutionDeliveryQueueBatch = {
+  agentId: string
+  deliveries: MessageDeliveryView[]
+  messageIds: string[]
+  createdAt: string
+}
+
+export function executionRunInputMessageIds(
   run: AgentRunView,
-  turns: CampSnapshot['turns'],
-  messageById: ReadonlyMap<string, CampMessageView>
-): CampMessageView[] {
+  turns: CampSnapshot['turns']
+): string[] {
   const sourceIds: string[] = []
   for (const messageId of run.inputMessageIds ?? []) {
     if (messageId && !sourceIds.includes(messageId)) sourceIds.push(messageId)
@@ -6082,7 +6144,15 @@ function executionSourceMessages(
   if (turn?.triggerType === 'camp_message' && !sourceIds.includes(turn.triggerId)) {
     sourceIds.push(turn.triggerId)
   }
-  return sourceIds.flatMap((messageId) => {
+  return sourceIds
+}
+
+function executionSourceMessages(
+  run: AgentRunView,
+  turns: CampSnapshot['turns'],
+  messageById: ReadonlyMap<string, CampMessageView>
+): CampMessageView[] {
+  return executionRunInputMessageIds(run, turns).flatMap((messageId) => {
     const message = messageById.get(messageId)
     return message ? [message] : []
   })
@@ -6130,6 +6200,33 @@ export function executionQueueBatches(runs: readonly AgentRunView[]): ExecutionQ
   )
 }
 
+export function executionDeliveryQueueBatches(
+  deliveries: readonly MessageDeliveryView[]
+): ExecutionDeliveryQueueBatch[] {
+  const byAgent = new Map<string, MessageDeliveryView[]>()
+  for (const delivery of deliveries) {
+    if (!messageDeliveryWaitsInExecutionQueue(delivery)) continue
+    byAgent.set(delivery.recipientAgentId, [
+      ...(byAgent.get(delivery.recipientAgentId) ?? []),
+      delivery
+    ])
+  }
+  return [...byAgent.entries()].map(([agentId, agentDeliveries]) => {
+    const ordered = agentDeliveries.slice().sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+    )
+    const messageIds = [...new Set(ordered.map((delivery) => delivery.messageId))]
+    return {
+      agentId,
+      deliveries: ordered,
+      messageIds,
+      createdAt: ordered.at(-1)?.createdAt ?? ''
+    }
+  }).sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt) || left.agentId.localeCompare(right.agentId)
+  )
+}
+
 function executionRunDurationLabel(run: AgentRunView, now: number): string {
   const start = Date.parse(run.startedAt ?? run.createdAt)
   const end = NON_TERMINAL_RUNS.has(run.status)
@@ -6170,6 +6267,94 @@ function ExecutionStopIcon(): JSX.Element {
 
 function ExecutionBatchIcon(): JSX.Element {
   return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 5 5-2 5 2-5 2zM3 8l5 2 5-2M3 11l5 2 5-2" /></svg>
+}
+
+function ExecutionInputList({
+  messageIds,
+  messageById,
+  memberById,
+  onRevealMessage
+}: {
+  messageIds: readonly string[]
+  messageById: ReadonlyMap<string, CampMessageView>
+  memberById: Map<string, CampSnapshot['members'][number]>
+  onRevealMessage(messageId: string): void
+}): JSX.Element {
+  return <ol className="execution-input-list">
+    {messageIds.map((messageId) => {
+      const message = messageById.get(messageId)
+      const authorMember = message?.authorType === 'agent'
+        ? memberById.get(message.authorId)
+        : null
+      const author = message
+        ? message.authorType === 'agent'
+          ? authorMember?.displayName ?? message.authorId
+          : '你'
+        : '消息'
+      const summary = message
+        ? message.body || message.attachments.map((item) => item.displayName).join('、')
+        : '消息内容尚未载入'
+      return <li key={messageId}>
+        {message?.authorType === 'agent'
+          ? <MemberAvatar agentId={message.authorId} avatarRef={authorMember?.avatarRef ?? null}
+              displayName={author} size="execution" decorative />
+          : message
+            ? <span className="execution-input-user" aria-hidden="true">你</span>
+            : <span className="execution-input-placeholder" aria-hidden="true"><ExecutionBatchIcon /></span>}
+        <div>
+          <div><strong>{author}</strong><button type="button" onClick={() => onRevealMessage(messageId)}>
+            定位原消息
+          </button></div>
+          <p title={summary}>{summary}</p>
+        </div>
+      </li>
+    })}
+  </ol>
+}
+
+function ExecutionInputCountPopover({
+  messageIds,
+  messageById,
+  memberById,
+  onRevealMessage,
+  subject
+}: {
+  messageIds: readonly string[]
+  messageById: ReadonlyMap<string, CampMessageView>
+  memberById: Map<string, CampSnapshot['members'][number]>
+  onRevealMessage(messageId: string): void
+  subject: string
+}): JSX.Element | null {
+  if (messageIds.length <= 1) return null
+  const label = `查看${subject}的 ${messageIds.length} 条输入`
+  return <Popover.Root>
+    <Popover.Trigger asChild>
+      <button className="execution-batch-count" type="button" aria-label={label} title={`${messageIds.length} 条输入`}>
+        <ExecutionBatchIcon /><span>{messageIds.length}</span>
+      </button>
+    </Popover.Trigger>
+    <Popover.Portal>
+      <Popover.Content
+        className="compact-menu execution-input-popover"
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        collisionPadding={12}
+        aria-label={`${subject}输入`}
+      >
+        <div className="execution-input-popover-heading">
+          <strong>{messageIds.length} 条输入</strong>
+          <span>{subject}</span>
+        </div>
+        <ExecutionInputList
+          messageIds={messageIds}
+          messageById={messageById}
+          memberById={memberById}
+          onRevealMessage={onRevealMessage}
+        />
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
 }
 
 function ExecutionDrawer({
@@ -6289,6 +6474,7 @@ function ExecutionDrawer({
     NON_TERMINAL_RUNS.has(run.status) && run.status !== 'queued'
   )
   const queueBatches = executionQueueBatches(newestFirstRuns)
+  const deliveryQueueBatches = executionDeliveryQueueBatches(process.waitingDeliveries)
   const historyRuns = newestFirstRuns.filter((run) => !NON_TERMINAL_RUNS.has(run.status))
   const latestRun = resolvedFocusedRun ?? currentRuns[0] ?? null
   const latestProgress = latestRun
@@ -6622,6 +6808,7 @@ function ExecutionDrawer({
     const state = agentRunPresentation(run, cancelling)
     const stateShape = runPulseStateShape(run, cancelling)
     const sourceMessage = executionTriggerMessage(run, turns, messageById)
+    const inputMessageIds = executionRunInputMessageIds(run, turns)
     const summary = executionMessageSummary(sourceMessage, run)
     const runMember = memberById.get(run.agentId)
     const runMemberName = runMember?.displayName ?? run.agentId
@@ -6650,9 +6837,16 @@ function ExecutionDrawer({
               onClick={() => toggleRun(run.id)}
             >
               {overview && <MemberAvatar agentId={run.agentId} avatarRef={runMember?.avatarRef ?? null}
-                displayName={runMemberName} size="mention" decorative />}
+                displayName={runMemberName} size="execution" decorative />}
               <span className="execution-run-summary">{summary}</span>
             </button>
+            <ExecutionInputCountPopover
+              messageIds={inputMessageIds}
+              messageById={messageById}
+              memberById={memberById}
+              onRevealMessage={onRevealMessage}
+              subject="本次执行"
+            />
             <span className="execution-run-trailing">
               <ExecutionRunMetric run={run} />
               <span className="execution-run-operations">
@@ -6696,22 +6890,26 @@ function ExecutionDrawer({
   }
 
   const renderQueueBatch = (batch: ExecutionQueueBatch): JSX.Element => {
-    const expanded = expandedQueueAgents.has(batch.agentId)
+    const expansionKey = `run:${batch.agentId}`
+    const expanded = expandedQueueAgents.has(expansionKey)
     const runMember = memberById.get(batch.agentId)
     const runMemberName = runMember?.displayName ?? batch.agentId
-    const batchMessages = [...new Map(batch.runs.flatMap((run) =>
-      executionSourceMessages(run, turns, messageById).map((message) =>
-        [message.id, message] as const
-      )
-    )).values()]
-    const batchInputCount = batchMessages.length || batch.runs.length
-    const summary = executionMessageSummary(batchMessages[0] ?? null, batch.runs[0])
+    const batchMessageIds = [...new Set(batch.runs.flatMap((run) =>
+      executionRunInputMessageIds(run, turns)
+    ))]
+    const summary = executionMessageSummary(
+      batchMessageIds.flatMap((messageId) => {
+        const message = messageById.get(messageId)
+        return message ? [message] : []
+      })[0] ?? null,
+      batch.runs[0]
+    )
     const stoppingBatch = batch.runs.some((run) => runStopState(run) !== 'available')
     const contentId = `execution-queue-content-${batch.agentId}`
     const toggle = (): void => setExpandedQueueAgents((current) => {
       const next = new Set(current)
-      if (next.has(batch.agentId)) next.delete(batch.agentId)
-      else next.add(batch.agentId)
+      if (next.has(expansionKey)) next.delete(expansionKey)
+      else next.add(expansionKey)
       return next
     })
     return (
@@ -6724,12 +6922,16 @@ function ExecutionDrawer({
             <button className="execution-run-toggle" type="button" aria-expanded={expanded}
               aria-controls={contentId} title={`${runMemberName} · ${summary}`} onClick={toggle}>
               {overview && <MemberAvatar agentId={batch.agentId} avatarRef={runMember?.avatarRef ?? null}
-                displayName={runMemberName} size="mention" decorative />}
+                displayName={runMemberName} size="execution" decorative />}
               <span className="execution-run-summary">{summary}</span>
-              {batchInputCount > 1 && <span className="execution-batch-count" aria-label={`${batchInputCount} 条输入`}>
-                <ExecutionBatchIcon /><span>{batchInputCount}</span>
-              </span>}
             </button>
+            <ExecutionInputCountPopover
+              messageIds={batchMessageIds}
+              messageById={messageById}
+              memberById={memberById}
+              onRevealMessage={onRevealMessage}
+              subject="排队批次"
+            />
             <span className="execution-run-trailing">
               <span className="execution-run-metric is-queued">排队中</span>
               <span className="execution-run-operations">
@@ -6747,26 +6949,68 @@ function ExecutionDrawer({
             </span>
           </header>
           <div className="execution-queue-inputs" id={contentId} hidden={!expanded}>
-            {batchMessages.length > 0 ? <ol>
-              {batchMessages.map((message) => {
-                const authorMember = message.authorType === 'agent' ? memberById.get(message.authorId) : null
-                const author = message.authorType === 'agent'
-                  ? authorMember?.displayName ?? message.authorId
-                  : '你'
-                return <li key={message.id}>
-                  {message.authorType === 'agent'
-                    ? <MemberAvatar agentId={message.authorId} avatarRef={authorMember?.avatarRef ?? null}
-                        displayName={author} size="mention" decorative />
-                    : <span className="execution-input-user" aria-hidden="true">你</span>}
-                  <div>
-                    <div><strong>{author}</strong><button type="button" onClick={() => onRevealMessage(message.id)}>
-                      定位原消息
-                    </button></div>
-                    <p title={message.body}>{message.body || message.attachments.map((item) => item.displayName).join('、')}</p>
-                  </div>
-                </li>
-              })}
-            </ol> : <p className="execution-queue-empty">排队输入当前未载入。</p>}
+            {batchMessageIds.length > 0
+              ? <ExecutionInputList messageIds={batchMessageIds} messageById={messageById}
+                  memberById={memberById} onRevealMessage={onRevealMessage} />
+              : <p className="execution-queue-empty">排队输入当前未载入。</p>}
+          </div>
+        </article>
+      </li>
+    )
+  }
+
+  const renderDeliveryQueueBatch = (batch: ExecutionDeliveryQueueBatch): JSX.Element => {
+    const expansionKey = `delivery:${batch.agentId}`
+    const expanded = expandedQueueAgents.has(expansionKey)
+    const runMember = memberById.get(batch.agentId)
+    const runMemberName = runMember?.displayName ?? batch.agentId
+    const sourceMessage = messageById.get(batch.messageIds[0]) ?? null
+    const summary = sourceMessage
+      ? sourceMessage.body.trim().replace(/\s+/gu, ' ')
+        || sourceMessage.attachments.map((item) => item.displayName).join('、')
+        || '排队消息'
+      : '排队消息'
+    const contentId = `execution-delivery-queue-content-${batch.agentId}`
+    const toggle = (): void => setExpandedQueueAgents((current) => {
+      const next = new Set(current)
+      if (next.has(expansionKey)) next.delete(expansionKey)
+      else next.add(expansionKey)
+      return next
+    })
+    return (
+      <li className="execution-process-stage status-queued" data-delivery-queue-agent-id={batch.agentId}
+        key={`delivery-queue:${batch.agentId}`}>
+        <span className="execution-process-node tone-attention state-queued" aria-hidden="true">
+          <ExecutionStatusGlyph status="queued" />
+        </span>
+        <article className="execution-process-card">
+          <header className="execution-run-card-header">
+            <button className="execution-run-toggle" type="button" aria-expanded={expanded}
+              aria-controls={contentId} title={`${runMemberName} · ${summary}`} onClick={toggle}>
+              {overview && <MemberAvatar agentId={batch.agentId} avatarRef={runMember?.avatarRef ?? null}
+                displayName={runMemberName} size="execution" decorative />}
+              <span className="execution-run-summary">{summary}</span>
+            </button>
+            <ExecutionInputCountPopover
+              messageIds={batch.messageIds}
+              messageById={messageById}
+              memberById={memberById}
+              onRevealMessage={onRevealMessage}
+              subject="排队消息"
+            />
+            <span className="execution-run-trailing">
+              <span className="execution-run-metric is-queued">排队中</span>
+              <span className="execution-run-operations">
+                <button type="button" aria-label={expanded ? '收起排队消息' : '展开排队消息'}
+                  aria-expanded={expanded} aria-controls={contentId} onClick={toggle}>
+                  <ExecutionCardChevron expanded={expanded} />
+                </button>
+              </span>
+            </span>
+          </header>
+          <div className="execution-queue-inputs" id={contentId} hidden={!expanded}>
+            <ExecutionInputList messageIds={batch.messageIds} messageById={messageById}
+              memberById={memberById} onRevealMessage={onRevealMessage} />
           </div>
         </article>
       </li>
@@ -6775,7 +7019,13 @@ function ExecutionDrawer({
 
   const currentEntries = [
     ...currentRuns.map((run) => ({ kind: 'run' as const, createdAt: run.createdAt, id: run.id, run })),
-    ...queueBatches.map((batch) => ({ kind: 'queue' as const, createdAt: batch.createdAt, id: batch.agentId, batch }))
+    ...queueBatches.map((batch) => ({ kind: 'queue' as const, createdAt: batch.createdAt, id: batch.agentId, batch })),
+    ...deliveryQueueBatches.map((batch) => ({
+      kind: 'delivery_queue' as const,
+      createdAt: batch.createdAt,
+      id: batch.agentId,
+      batch
+    }))
   ].sort((left, right) =>
     right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
   )
@@ -6880,7 +7130,11 @@ function ExecutionDrawer({
           <ExecutionToolGroupStateContext.Provider value={groupState}>
           {currentEntries.length > 0 && <section aria-label="当前执行与排队">
             <ol className="execution-process-timeline">{currentEntries.map((entry) =>
-              entry.kind === 'run' ? renderRunCard(entry.run) : renderQueueBatch(entry.batch)
+              entry.kind === 'run'
+                ? renderRunCard(entry.run)
+                : entry.kind === 'queue'
+                  ? renderQueueBatch(entry.batch)
+                  : renderDeliveryQueueBatch(entry.batch)
             )}</ol>
           </section>}
           {(historyRuns.length > 0 || !runHistoryComplete) && <section className={`execution-history-section${currentEntries.length === 0 ? ' is-first' : ''}`} aria-label="执行历史">
