@@ -32,6 +32,7 @@ import {
   type MissionDraftAttachment,
   type MissionWritingPlaneHandle
 } from './MissionDefinitionEditor'
+import { displayProjectPath } from '../../shared/project-display-name'
 
 type CreateCampDraft = Omit<CreateCampRequest, 'commandId' | 'activationState'>
 type WorkspaceChoice = WorkspaceSelection | WorkspaceInspection
@@ -278,7 +279,7 @@ export function NewConversationDialog({
       ?? workspace?.name ?? '使用快速对话'
     : '正在载入项目…'
   const projectDetail = projectAccessReady
-    ? workspace?.projectPath ?? 'Rovai AI 管理的快速对话目录'
+    ? workspace ? displayProjectPath(workspace.projectPath) : 'Rovai AI 管理的快速对话目录'
     : '正在确认本机项目访问状态'
   const gitPresentation = workspaceGitPresentation(workspace, gitInspectionStatus)
 
@@ -327,7 +328,7 @@ export function NewConversationDialog({
                         </DropdownMenu.RadioItem>
                         <DropdownMenu.Separator className="compact-separator" />
                         {projects.map((project) => <DropdownMenu.RadioItem key={project.projectKey} className="compact-option" value={project.projectPath} disabled={projectActionsDisabled} onSelect={() => selectKnownWorkspace(project)}>
-                          <WorkspaceIcon kind="project" /><span>{project.name}<small>{project.projectPath}</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check" /></DropdownMenu.ItemIndicator>
+                          <WorkspaceIcon kind="project" /><span>{project.name}<small>{displayProjectPath(project.projectPath)}</small></span><DropdownMenu.ItemIndicator><DialogControlIcon name="check" /></DropdownMenu.ItemIndicator>
                         </DropdownMenu.RadioItem>)}
                       </DropdownMenu.RadioGroup>
                       <DropdownMenu.Separator className="compact-separator" />
@@ -337,7 +338,7 @@ export function NewConversationDialog({
                     <WorkspaceIcon kind="quick-chat" /><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span>{!workspace && <DialogControlIcon name="check" />}
                   </button>
                   {projects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} disabled={projectActionsDisabled} onClick={() => selectKnownWorkspace(project)}>
-                    <WorkspaceIcon kind="project" /><span>{project.name}<small>{project.projectPath}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check" />}
+                    <WorkspaceIcon kind="project" /><span>{project.name}<small>{displayProjectPath(project.projectPath)}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check" />}
                   </button>)}
                   <button type="button" className="compact-option" disabled={projectActionsDisabled} onClick={() => { setProjectMenuOpen(false); void chooseWorkspaceDirectory() }}><DialogControlIcon name="plus" /><span>选择工作目录…</span></button>
                 </NewConversationPicker>
@@ -502,7 +503,7 @@ function MissionProjectPicker({
         onKeyDown={event => { if (event.key === 'ArrowDown' && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.closest('.mission-editor-project-popover')?.querySelector<HTMLButtonElement>('.mission-editor-project-list button:not(:disabled)')?.focus() } }}/></label>
       <div className="mission-editor-project-list" role="group" aria-label="可选项目">
         {quickChatMatches && <button type="button" className="compact-option" aria-pressed={!workspace} disabled={disabled} onClick={onQuickChat}><WorkspaceIcon kind="quick-chat"/><span>使用快速对话<small>由 Rovai AI 管理工作目录</small></span>{!workspace && <DialogControlIcon name="check"/>}</button>}
-        {matchingProjects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} disabled={disabled} title={project.projectPath} onClick={() => onProject(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{project.projectPath}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check"/>}</button>)}
+        {matchingProjects.map(project => <button type="button" className="compact-option" key={project.projectKey} aria-pressed={workspace?.projectPath === project.projectPath} disabled={disabled} title={displayProjectPath(project.projectPath)} onClick={() => onProject(project)}><WorkspaceIcon kind="project"/><span>{project.name}<small>{displayProjectPath(project.projectPath)}</small></span>{workspace?.projectPath === project.projectPath && <DialogControlIcon name="check"/>}</button>)}
         {!quickChatMatches && !matchingProjects.length && <p className="mission-picker-empty" role="status">没有匹配的项目</p>}
       </div>
       <div className="mission-editor-project-footer"><button type="button" className="compact-option" disabled={disabled} onClick={onChooseDirectory}><DialogControlIcon name="plus"/><span>选择工作目录…</span></button></div>

@@ -454,8 +454,8 @@ pub(super) fn register_run(
         SELECT agent_run.execution_epoch, agent_run.status,
                agent_run.workspace_json, camp.project_path
         FROM agent_run
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-        JOIN camp ON camp.id = camp_turn.camp_id
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
         WHERE agent_run.id = ?1
         "#,
         [agent_run_id],
@@ -1671,6 +1671,41 @@ mod tests {
                 .unwrap();
         }
 
+        fn convert_active_run_to_batch(database: &Database) {
+            let now = chrono::Utc::now().to_rfc3339();
+            database
+                .connection()
+                .execute(
+                    r#"
+                    INSERT INTO camp_message(
+                        id, camp_id, sequence, author_type, author_id,
+                        body, structured_content_json, content_digest,
+                        address_mode, addressed_agent_ids_json, created_at, updated_at
+                    ) VALUES (
+                        'windows-projection-anchor', 'windows-projection-camp', 1,
+                        'user', 'user_1', 'start', '[]', 'sha256:windows-projection-anchor',
+                        'default', '[]', ?1, ?1
+                    )
+                    "#,
+                    [&now],
+                )
+                .unwrap();
+            database
+                .connection()
+                .execute(
+                    r#"
+                    UPDATE agent_run
+                    SET invocation_kind = 'batch', camp_turn_id = NULL,
+                        camp_id = 'windows-projection-camp',
+                        anchor_message_id = 'windows-projection-anchor',
+                        current_public_tail_sequence = 1
+                    WHERE id = 'windows-projection-run'
+                    "#,
+                    [],
+                )
+                .unwrap();
+        }
+
         fn run_crash_recovery_case(point: CrashPoint, expect_ambiguous_orphan: bool) {
             let paths = TestPaths::new(&format!("rovai-windows-projection-crash-{point:?}"));
             let mut database = crate::test_support::fresh_schema_database_fast_at(&paths.data);
@@ -2326,6 +2361,49 @@ mod tests {
                 fs::read_to_string(entry.join("SKILL.md"))
                     .unwrap()
                     .contains("revision two")
+            );
+        }
+
+        #[test]
+        fn windows_skill_projection_registers_turnless_batch_run() {
+            let paths = TestPaths::new("rovai-windows-projection-batch-run");
+            let mut database = crate::test_support::fresh_schema_database_fast_at(&paths.data);
+            let library = SkillLibraryService::new(paths.library.clone()).unwrap();
+            write_source(
+                &paths.source,
+                "windows-projection-batch-run",
+                "revision one",
+            );
+            import_skill(
+                &mut database,
+                &library,
+                &paths.source,
+                "windows-projection-batch-run",
+                None,
+            );
+            insert_active_run(&database, &paths.root);
+            convert_active_run_to_batch(&database);
+
+            let prepared = SkillProjectionReconciler
+                .prepare_run_exposure(
+                    &mut database,
+                    &library,
+                    "windows-projection-run",
+                    &paths.root,
+                    AdapterKind::CodexCli,
+                )
+                .unwrap();
+
+            assert_eq!(prepared.snapshot.skills.len(), 1);
+            assert!(has_active_run_registration(&database, &paths.root, None).unwrap());
+            assert!(
+                super::super::super::has_active_run(
+                    &database,
+                    path_text(&paths.root).unwrap(),
+                    None,
+                    None,
+                )
+                .unwrap()
             );
         }
     }

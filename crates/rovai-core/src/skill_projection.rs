@@ -2464,8 +2464,8 @@ fn active_runs(database: &Database) -> Result<Vec<(String, String, Option<String
         SELECT agent_run.id, agent_run.workspace_json, camp.project_path,
                agent_run.runtime_adapter_kind
         FROM agent_run
-        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-        JOIN camp ON camp.id = camp_turn.camp_id
+        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
         JOIN conversation ON conversation.id = agent_run.conversation_id
         WHERE (
             agent_run.status = 'running'
@@ -3018,6 +3018,39 @@ mod slow_tests {
             .unwrap();
     }
 
+    fn convert_active_run_to_batch(database: &Database) {
+        let now = Utc::now().to_rfc3339();
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id,
+                    body, structured_content_json, content_digest,
+                    address_mode, addressed_agent_ids_json, created_at, updated_at
+                ) VALUES (
+                    'projection-anchor', 'projection-camp', 1, 'user', 'user_1',
+                    'start', '[]', 'sha256:projection-anchor', 'default', '[]', ?1, ?1
+                )
+                "#,
+                [&now],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                r#"
+                UPDATE agent_run
+                SET invocation_kind = 'batch', camp_turn_id = NULL,
+                    camp_id = 'projection-camp', anchor_message_id = 'projection-anchor',
+                    current_public_tail_sequence = 1
+                WHERE id = 'projection-run'
+                "#,
+                [],
+            )
+            .unwrap();
+    }
+
     #[test]
     fn projection_uses_minimum_native_roots_and_preserves_git_exclude_content() {
         let root = temporary_directory("rovai-projection-root");
@@ -3168,6 +3201,20 @@ mod slow_tests {
         assert_eq!(
             exposure.digest,
             canonical_json_digest(&serde_json::to_value(&exposure.snapshot).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn turnless_batch_run_is_an_active_projection_reader() {
+        let root = temporary_directory("rovai-projection-batch-lock");
+        let data = temporary_directory("rovai-projection-batch-db");
+        let database = crate::test_support::fresh_schema_database_fast_at(&data);
+        insert_active_run(&database, &root);
+        convert_active_run_to_batch(&database);
+
+        let canonical = root.canonicalize().unwrap();
+        assert!(
+            has_active_run(&database, canonical.to_string_lossy().as_ref(), None, None,).unwrap()
         );
     }
 

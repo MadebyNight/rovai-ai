@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { ProjectNavigationGroup } from '@contracts'
 import { AppDialogBody, AppDialogContent, AppDialogFooter, AppDialogHeader } from './AppDialog'
-import { normalizeProjectDisplayName, projectDirectoryName, projectDisplayNameError } from '../../shared/project-display-name'
+import { displayProjectPath, normalizeProjectDisplayName, projectDirectoryName, projectDisplayNameError } from '../../shared/project-display-name'
 
 export function ProjectRenameDialog({ project, onClose, onSave }: {
   project: ProjectNavigationGroup
@@ -56,7 +56,7 @@ export function ProjectRenameDialog({ project, onClose, onSave }: {
                 onChange={(event) => { setName(event.target.value); setRestoreDirectoryName(false); setSaveError(null) }}
                 onKeyDown={(event) => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault() }} />
             </label>
-            <div className="rename-project-context" id="rename-project-context"><span>工作目录</span><code>{project.projectPath}</code></div>
+            <div className="rename-project-context" id="rename-project-context"><span>工作目录</span><code>{displayProjectPath(project.projectPath)}</code></div>
             <p className="rename-project-error" id="rename-project-error" role="alert">{error}</p>
           </AppDialogBody>
           <AppDialogFooter leading={project.name !== directoryName
