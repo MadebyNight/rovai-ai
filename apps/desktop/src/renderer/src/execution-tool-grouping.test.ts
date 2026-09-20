@@ -240,7 +240,7 @@ describe('execution Tool grouping', () => {
     })
   })
 
-  it('counts only successful steps without appending terminal outcome counts', () => {
+  it('counts every settled step without appending terminal outcome counts', () => {
     expect(toolActivityGroupPresentation([
       tool('one'),
       tool('two', 'failed'),
@@ -248,9 +248,9 @@ describe('execution Tool grouping', () => {
     ], 'failed')).toMatchObject({
       status: 'completed',
       statusLabel: '含成功操作',
-      primary: '已完成 1 个步骤',
+      primary: '已完成 3 个步骤',
       countLabel: null,
-      accessibleLabel: '已完成 1 个步骤'
+      accessibleLabel: '已完成 3 个步骤'
     })
 
     expect(toolActivityGroupPresentation([
@@ -258,7 +258,7 @@ describe('execution Tool grouping', () => {
     ], 'succeeded')).toMatchObject({
       status: 'recorded',
       statusLabel: '已记录',
-      primary: '已完成 0 个步骤',
+      primary: '已完成 1 个步骤',
       countLabel: null
     })
   })
@@ -299,12 +299,11 @@ describe('execution Tool grouping', () => {
 
   it('uses danger only when every Tool failed and keeps other no-success outcomes neutral', () => {
     expect(toolActivityGroupPresentation([
-      tool('one', 'failed'),
-      tool('two', 'failed')
+      tool('one', 'failed')
     ], 'failed')).toMatchObject({
       status: 'failed',
       statusLabel: '全部失败',
-      primary: '已完成 0 个步骤',
+      primary: '已完成 1 个步骤',
       countLabel: null
     })
 
@@ -314,7 +313,7 @@ describe('execution Tool grouping', () => {
     ], 'failed')).toMatchObject({
       status: 'stopped',
       statusLabel: '已停止，含失败操作',
-      primary: '已完成 0 个步骤',
+      primary: '已完成 2 个步骤',
       countLabel: null
     })
   })
@@ -330,9 +329,9 @@ describe('execution Tool grouping', () => {
     })
   })
 
-  it('does not count skipped or unknown results as successful steps', () => {
+  it('counts skipped and unknown results as settled steps', () => {
     expect(toolActivityGroupPresentation([
       tool('success'), tool('skip', 'skipped'), tool('unknown', 'recorded')
-    ], 'succeeded').primary).toBe('已完成 1 个步骤')
+    ], 'succeeded').primary).toBe('已完成 3 个步骤')
   })
 })

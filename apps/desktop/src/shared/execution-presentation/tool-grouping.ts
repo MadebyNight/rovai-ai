@@ -149,7 +149,7 @@ export function toolActivityGroupPresentation(
     status = 'recorded'
     statusLabel = failed > 0 ? '已记录，含失败操作' : '已记录'
   }
-  const primary = `已完成 ${completed} 个步骤`
+  const primary = `已完成 ${total} 个步骤`
 
   return {
     status,
