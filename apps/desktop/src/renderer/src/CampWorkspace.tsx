@@ -8584,47 +8584,28 @@ function EmptyCampWelcome({
     )
   }
 
+  const runtimeSummary = emptyCampRuntimeSummary(snapshot.members, agents)
   return (
-    <section className="empty-camp-welcome" aria-labelledby="empty-camp-title">
-      <svg
-        className="empty-camp-mark"
-        data-brand-mark="horizon"
-        data-brand-layout="separated"
-        viewBox="0 0 72 56"
-        aria-hidden="true"
-      >
-        <path d="M36 4 L39.6 16.7 L53.9 20.4 L39.6 24.1 L36 36.8 L32.4 24.1 L18.1 20.4 L32.4 16.7 Z" fill="currentColor" />
-        <path d="M8 49.5 Q36 37.5 64 49.5" stroke="currentColor" strokeWidth="5" fill="none" strokeLinecap="round" />
-      </svg>
-      <h2 id="empty-camp-title">{snapshot.camp.activationState === 'pending' ? '开始一段新对话' : '开始这段协作'}</h2>
-
-      <div className="empty-camp-context" aria-label="当前协作配置">
-        <span><i aria-hidden="true">⌂</i><strong>{projectLabel}</strong></span>
-        <span className="empty-camp-lead">
-          {lead && (
-            <MemberAvatar
-              agentId={lead.agentId}
-              avatarRef={lead.avatarRef}
-              displayName={lead.displayName}
-              size="mention"
-              decorative
-              className="empty-camp-avatar"
-            />
-          )}
-          <strong>{lead ? `负责人 · ${lead.displayName}` : '默认负责人未设置'}</strong>
-        </span>
-        <span><i aria-hidden="true">◎</i><strong>{activeMembers.length} 位队员已在队</strong></span>
-        <span><i className="empty-camp-readiness" aria-hidden="true" /><strong>{emptyCampRuntimeSummary(snapshot.members, agents)}</strong></span>
-      </div>
-
-      <div className="starter-prompts" aria-label="起步建议">
+    <section className="empty-camp-welcome camp-home-welcome" aria-labelledby="empty-camp-title">
+      <h2 id="empty-camp-title">想先做些什么？</h2>
+      <p className="camp-home-context">
+        <span className="sr-only">当前协作配置：</span>
+        <span className="camp-home-project" title={projectLabel}>{projectLabel}</span>
+        <span className="camp-home-separator">·</span>
+        <span>{lead ? `队长${lead.displayName}` : '默认队长未设置'}</span>
+        <span className="camp-home-separator">·</span>
+        <span>{activeMembers.length} 位队员</span>
+      </p>
+      <div className="camp-home-actions" aria-label="起步建议">
         {EMPTY_CAMP_STARTERS.map((starter) => (
           <button type="button" key={starter.title} onClick={() => onChoosePrompt(starter.prompt)}>
-            <strong>{starter.title}</strong>
-            <span>{starter.body}</span>
+            {starter.title}
           </button>
         ))}
       </div>
+      {runtimeSummary !== 'Agent 运行时可用' && (
+        <p className="camp-home-runtime" role="status">{runtimeSummary}</p>
+      )}
     </section>
   )
 }

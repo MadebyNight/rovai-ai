@@ -3451,6 +3451,13 @@ describe('task event projections', () => {
         camp: { ...snapshot.camp, activationState: 'pending' }
       }
     }))
+    const readyMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      agents: [{
+        ...unreadyProfile,
+        runtimeReadiness: { status: 'ready', blockers: [] }
+      }]
+    }))
     const mobileMarkup = renderToStaticMarkup(createElement(
       MobileLayoutProvider,
       { value: true, children: createElement(CampWorkspace, workspaceProps) }
@@ -3460,30 +3467,32 @@ describe('task event projections', () => {
     expect(markup).toContain('集结队伍，写下这次冒险的目标…')
     expect(markup).not.toContain('和队伍继续前行：补充线索、调整方向或布置新任务…')
     expect(markup).not.toContain('默认由队长 @洛可 接收')
-    expect(markup).toContain('开始这段协作')
-    expect(markup).toContain('class="empty-camp-mark" data-brand-mark="horizon" data-brand-layout="separated"')
-    expect(markup).not.toContain('data-brand-point="rendezvous"')
-    expect(markup).not.toContain('linearGradient')
-    expect(markup).not.toContain('empty-camp-eyebrow')
-    expect(markup).not.toContain('empty-camp-description')
-    expect(markup).not.toContain('这里已经保留当前工作区、队员和默认负责人。')
-    expect(pendingMarkup).toContain('开始一段新对话')
+    expect(markup).toContain('class="empty-camp-welcome camp-home-welcome"')
+    expect(markup).toContain('想先做些什么？')
+    expect(markup).not.toContain('class="empty-camp-mark"')
+    expect(pendingMarkup).toContain('想先做些什么？')
+    expect(pendingMarkup).not.toContain('开始一段新对话')
     expect(pendingMarkup).not.toContain('新对话草稿')
     expect(pendingMarkup).not.toContain('当前只是一份草稿。')
     expect(markup).toContain('快速对话')
-    expect(markup).toContain('负责人 · 洛可')
-    expect(markup).toContain('1 位队员已在队')
+    expect(markup).toContain('队长洛可')
+    expect(markup).toContain('1 位队员')
+    expect(markup).not.toContain('负责人 · 洛可')
+    expect(markup).not.toContain('1 位队员已在队')
     expect(markup).toContain('Agent 运行时不可用')
+    expect(markup).toContain('class="camp-home-runtime"')
+    expect(readyMarkup).not.toContain('class="camp-home-runtime"')
     expect(markup).toContain('先了解项目')
     expect(markup).toContain('整理成任务')
     expect(markup).toContain('检查工作区')
+    expect(markup).not.toContain('读取项目结构并给出可靠的起步建议。')
     expect(mobileMarkup).toContain('class="empty-camp-welcome mobile-empty-camp-welcome"')
     expect(mobileMarkup).toContain('开始这段协作')
     expect(mobileMarkup).toContain('>起步建议</span>')
     expect(mobileMarkup).toContain('aria-expanded="false"')
     expect(mobileMarkup).not.toContain('class="empty-camp-mark"')
-    expect(mobileMarkup).not.toContain('class="empty-camp-context"')
-    expect(mobileMarkup).not.toContain('class="starter-prompts"')
+    expect(mobileMarkup).not.toContain('class="camp-home-context"')
+    expect(mobileMarkup).not.toContain('class="camp-home-actions"')
     expect(mobileMarkup).not.toContain('读取项目结构并给出可靠的起步建议。')
     expect(mobileMarkup).not.toContain('先了解项目')
     expect(markup).toContain('>队员</span><small>1</small>')
