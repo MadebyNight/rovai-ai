@@ -10160,6 +10160,7 @@ impl Core {
     async fn collect_delivery_batch_dispatch_candidates(
         &self,
     ) -> Result<Vec<rovai_core::runtime::QueuedAgentRunCandidate>> {
+        let mut claimed_any = false;
         loop {
             let claimed = {
                 let mut database = self.database.lock().await;
@@ -10175,7 +10176,11 @@ impl Core {
             if claimed.is_empty() {
                 break;
             }
+            claimed_any = true;
             tokio::task::yield_now().await;
+        }
+        if claimed_any {
+            emit_navigation_invalidated(&self.output, "delivery_batch.claimed", None);
         }
 
         let candidates = {

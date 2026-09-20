@@ -9,11 +9,12 @@ model_context_change: false
 last_updated: 2026-09-20
 ---
 
-# Rovai-ai v1.62：Mission 状态解耦、异步清理与独立看板滚动
+# Rovai-ai v1.62：Mission 状态解耦、执行提示与工作区收敛
 
 前置：[v1.61](../v1.61/README.md)。本版让 Mission 业务状态成为真正独立的操作：有权修改当前
 Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状态都只是可选关联；并把 Worktree 清理改为
-持久意图驱动的后台流程，让使命板各状态列独立滚动，同时保留既有视觉体系。
+持久意图驱动的后台流程，让使命板各状态列独立滚动，同时让启动入口和执行提示直接跟随 Delivery/AgentRun
+事实，并保留既有视觉体系。
 
 ## 目标
 
@@ -21,7 +22,8 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 显式来源仍必须是同 Camp、已公开且未删除的消息；无效来源原子拒绝。
 - 省略来源会清除旧关联；状态与关联共同决定 `changed`，Replay 与活动幂等保持不变。
 - catalog、真实 CLI help、实际错误恢复和 Core 使用同一语义。
-- 不改变 Mission 修改权限、执行生命周期、数据库、Bootstrap、Run Facts、ContextManifest 或 UI wire。
+- 状态解耦不改变 Mission 修改权限、执行生命周期、数据库、Bootstrap、Run Facts、ContextManifest 或 UI wire；
+  启动增量只为既有 path-free `MissionRecord` 增加 `startAvailable`。
 - Worktree 清理命令只提交持久意图；独立后台 owner 按 expected OID 和双检查点执行，failed 只显式重试。
 - 删除使命并清理时，清理意图与 Camp/Mission 删除同事务提交，卡片先消失，后续失败进入既有 orphan route。
 - 看板四个状态列各自拥有纵向滚动位置；标题、筛选和列头固定，窄桌面窗口只在看板区域横向切换。
@@ -29,8 +31,10 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 执行台支持右侧、浮层和底部三个保存位置；右侧与 Mission 活动、文件共享标签集合和分栏比例。
 - 进入普通或 Mission 会话时，只为最新 `running` Run 自动打开并定位最新指令；后台刷新不抢选择或焦点。
 - 当前用户消息显示轻量处理回执，并在所有接收队员均未读时通过权威版本围栏直接撤回。
+- Mission 启动受理后立即隐藏入口；claim 创建 queued Run 即显示“执行中”，不等待 Runtime 连接或输出。
+- 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
 
-字段级协议见 [Mission v7](../../contracts/mission-v7.md)与
+字段级协议见 [Mission v8](../../contracts/mission-v8.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)和
@@ -39,8 +43,9 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 
 ## 当前状态
 
-Core、catalog、CLI help、错误目录、异步 cleanup owner、使命板交互与当前权威文档已经同一版本实现；
-Rust 全量与定向测试、Mission Electron 验收、TypeScript、文档治理、格式、编译及生产构建均已完成。
+状态解耦、异步 cleanup、独立列滚动、Agent Run Card 与消息撤回增量已经完成实现及各自验收。
+Mission 启动与执行提示的 Core/Renderer/合同实现与全量门禁已经完成，由 PR #453 合入 `main`，并验证功能
+提交是最新 `origin/main` 的祖先。
 本版不轮换 data contract：继续使用 v1.61/schema 116；清理复用 schema 112 已有 workspace 状态、命令身份、
 expected OID 与双检查点，不新增 Migration。
 
@@ -83,15 +88,25 @@ Mission Activity、普通文件共用标签集合与分栏比例；切换标签�
 弹窗，确认复用既有 `camp.messages.withdraw` 原子语义。Desktop 与 Web Host 接受同一 operation，成功后原位置显示
 撤回标记，不创建新的 AgentRun 取消原因。
 
+## Mission 启动与执行提示增量
+
+Mission read model 公开 Core-owned `startAvailable`，并把 `runningAgentIds` 的非终态集合补齐为
+queued/running/waiting。只有 Mission start Delivery 的 waiting/claimed 或 Camp 内非终态 Run 会关闭启动入口；
+普通等待消息不伪装为执行。`missions.start` 在同一事务复用该判定，因此旧投影或快速连点也不会追加启动任务。
+
+Renderer 在点击后立即保留按钮几何、禁用并显示“正在开始…”；受理成功后先以本地确认态隐藏，再由权威投影接管，
+明确拒绝才恢复并提示错误。Delivery batch claim 新增普通导航失效提示，使使命板、抽屉和完整会话在 Runtime
+连接前就能刷新 queued Run。内部 Mission start 消息继续从 Timeline 过滤，业务状态不随启动或 Run 自动变化。
+
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner 与独立列滚动取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v7](../../contracts/mission-v7.md)、[Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)与[Camp Message Send v23](../../contracts/camp-message-send-v23.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
-| Architecture | 已更新 | Mission 与 Built-in Tool Runtime 明确状态及 cleanup 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入 |
-| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动与清理恢复；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、[Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)与[Camp Message Send v23](../../contracts/camp-message-send-v23.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性及 claim 后执行投影边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入 |
+| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复及一致启动/执行反馈；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |
 | Documentation routing | 已更新 | 文档任务入口、合同索引、当前决定导航和版本索引指向 v1.62 及本增量的当前权威 |

@@ -37,6 +37,7 @@ type MissionActions = {
   cleanupFeedback(mission: MissionRecord): 'cleaning' | 'success' | 'failed' | null
   dismissCleanupSuccesses(): void
   notifyError(message: string, action?: { label: string; onSelect(): void }): void
+  startAccepted(missionId: string): boolean
   busyId: string | null
 }
 const Actions = createContext<MissionActions | null>(null)
@@ -66,6 +67,7 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
   const [cleaning, setCleaning] = useState<MissionRecord | null>(null)
   const [deleting, setDeleting] = useState<MissionRecord | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [acceptedStarts, setAcceptedStarts] = useState<Set<string>>(() => new Set())
   const [cleanupFeedbacks, setCleanupFeedbacks] = useState<Record<string, 'cleaning' | 'success'>>({})
   const starts = useRef(new Map<string, string>())
   const cleanupRequests = useRef(new Set<string>())
@@ -97,7 +99,12 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
     if (busyId) return
     const commandId = starts.current.get(m.missionId) ?? newCommandId()
     starts.current.set(m.missionId, commandId); setBusyId(m.missionId)
-    try { await missionCommand(client, 'missions.start', { missionId: m.missionId }, commandId); starts.current.delete(m.missionId); await onChanged(m.campId) }
+    try {
+      await missionCommand(client, 'missions.start', { missionId: m.missionId }, commandId)
+      setAcceptedStarts(current => new Set(current).add(m.missionId))
+      starts.current.delete(m.missionId)
+      await onChanged(m.campId)
+    }
     catch (error) { if (error instanceof MissionCommandRejected) starts.current.delete(m.missionId); throw error }
     finally { setBusyId(null) }
   }
@@ -118,6 +125,11 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
       ? Object.fromEntries(Object.entries(current).filter(([, state]) => state !== 'success'))
       : current)
   }
+  useEffect(() => {
+    // A completed list refresh is authoritative again; the local latch only bridges
+    // the accepted command response to that first projection.
+    setAcceptedStarts(current => current.size ? new Set() : current)
+  }, [missions])
   useEffect(() => {
     const present = new Set(missions.map(mission => mission.missionId))
     for (const missionId of observedCleanupStates.current.keys()) {
@@ -159,7 +171,7 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
     edit: setEditing, menu: (m, e) => anchor('menu', m, e), roster: (m, e) => anchor('members', m, e), tags: (m, e) => anchor('tags', m, e),
     status: (m, status) => report(change(m, 'status', { status })), start: m => report(start(m)), cleanup,
     cleanupFeedback: m => cleanupFeedbacks[m.missionId] ?? (m.workspaceCleanup?.state === 'cleaning' || m.workspaceCleanup?.state === 'failed' ? m.workspaceCleanup.state : null),
-    dismissCleanupSuccesses, notifyError: onError, busyId
+    dismissCleanupSuccesses, notifyError: onError, startAccepted: missionId => acceptedStarts.has(missionId), busyId
   }
   return <MissionPeopleProvider agents={agents}><Actions.Provider value={actions}>{children}
     <MissionContextMenu key={`${position?.id}:${position?.x}:${position?.y}`} m={selectedForMenu} position={position?.kind === 'menu' ? position : null} catalog={catalog} onClose={() => setPosition(null)}
@@ -574,6 +586,7 @@ function MissionCleanupNotice() {
 export function MissionIntro({ mission: m, projects }: { mission: MissionRecord; projects: ProjectNavigationGroup[] }) {
   const actions = useMissionActions(), [expanded, setExpanded] = useState(false), [canExpand, setCanExpand] = useState(false), [attachmentError, setAttachmentError] = useState('')
   const description = useRef<HTMLParagraphElement>(null)
+  const starting = actions.busyId === m.missionId
   useLayoutEffect(() => {
     const node = description.current
     if (!node) return
@@ -598,6 +611,6 @@ export function MissionIntro({ mission: m, projects }: { mission: MissionRecord;
       <div className="mission-project-tags"><span className="mission-card-project" title={m.projectPath}><NavigationIcon name="folder-open"/>{missionProject(m, projects)}</span><MissionTags tags={m.tags}/></div>
       <div className="mission-intro-meta"><MissionAvatars m={m}/></div>
     </section>
-    {m.status === 'not_started' && !m.runningAgentIds.length && <div className="mission-start-row"><button className="mission-new mission-start" disabled={actions.busyId === m.missionId} onClick={() => actions.start(m)}><Icon name="play"/>{actions.busyId === m.missionId ? '正在开始…' : '开始使命'}</button></div>}
+    {m.status === 'not_started' && m.startAvailable && !actions.startAccepted(m.missionId) && <div className="mission-start-row"><button className="mission-new mission-start" disabled={starting} aria-busy={starting} onClick={() => actions.start(m)}><Icon name="play"/>{starting ? '正在开始…' : '开始使命'}</button></div>}
   </>
 }

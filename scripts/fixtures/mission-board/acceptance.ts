@@ -232,9 +232,10 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(!document.querySelector('.camp-execution-drawer'), 'Opening running Mission does not open execution')
   const drawerHeader = document.querySelector('.mission-session-header')!.getBoundingClientRect()
   const preview = visiblePreview()!.getBoundingClientRect()
+  const previewWorkspace = document.querySelector<HTMLElement>('.mission-drawer .workspace-grid')!.getBoundingClientRect()
   const previewToggle = button('收起文件预览').getBoundingClientRect()
   const detailEntries = [...document.querySelectorAll<HTMLElement>('.mission-session-header .camp-detail-entry')]
-  check(Math.abs(preview.width - 320) <= 1, 'Activity uses the narrow 320px preview width')
+  check(preview.width >= 420 && Math.abs(preview.width / previewWorkspace.width - .56) <= .01, `Activity uses the shared preview ratio and 420px stable minimum (received ${preview.width}px of ${previewWorkspace.width}px)`)
   check(detailEntries.length === 4 && detailEntries.every(entry => entry.getBoundingClientRect().right <= preview.left + 1), 'Four Camp tools stay in the message area')
   check(drawerHeader.right - previewToggle.right <= 10, 'Preview toggle stays at the far right')
   check(!document.querySelector('.mission-session-actions'), 'Mission conversation has no ellipsis action')
@@ -319,12 +320,14 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   const fileReader = visiblePreview()!.querySelector('.file-preview-content')!
   check(document.querySelectorAll('[role=tab]').length === 2, 'File and activity are siblings')
   button('活动').click()
-  await until(() => !tab('活动') && visiblePreview()?.textContent?.includes('交互核对'), 'Activity toggle closes its inactive tab and retains the file')
+  await until(() => tab('活动')?.getAttribute('aria-selected') === 'true', 'Activity entry switches from the retained file to Activity')
   check(fileReader.isConnected, 'File reader survives activity switch')
+  button('活动').click()
+  await until(() => !tab('活动') && visiblePreview()?.textContent?.includes('交互核对'), 'Selected Activity toggle closes its tab and restores the retained file')
   document.querySelector<HTMLButtonElement>('.file-preview-tab-close')!.click()
   await until(() => !visiblePreview(), 'Closing last file hides preview')
   cases.push('Diff switching uses bounded cache, ignores stale responses, and coalesces workspace refreshes')
-  cases.push('activity toggle closes actual tab, falls back to retained file, and last close hides preview')
+  cases.push('activity entry switches tabs, closes the selected Activity, and retains the file until its last close')
 
   button('活动').click()
   await until(() => visiblePreview() && tab('活动'), 'Activity is available again')
@@ -481,10 +484,17 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => !document.querySelector('.mission-create-dialog'), 'Fresh creation dialog closes')
   Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(card => card.textContent?.includes('无描述使命'))!.click()
   await until(() => document.querySelector('.mission-drawer .mission-start'), 'Created Mission opens with a start action')
-  const startCalls = qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length
+  qa.failNextMissionStart()
+  const rejectedStartCalls = qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length
   button('开始使命').click()
-  await until(() => qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length === startCalls + 1 && button('开始使命'), 'Start schedules work without changing Mission status')
+  await until(() => button('正在开始…')?.disabled && button('正在开始…')?.getAttribute('aria-busy') === 'true', 'Start disables immediately with accessible pending feedback')
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length === rejectedStartCalls + 1 && button('开始使命') && document.querySelector('.app-toast[role=alert]')?.textContent?.includes('mission.lead_unavailable'), 'Rejected start restores the action and reports the error')
+  const acceptedStartCalls = qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length
+  button('开始使命').click()
+  await until(() => button('正在开始…')?.disabled, 'Accepted start also enters the immediate pending state')
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.start' && call.p.command?.missionId === created.missionId).length === acceptedStartCalls + 1 && !button('开始使命') && !button('正在开始…'), 'Accepted start hides the action before any AgentRun is claimed')
   check(created.status === 'not_started', 'Start leaves the explicitly managed Mission status unchanged')
+  check(created.runningAgentIds.length === 0 && !Array.from(document.querySelectorAll<HTMLElement>('.mission-board-card')).find(card => card.textContent?.includes('无描述使命'))?.querySelector('.mission-running'), 'Waiting start Delivery is not presented as executing')
   check(!document.querySelector(`[data-message-id="${created.missionId}-mission-start"]`) && !document.querySelector('.mission-commission'), 'Start does not insert a visible user-authored message')
   button('关闭使命抽屉').click()
   await until(() => !document.querySelector('.mission-workspace-host'), 'Started Mission returns to the board')

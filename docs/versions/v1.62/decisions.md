@@ -13,7 +13,7 @@ last_updated: 2026-09-20
 
 - 状态：accepted
 - 日期：2026-09-19
-- 当前权威：Mission v7 与 Mission Architecture
+- 当前权威：Mission v8 与 Mission Architecture
 
 Mission 状态是独立业务事实，公开消息是可选解释材料。要求 Agent 在设置 `needs_you` 或 `completed`
 前先发布消息，会把两项可分别授权、失败和重放的操作强制串联，并让“状态是否可更新”取决于一条消息是否已
@@ -32,7 +32,7 @@ Core 接受状态命令的条件。
 
 - 状态：accepted
 - 日期：2026-09-20
-- 当前权威：Mission v7 与 Mission 架构
+- 当前权威：Mission v8 与 Mission 架构
 
 前台命令同时执行 Git 删除会把确认窗、Camp 删除和一个可能持续或失败的外部进程绑在一起；Renderer 无法在
 命令返回前可靠区分“意图已保存”和“资源已删除”，删除使命也会被后续资源失败反向阻断。选择复用既有

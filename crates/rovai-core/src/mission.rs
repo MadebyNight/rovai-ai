@@ -169,6 +169,7 @@ pub struct MissionRecord {
     pub member_agent_ids: Vec<String>,
     pub default_lead_agent_id: Option<String>,
     pub running_agent_ids: Vec<String>,
+    pub start_available: bool,
     pub has_unread: bool,
     pub workspace_ever_created: bool,
     pub workspace_resources_present: bool,
@@ -381,21 +382,16 @@ impl MissionService {
         self.gateway.execute(database,envelope,|tx| {
             if !matches!(envelope.actor,ActorRef::User{..}) { return Ok(reject("mission.user_required")); }
             let Some(mission)=load_record(tx,&envelope.payload.mission_id)? else { return Ok(reject("mission.not_found")); };
-            let active:bool=tx.query_row(
-                "SELECT EXISTS(
-                    SELECT 1
-                    FROM mission_start AS start
-                    JOIN camp_message_delivery AS delivery ON delivery.id=start.delivery_id
-                    WHERE start.mission_id=?1 AND delivery.status IN ('waiting','claimed')
-                )",
-                [&mission.info.mission_id],
-                |r|r.get(0)
+            let start_available=mission_start_available(
+                tx,
+                &mission.info.mission_id,
+                &mission.camp_id,
             )?;
-            let result=if active {
+            let result=if !start_available {
                 CommandHandlerResult::applied("mission.already_running",json!({"missionId":mission.info.mission_id,"campId":mission.camp_id,"alreadyRunning":true}),None)
             } else { admit_mission_start(tx,&envelope.actor,&envelope.command_id,&mission)? };
             if result.status==CommandResultStatus::Rejected { return Ok(result); }
-            if !active {
+            if start_available {
                 tx.execute("UPDATE mission SET updated_at=?2 WHERE id=?1",params![mission.info.mission_id,chrono::Utc::now().to_rfc3339()])?;
                 record_activity(tx,&mission.info.mission_id,"started",&envelope.actor,None,json!({}))?;
             }
@@ -757,6 +753,7 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         crate::camp_message_publication::public_camp_message_publication_cte()
     );
     let has_unread = connection.query_row(&unread_sql, [&camp_id], |r| r.get(0))?;
+    let start_available = mission_start_available(connection, &mission_id, &camp_id)?;
     let (workspace_ever_created, workspace_resources_present, cleanup_available, workspace_cleanup) =
         crate::mission_workspace::cleanup_projection(connection, &mission_id, &camp_id)?;
     Ok(Some(MissionRecord {
@@ -773,8 +770,9 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
             "SELECT agent_id FROM camp_member WHERE camp_id=?1 AND status='active' ORDER BY joined_at,agent_id",
         )?,
         running_agent_ids: strings(
-            "SELECT DISTINCT c.agent_id FROM agent_run r JOIN conversation c ON c.id=r.conversation_id WHERE c.camp_id=?1 AND r.status IN ('running','waiting') ORDER BY c.agent_id",
+            "SELECT DISTINCT c.agent_id FROM agent_run r JOIN conversation c ON c.id=r.conversation_id WHERE c.camp_id=?1 AND r.status IN ('queued','running','waiting') ORDER BY c.agent_id",
         )?,
+        start_available,
         camp_id,
         project_path,
         project_binding_kind: serde_json::from_value(json!(binding))?,
@@ -790,6 +788,31 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
         cleanup_available,
         workspace_cleanup,
     }))
+}
+
+fn mission_start_available(
+    connection: &Connection,
+    mission_id: &str,
+    camp_id: &str,
+) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT
+                NOT EXISTS(
+                    SELECT 1
+                    FROM mission_start AS start
+                    JOIN camp_message_delivery AS delivery ON delivery.id=start.delivery_id
+                    WHERE start.mission_id=?1 AND delivery.status IN ('waiting','claimed')
+                )
+                AND NOT EXISTS(
+                    SELECT 1
+                    FROM agent_run
+                    WHERE camp_id=?2 AND status IN ('queued','running','waiting')
+                )",
+            params![mission_id, camp_id],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 fn validate_content(title: Option<&str>, description: Option<&str>) -> Result<()> {
     if let Some(title) = title {
@@ -1083,6 +1106,84 @@ mod tests {
             CommandResultStatus::Rejected
         );
         assert_eq!(service.list(&db).unwrap().len(), 1);
+        let ordinary_created = service
+            .create(
+                &mut db,
+                &command(CreateMissionCommand {
+                    title: "普通消息执行使命".into(),
+                    description: String::new(),
+                    project_path: directory.to_str().unwrap().into(),
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    member_agent_ids: vec!["agent_1".into()],
+                    default_lead_agent_id: "agent_1".into(),
+                    tags: vec![],
+                    source_attachments: vec![],
+                }),
+            )
+            .unwrap();
+        let ordinary_id = ordinary_created.result.payload["missionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let ordinary = service.get(&db, &ordinary_id).unwrap().unwrap();
+        assert!(ordinary.start_available);
+        let ordinary_message = CommandEnvelope {
+            command_id: Uuid::new_v4().to_string(),
+            actor: ActorRef::User {
+                user_id: "local_user".into(),
+            },
+            camp_id: Some(ordinary.camp_id.clone()),
+            expected_versions: vec![],
+            execution_epoch: None,
+            payload: crate::collaboration::TestCampMessageCommand {
+                camp_id: ordinary.camp_id.clone(),
+                draft_revision: None,
+                body: "通过普通消息开始执行".into(),
+                prepared_attachment_ids: vec![],
+                address: crate::collaboration::TestCampMessageAddress::Default,
+                reply_to_camp_message_id: None,
+                execution: Some(crate::collaboration::ExecutionRequest {
+                    task_id: None,
+                    purpose: "验证普通消息 claim 后的使命投影".into(),
+                    completion_role: "required".into(),
+                    budget: None,
+                }),
+            },
+        };
+        let ordinary_sent = crate::collaboration::CollaborationService::default()
+            .send_test_camp_message(&mut db, &ordinary_message)
+            .unwrap();
+        assert_eq!(ordinary_sent.result.status, CommandResultStatus::Accepted);
+        assert_eq!(
+            ordinary_sent.result.payload["agentRunIds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let ordinary_claimed = service.get(&db, &ordinary_id).unwrap().unwrap();
+        assert!(!ordinary_claimed.start_available);
+        assert_eq!(ordinary_claimed.running_agent_ids, vec!["agent_1"]);
+        assert_eq!(
+            service
+                .start(
+                    &mut db,
+                    &command(StartMissionCommand {
+                        mission_id: ordinary_id.clone(),
+                    }),
+                )
+                .unwrap()
+                .result
+                .payload["alreadyRunning"],
+            true
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT COUNT(*) FROM mission_start", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         let start = command(StartMissionCommand {
             mission_id: id.clone(),
         });
@@ -1093,6 +1194,9 @@ mod tests {
             "{:?}",
             started.result
         );
+        let waiting_projection = service.get(&db, &id).unwrap().unwrap();
+        assert!(!waiting_projection.start_available);
+        assert!(waiting_projection.running_agent_ids.is_empty());
         assert_eq!(
             service.start(&mut db, &start).unwrap().result.payload,
             started.result.payload
@@ -1149,8 +1253,8 @@ mod tests {
         assert_eq!(
             db.connection()
                 .query_row(
-                    "SELECT COUNT(*) FROM agent_run WHERE status='queued'",
-                    [],
+                    "SELECT COUNT(*) FROM agent_run WHERE status='queued' AND camp_id=?1",
+                    [&record.camp_id],
                     |r| r.get::<_, i64>(0)
                 )
                 .unwrap(),
@@ -1183,17 +1287,19 @@ mod tests {
         assert_eq!(result.result.code, "mission.invalid_source_message");
 
         // The running member remains allowed after another member becomes lead.
-        assert_eq!(
-            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100)
-                .unwrap()
-                .len(),
-            1
-        );
+        let claimed_runs =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut db, 100).unwrap();
+        assert_eq!(claimed_runs.len(), 1);
+        let queued_projection = service.get(&db, &id).unwrap().unwrap();
+        assert!(!queued_projection.start_available);
+        assert_eq!(queued_projection.running_agent_ids, vec!["agent_1"]);
         let runtime = crate::runtime::ExecutionRuntimeService::default();
         let candidate = runtime
             .list_dispatchable_agent_runs(&db, 10)
             .unwrap()
-            .remove(0);
+            .into_iter()
+            .find(|candidate| candidate.camp_id == record.camp_id)
+            .unwrap();
         let mut claim = command(crate::runtime::ClaimAgentRunCommand {
             agent_run_id: candidate.agent_run_id.clone(),
             expected_version: candidate.version,

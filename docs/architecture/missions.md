@@ -58,6 +58,13 @@ status; when present it must resolve to a current public message in the same Cam
 previous association. Core never publishes, searches for or implicitly chooses a message during a status update.
 This does not weaken mutation authorization or change Run admission, cancellation or completion.
 
+Mission execution presentation is derived from Camp-owned queue facts rather than business status. A dedicated
+Mission start Delivery in `waiting`/`claimed`, or any non-terminal AgentRun in the Mission Camp, makes the start
+entry unavailable; the same predicate is enforced by `missions.start` in its command transaction. Only
+`queued`/`running`/`waiting` AgentRuns contribute executing members, so an unclaimed Delivery hides an accepted
+start without claiming that execution has begun. Delivery claim emits the ordinary navigation invalidation,
+allowing the board, drawer and full conversation to observe the queued Run before Runtime connection or output.
+
 Database relations, internal events, Agent results and new Run Facts share that same internal ID. The stable number
 is not returned to Agents; Renderer alone formats it as `M-xxx` for user-facing Mission surfaces and managed
 workspace names. No Agent-side ID translation layer exists.
@@ -78,7 +85,7 @@ preserve one mounted composer/preview owner. Mobile is intentionally outside thi
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
 branch in place. Optional cleanup records its intent in the same transaction that deletes the Mission, removes
 the card immediately, and exposes only failed orphan work through the existing cleanup route; retained resources
-never enter that route. Protocol and failure behavior live in [Mission v7](../contracts/mission-v7.md); UI in
+never enter that route. Protocol and failure behavior live in [Mission v8](../contracts/mission-v8.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14). Global discovery and current-only mutation are explained
