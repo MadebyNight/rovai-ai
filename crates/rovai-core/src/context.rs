@@ -70,6 +70,17 @@ const MIN_CONTEXT_PAYLOAD_BYTES: usize = 8 * 1024;
 const DELIVERY_FIRST_PAYLOAD_BOOTSTRAP_RESERVE_BYTES: usize = 32 * 1024;
 const HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION: i64 = 26;
 
+fn context_manifest_is_dispatchable(manifest_version: i64, formatter_version: i64) -> bool {
+    matches!(
+        (manifest_version, formatter_version),
+        (22, 22) | (23, 23) | (24, 24) | (25, 25) | (26, 26)
+    ) || (manifest_version, formatter_version)
+        == (
+            PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+            PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION,
+        )
+}
+
 trait ContextReadConnection {
     fn context_connection(&self) -> &Connection;
 }
@@ -2093,10 +2104,7 @@ impl ContextService {
         if row.5 != "running" || row.6 != execution_epoch {
             anyhow::bail!("AgentRun or Native Binding changed before input delivery");
         }
-        if !matches!(
-            (row.10, row.11),
-            (22, 22) | (23, 23) | (24, 24) | (25, 25) | (26, 26)
-        ) {
+        if !context_manifest_is_dispatchable(row.10, row.11) {
             anyhow::bail!("ContextManifest cannot be dispatched");
         }
         let (runtime_attachment_auth_receipt, runtime_attachment_auth_receipt_digest) =
@@ -8552,6 +8560,47 @@ mod tests {
         );
         for invalid in ["mixed", "missing", "absent"] {
             assert!(frozen_batch_context_manifest_version(&connection, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn dispatch_admission_tracks_current_and_historical_context_contracts() {
+        for supported in [
+            (22, 22),
+            (23, 23),
+            (24, 24),
+            (CONTEXT_MANIFEST_VERSION, CONTEXT_FORMATTER_VERSION),
+            (
+                HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+                HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+            ),
+            (
+                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION,
+            ),
+        ] {
+            assert!(
+                context_manifest_is_dispatchable(supported.0, supported.1),
+                "current and replayable ContextManifest pairs must remain dispatchable: {supported:?}"
+            );
+        }
+
+        for rejected in [
+            (21, 21),
+            (
+                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION - 1,
+            ),
+            (
+                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION - 1,
+                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION,
+            ),
+            (
+                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION + 1,
+                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION + 1,
+            ),
+        ] {
+            assert!(!context_manifest_is_dispatchable(rejected.0, rejected.1));
         }
     }
 
