@@ -26,6 +26,8 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
   启动增量只为既有 path-free `MissionRecord` 增加 `startAvailable`。
 - Worktree 清理命令只提交持久意图；独立后台 owner 按 expected OID 和双检查点执行，failed 只显式重试。
 - 删除使命并清理时，清理意图与 Camp/Mission 删除同事务提交，卡片先消失，后续失败进入既有 orphan route。
+- 持久 Mission Worktree 的当前分支不再作为执行门禁；受管分支身份保留给资源清理，活动页实时展示 checkout。
+- 累计 Diff 继续使用固定 `base_sha`，checkout 与列表同次刷新，文件详情不复用旧临时 index。
 - 看板四个状态列各自拥有纵向滚动位置；标题、筛选和列头固定，窄桌面窗口只在看板区域横向切换。
 - 跨列拖动在目标列边缘自动滚动；右键和 Shift+F10 继续提供同一非拖拽状态操作。
 - 执行台支持右侧、浮层和底部三个保存位置；右侧与 Mission 活动、文件共享标签集合和分栏比例。
@@ -35,7 +37,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
 - 使命板一级入口蓝点按 Core-owned `hasUnread` 统计有未读 Agent 回复的使命，不再复用 `needs_you` 状态。
 
-字段级协议见 [Mission v8](../../contracts/mission-v8.md)与
+字段级协议见 [Mission v9](../../contracts/mission-v9.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)和
@@ -50,6 +52,9 @@ Mission 启动与执行提示的 Core/Renderer/合同实现与全量门禁已经
 本版不轮换 data contract：继续使用 v1.61/schema 116；清理复用 schema 112 已有 workspace 状态、命令身份、
 expected OID 与双检查点，不新增 Migration。
 
+Mission Worktree checkout 增量同样不轮换 data contract：已有 `branch` 列继续是唯一受管分支记录，对外投影为
+`managedBranch`；实时 `checkoutState` 和进程内 Diff view handle 均不持久化。
+
 同日完成的 Agent Run Card 与用户消息撤回增量只调整 Renderer 编排、安装级位置偏好和既有 Domain Command
 准入，不增加 Migration、Runtime 输入版本或 AgentRun 状态。
 
@@ -63,6 +68,14 @@ cleaning/failed/cleaned 及两个 path-free checkpoint，failed 不自动重试�
 Renderer 把资源状态固定在现有卡片层级中；确认窗不承担长期进度。失败同时进入可操作 Toast、卡片持久错误和
 详情重试，部分失败只显示/重试本地分支；成功提示约四秒且刷新或重进不重播。删除后的失败沿用
 “工作区待清理”入口。
+
+## Worktree checkout 与当前 Diff 增量
+
+既有 Worktree 的执行校验只证明路径、仓库、Git 注册、owner marker、Host 与执行目录；当前分支、受管分支是否
+仍存在、detached HEAD、checkout 读取和固定基准可读性不再成为 Runtime 门禁。Rovai 不自动切分支、接管分支或
+重设基准。活动页一次返回实时 checkout 和相对固定基准的累计变化；文件详情使用新临时 index 重读当前状态，
+旧请求迟到时由 view association 和 Renderer generation 丢弃，不新增监听、哈希或持久快照。清理仍只认受管分支
+与 expected OID，当前 checkout 不匹配时保留现场并失败。
 
 ## 使命板独立列滚动增量
 
@@ -104,10 +117,10 @@ Renderer 在点击后立即保留按钮几何、禁用并显示“正在开始�
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
-| Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner 与独立列滚动取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、[Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)与[Camp Message Send v23](../../contracts/camp-message-send-v23.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
-| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性及 claim 后执行投影边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入 |
-| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈及 Core-owned 未读入口蓝点；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
+| Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)后继续发布当前 [Mission v9](../../contracts/mission-v9.md)，并发布 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、[File Preview v17](../../contracts/file-preview-v17.md)与[Camp Message Send v23](../../contracts/camp-message-send-v23.md)；Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入 |
+| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |
 | Documentation routing | 已更新 | 文档任务入口、合同索引、当前决定导航和版本索引指向 v1.62 及本增量的当前权威 |

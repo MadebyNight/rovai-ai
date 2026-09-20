@@ -31,12 +31,23 @@ idempotent without widening cleanup beyond the verified path, registration or st
 The command commits `cleanup_pending` before notifying the worker; startup/periodic recovery scans unfinished
 pending rows only. Failure becomes `cleanup_failed` and is never automatically retried. Successful live cleanup
 keeps both completed checkpoints for reconstruction; successful orphan cleanup removes the workspace row.
-It computes cumulative changes against a fixed initial commit with an independent temporary index. Opening
-the cumulative-change browser establishes a bounded, expiring process-local snapshot containing the file-ID
-to old/new-path mapping and that index. A single-file request resolves only through this snapshot and runs a
-path-scoped Diff; it never rediscovers the full change list. Refresh replaces the snapshot, and closing the
-browser releases it. Git and actual files are the authority, not Agent narratives. The worktree is an execution
-location, not an Agent capability; the snapshot stores neither patch history nor historical file content.
+
+For an existing persistent Worktree, execution admission validates canonical paths, repository identity,
+registration, owner marker, Host and occupancy without requiring its current branch to equal the persisted
+managed branch. Checkout observation is a separate best-effort read: branch plus `HEAD`, detached `HEAD`, or
+unavailable. It is neither persisted nor allowed to change resource ownership. A branch change, missing managed
+branch, detached `HEAD`, checkout-observation failure or unavailable Diff base cannot alone block Runtime launch.
+Rovai does not switch or adopt branches and does not rewrite the fixed base.
+
+MissionGit computes cumulative changes from the recorded `base_sha` to the current Worktree content with an
+independent temporary index, including committed, staged, unstaged and untracked changes. One changes request
+returns checkout observation and file list together. Its bounded process-local `viewId` retains only request
+association and file metadata, not a temporary index or historical content. A file request regenerates a private
+index and current list, rejects an association that is no longer applicable, and then runs the path-scoped Diff.
+Multiple outstanding handles prevent a late old list request from replacing the newer handle; Renderer also
+discards superseded responses and clears file detail on refresh. This deliberately provides a current dynamic
+view, not a filesystem-atomic snapshot or a workspace versioning system. Git and actual files are the authority,
+not Agent narratives. The Worktree is an execution location, not an Agent capability.
 
 User definition edits use an internal optimistic revision so stale dialogs cannot overwrite newer title or
 description. Agent updates remain field patches with last-commit-wins semantics and never see that revision.
@@ -85,10 +96,11 @@ preserve one mounted composer/preview owner. Mobile is intentionally outside thi
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
 branch in place. Optional cleanup records its intent in the same transaction that deletes the Mission, removes
 the card immediately, and exposes only failed orphan work through the existing cleanup route; retained resources
-never enter that route. Protocol and failure behavior live in [Mission v8](../contracts/mission-v8.md); UI in
+never enter that route. Protocol and failure behavior live in [Mission v9](../contracts/mission-v9.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14). Global discovery and current-only mutation are explained
 by [V1.61-D01](../versions/v1.61/decisions.md#v1-61-d01). Status/message decoupling is explained by
 [V1.62-D01](../versions/v1.62/decisions.md#v1-62-d01); asynchronous cleanup ordering is explained by
-[V1.62-D02](../versions/v1.62/decisions.md#v1-62-d02).
+[V1.62-D02](../versions/v1.62/decisions.md#v1-62-d02); managed branch and observed checkout separation is
+explained by [V1.62-D04](../versions/v1.62/decisions.md#v1-62-d04).

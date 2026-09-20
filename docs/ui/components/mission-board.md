@@ -124,7 +124,10 @@ the saved preview ratio and the same 420px stable minimum.
 After an automatic resize-driven hide, the far-right toggle can still reopen an intentionally selected
 compact preview. Compact preview and source-message navigation preserve the conversation and draft.
 
-Delivery shows the actual directory and, for Git, associated branch/base and cumulative changes. It has no
+Delivery shows the actual directory and, for Git, the fixed base and cumulative changes. The branch row comes
+from the Worktree's current checkout observation, never from the persisted managed branch: it shows the branch
+and current `HEAD`, detached `HEAD` with a short commit, or a neutral unavailable state. A Diff-base failure keeps
+that checkout row visible and reports only that cumulative changes cannot currently be compared. It has no
 “工作区信息” wrapper or explanatory net-change subtitle. Opening the section reads the changed-file list;
 the activity surface renders the complete changed-file set as a searchable, vertically scrollable directory tree
 with a 480px ceiling. Directories precede files, single-child directory chains compress, and all directories are
@@ -140,9 +143,12 @@ its top-right control or Escape. The 1px splitter exposes a forgiving hit target
 steps, 80px Shift+arrow steps, and Home/double-click default restoration, while narrow screens collapse the tree
 above the reader. A bounded per-Mission memory cache restores a viewed file
 without clearing its content or flashing loading state. Cache misses never show the prior file beneath a new
-selection; duplicate requests coalesce and late responses cannot replace the current selection. Explicit
-refresh and coalesced Run-terminal/workspace invalidation clear the cache and update the list; definition-only
-edits do not. Binary/type/rename data and Git modes remain in the contract, but the dialog does not print a
+selection; duplicate requests coalesce and late responses cannot replace the current selection. Checkout and
+file list commit from one view response. Explicit refresh, visible-window focus and coalesced Run-terminal or
+workspace invalidation clear file detail and update both together; superseded responses are discarded, while
+definition-only edits do not rescan Git. A file request carries its view association, rereads current Git state
+with a fresh private index and asks for a full view refresh when the association is stale. Binary/type/rename
+data and Git modes remain in the contract, but the dialog does not print a
 raw “Git 文件模式” row. Agent files reuse AttachmentCard, file preview and source-message navigation.
 Activity displays actual Mission history. The delete confirmation is intentionally concise and does not repeat
 the Mission title, worktree path or branch. When a workspace record exists it adds one default-unchecked
@@ -172,6 +178,6 @@ focus request even when there is no notification acknowledgement waiter; snapsho
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 
-Business and ownership rules are defined by [Mission v8](../../contracts/mission-v8.md), not this presentation
+Business and ownership rules are defined by [Mission v9](../../contracts/mission-v9.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

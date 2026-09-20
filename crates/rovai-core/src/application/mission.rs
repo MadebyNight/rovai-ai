@@ -146,67 +146,63 @@ impl Core {
         };
         if workspace.state != "preparing" {
             let worktree_exists = git.worktree_exists(&workspace)?;
-            let branch_oid = git.branch_oid(&workspace).await?;
-            match (worktree_exists, branch_oid) {
-                (true, Some(_)) => {
-                    workspace.state = "ready".into();
-                    // Do not clear completed-cleanup checkpoints for an occupied or
-                    // mismatched path. Reuse begins only after the persisted owner,
-                    // repository and current branch have all been verified.
-                    git.validate(&workspace).await?;
-                    let database = self.database.lock().await;
-                    database.connection().execute(
-                        "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1",
-                        params![workspace.id, chrono::Utc::now().to_rfc3339()],
-                    )?;
-                    workspace.cleanup_command_id = None;
-                    workspace.cleanup_expected_branch_oid = None;
-                    workspace.cleanup_worktree_removed = false;
-                    workspace.cleanup_branch_removed = false;
+            if worktree_exists {
+                workspace.state = "ready".into();
+                // Reuse depends on the owned Worktree and execution directory, not
+                // on which branch is currently checked out or whether the original
+                // managed branch still exists.
+                git.validate_execution_workspace(&workspace).await?;
+                let database = self.database.lock().await;
+                database.connection().execute(
+                    "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1",
+                    params![workspace.id, chrono::Utc::now().to_rfc3339()],
+                )?;
+                workspace.cleanup_command_id = None;
+                workspace.cleanup_expected_branch_oid = None;
+                workspace.cleanup_worktree_removed = false;
+                workspace.cleanup_branch_removed = false;
+            } else {
+                let branch_oid = git.branch_oid(&workspace).await?;
+                // Remove only a stale registration carrying this workspace's owner marker.
+                git.cleanup(&workspace).await?;
+                let preparation_kind = if branch_oid.is_some() {
+                    "restore"
+                } else {
+                    "create"
+                };
+                if branch_oid.is_none() {
+                    let repository = git
+                        .inspect(source)
+                        .await?
+                        .context("mission.source_repository_unavailable")?;
+                    anyhow::ensure!(
+                        repository.root == Path::new(&workspace.repository_root)
+                            && repository.common_dir == Path::new(&workspace.git_common_dir),
+                        "mission.repository_mismatch"
+                    );
+                    let expected_relative = Path::new(&workspace.working_directory)
+                        .strip_prefix(&workspace.worktree_path)?;
+                    anyhow::ensure!(
+                        repository.relative_directory == expected_relative,
+                        "mission.working_directory_changed"
+                    );
+                    workspace.base_branch = repository.base_branch;
+                    workspace.base_sha = repository.base_sha;
                 }
-                (true, None) => anyhow::bail!("mission.workspace_branch_missing"),
-                (false, branch_oid) => {
-                    // Remove only a stale registration carrying this workspace's owner marker.
-                    git.cleanup(&workspace).await?;
-                    let preparation_kind = if branch_oid.is_some() {
-                        "restore"
-                    } else {
-                        "create"
-                    };
-                    if branch_oid.is_none() {
-                        let repository = git
-                            .inspect(source)
-                            .await?
-                            .context("mission.source_repository_unavailable")?;
-                        anyhow::ensure!(
-                            repository.root == Path::new(&workspace.repository_root)
-                                && repository.common_dir == Path::new(&workspace.git_common_dir),
-                            "mission.repository_mismatch"
-                        );
-                        let expected_relative = Path::new(&workspace.working_directory)
-                            .strip_prefix(&workspace.worktree_path)?;
-                        anyhow::ensure!(
-                            repository.relative_directory == expected_relative,
-                            "mission.working_directory_changed"
-                        );
-                        workspace.base_branch = repository.base_branch;
-                        workspace.base_sha = repository.base_sha;
-                    }
-                    workspace.preparation_token = uuid::Uuid::new_v4().to_string();
-                    workspace.preparation_kind = preparation_kind.into();
-                    workspace.generation += 1;
-                    workspace.state = "preparing".into();
-                    workspace.cleanup_command_id = None;
-                    workspace.cleanup_expected_branch_oid = None;
-                    workspace.cleanup_worktree_removed = false;
-                    workspace.cleanup_branch_removed = false;
-                    workspace.diagnostic = None;
-                    let database = self.database.lock().await;
-                    database.connection().execute(
-                        "UPDATE mission_workspace SET base_branch=?2,base_sha=?3,preparation_token=?4,preparation_kind=?5,generation=?6,state='preparing',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?7 WHERE id=?1",
-                        params![workspace.id, workspace.base_branch, workspace.base_sha, workspace.preparation_token, workspace.preparation_kind, workspace.generation, chrono::Utc::now().to_rfc3339()],
-                    )?;
-                }
+                workspace.preparation_token = uuid::Uuid::new_v4().to_string();
+                workspace.preparation_kind = preparation_kind.into();
+                workspace.generation += 1;
+                workspace.state = "preparing".into();
+                workspace.cleanup_command_id = None;
+                workspace.cleanup_expected_branch_oid = None;
+                workspace.cleanup_worktree_removed = false;
+                workspace.cleanup_branch_removed = false;
+                workspace.diagnostic = None;
+                let database = self.database.lock().await;
+                database.connection().execute(
+                    "UPDATE mission_workspace SET base_branch=?2,base_sha=?3,preparation_token=?4,preparation_kind=?5,generation=?6,state='preparing',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?7 WHERE id=?1",
+                    params![workspace.id, workspace.base_branch, workspace.base_sha, workspace.preparation_token, workspace.preparation_kind, workspace.generation, chrono::Utc::now().to_rfc3339()],
+                )?;
             }
         }
         if workspace.state == "preparing" {
@@ -261,7 +257,7 @@ impl Core {
             database.connection().execute("UPDATE mission_workspace SET state='ready',diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='preparing'",params![workspace.id,chrono::Utc::now().to_rfc3339()])?;
             workspace.state = "ready".into();
         }
-        git.validate(&workspace).await?;
+        git.validate_execution_workspace(&workspace).await?;
         let actual = git::validate_workspace_directory(
             Path::new(&workspace.working_directory),
             &self.data_dir,
@@ -517,7 +513,7 @@ impl Core {
                             "missionId": mission_id,
                             "campId": camp_id,
                             "worktreePath": workspace.worktree_path,
-                            "branch": workspace.branch,
+                            "managedBranch": workspace.branch,
                             "scheduled": true,
                         }),
                         Some(EntityReference {
@@ -615,6 +611,7 @@ impl Core {
                     mission_id: String,
                     before: Option<i64>,
                     file_id: Option<String>,
+                    view_id: Option<String>,
                 }
                 let query: Query = serde_json::from_value(request.params.clone())?;
                 if request.method == "missions.diffSession.release" {
@@ -679,19 +676,45 @@ impl Core {
                 )?;
                 let git = self.mission_git().await?;
                 if request.method == "missions.changes" {
-                    let snapshot = git.changes_snapshot(workspace).await?;
-                    let files = snapshot.files().to_vec();
-                    self.mission_diff_snapshots
-                        .lock()
+                    git.validate_execution_workspace(workspace).await?;
+                    let checkout_state = git.observe_checkout(workspace).await;
+                    match git
+                        .prepare_diff_snapshot(workspace, checkout_state.clone())
                         .await
-                        .insert(query.mission_id, snapshot);
-                    Ok(serde_json::to_value(files)?)
+                    {
+                        Ok(prepared) => {
+                            let snapshot = prepared.into_snapshot();
+                            let view = mission_workspace::MissionWorkspaceChangesView {
+                                checkout_state,
+                                view_id: Some(snapshot.view_id().to_string()),
+                                files: Some(snapshot.files().to_vec()),
+                                diff_error: None,
+                            };
+                            self.mission_diff_snapshots
+                                .lock()
+                                .await
+                                .insert(query.mission_id, snapshot);
+                            Ok(serde_json::to_value(view)?)
+                        }
+                        Err(error) => Ok(serde_json::to_value(
+                            mission_workspace::MissionWorkspaceChangesView {
+                                checkout_state,
+                                view_id: None,
+                                files: None,
+                                diff_error: Some(format!("{error:#}")),
+                            },
+                        )?),
+                    }
                 } else {
+                    let view_id = query
+                        .view_id
+                        .as_deref()
+                        .context("mission.changes_refresh_required")?;
                     let snapshot = self
                         .mission_diff_snapshots
                         .lock()
                         .await
-                        .get(&query.mission_id, workspace)
+                        .get(&query.mission_id, workspace, view_id)
                         .context("mission.changes_refresh_required")?;
                     Ok(serde_json::to_value(
                         git.file_diff(

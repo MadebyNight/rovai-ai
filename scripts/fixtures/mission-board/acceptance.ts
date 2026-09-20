@@ -258,6 +258,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-delivery-file') && visiblePreview(), 'Activity reopens')
   check(!visiblePreview()!.textContent?.includes('Pull Requests') && !button('关联 Pull Request'), 'Activity omits the unavailable Pull Requests module')
   await until(() => document.querySelectorAll('#mission-detail-tree [data-file-id]').length === 7, 'Cumulative changes render the entire expanded file tree')
+  check([...document.querySelectorAll('.mission-delivery-section .mission-evidence-row code')].some(node => node.textContent === 'rovai/mission/018-validation'), 'Activity shows the Worktree current checkout instead of its managed branch')
   check(!document.querySelector('.mission-changed-file') && !document.querySelector('.mission-changes-more-files'), 'Cumulative changes no longer use a truncated flat list')
   check(document.querySelector('#mission-detail-tree [title="src/runtime"]')?.textContent?.includes('runtime'), 'Nested paths are grouped into directories')
   check(parseFloat(getComputedStyle(document.querySelector('#mission-detail-tree')!).maxHeight) === 480, 'Detail tree uses the approved 480px scroll ceiling')
@@ -305,16 +306,27 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   worker.click(); await frames()
   check(document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/runtime/worker.ts' && !document.querySelector('.mission-diff-state'), 'Returning to a viewed file uses cache without a loading flash')
   check(diffCalls('file-b') === 1, 'Cached file Diff is not requested again')
-  const changeReads = qa.calls.filter((call:any) => call.method === 'missions.changes').length
-  qa.invalidateMissionDetails(); await new Promise(resolve => setTimeout(resolve, 180))
-  check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads, 'Mission definition invalidation does not rescan Git Diff')
-  qa.terminalMissionRun(qa.items[0].campId); qa.terminalMissionRun(qa.items[0].campId); qa.terminalMissionRun(qa.items[0].campId)
-  await until(() => qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 1, 'Run completion refreshes the change list')
-  await new Promise(resolve => setTimeout(resolve, 180))
-  check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 1, 'Burst workspace invalidations coalesce into one refresh')
+  check(qa.calls.filter((call:any) => call.method === 'missions.fileDiff').every((call:any) => typeof call.p.viewId === 'string'), 'File Diff requests carry the current view association')
   document.querySelector<HTMLButtonElement>('.mission-diff-dialog .compact-close')!.click()
   await until(() => !document.querySelector('.mission-diff-dialog'), 'Cumulative diff dialog closes')
   check(document.activeElement === originalDiffTrigger, 'Closing the diff dialog restores focus to its detail-tree trigger')
+  const changeReads = qa.calls.filter((call:any) => call.method === 'missions.changes').length
+  qa.invalidateMissionDetails(); await new Promise(resolve => setTimeout(resolve, 180))
+  check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads, 'Mission definition invalidation does not rescan Git Diff')
+  qa.delayNextMissionChanges()
+  document.querySelector<HTMLButtonElement>('[aria-label="刷新累计文件变更"]')!.click()
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 1, 'A manual refresh starts the delayed workspace view read')
+  qa.setCheckoutBranch('rovai/mission/018-live')
+  qa.terminalMissionRun(qa.items[0].campId)
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.changes').length === changeReads + 2, 'A Run-completion refresh supersedes the delayed workspace view read')
+  await until(() => [...document.querySelectorAll('.mission-delivery-section .mission-evidence-row code')].some(node => node.textContent === 'rovai/mission/018-live'), 'The newer checkout and change list commit together')
+  await new Promise(resolve => setTimeout(resolve, 220))
+  check([...document.querySelectorAll('.mission-delivery-section .mission-evidence-row code')].some(node => node.textContent === 'rovai/mission/018-live'), 'A late older workspace response cannot replace the newer view')
+  const refreshedReads = qa.calls.filter((call:any) => call.method === 'missions.changes').length
+  qa.terminalMissionRun(qa.items[0].campId); qa.terminalMissionRun(qa.items[0].campId); qa.terminalMissionRun(qa.items[0].campId)
+  await until(() => qa.calls.filter((call:any) => call.method === 'missions.changes').length === refreshedReads + 1, 'Run completion refreshes the change list')
+  await new Promise(resolve => setTimeout(resolve, 180))
+  check(qa.calls.filter((call:any) => call.method === 'missions.changes').length === refreshedReads + 1, 'Burst workspace invalidations coalesce into one refresh')
   document.querySelector<HTMLButtonElement>('.mission-delivery-file .attachment-open')!.click()
   await until(() => visiblePreview()?.textContent?.includes('交互核对'), 'Delivery opens shared file viewer')
   const fileReader = visiblePreview()!.querySelector('.file-preview-content')!
@@ -646,4 +658,42 @@ export async function runMissionLargeDiffAcceptance(): Promise<{ ok: true; cases
   check(headingStyle.flexDirection !== 'column' && headingStyle.alignItems !== 'flex-start', 'Tree heading control is isolated from removed flat-list button styles')
   check(qa.errors.length === 0, qa.errors.join('\n'))
   return { ok: true, cases: ['large cumulative diffs virtualize both trees without losing search, scroll, totals or keyboard focus'] }
+}
+
+export async function runMissionCheckoutViewAcceptance(): Promise<{ ok: true; cases: string[] }> {
+  const qa = (window as any).missionQA
+  const check = (value: unknown, message: string): void => { if (!value) throw new Error(message) }
+  const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  const until = async (condition: () => unknown, message: string): Promise<void> => {
+    for (let i = 0; i < 240; ++i) { await frames(); if (condition()) return }
+    throw new Error(`${message}${qa.errors.length ? `\n${qa.errors.join('\n')}` : ''}\n${JSON.stringify({ recentCalls: qa.calls.slice(-12) })}`)
+  }
+  const checkoutLabels = () => [...document.querySelectorAll<HTMLElement>('.mission-delivery-section .mission-evidence-row code')].map(node => node.textContent)
+
+  await until(() => document.querySelector('.mission-board-card'), 'Checkout-view Mission board loads')
+  document.querySelector<HTMLElement>('.mission-board-card')!.click()
+  await until(() => document.querySelectorAll('#mission-detail-tree [data-file-id]').length === 7, 'Checkout-view cumulative changes load')
+  check(checkoutLabels().includes('rovai/mission/018-validation'), 'Activity reports the actual checkout branch')
+  check(!checkoutLabels().includes('rovai/mission/018'), 'Activity does not present the managed branch as the current checkout')
+
+  document.querySelector<HTMLButtonElement>('#mission-detail-tree [data-file-id="file-a"]')!.click()
+  await until(() => document.querySelector('.mission-diff-reading header strong')?.textContent === 'src/mission.ts', 'A file Diff loads from the current view')
+  const fileDiffCall = qa.calls.findLast((call: any) => call.method === 'missions.fileDiff')
+  check(typeof fileDiffCall?.p.viewId === 'string', 'File Diff requests carry their workspace view ID')
+  document.querySelector<HTMLButtonElement>('.mission-diff-dialog .compact-close')!.click()
+  await until(() => !document.querySelector('.mission-diff-dialog'), 'Checkout-view Diff closes')
+
+  const changeReads = qa.calls.filter((call: any) => call.method === 'missions.changes').length
+  qa.delayNextMissionChanges()
+  document.querySelector<HTMLButtonElement>('[aria-label="刷新累计文件变更"]')!.click()
+  await until(() => qa.calls.filter((call: any) => call.method === 'missions.changes').length === changeReads + 1, 'A delayed workspace refresh starts')
+  qa.setCheckoutBranch('rovai/mission/018-live')
+  qa.terminalMissionRun(qa.items[0].campId)
+  await until(() => qa.calls.filter((call: any) => call.method === 'missions.changes').length === changeReads + 2, 'Run completion starts a newer workspace refresh')
+  await until(() => checkoutLabels().includes('rovai/mission/018-live'), 'The newer checkout and file list commit together')
+  await new Promise(resolve => setTimeout(resolve, 220))
+  check(checkoutLabels().includes('rovai/mission/018-live'), 'A late older response cannot replace the current workspace view')
+  check(document.querySelectorAll('#mission-detail-tree [data-file-id]').length === 7, 'The current checkout and cumulative list remain one view')
+  check(qa.errors.length === 0, qa.errors.join('\n'))
+  return { ok: true, cases: ['activity follows the actual checkout, associates file Diff reads, and ignores late workspace views'] }
 }

@@ -163,7 +163,9 @@ app.whenReady().then(async () => {
     await waitFor('window.innerWidth === 1440 && window.innerHeight === 920', 'Mission fixture did not restore its desktop size')
     await window.webContents.executeJavaScript("document.querySelector('.mission-board-scroll')?.scrollTo({ left: 0, behavior: 'auto' })", true)
   }
-  const acceptance = mode === 'large-diff' ? 'window.missionQA.runLargeDiff()' : 'window.missionQA.run()'
+  const acceptance = mode === 'large-diff'
+    ? 'window.missionQA.runLargeDiff()'
+    : mode === 'checkout-view' ? 'window.missionQA.runCheckoutView()' : 'window.missionQA.run()'
   stage = 'renderer acceptance'
   const report = await window.webContents.executeJavaScript(`Promise.resolve().then(() => ${acceptance}).catch(error => ({ ok: false, error: error?.stack ?? String(error) }))`, true)
   if (!report.ok) {
@@ -172,7 +174,7 @@ app.whenReady().then(async () => {
     app.exit(1)
     return
   }
-  if (mode === 'large-diff') {
+  if (mode === 'large-diff' || mode === 'checkout-view') {
     console.log(JSON.stringify(report)); app.exit(report.ok ? 0 : 1); return
   }
   report.layouts = narrowLayout
