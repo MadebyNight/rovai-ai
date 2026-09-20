@@ -56,7 +56,7 @@
     "test:channel-camp-naming": "node --test scripts/lib/channel-camp-naming.test.mjs",
     "test:camp-open-projection": "node --test scripts/lib/camp-open-projection.test.mjs",
     "review:attachments": "node scripts/review-attachment-presentation.mjs",
-    "test:execution-avatar-rail": "node --test scripts/lib/execution-avatar-rail.test.mjs scripts/lib/execution-state-transition.test.mjs",
+    "test:execution-avatar-rail": "node --test --test-concurrency=1 scripts/lib/execution-avatar-rail.test.mjs scripts/lib/execution-state-transition.test.mjs",
     "test:notification-attention": "node --test scripts/lib/notification-attention.test.mjs",
     "test:settings-workspace": "node --test scripts/lib/settings-workspace.test.mjs",
     "test:capability-workspace": "node --test scripts/lib/capability-workspace.test.mjs",

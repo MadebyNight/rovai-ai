@@ -4319,6 +4319,7 @@ export function CampWorkspace({
       installation={executionDrawerInstallation}
       turns={snapshot.turns}
       messages={visibleCampMessages}
+      deliveries={snapshot.messageDeliveries}
       progressByRunId={executionProgressByRunId}
       windowedEvidence={openCoverage !== null}
       executionEventsByRunId={executionEventsByRunId}
@@ -4888,6 +4889,24 @@ export function CampWorkspace({
                                 copied={copied}
                                 hasDelivery={campMessageDeliveries.length > 0}
                                 showActions={campMessage.authorType !== 'agent'}
+                                actionBefore={campMessage.authorType === 'user' ? (
+                                  <UserMessageDeliveryReceipt
+                                    message={campMessage}
+                                    runs={userMessageRuns}
+                                    memberById={memberById}
+                                    onOpenExecution={(run, trigger) => openExecutionProcess(
+                                      run.agentId,
+                                      trigger,
+                                      { runId: run.id }
+                                    )}
+                                    onWithdraw={campMessage.canWithdraw && onWithdrawMessage
+                                      ? () => {
+                                          setWithdrawalError(null)
+                                          setWithdrawalMessage(campMessage)
+                                        }
+                                      : undefined}
+                                  />
+                                ) : undefined}
                                 onReply={humanAuthored ? undefined : handleReply}
                                 onCopy={handleCopy}
                               >
@@ -4992,24 +5011,6 @@ export function CampWorkspace({
                                   />
                                 )}
                               </MessageSurface>
-                              {campMessage.authorType === 'user' && (
-                                <UserMessageDeliveryReceipt
-                                  message={campMessage}
-                                  runs={userMessageRuns}
-                                  memberById={memberById}
-                                  onOpenExecution={(run, trigger) => openExecutionProcess(
-                                    run.agentId,
-                                    trigger,
-                                    { runId: run.id }
-                                  )}
-                                  onWithdraw={campMessage.canWithdraw && onWithdrawMessage
-                                    ? () => {
-                                        setWithdrawalError(null)
-                                        setWithdrawalMessage(campMessage)
-                                      }
-                                    : undefined}
-                                />
-                              )}
                               <CampMessageDeliveryFooter
                                 deliveries={campMessageDeliveries}
                                 memberById={memberById}
@@ -5158,6 +5159,7 @@ export function CampWorkspace({
                   revealRequest={executionDrawerFocusRequest.sequence}
                   onOpen={openExecutionProcess}
                   onOpenOverview={openExecutionOverview}
+                  onClose={closeExecutionProcess}
                   onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
                   onPlacementMenuOpenChange={trackExecutionPlacementMenu}
                   onMovePlacement={moveExecution}
@@ -5244,6 +5246,7 @@ export function CampWorkspace({
               selectedAgentId={executionDrawerAgentId}
               onOpen={openExecutionProcess}
               onOpenOverview={openExecutionOverview}
+              onClose={closeExecutionProcess}
               onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
               onPlacementMenuOpenChange={trackExecutionPlacementMenu}
               onMovePlacement={moveExecution}
@@ -5698,6 +5701,7 @@ export function CampWorkspace({
             revealRequest={executionDrawerFocusRequest.sequence}
             onOpen={openExecutionProcess}
             onOpenOverview={openExecutionOverview}
+            onClose={closeExecutionProcess}
             onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
             onPlacementMenuOpenChange={trackExecutionPlacementMenu}
             onMovePlacement={moveExecution}
@@ -5810,6 +5814,7 @@ function RunPulse({
   revealRequest = 0,
   onOpen,
   onOpenOverview,
+  onClose,
   onPlacementMenuIntent,
   onPlacementMenuOpenChange,
   onMovePlacement,
@@ -5826,6 +5831,7 @@ function RunPulse({
   revealRequest?: number
   onOpen(agentId: string, trigger: HTMLButtonElement): void
   onOpenOverview(trigger: HTMLButtonElement): void
+  onClose(): void
   onPlacementMenuIntent(): void
   onPlacementMenuOpenChange(open: boolean): void
   onMovePlacement(target: ExecutionConsolePlacement): Promise<void>
@@ -5848,16 +5854,10 @@ function RunPulse({
       : '底部'
   return (
     <div className={`run-pulse run-pulse-${placement}${placement === 'right' ? ' run-pulse-inspector' : ''}`} aria-label="Agent 执行台">
-      <div className="run-pulse-heading">
-        {placement === 'bottom' && <span className="run-pulse-title">
-          <span className="run-pulse-mark" aria-hidden="true">
-            <svg viewBox="0 0 26 18">
-              <path d="M1.5 9h4.2l2.1-5.2 3.4 10.4 3.1-7.4 2.2 4.1h3.1l1.4-2.1h3.5" />
-            </svg>
-          </span>
-          <strong>执行</strong>
-        </span>}
-      </div>
+      {placement === 'bottom' && <span className="run-pulse-bottom-caption">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h4l3-8 4 14 3-8h4" /></svg>
+        <span>执行</span>
+      </span>}
       {placement !== 'bottom' ? <ExecutionAvatarRail
         items={[{
           agentId: EXECUTION_OVERVIEW_SCOPE,
@@ -5910,7 +5910,6 @@ function RunPulse({
           if (!run) return null
           const member = memberById.get(process.agentId)
           const memberName = member?.displayName ?? process.agentId
-          const memberNameLines = runPulseMemberNameLines(memberName)
           const presentation = agentRunPresentation(
             run,
             stopping && NON_TERMINAL_RUNS.has(run.status)
@@ -5937,10 +5936,7 @@ function RunPulse({
                   decorative
                 />
                 <span className="run-pulse-chip-copy">
-                  <strong>
-                    <span>{memberNameLines[0]}</span>
-                    {memberNameLines[1] && <span>{memberNameLines[1]}</span>}
-                  </strong>
+                  <strong><span>{memberName}</span></strong>
                 </span>
                 <span
                   className={`run-pulse-chip-state tone-${presentation.tone} state-${stateShape}`}
@@ -6006,6 +6002,22 @@ function RunPulse({
           </span>
         )}
       </div>
+      {placement === 'bottom' && <button
+        className="execution-bottom-collapse-button"
+        type="button"
+        aria-expanded={selectedAgentId !== null}
+        aria-controls="agent-execution-drawer"
+        aria-label={selectedAgentId === null ? '展开执行详情' : '收起执行详情'}
+        onClick={(event) => {
+          if (selectedAgentId === null) onOpenOverview(event.currentTarget)
+          else onClose()
+        }}
+      >
+        <span>{selectedAgentId === null ? '展开' : '收起'}</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d={selectedAgentId === null ? 'm5 15 7-7 7 7' : 'm5 9 7 7 7-7'} />
+        </svg>
+      </button>}
     </div>
   )
 }
@@ -6043,14 +6055,34 @@ type ExecutionQueueBatch = {
   createdAt: string
 }
 
+function executionSourceMessages(
+  run: AgentRunView,
+  turns: CampSnapshot['turns'],
+  messageById: ReadonlyMap<string, CampMessageView>
+): CampMessageView[] {
+  const sourceIds: string[] = []
+  for (const messageId of run.inputMessageIds ?? []) {
+    if (messageId && !sourceIds.includes(messageId)) sourceIds.push(messageId)
+  }
+  if (run.anchorMessageId && !sourceIds.includes(run.anchorMessageId)) {
+    sourceIds.push(run.anchorMessageId)
+  }
+  const turn = turns.find((candidate) => candidate.id === run.campTurnId)
+  if (turn?.triggerType === 'camp_message' && !sourceIds.includes(turn.triggerId)) {
+    sourceIds.push(turn.triggerId)
+  }
+  return sourceIds.flatMap((messageId) => {
+    const message = messageById.get(messageId)
+    return message ? [message] : []
+  })
+}
+
 function executionTriggerMessage(
   run: AgentRunView,
   turns: CampSnapshot['turns'],
   messageById: ReadonlyMap<string, CampMessageView>
 ): CampMessageView | null {
-  const turn = turns.find((candidate) => candidate.id === run.campTurnId)
-  if (!turn || turn.triggerType !== 'camp_message') return null
-  return messageById.get(turn.triggerId) ?? null
+  return executionSourceMessages(run, turns, messageById)[0] ?? null
 }
 
 function executionMessageSummary(message: CampMessageView | null, run: AgentRunView): string {
@@ -6061,6 +6093,14 @@ function executionMessageSummary(message: CampMessageView | null, run: AgentRunV
     ? `${attachment} 等 ${message!.attachments.length} 个附件`
     : attachment
   return run.purpose.trim().replace(/\s+/gu, ' ') || '执行记录'
+}
+
+export function executionEmptyStateShouldRender(
+  currentEntryCount: number,
+  historyRunCount: number,
+  runHistoryComplete: boolean
+): boolean {
+  return currentEntryCount === 0 && historyRunCount === 0 && runHistoryComplete
 }
 
 export function executionQueueBatches(runs: readonly AgentRunView[]): ExecutionQueueBatch[] {
@@ -6106,11 +6146,15 @@ function ExecutionRunMetric({ run }: { run: AgentRunView }): JSX.Element {
 }
 
 function ExecutionCardChevron({ expanded }: { expanded: boolean }): JSX.Element {
-  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d={expanded ? 'm4 10 4-4 4 4' : 'm4 6 4 4 4-4'} /></svg>
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d={expanded ? 'm5 15 7-7 7 7' : 'm5 9 7 7 7-7'} />
+  </svg>
 }
 
 function ExecutionStopIcon(): JSX.Element {
-  return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1" /></svg>
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" stroke="none" />
+  </svg>
 }
 
 function ExecutionBatchIcon(): JSX.Element {
@@ -6127,6 +6171,7 @@ function ExecutionDrawer({
   installation,
   turns,
   messages,
+  deliveries,
   progressByRunId,
   windowedEvidence,
   executionEventsByRunId,
@@ -6154,6 +6199,7 @@ function ExecutionDrawer({
   installation: AdapterInstallation | null
   turns: CampSnapshot['turns']
   messages: CampMessageView[]
+  deliveries: CampSnapshot['messageDeliveries']
   progressByRunId: Map<string, LiveExecutionProgress>
   windowedEvidence: boolean
   executionEventsByRunId: Map<string, LiveRuntimeEvent[]>
@@ -6233,7 +6279,6 @@ function ExecutionDrawer({
   )
   const queueBatches = executionQueueBatches(newestFirstRuns)
   const historyRuns = newestFirstRuns.filter((run) => !NON_TERMINAL_RUNS.has(run.status))
-  const unresolvedFailureCount = historyRuns.filter((run) => run.status === 'failed').length
   const latestRun = resolvedFocusedRun ?? currentRuns[0] ?? null
   const latestProgress = latestRun
     ? progressByRunId.get(latestRun.id)
@@ -6628,6 +6673,11 @@ function ExecutionDrawer({
               hideSummary
               onFileOpenError={onFileOpenError}
             />
+            <AgentRunDeliveryRecipients
+              sourceAgentRunId={run.id}
+              deliveries={deliveries}
+              memberById={memberById}
+            />
           </div>
         </article>
       </li>
@@ -6638,10 +6688,11 @@ function ExecutionDrawer({
     const expanded = expandedQueueAgents.has(batch.agentId)
     const runMember = memberById.get(batch.agentId)
     const runMemberName = runMember?.displayName ?? batch.agentId
-    const batchMessages = [...new Map(batch.runs.flatMap((run) => {
-      const message = executionTriggerMessage(run, turns, messageById)
-      return message ? [[message.id, message] as const] : []
-    })).values()]
+    const batchMessages = [...new Map(batch.runs.flatMap((run) =>
+      executionSourceMessages(run, turns, messageById).map((message) =>
+        [message.id, message] as const
+      )
+    )).values()]
     const batchInputCount = batchMessages.length || batch.runs.length
     const summary = executionMessageSummary(batchMessages[0] ?? null, batch.runs[0])
     const stoppingBatch = batch.runs.some((run) => runStopState(run) !== 'available')
@@ -6782,14 +6833,6 @@ function ExecutionDrawer({
               </div>
             </div>
           </div>
-          {placement === 'bottom' && <div className="execution-drawer-actions">
-              <button type="button" className="execution-drawer-action-button execution-drawer-collapse-button" onClick={onClose} aria-label="收起执行详情">
-                <span className="execution-drawer-action-face">
-                  <span>收起</span>
-                  <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="m4 10 4-4 4 4" /></svg>
-                </span>
-              </button>
-          </div>}
         </header>
         <div
           ref={drawerBodyRef}
@@ -6824,22 +6867,17 @@ function ExecutionDrawer({
           <ExecutionLatestContext.Provider value={latestContext}>
           <ExecutionReadingContext.Provider value={setFollowingLatest}>
           <ExecutionToolGroupStateContext.Provider value={groupState}>
-          <section aria-label="当前执行与排队">
-            {currentEntries.length > 0
-              ? <ol className="execution-process-timeline">{currentEntries.map((entry) =>
-                  entry.kind === 'run' ? renderRunCard(entry.run) : renderQueueBatch(entry.batch)
-                )}</ol>
-              : <div className="execution-current-empty">当前没有执行</div>}
-          </section>
-          <section className="execution-history-section" aria-label="执行历史">
+          {currentEntries.length > 0 && <section aria-label="当前执行与排队">
+            <ol className="execution-process-timeline">{currentEntries.map((entry) =>
+              entry.kind === 'run' ? renderRunCard(entry.run) : renderQueueBatch(entry.batch)
+            )}</ol>
+          </section>}
+          {(historyRuns.length > 0 || !runHistoryComplete) && <section className={`execution-history-section${currentEntries.length === 0 ? ' is-first' : ''}`} aria-label="执行历史">
             <button className="execution-history-toggle" type="button" aria-expanded={historyOpen}
               aria-controls={`execution-history-${process.agentId}`} onClick={() => setHistoryOpen((open) => !open)}>
               <ExecutionCardChevron expanded={historyOpen} />
               <span>执行历史</span>
               {historyRuns.length > 0 && <span className="execution-history-count">{historyRuns.length}</span>}
-              {unresolvedFailureCount > 0 && <span className="execution-history-alert">
-                <ExecutionStatusGlyph status="failed" />{unresolvedFailureCount} 项失败待处理
-              </span>}
             </button>
             <div className="execution-history-list" id={`execution-history-${process.agentId}`} hidden={!historyOpen}>
               {historyRuns.length > 0
@@ -6847,7 +6885,13 @@ function ExecutionDrawer({
                 : <div className="execution-current-empty">暂无执行历史</div>}
               {!runHistoryComplete && <p className="execution-history-partial">更早执行尚未载入</p>}
             </div>
-          </section>
+          </section>}
+          {executionEmptyStateShouldRender(
+            currentEntries.length,
+            historyRuns.length,
+            runHistoryComplete
+          )
+            && <div className="execution-current-empty">当前没有执行</div>}
           <div className="execution-reading-space" aria-hidden="true" />
           </ExecutionToolGroupStateContext.Provider>
           </ExecutionReadingContext.Provider>
@@ -7018,15 +7062,12 @@ function UserMessageDeliveryReceipt({
   }))
   const pending = ordered.filter(({ run }) => !run || (run.status === 'queued' && !run.cancelRequestedAt))
   const inProgress = ordered.filter(({ run }) => run?.status === 'running' || run?.status === 'waiting')
-  const incomplete = ordered.filter(({ run }) => run?.status === 'failed' || run?.status === 'cancelled')
   const canWithdraw = message.canWithdraw && Boolean(onWithdraw)
   const presentation = pending.length > 0
     ? { className: 'is-queued', label: `待处理 · ${pending.length}` }
-    : incomplete.length > 0
-      ? { className: 'is-error', label: `未完成 · ${incomplete.length}` }
-      : inProgress.length > 0
-        ? { className: 'is-progress', label: `处理中 · ${inProgress.length}` }
-        : null
+    : inProgress.length > 0
+      ? { className: 'is-progress', label: `处理中 · ${inProgress.length}` }
+      : null
   if (!presentation) return null
   return (
     <div className="user-message-receipt-row">
@@ -7038,11 +7079,9 @@ function UserMessageDeliveryReceipt({
             aria-label={`查看消息处理状态，${presentation.label}`}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
-              {presentation.className === 'is-error'
-                ? <><circle cx="8" cy="8" r="5.6" /><path d="M8 5v3.5M8 11h.01" /></>
-                : presentation.className === 'is-progress'
-                  ? <path d="M2 8h2.4l1.2-3 2 6 1.8-4.4 1.3 2.5H14" />
-                  : <><circle cx="8" cy="8" r="5.6" /><path d="M8 4.7V8l2.2 1.4" /></>}
+              {presentation.className === 'is-progress'
+                ? <path d="M2 8h2.4l1.2-3 2 6 1.8-4.4 1.3 2.5H14" />
+                : <><circle cx="8" cy="8" r="5.6" /><path d="M8 4.7V8l2.2 1.4" /></>}
             </svg>
             <span>{presentation.label}</span>
           </button>
@@ -8601,6 +8640,7 @@ function MessageSurface({
   copied,
   hasDelivery,
   showActions = true,
+  actionBefore,
   onReply,
   onCopy,
   onWithdraw,
@@ -8610,6 +8650,7 @@ function MessageSurface({
   copied: boolean
   hasDelivery: boolean
   showActions?: boolean
+  actionBefore?: React.ReactNode
   onReply?(modality: ReplyFocusModality): void
   onCopy(): void
   onWithdraw?(): void
@@ -8620,13 +8661,16 @@ function MessageSurface({
     <div className={`message-surface${hasDelivery ? ' has-delivery' : ''}${copied ? ' copied' : ''}`}>
       {children}
       {showActions && (
-        <MessageActions
-          copied={copied}
-          onReply={onReply}
-          onCopy={onCopy}
-          onWithdraw={onWithdraw}
-          withdrawing={withdrawing}
-        />
+        <div className="message-action-line">
+          {actionBefore}
+          <MessageActions
+            copied={copied}
+            onReply={onReply}
+            onCopy={onCopy}
+            onWithdraw={onWithdraw}
+            withdrawing={withdrawing}
+          />
+        </div>
       )}
     </div>
   )

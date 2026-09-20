@@ -33,15 +33,20 @@ app.whenReady().then(async () => {
   }
   const state = () => run(`(() => {
     const rail = document.querySelector('.run-pulse-avatar-rail .run-pulse-list')
-    const chips = [...(rail?.querySelectorAll('.run-pulse-chip') ?? [])]
+    const allChips = [...(rail?.querySelectorAll('.run-pulse-chip') ?? [])]
+    const chips = allChips.filter(chip => chip.dataset.agentId !== '__execution_overview__')
+    const overview = allChips.find(chip => chip.dataset.agentId === '__execution_overview__')
     const viewport = rail?.getBoundingClientRect()
     const rect = node => node?.getBoundingClientRect().toJSON() ?? null
     const title = document.querySelector('.run-pulse-title')
     const count = document.querySelector('.run-pulse-count')
-    const selected = chips.find(chip => chip.getAttribute('aria-pressed') === 'true')
+    const selected = allChips.find(chip => chip.getAttribute('aria-pressed') === 'true')
+    const dock = document.querySelector('.run-pulse-inspector')
+    const placement = dock?.querySelector('.execution-placement-control')
     return {
       left: rail?.scrollLeft ?? 0, maximum: rail ? rail.scrollWidth - rail.clientWidth : 0,
       count: chips.length, ids: chips.map(chip => chip.dataset.agentId),
+      overviewCount: overview ? 1 : 0,
       visible: chips.filter(chip => { const r = chip.getBoundingClientRect(); return r.left >= viewport.left + 32 && r.right <= viewport.right - 32 }).map(chip => chip.dataset.agentId),
       rects: chips.map(rect), rail: rect(rail), selected: selected?.dataset.agentId, selectedRect: rect(selected),
       focused: document.activeElement?.getAttribute('data-agent-id'),
@@ -50,6 +55,7 @@ app.whenReady().then(async () => {
       title: rect(title), countRect: rect(count), tooltip: document.querySelector('[role="tooltip"]')?.textContent?.trim() ?? null,
       tooltipRect: rect(document.querySelector('[role="tooltip"]')),
       header: document.querySelector('.execution-drawer-header')?.textContent,
+      dock: rect(dock), placement: rect(placement),
       panel: rect(document.querySelector('.camp-detail-popover')), composer: rect(document.querySelector('.conversation-controls .composer-box')),
       pageOverflow: document.documentElement.scrollWidth > innerWidth,
       timelineTop: document.querySelector('.camp-timeline')?.scrollTop,
@@ -125,7 +131,13 @@ app.whenReady().then(async () => {
     assert.equal(value.pageOverflow, false)
     assert.ok(value.panel.bottom <= value.composer.top + 1, 'Popover does not cover Composer')
     assert.equal(value.title, null, 'The execution popover does not repeat the execution-console title')
-    assert.ok(value.countRect.height > 0 && value.countRect.bottom <= value.rail.top, 'The compact execution count stays above the avatar rail')
+    assert.equal(value.countRect, null, 'The avatar rail does not repeat a second execution count')
+    assert.equal(value.overviewCount, 1, 'The avatar rail keeps one explicit overview entry')
+    assert.ok(value.dock.left >= value.panel.left - 1 && value.dock.right <= value.panel.right + 1,
+      'The one-row execution rail stays inside the popover')
+    assert.ok(Math.abs((value.rail.top + value.rail.height / 2)
+      - (value.placement.top + value.placement.height / 2)) <= 1,
+    'The avatar rail and placement control share one vertical center')
     assert.ok(value.rects.every(rect => Math.abs(rect.y - value.rects[0].y) < 1), 'All avatars stay on one row')
     assert.ok(value.rects.every(rect => Math.abs(rect.width - 38) < 1 && Math.abs(rect.height - 38) < 1))
     assert.equal(value.scrollbar, 'none')
@@ -367,15 +379,15 @@ app.whenReady().then(async () => {
     assert.ok(value.tooltip.includes('负责跨项目执行审查与回归验收的长名称队员'))
     assert.ok(value.tooltipRect.left >= value.rail.left - 1 && value.tooltipRect.right <= value.rail.right + 1)
     value = await key('Home')
-    assert.equal(value.focused, 'agent-1')
+    assert.equal(value.focused, '__execution_overview__')
     assert.equal(value.left, 0)
     await wheel(-60, 0)
     value = await key('Home')
     assert.equal(value.left, 0, 'Home reveals an already-focused first avatar after manual scrolling')
     value = await key('Right')
-    assert.equal(value.focused, 'agent-2')
-    value = await key('Left')
     assert.equal(value.focused, 'agent-1')
+    value = await key('Left')
+    assert.equal(value.focused, '__execution_overview__')
     value = await key('End')
     value = await waitForState(value => value.focused === 'agent-20' && value.left === value.maximum,
       'the last avatar and scroll boundary')
@@ -414,16 +426,15 @@ app.whenReady().then(async () => {
 
     await click('[data-count="8"]')
     value = await openDetail('execution')
-    assert.equal(value.maximum, 0)
-    assert.ok(!value.leftEnabled && !value.rightEnabled)
+    assert.ok(value.maximum > 0 && (value.leftEnabled || value.rightEnabled),
+      'Eight members plus overview remain scrollable when the placement control shares the row')
     assertLayout(value)
     await capture('avatar-rail-eight-members')
 
     await click('[data-count="12"]')
     await click('[data-theme-toggle]')
     await openDetail('execution')
-    await click('.run-pulse-avatar-rail [data-agent-id="agent-1"]')
-    await click('.execution-disclosure.worked > summary')
+    await click('.run-pulse-avatar-rail [data-agent-id="agent-3"]')
     await assertExecutionWidth()
     await capture('avatar-rail-night-1440')
     if (!window.webContents.debugger.isAttached()) window.webContents.debugger.attach('1.3')
@@ -437,15 +448,21 @@ app.whenReady().then(async () => {
     await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false })
     await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     await focusAvatar('agent-1')
-    await key('Home')
-    value = await click('.run-pulse-avatar-scroll.is-right')
+    value = await key('End')
     assert.equal(value.left, value.maximum)
     await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] })
     assert.equal(await run("getComputedStyle(document.querySelector('.run-pulse-avatar-rail .run-pulse-list')).maskImage"), 'none')
     await capture('avatar-rail-forced-colors')
     await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] })
+    await key('Home')
+    await key('Right')
+    await key('Enter')
     await click('.run-pulse-inspector .execution-placement-button')
-    assert.equal(await run("document.querySelectorAll('.run-pulse-bottom .run-pulse-chip-copy').length"), 12)
+    await click('.execution-placement-option[data-placement="bottom"]')
+    assert.equal(await run("document.querySelectorAll('.run-pulse-bottom .run-pulse-chip-copy').length"), 13,
+      'The bottom dock keeps Overview plus all twelve member cards')
+    assert.equal(await run("document.querySelector('.run-pulse-bottom').getBoundingClientRect().height"), 55,
+      'The hidden horizontal scrollbar does not make the restored bottom rail taller')
     assert.equal(await run("document.querySelector('.run-pulse-avatar-rail') === null"), true)
 
     // Collaboration recipients are a separate identity row, not the process-selection rail.
@@ -483,6 +500,9 @@ app.whenReady().then(async () => {
       await settle()
     }
     await click('[data-recipient-count="2"]')
+    if (!await run("document.querySelector('.execution-history-toggle')?.getAttribute('aria-expanded') === 'true'")) {
+      await click('.execution-history-toggle')
+    }
     await revealRecipients()
     assert.deepEqual((await assertRecipients(2)).ids, ['agent-2', 'agent-3'])
     await capture('delivery-avatars-bottom-night')
@@ -513,6 +533,7 @@ app.whenReady().then(async () => {
 
     await run("window.deliveryDrawer = document.querySelector('.execution-drawer')")
     await click('.run-pulse-bottom .execution-placement-button')
+    await click('.execution-placement-option[data-placement="inspector"]')
     assert.equal(await run("window.deliveryDrawer === document.querySelector('.execution-drawer')"), true)
     await click('[data-recipient-count="16"]')
     await click('[data-theme-toggle]')

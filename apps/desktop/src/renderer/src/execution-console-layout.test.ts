@@ -75,6 +75,46 @@ describe('execution console layout', () => {
     expect(styleBlock('.run-pulse-chip-copy')).toMatch(/margin-inline-start:\s*4px/)
   })
 
+  it('restores the bottom rail and keeps its member controls on one compact row', () => {
+    expect(styleBlock('.run-pulse-bottom')).toMatch(/display:\s*flex/)
+    expect(styleBlock('.run-pulse-bottom')).toMatch(/min-height:\s*55px/)
+    expect(styleBlock('.run-pulse-bottom .run-pulse-chip')).toMatch(/height:\s*34px/)
+    expect(styleBlock('.run-pulse-bottom .run-pulse-list')).toMatch(/scrollbar-width:\s*none/)
+    expect(styleBlock('.execution-drawer-bottom .execution-drawer-title-line')).toMatch(
+      /display:\s*flex/
+    )
+    expect(styleBlock('.execution-drawer-bottom .execution-drawer-title-line')).toMatch(
+      /flex-wrap:\s*nowrap/
+    )
+  })
+
+  it('aligns the floating and right rails with the placement control on one row', () => {
+    expect(styleBlock('.run-pulse-inspector')).toMatch(/display:\s*flex/)
+    expect(styleBlock('.run-pulse-inspector')).toMatch(/align-items:\s*center/)
+    expect(styleBlock('.run-pulse-avatar-rail')).toMatch(/flex:\s*1 1 auto/)
+    expect(styleBlock('.run-pulse-inspector .execution-placement-control')).toMatch(
+      /align-self:\s*center/
+    )
+  })
+
+  it('matches the compact Run card controls from the interaction prototype', () => {
+    expect(styleBlock('.execution-run-operations button')).toMatch(/width:\s*26px/)
+    expect(styleBlock('.execution-run-operations button')).toMatch(/height:\s*25px/)
+    expect(styleBlock('.execution-run-operations button.is-danger')).toMatch(
+      /background:\s*var\(--danger-soft\)/
+    )
+    expect(styleBlock('.execution-process-card:is(:hover, :focus-within) .execution-run-metric'))
+      .toMatch(/visibility:\s*hidden/)
+  })
+
+  it('keeps the user receipt and message actions on one footer row', () => {
+    expect(styleBlock('.message-action-line')).toMatch(/display:\s*flex/)
+    expect(styleBlock('.message-action-line')).toMatch(/align-items:\s*center/)
+    expect(styleBlock('.message-action-line')).toMatch(/justify-content:\s*flex-end/)
+    expect(styleBlock('.message-action-line > .user-message-receipt-row,\n.message-action-line > .message-actions'))
+      .toMatch(/transform:\s*none/)
+  })
+
   it('uses immediate drawer scrolling while JavaScript owns latest-position restoration', () => {
     expect(styleBlock('.execution-drawer-body')).toMatch(/scroll-behavior:\s*auto/)
     expect(styleBlock('.execution-drawer-body')).not.toMatch(/scroll-behavior:\s*smooth/)
