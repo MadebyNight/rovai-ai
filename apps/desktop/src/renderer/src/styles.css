@@ -3980,7 +3980,7 @@ button.task-event-card:focus-visible .task-card-chevron { color: var(--brand-ink
 .tool-result-state-copy { display: grid; min-width: 0; gap: 2px; }
 .tool-result-state-copy strong { color: inherit; font-size: 10.5px; }
 .tool-result-state-copy span { color: var(--evidence-muted); overflow-wrap: anywhere; }
-.tool-result-spinner { width: 11px; height: 11px; flex: 0 0 11px; border: 1.5px solid var(--line-strong); border-top-color: var(--info); border-radius: 50%; animation: camp-marker-spin 900ms linear infinite; }
+.tool-result-spinner { width: 11px; height: 11px; flex: 0 0 11px; border: 1.5px solid var(--line-strong); border-top-color: var(--evidence-muted); border-radius: 50%; animation: camp-marker-spin 900ms linear infinite; }
 .tool-result-retry { flex: 0 0 auto; }
 .process-plan { color: var(--muted); font-size: 11.5px; }
 .live-progress-plan ol { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
