@@ -24,12 +24,18 @@ according to actual resource state.
 `MissionGit` reads the source checkout's current local branch and `HEAD` when the first admitted Run enters
 preparing, and again only when both previously managed Git resources have been removed. It uses the resolved
 commit, the Host-resolved Git executable and verified ownership to create, restore or clean worktrees. Cleanup
-verifies the owned resource set once, persists the branch OID on the first attempt, and removes the verified
-worktree before checking branch use and conditionally deleting the local Mission branch at that OID. Its two
+verifies the directory and managed branch as independent resources, persists the managed-branch OID on the first
+attempt, and removes the verified clean Worktree without force before checking branch use and conditionally deleting
+the local Mission branch at that OID. A different named checkout is retained as a branch; a detached commit must be
+reachable from another persistent reference. Its two
 durable checkpoints let retries skip the completed worktree step and reuse the saved OID; an absent resource is
 idempotent without widening cleanup beyond the verified path, registration or staging root.
-The command commits `cleanup_pending` before notifying the worker; startup/periodic recovery scans unfinished
-pending rows only. Failure becomes `cleanup_failed` and is never automatically retried. Successful live cleanup
+The command normally commits `cleanup_pending` before notifying the worker, but a preflight dirty or unsafe detached
+refusal leaves a ready workspace ready. Startup/periodic recovery scans unfinished pending rows only. A worker failure
+becomes `cleanup_failed` unless an intact-resource audit proves that no Worktree removal occurred for a still-live
+Mission, in which case the attempt ends back at `ready`; failed rows are never automatically retried. The same audit
+lets an explicit retry or later execution recover legacy non-destructive failures without trusting checkpoint booleans.
+Successful live cleanup
 keeps both completed checkpoints for reconstruction; successful orphan cleanup removes the workspace row.
 
 For an existing persistent Worktree, execution admission validates canonical paths, repository identity,
@@ -96,7 +102,7 @@ preserve one mounted composer/preview owner. Mobile is intentionally outside thi
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
 branch in place. Optional cleanup records its intent in the same transaction that deletes the Mission, removes
 the card immediately, and exposes only failed orphan work through the existing cleanup route; retained resources
-never enter that route. Protocol and failure behavior live in [Mission v9](../contracts/mission-v9.md); UI in
+never enter that route. Protocol and failure behavior live in [Mission v10](../contracts/mission-v10.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14). Global discovery and current-only mutation are explained

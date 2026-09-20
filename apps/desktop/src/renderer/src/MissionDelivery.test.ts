@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { MissionChangedFile } from '@contracts'
-import { missionFileTree, missionTreeWindow } from './MissionDelivery'
+import { missionChangesVisible, missionFileTree, missionTreeWindow } from './MissionDelivery'
 
 function changedFile(id: string, path: string): MissionChangedFile {
   return {
@@ -24,6 +24,16 @@ function treeShape(nodes: ReturnType<typeof missionFileTree>): unknown[] {
 }
 
 describe('Mission cumulative file tree', () => {
+  it('mounts cumulative changes only after a Git workspace is ready', () => {
+    expect(missionChangesVisible(true, null)).toBe(false)
+    expect(missionChangesVisible(true, 'preparing')).toBe(false)
+    expect(missionChangesVisible(true, 'cleanup_pending')).toBe(false)
+    expect(missionChangesVisible(true, 'cleanup_failed')).toBe(false)
+    expect(missionChangesVisible(true, 'cleaned')).toBe(false)
+    expect(missionChangesVisible(false, 'ready')).toBe(false)
+    expect(missionChangesVisible(true, 'ready')).toBe(true)
+  })
+
   it('sorts directories before files, compresses single-directory chains and counts descendants', () => {
     const tree = missionFileTree([
       changedFile('readme', 'README.md'),

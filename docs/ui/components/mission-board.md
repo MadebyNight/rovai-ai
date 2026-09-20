@@ -127,7 +127,9 @@ the saved preview ratio and the same 420px stable minimum.
 After an automatic resize-driven hide, the far-right toggle can still reopen an intentionally selected
 compact preview. Compact preview and source-message navigation preserve the conversation and draft.
 
-Delivery shows the actual directory and, for Git, the fixed base and cumulative changes. The branch row comes
+Delivery shows the actual directory. Before a Git Mission has created its first workspace, the Activity document
+does not render the cumulative-changes heading, controls, empty state or workspace-not-prepared error. Once a ready
+workspace exists, Delivery shows its fixed base and cumulative changes. The branch row comes
 from the Worktree's current checkout observation, never from the persisted managed branch: it shows the branch
 and current `HEAD`, detached `HEAD` with a short commit, or a neutral unavailable state. A Diff-base failure keeps
 that checkout row visible and reports only that cumulative changes cannot currently be compared. It has no
@@ -158,8 +160,10 @@ the Mission title, worktree path or branch. When a workspace record exists it ad
 `同时清理 Worktree 及本地分支` option and a focusable `?` explaining that unchecked resources stay in place.
 The existing card/list right-click menu shows `清理使命 Worktree` only from Core's `cleanupAvailable`; there is
 no conversation-header ellipsis or retained-workspace page. Its dialog states that it removes the Worktree and
-local branch, lists the two identifiers, and uses only neutral `取消` / `清理` actions. A cleanup failure keeps
-the Mission and returns to the same explicit retry path. After Core durably accepts the cleanup intent, the
+local branch, lists the two identifiers, and uses only neutral `取消` / `清理` actions. A cleanup preflight refusal
+for unsaved content or an unsafe detached commit keeps the Mission workspace ready and reports the reason without
+entering the persistent failure presentation. A cleanup failure after partial or uncertain deletion keeps the
+Mission and returns to the same explicit retry path. After Core durably accepts the cleanup intent, the
 dialog closes without waiting for Git work, the Mission list or the current Camp to refresh. The card adds one
 full-width bottom resource row without changing its business-status lane: spinner plus `正在清理 Worktree…`
 while pending, persistent `Worktree 清理失败 · 查看` (or `分支清理失败 · 查看`) after failure, and
@@ -181,6 +185,6 @@ focus request even when there is no notification acknowledgement waiter; snapsho
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 
-Business and ownership rules are defined by [Mission v9](../../contracts/mission-v9.md), not this presentation
+Business and ownership rules are defined by [Mission v10](../../contracts/mission-v10.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

@@ -9,7 +9,7 @@ last_updated: 2026-09-20
 
 # v1.62 实施与验收
 
-范围见[版本概览](README.md)，字段级行为见 [Mission v9](../../contracts/mission-v9.md)、
+范围见[版本概览](README.md)，字段级行为见 [Mission v10](../../contracts/mission-v10.md)、
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
@@ -112,7 +112,8 @@ last_updated: 2026-09-20
 - [x] workspace 投影把已有 `branch` 映射为 `managedBranch`，活动页使用不持久化的 `checkoutState`；无 Migration。
 - [x] checkout 与文件列表由一次 changes view 返回；文件详情重建私有临时 index 并验证 view association，旧请求
   迟到不会覆盖新视图或移除新句柄，Renderer 刷新时清除文件详情并丢弃旧响应。
-- [x] 清理继续使用受管分支与 expected OID；非受管 checkout 和 detached HEAD 保留现场，不自动切回或接管。
+- [x] 清理分离 Worktree 目录归属与受管分支 expected OID；干净的非受管具名 checkout 删除目录但保留分支，
+  detached 提交必须有本次保留的持久引用，脏现场不自动切换、stash、commit、reset 或 clean。
 - [x] 既有 Rust owner 覆盖分支切换、受管分支删除、detached、观测降级、固定基准失败、同 HEAD 的 staged/
   unstaged/untracked 刷新和 cleanup fence；真实 Runtime smoke 经过调度准备链验证重启续跑。
 
@@ -135,6 +136,17 @@ last_updated: 2026-09-20
 - [x] Mission 专属 Session Charter 在 `mission get` 说明后只增加已确认的续作句，并把 Charter revision 从
   10 轮换到 11；普通 Camp、Single Chat、WORKSPACE、Runtime compaction 与数据库均不变。
 - [x] 两个既有 Rust owner、格式、文档治理与 diff 检查通过；PR 继续由 required checks 约束合入。
+
+## Gate 13：Worktree 清理安全修复
+
+- [x] 正式 Worktree 删除改用非 force 路径；切到其他具名分支且现场干净时删除目录并保留当前分支，受管分支
+  缺失视为步骤完成，残留注册只按精确路径与 owner marker 清理。
+- [x] staged、unstaged、untracked 与无保留引用的 detached 提交在删除前拒绝；清理不自动修改用户现场。
+- [x] 预检拒绝不进入 `cleanup_failed`；worker 或旧失败只有在完整目录、注册、owner marker 与执行目录均实际
+  存在时恢复 `ready`，部分删除与未知结果继续复用原 expected OID 和检查点。
+- [x] 活动页在 Workspace 尚未创建时不挂载“累计文件变更”区域；ready 工作区及拒绝后的改动读取保持不变。
+- [x] 完成定向 Rust/Renderer、默认 feature PR 门禁及 Mission Board 隔离自动验收；本地 App 安装与追加真实
+  Mission smoke 按本次交付指令不执行。
 
 ## Rust 测试准入记录
 
@@ -162,6 +174,15 @@ Worktree checkout 增量不新增平行 Rust test owner。既有 `persistent_wor
 扩展执行准入、detached、受管分支缺失、checkout 降级与非受管分支 cleanup fence；既有
 `fixed_base_diff_is_final_net_content_without_mutating_real_index` 扩展同 HEAD 刷新、固定基准失败和多 view handle。
 `scripts/smoke-mission.mjs` 继续拥有真实调度/Runtime 证明，Electron Mission fixture 继续拥有迟到响应与活动页刷新。
+
+清理安全修复继续扩展同一个 `persistent_worktree_preserves_source_recovers_owned_creation_and_retains_branch_on_delete`
+owner：修复前非受管 checkout 固定失败且正式删除使用 force；现在同一真实 Git fixture 同时证明脏文件保留、具名
+分支提交保留、受管分支缺失、detached 引用准入与变更后的 stale registration。跨 Core 命令、持久状态和后续
+preparing 的 seam 仍由 `scripts/smoke-mission.mjs` 拥有，扩展 dirty rejection、旧 `cleanup_failed` 恢复、成功清理
+及下一 Run 重建；较低层测试不能证明 Gateway/worker/preparation 串联。Renderer 继续扩展现有
+`MissionDelivery.test.ts` owner，修复前 `workspace=null` 仍挂载变化区。删除测试为零。最小自动命令分别为
+`cargo test -p rovai-core --lib persistent_worktree_preserves_source_recovers_owned_creation_and_retains_branch_on_delete`
+与 `pnpm exec vitest run apps/desktop/src/renderer/src/MissionDelivery.test.ts`。
 
 Camp Open 增量改写既有 `open_repairs_only_cancellation_marked_work_in_the_requested_camp` owner：旧 service 修复
 合同退出，successor `open_and_read_only_enter_never_settle_work_or_write_managed_blobs` 拥有读取入口的 SQL 与文件
