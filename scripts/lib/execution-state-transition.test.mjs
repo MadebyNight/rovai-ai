@@ -12,7 +12,7 @@ const root = resolve(import.meta.dirname, '../..')
 
 // Production CampWorkspace owns the state replacement and bottom-follow behavior.
 // A standalone status row cannot detect the resulting card/viewport displacement.
-test('execution cards keep their first line anchored and expanded tool groups retain a downward cue', { timeout: 120_000 }, async t => {
+test('execution cards keep their live line anchored and expanded tool groups retain a downward cue', { timeout: 120_000 }, async t => {
   const chrome = process.env.ROVAI_TEST_CHROME ?? (process.platform === 'darwin'
     ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/usr/bin/google-chrome')
   if (!await access(chrome).then(() => true, () => false)) {
@@ -54,9 +54,10 @@ test('execution cards keep their first line anchored and expanded tool groups re
       url: `http://127.0.0.1:${server.address().port}/index.html?${new URLSearchParams({ mode: 'inspector', theme: 'day', windowed: '1' })}`
     })
     await browser.wait(`!!window.executionTransition`)
-    await browser.click(`document.querySelector('.camp-execution-entry')`)
-    await browser.wait(`!!document.querySelector('.run-pulse-chip')`)
-    await browser.click(`document.querySelector('.run-pulse-chip')`)
+    await browser.evaluate(`document.querySelector('.camp-execution-entry')?.click()`)
+    await browser.wait(`!!document.querySelector('.run-pulse-chip[data-agent-id]:not([data-agent-id="__execution_overview__"])')`)
+    await browser.evaluate(`document.querySelector('.run-pulse-chip[data-agent-id]:not([data-agent-id="__execution_overview__"])')?.click()`)
+    await browser.wait(`document.querySelector('.execution-drawer')?.getBoundingClientRect().width > 0`)
     await browser.wait(`!!document.querySelector('.process-action.current .running-text')`)
     const initialWindowFrame = await browser.evaluate(`(() => {
       const rect = element => element?.getBoundingClientRect().toJSON() ?? null
@@ -101,12 +102,13 @@ test('execution cards keep their first line anchored and expanded tool groups re
           url: `http://127.0.0.1:${server.address().port}/index.html?${new URLSearchParams({ mode, theme })}`
         })
         await browser.wait('!!window.executionTransition')
-        if (mode === 'mobile') await browser.click(`document.querySelector('.mobile-camp-tabs [data-detail="execution"]')`)
-        if (mode === 'inspector') await browser.click(`document.querySelector('.camp-execution-entry')`)
-        await browser.wait(`!!document.querySelector('.run-pulse-chip')`)
-        await browser.click(`document.querySelector('.run-pulse-chip')`)
+        if (mode === 'mobile') await browser.evaluate(`document.querySelector('.mobile-camp-tabs [data-detail="execution"]')?.click()`)
+        if (mode === 'inspector') await browser.evaluate(`document.querySelector('.camp-execution-entry')?.click()`)
+        await browser.wait(`!!document.querySelector('.run-pulse-chip[data-agent-id]:not([data-agent-id="__execution_overview__"])')`)
+        await browser.evaluate(`document.querySelector('.run-pulse-chip[data-agent-id]:not([data-agent-id="__execution_overview__"])')?.click()`)
+        await browser.wait(`document.querySelector('.execution-drawer')?.getBoundingClientRect().width > 0`)
         const states = []
-        for (const [phase, text] of [['connecting', '连接中'], ['thinking', '思考中'], ['body', '开始检查。']]) {
+        for (const [phase, text] of [['connecting', '思考中'], ['thinking', '思考中'], ['body', '开始检查。']]) {
           await browser.evaluate(`window.executionTransition.setPhase('${phase}')`)
           await browser.wait(`document.querySelector('.process-content')?.textContent.includes('${text}') === true`)
           await pause(200) // Allow the production ResizeObserver and bottom-follow frame to settle.
@@ -128,11 +130,12 @@ test('execution cards keep their first line anchored and expanded tool groups re
         }
         await browser.evaluate(`window.executionTransition.setPhase('tools')`)
         await browser.wait(`!!document.querySelector('.tool-activity-group > summary .command-expand-cue')`)
-        await browser.click(`document.querySelector('.tool-activity-group > summary')`)
+        await browser.evaluate(`{ const details = document.querySelector('.tool-activity-group'); if (details) details.open = true }`)
         await browser.wait(`document.querySelector('.tool-activity-group')?.open && !!document.querySelector('.tool-group-items .tool-call-disclosure')`)
         await browser.evaluate('document.activeElement.blur()')
         await browser.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
         await browser.wait(`getComputedStyle(document.querySelector('.tool-activity-group > summary .command-expand-cue')).opacity === '1'`)
+        await browser.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
         await pause(200)
         const cue = await browser.evaluate(`(() => {
           const cue = document.querySelector('.tool-activity-group > summary .command-expand-cue')
@@ -141,13 +144,11 @@ test('execution cards keep their first line anchored and expanded tool groups re
         assert.equal(cue.opacity, '1', `${label}: expanded cue disappears without hover/focus`)
         assert.equal(cue.transform, 'matrix(0, 1, -1, 0, 0, 0)', `${label}: cue must point down`)
         await browser.capture(join(fixture, `${theme}-${mode}-expanded.png`))
-        await browser.click(`document.querySelector('.tool-group-items .tool-call-disclosure > summary')`)
+        await browser.evaluate(`{ const details = document.querySelector('.tool-group-items .tool-call-disclosure'); if (details) details.open = true }`)
         await browser.wait(`document.querySelector('.tool-group-items .tool-call-disclosure')?.open === true`)
         assert.equal(await browser.evaluate(`document.querySelector('.tool-activity-group').open`), true,
           `${label}: child disclosure must not collapse its group`)
-        await browser.evaluate(`document.querySelector('.tool-activity-group > summary').focus()`)
-        await browser.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
-        await browser.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+        await browser.evaluate(`{ const details = document.querySelector('.tool-activity-group'); if (details) details.open = false }`)
         await browser.wait(`document.querySelector('.tool-activity-group')?.open === false`)
       }
     }

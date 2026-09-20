@@ -30,6 +30,7 @@ const conversationDropZoneOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_DROP_
 const worldMapOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_WORLD_MAP_ONLY === '1'
 const runtimeModelOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_MODEL_ONLY === '1'
 const webSearchOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_WEB_SEARCH_ONLY === '1'
+const webSearchAfterResponsiveOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_WEB_SEARCH_AFTER_RESPONSIVE_ONLY === '1'
 const toolDetailsOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_TOOL_DETAILS_ONLY === '1'
 const completeToolOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_COMPLETE_TOOL_ONLY === '1'
 const executionAutoFollowOnly = process.env.ROVAI_RUNTIME_ACTIVITY_ACCEPT_AUTO_FOLLOW_ONLY === '1'
@@ -227,9 +228,9 @@ try {
   const rightExecutionPlacement = await verifyRightExecutionPlacement(app.cdp)
   await chooseExecutionPlacement(app.cdp, 'bottom')
   await waitForExpression(app.cdp, `document.querySelector('.execution-drawer')?.dataset.placement === 'bottom'`)
-  if (!webSearchOnly && !toolDetailsOnly && !completeToolOnly && !executionAutoFollowOnly) {
+  if (!webSearchOnly && !webSearchAfterResponsiveOnly && !toolDetailsOnly && !completeToolOnly && !executionAutoFollowOnly) {
     await evaluate(app.cdp,
-      `document.querySelector('.execution-drawer [aria-label="收起执行详情"]')?.click()`)
+      `document.querySelector('.execution-bottom-collapse-button[aria-label="收起执行详情"]')?.click()`)
     await waitForExpression(app.cdp, `!document.querySelector('.execution-drawer')`)
   }
 
@@ -254,7 +255,10 @@ try {
       outputDir,
       verified
     }, null, 2))
-  } else if (webSearchOnly || toolDetailsOnly) {
+  } else if (webSearchOnly || webSearchAfterResponsiveOnly || toolDetailsOnly) {
+    if (webSearchAfterResponsiveOnly) {
+      await verifyResponsiveRuntimeModelLayouts(app.cdp, outputDir)
+    }
     const webSearchPresentation = await verifyWebSearchPresentation(app.cdp)
     const webSearchCapture = join(outputDir, 'runtime-activity-web-search.png')
     await capture(app.cdp, webSearchCapture)
@@ -340,6 +344,13 @@ try {
     && conversationPresentation.dayLabels.every((label) => /^\d{4}年\d{1,2}月\d{1,2}日$/.test(label))
     && conversationPresentation.dayLabels.every((label) => !label.includes('今天') && !label.includes('发布准备')),
     `Timeline did not use durable message dates: ${JSON.stringify(conversationPresentation)}`)
+
+  const userReceiptActionLine = await collectUserReceiptActionLine(app.cdp)
+  assert(userReceiptActionLine.text === '处理中 · 1'
+    && userReceiptActionLine.sameActionLine
+    && userReceiptActionLine.receiptBeforeActions
+    && userReceiptActionLine.centerDelta <= 1,
+  `User processing receipt and copy action did not share one row: ${JSON.stringify(userReceiptActionLine)}`)
 
   const messageAuthorProfileTriggers = await collectMessageAuthorProfileTriggers(app.cdp)
   assert(messageAuthorProfileTriggers.length === runtimes.length
@@ -487,8 +498,7 @@ try {
     && agentDock.agentIds.filter((agentId) => agentId === activeAgentId).length === 1,
     `Agent dock did not aggregate one entry per Agent: ${JSON.stringify(agentDock)}`)
   assert(agentDock.entries.every((entry) => entry.childCount === 3
-    && entry.nameLineCount >= 1
-    && entry.nameLineCount <= 2
+    && entry.nameLineCount === 1
     && entry.visibleStateText === ''
     && entry.buttonAriaLabel
     && entry.buttonTitle
@@ -496,7 +506,7 @@ try {
     && entry.stateTitle
     && ['state-running', 'state-waiting', 'state-completed', 'state-failed', 'state-stopped', 'state-recorded']
       .includes(entry.stateShape)),
-  `Agent dock entries were not avatar + two-line name + shaped status markers: ${JSON.stringify(agentDock)}`)
+  `Agent dock entries were not avatar + one-line name + shaped status markers: ${JSON.stringify(agentDock)}`)
   assert(agentDock.followsTimeline && agentDock.dockTop >= agentDock.timelineBottom - 1,
     `Agent dock is not attached below the conversation timeline: ${JSON.stringify(agentDock)}`)
   assert(agentDock.topRunBadgeCount === 0
@@ -531,6 +541,8 @@ try {
     && executionSidecar.singleRow
     && executionSidecar.compactAvatars
     && executionSidecar.noDuplicateHeading
+    && executionSidecar.rowDisplay === 'flex'
+    && executionSidecar.railPlacementCenterDelta <= 1
     && executionSidecar.listScrollWidth > executionSidecar.listClientWidth
     && executionSidecar.listOverflowX === 'auto'
     && executionSidecar.scrollbarWidth === 'none'
@@ -560,6 +572,7 @@ try {
       && Boolean(drawer.querySelector('.execution-drawer-resize-handle'))
   })()`)
   const returnedExecutionDock = await collectAgentDock(app.cdp)
+  const bottomExecutionLayout = await collectBottomExecutionLayout(app.cdp)
   const returnedExecutionSelection = await evaluate(app.cdp, `(() => ({
     selectedAgentId: document.querySelector('.run-pulse-bottom .run-pulse-chip.is-selected')?.dataset.agentId ?? null,
     drawerPlacement: document.querySelector('.execution-drawer')?.dataset.placement ?? null,
@@ -573,6 +586,19 @@ try {
     && returnedExecutionSelection.resizeHandle
     && JSON.stringify(returnedExecutionSelection.inspectorTabLabels) === JSON.stringify(['任务', '队员', '单聊']),
   `Execution console did not return to the production bottom surface: ${JSON.stringify({ returnedExecutionDock, returnedExecutionSelection })}`)
+  assert(bottomExecutionLayout.captionText === '执行'
+    && bottomExecutionLayout.dockHeight >= 54
+    && bottomExecutionLayout.dockHeight <= 56
+    && bottomExecutionLayout.controlOrder
+    && bottomExecutionLayout.collapseText === '收起'
+    && bottomExecutionLayout.headerSingleRow
+    && bottomExecutionLayout.headerCenterDelta <= 2
+    && bottomExecutionLayout.operationButtonSizes.every(({ width, height }) =>
+      Math.abs(width - 26) <= 1 && Math.abs(height - 25) <= 1)
+    && bottomExecutionLayout.chevronPaths.every((path) =>
+      path === 'm5 15 7-7 7 7' || path === 'm5 9 7 7 7-7')
+    && bottomExecutionLayout.stopIconMatchesPrototype,
+  `Bottom Execution console did not match the V15 control geometry: ${JSON.stringify(bottomExecutionLayout)}`)
 
   executionBackgrounds.dayBottom = await verifyExecutionBackgrounds(app.cdp)
   await setTheme(app.cdp, 'night')
@@ -666,9 +692,9 @@ try {
   await capture(app.cdp, bottomCapture)
 
   const drawerFocusedForEscape = await evaluate(app.cdp, `(() => {
-    const closeButton = document.querySelector('.execution-drawer button[aria-label="收起执行详情"]')
-    closeButton?.focus({ preventScroll: true })
-    return document.activeElement === closeButton
+    const resizeHandle = document.querySelector('.execution-drawer-resize-handle')
+    resizeHandle?.focus({ preventScroll: true })
+    return document.activeElement === resizeHandle
   })()`)
   assert(drawerFocusedForEscape, 'Could not focus the execution Drawer before testing Drawer-level Escape')
   await app.cdp.send('Input.dispatchKeyEvent', {
@@ -1645,6 +1671,30 @@ async function collectHandoffFooter(cdp) {
   })()`)
 }
 
+async function collectUserReceiptActionLine(cdp) {
+  return evaluate(cdp, `(() => {
+    const receipt = [...document.querySelectorAll('.user-message-receipt')]
+      .find((candidate) => candidate.textContent?.replace(/\\s+/g, ' ').trim() === '处理中 · 1')
+    const receiptRow = receipt?.closest('.user-message-receipt-row')
+    const actionLine = receiptRow?.closest('.message-action-line')
+    const actions = actionLine?.querySelector(':scope > .message-actions')
+    const receiptRect = receiptRow?.getBoundingClientRect()
+    const actionsRect = actions?.getBoundingClientRect()
+    return {
+      text: receipt?.textContent?.replace(/\\s+/g, ' ').trim() ?? null,
+      sameActionLine: Boolean(actionLine)
+        && receiptRow?.parentElement === actionLine
+        && actions?.parentElement === actionLine
+        && Boolean(actions?.querySelector('.message-copy-button')),
+      receiptBeforeActions: Boolean(receiptRow && actions)
+        && [...actionLine.children].indexOf(receiptRow) < [...actionLine.children].indexOf(actions),
+      centerDelta: receiptRect && actionsRect
+        ? Math.abs((receiptRect.top + receiptRect.height / 2) - (actionsRect.top + actionsRect.height / 2))
+        : Number.POSITIVE_INFINITY
+    }
+  })()`)
+}
+
 async function verifyTimelineFollowsLatestAcrossViewportResize(cdp) {
   const prepared = await evaluate(cdp, `(async () => {
     const timeline = document.querySelector('.camp-timeline')
@@ -1848,6 +1898,66 @@ async function collectAgentDock(cdp) {
   })()`)
 }
 
+async function collectBottomExecutionLayout(cdp) {
+  return evaluate(cdp, `(() => {
+    const dock = document.querySelector('.run-pulse-bottom')
+    const drawer = document.querySelector('.execution-drawer[data-placement="bottom"]')
+    const caption = dock?.querySelector(':scope > .run-pulse-bottom-caption')
+    const list = dock?.querySelector(':scope > .run-pulse-list')
+    const placement = dock?.querySelector(':scope > .execution-placement-control')
+    const collapse = dock?.querySelector(':scope > .execution-bottom-collapse-button')
+    const dockChildren = [...(dock?.children ?? [])]
+    const avatar = drawer?.querySelector('.execution-drawer-agent > .member-avatar')
+    const titleLine = drawer?.querySelector('.execution-drawer-title-line')
+    const title = titleLine?.querySelector('h2')
+    const model = titleLine?.querySelector('.execution-model-params')
+    const fast = titleLine?.querySelector('.camp-fast-toggle')
+    const headerNodes = [avatar, title, model, fast].filter((node) => node instanceof HTMLElement)
+    const headerCenters = headerNodes.map((node) => {
+      const rect = node.getBoundingClientRect()
+      return rect.top + rect.height / 2
+    })
+    const titleLineStyle = titleLine ? getComputedStyle(titleLine) : null
+    const operationButtons = [...(drawer?.querySelectorAll(
+      '.execution-process-stage.is-focused .execution-run-operations button'
+    ) ?? [])]
+    const stopRect = drawer?.querySelector(
+      '.execution-process-stage.is-focused .execution-run-operations button.is-danger rect'
+    )
+    return {
+      captionText: caption?.textContent?.replace(/\\s+/g, ' ').trim() ?? null,
+      dockHeight: dock?.getBoundingClientRect().height ?? 0,
+      controlOrder: dockChildren.indexOf(caption) === 0
+        && dockChildren.indexOf(list) === 1
+        && dockChildren.indexOf(placement) === 2
+        && dockChildren.indexOf(collapse) === 3,
+      collapseText: collapse?.textContent?.replace(/\\s+/g, ' ').trim() ?? null,
+      headerNodeCount: headerNodes.length,
+      headerSingleRow: headerNodes.length >= 3
+        && headerNodes.length <= 4
+        && titleLineStyle?.display === 'flex'
+        && titleLineStyle?.flexWrap === 'nowrap',
+      headerCenterDelta: headerCenters.length > 0
+        ? Math.max(...headerCenters) - Math.min(...headerCenters)
+        : Number.POSITIVE_INFINITY,
+      operationButtonSizes: operationButtons.map((button) => {
+        const rect = button.getBoundingClientRect()
+        return { width: rect.width, height: rect.height }
+      }),
+      chevronPaths: operationButtons.flatMap((button) => button.classList.contains('is-danger')
+        ? []
+        : [...button.querySelectorAll('path')].map((path) => path.getAttribute('d'))),
+      stopIconMatchesPrototype: stopRect?.getAttribute('x') === '5'
+        && stopRect?.getAttribute('y') === '5'
+        && stopRect?.getAttribute('width') === '14'
+        && stopRect?.getAttribute('height') === '14'
+        && stopRect?.getAttribute('rx') === '1.5'
+        && stopRect?.getAttribute('fill') === 'currentColor'
+        && stopRect?.getAttribute('stroke') === 'none'
+    }
+  })()`)
+}
+
 async function collectExecutionSidecar(cdp) {
   return evaluate(cdp, `(() => {
     const sideDock = document.querySelector('.run-pulse-inspector')
@@ -1861,6 +1971,11 @@ async function collectExecutionSidecar(cdp) {
     const activeTab = document.querySelector('.camp-detail-entry[aria-expanded="true"]')
       ?.querySelector(':scope > span:not([aria-hidden="true"])')?.textContent?.trim() ?? null
     const drawer = document.querySelector('.execution-drawer')
+    const rail = sideDock?.querySelector('.run-pulse-avatar-rail')
+    const placementControl = sideDock?.querySelector('.execution-placement-control')
+    const railRect = rail?.getBoundingClientRect()
+    const placementRect = placementControl?.getBoundingClientRect()
+    const sideDockStyle = sideDock ? getComputedStyle(sideDock) : null
     return {
       inspectorTabLabels,
       activeTab,
@@ -1884,6 +1999,10 @@ async function collectExecutionSidecar(cdp) {
         || (Math.abs(rect.y - rects[0].y) <= 1 && rect.x > rects[index - 1].x)),
       compactAvatars: rects.every((rect) => Math.abs(rect.width - 38) <= 1 && Math.abs(rect.height - 38) <= 1),
       noDuplicateHeading: !sideDock?.querySelector('.run-pulse-title, .run-pulse-count'),
+      rowDisplay: sideDockStyle?.display ?? null,
+      railPlacementCenterDelta: railRect && placementRect
+        ? Math.abs((railRect.top + railRect.height / 2) - (placementRect.top + placementRect.height / 2))
+        : Number.POSITIVE_INFINITY,
       listClientWidth: list?.clientWidth ?? 0,
       listScrollWidth: list?.scrollWidth ?? 0,
       listOverflowX: list ? getComputedStyle(list).overflowX : null,
@@ -2342,6 +2461,9 @@ async function openToolActivityGroups(cdp) {
       .forEach((summary) => summary.click())
     return true
   })()`)
+  await waitForExpression(cdp, `(() => [...document.querySelectorAll(
+    '.execution-drawer details.tool-activity-group'
+  )].every((group) => group.open && group.querySelector(':scope > summary')?.getAttribute('aria-expanded') === 'true'))()`)
 }
 
 async function expandSelectedRunCards(cdp) {
@@ -2351,7 +2473,10 @@ async function expandSelectedRunCards(cdp) {
     return true
   })()`)
   await waitForExpression(cdp,
-    `document.querySelector('.execution-drawer .execution-history-toggle')?.getAttribute('aria-expanded') === 'true'`)
+    `(() => {
+      const history = document.querySelector('.execution-drawer .execution-history-toggle')
+      return !history || history.getAttribute('aria-expanded') === 'true'
+    })()`)
   await evaluate(cdp, `(() => {
     document.querySelectorAll('.execution-drawer .execution-run-toggle[aria-expanded="false"]')
       .forEach((button) => button.click())
@@ -3169,6 +3294,8 @@ async function verifyWebSearchPresentation(cdp) {
   })()`)
   assert(selected, 'Could not select the CodeBuddy Web search process entry')
   await expandSelectedRunCards(cdp)
+  await waitForExpression(cdp,
+    `document.querySelectorAll('.execution-drawer .tool-group-summary').length > 0`)
   await openToolActivityGroups(cdp)
   await waitForExpression(cdp, `(() => {
     const selected = document.querySelector('.run-pulse-chip.is-selected')
@@ -3176,6 +3303,13 @@ async function verifyWebSearchPresentation(cdp) {
       && [...document.querySelectorAll('.execution-drawer .tool-call-title')]
         .some((title) => title.textContent?.trim() === 'Web 搜索')
   })()`)
+  await evaluate(cdp, `(() => {
+    const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
+      .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'Web 搜索')
+    disclosure?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
+    return Boolean(disclosure)
+  })()`)
+  await evaluate(cdp, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))', true)
   const opened = await evaluate(cdp, `(() => {
     const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
       .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'Web 搜索')
@@ -3192,8 +3326,14 @@ async function verifyWebSearchPresentation(cdp) {
   await waitForExpression(cdp, `(() => {
     const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
       .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'Web 搜索')
-    return Boolean(disclosure?.querySelector('.tool-call-detail pre'))
+    return disclosure?.open === true
+      && disclosure.querySelector(':scope > summary')?.getAttribute('aria-expanded') === 'true'
   })()`)
+  await waitForExpression(cdp, `(() => {
+    const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
+      .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'Web 搜索')
+    return Boolean(disclosure?.querySelector('.tool-call-detail pre'))
+  })()`, 30_000)
   const presentation = await evaluate(cdp, `(() => {
     const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
       .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'Web 搜索')
@@ -3229,6 +3369,8 @@ async function verifyClaudeCommandDisclosure(cdp) {
     return selected?.dataset.agentId === ${JSON.stringify(claudeAgentId)}
   })()`)
   await expandSelectedRunCards(cdp)
+  await waitForExpression(cdp,
+    `document.querySelectorAll('.execution-drawer .tool-group-summary').length > 0`)
   await openToolActivityGroups(cdp)
   await waitForExpression(cdp, `(() => [...document.querySelectorAll(
     '.execution-drawer details.tool-call-disclosure .tool-call-title'
@@ -3239,10 +3381,18 @@ async function verifyClaudeCommandDisclosure(cdp) {
         === ${JSON.stringify(claudeExpectedCommand)})
     const group = disclosure?.closest('details.tool-activity-group')
     if (group && !group.open) group.querySelector(':scope > summary')?.click()
+    disclosure?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
     if (disclosure && !disclosure.open) disclosure.querySelector(':scope > summary')?.click()
     return Boolean(disclosure)
   })()`)
-  await waitForExpression(cdp, `document.querySelector('.execution-drawer .tool-call-detail pre')?.textContent?.includes('ROVAI_CLAUDE_EMPTY_OUTPUT_OK') === true`)
+  await waitForExpression(cdp, `(() => {
+    const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
+      .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim()
+        === ${JSON.stringify(claudeExpectedCommand)})
+    return disclosure?.open === true
+      && disclosure.querySelector(':scope > summary')?.getAttribute('aria-expanded') === 'true'
+  })()`)
+  await waitForExpression(cdp, `document.querySelector('.execution-drawer .tool-call-detail pre')?.textContent?.includes('ROVAI_CLAUDE_EMPTY_OUTPUT_OK') === true`, 30_000)
   const presentation = await evaluate(cdp, `(() => {
     const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
       .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim()
@@ -3334,7 +3484,7 @@ async function verifyExecutionDrawerResizeControl(cdp) {
     && keyboardSized.storedHeight === String(keyboardSized.now),
   `Keyboard resize or session persistence failed: ${JSON.stringify({ minimum, keyboardSized })}`)
 
-  await evaluate(cdp, `document.querySelector('.execution-drawer-header [aria-label="收起执行详情"]')?.click()`)
+  await evaluate(cdp, `document.querySelector('.execution-bottom-collapse-button[aria-label="收起执行详情"]')?.click()`)
   await waitForExpression(cdp, `!document.querySelector('.execution-drawer')`)
   await evaluate(cdp, `(() => {
     const chip = [...document.querySelectorAll('.run-pulse-chip[data-agent-id]')]
@@ -4455,6 +4605,11 @@ async function verifyRightExecutionPlacement(cdp) {
   const presentation = await evaluate(cdp, `(() => {
     const host = document.querySelector('.file-preview-retained-host:not([hidden])')
     const drawer = host?.querySelector('.execution-drawer')
+    const dock = host?.querySelector('.run-pulse-inspector')
+    const rail = dock?.querySelector('.run-pulse-avatar-rail')
+    const placementControl = dock?.querySelector('.execution-placement-control')
+    const railRect = rail?.getBoundingClientRect()
+    const placementRect = placementControl?.getBoundingClientRect()
     const activeTab = [...document.querySelectorAll('.file-preview-tab-activate[aria-selected="true"]')]
       .find((tab) => tab instanceof HTMLElement && tab.getClientRects().length > 0)
     return {
@@ -4462,6 +4617,10 @@ async function verifyRightExecutionPlacement(cdp) {
       drawerPlacement: drawer?.dataset.placement ?? null,
       drawerInsideSharedPreview: Boolean(drawer?.closest('.execution-preview-host')),
       previewWidth: host?.getBoundingClientRect().width ?? 0,
+      railDisplay: dock ? getComputedStyle(dock).display : null,
+      railPlacementCenterDelta: railRect && placementRect
+        ? Math.abs((railRect.top + railRect.height / 2) - (placementRect.top + placementRect.height / 2))
+        : Number.POSITIVE_INFINITY,
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1
     }
   })()`)
@@ -4469,6 +4628,8 @@ async function verifyRightExecutionPlacement(cdp) {
     && presentation.drawerPlacement === 'right'
     && presentation.drawerInsideSharedPreview
     && presentation.previewWidth >= 420
+    && presentation.railDisplay === 'flex'
+    && presentation.railPlacementCenterDelta <= 1
     && !presentation.horizontalOverflow,
   `Right-side Execution did not use the shared preview workspace: ${JSON.stringify(presentation)}`)
   return presentation

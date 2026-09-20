@@ -90,8 +90,8 @@ function Fixture() {
   const snapshot = useMemo<CampSnapshot>(() => ({
     ...initial,
     agentRuns: [{
-      ...run, status: phase === 'connecting' ? 'queued' : 'running',
-      startedAt: phase === 'connecting' ? null : now,
+      ...run, status: 'running',
+      startedAt: now,
       executionEvidenceCount: phase === 'body' ? 1 : phase === 'tools' ? 3 : 0
     }],
     executionEvidence: phase === 'body' ? [{

@@ -125,6 +125,7 @@ import {
   executionDrawerIsNearBottom,
   executionDrawerTitle,
   executionConsoleIsVisible,
+  executionEmptyStateShouldRender,
   executionPlacementChangeShouldStart,
   executionPlacementSaveFailureMessage,
   executionDisclosureOpenAfterActivity,
@@ -3721,6 +3722,7 @@ describe('task event projections', () => {
       }],
       agentRuns: [{
         id: 'run-muwa', campTurnId: 'turn-1', conversationId: 'conversation-muwa',
+        inputMessageIds: ['message-user'], anchorMessageId: 'message-user',
         agentId: 'agent_2', taskId: null, responsibilityKey: 'direct:agent_2',
         responsibilityGeneration: 0, purpose: '实现复制',
         completionRole: 'required', status: 'running', waitReason: null, cancelRequestedAt: null, cancelReasonCode: null, cancelAcknowledgedAt: null, executionEpoch: 1,
@@ -3766,6 +3768,9 @@ describe('task event projections', () => {
     const historicalRun = {
       ...snapshot.agentRuns[0],
       id: 'run-muwa-history',
+      campTurnId: null,
+      purpose: 'Handle the claimed Camp message batch',
+      invocationKind: 'batch' as const,
       status: 'succeeded' as const,
       executionEvidenceCount: 0,
       createdAt: '2026-07-28T04:30:00Z',
@@ -3863,6 +3868,9 @@ describe('task event projections', () => {
     expect(executionPlacementSaveFailureMessage('bottom')).toBe('未能保存，仍在底部。')
     expect(executionPlacementSaveFailureMessage('right')).toBe('未能保存，仍在右侧。')
     expect(executionPlacementSaveFailureMessage('inspector')).toBe('未能保存，仍在详情浮层。')
+    expect(executionEmptyStateShouldRender(0, 0, true)).toBe(true)
+    expect(executionEmptyStateShouldRender(0, 1, true)).toBe(false)
+    expect(executionEmptyStateShouldRender(0, 0, false)).toBe(false)
     expect(executionQueueBatches([
       submittedSecondRun,
       { ...submittedSecondRun, id: 'run-submitted-third', campTurnId: 'turn-submitted-later', createdAt: '2026-07-28T06:01:00Z' },
@@ -3921,6 +3929,8 @@ describe('task event projections', () => {
     expect(markup).not.toContain('>复制</button>')
     expect(markup).not.toContain('d="M16.7 17.3H10l-4.2 3.1v-3.1h-.7a2.6 2.6 0 0 1-2.6-2.6V7.6A2.6 2.6 0 0 1 5.1 5h11.8a2.6 2.6 0 0 1 2.6 2.6v2.2"')
     expect(markup).not.toContain('d="m15.2 9.2-3.6 3.5 3.6 3.5"')
+    expect(markup).toMatch(/class="message-action-line"><div class="user-message-receipt-row">[\s\S]*class="message-actions"/)
+    expect(markup).toContain('处理中 · 1')
     expect(markup).toContain('class="message-actions" role="group" aria-label="消息操作"')
     expect(markup).toContain('class="message-surface"')
     expect(markup).toContain('class="message-mention-token is-interactive"')
@@ -3936,11 +3946,13 @@ describe('task event projections', () => {
     expect(markup).toContain('aria-label="Agent 执行台"')
     expect(markup).toContain('aria-label="切换执行台位置，当前底部"')
     expect(markup).toContain('class="execution-placement-button"')
-    expect(markup).toContain('class="run-pulse-title"')
+    expect(markup).toContain('class="run-pulse-bottom-caption"')
+    expect(markup).toContain('class="execution-bottom-collapse-button"')
     expect(markup).toContain('class="run-pulse-chip is-selected"')
     expect((markup.match(/class="run-pulse-chip(?: is-selected)?"/g) ?? [])).toHaveLength(1)
     expect(markup).not.toContain('<small>执行过程</small>')
     expect(markup).toContain('class="run-pulse-chip-copy"><strong><span>沐瓦</span></strong>')
+    expect(markup).not.toContain('Handle the claimed Camp message batch')
     expect(markup).toContain('class="run-pulse-chip-state tone-info state-running" role="img"')
     expect(markup).toMatch(/title="沐瓦 · [^"]+"/)
     expect(markup).not.toMatch(/run-pulse-chip-state[^>]*>[^<]+<\/span>/)
@@ -4162,6 +4174,7 @@ describe('task event projections', () => {
     expect(cancellingMarkup).toContain('正在提交停止请求')
     expect(cancellingMarkup).toContain('execution-disclosure run-live is-cancelling')
     expect(cancellingMarkup).toMatch(/aria-label="终止沐瓦的本次执行"[^>]*disabled/)
+    expect(cancellingMarkup).toContain('<rect x="5" y="5" width="14" height="14" rx="1.5" fill="currentColor" stroke="none"></rect>')
     expect(cancellingMarkup).not.toContain('aria-label="停止当前运行"')
     expect(cancellingMarkup).not.toContain('class="composer-primary-action is-stop"')
     expect(cancellingMarkup).not.toMatch(/<textarea[^>]*disabled/)
