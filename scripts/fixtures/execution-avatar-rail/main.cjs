@@ -275,6 +275,14 @@ app.whenReady().then(async () => {
     if (value.panel.height === 0) value = await click('.camp-detail-entry[data-detail="execution"]')
     value = await waitForState(value => value.panel.height > 0 && value.rail.height > 0, 'the initial execution popover')
     assert.equal(value.count, 12)
+    assert.equal(value.selected, '__execution_overview__', 'Workspace entry selects the execution overview')
+    const entryRunSelection = await run(`(() => {
+      const stage = document.querySelector('.execution-process-stage[aria-current="step"]')
+      return { id: stage?.dataset.agentRunId ?? null,
+        expanded: stage?.querySelector('.execution-run-toggle')?.getAttribute('aria-expanded') ?? null }
+    })()`)
+    assert.deepEqual(entryRunSelection, { id: 'run-agent-3', expanded: 'true' },
+      'The overview preserves the exact latest running Run target')
     assertLayout(value)
     await assertExecutionWidth()
 

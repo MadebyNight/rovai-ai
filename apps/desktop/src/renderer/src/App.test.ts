@@ -134,6 +134,7 @@ import {
   executionDeliveryQueueBatches,
   executionQueueBatches,
   executionRunInputMessageIds,
+  executionWorkspaceEntrySelection,
   firstSubmittedAgentRun,
   formatStopElapsed,
   groupExecutionEventsByRunId,
@@ -3804,6 +3805,21 @@ describe('task event projections', () => {
         createdAt: '2026-07-28T05:30:00Z'
       }
     ])?.id).toBe('run-muwa-newer')
+    expect(executionWorkspaceEntrySelection([
+      snapshot.agentRuns[0],
+      {
+        ...snapshot.agentRuns[0],
+        id: 'run-muwa-newer',
+        createdAt: '2026-07-28T05:30:00Z'
+      }
+    ])).toMatchObject({
+      selectedAgentId: '__execution_overview__',
+      focusedRun: { id: 'run-muwa-newer' }
+    })
+    expect(executionWorkspaceEntrySelection([
+      { ...historicalRun, status: 'waiting' },
+      historicalRun
+    ])).toBeNull()
     expect(executionDisclosureOpenAfterActivity(true, false)).toBe(true)
     expect(executionDisclosureOpenAfterActivity(false, true)).toBe(true)
     expect(executionDisclosureOpenAfterActivity(false, false)).toBe(false)
@@ -4108,8 +4124,11 @@ describe('task event projections', () => {
     expect(markup).toContain('class="execution-placement-button"')
     expect(markup).toContain('class="run-pulse-bottom-caption"')
     expect(markup).toContain('class="execution-bottom-collapse-button"')
-    expect(markup).toContain('class="run-pulse-chip is-selected"')
+    expect(markup).toContain('class="run-pulse-chip run-pulse-overview-chip is-selected"')
+    expect(markup).not.toContain('class="run-pulse-chip is-selected"')
+    expect(markup).toMatch(/data-agent-run-id="run-muwa"[\s\S]*?aria-current="step"/)
     expect(suppressedMissionDrawerMarkup).not.toContain('class="run-pulse-chip is-selected"')
+    expect(suppressedMissionDrawerMarkup).not.toContain('run-pulse-overview-chip is-selected')
     expect(suppressedMissionDrawerMarkup).not.toContain('class="execution-drawer execution-drawer-bottom"')
     expect(missionDrawerSuppressesExecutionAutoOpen(true, 'bottom')).toBe(true)
     expect(missionDrawerSuppressesExecutionAutoOpen(false, 'bottom')).toBe(false)

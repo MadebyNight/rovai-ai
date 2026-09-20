@@ -10,7 +10,7 @@ last_updated: 2026-09-20
 # v1.62 实施与验收
 
 范围见[版本概览](README.md)，字段级行为见 [Mission v11](../../contracts/mission-v11.md)、
-[Run Process Detail Surface v39](../../contracts/run-process-detail-surface-v39.md)、
+[Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)。
@@ -186,6 +186,14 @@ last_updated: 2026-09-20
 - [x] staged、unstaged、untracked 脏现场经非 force 删除安全拒绝，恢复 `ready`、保留内容与诊断，Activity 提供明确重试。
 - [x] 增加排队、安全、删除、分支与结果发布耗时日志；既有 Rust owner 验证调用上限和实际入口，Renderer owner 验证拒绝反馈。
 
+## Gate 17：运行中会话默认进入总览
+
+- [x] 普通 Camp 与完整 Mission 进入时选择总览，同时保留 `createdAt + id` 最新 running Run 的精确聚焦、展开、
+  最新指令定位和 live follow；无 running Run 与使命抽屉底部例外保持不变。
+- [x] 显式队员入口、消息发送回执、Task、通知与其他精确导航保持原 Agent／Run scope；不改变 route、位置偏好、
+  Renderer wire、Core、数据库或 Runtime。
+- [x] 既有 Renderer owner、隔离执行台验收、TypeScript、文档治理、diff 检查与静态 UI detector 通过；不扩大为 Rust 测试。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -244,6 +252,9 @@ Session Charter revision 与 Binding compatibility digest。只扩展这两个 o
 
 ## 实施收口
 
+- 运行中会话总览增量：`App.test.ts` 174/174、`pnpm test:execution-avatar-rail` 2/2、`pnpm typecheck`、
+  `pnpm docs:test`、`pnpm docs:check`、固定 base 的 `pnpm docs:check:ci`、`pnpm build:desktop` 与
+  `git diff --check` 通过；Impeccable 静态 detector 对 `CampWorkspace.tsx` 返回零发现。
 - `cargo test -p rovai-core --lib mission_commands_keep_definition_atomic_patch_only_and_start_status_independent`：1 passed。
 - `cargo test -p rovai-core --lib builtin_tool_transport::tests::`：8 passed。
 - `cargo test -p rovai-core --bin rovai mission_status_help_and_direct_flags_keep_source_message_optional`：1 passed。
