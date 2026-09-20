@@ -10,7 +10,7 @@ last_updated: 2026-09-20
 # v1.62 实施与验收
 
 范围见[版本概览](README.md)，字段级行为见 [Mission v10](../../contracts/mission-v10.md)、
-[Run Process Detail Surface v36](../../contracts/run-process-detail-surface-v36.md)、
+[Run Process Detail Surface v37](../../contracts/run-process-detail-surface-v37.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
 [Camp Open Projection v20](../../contracts/camp-open-projection-v20.md)。
@@ -152,6 +152,12 @@ last_updated: 2026-09-20
 - [x] 活动页在 Workspace 尚未创建时不挂载“累计文件变更”区域；ready 工作区及拒绝后的改动读取保持不变。
 - [x] 完成定向 Rust/Renderer、默认 feature PR 门禁及 Mission Board 隔离自动验收；本地 App 安装与追加真实
   Mission smoke 按本次交付指令不执行。
+
+## Gate 14：终态步骤计数恢复
+
+- [x] 工具组真实收口后以去重后的全部已结算逻辑操作作为“已完成 N 个步骤”的 N；失败、停止、跳过和结果未知均计入。
+- [x] 单条 Tool 的实际终态、状态图形、详情、活动尾组、等待审批、分页范围与 Runtime Compaction 排除保持不变。
+- [x] 既有 Renderer 分组 owner 覆盖单个失败、混合结果及 skipped/recorded；只运行定向 Vitest、文档治理、类型检查和静态 UI detector。
 
 ## Rust 测试准入记录
 
