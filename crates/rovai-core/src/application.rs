@@ -22385,7 +22385,9 @@ fn dispatch_public_failure(
 ) -> Option<RuntimeFailureView> {
     let runtime_kind = candidate
         .effective_config
-        .get("adapterKind")
+        .pointer("/runtime/adapterKind")
+        .or_else(|| candidate.effective_config.get("runtimeAdapter"))
+        .or_else(|| candidate.effective_config.get("adapterKind"))
         .cloned()
         .and_then(|value| serde_json::from_value::<AdapterKind>(value).ok())?;
     let raw_detail = error.root_cause().to_string();
@@ -23073,6 +23075,41 @@ mod tests {
             assert_eq!(failure.detail.as_deref(), Some("select model xxx"));
             failure.validate().unwrap();
         }
+    }
+
+    #[test]
+    fn dispatch_failure_uses_current_effective_runtime_adapter() {
+        let candidate = rovai_core::runtime::QueuedAgentRunCandidate {
+            agent_run_id: "run-dispatch-failure".into(),
+            camp_id: "camp-dispatch-failure".into(),
+            camp_turn_id: String::new(),
+            conversation_id: "conversation-dispatch-failure".into(),
+            agent_id: "agent_1".into(),
+            task_id: None,
+            version: 1,
+            permission_semantics: PermissionSemantics::RuntimeManagedV2,
+            project_binding_kind: "git".into(),
+            project_path: "/project".into(),
+            effective_config: json!({
+                "runtimeAdapter": "codex-cli",
+                "runtime": { "adapterKind": "codex-cli" }
+            }),
+            workspace: None,
+        };
+
+        let failure = dispatch_public_failure(
+            &candidate,
+            "workspace_unavailable",
+            &anyhow::anyhow!("mission.workspace_branch_mismatch"),
+        )
+        .expect("dispatch failure should retain the frozen Runtime adapter");
+
+        assert_eq!(failure.runtime_kind, AdapterKind::CodexCli);
+        assert_eq!(failure.code, "workspace_unavailable");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("mission.workspace_branch_mismatch")
+        );
     }
 
     #[test]
