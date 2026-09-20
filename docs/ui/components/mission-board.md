@@ -132,12 +132,25 @@ compact preview. Compact preview and source-message navigation preserve the conv
 
 Delivery shows the actual directory. Before a Git Mission has created its first workspace, the Activity document
 does not render the cumulative-changes heading, controls, empty state or workspace-not-prepared error. Once a ready
-workspace exists, Delivery shows its fixed base and cumulative changes. The branch row comes
-from the Worktree's current checkout observation, never from the persisted managed branch: it shows the branch
-and current `HEAD`, detached `HEAD` with a short commit, or a neutral unavailable state. A Diff-base failure keeps
-that checkout row visible and reports only that cumulative changes cannot currently be compared. It has no
-“工作区信息” wrapper or explanatory net-change subtitle. Opening the section reads the changed-file list;
-the activity surface renders the complete changed-file set as a searchable, vertically scrollable directory tree
+workspace exists, Delivery shows its source, fixed base and persisted managed branch. Cumulative changes start
+collapsed and do not issue `missions.changes` or `missions.fileDiff` while the Activity tab opens, closes, regains
+focus, becomes visible or receives Run-terminal events. The first explicit expansion reads the changed-file list;
+collapsing and reopening the same mounted Activity reuses that result. Before the first read, the hint says to click
+to read current workspace changes and never presents the unread state as an empty result. A successful read adds a
+“读取时分支” row from that view's checkout observation: branch and current `HEAD`, detached `HEAD` with a short
+commit, or a neutral unavailable state. This row is separate from the persisted managed branch. A Diff-base failure
+keeps the observed checkout visible and reports only that cumulative changes cannot currently be compared. Delivery
+has no “工作区信息” wrapper or explanatory net-change subtitle.
+
+Agent completion, visible-window focus and visibility restoration mark an existing result as possibly changed but
+never rescan Git. They retain the list, selection, open Diff and file cache until the user explicitly refreshes.
+Refresh disables duplicate submission; a failed refresh retains the prior result and its reading position. A
+successful refresh replaces checkout and file list together, preserves a still-present selected file, and clears
+the prior view's per-file cache. Superseded or unmounted responses cannot commit. A stale `missions.fileDiff` view
+shows a refresh action in the existing dialog and does not start `missions.changes` itself. Leaving Activity releases
+the Diff session; entering a newly mounted Activity returns to the collapsed unread state.
+
+After a successful list read, the activity surface renders the complete changed-file set as a searchable, vertically scrollable directory tree
 with a 480px ceiling. Directories precede files, single-child directory chains compress, and all directories are
 expanded by default. Large flattened trees keep a bounded mounted-row window while preserving the complete
 scroll range, search result set, accessible sibling metadata and Arrow/Home/End navigation; keyboard focus
@@ -151,11 +164,9 @@ its top-right control or Escape. The 1px splitter exposes a forgiving hit target
 steps, 80px Shift+arrow steps, and Home/double-click default restoration, while narrow screens collapse the tree
 above the reader. A bounded per-Mission memory cache restores a viewed file
 without clearing its content or flashing loading state. Cache misses never show the prior file beneath a new
-selection; duplicate requests coalesce and late responses cannot replace the current selection. Checkout and
-file list commit from one view response. Explicit refresh, visible-window focus and coalesced Run-terminal or
-workspace invalidation clear file detail and update both together; superseded responses are discarded, while
-definition-only edits do not rescan Git. A file request carries its view association, rereads current Git state
-with a fresh private index and asks for a full view refresh when the association is stale. Binary/type/rename
+selection; duplicate requests coalesce and late responses cannot replace the current selection. A file request
+carries its view association, rereads current Git state with a fresh private index and asks for an explicit full
+view refresh when the association is stale. Definition-only edits do not rescan Git. Binary/type/rename
 data and Git modes remain in the contract, but the dialog does not print a
 raw “Git 文件模式” row. Agent files reuse AttachmentCard, file preview and source-message navigation.
 Activity displays actual Mission history. The delete confirmation is intentionally concise and does not repeat
