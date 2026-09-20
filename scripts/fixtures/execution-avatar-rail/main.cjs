@@ -378,6 +378,8 @@ app.whenReady().then(async () => {
     assert.equal(deliveryQueue.label, '查看排队消息的 2 条输入')
     assert.equal(deliveryQueue.nested, false, 'The waiting-message count is an independent button')
     assert.equal(deliveryQueue.stopButtons, 0, 'A waiting Delivery is not presented as a stoppable AgentRun')
+    assert.equal(await run("document.querySelectorAll('.conversation-bubble.user .message-delivery-footer').length"), 0,
+      'Human Delivery inputs stay available to queue cards without an Agent handoff footer')
     await run(`document.querySelector(${JSON.stringify(deliveryInputSelector)}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`)
     await settle()
     await click(deliveryInputSelector)
@@ -651,6 +653,20 @@ app.whenReady().then(async () => {
     await click('[data-title-scenario]')
     await openDetail('execution')
     const titleStage = '[data-agent-run-id="run-agent-3"]'
+    const hoverTitle = async () => {
+      const point = await run(`(() => { const r = document.querySelector('${titleStage} .execution-run-card-header').getBoundingClientRect();
+        return { x: Math.round(r.x + 30), y: Math.round(r.y + r.height / 2) } })()`)
+      const zoom = window.webContents.getZoomFactor()
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) })
+      await settle()
+    }
+    const hoverBody = async () => {
+      const point = await run(`(() => { const r = document.querySelector('${titleStage} .execution-run-card-header').getBoundingClientRect();
+        return { x: Math.round(r.x + 30), y: Math.round(r.bottom + 15) } })()`)
+      const zoom = window.webContents.getZoomFactor()
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) })
+      await settle()
+    }
     const titleGeometry = () => run(`(() => {
       const body = document.querySelector('.execution-drawer-body')
       const stage = document.querySelector('${titleStage}')
@@ -663,6 +679,15 @@ app.whenReady().then(async () => {
         heading: !!header.querySelector('h3 .execution-run-toggle'),
         weight: getComputedStyle(header.querySelector('.execution-run-summary')).fontWeight,
         operationsOpacity: getComputedStyle(header.querySelector('.execution-run-operations')).opacity,
+        metricOpacity: getComputedStyle(header.querySelector('.execution-run-metric')).opacity,
+        metricDisplay: getComputedStyle(header.querySelector('.execution-run-metric')).display,
+        summary: rect(header.querySelector('.execution-run-summary')),
+        background: getComputedStyle(header).backgroundColor,
+        canvas: getComputedStyle(document.querySelector('.execution-drawer')).backgroundColor,
+        cardBackground: getComputedStyle(stage.querySelector('article')).backgroundColor,
+        stopColor: getComputedStyle(stop).color,
+        danger: getComputedStyle(document.documentElement).getPropertyValue('--danger').trim(),
+        collapseBorder: getComputedStyle(header.querySelector('.execution-run-operations button')).borderTopWidth,
         overflow: body.scrollWidth > body.clientWidth, scrollTop: body.scrollTop }
     })()`)
     for (const placement of ['inspector', 'right', 'bottom']) {
@@ -700,10 +725,24 @@ app.whenReady().then(async () => {
             body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220
           })()`)
           await settle()
+          await run('document.activeElement?.blur()')
+          await hoverBody()
+          const idle = await titleGeometry()
+          assert.equal(idle.operationsOpacity, '0', 'Body hover leaves actions hidden')
+          assert.equal(idle.metricOpacity, '1', 'Elapsed is visible by default, including narrow panels')
+          assert.notEqual(idle.metricDisplay, 'none')
+          assert.equal(idle.background, idle.canvas, 'Every title shares the conversation surface')
+          assert.equal(idle.cardBackground, idle.canvas, 'Running cards have no tinted fill')
+          await hoverTitle()
           const geometry = await titleGeometry()
           assert.ok(Math.abs(geometry.header.top - geometry.body.top) <= 1, `Title pins to its scrollport: ${JSON.stringify(geometry)}`)
           assert.ok(geometry.stopVisible && geometry.heading && geometry.weight === '600' && !geometry.overflow, JSON.stringify(geometry))
-          assert.equal(geometry.operationsOpacity, '1', 'Stop and collapse do not depend on hover')
+          assert.equal(geometry.operationsOpacity, '1', 'Title hover reveals stop and collapse')
+          assert.equal(geometry.metricOpacity, '0', 'Title hover replaces elapsed')
+          assert.equal(geometry.collapseBorder, '1px', 'Collapse retains its V15 border')
+          assert.equal(geometry.summary.width, idle.summary.width, 'Hover does not reflow the title')
+          assert.equal(await run(`(() => { const probe = document.createElement('span'); probe.style.color = 'var(--danger)'; document.body.append(probe);
+            const color = getComputedStyle(probe).color; probe.remove(); return color })()`), geometry.stopColor, 'Stop is red before button hover')
           assert.ok(geometry.card.right - geometry.stop.right >= 9, 'Sticky actions retain the right inset')
           // The same identity path/stroke is used in the entry, receipt and the active placement.
           const icons = await run(`(() => {
@@ -722,6 +761,7 @@ app.whenReady().then(async () => {
         const stage = document.querySelector('${titleStage}');
         body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220 })()`)
       await settle()
+      await hoverTitle()
       const single = await titleGeometry()
       assert.ok(single.stopVisible && Math.abs(single.header.top - single.body.top) <= 1, 'Single-member view shares the sticky title')
       await capture(`title-${placement}-single-member`)
@@ -732,13 +772,18 @@ app.whenReady().then(async () => {
         const stage = document.querySelector('${titleStage}');
         body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220 })()`)
       await settle()
+      await hoverTitle()
       const zoom = await titleGeometry()
-      assert.ok(zoom.stopVisible && !zoom.overflow && Math.abs(zoom.header.top - zoom.body.top) <= 1, 'Sticky controls fit at actual 200% zoom')
+      assert.ok(zoom.stopVisible && !zoom.overflow && Math.abs(zoom.header.top - zoom.body.top) <= 1, `Sticky controls fit at actual 200% zoom: ${JSON.stringify(zoom)}`)
       await capture(`title-${placement}-200-percent`)
       window.webContents.setZoomFactor(1)
       await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 1040, height: 700, deviceScaleFactor: 1, mobile: false })
       await settle()
       await click('.run-pulse [data-agent-id="__execution_overview__"]')
+      await hoverBody()
+      await run(`document.querySelector('${titleStage} .execution-run-toggle').focus()`)
+      await key('Tab')
+      assert.equal((await titleGeometry()).operationsOpacity, '1', 'Keyboard focus reveals header operations')
       // Natural keyboard focus must reveal content below the sticky title.
       await run(`(() => {
         const body = document.querySelector('.execution-drawer-body')
@@ -776,6 +821,18 @@ app.whenReady().then(async () => {
     await click(`${titleStage} .execution-run-operations .is-danger`)
     assert.equal(await run("document.querySelector('[data-stopped-runs]').textContent"), 'run-agent-3', 'Sticky stop targets only its exact Run')
     assert.equal(await run("document.querySelectorAll('[data-delivery-queue-agent-id] .is-danger').length"), 0)
+    await run(`document.querySelector('.execution-history-toggle[aria-expanded="false"]')?.click()`)
+    await settle()
+    await run(`(() => { const toggle = document.querySelector('${titleStage} .execution-run-toggle');
+      if (toggle?.getAttribute('aria-expanded') !== 'true') toggle?.click() })()`)
+    await settle()
+    const terminal = await run(`(() => { const stage = document.querySelector('${titleStage}'); return {
+      cancelled: stage?.classList.contains('status-cancelled'), text: stage?.textContent,
+      groupCount: stage?.querySelectorAll('.tool-activity-group').length,
+      stopCount: stage?.querySelectorAll('.is-danger').length } })()`)
+    assert.ok(terminal.cancelled && terminal.groupCount > 0, JSON.stringify(terminal))
+    assert.ok(!terminal.text.includes('正在停止') && !terminal.text.includes('等待执行结束'), JSON.stringify(terminal))
+    assert.equal(terminal.stopCount, 0, 'Terminal Run cannot be stopped again')
 
     console.log(JSON.stringify({ ok: true, cases: ['0/1/2/3/5 running entry members and duplicate runs', 'two equal brand orbits',
       'idle history with executed member count', 'entry names and keyboard focus', 'collapsed running state',
@@ -788,7 +845,8 @@ app.whenReady().then(async () => {
       '0/1/2/16/48 delivery recipients', 'source attribution and deduplication', 'single-line complete avatars',
       'overflow list keyboard scrolling and focus return', 'nested Escape', 'recipient resize and placement preservation',
       'four-grid overview and centering in three placements', 'shared execution icon geometry',
-      'sticky title in three placements and two themes/sizes', 'focus not obscured', 'Run-bounded sticky and exact stop'] }))
+      'sticky title in three placements and two themes/sizes', 'default elapsed/title-only hover/bordered controls/red stop',
+      'terminal cancellation precedence', 'focus not obscured', 'Run-bounded sticky and exact stop'] }))
     window.destroy()
     app.quit()
   } catch (error) {

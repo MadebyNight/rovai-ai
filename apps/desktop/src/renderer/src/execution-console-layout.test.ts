@@ -17,12 +17,13 @@ describe('execution console layout', () => {
     '.run-pulse-chip',
     '.execution-drawer',
     '.execution-process-card',
+    '.execution-run-card-header',
     '.execution-process-node'
   ])('uses the conversation surface for the execution canvas: %s', (selector) => {
     expect(styleBlock(selector)).toMatch(/background:\s*var\(--conversation-surface\)/)
   })
 
-  it('keeps the action bar on the conversation surface and reserves the execution fill for running Run cards', () => {
+  it('keeps all Run states on the conversation surface without a running fill override', () => {
     expect(styleBlock('.camp-conversation-view-controls button[aria-pressed="true"]')).toMatch(
       /background:\s*var\(--brand-soft\)/
     )
@@ -32,9 +33,7 @@ describe('execution console layout', () => {
     expect(styleBlock('.execution-drawer-header')).toMatch(
       /background:\s*var\(--conversation-surface\)/
     )
-    expect(styleBlock('.execution-process-stage.status-running .execution-process-card')).toMatch(
-      /background:\s*var\(--execution-running-surface\)/
-    )
+    expect(styleBlock('.execution-process-stage.status-running .execution-process-card')).not.toMatch(/background:/)
     expect(styleBlock('.execution-process-stage.is-focused .execution-process-card') ?? '').not.toMatch(
       /background:/
     )
@@ -103,7 +102,10 @@ describe('execution console layout', () => {
     expect(styleBlock('.execution-run-operations button')).toMatch(/height:\s*25px/)
     expect(styleBlock('.execution-run-trailing')).toMatch(/padding-right:\s*9px/)
     expect(styleBlock('.execution-run-operations')).not.toMatch(/opacity:\s*0|pointer-events:\s*none/)
-    expect(styleBlock('.execution-run-operations button.is-danger:is(:hover, :focus-visible)')).toMatch(
+    expect(styleBlock('.execution-run-operations button')).toMatch(/border:\s*1px solid var\(--line\)/)
+    expect(styleBlock('.execution-run-operations button')).toMatch(/background:\s*var\(--surface-raised\)/)
+    expect(styleBlock('.execution-run-operations button.is-danger')).toMatch(/color:\s*var\(--danger\)/)
+    expect(styleBlock('.execution-run-operations button.is-danger')).toMatch(
       /background:\s*var\(--danger-soft\)/
     )
     expect(styleBlock('.execution-batch-count')).toMatch(/height:\s*26px/)
@@ -114,6 +116,19 @@ describe('execution console layout', () => {
     expect(styleBlock('.execution-run-card-header')).toMatch(/top:\s*0/)
     expect(styleBlock('.execution-run-summary')).toMatch(/font-weight:\s*600/)
     expect(styleBlock('.execution-drawer-body')).toMatch(/scroll-padding-block:\s*60px 16px/)
+  })
+
+  it('swaps live elapsed time only on title hover or visible keyboard focus in a fixed slot', () => {
+    expect(styleBlock('.execution-process-stage.status-running .execution-run-trailing')).toMatch(/width:\s*77px/)
+    expect(styleBlock('.execution-process-stage.status-running .execution-run-operations')).toMatch(/opacity:\s*0/)
+    expect(styleBlock('.execution-process-stage.status-running .execution-run-operations')).toMatch(/right:\s*9px/)
+    const activeTitle = '.execution-process-stage.status-running .execution-run-card-header:is(:hover, :has(:focus-visible))'
+    expect(styleBlock(`${activeTitle} .execution-run-operations`)).toMatch(/opacity:\s*1/)
+    expect(styleBlock(`${activeTitle} .execution-run-metric`)).toMatch(/opacity:\s*0/)
+    expect(styles).not.toMatch(/(?:^|\n)\s*\.execution-run-metric\.is-live\s*\{[^}]*display:\s*none/)
+    expect(styleBlock('.execution-process-stage.status-waiting .execution-run-metric.is-live')).toMatch(/display:\s*none/)
+    expect(styles).not.toMatch(/\.execution-process-card:(?:hover|focus-within)[^{]*\.execution-run-operations/)
+    expect(styles).toMatch(/@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.execution-run-operations\s*\{[^}]*position:\s*static;\s*opacity:\s*1/)
   })
 
   it('centers the status rail on the 46px title and keeps overview avatars square', () => {

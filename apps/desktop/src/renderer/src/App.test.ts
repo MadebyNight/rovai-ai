@@ -4868,7 +4868,7 @@ describe('task event projections', () => {
     expect(attachmentRevealLabel('linux')).toBe('显示所在位置')
   })
 
-  it('renders a public A2A message with the Scheme C handoff footer', () => {
+  it('renders the Scheme C handoff footer only for Agent messages, not human deliveries', () => {
     const publicMessage: CampMessageView = {
     quotes: [],
       withdrawn: false, canWithdraw: false, version: 1,
@@ -5015,6 +5015,17 @@ describe('task event projections', () => {
         onStop: () => undefined
       }))
     const markup = renderWorkspace(snapshot)
+
+    for (const authorType of ['user', 'external_principal'] as const) {
+      const humanMarkup = renderWorkspace({
+        ...snapshot,
+        messages: [{ ...publicMessage, authorType, authorId: 'local_user', sourceAgentRunId: null }],
+        agentRunFileChanges: []
+      })
+      expect(humanMarkup).not.toContain('message-delivery-footer')
+      expect(humanMarkup).not.toContain('发送给')
+      expect(humanMarkup).toContain('请检查 Downloads 目录里的页面。')
+    }
 
     expect(markup).not.toContain('<h2>会话</h2>')
     expect(markup).toContain('请检查 Downloads 目录里的页面。')

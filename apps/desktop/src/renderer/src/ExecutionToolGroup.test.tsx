@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentRunExecutionEvidenceView } from '@contracts'
+import type { AgentRunExecutionEvidenceView, AgentRunView } from '@contracts'
 import {
   CompactionEventRow,
   ExecutionToolGroupStateContext,
@@ -18,16 +18,31 @@ const tool = (id: string, iconKind: ActivityIconKind, status: ToolProgressItem['
     detail: `指令 ${id} 结果`, activityDomain: 'shell', toolName: null, credibility: 'runtime_structured'
   }
 })
-const renderGroup = (items: ToolProgressItem[], expanded = false, liveTail = false) => renderToStaticMarkup(
+const renderGroup = (items: ToolProgressItem[], expanded = false, liveTail = false,
+  runStatus: AgentRunView['status'] = 'running', cancelling = false) => renderToStaticMarkup(
   <ExecutionToolGroupStateContext.Provider value={{
     expanded: new Set(expanded ? items.map(item => `run:${item.key}`) : []), change() {}
   }}>
-    <ToolActivityGroup items={items} runId="run" runStatus="running" campId="camp" liveTail={liveTail}
-      cancelling={false} completeEvidence={{ byToolId: new Map() }} onFileOpenError={() => {}} />
+    <ToolActivityGroup items={items} runId="run" runStatus={runStatus} campId="camp" liveTail={liveTail}
+      cancelling={cancelling} completeEvidence={{ byToolId: new Map() }} onFileOpenError={() => {}} />
   </ExecutionToolGroupStateContext.Provider>
 )
 
 describe('command disclosure presentation', () => {
+  it.each(['succeeded', 'failed', 'cancelled'] as const)(
+    'gives the authoritative %s Run priority over a retained cancellation flag', runStatus => {
+      const completed = renderGroup([tool('done', 'terminal', 'completed')], true, false, runStatus, true)
+      const unfinished = renderGroup([tool('active', 'terminal', 'running')], true, false, runStatus, true)
+      expect(completed).not.toContain('正在停止')
+      expect(unfinished).not.toContain('等待执行结束')
+      expect(completed).toContain('tool-call-state status-completed')
+      if (runStatus === 'cancelled') expect(unfinished).toContain('tool-call-state status-stopped')
+    }
+  )
+  it('still presents an in-flight stop before the Run becomes terminal', () => {
+    expect(renderGroup([tool('active', 'terminal', 'running')], false, false, 'running', true))
+      .toContain('正在停止：等待执行结束')
+  })
   it('routes a non-truncated canonical Command Diff through its exact Run activity evidence', async () => {
     const evidence = {
       id: 'diff-evidence',

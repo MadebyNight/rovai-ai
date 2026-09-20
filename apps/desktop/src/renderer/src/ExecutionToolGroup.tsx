@@ -731,7 +731,9 @@ export function ToolActivityGroup({
     else setLocalExpanded(value)
   }
   const settledPresentation = toolActivityGroupPresentation(items, runStatus, liveTail)
-  const presentation = cancelling
+  // Cancellation intent is retained in history; an authoritative terminal Run wins.
+  const nonTerminal = runStatus === 'queued' || runStatus === 'running' || runStatus === 'waiting'
+  const presentation = cancelling && nonTerminal
     ? {
         ...settledPresentation,
         status: 'stopped' as const,

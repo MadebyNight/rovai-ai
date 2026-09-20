@@ -4937,7 +4937,7 @@ export function CampWorkspace({
                               <div className="public-message-readout">
                               <MessageSurface
                                 copied={copied}
-                                hasDelivery={campMessageDeliveries.length > 0}
+                                hasDelivery={campMessage.authorType === 'agent' && campMessageDeliveries.length > 0}
                                 showActions={campMessage.authorType !== 'agent'}
                                 actionBefore={campMessage.authorType === 'user' ? (
                                   <UserMessageDeliveryReceipt
@@ -5061,11 +5061,13 @@ export function CampWorkspace({
                                   />
                                 )}
                               </MessageSurface>
-                              <CampMessageDeliveryFooter
-                                deliveries={campMessageDeliveries}
-                                memberById={memberById}
-                                onActivateMemberMention={openMemberProfilePopover}
-                              />
+                              {campMessage.authorType === 'agent' && (
+                                <CampMessageDeliveryFooter
+                                  deliveries={campMessageDeliveries}
+                                  memberById={memberById}
+                                  onActivateMemberMention={openMemberProfilePopover}
+                                />
+                              )}
                               {campMessage.authorType === 'agent'
                                 && trailingFileChangeItems.length === 0
                                 && (
@@ -6808,10 +6810,12 @@ function ExecutionDrawer({
   }
 
   const renderRunCard = (run: AgentRunView): JSX.Element => {
-    const cancelling = (run.campTurnId !== null && cancellingTurnIds.has(run.campTurnId))
+    const cancelling = NON_TERMINAL_RUNS.has(run.status) && (
+      (run.campTurnId !== null && cancellingTurnIds.has(run.campTurnId))
       || cancellingRunIds.has(run.id)
       || submittingStopRunIds.has(run.id)
       || run.cancelRequestedAt !== null
+    )
     const focused = run.id === resolvedFocusedRunId
     const expanded = expandedRunIds.has(run.id)
     const state = agentRunPresentation(run, cancelling)
