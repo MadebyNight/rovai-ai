@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { useFilePreview } from './FilePreviewContext'
 import { FilePreviewTabIcon } from './FilePreviewTabIcon'
 import { Icon } from './MissionControls'
+import { ExecutionIcon } from './ExecutionIcons'
 import { previewTabLabel, previewTabLabels, previewTabPresentation } from './file-preview-tab-presentation'
 
 function tabDomId(tabId: string): string {
@@ -303,9 +304,7 @@ export function FilePreviewTabs({ compact = false }: { compact?: boolean } = {})
                   onKeyDown={(event) => handleTabKeyDown(event, index)}
                 >
                   {tab.kind === 'mission_activity' ? <Icon name="history" /> : tab.kind === 'execution' ? (
-                    <svg className="icon file-preview-execution-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
-                      <path d="M2.5 10h3l1.5-4 2.4 8 2.1-5.7 1.6 3.1h2.2l1.2-1.8h1" />
-                    </svg>
+                    <ExecutionIcon className="icon file-preview-execution-icon" />
                   ) : <FilePreviewTabIcon
                     kind={icon}
                     fileType={tab.kind === 'file' ? tab.file?.kind : 'file_change'}

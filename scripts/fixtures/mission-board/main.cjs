@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict')
-const { mkdirSync } = require('node:fs')
-const { isAbsolute, join } = require('node:path')
+const { mkdirSync, writeFileSync } = require('node:fs')
+const { dirname, isAbsolute, join } = require('node:path')
 const { app, BrowserWindow } = require('electron')
 const [renderer, userData, mode = 'standard'] = process.argv.slice(2)
 let stage = 'startup'
@@ -136,6 +136,12 @@ app.whenReady().then(async () => {
   let narrowLayout = null
   if (mode === 'standard') {
     await waitFor("!!document.querySelector('.mission-board-card')", 'Mission board did not load for narrow-window acceptance', 15000)
+    for (const theme of ['day', 'night']) {
+      await window.webContents.executeJavaScript(`document.documentElement.dataset.theme = '${theme}'`, true)
+      await settle()
+      writeFileSync(join(dirname(userData), `mission-board-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+    }
+    await window.webContents.executeJavaScript("document.documentElement.dataset.theme = 'day'", true)
     stage = 'narrow resize'
     window.setContentSize(820, 700)
     await waitFor('window.innerWidth === 820 && window.innerHeight === 700', 'Narrow Mission fixture did not resize')

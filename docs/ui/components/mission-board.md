@@ -7,6 +7,10 @@ last_updated: 2026-09-20
 
 # Mission board
 
+The board header's creation entry is **新使命**, using the existing neutral primary action tokens
+(`--conversation-action` / `--conversation-action-contrast`, black in Day) and their hover token.
+This entry still opens the same creation dialog; the dialog's labels and submission choices are unchanged.
+
 Desktop and wide Web expose one 使命板 navigation entry between 记忆 and 定时任务, and retain its surface, route and interaction model.
 When one or more Missions have unread Agent replies, a blue dot sits at the entry's right edge and is vertically
 centered; the accessible label includes the number of Missions with unread replies, but the visual indicator never

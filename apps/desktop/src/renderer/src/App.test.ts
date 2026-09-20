@@ -4084,7 +4084,7 @@ describe('task event projections', () => {
     expect(waitingQueueMarkup).toContain('d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 17l10 5 10-5"')
     expect(waitingQueueMarkup).toContain('class="execution-input-locate-icon"')
     expect(waitingQueueMarkup).toMatch(
-      /class="execution-run-toggle"[\s\S]*?<\/button><button class="execution-batch-count"/
+      /<h3 class="execution-run-heading"><button class="execution-run-toggle"[\s\S]*?<\/button><\/h3><button class="execution-batch-count"/
     )
     expect(waitingOverHistoryMarkup).toContain('aria-label="打开沐瓦的执行过程，排队中"')
     expect(batchedRunMarkup).toContain('aria-label="查看本次执行的 2 条输入"')

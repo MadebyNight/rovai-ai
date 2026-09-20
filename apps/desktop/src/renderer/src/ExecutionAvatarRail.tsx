@@ -2,6 +2,7 @@ import { prefersReducedMotion } from './reduced-motion'
 import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MemberAvatar, type MemberAvatarProps } from './MemberAvatar'
 import { ExecutionStatusGlyph, type ExecutionStatusShape } from './ExecutionStatusGlyph'
+import { ExecutionOverviewMark } from './ExecutionIcons'
 
 export interface ExecutionAvatarRailItem extends Pick<MemberAvatarProps, 'agentId' | 'avatarRef' | 'displayName'> {
   overview?: boolean
@@ -212,7 +213,7 @@ export function ExecutionAvatarRail({
           onClick={event => onOpen(item.agentId, event.currentTarget)}
         >
           {item.overview
-            ? <span className="run-pulse-overview-mark" aria-hidden="true">总</span>
+            ? <ExecutionOverviewMark className="run-pulse-overview-mark" />
             : <>
                 <MemberAvatar agentId={item.agentId} avatarRef={item.avatarRef} displayName={item.displayName} size="list" decorative />
                 <span className={`run-pulse-chip-state tone-${item.statusTone} state-${item.stateShape}`} role="img" aria-label={item.statusLabel}>
