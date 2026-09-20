@@ -65,6 +65,14 @@ fn worktree_cleanup_required(worktree_removed: bool) -> bool {
     !worktree_removed
 }
 
+fn mission_workspace_read_matches(expected: &MissionWorkspace, current: &MissionWorkspace) -> bool {
+    current.state == "ready"
+        && current.id == expected.id
+        && current.generation == expected.generation
+        && current.worktree_path == expected.worktree_path
+        && current.working_directory == expected.working_directory
+}
+
 impl Core {
     async fn mission_git(&self) -> Result<MissionGit> {
         MissionGit::new(
@@ -74,6 +82,26 @@ impl Core {
                 .resolve_command_path("git")
                 .context("mission.git_unavailable")?,
         )
+    }
+
+    async fn ensure_mission_workspace_read_is_current(
+        &self,
+        expected: &MissionWorkspace,
+    ) -> Result<(u128, u128)> {
+        let lock_started_at = Instant::now();
+        let database = self.database.lock().await;
+        let lock_ms = lock_started_at.elapsed().as_millis();
+        let read_started_at = Instant::now();
+        let current =
+            mission_workspace::load_workspaces(database.connection(), &expected.mission_id)?
+                .into_iter()
+                .find(|workspace| workspace.id == expected.id)
+                .context("mission.changes_refresh_required")?;
+        anyhow::ensure!(
+            mission_workspace_read_matches(expected, &current),
+            "mission.changes_refresh_required"
+        );
+        Ok((lock_ms, read_started_at.elapsed().as_millis()))
     }
     pub(super) async fn prepare_mission_workspace(
         &self,
@@ -628,8 +656,11 @@ impl Core {
                         .release(&query.mission_id);
                     return Ok(json!({ "released": released }));
                 }
-                let (mission, workspaces) = {
+                let workspace_lock_started_at = Instant::now();
+                let (mission, workspaces, workspace_lock_ms, workspace_read_ms) = {
                     let database = self.database.lock().await;
+                    let workspace_lock_ms = workspace_lock_started_at.elapsed().as_millis();
+                    let workspace_read_started_at = Instant::now();
                     let mission = MissionService::default()
                         .get(&database, &query.mission_id)?
                         .context("mission.not_found")?;
@@ -647,7 +678,12 @@ impl Core {
                         database.connection(),
                         &query.mission_id,
                     )?;
-                    (mission, workspaces)
+                    (
+                        mission,
+                        workspaces,
+                        workspace_lock_ms,
+                        workspace_read_started_at.elapsed().as_millis(),
+                    )
                 };
                 if request.method == "missions.delivery" {
                     let database = self.database.lock().await;
@@ -674,14 +710,33 @@ impl Core {
                         "mission.git_not_applicable"
                     },
                 )?;
+                anyhow::ensure!(
+                    workspace.state == "ready",
+                    "mission.changes_refresh_required"
+                );
                 let git = self.mission_git().await?;
+                let permit_started_at = Instant::now();
+                let _git_read_permit = self
+                    .mission_git_read_capacity
+                    .acquire()
+                    .await
+                    .context("mission.git_read_capacity_closed")?;
+                let permit_wait_ms = permit_started_at.elapsed().as_millis();
+                #[cfg(test)]
+                wait_for_mission_git_read_test_barrier(&request.method, &query.mission_id).await;
+                let git_started_at = Instant::now();
                 if request.method == "missions.changes" {
                     git.validate_execution_workspace(workspace).await?;
                     let checkout_state = git.observe_checkout(workspace).await;
-                    match git
+                    let prepared = git
                         .prepare_diff_snapshot(workspace, checkout_state.clone())
-                        .await
-                    {
+                        .await;
+                    let git_ms = git_started_at.elapsed().as_millis();
+                    let (revalidate_lock_ms, revalidate_read_ms) = self
+                        .ensure_mission_workspace_read_is_current(workspace)
+                        .await?;
+                    let serialization_started_at = Instant::now();
+                    let value = match prepared {
                         Ok(prepared) => {
                             let snapshot = prepared.into_snapshot();
                             let view = mission_workspace::MissionWorkspaceChangesView {
@@ -693,18 +748,33 @@ impl Core {
                             self.mission_diff_snapshots
                                 .lock()
                                 .await
-                                .insert(query.mission_id, snapshot);
-                            Ok(serde_json::to_value(view)?)
+                                .insert(query.mission_id.clone(), snapshot);
+                            serde_json::to_value(view)?
                         }
-                        Err(error) => Ok(serde_json::to_value(
-                            mission_workspace::MissionWorkspaceChangesView {
+                        Err(error) => {
+                            serde_json::to_value(mission_workspace::MissionWorkspaceChangesView {
                                 checkout_state,
                                 view_id: None,
                                 files: None,
                                 diff_error: Some(format!("{error:#}")),
-                            },
-                        )?),
-                    }
+                            })?
+                        }
+                    };
+                    let serialization_ms = serialization_started_at.elapsed().as_millis();
+                    eprintln!(
+                        "[mission-git-read] request={} method={} mission={:?} stage=read_complete workspace_lock_ms={} workspace_read_ms={} permit_wait_ms={} git_ms={} revalidate_lock_ms={} revalidate_read_ms={} serialization_ms={}",
+                        request.id,
+                        request.method,
+                        query.mission_id,
+                        workspace_lock_ms,
+                        workspace_read_ms,
+                        permit_wait_ms,
+                        git_ms,
+                        revalidate_lock_ms,
+                        revalidate_read_ms,
+                        serialization_ms,
+                    );
+                    Ok(value)
                 } else {
                     let view_id = query
                         .view_id
@@ -716,8 +786,8 @@ impl Core {
                         .await
                         .get(&query.mission_id, workspace, view_id)
                         .context("mission.changes_refresh_required")?;
-                    Ok(serde_json::to_value(
-                        git.file_diff(
+                    let diff = git
+                        .file_diff(
                             workspace,
                             &snapshot,
                             query
@@ -725,8 +795,28 @@ impl Core {
                                 .as_deref()
                                 .context("mission.file_id_required")?,
                         )
-                        .await?,
-                    )?)
+                        .await?;
+                    let git_ms = git_started_at.elapsed().as_millis();
+                    let (revalidate_lock_ms, revalidate_read_ms) = self
+                        .ensure_mission_workspace_read_is_current(workspace)
+                        .await?;
+                    let serialization_started_at = Instant::now();
+                    let value = serde_json::to_value(diff)?;
+                    let serialization_ms = serialization_started_at.elapsed().as_millis();
+                    eprintln!(
+                        "[mission-git-read] request={} method={} mission={:?} stage=read_complete workspace_lock_ms={} workspace_read_ms={} permit_wait_ms={} git_ms={} revalidate_lock_ms={} revalidate_read_ms={} serialization_ms={}",
+                        request.id,
+                        request.method,
+                        query.mission_id,
+                        workspace_lock_ms,
+                        workspace_read_ms,
+                        permit_wait_ms,
+                        git_ms,
+                        revalidate_lock_ms,
+                        revalidate_read_ms,
+                        serialization_ms,
+                    );
+                    Ok(value)
                 }
             }
             "missions.create" | "missions.createWithAttachments" => {
@@ -922,11 +1012,61 @@ async fn select_candidate(
 
 #[cfg(test)]
 mod tests {
-    use super::worktree_cleanup_required;
+    use super::{mission_workspace_read_matches, worktree_cleanup_required};
+    use crate::mission_workspace::MissionWorkspace;
+
+    fn workspace() -> MissionWorkspace {
+        MissionWorkspace {
+            id: "workspace-1".into(),
+            mission_id: "mission-1".into(),
+            camp_id: "camp-1".into(),
+            execution_host_id: "host-1".into(),
+            source_directory: "/source".into(),
+            repository_root: "/source".into(),
+            git_common_dir: "/source/.git".into(),
+            worktree_path: "/worktree".into(),
+            working_directory: "/worktree/project".into(),
+            base_branch: Some("main".into()),
+            branch: "rovai/mission/001".into(),
+            base_sha: "base".into(),
+            preparation_token: "token".into(),
+            preparation_kind: "create".into(),
+            generation: 1,
+            state: "ready".into(),
+            cleanup_command_id: None,
+            cleanup_expected_branch_oid: None,
+            cleanup_worktree_removed: false,
+            cleanup_branch_removed: false,
+            diagnostic: None,
+        }
+    }
 
     #[test]
     fn cleanup_retries_only_the_unfinished_worktree_step() {
         assert!(worktree_cleanup_required(false));
         assert!(!worktree_cleanup_required(true));
+    }
+
+    #[test]
+    fn mission_git_reads_reject_cleanup_rebuild_and_replacement_workspaces() {
+        let expected = workspace();
+        assert!(mission_workspace_read_matches(&expected, &expected));
+
+        let mut cleanup = expected.clone();
+        cleanup.state = "cleanup_pending".into();
+        assert!(!mission_workspace_read_matches(&expected, &cleanup));
+
+        let mut rebuilt = expected.clone();
+        rebuilt.generation += 1;
+        assert!(!mission_workspace_read_matches(&expected, &rebuilt));
+
+        let mut moved = expected.clone();
+        moved.worktree_path = "/replacement".into();
+        moved.working_directory = "/replacement/project".into();
+        assert!(!mission_workspace_read_matches(&expected, &moved));
+
+        let mut replacement = expected.clone();
+        replacement.id = "workspace-2".into();
+        assert!(!mission_workspace_read_matches(&expected, &replacement));
     }
 }

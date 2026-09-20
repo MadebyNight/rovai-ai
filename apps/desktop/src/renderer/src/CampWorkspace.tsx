@@ -1892,6 +1892,7 @@ export function CampWorkspace({
   const executionPlacementRequest = useRef(false)
   const executionPlacementMounted = useRef(true)
   const workspaceEntrySnapshotHandled = useRef(workspaceEntrySnapshotReady)
+  const executionEntryInteractionCampId = useRef<string | null>(null)
   const workspaceEntryInspectorHandled = useRef(false)
   const mountedCampId = useRef(snapshot.camp.id)
   const [executionDrawerPortal] = useState<HTMLDivElement | null>(() => {
@@ -2126,6 +2127,7 @@ export function CampWorkspace({
   useLayoutEffect(() => {
     if (workspaceEntrySnapshotHandled.current || !workspaceEntrySnapshotReady) return
     workspaceEntrySnapshotHandled.current = true
+    if (executionEntryInteractionCampId.current === snapshot.camp.id) return
     if (suppressExecutionAutoOpen) return
     const runningRun = runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
     setExecutionDrawerAgentId(runningRun?.agentId ?? null)
@@ -2179,7 +2181,11 @@ export function CampWorkspace({
   useLayoutEffect(() => {
     if (mountedCampId.current === snapshot.camp.id) return
     mountedCampId.current = snapshot.camp.id
-    const runningRun = suppressExecutionAutoOpen ? null : runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
+    executionEntryInteractionCampId.current = null
+    workspaceEntrySnapshotHandled.current = workspaceEntrySnapshotReady
+    const runningRun = workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
+      ? runningAgentRunForWorkspaceEntry(snapshot.agentRuns)
+      : null
     setExecutionDrawerAgentId(runningRun?.agentId ?? null)
     setExecutionDrawerFocusedRunId(runningRun?.id ?? null)
     setExecutionDrawerFocusRequest((request) => ({
@@ -2195,7 +2201,7 @@ export function CampWorkspace({
     } else if (runningRun && executionPlacement === 'right') {
       filePreview?.openExecution()
     }
-  }, [executionPlacement, filePreview, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id, suppressExecutionAutoOpen])
+  }, [executionPlacement, filePreview, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.camp.id, suppressExecutionAutoOpen, workspaceEntrySnapshotReady])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -3219,6 +3225,7 @@ export function CampWorkspace({
     const run = snapshot.agentRuns.find((candidate) => candidate.id === notificationFocus.agentRunId)
     if (!run) return
     preparedNotificationAgentRunRequest.current = notificationFocus.requestId
+    executionEntryInteractionCampId.current = snapshot.camp.id
     if (executionPlacement === 'inspector') {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
@@ -3229,7 +3236,7 @@ export function CampWorkspace({
       sequence: request.sequence + 1,
       moveDomFocus: true
     }))
-  }, [executionPlacement, inspectorTab, notificationFocus, onOpenInspector, snapshot.agentRuns])
+  }, [executionPlacement, inspectorTab, notificationFocus, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
 
   useEffect(() => {
     if (!notificationFocus?.active || notificationFocus.kind === 'single_chat') return undefined
@@ -4180,10 +4187,11 @@ export function CampWorkspace({
   const openExecutionProcess = (
     agentId: string,
     trigger: HTMLButtonElement | null = null,
-    options: { runId?: string | null; moveDomFocus?: boolean; reveal?: boolean } = {}
+    options: { runId?: string | null; moveDomFocus?: boolean; reveal?: boolean; entryInteraction?: boolean } = {}
   ): void => {
     const process = executionProcessByAgentId.get(agentId)
     if (!process) return
+    if (options.entryInteraction !== false) executionEntryInteractionCampId.current = snapshot.camp.id
     if (executionPlacement === 'inspector' && options.reveal !== false) {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
@@ -4213,6 +4221,7 @@ export function CampWorkspace({
     trigger: HTMLButtonElement | null = null,
     moveDomFocus = true
   ): void => {
+    executionEntryInteractionCampId.current = snapshot.camp.id
     if (executionPlacement === 'inspector') {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
@@ -4230,6 +4239,7 @@ export function CampWorkspace({
   }
 
   const closeExecutionProcess = (): void => {
+    executionEntryInteractionCampId.current = snapshot.camp.id
     setExecutionDrawerAgentId(null)
     setExecutionDrawerFocusedRunId(null)
   }
@@ -4266,7 +4276,8 @@ export function CampWorkspace({
     openExecutionProcess(targetRun.agentId, null, {
       runId: targetRun.id,
       moveDomFocus: false,
-      reveal: !mobile
+      reveal: !mobile,
+      entryInteraction: false
     })
   }, [
     executionDrawerAgentId,

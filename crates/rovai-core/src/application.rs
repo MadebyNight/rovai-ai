@@ -293,7 +293,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
-    sync::{Mutex, Notify, RwLock, mpsc, oneshot},
+    sync::{Mutex, Notify, RwLock, Semaphore, mpsc, oneshot},
     time::{Duration, MissedTickBehavior},
 };
 
@@ -318,6 +318,7 @@ const DELIVERY_BATCH_SCHEDULER_PAGE_LIMIT: i64 = 16;
 const DELIVERY_BATCH_FALLBACK_INTERVAL: Duration = Duration::from_secs(30);
 const NON_BATCH_AGENT_RUN_DISPATCH_LIMIT: i64 = 16;
 const ORDERED_REQUEST_QUEUE_CAPACITY: usize = 128;
+const MISSION_GIT_READ_CONCURRENCY_LIMIT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeCancellationIngressFence {
@@ -471,6 +472,51 @@ fn installed_request_dispatch_test_barrier(token: &str) -> Result<RequestDispatc
         .filter(|barrier| barrier.token == token)
         .cloned()
         .context("request dispatch test barrier is not installed")
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct MissionGitReadTestBarrier {
+    mission_id: String,
+    method: String,
+    entered_count: Arc<std::sync::atomic::AtomicUsize>,
+    entered: Arc<Notify>,
+    released: Arc<std::sync::atomic::AtomicBool>,
+    release: Arc<Notify>,
+}
+
+#[cfg(test)]
+static MISSION_GIT_READ_TEST_BARRIER: std::sync::OnceLock<
+    std::sync::Mutex<Option<MissionGitReadTestBarrier>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+async fn wait_for_mission_git_read_test_barrier(method: &str, mission_id: &str) {
+    use std::sync::atomic::Ordering;
+
+    let barrier = MISSION_GIT_READ_TEST_BARRIER
+        .get_or_init(Default::default)
+        .lock()
+        .ok()
+        .and_then(|installed| {
+            installed
+                .as_ref()
+                .filter(|barrier| barrier.method == method && barrier.mission_id == mission_id)
+                .cloned()
+        });
+    let Some(barrier) = barrier else { return };
+    barrier.entered_count.fetch_add(1, Ordering::SeqCst);
+    barrier.entered.notify_waiters();
+    loop {
+        if barrier.released.load(Ordering::SeqCst) {
+            return;
+        }
+        let released = barrier.release.notified();
+        if barrier.released.load(Ordering::SeqCst) {
+            return;
+        }
+        released.await;
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -693,6 +739,8 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
             | "camp.attachments.desktopOpenTarget"
             | "agentRunExecution.page"
             | "agentRunExecution.changes"
+            | "missions.changes"
+            | "missions.fileDiff"
             | "agentRuns.cancel"
             | "singleChat.sourceAttachments.addFromPath"
             | "singleChat.composerDraft.removeAttachment"
@@ -710,8 +758,12 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
 fn is_execution_window_request(method: &str) -> bool {
     matches!(
         method,
-        "agentRunExecution.page" | "agentRunExecution.changes"
+        "agentRunExecution.page" | "agentRunExecution.changes" | "agentRunEvidence.getContent"
     )
+}
+
+fn is_mission_git_read_request(method: &str) -> bool {
+    matches!(method, "missions.changes" | "missions.fileDiff")
 }
 
 fn log_execution_window_request_stage(
@@ -741,12 +793,39 @@ fn log_execution_window_request_stage(
     );
 }
 
+fn log_mission_git_read_request_stage(
+    request: &Request,
+    stage: &str,
+    elapsed: Option<std::time::Duration>,
+) {
+    if !is_mission_git_read_request(&request.method) {
+        return;
+    }
+    let mission_id = request
+        .params
+        .get("missionId")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let elapsed = elapsed
+        .map(|duration| format!(" elapsed_ms={}", duration.as_millis()))
+        .unwrap_or_default();
+    eprintln!(
+        "[mission-git-read] request={} method={} mission={:?} stage={}{}",
+        request.id, request.method, mission_id, stage, elapsed,
+    );
+}
+
+fn log_read_request_stage(request: &Request, stage: &str, elapsed: Option<std::time::Duration>) {
+    log_execution_window_request_stage(request, stage, elapsed);
+    log_mission_git_read_request_stage(request, stage, elapsed);
+}
+
 async fn response_for_request(
     core: &Arc<Core>,
     request: &Request,
     received_at: Instant,
 ) -> Response {
-    log_execution_window_request_stage(request, "handling_start", Some(received_at.elapsed()));
+    log_read_request_stage(request, "handling_start", Some(received_at.elapsed()));
     match Box::pin(core.handle(request)).await {
         Ok(result) => {
             if request_did_invalidate_navigation(core, request, &result).await {
@@ -761,11 +840,7 @@ async fn response_for_request(
                 result: Some(result),
                 error: None,
             };
-            log_execution_window_request_stage(
-                request,
-                "response_ready",
-                Some(received_at.elapsed()),
-            );
+            log_read_request_stage(request, "response_ready", Some(received_at.elapsed()));
             response
         }
         Err(error) => {
@@ -774,11 +849,7 @@ async fn response_for_request(
                 result: None,
                 error: Some(request_error_body(&error)),
             };
-            log_execution_window_request_stage(
-                request,
-                "response_ready",
-                Some(received_at.elapsed()),
-            );
+            log_read_request_stage(request, "response_ready", Some(received_at.elapsed()));
             response
         }
     }
@@ -2027,6 +2098,7 @@ struct Core {
     mission_workspace_gate: Mutex<()>,
     mission_workspace_cleanup_gate: Mutex<()>,
     mission_workspace_cleanup_notify: Notify,
+    mission_git_read_capacity: Semaphore,
     mission_diff_snapshots: Mutex<crate::mission_workspace::MissionDiffSnapshotCache>,
     #[cfg(test)]
     runtime_search_capture: Option<runtime_check_environment::TestSearchCapture>,
@@ -8634,7 +8706,10 @@ impl Core {
             "agentRunEvidence.getContent" => {
                 let params: ExecutionEvidenceContentParams =
                     serde_json::from_value(request.params.clone())?;
+                let lock_started_at = Instant::now();
                 let database = self.database.lock().await;
+                let lock_ms = lock_started_at.elapsed().as_millis();
+                let read_started_at = Instant::now();
                 let payload = ExecutionEvidenceService.read_full_payload(
                     &database,
                     &ManagedBlobStore::new(&self.data_dir),
@@ -8645,9 +8720,22 @@ impl Core {
                     &database,
                     &params.evidence_id,
                 )?;
-                Ok(
-                    json!({ "evidenceId": params.evidence_id, "payload": payload, "canonical": canonical }),
-                )
+                let read_ms = read_started_at.elapsed().as_millis();
+                drop(database);
+                let serialization_started_at = Instant::now();
+                let value = json!({ "evidenceId": params.evidence_id, "payload": payload, "canonical": canonical });
+                let serialization_ms = serialization_started_at.elapsed().as_millis();
+                eprintln!(
+                    "[execution-window] request={} method={} camp={:?} evidence={:?} stage=read_complete lock_ms={} read_ms={} serialization_ms={}",
+                    request.id,
+                    request.method,
+                    params.camp_id.as_str(),
+                    params.evidence_id,
+                    lock_ms,
+                    read_ms,
+                    serialization_ms,
+                );
+                Ok(value)
             }
             "agentRunExecution.changes" => {
                 let params: ExecutionChangesParams =
@@ -15887,6 +15975,7 @@ async fn run_core(
         mission_workspace_gate: Mutex::new(()),
         mission_workspace_cleanup_gate: Mutex::new(()),
         mission_workspace_cleanup_notify: Notify::new(),
+        mission_git_read_capacity: Semaphore::new(MISSION_GIT_READ_CONCURRENCY_LIMIT),
         mission_diff_snapshots: Mutex::new(
             crate::mission_workspace::MissionDiffSnapshotCache::default(),
         ),
@@ -16154,7 +16243,7 @@ async fn run_core(
 
     while let Some(request) = input.next_request().await? {
         let received_at = Instant::now();
-        log_execution_window_request_stage(&request, "request_arrived", None);
+        log_read_request_stage(&request, "request_arrived", None);
         while let Some(result) = background_requests.try_join_next() {
             if let Err(error) = result {
                 eprintln!("background Core request failed: {error}");
@@ -23449,6 +23538,7 @@ mod tests {
             mission_workspace_gate: Mutex::new(()),
             mission_workspace_cleanup_gate: Mutex::new(()),
             mission_workspace_cleanup_notify: Notify::new(),
+            mission_git_read_capacity: Semaphore::new(MISSION_GIT_READ_CONCURRENCY_LIMIT),
             mission_diff_snapshots: Mutex::new(
                 crate::mission_workspace::MissionDiffSnapshotCache::default(),
             ),
@@ -25984,6 +26074,11 @@ done
         assert!(!request_runs_outside_main_queue("camp.messages.page"));
         assert!(request_runs_outside_main_queue("agentRunExecution.page"));
         assert!(request_runs_outside_main_queue("agentRunExecution.changes"));
+        assert!(request_runs_outside_main_queue("missions.changes"));
+        assert!(request_runs_outside_main_queue("missions.fileDiff"));
+        assert!(!request_runs_outside_main_queue(
+            "agentRunEvidence.getContent"
+        ));
         assert!(!request_runs_outside_main_queue(
             "camps.reconcileDefaultLead"
         ));
@@ -26122,6 +26217,594 @@ done
             Some(&json!("CORE_REQUEST_FAILED")),
             "the nonexistent Run should still reach the ordinary execution-page validation"
         );
+    }
+
+    #[cfg(feature = "slow-tests")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mission_git_reads_release_ingress_database_and_lifecycle_authority() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        struct InstalledMissionGitBarrier(MissionGitReadTestBarrier);
+        impl InstalledMissionGitBarrier {
+            fn release(&self) {
+                self.0.released.store(true, Ordering::SeqCst);
+                self.0.release.notify_waiters();
+            }
+        }
+        impl Drop for InstalledMissionGitBarrier {
+            fn drop(&mut self) {
+                self.release();
+                if let Ok(mut installed) = MISSION_GIT_READ_TEST_BARRIER
+                    .get_or_init(Default::default)
+                    .lock()
+                {
+                    installed.take();
+                }
+            }
+        }
+        fn install_barrier(mission_id: &str, method: &str) -> InstalledMissionGitBarrier {
+            let barrier = MissionGitReadTestBarrier {
+                mission_id: mission_id.to_string(),
+                method: method.to_string(),
+                entered_count: Arc::new(AtomicUsize::new(0)),
+                entered: Arc::new(Notify::new()),
+                released: Arc::new(AtomicBool::new(false)),
+                release: Arc::new(Notify::new()),
+            };
+            let mut installed = MISSION_GIT_READ_TEST_BARRIER
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap();
+            assert!(installed.replace(barrier.clone()).is_none());
+            InstalledMissionGitBarrier(barrier)
+        }
+        async fn wait_for_entries(barrier: &MissionGitReadTestBarrier, count: usize) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while barrier.entered_count.load(Ordering::SeqCst) < count {
+                    let entered = barrier.entered.notified();
+                    if barrier.entered_count.load(Ordering::SeqCst) >= count {
+                        break;
+                    }
+                    entered.await;
+                }
+            })
+            .await
+            .expect("Mission Git reads should reach the controlled Git barrier");
+        }
+        fn spawn_requests(
+            service: &CoreService,
+            method: &str,
+            params: Value,
+            count: usize,
+        ) -> Vec<tokio::task::JoinHandle<Result<CoreReply>>> {
+            (0..count)
+                .map(|_| {
+                    let service = service.clone();
+                    let method = method.to_string();
+                    let params = params.clone();
+                    tokio::spawn(async move { service.request(&method, params).await })
+                })
+                .collect()
+        }
+        async fn replies(
+            requests: Vec<tokio::task::JoinHandle<Result<CoreReply>>>,
+        ) -> Vec<CoreReply> {
+            let mut replies = Vec::new();
+            for request in requests {
+                replies.push(request.await.unwrap().unwrap());
+            }
+            replies
+        }
+        async fn assert_ordinary_reads_finish(
+            service: &CoreService,
+            camp_id: &str,
+            agent_run_id: &str,
+            evidence_id: &str,
+            expected_output: &str,
+        ) {
+            let open_service = service.clone();
+            let event_service = service.clone();
+            let page_service = service.clone();
+            let content_service = service.clone();
+            let camp_id_for_open = camp_id.to_string();
+            let camp_id_for_events = camp_id.to_string();
+            let camp_id_for_page = camp_id.to_string();
+            let camp_id_for_content = camp_id.to_string();
+            let run_id = agent_run_id.to_string();
+            let evidence_id = evidence_id.to_string();
+            let (open, events, page, content) =
+                tokio::time::timeout(Duration::from_secs(5), async move {
+                    tokio::join!(
+                        open_service.request(
+                            "camps.open",
+                            json!({
+                                "traceId": uuid::Uuid::new_v4().to_string(),
+                                "campId": camp_id_for_open,
+                            }),
+                        ),
+                        event_service.request(
+                            "events.subscribe",
+                            json!({
+                                "campId": camp_id_for_events,
+                                "afterGlobalSequence": 0,
+                                "limit": 50,
+                            }),
+                        ),
+                        page_service.request(
+                            "agentRunExecution.page",
+                            json!({
+                                "campId": camp_id_for_page,
+                                "agentRunId": run_id,
+                                "beforeSequence": null,
+                                "afterSequence": null,
+                                "limit": 24,
+                            }),
+                        ),
+                        content_service.request(
+                            "agentRunEvidence.getContent",
+                            json!({
+                                "campId": camp_id_for_content,
+                                "evidenceId": evidence_id,
+                            }),
+                        ),
+                    )
+                })
+                .await
+                .expect("ordinary reads must finish before Mission Git is released");
+            let replies = [
+                open.unwrap(),
+                events.unwrap(),
+                page.unwrap(),
+                content.unwrap(),
+            ];
+            for reply in &replies {
+                assert!(
+                    reply.error.is_none(),
+                    "ordinary read failed: {:?}",
+                    reply.error
+                );
+            }
+            assert_eq!(
+                replies[3].result.as_ref().unwrap()["payload"]["item"]["aggregatedOutput"],
+                expected_output,
+                "getContent must return the full managed Blob while Mission Git is blocked"
+            );
+        }
+        fn assert_refresh_required(reply: &CoreReply) {
+            let message = reply
+                .error
+                .as_ref()
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(
+                message.contains("mission.changes_refresh_required"),
+                "expected a recoverable Mission view error, got {message:?}"
+            );
+        }
+
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "rovai-mission-git-dispatch-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let git_path = crate::runtime_discovery::resolve_active_command_path("git")
+            .expect("Git is required for the real Mission dispatch test");
+        let git = |arguments: &[&str]| {
+            let output = std::process::Command::new(&git_path)
+                .arg("-C")
+                .arg(&source)
+                .args(arguments)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "Git fixture command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "Mission Dispatch Test"]);
+        git(&["config", "user.email", "mission-dispatch@example.invalid"]);
+        fs::write(source.join("tracked.txt"), "base\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        git(&["commit", "-m", "base"]);
+
+        let data_dir = root.join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let runtime_camp_files_root =
+            rovai_core::storage_layout::server_runtime_root(&data_dir).unwrap();
+        let attachment_views =
+            CampAttachmentViewStore::admit(&runtime_camp_files_root, &data_dir, &[]).unwrap();
+        let mut database = Database::open_with_runtime_camp_files_root(
+            &data_dir,
+            attachment_views.root(),
+            attachment_views.root_identity_digest(),
+        )
+        .unwrap();
+        let agent_id = AgentProfileService::default()
+            .list_profiles(&database)
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("the startup database should include a default member")
+            .agent_id;
+        rovai_core::agent_profile::configure_test_runtime(&database, &[agent_id.as_str()]);
+        let created = crate::mission::MissionService::default()
+            .create(
+                &mut database,
+                &CommandEnvelope {
+                    command_id: uuid::Uuid::new_v4().to_string(),
+                    actor: ActorRef::User {
+                        user_id: "test-user".into(),
+                    },
+                    camp_id: None,
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: crate::mission::CreateMissionCommand {
+                        title: "Mission Git background dispatch".into(),
+                        description: String::new(),
+                        project_path: source.to_string_lossy().into_owned(),
+                        project_binding_kind: ProjectBindingKind::Directory,
+                        member_agent_ids: vec![agent_id.clone()],
+                        default_lead_agent_id: agent_id.clone(),
+                        tags: Vec::new(),
+                        source_attachments: Vec::new(),
+                    },
+                },
+            )
+            .unwrap();
+        let mission_id = created.result.payload["missionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let camp_id = created.result.payload["campId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        attachment_views
+            .ensure_empty_camp_ready(&mut database, &camp_id)
+            .unwrap();
+        let execution_host_id: String = database
+            .connection()
+            .query_row(
+                "SELECT id FROM mission_execution_host WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let sent = CollaborationService::default()
+            .send_test_camp_message(
+                &mut database,
+                &CommandEnvelope {
+                    command_id: uuid::Uuid::new_v4().to_string(),
+                    actor: ActorRef::User {
+                        user_id: "test-user".into(),
+                    },
+                    camp_id: Some(camp_id.clone()),
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: rovai_core::collaboration::TestCampMessageCommand {
+                        camp_id: camp_id.clone(),
+                        draft_revision: None,
+                        body: "Create a real execution window".into(),
+                        prepared_attachment_ids: Vec::new(),
+                        address: rovai_core::collaboration::TestCampMessageAddress::Default,
+                        reply_to_camp_message_id: None,
+                        execution: Some(ExecutionRequest {
+                            task_id: None,
+                            purpose: "Mission Git queue verification".into(),
+                            completion_role: "required".into(),
+                            budget: None,
+                        }),
+                    },
+                },
+            )
+            .unwrap();
+        let agent_run_id = sent.result.payload["agentRunIds"][0]
+            .as_str()
+            .unwrap()
+            .to_string();
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status='running',execution_epoch=1 WHERE id=?1",
+                [&agent_run_id],
+            )
+            .unwrap();
+        let secret = format!("MISSION_GIT_BLOB_{}", "x".repeat(573_647));
+        ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &ManagedBlobStore::new(&data_dir),
+                &agent_run_id,
+                1,
+                "activity.started",
+                &json!({
+                    "item": {
+                        "id": "command-1",
+                        "type": "commandExecution",
+                        "command": "git status",
+                        "status": "inProgress",
+                    }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        let evidence = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &ManagedBlobStore::new(&data_dir),
+                &agent_run_id,
+                1,
+                "activity.completed",
+                &json!({
+                    "item": {
+                        "id": "command-1",
+                        "type": "commandExecution",
+                        "command": "git status",
+                        "status": "completed",
+                        "exitCode": 0,
+                        "aggregatedOutput": secret.clone(),
+                    }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(evidence.is_truncated && evidence.content_blob_id.is_some());
+        let evidence_id = evidence.id.clone();
+
+        let mission_git = crate::mission_workspace::MissionGit::new(git_path.clone()).unwrap();
+        let repository = mission_git.inspect(&source).await.unwrap().unwrap();
+        let worktree = root.join("mission-worktree");
+        let mut workspace = crate::mission_workspace::MissionWorkspace {
+            id: uuid::Uuid::new_v4().to_string(),
+            mission_id: mission_id.clone(),
+            camp_id: camp_id.clone(),
+            execution_host_id,
+            source_directory: source.to_string_lossy().into_owned(),
+            repository_root: repository.root.to_string_lossy().into_owned(),
+            git_common_dir: repository.common_dir.to_string_lossy().into_owned(),
+            worktree_path: worktree.to_string_lossy().into_owned(),
+            working_directory: worktree.to_string_lossy().into_owned(),
+            base_branch: repository.base_branch,
+            branch: format!("rovai/mission/dispatch-{}", uuid::Uuid::new_v4()),
+            base_sha: repository.base_sha,
+            preparation_token: uuid::Uuid::new_v4().to_string(),
+            preparation_kind: "create".into(),
+            generation: 1,
+            state: "preparing".into(),
+            cleanup_command_id: None,
+            cleanup_expected_branch_oid: None,
+            cleanup_worktree_removed: false,
+            cleanup_branch_removed: false,
+            diagnostic: None,
+        };
+        crate::mission_workspace::persist_plan(database.connection(), &workspace).unwrap();
+        drop(database);
+        mission_git.materialize(&workspace).await.unwrap();
+        workspace.state = "ready".into();
+        fs::write(worktree.join("tracked.txt"), "changed\n").unwrap();
+        let database = Database::open_with_runtime_camp_files_root(
+            &data_dir,
+            attachment_views.root(),
+            attachment_views.root_identity_digest(),
+        )
+        .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE mission_workspace SET state='ready' WHERE id=?1",
+                [&workspace.id],
+            )
+            .unwrap();
+        let database_path = database.path().to_path_buf();
+        drop(database);
+        drop(attachment_views);
+        let mut search_paths = vec![git_path.parent().unwrap().to_path_buf()];
+        search_paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let (service, runner) = embedded(
+            CoreConfig {
+                runtime_camp_files_root: runtime_camp_files_root.clone(),
+                data_dir: data_dir.clone(),
+                skill_library_root: root.join("skills"),
+                mcp_config_path: Some(root.join("mcp.json")),
+                require_existing_authority: false,
+                automation_scheduler_control: None,
+                removed_skill_project_roots: RemovedSkillProjectRoots::default(),
+            },
+            Arc::new(RuntimeSearchEnvironment::for_test_paths(1, search_paths)),
+        )
+        .unwrap();
+        let mut runner_task = tokio::spawn(runner.run());
+        tokio::time::timeout(Duration::from_secs(20), service.wait_ready())
+            .await
+            .expect("isolated Core should become ready")
+            .unwrap();
+
+        let changes_barrier = install_barrier(&mission_id, "missions.changes");
+        let changes_requests = spawn_requests(
+            &service,
+            "missions.changes",
+            json!({ "missionId": mission_id }),
+            MISSION_GIT_READ_CONCURRENCY_LIMIT + 1,
+        );
+        wait_for_entries(&changes_barrier.0, MISSION_GIT_READ_CONCURRENCY_LIMIT).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            changes_barrier.0.entered_count.load(Ordering::SeqCst),
+            MISSION_GIT_READ_CONCURRENCY_LIMIT,
+            "the extra Mission change read must wait at the bounded permit"
+        );
+        assert!(!changes_requests.last().unwrap().is_finished());
+        assert_ordinary_reads_finish(&service, &camp_id, &agent_run_id, &evidence_id, &secret)
+            .await;
+        changes_barrier.release();
+        let change_replies = replies(changes_requests).await;
+        drop(changes_barrier);
+        for reply in &change_replies {
+            assert!(
+                reply.error.is_none(),
+                "Mission changes failed: {:?}",
+                reply.error
+            );
+        }
+        let view_id = change_replies[0].result.as_ref().unwrap()["viewId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let file_id = change_replies[0].result.as_ref().unwrap()["files"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let diff_barrier = install_barrier(&mission_id, "missions.fileDiff");
+        let diff_requests = spawn_requests(
+            &service,
+            "missions.fileDiff",
+            json!({ "missionId": mission_id, "viewId": view_id, "fileId": file_id }),
+            MISSION_GIT_READ_CONCURRENCY_LIMIT + 1,
+        );
+        wait_for_entries(&diff_barrier.0, MISSION_GIT_READ_CONCURRENCY_LIMIT).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            diff_barrier.0.entered_count.load(Ordering::SeqCst),
+            MISSION_GIT_READ_CONCURRENCY_LIMIT,
+            "the extra Mission file Diff must wait at the bounded permit"
+        );
+        assert!(!diff_requests.last().unwrap().is_finished());
+        assert_ordinary_reads_finish(&service, &camp_id, &agent_run_id, &evidence_id, &secret)
+            .await;
+        diff_barrier.release();
+        let diff_replies = replies(diff_requests).await;
+        drop(diff_barrier);
+        for reply in &diff_replies {
+            assert!(
+                reply.error.is_none(),
+                "Mission file Diff failed: {:?}",
+                reply.error
+            );
+        }
+
+        let stale_changes_barrier = install_barrier(&mission_id, "missions.changes");
+        let mut stale_changes = spawn_requests(
+            &service,
+            "missions.changes",
+            json!({ "missionId": mission_id }),
+            1,
+        );
+        wait_for_entries(&stale_changes_barrier.0, 1).await;
+        let lifecycle = rusqlite::Connection::open(&database_path).unwrap();
+        lifecycle
+            .execute(
+                "UPDATE mission_workspace SET state='cleanup_pending',generation=generation+1 WHERE id=?1",
+                [&workspace.id],
+            )
+            .expect("cleanup must acquire SQLite while the Git read is blocked");
+        stale_changes_barrier.release();
+        let stale_changes_reply = stale_changes.remove(0).await.unwrap().unwrap();
+        drop(stale_changes_barrier);
+        assert_refresh_required(&stale_changes_reply);
+        lifecycle
+            .execute(
+                "UPDATE mission_workspace SET state='ready' WHERE id=?1",
+                [&workspace.id],
+            )
+            .unwrap();
+        let refreshed = service
+            .request("missions.changes", json!({ "missionId": mission_id }))
+            .await
+            .unwrap();
+        assert!(
+            refreshed.error.is_none(),
+            "refresh failed: {:?}",
+            refreshed.error
+        );
+        let refreshed_view_id = refreshed.result.as_ref().unwrap()["viewId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let refreshed_file_id = refreshed.result.as_ref().unwrap()["files"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let stale_diff_barrier = install_barrier(&mission_id, "missions.fileDiff");
+        let mut stale_diff = spawn_requests(
+            &service,
+            "missions.fileDiff",
+            json!({
+                "missionId": mission_id,
+                "viewId": refreshed_view_id,
+                "fileId": refreshed_file_id,
+            }),
+            1,
+        );
+        wait_for_entries(&stale_diff_barrier.0, 1).await;
+        lifecycle
+            .execute(
+                "UPDATE mission_workspace SET state='cleanup_pending',generation=generation+1 WHERE id=?1",
+                [&workspace.id],
+            )
+            .expect("rebuild must acquire SQLite while the file Diff is blocked");
+        stale_diff_barrier.release();
+        let stale_diff_reply = stale_diff.remove(0).await.unwrap().unwrap();
+        drop(stale_diff_barrier);
+        assert_refresh_required(&stale_diff_reply);
+        lifecycle
+            .execute(
+                "UPDATE mission_workspace SET state='ready' WHERE id=?1",
+                [&workspace.id],
+            )
+            .unwrap();
+        let invalidated_view = service
+            .request(
+                "missions.fileDiff",
+                json!({
+                    "missionId": mission_id,
+                    "viewId": refreshed_view_id,
+                    "fileId": refreshed_file_id,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_refresh_required(&invalidated_view);
+        drop(lifecycle);
+
+        drop(service);
+        if tokio::time::timeout(Duration::from_secs(10), &mut runner_task)
+            .await
+            .is_err()
+        {
+            runner_task.abort();
+            let _ = runner_task.await;
+        }
+        CampAttachmentStore::new(&data_dir)
+            .remove_camp(&camp_id)
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let view_attachment_root = runtime_camp_files_root
+                .join("camps")
+                .join(&camp_id)
+                .join("attachments");
+            for directory in [
+                view_attachment_root.as_path(),
+                view_attachment_root.parent().unwrap(),
+                view_attachment_root.parent().unwrap().parent().unwrap(),
+            ] {
+                if directory.exists() {
+                    fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+                }
+            }
+        }
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
