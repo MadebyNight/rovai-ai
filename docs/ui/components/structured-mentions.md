@@ -125,6 +125,11 @@ replace。失败保留现有正文并恢复交互。
 
 ## Current User Mention 与历史消息
 
+默认路由的本地用户或 External Principal 历史消息可由 Renderer 根据消息冻结的唯一
+`addressedAgentId`，在可见正文前派生一个 Member Mention。它复用本节的行内色彩、人物卡和不可用降级，
+但使用 `data-quote-exclude` 与用户原文边界隔离：不是 Structured Content，不改变复制、引用定位、搜索、
+`camp.read` 或 Agent 路由。显式 Member Mention 仍只来自权威 Structured Content，不得从正文或显示前缀反推身份。
+
 Current User Mention 从 Desktop 当前个人资料解析名称；保存后历史结构化 `@你` 立即显示为新名称。
 普通文本、代码和外部引用中的同名字面字符不替换。作者栏、复制投影和历史回复预览的当前资料规则见
 [Current User Profile v1](../../contracts/current-user-profile-v1.md)，不改变 Core 的 Agent 上下文投影。

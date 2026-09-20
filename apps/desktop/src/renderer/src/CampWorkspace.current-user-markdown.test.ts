@@ -10,6 +10,7 @@ import type {
 } from '@contracts'
 import {
   CampWorkspace,
+  defaultRecipientMentionAgentId,
   projectLeadingCurrentUserMentionMarkdownBody,
   structuredCampContentPlainText
 } from './CampWorkspace'
@@ -45,7 +46,8 @@ function renderMessage(
   body = 'NON_AUTHORITATIVE_BODY_CACHE',
   authorType: 'agent' | 'user' | 'external_principal' = 'agent',
   campMembers = members,
-  profile: CurrentUserProfile = DEFAULT_CURRENT_USER_PROFILE
+  profile: CurrentUserProfile = DEFAULT_CURRENT_USER_PROFILE,
+  messageOverrides: Partial<CampMessageView> = {}
 ): string {
   const message: CampMessageView = {
     quotes: [],
@@ -66,7 +68,8 @@ function renderMessage(
     replyToCampMessageId: null,
     campTurnId: null,
     presentation: null,
-    createdAt: '2026-08-13T00:00:00Z'
+    createdAt: '2026-08-13T00:00:00Z',
+    ...messageOverrides
   }
   const snapshot: CampSnapshot = {
     schemaVersion: 34,
@@ -114,6 +117,72 @@ function renderMessage(
     inspectorVisible: false
   })))
 }
+
+describe('Default recipient timeline Mention rendering', () => {
+  it('shows the frozen default recipient before authored user text without changing the source', () => {
+    const content: StructuredCampMessageContent = [{ kind: 'text', text: '请检查这条消息' }]
+    const source = JSON.stringify(content)
+    const message = {
+      authorType: 'user' as const,
+      addressMode: 'default' as const,
+      addressedAgentIds: ['agent_author']
+    }
+    const markup = renderMessage(
+      content,
+      '请检查这条消息',
+      'user',
+      members,
+      DEFAULT_CURRENT_USER_PROFILE,
+      message
+    )
+
+    expect(defaultRecipientMentionAgentId(message)).toBe('agent_author')
+    expect(markup).toContain('class="default-recipient-mention-prefix" data-quote-exclude=""')
+    expect(markup).toContain('class="message-mention-token is-interactive" data-agent-id="agent_author"')
+    expect(markup).toContain('aria-label="查看洛可的基础信息"')
+    expect(markup.replace(/<[^>]*>/gu, '')).toContain('@洛可 请检查这条消息')
+    expect(JSON.stringify(content)).toBe(source)
+  })
+
+  it.each([
+    ['explicit', ['agent_author']],
+    ['broadcast', ['agent_author']],
+    ['default', []],
+    ['default', ['agent_author', 'agent_reviewer']]
+  ] as const)('fails closed for %s addressing with %s recipients', (addressMode, addressedAgentIds) => {
+    const message = { authorType: 'user' as const, addressMode, addressedAgentIds: [...addressedAgentIds] }
+    const markup = renderMessage(
+      [{ kind: 'text', text: '保持用户原文' }],
+      '保持用户原文',
+      'user',
+      members,
+      DEFAULT_CURRENT_USER_PROFILE,
+      message
+    )
+
+    expect(defaultRecipientMentionAgentId(message)).toBeNull()
+    expect(markup).not.toContain('default-recipient-mention-prefix')
+  })
+
+  it('does not add a default-recipient prefix to Agent-authored messages', () => {
+    const message = {
+      authorType: 'agent' as const,
+      addressMode: 'default' as const,
+      addressedAgentIds: ['agent_reviewer']
+    }
+    const markup = renderMessage(
+      [{ kind: 'text', text: 'Agent 原文' }],
+      'Agent 原文',
+      'agent',
+      members,
+      DEFAULT_CURRENT_USER_PROFILE,
+      message
+    )
+
+    expect(defaultRecipientMentionAgentId(message)).toBeNull()
+    expect(markup).not.toContain('default-recipient-mention-prefix')
+  })
+})
 
 describe('Agent Current User Mention Markdown rendering', () => {
   it('projects the authoritative remainder while preserving Member and all-members text', () => {
