@@ -93,3 +93,24 @@ HEAD、checkout 观测失败和 Diff 基准不可用不再单独阻断有效 Wor
 审计恢复为 `ready`。拒绝直接覆盖原分支字段或删除当前 checkout，因为这会让展示观测改变资源归属；也拒绝自动
 stash、commit、切分支、建立保留分支、更新固定基准或只显示 `git diff HEAD`，因为这些都会改变用户成果或 Mission
 固定基准累计净变化语义。
+
+<a id="v1-62-d05"></a>
+## V1.62-D05：Camp Open 不精确统计无消费者的全 Camp 原始 Evidence 总数
+
+- 状态：accepted
+- 日期：2026-09-20
+- 当前权威：Camp Open Projection v22 与 Camp Open Read Path
+
+Camp Open 的产品任务是交付有界首屏：最近消息、当前业务状态、最多 96 个 Run 的标题与状态，
+以及已返回 Run 的局部变化信号。`coverage.executionEvidence.totalCount` 统计的却是所有
+Run 的全部原始持久行；Renderer 没有消费它，它也不能表达用户可见的逻辑步骤。当 Evidence
+是 append-only 时，从 Evidence 全表出发再过滤 Camp 使打开成本随所有无关历史线性增长。
+
+选择在 Open schema 8 中移除该 coverage 字段和它的精确查询，同时保留 `coverage.agentRuns`、
+有界 Run 集合和各 Run 通过 `agent_run_id` 索引计算的原始 `executionEvidenceCount`。真正的执行
+内容继续只对可见 Run 按需读取，`reasoning_summary` 继续在执行窗口的准入 SQL 中过滤，不借
+此偷偷重定义原始计数。
+
+拒绝保留全 Camp 精确计数后只改为 Camp→Run→Evidence 定向查询，因为它仍为无消费者做随当前 Camp
+历史增长的工作；拒绝把 96 个 Run 求和或 0 写入旧字段，因为这会伪装全量语义；也拒绝在 Evidence
+冗余 `camp_id`，因为现有 Run 归属已是权威，冗余会引入一致性、迁移和删除负担。

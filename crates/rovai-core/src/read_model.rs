@@ -34,7 +34,7 @@ pub const NAVIGATION_SCHEMA_VERSION: i64 = 3;
 pub const EXECUTION_EVIDENCE_PAGE_SCHEMA_VERSION: i64 = 1;
 pub const CAMP_MESSAGE_AROUND_SCHEMA_VERSION: i64 = 1;
 pub const CAMP_MESSAGE_FIND_SCHEMA_VERSION: i64 = 1;
-pub const CAMP_OPEN_SCHEMA_VERSION: i64 = 7;
+pub const CAMP_OPEN_SCHEMA_VERSION: i64 = 8;
 pub const CAMP_MESSAGE_PAGE_SCHEMA_VERSION: i64 = 1;
 pub const AGENT_RUN_DIAGNOSTIC_SCHEMA_VERSION: i64 = 1;
 pub const NAVIGATION_RECENT_CAMP_LIMIT: usize = 5;
@@ -759,7 +759,6 @@ pub struct CampOpenCoverage {
     pub message_deliveries: CampOpenCollectionCoverage,
     pub turns: CampOpenCollectionCoverage,
     pub agent_runs: CampOpenCollectionCoverage,
-    pub execution_evidence: CampOpenCollectionCoverage,
     pub approvals: CampOpenCollectionCoverage,
 }
 
@@ -1194,10 +1193,6 @@ impl ReadModelService {
             ),
             turns: collection_coverage(turns.len(), counts.turns),
             agent_runs: collection_coverage(agent_runs.len(), counts.agent_runs),
-            execution_evidence: collection_coverage(
-                execution_evidence.len(),
-                counts.execution_evidence,
-            ),
             approvals: collection_coverage(approvals.len(), counts.pending_approvals),
         };
         transaction.commit()?;
@@ -1950,7 +1945,6 @@ struct CampOpenCounts {
     message_deliveries: i64,
     turns: i64,
     agent_runs: i64,
-    execution_evidence: i64,
     pending_approvals: i64,
 }
 
@@ -1985,12 +1979,6 @@ fn load_camp_open_counts(transaction: &Transaction<'_>, camp_id: &str) -> Result
                WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
                  AND agent_run.invocation_kind <> 'single_chat'),
               (SELECT COUNT(*)
-               FROM agent_run_execution_evidence AS evidence
-               JOIN agent_run ON agent_run.id = evidence.agent_run_id
-               LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-               WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
-                 AND agent_run.invocation_kind <> 'single_chat'),
-              (SELECT COUNT(*)
                FROM approval
                JOIN action_execution ON action_execution.id = approval.action_id
                JOIN agent_run ON agent_run.id = action_execution.agent_run_id
@@ -2008,8 +1996,7 @@ fn load_camp_open_counts(transaction: &Transaction<'_>, camp_id: &str) -> Result
                     message_deliveries: row.get(2)?,
                     turns: row.get(3)?,
                     agent_runs: row.get(4)?,
-                    execution_evidence: row.get(5)?,
-                    pending_approvals: row.get(6)?,
+                    pending_approvals: row.get(5)?,
                 })
             },
         )
@@ -6106,9 +6093,18 @@ mod slow_tests {
             .camp_open_projection(&mut database, camp_id)
             .unwrap();
         assert!(open.execution_evidence.is_empty());
-        assert_eq!(open.coverage.execution_evidence.loaded_count, 0);
-        assert_eq!(open.coverage.execution_evidence.total_count, 85);
-        assert!(!open.coverage.execution_evidence.complete);
+        assert_eq!(
+            open.agent_runs
+                .iter()
+                .find(|run| run.id == agent_run_id)
+                .map(|run| run.execution_evidence_count),
+            Some(85)
+        );
+        assert!(
+            serde_json::to_value(&open).unwrap()["coverage"]
+                .get("executionEvidence")
+                .is_none()
+        );
         database.connection().execute("UPDATE canonical_runtime_activity SET phase = 'started', outcome = 'unsettled' WHERE operation_id = 'operation-command-1'", []).unwrap();
         let pinned =
             crate::execution_window::read_page(&mut database, camp_id, agent_run_id, None, 2)

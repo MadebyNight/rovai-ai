@@ -489,7 +489,7 @@ describe('active Camp event invalidation', () => {
         complete: true
       }
       return {
-        schemaVersion: 7,
+        schemaVersion: 8,
         throughGlobalSequence: terminal ? 12 : 10,
         camp: {
           id: 'camp-terminal-refresh', title: '终态刷新', activationState: 'active',
@@ -551,7 +551,6 @@ describe('active Camp event invalidation', () => {
           messageDeliveries: complete,
           turns: { ...complete, loadedCount: 1, totalCount: 1 },
           agentRuns: { ...complete, loadedCount: 1, totalCount: 1 },
-          executionEvidence: complete,
           approvals: complete
         }
       }
@@ -874,7 +873,7 @@ describe('Camp snapshot cache', () => {
       complete: true
     }
     const projection = {
-      schemaVersion: 7,
+      schemaVersion: 8,
       throughGlobalSequence: 20,
       camp,
       members: [],
@@ -901,7 +900,6 @@ describe('Camp snapshot cache', () => {
         messageDeliveries: complete,
         turns: complete,
         agentRuns: complete,
-        executionEvidence: complete,
         approvals: complete
       }
     } satisfies CampOpenProjection
