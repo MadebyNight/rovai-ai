@@ -164,8 +164,8 @@ the Mission title, worktree path or branch. When a workspace record exists it ad
 The existing card/list right-click menu shows `清理使命 Worktree` only from Core's `cleanupAvailable`; there is
 no conversation-header ellipsis or retained-workspace page. Its dialog states that it removes the Worktree and
 local branch, lists the two identifiers, and uses only neutral `取消` / `清理` actions. A cleanup preflight refusal
-for unsaved content or an unsafe detached commit keeps the Mission workspace ready and reports the reason without
-entering the persistent failure presentation. A cleanup failure after partial or uncertain deletion keeps the
+for unsaved content or an unsafe detached commit is reported asynchronously, keeps the Mission workspace ready and
+shows the existing inline alert with the exact reason, resource status and `再次清理` action. A cleanup failure after partial or uncertain deletion keeps the
 Mission and returns to the same explicit retry path. After Core durably accepts the cleanup intent, the
 dialog closes without waiting for Git work, the Mission list or the current Camp to refresh. The card adds one
 full-width bottom resource row without changing its business-status lane: spinner plus `正在清理 Worktree…`
@@ -188,6 +188,6 @@ focus request even when there is no notification acknowledgement waiter; snapsho
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 
-Business and ownership rules are defined by [Mission v10](../../contracts/mission-v10.md), not this presentation
+Business and ownership rules are defined by [Mission v11](../../contracts/mission-v11.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

@@ -95,20 +95,83 @@ pub struct GitRepository {
 #[derive(Debug, Clone)]
 pub struct MissionGit {
     executable: PathBuf,
+    #[cfg(test)]
+    invocations: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct VerifiedWorktreeCleanup {
     target_present: bool,
+    admin_dir: Option<PathBuf>,
     stale_registrations: Vec<PathBuf>,
     staging_root: Option<PathBuf>,
     staging_checkout_present: bool,
+    managed_reference: String,
+    managed_branch_oid: Option<String>,
 }
 
 impl VerifiedWorktreeCleanup {
+    pub(crate) fn target_present(&self) -> bool {
+        self.target_present
+    }
+
     pub(crate) fn requires_managed_branch(&self) -> bool {
         self.staging_checkout_present
     }
+
+    pub(crate) fn managed_reference(&self) -> &str {
+        &self.managed_reference
+    }
+
+    pub(crate) fn managed_branch_oid(&self) -> Option<&str> {
+        self.managed_branch_oid.as_deref()
+    }
+
+    pub(crate) fn owned_worktree_intact(&self, workspace: &MissionWorkspace) -> bool {
+        self.target_present
+            && self.admin_dir.as_deref().is_some_and(|admin_dir| {
+                MissionGit::verify_cleanup_filesystem_identity(workspace, admin_dir).is_ok()
+            })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CleanupRefusal {
+    code: &'static str,
+    detail: Option<String>,
+}
+
+impl CleanupRefusal {
+    fn new(code: &'static str, detail: Option<String>) -> Self {
+        Self { code, detail }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+impl std::fmt::Display for CleanupRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code)?;
+        if let Some(detail) = self.detail.as_deref().filter(|detail| !detail.is_empty()) {
+            write!(formatter, ": {detail}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CleanupRefusal {}
+
+#[derive(Debug)]
+struct CleanupGitObservation {
+    root: PathBuf,
+    admin_dir: PathBuf,
+    common_dir: PathBuf,
+    head_oid: String,
+    managed_branch_oid: Option<String>,
+    checkout_reference: Option<String>,
 }
 
 impl MissionGit {
@@ -117,7 +180,11 @@ impl MissionGit {
             executable.is_absolute() && executable.is_file(),
             "mission.git_unavailable"
         );
-        Ok(Self { executable })
+        Ok(Self {
+            executable,
+            #[cfg(test)]
+            invocations: Arc::new(std::sync::Mutex::new(Vec::new())),
+        })
     }
     async fn output(
         &self,
@@ -126,6 +193,12 @@ impl MissionGit {
         index: Option<&Path>,
         input: Option<&[u8]>,
     ) -> Result<BoundedCommandOutput> {
+        #[cfg(test)]
+        self.invocations.lock().unwrap().push(
+            args.iter()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect(),
+        );
         let mut command = Command::new(&self.executable);
         crate::runtime_discovery::configure_active_runtime_command(&mut command);
         for key in [
@@ -165,6 +238,16 @@ impl MissionGit {
         ensure!(!output.stdout.truncated, "mission.git_output_too_large");
         Ok(output)
     }
+
+    #[cfg(test)]
+    fn clear_invocations(&self) {
+        self.invocations.lock().unwrap().clear();
+    }
+
+    #[cfg(test)]
+    fn take_invocations(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.invocations.lock().unwrap())
+    }
     async fn bytes(&self, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
         let output = self
             .output(
@@ -182,6 +265,21 @@ impl MissionGit {
             .context("mission.invalid_git_text")?
             .trim_end_matches(['\r', '\n'])
             .to_string())
+    }
+
+    async fn common_output(
+        &self,
+        workspace: &MissionWorkspace,
+        args: &[OsString],
+    ) -> Result<BoundedCommandOutput> {
+        let common_dir = Path::new(&workspace.git_common_dir);
+        ensure!(
+            fs::canonicalize(common_dir)? == common_dir,
+            "mission.repository_mismatch"
+        );
+        let mut scoped = vec![format!("--git-dir={}", workspace.git_common_dir).into()];
+        scoped.extend_from_slice(args);
+        self.output(common_dir, &scoped, None, None).await
     }
     pub async fn inspect(&self, directory: &Path) -> Result<Option<GitRepository>> {
         let output = self
@@ -591,49 +689,167 @@ impl MissionGit {
         path_occupied(Path::new(&workspace.worktree_path))
     }
 
-    async fn worktree_has_unsaved_changes(&self, workspace: &MissionWorkspace) -> Result<bool> {
-        let output = self
-            .output(
-                Path::new(&workspace.worktree_path),
-                &[
-                    "status".into(),
-                    "--porcelain=v1".into(),
-                    "-z".into(),
-                    "--untracked-files=all".into(),
-                ],
-                None,
-                None,
-            )
-            .await?;
+    fn valid_object_id(value: &str) -> bool {
+        matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
+
+    fn parse_cleanup_observation(
+        output: BoundedCommandOutput,
+        includes_managed_branch: bool,
+    ) -> Result<CleanupGitObservation> {
         ensure!(
             output.status.success(),
-            "mission.workspace_status_unavailable: {}",
+            "mission.cleanup_observation_unavailable: {}",
             output.stderr.lossy_text()
         );
-        Ok(!output.stdout.bytes.is_empty())
+        let text = String::from_utf8(output.stdout.bytes).context("mission.invalid_git_text")?;
+        let fields = text
+            .strip_suffix('\n')
+            .unwrap_or(&text)
+            .split('\n')
+            .map(|field| field.strip_suffix('\r').unwrap_or(field))
+            .collect::<Vec<_>>();
+        let expected_fields = if includes_managed_branch { 6 } else { 5 };
+        ensure!(
+            fields.len() == expected_fields && fields.iter().all(|field| !field.is_empty()),
+            "mission.cleanup_observation_invalid"
+        );
+        let head_index = 3;
+        let managed_index = includes_managed_branch.then_some(4);
+        let checkout_index = if includes_managed_branch { 5 } else { 4 };
+        ensure!(
+            Self::valid_object_id(fields[head_index]),
+            "mission.cleanup_observation_invalid"
+        );
+        if let Some(index) = managed_index {
+            ensure!(
+                Self::valid_object_id(fields[index]),
+                "mission.cleanup_observation_invalid"
+            );
+        }
+        let checkout_reference = match fields[checkout_index] {
+            "HEAD" => None,
+            reference if reference.starts_with("refs/heads/") => Some(reference.to_string()),
+            _ => bail!("mission.cleanup_observation_invalid"),
+        };
+        Ok(CleanupGitObservation {
+            root: fields[0].into(),
+            admin_dir: fields[1].into(),
+            common_dir: fields[2].into(),
+            head_oid: fields[head_index].to_string(),
+            managed_branch_oid: managed_index.map(|index| fields[index].to_string()),
+            checkout_reference,
+        })
+    }
+
+    async fn cleanup_observation_query(
+        &self,
+        workspace: &MissionWorkspace,
+        managed_reference: &str,
+        includes_managed_branch: bool,
+    ) -> Result<BoundedCommandOutput> {
+        let mut arguments = vec![
+            "rev-parse".into(),
+            "--path-format=absolute".into(),
+            "--show-toplevel".into(),
+            "--git-dir".into(),
+            "--git-common-dir".into(),
+            "HEAD^{commit}".into(),
+        ];
+        if includes_managed_branch {
+            arguments.push(format!("{managed_reference}^{{commit}}").into());
+        }
+        // rev-parse applies this output mode only to arguments that follow it.
+        // Keeping it last yields object IDs above and the exact checkout ref here.
+        arguments.extend(["--symbolic-full-name".into(), "HEAD".into()]);
+        self.output(Path::new(&workspace.worktree_path), &arguments, None, None)
+            .await
+    }
+
+    async fn observe_cleanup_state(
+        &self,
+        workspace: &MissionWorkspace,
+        managed_reference: &str,
+    ) -> Result<CleanupGitObservation> {
+        if workspace.cleanup_branch_removed {
+            return Self::parse_cleanup_observation(
+                self.cleanup_observation_query(workspace, managed_reference, false)
+                    .await?,
+                false,
+            );
+        }
+        let combined = self
+            .cleanup_observation_query(workspace, managed_reference, true)
+            .await?;
+        if combined.status.success() {
+            return Self::parse_cleanup_observation(combined, true);
+        }
+        // A missing managed ref is an allowed exceptional path. Re-run only the
+        // identity/checkout query and distinguish absence from an invalid ref.
+        let combined_error = combined.stderr.lossy_text();
+        let mut observation = Self::parse_cleanup_observation(
+            self.cleanup_observation_query(workspace, managed_reference, false)
+                .await?,
+            false,
+        )?;
+        if self
+            .branch_oid_for_reference(workspace, managed_reference)
+            .await?
+            .is_some()
+        {
+            bail!("mission.branch_unavailable: {combined_error}");
+        }
+        observation.managed_branch_oid = None;
+        Ok(observation)
+    }
+
+    fn verify_cleanup_filesystem_identity(
+        workspace: &MissionWorkspace,
+        admin_dir: &Path,
+    ) -> Result<()> {
+        let target = Path::new(&workspace.worktree_path);
+        ensure!(
+            fs::canonicalize(target)? == target,
+            "mission.worktree_path_changed"
+        );
+        ensure!(
+            fs::canonicalize(admin_dir)? == admin_dir
+                && admin_dir.starts_with(Path::new(&workspace.git_common_dir).join("worktrees")),
+            "mission.worktree_registration_missing"
+        );
+        let registered = fs::read_to_string(admin_dir.join("gitdir"))?;
+        ensure!(
+            fs::canonicalize(registered.trim_end_matches(['\r', '\n']))?
+                == fs::canonicalize(target.join(".git"))?,
+            "mission.worktree_registration_mismatch"
+        );
+        ensure!(
+            fs::read_to_string(admin_dir.join("rovai-mission-owner"))?
+                == workspace.preparation_token,
+            "mission.worktree_owner_mismatch"
+        );
+        ensure!(
+            fs::canonicalize(&workspace.working_directory)?
+                == Path::new(&workspace.working_directory),
+            "mission.working_directory_changed"
+        );
+        Ok(())
     }
 
     async fn detached_head_has_retained_reference(
         &self,
         workspace: &MissionWorkspace,
         managed_reference: &str,
+        head: &str,
     ) -> Result<bool> {
-        let head = self
-            .text(
-                Path::new(&workspace.worktree_path),
-                &["rev-parse", "--verify", "HEAD^{commit}"],
-            )
-            .await?;
         let output = self
-            .output(
-                Path::new(&workspace.repository_root),
+            .common_output(
+                workspace,
                 &[
                     "for-each-ref".into(),
                     format!("--contains={head}").into(),
                     "--format=%(refname)".into(),
                 ],
-                None,
-                None,
             )
             .await?;
         ensure!(
@@ -674,15 +890,13 @@ impl MissionGit {
     async fn validated_branch_reference(&self, workspace: &MissionWorkspace) -> Result<String> {
         let reference = format!("refs/heads/{}", workspace.branch);
         let valid = self
-            .output(
-                Path::new(&workspace.repository_root),
+            .common_output(
+                workspace,
                 &[
                     "check-ref-format".into(),
                     "--branch".into(),
                     workspace.branch.clone().into(),
                 ],
-                None,
-                None,
             )
             .await?;
         ensure!(valid.status.success(), "mission.branch_identity_invalid");
@@ -697,16 +911,6 @@ impl MissionGit {
             fs::canonicalize(&workspace.repository_root)? == Path::new(&workspace.repository_root),
             "mission.repository_mismatch"
         );
-        ensure!(
-            fs::canonicalize(
-                self.text(
-                    Path::new(&workspace.repository_root),
-                    &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-                )
-                .await?
-            )? == Path::new(&workspace.git_common_dir),
-            "mission.repository_mismatch"
-        );
         self.validated_branch_reference(workspace).await
     }
 
@@ -716,16 +920,14 @@ impl MissionGit {
         reference: &str,
     ) -> Result<Option<String>> {
         let output = self
-            .output(
-                Path::new(&workspace.repository_root),
+            .common_output(
+                workspace,
                 &[
                     "show-ref".into(),
                     "--verify".into(),
                     "--hash".into(),
                     reference.to_string().into(),
                 ],
-                None,
-                None,
             )
             .await?;
         match output.status.code() {
@@ -752,16 +954,14 @@ impl MissionGit {
         reference: &str,
     ) -> Result<bool> {
         let output = self
-            .output(
-                Path::new(&workspace.repository_root),
+            .common_output(
+                workspace,
                 &[
                     "show-ref".into(),
                     "--verify".into(),
                     "--quiet".into(),
                     reference.to_string().into(),
                 ],
-                None,
-                None,
             )
             .await?;
         match output.status.code() {
@@ -778,16 +978,14 @@ impl MissionGit {
         expected_oid: &str,
     ) -> Result<()> {
         let worktrees = self
-            .output(
-                Path::new(&workspace.repository_root),
+            .common_output(
+                workspace,
                 &[
                     "worktree".into(),
                     "list".into(),
                     "--porcelain".into(),
                     "-z".into(),
                 ],
-                None,
-                None,
             )
             .await?;
         ensure!(
@@ -805,16 +1003,15 @@ impl MissionGit {
             "mission.branch_in_use"
         );
         let output = self
-            .output(
-                Path::new(&workspace.repository_root),
+            .common_output(
+                workspace,
                 &[
                     "update-ref".into(),
+                    "--no-deref".into(),
                     "-d".into(),
                     reference.to_string().into(),
                     expected_oid.into(),
                 ],
-                None,
-                None,
             )
             .await?;
         if !output.status.success() {
@@ -831,28 +1028,50 @@ impl MissionGit {
         Ok(())
     }
 
-    pub(crate) async fn verify_worktree_cleanup(
+    pub(crate) async fn prepare_worktree_cleanup(
         &self,
         workspace: &MissionWorkspace,
-        reference: &str,
     ) -> Result<VerifiedWorktreeCleanup> {
         let target = Path::new(&workspace.worktree_path);
         let target_present = path_occupied(target)?;
+        let mut managed_reference = format!("refs/heads/{}", workspace.branch);
+        let mut managed_branch_oid = None;
+        let mut admin_dir = None;
+        let mut detached_unreachable = false;
         let mut stale_registrations = Vec::new();
         if target_present {
-            self.verify_tree(target, workspace, true).await?;
+            let observation = self
+                .observe_cleanup_state(workspace, &managed_reference)
+                .await?;
             ensure!(
-                !self.worktree_has_unsaved_changes(workspace).await?,
-                "mission.workspace_dirty"
+                fs::canonicalize(&observation.root)? == target,
+                "mission.worktree_root_mismatch"
             );
-            if self.current_branch(workspace).await?.is_none() {
-                ensure!(
-                    self.detached_head_has_retained_reference(workspace, reference)
-                        .await?,
-                    "mission.detached_head_unreachable"
-                );
+            ensure!(
+                fs::canonicalize(&observation.common_dir)? == Path::new(&workspace.git_common_dir),
+                "mission.repository_mismatch"
+            );
+            Self::verify_cleanup_filesystem_identity(workspace, &observation.admin_dir)?;
+            if observation.checkout_reference.is_none()
+                && !self
+                    .detached_head_has_retained_reference(
+                        workspace,
+                        &managed_reference,
+                        &observation.head_oid,
+                    )
+                    .await?
+            {
+                detached_unreachable = true;
             }
+            managed_branch_oid = observation.managed_branch_oid;
+            admin_dir = Some(observation.admin_dir);
         } else {
+            managed_reference = self.cleanup_branch_reference(workspace).await?;
+            if !workspace.cleanup_branch_removed {
+                managed_branch_oid = self
+                    .branch_oid_for_reference(workspace, &managed_reference)
+                    .await?;
+            }
             // Select only exact stale registrations carrying this workspace's owner marker.
             let registrations = Path::new(&workspace.git_common_dir).join("worktrees");
             if path_occupied(&registrations)? {
@@ -901,64 +1120,76 @@ impl MissionGit {
         } else {
             None
         };
+        if detached_unreachable {
+            return Err(CleanupRefusal::new("mission.detached_head_unreachable", None).into());
+        }
         Ok(VerifiedWorktreeCleanup {
             target_present,
+            admin_dir,
             stale_registrations,
             staging_root,
             staging_checkout_present,
+            managed_reference,
+            managed_branch_oid,
         })
     }
 
     pub(crate) async fn remove_verified_worktree(
         &self,
         workspace: &MissionWorkspace,
-        verified: VerifiedWorktreeCleanup,
+        verified: &VerifiedWorktreeCleanup,
     ) -> Result<()> {
         if verified.target_present {
             let output = self
-                .output(
-                    Path::new(&workspace.repository_root),
+                .common_output(
+                    workspace,
                     &[
                         "worktree".into(),
                         "remove".into(),
                         workspace.worktree_path.clone().into(),
                     ],
-                    None,
-                    None,
                 )
                 .await?;
             if !output.status.success() {
-                if path_occupied(Path::new(&workspace.worktree_path))?
-                    && self
-                        .worktree_has_unsaved_changes(workspace)
-                        .await
-                        .unwrap_or(false)
+                let diagnostic = output.stderr.lossy_text();
+                if diagnostic
+                    .contains("contains modified or untracked files, use --force to delete it")
+                    && verified.owned_worktree_intact(workspace)
                 {
-                    bail!("mission.workspace_dirty");
+                    return Err(
+                        CleanupRefusal::new("mission.workspace_dirty", Some(diagnostic)).into(),
+                    );
                 }
-                bail!(
-                    "mission.worktree_remove_failed: {}",
-                    output.stderr.lossy_text()
-                );
+                bail!("mission.worktree_remove_failed: {diagnostic}");
             }
+            ensure!(
+                !path_occupied(Path::new(&workspace.worktree_path))?,
+                "mission.worktree_remove_incomplete"
+            );
         } else {
-            for registration in verified.stale_registrations {
+            for registration in &verified.stale_registrations {
                 fs::remove_dir_all(registration)?;
             }
         }
-        if let Some(staging) = verified.staging_root {
+        if let Some(staging) = verified.staging_root.as_ref() {
             let checkout = staging.join("checkout");
             if verified.staging_checkout_present {
-                self.bytes(
-                    Path::new(&workspace.repository_root),
-                    &[
-                        "worktree",
-                        "remove",
-                        "--force",
-                        checkout.to_str().context("mission.invalid_path")?,
-                    ],
-                )
-                .await?;
+                let output = self
+                    .common_output(
+                        workspace,
+                        &[
+                            "worktree".into(),
+                            "remove".into(),
+                            "--force".into(),
+                            checkout.into_os_string(),
+                        ],
+                    )
+                    .await?;
+                ensure!(
+                    output.status.success(),
+                    "mission.staging_cleanup_failed: {}",
+                    output.stderr.lossy_text()
+                );
             }
             fs::remove_file(staging.join("owner"))?;
             fs::remove_dir(staging)?;
@@ -967,9 +1198,8 @@ impl MissionGit {
     }
 
     pub async fn cleanup(&self, workspace: &MissionWorkspace) -> Result<()> {
-        let reference = format!("refs/heads/{}", workspace.branch);
-        let verified = self.verify_worktree_cleanup(workspace, &reference).await?;
-        self.remove_verified_worktree(workspace, verified).await
+        let verified = self.prepare_worktree_cleanup(workspace).await?;
+        self.remove_verified_worktree(workspace, &verified).await
     }
 
     async fn temporary_index(&self, workspace: &MissionWorkspace) -> Result<TemporaryIndex> {
@@ -1450,7 +1680,9 @@ pub fn cleanup_projection(
             branch_removed: workspace.cleanup_branch_removed,
             diagnostic: None,
         })
-    } else if workspace.state == "cleanup_failed" {
+    } else if workspace.state == "cleanup_failed"
+        || (workspace.state == "ready" && workspace.diagnostic.is_some())
+    {
         Some(MissionWorkspaceCleanupProjection {
             state: "failed".into(),
             worktree_removed: workspace.cleanup_worktree_removed,
@@ -1809,6 +2041,45 @@ mod tests {
             fs::read_to_string(repo.root.join("edit.txt")).unwrap(),
             "source dirty\n"
         );
+        git.clear_invocations();
+        let verified = git.prepare_worktree_cleanup(&workspace).await.unwrap();
+        let expected_oid = verified.managed_branch_oid().unwrap().to_string();
+        let managed_reference = verified.managed_reference().to_string();
+        git.remove_verified_worktree(&workspace, &verified)
+            .await
+            .unwrap();
+        git.delete_branch_expected(&workspace, &managed_reference, &expected_oid)
+            .await
+            .unwrap();
+        let cleanup_calls = git.take_invocations();
+        assert_eq!(
+            cleanup_calls.len(),
+            4,
+            "ordinary cleanup must use one observation, worktree removal, occupancy check and conditional ref deletion: {cleanup_calls:#?}"
+        );
+        assert_eq!(cleanup_calls[0][0], "rev-parse");
+        assert!(
+            cleanup_calls[1]
+                .windows(2)
+                .any(|args| args == ["worktree", "remove"])
+        );
+        assert!(
+            cleanup_calls[2]
+                .windows(2)
+                .any(|args| args == ["worktree", "list"])
+        );
+        assert!(cleanup_calls[3].iter().any(|arg| arg == "update-ref"));
+        assert!(cleanup_calls[3].iter().any(|arg| arg == "--no-deref"));
+        assert!(!Path::new(&workspace.worktree_path).exists());
+        git.bytes(&repo.root, &["branch", &workspace.branch, &expected_oid])
+            .await
+            .unwrap();
+        workspace.preparation_token = Uuid::new_v4().to_string();
+        workspace.preparation_kind = "restore".into();
+        workspace.state = "preparing".into();
+        git.restore(&workspace).await.unwrap();
+        workspace.state = "ready".into();
+        git.validate_execution_workspace(&workspace).await.unwrap();
         git.bytes(
             Path::new(&workspace.worktree_path),
             &["checkout", "--detach"],
@@ -1822,9 +2093,7 @@ mod tests {
         ));
         git.validate_execution_workspace(&workspace).await.unwrap();
         let reference = git.cleanup_branch_reference(&workspace).await.unwrap();
-        git.verify_worktree_cleanup(&workspace, &reference)
-            .await
-            .unwrap();
+        git.prepare_worktree_cleanup(&workspace).await.unwrap();
         fs::write(
             Path::new(&workspace.worktree_path).join("detached-result.txt"),
             "detached\n",
@@ -1843,7 +2112,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            git.verify_worktree_cleanup(&workspace, &reference)
+            git.prepare_worktree_cleanup(&workspace)
                 .await
                 .unwrap_err()
                 .to_string()
@@ -1855,9 +2124,7 @@ mod tests {
         )
         .await
         .unwrap();
-        git.verify_worktree_cleanup(&workspace, &reference)
-            .await
-            .unwrap();
+        git.prepare_worktree_cleanup(&workspace).await.unwrap();
         git.bytes(
             Path::new(&workspace.worktree_path),
             &["checkout", &workspace.branch],

@@ -104,6 +104,15 @@ async function waitForWorkspaceState(missionId, expected) {
   }
   throw new Error(`Mission workspace did not reach ${expected}`)
 }
+async function waitForWorkspaceDiagnostic(missionId, expected) {
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    const row = db.prepare('SELECT * FROM mission_workspace WHERE mission_id=?').get(missionId)
+    if (row?.state === 'ready' && row?.diagnostic === expected) return row
+    await delay(100)
+  }
+  throw new Error(`Mission workspace did not report ${expected}`)
+}
 async function waitForWorkspaceCleanupFinished(missionId) {
   const deadline = Date.now() + 60_000
   while (Date.now() < deadline) {
@@ -210,16 +219,16 @@ try {
   await assert.rejects(client.request('missions.changes', { missionId: simple.missionId }), /mission.git_not_applicable/)
   report.cases.push('non-Git ordinary-message first Run keeps original directory, not_started status and no branch/Diff')
   git(workspace.worktree_path, 'switch', 'external/mission-validation')
-  const dirtyCleanup = await command('missions.workspace.cleanup', { missionId: mission.missionId })
-  assert.equal(dirtyCleanup.status, 'rejected'); assert.equal(dirtyCleanup.code, 'mission.workspace_dirty')
-  assert.equal(db.prepare('SELECT state FROM mission_workspace WHERE mission_id=?').get(mission.missionId).state, 'ready')
+  applied(await command('missions.workspace.cleanup', { missionId: mission.missionId }))
+  const dirtyRefusal = await waitForWorkspaceDiagnostic(mission.missionId, 'mission.workspace_dirty')
+  assert.equal(dirtyRefusal.cleanup_expected_branch_oid, null)
+  assert.equal(dirtyRefusal.cleanup_worktree_removed, 0); assert.equal(dirtyRefusal.cleanup_branch_removed, 0)
   assert.equal(await readFile(join(workspace.working_directory, 'tracked.txt'), 'utf8'), 'current net\n')
   const dirtyChanges = await client.request('missions.changes', { missionId: mission.missionId })
   assert(dirtyChanges.files.some(file => file.path.endsWith('tracked.txt')))
   db.prepare("UPDATE mission_workspace SET state='cleanup_failed',cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic='mission.workspace_branch_mismatch' WHERE mission_id=?").run(mission.missionId)
-  const recoveredRetry = await command('missions.workspace.cleanup', { missionId: mission.missionId })
-  assert.equal(recoveredRetry.status, 'rejected'); assert.equal(recoveredRetry.code, 'mission.workspace_dirty')
-  assert.equal(db.prepare('SELECT state FROM mission_workspace WHERE mission_id=?').get(mission.missionId).state, 'ready')
+  applied(await command('missions.workspace.cleanup', { missionId: mission.missionId }))
+  await waitForWorkspaceDiagnostic(mission.missionId, 'mission.workspace_dirty')
   git(workspace.worktree_path, 'add', '-A'); git(workspace.worktree_path, 'commit', '-m', 'preserve external mission result')
   const managedCommit = git(workspace.worktree_path, 'rev-parse', 'HEAD')
   applied(await command('missions.workspace.cleanup', { missionId: mission.missionId }))
@@ -238,7 +247,7 @@ try {
   const currentMission = await client.request('camps.snapshot', { campId: mission.campId })
   applied(await command('camps.delete', { campId: mission.campId, expectedVersion: currentMission.camp.version, force: false, workspaceDisposition: 'retain' }))
   assert.equal(db.prepare('SELECT count(*) n FROM mission_workspace WHERE mission_id=?').get(mission.missionId).n, 0)
-  report.cases.push('dirty cleanup is rejected without leaving cleanup_failed; a legacy untouched failure recovers on retry; clean non-managed checkout cleanup preserves its branch and the next Run rebuilds through the preparation path')
+  report.cases.push('dirty cleanup is refused asynchronously without leaving cleanup_failed; a legacy untouched failure recovers on retry; clean non-managed checkout cleanup preserves its branch and the next Run rebuilds through the preparation path')
   report.runs = [...rebuiltSnapshot.agentRuns, ...plainSnapshot.agentRuns].map(({ id, status, workspace }) => ({ id, status, workspace }))
   report.status = 'passed'
 } catch (error) {

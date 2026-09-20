@@ -5,8 +5,38 @@ use crate::mission::{
     CleanupMissionWorkspaceCommand, CreateMissionCommand, MissionAttachmentUpdate, MissionService,
     StartMissionCommand, StatusMissionCommand, UpdateMissionCommand,
 };
-use crate::mission_workspace::{self, GitRepository, MissionGit, MissionWorkspace, NameOccupied};
+use crate::mission_workspace::{
+    self, CleanupRefusal, GitRepository, MissionGit, MissionWorkspace, NameOccupied,
+};
 use rusqlite::{OptionalExtension, params};
+
+#[derive(Debug, Clone, Default)]
+struct MissionWorkspaceCleanupTimings {
+    identity_and_safety_ms: u128,
+    worktree_remove_ms: u128,
+    branch_check_and_delete_ms: u128,
+}
+
+#[derive(Debug)]
+struct MissionWorkspaceCleanupFailure {
+    error: anyhow::Error,
+    restore_ready: bool,
+    timings: MissionWorkspaceCleanupTimings,
+}
+
+impl MissionWorkspaceCleanupFailure {
+    fn new(
+        error: anyhow::Error,
+        restore_ready: bool,
+        timings: &MissionWorkspaceCleanupTimings,
+    ) -> Self {
+        Self {
+            error,
+            restore_ready,
+            timings: timings.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -73,7 +103,11 @@ fn mission_workspace_read_matches(expected: &MissionWorkspace, current: &Mission
         && current.working_directory == expected.working_directory
 }
 
+#[cfg(test)]
 fn cleanup_refusal_code(error: &anyhow::Error) -> Option<&'static str> {
+    if let Some(refusal) = error.downcast_ref::<CleanupRefusal>() {
+        return Some(refusal.code());
+    }
     let diagnostic = format!("{error:#}");
     [
         "mission.workspace_dirty",
@@ -81,6 +115,16 @@ fn cleanup_refusal_code(error: &anyhow::Error) -> Option<&'static str> {
     ]
     .into_iter()
     .find(|code| diagnostic.contains(code))
+}
+
+fn cleanup_diagnostic_is_recoverable(workspace: &MissionWorkspace) -> bool {
+    let Some(diagnostic) = workspace.diagnostic.as_deref() else {
+        return false;
+    };
+    diagnostic.contains("mission.workspace_dirty")
+        || diagnostic.contains("mission.detached_head_unreachable")
+        || (workspace.cleanup_expected_branch_oid.is_none()
+            && diagnostic.contains("mission.workspace_branch_mismatch"))
 }
 
 impl Core {
@@ -173,6 +217,7 @@ impl Core {
         };
         if workspace.state == "cleanup_failed"
             && !workspace.cleanup_finished()
+            && cleanup_diagnostic_is_recoverable(&workspace)
             && git.cleanup_failure_left_intact_workspace(&workspace).await
         {
             let database = self.database.lock().await;
@@ -338,85 +383,194 @@ impl Core {
     async fn perform_mission_workspace_cleanup_locked(
         &self,
         workspace: &mut MissionWorkspace,
-    ) -> Result<()> {
+    ) -> std::result::Result<MissionWorkspaceCleanupTimings, MissionWorkspaceCleanupFailure> {
+        let mut timings = MissionWorkspaceCleanupTimings::default();
+        let identity_started_at = Instant::now();
         let host = {
             let database = self.database.lock().await;
-            database.connection().query_row(
-                "SELECT id FROM mission_execution_host WHERE singleton=1",
-                [],
-                |row| row.get::<_, String>(0),
-            )?
+            database
+                .connection()
+                .query_row(
+                    "SELECT id FROM mission_execution_host WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(anyhow::Error::from)
+                .map_err(|error| MissionWorkspaceCleanupFailure::new(error, false, &timings))?
         };
-        anyhow::ensure!(
-            workspace.execution_host_id == host,
-            "mission.execution_host_unavailable"
-        );
-        anyhow::ensure!(
-            workspace.state == "cleanup_pending",
-            "mission.workspace_cleanup_not_pending"
-        );
-        let git = self.mission_git().await?;
-        let reference = git.cleanup_branch_reference(&workspace).await?;
+        if workspace.execution_host_id != host {
+            return Err(MissionWorkspaceCleanupFailure::new(
+                anyhow::anyhow!("mission.execution_host_unavailable"),
+                false,
+                &timings,
+            ));
+        }
+        if workspace.state != "cleanup_pending" {
+            return Err(MissionWorkspaceCleanupFailure::new(
+                anyhow::anyhow!("mission.workspace_cleanup_not_pending"),
+                false,
+                &timings,
+            ));
+        }
+        let git = self
+            .mission_git()
+            .await
+            .map_err(|error| MissionWorkspaceCleanupFailure::new(error, false, &timings))?;
         let verified_worktree = if worktree_cleanup_required(workspace.cleanup_worktree_removed) {
-            Some(git.verify_worktree_cleanup(&workspace, &reference).await?)
+            match git.prepare_worktree_cleanup(workspace).await {
+                Ok(verified) => Some(verified),
+                Err(error) => {
+                    timings.identity_and_safety_ms = identity_started_at.elapsed().as_millis();
+                    let restore_ready = error.downcast_ref::<CleanupRefusal>().is_some();
+                    return Err(MissionWorkspaceCleanupFailure::new(
+                        error,
+                        restore_ready,
+                        &timings,
+                    ));
+                }
+            }
         } else {
             None
         };
+        let reference = match verified_worktree.as_ref() {
+            Some(verified) => verified.managed_reference().to_string(),
+            None => git
+                .cleanup_branch_reference(workspace)
+                .await
+                .map_err(|error| MissionWorkspaceCleanupFailure::new(error, false, &timings))?,
+        };
         let saved_expected_oid = workspace.cleanup_expected_branch_oid.clone();
         let expected_oid = match saved_expected_oid.as_ref() {
-            Some(expected_oid) => Some(expected_oid.clone()),
-            None => git.branch_oid_for_reference(&workspace, &reference).await?,
+            Some(expected_oid) => {
+                if let Some(verified) = verified_worktree.as_ref() {
+                    match verified.managed_branch_oid() {
+                        Some(observed_oid) if observed_oid != expected_oid => {
+                            timings.identity_and_safety_ms =
+                                identity_started_at.elapsed().as_millis();
+                            return Err(MissionWorkspaceCleanupFailure::new(
+                                anyhow::anyhow!("mission.branch_changed"),
+                                false,
+                                &timings,
+                            ));
+                        }
+                        None if verified.target_present() => {
+                            timings.identity_and_safety_ms =
+                                identity_started_at.elapsed().as_millis();
+                            return Err(MissionWorkspaceCleanupFailure::new(
+                                anyhow::anyhow!("mission.branch_changed"),
+                                false,
+                                &timings,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                Some(expected_oid.clone())
+            }
+            None => verified_worktree
+                .as_ref()
+                .and_then(|verified| verified.managed_branch_oid().map(str::to_string)),
         };
         if verified_worktree
             .as_ref()
             .is_some_and(|verified| verified.requires_managed_branch())
         {
-            let branch_present = if saved_expected_oid.is_some() {
-                git.branch_exists_for_reference(&workspace, &reference)
-                    .await?
-            } else {
-                expected_oid.is_some()
-            };
-            anyhow::ensure!(branch_present, "mission.workspace_branch_missing");
+            if expected_oid.is_none() {
+                timings.identity_and_safety_ms = identity_started_at.elapsed().as_millis();
+                return Err(MissionWorkspaceCleanupFailure::new(
+                    anyhow::anyhow!("mission.workspace_branch_missing"),
+                    false,
+                    &timings,
+                ));
+            }
         }
         workspace.cleanup_expected_branch_oid = expected_oid.clone();
         workspace.cleanup_branch_removed |= expected_oid.is_none();
         {
             let database = self.database.lock().await;
-            let changed = database.connection().execute(
-                "UPDATE mission_workspace SET cleanup_expected_branch_oid=?2,cleanup_branch_removed=?3,updated_at=?4 WHERE id=?1 AND state='cleanup_pending'",
-                params![workspace.id, workspace.cleanup_expected_branch_oid, workspace.cleanup_branch_removed, chrono::Utc::now().to_rfc3339()],
-            )?;
-            anyhow::ensure!(changed == 1, "mission.workspace_cleanup_not_pending");
+            let changed = database
+                .connection()
+                .execute(
+                    "UPDATE mission_workspace SET cleanup_expected_branch_oid=?2,cleanup_branch_removed=?3,updated_at=?4 WHERE id=?1 AND state='cleanup_pending'",
+                    params![workspace.id, workspace.cleanup_expected_branch_oid, workspace.cleanup_branch_removed, chrono::Utc::now().to_rfc3339()],
+                )
+                .map_err(anyhow::Error::from)
+                .map_err(|error| {
+                    MissionWorkspaceCleanupFailure::new(error, false, &timings)
+                })?;
+            if changed != 1 {
+                return Err(MissionWorkspaceCleanupFailure::new(
+                    anyhow::anyhow!("mission.workspace_cleanup_not_pending"),
+                    false,
+                    &timings,
+                ));
+            }
         }
+        timings.identity_and_safety_ms = identity_started_at.elapsed().as_millis();
 
-        if let Some(verified_worktree) = verified_worktree {
-            git.remove_verified_worktree(&workspace, verified_worktree)
-                .await?;
+        if let Some(verified_worktree) = verified_worktree.as_ref() {
+            let worktree_started_at = Instant::now();
+            if let Err(error) = git
+                .remove_verified_worktree(workspace, verified_worktree)
+                .await
+            {
+                timings.worktree_remove_ms = worktree_started_at.elapsed().as_millis();
+                let restore_ready = error.downcast_ref::<CleanupRefusal>().is_some();
+                return Err(MissionWorkspaceCleanupFailure::new(
+                    error,
+                    restore_ready,
+                    &timings,
+                ));
+            }
+            timings.worktree_remove_ms = worktree_started_at.elapsed().as_millis();
             workspace.cleanup_worktree_removed = true;
             let database = self.database.lock().await;
-            database.connection().execute(
-                "UPDATE mission_workspace SET cleanup_worktree_removed=1,updated_at=?2 WHERE id=?1",
-                params![workspace.id, chrono::Utc::now().to_rfc3339()],
-            )?;
+            database
+                .connection()
+                .execute(
+                    "UPDATE mission_workspace SET cleanup_worktree_removed=1,updated_at=?2 WHERE id=?1",
+                    params![workspace.id, chrono::Utc::now().to_rfc3339()],
+                )
+                .map_err(anyhow::Error::from)
+                .map_err(|error| {
+                    MissionWorkspaceCleanupFailure::new(error, false, &timings)
+                })?;
         }
 
+        let branch_started_at = Instant::now();
         if !workspace.cleanup_branch_removed {
-            let expected_oid = expected_oid.context("mission.branch_identity_missing")?;
-            git.delete_branch_expected(&workspace, &reference, &expected_oid)
-                .await?;
+            let expected_oid = expected_oid.ok_or_else(|| {
+                MissionWorkspaceCleanupFailure::new(
+                    anyhow::anyhow!("mission.branch_identity_missing"),
+                    false,
+                    &timings,
+                )
+            })?;
+            git.delete_branch_expected(workspace, &reference, &expected_oid)
+                .await
+                .map_err(|error| {
+                    timings.branch_check_and_delete_ms = branch_started_at.elapsed().as_millis();
+                    MissionWorkspaceCleanupFailure::new(error, false, &timings)
+                })?;
             workspace.cleanup_branch_removed = true;
         }
+        timings.branch_check_and_delete_ms = branch_started_at.elapsed().as_millis();
         {
             let database = self.database.lock().await;
-            database.connection().execute(
-                "UPDATE mission_workspace SET state='cleanup_pending',cleanup_worktree_removed=1,cleanup_branch_removed=1,diagnostic=NULL,updated_at=?2 WHERE id=?1",
-                params![workspace.id, chrono::Utc::now().to_rfc3339()],
-            )?;
+            database
+                .connection()
+                .execute(
+                    "UPDATE mission_workspace SET state='cleanup_pending',cleanup_worktree_removed=1,cleanup_branch_removed=1,diagnostic=NULL,updated_at=?2 WHERE id=?1",
+                    params![workspace.id, chrono::Utc::now().to_rfc3339()],
+                )
+                .map_err(anyhow::Error::from)
+                .map_err(|error| {
+                    MissionWorkspaceCleanupFailure::new(error, false, &timings)
+                })?;
         }
         workspace.state = "cleanup_pending".into();
         workspace.diagnostic = None;
-        Ok(())
+        Ok(timings)
     }
 
     pub(super) async fn cleanup_mission_workspaces_locked(
@@ -447,20 +601,19 @@ impl Core {
             return Ok(());
         }
         for mut workspace in workspaces {
+            let attempt_started_at = Instant::now();
             let result = self
                 .perform_mission_workspace_cleanup_locked(&mut workspace)
                 .await;
-            let intact_after_failure = if result.is_err() {
-                match self.mission_git().await {
-                    Ok(git) => git.cleanup_failure_left_intact_workspace(&workspace).await,
-                    Err(_) => false,
-                }
-            } else {
-                false
+            let publish_started_at = Instant::now();
+            let mut outcome = "completed";
+            let timings = match &result {
+                Ok(timings) => timings.clone(),
+                Err(failure) => failure.timings.clone(),
             };
             let database = self.database.lock().await;
             match result {
-                Ok(()) => {
+                Ok(_) => {
                     let camp_exists = database.connection().query_row(
                         "SELECT EXISTS(SELECT 1 FROM camp WHERE id=?1)",
                         [&workspace.camp_id],
@@ -473,14 +626,19 @@ impl Core {
                         )?;
                     }
                 }
-                Err(error) => {
-                    let restored = intact_after_failure
+                Err(failure) => {
+                    let diagnostic = format!("{:#}", failure.error);
+                    let restored = failure.restore_ready
+                        && !workspace.cleanup_worktree_removed
                         && database.connection().execute(
-                            "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_pending' AND EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",
-                            params![workspace.id, chrono::Utc::now().to_rfc3339()],
+                            "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='cleanup_pending' AND EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",
+                            params![workspace.id, &diagnostic, chrono::Utc::now().to_rfc3339()],
                         )? == 1;
-                    if !restored {
-                        database.connection().execute("UPDATE mission_workspace SET state='cleanup_failed',diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='cleanup_pending'",params![workspace.id,format!("{error:#}"),chrono::Utc::now().to_rfc3339()])?;
+                    if restored {
+                        outcome = "refused_ready";
+                    } else {
+                        outcome = "failed";
+                        database.connection().execute("UPDATE mission_workspace SET state='cleanup_failed',diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='cleanup_pending'",params![workspace.id,&diagnostic,chrono::Utc::now().to_rfc3339()])?;
                     }
                 }
             }
@@ -494,6 +652,17 @@ impl Core {
                 "mission.workspace.cleanup.finished",
                 Some(&workspace.camp_id),
             );
+            eprintln!(
+                "[mission-worktree-cleanup] mission={:?} workspace={:?} stage=result_published outcome={} identity_and_safety_ms={} worktree_remove_ms={} branch_check_and_delete_ms={} result_publish_ms={} total_ms={}",
+                workspace.mission_id,
+                workspace.id,
+                outcome,
+                timings.identity_and_safety_ms,
+                timings.worktree_remove_ms,
+                timings.branch_check_and_delete_ms,
+                publish_started_at.elapsed().as_millis(),
+                attempt_started_at.elapsed().as_millis(),
+            );
         }
         Ok(())
     }
@@ -501,6 +670,7 @@ impl Core {
     pub(super) async fn handle_mission(&self, request: &Request) -> Result<Value> {
         match request.method.as_str() {
             "missions.workspace.cleanup" => {
+                let admission_started_at = Instant::now();
                 let params: UserCommandParams<CleanupMissionWorkspaceCommand> =
                     serde_json::from_value(request.params.clone())?;
                 let mission_id = params.command.mission_id.clone();
@@ -512,34 +682,15 @@ impl Core {
                     if replay.result.payload["scheduled"] == json!(true) {
                         self.mission_workspace_cleanup_notify.notify_one();
                     }
+                    eprintln!(
+                        "[mission-worktree-cleanup] mission={:?} stage=request_queued replay=true scheduled={} request_to_queue_ms={}",
+                        mission_id,
+                        replay.result.payload["scheduled"] == json!(true),
+                        admission_started_at.elapsed().as_millis(),
+                    );
                     return Ok(serde_json::to_value(replay.result)?);
                 }
                 let _guard = self.mission_workspace_gate.lock().await;
-                let preflight_refusal = {
-                    let workspace = {
-                        let database = self.database.lock().await;
-                        mission_workspace::load_workspaces(database.connection(), &mission_id)?
-                            .into_iter()
-                            .next()
-                    };
-                    if let Some(workspace) = workspace.filter(|workspace| {
-                        worktree_cleanup_required(workspace.cleanup_worktree_removed)
-                            && !workspace.cleanup_finished()
-                            && !matches!(workspace.state.as_str(), "preparing" | "cleanup_pending")
-                    }) {
-                        let git = self.mission_git().await?;
-                        let reference = git.cleanup_branch_reference(&workspace).await?;
-                        match git.verify_worktree_cleanup(&workspace, &reference).await {
-                            Ok(_) => None,
-                            Err(error) => match cleanup_refusal_code(&error) {
-                                Some(code) => Some(code),
-                                None => return Err(error),
-                            },
-                        }
-                    } else {
-                        None
-                    }
-                };
                 let mut database = self.database.lock().await;
                 let execution = DomainCommandGateway.execute(&mut database, &envelope, |tx| {
                     let camp_id = tx
@@ -599,18 +750,6 @@ impl Core {
                             json!({"missionId": mission_id}),
                         ));
                     }
-                    if let Some(code) = preflight_refusal {
-                        if workspace.state == "cleanup_failed" {
-                            tx.execute(
-                                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_failed'",
-                                params![workspace.id, chrono::Utc::now().to_rfc3339()],
-                            )?;
-                        }
-                        return Ok(CommandHandlerResult::rejected(
-                            code,
-                            json!({"missionId": mission_id}),
-                        ));
-                    }
                     let generation = workspace.generation + i64::from(workspace.state == "ready");
                     tx.execute(
                         "UPDATE mission_workspace SET generation=?2,state='cleanup_pending',cleanup_command_id=?3,diagnostic=NULL,updated_at=?4 WHERE id=?1",
@@ -648,6 +787,12 @@ impl Core {
                     );
                     self.mission_workspace_cleanup_notify.notify_one();
                 }
+                eprintln!(
+                    "[mission-worktree-cleanup] mission={:?} stage=request_queued replay=false scheduled={} request_to_queue_ms={}",
+                    mission_id,
+                    scheduled,
+                    admission_started_at.elapsed().as_millis(),
+                );
                 Ok(serde_json::to_value(execution.result)?)
             }
             "missions.cleanup.list" => {

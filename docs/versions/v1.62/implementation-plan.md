@@ -9,7 +9,7 @@ last_updated: 2026-09-20
 
 # v1.62 实施与验收
 
-范围见[版本概览](README.md)，字段级行为见 [Mission v10](../../contracts/mission-v10.md)、
+范围见[版本概览](README.md)，字段级行为见 [Mission v11](../../contracts/mission-v11.md)、
 [Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)，Camp 打开职责见
@@ -169,6 +169,14 @@ last_updated: 2026-09-20
   排队卡与真实多输入 Run 共用同一按钮和焦点边界。
 - [x] Renderer 定向回归、Camp Open slow owner、隔离 Electron 双状态截图、类型检查、文档门禁和 Desktop
   生产构建通过；Rust 验证收敛为上述两条定向 owner。
+
+## Gate 16：Mission Worktree 清理短路径
+
+- [x] 清理请求入口只保留权限、状态、占用和幂等准入；文件系统与 Git 安全判断由 worker 单一拥有。
+- [x] 正常成功路径合并身份、HEAD、受管分支 OID 和实际 checkout 观测，不执行 `git status`，并将 Git 进程调用限制为 4 次。
+- [x] expected OID 在删除前持久化，Worktree 检查点先于分支步骤；部分结果与不确定失败继续失败关闭并只重试未完成步骤。
+- [x] staged、unstaged、untracked 脏现场经非 force 删除安全拒绝，恢复 `ready`、保留内容与诊断，Activity 提供明确重试。
+- [x] 增加排队、安全、删除、分支与结果发布耗时日志；既有 Rust owner 验证调用上限和实际入口，Renderer owner 验证拒绝反馈。
 
 ## Rust 测试准入记录
 

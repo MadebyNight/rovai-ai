@@ -40,7 +40,7 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 等待领取的启动 Delivery 只关闭重复启动入口，不伪装成执行；普通消息 claim 后使用同一活跃 Run 判定。
 - 使命板一级入口蓝点按 Core-owned `hasUnread` 统计有未读 Agent 回复的使命，不再复用 `needs_you` 状态。
 
-字段级协议见 [Mission v10](../../contracts/mission-v10.md)与
+字段级协议见 [Mission v11](../../contracts/mission-v11.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
 [Run Process Detail Surface v38](../../contracts/run-process-detail-surface-v38.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)和
@@ -89,6 +89,11 @@ cleaning/failed/cleaned 及两个 path-free checkpoint，failed 不自动重试�
 Renderer 把资源状态固定在现有卡片层级中；确认窗不承担长期进度。失败同时进入可操作 Toast、卡片持久错误和
 详情重试，部分失败只显示/重试本地分支；成功提示约四秒且刷新或重进不重播。删除后的失败沿用
 “工作区待清理”入口。
+
+清理短路径继续使用同一后台 owner 和持久字段：请求入口不再重复访问文件系统或 Git，普通成功 worker 将身份、
+HEAD、受管 OID 与实际 checkout 合并为一次观测，并以非 force Worktree 删除、一次占用列表和一次条件删引用完成，
+正常上限为 4 个 Git 进程。安全的脏现场拒绝恢复为可执行的 `ready` 并保留诊断与再次清理入口；部分或不确定结果
+仍为 `cleanup_failed`。各阶段耗时写入结构化日志，不改变协议结果。
 
 ## Worktree checkout 与当前 Diff 增量
 
@@ -156,7 +161,7 @@ Run/Camp，到期只重试文本并在成功后复用 block event；失败最高
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动及受管分支与实时 checkout 分离取舍；Agent Run Card 按已确认交互和当前合同实施，不新增高成本架构决定 |
-| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9 后继续发布当前 [Mission v10](../../contracts/mission-v10.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37 与当前 [v38](../../contracts/run-process-detail-surface-v38.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
+| Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37 与当前 [v38](../../contracts/run-process-detail-surface-v38.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)及当前 [Camp Open Projection v21](../../contracts/camp-open-projection-v21.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
 | Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner |
 | UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、回执和共享分栏 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
