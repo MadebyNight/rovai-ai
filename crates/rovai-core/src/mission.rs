@@ -1791,9 +1791,25 @@ mod tests {
                 [other_camp_id],
             )
             .unwrap();
+        db.connection().execute(
+            "UPDATE mission_workspace SET state='ready',cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic='mission.workspace_dirty' WHERE mission_id=?1",
+            [&mission_id],
+        ).unwrap();
+        let refused = service.get(&db, &mission_id).unwrap().unwrap();
+        assert!(refused.cleanup_available);
+        assert!(refused.workspace_resources_present);
+        let refused_cleanup = refused.workspace_cleanup.unwrap();
+        assert_eq!(refused_cleanup.state, "failed");
+        assert!(!refused_cleanup.worktree_removed);
+        assert!(!refused_cleanup.branch_removed);
+        assert_eq!(
+            refused_cleanup.diagnostic.as_deref(),
+            Some("mission.workspace_dirty")
+        );
+
         db.connection()
             .execute(
-                "UPDATE mission_workspace SET state='cleanup_pending' WHERE mission_id=?1",
+                "UPDATE mission_workspace SET state='cleanup_pending',diagnostic=NULL WHERE mission_id=?1",
                 [&mission_id],
             )
             .unwrap();

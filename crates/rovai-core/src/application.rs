@@ -26904,6 +26904,98 @@ done
         assert_refresh_required(&invalidated_view);
         drop(lifecycle);
 
+        rusqlite::Connection::open(&database_path)
+            .unwrap()
+            .execute(
+                "UPDATE agent_run SET status='succeeded',ended_at=?2 WHERE id=?1",
+                rusqlite::params![&agent_run_id, chrono::Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+
+        let staged = std::process::Command::new(&git_path)
+            .arg("-C")
+            .arg(&worktree)
+            .args(["add", "tracked.txt"])
+            .output()
+            .unwrap();
+        assert!(
+            staged.status.success(),
+            "failed to stage the cleanup fixture: {}",
+            String::from_utf8_lossy(&staged.stderr)
+        );
+        fs::write(worktree.join("tracked.txt"), "unstaged after staged\n").unwrap();
+        fs::write(worktree.join("untracked.txt"), "untracked\n").unwrap();
+        let cleanup = service
+            .request(
+                "missions.workspace.cleanup",
+                json!({
+                    "commandId": uuid::Uuid::new_v4().to_string(),
+                    "command": { "missionId": mission_id },
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            cleanup.error.is_none(),
+            "cleanup admission failed before the worker could run: {:?}",
+            cleanup.error
+        );
+        assert_eq!(cleanup.result.as_ref().unwrap()["status"], "applied");
+        assert_eq!(
+            cleanup.result.as_ref().unwrap()["payload"]["scheduled"],
+            true
+        );
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let cleanup_state = rusqlite::Connection::open(&database_path)
+                    .unwrap()
+                    .query_row(
+                        "SELECT state,diagnostic,cleanup_expected_branch_oid,cleanup_worktree_removed,cleanup_branch_removed FROM mission_workspace WHERE id=?1",
+                        [&workspace.id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, bool>(3)?,
+                                row.get::<_, bool>(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                if cleanup_state.0 == "ready"
+                    && cleanup_state
+                        .1
+                        .as_deref()
+                        .is_some_and(|diagnostic| diagnostic.contains("mission.workspace_dirty"))
+                {
+                    assert_eq!(cleanup_state.2, None);
+                    assert!(!cleanup_state.3 && !cleanup_state.4);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a reliable dirty refusal must restore the complete workspace to ready");
+        assert_eq!(
+            fs::read_to_string(worktree.join("tracked.txt")).unwrap(),
+            "unstaged after staged\n"
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join("untracked.txt")).unwrap(),
+            "untracked\n"
+        );
+        let readable_after_refusal = service
+            .request("missions.changes", json!({ "missionId": mission_id }))
+            .await
+            .unwrap();
+        assert!(
+            readable_after_refusal.error.is_none(),
+            "a non-destructive refusal must not permanently block Mission reads: {:?}",
+            readable_after_refusal.error
+        );
+
         drop(service);
         if tokio::time::timeout(Duration::from_secs(10), &mut runner_task)
             .await

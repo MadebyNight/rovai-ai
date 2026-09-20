@@ -29,6 +29,9 @@ type MissionWorkspaceState = NonNullable<Delivery['workspace']>['state']
 export function missionChangesVisible(git: boolean, workspaceState: MissionWorkspaceState | null): boolean {
   return git && workspaceState === 'ready'
 }
+export function missionCleanupAttentionVisible(workspaceState: MissionWorkspaceState | null, diagnostic: string | null): boolean {
+  return Boolean(diagnostic) && (workspaceState === 'ready' || workspaceState === 'cleanup_failed')
+}
 export function MissionDeliveryPanel({ mission, agents, onSource, onNotify, onWorkspaceCleanupRequested }: { mission: MissionRecord; agents: AgentProfile[]; onSource(id: string): void; onNotify(message: string): void; onWorkspaceCleanupRequested(campId: string): Promise<void> }) {
   const client = useCampClient()
   const [data, setData] = useState<Delivery | null>(null), [error, setError] = useState(''), [revision, setRevision] = useState(0)
@@ -48,6 +51,8 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify, onWo
       void onWorkspaceCleanupRequested(mission.campId).catch(error => onNotify(`使命 Worktree 清理已开始，但信息刷新失败：${missionError(error)}`))
     } catch (error) { onNotify(missionError(error)) } finally { setCleanupBusy(false) }
   }
+  const cleanupRefused = data?.workspace?.state === 'ready' && Boolean(data.workspace.diagnostic)
+  const cleanupNeedsAttention = missionCleanupAttentionVisible(data?.workspace?.state ?? null, data?.workspace?.diagnostic ?? null)
   return <section className="mission-delivery-panel" aria-label="使命交付">
     {error && <div className="mission-load-error" role="alert"><span>{error}</span><button onClick={() => setRevision(v => v + 1)}>重试</button></div>}
     {!data && !error && <p className="mission-section-empty" role="status">正在加载交付…</p>}
@@ -57,7 +62,7 @@ export function MissionDeliveryPanel({ mission, agents, onSource, onNotify, onWo
         {data.workspace?.state === 'cleanup_pending' && <p className="mission-workspace-cleaning" role="status"><span className="mission-cleanup-spinner" aria-hidden="true"/>{data.workspace.cleanupWorktreeRemoved && !data.workspace.cleanupBranchRemoved ? '正在清理本地分支…' : '正在清理 Worktree…'}</p>}
         <div className="mission-evidence-row"><span>目录</span><code>{data.workingDirectory}</code></div>
         {data.git && data.workspace && <><div className="mission-evidence-row"><span>来源</span><code>{data.workspace.baseBranch ?? 'detached HEAD'}</code></div><div className="mission-evidence-row"><span>基准</span><code title={data.workspace.baseSha}>{data.workspace.baseSha.slice(0, 12)}</code></div></>}
-        {data.workspace?.state === 'cleanup_failed' && <div className="mission-workspace-cleanup-failure" role="alert"><strong>{data.workspace.cleanupWorktreeRemoved && !data.workspace.cleanupBranchRemoved ? '分支清理失败' : 'Worktree 清理失败'}</strong><p>{data.workspace.diagnostic ?? '清理未完成，请重试。'}</p><dl><div><dt>Worktree</dt><dd>{data.workspace.cleanupWorktreeRemoved ? '已清理' : '待清理'}</dd></div><div><dt>本地分支</dt><dd>{data.workspace.cleanupBranchRemoved ? '已清理' : '待清理'}</dd></div></dl><button type="button" className="compact-cancel" disabled={cleanupBusy} onClick={() => void retryCleanup()}>{cleanupBusy ? '正在安排重试…' : '重试未完成步骤'}</button></div>}
+        {cleanupNeedsAttention && data.workspace && <div className="mission-workspace-cleanup-failure" role="alert"><strong>{cleanupRefused ? 'Worktree 未清理' : data.workspace.cleanupWorktreeRemoved && !data.workspace.cleanupBranchRemoved ? '分支清理失败' : 'Worktree 清理失败'}</strong><p>{data.workspace.diagnostic ?? '清理未完成，请重试。'}</p><dl><div><dt>Worktree</dt><dd>{data.workspace.cleanupWorktreeRemoved ? '已清理' : '待清理'}</dd></div><div><dt>本地分支</dt><dd>{data.workspace.cleanupBranchRemoved ? '已清理' : '待清理'}</dd></div></dl><button type="button" className="compact-cancel" disabled={cleanupBusy} onClick={() => void retryCleanup()}>{cleanupBusy ? '正在安排重试…' : cleanupRefused ? '再次清理' : '重试未完成步骤'}</button></div>}
       </div>
       {missionChangesVisible(data.git, data.workspace?.state ?? null) && <MissionChanges mission={mission} baseSha={data.workspace?.baseSha ?? null}/>}
       <section className="mission-delivery-section"><h3>队员交付 <span>{data.files.length || ''}</span></h3>{data.files.map(file => <div className="mission-delivery-file" key={`${file.messageId}:${file.attachmentId}`}>

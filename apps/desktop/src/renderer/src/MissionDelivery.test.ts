@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { MissionChangedFile } from '@contracts'
-import { missionChangesVisible, missionFileTree, missionTreeWindow } from './MissionDelivery'
+import { missionChangesVisible, missionCleanupAttentionVisible, missionFileTree, missionTreeWindow } from './MissionDelivery'
 
 function changedFile(id: string, path: string): MissionChangedFile {
   return {
@@ -32,6 +32,10 @@ describe('Mission cumulative file tree', () => {
     expect(missionChangesVisible(true, 'cleaned')).toBe(false)
     expect(missionChangesVisible(false, 'ready')).toBe(false)
     expect(missionChangesVisible(true, 'ready')).toBe(true)
+    expect(missionCleanupAttentionVisible('ready', 'mission.workspace_dirty')).toBe(true)
+    expect(missionCleanupAttentionVisible('cleanup_failed', 'mission.branch_changed')).toBe(true)
+    expect(missionCleanupAttentionVisible('ready', null)).toBe(false)
+    expect(missionCleanupAttentionVisible('cleanup_pending', 'mission.git_failed')).toBe(false)
   })
 
   it('sorts directories before files, compresses single-directory chains and counts descendants', () => {
