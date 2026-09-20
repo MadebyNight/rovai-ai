@@ -770,8 +770,8 @@ impl Core {
                     let database = self.database.lock().await;
                     let mut prs=database.connection().prepare("SELECT id,url,title,created_at FROM mission_pr WHERE mission_id=?1 ORDER BY created_at DESC,id")?;
                     let prs=prs.query_map([&query.mission_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"url":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"createdAt":r.get::<_,String>(3)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                    let mut files=database.connection().prepare("SELECT a.id,r.display_name_snapshot,a.media_type,a.byte_size,a.preview_kind,m.id,m.author_id,m.created_at,a.kind,a.file_count FROM camp_message m JOIN camp_message_attachment_ref r ON r.camp_message_id=m.id JOIN managed_attachment a ON a.id=r.attachment_id AND a.camp_id=m.camp_id WHERE m.camp_id=?1 AND m.author_type='agent' AND m.tombstoned_at IS NULL AND a.state='available' ORDER BY m.sequence DESC,r.ordinal")?;
-                    let files=files.query_map([&mission.camp_id],|r|Ok(json!({"attachmentId":r.get::<_,String>(0)?,"displayName":r.get::<_,String>(1)?,"mediaType":r.get::<_,String>(2)?,"byteSize":r.get::<_,i64>(3)?,"previewKind":r.get::<_,String>(4)?,"messageId":r.get::<_,String>(5)?,"agentId":r.get::<_,String>(6)?,"createdAt":r.get::<_,String>(7)?,"kind":r.get::<_,String>(8)?,"fileCount":r.get::<_,i64>(9)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                    let files =
+                        MissionService::default().delivery_files(&database, &mission.camp_id)?;
                     let git_project = !workspaces.is_empty()
                         || mission_workspace::has_git_marker(Path::new(&mission.project_path));
                     let workspace = workspaces.first().cloned().map(|mut workspace| {

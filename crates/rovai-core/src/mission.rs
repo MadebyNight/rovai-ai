@@ -16,6 +16,7 @@ use crate::{
         DomainCommand, DomainCommandGateway, EntityReference, sealed,
     },
     db::Database,
+    local_attachment_snapshot::DIRECTORY_MEDIA_TYPE,
     local_attachment_source::{
         LocalAttachmentAvailability, LocalAttachmentSourceRef, LocalAttachmentSourceView,
         parse_source_attachments, serialize_source_attachments,
@@ -326,6 +327,21 @@ pub struct MissionActivity {
     pub actor_id: String,
     pub changes: Value,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MissionDeliveryFile {
+    pub attachment_id: String,
+    pub display_name: String,
+    pub media_type: String,
+    pub byte_size: i64,
+    pub preview_kind: String,
+    pub message_id: String,
+    pub agent_id: String,
+    pub created_at: String,
+    pub kind: String,
+    pub file_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -666,6 +682,100 @@ impl MissionService {
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn delivery_files(
+        &self,
+        database: &Database,
+        camp_id: &str,
+    ) -> Result<Vec<MissionDeliveryFile>> {
+        let mut statement = database.connection().prepare(
+            r#"
+            WITH delivery_file AS (
+                SELECT m.sequence AS message_sequence,
+                       r.ordinal AS attachment_ordinal,
+                       a.id AS attachment_id,
+                       r.display_name_snapshot AS display_name,
+                       a.media_type,
+                       a.byte_size,
+                       a.preview_kind,
+                       m.id AS message_id,
+                       m.author_id AS agent_id,
+                       m.created_at,
+                       a.kind,
+                       a.file_count
+                FROM camp_message AS m
+                JOIN camp_message_attachment_ref AS r
+                  ON r.camp_id = m.camp_id
+                 AND r.camp_message_id = m.id
+                JOIN managed_attachment AS a
+                  ON a.camp_id = r.camp_id
+                 AND a.id = r.attachment_id
+                WHERE m.camp_id = ?1
+                  AND m.author_type = 'agent'
+                  AND m.tombstoned_at IS NULL
+                  AND a.state = 'available'
+
+                UNION ALL
+
+                SELECT m.sequence AS message_sequence,
+                       CAST(source.key AS INTEGER) AS attachment_ordinal,
+                       CAST(json_extract(source.value, '$.id') AS TEXT) AS attachment_id,
+                       CAST(json_extract(source.value, '$.displayName') AS TEXT) AS display_name,
+                       COALESCE(
+                           NULLIF(CAST(json_extract(source.value, '$.mediaType') AS TEXT), ''),
+                           CASE CAST(json_extract(source.value, '$.kind') AS TEXT)
+                               WHEN 'directory' THEN ?2
+                               ELSE 'application/octet-stream'
+                           END
+                       ) AS media_type,
+                       COALESCE(
+                           CAST(json_extract(source.value, '$.observedByteSize') AS INTEGER),
+                           0
+                       ) AS byte_size,
+                       CASE
+                           WHEN CAST(json_extract(source.value, '$.mediaType') AS TEXT) LIKE 'image/%'
+                               THEN 'image'
+                           ELSE 'none'
+                       END AS preview_kind,
+                       m.id AS message_id,
+                       m.author_id AS agent_id,
+                       m.created_at,
+                       CAST(json_extract(source.value, '$.kind') AS TEXT) AS kind,
+                       CASE CAST(json_extract(source.value, '$.kind') AS TEXT)
+                           WHEN 'file' THEN 1
+                           ELSE 0
+                       END AS file_count
+                FROM camp_message AS m,
+                     json_each(m.source_attachments_json) AS source
+                WHERE m.camp_id = ?1
+                  AND m.author_type = 'agent'
+                  AND m.tombstoned_at IS NULL
+                  AND m.source_attachments_json <> '[]'
+            )
+            SELECT attachment_id, display_name, media_type, byte_size,
+                   preview_kind, message_id, agent_id, created_at, kind, file_count
+            FROM delivery_file
+            ORDER BY message_sequence DESC, attachment_ordinal, attachment_id
+            "#,
+        )?;
+        statement
+            .query_map(params![camp_id, DIRECTORY_MEDIA_TYPE], |row| {
+                Ok(MissionDeliveryFile {
+                    attachment_id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    media_type: row.get(2)?,
+                    byte_size: row.get(3)?,
+                    preview_kind: row.get(4)?,
+                    message_id: row.get(5)?,
+                    agent_id: row.get(6)?,
+                    created_at: row.get(7)?,
+                    kind: row.get(8)?,
+                    file_count: row.get(9)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 }
 
@@ -1860,6 +1970,91 @@ mod tests {
             crate::local_attachment_source::parse_source_attachments(&published_json).unwrap(),
             vec![directory, second]
         );
+    }
+
+    #[test]
+    fn mission_delivery_collects_agent_source_attachments_without_reading_the_source() {
+        let mut database = crate::test_support::seeded_runtime_database_owned();
+        let workspace = database.directory().join("mission-delivery-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let service = MissionService::default();
+        let created = service
+            .create(
+                &mut database,
+                &command(CreateMissionCommand {
+                    title: "非 Git 交付".into(),
+                    description: String::new(),
+                    project_path: workspace.to_string_lossy().into_owned(),
+                    project_binding_kind: ProjectBindingKind::Directory,
+                    member_agent_ids: vec!["agent_1".into()],
+                    default_lead_agent_id: "agent_1".into(),
+                    tags: vec![],
+                    source_attachments: vec![],
+                }),
+            )
+            .unwrap();
+        let mission_id = created.result.payload["missionId"].as_str().unwrap();
+        let mission = service.get(&database, mission_id).unwrap().unwrap();
+        let missing_source = workspace.join("historical-delivery.html");
+        assert!(!missing_source.exists());
+        let source = LocalAttachmentSourceRef {
+            id: Uuid::new_v4().to_string(),
+            source_path: missing_source.to_string_lossy().into_owned(),
+            display_name: "historical-delivery.html".into(),
+            kind: crate::local_attachment_source::LocalAttachmentKind::File,
+            media_type: Some("text/html".into()),
+            observed_byte_size: Some(19_823),
+        };
+        let message_id = Uuid::new_v4().to_string();
+        let created_at = "2026-09-20T07:38:20Z";
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id, body,
+                    structured_content_json, source_attachments_json,
+                    address_mode, addressed_agent_ids_json, created_at, updated_at
+                ) VALUES (?1, ?2, 1, 'agent', 'agent_1', '附件', '[]', ?3,
+                          'broadcast', '[]', ?4, ?4)
+                "#,
+                params![
+                    message_id,
+                    mission.camp_id,
+                    serialize_source_attachments(std::slice::from_ref(&source)).unwrap(),
+                    created_at,
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            service.delivery_files(&database, &mission.camp_id).unwrap(),
+            vec![MissionDeliveryFile {
+                attachment_id: source.id,
+                display_name: source.display_name,
+                media_type: "text/html".into(),
+                byte_size: 19_823,
+                preview_kind: "none".into(),
+                message_id,
+                agent_id: "agent_1".into(),
+                created_at: created_at.into(),
+                kind: "file".into(),
+                file_count: 1,
+            }]
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM managed_attachment), \
+                            (SELECT COUNT(*) FROM camp_message_attachment_ref)",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap(),
+            (0, 0)
+        );
+        assert!(!missing_source.exists());
     }
 
     #[test]
