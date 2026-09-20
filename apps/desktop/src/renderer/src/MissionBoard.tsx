@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import type { AgentProfile, CampOpenProjection, MissionDelivery, MissionRecord, MissionStatus, MissionUpdate, MissionWorkspace, ProjectNavigationGroup } from '@contracts'
-import { useCampClient } from './camp-client'
+import { useCampClient, type CampClient } from './camp-client'
 import { newCommandId } from '../../shared/command-id'
 import { DialogControlIcon } from './AppDialog'
 import { NavigationIcon } from './NavigationIcon'
@@ -55,6 +55,10 @@ export function missionDate(value: string): string {
   if (date.toDateString() === today.toDateString()) return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   if (date.toDateString() === yesterday.toDateString()) return '昨天'
   return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } as const : {}) })
+}
+
+function openMissionCamp(client: Pick<CampClient, 'request'>, campId: string): Promise<CampOpenProjection> {
+  return client.request<CampOpenProjection>('camps.open', { traceId: newCommandId(), campId })
 }
 
 /** Shared overlays keep card actions identical in the board, drawer and full conversation. */
@@ -178,7 +182,7 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
       onEdit={() => { if (selected) setEditing(selected); setPosition(null) }}
       onStatus={status => { if (selected) actions.status(selected, status) }}
       onLead={id => { if (selected) report((async () => {
-        const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: selected.campId })
+        const snapshot = await openMissionCamp(client, selected.campId)
         await missionCommand(client, 'camps.changeDefaultLead', { campId: selected.campId, successorAgentId: id, expectedVersion: snapshot.camp.version })
         await onChanged(selected.campId)
       })()) }}
@@ -193,7 +197,7 @@ export function MissionInteractionProvider({ missions, projects, agents, onChang
       <MissionWorkspaceCleanup key={cleaning.missionId} mission={cleaning} onClose={() => setCleaning(null)} onRequested={async () => { await cleanup(cleaning); setCleaning(null) }}/>
     )}
     {deleting && <MissionDelete key={deleting.missionId} mission={deleting} onClose={() => setDeleting(null)} onDelete={async workspaceDisposition => {
-      const snapshot = await client.request<CampOpenProjection>('camps.open', { campId: deleting.campId })
+      const snapshot = await openMissionCamp(client, deleting.campId)
       await missionCommand(client, 'camps.delete', { campId: deleting.campId, expectedVersion: snapshot.camp.version, force: true, workspaceDisposition })
       await onDeleted(deleting.campId); setDeleting(null)
     }}/>}
