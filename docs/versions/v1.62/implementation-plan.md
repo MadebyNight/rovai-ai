@@ -9,7 +9,7 @@ last_updated: 2026-09-20
 
 # v1.62 实施与验收
 
-范围见[版本概览](README.md)，字段级行为见 [Mission v7](../../contracts/mission-v7.md)、
+范围见[版本概览](README.md)，字段级行为见 [Mission v8](../../contracts/mission-v8.md)、
 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)、
 [File Preview v17](../../contracts/file-preview-v17.md)与
 [Camp Message Send v23](../../contracts/camp-message-send-v23.md)。
@@ -18,7 +18,7 @@ last_updated: 2026-09-20
 
 - [x] 从最新 `main` 复核 Mission v5、Built-in v29、Core status 路径、catalog、CLI help 与错误恢复。
 - [x] 确认本版不修改数据库、Bootstrap、Charter、ContextManifest、Run Facts 或 Renderer wire。
-- [x] 发布 Mission v6/Built-in v30 后继续发布 Mission v7，补齐版本决定并切换当前文档导航。
+- [x] 发布 Mission v6/Built-in v30 后继续发布 Mission v7/v8，补齐当前权威并切换文档导航。
 
 ## Gate 1：Core 状态语义
 
@@ -89,6 +89,18 @@ last_updated: 2026-09-20
 - [x] 隔离 Electron 验收覆盖三位置往返、共享宽度、最新 running Run 自动打开、指令跟随、排队合批、停止、
   撤回取消/确认、恢复和长 Tool 输出；类型、文档、生产构建与 macOS App 验证通过。
 
+## Gate 9：Mission 启动与执行提示
+
+- [x] `MissionRecord.startAvailable` 由等待/已领取的 Mission start Delivery 与 Camp 非终态 Run 共同决定；
+  普通等待 Delivery 不进入该判定。
+- [x] `runningAgentIds` 覆盖 queued/running/waiting，Delivery claim 后发布导航失效，连接前即可刷新执行提示。
+- [x] `missions.start` 与 Renderer 共用同一 Core 判定；旧投影、快速连点或普通消息活跃 Run 不会追加启动任务。
+- [x] 开始按钮立即 disabled、`aria-busy` 并显示“正在开始…”；受理后隐藏，明确拒绝恢复且显示错误；内部
+  Mission start 消息继续不进入 Timeline。
+- [x] Mission Rust owner、Electron 使命验收、TypeScript、文档治理、格式、workspace check、Rust 全量、Node
+  全量与 Desktop 生产构建通过。
+- [x] 分支提交并推送；PR #453 required gate 通过后合入 `main`，并验证功能提交是 `origin/main` 祖先。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -104,6 +116,13 @@ Agent Run Card 增量不新增 Rust 测试 owner。撤回继续由既有多接�
 和幂等命令用例拥有；Desktop/Web 只补齐同一 operation 的 Host 准入。新的偏好保存回归由共享 TypeScript owner
 覆盖，避免 unrelated Host read 阻塞已提交的保存结果。
 
+Mission 启动增量不新增独立 Rust 测试函数：既有
+`mission_commands_keep_definition_atomic_patch_only_and_start_status_independent` 继续拥有 start admission、Replay、
+业务状态独立与活动副作用，并扩展 waiting start、普通消息 claim、queued 投影及重复启动输入。修复前普通消息
+claim 后仍可能重复创建 Mission start，queued Run 也不会进入执行提示；同一数据库/命令 owner 已覆盖完整事务，
+平行 fixture 只会重复 setup。最小验证命令为
+`cargo test -p rovai-core --lib mission_commands_keep_definition_atomic_patch_only_and_start_status_independent`。删除测试为零。
+
 ## 实施收口
 
 - `cargo test -p rovai-core --lib mission_commands_keep_definition_atomic_patch_only_and_start_status_independent`：1 passed。
@@ -116,10 +135,15 @@ Agent Run Card 增量不新增 Rust 测试 owner。撤回继续由既有多接�
   cleanup projection、部分失败重试与 Camp 删除原子性定向用例通过。
 - `pnpm test:mission-board`：4 passed、0 failed；覆盖异步清理、独立列滚动、820px 桌面窄窗横向切换、
   大 Diff 虚拟化、宽屏抽屉与编辑器指针交互；`pnpm build:desktop` 通过。
-- Core 全量在功能基线为 841 passed、6 ignored；rebase 后组合运行 840 passed、1 个时间敏感 Runtime
-  discovery 失败、6 ignored，该失败独立 exact 复跑 1/1 通过。
-- 完整 `pnpm test` 曾取得 Vitest 2153/2153、Node 324 passed/2 skipped；rebase 后两次完整运行只命中既有
-  `evaluation-host` 并行超时，隔离复跑 4/4 通过。required PR gate 负责最终独立环境裁决。
+- Mission 启动增量在最新 `origin/main` 上定向 owner 1 passed；默认 feature workspace 为 Core 844 passed、
+  6 ignored，CLI 29 passed、Host 4 passed、Web 8 passed，0 failed。
+- `pnpm test:mission-board` 为 4 passed、0 failed；新增覆盖 pending/拒绝/受理、claim 前入口隐藏、queued
+  执行提示、状态独立和内部启动消息不可见。`pnpm typecheck`、diff-aware 文档治理、格式、workspace check、
+  `git diff --check` 与 `pnpm build:desktop` 均通过。
+- 完整 `pnpm test` 为 Vitest 2162/2162、Node 324 passed/2 skipped、0 failed；同时把主线已经轮换的 schema 116、
+  ContextManifest/Formatter 27 与 Delivery Profile 8 同步到 Product Contract Fingerprint owner。
+- PR #453 required gate 通过并合入 `main`；功能提交的最终 SHA 已由 `git merge-base --is-ancestor` 对
+  `origin/main` 验证。
 - `node scripts/smoke-mission.mjs ...` 在 rebase 后隔离 data-dir/Skill Library 通过 6 个场景，4 条真实
   AgentRun 全部 succeeded；bundled CLI 以 `{status:'completed'}` 更新并读回 `sourceMessageId: null`，
   Core 重启后的续轮保持该状态。

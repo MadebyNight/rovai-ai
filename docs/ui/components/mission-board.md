@@ -18,9 +18,10 @@ right click or Shift+F10 opens the same accessible menu. The metadata label uses
 (`M-018`), never an opaque ID suffix. The footer keeps the lead first and shows at most five 23px member
 avatars with 7px overlap; when unread and time leave less room, it reduces the visible count and recalculates
 a borderless, backgroundless semibold `+N`. The complete ordered roster remains available from the same
-keyboard-accessible group. Project is followed by tags and a plain relative timestamp such as “昨天”. An
-active card places at most three running-member avatars, the remaining plain-text `+N`, and stationary
-“执行中” text in one upper-right group. The execution-console Steel/Ember dual arcs flow around that complete
+keyboard-accessible group. Project is followed by tags and a plain relative timestamp such as “昨天”. A card
+with `queued`, `running` or `waiting` AgentRuns places at most three executing-member avatars, the remaining
+plain-text `+N`, and stationary “执行中” text in one upper-right group. An unclaimed Delivery does not show this
+group. The execution-console Steel/Ember dual arcs flow around the complete
 group; the text itself has no sweep animation, and reduced motion keeps the arcs static. Unread uses an 8px
 solid blue dot plus 12px semibold blue “未读” in the footer, and raises that card title from 550 to 600 without
 a background, border or flashing. Card and list menus share this order: 编辑、状态、查看队员、队长、标签、删除. Click opens
@@ -103,18 +104,22 @@ expansion, current source attachments, roster, tags and read-only status. Attach
 cards and focusable no-wrap strip, including file/directory typing, hidden visual scrollbar and
 Left/Right/Home/End browsing. Opening an attachment is not a Mission edit action. The Mission card has no edit,
 context menu, or detail/delivery/activity links.
-An unstarted Mission has a 36px neutral primary 开始使命 action below the card (black in Day).
-Starting schedules the Mission and preserves its explicitly managed status without inserting a visible user-authored message;
-the timeline remains unchanged until a teammate publishes a message.
+An unstarted Mission has a 36px neutral primary 开始使命 action below the card (black in Day) only while Core
+projects `startAvailable`. Pressing it immediately disables the stable button, sets its accessible busy state and
+changes the label to `正在开始…`. Explicit rejection restores the action and shows the error. Acceptance hides it
+without waiting for claim; an ordinary public message hides it after claim creates a non-terminal Run, including
+the queued connection phase. The board, drawer and full conversation consume the same Mission projection and
+do not infer availability from business status alone. Starting preserves the explicitly managed status and the
+internal start message stays excluded from the timeline; no visible “开始使命” or “使命已开始” message is added.
 
 Activity is a real closeable preview tab containing delivery and Mission history in one scrolling document.
-Clicking the Activity entry opens or restores it when absent/hidden; when its tab already exists in the
-visible preview, the same entry closes that tab even if another file is currently selected.
+Clicking the Activity entry opens or restores it when absent/hidden and selects it when another preview tab is
+active. Clicking the selected Activity entry closes that tab.
 Closing selects an adjacent remaining file; closing the last tab also hides the preview. Hiding the whole
 preview retains all tabs and reading state. Activity acquires no file handle and remains scoped to its Camp.
 In Mission conversations the shared preview tab strip occupies the preview column of the same header,
-with the same low-contrast divider continuing through the body. Activity defaults to a narrow 320px
-column (300px stable minimum); ordinary files retain the normal preview ratio and 420px stable minimum.
+with the same low-contrast divider continuing through the body. Activity, Execution and ordinary files share
+the saved preview ratio and the same 420px stable minimum.
 After an automatic resize-driven hide, the far-right toggle can still reopen an intentionally selected
 compact preview. Compact preview and source-message navigation preserve the conversation and draft.
 
@@ -166,6 +171,6 @@ focus request even when there is no notification acknowledgement waiter; snapsho
 the positioning or steal the user's subsequent focus. Status history uses the actor and new status only,
 such as “爱丽丝 将状态改为‘未开始’”, for both user and Agent changes.
 
-Business and ownership rules are defined by [Mission v7](../../contracts/mission-v7.md), not this presentation
+Business and ownership rules are defined by [Mission v8](../../contracts/mission-v8.md), not this presentation
 contract. Theme and ordinary conversation behavior remain under [DESIGN.md](../../../DESIGN.md) and
 [Camp workspace](conversation-workspace.md).

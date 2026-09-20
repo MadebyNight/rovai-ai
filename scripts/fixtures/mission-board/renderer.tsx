@@ -28,10 +28,10 @@ const missionSourceAttachments=[
 ]
 const items:MissionRecord[]=[
  ['需要核对窄窗口的目录布局','needs_you',['交互','体验优化']],['补齐使命工作区恢复路径','in_progress',['Core']],['更新首次使用引导文案','not_started',['文案']],['使命累计变更回归测试','completed',['测试']]
-].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:i===0?structuredClone(missionSourceAttachments):[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.slice(0,i===0?8:4).map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.slice(0,4).map(a=>a.agentId):[],hasUnread:i===0,workspaceEverCreated:i!==2,workspaceResourcesPresent:i!==2,cleanupAvailable:i!==1&&i!==2}))
+].map(([title,status,tags],i)=>({missionId:`mission-${i}`,number:18-i,campId:`rvcamp_01h47kvsy5fk1shh6w1g60eec${i}`,title:title as string,description:'让使命从保存、开始、恢复到交付都有清晰的状态。复用现有会话组件，并验证工作目录、草稿和文件预览。\n这段描述用于验证完整描述展开后的布局。',status:status as any,tags:tags as string[],attachments:i===0?structuredClone(missionSourceAttachments):[],projectPath:'/workspace/rovai-ai',projectBindingKind:'directory',detailsVersion:1,sourceMessageId:null,createdAt:now,updatedAt:new Date(Date.now()-86400000).toISOString(),memberAgentIds:profiles.slice(0,i===0?8:4).map(a=>a.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:status==='in_progress'?profiles.slice(0,4).map(a=>a.agentId):[],startAvailable:status!=='in_progress',hasUnread:i===0,workspaceEverCreated:i!==2,workspaceResourcesPresent:i!==2,cleanupAvailable:i!==1&&i!==2}))
 if(query.has('pointerCatalog')) items[1].tags.push(...Array.from({length:16},(_,i)=>`扩展标签 ${String(i+1).padStart(2,'0')}`))
 const events=new Set<(e:any)=>void>(),calls:any[]=[]
-let failNextMissionRefresh=false, missionRefreshPending=false
+let failNextMissionRefresh=false, missionRefreshPending=false, failNextMissionStart=false
 const orphanCleanups:any[]=[]
 const missionChangedFiles=[
  {id:'file-a',path:'src/mission.ts',oldPath:null,kind:'modified',additions:2,deletions:1,binary:false,oldMode:'100644',newMode:'100644'},
@@ -67,7 +67,7 @@ const seedScrollableLanes=(count=10)=>{
  const states=['needs_you','not_started','in_progress','completed'] as const
  states.forEach((status,statusIndex)=>Array.from({length:count},(_,index)=>{
   const seed=structuredClone(items[0])
-  items.push({...seed,missionId:`scroll-${status}-${index}`,campId:`rvcamp_scroll_${status}_${index}`,number:300+statusIndex*count+index,title:`${status} 滚动样本 ${String(index+1).padStart(2,'0')}`,description:'用于验证状态列独立滚动与拖拽边缘自动滚动。',status,tags:[],attachments:[],createdAt:now,updatedAt:now,memberAgentIds:profiles.slice(0,2).map(agent=>agent.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:[],hasUnread:false,workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false,workspaceCleanup:undefined})
+  items.push({...seed,missionId:`scroll-${status}-${index}`,campId:`rvcamp_scroll_${status}_${index}`,number:300+statusIndex*count+index,title:`${status} 滚动样本 ${String(index+1).padStart(2,'0')}`,description:'用于验证状态列独立滚动与拖拽边缘自动滚动。',status,tags:[],attachments:[],createdAt:now,updatedAt:now,memberAgentIds:profiles.slice(0,2).map(agent=>agent.agentId),defaultLeadAgentId:profiles[0].agentId,runningAgentIds:[],startAvailable:true,hasUnread:false,workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false,workspaceCleanup:undefined})
  }))
  changed()
 }
@@ -111,7 +111,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  },
  create:async(_commandId:string,command:any,attachments:any[])=>{
   calls.push({method:'missions.createWithAttachments',p:{command,attachments}})
-  const m={...items[0],...command,attachments:attachments.map(({id,file,kindHint})=>({id,displayName:file.name,kind:kindHint,mediaType:kindHint==='directory'?'inode/directory':file.type||null,byteSize:kindHint==='directory'?null:file.size,fileCount:kindHint==='directory'?null:1,previewKind:kindHint==='file'&&file.type.startsWith('image/')?'image':'none',availability:'unknown'})),number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',sourceMessageId:null,detailsVersion:1,hasUnread:false,runningAgentIds:[],workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false,createdAt:now,updatedAt:now}
+  const m={...items[0],...command,attachments:attachments.map(({id,file,kindHint})=>({id,displayName:file.name,kind:kindHint,mediaType:kindHint==='directory'?'inode/directory':file.type||null,byteSize:kindHint==='directory'?null:file.size,fileCount:kindHint==='directory'?null:1,previewKind:kindHint==='file'&&file.type.startsWith('image/')?'image':'none',availability:'unknown'})),number:Math.max(0,...items.map(item=>item.number))+1,missionId:'created-'+items.length,campId:'rvcamp_01h47kvsy5fk1shh6w1g60eed'+items.length,status:'not_started',sourceMessageId:null,detailsVersion:1,hasUnread:false,runningAgentIds:[],startAvailable:true,workspaceEverCreated:false,workspaceResourcesPresent:false,cleanupAvailable:false,createdAt:now,updatedAt:now}
   items.unshift(m);changed();return applied({campId:m.campId,missionId:m.missionId})
  }
 },request:async(method:string,p:any={})=>{
@@ -156,10 +156,13 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
   return {pending:!!row,scheduled:false}
  }
  if(method==='missions.start'){
+  await new Promise(resolve=>setTimeout(resolve,80))
+  if(failNextMissionStart){failNextMissionStart=false;return {...applied({missionId:m!.missionId}),status:'rejected',code:'mission.lead_unavailable'}}
   const s=snapshot(m!),sequence=Math.max(0,...s.messages.map((message:any)=>message.sequence))+1
   const trigger={...structuredClone(s.messages[0]),id:`${m!.missionId}-mission-start`,sequence,authorType:'user',authorId:'local_user',sourceAgentRunId:null,body:'开始使命',content:{schemaVersion:1,segments:[{kind:'text',text:'开始使命'}]},attachments:[],missionStart:{missionId:m!.missionId,title:m!.title,description:m!.description},createdAt:new Date().toISOString()}
   s.messages.push(trigger)
   s.coverage.messages={...s.coverage.messages,totalCount:s.messages.length,loadedCount:s.messages.length,newestLoadedSequence:sequence}
+  m!.startAvailable=false;m!.updatedAt=new Date().toISOString()
   changed();return applied({missionId:m!.missionId,campId:m!.campId})
  }
  if(method==='missions.activity')return [{id:1,kind:'created',actorType:'user',actorId:'user',changes:{},createdAt:now}]
@@ -186,6 +189,8 @@ const environment:any={client,files:{...model.fileApi,open:async(req:any)=>{call
 ;(window as any).missionQA={items,calls,errors:[],run:runMissionAcceptance,runLargeDiff:runMissionLargeDiffAcceptance,admitMissionNotification,
  seedScrollableLanes,clearScrollableLanes,
  failNextMissionRefresh:()=>{failNextMissionRefresh=true},missionRefreshPending:()=>missionRefreshPending,
+ failNextMissionStart:()=>{failNextMissionStart=true},
+ claimMissionRun:(missionId:string)=>{const m=items.find(item=>item.missionId===missionId)!;m.runningAgentIds=[m.defaultLeadAgentId!];m.startAvailable=false;changed()},
  failMissionCleanup:(missionId:string,partial=false)=>{const m=items.find(item=>item.missionId===missionId)!;m.workspaceCleanup={state:'failed',worktreeRemoved:partial,branchRemoved:false,diagnostic:partial?'mission.branch_changed: expected branch identity changed':'mission.git_failed: worktree could not be removed'};m.workspaceResourcesPresent=true;m.cleanupAvailable=false;changed()},
  completeMissionCleanup:(missionId:string)=>{const m=items.find(item=>item.missionId===missionId)!;m.workspaceCleanup={state:'cleaned',worktreeRemoved:true,branchRemoved:true,diagnostic:null};m.workspaceResourcesPresent=false;m.cleanupAvailable=false;changed()},
  failOrphanCleanup:(partial=false)=>{const row=orphanCleanups[0];if(row){row.state='cleanup_failed';row.cleanupWorktreeRemoved=partial;row.cleanupBranchRemoved=false;row.diagnostic=partial?'mission.branch_changed: expected branch identity changed':'mission.git_failed';changed()}},
