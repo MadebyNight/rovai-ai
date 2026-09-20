@@ -111,8 +111,8 @@ v3 结算的 Run 是普通 terminal `cancelled`。存在 accepted/delivery-unkno
 
 Renderer 收到 `runtime.state = shutting_down` 后立即阻止新的界面交互，但前 400ms 不显示关闭反馈；若 App
 在门槛内完成收口则直接退出，不闪现等待面。超过门槛后显示无操作按钮的 modal：标题为“正在安全退出”，
-说明 Rovai 正在保存本地状态并关闭后台服务；若有尚未完成的 AgentRun，将一并取消，未确认的文件、命令或
-工具效果会保留为待核对记录。modal 必须可聚焦、标记为 busy modal dialog，并在 reduced-motion 下停用
+说明 Rovai 正在保存本地状态并关闭后台服务；补充说明为“未完成的任务会取消，未确认的改动保留为待核对
+记录。”，面向用户不暴露 AgentRun 内部术语。modal 必须可聚焦、标记为 busy modal dialog，并在 reduced-motion 下停用
 indeterminate motion。`shutting_down` 之后 Renderer 不再发起页面投影刷新，也不把取消结算产生的晚到请求
 拒绝显示为错误横幅或 Toast；安全退出 modal 是该阶段唯一的操作状态反馈。
 
