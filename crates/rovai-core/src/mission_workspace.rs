@@ -180,6 +180,17 @@ struct CleanupGitObservation {
     checkout_reference: Option<String>,
 }
 
+fn git_compatible_path(path: &Path) -> &Path {
+    #[cfg(windows)]
+    {
+        dunce::simplified(path)
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
+}
+
 impl MissionGit {
     pub fn new(executable: PathBuf) -> Result<Self> {
         ensure!(
@@ -232,7 +243,7 @@ impl MissionGit {
             .arg("--no-optional-locks")
             .arg("--literal-pathspecs")
             .arg("-C")
-            .arg(dunce::simplified(cwd));
+            .arg(git_compatible_path(cwd));
         for argument in args {
             let path = Path::new(argument);
             if path.is_absolute() {
@@ -240,13 +251,13 @@ impl MissionGit {
                 // `//?/C:/...` and then rejects it while creating `.git`.
                 // Keep canonical paths for Core identity checks, but expose the
                 // equivalent ordinary path only at the Git process boundary.
-                command.arg(dunce::simplified(path));
+                command.arg(git_compatible_path(path));
             } else {
                 command.arg(argument);
             }
         }
         if let Some(index) = index {
-            command.env("GIT_INDEX_FILE", dunce::simplified(index));
+            command.env("GIT_INDEX_FILE", git_compatible_path(index));
         }
         let output = run_bounded_command_with_input(
             &mut command,
@@ -1122,8 +1133,8 @@ impl MissionGit {
                     let registered = fs::read_to_string(entry.path().join("gitdir"))?;
                     let expected_git_file = target.join(".git");
                     ensure!(
-                        dunce::simplified(Path::new(registered.trim_end_matches(['\r', '\n'])))
-                            == dunce::simplified(&expected_git_file),
+                        git_compatible_path(Path::new(registered.trim_end_matches(['\r', '\n'])))
+                            == git_compatible_path(&expected_git_file),
                         "mission.cleanup_registration_mismatch"
                     );
                     stale_registrations.push(entry.path());
