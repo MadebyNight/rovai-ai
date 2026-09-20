@@ -169,7 +169,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal('dataDir' in info, false)
     assert.equal(info.name, (await host.request('app.info')).name)
     assert.deepEqual(await call(second, 'navigation.snapshot'), await host.request('navigation.snapshot'))
-    for (const operation of ['preferences.newConversation.initialize', 'host.web.token', 'host.web.rotate', 'host.web.loginTicket', 'core.shutdown', 'host.editor.resolve', 'host.upload.bind', 'camp.sourceAttachments.addFromPath', 'camp.attachments.desktopOpenTarget', 'filePreview.resolveSource']) {
+    for (const operation of ['preferences.newConversation.initialize', 'host.web.token', 'host.web.rotate', 'host.web.loginTicket', 'core.shutdown', 'host.editor.resolve', 'host.upload.bind', 'camp.composerDraft.get', 'camp.composerDraft.save', 'camp.sourceAttachments.addFromPath', 'camp.attachments.desktopOpenTarget', 'filePreview.resolveSource']) {
       const response = await authorized(first, 'request', { method: 'POST', body: JSON.stringify({ operation, params: {} }) })
       assert.equal(response.status, 400, operation)
     }
@@ -198,7 +198,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       await assert.rejects(host.request(defaultsMethod + 'setDefaults', { defaults, enableOneClick: false }))
       assert.deepEqual(await call(first, defaultsMethod + 'get'), sharedDefaults)
     }
-    const createParams = { commandId: crypto.randomUUID(), name: 'Web owned draft', workspace: null, memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId, collaborationMode: 'peer' }
+    const createParams = { commandId: crypto.randomUUID(), name: 'Web owned message', workspace: null, memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId, collaborationMode: 'peer' }
     const created = await call(first, 'camps.create', createParams)
     assert.equal(created.status, 'applied')
     const campId = created.payload.campId
@@ -220,27 +220,17 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(directoryCamp.status, 'applied')
     await rename(workspace, `${workspace}-moved`)
     assert.deepEqual((await call(first, 'commands.reconcile', { operation: 'camps.create', params: directoryParams })).result, directoryCamp)
-    const save = (session, text, expectedRevision = 0) => call(session, 'camp.composerDraft.save', { campId, expectedRevision, content: { version: 2, segments: [{ kind: 'text', text }] } })
-    const draftA = await save(first, 'tab A')
-    const draftB = await save(second, 'tab B')
-    assert.notEqual(draftA.draftId, draftB.draftId)
-    assert.equal((await host.request('camp.composerDraft.get', { campId })).body, '')
+    // Public Camp editing is local to each Renderer. The Host owns only the
+    // authenticated upload source and the one-shot publication command.
     const forged = await request('login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: administrator, editor: { clientId: first.clientId, proof: second.editorProof } }) })
     assert.equal(forged.status, 401)
     const resumed = await login({ clientId: first.clientId, proof: first.editorProof })
     assert.equal(resumed.clientId, first.clientId)
     assert.equal((await authorized(first, 'capabilities')).status, 401)
     Object.assign(first, resumed)
-    assert.deepEqual(await call(first, 'camp.composerDraft.get', { campId }), draftA)
-    const rejectedQuote = { commandId: crypto.randomUUID(), command: { campId, conversationId: null, expectedRevision: draftA.revision + 1, action: { type: 'remove', quoteId: crypto.randomUUID() } } }
-    const quoteResponse = await authorized(first, 'request', { method: 'POST', body: JSON.stringify({ operation: 'messageQuotes.mutateDraft', params: rejectedQuote }) })
-    assert.ok((await quoteResponse.json()).error, 'A stale quote mutation must reject')
-    const quoteReceipt = await call(first, 'commands.reconcile', { operation: 'messageQuotes.mutateDraft', params: rejectedQuote })
-    assert.deepEqual(quoteReceipt, { state: 'recorded', error: { code: 'draft_changed', message: 'draft_changed' } })
-    assert.deepEqual(await call(first, 'camp.composerDraft.get', { campId }), draftA)
     const input = new TextEncoder().encode('source ref from real HTTP upload')
     const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', input))].map(value => value.toString(16).padStart(2, '0')).join('')
-    const intent = { commandId: crypto.randomUUID(), campId, expectedRevision: draftA.revision, displayName: '浏览器 source.txt', byteSize: input.length, sha256 }
+    const intent = { commandId: crypto.randomUUID(), campId, expectedRevision: 1, displayName: '浏览器 source.txt', byteSize: input.length, sha256 }
     const spools = async () => (await readdir(uploadScratch)).filter(name => name.startsWith('rovai-web-upload-'))
     const postUpload = body => request('uploads', { method: 'POST', headers: { Authorization: `Bearer ${first.token}` }, body })
     for (const scenario of ['digest', 'duplicate-file', 'too-large']) {
@@ -282,9 +272,10 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     await within((async () => { while ((await spools()).length !== 0) await pause(10) })())
     const upload = new FormData(); upload.append('intent', JSON.stringify(intent)); upload.append('file', new Blob([input]), 'web-source.txt')
     const uploadResponse = await request('uploads', { method: 'POST', headers: { Authorization: `Bearer ${first.token}` }, body: upload })
-    assert.equal(uploadResponse.status, 200, await uploadResponse.clone().text())
+    assert.equal(uploadResponse.status, 200, `${await uploadResponse.clone().text()}\n${host.stderr()}`)
     const bound = (await uploadResponse.json()).draft
-    assert.equal(bound.attachments[0].id, intent.commandId)
+    assert.equal(bound.id, intent.commandId)
+    assert.ok(bound.sourcePath)
     assert.equal((await spools()).length, 1, 'a bound source survives request completion')
     const replayUpload = new FormData(); replayUpload.append('file', new Blob([input]), 'replay'); replayUpload.append('intent', JSON.stringify(intent))
     assert.equal((await postUpload(replayUpload)).status, 200, 'file-before-intent remains supported')
@@ -315,66 +306,43 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const privateRemove = await call(first, 'singleChat.composerDraft.removeAttachment', { conversationId, expectedDraftRevision: privateSnapshot.draft.revision, attachmentRefId: privateIntent.commandId })
     assert.equal(privateRemove.draft.attachments.length, 0)
     assert.equal((await call(second, 'singleChat.get', { conversationId })).draft.revision, 0)
-    const locator = { owner: 'composer', campId, attachmentRefId: intent.commandId }
-    const ownFile = await authorized(first, 'attachments', { method: 'POST', body: JSON.stringify(locator) })
-    assert.match(ownFile.headers.get('content-disposition'), /filename\*=UTF-8''/)
-    assert.equal(decodeURIComponent(ownFile.headers.get('content-disposition').split("filename*=UTF-8''")[1]), intent.displayName)
-    assert.equal(await ownFile.text(), new TextDecoder().decode(input))
-    assert.equal((await authorized(second, 'attachments', { method: 'POST', body: JSON.stringify(locator) })).status, 404)
-    const previewResponse = await authorized(first, 'files', { method: 'POST', body: JSON.stringify({ action: 'open', request: { kind: 'attachment', campId, locator } }) })
-    const preview = await previewResponse.json()
-    assert.equal(preview.ok, true, JSON.stringify(preview))
-    const file = preview.value.file
-    assert.match(file.displayPath, /^服务器：/)
-    assert.ok(file.absolutePath)
-    const readFile = session => authorized(session, 'files', { method: 'POST', body: JSON.stringify({ action: 'readText', request: { handleId: file.handleId, expectedGeneration: file.contentGeneration } }) }).then(response => response.json())
-    assert.equal((await readFile(first)).value.text, new TextDecoder().decode(input))
-    assert.equal((await readFile(second)).ok, false)
-    const sentParams = { commandId: crypto.randomUUID(), campId, draftRevision: bound.revision, execution: null }
+    const sentParams = { commandId: crypto.randomUUID(), campId,
+      content: { version: 2, segments: [{ kind: 'text', text: 'Published from Web' }] },
+      sourceAttachments: [bound], quotes: [], replyToCampMessageId: null, execution: null }
     const sent = await call(first, 'camp.messages.send', sentParams)
     assert.notEqual(sent.commandResult.status, 'rejected', JSON.stringify(sent))
     assert.deepEqual((await call(first, 'commands.reconcile', { operation: 'camp.messages.send', params: sentParams })).result.commandResult, sent.commandResult)
-    assert.equal((await call(first, 'camp.composerDraft.get', { campId })).body, '')
-    assert.deepEqual(await call(second, 'camp.composerDraft.get', { campId }), draftB)
-    assert.equal((await readFile(first)).ok, false, 'consumed Composer source no longer authorizes its old handle')
     const messageLocator = { owner: 'message', campId, messageId: sent.commandResult.payload.campMessageId, attachmentRefId: intent.commandId }
     const historyFile = await authorized(first, 'attachments', { method: 'POST', body: JSON.stringify(messageLocator) })
     assert.equal(historyFile.status, 200)
     assert.equal(await historyFile.text(), new TextDecoder().decode(input))
-    // Repair rows keep this transport acceptance model-free. Core owns the
-    // real edit lease, upload transaction and replay on both queue variants.
-    for (const isPrivate of [false, true]) {
-      const pendingInputId = crypto.randomUUID()
-      const seed = new DatabaseSync(join(dataDir, 'rovai.sqlite'))
-      seed.exec('PRAGMA busy_timeout=5000')
-      const now = new Date().toISOString()
-      try {
-        if (isPrivate) seed.prepare(`insert into single_chat_pending_input(id,conversation_id,enqueue_sequence,state,body,user_id,created_at,updated_at)
-          values(?,?,1,'needs_repair','Pending private fixture','local_user',?,?)`).run(pendingInputId, conversationId, now, now)
-        else seed.prepare(`insert into pending_camp_input(id,camp_id,enqueue_sequence,state,structured_content_json,execution_json,user_id,created_at,updated_at)
-          values(?,?,1,'needs_repair',?,'null','local_user',?,?)`).run(pendingInputId, campId, JSON.stringify({ version: 2, segments: [{ kind: 'text', text: 'Pending Camp fixture' }] }), now, now)
-      } finally { seed.close() }
-      const operation = isPrivate ? 'singleChat.pendingInputs.edit' : 'camp.pendingInputs.edit'
-      const command = { campId, ...(isPrivate ? { conversationId } : {}), pendingInputId, expectedRevision: 1, editToken: null, action: { type: 'begin' } }
-      const begun = await call(first, operation, { commandId: crypto.randomUUID(), command })
-      const result = begun
-      assert.equal(result.status, 'applied', JSON.stringify(begun))
-      const pendingIntent = { ...intent, commandId: crypto.randomUUID(), expectedRevision: 1, target: { kind: isPrivate ? 'single_chat_pending' : 'camp_pending', ...(isPrivate ? { conversationId } : {}), pendingInputId, editToken: result.payload.editToken } }
-      const pendingForm = new FormData(); pendingForm.append('intent', JSON.stringify(pendingIntent)); pendingForm.append('file', new Blob([input]), 'pending.txt')
-      const postPending = session => request('uploads', { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, body: pendingForm })
-      const boundPending = await postPending(first)
-      assert.equal(boundPending.status, 200, await boundPending.clone().text())
-      const pendingSnapshot = (await boundPending.json()).draft
-      const edit = isPrivate ? pendingSnapshot.pendingInputs.editSession : pendingSnapshot.editSession
-      assert.equal(edit.workingAttachments.length, 1)
-      assert.equal(edit.workingAttachments[0].id, pendingIntent.commandId)
-      assert.notEqual((await postPending(second)).status, 200, 'a leaked edit token does not confer another editor’s upload ownership')
-      const replayed = await postPending(first)
-      assert.equal(replayed.status, 200)
-      const replaySnapshot = (await replayed.json()).draft
-      assert.equal((isPrivate ? replaySnapshot.pendingInputs.editSession : replaySnapshot.editSession).workingAttachments.length, 1, 'replaying an unknown upload outcome must not duplicate the attachment')
-      await call(first, operation, { commandId: crypto.randomUUID(), command: { ...command, editToken: edit.editToken, action: { type: 'cancel' } } })
-    }
+    // Single Chat retains its Core-owned private pending edit lease.
+    const pendingInputId = crypto.randomUUID()
+    const seed = new DatabaseSync(join(dataDir, 'rovai.sqlite'))
+    seed.exec('PRAGMA busy_timeout=5000')
+    const now = new Date().toISOString()
+    try {
+      seed.prepare(`insert into single_chat_pending_input(id,conversation_id,enqueue_sequence,state,body,user_id,created_at,updated_at)
+        values(?,?,1,'needs_repair','Pending private fixture','local_user',?,?)`).run(pendingInputId, conversationId, now, now)
+    } finally { seed.close() }
+    const operation = 'singleChat.pendingInputs.edit'
+    const command = { campId, conversationId, pendingInputId, expectedRevision: 1, editToken: null, action: { type: 'begin' } }
+    const begun = await call(first, operation, { commandId: crypto.randomUUID(), command })
+    assert.equal(begun.status, 'applied', JSON.stringify(begun))
+    const pendingIntent = { ...intent, commandId: crypto.randomUUID(), expectedRevision: 1, target: { kind: 'single_chat_pending', conversationId, pendingInputId, editToken: begun.payload.editToken } }
+    const pendingForm = new FormData(); pendingForm.append('intent', JSON.stringify(pendingIntent)); pendingForm.append('file', new Blob([input]), 'pending.txt')
+    const postPending = session => request('uploads', { method: 'POST', headers: { Authorization: `Bearer ${session.token}` }, body: pendingForm })
+    const boundPending = await postPending(first)
+    assert.equal(boundPending.status, 200, await boundPending.clone().text())
+    const pendingSnapshot = (await boundPending.json()).draft
+    const edit = pendingSnapshot.pendingInputs.editSession
+    assert.equal(edit.workingAttachments.length, 1)
+    assert.equal(edit.workingAttachments[0].id, pendingIntent.commandId)
+    assert.notEqual((await postPending(second)).status, 200, 'a leaked edit token does not confer another editor’s upload ownership')
+    const replayed = await postPending(first)
+    assert.equal(replayed.status, 200)
+    assert.equal((await replayed.json()).draft.pendingInputs.editSession.workingAttachments.length, 1, 'replaying an unknown upload outcome must not duplicate the attachment')
+    await call(first, operation, { commandId: crypto.randomUUID(), command: { ...command, editToken: edit.editToken, action: { type: 'cancel' } } })
     const html = await fetch(origin, { redirect: 'error' })
     assert.equal(html.status, 200)
     assert.match(html.headers.get('content-security-policy'), /frame-ancestors 'none'/)
@@ -544,7 +512,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(changedPreference.status, 'applied')
     assert.deepEqual((await call(second, 'notifications.preference.get')).headsUpEnabled, !preference.headsUpEnabled)
     assert.deepEqual((await call(first, 'commands.reconcile', { operation: 'notifications.preference.update', params: preferenceParams })).result, changedPreference)
-    assert.equal((await call(first, 'notifications.inbox', { filter: 'unread', limit: 1 })).schemaVersion, 7)
+    assert.equal((await call(first, 'notifications.inbox', { filter: 'unread', limit: 1 })).schemaVersion, 8)
     const exported = await call(first, 'diagnostics.export')
     assert.equal(exported.format, 'rovai-diagnostics-v5')
     assert.equal(JSON.stringify(exported).includes(administrator), false)
@@ -638,8 +606,8 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
 })
 
 // This process owner proves that both Host entrances drive persisted schedules
-// without a Renderer tick. The unset member prevents any real model invocation;
-// ordinary Automation domain tests own execution, overlap and recovery matrices.
+// without a Renderer tick. The ordinary Delivery scheduler may leave the work
+// waiting or claim it into an AgentRun; domain tests own execution and recovery.
 test('Host clock consumes scheduled occurrences with Web stopped and in standalone mode', { timeout: 180_000 }, async () => {
   const fixture = await realpath(await mkdtemp(join(tmpdir(), 'rovai-host-clock-')))
   const dataDir = join(fixture, 'data')
@@ -692,13 +660,30 @@ test('Host clock consumes scheduled occurrences with Web stopped and in standalo
     await desktop.request('host.web.stop')
     await assert.rejects(fetch(started.origin, { signal: AbortSignal.timeout(1000) }))
     database = new DatabaseSync(join(dataDir, 'rovai.sqlite'), { readOnly: true })
-    const rows = id => database.prepare('SELECT status, reason, camp_id FROM automation_run WHERE automation_id = ?').all(id)
+    const rows = id => database.prepare(`
+      SELECT occurrence.status, occurrence.reason, occurrence.camp_id,
+             occurrence.trigger_message_id, occurrence.trigger_delivery_id,
+             delivery.status AS delivery_status,
+             delivery.claimed_agent_run_id
+      FROM automation_run AS occurrence
+      LEFT JOIN camp_message_delivery AS delivery ON delivery.id = occurrence.trigger_delivery_id
+      WHERE occurrence.automation_id = ?
+    `).all(id)
     const waitForOccurrence = async (id, due) => {
       while (rows(id).length === 0 && Date.now() < due + 15_000) await pause(200)
       const runs = rows(id)
       assert.equal(runs.length, 1)
       assert.notEqual(runs[0].reason, 'missed', 'a live Host must claim the due occurrence')
-      assert.equal(runs[0].camp_id, null, 'the unconfigured member must not create a real execution')
+      assert.equal(runs[0].status, 'running')
+      assert.ok(runs[0].camp_id, 'an admitted occurrence owns a Camp')
+      assert.ok(runs[0].trigger_message_id, 'an admitted occurrence owns its system message')
+      assert.ok(runs[0].trigger_delivery_id, 'an admitted occurrence owns its Delivery')
+      assert.ok(['waiting', 'claimed'].includes(runs[0].delivery_status))
+      if (runs[0].delivery_status === 'claimed') {
+        assert.ok(runs[0].claimed_agent_run_id, 'a claimed Delivery owns an AgentRun')
+      } else {
+        assert.equal(runs[0].claimed_agent_run_id, null, 'a waiting Delivery is not owned by an AgentRun')
+      }
     }
     await waitForOccurrence(desktopId, firstAt)
     const reply = await desktop.request('core.shutdown', { protocolVersion: 3, deadlineMs: 10_000 })
