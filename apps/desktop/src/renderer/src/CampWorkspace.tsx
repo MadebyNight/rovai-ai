@@ -5026,7 +5026,20 @@ export function CampWorkspace({
                               </div>
                             </div>
                           )
-                        : <p>{displayBody}</p>}
+                        : (
+                            <MessageSurface copied={copied} hasDelivery={false} onCopy={handleCopy}>
+                              <div className="system-message-card">
+                                <div className="system-message-meta">
+                                  <NavigationIcon name="cpu" />
+                                  <span>系统</span>
+                                  <time dateTime={campMessage.createdAt} title={`#${campMessage.sequence}`}>
+                                    {messageClockTime(campMessage.createdAt)}
+                                  </time>
+                                </div>
+                                <p>{displayBody}</p>
+                              </div>
+                            </MessageSurface>
+                          )}
                     </article>
                   )
                   if (trailingFileChangeItems.length > 0) {
