@@ -130,7 +130,9 @@ import {
   executionPlacementSaveFailureMessage,
   executionDisclosureOpenAfterActivity,
   executionDisclosureIsLiveOpen,
+  executionDeliveryQueueBatches,
   executionQueueBatches,
+  executionRunInputMessageIds,
   firstSubmittedAgentRun,
   formatStopElapsed,
   groupExecutionEventsByRunId,
@@ -3829,6 +3831,61 @@ describe('task event projections', () => {
       createdAt: '2026-07-28T06:00:00Z'
     }
     const submittedRuns = [submittedSecondRun, submittedFirstRun]
+    const waitingDelivery: MessageDeliveryView = {
+      id: 'delivery-waiting-1',
+      messageId: 'message-waiting-1',
+      campTurnId: null,
+      taskId: null,
+      recipientAgentId: 'agent_2',
+      recipientMembershipVersionAtAdmission: 1,
+      status: 'waiting',
+      dispatchPhase: 'never_attempted',
+      waitCondition: null,
+      dispatchAttemptCount: 0,
+      retryGeneration: 0,
+      contextManifestId: null,
+      targetAgentRunId: null,
+      manualInterventionRequired: false,
+      failureCode: null,
+      version: 1,
+      createdAt: '2026-07-28T06:02:00Z',
+      updatedAt: '2026-07-28T06:02:00Z',
+      endedAt: null,
+      deliveryKind: 'public_a2a',
+      dispatchDisposition: 'dispatch',
+      completionRole: null,
+      gatherId: null,
+      gatherDispatchDeliveryId: null,
+      recipientCanonicalPosition: 0,
+      edgeKind: 'forward',
+      targetParentAgentRunId: null,
+      returnToAgentRunId: null
+    }
+    const secondWaitingDelivery: MessageDeliveryView = {
+      ...waitingDelivery,
+      id: 'delivery-waiting-2',
+      messageId: 'message-waiting-2',
+      createdAt: '2026-07-28T06:03:00Z',
+      updatedAt: '2026-07-28T06:03:00Z'
+    }
+    expect(agentExecutionProcesses([], [waitingDelivery])).toMatchObject([{
+      agentId: 'agent_2',
+      runs: [],
+      waitingDeliveries: [{ id: 'delivery-waiting-1' }]
+    }])
+    expect(executionDeliveryQueueBatches([secondWaitingDelivery, waitingDelivery])).toMatchObject([{
+      agentId: 'agent_2',
+      messageIds: ['message-waiting-1', 'message-waiting-2']
+    }])
+    expect(executionDeliveryQueueBatches([{
+      ...waitingDelivery,
+      dispatchDisposition: 'gather_captured'
+    }])).toEqual([])
+    expect(executionRunInputMessageIds({
+      ...submittedSecondRun,
+      inputMessageIds: ['message-waiting-1', 'message-waiting-2'],
+      anchorMessageId: 'message-waiting-2'
+    }, snapshot.turns)).toEqual(['message-waiting-1', 'message-waiting-2'])
     expect(firstSubmittedAgentRun({
       deliveryIds: ['delivery-1', 'delivery-2'],
       agentRunIds: ['run-submitted-first', 'run-submitted-second'],
@@ -3929,6 +3986,55 @@ describe('task event projections', () => {
       },
       liveRuntimeEvents: []
     }))
+    const secondInputMessage: CampMessageView = {
+      ...snapshot.messages[0],
+      id: 'message-waiting-1',
+      sequence: 2,
+      timelineGlobalSequence: 2,
+      body: '补充第一条排队输入。',
+      content: [{ kind: 'text', text: '补充第一条排队输入。' }],
+      campTurnId: null,
+      createdAt: '2026-07-28T06:02:00Z'
+    }
+    const thirdInputMessage: CampMessageView = {
+      ...secondInputMessage,
+      id: 'message-waiting-2',
+      sequence: 3,
+      timelineGlobalSequence: 3,
+      body: '补充第二条排队输入。',
+      content: [{ kind: 'text', text: '补充第二条排队输入。' }],
+      createdAt: '2026-07-28T06:03:00Z'
+    }
+    const waitingQueueMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      snapshot: {
+        ...snapshot,
+        messages: [...snapshot.messages, secondInputMessage, thirdInputMessage],
+        messageDeliveries: [waitingDelivery, secondWaitingDelivery]
+      }
+    }))
+    const waitingOverHistoryMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      snapshot: {
+        ...snapshot,
+        messages: [...snapshot.messages, secondInputMessage, thirdInputMessage],
+        messageDeliveries: [waitingDelivery, secondWaitingDelivery],
+        agentRuns: [historicalRun],
+        executionEvidence: []
+      }
+    }))
+    const batchedRunMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
+      ...workspaceProps,
+      snapshot: {
+        ...snapshot,
+        messages: [...snapshot.messages, secondInputMessage],
+        agentRuns: [{
+          ...snapshot.agentRuns[0],
+          inputMessageIds: ['message-user', 'message-waiting-1'],
+          anchorMessageId: 'message-waiting-1'
+        }]
+      }
+    }))
     const failedReceiptMarkup = renderToStaticMarkup(createElement(CampWorkspace, {
       ...workspaceProps,
       snapshot: {
@@ -3966,6 +4072,14 @@ describe('task event projections', () => {
     expect(markup).toMatch(/class="message-action-line"><div class="user-message-receipt-row">[\s\S]*class="message-actions"/)
     expect(markup).toContain('处理中 · 1')
     expect(queuedMarkup).toMatch(/class="message-action-line"><div class="user-message-receipt-row">[\s\S]*待处理 · 1[\s\S]*class="message-actions"/)
+    expect(waitingQueueMarkup).toContain('data-delivery-queue-agent-id="agent_2"')
+    expect(waitingQueueMarkup).toContain('aria-label="查看排队消息的 2 条输入"')
+    expect(waitingQueueMarkup).toMatch(
+      /class="execution-run-toggle"[\s\S]*?<\/button><button class="execution-batch-count"/
+    )
+    expect(waitingOverHistoryMarkup).toContain('aria-label="打开沐瓦的执行过程，排队中"')
+    expect(batchedRunMarkup).toContain('aria-label="查看本次执行的 2 条输入"')
+    expect(batchedRunMarkup).toContain('class="execution-batch-count"')
     expect(failedReceiptMarkup).not.toContain('未完成 · 1')
     expect(failedHistoryMarkup).not.toContain('项失败待处理')
     expect(markup).toContain('class="message-actions" role="group" aria-label="消息操作"')

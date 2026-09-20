@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
+const workspaceSource = readFileSync(new URL('./CampWorkspace.tsx', import.meta.url), 'utf8')
 
 function styleBlock(selector: string): string | null {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -100,11 +101,24 @@ describe('execution console layout', () => {
   it('matches the compact Run card controls from the interaction prototype', () => {
     expect(styleBlock('.execution-run-operations button')).toMatch(/width:\s*26px/)
     expect(styleBlock('.execution-run-operations button')).toMatch(/height:\s*25px/)
+    expect(styleBlock('.execution-run-operations')).toMatch(/inset:\s*0 9px 0 0/)
     expect(styleBlock('.execution-run-operations button.is-danger')).toMatch(
       /background:\s*var\(--danger-soft\)/
     )
+    expect(styleBlock('.execution-batch-count')).toMatch(/height:\s*26px/)
+    expect(styleBlock('.execution-batch-count')).toMatch(/cursor:\s*pointer/)
     expect(styleBlock('.execution-process-card:is(:hover, :focus-within) .execution-run-metric'))
       .toMatch(/visibility:\s*hidden/)
+  })
+
+  it('centers the status rail on the 40px card header and keeps overview avatars square', () => {
+    expect(styleBlock('.execution-process-timeline::before')).toMatch(/top:\s*21px/)
+    expect(styleBlock('.execution-process-timeline::before')).toMatch(/bottom:\s*23px/)
+    expect(styleBlock('.execution-process-node')).toMatch(/margin-top:\s*14px/)
+    expect(styleBlock('.execution-run-toggle .member-avatar')).toMatch(/width:\s*20px/)
+    expect(styleBlock('.execution-run-toggle .member-avatar')).toMatch(/height:\s*20px/)
+    expect(workspaceSource.match(/overview && <MemberAvatar[\s\S]{0,180}?size="execution"/g))
+      .toHaveLength(3)
   })
 
   it('keeps the user receipt and message actions on one footer row', () => {

@@ -11,7 +11,8 @@ last_updated: 2026-09-20
 
 - 已激活 Camp 的输入内容不进入 Core Draft/Pending；Desktop 按 Camp 保存本机快照，切换、刷新、重建窗口和普通重启后恢复。
   发送失败或结果未知保留当前内容，确认发送成功才清空已发送快照。
-- 等待阶段展示“等待 · N 条”Delivery 预览，不渲染尚不存在的 queued Run 卡。Scheduler claim 后才出现真实 Run。
+- 等待阶段在执行台展示由 Delivery 支撑的“排队消息”卡，但不伪装尚不存在的 AgentRun，也不提供 Run 停止入口。
+  Scheduler claim 后才出现真实 Run，并由真实 Run 接管后续状态与停止语义。
 - 执行区“停止”只 CAS 当前精确 Run。没有公屏通用停止、队列暂停/恢复、Camp 全部停止、业务重试或手工放行入口；终态后队列按正常规则继续。
 - accepted/outcome-unknown 对用户显示普通红色失败，不显示“结果未知”产品状态；诊断和 evidence 仍保留内部真实分类。旧执行尚未隔离时，后继消息继续显示等待，不制造必败 Run。
 - 本地用户消息仅在首次目标 claim 前显示撤回；成功后时间线可显示“你撤回了一条消息”，但 Agent 读取、搜索、线程和分页不包含正文或占位。
@@ -494,8 +495,19 @@ Drawer/结果阅读位置与 DOM identity，不得条件卸载后重建。底部
 与总览均把 non-terminal Run 留在当前区，terminal Run 按新到旧进入默认收起的“执行历史”；历史标题只显示
 历史总数，不增加失败待处理汇总。收起卡片只显示触发消息摘要、状态或耗时，动作在 hover/focus 后出现；只有总览卡片重复队员头像。
 展开后直接显示过程正文，不重复元数据。队员 Header 保留身份、Runtime、模型与 Fast，移除 Run 总数和冗余统计。
+尚未被 Scheduler claim、没有 `targetAgentRunId` 的 waiting public Delivery 按接收队员合为一个 Delivery-backed
+“排队消息”卡，即使该队员尚无 AgentRun 也进入执行台当前区和队员入口。该卡只允许展开、查看输入和定位原消息，
+不显示停止；Delivery 被 claim 或离开 waiting 后，由真实 Run 或终态投递事实接管。若同一队员同时存在终态历史和
+waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal Run 仍优先于 Delivery 预览。
+
 同一队员的 queued Run 合为一个排队批次，按不同来源消息显示层数；展开后逐条显示用户或 Agent 作者、两行摘要与
-“定位原消息”。单卡停止只作用 exact Run，批次停止只作用该批列出的 queued Run；执行台不提供消息撤回。
+“定位原消息”。任一 Run、queued Run 批次或 Delivery-backed 排队卡含多条不同来源消息时，卡头显示独立于展开按钮的
+可点击层数图标；点击打开同一输入清单，`Escape` 关闭并把焦点还给层数按钮。计数使用冻结输入 ID，不因消息正文尚未载入
+而退化为单条。单卡停止只作用 exact Run，批次停止只作用该批列出的 queued Run；执行台不提供消息撤回。
+
+紧凑卡头保持 40px 最小高度；总览中的队员头像固定为 20×20px，不随 flex 收缩拉伸。左侧状态节点与卡头首行垂直居中，
+竖向时间线从首节点中心延伸到末节点中心；展开与停止操作距卡片右边保留 9px，不能被绝对定位层吞掉。字段与验收边界见
+[Run Process Detail Surface v36](../../contracts/run-process-detail-surface-v36.md)。
 
 打开过程入口时，先定位最新 running，其次最新 non-terminal，最后最新 terminal Run。用户显式
 发送成功且未在查看 non-terminal Run 时，按 Core 有序回执打开首个 Run 的精确 stage，但不夺走

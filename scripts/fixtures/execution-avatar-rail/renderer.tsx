@@ -50,6 +50,8 @@ function snapshotFor(count: number, revision: number, recipientCount = 0): CampS
     const status = (['running', 'waiting', 'running', 'succeeded', 'failed', 'cancelled'] as const)[index < 3 ? index : 3 + (index % 3)]
     return {
       id: `run-${agent.agentId}`, campTurnId: `turn-${agent.agentId}`, conversationId: `conversation-${agent.agentId}`,
+      inputMessageIds: index === 0 ? ['public-message-0', 'public-message-1', 'public-message-2'] : ['message-1'],
+      anchorMessageId: index === 0 ? 'public-message-2' : 'message-1',
       agentId: agent.agentId, taskId: index === count - 1 ? 'task-rail' : null,
       responsibilityKey: `direct:${agent.agentId}`, responsibilityGeneration: 0, purpose: '执行台界面与交互检查',
       completionRole: 'required', status: revision % 2 && index === 0 ? 'succeeded' : status,
@@ -79,7 +81,13 @@ function snapshotFor(count: number, revision: number, recipientCount = 0): CampS
     messages: [{ id: 'message-1', sequence: 1, timelineGlobalSequence: 1, authorType: 'user', authorId: 'local-user',
       sourceAgentRunId: null, body: fixtureMessage,
       content: [{ kind: 'text', text: fixtureMessage }], addressMode: 'default', attachments: [], addressedAgentIds: [], replyToCampMessageId: null,
-      campTurnId: null, presentation: null, createdAt: now }],
+      campTurnId: null, presentation: null, createdAt: now }, ...[0, 1, 2].map((index) => ({
+      id: `public-message-${index}`, sequence: index + 2, timelineGlobalSequence: index + 2,
+      authorType: 'user' as const, authorId: 'local-user', sourceAgentRunId: null,
+      body: `第 ${index + 1} 条合批输入`, content: [{ kind: 'text' as const, text: `第 ${index + 1} 条合批输入` }],
+      addressMode: 'explicit' as const, attachments: [], addressedAgentIds: ['agent-1'],
+      replyToCampMessageId: null, campTurnId: null, presentation: null, createdAt: now
+    }))],
     messageDeliveries: deliveries, turns: [], agentRuns: runs,
     executionEvidence: runs.flatMap<CampSnapshot['executionEvidence'][number]>(run => [{ id: `evidence-${run.agentId}`, agentRunId: run.id, executionEpoch: 1,
       sequence: 1, eventType: 'agent.text.delta', kind: 'narration', phase: 'updated',

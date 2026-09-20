@@ -311,6 +311,79 @@ app.whenReady().then(async () => {
       return
     }
 
+    await click('.run-pulse-avatar-rail [data-agent-id="agent-1"]')
+    const runInputSelector = '[data-agent-run-id="run-agent-1"] .execution-batch-count'
+    const runInputTrigger = await run(`(() => {
+      const button = document.querySelector(${JSON.stringify(runInputSelector)})
+      return { label: button?.getAttribute('aria-label'), nested: !!button?.closest('.execution-run-toggle') }
+    })()`)
+    assert.equal(runInputTrigger.label, '查看本次执行的 3 条输入')
+    assert.equal(runInputTrigger.nested, false, 'The Run input count is an independent button')
+    await run(`document.querySelector(${JSON.stringify(runInputSelector)}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`)
+    await settle()
+    await click(runInputSelector)
+    let inputPopover = await run(`(() => {
+      const popup = document.querySelector('.execution-input-popover')
+      return { items: popup?.querySelectorAll('.execution-input-list > li').length ?? 0,
+        text: popup?.textContent ?? '', focused: !!popup?.contains(document.activeElement) }
+    })()`)
+    assert.equal(inputPopover.items, 3)
+    assert.ok(inputPopover.text.includes('第 1 条合批输入') && inputPopover.text.includes('第 3 条合批输入'))
+    assert.equal(inputPopover.focused, true, 'Keyboard focus enters the input popover')
+    await capture('run-input-popover-day')
+    await key('Escape')
+    assert.equal(await run(`document.activeElement === document.querySelector(${JSON.stringify(runInputSelector)})`), true,
+      'Closing the Run input popover returns focus to its count button')
+
+    await click('.run-pulse-avatar-rail [data-agent-id="__execution_overview__"]')
+    const cardGeometry = await run(`(() => {
+      const stage = document.querySelector('[data-agent-run-id="run-agent-1"]')
+      const node = stage.querySelector('.execution-process-node').getBoundingClientRect()
+      const header = stage.querySelector('.execution-run-card-header').getBoundingClientRect()
+      const card = stage.querySelector('.execution-process-card').getBoundingClientRect()
+      const lastOperation = stage.querySelector('.execution-run-operations button:last-child').getBoundingClientRect()
+      const avatars = [...document.querySelectorAll('.execution-run-toggle .member-avatar')]
+        .filter(avatar => avatar.checkVisibility())
+        .map(avatar => avatar.getBoundingClientRect().toJSON())
+      return { centerDelta: Math.abs(node.y + node.height / 2 - (header.y + header.height / 2)),
+        rightInset: card.right - lastOperation.right, avatars }
+    })()`)
+    assert.ok(cardGeometry.centerDelta <= 1, `Run status node is not centered: ${JSON.stringify(cardGeometry)}`)
+    assert.ok(cardGeometry.rightInset >= 9, `Run actions need a 9px right inset: ${JSON.stringify(cardGeometry)}`)
+    assert.ok(cardGeometry.avatars.length > 0
+      && cardGeometry.avatars.every(rect => rect.width === 20 && rect.height === 20),
+    `Overview avatars must stay square: ${JSON.stringify(cardGeometry)}`)
+    await capture('execution-overview-geometry-day')
+
+    await click('[data-recipient-count="1"]')
+    await click('.run-pulse-avatar-rail [data-agent-id="agent-2"]')
+    const deliveryInputSelector = '[data-delivery-queue-agent-id="agent-2"] .execution-batch-count'
+    const deliveryQueue = await run(`(() => {
+      const card = document.querySelector('[data-delivery-queue-agent-id="agent-2"]')
+      const button = card?.querySelector('.execution-batch-count')
+      return { present: !!card, label: button?.getAttribute('aria-label'),
+        nested: !!button?.closest('.execution-run-toggle'), stopButtons: card?.querySelectorAll('.is-danger').length ?? 0 }
+    })()`)
+    assert.equal(deliveryQueue.present, true, 'Waiting Deliveries appear in the execution console')
+    assert.equal(deliveryQueue.label, '查看排队消息的 2 条输入')
+    assert.equal(deliveryQueue.nested, false, 'The waiting-message count is an independent button')
+    assert.equal(deliveryQueue.stopButtons, 0, 'A waiting Delivery is not presented as a stoppable AgentRun')
+    await run(`document.querySelector(${JSON.stringify(deliveryInputSelector)}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`)
+    await settle()
+    await click(deliveryInputSelector)
+    inputPopover = await run(`(() => {
+      const popup = document.querySelector('.execution-input-popover')
+      return { items: popup?.querySelectorAll('.execution-input-list > li').length ?? 0,
+        text: popup?.textContent ?? '', focused: !!popup?.contains(document.activeElement) }
+    })()`)
+    assert.equal(inputPopover.items, 2)
+    assert.ok(inputPopover.text.includes('第 2 条合批输入') && inputPopover.text.includes('第 3 条合批输入'))
+    assert.equal(inputPopover.focused, true)
+    await capture('delivery-queue-popover-day')
+    await key('Escape')
+    await click('[data-recipient-count="0"]')
+    await click('.run-pulse-avatar-rail [data-agent-id="agent-1"]')
+
     await run("document.querySelector('.tool-group-summary').scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})")
     await settle()
     await click('.tool-group-summary')
@@ -464,6 +537,11 @@ app.whenReady().then(async () => {
     assert.equal(await run("document.querySelector('.run-pulse-bottom').getBoundingClientRect().height"), 55,
       'The hidden horizontal scrollbar does not make the restored bottom rail taller')
     assert.equal(await run("document.querySelector('.run-pulse-avatar-rail') === null"), true)
+    assert.equal(await run(`(() => {
+      const placement = document.querySelector('.run-pulse-bottom .execution-placement-button').getBoundingClientRect()
+      const collapse = document.querySelector('.run-pulse-bottom .execution-bottom-collapse-button').getBoundingClientRect()
+      return placement.width >= 30 && placement.right <= collapse.left
+    })()`), true, 'Bottom placement and collapse controls keep separate hit targets')
 
     // Collaboration recipients are a separate identity row, not the process-selection rail.
     const recipients = () => run(`(() => {
@@ -564,6 +642,7 @@ app.whenReady().then(async () => {
       'persistent outside pointer/focus', 'explicit close and Escape focus return',
       'selection and node retention', 'status refresh/reopen', 'Task navigation/repeated target', '8-member no overflow',
       'long prose containment', 'single-line command and full expanded output',
+      'waiting Delivery queue cards', 'independent multi-input popovers', 'Run card geometry and square overview avatars',
       'Day/Night', '1040/1440/2560/200% layout', 'reduced motion', 'forced colors', 'bottom dock unchanged',
       '0/1/2/16/48 delivery recipients', 'source attribution and deduplication', 'single-line complete avatars',
       'overflow list keyboard scrolling and focus return', 'nested Escape', 'recipient resize and placement preservation'] }))
