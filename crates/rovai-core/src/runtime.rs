@@ -24,6 +24,7 @@ use crate::{
     db::Database,
     delivery_queue::settle_run_deliveries,
     execution_budget::{CampTurnExecutionBudgetExhaustionReason, camp_turn_execution_budget_now},
+    execution_evidence::AgentRunExecutionEvidence,
     git::GitObservation,
     message_delivery::{
         AgentRunDeliverySettlement, CAMP_MESSAGE_SEND_MAX_BODY_BYTES, DeliveryDispatchTrigger,
@@ -5804,33 +5805,57 @@ pub(crate) fn cancel_automation_camp_turn_in_tx(
     settle_abortive_camp_turn_in_tx(transaction, camp_turn_id, reason_code, &actor, now)
 }
 
-/// A bounded, Camp-scoped repair of the retired two-phase cancellation protocol. The empty
-/// path performs no writes and never reads the event log or unrelated historical Camps.
-pub(crate) fn settle_pending_camp_cancellations(
-    database: &mut Database,
-    camp_id: &str,
-) -> Result<()> {
-    let pending: bool = database.connection().query_row(
-        r#"SELECT EXISTS(SELECT 1 FROM agent_run AS run
+/// Repairs only the persisted intermediate state left by the retired two-phase cancellation
+/// protocol. Startup invokes this before generic execution recovery can admit old work again.
+pub fn recover_legacy_pending_cancellations(database: &mut Database) -> Result<()> {
+    let camp_ids = {
+        let mut statement = database.connection().prepare(
+            r#"SELECT DISTINCT turn.camp_id FROM agent_run AS run
             JOIN camp_turn AS turn ON turn.id = run.camp_turn_id
-            WHERE turn.camp_id = ?1
-              AND (run.cancel_requested_at IS NOT NULL OR turn.cancel_requested_at IS NOT NULL)
+            WHERE (run.cancel_requested_at IS NOT NULL OR turn.cancel_requested_at IS NOT NULL)
               AND (run.status IN ('queued', 'running', 'waiting') OR turn.status IN ('running', 'waiting')
                 OR EXISTS(SELECT 1 FROM message_delivery WHERE target_agent_run_id = run.id AND status = 'running')
-                OR EXISTS(SELECT 1 FROM channel_turn_request WHERE camp_turn_id = turn.id AND status = 'admitted')))"#,
-        [camp_id], |row| row.get(0),
-    )?;
-    if pending {
-        let transaction = database.connection_mut().transaction()?;
-        let settled_run_ids = settle_pending_camp_cancellations_in_tx(
-            &transaction,
-            camp_id,
-            &chrono::Utc::now().to_rfc3339(),
+                OR EXISTS(SELECT 1 FROM channel_turn_request WHERE camp_turn_id = turn.id AND status = 'admitted'))
+            ORDER BY turn.camp_id"#,
         )?;
-        transaction.commit()?;
-        pump_targets_after_runs_terminal(database, &settled_run_ids)?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if camp_ids.is_empty() {
+        return Ok(());
     }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let transaction = database.connection_mut().transaction()?;
+    let mut settled_run_ids = Vec::new();
+    for camp_id in camp_ids {
+        settled_run_ids.extend(settle_pending_camp_cancellations_in_tx(
+            &transaction,
+            &camp_id,
+            &now,
+        )?);
+    }
+    transaction.commit()?;
+    settled_run_ids.sort();
+    settled_run_ids.dedup();
+    pump_targets_after_runs_terminal(database, &settled_run_ids)?;
     Ok(())
+}
+
+pub struct ExecutionTextMaintenance {
+    pub attempted: bool,
+    pub finalized: Vec<AgentRunExecutionEvidence>,
+    pub error: Option<anyhow::Error>,
+}
+
+pub fn maintain_execution_text(database: &mut Database) -> ExecutionTextMaintenance {
+    let outcome = crate::execution_text::maintain_settled(database);
+    ExecutionTextMaintenance {
+        attempted: outcome.attempted,
+        finalized: outcome.finalized,
+        error: outcome.error,
+    }
 }
 
 pub(crate) fn settle_pending_camp_cancellations_in_tx(
@@ -6794,7 +6819,7 @@ mod tests {
         },
         collaboration::{
             AddCampMemberCommand, CollaborationService, CreateCampCommand, ExecutionRequest,
-            TestCampMessageAddress, TestCampMessageCommand,
+            ProjectBindingKind, TestCampMessageAddress, TestCampMessageCommand,
         },
         command::CommandResultStatus,
         planned_shutdown::{
@@ -6839,6 +6864,129 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn startup_cancellation_recovery_settles_all_legacy_candidates_once() {
+        let mut database = crate::test_support::seeded_runtime_database_owned();
+        let service = CollaborationService::default();
+        let mut camps = Vec::new();
+        for index in 0..2 {
+            let mut create = CreateCampCommand::for_test_with_members(
+                database
+                    .directory()
+                    .join(format!("startup-recovery-{index}"))
+                    .to_string_lossy()
+                    .into_owned(),
+                &["agent_1", "agent_2"],
+                "agent_1",
+            );
+            create.project_binding_kind = ProjectBindingKind::Directory;
+            let created = service
+                .create_camp(
+                    &mut database,
+                    &user_envelope(&format!("recovery-create-{index}"), None, create),
+                )
+                .unwrap();
+            let camp_id = created.result.payload["campId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let sent = service
+                .send_test_camp_message(
+                    &mut database,
+                    &user_envelope(
+                        &format!("recovery-send-{index}"),
+                        Some(&camp_id),
+                        TestCampMessageCommand {
+                            camp_id: camp_id.clone(),
+                            draft_revision: None,
+                            body: "recover persisted cancellation".into(),
+                            prepared_attachment_ids: Vec::new(),
+                            address: TestCampMessageAddress::Explicit {
+                                agent_ids: vec!["agent_1".into(), "agent_2".into()],
+                            },
+                            reply_to_camp_message_id: None,
+                            execution: Some(ExecutionRequest {
+                                task_id: None,
+                                purpose: "startup cancellation recovery".into(),
+                                completion_role: "required".into(),
+                                budget: None,
+                            }),
+                        },
+                    ),
+                )
+                .unwrap();
+            let run_ids = sent.result.payload["agentRunIds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| id.as_str().unwrap().to_string())
+                .collect::<Vec<_>>();
+            let trigger_id: String = database
+                .connection()
+                .query_row(
+                    "SELECT anchor_message_id FROM agent_run WHERE id=?1",
+                    [&run_ids[0]],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let turn_id = format!("legacy-recovery-turn-{index}");
+            database.connection().execute(
+                "INSERT INTO camp_turn(id,camp_id,trigger_type,trigger_id,status,created_at,updated_at) VALUES(?1,?2,'camp_message',?3,'waiting','2026-08-31T00:00:00Z','2026-08-31T00:00:00Z')",
+                params![turn_id, camp_id, trigger_id],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE camp_turn SET execution_budget_schema_version=?2, execution_budget_accepted_at='2026-08-31T00:00:00Z', execution_budget_deadline_at='2026-09-01T00:00:00Z', execution_budget_elapsed_seconds=?3, execution_budget_max_agent_run_responsibilities=?4, execution_budget_max_accepted_a2a=?5, execution_budget_root_agent_run_responsibilities=?6, agent_run_responsibilities_allocated=0, accepted_a2a_allocated=0 WHERE id=?1",
+                params![
+                    turn_id,
+                    crate::execution_budget::CAMP_TURN_EXECUTION_BUDGET_SCHEMA_VERSION,
+                    crate::execution_budget::PRODUCT_MAX_EXECUTION_ELAPSED_SECONDS,
+                    crate::execution_budget::PRODUCT_MAX_AGENT_RUN_RESPONSIBILITIES,
+                    crate::execution_budget::PRODUCT_MAX_ACCEPTED_A2A,
+                    run_ids.len() as i64,
+                ],
+            ).unwrap();
+            for run_id in &run_ids {
+                database.connection().execute(
+                    "UPDATE agent_run SET status='waiting', wait_reason='runtime_delivery', invocation_kind='direct', camp_id=NULL, anchor_message_id=NULL, current_public_tail_sequence=NULL, camp_turn_id=?2, trigger_camp_message_id=?3 WHERE id=?1",
+                    params![run_id, turn_id, trigger_id],
+                ).unwrap();
+            }
+            database.connection().execute(
+                "UPDATE agent_run SET cancel_requested_at='2026-08-31T00:00:00Z', cancel_reason_code='user_requested_agent_run_stop' WHERE id=?1",
+                [&run_ids[0]],
+            ).unwrap();
+            camps.push((camp_id, run_ids));
+        }
+
+        recover_legacy_pending_cancellations(&mut database).unwrap();
+        for (_, run_ids) in &camps {
+            let statuses = run_ids
+                .iter()
+                .map(|run_id| {
+                    database
+                        .connection()
+                        .query_row(
+                            "SELECT status FROM agent_run WHERE id=?1",
+                            [run_id],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(statuses, vec!["cancelled", "waiting"]);
+        }
+        let cancelled_events: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM event_log WHERE event_type='agent_run.cancelled' AND entity_id IN (?1, ?2)",
+            params![camps[0].1[0], camps[1].1[0]],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(cancelled_events, 2);
+
+        let changes = database.connection().total_changes();
+        recover_legacy_pending_cancellations(&mut database).unwrap();
+        assert_eq!(database.connection().total_changes(), changes);
     }
 
     fn host_key(scope: &str) -> RuntimeHostKey {
