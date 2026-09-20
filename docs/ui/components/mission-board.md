@@ -33,8 +33,10 @@ Status/tag/project filters use matching icon triggers and neutral filled multi-s
 means all, without an extra “all” option. Project and tag pickers have search; status does not. Search and the
 low-frequency board/list menu share the toolbar without vertical separators. The page uses the white home
 surface in Day and its Night equivalent. Its title/subtitle use the same 34px overview-page top inset as
-Memory and Scheduled Automation, align with shell controls, and lead into four equally tall,
-very light neutral rounded lanes, including empty lanes. List mode groups and folds rows by status.
+Memory and Scheduled Automation and align with shell controls. The title, filter bar and board use the full
+available page width instead of inheriting the ordinary 1400px reading cap, and lead into four equally tall,
+very light neutral rounded lanes, including empty lanes. Lane headings flow directly into their card regions
+without a horizontal divider. List mode groups and folds rows by status.
 In board mode the page title, filters, and each lane's status name/count remain fixed. The board host owns only
 horizontal movement, while each lane's card region is a focusable, independently scrolling vertical region with
 contained overscroll. Reaching one lane's end therefore never moves another lane or the whole board. Stable
