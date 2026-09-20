@@ -3,7 +3,7 @@ document_type: ui-interaction-draft
 authority: host-web-mobile-interaction-proposal
 status: implemented
 target_version: v1.59
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # Mobile WebUI
@@ -81,6 +81,9 @@ WebUI 与 MobileUI 的目录选择统一面向“项目目录”：标题为“�
 仍使用结构化 Mention 和既有默认接收计算。手机 Return 换行，发送按钮提交；提交或排队后开始 Run 都不自动切到执行页，用户通过执行标签自行打开。Desktop 的 Enter 与发送后执行选中行为不变。
 会话正文在用户阅读字号基础上缩小 0.5px，默认 12.5px；用户气泡保留原有较窄宽度。
 复制/回复图标为 17px，背景区域为 24px、间隔 4px，纵向点击区域扩到 32px；队员操作向左微调、用户操作向右微调。
+系统消息复用 [共享系统消息块](components/conversation-workspace.md#系统消息)：灰阶表面、12px 圆角及图标／系统／时间
+头部保持不变，横竖屏均取消头像位缩进，在消息区两侧 14px 留白内完整换行；复制入口常驻且左边缘与系统消息块对齐。
+不以用户身份显示，不提供回复或撤回。宽屏 Web 与 Desktop 保持同一结构和样式。
 Composer 外壳内边距 4px，提示与编辑区同用 6px 起点；提示默认 14px 并淡化，编辑字号至少 16px 避免手机聚焦缩放。
 附件与 @ 为 36×40px、间隔 4px，用户的阅读字号设置仍生效。
 私聊使用同一正式面板和独立草稿，打开时仅展示私聊输入框。文件、引用、上传、发送及未知结果恢复继续使用既有接口。

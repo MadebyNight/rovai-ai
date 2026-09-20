@@ -29,6 +29,12 @@ test('phone navigation keeps hierarchy geometry while status stays in a 12px tra
   assert.doesNotMatch(mobileCss, /camp-marker-slot/)
 })
 
+test('phone system message copy control aligns with its message surface', async () => {
+  const mobileCss = await readFile(join(repository, 'apps/web/src/mobile.css'), 'utf8')
+  assert.match(mobileCss, /\.conversation-bubble\.system \.message-actions\s*\{[^}]*margin-left: 0;/s)
+  assert.match(mobileCss, /\.conversation-bubble\.agent \.message-actions\s*\{[^}]*margin-left: -4px;/s)
+})
+
 // Real Host + production Web entry. No Electron profile, Runtime, or daily data.
 test('phone workbench uses shared navigation, schedules and per-tab drafts', { timeout: 180_000 }, async t => {
   if (process.platform !== 'darwin' || !await access(executable).then(() => true, () => false)) { t.skip('Requires macOS Chrome; does not qualify real phones or other OSes'); return }
