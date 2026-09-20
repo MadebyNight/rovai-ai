@@ -3,7 +3,7 @@ document_type: ui-component
 authority: notification-attention-presentation
 status: accepted
 target_version: cross-version
-last_updated: 2026-09-19
+last_updated: 2026-09-20
 ---
 
 # 应用内提醒与会话未读
@@ -23,11 +23,13 @@ Core 的持久注意力事实。
 使用 signal，不读取 Episode 当前 primary semantic/action 替代。内部 `open_camp` action 在界面统一呈现
 为“打开会话”，不得暴露领域对象名。
 
-应用失焦、隐藏或在后台时，队列可以接收新 signal，但浮层隐藏且剩余 8 秒计时暂停；重新获得前台注意
+当前普通或 Mission Camp workspace 可见且窗口有焦点时，同 Camp 的全部 signal 不加入临时队列；进入该 Camp
+前已排队的同 Camp 项也撤下且离开后不重放。该 quiet scope 不写 acknowledgement，精确来源尚未可见时持久未读
+仍保留。应用失焦、隐藏或在后台时，队列可以接收新 signal，但浮层隐藏且剩余 8 秒计时暂停；重新获得前台注意
 后先收敛失效与可见来源，再显示当前一条。Hover、focus 和动作提交期间暂停剩余时间，不重置。关闭或超时只移除本次临时呈现，不
 acknowledge、不 clear。关闭当前卡片后的剩余项以“还有 N 条提醒 / 查看下一条”轻入口按需推进，不跳转到已隐藏的通知中心。
 
-队列 signal 由 Journal 的 exact acknowledgement、Clear revision、source resolved 或 Episode remove invalidation 失效；当前已读内容 / 阅读区完成也会抑制并撤下临时呈现。
+队列 signal 由 Journal 的 exact acknowledgement、Clear revision、source resolved 或 Episode remove invalidation 失效；当前 Camp quiet scope 或精确内容已读也会抑制并撤下临时呈现。
 resolved Approval 的旧 pending signal 必须删除，即使该 Occurrence 仍未确认；reset/重新建立 baseline
 直接清空队列，不从历史或 Episode 推荐动作恢复。
 
@@ -64,8 +66,8 @@ Occurrence。
 
 ## References
 
-- [Notification Episode v7](../../contracts/notification-episode-v7.md)
-- [Current User Attention v6](../../contracts/current-user-attention-v6.md)
+- [Notification Episode v8](../../contracts/notification-episode-v8.md)
+- [Current User Attention v7](../../contracts/current-user-attention-v7.md)
 - [App Shell 与统一侧栏](app-shell-navigation.md)
 - [DESIGN.md](../../../DESIGN.md)
 
@@ -77,7 +79,7 @@ Occurrence。
 本轮完成文案为“本轮已完成”，不推断必然有最终回复。Delivery-first batch AgentRun 使用 exact
 `open_agent_run` 动作打开对应成员的执行记录并定位到该 Run；历史 CampTurn 继续使用 `open_camp_turn`。
 
-公屏与每段单聊分别判断当前阅读区域，当前对话完成不弹，阅读旧消息时用对话内的新回复入口。
-审批 / 失败 / 未完成 / Mention 的精确内容尚不可见时仍弹；不把同 Camp 的另一段单聊当成已读。
+公屏与每段单聊仍分别判断精确已读来源，但临时浮层以当前 Camp 为 quiet scope：只要该 Camp workspace 在前台，
+审批 / 失败 / 未完成 / Mention / 完成都不弹；这不把同 Camp 的另一段单聊或屏幕外来源当成已读。
 单聊共用四类偏好。点击原始 Conversation / Run 或审批详情，绝不创建 successor；关闭、超时和查看下一条
 都不代表已读或批准。

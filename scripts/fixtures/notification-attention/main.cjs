@@ -56,10 +56,9 @@ app.whenReady().then(async () => {
     await run("window.notificationTest.source('private-original'); window.notificationTest.admit('turn_completed', 'private-original')")
     assert.equal((await state()).cards.length, 0)
     await run("window.notificationTest.admit('turn_completed', 'private-other')")
-    assert.equal((await state()).cards.length, 1, 'Another private conversation is a different reading surface')
-    const beforeClose = (await state()).acknowledgements.length
-    current = await click('.notification-heads-up-close')
-    assert.equal(current.acknowledgements.length, beforeClose)
+    assert.equal((await state()).cards.length, 0, 'The attentive Camp is quiet across its public and private reading surfaces')
+    await run('window.notificationTest.away()')
+    assert.equal((await state()).cards.length, 0, 'A reminder suppressed in the current Camp cannot replay after leaving')
     awayMouse()
     await run("window.notificationTest.attentive(false); window.notificationTest.admit('turn_failed', 'private-original')")
     assert.equal((await state()).cards.length, 0)

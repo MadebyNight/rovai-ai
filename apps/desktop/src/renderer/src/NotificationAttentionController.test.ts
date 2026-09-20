@@ -461,6 +461,30 @@ it('suppresses completion only on its exact reading surface, without changing un
   ).entries).toEqual([])
 })
 
+it('suppresses every transient reminder from the attentive current Camp without marking it read', () => {
+  const semantics: NotificationSemantic[] = [
+    'approval_pending',
+    'turn_failed',
+    'turn_incomplete',
+    'user_mention',
+    'turn_completed'
+  ]
+  const queued = applyNotificationHeadsUpChanges(
+    { entries: [], overflowEntries: [] },
+    semantics.map((semantic, index) => change(episode(semantic, {
+      id: `episode-${index + 1}`
+    }), index + 1)),
+    semantics.length
+  )
+
+  expect(filterVisibleNotificationHeadsUp(queued, [], false, 'camp-1')).toBe(queued)
+  expect(filterVisibleNotificationHeadsUp(queued, [], true, 'camp-other')).toBe(queued)
+
+  const quiet = filterVisibleNotificationHeadsUp(queued, [], true, 'camp-1')
+  expect(quiet).toEqual({ entries: [], overflowEntries: [] })
+  expect([...queued.entries, ...queued.overflowEntries].every((entry) => entry.episode.unread)).toBe(true)
+})
+
 it('retains exact urgent occurrences when completion arrives, then advances only on request', () => {
   const approval = change(episode('approval_pending'), 1)
   approval.headsUpSignal!.action.acknowledgementId = 'approval-occurrence'

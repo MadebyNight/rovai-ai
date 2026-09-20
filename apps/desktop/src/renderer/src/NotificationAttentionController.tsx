@@ -123,12 +123,14 @@ function headsUpPriority(semantic: NotificationSemantic): number {
 export function filterVisibleNotificationHeadsUp(
   current: NotificationHeadsUpState,
   sources: readonly VisibleNotificationSources[],
-  attentive: boolean
+  attentive: boolean,
+  quietCampId: string | null = null
 ): NotificationHeadsUpState {
   if (!attentive) return current
   const retain = (entry: NotificationHeadsUpEntry): boolean => {
     const action = entry.signal.action
     if (!action.available) return false
+    if (quietCampId !== null && entry.episode.camp.id === quietCampId) return false
     return !sources.some((source) => source.campId === action.campId
       && source.surfaceVisible !== false
       && (source.conversationId ?? null) === (action.singleChat?.conversationId ?? null)
@@ -478,8 +480,13 @@ export function NotificationAttentionController({
             }
           }
         }
+        const quietCurrentCamp = activeCampVisible
+          && windowAttentive
+          && episode.camp.id === activeCampId
         headsUpChanges.push(
-          effectivePreference && shouldShowHeadsUp(signal.semantic, effectivePreference)
+          !quietCurrentCamp
+            && effectivePreference
+            && shouldShowHeadsUp(signal.semantic, effectivePreference)
             ? change
             : { ...change, headsUpSignal: null }
         )
@@ -561,8 +568,13 @@ export function NotificationAttentionController({
   }, [enabled, pollChanges, windowAttentive, observedThroughChangeSequence])
 
   useEffect(() => {
-    setHeadsUpState((current) => filterVisibleNotificationHeadsUp(current, readingSources, windowAttentive))
-  }, [readingSources, windowAttentive, observedThroughChangeSequence])
+    setHeadsUpState((current) => filterVisibleNotificationHeadsUp(
+      current,
+      readingSources,
+      windowAttentive,
+      activeCampVisible ? activeCampId : null
+    ))
+  }, [activeCampId, activeCampVisible, readingSources, windowAttentive, observedThroughChangeSequence])
 
   useEffect(() => {
     if (
@@ -678,7 +690,12 @@ export function NotificationAttentionController({
     }
   }
 
-  const presentableState = filterVisibleNotificationHeadsUp(headsUpState, readingSources, windowAttentive)
+  const presentableState = filterVisibleNotificationHeadsUp(
+    headsUpState,
+    readingSources,
+    windowAttentive,
+    activeCampVisible ? activeCampId : null
+  )
   const currentHeadsUp = presentableState.entries[0] ?? null
   const headsUpOverflow = presentableState.overflowEntries.length
   const visibleHeadsUp = windowAttentive && foregroundReady && (currentHeadsUp !== null || headsUpOverflow > 0)

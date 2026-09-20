@@ -3280,6 +3280,8 @@ export function CampWorkspace({
     if (executionPlacement === 'inspector') {
       setExecutionInspectorActive(true)
       onOpenInspector?.(inspectorTab)
+    } else if (executionPlacement === 'right') {
+      filePreview?.openExecution()
     }
     setExecutionDrawerAgentId(run.agentId)
     setExecutionDrawerFocusedRunId(run.id)
@@ -3287,7 +3289,7 @@ export function CampWorkspace({
       sequence: request.sequence + 1,
       moveDomFocus: true
     }))
-  }, [executionPlacement, inspectorTab, notificationFocus, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
+  }, [executionPlacement, filePreview, inspectorTab, notificationFocus, onOpenInspector, snapshot.agentRuns, snapshot.camp.id])
 
   useEffect(() => {
     if (!notificationFocus?.active || notificationFocus.kind === 'single_chat') return undefined
@@ -3336,7 +3338,7 @@ export function CampWorkspace({
       if (notificationFocus.kind === 'agent_run') {
         const runId = notificationFocus.agentRunId
         const target = runId
-          ? workspaceShellRef.current?.querySelector<HTMLElement>(
+          ? executionDrawerPortal?.querySelector<HTMLElement>(
               `[data-agent-run-id="${CSS.escape(runId)}"]`
             ) ?? null
           : null
@@ -3364,7 +3366,7 @@ export function CampWorkspace({
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame)
     }
-  }, [notificationFocus, onNotificationFocusPresented, snapshot.messages, snapshot.agentRuns])
+  }, [executionDrawerPortal, notificationFocus, onNotificationFocusPresented, snapshot.messages, snapshot.agentRuns])
 
   const flushTimelineReadingPosition = useCallback((campId?: string): void => {
     if (timelinePositionSaveTimer.current !== null) {
@@ -3672,7 +3674,7 @@ export function CampWorkspace({
         }
       }
       if (campForeground) {
-        for (const node of workspaceShellRef.current?.querySelectorAll<HTMLElement>(
+        for (const node of executionDrawerPortal?.querySelectorAll<HTMLElement>(
           '.execution-drawer [data-agent-run-id]'
         ) ?? []) {
           const viewport = node.closest<HTMLElement>('.execution-drawer-body')
@@ -3702,14 +3704,30 @@ export function CampWorkspace({
     }
     const timeline = timelineScrollRef.current
     const workspace = workspaceShellRef.current
-    const observer = new MutationObserver(schedule)
+    const resizeObserver = new ResizeObserver(schedule)
+    const observeExecutionDrawer = (): void => {
+      if (!executionDrawerPortal) return
+      resizeObserver.observe(executionDrawerPortal)
+      const drawer = executionDrawerPortal.querySelector<HTMLElement>('.execution-drawer')
+      if (drawer) resizeObserver.observe(drawer)
+    }
+    const observer = new MutationObserver(() => {
+      observeExecutionDrawer()
+      schedule()
+    })
     if (timeline) observer.observe(timeline, { subtree: true, childList: true, attributes: true })
     if (approvalDockRef.current) observer.observe(approvalDockRef.current, { subtree: true, childList: true, attributes: true })
     if (bottomExecutionDrawerHostRef.current) observer.observe(bottomExecutionDrawerHostRef.current, { subtree: true, childList: true, attributes: true })
     if (inspectorExecutionDrawerHostRef.current) observer.observe(inspectorExecutionDrawerHostRef.current, { subtree: true, childList: true, attributes: true })
+    if (executionDrawerPortal) observer.observe(executionDrawerPortal, { subtree: true, childList: true, attributes: true })
+    observeExecutionDrawer()
     schedule()
     timeline?.addEventListener('scroll', schedule, { passive: true })
     workspace?.addEventListener('scroll', schedule, {
+      capture: true,
+      passive: true
+    })
+    executionDrawerPortal?.addEventListener('scroll', schedule, {
       capture: true,
       passive: true
     })
@@ -3719,14 +3737,24 @@ export function CampWorkspace({
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame)
       observer.disconnect()
+      resizeObserver.disconnect()
       timeline?.removeEventListener('scroll', schedule)
       workspace?.removeEventListener('scroll', schedule, true)
+      executionDrawerPortal?.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
       window.removeEventListener('focus', schedule)
       document.removeEventListener('visibilitychange', schedule)
     }
   }, [
     conversationView,
+    executionDrawerAgentId,
+    executionDrawerFocusedRunId,
+    executionDrawerPortal,
+    executionPlacement,
+    executionPreviewHost,
+    filePreview?.activeTab?.id,
+    filePreview?.paneVisible,
+    inspectorVisible,
     singleChatVisible,
     onVisibleNotificationSources,
     snapshot.approvals,
@@ -4409,8 +4437,7 @@ export function CampWorkspace({
       <FilePreviewWorkspace
       >
         <RevealNotificationConversation active={!!notificationFocus?.active
-          && (notificationFocus.kind === 'camp_message' || notificationFocus.kind === 'camp_turn'
-            || notificationFocus.kind === 'agent_run')}
+          && (notificationFocus.kind === 'camp_message' || notificationFocus.kind === 'camp_turn')}
           onHidePreview={filePreview?.hidePane} />
         <section
           className="timeline-pane"
