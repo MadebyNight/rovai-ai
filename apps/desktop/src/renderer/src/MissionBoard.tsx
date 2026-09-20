@@ -478,7 +478,7 @@ export function MissionBoard({ missions, projects, loading, error, selectedId, h
     </article>
   }
   return <section className="mission-board-content mission-board-page" hidden={hidden} aria-label="使命板">
-    <header className="mission-page-header"><div><h1>使命板</h1><p>设定目标，与队伍一起推进。</p></div><button className="mission-new mission-new-entry" onClick={onNew}><Icon name="plus"/>新建使命</button></header>
+    <header className="mission-page-header"><div><h1>使命板</h1><p>设定目标，与队伍一起推进。</p></div><button className="mission-new mission-new-entry" onClick={onNew}><Icon name="plus"/>新使命</button></header>
     <div className="mission-toolbar"><div className="mission-filter-group">
       <MissionFilter label="状态" icon={<FilterStateIcon/>} searchable={false} values={stateFilter} onChange={setStateFilter} options={statuses.map(s => ({ id: s.id, label: s.label, icon: <StatusIcon status={s.id}/> }))}/>
       <MissionFilter label="标签" icon={<Icon name="tag"/>} values={tags} onChange={setTags} options={catalog.map(t => ({id: t, label: t, icon: <TagColorDot tag={t}/>}))}/>

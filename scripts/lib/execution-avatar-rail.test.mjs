@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -14,7 +14,7 @@ import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 const root = resolve(import.meta.dirname, '../..')
 const source = join(root, 'scripts/fixtures/execution-avatar-rail')
 
-test('production execution popover preserves dismissal, selection, scrolling and navigation through native input', { timeout: 120_000 }, async (t) => {
+test('production execution popover preserves dismissal, selection, scrolling and navigation through native input', { timeout: 180_000 }, async (t) => {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-execution-avatar-rail-'))
   let child
@@ -29,6 +29,7 @@ test('production execution popover preserves dismissal, selection, scrolling and
     const environment = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
     delete environment.ELECTRON_RUN_AS_NODE
     const userData = assertUserDataIsIsolated(join(fixture, 'user-data'))
+    await mkdir(join(userData, 'managed-skill-library'), { recursive: true })
     process.stdout.write(`Isolated execution rail fixture: ${fixture}\n`)
     const dismissalOnly = process.env.ROVAI_EXECUTION_POPOVER_DISMISSAL_ONLY === '1'
     child = spawn(electron, [join(source, 'main.cjs'), join(fixture, 'renderer/index.html'), userData,
@@ -40,7 +41,7 @@ test('production execution popover preserves dismissal, selection, scrolling and
     let output = ''
     child.stdout.on('data', chunk => { output += chunk.toString() })
     child.stderr.on('data', chunk => { output += chunk.toString() })
-    const timeout = setTimeout(() => child.kill('SIGKILL'), 90_000)
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 150_000)
     let code
     try { [code] = await closed } finally { clearTimeout(timeout) }
     assert.equal(code, 0, `Execution avatar rail regression failed:\n${output}`)

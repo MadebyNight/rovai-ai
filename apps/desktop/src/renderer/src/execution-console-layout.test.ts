@@ -101,22 +101,26 @@ describe('execution console layout', () => {
   it('matches the compact Run card controls from the interaction prototype', () => {
     expect(styleBlock('.execution-run-operations button')).toMatch(/width:\s*26px/)
     expect(styleBlock('.execution-run-operations button')).toMatch(/height:\s*25px/)
-    expect(styleBlock('.execution-run-operations')).toMatch(/inset:\s*0 9px 0 0/)
-    expect(styleBlock('.execution-run-operations button.is-danger')).toMatch(
+    expect(styleBlock('.execution-run-trailing')).toMatch(/padding-right:\s*9px/)
+    expect(styleBlock('.execution-run-operations')).not.toMatch(/opacity:\s*0|pointer-events:\s*none/)
+    expect(styleBlock('.execution-run-operations button.is-danger:is(:hover, :focus-visible)')).toMatch(
       /background:\s*var\(--danger-soft\)/
     )
     expect(styleBlock('.execution-batch-count')).toMatch(/height:\s*26px/)
     expect(styleBlock('.execution-batch-count')).toMatch(/cursor:\s*pointer/)
     expect(styleBlock('.execution-batch-count')).toMatch(/font:\s*10\.5px\/1/)
     expect(styleBlock('.execution-batch-count svg')).toMatch(/stroke-width:\s*1\.5/)
-    expect(styleBlock('.execution-process-card:is(:hover, :focus-within) .execution-run-metric'))
-      .toMatch(/visibility:\s*hidden/)
+    expect(styleBlock('.execution-run-card-header')).toMatch(/position:\s*sticky/)
+    expect(styleBlock('.execution-run-card-header')).toMatch(/top:\s*0/)
+    expect(styleBlock('.execution-run-summary')).toMatch(/font-weight:\s*600/)
+    expect(styleBlock('.execution-drawer-body')).toMatch(/scroll-padding-block:\s*60px 16px/)
   })
 
-  it('centers the status rail on the 40px card header and keeps overview avatars square', () => {
-    expect(styleBlock('.execution-process-timeline::before')).toMatch(/top:\s*21px/)
+  it('centers the status rail on the 46px title and keeps overview avatars square', () => {
+    expect(styleBlock('.execution-run-card-header')).toMatch(/min-height:\s*46px/)
+    expect(styleBlock('.execution-process-timeline::before')).toMatch(/top:\s*24px/)
     expect(styleBlock('.execution-process-timeline::before')).toMatch(/bottom:\s*23px/)
-    expect(styleBlock('.execution-process-node')).toMatch(/margin-top:\s*14px/)
+    expect(styleBlock('.execution-process-node')).toMatch(/margin-top:\s*17px/)
     expect(styleBlock('.execution-run-toggle .member-avatar')).toMatch(/width:\s*20px/)
     expect(styleBlock('.execution-run-toggle .member-avatar')).toMatch(/height:\s*20px/)
     expect(workspaceSource.match(/overview && <MemberAvatar[\s\S]{0,180}?size="execution"/g))

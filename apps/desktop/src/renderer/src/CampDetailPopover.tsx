@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useMobileLayout } from './MobileLayout'
 import { MemberAvatar, type MemberAvatarProps } from './MemberAvatar'
+import { ExecutionIcon } from './ExecutionIcons'
 
 export type CampDetailTab = 'execution' | 'tasks' | 'members'
 export type RunningCampMember = Pick<MemberAvatarProps, 'agentId' | 'avatarRef' | 'displayName'>
@@ -14,8 +15,8 @@ const labels: Record<CampDetailTab, string> = {
 }
 
 function CampDetailIcon({ tab }: { tab: CampDetailTab }): React.JSX.Element {
+  if (tab === 'execution') return <ExecutionIcon />
   return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round">
-    {tab === 'execution' && <path d="M3 12h4l3-8 4 16 3-8h4" />}
     {tab === 'tasks' && <><rect x="6" y="4" width="15" height="17" rx="2" /><path d="M3 7h5M3 12h5M3 17h5M12 8h5M12 12h5M12 16h3" /></>}
     {tab === 'members' && <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /><circle cx="9" cy="7" r="4" /></>}
   </svg>

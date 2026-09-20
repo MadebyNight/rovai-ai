@@ -416,7 +416,20 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-list-cards[hidden]'), 'List group folds')
   cases.push('list view uses independently collapsible status groups')
 
-  const newEntry = button('新建使命'), entryBounds = newEntry.getBoundingClientRect()
+  const newEntry = button('新使命'), entryBounds = newEntry.getBoundingClientRect()
+  const tokenProbe = document.createElement('span')
+  tokenProbe.style.cssText = 'background:var(--conversation-action);color:var(--conversation-action-contrast)'
+  newEntry.after(tokenProbe)
+  const originalTheme = document.documentElement.dataset.theme
+  for (const theme of ['day', 'night']) {
+    document.documentElement.dataset.theme = theme
+    const entryStyle = getComputedStyle(newEntry)
+    check(entryStyle.backgroundColor === getComputedStyle(tokenProbe).backgroundColor
+      && entryStyle.color === getComputedStyle(tokenProbe).color, `New Mission uses neutral primary tokens in ${theme}`)
+  }
+  if (originalTheme === undefined) delete document.documentElement.dataset.theme
+  else document.documentElement.dataset.theme = originalTheme
+  tokenProbe.remove()
   check(newEntry.contains(document.elementFromPoint(entryBounds.x + entryBounds.width / 2, entryBounds.y + entryBounds.height / 2)), 'Window drag strip cannot cover creation entry')
   newEntry.click()
   await until(() => document.querySelector('input[aria-label="使命名称"]'), 'Create dialog')
@@ -492,7 +505,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   await until(() => document.querySelector('.mission-create-dialog [title="mission-brief.md"]'), 'Create accepts a new attachment')
   document.querySelector<HTMLButtonElement>('.mission-create-dialog .mission-editor-footer .compact-cancel')!.click()
   await until(() => !document.querySelector('.mission-create-dialog'), 'Closing an unfinished Mission keeps its draft')
-  button('新建使命').click()
+  button('新使命').click()
   await until(() => document.querySelector('.mission-create-dialog'), 'Mission creation can reopen')
   check((document.querySelector('input[aria-label="使命名称"]') as HTMLInputElement).value === '草稿保留使命'
     && (document.querySelector('textarea[aria-label="使命描述"]') as HTMLTextAreaElement).value === '关闭后仍应恢复的使命描述'
@@ -514,7 +527,7 @@ export async function runMissionAcceptance(): Promise<{ ok: true; cases: string[
   check(created.description === '' && created.status === 'not_started' && created.projectPath === '/workspace/sample-12' && created.tags.includes('交互') && created.attachments[0]?.displayName === 'mission-brief.md', 'Default create preserves its draft properties and attachment without starting')
   check(qa.calls.some((c: any) => c.method === 'missions.createWithAttachments' && c.p.command.title === '无描述使命'), 'Create sends attachments through the private native bridge')
   check(!qa.calls.some((c: any) => c.method === 'missions.start' && c.p.command?.missionId === created.missionId), 'No start request on default create')
-  button('新建使命').click()
+  button('新使命').click()
   await until(() => document.querySelector('.mission-create-dialog'), 'Creation opens again after a confirmed create')
   check((document.querySelector('input[aria-label="使命名称"]') as HTMLInputElement).value === '' && !document.querySelector('.mission-create-dialog [title="mission-brief.md"]'), 'Confirmed creation clears the retained Mission draft')
   document.querySelector<HTMLButtonElement>('.mission-create-dialog .mission-editor-footer .compact-cancel')!.click()

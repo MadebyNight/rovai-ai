@@ -402,9 +402,9 @@ button.mission-tag { cursor: pointer; }
 .mission-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 0 17px; margin-bottom: 14px; border: 0; }
 .mission-page-header h1 { margin: 0; font-size: 25px; line-height: 30px; font-weight: 620; }
 .mission-page-header p { margin: 7px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.42; }
-.mission-new-entry { position: relative; z-index: 3; background: var(--neutral-selected); color: var(--ink); font-weight: 550; -webkit-app-region: no-drag; }
+.mission-new-entry { position: relative; z-index: 3; background: var(--conversation-action); color: var(--conversation-action-contrast); font-weight: 550; -webkit-app-region: no-drag; }
 .mission-new-entry * { -webkit-app-region: no-drag; }
-.mission-new-entry:hover { background: var(--neutral-hover); }
+.mission-new-entry:hover { background: var(--conversation-action-hover); }
 .mission-board-page > .mission-toolbar { padding: 0 0 18px; flex: 0 0 auto; gap: 12px; min-height: 48px; border: 0; }
 .mission-filter-group { gap: 5px; flex-wrap: wrap; }
 .mission-board-page > .mission-board-scroll { padding: 0; }

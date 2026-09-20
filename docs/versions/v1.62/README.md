@@ -122,7 +122,10 @@ Board mode 把每个 status lane 的 card region 变成独立、可聚焦、cont
 
 执行台使用 `right | inspector | bottom` 三个安装级保存位置。右侧 Execution 是无文件能力的合成标签，和
 Mission Activity、普通文件共用标签集合与分栏比例；切换标签或自动打开不会改变文件预览宽度。总览、当前执行、
-聚合排队批次和默认折叠的执行历史复用同一详情 DOM，紧凑 Run 卡片只保留触发消息摘要、状态、耗时与按需动作。
+聚合排队批次和默认折叠的执行历史复用同一详情 DOM，Run 卡片保留触发消息摘要、状态、耗时与常驻动作。
+确认后的局部 UI 调整统一总览四格图标及执行心跳图标，标题加强层级并仅在本卡内吸顶，使命板创建入口为中性主操作“新使命”；
+不改变消息/排队数据、停止协议、默认展开或使命创建流程。呈现细节由 [Camp 会话工作区](../../ui/components/conversation-workspace.md)
+与[使命板 UI](../../ui/components/mission-board.md)拥有。
 尚未 claim 的当前 waiting CampMessageDelivery 按接收队员投影为只读“排队消息”卡；用户和 Agent 作者使用同一
 准入，不制造 AgentRun 或停止入口；claim 后由
 真实 Run 接管。Run、queued Run 批次和 Delivery 队列的多输入层数使用独立按钮打开输入清单，不嵌入展开按钮，

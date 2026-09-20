@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import type { AgentProfile, AgentRunView, CampComposerDraftView, CampSnapshot, ExecutionConsolePlacement, MessageDeliveryView } from '@contracts'
 import { AppHeader } from '../../../apps/desktop/src/renderer/src/App'
 import { CampWorkspace } from '../../../apps/desktop/src/renderer/src/CampWorkspace'
+import { FilePreviewProvider } from '../../../apps/desktop/src/renderer/src/FilePreviewContext'
 import '../../../apps/desktop/src/renderer/src/styles.css'
 
 // The actual production workspace, with closed local fixtures. No Core, Runtime or daily data.
@@ -112,6 +113,8 @@ let draft: CampComposerDraftView = { campId, body: '', content: { version: 2, se
   replyIntent: null, continuationIntent: null, updatedAt: now, expiresAt: null }
 Object.assign(window, { rovai: {
   platform: 'darwin', onEvent: () => () => {},
+  filePreview: { bindCamp: async () => {}, onExternalUpdate: () => () => {} },
+  windowControls: { onCloseTabRequested: () => () => {} },
   request: async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
     if (method === 'skills.list' || method === 'skills.deliveryGroups.list') return []
     if (method === 'camp.composerDraft.get') return draft
@@ -133,7 +136,26 @@ function Fixture(): React.JSX.Element {
   const [placement, setPlacement] = useState<ExecutionConsolePlacement>('inspector')
   const [entryHost, setEntryHost] = useState<HTMLElement | null>(null)
   const [theme, setTheme] = useState('day')
+  const [longTitleScenario, setLongTitleScenario] = useState(false)
+  const [stoppedRuns, setStoppedRuns] = useState<string[]>([])
   const snapshot = snapshotFor(count, revision, recipientCount)
+  if (longTitleScenario) {
+    snapshot.turns = snapshot.agentRuns.map(run => ({ id: run.campTurnId!, triggerType: 'camp_message',
+      triggerId: run.anchorMessageId!, status: 'running', aggregateReasonCode: null,
+      cancelRequestedAt: null, createdAt: now, updatedAt: now, endedAt: null, version: 1,
+      executionBudget: { schemaVersion: 1, acceptedAt: now, deadlineAt: null, elapsedSeconds: null,
+        maxAgentRunResponsibilities: 32, maxAcceptedA2a: 16, allocatedAgentRunResponsibilities: 1,
+        acceptedA2a: 0, exhaustedAt: null, exhaustionReason: null, exhaustionCommandId: null } }))
+    snapshot.agentRuns = snapshot.agentRuns.map(run => ({ ...run,
+      status: run.agentId === 'agent-1' ? 'running' : run.status,
+      createdAt: run.agentId === 'agent-3' ? '2026-08-31T04:01:00Z' : run.createdAt,
+      cancelRequestedAt: stoppedRuns.includes(run.id) ? now : null
+    }))
+    snapshot.executionEvidence = snapshot.executionEvidence.map(evidence => evidence.kind === 'narration'
+      ? { ...evidence, payload: { ...evidence.payload,
+          delta: `${('长记录用于检查卡片标题吸顶、键盘焦点与单卡终止。\n\n').repeat(24)}${longNarration}` } }
+      : evidence)
+  }
   if (entryRunningCount !== null) {
     snapshot.agentRuns = snapshot.agentRuns.map((run, index) => ({
       ...run, status: index < entryRunningCount ? 'running' : 'waiting',
@@ -150,7 +172,8 @@ function Fixture(): React.JSX.Element {
       memberOrder: snapshot.members.length, isDefaultLead: false, version: 1
     })
   }
-  return <div className="app-shell app-shell-camp">
+  return <FilePreviewProvider campId={campId} resolvedTheme={theme === 'night' ? 'night' : 'day'}>
+    <div className="app-shell app-shell-camp">
     <aside style={{ gridRow: '1 / -1', padding: '48px 24px', background: 'var(--rail)', color: 'var(--rail-ink)' }}>
       <strong>Rovai AI · 隔离验收</strong>
       <p style={{ fontSize: 12, lineHeight: 1.7 }}>真实生产组件，模拟队员数据。<br />不调用模型，不访问日常 Camp。</p>
@@ -163,6 +186,8 @@ function Fixture(): React.JSX.Element {
         {[0, 1, 8, 12, 20].map(value => <button key={value} className="quiet-button" data-count={value} onClick={() => setCount(value)}>{value} 位队员</button>)}
         {[0, 1, 2, 16, 48].map(value => <button key={`recipient-${value}`} className="quiet-button" data-recipient-count={value} onClick={() => setRecipientCount(value)}>{value} 位投递对象</button>)}
         <button className="quiet-button" data-refresh onClick={() => setRevision(value => value + 1)}>模拟状态刷新</button>
+        <button data-title-scenario onClick={() => setLongTitleScenario(true)}>长卡片标题验收</button>
+        <output data-stopped-runs>{stoppedRuns.join(',')}</output>
         <button className="quiet-button" data-theme-toggle onClick={() => {
           const next = theme === 'day' ? 'night' : 'day'
           document.documentElement.dataset.theme = next
@@ -175,9 +200,10 @@ function Fixture(): React.JSX.Element {
       <CampWorkspace snapshot={snapshot} projectName="隔离验收" agents={agents.slice(0, snapshot.members.length)} busy={false} stopping={false}
         onSend={async () => {}} onChangeLead={async () => {}} onTasksChanged={async () => {}} onResolveApproval={() => {}}
         onStop={() => {}} worldMapEnabled={false} inspectorVisible={open} detailEntryHost={entryHost}
+        onCancelAgentRun={async run => { setStoppedRuns(current => [...current, run.id]) }}
         executionPlacement={placement} onExecutionPlacementChange={async value => { setPlacement(value); return value }}
         onOpenInspector={() => setOpen(true)} onCloseInspector={() => setOpen(false)} />
     </main>
-  </div>
+  </div></FilePreviewProvider>
 }
 createRoot(document.getElementById('root')!).render(<Fixture />)

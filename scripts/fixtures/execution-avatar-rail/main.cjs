@@ -646,6 +646,137 @@ app.whenReady().then(async () => {
     await assertRecipients(16)
     await capture('delivery-avatars-popover-night-1440')
 
+    await key('Escape')
+    await click('[data-recipient-count="1"]')
+    await click('[data-title-scenario]')
+    await openDetail('execution')
+    const titleStage = '[data-agent-run-id="run-agent-3"]'
+    const titleGeometry = () => run(`(() => {
+      const body = document.querySelector('.execution-drawer-body')
+      const stage = document.querySelector('${titleStage}')
+      const header = stage.querySelector('.execution-run-card-header')
+      const stop = header.querySelector('.is-danger')
+      const rect = element => element.getBoundingClientRect().toJSON()
+      const button = rect(stop)
+      return { body: rect(body), header: rect(header), card: rect(stage.querySelector('article')),
+        stop: button, stopVisible: stop.contains(document.elementFromPoint(button.x + button.width / 2, button.y + button.height / 2)),
+        heading: !!header.querySelector('h3 .execution-run-toggle'),
+        weight: getComputedStyle(header.querySelector('.execution-run-summary')).fontWeight,
+        operationsOpacity: getComputedStyle(header.querySelector('.execution-run-operations')).opacity,
+        overflow: body.scrollWidth > body.clientWidth, scrollTop: body.scrollTop }
+    })()`)
+    for (const placement of ['inspector', 'right', 'bottom']) {
+      if (await run("document.querySelector('.execution-drawer')?.dataset.placement") !== placement) {
+        await click('.run-pulse .execution-placement-button')
+        await click(`.execution-placement-option[data-placement="${placement}"]`)
+      }
+      for (const theme of ['day', 'night']) {
+        await run(`document.documentElement.dataset.theme = '${theme}'`)
+        for (const [width, height] of [[1440, 920], [1040, 700]]) {
+          await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
+          await settle()
+          await click('.run-pulse [data-agent-id="__execution_overview__"]')
+          const overview = await run(`(() => {
+            const mark = document.querySelector('.execution-overview-mark')
+            const title = document.querySelector('#execution-drawer-title').getBoundingClientRect()
+            const r = mark.getBoundingClientRect()
+            return { centerDelta: Math.abs(r.y + r.height / 2 - title.y - title.height / 2),
+              marks: [...document.querySelectorAll('.run-pulse-overview-mark, .execution-overview-mark')]
+                .filter(el => el.checkVisibility()).map(el => ({ rects: el.querySelectorAll('svg rect').length,
+                  radius: getComputedStyle(el).borderRadius, width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })) }
+          })()`)
+          assert.ok(overview.centerDelta <= 1, `Overview is vertically centered: ${JSON.stringify(overview)}`)
+          assert.equal(overview.marks.length, 2)
+          assert.ok(overview.marks.every(mark => mark.rects === 4 && mark.radius === '6px' && mark.width === mark.height))
+          await run(`(() => {
+            const stage = document.querySelector('${titleStage}')
+            const toggle = stage.querySelector('.execution-run-toggle')
+            if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click()
+          })()`)
+          await settle()
+          await run(`(() => {
+            const body = document.querySelector('.execution-drawer-body')
+            const stage = document.querySelector('${titleStage}')
+            body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220
+          })()`)
+          await settle()
+          const geometry = await titleGeometry()
+          assert.ok(Math.abs(geometry.header.top - geometry.body.top) <= 1, `Title pins to its scrollport: ${JSON.stringify(geometry)}`)
+          assert.ok(geometry.stopVisible && geometry.heading && geometry.weight === '600' && !geometry.overflow, JSON.stringify(geometry))
+          assert.equal(geometry.operationsOpacity, '1', 'Stop and collapse do not depend on hover')
+          assert.ok(geometry.card.right - geometry.stop.right >= 9, 'Sticky actions retain the right inset')
+          // The same identity path/stroke is used in the entry, receipt and the active placement.
+          const icons = await run(`(() => {
+            const selectors = ['.camp-execution-entry > svg:not(.camp-execution-orbits)', '.user-message-receipt.is-progress svg',
+              '${placement === 'right' ? '.file-preview-execution-icon' : placement === 'bottom' ? '.run-pulse-bottom-caption svg' : '.camp-detail-heading > svg'}']
+            return selectors.map(selector => document.querySelector(selector)).filter(Boolean).map(icon => ({
+              viewBox: icon.getAttribute('viewBox'), path: icon.querySelector('path')?.getAttribute('d'), stroke: getComputedStyle(icon).strokeWidth }))
+          })()`)
+          assert.ok(icons.length === (placement === 'bottom' ? 2 : 3) && icons.every(icon => icon.viewBox === '0 0 24 24'
+            && icon.path === 'M3 12h4l3-8 4 16 3-8h4' && icon.stroke === '1.65px'), JSON.stringify(icons))
+          await capture(`title-${placement}-${theme}-${width}`)
+        }
+      }
+      await click('.run-pulse [data-agent-id="agent-3"]')
+      await run(`(() => { const body = document.querySelector('.execution-drawer-body');
+        const stage = document.querySelector('${titleStage}');
+        body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220 })()`)
+      await settle()
+      const single = await titleGeometry()
+      assert.ok(single.stopVisible && Math.abs(single.header.top - single.body.top) <= 1, 'Single-member view shares the sticky title')
+      await capture(`title-${placement}-single-member`)
+      await window.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride')
+      window.webContents.setZoomFactor(2)
+      await settle()
+      await run(`(() => { const body = document.querySelector('.execution-drawer-body');
+        const stage = document.querySelector('${titleStage}');
+        body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220 })()`)
+      await settle()
+      const zoom = await titleGeometry()
+      assert.ok(zoom.stopVisible && !zoom.overflow && Math.abs(zoom.header.top - zoom.body.top) <= 1, 'Sticky controls fit at actual 200% zoom')
+      await capture(`title-${placement}-200-percent`)
+      window.webContents.setZoomFactor(1)
+      await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 1040, height: 700, deviceScaleFactor: 1, mobile: false })
+      await settle()
+      await click('.run-pulse [data-agent-id="__execution_overview__"]')
+      // Natural keyboard focus must reveal content below the sticky title.
+      await run(`(() => {
+        const body = document.querySelector('.execution-drawer-body')
+        const target = document.querySelector('${titleStage} .tool-group-summary')
+        body.scrollTop += target.getBoundingClientRect().top - body.getBoundingClientRect().top - 20
+        target.focus()
+      })()`)
+      await settle()
+      const focusClear = await run(`(() => {
+        const focused = document.activeElement.getBoundingClientRect()
+        const header = document.querySelector('${titleStage} .execution-run-card-header').getBoundingClientRect()
+        const body = document.querySelector('.execution-drawer-body').getBoundingClientRect()
+        return focused.top >= header.bottom && focused.bottom <= body.bottom
+      })()`)
+      assert.equal(focusClear, true, 'Keyboard focus is not obscured by the title')
+      await run(`(() => {
+        const next = document.querySelector('[data-agent-run-id="run-agent-2"] .execution-run-toggle')
+        if (next.getAttribute('aria-expanded') !== 'true') next.click()
+      })()`)
+      await settle()
+      await run(`(() => {
+        const body = document.querySelector('.execution-drawer-body')
+        const card = document.querySelector('${titleStage} article')
+        body.scrollTop += card.getBoundingClientRect().bottom - body.getBoundingClientRect().top - 20
+      })()`)
+      await settle()
+      const boundary = await titleGeometry()
+      assert.ok(boundary.header.bottom <= boundary.card.bottom + 1, 'The title never escapes its own Run')
+      assert.ok(boundary.header.top < boundary.body.top, `The next card pushes the prior title out: ${JSON.stringify(boundary)}`)
+    }
+    await run(`(() => { const body = document.querySelector('.execution-drawer-body');
+      const stage = document.querySelector('${titleStage}');
+      body.scrollTop += stage.getBoundingClientRect().top - body.getBoundingClientRect().top + 220 })()`)
+    await settle()
+    await click(`${titleStage} .execution-run-operations .is-danger`)
+    assert.equal(await run("document.querySelector('[data-stopped-runs]').textContent"), 'run-agent-3', 'Sticky stop targets only its exact Run')
+    assert.equal(await run("document.querySelectorAll('[data-delivery-queue-agent-id] .is-danger').length"), 0)
+
     console.log(JSON.stringify({ ok: true, cases: ['0/1/2/3/5 running entry members and duplicate runs', 'two equal brand orbits',
       'idle history with executed member count', 'entry names and keyboard focus', 'collapsed running state',
       '12/20-member overflow', '176px steps and overlap', 'mouse wheel/trackpad', 'keyboard and long-name tooltip',
@@ -655,7 +786,9 @@ app.whenReady().then(async () => {
       'waiting Delivery queue cards', 'independent multi-input popovers', 'Run card geometry and square overview avatars',
       'Day/Night', '1040/1440/2560/200% layout', 'reduced motion', 'forced colors', 'bottom dock unchanged',
       '0/1/2/16/48 delivery recipients', 'source attribution and deduplication', 'single-line complete avatars',
-      'overflow list keyboard scrolling and focus return', 'nested Escape', 'recipient resize and placement preservation'] }))
+      'overflow list keyboard scrolling and focus return', 'nested Escape', 'recipient resize and placement preservation',
+      'four-grid overview and centering in three placements', 'shared execution icon geometry',
+      'sticky title in three placements and two themes/sizes', 'focus not obscured', 'Run-bounded sticky and exact stop'] }))
     window.destroy()
     app.quit()
   } catch (error) {

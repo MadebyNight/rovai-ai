@@ -49,7 +49,11 @@ async function runFixture(t, expectedCases, mode = 'standard') {
       child.kill('SIGKILL')
       await closed
     }
-    await rm(fixture, { recursive: true, force: true })
+    if (process.env.ROVAI_KEEP_MISSION_BOARD_FIXTURE === '1') {
+      process.stdout.write(`Preserved Mission board fixture: ${fixture}\n`)
+    } else {
+      await rm(fixture, { recursive: true, force: true })
+    }
   }
 }
 
