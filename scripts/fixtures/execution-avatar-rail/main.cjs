@@ -315,19 +315,29 @@ app.whenReady().then(async () => {
     const runInputSelector = '[data-agent-run-id="run-agent-1"] .execution-batch-count'
     const runInputTrigger = await run(`(() => {
       const button = document.querySelector(${JSON.stringify(runInputSelector)})
-      return { label: button?.getAttribute('aria-label'), nested: !!button?.closest('.execution-run-toggle') }
+      const icon = button?.querySelector('svg')
+      return { label: button?.getAttribute('aria-label'), nested: !!button?.closest('.execution-run-toggle'),
+        iconViewBox: icon?.getAttribute('viewBox'), iconPath: icon?.querySelector('path')?.getAttribute('d'),
+        fontSize: button ? getComputedStyle(button).fontSize : null,
+        fontWeight: button ? getComputedStyle(button).fontWeight : null }
     })()`)
     assert.equal(runInputTrigger.label, '查看本次执行的 3 条输入')
     assert.equal(runInputTrigger.nested, false, 'The Run input count is an independent button')
+    assert.equal(runInputTrigger.iconViewBox, '0 0 24 24')
+    assert.equal(runInputTrigger.iconPath, 'm12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 17l10 5 10-5')
+    assert.equal(runInputTrigger.fontSize, '10.5px')
+    assert.equal(runInputTrigger.fontWeight, '400')
     await run(`document.querySelector(${JSON.stringify(runInputSelector)}).scrollIntoView({block:'center',inline:'nearest',behavior:'instant'})`)
     await settle()
     await click(runInputSelector)
     let inputPopover = await run(`(() => {
       const popup = document.querySelector('.execution-input-popover')
       return { items: popup?.querySelectorAll('.execution-input-list > li').length ?? 0,
-        text: popup?.textContent ?? '', focused: !!popup?.contains(document.activeElement) }
+        text: popup?.textContent ?? '', focused: !!popup?.contains(document.activeElement),
+        locateIcons: popup?.querySelectorAll('.execution-input-locate-icon').length ?? 0 }
     })()`)
     assert.equal(inputPopover.items, 3)
+    assert.equal(inputPopover.locateIcons, 3)
     assert.ok(inputPopover.text.includes('第 1 条合批输入') && inputPopover.text.includes('第 3 条合批输入'))
     assert.equal(inputPopover.focused, true, 'Keyboard focus enters the input popover')
     await capture('run-input-popover-day')

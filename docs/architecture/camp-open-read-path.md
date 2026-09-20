@@ -8,7 +8,7 @@ last_updated: 2026-09-20
 
 # Camp Open Read Path 架构
 
-字段与窗口见 [Camp Open Projection v20](../contracts/camp-open-projection-v20.md)与
+字段与窗口见 [Camp Open Projection v21](../contracts/camp-open-projection-v21.md)与
 [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)。本架构把“进入会话”、
 “继续阅读”、“查找完整当前会话”和“检查运行详情”分成用途明确的接口，同时保持 SQLite Read Side
 为唯一权威。
@@ -129,7 +129,7 @@ Renderer 保留连续已加载区间，用实测高度占位虚拟化视口外�
 运行中通过 `agentRunExecution.changes` 按原始变化水位追加/更新逻辑项，同时刷新原地变化的未完成正文。
 增量合并不改变历史 cursor，不把可见内容裁回最新一页。Camp 切换只卸载订阅与 DOM，保留有界 session 缓存；
 切回先显示最新缓存，再补齐变化。虚拟高度调整与翻页保留锚点，初始跟随意图等异步内容到达后完成。
-预算、淘汰后按需恢复和字段由 Camp Open v20 拥有。
+预算、淘汰后按需恢复和字段由 Camp Open v21 拥有。
 
 ## Complete conversation find flow
 
@@ -170,6 +170,6 @@ Memory 分别拥有局部 loading/error；全屏 StartupGate 只允许覆盖 Mai
 
 - [Core 受管内容不变量](foundational-invariants.md#core-managed-content)
 - [协作与执行准入不变量](foundational-invariants.md#collaboration-admission)
-- [Camp Open Projection v20](../contracts/camp-open-projection-v20.md)
+- [Camp Open Projection v21](../contracts/camp-open-projection-v21.md)
 - [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)
 - [Desktop Navigation Refresh](desktop-navigation-refresh.md)

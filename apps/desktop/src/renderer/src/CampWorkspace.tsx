@@ -6266,7 +6266,15 @@ function ExecutionStopIcon(): JSX.Element {
 }
 
 function ExecutionBatchIcon(): JSX.Element {
-  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 5 5-2 5 2-5 2zM3 8l5 2 5-2M3 11l5 2 5-2" /></svg>
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 17l10 5 10-5" />
+  </svg>
+}
+
+function ExecutionLocateIcon(): JSX.Element {
+  return <svg className="execution-input-locate-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 11V4h16v12h-6l-4 4v-4H8M2 12h8m-3-3 3 3-3 3" />
+  </svg>
 }
 
 function ExecutionInputList({
@@ -6303,7 +6311,7 @@ function ExecutionInputList({
             : <span className="execution-input-placeholder" aria-hidden="true"><ExecutionBatchIcon /></span>}
         <div>
           <div><strong>{author}</strong><button type="button" onClick={() => onRevealMessage(messageId)}>
-            定位原消息
+            <ExecutionLocateIcon />定位原消息
           </button></div>
           <p title={summary}>{summary}</p>
         </div>

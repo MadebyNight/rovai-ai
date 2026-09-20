@@ -4074,6 +4074,8 @@ describe('task event projections', () => {
     expect(queuedMarkup).toMatch(/class="message-action-line"><div class="user-message-receipt-row">[\s\S]*待处理 · 1[\s\S]*class="message-actions"/)
     expect(waitingQueueMarkup).toContain('data-delivery-queue-agent-id="agent_2"')
     expect(waitingQueueMarkup).toContain('aria-label="查看排队消息的 2 条输入"')
+    expect(waitingQueueMarkup).toContain('d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 17l10 5 10-5"')
+    expect(waitingQueueMarkup).toContain('class="execution-input-locate-icon"')
     expect(waitingQueueMarkup).toMatch(
       /class="execution-run-toggle"[\s\S]*?<\/button><button class="execution-batch-count"/
     )

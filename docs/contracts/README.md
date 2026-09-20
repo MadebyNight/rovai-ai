@@ -64,7 +64,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Runtime Images v4（历史）](runtime-images-v4.md) | v3 来源/读取/去重不变；Runtime 图片并入 Agent 图片区，按作者分区并采用 Agent 原比例与用户 72px 两种 Gallery variant；自动展示来源由 v5 收紧 |
 | [Runtime Images v3（历史）](runtime-images-v3.md) | v2 来源/保存/读取不变；同 Run 的已发送同摘要图片优先展示；统一图片几何与附件原序规则由 v4 替代 |
 | [Runtime Images v2（历史）](runtime-images-v2.md) | 本地结构化图片、ACP 增量累积、混合存储与 Camp-scoped 读取；允许显式附件重复展示的规则由 v3 替代 |
-| [Camp Open Projection v20（当前）](camp-open-projection-v20.md) | Open/投影阶段零业务与 Blob 写入；旧取消归启动恢复，文本失败归既有维护循环；Open schema 7 不变 |
+| [Camp Open Projection v21（当前）](camp-open-projection-v21.md) | 继承 v20；当前 Delivery 集合覆盖用户与 Agent 作者，loader 与 coverage 使用同一准入；Open schema 7 不变 |
+| [Camp Open Projection v20（历史）](camp-open-projection-v20.md) | Open/投影阶段零业务与 Blob 写入；旧取消归启动恢复，文本失败归既有维护循环；其当前 Delivery 作者覆盖由 v21 校正 |
 | [Camp Open Projection v19（历史）](camp-open-projection-v19.md) | 连续展示增量、跨 Camp 有界缓存、实测高度虚拟滚动；Open schema 7 不变 |
 | [Camp Open Projection v18（历史）](camp-open-projection-v18.md) | Open schema 7；首屏仅业务摘要，执行详情按可视窗口分页并预取相邻页 |
 | [Camp Open Projection v17（历史）](camp-open-projection-v17.md) | v16 wire 不变；公屏审批排除私有 Conversation |
@@ -441,8 +442,9 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v9 (historical)](context-manifest-evidence-v9.md) | bounded public omission evidence；不作为 Formatter v13 恢复入口 |
 | [Context Delivery Profile v2 (historical)](context-delivery-profile-v2.md) | 公共引用链与历史 budget 的旧当前合同；不选择 self-active Task |
 | [Context Delivery Profile v1 (historical)](context-delivery-profile-v1.md) | AgentRun 公共消息窗口、Unicode scalar 正文截断、历史字符预算与遗漏提示 |
-| [Run Process Detail Surface v37（当前）](run-process-detail-surface-v37.md) | 继承 v36；终态步骤数恢复统计所有已结算逻辑操作，失败、停止、跳过和结果未知均计入 N |
-| [Run Process Detail Surface v36（历史）](run-process-detail-surface-v36.md) | 继承 v35；claim 前 Delivery-backed 排队卡、独立多输入入口和紧凑卡几何 |
+| [Run Process Detail Surface v38（当前）](run-process-detail-surface-v38.md) | 继承 v37；排队卡读取当前用户 Delivery，层数按钮还原三层图标与交互稿字形 |
+| [Run Process Detail Surface v37（历史）](run-process-detail-surface-v37.md) | 继承 v36；终态步骤数恢复统计所有已结算逻辑操作，失败、停止、跳过和结果未知均计入 N |
+| [Run Process Detail Surface v36（历史）](run-process-detail-surface-v36.md) | 继承 v35；claim 前 Delivery-backed 排队卡、独立多输入入口和紧凑卡几何；其当前队列来源由 v38 校正 |
 | [Run Process Detail Surface v35（历史）](run-process-detail-surface-v35.md) | 三位置执行台、右侧共享 Tab、进入恢复、紧凑 Run 卡片、排队批次与折叠历史 |
 | [Run Process Detail Surface v34（历史）](run-process-detail-surface-v34.md) | 运行中连续追加、可见范围渲染、回看缓存免重复读取 |
 | [Run Process Detail Surface v33（历史）](run-process-detail-surface-v33.md) | 执行按窗口加载，关闭组不挂载子行，Diff 按条读取，取消执行内容脱敏 |
