@@ -73,8 +73,9 @@ Unix 默认配置 `.profile`、`.bashrc`、`.bash_profile`、`.zshrc` 的去重 
 官方源固定为 GitHub Releases，Server tag 为 `server-v<版本>`。资产名为
 `rovai-server-<版本>-<target>.tar.gz`（Unix）或 `.zip`（Windows），`SHA256SUMS` 每个资产恰好一项。
 安装器先完整下载、校验 SHA-256，检查归档路径/类型和包内版本/目标，再切换入口；下载/校验失败保留旧安装。
-默认版本由仓库 `scripts/server-channel.txt` 指定；目前为 `unpublished`，因此默认网络安装明确失败。
-只有实际发布相应资产并晋升该指针后，才能把网络安装命令描述为可用。没有独立域名或下载服务。
+默认版本由仓库 `scripts/server-channel.txt` 指定：稳定版本号表示默认网络安装使用该版本，`unpublished`
+表示默认网络安装明确失败。只有实际发布相应资产并晋升该指针后，才能把网络安装命令描述为可用。
+没有独立域名或下载服务。
 
 安装完成后可在任意工作目录运行：
 
