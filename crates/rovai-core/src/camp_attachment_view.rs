@@ -771,7 +771,7 @@ impl CampAttachmentViewStore {
         plan: CampAttachmentPublicationCopyPlan,
     ) -> Result<CopiedCampAttachmentPublication> {
         ensure_private_directory(&plan.operation_root)?;
-        #[cfg(test)]
+        #[cfg(all(test, feature = "extended-tests"))]
         pause_publication_copy_for_test(&plan.operation_id);
         let mut entries = Vec::with_capacity(plan.rows.len());
         for row in &plan.rows {
@@ -1941,7 +1941,7 @@ impl CampAttachmentViewStore {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pub(crate) fn remove_camp_view(&self, database: &mut Database, camp_id: &str) -> Result<()> {
         CampId::parse(camp_id)?;
         let camp_root = self.camp_root(camp_id)?;
@@ -3054,7 +3054,7 @@ impl CampAttachmentViewStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 #[derive(Debug)]
 struct PublicationCopyTestPause {
     started: std::sync::atomic::AtomicBool,
@@ -3062,7 +3062,7 @@ struct PublicationCopyTestPause {
     release: std::sync::Condvar,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 impl PublicationCopyTestPause {
     fn new() -> Self {
         Self {
@@ -3078,7 +3078,7 @@ impl PublicationCopyTestPause {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn publication_copy_test_pauses() -> &'static std::sync::Mutex<
     std::collections::BTreeMap<String, std::sync::Arc<PublicationCopyTestPause>>,
 > {
@@ -3090,7 +3090,7 @@ fn publication_copy_test_pauses() -> &'static std::sync::Mutex<
     PAUSES.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn pause_publication_copy_for_test(operation_id: &str) {
     let pause = publication_copy_test_pauses()
         .lock()
@@ -3109,7 +3109,7 @@ fn pause_publication_copy_for_test(operation_id: &str) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn view_verification_test_pauses() -> &'static std::sync::Mutex<
     std::collections::BTreeMap<String, std::sync::Arc<PublicationCopyTestPause>>,
 > {
@@ -3121,7 +3121,7 @@ fn view_verification_test_pauses() -> &'static std::sync::Mutex<
     PAUSES.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn pause_view_verification_for_test(camp_id: &str) {
     let pause = view_verification_test_pauses()
         .lock()
@@ -4625,7 +4625,7 @@ fn verify_resolution_ledger(
 }
 
 fn inspect_ready_camp_view(verification: &CampAttachmentViewVerification) -> Result<()> {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pause_view_verification_for_test(&verification.camp_id);
     if directory_identity_digest(&verification.root)? != verification.receipt.root_identity_digest {
         anyhow::bail!("Runtime Files Root identity changed");
@@ -5924,7 +5924,7 @@ fn unlock(file: &File) {
     let _ = file.unlock();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::{

@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: test-policy-and-command-routing
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 ---
 
 # 测试与 Smoke Test
@@ -71,6 +71,25 @@ cargo test -p rovai-core --lib -- --list
 cargo test --workspace -- --list
 ```
 
+### Rust 执行层级与默认预算
+
+Rust owner 分成四个可执行层级；feature gating 只改变日常路由，不表示合同或测试被删除：
+
+| 层级 | 命令 | 职责 |
+| --- | --- | --- |
+| 默认快速层 | `pnpm test:rust:pr` | PR/日常反馈；当前 macOS workspace 基线为 400 项 |
+| 扩展层 | `pnpm test:rust:extended` | 大型模块矩阵、SQLite fixture、子进程与并发 owner |
+| 慢速层 | `pnpm test:rust:slow` | 显式 `slow_tests` owner；`slow-tests` 会同时启用 `extended-tests` |
+| 完整层 | `pnpm test:rust:full` | `--all-features`，包含扩展、慢速和历史 Migration owner |
+
+400 是默认快速层的反馈预算，不是全仓测试总数或质量配额。新增纯 parser/serde、确定性 policy、常量和
+最小原子 regression 可以进入默认层；需要完整数据库、进程、重启、广泛 Runtime 矩阵或并发时序的 owner
+进入 `extended-tests`。历史 Migration 继续由 `legacy-migration-tests` 拥有。
+
+修改 feature-gated owner 时，定向命令必须显式加 `--features extended-tests`；若 owner 同时标为
+`slow-tests`，则使用 `--features slow-tests`。过滤命令显示 `0 tests` 不构成验证证据，提交前先用
+`-- --list` 确认目标 owner 实际进入清单。
+
 ## 测试层级
 
 ### DeepSeek Harness ACP
@@ -133,13 +152,13 @@ edit `+1/-1`、空文件 edit `+1/-0`；内容不匹配时即使 Diff 正确也�
 `acp::tests::codebuddy_launch_preserves_native_default_and_explicit_model_selection` 拥有 CodeBuddy 启动模型选择：
 RuntimeDefault 不得作为 `--model` 原生参数，显式模型仍须在 session/new 前传入。修复前传入内部 sentinel
 导致 BYOK 执行被拒绝。现有 launch owner 分别拥有 Kiro/Cursor 权限，未覆盖此模型边界；新 owner 仅检查命令
-构造，不创建进程或数据库。最小命令：`cargo test -p rovai-core --lib codebuddy_launch_preserves_native_default_and_explicit_model_selection`。
+构造，不创建进程或数据库。最小命令：`cargo test -p rovai-core --features extended-tests --lib codebuddy_launch_preserves_native_default_and_explicit_model_selection`。
 
 `health::tests::codex_probe_requires_login_unless_native_provider_explicitly_waives_it` 拥有 Codex 原生认证进程边界：
 同一隔离 fixture 覆盖 OpenAI 登录成功、自定义 Provider 明确免登录，以及 true、缺失、类型错误、RPC 拒绝。
 既有 ACP Native Home owner 使用另一协议，不能证明 `account/read` 的语义。fixture 不修改环境或读取真实凭据，
 故意返回空 capability schema，确保认证通过不会自动变成 Ready。最小命令：
-`cargo test -p rovai-core --lib codex_probe_requires_login_unless_native_provider_explicitly_waives_it`。
+`cargo test -p rovai-core --features extended-tests --lib codex_probe_requires_login_unless_native_provider_explicitly_waives_it`。
 
 既有 `zcode::tests::official_bundle_layouts_reject_launchers_and_missing_resources` 增补官方 Linux 平面布局、
 缺失 App 资源和 kernel symlink 越界拒绝；同时检查 Linux 默认位置不纳入相对 Home，不新增重复 owner。
@@ -170,13 +189,13 @@ RuntimeDefault 不得作为 `--model` 原生参数，显式模型仍须在 sessi
 `pi::host::tests::host_cwd_uses_safe_dos_spelling_and_rejects_extended_only_paths` 拥有 Pi 命令构造边界的
 路径转换矩阵：规范化的本地英文/中文路径必须传为等价 DOS 写法；需要 verbatim 语义的路径必须明确失败。
 既有 argv/Session 参数测试不检查 cwd，因此不能覆盖 Issue #346 的默认 Session 目录命名回归。
-Windows 定向命令为 `cargo test -p rovai-core --bin rovai-core pi::host::tests::`。
+Windows 定向命令为 `cargo test -p rovai-core --features extended-tests --bin rovai-core pi::host::tests::`。
 
 独立的 ignored `native_pi_host_starts_with_canonical_workspace` 使用真实 native Pi、Managed Process 和正式
 Host 参数验证 canonical Quick Chat/中文目录上的 `get_state`，不指定 Session 目录、不调用模型，并回收进程。
 运行前将 `ROVAI_PI_STARTUP_SMOKE_EXE` 指向官方 `pi.exe`，将 `ROVAI_PI_STARTUP_SMOKE_ROOT` 指向独立绝对
 临时目录，`PI_CODING_AGENT_DIR` 必须等于该目录下的 `agent`；Home/AppData 也应隔离，不继承认证环境。
-通过 `cargo test -p rovai-core --bin rovai-core pi::host::tests::native_pi_host_starts_with_canonical_workspace -- --exact --ignored`
+通过 `cargo test -p rovai-core --features extended-tests --bin rovai-core pi::host::tests::native_pi_host_starts_with_canonical_workspace -- --exact --ignored`
 显式执行。该 smoke 证明原生进程解释 cwd 的结果，不能由命令字段断言代替。
 
 ### CampOpen 业务读取边界
@@ -208,7 +227,7 @@ Electron 回归使用生产 adapter、CampWorkspace 与 CSS，验证空事件下
 可执行夹具，不启动真实模型。安装版手工验证使用显式 ignored 测试：
 
 ```bash
-cargo test -p rovai-core --lib health::claude_catalog_tests::claude_catalog_real_runtime_smoke -- --ignored --nocapture
+cargo test -p rovai-core --features extended-tests --lib health::claude_catalog_tests::claude_catalog_real_runtime_smoke -- --ignored --nocapture
 ```
 
 执行前遵守 [本地隔离流程](local-workflow.md)，确认实际 Claude 可执行入口与继承的配置；该命令只发送
@@ -264,11 +283,13 @@ Main 专属模块由 staged `src/main.rs` 声明、但未由 staged `src/lib.rs`
 到全量测试，不会静默跳过。该入口为既有调用方保留，不再作为日常默认：普通 Library 文件最终仍会
 运行整个 Library，无法替代上面的模块级 Cargo 过滤，也不继续扩展源码解析规则。
 
-`test:rust:workspace-default` 与 `test:rust:pr` 都运行 default-feature workspace；后者是 PR 集成入口。
-`test:rust:full` 运行 all-features workspace，包含 `slow-tests` 与 `legacy-migration-tests`。显式范围为：
+`test:rust:workspace-default` 与 `test:rust:pr` 都运行 400 项 default-feature workspace；后者是 PR
+集成入口。`test:rust:extended` 启用扩展 owner，`test:rust:full` 运行 all-features workspace，包含
+`extended-tests`、`slow-tests` 与 `legacy-migration-tests`。显式范围为：
 
 ```bash
 pnpm test:rust:workspace-default
+pnpm test:rust:extended
 pnpm test:rust:slow
 pnpm test:rust:pr
 pnpm test:rust:full
@@ -288,9 +309,10 @@ Rust 构建配置改动在自动门禁中执行：
 
 ```bash
 cargo fmt --all --check
-cargo check --workspace --all-targets
+cargo check --workspace
 ```
 
+自动 PR gate 不编译测试 target。默认 400 项由提交前的 `pnpm test:rust:pr` 承担；测试 target、
 All-features Clippy、测试与 Windows x64 原生编译/验证只在手动
 `.github/workflows/full-check.yml` 中执行；Linux 深度命令为：
 
@@ -300,10 +322,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 pnpm test:rust:full
 ```
 
-默认 fast suite 保留 parser/serde、纯 policy、幂等冲突、权限、路径与 symlink、安全脱敏、取消和
-route/epoch/session fencing、当前 schema 与受支持 migration smoke，以及每个高风险域的代表性原子
-E2E。`slow-tests` 承担需要完整 SQLite/Camp/Runtime fixture 的扩展场景；每个测试仍使用独立数据库
-clone，不共享可写状态。
+默认 fast suite 保留纯 parser/serde、确定性 policy、常量和最小原子 regression，并以 400 项作为当前
+反馈预算。`extended-tests` 承担大型模块矩阵、SQLite、子进程、并发与跨边界 owner；`slow-tests`
+承担需要完整 SQLite/Camp/Runtime fixture 的显式慢速场景，并隐式启用扩展层。每个数据库测试仍使用
+独立 clone，不共享可写状态。
 
 `legacy-migration-tests` 会隐式启用 `slow-tests`，只在手动 `Full check` 的全特性门禁中运行：
 
@@ -662,7 +684,7 @@ Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
 `db::tests::automation_time_limit_migration_preserves_definitions_and_rolls_back_with_its_receipt` 使用现有快速 schema
 夹具构造真实 schema 104 来源，验证新列与 receipt 同事务回滚、定义版本/Prompt/计划不变以及默认一小时。
 该边界需要 SQLite DDL 与准入记录，纯函数或无关历史迁移不能覆盖。最小命令：
-`cargo test -p rovai-core --lib automation_time_limit_migration`；原有来源矩阵继续保留全部旧输入。
+`cargo test -p rovai-core --features extended-tests --lib automation_time_limit_migration`；原有来源矩阵继续保留全部旧输入。
 
 
 既有 `team_tool::tests::public_send_atomically_persists_one_message_and_canonical_deliveries` 扩展为有限/无限
@@ -674,7 +696,7 @@ Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
 新增 `db::attachment_paths::tests::attachment_path_schema_and_receipt_commit_atomically` 拥有 schema 105→106
 的 SQLite DDL/迁移回执原子边界；注入最后回执写入失败时，表重建和版本号必须一起回滚，重试成功后拒绝
 仅保留同名空触发器的半成品 schema。该失败不属于旧 v155 Automation 迁移；需要真实 SQLite transaction，
-纯函数无法证明 DDL 回滚。最小命令：`cargo test -p rovai-core --lib attachment_path_schema_and_receipt`。
+纯函数无法证明 DDL 回滚。最小命令：`cargo test -p rovai-core --features extended-tests --lib attachment_path_schema_and_receipt`。
 原有受支持来源、冻结 ContextManifest 和 FK 迁移测试全部保留，升级链补接 v156。
 
 删除 CLI `send_attachments` 的 7 个 active tests，随同删除的生产模块一起退出：
@@ -691,6 +713,6 @@ Windows 平台实测独立记录，不能由此 macOS 浏览器结果推断。
 改写既有 `team_tool::tests::attachment_send_keeps_source_path_and_dispatches_without_projection_gate`，
 覆盖工作区、外部只读源、Run 临时源、默认输出、目录、跨 Camp 原路径、替换保存及源消失后内部重放；
 扩展既有 Camp 删除 journal、Pi 当前图片、Desktop file preview、Host HTTP/Chrome HTML 和临时实例清理 owner。
-定向验证：`cargo test -p rovai-core --lib attachment_send_keeps_source_path`、
+定向验证：`cargo test -p rovai-core --features extended-tests --lib attachment_send_keeps_source_path`、
 `cargo test -p rovai-core --bin rovai`、`node --test scripts/lib/host-web-html.test.mjs scripts/lib/host-web.test.mjs`；
 完整 Core library 与 Context slow suite 继续执行，不用删除旧迁移测试换取通过。

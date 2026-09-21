@@ -3318,7 +3318,7 @@ fn antigravity_binding_compatibility_digest(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::agent_profile::{PermissionOptionDescriptor, ValueChoice};

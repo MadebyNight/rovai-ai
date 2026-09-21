@@ -1014,7 +1014,7 @@ pub fn merge_projection(
     current
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use serde_json::json;

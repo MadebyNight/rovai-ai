@@ -1304,7 +1304,7 @@ fn file_details_with_authoritative_snapshot(
     snapshot_files
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::execution_evidence::ExecutionEvidenceService;

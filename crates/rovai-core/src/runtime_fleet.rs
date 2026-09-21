@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use rovai_core::agent_profile::AdapterKind;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 use tokio::sync::Notify;
 use tokio::{
     sync::{Mutex, oneshot},
@@ -175,11 +175,11 @@ pub(crate) enum RuntimeProcessHost {
     Codex(Arc<CodexHost>),
     Acp(Arc<AcpHost>),
     Pi(Arc<PiHost>),
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     Fake(Arc<FakeRuntimeProcessHost>),
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 #[derive(Debug)]
 pub(crate) struct FakeRuntimeProcessHost {
     process_id: String,
@@ -189,7 +189,7 @@ pub(crate) struct FakeRuntimeProcessHost {
     zcode_background: AtomicBool,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 pub(crate) fn fake_runtime_process_host(process_id: impl Into<String>) -> RuntimeProcessHost {
     RuntimeProcessHost::Fake(Arc::new(FakeRuntimeProcessHost {
         process_id: process_id.into(),
@@ -206,7 +206,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.host_instance_id(),
             Self::Acp(host) => host.host_instance_id(),
             Self::Pi(host) => host.host_instance_id(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => &host.process_id,
         }
     }
@@ -216,7 +216,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.is_alive(),
             Self::Acp(host) => host.is_alive(),
             Self::Pi(host) => host.is_alive(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => !host.reaped.load(std::sync::atomic::Ordering::Acquire),
         }
     }
@@ -224,7 +224,7 @@ impl RuntimeProcessHost {
     fn has_zcode_background_tasks(&self) -> bool {
         match self {
             Self::Acp(host) => host.has_zcode_background_tasks(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => host.zcode_background.load(Ordering::Acquire),
             _ => false,
         }
@@ -235,7 +235,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.is_quiescent().await,
             Self::Acp(host) => host.is_quiescent().await,
             Self::Pi(host) => host.is_quiescent().await,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => !host.reaped.load(std::sync::atomic::Ordering::Acquire),
         }
     }
@@ -245,7 +245,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.shutdown_and_reap().await,
             Self::Acp(host) => host.shutdown_and_reap().await,
             Self::Pi(host) => host.shutdown_and_reap().await,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => {
                 host.shutdown_calls
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -261,7 +261,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.force_reap_until(deadline).await,
             Self::Acp(host) => host.force_reap_until(deadline).await,
             Self::Pi(host) => host.force_reap_until(deadline).await,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => {
                 host.reaped.load(std::sync::atomic::Ordering::Acquire)
                     || timeout_at(deadline, self.shutdown_and_reap()).await.is_ok()
@@ -281,7 +281,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.pid(),
             Self::Acp(host) => host.pid(),
             Self::Pi(host) => host.pid(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(host) => {
                 (!host.reaped.load(std::sync::atomic::Ordering::Acquire)).then_some(42)
             }
@@ -293,7 +293,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.executable_path(),
             Self::Acp(host) => host.executable_path(),
             Self::Pi(host) => host.executable_path(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(_) => Path::new("fake-runtime"),
         }
     }
@@ -303,7 +303,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => host.builtin_tool_process_config().cloned(),
             Self::Acp(host) => host.builtin_tool_process_config().cloned(),
             Self::Pi(host) => host.builtin_tool_process_config().cloned(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(_) => None,
         }
     }
@@ -313,7 +313,7 @@ impl RuntimeProcessHost {
             Self::Codex(host) => Ok(host),
             Self::Acp(_) => bail!("Fleet returned an ACP Host to the Codex Adapter"),
             Self::Pi(_) => bail!("Fleet returned a Pi Host to the Codex Adapter"),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(_) => bail!("Fleet returned a fake Host to the Codex Adapter"),
         }
     }
@@ -323,7 +323,7 @@ impl RuntimeProcessHost {
             Self::Acp(host) => Ok(host),
             Self::Codex(_) => bail!("Fleet returned a Codex Host to an ACP Adapter"),
             Self::Pi(_) => bail!("Fleet returned a Pi Host to an ACP Adapter"),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(_) => bail!("Fleet returned a fake Host to the ACP Adapter"),
         }
     }
@@ -333,7 +333,7 @@ impl RuntimeProcessHost {
             Self::Pi(host) => Ok(host),
             Self::Codex(_) => bail!("Fleet returned a Codex Host to the Pi Adapter"),
             Self::Acp(_) => bail!("Fleet returned an ACP Host to the Pi Adapter"),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "extended-tests"))]
             Self::Fake(_) => bail!("Fleet returned a fake Host to the Pi Adapter"),
         }
     }
@@ -1177,7 +1177,7 @@ fn owner_process_arguments(pid: u32) -> Option<Vec<PathBuf>> {
 }
 
 impl AgentRuntimeFleetManager {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pub(crate) fn new(config: AgentRuntimeFleetConfig) -> Self {
         Self::with_owner_records(config, None, Arc::new(BuiltinToolLeaseRegistry::default()))
     }
@@ -1979,7 +1979,7 @@ impl AgentRuntimeFleetManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
 

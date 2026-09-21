@@ -14,7 +14,7 @@ use std::{
 use std::{fs::OpenOptions, io::Write};
 
 use anyhow::{Context, Result, bail};
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "extended-tests"))]
 use rovai_core::agent_runtime_adapter::TRAE_RUNTIME_DEFAULT_MODEL_ID;
 use rovai_core::{
     action::{
@@ -3485,7 +3485,7 @@ impl AcpRuntime {
         )
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, unix, feature = "extended-tests"))]
     pub async fn start_or_resume_session(
         &self,
         existing_session_id: Option<&str>,
@@ -3755,7 +3755,7 @@ impl AcpRuntime {
             .and_then(acp_runtime_model_id_from_session)
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, unix, feature = "extended-tests"))]
     async fn verification_evidence(&self) -> Option<(Value, Value)> {
         let initialize = self.host.initialize_result.read().await.clone()?;
         let session = self.session_result.read().await.clone()?;
@@ -4215,7 +4215,7 @@ pub struct AcpCliRuntimeAdapter {
 }
 
 impl AcpCliRuntimeAdapter {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pub fn new(
         kind: AdapterKind,
         incoming: mpsc::UnboundedSender<AcpIncoming>,
@@ -5811,7 +5811,7 @@ fn acp_protocol_path(path: &Path) -> String {
     value.into_owned()
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, windows, feature = "extended-tests"))]
 mod windows_path_tests {
     use super::acp_protocol_path;
     use std::path::Path;
@@ -6781,7 +6781,7 @@ fn canonicalize_allow_missing(path: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod route_policy_tests {
     use super::*;
 
@@ -6982,7 +6982,7 @@ mod route_policy_tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "extended-tests"))]
 mod tests {
     use super::*;
 

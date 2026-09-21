@@ -12598,7 +12598,7 @@ where
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::{

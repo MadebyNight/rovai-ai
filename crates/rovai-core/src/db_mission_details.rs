@@ -401,7 +401,7 @@ impl Database {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::command::{ActorRef, CommandEnvelope};

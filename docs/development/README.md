@@ -1,7 +1,7 @@
 ---
 document_type: development-index
 authority: development-routing
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 ---
 
 # Rovai-ai 开发者指南
@@ -85,10 +85,11 @@ push / PR 前由集成执行者运行默认 feature 的 Rust 回归：
 pnpm test:rust:pr
 ```
 
-`test:rust:pr` 一次运行 default-feature workspace，不包含 `slow-tests` 或历史 Migration feature。
-`test:rust:full` 一次运行 all-features workspace，供手动完整验收使用。PR 的 `CI / gate` 仅执行
-`cargo fmt --all --check` 和 `cargo check --workspace --all-targets`；all-features Clippy、测试与
-Windows 专项验证由手动 `Full check` workflow 承接。
+`test:rust:pr` 一次运行当前 400 项 default-feature workspace，不包含 `extended-tests`、`slow-tests`
+或历史 Migration feature。修改扩展 owner 时运行 `pnpm test:rust:extended`；`test:rust:full` 一次运行
+all-features workspace，供手动完整验收使用。PR 的 `CI / gate` 仅执行
+`cargo fmt --all --check` 和生产 target 的 `cargo check --workspace`；测试 target、all-features
+Clippy、测试与 Windows 专项验证由手动 `Full check` workflow 承接。
 涉及桌面构建或跨边界改动时继续运行：
 
 ```bash

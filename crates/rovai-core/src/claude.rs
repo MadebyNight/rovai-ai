@@ -127,7 +127,7 @@ pub struct ClaudeCodeCliRuntimeAdapter {
 }
 
 impl ClaudeCodeCliRuntimeAdapter {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pub fn new(data_dir: &Path) -> Result<Self> {
         let adapter = Self::deferred(data_dir);
         adapter.initialize_storage()?;
@@ -1925,7 +1925,7 @@ fn restrict_directory_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use serde_json::json;

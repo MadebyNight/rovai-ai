@@ -26,7 +26,7 @@ use crate::agent_identity::{
     FIRST_USER_AGENT_ORDINAL, LEGACY_BUILT_IN_AGENT_ID_MAPPINGS, LUOKE_AGENT_ID, MIANZHI_AGENT_ID,
     MUWA_AGENT_ID, QILU_AGENT_ID, format_agent_id,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 use crate::agent_runtime_adapter::SkillDeliveryGroupKey;
 use crate::camp_id::CampId;
 use crate::command::canonical_json_digest;
@@ -5425,7 +5425,7 @@ fn finalize_staged_authority(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn validate_staged_authority(
     connection: &Connection,
     path: &Path,
@@ -5906,7 +5906,7 @@ impl Database {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pub(crate) fn migrate_staged_authority_copy(
         path: &Path,
         runtime_camp_files_root: &Path,
@@ -6010,7 +6010,7 @@ impl Database {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     fn open_with_data_contract_enforcement(
         data_dir: &Path,
         enforce_data_contract: bool,
@@ -8055,7 +8055,7 @@ impl Database {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     fn migrate_missions_v156(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
@@ -31356,7 +31356,7 @@ impl Database {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 pub(crate) fn downgrade_current_schema_to_main_camp_source_for_test(
     database: &mut Database,
     source: MainCampMigrationSource,
@@ -34450,7 +34450,7 @@ pub(crate) fn downgrade_current_schema_to_v115_source_for_test(connection: &Conn
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v114_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v115_source_for_test(connection);
     let has_v115: bool = connection
@@ -34476,7 +34476,7 @@ fn downgrade_current_schema_to_v114_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v113_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v114_source_for_test(connection);
     let has_v114: bool = connection
@@ -34504,7 +34504,7 @@ fn downgrade_current_schema_to_v113_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v112_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v113_source_for_test(connection);
     let has_v113: bool = connection
@@ -34564,7 +34564,7 @@ fn downgrade_current_schema_to_v112_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_legacy_feishu_collision_for_test(connection: &Connection) {
     downgrade_current_schema_to_v117_source_for_test(connection);
     connection
@@ -34637,7 +34637,7 @@ fn downgrade_current_schema_to_legacy_feishu_collision_for_test(connection: &Con
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v111_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v112_source_for_test(connection);
     let has_v112: bool = connection
@@ -34670,7 +34670,7 @@ fn downgrade_current_schema_to_v111_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v110_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v111_source_for_test(connection);
     let has_v111: bool = connection
@@ -34774,7 +34774,7 @@ fn downgrade_current_schema_to_v110_source_for_test(connection: &Connection) {
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v109_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v110_source_for_test(connection);
     let has_v110: bool = connection
@@ -34808,7 +34808,7 @@ fn downgrade_current_schema_to_v109_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v108_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v109_source_for_test(connection);
     let has_v109: bool = connection
@@ -34831,7 +34831,7 @@ fn downgrade_current_schema_to_v108_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v102_source_for_test(connection: &Connection) {
     let has_v102: bool = connection
         .query_row(
@@ -34970,7 +34970,7 @@ fn downgrade_current_schema_to_v102_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn downgrade_current_schema_to_v99_source_for_test(connection: &Connection) {
     downgrade_current_schema_to_v102_source_for_test(connection);
     let has_v100: bool = connection
@@ -35115,7 +35115,7 @@ fn downgrade_current_schema_to_v99_source_for_test(connection: &Connection) {
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 pub(crate) fn downgrade_current_schema_to_v98_source_for_test(connection: &Connection) {
     let has_v100: bool = connection
         .query_row(
@@ -35408,7 +35408,7 @@ pub(crate) fn downgrade_current_schema_to_v98_source_for_test(connection: &Conne
         .unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
 

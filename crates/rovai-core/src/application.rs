@@ -23108,7 +23108,7 @@ fn parse_mcp_config_path_from(args: impl IntoIterator<Item = String>) -> Result<
     Ok(None)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     #[cfg(feature = "slow-tests")]
@@ -24806,7 +24806,6 @@ done
                 .unwrap();
             attachment_store.load_draft(&database, &camp_id).unwrap()
         };
-        let draft_revision = prepared.revision;
         let attachment_id = prepared.attachments[0].id.clone();
         core.send_test_camp_message_request(SendCampMessageParams {
             command_id: uuid::Uuid::new_v4().to_string(),

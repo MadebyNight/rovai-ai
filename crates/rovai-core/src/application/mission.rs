@@ -103,7 +103,7 @@ fn mission_workspace_read_matches(expected: &MissionWorkspace, current: &Mission
         && current.working_directory == expected.working_directory
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn cleanup_refusal_code(error: &anyhow::Error) -> Option<&'static str> {
     if let Some(refusal) = error.downcast_ref::<CleanupRefusal>() {
         return Some(refusal.code());
@@ -1247,7 +1247,7 @@ async fn select_candidate(
     anyhow::bail!("mission.workspace_names_exhausted")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::{cleanup_refusal_code, mission_workspace_read_matches, worktree_cleanup_required};
     use crate::mission_workspace::MissionWorkspace;

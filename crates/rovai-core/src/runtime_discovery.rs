@@ -1971,6 +1971,7 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[cfg(feature = "extended-tests")]
     #[tokio::test]
     async fn installed_catalog_discovery_runs_only_bounded_identity_commands() {
         let directory = env::temp_dir().join(format!(

@@ -1753,25 +1753,9 @@ fn rejected(code: &str, message: &str) -> CommandHandlerResult {
     CommandHandlerResult::rejected(code, json!({ "message": message }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
-    #[cfg(feature = "slow-tests")]
-    use crate::{
-        agent_profile::configure_test_runtime,
-        collaboration::{RemoveCampMemberCommand, end_camp_membership},
-        context::{
-            CharterDeliveryMode, ContextMaterialization, ContextService,
-            DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES, MaterializeContextRequest,
-        },
-        managed_blob::ManagedBlobStore,
-        memory::{MEMORY_AGENT_MUTATIONS_PER_RUN, MemoryCreationOrigin, RetireMemoryCommand},
-        memory_retrieval::{MemoryCacheState, MemoryReadInput, MemorySearchInput},
-        message_delivery::{
-            DeliveryDispatchOutcome, DeliveryDispatchTrigger, dispatch_pending_for_recipient,
-        },
-        runtime::{CancelAgentRunCommand, CancelCampTurnCommand, FailAgentRunCommand},
-    };
     use crate::{
         camp_attachment_view::CampAttachmentViewStore,
         collaboration::{
@@ -1792,6 +1776,19 @@ mod tests {
             BindNativeSessionCommand, ClaimAgentRunCommand, ExecutionRuntimeService,
             MissingSendRecoveryBoundary, MissingSendRecoveryCandidate, SucceedAgentRunCommand,
         },
+    };
+    #[cfg(feature = "slow-tests")]
+    use crate::{
+        collaboration::{RemoveCampMemberCommand, end_camp_membership},
+        context::{
+            CharterDeliveryMode, ContextMaterialization, ContextService,
+            DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES, MaterializeContextRequest,
+        },
+        managed_blob::ManagedBlobStore,
+        memory::{MEMORY_AGENT_MUTATIONS_PER_RUN, MemoryCreationOrigin, RetireMemoryCommand},
+        memory_retrieval::{MemoryCacheState, MemoryReadInput, MemorySearchInput},
+        message_delivery::{DeliveryDispatchTrigger, dispatch_pending_for_recipient},
+        runtime::{CancelAgentRunCommand, FailAgentRunCommand},
     };
 
     fn user_envelope<P>(command_id: &str, camp_id: Option<&str>, payload: P) -> CommandEnvelope<P> {
@@ -2409,30 +2406,6 @@ mod tests {
             assert_eq!(completed.result.status, CommandResultStatus::Applied);
             completed
         }
-    }
-
-    #[cfg(feature = "slow-tests")]
-    fn public_send_schema_keeps_inline_fallback_out_of_agent_body_help() {
-        let schema = TeamToolService::camp_message_send_input_schema();
-        let body_description = schema["properties"]["body"]["description"]
-            .as_str()
-            .unwrap();
-        let to_description = schema["properties"]["to"]["description"].as_str().unwrap();
-
-        assert_eq!(
-            body_description,
-            "Optional exact public message body; omit it when at least one file supplies the complete payload."
-        );
-        for hidden_fallback_term in [
-            "@agent_N",
-            "@display-name",
-            "cluster",
-            "dedicated final line",
-        ] {
-            assert!(!body_description.contains(hidden_fallback_term));
-        }
-        assert!(to_description.contains("canonical Agent ID"));
-        assert!(to_description.contains("Display names are not accepted here"));
     }
 
     #[test]

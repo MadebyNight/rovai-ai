@@ -5,10 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 use rusqlite::{Connection, OpenFlags, backup::StepResult};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 use std::thread;
 use uuid::Uuid;
 
@@ -24,18 +24,18 @@ use crate::{
     platform::private_storage::create_private_new_file,
 };
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 use crate::platform::private_storage::{
     atomic_write_private_json, prepare_private_directory, publish_private_temporary_file,
 };
 
 const MIGRATION_BACKUP_ROOT: &str = ".rovai-authority-migration-backups";
 const MANIFEST_MAX_BYTES: u64 = 128 * 1024;
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 const BACKUP_PAGES_PER_STEP: i32 = 256;
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 const BACKUP_BUSY_RETRY_LIMIT: usize = 200;
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 const BACKUP_BUSY_PAUSE: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -259,7 +259,7 @@ pub fn trace_startup_stage(stage: &str, elapsed: Duration, source_contract: Opti
 
 // Retained solely to construct genuine pre-upgrade crash fixtures. Production
 // contains the legacy reader/recovery below, never a new snapshot-switch writer.
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn legacy_snapshot_switch_for_test(
     open: MigrationAuthorityOpen<'_>,
     runtime_camp_files_root: &Path,
@@ -452,7 +452,7 @@ fn legacy_snapshot_switch_for_test(
     Ok(database)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn backup_authority(
     source: &Path,
     destination: &Path,
@@ -594,7 +594,7 @@ fn recover_interrupted_switch(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 #[derive(Debug, Clone)]
 struct SourceArtifact {
     kind: AuthorityArtifactKind,
@@ -602,7 +602,7 @@ struct SourceArtifact {
     identity: AuthorityArtifactIdentityToken,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn observe_source_artifacts(
     source: &Path,
     namespace: AuthorityNamespace,
@@ -643,7 +643,7 @@ fn observe_source_artifacts(
     Ok(artifacts)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn prepare_backup_directory(
     lease: &CoreDataDirLease,
     operation_id: Uuid,
@@ -743,7 +743,7 @@ fn open_existing_no_follow(path: &Path) -> io::Result<File> {
     File::open(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn detach_source_sidecars(
     lease: &CoreDataDirLease,
     backup_directory: &Path,
@@ -968,7 +968,7 @@ fn remove_generated_file_if_identity(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn remove_generated_sqlite_files(path: &Path) {
     let name = path.as_os_str().to_string_lossy();
     let _ = std::fs::remove_file(path);
@@ -1128,7 +1128,7 @@ fn is_leaf(value: &str) -> bool {
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 fn leaf_name(path: &Path) -> Result<String, DatabaseMigrationError> {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -1155,7 +1155,7 @@ fn artifact_kind_name(kind: AuthorityArtifactKind) -> &'static str {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 use crate::database_admission::sqlite_error_is_transient as sqlite_retryable;
 
 fn phase(phase: AuthorityMigrationPhase) -> AuthorityMigrationProgress {
@@ -1244,7 +1244,7 @@ impl DatabaseMigrationError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::{
