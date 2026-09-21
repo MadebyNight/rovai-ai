@@ -80,6 +80,7 @@
   --conversation-focus-soft: rgba(43, 43, 44, 0.12);
   --conversation-route-accent: #7a7d80;
   --conversation-unread: #1683ff;
+  --update-progress-fill: #2879e8;
   --mission-unread-ink: #0967d2;
   --file-update-marker: #b7791f;
   --channel-feishu: #3370ff;
@@ -269,6 +270,7 @@
   --conversation-focus-soft: rgba(212, 212, 216, 0.16);
   --conversation-route-accent: #a2a6aa;
   --conversation-unread: #5aa7ff;
+  --update-progress-fill: #60a5fa;
   --mission-unread-ink: #79b8ff;
   --file-update-marker: #d2ac70;
   --channel-feishu: #7fa2ff;

@@ -63,7 +63,7 @@ export function AboutUpdatesSettingsView({
   }
 
   return (
-    <div className="about-updates-settings">
+    <div className="about-updates-settings" data-update-read-only={readOnly}>
       <SettingsPageHeader
         eyebrow="Settings / About & Updates"
         title="关于与更新"
@@ -86,7 +86,7 @@ export function AboutUpdatesSettingsView({
             <div><h2 id="about-update-heading">软件更新</h2><p>检查、下载与安装</p></div>
           </div>
           <div className="about-update-body">
-            <div className="about-update-control">
+            <div className="about-update-control" data-update-status={snapshot?.status ?? 'unavailable'}>
               <div>
                 <strong>{controlTitle(snapshot)}</strong>
                 <p>{product === 'server' && snapshot?.failureReason === 'restart_unconfirmed' ? '连接暂未恢复，尚不能确认更新结果。' : product === 'server' && snapshot?.status === 'installing' ? 'Server 正在重启，页面会自动恢复连接。' : controlDetail(snapshot)}</p>

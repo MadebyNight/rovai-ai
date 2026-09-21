@@ -31,6 +31,7 @@ const requiredTokens = [
   '--conversation-focus-soft',
   '--conversation-route-accent',
   '--conversation-unread',
+  '--update-progress-fill',
   '--mission-unread-ink',
   '--file-update-marker',
   '--execution-running-surface',
@@ -218,6 +219,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
         ['--conversation-focus', '--rail'],
         ['--conversation-unread', '--rail'],
         ['--conversation-unread', '--surface-selected'],
+        ['--update-progress-fill', '--surface-muted'],
         ['--file-update-marker', '--conversation-surface'],
         ['--file-update-marker', '--surface-muted']
       ]) {
@@ -226,6 +228,8 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     }
     expect(day['--file-update-marker']).toBe('#b7791f')
     expect(night['--file-update-marker']).toBe('#d2ac70')
+    expect(day['--update-progress-fill']).toBe('#2879e8')
+    expect(night['--update-progress-fill']).toBe('#60a5fa')
     expect(day['--mission-unread-ink']).toBe('#0967d2')
     expect(night['--mission-unread-ink']).toBe('#79b8ff')
   })

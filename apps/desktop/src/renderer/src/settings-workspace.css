@@ -1275,20 +1275,39 @@
   border-radius: 0;
   background: transparent;
 }
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-updates-settings[data-update-read-only="false"] .settings-page-heading-copy>p:last-child {
+  display: none;
+}
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control {
-  min-height: 48px;
+  min-height: 40px;
+  align-items: center;
   padding: 0;
   border-radius: 0;
   background: transparent;
   gap: 18px;
 }
-:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control>div {
-  gap: 6px;
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control>div:first-child {
+  gap: 7px;
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-actions {
+  gap: 8px!important;
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-actions>button {
+  min-height: 32px;
 }
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-download-progress {
+  gap: 10px;
   padding: 8px 0 4px;
   background: transparent;
   border-radius: 0;
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-download-progress-meta {
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-download-progress-heading strong {
+  font-size: 12px;
 }
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-fallback {
   padding: 4px 0 0;
@@ -1299,7 +1318,7 @@
   flex-wrap: wrap;
   gap: 10px 16px;
 }
-:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-fallback strong {
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-fallback>div:first-child {
   display: none;
 }
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-fallback span {
@@ -1316,6 +1335,9 @@
 }
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-fallback-actions a:hover {
   background: var(--surface-hover);
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-fallback-actions {
+  gap: 8px;
 }
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-release-section {
   border-bottom: 0;
@@ -1434,6 +1456,28 @@
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control strong {
   font-size: 14px;
   font-weight: 550;
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control>div:first-child>strong::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--attention);
+  vertical-align: 2px;
+  content: "";
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control[data-update-status="idle"]>div:first-child>strong::before {
+  background: var(--neutral);
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control:is([data-update-status="checking"],[data-update-status="downloading"],[data-update-status="installing"])>div:first-child>strong::before {
+  background: var(--info);
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control:is([data-update-status="up_to_date"],[data-update-status="ready_to_install"])>div:first-child>strong::before {
+  background: var(--success);
+}
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-update-control:is([data-update-status="check_failed"],[data-update-status="download_failed"],[data-update-status="install_failed"],[data-update-status="unavailable"])>div:first-child>strong::before {
+  background: var(--danger);
 }
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .settings-page-note {
   border: 0;
