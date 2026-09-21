@@ -26,6 +26,22 @@ it('retains one live entry per identified block across batches, tools, overlap a
   expect(events[1]).toBe(tool)
 })
 
+it('concatenates version-decorated text deltas instead of treating them as row replacements', () => {
+  const delta = (offset: number, text: string, revision: number): LiveRuntimeEvent => ({
+    ...event(offset),
+    id: `block:${offset}`,
+    revision,
+    changeSequence: revision,
+    payload: { blockId: 'block', itemId: 'block', textOffset: offset, delta: text }
+  })
+  const events = appendLiveRuntimeEventBatch([], [
+    delta(0, 'hello ', 1),
+    delta(6, 'world', 2)
+  ])
+  expect(events).toHaveLength(1)
+  expect(events[0].payload).toMatchObject({ textOffset: 0, delta: 'hello world' })
+})
+
 function event(id: number, eventType = 'agent.text.delta'): LiveRuntimeEvent {
   return { id: `event-${id}`, agentRunId: 'run', eventType,
     payload: { delta: `${id}` }, createdAt: '2026-08-31T00:00:00Z' }
@@ -45,7 +61,7 @@ it('batches visible progress without a rolling count cap or losing any text delt
   buffer.dispose()
 })
 
-it('does not wake React for hidden reasoning, and retains its narration boundary in order', () => {
+it('drops hidden reasoning before Renderer state and retains narration order', () => {
   vi.useFakeTimers()
   const committed: LiveRuntimeEvent[] = []
   const append = vi.fn((batch: LiveRuntimeEvent[]) => committed.push(...batch))
@@ -55,13 +71,23 @@ it('does not wake React for hidden reasoning, and retains its narration boundary
   for (let id = 2; id <= 601; id += 1) buffer.push(event(id, 'agent.thought.delta'))
   vi.advanceTimersByTime(5_000)
   expect(append).toHaveBeenCalledTimes(1)
+  const phase: LiveRuntimeEvent = {
+    id: 'phase-thinking',
+    agentRunId: 'run',
+    eventType: 'agent_run.runtime_phase_changed',
+    payload: { phase: 'thinking' },
+    createdAt: '2026-08-31T00:00:00Z'
+  }
+  buffer.push(phase)
+  vi.advanceTimersByTime(32)
   buffer.push(event(602))
   vi.advanceTimersByTime(32)
-  expect(append).toHaveBeenCalledTimes(2)
-  expect(committed).toHaveLength(602)
+  expect(append).toHaveBeenCalledTimes(3)
+  expect(committed).toHaveLength(3)
   const progress = buildLiveExecutionProgress(committed, 'run')
-  expect(progress).toEqual(buildLiveExecutionProgress([event(1), event(2, 'agent.thought.delta'), event(602)], 'run'))
+  expect(progress).toEqual(buildLiveExecutionProgress([event(1), phase, event(602)], 'run'))
   expect(progress.items.filter(item => item.kind === 'narration')).toHaveLength(2)
+  expect(progress.runtimePhase).toBe('thinking')
   buffer.dispose()
 })
 
@@ -77,6 +103,5 @@ it('flushes pending events on terminal or resubscription and cancels scheduled w
   buffer.dispose()
   buffer.push(event(4))
   vi.runAllTimers()
-  expect(append).toHaveBeenCalledTimes(2)
-  expect(append.mock.calls[1][0]).toEqual([event(3, 'agent.thought.delta')])
+  expect(append).toHaveBeenCalledTimes(1)
 })

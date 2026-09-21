@@ -1314,7 +1314,7 @@ struct ExecutionWindowParams {
 struct ExecutionChangesParams {
     camp_id: CampId,
     agent_run_id: String,
-    after_sequence: i64,
+    after_change_sequence: i64,
     #[serde(default)]
     refresh_evidence_ids: Vec<String>,
     limit: Option<i64>,
@@ -2111,6 +2111,7 @@ struct Core {
     agent_run_cancellation_notify: Notify,
     delivery_batch_scheduler_notify: Notify,
     agent_run_cleanup_inflight: Mutex<HashSet<ActiveExecutionKey>>,
+    runtime_phases: Mutex<HashMap<String, (i64, String)>>,
     network_recovery: Mutex<NetworkRecoveryQueue>,
     network_recovery_notify: Notify,
     pending_execution_recovery: Mutex<()>,
@@ -8646,7 +8647,33 @@ impl Core {
             "agentRunFileChanges.get" => {
                 let params: AgentRunFileChangesParams =
                     serde_json::from_value(request.params.clone())?;
-                let database = self.database.lock().await;
+                let mut database = self.database.lock().await;
+                let authorized: bool = database.connection().query_row(
+                    r#"
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM agent_run
+                        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                        WHERE agent_run.id = ?1
+                          AND agent_run.execution_epoch = ?2
+                          AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?3
+                    )
+                    "#,
+                    rusqlite::params![params.agent_run_id, params.execution_epoch, params.camp_id,],
+                    |row| row.get(0),
+                )?;
+                anyhow::ensure!(authorized, "AgentRun does not belong to the requested Camp");
+                if let Err(error) = AgentRunFileChangeProjector.project_terminal_run(
+                    &mut database,
+                    &ManagedBlobStore::new(&self.data_dir),
+                    &params.agent_run_id,
+                    params.execution_epoch,
+                ) {
+                    eprintln!(
+                        "AgentRun file-change refresh remains pending for {}/{}: {error:#}",
+                        params.agent_run_id, params.execution_epoch
+                    );
+                }
                 Ok(serde_json::to_value(
                     agent_run_file_change::read_run_file_changes(
                         &database,
@@ -8708,10 +8735,21 @@ impl Core {
                     &database,
                     &params.evidence_id,
                 )?;
+                let (revision, change_sequence) = database.connection().query_row(
+                    "SELECT revision, change_sequence FROM agent_run_execution_evidence WHERE id = ?1",
+                    [&params.evidence_id],
+                    |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+                )?;
                 let read_ms = read_started_at.elapsed().as_millis();
                 drop(database);
                 let serialization_started_at = Instant::now();
-                let value = json!({ "evidenceId": params.evidence_id, "payload": payload, "canonical": canonical });
+                let value = json!({
+                    "evidenceId": params.evidence_id,
+                    "revision": revision,
+                    "changeSequence": change_sequence,
+                    "payload": payload,
+                    "canonical": canonical,
+                });
                 let serialization_ms = serialization_started_at.elapsed().as_millis();
                 eprintln!(
                     "[execution-window] request={} method={} camp={:?} evidence={:?} stage=read_complete lock_ms={} read_ms={} serialization_ms={}",
@@ -8736,14 +8774,23 @@ impl Core {
                     &mut database,
                     params.camp_id.as_str(),
                     &params.agent_run_id,
-                    params.after_sequence,
+                    params.after_change_sequence,
                     &params.refresh_evidence_ids,
                     params.limit.unwrap_or(96),
                 )?;
                 let read_ms = read_started_at.elapsed().as_millis();
                 drop(database);
                 let serialization_started_at = Instant::now();
-                let value = serde_json::to_value(changes)?;
+                let mut value = serde_json::to_value(changes)?;
+                if let Some((_, phase)) = self
+                    .runtime_phases
+                    .lock()
+                    .await
+                    .get(&params.agent_run_id)
+                    .cloned()
+                {
+                    value["runtimePhase"] = Value::String(phase);
+                }
                 let serialization_ms = serialization_started_at.elapsed().as_millis();
                 eprintln!(
                     "[execution-window] request={} method={} camp={:?} run={:?} stage=read_complete lock_ms={} read_ms={} serialization_ms={}",
@@ -8776,7 +8823,16 @@ impl Core {
                 let read_ms = read_started_at.elapsed().as_millis();
                 drop(database);
                 let serialization_started_at = Instant::now();
-                let value = serde_json::to_value(page)?;
+                let mut value = serde_json::to_value(page)?;
+                if let Some((_, phase)) = self
+                    .runtime_phases
+                    .lock()
+                    .await
+                    .get(&params.agent_run_id)
+                    .cloned()
+                {
+                    value["runtimePhase"] = Value::String(phase);
+                }
                 let serialization_ms = serialization_started_at.elapsed().as_millis();
                 eprintln!(
                     "[execution-window] request={} method={} camp={:?} run={:?} stage=read_complete lock_ms={} read_ms={} serialization_ms={}",
@@ -15175,6 +15231,14 @@ impl Core {
         agent_run_id: &str,
         execution_epoch: i64,
     ) -> Option<agent_run_file_change::AgentRunFileChangesView> {
+        let mut phases = self.runtime_phases.lock().await;
+        if phases
+            .get(agent_run_id)
+            .is_some_and(|(epoch, _)| *epoch == execution_epoch)
+        {
+            phases.remove(agent_run_id);
+        }
+        drop(phases);
         let projection = {
             let mut database = self.database.lock().await;
             AgentRunFileChangeProjector.project_terminal_run(
@@ -15198,7 +15262,17 @@ impl Core {
                 );
                 Some(view)
             }
-            Ok(None) => None,
+            Ok(None) => {
+                emit(
+                    &self.output,
+                    "agent_run.file_changes_completed",
+                    json!({
+                        "agentRunId": agent_run_id,
+                        "executionEpoch": execution_epoch,
+                    }),
+                );
+                None
+            }
             Err(error) => {
                 eprintln!(
                     "AgentRun file-change projection failed for {agent_run_id}/{execution_epoch}: {error:#}"
@@ -15852,6 +15926,7 @@ async fn run_core(
     let compaction_detector_policies =
         DesiredCompactionDetectorPolicies::from_process_environment();
     let recovery = (|| -> Result<_> {
+        ManagedBlobStore::new(&data_dir).recover_gc_state(&mut database)?;
         recover_legacy_pending_cancellations(&mut database)?;
         rovai_core::single_chat::recover_pending_edit_sessions(&database)?;
         AutomationService::default().recover_interrupted(&mut database)?;
@@ -15990,6 +16065,7 @@ async fn run_core(
         agent_run_cancellation_notify: Notify::new(),
         delivery_batch_scheduler_notify: Notify::new(),
         agent_run_cleanup_inflight: Mutex::new(HashSet::new()),
+        runtime_phases: Mutex::new(HashMap::new()),
         network_recovery: Mutex::new(NetworkRecoveryQueue::default()),
         network_recovery_notify: Notify::new(),
         pending_execution_recovery: Mutex::new(()),
@@ -17433,6 +17509,8 @@ async fn process_agent_run_pi_message(
                         "adapterKind": AdapterKind::Pi,
                         "nativeMethod": message_type,
                         "evidenceId": evidence_id,
+                        "revision": evidence.as_ref().and_then(|value| value.revision),
+                        "changeSequence": evidence.as_ref().and_then(|value| value.change_sequence),
                         "payload": public_payload,
                         "canonical": evidence.as_ref().and_then(|value| value.canonical.as_ref()),
                     }),
@@ -18123,6 +18201,7 @@ async fn process_acp_events(
                             json!({"agentRunId":agent_run_id,
                             "executionEpoch":execution_epoch,"adapterKind":AdapterKind::ZcodeApp,
                             "nativeMethod":"_zcode/background","evidenceId":evidence.id,
+                            "revision":evidence.revision,"changeSequence":evidence.change_sequence,
                             "payload":evidence.payload,"canonical":evidence.canonical}),
                         );
                     }
@@ -18527,6 +18606,8 @@ async fn process_agent_run_acp_delta_batch(
                 "adapterKind": adapter_kind,
                 "nativeMethod": message.native_method,
                 "evidenceId": evidence.id,
+                "revision": evidence.revision,
+                "changeSequence": evidence.change_sequence,
                 "payload": evidence.payload,
                 "canonical": evidence.canonical,
             }),
@@ -18767,6 +18848,8 @@ async fn process_agent_run_acp_message(
             "adapterKind": adapter_kind,
             "nativeMethod": method,
             "evidenceId": evidence_id,
+            "revision": evidence.as_ref().and_then(|evidence| evidence.revision),
+            "changeSequence": evidence.as_ref().and_then(|evidence| evidence.change_sequence),
             "payload": public_payload,
             "canonical": evidence.as_ref().and_then(|evidence| evidence.canonical.as_ref()),
         }),
@@ -19264,6 +19347,8 @@ async fn process_runtime_event(
             "adapterKind": scope.adapter_kind,
             "nativeMethod": "stream-json",
             "evidenceId": evidence.id,
+            "revision": evidence.revision,
+            "changeSequence": evidence.change_sequence,
             "payload": evidence.payload,
             "canonical": evidence.canonical,
         }),
@@ -19319,7 +19404,17 @@ async fn persist_runtime_evidence(
     if !ExecutionEvidenceService::is_durable_runtime_evidence_event(event_type) {
         return Ok(None);
     }
+    let runtime_phase = runtime_phase_transition(event_type, payload);
     let mut database = core.database.lock().await;
+    let phase_admitted = if runtime_phase.is_some() {
+        database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_run WHERE id = ?1 AND execution_epoch = ?2 AND status IN ('running', 'waiting') AND cancel_requested_at IS NULL)",
+            rusqlite::params![agent_run_id, execution_epoch],
+            |row| row.get::<_, bool>(0),
+        )?
+    } else {
+        false
+    };
     let recorded = ExecutionEvidenceService.record_runtime_event_with_managed_output_root(
         &mut database,
         &ManagedBlobStore::new(&core.data_dir),
@@ -19329,7 +19424,68 @@ async fn persist_runtime_evidence(
         payload,
         managed_output_root,
     )?;
-    Ok(recorded.map(RecordedExecutionEvidence::into_evidence))
+    let file_facts_changed = recorded
+        .as_ref()
+        .is_some_and(|recorded| recorded.file_facts_changed);
+    let should_reproject = file_facts_changed
+        && database.connection().query_row(
+            "SELECT status IN ('succeeded', 'failed', 'cancelled') FROM agent_run WHERE id = ?1 AND execution_epoch = ?2",
+            rusqlite::params![agent_run_id, execution_epoch],
+            |row| row.get::<_, bool>(0),
+        ).unwrap_or(false);
+    let evidence = recorded.map(RecordedExecutionEvidence::into_evidence);
+    drop(database);
+    if phase_admitted && let Some(phase) = runtime_phase {
+        let mut phases = core.runtime_phases.lock().await;
+        let changed = phases
+            .get(agent_run_id)
+            .is_none_or(|(epoch, current)| *epoch != execution_epoch || current != phase);
+        if changed {
+            phases.insert(
+                agent_run_id.to_string(),
+                (execution_epoch, phase.to_string()),
+            );
+        }
+        drop(phases);
+        if changed {
+            emit(
+                &core.output,
+                "agent_run.runtime_phase_changed",
+                json!({
+                    "agentRunId": agent_run_id,
+                    "executionEpoch": execution_epoch,
+                    "phase": phase,
+                }),
+            );
+        }
+    }
+    if should_reproject {
+        core.project_agent_run_file_changes_after_terminal(agent_run_id, execution_epoch)
+            .await;
+    }
+    Ok(evidence)
+}
+
+fn runtime_phase_transition(event_type: &str, payload: &Value) -> Option<&'static str> {
+    let native_reasoning =
+        payload.pointer("/item/type").and_then(Value::as_str) == Some("reasoning");
+    if native_reasoning {
+        return Some(if event_type == "activity.completed" {
+            "executing"
+        } else {
+            "thinking"
+        });
+    }
+    if matches!(
+        event_type,
+        "agent.thought.delta"
+            | "agent.thought.block"
+            | "agent.reasoning.summary.delta"
+            | "agent.reasoning.summary.block"
+    ) {
+        return Some("thinking");
+    }
+    ExecutionEvidenceService::is_durable_runtime_evidence_event(event_type).then_some("executing")
 }
 
 fn observation_hook_compaction_display_event(
@@ -19393,6 +19549,8 @@ async fn persist_runtime_compaction_display(
             "adapterKind": adapter_kind,
             "nativeMethod": native_method,
             "evidenceId": evidence.id,
+            "revision": evidence.revision,
+            "changeSequence": evidence.change_sequence,
             "payload": evidence.payload,
             "canonical": evidence.canonical,
         }),
@@ -19414,6 +19572,31 @@ async fn persist_prepared_runtime_evidence_batch(
         prepared,
     )?;
     drop(database);
+    let has_public_update = recorded.iter().any(Option::is_some);
+    if has_public_update {
+        let mut phases = core.runtime_phases.lock().await;
+        let changed = phases
+            .get(agent_run_id)
+            .is_none_or(|(epoch, phase)| *epoch != execution_epoch || phase != "executing");
+        if changed {
+            phases.insert(
+                agent_run_id.to_string(),
+                (execution_epoch, "executing".to_string()),
+            );
+        }
+        drop(phases);
+        if changed {
+            emit(
+                &core.output,
+                "agent_run.runtime_phase_changed",
+                json!({
+                    "agentRunId": agent_run_id,
+                    "executionEpoch": execution_epoch,
+                    "phase": "executing",
+                }),
+            );
+        }
+    }
     Ok(recorded
         .into_iter()
         .map(|recorded| recorded.map(RecordedExecutionEvidence::into_evidence))
@@ -20590,6 +20773,8 @@ async fn process_agent_run_codex_delta_batch(
                 "executionEpoch": execution_epoch,
                 "nativeMethod": message.native_method,
                 "evidenceId": evidence.id,
+                "revision": evidence.revision,
+                "changeSequence": evidence.change_sequence,
                 "payload": evidence.payload,
                 "canonical": evidence.canonical,
             }),
@@ -20643,6 +20828,8 @@ async fn persist_interrupted_codex_activities(
                 "executionEpoch": execution_epoch,
                 "nativeMethod": "turn/completed",
                 "evidenceId": evidence.id,
+                "revision": evidence.revision,
+                "changeSequence": evidence.change_sequence,
                 "payload": evidence.payload,
                 "canonical": evidence.canonical,
             }),
@@ -20815,6 +21002,8 @@ async fn process_agent_run_codex_message(
             "executionEpoch": execution_epoch,
             "nativeMethod": method,
             "evidenceId": evidence_id,
+            "revision": evidence.as_ref().and_then(|evidence| evidence.revision),
+            "changeSequence": evidence.as_ref().and_then(|evidence| evidence.change_sequence),
             "payload": public_payload,
             "canonical": evidence.as_ref().and_then(|evidence| evidence.canonical.as_ref()),
         }),
@@ -21807,6 +21996,11 @@ async fn process_agent_run_maintenance(
         Duration::from_secs(15),
     );
     pending_execution_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut managed_blob_gc_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(60),
+        Duration::from_secs(60),
+    );
+    managed_blob_gc_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -21839,6 +22033,8 @@ async fn process_agent_run_maintenance(
                         "executionEpoch": evidence.execution_epoch,
                         "nativeMethod": "execution-text-maintenance",
                         "evidenceId": evidence.id,
+                        "revision": evidence.revision,
+                        "changeSequence": evidence.change_sequence,
                         "payload": evidence.payload,
                         "canonical": evidence.canonical,
                     }));
@@ -21868,6 +22064,35 @@ async fn process_agent_run_maintenance(
             },
             _ = pending_execution_interval.tick() => {
                 core.recover_pending_execution_intents().await;
+                let projection_recovery = {
+                    let mut database = core.database.lock().await;
+                    AgentRunFileChangeProjector.recover_terminal_runs(
+                        &mut database,
+                        &ManagedBlobStore::new(&core.data_dir),
+                    )
+                };
+                match projection_recovery {
+                    Ok(recovered) if recovered > 0 => emit(
+                        &output,
+                        "agent_run.file_changes_completed",
+                        json!({ "recovered": recovered }),
+                    ),
+                    Ok(_) => {}
+                    Err(error) => eprintln!(
+                        "AgentRun file-change projection recovery remains pending: {error:#}"
+                    ),
+                }
+            },
+            _ = managed_blob_gc_interval.tick() => {
+                let cutoff = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+                let result = {
+                    let mut database = core.database.lock().await;
+                    ManagedBlobStore::new(&core.data_dir)
+                        .collect_gc_candidates_before(&mut database, &cutoff, 32)
+                };
+                if let Err(error) = result {
+                    eprintln!("Managed Blob candidate collection remains pending: {error:#}");
+                }
             },
             _ = &mut shutdown => break,
         }
@@ -23541,6 +23766,7 @@ mod tests {
             agent_run_cancellation_notify: Notify::new(),
             delivery_batch_scheduler_notify: Notify::new(),
             agent_run_cleanup_inflight: Mutex::new(HashSet::new()),
+            runtime_phases: Mutex::new(HashMap::new()),
             network_recovery: Mutex::new(NetworkRecoveryQueue::default()),
             network_recovery_notify: Notify::new(),
             pending_execution_recovery: Mutex::new(()),

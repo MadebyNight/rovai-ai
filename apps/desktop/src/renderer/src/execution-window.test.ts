@@ -4,6 +4,7 @@ import { ExecutionWindow, ExecutionWindowCache, executionWindowCacheFor, executi
 
 function evidence(sequence: number): Evidence {
   return { id: `e-${sequence}`, agentRunId: 'run', executionEpoch: 1, sequence,
+    operationId: null, revision: 1, changeSequence: sequence,
     eventType: 'agent.text.block', kind: 'narration', phase: 'completed',
     payload: { text: `text ${sequence}` }, contentBlobId: null, contentByteCount: 10,
     isTruncated: false, occurredAt: '2026-09-12T00:00:00Z' }
@@ -18,18 +19,19 @@ function source(initial = 100) {
     const end = params.afterSequence === undefined ? Math.min(state.through, (params.beforeSequence ?? state.through + 1) - 1)
       : Math.min(state.through, start + params.limit - 1)
     const hasMore = params.afterSequence === undefined ? start > 1 : end < state.through
-    return { schemaVersion: 1, campId: 'camp', agentRunId: 'run', requestedBeforeSequence: params.beforeSequence,
+    return { schemaVersion: 2, campId: 'camp', agentRunId: 'run', requestedBeforeSequence: params.beforeSequence,
       requestedAfterSequence: params.afterSequence, nextAfterSequence: params.afterSequence !== undefined && hasMore ? end : null,
       nextBeforeSequence: params.afterSequence === undefined && hasMore ? start : null,
-      throughSequence: state.through, hasMore,
+      throughSequence: state.through, throughChangeSequence: state.through, hasMore,
       evidence: Array.from({ length: Math.max(0, end - start + 1) }, (_, offset) => evidence(start + offset)) }
   })
   const changes = vi.fn<ExecutionChangesRequest>(async params => {
     if (state.offline) throw new Error('offline')
-    const end = Math.min(state.through, params.afterSequence + params.limit)
-    return { schemaVersion: 1, campId: 'camp', agentRunId: 'run', requestedAfterSequence: params.afterSequence,
-      nextAfterSequence: end, throughSequence: state.through, hasMore: end < state.through,
-      evidence: Array.from({ length: end - params.afterSequence }, (_, offset) => evidence(params.afterSequence + offset + 1)),
+    const end = Math.min(state.through, params.afterChangeSequence + params.limit)
+    return { schemaVersion: 2, campId: 'camp', agentRunId: 'run', requestedAfterChangeSequence: params.afterChangeSequence,
+      nextAfterChangeSequence: end, throughSequence: state.through, throughChangeSequence: state.through,
+      hasMore: end < state.through,
+      evidence: Array.from({ length: end - params.afterChangeSequence }, (_, offset) => evidence(params.afterChangeSequence + offset + 1)),
       refreshedEvidence: state.refreshed }
   })
   return { state, request, changes }
@@ -48,7 +50,7 @@ describe('continuous execution history', () => {
     await current.refresh()
     expect(current.evidence.map(item => item.sequence)).toEqual(Array.from({ length: 240 }, (_, i) => i + 1))
     expect(request).toHaveBeenCalledTimes(1)
-    expect(changes.mock.calls.map(([params]) => params.afterSequence)).toEqual([12, 13, 109, 205])
+    expect(changes.mock.calls.map(([params]) => params.afterChangeSequence)).toEqual([12, 13, 109, 205])
     state.through = 10_000
     await current.refresh()
     expect(current.evidence.at(-1)?.sequence).toBe(10_000)
@@ -64,6 +66,7 @@ describe('continuous execution history', () => {
     await current.earlier()
     const first = current.evidence[0].sequence
     current.evidence[0].phase = 'updated'
+    current.evidence[0].revision = null
     state.refreshed = [{ ...current.evidence[0], phase: 'completed', payload: { text: 'complete body' } }]
     state.through = 102
     await current.refresh(() => false)

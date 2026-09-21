@@ -94,6 +94,7 @@ export interface FilePreviewContextValue {
     options?: FilePreviewOpenOptions
   ): Promise<FilePreviewOpenOutcome>
   openFileChanges(campId: string, changes: AgentRunFileChangesView, evidenceFileId?: string): string | undefined
+  syncFileChanges(campId: string, changes: readonly AgentRunFileChangesView[]): void
   openMissionActivity(missionId: string): void
   openExecution(): void
   loadChanges(tabId: string, read: () => Promise<AgentRunFileChangesDetailView>, retry?: boolean): Promise<void>
@@ -409,6 +410,16 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
     if (targetCampId !== campIdRef.current) return
     const id = `file-change:${encodeURIComponent(targetCampId)}:${encodeURIComponent(changes.agentRunId)}:${changes.executionEpoch}`
     const existing = tabsRef.current.find((tab) => tab.id === id)
+    if (existing?.kind === 'file_change'
+      && ((changes.revision ?? 0) < (existing.changes.revision ?? 0)
+        || ((changes.revision ?? 0) === (existing.changes.revision ?? 0)
+          && (changes.sourceChangeSequence ?? 0) < (existing.changes.sourceChangeSequence ?? 0)))) {
+      showOpenedTab(id, false)
+      return id
+    }
+    const projectionChanged = existing?.kind === 'file_change'
+      && ((existing.changes.revision ?? 0) !== (changes.revision ?? 0)
+        || (existing.changes.sourceChangeSequence ?? 0) !== (changes.sourceChangeSequence ?? 0))
     const previousSelection = existing?.kind === 'file_change' ? existing.selectedEvidenceFileId : null
     const previousFile = changes.files.find((file) => file.evidenceFileId === previousSelection)
     const selectedFile = changes.files.find((file) => file.evidenceFileId === evidenceFileId)
@@ -416,7 +427,11 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
       ?? changes.files.find(agentRunFileChangeHasReviewableDiff)
       ?? changes.files[0]
     const selectedEvidenceFileId = selectedFile?.evidenceFileId ?? null
-    const tab: FileChangesPreviewTabModel = { ...(existing?.kind === 'file_change' ? existing : {}), kind: 'file_change', id, campId: targetCampId, changes, selectedEvidenceFileId }
+    const tab: FileChangesPreviewTabModel = {
+      ...(existing?.kind === 'file_change' ? existing : {}),
+      kind: 'file_change', id, campId: targetCampId, changes, selectedEvidenceFileId,
+      ...(projectionChanged ? { detail: undefined, detailBytes: undefined, detailStatus: undefined } : {})
+    }
     setTabs((current) => existing ? current.map((entry) => entry.id === id ? tab : entry) : [...current, tab])
     owner.touch(session, id)
     showOpenedTab(id, !existing)
@@ -428,6 +443,39 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
       && tab.changes.files.some((file) => file.evidenceFileId === evidenceFileId)
       ? { ...tab, selectedEvidenceFileId: evidenceFileId }
       : tab))
+  }
+
+  const syncFileChanges = (targetCampId: string, changes: readonly AgentRunFileChangesView[]): void => {
+    if (targetCampId !== campIdRef.current) return
+    const byRun = new Map(changes.map(item => [`${item.agentRunId}:${item.executionEpoch}`, item]))
+    setTabs(current => {
+      let changed = false
+      const nextTabs = current.map(tab => {
+      if (tab.kind !== 'file_change' || tab.campId !== targetCampId) return tab
+      const next = byRun.get(`${tab.changes.agentRunId}:${tab.changes.executionEpoch}`)
+      if (!next
+        || (next.revision ?? 0) < (tab.changes.revision ?? 0)
+        || ((next.revision ?? 0) === (tab.changes.revision ?? 0)
+          && (next.sourceChangeSequence ?? 0) < (tab.changes.sourceChangeSequence ?? 0))) return tab
+      const projectionChanged = (next.revision ?? 0) > (tab.changes.revision ?? 0)
+        || (next.sourceChangeSequence ?? 0) > (tab.changes.sourceChangeSequence ?? 0)
+      if (!projectionChanged && next.isStale === tab.changes.isStale) return tab
+      changed = true
+      const selectedEvidenceFileId = next.files.some(file => file.evidenceFileId === tab.selectedEvidenceFileId)
+        ? tab.selectedEvidenceFileId
+        : next.files.find(agentRunFileChangeHasReviewableDiff)?.evidenceFileId
+          ?? next.files[0]?.evidenceFileId ?? null
+      return {
+        ...tab,
+        changes: next,
+        selectedEvidenceFileId,
+        ...(projectionChanged
+          ? { detail: undefined, detailBytes: undefined, detailStatus: undefined }
+          : {})
+      }
+      })
+      return changed ? nextTabs : current
+    })
   }
 
   const failTabRequest = (
@@ -1159,7 +1207,9 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
   const changeRequests = new Map<string, Promise<void>>()
   const loadChanges = (tabId: string, read: () => Promise<AgentRunFileChangesDetailView>, retry = false): Promise<void> => {
     const tab = tabsRef.current.find(entry => entry.id === tabId)
-    if (tab?.kind !== 'file_change' || tab.detail || tab.detailStatus === 'error' && !retry) return Promise.resolve()
+    if (tab?.kind !== 'file_change'
+      || (tab.detail && !(retry && tab.changes.isStale))
+      || tab.detailStatus === 'error' && !retry) return Promise.resolve()
     const pending = changeRequests.get(tabId)
     if (pending) return pending
     if (!owner.admit(session)) {
@@ -1169,16 +1219,42 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
     const scope = scopeGenerationRef.current
     const operation = Promise.resolve().then(read).then(detail => {
       if (disposed || scope !== scopeGenerationRef.current || changeRequests.get(tabId) !== operation) return
-      if (detail.schemaVersion !== 2 || detail.card.agentRunId !== tab.changes.agentRunId || detail.card.executionEpoch !== tab.changes.executionEpoch) throw new Error('Mismatched evidence')
+      if (!([2, 3] as const).includes(detail.schemaVersion)
+        || detail.card.agentRunId !== tab.changes.agentRunId
+        || detail.card.executionEpoch !== tab.changes.executionEpoch) throw new Error('Mismatched evidence')
+      const current = tabsRef.current.find(entry => entry.id === tabId)
+      if (current?.kind !== 'file_change'
+        || (detail.card.revision ?? 0) < (current.changes.revision ?? 0)
+        || (detail.card.sourceChangeSequence ?? 0) < (current.changes.sourceChangeSequence ?? 0)
+        || (current.changes.isStale && !detail.card.isStale
+          && (detail.card.revision ?? 0) === (current.changes.revision ?? 0)
+          && (detail.card.sourceChangeSequence ?? 0) === (current.changes.sourceChangeSequence ?? 0))) {
+        setTabs(tabs => tabs.map(entry => entry.id === tabId && entry.kind === 'file_change'
+          ? { ...entry, detailStatus: entry.detail ? 'ready' : undefined }
+          : entry))
+        return
+      }
       const stringBytes = (value: unknown): number => typeof value === 'string' ? value.length * 2
         : value && typeof value === 'object' ? Object.values(value).reduce<number>((sum, part) => sum + stringBytes(part), 0) : 0
-      setTabs(tabs => tabs.map(entry => entry.id === tabId ? { ...entry, detail, detailBytes: stringBytes(detail), detailStatus: 'ready' } : entry))
+      setTabs(tabs => tabs.map(entry => entry.id === tabId && entry.kind === 'file_change'
+        ? {
+          ...entry,
+          changes: detail.card,
+          detail,
+          detailBytes: stringBytes(detail),
+          detailStatus: 'ready'
+        }
+        : entry))
     }).catch(() => {
       if (!disposed && scope === scopeGenerationRef.current && changeRequests.get(tabId) === operation)
-        setTabs(tabs => tabs.map(entry => entry.id === tabId ? { ...entry, detailStatus: 'error' } : entry))
+        setTabs(tabs => tabs.map(entry => entry.id === tabId
+          ? { ...entry, detailStatus: entry.kind === 'file_change' && entry.detail ? 'ready' : 'error' }
+          : entry))
     }).finally(() => { if (changeRequests.get(tabId) === operation) changeRequests.delete(tabId) })
     changeRequests.set(tabId, operation)
-    setTabs(tabs => tabs.map(entry => entry.id === tabId ? { ...entry, detailStatus: 'loading' } : entry))
+    setTabs(tabs => tabs.map(entry => entry.id === tabId
+      ? { ...entry, detailStatus: entry.kind === 'file_change' && entry.detail ? 'ready' : 'loading' }
+      : entry))
     return operation
   }
   const session = {
@@ -1187,7 +1263,7 @@ export function createFilePreviewSession(api: FilePreviewApi, campId: string, ow
     retired,
     cool: () => { scopeGenerationRef.current += 1; committedLoads.clear(); for (const tab of tabsRef.current) session.evict(tab.id); session.id = newCommandId(); bindingPromiseRef.current = owner.sync() },
     setBinding: (binding: Promise<void>) => { bindingPromiseRef.current = binding },
-    actions: { open, openFileChanges, openMissionActivity, openExecution, loadChanges, selectChangedFile, showPane, hidePane, activate, move, close, closeMany, download, openInSystem, revealInFolder, copyPath, toggleHtmlSource, reload, reopen, retry, changePage, saveReading, loadHtmlSource, saveHtmlSource, completeHtmlRefresh, displayed },
+    actions: { open, openFileChanges, syncFileChanges, openMissionActivity, openExecution, loadChanges, selectChangedFile, showPane, hidePane, activate, move, close, closeMany, download, openInSystem, revealInFolder, copyPath, toggleHtmlSource, reload, reopen, retry, changePage, saveReading, loadHtmlSource, saveHtmlSource, completeHtmlRefresh, displayed },
     ensureActive: () => { if (paneVisibleRef.current && activeTabIdRef.current) restoreTab(activeTabIdRef.current, true) },
     externalUpdate: (previewKeys: string[]) => {
       const changed = new Set(previewKeys)

@@ -1,17 +1,17 @@
 ---
 document_type: version-overview
 version: v1.63
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
 model_context_change: true
-last_updated: 2026-09-21
+last_updated: 2026-09-22
 ---
 
 # Rovai-ai v1.63：Task 单一正文与读取投影收敛
 
-前置：[v1.62](../v1.62/README.md)。本版把 Task scope 与 requirements 收敛到单一
+前置：[v1.62](../v1.62/README.md)。后续：[v1.64](../v1.64/README.md)。本版把 Task scope 与 requirements 收敛到单一
 `description`，让历史结构化要求继续可读但不再扩散到当前输入、输出、UI 和 Agent 教学；同时以新合同身份
 发布 Task CLI family index 和更小的 `task get` Agent projection。
 

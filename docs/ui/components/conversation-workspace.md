@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-camp-workspace
 status: accepted
-last_updated: 2026-09-20
+last_updated: 2026-09-22
 ---
 
 # Camp 会话工作区
@@ -62,7 +62,7 @@ Files Changed 历史 Review 真源。
 
 ## 打开与渐进历史
 
-Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v22](../../contracts/camp-open-projection-v22.md)：
+Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v23](../../contracts/camp-open-projection-v23.md)：
 Camp/成员、最近消息、当前运行摘要、pending Approval 和 Composer 可用即完成。项目导航恢复、侧栏刷新
 与可见来源确认在首屏后执行，失败不能撤销已打开会话。只显示“正在打开对话”的 Shell 不算完成。
 
@@ -426,13 +426,13 @@ Conversation；读到不再满足这两个条件的 terminal Snapshot 后立即�
 “结束”在默认情况下打开危险确认 Dialog。说明必须为“这段对话将被删除且无法回复。”，按钮为“取消 / 结束”，
 并提供“不再询问”复选框；选择后只把该确认偏好保存在本机。结束成功立即从产品 surface 移除该 transcript，之后与
 同一队员发起单聊显示新的空白 Conversation。具体 ended/审计保留、取消和迟到事件行为由
-[Single Chat v6](../../contracts/single-chat-v6.md)拥有，Renderer 不从旧 Runtime 事件恢复正文。
+[Single Chat v7](../../contracts/single-chat-v7.md)拥有，Renderer 不从旧 Runtime 事件恢复正文。
 
 panel 保留明确的收起按钮与 `Esc`，对象菜单和确认 Dialog 打开时 `Esc` 先关闭最上层浮层。选择器、Disclosure、停止、
 结束和发送均需可键盘到达，不添加额外焦点框；spinner 有文本或可访问名称。窄窗口中 panel 以会话区宽度为上限，
 不能遮住全局侧栏或溢出可视区；reduced motion 关闭非必要位移和旋转动画但保留状态变化。
 
-领域、权限与输出路由见 [Single Chat v6](../../contracts/single-chat-v6.md)，组件数据流见
+领域、权限与输出路由见 [Single Chat v7](../../contracts/single-chat-v7.md)，组件数据流见
 [Single Chat Architecture](../../architecture/single-chat.md)。
 
 ## Camp 执行过程
@@ -517,7 +517,7 @@ waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal
 滚动容器为键盘焦点留出标题安全区，不改变跟随最新、折叠、输入清单或 exact Run 停止语义。
 总览中的队员头像固定为 20×20px，不随 flex 收缩拉伸。左侧状态节点与卡头首行垂直居中并跟随本卡标题，
 展开与停止操作距卡片右边保留 9px。字段与验收边界见
-[Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)。
+[Run Process Detail Surface v41](../../contracts/run-process-detail-surface-v41.md)。
 
 执行浮层入口、右侧标签、消息区“处理中”回执和底部标题共用同一 24×24 心跳路径与 1.65 描边；
 queued 回执的时钟及各执行状态图形不变。
@@ -560,6 +560,8 @@ Renderer 以公开消息和 Delivery ID 跟踪刚提交输入；Scheduler claim 
 删除待发送消息、无执行发布或离开 Camp 会消费或丢弃意图；其他窗口的发送和后台新 Run 不触发该行为。
 
 单聊与执行台的发送确认前和排队显示“连接中”，开始处理但尚未输出时显示“思考中”；正文、计划、工具或 final 到达即移除普通等待提示，后续正文不追加提示。
+Runtime 的 private thought/reasoning 文本不进入 Renderer state、搜索、缓存或 disclosure；仅消费不含正文的
+`thinking | executing` phase 来切换上述等待反馈，并把 phase edge 作为匿名公开正文的分段边界。
 Camp 执行卡片的普通等待提示与正文共用字号、行高和文字起点，加载图标放在提示文字后；底部、桌面浮层和手机端切入首行正文时不改变卡片位置或单行高度。
 需要审批、网络恢复、重试或停止时继续显示明确状态。非终态过程不显示耗时总结，非聚焦执行摘要在已有输出时显示“执行中”。成功后才显示“工作了 {时长}”
 并自动折叠过程；失败保留明确失败摘要及可操作错误，取消保持停止语义。正文或工具首次到达、单条工具返回、步骤组
@@ -579,7 +581,7 @@ Task related execution、停止结果和世界地图入口在右侧承载时必�
 按窗口呈现。顶部“加载更早记录”复用会话区的文字箭头、已显示计数与原位加载／重试样式；向下滚动自动恢复
 已读缓存，取消“加载较新记录”按钮。“回到最新”采用最新缓存并跳转；首次展开执行中 Run 时，首屏与完整正文
 异步到达后仍定位到最新。历史阅读期间后台只更新最新缓存，不替换当前窗口或抢滚动位置。缓存预算见
-[Camp Open v22](../../contracts/camp-open-projection-v22.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
+[Camp Open v23](../../contracts/camp-open-projection-v23.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
 Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ command` 与下一行原始 JSON／文本输出，保留正文参数
 和多行输入，沿用 Shell Evidence 的按条惰性读取。Core 操作身份、图标和状态保持不变；不新增入参存储。
 缺少可靠关联时回退对应 `rovai` CLI 名称和同一 operation 的 Core 公共 `canonicalInput`，省略投影辅助事实和
@@ -587,6 +589,10 @@ Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ comm
 纯 CLI Shell 的完整成功返回值与其生命周期内唯一 Core 调用精确匹配时，折叠到 Built-in 行；混合命令、帮助、
 提前失败或不确定关联保留。底层 Evidence 和 Canonical 身份不变。完整规则见
 [Built-in 入参与载体展示](../../contracts/run-process-detail-surface-v34.md)。
+
+新 operation 的 started/progress/terminal 按稳定 Evidence ID 合并为一行；Renderer 只接受更高
+`revision/changeSequence`，不以记录数量或固定展示 `sequence` 判断内容是否变化。终态后的输入补齐、结果更新和
+冲突仍在原位置刷新，保留 disclosure 展开、当前选择与阅读锚点；历史无版本 Evidence 继续使用兼容路径。
 
 同一 Run 内最大连续的 Tool items 默认收成一条可展开组摘要；收起时只挂载摘要，展开后才挂载子行，文件 Diff 在文件行展开后读取和解析；narration、plan 与 diagnostic 都会截断
 分组，不能跨 Run 或跨队员合并。有 running 操作时，活动组只显示当前指令；waiting 保留“等待审批 · 当前操作”，
@@ -597,7 +603,7 @@ Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ comm
 全部已结算逻辑操作，各终态不再追加独立数量，具体结果由展开后的 Tool 行表达。分页读取沿用相同的执行结果摘要，不改成“已载入 x 项执行记录”；组摘要只统计
 当前组已读取的逻辑操作，不表示整轮总量。已载入范围只在“加载更早记录”入口呈现。
 `x` 按去重后的可见逻辑操作计数；同一 Built-in 与已关联 Shell 载体计一步，started/result/delta 和一个 Activity 的多文件行不重复计数。
-精确计数语义见 [Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)。
+精确计数语义见 [Run Process Detail Surface v41](../../contracts/run-process-detail-surface-v41.md)。
 
 Runtime Compaction 作为根级、非 Tool process item 同样截断前后 Tool 分组，但不进入“已完成 x 个步骤”。
 它复用普通 command 的桌面 28px 行、最右侧状态 icon、文字后展开提示与结果文本框，并保留独立压缩 SVG；同一
@@ -687,7 +693,7 @@ standalone raw Evidence、Envelope JSON 或独立
 
 ### Runtime 终态文件变更与 AgentRun 文件变化
 
-只有 [Runtime File Change Observation v3](../../contracts/runtime-file-change-observation-v3.md)准入的可靠
+只有 [Runtime File Change Observation v6](../../contracts/runtime-file-change-observation-v6.md)准入的可靠
 Evidence 才进入文件操作呈现。成功 read 的可靠单路径显示为不可展开的 `阅读 <basename>`；成功 write 的可靠
 单路径显示 `编辑 <basename>`。有完整 before/after、unified snapshot 或 exact mutation 时，每个文件作为同一
 Canonical Activity 的 presentation row，明确 add 显示“新增”，其他显示“编辑”；没有可靠内容时不显示
@@ -750,8 +756,11 @@ operation-only 文件仍可选择，右侧显示“没有可审查的差异内�
 不以内联当前正文补齐历史 Review。“打开当前文件”通过既有来源校验打开普通文件 Tab，历史 Review 保留原
 选择和阅读位置；关闭预览或在单 Pane 模式返回时恢复原会话，不默认跳转系统编辑器。
 
-卡片只读取不可变 AgentRun projection 与受管 detail blob，不读取当前 workspace 或重新执行 Git。`no_changes` 和
-没有可靠 Evidence 的 Run 不生成卡片；Review 也只读取同一 projection/detail，不补造行号或 diff。Git 与非 Git
+卡片只读取 AgentRun/epoch 的版本化 projection 与受管 detail blob，不读取当前 workspace 或重新执行 Git。来源水位
+推进后，`complete` 与 `no_changes` 都会失效并只重算该 Run/epoch；合法迟到事实可以让旧 `no_changes` 生成卡片，
+也可以让既有卡片原位更新。卡片与 detail 使用同一 projection revision，Renderer 拒绝旧异步响应；已打开 Review
+保留文件选择、展开、查找、滚动和 Pane 状态，失败时保留上一份明确标为待更新的可读内容并允许重试。没有可靠
+Evidence 的 Run 不生成卡片；Review 也只读取同一 projection/detail，不补造行号或 diff。Git 与非 Git
 项目行为一致。执行台不增加共享 workspace observation，
 底部/右侧 placement、会话连接轨、Tool list 宽度和其他既有视觉结构保持不变。
 

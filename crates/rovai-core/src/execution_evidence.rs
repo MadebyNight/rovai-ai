@@ -9,7 +9,10 @@ use uuid::Uuid;
 use crate::{
     canonical_activity::{self, CanonicalRuntimeActivity, EvidenceActivityFacts},
     db::Database,
-    managed_blob::ManagedBlobStore,
+    managed_blob::{
+        GC_OWNER_EXECUTION_LIFECYCLE, MAX_BLOB_BYTES, ManagedBlobStore, attach_gc_candidate,
+        detach_gc_candidate,
+    },
     runtime_compaction_display::RUNTIME_COMPACTION_DISPLAY_EVENT,
     runtime_diff::{self, COMMAND_DIFF_SCHEMA_VERSION},
     runtime_file_operation::{
@@ -33,6 +36,9 @@ pub struct AgentRunExecutionEvidence {
     pub agent_run_id: String,
     pub execution_epoch: i64,
     pub sequence: i64,
+    pub operation_id: Option<String>,
+    pub revision: Option<i64>,
+    pub change_sequence: Option<i64>,
     pub event_type: String,
     pub kind: String,
     pub phase: String,
@@ -48,6 +54,7 @@ pub struct AgentRunExecutionEvidence {
 pub struct RecordedExecutionEvidence {
     pub evidence: AgentRunExecutionEvidence,
     pub inserted: bool,
+    pub file_facts_changed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +66,29 @@ pub struct PreparedRuntimeEvidence {
     payload_json: String,
     content_byte_count: i64,
     occurred_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct LifecycleContentPart {
+    value: Value,
+    preview_json: String,
+    blob_id: Option<String>,
+    byte_count: i64,
+    state: String,
+}
+
+#[derive(Debug, Clone)]
+struct LifecycleEvidenceRow {
+    id: String,
+    sequence: i64,
+    event_type: String,
+    kind: String,
+    phase: String,
+    occurred_at: String,
+    revision: i64,
+    change_sequence: i64,
+    input: LifecycleContentPart,
+    result: Option<LifecycleContentPart>,
 }
 
 impl PreparedRuntimeEvidence {
@@ -86,6 +116,55 @@ impl Deref for RecordedExecutionEvidence {
     }
 }
 
+pub(crate) fn allocate_change_sequence(
+    transaction: &rusqlite::Transaction<'_>,
+    agent_run_id: &str,
+) -> Result<i64> {
+    transaction
+        .query_row(
+            r#"
+            UPDATE agent_run
+            SET execution_evidence_change_sequence = MAX(
+                execution_evidence_change_sequence,
+                COALESCE((
+                    SELECT MAX(sequence)
+                    FROM agent_run_execution_evidence
+                    WHERE agent_run_id = ?1
+                ), 0)
+            ) + 1
+            WHERE id = ?1
+            RETURNING execution_evidence_change_sequence
+            "#,
+            [agent_run_id],
+            |row| row.get(0),
+        )
+        .context("AgentRun does not exist while allocating an Evidence change sequence")
+}
+
+pub(crate) fn advance_file_facts_watermark(
+    transaction: &rusqlite::Transaction<'_>,
+    agent_run_id: &str,
+    execution_epoch: i64,
+    change_sequence: i64,
+    changed_at: &str,
+) -> Result<()> {
+    transaction.execute(
+        r#"
+        INSERT INTO agent_run_execution_epoch_state(
+            agent_run_id, execution_epoch, file_facts_change_sequence, updated_at
+        ) VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(agent_run_id, execution_epoch) DO UPDATE SET
+            file_facts_change_sequence = MAX(
+                agent_run_execution_epoch_state.file_facts_change_sequence,
+                excluded.file_facts_change_sequence
+            ),
+            updated_at = excluded.updated_at
+        "#,
+        params![agent_run_id, execution_epoch, change_sequence, changed_at],
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 pub struct ExecutionEvidenceService;
 
@@ -94,7 +173,9 @@ impl ExecutionEvidenceService {
         matches!(
             event_type,
             "agent.reasoning.summary.delta"
+                | "agent.reasoning.summary.block"
                 | "agent.thought.delta"
+                | "agent.thought.block"
                 | "agent.text.delta"
                 | "agent.text.completed"
                 | "agent.text.boundary"
@@ -118,11 +199,7 @@ impl ExecutionEvidenceService {
     pub fn is_batchable_runtime_delta_event(event_type: &str) -> bool {
         matches!(
             event_type,
-            "agent.reasoning.summary.delta"
-                | "agent.thought.delta"
-                | "agent.text.delta"
-                | "runtime.plan.delta"
-                | "file.change.updated"
+            "agent.text.delta" | "runtime.plan.delta" | "file.change.updated"
         )
     }
 
@@ -220,16 +297,18 @@ impl ExecutionEvidenceService {
                 .checked_add(i64::try_from(index).context("Evidence batch index overflow")?)
                 .context("Execution Evidence sequence overflow")?;
             let id = Uuid::new_v4().to_string();
+            let change_sequence = allocate_change_sequence(&transaction, agent_run_id)?;
             transaction.execute(
                 r#"
                 INSERT INTO agent_run_execution_evidence(
                     id, agent_run_id, execution_epoch, sequence,
                     event_type, kind, phase, source_event_key,
                     payload_preview_json, content_blob_id,
-                    content_byte_count, is_truncated, occurred_at
+                    content_byte_count, is_truncated, occurred_at,
+                    revision, change_sequence, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL,
-                    ?8, NULL, ?9, 0, ?10
+                    ?8, NULL, ?9, 0, ?10, 1, ?11, ?10
                 )
                 "#,
                 params![
@@ -243,8 +322,19 @@ impl ExecutionEvidenceService {
                     evidence.payload_json,
                     evidence.content_byte_count,
                     evidence.occurred_at,
+                    change_sequence,
                 ],
             )?;
+            let file_facts_changed = payload_affects_file_facts(&evidence.payload);
+            if file_facts_changed {
+                advance_file_facts_watermark(
+                    &transaction,
+                    agent_run_id,
+                    execution_epoch,
+                    change_sequence,
+                    &evidence.occurred_at,
+                )?;
+            }
             let facts = canonical_activity::classify_evidence(
                 agent_run_id,
                 execution_epoch,
@@ -304,6 +394,9 @@ impl ExecutionEvidenceService {
                     agent_run_id: agent_run_id.to_string(),
                     execution_epoch,
                     sequence,
+                    operation_id: None,
+                    revision: Some(1),
+                    change_sequence: Some(change_sequence),
                     event_type: evidence.event_type,
                     kind: evidence.kind,
                     phase: evidence.phase,
@@ -315,6 +408,7 @@ impl ExecutionEvidenceService {
                     canonical,
                 },
                 inserted: true,
+                file_facts_changed,
             }));
         }
         transaction.commit()?;
@@ -693,6 +787,20 @@ impl ExecutionEvidenceService {
             workspace_json.as_deref(),
             managed_output_root,
         );
+        if let Some(recorded) = self.record_operation_lifecycle(
+            database,
+            blob_store,
+            agent_run_id,
+            execution_epoch,
+            event_type,
+            kind,
+            phase,
+            source_event_key.as_deref(),
+            &payload,
+            allow_fenced_terminal_tool_result,
+        )? {
+            return Ok(recorded);
+        }
         let encoded = serde_json::to_vec(&payload)?;
         let (preview, content_blob_id, is_truncated) = if encoded.len() > INLINE_PAYLOAD_LIMIT_BYTES
         {
@@ -709,7 +817,13 @@ impl ExecutionEvidenceService {
             } else {
                 "normal"
             };
-            let blob = blob_store.put_bytes(database, &encoded, "application/json", privacy)?;
+            let blob = blob_store.put_bytes_candidate(
+                database,
+                &encoded,
+                "application/json",
+                privacy,
+                GC_OWNER_EXECUTION_LIFECYCLE,
+            )?;
             (bounded_preview(&payload), Some(blob.id), true)
         } else {
             (payload.clone(), None, false)
@@ -730,6 +844,7 @@ impl ExecutionEvidenceService {
             return Ok(Some(RecordedExecutionEvidence {
                 evidence: existing,
                 inserted: false,
+                file_facts_changed: false,
             }));
         }
 
@@ -769,16 +884,18 @@ impl ExecutionEvidenceService {
             |row| row.get(0),
         )?;
         let id = Uuid::new_v4().to_string();
+        let change_sequence = allocate_change_sequence(&transaction, agent_run_id)?;
         transaction.execute(
             r#"
             INSERT INTO agent_run_execution_evidence(
                 id, agent_run_id, execution_epoch, sequence,
                 event_type, kind, phase, source_event_key,
                 payload_preview_json, content_blob_id,
-                content_byte_count, is_truncated, occurred_at
+                content_byte_count, is_truncated, occurred_at,
+                revision, change_sequence, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12, ?13
+                ?9, ?10, ?11, ?12, ?13, 1, ?14, ?13
             )
             "#,
             params![
@@ -795,8 +912,22 @@ impl ExecutionEvidenceService {
                 encoded.len() as i64,
                 i64::from(is_truncated),
                 occurred_at,
+                change_sequence,
             ],
         )?;
+        if let Some(blob_id) = content_blob_id.as_deref() {
+            attach_gc_candidate(&transaction, blob_id)?;
+        }
+        let file_facts_changed = payload_affects_file_facts(&payload);
+        if file_facts_changed {
+            advance_file_facts_watermark(
+                &transaction,
+                agent_run_id,
+                execution_epoch,
+                change_sequence,
+                &occurred_at,
+            )?;
+        }
         let facts = canonical_activity::classify_evidence(
             agent_run_id,
             execution_epoch,
@@ -857,6 +988,9 @@ impl ExecutionEvidenceService {
                 agent_run_id: agent_run_id.to_string(),
                 execution_epoch,
                 sequence,
+                operation_id: None,
+                revision: Some(1),
+                change_sequence: Some(change_sequence),
                 event_type: event_type.to_string(),
                 kind: kind.to_string(),
                 phase: phase.to_string(),
@@ -868,7 +1002,497 @@ impl ExecutionEvidenceService {
                 canonical,
             },
             inserted: true,
+            file_facts_changed,
         }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_operation_lifecycle(
+        &self,
+        database: &mut Database,
+        blob_store: &ManagedBlobStore,
+        agent_run_id: &str,
+        execution_epoch: i64,
+        event_type: &str,
+        kind: &str,
+        phase: &str,
+        source_event_key: Option<&str>,
+        payload: &Value,
+        allow_fenced_terminal_tool_result: bool,
+    ) -> Result<Option<Option<RecordedExecutionEvidence>>> {
+        let proposed_id = Uuid::new_v4().to_string();
+        let proposed_facts = canonical_activity::classify_evidence(
+            agent_run_id,
+            execution_epoch,
+            &proposed_id,
+            event_type,
+            kind,
+            phase,
+            payload,
+        );
+        if !proposed_facts.is_activity || proposed_facts.identity_authority == "evidence" {
+            return Ok(None);
+        }
+        let operation_id = proposed_facts.operation_id.clone();
+        let existing = load_lifecycle_evidence(
+            database,
+            blob_store,
+            agent_run_id,
+            execution_epoch,
+            &operation_id,
+        )?;
+        if existing.is_none() {
+            let legacy_started: bool = database.connection().query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM canonical_runtime_activity AS activity
+                    JOIN json_each(activity.source_evidence_ids_json) AS source
+                    JOIN agent_run_execution_evidence AS evidence ON evidence.id = source.value
+                    WHERE activity.agent_run_id = ?1
+                      AND activity.execution_epoch = ?2
+                      AND activity.operation_id = ?3
+                      AND evidence.operation_id IS NULL
+                )
+                "#,
+                params![agent_run_id, execution_epoch, operation_id],
+                |row| row.get(0),
+            )?;
+            if legacy_started {
+                return Ok(None);
+            }
+        }
+
+        let incoming_input = lifecycle_input_payload(payload);
+        let mut next_input = existing
+            .as_ref()
+            .map(|row| row.input.value.clone())
+            .unwrap_or(Value::Null);
+        fill_missing(&mut next_input, &incoming_input);
+        if next_input.is_null() {
+            next_input = incoming_input;
+        }
+
+        let incoming_terminal = lifecycle_terminal_status(payload);
+        let existing_payload = existing.as_ref().map(lifecycle_combined_payload);
+        let existing_terminal = existing_payload
+            .as_ref()
+            .and_then(lifecycle_terminal_status);
+        let terminal_conflict = existing_payload
+            .as_ref()
+            .is_some_and(lifecycle_has_terminal_conflict)
+            || existing_terminal
+                .as_deref()
+                .zip(incoming_terminal.as_deref())
+                .is_some_and(|(old, new)| old != new);
+        let incoming_is_start =
+            phase == "started" || payload.get("status").and_then(Value::as_str) == Some("started");
+        let mut next_result = existing
+            .as_ref()
+            .and_then(|row| row.result.as_ref())
+            .map(|part| part.value.clone());
+        if !incoming_is_start {
+            let incoming_result = json_difference(payload, &next_input).unwrap_or_else(
+                || serde_json::json!({"_rovaiLifecycle": {"resultObserved": true}}),
+            );
+            next_result = Some(match next_result {
+                Some(mut old) if terminal_conflict => {
+                    fill_missing(&mut old, &incoming_result);
+                    let mut statuses = lifecycle_observed_terminal_statuses(&old);
+                    for status in [existing_terminal.clone(), incoming_terminal.clone()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if !statuses.iter().any(|observed| observed == &status) {
+                            statuses.push(status);
+                        }
+                    }
+                    old["status"] = Value::String("unsettled".to_string());
+                    old["_rovaiLifecycle"] = serde_json::json!({
+                        "terminalConflict": true,
+                        "observedStatuses": statuses,
+                    });
+                    old
+                }
+                Some(old) => {
+                    let mut latest = incoming_result;
+                    fill_missing(&mut latest, &old);
+                    latest
+                }
+                None => incoming_result,
+            });
+        }
+
+        let existing_is_terminal = existing
+            .as_ref()
+            .is_some_and(|row| matches!(row.phase.as_str(), "completed" | "failed"));
+        let next_phase = if existing_is_terminal {
+            existing.as_ref().unwrap().phase.clone()
+        } else {
+            phase.to_string()
+        };
+        let (next_event_type, next_kind) = if existing_is_terminal && incoming_is_start {
+            let row = existing.as_ref().unwrap();
+            (row.event_type.clone(), row.kind.clone())
+        } else {
+            (event_type.to_string(), kind.to_string())
+        };
+        let semantically_unchanged = existing.as_ref().is_some_and(|row| {
+            row.input.value == next_input
+                && row.result.as_ref().map(|part| &part.value) == next_result.as_ref()
+                && row.phase == next_phase
+                && row.event_type == next_event_type
+                && row.kind == next_kind
+        });
+
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let still_current = |transaction: &rusqlite::Transaction<'_>| -> Result<bool> {
+            Ok(transaction.query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1 FROM agent_run
+                    WHERE id = ?1 AND execution_epoch = ?2
+                      AND (
+                        (status IN ('running', 'waiting')
+                         AND (?3 = 1 OR cancel_requested_at IS NULL))
+                        OR (?3 = 1 AND status IN ('succeeded', 'failed', 'cancelled'))
+                      )
+                )
+                "#,
+                params![
+                    agent_run_id,
+                    execution_epoch,
+                    i64::from(allow_fenced_terminal_tool_result)
+                ],
+                |row| row.get(0),
+            )?)
+        };
+        if semantically_unchanged {
+            let transaction = database
+                .connection_mut()
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if !still_current(&transaction)? {
+                transaction.commit()?;
+                return Ok(Some(None));
+            }
+            let row = existing.expect("semantic equality requires an existing lifecycle row");
+            let canonical = load_canonical_for_evidence(&transaction, &row.id)?;
+            transaction.commit()?;
+            return Ok(Some(Some(RecordedExecutionEvidence {
+                evidence: lifecycle_evidence_view(
+                    agent_run_id,
+                    execution_epoch,
+                    &operation_id,
+                    &row,
+                    canonical,
+                ),
+                inserted: false,
+                file_facts_changed: false,
+            })));
+        }
+
+        let input_changed = existing
+            .as_ref()
+            .is_none_or(|row| row.input.value != next_input);
+        let result_changed = existing
+            .as_ref()
+            .is_none_or(|row| row.result.as_ref().map(|part| &part.value) != next_result.as_ref());
+        let next_input_part = if input_changed {
+            prepare_lifecycle_part(
+                database,
+                blob_store,
+                &next_input,
+                payload_affects_file_facts(&next_input),
+            )?
+        } else {
+            existing.as_ref().unwrap().input.clone()
+        };
+        let next_result_part = match (result_changed, next_result.as_ref()) {
+            (true, Some(value)) => Some(prepare_lifecycle_part(
+                database,
+                blob_store,
+                value,
+                payload_affects_file_facts(value),
+            )?),
+            (true, None) => None,
+            (false, _) => existing.as_ref().and_then(|row| row.result.clone()),
+        };
+        let next_combined = combine_lifecycle_values(
+            &next_input_part.value,
+            next_result_part.as_ref().map(|part| &part.value),
+        );
+        let preview = combine_lifecycle_values(
+            &serde_json::from_str(&next_input_part.preview_json)?,
+            next_result_part
+                .as_ref()
+                .map(|part| serde_json::from_str::<Value>(&part.preview_json))
+                .transpose()?
+                .as_ref(),
+        );
+        let preview_json = serde_json::to_string(&preview)?;
+        let content_byte_count = next_input_part
+            .byte_count
+            .saturating_add(next_result_part.as_ref().map_or(0, |part| part.byte_count));
+        let is_truncated = next_input_part.state != "inline"
+            || next_result_part
+                .as_ref()
+                .is_some_and(|part| part.state != "inline");
+
+        let transaction = database
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !still_current(&transaction)? {
+            transaction.commit()?;
+            return Ok(Some(None));
+        }
+        let (id, sequence, revision, inserted, original_occurred_at) = match &existing {
+            Some(row) => (
+                row.id.clone(),
+                row.sequence,
+                row.revision + 1,
+                false,
+                row.occurred_at.clone(),
+            ),
+            None => {
+                let sequence = transaction.query_row(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_run_execution_evidence WHERE agent_run_id = ?1",
+                    [agent_run_id],
+                    |row| row.get(0),
+                )?;
+                (proposed_id, sequence, 1, true, occurred_at.clone())
+            }
+        };
+        let change_sequence = allocate_change_sequence(&transaction, agent_run_id)?;
+        if inserted {
+            transaction.execute(
+                r#"
+                INSERT INTO agent_run_execution_evidence(
+                    id, agent_run_id, execution_epoch, sequence,
+                    event_type, kind, phase, source_event_key,
+                    payload_preview_json, content_blob_id,
+                    content_byte_count, is_truncated, occurred_at,
+                    operation_id, revision, change_sequence,
+                    input_preview_json, input_blob_id, input_byte_count, input_content_state,
+                    result_preview_json, result_blob_id, result_byte_count, result_content_state,
+                    updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+                )
+                "#,
+                params![
+                    id,
+                    agent_run_id,
+                    execution_epoch,
+                    sequence,
+                    next_event_type,
+                    next_kind,
+                    next_phase,
+                    source_event_key,
+                    preview_json,
+                    content_byte_count,
+                    i64::from(is_truncated),
+                    original_occurred_at,
+                    operation_id,
+                    revision,
+                    change_sequence,
+                    next_input_part.preview_json,
+                    next_input_part.blob_id,
+                    next_input_part.byte_count,
+                    next_input_part.state,
+                    next_result_part.as_ref().map(|part| &part.preview_json),
+                    next_result_part
+                        .as_ref()
+                        .and_then(|part| part.blob_id.as_ref()),
+                    next_result_part.as_ref().map(|part| part.byte_count),
+                    next_result_part.as_ref().map(|part| &part.state),
+                    occurred_at,
+                ],
+            )?;
+        } else {
+            transaction.execute(
+                r#"
+                UPDATE agent_run_execution_evidence
+                SET event_type = ?2, kind = ?3, phase = ?4,
+                    source_event_key = COALESCE(source_event_key, ?5),
+                    payload_preview_json = ?6, content_blob_id = NULL,
+                    content_byte_count = ?7, is_truncated = ?8,
+                    revision = ?9, change_sequence = ?10,
+                    input_preview_json = ?11, input_blob_id = ?12,
+                    input_byte_count = ?13, input_content_state = ?14,
+                    result_preview_json = ?15, result_blob_id = ?16,
+                    result_byte_count = ?17, result_content_state = ?18,
+                    updated_at = ?19
+                WHERE id = ?1
+                "#,
+                params![
+                    id,
+                    next_event_type,
+                    next_kind,
+                    next_phase,
+                    source_event_key,
+                    preview_json,
+                    content_byte_count,
+                    i64::from(is_truncated),
+                    revision,
+                    change_sequence,
+                    next_input_part.preview_json,
+                    next_input_part.blob_id,
+                    next_input_part.byte_count,
+                    next_input_part.state,
+                    next_result_part.as_ref().map(|part| &part.preview_json),
+                    next_result_part
+                        .as_ref()
+                        .and_then(|part| part.blob_id.as_ref()),
+                    next_result_part.as_ref().map(|part| part.byte_count),
+                    next_result_part.as_ref().map(|part| &part.state),
+                    occurred_at,
+                ],
+            )?;
+        }
+        for blob_id in [
+            next_input_part.blob_id.as_deref(),
+            next_result_part
+                .as_ref()
+                .and_then(|part| part.blob_id.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            attach_gc_candidate(&transaction, blob_id)?;
+        }
+        if let Some(row) = &existing {
+            for old_blob_id in [
+                row.input.blob_id.as_deref(),
+                row.result.as_ref().and_then(|part| part.blob_id.as_deref()),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|old| {
+                next_input_part.blob_id.as_deref() != Some(*old)
+                    && next_result_part
+                        .as_ref()
+                        .and_then(|part| part.blob_id.as_deref())
+                        != Some(*old)
+            }) {
+                detach_gc_candidate(
+                    &transaction,
+                    old_blob_id,
+                    GC_OWNER_EXECUTION_LIFECYCLE,
+                    &occurred_at,
+                )?;
+            }
+        }
+
+        let old_file_facts = existing_payload
+            .as_ref()
+            .map(file_fact_projection)
+            .unwrap_or(Value::Null);
+        let new_file_facts = file_fact_projection(&next_combined);
+        let file_facts_changed = old_file_facts != new_file_facts;
+        if file_facts_changed {
+            advance_file_facts_watermark(
+                &transaction,
+                agent_run_id,
+                execution_epoch,
+                change_sequence,
+                &occurred_at,
+            )?;
+        }
+
+        let facts = canonical_activity::classify_evidence(
+            agent_run_id,
+            execution_epoch,
+            &id,
+            &next_event_type,
+            &next_kind,
+            &next_phase,
+            &next_combined,
+        );
+        let previous_facts = canonical_activity::classify_evidence_with_version(
+            canonical_activity::PREVIOUS_CLASSIFIER_VERSION,
+            agent_run_id,
+            execution_epoch,
+            &id,
+            &next_event_type,
+            &next_kind,
+            &next_phase,
+            &next_combined,
+        );
+        let intermediate_facts = canonical_activity::classify_evidence_with_version(
+            canonical_activity::INTERMEDIATE_CLASSIFIER_VERSION,
+            agent_run_id,
+            execution_epoch,
+            &id,
+            &next_event_type,
+            &next_kind,
+            &next_phase,
+            &next_combined,
+        );
+        let legacy_facts = canonical_activity::classify_evidence_with_version(
+            canonical_activity::LEGACY_CLASSIFIER_VERSION,
+            agent_run_id,
+            execution_epoch,
+            &id,
+            &next_event_type,
+            &next_kind,
+            &next_phase,
+            &next_combined,
+        );
+        let canonical = upsert_canonical_activity(
+            &transaction,
+            agent_run_id,
+            execution_epoch,
+            sequence,
+            &id,
+            &occurred_at,
+            EvidenceActivityClassifications {
+                current: &facts,
+                previous: &previous_facts,
+                intermediate: &intermediate_facts,
+                legacy: &legacy_facts,
+            },
+        )?;
+        if incoming_is_start && let Some(canonical) = canonical.as_ref() {
+            transaction.execute(
+                r#"
+                UPDATE canonical_runtime_activity
+                SET started_at = COALESCE(started_at, ?5), updated_at = ?5
+                WHERE agent_run_id = ?1 AND execution_epoch = ?2
+                  AND operation_id = ?3 AND classifier_version = ?4
+                "#,
+                params![
+                    agent_run_id,
+                    execution_epoch,
+                    canonical.operation_id,
+                    canonical.classifier_version,
+                    occurred_at,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(Some(Some(RecordedExecutionEvidence {
+            evidence: AgentRunExecutionEvidence {
+                id,
+                agent_run_id: agent_run_id.to_string(),
+                execution_epoch,
+                sequence,
+                operation_id: Some(operation_id),
+                revision: Some(revision),
+                change_sequence: Some(change_sequence),
+                event_type: next_event_type,
+                kind: next_kind,
+                phase: next_phase,
+                payload: next_combined,
+                content_blob_id: None,
+                content_byte_count,
+                is_truncated,
+                occurred_at: original_occurred_at,
+                canonical,
+            },
+            inserted,
+            file_facts_changed,
+        })))
     }
 
     pub fn read_full_payload(
@@ -882,25 +1506,459 @@ impl ExecutionEvidenceService {
             .connection()
             .query_row(
                 r#"
-                SELECT evidence.payload_preview_json, evidence.content_blob_id
+                SELECT evidence.agent_run_id, evidence.execution_epoch,
+                       evidence.operation_id, evidence.payload_preview_json,
+                       evidence.content_blob_id
                 FROM agent_run_execution_evidence AS evidence
                 JOIN agent_run ON agent_run.id = evidence.agent_run_id
                 LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
                 WHERE evidence.id = ?1 AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?2
                 "#,
                 params![evidence_id, camp_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
             )
             .optional()?
             .context("Execution Evidence does not exist in this Camp")?;
         if let Some(payload) = crate::execution_text::live_payload(database, evidence_id)? {
             return Ok(payload);
         }
-        let bytes = match row.1 {
+        if let Some(operation_id) = row.2.as_deref() {
+            let lifecycle =
+                load_lifecycle_evidence(database, blob_store, &row.0, row.1, operation_id)?
+                    .context("Operation lifecycle Evidence is incomplete")?;
+            return Ok(lifecycle_combined_payload(&lifecycle));
+        }
+        let bytes = match row.4 {
             Some(blob_id) => blob_store.read_bytes(database, &blob_id)?,
-            None => row.0.into_bytes(),
+            None => row.3.into_bytes(),
         };
         serde_json::from_slice(&bytes).context("Execution Evidence payload is not valid JSON")
+    }
+
+    pub(crate) fn read_full_payload_unscoped(
+        &self,
+        database: &Database,
+        blob_store: &ManagedBlobStore,
+        evidence_id: &str,
+    ) -> Result<Value> {
+        let row = database
+            .connection()
+            .query_row(
+                r#"
+                SELECT agent_run_id, execution_epoch, operation_id,
+                       payload_preview_json, content_blob_id
+                FROM agent_run_execution_evidence WHERE id = ?1
+                "#,
+                [evidence_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .context("Execution Evidence does not exist")?;
+        if let Some(payload) = crate::execution_text::live_payload(database, evidence_id)? {
+            return Ok(payload);
+        }
+        if let Some(operation_id) = row.2.as_deref() {
+            return load_lifecycle_evidence(database, blob_store, &row.0, row.1, operation_id)?
+                .map(|row| lifecycle_combined_payload(&row))
+                .context("Operation lifecycle Evidence is incomplete");
+        }
+        let bytes = match row.4 {
+            Some(blob_id) => blob_store.read_bytes(database, &blob_id)?,
+            None => row.3.into_bytes(),
+        };
+        serde_json::from_slice(&bytes).context("Execution Evidence payload is not valid JSON")
+    }
+}
+
+fn lifecycle_input_payload(payload: &Value) -> Value {
+    let mut input = payload.clone();
+    if let Some(object) = input.as_object_mut() {
+        for field in [
+            "output",
+            "rawOutputDigest",
+            "errorCode",
+            "runtimeDiff",
+            "runtimeFileOperation",
+            "runtimeRunDiff",
+            "coreEnvelope",
+        ] {
+            object.remove(field);
+        }
+        if let Some(item) = object.get_mut("item").and_then(Value::as_object_mut) {
+            for field in [
+                "durationMs",
+                "exitCode",
+                "aggregatedOutput",
+                "output",
+                "result",
+                "summary",
+                "changes",
+                "error",
+            ] {
+                item.remove(field);
+            }
+        }
+    }
+    input
+}
+
+fn json_difference(value: &Value, base: &Value) -> Option<Value> {
+    if value == base {
+        return None;
+    }
+    match (value, base) {
+        (Value::Object(value), Value::Object(base)) => {
+            let difference = value
+                .iter()
+                .filter_map(|(key, value)| {
+                    json_difference(value, base.get(key).unwrap_or(&Value::Null))
+                        .map(|value| (key.clone(), value))
+                })
+                .collect::<Map<_, _>>();
+            (!difference.is_empty()).then_some(Value::Object(difference))
+        }
+        _ => Some(value.clone()),
+    }
+}
+
+fn fill_missing(latest: &mut Value, earlier: &Value) {
+    match (latest, earlier) {
+        (Value::Object(latest), Value::Object(earlier)) => {
+            for (key, value) in earlier {
+                fill_missing(latest.entry(key).or_insert(Value::Null), value);
+            }
+        }
+        (latest @ Value::Null, earlier) => *latest = earlier.clone(),
+        _ => {}
+    }
+}
+
+fn combine_lifecycle_values(input: &Value, result: Option<&Value>) -> Value {
+    let mut combined = result.cloned().unwrap_or(Value::Null);
+    fill_missing(&mut combined, input);
+    combined
+}
+
+fn lifecycle_terminal_status(payload: &Value) -> Option<String> {
+    payload
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| payload.pointer("/item/status").and_then(Value::as_str))
+        .filter(|status| {
+            matches!(
+                *status,
+                "completed"
+                    | "succeeded"
+                    | "success"
+                    | "failed"
+                    | "error"
+                    | "declined"
+                    | "denied"
+                    | "cancelled"
+                    | "canceled"
+                    | "not_executed"
+            )
+        })
+        .map(str::to_string)
+}
+
+fn lifecycle_has_terminal_conflict(payload: &Value) -> bool {
+    payload
+        .pointer("/_rovaiLifecycle/terminalConflict")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn lifecycle_observed_terminal_statuses(payload: &Value) -> Vec<String> {
+    payload
+        .pointer("/_rovaiLifecycle/observedStatuses")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn file_fact_projection(payload: &Value) -> Value {
+    let mut projection = serde_json::json!({
+        "runtimeDiff": payload.get("runtimeDiff"),
+        "runtimeFileOperation": payload.get("runtimeFileOperation"),
+        "runtimeRunDiff": payload.get("runtimeRunDiff"),
+        "patch": payload.get("patch"),
+        "changes": payload.get("changes").or_else(|| payload.pointer("/item/changes")),
+    });
+    let has_file_facts = projection
+        .as_object()
+        .is_some_and(|object| object.values().any(|value| !value.is_null()));
+    if has_file_facts {
+        projection["trustState"] = serde_json::json!({
+            "terminalConflict": payload
+                .pointer("/_rovaiLifecycle/terminalConflict")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "contentComplete": payload
+                .pointer("/_rovaiContent/complete")
+                .and_then(Value::as_bool),
+            "contentState": payload
+                .pointer("/_rovaiContent/state")
+                .and_then(Value::as_str),
+        });
+    }
+    projection
+}
+
+pub(crate) fn payload_affects_file_facts(payload: &Value) -> bool {
+    let projection = file_fact_projection(payload);
+    projection
+        .as_object()
+        .is_some_and(|object| object.values().any(|value| !value.is_null()))
+}
+
+fn lifecycle_part_preview(value: &Value, byte_count: usize, state: &str) -> Result<String> {
+    let mut preview = if state == "inline" {
+        value.clone()
+    } else {
+        bounded_preview(value)
+    };
+    if matches!(state, "too_large" | "unavailable") {
+        let digest = crate::command::canonical_json_digest(value)?;
+        if !preview.is_object() {
+            preview = serde_json::json!({"value": preview});
+        }
+        preview["_rovaiContent"] = serde_json::json!({
+            "state": state,
+            "complete": false,
+            "byteCount": byte_count,
+            "digest": digest,
+        });
+    }
+    serde_json::to_string(&preview).map_err(Into::into)
+}
+
+fn prepare_lifecycle_part(
+    database: &mut Database,
+    blob_store: &ManagedBlobStore,
+    value: &Value,
+    sensitive: bool,
+) -> Result<LifecycleContentPart> {
+    let encoded = serde_json::to_vec(value)?;
+    let byte_count = i64::try_from(encoded.len()).context("Lifecycle content size overflow")?;
+    let (blob_id, state) = if encoded.len() <= INLINE_PAYLOAD_LIMIT_BYTES {
+        (None, "inline")
+    } else if encoded.len() as u64 <= MAX_BLOB_BYTES {
+        let blob = blob_store.put_bytes_candidate(
+            database,
+            &encoded,
+            "application/json",
+            if sensitive { "sensitive" } else { "normal" },
+            GC_OWNER_EXECUTION_LIFECYCLE,
+        )?;
+        (Some(blob.id), "blob")
+    } else {
+        (None, "too_large")
+    };
+    Ok(LifecycleContentPart {
+        value: if state == "too_large" {
+            serde_json::from_str(&lifecycle_part_preview(value, encoded.len(), state)?)?
+        } else {
+            value.clone()
+        },
+        preview_json: lifecycle_part_preview(value, encoded.len(), state)?,
+        blob_id,
+        byte_count,
+        state: state.to_string(),
+    })
+}
+
+fn load_lifecycle_part(
+    database: &Database,
+    blob_store: &ManagedBlobStore,
+    preview_json: String,
+    blob_id: Option<String>,
+    byte_count: i64,
+    state: String,
+) -> Result<LifecycleContentPart> {
+    let preview: Value = serde_json::from_str(&preview_json)
+        .context("Lifecycle content preview is not valid JSON")?;
+    let value = match (state.as_str(), blob_id.as_deref()) {
+        ("blob", Some(blob_id)) => match blob_store.read_bytes(database, blob_id) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .context("Lifecycle Blob content is not valid JSON")?,
+            Err(_) => {
+                let mut unavailable = preview.clone();
+                if !unavailable.is_object() {
+                    unavailable = serde_json::json!({"value": unavailable});
+                }
+                unavailable["_rovaiContent"] = serde_json::json!({
+                    "state": "unavailable",
+                    "complete": false,
+                    "byteCount": byte_count,
+                });
+                unavailable
+            }
+        },
+        _ => preview.clone(),
+    };
+    Ok(LifecycleContentPart {
+        value,
+        preview_json,
+        blob_id,
+        byte_count,
+        state,
+    })
+}
+
+fn load_lifecycle_evidence(
+    database: &Database,
+    blob_store: &ManagedBlobStore,
+    agent_run_id: &str,
+    execution_epoch: i64,
+    operation_id: &str,
+) -> Result<Option<LifecycleEvidenceRow>> {
+    let row = database
+        .connection()
+        .query_row(
+            r#"
+            SELECT id, sequence, event_type, kind, phase, occurred_at,
+                   revision, change_sequence,
+                   input_preview_json, input_blob_id, input_byte_count, input_content_state,
+                   result_preview_json, result_blob_id, result_byte_count, result_content_state
+            FROM agent_run_execution_evidence
+            WHERE agent_run_id = ?1 AND execution_epoch = ?2 AND operation_id = ?3
+            "#,
+            params![agent_run_id, execution_epoch, operation_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<i64>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        id,
+        sequence,
+        event_type,
+        kind,
+        phase,
+        occurred_at,
+        revision,
+        change_sequence,
+        input_preview,
+        input_blob,
+        input_bytes,
+        input_state,
+        result_preview,
+        result_blob,
+        result_bytes,
+        result_state,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let input = load_lifecycle_part(
+        database,
+        blob_store,
+        input_preview,
+        input_blob,
+        input_bytes,
+        input_state,
+    )?;
+    let result = match (result_preview, result_bytes, result_state) {
+        (Some(preview), Some(bytes), Some(state)) => Some(load_lifecycle_part(
+            database,
+            blob_store,
+            preview,
+            result_blob,
+            bytes,
+            state,
+        )?),
+        _ => None,
+    };
+    Ok(Some(LifecycleEvidenceRow {
+        id,
+        sequence,
+        event_type,
+        kind,
+        phase,
+        occurred_at,
+        revision,
+        change_sequence,
+        input,
+        result,
+    }))
+}
+
+fn lifecycle_combined_payload(row: &LifecycleEvidenceRow) -> Value {
+    combine_lifecycle_values(
+        &row.input.value,
+        row.result.as_ref().map(|part| &part.value),
+    )
+}
+
+fn lifecycle_evidence_view(
+    agent_run_id: &str,
+    execution_epoch: i64,
+    operation_id: &str,
+    row: &LifecycleEvidenceRow,
+    canonical: Option<CanonicalRuntimeActivity>,
+) -> AgentRunExecutionEvidence {
+    let payload = lifecycle_combined_payload(row);
+    AgentRunExecutionEvidence {
+        id: row.id.clone(),
+        agent_run_id: agent_run_id.to_string(),
+        execution_epoch,
+        sequence: row.sequence,
+        operation_id: Some(operation_id.to_string()),
+        revision: Some(row.revision),
+        change_sequence: Some(row.change_sequence),
+        event_type: row.event_type.clone(),
+        kind: row.kind.clone(),
+        phase: row.phase.clone(),
+        content_byte_count: row
+            .input
+            .byte_count
+            .saturating_add(row.result.as_ref().map_or(0, |part| part.byte_count)),
+        payload,
+        content_blob_id: None,
+        is_truncated: row.input.state != "inline"
+            || row
+                .result
+                .as_ref()
+                .is_some_and(|part| part.state != "inline"),
+        occurred_at: row.occurred_at.clone(),
+        canonical,
     }
 }
 
@@ -1511,7 +2569,8 @@ fn load_by_source_key(
             r#"
             SELECT id, agent_run_id, execution_epoch, sequence,
                    event_type, kind, phase, payload_preview_json,
-                   content_blob_id, content_byte_count, is_truncated, occurred_at
+                   content_blob_id, content_byte_count, is_truncated, occurred_at,
+                   operation_id, revision, change_sequence
             FROM agent_run_execution_evidence
             WHERE agent_run_id = ?1 AND source_event_key = ?2
             "#,
@@ -1531,6 +2590,9 @@ fn load_by_source_key(
                     row.get::<_, i64>(9)?,
                     row.get::<_, i64>(10)? != 0,
                     row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<i64>>(13)?,
+                    row.get::<_, Option<i64>>(14)?,
                 ))
             },
         )
@@ -1549,12 +2611,18 @@ fn load_by_source_key(
                 content_byte_count,
                 is_truncated,
                 occurred_at,
+                operation_id,
+                revision,
+                change_sequence,
             )| {
                 Ok(AgentRunExecutionEvidence {
                     id,
                     agent_run_id,
                     execution_epoch,
                     sequence,
+                    operation_id,
+                    revision,
+                    change_sequence,
                     event_type,
                     kind,
                     phase,
@@ -3102,10 +4170,13 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(evidence.inserted);
+        assert!(!evidence.inserted);
         assert!(evidence.is_truncated);
-        assert!(evidence.content_blob_id.is_some());
-        assert_eq!(evidence.sequence, 2);
+        assert!(evidence.content_blob_id.is_none());
+        assert_eq!(evidence.id, started_command.id);
+        assert_eq!(evidence.sequence, 1);
+        assert_eq!(evidence.revision, Some(2));
+        assert!(evidence.change_sequence > started_command.change_sequence);
         let canonical = evidence
             .canonical
             .as_ref()
@@ -3189,7 +4260,7 @@ mod tests {
                 .iter()
                 .map(|evidence| evidence.sequence)
                 .collect::<Vec<_>>(),
-            vec![3, 4, 5]
+            vec![2, 3, 4]
         );
         assert_eq!(batch[0].payload["delta"], "hello ");
         assert!(batch.iter().all(|evidence| evidence.canonical.is_none()));
@@ -3269,6 +4340,128 @@ mod tests {
         assert!(!ExecutionEvidenceService::is_batchable_runtime_delta_event(
             "runtime.action"
         ));
+
+        let terminal_first = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.completed",
+                &json!({
+                    "item": {
+                        "id": "terminal-first-command",
+                        "type": "commandExecution",
+                        "status": "completed",
+                        "exitCode": 0,
+                    }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(terminal_first.inserted);
+        assert_eq!(terminal_first.sequence, 9);
+        assert_eq!(terminal_first.revision, Some(1));
+        let late_start_payload = json!({
+            "item": {
+                "id": "terminal-first-command",
+                "type": "commandExecution",
+                "command": "printf late-start",
+                "status": "inProgress",
+            }
+        });
+        let late_start = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.started",
+                &late_start_payload,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!late_start.inserted);
+        assert_eq!(late_start.id, terminal_first.id);
+        assert_eq!(late_start.sequence, terminal_first.sequence);
+        assert_eq!(late_start.revision, Some(2));
+        assert!(late_start.change_sequence > terminal_first.change_sequence);
+        assert_eq!(late_start.phase, "completed");
+        assert_eq!(late_start.payload["item"]["status"], "completed");
+        assert_eq!(late_start.payload["item"]["command"], "printf late-start");
+        let canonical_started: bool = database.connection().query_row(
+            "SELECT started_at IS NOT NULL FROM canonical_runtime_activity WHERE agent_run_id = ?1 AND operation_id = ?2",
+            params![run_id, late_start.canonical.as_ref().unwrap().operation_id],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(
+            canonical_started,
+            "a late start must fill the canonical start time"
+        );
+        let duplicate_late_start = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.started",
+                &late_start_payload,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(duplicate_late_start.revision, late_start.revision);
+        assert_eq!(
+            duplicate_late_start.change_sequence,
+            late_start.change_sequence
+        );
+        let conflicting_terminal_payload = json!({
+            "item": {
+                "id": "terminal-first-command",
+                "type": "commandExecution",
+                "status": "failed",
+            },
+            "errorCode": "late_conflict",
+        });
+        let conflicting_terminal = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.completed",
+                &conflicting_terminal_payload,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(conflicting_terminal.id, terminal_first.id);
+        assert_eq!(conflicting_terminal.sequence, terminal_first.sequence);
+        assert_eq!(conflicting_terminal.revision, Some(3));
+        assert_eq!(
+            conflicting_terminal.canonical.as_ref().unwrap().outcome,
+            "unsettled"
+        );
+        assert_eq!(conflicting_terminal.payload["status"], "unsettled");
+        let duplicate_conflict = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.completed",
+                &conflicting_terminal_payload,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(duplicate_conflict.revision, conflicting_terminal.revision);
+        assert_eq!(
+            duplicate_conflict.change_sequence,
+            conflicting_terminal.change_sequence
+        );
+        assert_eq!(duplicate_conflict.payload["status"], "unsettled");
+        assert_eq!(
+            duplicate_conflict.canonical.as_ref().unwrap().outcome,
+            "unsettled"
+        );
 
         let started_tool = ExecutionEvidenceService
             .record_builtin_tool_started(
@@ -3377,7 +4570,8 @@ mod tests {
             )
             .unwrap()
             .expect("an already-started Activity must receive one interruption terminal");
-        assert_eq!(interrupted.sequence, 12);
+        assert_eq!(interrupted.id, interrupted_started.id);
+        assert_eq!(interrupted.sequence, 11);
         assert_eq!(interrupted.payload["reasonCode"], "runtime_interrupted");
         let interrupted_canonical = interrupted.canonical.as_ref().unwrap();
         assert_eq!(interrupted_canonical.phase, "terminal");
@@ -3432,7 +4626,7 @@ mod tests {
             .unwrap()
             .expect("terminal Team Tool result must survive the Turn fence");
         assert!(failed.inserted);
-        assert_eq!(failed.sequence, 13);
+        assert_eq!(failed.sequence, 12);
         assert_eq!(
             failed.payload["errorCode"],
             "team_tool.execution_budget_exhausted"
@@ -3463,8 +4657,9 @@ mod tests {
             )
             .unwrap()
             .expect("the first replay observation must remain visible");
-        assert!(replay.inserted);
-        assert_eq!(replay.sequence, 14);
+        assert!(!replay.inserted);
+        assert_eq!(replay.id, failed.id);
+        assert_eq!(replay.sequence, 12);
         assert_eq!(replay.payload["idempotentReplay"], true);
 
         let replay_duplicate = ExecutionEvidenceService
@@ -3477,9 +4672,9 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(replay_duplicate.inserted);
-        assert_ne!(replay_duplicate.id, replay.id);
-        assert_eq!(replay_duplicate.sequence, 15);
+        assert!(!replay_duplicate.inserted);
+        assert_eq!(replay_duplicate.id, replay.id);
+        assert_eq!(replay_duplicate.sequence, 12);
 
         // Extend the existing durable fencing owner: only a registered ZCode
         // background identity may update its original completed epoch.

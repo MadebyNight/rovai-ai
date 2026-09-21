@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -12,7 +12,10 @@ use uuid::Uuid;
 
 use crate::{
     db::Database,
-    managed_blob::ManagedBlobStore,
+    execution_evidence::{ExecutionEvidenceService, payload_affects_file_facts},
+    managed_blob::{
+        GC_OWNER_FILE_CHANGE_PROJECTION, ManagedBlobStore, attach_gc_candidate, detach_gc_candidate,
+    },
     runtime_diff::{
         exact_mutation_fragment, fragment_line_count, normalize_reported_path_for_display,
         split_unified_diff_sections, unified_diff_counts, unified_diff_from_complete_states,
@@ -20,7 +23,7 @@ use crate::{
     },
 };
 
-pub const AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION: u32 = 2;
+pub const AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +46,12 @@ pub struct AgentRunFileChangesView {
     pub schema_version: u32,
     pub agent_run_id: String,
     pub execution_epoch: i64,
+    #[serde(default)]
+    pub source_change_sequence: i64,
+    #[serde(default = "default_projection_revision")]
+    pub revision: i64,
+    #[serde(default)]
+    pub is_stale: bool,
     pub files: Vec<AgentRunChangedFileSummaryView>,
     pub file_count: u64,
     pub operation_count: u64,
@@ -51,6 +60,10 @@ pub struct AgentRunFileChangesView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletions: Option<u64>,
     pub completed_at: String,
+}
+
+fn default_projection_revision() -> i64 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,6 +141,14 @@ struct AggregatedProjection {
     source_evidence_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ProjectionState {
+    status: String,
+    source_change_sequence: i64,
+    revision: i64,
+    details_blob_id: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct AgentRunFileChangeProjector;
 
@@ -139,13 +160,6 @@ impl AgentRunFileChangeProjector {
         agent_run_id: &str,
         execution_epoch: i64,
     ) -> Result<Option<AgentRunFileChangesView>> {
-        if let Some(status) = load_projection_status(database, agent_run_id, execution_epoch)? {
-            return match status.as_str() {
-                "complete" => load_card(database, agent_run_id, execution_epoch),
-                "no_changes" => Ok(None),
-                _ => anyhow::bail!("AgentRun file-change projection has an invalid status"),
-            };
-        }
         let terminal = database
             .connection()
             .query_row(
@@ -181,51 +195,84 @@ impl AgentRunFileChangeProjector {
                     .map(str::to_string)
             })
             .context("terminal AgentRun has no frozen execution root")?;
-        let evidence = load_full_evidence(database, blob_store, agent_run_id, execution_epoch)?;
-        let Some(mut projection) = aggregate_evidence(
+        let source_change_sequence =
+            load_file_facts_change_sequence(database.connection(), agent_run_id, execution_epoch)?;
+        let existing = load_projection_state(database, agent_run_id, execution_epoch)?;
+        if existing
+            .as_ref()
+            .is_some_and(|state| state.source_change_sequence == source_change_sequence)
+        {
+            return match existing.as_ref().map(|state| state.status.as_str()) {
+                Some("complete") => load_card(database, agent_run_id, execution_epoch),
+                Some("no_changes") => Ok(None),
+                _ => anyhow::bail!("AgentRun file-change projection has an invalid status"),
+            };
+        }
+        let existing_file_ids = load_existing_file_ids(database, agent_run_id, execution_epoch)?;
+        let evidence = match load_full_evidence(database, blob_store, agent_run_id, execution_epoch)
+        {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                record_projection_failure(
+                    database,
+                    agent_run_id,
+                    execution_epoch,
+                    source_change_sequence,
+                    "source_unreadable",
+                )?;
+                return Err(error);
+            }
+        };
+        if let Some(error_code) = file_fact_source_error(&evidence) {
+            record_projection_failure(
+                database,
+                agent_run_id,
+                execution_epoch,
+                source_change_sequence,
+                error_code,
+            )?;
+            anyhow::bail!("AgentRun file-change source is not trustworthy: {error_code}");
+        }
+        let Some(mut projection) = aggregate_evidence_with_existing_ids(
             agent_run_id,
             execution_epoch,
             &completed_at,
             Path::new(&execution_root),
             &evidence,
+            &existing_file_ids,
         ) else {
-            insert_no_changes_projection(database, agent_run_id, execution_epoch, &completed_at)?;
+            publish_projection(
+                database,
+                agent_run_id,
+                execution_epoch,
+                source_change_sequence,
+                &completed_at,
+                None,
+                existing.as_ref(),
+            )?;
             return Ok(None);
         };
+        let next_revision = existing.as_ref().map_or(1, |state| state.revision + 1);
+        projection.details.card.source_change_sequence = source_change_sequence;
+        projection.details.card.revision = next_revision;
+        projection.details.card.is_stale = false;
         projection.details.card.completed_at = completed_at.clone();
         let encoded = serde_json::to_vec(&projection.details)?;
-        let blob = blob_store.put_bytes(
+        let blob = blob_store.put_bytes_candidate(
             database,
             &encoded,
             "application/vnd.rovai.agent-run-file-changes+json",
             "sensitive",
+            GC_OWNER_FILE_CHANGE_PROJECTION,
         )?;
-        let summary_json = serde_json::to_string(&projection.details.card.files)?;
-        let source_evidence_ids_json = serde_json::to_string(&projection.source_evidence_ids)?;
-        let now = chrono::Utc::now().to_rfc3339();
-        database.connection().execute(
-            r#"
-            INSERT OR IGNORE INTO agent_run_file_change_projection(
-                agent_run_id, execution_epoch, schema_version, status,
-                file_count, operation_count, additions, deletions,
-                files_summary_json, details_blob_id,
-                source_evidence_ids_json, completed_at, created_at
-            ) VALUES (?1, ?2, ?3, 'complete', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-            "#,
-            params![
-                agent_run_id,
-                execution_epoch,
-                i64::from(AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION),
-                projection.details.card.file_count as i64,
-                projection.details.card.operation_count as i64,
-                projection.details.card.additions.map(|value| value as i64),
-                projection.details.card.deletions.map(|value| value as i64),
-                summary_json,
-                blob.id,
-                source_evidence_ids_json,
-                completed_at,
-                now,
-            ],
+        publish_projection(
+            database,
+            agent_run_id,
+            execution_epoch,
+            source_change_sequence,
+            &completed_at,
+            Some((&projection, &blob.id)),
+            existing.as_ref(),
         )?;
         load_card(database, agent_run_id, execution_epoch)
     }
@@ -241,10 +288,23 @@ impl AgentRunFileChangeProjector {
                 SELECT agent_run.id, agent_run.execution_epoch
                 FROM agent_run
                 WHERE agent_run.status IN ('succeeded', 'failed', 'cancelled')
-                  AND NOT EXISTS (
-                      SELECT 1 FROM agent_run_file_change_projection AS projection
-                      WHERE projection.agent_run_id = agent_run.id
-                        AND projection.execution_epoch = agent_run.execution_epoch
+                  AND (
+                      NOT EXISTS (
+                          SELECT 1 FROM agent_run_file_change_projection AS projection
+                          WHERE projection.agent_run_id = agent_run.id
+                            AND projection.execution_epoch = agent_run.execution_epoch
+                      )
+                      OR COALESCE((
+                          SELECT projection.source_change_sequence
+                          FROM agent_run_file_change_projection AS projection
+                          WHERE projection.agent_run_id = agent_run.id
+                            AND projection.execution_epoch = agent_run.execution_epoch
+                      ), 0) < COALESCE((
+                          SELECT state.file_facts_change_sequence
+                          FROM agent_run_execution_epoch_state AS state
+                          WHERE state.agent_run_id = agent_run.id
+                            AND state.execution_epoch = agent_run.execution_epoch
+                      ), 0)
                   )
                   AND EXISTS (
                       SELECT 1 FROM agent_run_execution_evidence AS evidence
@@ -262,11 +322,11 @@ impl AgentRunFileChangeProjector {
         };
         let mut recovered = 0_usize;
         for (agent_run_id, execution_epoch) in candidates {
-            if self
-                .project_terminal_run(database, blob_store, &agent_run_id, execution_epoch)?
-                .is_some()
-            {
-                recovered = recovered.saturating_add(1);
+            match self.project_terminal_run(database, blob_store, &agent_run_id, execution_epoch) {
+                Ok(_) => recovered = recovered.saturating_add(1),
+                Err(error) => eprintln!(
+                    "AgentRun file-change projection recovery remains pending for {agent_run_id}/{execution_epoch}: {error:#}"
+                ),
             }
         }
         Ok(recovered)
@@ -283,10 +343,15 @@ pub fn list_completed_run_file_changes(
                projection.file_count, projection.operation_count,
                projection.additions, projection.deletions,
                projection.files_summary_json, projection.completed_at,
-               projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id)
+               projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+               projection.source_change_sequence, projection.revision,
+               COALESCE(epoch_state.file_facts_change_sequence, 0)
         FROM agent_run_file_change_projection AS projection
         JOIN agent_run ON agent_run.id = projection.agent_run_id
         LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        LEFT JOIN agent_run_execution_epoch_state AS epoch_state
+          ON epoch_state.agent_run_id = projection.agent_run_id
+         AND epoch_state.execution_epoch = projection.execution_epoch
         WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
           AND projection.status = 'complete'
         ORDER BY projection.completed_at, projection.agent_run_id, projection.execution_epoch
@@ -312,10 +377,15 @@ pub fn find_run_file_change_summary(
                    projection.file_count, projection.operation_count,
                    projection.additions, projection.deletions,
                    projection.files_summary_json, projection.completed_at,
-                   projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id)
+                   projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   projection.source_change_sequence, projection.revision,
+                   COALESCE(epoch_state.file_facts_change_sequence, 0)
             FROM agent_run_file_change_projection AS projection
             JOIN agent_run ON agent_run.id = projection.agent_run_id
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN agent_run_execution_epoch_state AS epoch_state
+              ON epoch_state.agent_run_id = projection.agent_run_id
+             AND epoch_state.execution_epoch = projection.execution_epoch
             WHERE projection.agent_run_id = ?1
               AND projection.execution_epoch = ?2
               AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?3
@@ -339,29 +409,43 @@ pub fn read_run_file_changes(
     agent_run_id: &str,
     execution_epoch: i64,
 ) -> Result<AgentRunFileChangesDetailView> {
-    let (blob_id, stored_schema_version) = database
-        .connection()
-        .query_row(
-            r#"
-            SELECT projection.details_blob_id, projection.schema_version
+    let (blob_id, stored_schema_version, source_change_sequence, revision, current_source) =
+        database
+            .connection()
+            .query_row(
+                r#"
+            SELECT projection.details_blob_id, projection.schema_version,
+                   projection.source_change_sequence, projection.revision,
+                   COALESCE(epoch_state.file_facts_change_sequence, 0)
             FROM agent_run_file_change_projection AS projection
             JOIN agent_run ON agent_run.id = projection.agent_run_id
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN agent_run_execution_epoch_state AS epoch_state
+              ON epoch_state.agent_run_id = projection.agent_run_id
+             AND epoch_state.execution_epoch = projection.execution_epoch
             WHERE projection.agent_run_id = ?1
               AND projection.execution_epoch = ?2
               AND COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?3
               AND projection.status = 'complete'
             "#,
-            params![agent_run_id, execution_epoch, camp_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .optional()?
-        .context("AgentRun file changes do not exist in this Camp")?;
+                params![agent_run_id, execution_epoch, camp_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .context("AgentRun file changes do not exist in this Camp")?;
     let stored_schema_version = u32::try_from(stored_schema_version)
         .context("AgentRun file changes have an invalid stored schema version")?;
     ensure_supported_schema_version(stored_schema_version)?;
     let bytes = blob_store.read_bytes(database, &blob_id)?;
-    let detail = serde_json::from_slice::<AgentRunFileChangesDetailView>(&bytes)
+    let mut detail = serde_json::from_slice::<AgentRunFileChangesDetailView>(&bytes)
         .context("AgentRun file changes are not valid JSON")?;
     if detail.card.agent_run_id != agent_run_id || detail.card.execution_epoch != execution_epoch {
         anyhow::bail!("AgentRun file changes identity is invalid");
@@ -371,6 +455,9 @@ pub fn read_run_file_changes(
     {
         anyhow::bail!("AgentRun file changes schema evidence is inconsistent");
     }
+    detail.card.source_change_sequence = source_change_sequence;
+    detail.card.revision = revision;
+    detail.card.is_stale = source_change_sequence < current_source;
     adapt_detail_to_public_v2(detail, camp_id, stored_schema_version)
 }
 
@@ -387,10 +474,15 @@ fn load_card(
                    projection.file_count, projection.operation_count,
                    projection.additions, projection.deletions,
                    projection.files_summary_json, projection.completed_at,
-                   projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id)
+                   projection.schema_version, COALESCE(agent_run.camp_id, camp_turn.camp_id),
+                   projection.source_change_sequence, projection.revision,
+                   COALESCE(epoch_state.file_facts_change_sequence, 0)
             FROM agent_run_file_change_projection AS projection
             JOIN agent_run ON agent_run.id = projection.agent_run_id
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            LEFT JOIN agent_run_execution_epoch_state AS epoch_state
+              ON epoch_state.agent_run_id = projection.agent_run_id
+             AND epoch_state.execution_epoch = projection.execution_epoch
             WHERE projection.agent_run_id = ?1 AND projection.execution_epoch = ?2
               AND projection.status = 'complete'
             "#,
@@ -401,49 +493,207 @@ fn load_card(
         .map_err(Into::into)
 }
 
-fn load_projection_status(
+fn load_file_facts_change_sequence(
+    connection: &rusqlite::Connection,
+    agent_run_id: &str,
+    execution_epoch: i64,
+) -> Result<i64> {
+    Ok(connection.query_row(
+        r#"
+        SELECT COALESCE((
+            SELECT file_facts_change_sequence
+            FROM agent_run_execution_epoch_state
+            WHERE agent_run_id = ?1 AND execution_epoch = ?2
+        ), 0)
+        "#,
+        params![agent_run_id, execution_epoch],
+        |row| row.get(0),
+    )?)
+}
+
+fn load_projection_state(
     database: &Database,
     agent_run_id: &str,
     execution_epoch: i64,
-) -> Result<Option<String>> {
+) -> Result<Option<ProjectionState>> {
     database
         .connection()
         .query_row(
             r#"
-            SELECT status
+            SELECT status, source_change_sequence, revision, details_blob_id
             FROM agent_run_file_change_projection
             WHERE agent_run_id = ?1 AND execution_epoch = ?2
             "#,
             params![agent_run_id, execution_epoch],
-            |row| row.get(0),
+            |row| {
+                Ok(ProjectionState {
+                    status: row.get(0)?,
+                    source_change_sequence: row.get(1)?,
+                    revision: row.get(2)?,
+                    details_blob_id: row.get(3)?,
+                })
+            },
         )
         .optional()
         .map_err(Into::into)
 }
 
-fn insert_no_changes_projection(
+fn load_existing_file_ids(
     database: &Database,
     agent_run_id: &str,
     execution_epoch: i64,
-    completed_at: &str,
+) -> Result<BTreeMap<String, String>> {
+    Ok(load_card(database, agent_run_id, execution_epoch)?
+        .map(|card| {
+            card.files
+                .into_iter()
+                .map(|file| (file.path, file.evidence_file_id))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+fn record_projection_failure(
+    database: &Database,
+    agent_run_id: &str,
+    execution_epoch: i64,
+    source_change_sequence: i64,
+    error_code: &str,
 ) -> Result<()> {
     database.connection().execute(
         r#"
-        INSERT OR IGNORE INTO agent_run_file_change_projection(
+        UPDATE agent_run_file_change_projection
+        SET last_attempted_source_change_sequence = ?3,
+            last_error_code = ?4,
+            updated_at = ?5
+        WHERE agent_run_id = ?1 AND execution_epoch = ?2
+        "#,
+        params![
+            agent_run_id,
+            execution_epoch,
+            source_change_sequence,
+            error_code,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn publish_projection(
+    database: &mut Database,
+    agent_run_id: &str,
+    execution_epoch: i64,
+    source_change_sequence: i64,
+    completed_at: &str,
+    projection: Option<(&AggregatedProjection, &str)>,
+    existing: Option<&ProjectionState>,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let revision = existing.map_or(1, |state| state.revision + 1);
+    let (status, file_count, operation_count, additions, deletions, summary_json, blob_id, sources) =
+        match projection {
+            Some((projection, blob_id)) => (
+                "complete",
+                projection.details.card.file_count as i64,
+                projection.details.card.operation_count as i64,
+                projection.details.card.additions.map(|value| value as i64),
+                projection.details.card.deletions.map(|value| value as i64),
+                serde_json::to_string(&projection.details.card.files)?,
+                Some(blob_id),
+                serde_json::to_string(&projection.source_evidence_ids)?,
+            ),
+            None => (
+                "no_changes",
+                0,
+                0,
+                None,
+                None,
+                "[]".to_string(),
+                None,
+                "[]".to_string(),
+            ),
+        };
+    let transaction = database
+        .connection_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current_source = transaction.query_row(
+        r#"
+        SELECT COALESCE((
+            SELECT file_facts_change_sequence
+            FROM agent_run_execution_epoch_state
+            WHERE agent_run_id = ?1 AND execution_epoch = ?2
+        ), 0)
+        "#,
+        params![agent_run_id, execution_epoch],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if current_source != source_change_sequence {
+        transaction.commit()?;
+        anyhow::bail!("AgentRun file facts changed while the projection was being built");
+    }
+    transaction.execute(
+        r#"
+        INSERT INTO agent_run_file_change_projection(
             agent_run_id, execution_epoch, schema_version, status,
             file_count, operation_count, additions, deletions,
             files_summary_json, details_blob_id,
-            source_evidence_ids_json, completed_at, created_at
-        ) VALUES (?1, ?2, ?3, 'no_changes', 0, 0, NULL, NULL, '[]', NULL, '[]', ?4, ?5)
+            source_evidence_ids_json, completed_at, created_at,
+            source_change_sequence, revision, updated_at,
+            last_attempted_source_change_sequence, last_error_code
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            ?14, ?15, ?13, ?14, NULL
+        )
+        ON CONFLICT(agent_run_id, execution_epoch) DO UPDATE SET
+            schema_version = excluded.schema_version,
+            status = excluded.status,
+            file_count = excluded.file_count,
+            operation_count = excluded.operation_count,
+            additions = excluded.additions,
+            deletions = excluded.deletions,
+            files_summary_json = excluded.files_summary_json,
+            details_blob_id = excluded.details_blob_id,
+            source_evidence_ids_json = excluded.source_evidence_ids_json,
+            completed_at = excluded.completed_at,
+            source_change_sequence = excluded.source_change_sequence,
+            revision = excluded.revision,
+            updated_at = excluded.updated_at,
+            last_attempted_source_change_sequence = excluded.last_attempted_source_change_sequence,
+            last_error_code = NULL
         "#,
         params![
             agent_run_id,
             execution_epoch,
             i64::from(AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION),
+            status,
+            file_count,
+            operation_count,
+            additions,
+            deletions,
+            summary_json,
+            blob_id,
+            sources,
             completed_at,
-            chrono::Utc::now().to_rfc3339(),
+            now,
+            source_change_sequence,
+            revision,
         ],
     )?;
+    if let Some(blob_id) = blob_id {
+        attach_gc_candidate(&transaction, blob_id)?;
+    }
+    if let Some(old_blob_id) = existing
+        .and_then(|state| state.details_blob_id.as_deref())
+        .filter(|old_blob_id| Some(*old_blob_id) != blob_id)
+    {
+        detach_gc_candidate(
+            &transaction,
+            old_blob_id,
+            GC_OWNER_FILE_CHANGE_PROJECTION,
+            &now,
+        )?;
+    }
+    transaction.commit()?;
     Ok(())
 }
 
@@ -485,6 +735,9 @@ fn card_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRunFileChange
         schema_version: AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION,
         agent_run_id,
         execution_epoch,
+        source_change_sequence: row.get(10)?,
+        revision: row.get(11)?,
+        is_stale: row.get::<_, i64>(10)? < row.get::<_, i64>(12)?,
         file_count: row.get::<_, i64>(2)?.max(0) as u64,
         operation_count: row.get::<_, i64>(3)?.max(0) as u64,
         additions: row
@@ -527,7 +780,7 @@ fn legacy_evidence_file_id(
 fn ensure_supported_schema_version(stored_schema_version: u32) -> Result<()> {
     if !matches!(
         stored_schema_version,
-        1 | AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION
+        1 | 2 | AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION
     ) {
         anyhow::bail!(
             "AgentRun file changes schema version {stored_schema_version} is not supported"
@@ -555,7 +808,7 @@ fn adapt_summary_ids(
                     ordinal,
                 );
             }
-            AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION => {
+            2 | AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION => {
                 if file.evidence_file_id.trim().is_empty() {
                     anyhow::bail!("AgentRun file changes have a missing Evidence File identity");
                 }
@@ -590,7 +843,7 @@ fn adapt_detail_to_public_v2(
         }
         match stored_schema_version {
             1 => file.evidence_file_id = summary.evidence_file_id.clone(),
-            AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION => {
+            2 | AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION => {
                 if file.evidence_file_id != summary.evidence_file_id
                     || file.evidence_file_id.trim().is_empty()
                 {
@@ -616,45 +869,56 @@ fn load_full_evidence(
     let rows = {
         let mut statement = database.connection().prepare(
             r#"
-            SELECT id, sequence, payload_preview_json, content_blob_id
+            SELECT id, COALESCE(change_sequence, sequence) AS fact_sequence
             FROM agent_run_execution_evidence
             WHERE agent_run_id = ?1 AND execution_epoch = ?2
-            ORDER BY sequence, id
+            ORDER BY fact_sequence, id
             "#,
         )?;
         statement
             .query_map(params![agent_run_id, execution_epoch], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     rows.into_iter()
-        .map(|(id, sequence, preview, blob_id)| {
-            let bytes = match blob_id {
-                Some(blob_id) => blob_store.read_bytes(database, &blob_id)?,
-                None => preview.into_bytes(),
-            };
+        .map(|(id, sequence)| {
+            let payload =
+                ExecutionEvidenceService.read_full_payload_unscoped(database, blob_store, &id)?;
             Ok(SequencedEvidence {
                 id,
                 sequence,
-                payload: serde_json::from_slice(&bytes)
-                    .context("Execution Evidence payload is not valid JSON")?,
+                payload,
             })
         })
         .collect()
 }
 
+#[cfg(all(test, feature = "extended-tests"))]
 fn aggregate_evidence(
     agent_run_id: &str,
     execution_epoch: i64,
     completed_at: &str,
     execution_root: &Path,
     evidence: &[SequencedEvidence],
+) -> Option<AggregatedProjection> {
+    aggregate_evidence_with_existing_ids(
+        agent_run_id,
+        execution_epoch,
+        completed_at,
+        execution_root,
+        evidence,
+        &BTreeMap::new(),
+    )
+}
+
+fn aggregate_evidence_with_existing_ids(
+    agent_run_id: &str,
+    execution_epoch: i64,
+    completed_at: &str,
+    execution_root: &Path,
+    evidence: &[SequencedEvidence],
+    existing_file_ids: &BTreeMap<String, String>,
 ) -> Option<AggregatedProjection> {
     let mut changes = Vec::new();
     let mut latest_run_snapshot: Option<(i64, String)> = None;
@@ -699,7 +963,10 @@ fn aggregate_evidence(
         return None;
     }
     for file in &mut files {
-        file.evidence_file_id = new_evidence_file_id();
+        file.evidence_file_id = existing_file_ids
+            .get(&file.path)
+            .cloned()
+            .unwrap_or_else(new_evidence_file_id);
     }
     let all_files_have_counts = files
         .iter()
@@ -729,6 +996,9 @@ fn aggregate_evidence(
         schema_version: AGENT_RUN_FILE_CHANGES_SCHEMA_VERSION,
         agent_run_id: agent_run_id.to_string(),
         execution_epoch,
+        source_change_sequence: 0,
+        revision: 1,
+        is_stale: false,
         file_count: summaries.len() as u64,
         operation_count,
         additions,
@@ -743,6 +1013,31 @@ fn aggregate_evidence(
             files,
         },
         source_evidence_ids,
+    })
+}
+
+fn file_fact_source_error(evidence: &[SequencedEvidence]) -> Option<&'static str> {
+    evidence.iter().find_map(|item| {
+        if !payload_affects_file_facts(&item.payload) {
+            return None;
+        }
+        if item
+            .payload
+            .pointer("/_rovaiLifecycle/terminalConflict")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return Some("source_terminal_conflict");
+        }
+        if item
+            .payload
+            .pointer("/_rovaiContent/complete")
+            .and_then(Value::as_bool)
+            == Some(false)
+        {
+            return Some("source_content_incomplete");
+        }
+        None
     })
 }
 
@@ -1569,6 +1864,43 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_or_conflicting_file_facts_never_become_no_changes() {
+        for (marker, expected) in [
+            (
+                json!({
+                    "_rovaiContent": {"state": "too_large", "complete": false},
+                    "runtimeDiff": {"status": "available", "entries": []}
+                }),
+                "source_content_incomplete",
+            ),
+            (
+                json!({
+                    "_rovaiLifecycle": {"terminalConflict": true},
+                    "runtimeFileOperation": {
+                        "status": "available",
+                        "operationKind": "write",
+                        "path": "src/app.ts"
+                    }
+                }),
+                "source_terminal_conflict",
+            ),
+        ] {
+            assert_eq!(
+                file_fact_source_error(&[evidence(1, marker)]),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            file_fact_source_error(&[evidence(
+                1,
+                json!({"_rovaiContent": {"state": "too_large", "complete": false}}),
+            )]),
+            None,
+            "an unrelated large command output must not block valid file projection"
+        );
+    }
+
+    #[test]
     fn managed_output_unavailable_evidence_does_not_create_a_files_changed_card() {
         assert!(
             aggregate_evidence(
@@ -2055,7 +2387,8 @@ mod tests {
             AgentRunFileChangeProjector
                 .recover_terminal_runs(&mut database, &blob_store)
                 .unwrap(),
-            2
+            3,
+            "successful no_changes publication is also recovered work"
         );
         let cards =
             list_completed_run_file_changes(database.connection(), "file-change-camp").unwrap();
@@ -2080,6 +2413,154 @@ mod tests {
             0,
             "replay must not create a second card for the same Run epoch"
         );
+
+        let original_card = cards
+            .iter()
+            .find(|card| card.agent_run_id == "file-change-run-1")
+            .unwrap()
+            .clone();
+        let original_file_id = original_card.files[0].evidence_file_id.clone();
+        let original_blob_id: String = database
+            .connection()
+            .query_row(
+                "SELECT details_blob_id FROM agent_run_file_change_projection WHERE agent_run_id = 'file-change-run-1' AND execution_epoch = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let late_result = ExecutionEvidenceService
+            .record_builtin_tool_result(
+                &mut database,
+                &blob_store,
+                "file-change-run-1",
+                1,
+                &json!({
+                    "toolCallId": "file-change-tool-1",
+                    "status": "completed",
+                    "kind": "edit",
+                    "runtimeFileOperation": {
+                        "adapterKind": "qoder-cli",
+                        "protocolFamily": "acp-v1",
+                        "sourceEventKind": "session/update.tool_call_update.completed",
+                        "operationKind": "write",
+                        "path": "src/run-1.ts"
+                    },
+                    "runtimeDiff": {
+                        "adapterKind": "qoder-cli",
+                        "protocolFamily": "acp-v1",
+                        "sourceEventKind": "session/update.tool_call_update.completed",
+                        "semanticKind": "complete_before_after",
+                        "entries": [{
+                            "path": "src/run-1.ts",
+                            "oldText": "old\n",
+                            "newText": "new\n",
+                        }]
+                    }
+                }),
+            )
+            .unwrap()
+            .expect("a permitted late terminal result should update its lifecycle row");
+        let (display_sequence, fact_sequence): (i64, i64) = database
+            .connection()
+            .query_row(
+                "SELECT sequence, change_sequence FROM agent_run_execution_evidence WHERE id = ?1",
+                [&late_result.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(fact_sequence > display_sequence);
+        let loaded = load_full_evidence(&database, &blob_store, "file-change-run-1", 1).unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .find(|evidence| evidence.id == late_result.id)
+                .unwrap()
+                .sequence,
+            fact_sequence,
+            "mutable lifecycle facts must be ordered by their latest observation"
+        );
+        let stale_card = list_completed_run_file_changes(database.connection(), "file-change-camp")
+            .unwrap()
+            .into_iter()
+            .find(|card| card.agent_run_id == "file-change-run-1")
+            .unwrap();
+        assert!(stale_card.is_stale);
+        assert_eq!(stale_card.revision, original_card.revision);
+        assert!(
+            stale_card.source_change_sequence
+                < {
+                    database
+                .connection()
+                .query_row(
+                    "SELECT file_facts_change_sequence FROM agent_run_execution_epoch_state WHERE agent_run_id = 'file-change-run-1' AND execution_epoch = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+                }
+        );
+        assert_eq!(
+            AgentRunFileChangeProjector
+                .recover_terminal_runs(&mut database, &blob_store)
+                .unwrap(),
+            1
+        );
+        let refreshed = read_run_file_changes(
+            &database,
+            &blob_store,
+            "file-change-camp",
+            "file-change-run-1",
+            1,
+        )
+        .unwrap();
+        assert!(!refreshed.card.is_stale);
+        assert_eq!(refreshed.card.revision, original_card.revision + 1);
+        assert_eq!(refreshed.files[0].evidence_file_id, original_file_id);
+        assert_eq!(refreshed.files[0].additions, Some(1));
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT gc_candidate_owner IS 'file_change_projection' AND gc_candidate_at IS NOT NULL FROM managed_blob WHERE id = ?1",
+                    [&original_blob_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap(),
+            true,
+            "replaced projection details must become a recoverable GC candidate"
+        );
+
+        ExecutionEvidenceService
+            .record_terminal_run_diff_snapshot(
+                &mut database,
+                &blob_store,
+                "file-change-run-2",
+                1,
+                &json!({
+                    "eventId": "late-authoritative-snapshot",
+                    "runtimeRunDiff": {
+                        "status": "available",
+                        "semanticKind": "unified_diff_snapshot",
+                        "diff": "diff --git a/src/late.ts b/src/late.ts\n--- a/src/late.ts\n+++ b/src/late.ts\n@@ -1 +1 @@\n-old\n+new\n"
+                    }
+                }),
+            )
+            .unwrap()
+            .expect("a permitted late snapshot should invalidate no_changes");
+        assert_eq!(
+            AgentRunFileChangeProjector
+                .recover_terminal_runs(&mut database, &blob_store)
+                .unwrap(),
+            1
+        );
+        let formerly_empty =
+            list_completed_run_file_changes(database.connection(), "file-change-camp")
+                .unwrap()
+                .into_iter()
+                .find(|card| card.agent_run_id == "file-change-run-2")
+                .expect("no_changes must not suppress a later valid file fact");
+        assert_eq!(formerly_empty.files[0].path, "src/late.ts");
+        assert!(!formerly_empty.is_stale);
 
         drop(database);
         std::fs::remove_dir_all(data_dir).unwrap();

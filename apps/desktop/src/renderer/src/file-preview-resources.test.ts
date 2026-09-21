@@ -317,6 +317,68 @@ it('reclaims immutable change detail with the hot Camp while preserving its sele
   expect(read).toHaveBeenCalledTimes(2)
 })
 
+it('keeps stale file-change detail readable and rejects an older same-version refresh', async () => {
+  const { owner } = fixture()
+  owner.activate('a')
+  const session = owner.session('a')
+  const card = (revision: number, sourceChangeSequence: number, isStale: boolean) => ({
+    schemaVersion: 3,
+    agentRunId: 'run',
+    executionEpoch: 1,
+    revision,
+    sourceChangeSequence,
+    isStale,
+    files: [{
+      evidenceFileId: 'evidence',
+      path: 'file.txt',
+      changeKind: 'update',
+      presentationKind: 'operation_only',
+      operationCount: 1
+    }],
+    fileCount: 1,
+    operationCount: 1,
+    completedAt: '2026-09-22T00:00:00Z'
+  }) as import('@contracts').AgentRunFileChangesView
+  const initial = card(1, 1, false)
+  const id = session.actions.openFileChanges('a', initial)!
+  const originalDetail = {
+    schemaVersion: 3,
+    card: initial,
+    files: []
+  } as import('@contracts').AgentRunFileChangesDetailView
+  await session.actions.loadChanges(id, async () => originalDetail)
+
+  session.actions.syncFileChanges('a', [card(1, 1, true)])
+  expect(active(session)).toMatchObject({
+    changes: { revision: 1, sourceChangeSequence: 1, isStale: true },
+    detail: originalDetail,
+    detailStatus: 'ready'
+  })
+
+  await session.actions.loadChanges(id, async () => ({
+    schemaVersion: 3,
+    card: card(1, 1, false),
+    files: []
+  }) as import('@contracts').AgentRunFileChangesDetailView, true)
+  expect(active(session)).toMatchObject({
+    changes: { revision: 1, isStale: true },
+    detail: originalDetail,
+    detailStatus: 'ready'
+  })
+
+  const refreshed = {
+    schemaVersion: 3,
+    card: card(2, 2, false),
+    files: []
+  } as import('@contracts').AgentRunFileChangesDetailView
+  await session.actions.loadChanges(id, async () => refreshed, true)
+  expect(active(session)).toMatchObject({
+    changes: { revision: 2, sourceChangeSequence: 2, isStale: false },
+    detail: refreshed,
+    detailStatus: 'ready'
+  })
+})
+
 it('bounds cold snapshots without letting snapshot writes promote their Camp', async () => {
   const { owner } = fixture({ hotCamps: 1, snapshots: 3 })
   const a = await open(owner, 'a')

@@ -130,7 +130,7 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
       if (following()) followAfterLoad.current = 'live'
       void store.current?.refresh(following)
     }, 300)
-  }, [enabled, run.updatedAt, run.executionEvidenceCount, run.status, liveRevision])
+  }, [enabled, run.updatedAt, run.executionEvidenceChangeSequence, run.status, liveRevision])
 
   useLayoutEffect(() => {
     const current = store.current
@@ -226,7 +226,8 @@ export function useExecutionWindow(enabled: boolean, campId: string, run: AgentR
     project: <T,>(input: AgentRunExecutionWindowPage['evidence'], build: () => T): T => store.current?.project(input, build) ?? build(),
     contentCache: store.current?.content ?? null,
     setViewport: (first: number, last: number) => store.current?.setViewport(first, last),
-    root, evidence, loading: enabled && (store.current?.loading || (!store.current?.loaded && !store.current?.error)),
+    root, evidence, runtimePhase: store.current?.runtimePhase,
+    loading: enabled && (store.current?.loading || (!store.current?.loaded && !store.current?.error)),
     direction: store.current?.direction ?? 'latest',
     error: store.current?.error ?? null,
     hasEarlier: store.current?.hasEarlier ?? false,

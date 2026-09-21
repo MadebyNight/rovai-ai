@@ -5,7 +5,7 @@ export type ExecutionWindowRequest = (params: {
   campId: string; agentRunId: string; beforeSequence: number | null; afterSequence?: number; limit: number
 }) => Promise<Page>
 export type ExecutionChangesRequest = (params: {
-  campId: string; agentRunId: string; afterSequence: number; refreshEvidenceIds: string[]; limit: number
+  campId: string; agentRunId: string; afterChangeSequence: number; refreshEvidenceIds: string[]; limit: number
 }) => Promise<AgentRunExecutionWindowChanges>
 type Direction = 'earlier' | 'newer' | 'latest'
 type CacheBudget = { maxItems: number; maxBytes: number }
@@ -27,6 +27,7 @@ export class ExecutionWindow {
   direction: Direction = 'latest'
   hasEarlier = false
   hasNewer = false
+  runtimePhase: Page['runtimePhase'] = undefined
   private cursor = 0
   private before: number | null = null
   private neighbor: Page | null = null
@@ -64,12 +65,15 @@ export class ExecutionWindow {
     return bytes
   }
   private merge(items: Evidence[]): void {
-    const entries = new Map(this.evidence.map(item => [item.sequence, item]))
+    const entries = new Map(this.evidence.map(item => [item.id, item]))
     let dirty = false
     for (const item of items) {
-      const previous = entries.get(item.sequence)
+      const previous = entries.get(item.id)
+      if (previous && (item.revision ?? 0) < (previous.revision ?? 0)) continue
+      if (previous && item.revision === previous.revision
+        && (item.changeSequence ?? 0) < (previous.changeSequence ?? 0)) continue
       if (previous && JSON.stringify(previous) === JSON.stringify(item)) continue
-      entries.set(item.sequence, item); dirty = true
+      entries.set(item.id, item); dirty = true
     }
     if (!dirty) return
     this.evidence = [...entries.values()].sort((a, b) => a.sequence - b.sequence)
@@ -87,9 +91,10 @@ export class ExecutionWindow {
     const promise = this.request({ campId: this.campId, agentRunId: this.agentRunId, beforeSequence: before,
       ...(after === undefined ? {} : { afterSequence: after }), limit }).then(page => {
       const items = page.evidence
-      if (page.schemaVersion !== 1 || page.campId !== this.campId || page.agentRunId !== this.agentRunId
+      if (page.schemaVersion !== 2 || page.campId !== this.campId || page.agentRunId !== this.agentRunId
         || page.requestedBeforeSequence !== before || (page.requestedAfterSequence ?? undefined) !== after
         || !Number.isSafeInteger(page.throughSequence) || page.throughSequence < 0 || items.length > limit
+        || !Number.isSafeInteger(page.throughChangeSequence) || page.throughChangeSequence < 0
         || !this.valid([...items, ...(page.activeEvidence ?? [])], page.throughSequence)
         || items.some((item, i) => (i > 0 && item.sequence <= items[i - 1].sequence)
           || (before !== null && item.sequence >= before) || (after !== undefined && item.sequence <= after))
@@ -130,7 +135,8 @@ export class ExecutionWindow {
           this.evidence = []; this.before = page.nextBeforeSequence; this.hasEarlier = page.hasMore
         }
         this.merge([...page.evidence, ...(page.activeEvidence ?? [])])
-        this.latestPage = page; this.cursor = page.throughSequence
+        this.latestPage = page; this.cursor = page.throughChangeSequence
+        this.runtimePhase = page.runtimePhase
         this.latestDirty = false; this.hasNewer = false; this.viewport = null
       } else if (direction === 'earlier') {
         // A prefetched page may contain an older version of an already loaded operation.
@@ -138,7 +144,7 @@ export class ExecutionWindow {
         this.before = page.nextBeforeSequence; this.hasEarlier = page.hasMore; this.neighbor = null
       } else {
         this.merge(page.evidence); this.hasNewer = page.hasMore
-        if (!page.hasMore) this.cursor = page.throughSequence
+        if (!page.hasMore) this.cursor = page.throughChangeSequence
       }
       this.loaded = true
       this.prune(direction === 'earlier')
@@ -161,34 +167,36 @@ export class ExecutionWindow {
       let more = true
       while (more && generation === this.generation && !this.hasNewer) {
         const after = this.cursor
-        const unfinished = this.evidence.filter(item => item.phase === 'updated' || item.phase === 'started')
-        const refreshEvidenceIds = [...unfinished.filter(item => item.eventType === 'agent.text.block'),
-          ...unfinished.filter(item => item.eventType !== 'agent.text.block')].slice(0, 256).map(item => item.id)
+        const refreshEvidenceIds = this.evidence
+          .filter(item => item.revision == null && (item.phase === 'updated' || item.phase === 'started'))
+          .slice(0, 256).map(item => item.id)
         const page = await this.changes({ campId: this.campId, agentRunId: this.agentRunId,
-          afterSequence: after, refreshEvidenceIds, limit: 96 })
+          afterChangeSequence: after, refreshEvidenceIds, limit: 96 })
         if (generation !== this.generation) return
-        if (page.schemaVersion !== 1 || page.campId !== this.campId || page.agentRunId !== this.agentRunId
-          || page.requestedAfterSequence !== after || !Number.isSafeInteger(page.nextAfterSequence)
-          || !Number.isSafeInteger(page.throughSequence) || page.nextAfterSequence < after
-          || page.nextAfterSequence > page.throughSequence || (page.hasMore && page.nextAfterSequence <= after)
-          || (!page.hasMore && page.nextAfterSequence !== page.throughSequence)
+        if (page.schemaVersion !== 2 || page.campId !== this.campId || page.agentRunId !== this.agentRunId
+          || page.requestedAfterChangeSequence !== after || !Number.isSafeInteger(page.nextAfterChangeSequence)
+          || !Number.isSafeInteger(page.throughChangeSequence) || page.nextAfterChangeSequence < after
+          || page.nextAfterChangeSequence > page.throughChangeSequence || (page.hasMore && page.nextAfterChangeSequence <= after)
+          || (!page.hasMore && page.nextAfterChangeSequence !== page.throughChangeSequence)
           || page.evidence.length > 96 || page.refreshedEvidence.length > 256
           || !this.valid([...page.evidence, ...page.refreshedEvidence], page.throughSequence)) {
           throw new Error('执行记录增量数据不兼容')
         }
         // Returning after a long absence must not replay an entire Run before reaching its tail.
-        if (page.throughSequence - after > this.budget.maxItems && accept()) {
+        if (page.throughChangeSequence - after > this.budget.maxItems && accept()) {
           this.latestDirty = true
           await this.read('latest')
           return
         }
-        this.cursor = page.nextAfterSequence
+        this.cursor = page.nextAfterChangeSequence
+        this.runtimePhase = page.runtimePhase
         // Ignore old operation updates outside the contiguous loaded interval.
         const first = this.before === null ? 0 : this.before
         this.merge([...page.evidence, ...page.refreshedEvidence].filter(item => item.sequence >= first
           || this.evidence.some(old => old.sequence === item.sequence)))
-        this.latestPage = { schemaVersion: 1, campId: this.campId, agentRunId: this.agentRunId,
-          requestedBeforeSequence: null, throughSequence: this.cursor, evidence: this.evidence.slice(-this.limit),
+        this.latestPage = { schemaVersion: 2, campId: this.campId, agentRunId: this.agentRunId,
+          requestedBeforeSequence: null, throughSequence: this.evidence.at(-1)?.sequence ?? 0,
+          throughChangeSequence: this.cursor, runtimePhase: this.runtimePhase, evidence: this.evidence.slice(-this.limit),
           hasMore: this.hasEarlier || this.evidence.length > this.limit,
           nextBeforeSequence: this.hasEarlier || this.evidence.length > this.limit ? this.evidence.slice(-this.limit)[0]?.sequence ?? null : null }
         this.prune(!accept())

@@ -1,10 +1,10 @@
 ---
 document_type: implementation-plan
 version: v1.63
-lifecycle: current
+lifecycle: historical
 authority: version-implementation-plan
 status: completed
-last_updated: 2026-09-21
+last_updated: 2026-09-22
 ---
 
 # v1.63 实施与验收

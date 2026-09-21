@@ -3,12 +3,12 @@ document_type: architecture
 architecture: camp-open-read-path
 authority: desktop-camp-enter-and-progressive-read-boundaries
 status: accepted
-last_updated: 2026-09-20
+last_updated: 2026-09-22
 ---
 
 # Camp Open Read Path 架构
 
-字段与窗口见 [Camp Open Projection v22](../contracts/camp-open-projection-v22.md)与
+字段与窗口见 [Camp Open Projection v23](../contracts/camp-open-projection-v23.md)与
 [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)。本架构把“进入会话”、
 “继续阅读”、“查找完整当前会话”和“检查运行详情”分成用途明确的接口，同时保持 SQLite Read Side
 为唯一权威。
@@ -23,7 +23,7 @@ last_updated: 2026-09-20
 | Electron Main bridge | allowlist typed method、记录不含内容的 IPC roundtrip/response bytes；不组装或缓存领域投影 |
 | Core request ingress | 持续接收请求；有顺序要求的命令与混合操作交给单一 FIFO worker，执行窗口 page/changes 复用既有独立派发任务，不建立优先级调度器或第二套 RPC |
 | Core Camp enter module | 在一次有序 request 中先读 activation state；Pending 直接读取投影，Active 先按原 Envelope 查 receipt 并校验 Lead，有效新 User enter 只读，需要修复时 reconcile 后再读；缺失或 rejected 时 fail closed；不执行取消或文本维护 |
-| Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、有界业务 coverage 与 high-water；保留已返回 Run 的定向原始 Evidence 计数，不计算 Camp-wide Evidence 总数；不读取 event_log 或 Context Manifest/Action history，不执行业务 SQL 或 Blob/文件写入 |
+| Core Camp open read model | 在单一 SQLite transaction 中组装业务首屏投影、空 Execution Evidence、有界业务 coverage 与 high-water；保留已返回 Run 的定向原始 Evidence 计数和独立 change watermark，不计算 Camp-wide Evidence 总数；不读取 event_log 或 Context Manifest/Action history，不执行业务 SQL 或 Blob/文件写入 |
 | Camp message history read | 以 stable sequence cursor 读取 earlier page；不回放 event 构造第二真源 |
 | Camp conversation find read | 扫描当前 Camp 公开 user/agent 正文投影，返回 exact total 与一个选中命中；不改变 Agent-facing discovery search，也不返回完整结果集 |
 | Run detail read | 可见展开的 Run 使用逻辑操作窗口与相邻页预取，单条展开复用 content 接口；大 Evidence 正文继续按需读取，不随普通 Camp open 挂载 |
@@ -45,13 +45,16 @@ Open 仅读取当前 Camp 的业务表。它及其嵌套 loader、CTE、view 不
 exact count 后，打开成本不随其他 Camp 的事件历史增长；执行详情改由独立窗口读取，完整历史仍可按需访问。
 
 Open schema 8 也不再精确计算或公开 Camp-wide 原始 Evidence coverage。最多 96 个返回
-Run 仍包含各自的 `executionEvidenceCount`，该计数从 `agent_run_id` 索引路径定向获得；
-它不是全 Camp 合计，也不被最多 96 个 Run 的局部求和代替。因此打开 Camp A 的 SQL
+Run 仍包含各自的 `executionEvidenceCount` 和 `executionEvidenceChangeSequence`，两者从 `agent_run_id`
+定向获得；前者是原始行数，后者是新 Evidence INSERT/UPDATE 的单调水位。Renderer 只用后者失效增量窗口；
+原位更新时行数可以不变，因而计数不得再充当 revision。
+历史 Run 水位保持 0 且不回填，初始 page 与旧 refresh-ID 兼容读取仍可用；原始计数不是全 Camp 合计，
+也不被最多 96 个 Run 的局部求和代替。因此打开 Camp A 的 SQL
 VM 工作量不得随 Camp B 的 Evidence 历史规模增长。
 
 此边界只约束投影读取，不撤销已执行 Active reconciliation 的 command receipt，也不修改完整
 `camp_snapshot()`、显式 History/Find、Navigation 或 `events.subscribe` 的审计与 invalidation 语义。
-无需清理旧数据、补历史字段、迁移或给旧 event 查询补索引。
+Migration 168 只增加新水位字段并保留历史默认值；无需清理旧数据、回填历史 Evidence 或给旧 event 查询补索引。
 
 取消、成功与失败的普通终态继续由 Domain Command Gateway 在业务事务提交后收尾文本；受控关闭和
 planned-shutdown 的直提交流程在自己的提交后调用同一入口，不在 Adapter 回调重复实现。若业务与回执已提交、
@@ -66,7 +69,7 @@ app click / notification target
   -> Core reads authoritative activation state
        -> Pending: skip reconciliation
        -> Active: replay prior receipt or validate current Lead; reconcile only when needed
-  -> Core read transaction + bounded business collections + per-returned-Run evidence counts + throughGlobalSequence
+  -> Core read transaction + bounded business collections + per-returned-Run evidence count/change water + throughGlobalSequence
   -> Main parses typed response
   -> Renderer atomically commits target Camp ID + project + recent Camp surface
   -> next meaningful paint
@@ -76,7 +79,7 @@ cold startup
   -> Main Window Session returns a frozen local target
   -> Renderer paints the target route shell; the shared startup canvas appears only after the 400ms threshold
   -> Renderer queues camps.enter ahead of Overview/preferences/runtime health
-  -> Core activation-aware enter + bounded business collections + per-returned-Run evidence counts
+  -> Core activation-aware enter + bounded business collections + per-returned-Run evidence count/change water
   -> Renderer commits Active Camp or meaningful Pending Camp Draft + meaningful content, then fades the canvas
   -> background navigation / campViewed / project restore
 
@@ -131,10 +134,11 @@ Renderer 不通过 event replay 补齐权威对象。
 
 Renderer 保留连续已加载区间，用实测高度占位虚拟化视口外内容；长工具组内部同样虚拟化。首屏 12–48 项，
 历史页 64 项；只有用户接近未加载边界才读下一批。正文在可见行中读取，命中缓存或在途请求则复用。
-运行中通过 `agentRunExecution.changes` 按原始变化水位追加/更新逻辑项，同时刷新原地变化的未完成正文。
+运行中通过 `agentRunExecution.changes` 按独立 `changeSequence` 水位追加/更新逻辑项，同时刷新任何原地变化的
+生命周期记录；固定展示 `sequence`、Evidence 行数和 `executionEvidenceCount` 都不能充当更新游标。
 增量合并不改变历史 cursor，不把可见内容裁回最新一页。Camp 切换只卸载订阅与 DOM，保留有界 session 缓存；
 切回先显示最新缓存，再补齐变化。虚拟高度调整与翻页保留锚点，初始跟随意图等异步内容到达后完成。
-预算、淘汰后按需恢复和字段由 Camp Open v22 拥有。
+预算、淘汰后按需恢复和字段由 Camp Open v23 拥有。
 
 ## Complete conversation find flow
 
@@ -177,6 +181,6 @@ Memory 仍分别拥有读取与错误状态，但冷启动可见反馈共用不�
 
 - [Core 受管内容不变量](foundational-invariants.md#core-managed-content)
 - [协作与执行准入不变量](foundational-invariants.md#collaboration-admission)
-- [Camp Open Projection v22](../contracts/camp-open-projection-v22.md)
+- [Camp Open Projection v23](../contracts/camp-open-projection-v23.md)
 - [Camp Conversation Find v1](../contracts/camp-conversation-find-v1.md)
 - [Desktop Navigation Refresh](desktop-navigation-refresh.md)

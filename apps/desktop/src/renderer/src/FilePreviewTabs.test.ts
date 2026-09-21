@@ -93,6 +93,7 @@ beforeEach(() => {
     openExecution: vi.fn(),
     openMissionActivity: vi.fn(),
     openFileChanges: vi.fn(),
+    syncFileChanges: vi.fn(),
     selectChangedFile: vi.fn(),
     showPane: vi.fn(),
     hidePane: vi.fn(),

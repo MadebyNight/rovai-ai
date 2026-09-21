@@ -207,6 +207,13 @@ export function AgentRunFileChangesReviewSurface({
                     {openCurrentError}
                   </div>
                 )}
+                {changes.isStale && (
+                  <div className="agent-run-file-review-truth-note is-pending" role="status">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2" /><circle cx="12" cy="12" r="9" /></svg>
+                    <span>检测到较新的文件事实。当前结果仍可阅读，刷新完成后会自动更新。</span>
+                    <button type="button" onClick={onRetry}>重试刷新</button>
+                  </div>
+                )}
                 {truthNote && (
                   <div className="agent-run-file-review-truth-note">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>

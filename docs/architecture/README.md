@@ -1,7 +1,7 @@
 ---
 document_type: architecture-index
 authority: long-lived-architecture-routing
-last_updated: 2026-09-20
+last_updated: 2026-09-22
 ---
 
 # 长期系统架构
@@ -49,6 +49,6 @@ last_updated: 2026-09-20
 | [Structured Run Input Skill Links](structured-current-input-skill-links.md) | Picker SkillMention、claim-time 批次 snapshot、verified Exposure、只读 Resolver、per-message `RUN_INPUT.messages[].skills` 与 unchanged Adapter transport |
 | [User Automation](user-automation.md) | 一个 `rovai` binary 下隔离的 Agent/User transport、Main-owned 本机 IPC、封闭 dispatch、Camp navigation、CLI-owned Diagnostic Trial、双 cursor 与安全导出边界 |
 | [Windows Desktop Platform](windows-desktop-platform.md) | Windows x64 host envelope、平台 seam、原子 Job 启动、Transport v14、私有 local storage、hidden title strip + top-level menu projection + native controls、NSIS 与真实 Windows 验收组合 |
-| [Runtime File Change Observation](runtime-file-change-observation.md) | Runtime 终态文件操作、Command Diff、每 AgentRun 文件变化归约、exact managed-output exclusion、Managed Blob、恢复与授权读取边界；不扫描工作区或依赖 Git |
+| [Runtime File Change Observation](runtime-file-change-observation.md) | Runtime 文件操作、Command Diff、每 AgentRun/epoch 的版本化文件变化归约、exact managed-output exclusion、Managed Blob、迟到事实重算、恢复与授权读取边界；不扫描工作区或依赖 Git |
 | [消息选文引用](message-quotes.md) | 正文选择、owner 隔离与 Context 投影 |
 <!-- architecture-index:end -->

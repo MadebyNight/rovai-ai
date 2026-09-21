@@ -1,7 +1,7 @@
 ---
 document_type: contracts-index
 authority: protocol-contract-routing
-last_updated: 2026-09-20
+last_updated: 2026-09-22
 ---
 
 # 长期接口合同
@@ -53,7 +53,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Scheduled Automation v3（当前）](scheduled-automation-v3.md) | occurrence 只分 started/skipped(overlap)，首消息进入普通 Delivery→claim→AgentRun 主链 |
 | [Scheduled Automation v2（历史）](scheduled-automation-v2.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
 | [Scheduled Automation v1（历史）](scheduled-automation-v1.md) | Desktop/Core 本机计划、冻结快照、原子 Camp 派发、恢复收口、唯一公共结果与独立 Owner 通知 |
-| [Single Chat v6（当前）](single-chat-v6.md) | operation policy version 2 增加全局只读 `mission.list/get`；历史 version 1 冻结兼容 |
+| [Single Chat v7（当前）](single-chat-v7.md) | Run View 增加 Execution Evidence change watermark；行数不再兼任更新 revision |
+| [Single Chat v6（历史）](single-chat-v6.md) | operation policy version 2 增加全局只读 `mission.list/get`；历史 version 1 冻结兼容 |
 | [Single Chat v5（历史）](single-chat-v5.md) | 待发送消息原子移回普通输入框、覆盖草稿、释放 FIFO；旧编辑 session 兼容 |
 | [Single Chat v4（历史）](single-chat-v4.md) | v3 私有会话与注意力不变；Source Attachment Run 前宿主重检后原样投影 source path |
 | [Single Chat v3（历史）](single-chat-v3.md) | 本机单聊注意力、Run CampTurn ID 与精确私有审批投影；附件交付语义由 v4 替代 |
@@ -66,7 +67,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Runtime Images v4（历史）](runtime-images-v4.md) | v3 来源/读取/去重不变；Runtime 图片并入 Agent 图片区，按作者分区并采用 Agent 原比例与用户 72px 两种 Gallery variant；自动展示来源由 v5 收紧 |
 | [Runtime Images v3（历史）](runtime-images-v3.md) | v2 来源/保存/读取不变；同 Run 的已发送同摘要图片优先展示；统一图片几何与附件原序规则由 v4 替代 |
 | [Runtime Images v2（历史）](runtime-images-v2.md) | 本地结构化图片、ACP 增量累积、混合存储与 Camp-scoped 读取；允许显式附件重复展示的规则由 v3 替代 |
-| [Camp Open Projection v22（当前）](camp-open-projection-v22.md) | Open schema 8；保留有界 Run 元数据及各自原始 Evidence 计数，移除未消费的 Camp-wide Evidence 精确 coverage 与全表扫描 |
+| [Camp Open Projection v23（当前）](camp-open-projection-v23.md) | 有界 Run View 增加独立 Evidence change watermark；原始行数不再充当刷新 revision |
+| [Camp Open Projection v22（历史）](camp-open-projection-v22.md) | Open schema 8；保留有界 Run 元数据及各自原始 Evidence 计数，移除未消费的 Camp-wide Evidence 精确 coverage 与全表扫描 |
 | [Camp Open Projection v21（历史）](camp-open-projection-v21.md) | 继承 v20；当前 Delivery 集合覆盖用户与 Agent 作者，loader 与 coverage 使用同一准入；其 Camp-wide Evidence coverage 已由 v22 移除 |
 | [Camp Open Projection v20（历史）](camp-open-projection-v20.md) | Open/投影阶段零业务与 Blob 写入；旧取消归启动恢复，文本失败归既有维护循环；其当前 Delivery 作者覆盖由 v21 校正 |
 | [Camp Open Projection v19（历史）](camp-open-projection-v19.md) | 连续展示增量、跨 Camp 有界缓存、实测高度虚拟滚动；Open schema 7 不变 |
@@ -161,7 +163,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v17（当前）](file-preview-v17.md) | Execution、Mission Activity 与文件共享标签集合、分栏宿主与已保存宽度 |
+| [File Preview v18（当前）](file-preview-v18.md) | Files Changed projection 原位刷新、旧 detail 响应 fence 与 Tab 阅读状态保留 |
+| [File Preview v17（历史）](file-preview-v17.md) | Execution、Mission Activity 与文件共享标签集合、分栏宿主与已保存宽度 |
 | [File Preview v16（历史）](file-preview-v16.md) | Command 修改文件以 exact Run Activity Evidence 授权，并优先解析来源 AgentRun executionRoot；同名相对路径按实际文件身份去重 |
 | [File Preview v15（历史）](file-preview-v15.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；Command Activity 文件来源由 v16 替代 |
 | [File Preview v14（历史）](file-preview-v14.md) | 继承 v13 窗口保留与 LRU；受管 HTML 无空闲到期，页面通信与资源诊断分离、有限重连 |
@@ -181,7 +184,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Permanent Deletion v3（当前）](camp-permanent-deletion-v3.md) | 原删除权限/journal 不变；先定向业务终态，再有界 Runtime 清理和物理删除 |
 | [Camp Permanent Deletion v2（历史）](camp-permanent-deletion-v2.md) | v1 删除合同不变；增加 Camp Published Attachment View journal cleanup，并规定先 fence Runtime、再取得 View write gate |
 | [Camp Permanent Deletion v1（历史）](camp-permanent-deletion-v1.md) | `camps.delete` force 字段、兼容 blocker、单事务物理删除、Runtime cleanup 与 Renderer 确认边界；不含 Published View cleanup |
-| [Runtime File Change Observation v5（当前）](runtime-file-change-observation-v5.md) | 官方 ZCode Runtime 与原生证据边界；继承上一版合同 |
+| [Runtime File Change Observation v6（当前）](runtime-file-change-observation-v6.md) | exact-epoch 文件事实水位、stale/no_changes 重算、稳定文件 ID 与原子 projection 发布 |
+| [Runtime File Change Observation v5（历史）](runtime-file-change-observation-v5.md) | 官方 ZCode Runtime 与原生证据边界；继承上一版合同 |
 | [Runtime File Change Observation v4（历史）](runtime-file-change-observation-v4.md) | v3 typed read/write 与文件汇总不变；准入 Pi 成功 edit 的 path-bound 原生 patch，activity-v4 隔离新映射且不回写历史 |
 | [Runtime File Change Observation v3（历史）](runtime-file-change-observation-v3.md) | v2 文件变化与临时区排除不变；schema 2 增加 typed read/write，activity-v3 准入可靠单文件阅读且排除 Files Changed |
 | [Runtime File Change Observation v2（历史）](runtime-file-change-observation-v2.md) | v1 Evidence/投影/呈现不变；精确排除当前 `ROVAI_RUN_TMP` 临时交付区，mixed evidence 保留普通文件且不迁移历史数据 |
@@ -449,7 +453,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v9 (historical)](context-manifest-evidence-v9.md) | bounded public omission evidence；不作为 Formatter v13 恢复入口 |
 | [Context Delivery Profile v2 (historical)](context-delivery-profile-v2.md) | 公共引用链与历史 budget 的旧当前合同；不选择 self-active Task |
 | [Context Delivery Profile v1 (historical)](context-delivery-profile-v1.md) | AgentRun 公共消息窗口、Unicode scalar 正文截断、历史字符预算与遗漏提示 |
-| [Run Process Detail Surface v40（当前）](run-process-detail-surface-v40.md) | 继承 v39；普通 Camp 与完整 Mission 进入时默认选择总览，同时保留最新 running Run 的精确聚焦与定位 |
+| [Run Process Detail Surface v41（当前）](run-process-detail-surface-v41.md) | Operation 单记录生命周期、独立 change cursor、输入/结果分离 Blob 与 content-free thinking phase |
+| [Run Process Detail Surface v40（历史）](run-process-detail-surface-v40.md) | 继承 v39；普通 Camp 与完整 Mission 进入时默认选择总览，同时保留最新 running Run 的精确聚焦与定位 |
 | [Run Process Detail Surface v39（历史）](run-process-detail-surface-v39.md) | 继承 v38；使命板抽屉的底部执行台不因已有或新建 running Run 自动展开，显式入口保持可用 |
 | [Run Process Detail Surface v38（历史）](run-process-detail-surface-v38.md) | 继承 v37；排队卡读取当前用户 Delivery，层数按钮还原三层图标与交互稿字形 |
 | [Run Process Detail Surface v37（历史）](run-process-detail-surface-v37.md) | 继承 v36；终态步骤数恢复统计所有已结算逻辑操作，失败、停止、跳过和结果未知均计入 N |

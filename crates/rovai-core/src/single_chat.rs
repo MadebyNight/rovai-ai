@@ -169,6 +169,7 @@ pub struct SingleChatRunView {
     pub ended_at: Option<String>,
     pub final_conversation_message_id: Option<String>,
     pub execution_evidence_count: i64,
+    pub execution_evidence_change_sequence: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1614,7 +1615,9 @@ impl SingleChatService {
                        agent_run.created_at, agent_run.started_at, agent_run.ended_at,
                        agent_run.final_conversation_message_id,
                        (SELECT COUNT(*) FROM agent_run_execution_evidence AS evidence
-                        WHERE evidence.agent_run_id = agent_run.id), agent_run.camp_turn_id
+                        WHERE evidence.agent_run_id = agent_run.id),
+                       agent_run.execution_evidence_change_sequence,
+                       agent_run.camp_turn_id
                 FROM agent_run
                 WHERE agent_run.conversation_id = ?1
                   AND agent_run.invocation_kind = 'single_chat'
@@ -1625,7 +1628,7 @@ impl SingleChatService {
                 .query_map([conversation_id], |row| {
                     Ok(SingleChatRunView {
                         id: row.get(0)?,
-                        camp_turn_id: row.get(12)?,
+                        camp_turn_id: row.get(13)?,
                         trigger_conversation_message_id: row.get(1)?,
                         status: row.get(2)?,
                         version: row.get(3)?,
@@ -1637,6 +1640,7 @@ impl SingleChatService {
                         ended_at: row.get(9)?,
                         final_conversation_message_id: row.get(10)?,
                         execution_evidence_count: row.get(11)?,
+                        execution_evidence_change_sequence: row.get(12)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?

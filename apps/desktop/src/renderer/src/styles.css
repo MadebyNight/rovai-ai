@@ -3781,6 +3781,9 @@ button.task-event-card:focus-visible .task-card-chevron { color: var(--brand-ink
 .agent-run-file-review-current-error { flex: 0 0 auto; padding: 6px 11px; border-bottom: 1px solid var(--line); color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); font-size: 10.5px; }
 .agent-run-file-review-truth-note { display: grid; min-height: 38px; flex: 0 0 auto; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 7px; padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--evidence-muted); background: var(--file-change-hunk); font-size: 11px; line-height: 1.6; }
 .agent-run-file-review-truth-note svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; color: var(--muted); }
+.agent-run-file-review-truth-note.is-pending { grid-template-columns: 18px minmax(0, 1fr) auto; }
+.agent-run-file-review-truth-note button { min-height: 26px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: transparent; cursor: pointer; font: inherit; }
+.agent-run-file-review-truth-note button:hover { background: var(--file-change-hover); }
 .agent-run-file-review-scroll { min-width: 0; min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; background: var(--file-change-surface); }
 .agent-run-file-review-blocks { display: grid; min-width: max-content; width: 100%; gap: 16px; padding: 8px 0 28px; }
 .agent-run-file-review-block > header { display: flex; min-width: 0; min-height: 32px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--evidence-muted); background: var(--file-change-hunk); }

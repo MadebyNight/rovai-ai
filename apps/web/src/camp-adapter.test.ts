@@ -15,18 +15,28 @@ it('loads a command after an initially empty Web Run and refreshes its completio
   vi.stubGlobal('window', { sessionStorage: storage, history: { state: null } })
   vi.stubGlobal('matchMedia', () => ({ matches: false }))
   let evidence: AgentRunExecutionEvidenceView[] = []
+  let changeSequence = 0
   const operations: string[] = []
   const fetcher = vi.fn<typeof fetch>(async (url, options) => {
     if (String(url).endsWith('/login')) return Response.json({ protocolVersion: 3, token: 'a'.repeat(64), clientId: 'd'.repeat(64), editorProof: 'e'.repeat(64), ownerId: 'local_user' })
     const { operation, params } = JSON.parse(String(options?.body))
     operations.push(operation)
-    const common = { schemaVersion: 1, campId: 'camp', agentRunId: 'run', throughSequence: evidence.length, hasMore: false }
+    const common = {
+      schemaVersion: 2,
+      campId: 'camp',
+      agentRunId: 'run',
+      throughSequence: evidence.at(-1)?.sequence ?? 0,
+      throughChangeSequence: changeSequence,
+      hasMore: false
+    }
     if (operation === 'agentRunExecution.page') return Response.json({ result: {
       ...common, requestedBeforeSequence: params.beforeSequence, nextBeforeSequence: null, evidence
     } })
     if (operation === 'agentRunExecution.changes') return Response.json({ result: {
-      ...common, requestedAfterSequence: params.afterSequence, nextAfterSequence: evidence.length,
-      evidence: evidence.filter(item => item.sequence > params.afterSequence),
+      ...common,
+      requestedAfterChangeSequence: params.afterChangeSequence,
+      nextAfterChangeSequence: changeSequence,
+      evidence: evidence.filter(item => (item.changeSequence ?? item.sequence) > params.afterChangeSequence),
       refreshedEvidence: evidence.filter(item => params.refreshEvidenceIds.includes(item.id))
     } })
     throw Error(`Unexpected request: ${operation}`)
@@ -42,13 +52,18 @@ it('loads a command after an initially empty Web Run and refreshes its completio
     await current.latest()
     expect(current.loaded).toBe(true)
     expect(current.evidence).toEqual([])
+    changeSequence = 1
     evidence = [{ id: 'command', agentRunId: 'run', executionEpoch: 1, sequence: 1,
+      operationId: 'command', revision: 1, changeSequence,
       eventType: 'command.started', kind: 'command', phase: 'started',
       payload: { command: 'printf WEB_LIVE_COMMAND_MARKER' }, contentBlobId: null,
       contentByteCount: 0, isTruncated: false, occurredAt: '2026-09-14T00:00:00Z' }]
     await current.refresh()
     expect(current.evidence).toEqual(evidence)
-    evidence = [{ ...evidence[0], eventType: 'command.completed', phase: 'completed', payload: { command: 'printf WEB_LIVE_COMMAND_MARKER', exitCode: 0 } }]
+    changeSequence = 2
+    evidence = [{ ...evidence[0], revision: 2, changeSequence,
+      eventType: 'command.completed', phase: 'completed',
+      payload: { command: 'printf WEB_LIVE_COMMAND_MARKER', exitCode: 0 } }]
     await current.refresh()
     expect(current.evidence[0].phase).toBe('completed')
     expect(operations).toEqual(['agentRunExecution.page', 'agentRunExecution.changes', 'agentRunExecution.changes'])

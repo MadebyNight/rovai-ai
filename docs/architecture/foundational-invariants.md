@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: current-foundational-invariants
-last_updated: 2026-09-20
+last_updated: 2026-09-22
 ---
 
 # 当前基础架构不变量
@@ -477,8 +477,8 @@ last_updated: 2026-09-20
 
 ### Evidence 与 Canonical Activity
 
-- Runtime source event、Execution Evidence、Canonical Runtime Activity 和 Renderer presentation 是四个显式层。Runtime/Core 只声明它们真实观测或介入的事实；工具 Evidence 保持 append-only，文本 Evidence 按独立正文块定稿；二者保留来源、序列和原始观测边界；执行展示中的正文、命令与工具结果保留原值，不做敏感文本匹配或替换。Core classifier 拥有 canonical 语义；Renderer 只本地化/分组/呈现。任一层都不能用未报告行为、进程消失、命令文本或 UI 提示补写“已执行”。
-- Canonical Runtime Activity 是 Core 从不可变 Evidence 构建、持久但可重建的版本化投影，不是新的效果真源。Lifecycle/Read Side 只从选定的 canonical projection 派生，不跳过它直接从 Runtime 标题或 evidence payload 猜状态。
+- Runtime source event、Execution Evidence、Canonical Runtime Activity 和 Renderer presentation 是四个显式层。Runtime/Core 只声明它们真实观测或介入的事实；新 command/tool operation 在可靠原生/Core identity 下归约为一条可变生命周期 Evidence，无法可靠关联与独立事实继续使用追加记录；公开文本按独立正文块定稿。生命周期行保留稳定展示 `sequence`，每次有效变更同事务递增行 `revision` 与 Run-wide `changeSequence`，语义重复不推进；所有层继续保留来源和原始观测边界。执行展示中的正文、命令与工具结果保留原值，不做敏感文本匹配或替换。Core classifier 拥有 canonical 语义；Renderer 只本地化/分组/呈现。任一层都不能用未报告行为、进程消失、命令文本或 UI 提示补写“已执行”。字段与读取边界见 [Run Process Detail Surface v41](../contracts/run-process-detail-surface-v41.md)。
+- Canonical Runtime Activity 是 Core 从已准入 Evidence 当前 revision 构建、持久但可重建的版本化投影，不是新的效果真源。Lifecycle/Read Side 只从选定的 canonical projection 派生，不跳过它直接从 Runtime 标题或 evidence payload 猜状态。terminal-only、迟到 started 和互斥终态使用同一 reducer；迟到字段只补缺失，terminal 不回退，冲突 outcome 保持 `unsettled`。
 - `source_event_key` 与 Core-scoped `operationId` 是严格分离的身份：前者只在一个已声明 observation scope 内去重单个来源事件，后者才能跨 phase/evidence 合并同一操作。Core 只接受协议原生 ID、自有调用/receipt 关联或 Adapter 按封闭规则构造的可证明身份；不用时间、文本、路径或顺序相似性聚合。重放使用同一规则得到同一 identity/归约结果。
 - Activity Domain（历史字段名 `capabilityKind`）是稳定顶层观测域；可选 `semanticKind` 只能在 Evidence 支持时细分，`presentationHint` 永不成为 canonical semantics。Domain/kind 词汇扩展必须在 Mapping Registry 注册、版本化并提供 replay fixture；无证据时保留已有域或 `unknown`。
 - `activity-v3` 的 Core 只保留 Runtime 明确 title，不生成本地化默认标题、Codex commandActions 标题或文件
@@ -493,11 +493,14 @@ last_updated: 2026-09-20
   replay。当前 v3/v2/v1 读取仅让原有 row 与新 row 都可见；没有批量回填、平行 projection、mapping digest 或任意
   Evidence replay 基础设施，因而不得声称这些能力已经存在。
 - Runtime-reported Command Diff 只能由 Adapter/version 明确声明为完整 snapshot、exact mutation 或完整
-  before/after 的结构化字段进入 append-only Evidence，并归约为既有 Canonical Activity 的 typed
+  before/after 的结构化字段进入已准入 Evidence lifecycle 或独立 snapshot，并归约为既有 Canonical Activity 的 typed
   `diffProjection`。projection 保留 revision、全部 source Evidence IDs 和 available/unavailable/conflict；它不拥有
   独立 phase/outcome/identity。路径规范化不授予文件读取权，局部或语义不明字段不补猜，旧 Evidence 不推测回填。
 - AgentRun File Changes 以 `agentRunId + executionEpoch` 为独立 read projection，在 Run terminal ingress 后从同一
-  append-only Evidence 归约；它不依赖 Canonical Activity 的 Command Diff merge，也不创建第二套 Activity。
+  Evidence 当前 revision 与独立 snapshot 归约；它不依赖 Canonical Activity 的 Command Diff merge，也不创建第二套 Activity。
+  每个 exact epoch 保存最近一次影响文件事实的 Run `changeSequence`，projection 保存已消费来源水位与 revision；
+  `complete/no_changes` 都只在水位相等时有效。迟到文件事实使旧结果 stale 并定向重算，发布前复核来源水位；失败保留
+  上一份可读结果，不能清空或冒充最新。字段见 [Runtime File Change Observation v6](../contracts/runtime-file-change-observation-v6.md)。
   最新 Runtime Run snapshot 优先，完整 before/after 连续链可收敛为净差异，roundtrip 消失，exact mutation 保留
   时序，链断裂或 operation-only 只保留操作历史。只有所有文件都是完整净差异时才能显示全局增删计数。
 - 文件变化观察不执行 Git、filesystem scan 或当前文件读取，不解析 shell 命令，也不跨 Run 合并。失败或取消 Run
@@ -546,7 +549,11 @@ last_updated: 2026-09-20
 
 ### 用户可见 evidence 与 Usage
 
-- AgentRun Execution Evidence 是独立、用户可见但默认不回流 Agent 的权威记录，不归 Task、Message、Activity presentation 或 Runtime cache 所有。工具与执行事实保持 append-only；正文、公开 thought 与 reasoning summary 各自按消息块保留，delta 只作实时运输。每块在首片占据稳定位置，由原生 item 完成结果或连续正文边界定稿；取消、失败、受控退出保存已接受内容并标明中断，不把整个 Run 简化为最后一段。小内容在 SQLite，大正文进入 Managed Blob；Camp Open 只返回执行记录计数，执行台按视口读取有界逻辑条目页并叠加页内未定稿内容；历史与实时使用同一块身份去重。首屏后只预取相邻一页，较早记录按需分页，完整工具结果与文件 diff 在对应行展开后读取。业务终态已提交而正文定稿失败时，同一进程内 block 记录有界退避并由既有 AgentRun maintenance tick 只重试文本；未到期时不扫描持久状态，成功后复用 block event，重试不重放领域命令。进程重启不声称恢复尚未持久化的 block。原生 `userMessage` 的空生命周期不复制 CampMessage；Migration 143 可删除 terminal 完整输出已覆盖的 command delta 和未被引用的空文本壳，但必须在同一事务修复 Canonical 来源、保持非空和无悬挂，且不改写 Canonical revision。字段与有界存储见 [Run Process Detail Surface v34](../contracts/run-process-detail-surface-v34.md#evidence-持久化与模型观察边界)。
+- AgentRun Execution Evidence 是独立、用户可见但默认不回流 Agent 的权威记录，不归 Task、Message、Activity presentation 或 Runtime cache 所有。新可靠 operation 与公开正文 block 各自只占一个稳定展示位置，以 revision/change sequence 原位更新；无法可靠关联、历史和独立事实仍保留原记录边界。transport delta 只作实时运输。私有 thought/reasoning 在持久化、临时文件、日志和 Renderer state 前丢弃，只派生不含正文的瞬时 `thinking | executing` phase；历史已持久化 reasoning 不回写。取消、失败、受控退出保存已接受的公开内容并标明中断，不把整个 Run 简化为最后一段。
+
+  小内容在 SQLite；生命周期输入与结果分别 inline 或进入各自 Managed Blob，详情按需组合而不写第三份副本。每个部分独立执行 64 MiB 上限，失败以 incomplete 状态表达，不能改写 operation outcome 或 Files Changed。新 replaceable-content 路径在权威引用事务前持久登记 GC candidate，挂接后解除；引用替换按 detach time 重新登记。Core 维护只处理封闭 owner，宽限后动态复核全部 Managed Blob 外键并保护同进程在途读取；历史无标记 Blob 不扫描清理。
+
+  Camp Open 返回每个有界 Run 的记录计数与独立 `executionEvidenceChangeSequence`；计数不再承担 revision。执行台按视口读取有界逻辑条目页，展示分页继续使用 `sequence`，增量读取使用 `changeSequence`；历史与实时按稳定 ID/revision 去重，旧异步结果不得覆盖新状态。首屏后只预取相邻一页，较早记录按需分页，完整工具结果与文件 diff 在对应行展开后读取。业务终态已提交而正文定稿失败时，同一进程内 block 记录有界退避并由既有 AgentRun maintenance tick 只重试文本；未到期时不扫描持久状态，成功后复用 block event，重试不重放领域命令。进程重启不声称恢复尚未持久化的 block。原生 `userMessage` 的空生命周期不复制 CampMessage；Migration 143 的历史压缩边界保持不变。字段与有界存储见 [Run Process Detail Surface v41](../contracts/run-process-detail-surface-v41.md)。
 - Renderer 对文本、结构化数据、二进制/未知类型和链接使用安全、有界渲染；不执行 evidence 内容、不把它当作 Agent 消息、Task 完成证明或可重放命令。保留/回收由权威 Run/Camp 引用和 Managed Blob GC 决定，不因 UI 清理或 Agent 不可见而提前删除。
 - Runtime Monitoring 只拥有 Usage-derived metering：原始 observation、归一化 usage、flush/rollup 和 bounded snapshot 由当前五表合同约束。缺失 token/cache/cost 保持稀疏 unknown，不补零或跨 grain 重复计费。
 - Usage raw observation、normalized grain、flush cursor/lease、rollup 和 bounded snapshot 保持独立身份/幂等键；读取按成员/Run/时间范围限界，retention/rollup 不改写已归一化 grain 或从缺失值补数。Cost 只在精确模型、价格版本、token category/grain 可证明且不重复计费时估算；Coverage、unknown 与数据新鲜度随 Snapshot 返回，UI 不把部分支持展示成完整精确账单。

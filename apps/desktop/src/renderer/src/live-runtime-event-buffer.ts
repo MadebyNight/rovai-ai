@@ -1,7 +1,12 @@
 import type { LiveRuntimeEvent } from './ui-model'
 
-const TEXT_EVENTS = new Set(['agent.text.delta', 'agent.thought.delta', 'agent.reasoning.summary.delta',
-  'agent.text.block', 'agent.thought.block', 'agent.reasoning.summary.block'])
+const TEXT_EVENTS = new Set(['agent.text.delta', 'agent.text.block'])
+const PRIVATE_REASONING_EVENTS = new Set([
+  'agent.thought.delta',
+  'agent.thought.block',
+  'agent.reasoning.summary.delta',
+  'agent.reasoning.summary.block'
+])
 const LIVE_TEXT_LIMIT = 8 * 1024 * 1024
 
 /** New Core blocks retain one live entry at their first position, not every transport frame.
@@ -12,19 +17,32 @@ export function appendLiveRuntimeEventBatch(current: LiveRuntimeEvent[], batch: 
   const payload = (event: LiveRuntimeEvent): Record<string, unknown> =>
     event.payload !== null && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {}
   const key = (event: LiveRuntimeEvent): string | null => {
+    if (event.eventType === 'agent_run.runtime_phase_changed') return `${event.agentRunId}\0runtime-phase`
     const blockId = payload(event).blockId
-    return TEXT_EVENTS.has(event.eventType) && typeof blockId === 'string'
-      ? `${event.agentRunId}\0${event.eventType.replace(/\.(delta|block)$/, '')}\0${blockId}`
-      : null
+    if (TEXT_EVENTS.has(event.eventType) && typeof blockId === 'string') {
+      return `${event.agentRunId}\0${event.eventType.replace(/\.(delta|block)$/, '')}\0${blockId}`
+    }
+    return event.revision != null ? `${event.agentRunId}\0evidence\0${event.id}` : null
   }
   result.forEach((event, index) => { const id = key(event); if (id) positions.set(id, index) })
   for (const event of batch) {
+    // Private reasoning never enters Renderer state. Runtime phase is delivered as
+    // a separate content-free event, so dropping these frames loses no UI signal.
+    if (PRIVATE_REASONING_EVENTS.has(event.eventType)) continue
     const id = key(event)
     const index = id === null ? undefined : positions.get(id)
     if (index !== undefined) {
       const previous = result[index]
+      if ((event.revision ?? 0) < (previous.revision ?? 0)) continue
+      if (event.revision === previous.revision
+        && (event.changeSequence ?? 0) < (previous.changeSequence ?? 0)) continue
       const old = payload(previous)
       const next = payload(event)
+      if (event.eventType === 'agent_run.runtime_phase_changed'
+        || (event.revision != null && !event.eventType.endsWith('.delta'))) {
+        result[index] = { ...event, createdAt: previous.createdAt }
+        continue
+      }
       if (event.eventType.endsWith('.block')) {
         result[index] = { ...event, createdAt: previous.createdAt }
         continue
@@ -46,8 +64,7 @@ export function appendLiveRuntimeEventBatch(current: LiveRuntimeEvent[], batch: 
   return result
 }
 
-/** Keep the full ordered evidence stream, but only wake React for visible
- * progress. Thought events still delimit anonymous narration and must survive. */
+/** Keep the bounded public evidence stream and the current transient phase. */
 export function createLiveRuntimeEventBuffer(append: (events: LiveRuntimeEvent[]) => void): {
   push(event: LiveRuntimeEvent): void
   flush(): void
@@ -68,13 +85,12 @@ export function createLiveRuntimeEventBuffer(append: (events: LiveRuntimeEvent[]
     push(event) {
       if (disposed) return
       pending = appendLiveRuntimeEventBatch(pending, [event])
-      if (event.eventType === 'agent.thought.delta' || event.eventType === 'agent.reasoning.summary.delta') return
       if (timer === null) timer = setTimeout(flush, 32)
     },
     flush,
     dispose() {
       disposed = true
-      // Effect resubscriptions must not drop a pending narration boundary.
+      // Effect resubscriptions must not drop a pending public update.
       flush()
     }
   }

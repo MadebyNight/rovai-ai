@@ -2,13 +2,13 @@
 document_type: architecture
 architecture: single-chat
 authority: single-chat-component-boundaries-and-data-flow
-last_updated: 2026-09-11
+last_updated: 2026-09-22
 ---
 
 # Single Chat Architecture
 
 Single Chat 是现有执行基础设施上的一种私有 Conversation 模式。字段级合同见
-[Single Chat v6](../contracts/single-chat-v6.md)，当前选择理由见
+[Single Chat v7](../contracts/single-chat-v7.md)，当前选择理由见
 [V1.50-D01](../versions/v1.50/decisions.md#v1-50-d01)至
 [V1.50-D04](../versions/v1.50/decisions.md#v1-50-d04)及
 [V1.58-D06](../versions/v1.58/decisions.md#v1-58-d06)。
@@ -115,6 +115,8 @@ cancelled、epoch 过期、Binding generation 不匹配或 route 不完整时，
 Renderer 只读取 SingleChatSnapshot 中的私有 Messages、Pending 与精确 Run Evidence。运行时沿用执行台的 narration、plan、
 tool 与 command 分组；终态自动折叠过程而不是删除 Evidence，final message 保持可读。用户历史附件和 Composer/Pending
 附件都由清洗后的 View 加精确 owner locator 呈现。
+Snapshot 的 Run 同时携带 `executionEvidenceChangeSequence`；执行窗口按独立 change cursor 合并原位更新，不能把
+`executionEvidenceCount` 当作 revision。私有 thought/reasoning 正文在 Renderer state 前丢弃，只保留 content-free phase。
 
 Panel 打开或切换对象时由 Renderer 唯一决定 target、清空旧 Snapshot 并管理 loading；一个 target request
 sequence 同时校验当前队员，阻止迟到结果跨目标写回。后台 `refreshList` 只更新 active Conversation 列表和

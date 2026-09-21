@@ -75,7 +75,10 @@ export type ActivityStatus = 'running' | 'completed' | 'failed' | 'waiting' | 's
 export type LiveRuntimeEvent = {
   id: string
   agentRunId: string
+  executionEpoch?: number | null
   eventType: string
+  revision?: number | null
+  changeSequence?: number | null
   payload: unknown
   canonical?: CanonicalRuntimeActivityView | null
   createdAt: string
@@ -184,6 +187,7 @@ export type ExecutionProgressItem =
 
 export type LiveExecutionProgress = {
   items: ExecutionProgressItem[]
+  runtimePhase?: 'thinking' | 'executing'
 }
 
 export type DiffLineKind = 'context' | 'addition' | 'deletion' | 'hunk' | 'metadata'
@@ -308,19 +312,16 @@ export function formatByteSize(bytes: number): string {
 
 const LIVE_RUNTIME_EVENT_TYPES = new Set([
   'agent.text.block',
-  'agent.thought.block',
-  'agent.reasoning.summary.block',
   'activity.started',
   'activity.completed',
   'agent.text.delta',
   'file.change.updated',
-  'agent.reasoning.summary.delta',
-  'agent.thought.delta',
   'runtime.plan',
   'runtime.plan.delta',
   'runtime.diagnostic',
   'runtime.compaction.display',
-  'runtime.action'
+  'runtime.action',
+  'agent_run.runtime_phase_changed'
 ])
 
 export function liveRuntimeEventFromCore(
@@ -335,7 +336,10 @@ export function liveRuntimeEventFromCore(
   return {
     id: stringField(params, 'evidenceId') ?? id,
     agentRunId,
+    executionEpoch: numberField(params, 'executionEpoch'),
     eventType: event.method,
+    revision: numberField(params, 'revision'),
+    changeSequence: numberField(params, 'changeSequence'),
     payload: Object.prototype.hasOwnProperty.call(params, 'payload') ? params.payload : params,
     canonical: canonicalRuntimeActivity(params.canonical),
     createdAt: stringField(asRecord(params.payload), 'blockStartedAt') ?? createdAt
@@ -348,7 +352,10 @@ export function liveRuntimeEventFromExecutionEvidence(
   return {
     id: evidence.id,
     agentRunId: evidence.agentRunId,
+    executionEpoch: evidence.executionEpoch,
     eventType: evidence.eventType,
+    revision: evidence.revision,
+    changeSequence: evidence.changeSequence,
     payload: evidence.payload,
     canonical: evidence.canonical,
     createdAt: evidence.occurredAt
@@ -521,6 +528,7 @@ export function buildLiveExecutionProgress(
   let activeAnonymousNarrationItemId: string | null = null
   let planExplanation = ''
   let plan: ExecutionPlanStep[] = []
+  let runtimePhase: LiveExecutionProgress['runtimePhase']
   const diagnosticsById = new Map<string, RuntimeDiagnostic>()
   const compactionsById = new Map<string, RuntimeCompactionDisplayItem>()
   const steps: ExecutionStep[] = []
@@ -590,9 +598,14 @@ export function buildLiveExecutionProgress(
     if (event.agentRunId !== agentRunId) continue
     const payload = asRecord(event.payload)
 
-    if (event.eventType === 'agent.reasoning.summary.delta' || event.eventType === 'agent.thought.delta'
-      || event.eventType === 'agent.reasoning.summary.block' || event.eventType === 'agent.thought.block') {
-      finishNarrationStream()
+    if (event.eventType === 'agent_run.runtime_phase_changed') {
+      const phase = stringField(payload, 'phase')
+      if (phase === 'thinking' || phase === 'executing') {
+        runtimePhase = phase
+        // The content-free phase edge preserves the public narration boundary
+        // that private reasoning frames used to imply.
+        finishNarrationStream()
+      }
       continue
     }
     if (event.eventType === 'agent.text.block') {
@@ -851,7 +864,8 @@ export function buildLiveExecutionProgress(
     return []
   })
   return {
-    items
+    items,
+    runtimePhase
   }
 }
 
