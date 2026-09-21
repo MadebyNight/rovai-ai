@@ -94,7 +94,7 @@ try {
   stage = 'real ticket expiry'
   console.log('Checking real 120-second ticket expiry; browser recovery assertions passed.')
   while (Date.now() < expiryDeadline) await pause(Math.min(10_000, expiryDeadline - Date.now()))
-  const expired = await fetch(`${web.origin}/api/v1/login-ticket`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, ticket: expiring.ticket }) })
+  const expired = await fetch(`${web.origin}/api/v1/login-ticket`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 3, ticket: expiring.ticket }) })
   assert.equal(expired.status, 401)
   assert.equal((await expired.json()).error.code, 'login_ticket_invalid')
   stage = 'normal Host restart'

@@ -231,7 +231,6 @@ test('v2 adapters measure history.search, memory.view and Task lifecycle without
         input: {
           title: 'Review the verifier boundary',
           description: 'Check the sealed verifier and report evidence.',
-          acceptanceCriteria: ['Cite the verifier receipt.'],
           assigneeAgentId: 'agent-reviewer'
         },
         result: { taskId: 'task-1', status: 'pending', assigneeAgentId: 'agent-reviewer', version: 1 },

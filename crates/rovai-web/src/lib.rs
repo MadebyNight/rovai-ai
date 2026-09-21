@@ -35,6 +35,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+const HOST_WEB_PROTOCOL_VERSION: u32 = 3;
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebConfig {
@@ -355,7 +357,7 @@ async fn login(
     let Ok(Json(body)) = body else {
         return error(StatusCode::BAD_REQUEST, "invalid_login");
     };
-    if body.protocol_version != 2 {
+    if body.protocol_version != HOST_WEB_PROTOCOL_VERSION {
         return error(StatusCode::CONFLICT, "protocol_incompatible");
     }
     let generation = match state.sessions.authorize_login(&body.administrator_token) {
@@ -386,7 +388,7 @@ async fn redeem_login_ticket(
     let Ok(Json(body)) = body else {
         return error(StatusCode::BAD_REQUEST, "invalid_login");
     };
-    if body.protocol_version != 2 {
+    if body.protocol_version != HOST_WEB_PROTOCOL_VERSION {
         return error(StatusCode::CONFLICT, "protocol_incompatible");
     }
     let grant = match state.sessions.authorize_ticket(&body.ticket) {
@@ -422,7 +424,7 @@ async fn finish_login(
     match result {
         Ok((token, session)) => {
             let mut response = state.sessions.timing(&session);
-            response.as_object_mut().expect("session timing").extend(json!({"protocolVersion":2,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }}).as_object().expect("session response").clone());
+            response.as_object_mut().expect("session timing").extend(json!({"protocolVersion":HOST_WEB_PROTOCOL_VERSION,"token":token,"clientId":session.client_id,"editorProof":identity["proof"],"ownerId":identity["ownerId"],"epoch":state.epoch,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }}).as_object().expect("session response").clone());
             Json(response).into_response()
         }
         Err(failure) if ticket => ticket_failure(failure),
@@ -510,7 +512,7 @@ async fn resume_session(
         .as_object_mut()
         .expect("Core identity object")
         .remove("proof");
-    identity["protocolVersion"] = json!(2);
+    identity["protocolVersion"] = json!(HOST_WEB_PROTOCOL_VERSION);
     identity["channels"] = json!(if state.channels.is_some() {
         "desktop"
     } else {
@@ -560,7 +562,7 @@ async fn renew_session(
 
 async fn capabilities(State(state): State<WebState>) -> Json<Value> {
     Json(
-        json!({"protocolVersion":2,"epoch":state.epoch,"read":true,"composer":true,"uploads":true,"approval":true,"nativeFilePicker":false,"desktopWindow":false,"releaseQualified":false,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }}),
+        json!({"protocolVersion":HOST_WEB_PROTOCOL_VERSION,"epoch":state.epoch,"read":true,"composer":true,"uploads":true,"approval":true,"nativeFilePicker":false,"desktopWindow":false,"releaseQualified":false,"channels":if state.channels.is_some() { "desktop" } else { "unsupported" }}),
     )
 }
 

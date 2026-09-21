@@ -42,8 +42,7 @@ try {
     commandId: crypto.randomUUID(),
     campId: fixture.campId,
     title: '确认任务卡创建位置',
-    description: '这段说明只能出现在任务详情，不能出现在会话卡片。',
-    acceptanceCriteria: ['任务卡保持唯一', '详情完整展示责任与审计'],
+    description: '这段说明只能出现在任务详情，不能出现在会话卡片。任务卡保持唯一，详情完整展示责任与审计。',
     assigneeAgentId: fixture.primaryAssignee.id
   })
   const completedTaskId = createdTask.payload?.taskId
@@ -102,7 +101,6 @@ try {
     expectedVersion: task.version,
     status: 'blocked',
     assignee: { operation: 'unchanged' },
-    acceptanceCriteria: { operation: 'unchanged' },
     blockedReason: '等待确认外部依赖的可用窗口。'
   })
   assert(blockedTask.status === 'applied',
@@ -128,8 +126,7 @@ try {
     taskId: completedTaskId,
     expectedVersion: task.version,
     status: 'in_progress',
-    assignee: { operation: 'unchanged' },
-    acceptanceCriteria: { operation: 'unchanged' }
+    assignee: { operation: 'unchanged' }
   })
   assert(resumedTask.status === 'applied',
     `Could not resume Task in place: ${JSON.stringify(resumedTask)}`)
@@ -181,8 +178,7 @@ try {
     taskId: cancelledTaskId,
     expectedVersion: task.version,
     status: 'pending',
-    assignee: { operation: 'clear' },
-    acceptanceCriteria: { operation: 'unchanged' }
+    assignee: { operation: 'clear' }
   })
   assert(releasedTask.status === 'applied',
     `Could not release Task responsibility: ${JSON.stringify(releasedTask)}`)
@@ -212,8 +208,7 @@ try {
     assignee: {
       operation: 'assign',
       agentId: fixture.primaryAssignee.id
-    },
-    acceptanceCriteria: { operation: 'unchanged' }
+    }
   })
   assert(reassignedTask.status === 'applied',
     `Could not reassign Task responsibility: ${JSON.stringify(reassignedTask)}`)
@@ -253,7 +248,7 @@ try {
   await assertTaskCreateAction(desktopApp.cdp, 2)
 
   await openTaskDetails(desktopApp.cdp, '任务卡已原地更新')
-  await assertTerminalDetails(desktopApp.cdp, '更新后的说明仍然只能在任务详情里看到。', 2)
+  await assertTerminalDetails(desktopApp.cdp, '更新后的说明仍然只能在任务详情里看到。')
   await assertNoHorizontalOverflow(desktopApp.cdp, '1440×920')
   const desktopCapture = join(outputDir, 'task-card-details-day-1440x920.png')
   await capture(desktopApp.cdp, desktopCapture)
@@ -269,7 +264,7 @@ try {
   const compactCardCapture = join(outputDir, 'task-card-night-1040x700-reduced-motion.png')
   await capture(compactApp.cdp, compactCardCapture)
   await openTaskDetailsWithKeyboard(compactApp.cdp, '取消路径仍复用原卡')
-  await assertTerminalDetails(compactApp.cdp, '取消后保留在任务详情与审计记录。', 0)
+  await assertTerminalDetails(compactApp.cdp, '取消后保留在任务详情与审计记录。')
   await assertNoHorizontalOverflow(compactApp.cdp, '1040×700 reduced-motion')
   const compactCapture = join(outputDir, 'task-card-details-compact-1040x700.png')
   await capture(compactApp.cdp, compactCapture)
@@ -296,7 +291,7 @@ try {
       taskLifecycleCreatesNoCampMessages: true,
       taskCardOpensCurrentTerminalDetails: true,
       keyboardOpensTaskDetails: true,
-      orderedCriteriaAndAuditDetailsVisible: true,
+      responsibilityDescriptionAndAuditDetailsVisible: true,
       taskCreateActionReplacesLegacyToolbar: true,
       taskCreateTitleReceivesFocus: true,
       taskCreateCancelRestoresPreviousList: true,
@@ -521,7 +516,7 @@ async function openTaskDetailsWithKeyboard(cdp, title) {
   })()`)
 }
 
-async function assertTerminalDetails(cdp, expectedDescription, expectedCriteriaCount) {
+async function assertTerminalDetails(cdp, expectedDescription) {
   const state = await evaluate(cdp, `(() => {
     const detail = document.querySelector('.task-detail')
     const audit = detail?.querySelector('.task-audit-disclosure')
@@ -530,14 +525,13 @@ async function assertTerminalDetails(cdp, expectedDescription, expectedCriteriaC
       description: detail?.querySelector('.task-detail-copy')?.textContent ?? null,
       editable: Boolean(detail?.querySelector('.task-detail-actions')),
       note: detail?.querySelector('.task-terminal-note')?.textContent ?? '',
-      criteriaCount: detail?.querySelectorAll('.task-acceptance-list li').length ?? 0,
       auditVisible: Boolean(detail?.querySelector('[aria-label="任务审计信息"]')),
       relatedExecutionVisible: Boolean(detail?.querySelector('[aria-label="关联执行"]')),
       visible: Boolean(detail && detail.getBoundingClientRect().height > 0)
     }
   })()`)
   assert(state.visible && !state.editable && state.description === expectedDescription
-      && state.criteriaCount === expectedCriteriaCount && state.auditVisible && state.relatedExecutionVisible
+      && state.auditVisible && state.relatedExecutionVisible
       && state.note.includes('已结束的任务保留为只读记录'),
     `Task details did not show current terminal data: ${JSON.stringify(state)}`)
 }
@@ -588,7 +582,7 @@ async function assertZoomedTaskFunctionality(cdp) {
       && document.querySelectorAll('button.task-event-card').length === 2
   })()`)
   await openTaskDetails(cdp, '取消路径仍复用原卡')
-  await assertTerminalDetails(cdp, '取消后保留在任务详情与审计记录。', 0)
+  await assertTerminalDetails(cdp, '取消后保留在任务详情与审计记录。')
 }
 
 async function setTaskField(cdp, label, value) {
@@ -613,8 +607,7 @@ async function verifyTaskEditorLifecycle(cdp, fixture) {
   await evaluate(cdp, `document.querySelector('.task-new-button')?.click()`)
   await waitForExpression(cdp, `Boolean(document.querySelector('.task-editor-dialog'))`)
   await setTaskField(cdp, '标题', '浮层编辑与草稿验收')
-  await setTaskField(cdp, '说明', '关闭后保留的任务说明')
-  await setTaskField(cdp, '验收条件（每行一项，最多 12 项）', '保留草稿\n保留版本冲突时的修改')
+  await setTaskField(cdp, '责任范围与要求', '关闭后保留的任务说明。保留草稿与版本冲突时的修改。')
   await setTaskField(cdp, '负责人', fixture.primaryAssignee.id)
   await evaluate(cdp, `document.querySelector('.task-editor-dialog .app-dialog-close')?.click()`)
   await waitForExpression(cdp, `!document.querySelector('.task-editor-dialog')`)
@@ -629,29 +622,28 @@ async function verifyTaskEditorLifecycle(cdp, fixture) {
   await waitForExpression(cdp, `document.querySelector('.task-editor input')?.value === '浮层编辑与草稿验收'`)
   const restored = await evaluate(cdp, `(() => ({
     description: document.querySelector('.task-editor textarea')?.value,
-    assignee: document.querySelector('.task-editor select')?.value,
-    criteria: document.querySelectorAll('.task-editor textarea')[1]?.value
+    assignee: document.querySelector('.task-editor select')?.value
   }))()`)
-  assert(restored.description === '关闭后保留的任务说明'
-    && restored.assignee === fixture.primaryAssignee.id
-    && restored.criteria === '保留草稿\n保留版本冲突时的修改',
+  assert(restored.description === '关闭后保留的任务说明。保留草稿与版本冲突时的修改。'
+    && restored.assignee === fixture.primaryAssignee.id,
     `Switching/closing Camp details lost the Task draft: ${JSON.stringify(restored)}`)
   await evaluate(cdp, `document.querySelector('.task-editor')?.requestSubmit()`)
   await waitForExpression(cdp, `!document.querySelector('.task-editor-dialog')`)
   let snapshot = await request(cdp, 'camps.snapshot', { campId: fixture.campId })
   const task = snapshot.tasks.find((candidate) => candidate.title === '浮层编辑与草稿验收')
-  assert(task && task.acceptanceCriteria.length === 2, 'Task dialog did not submit its complete draft')
+  assert(task?.description === '关闭后保留的任务说明。保留草稿与版本冲突时的修改。',
+    'Task dialog did not submit its complete draft')
   await evaluate(cdp, `document.querySelector('.task-list-row[data-task-id="${task.taskId}"]')?.click()`)
   await waitForExpression(cdp, `Boolean(document.querySelector('.task-detail-actions'))`)
   await evaluate(cdp, `document.querySelector('.task-detail-actions button')?.click()`)
   await waitForExpression(cdp, `Boolean(document.querySelector('.task-editor-dialog'))`)
-  await setTaskField(cdp, '说明', '我在编辑器中保留的修改')
+  await setTaskField(cdp, '责任范围与要求', '我在编辑器中保留的修改')
   await setTaskField(cdp, '状态', 'blocked')
   await setTaskField(cdp, '阻塞原因', '等待用户验收')
   const concurrent = await request(cdp, 'tasks.update', {
     commandId: crypto.randomUUID(), campId: fixture.campId, taskId: task.taskId,
     expectedVersion: task.version, description: '另一次操作更新了说明',
-    assignee: { operation: 'unchanged' }, acceptanceCriteria: { operation: 'unchanged' }
+    assignee: { operation: 'unchanged' }
   })
   assert(concurrent.status === 'applied', `Could not prepare a Task version conflict: ${JSON.stringify(concurrent)}`)
   await evaluate(cdp, `document.querySelector('.task-editor')?.requestSubmit()`)
@@ -849,7 +841,7 @@ async function waitForExpression(cdp, expression, timeoutMs = 10_000) {
     await wait(100)
   }
   if (await evaluate(cdp, expression)) return
-  await capture(cdp, join(outputDir, 'task-acceptance-failure.png'))
+  await capture(cdp, join(outputDir, 'task-detail-wait-failure.png'))
   const visibleState = await evaluate(cdp, `document.body.innerText.slice(-7000)`)
   throw new Error(`Expression did not become true within ${timeoutMs}ms: ${expression}\nVisible state: ${visibleState}`)
 }

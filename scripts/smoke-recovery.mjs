@@ -89,8 +89,7 @@ try {
     campId,
     title: 'Durable recovery checkpoint',
     assigneeAgentId: agentId,
-    acceptanceCriteria: ['Survives restart once without re-enqueueing the accepted input.'],
-    description: 'Must survive a hard Core restart exactly once.'
+    description: 'Must survive a hard Core restart exactly once without re-enqueueing the accepted input.'
   }
   const createdTask = await firstCore.request('tasks.create', taskRequest)
   const taskId = createdTask.payload?.taskId

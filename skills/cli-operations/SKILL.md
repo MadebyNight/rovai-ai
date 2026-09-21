@@ -7,8 +7,8 @@ description: 当不确定当前工作应使用 CampMessage、持久 Task、Camp/
 
 ## 快速路径
 
-如果需求已经明确对应一个普通单一操作，不要继续加载本 Skill 的 references。运行 `rovai --help`
-选择 operation，再运行该 operation 的精确 `--help`；不要假设 command family 有独立 help entry。
+普通单一操作直接查看对应操作的 `--help`，无需加载 references。
+操作不明确时查看 `rovai --help`；Task 子命令不明确时查看 `rovai task --help`。
 
 ## 选择操作
 

@@ -191,7 +191,7 @@ test('phone workbench uses shared navigation, schedules and per-tab drafts', { t
     await capture('camp-tasks')
     await browser.click(`document.querySelector('.task-new-button')`)
     await browser.wait(`document.querySelector('.task-editor-dialog')!==null`)
-    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('.task-editor-dialog .task-field > span')].map(e=>e.textContent)`), ['标题', '说明', '验收条件（每行一项，最多 12 项）', '负责人'])
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('.task-editor-dialog .task-field > span')].map(e=>e.textContent)`), ['标题', '责任范围与要求', '负责人'])
     await capture('new-task')
     await fill('.task-editor-dialog input', '手机任务创建验收')
     await browser.evaluate(`(()=>{const s=document.querySelector('.task-editor-dialog select');s.value=${JSON.stringify(member.agentId)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`)
@@ -537,7 +537,7 @@ test('standalone Server phone settings expose update controls, initial login and
     const token = (await readFile(join(dataDir, 'server-token'), 'utf8')).trim()
     const update = (body, session, headers = {}) => fetch(`${origin}/api/v1/updates`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session}` } : {}), ...headers }, body: JSON.stringify(body) })
     assert.equal((await update({ operation: 'get' })).status, 401)
-    const session = await (await fetch(`${origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: token }) })).json()
+    const session = await (await fetch(`${origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 3, administratorToken: token }) })).json()
     assert.equal((await update({ operation: 'get' }, session.token, { Origin: 'http://other-device.invalid' })).status, 403)
     for (const body of [{ operation: 'exec' }, { operation: 'get', url: 'https://other-device.invalid/package' }, { operation: 'install', version: '999.0.0', path: '/tmp/package' }]) {
       assert.equal((await update(body, session.token)).status, 400)

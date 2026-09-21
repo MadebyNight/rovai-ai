@@ -28,7 +28,6 @@ const SEMANTIC_TEXT_LIMIT_CHARS: usize = 512;
 const IDENTIFIER_LIMIT_CHARS: usize = 256;
 const STRING_ARRAY_LIMIT: usize = 32;
 const RESULT_ITEM_LIMIT: usize = 64;
-const ACCEPTANCE_CRITERION_LIMIT_CHARS: usize = 256;
 const MEMORY_SEMANTIC_BODY_LIMIT_CHARS: usize = 2_048;
 const MEMORY_VIEW_SEMANTIC_ITEM_LIMIT: usize = 8;
 
@@ -146,12 +145,6 @@ fn project_input(operation: &str, input: &Value) -> Result<Value> {
         TEAM_CREATE_TASK_TOOL_NAME => {
             insert_semantic_text(&mut projected, "title", input.get("title"));
             insert_semantic_text(&mut projected, "description", input.get("description"));
-            insert_bounded_semantic_array(
-                &mut projected,
-                "acceptanceCriteria",
-                input.get("acceptanceCriteria"),
-                ACCEPTANCE_CRITERION_LIMIT_CHARS,
-            );
             insert_identifier(
                 &mut projected,
                 "assigneeAgentId",
@@ -175,16 +168,9 @@ fn project_input(operation: &str, input: &Value) -> Result<Value> {
                 input.get("assigneeAgentId"),
             );
             insert_bool(&mut projected, "clearAssignee", input.get("clearAssignee"));
-            insert_bool(
-                &mut projected,
-                "clearAcceptanceCriteria",
-                input.get("clearAcceptanceCriteria"),
-            );
             let changed_fields = [
                 "title",
                 "description",
-                "acceptanceCriteria",
-                "clearAcceptanceCriteria",
                 "status",
                 "assigneeAgentId",
                 "clearAssignee",
@@ -205,12 +191,6 @@ fn project_input(operation: &str, input: &Value) -> Result<Value> {
             ] {
                 insert_semantic_text(&mut projected, field, input.get(field));
             }
-            insert_bounded_semantic_array(
-                &mut projected,
-                "acceptanceCriteria",
-                input.get("acceptanceCriteria"),
-                ACCEPTANCE_CRITERION_LIMIT_CHARS,
-            );
         }
         TEAM_LIST_TASKS_TOOL_NAME => {
             insert_string_array(&mut projected, "statuses", input.get("statuses"));
@@ -1034,7 +1014,6 @@ mod tests {
                 "status": "completed",
                 "title": "Review the evidence boundary",
                 "description": "Verify the receipt and exact revision.",
-                "acceptanceCriteria": ["Cite the receipt.", "Check stale revision behavior."],
                 "completionSummary": "Receipt and stale revision behavior verified."
             }),
             json!({
@@ -1052,8 +1031,8 @@ mod tests {
             "Receipt and stale revision behavior verified."
         );
         assert_eq!(
-            input["acceptanceCriteria"][1],
-            "Check stale revision behavior."
+            input["description"],
+            "Verify the receipt and exact revision."
         );
         assert_eq!(projected["canonicalResult"]["version"], 3);
     }

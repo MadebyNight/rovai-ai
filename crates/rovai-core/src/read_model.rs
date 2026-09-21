@@ -241,7 +241,6 @@ pub struct TaskView {
     pub camp_id: String,
     pub title: String,
     pub description: String,
-    pub acceptance_criteria: Vec<String>,
     pub status: String,
     pub assignee_agent_id: Option<String>,
     pub blocked_reason: Option<String>,
@@ -2215,13 +2214,17 @@ fn load_tasks(
         } else {
             vec!["update".to_string()]
         };
+        let legacy_acceptance_criteria =
+            serde_json::from_str::<Vec<String>>(&acceptance_criteria_json)
+                .context("Task acceptance criteria are invalid")?;
         result.push(TaskView {
             task_id: id,
             camp_id: task_camp_id,
             title,
-            description,
-            acceptance_criteria: serde_json::from_str(&acceptance_criteria_json)
-                .context("Task acceptance criteria are invalid")?,
+            description: crate::collaboration::synthesize_task_description(
+                &description,
+                &legacy_acceptance_criteria,
+            ),
             status,
             assignee_agent_id: assignee,
             blocked_reason,

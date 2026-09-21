@@ -204,8 +204,7 @@ async function writePack(root, caseRecord) {
     tasks: [{
       symbol: 'task:review',
       title: 'Review the qualification evidence',
-      description: 'Verify the exact receipt and current revision.',
-      acceptanceCriteria: ['Cite the receipt', 'Reject stale revisions'],
+      description: 'Verify the exact receipt and current revision. Cite the receipt and reject stale revisions.',
       assigneeAgentId: null
     }]
   })

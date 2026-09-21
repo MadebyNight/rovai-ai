@@ -283,8 +283,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.61";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 116;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.63";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 117;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -725,6 +725,7 @@ struct CurrentMigrationState {
     v164: bool,
     v165: bool,
     v166: bool,
+    v167: bool,
 }
 
 impl CurrentMigrationState {
@@ -746,11 +747,19 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v167 {
+            let mut previous = *self;
+            previous.v167 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v166
+                && previous.admits("v1.61", 116, classifier);
+        }
         if self.v166 {
             let mut previous = *self;
             previous.v166 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
-                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            return contract == "v1.61"
+                && schema == 116
                 && self.v165
                 && previous.admits("v1.61", 115, classifier);
         }
@@ -3021,6 +3030,8 @@ pub(crate) fn classify_database_contract(
         migrations.v165 && single_chat_operation_policy_v165_schema_matches(connection)?;
     let default_recipient_mention_schema_matches =
         migrations.v166 && default_recipient_mention_v166_schema_matches(connection)?;
+    let task_description_schema_matches =
+        migrations.v167 && task_description_v167_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
         &marker,
         migrations,
@@ -3090,6 +3101,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v164 && !agent_run_notification_schema_matches)
         || (migrations.v165 && !single_chat_operation_policy_schema_matches)
         || (migrations.v166 && !default_recipient_mention_schema_matches)
+        || (migrations.v167 && !task_description_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3385,6 +3397,17 @@ fn default_recipient_mention_v166_schema_matches(
         && profile_trigger.contains("NEW.context_delivery_profile_version <> 8")
         && attachment_trigger.contains("context_manifest_version IN (24, 25, 26, 27)")
         && triggers == 3)
+}
+
+fn task_description_v167_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let task_schema: String = connection.query_row(
+        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'task'",
+        [],
+        |row| row.get(0),
+    )?;
+    let compact = task_schema.split_whitespace().collect::<String>();
+    Ok(compact.contains("CHECK(length(description)<=16000)")
+        && !compact.contains("CHECK(length(description)<=8000)"))
 }
 
 fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -4137,6 +4160,7 @@ fn connection_has_current_data_contract(connection: &Connection) -> rusqlite::Re
                AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 146)
                AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 147)
                AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 148)
+               AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 167)
         FROM rovai_data_contract
         WHERE singleton = 1
         "#,
@@ -4250,7 +4274,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 163),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 164),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 165),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 166)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 166),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 167)
         "#,
         [],
         |row| {
@@ -4352,6 +4377,7 @@ fn load_current_migration_state(
                 v164: row.get(94)?,
                 v165: row.get(95)?,
                 v166: row.get(96)?,
+                v167: row.get(97)?,
             })
         },
     )
@@ -7345,6 +7371,9 @@ impl Database {
                     self.migrate_default_recipient_mention_v166()
                 );
             }
+            if !self.schema_migration_applied(167)? {
+                migration_step!("migration_167", self.migrate_task_description_v167());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -8046,6 +8075,9 @@ impl Database {
                 "migration_166",
                 self.migrate_default_recipient_mention_v166()
             );
+        }
+        if !self.schema_migration_applied(167)? {
+            migration_step!("migration_167", self.migrate_task_description_v167());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -26310,11 +26342,101 @@ impl Database {
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.61"
+                            && marker.projection_schema_version == 116
                 ),
-                "Default Recipient Mention migration failed current schema admission"
+                "Default Recipient Mention migration failed v1.61/schema 116 source admission"
             );
             validate_migration_foreign_keys(&tx, &["context_manifest"])?;
+            tx.commit()?;
+            Ok(())
+        })();
+        let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
+        result?;
+        foreign_keys_result?;
+        Ok(())
+    }
+
+    fn migrate_task_description_v167(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.61"
+                            && marker.projection_schema_version == 116
+                ),
+                "Task description migration requires the exact v1.61/schema 116 source"
+            );
+
+            let source_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task'",
+                [],
+                |row| row.get(0),
+            )?;
+            let objects = migration_schema_objects(&tx, "task", true)?;
+            let target_schema = if source_schema.contains("CREATE TABLE \"task\"") {
+                source_schema.replacen("CREATE TABLE \"task\"", "CREATE TABLE task_v167", 1)
+            } else {
+                source_schema.replacen("CREATE TABLE task", "CREATE TABLE task_v167", 1)
+            }
+            .replacen(
+                "CHECK(length(description) <= 8000)",
+                "CHECK(length(description) <= 16000)",
+                1,
+            );
+            anyhow::ensure!(
+                target_schema.contains("CREATE TABLE task_v167")
+                    && target_schema.contains("CHECK(length(description) <= 16000)")
+                    && !target_schema.contains("CHECK(length(description) <= 8000)"),
+                "v167 could not extend the Task description schema"
+            );
+            tx.execute_batch(&target_schema)
+                .context("v167 failed to create the replacement Task table")?;
+            let columns = table_columns(&tx, "task")?
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            drop_rebuild_triggers(&tx, &objects)?;
+            tx.execute_batch(&format!(
+                r#"
+                INSERT INTO task_v167({columns}) SELECT {columns} FROM task;
+                DROP TABLE task;
+                ALTER TABLE task_v167 RENAME TO task;
+                "#,
+            ))
+            .context("v167 failed to replace the Task table")?;
+            restore_rebuild_schema_objects(&tx, "task", objects)
+                .context("v167 failed to restore Task indexes or triggers")?;
+
+            tx.execute_batch(
+                r#"
+                INSERT INTO schema_migration(version, applied_at)
+                VALUES (167, datetime('now'));
+                UPDATE rovai_data_contract
+                SET contract_version = 'v1.63', projection_schema_version = 117,
+                    reset_reason = NULL, updated_at = datetime('now')
+                WHERE singleton = 1;
+                "#,
+            )?;
+            anyhow::ensure!(
+                task_description_v167_schema_matches(&tx)?,
+                "Task description migration did not create the required schema"
+            );
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "Task description migration failed current schema admission"
+            );
+            validate_migration_foreign_keys(&tx, &["task"])?;
             tx.commit()?;
             Ok(())
         })();
@@ -31539,7 +31661,72 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v166_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=167)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    let task_schema: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='task'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let source_schema = task_schema
+        .replace("CREATE TABLE \"task\"", "CREATE TABLE task_v166_source")
+        .replace("CREATE TABLE task (", "CREATE TABLE task_v166_source (")
+        .replace(
+            "CHECK(length(description) <= 16000)",
+            "CHECK(length(description) <= 8000)",
+        );
+    assert!(source_schema.contains("CREATE TABLE task_v166_source"));
+    assert!(source_schema.contains("CHECK(length(description) <= 8000)"));
+    let objects = migration_schema_objects(&tx, "task", true).unwrap();
+    tx.execute_batch(&source_schema).unwrap();
+    let columns = table_columns(&tx, "task")
+        .unwrap()
+        .into_iter()
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    drop_rebuild_triggers(&tx, &objects).unwrap();
+    tx.execute_batch(&format!(
+        "INSERT INTO task_v166_source({columns}) SELECT {columns} FROM task; \
+         DROP TABLE task; \
+         ALTER TABLE task_v166_source RENAME TO task;"
+    ))
+    .unwrap();
+    restore_rebuild_schema_objects(&tx, "task", objects).unwrap();
+    tx.execute_batch(
+        "DELETE FROM schema_migration WHERE version=167; \
+         UPDATE rovai_data_contract SET contract_version='v1.61',projection_schema_version=116 \
+         WHERE singleton=1;",
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    assert!(!task_description_v167_schema_matches(connection).unwrap());
+    assert!(matches!(
+        classify_database_contract(connection).unwrap(),
+        DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.61" && marker.projection_schema_version == 116
+    ));
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v165_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v166_source_for_test(connection);
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=166)",
@@ -35488,6 +35675,7 @@ mod tests {
                     && marker.projection_schema_version == 115
         ));
         database.migrate_default_recipient_mention_v166().unwrap();
+        database.migrate_task_description_v167().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -35513,7 +35701,12 @@ mod tests {
 
         assert!(database.schema_migration_applied(166).unwrap());
         assert!(default_recipient_mention_v166_schema_matches(database.connection()).unwrap());
-        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.61"
+                    && marker.projection_schema_version == 116
+        ));
         let frozen_input_columns: i64 = database
             .connection()
             .query_row(
@@ -35537,6 +35730,65 @@ mod tests {
             )
             .unwrap();
         assert_eq!(marker, ("v1.61".to_string(), 116));
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v167_extends_task_descriptions_and_keeps_the_legacy_column() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-v167-task-description-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v166_source_for_test(database.connection());
+        assert!(!database.schema_migration_applied(167).unwrap());
+        assert!(!task_description_v167_schema_matches(database.connection()).unwrap());
+
+        database.migrate_task_description_v167().unwrap();
+
+        assert!(database.schema_migration_applied(167).unwrap());
+        assert!(task_description_v167_schema_matches(database.connection()).unwrap());
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        assert!(
+            table_columns(database.connection(), "task")
+                .unwrap()
+                .contains(&"acceptance_criteria_json".to_string())
+        );
+        let marker: (String, i64) = database
+            .connection()
+            .query_row(
+                "SELECT contract_version, projection_schema_version FROM rovai_data_contract WHERE singleton=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(marker, ("v1.63".to_string(), 117));
+
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                r#"
+                INSERT INTO task(
+                    id, camp_id, title, description, status,
+                    created_by_type, created_by_id, version, created_at, updated_at
+                ) VALUES ('task-v167-probe', 'camp-v167-probe', 'probe', ?1, 'pending',
+                          'user', 'local_user', 1, datetime('now'), datetime('now'))
+                "#,
+                ["x".repeat(16_000)],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute("DELETE FROM task WHERE id='task-v167-probe'", [])
+            .unwrap();
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .unwrap();
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -35590,6 +35842,7 @@ mod tests {
             .migrate_single_chat_operation_policy_v165()
             .unwrap();
         database.migrate_default_recipient_mention_v166().unwrap();
+        database.migrate_task_description_v167().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -35644,6 +35897,7 @@ mod tests {
             .migrate_single_chat_operation_policy_v165()
             .unwrap();
         database.migrate_default_recipient_mention_v166().unwrap();
+        database.migrate_task_description_v167().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -35793,6 +36047,7 @@ mod tests {
             .migrate_single_chat_operation_policy_v165()
             .unwrap();
         database.migrate_default_recipient_mention_v166().unwrap();
+        database.migrate_task_description_v167().unwrap();
         let successor_run_id = claim_waiting_delivery_batches(&mut database, 1)
             .unwrap()
             .pop()
@@ -36136,6 +36391,7 @@ mod tests {
             v164: version >= 164,
             v165: version >= 165,
             v166: version >= 166,
+            v167: version >= 167,
         }
     }
 
@@ -36777,7 +37033,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(166);
+        let current = migration_state_through(167);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -37231,7 +37487,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(166));
+        assert_eq!(state, migration_state_through(167));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -37959,6 +38215,8 @@ mod tests {
         assert!(database.schema_migration_applied(165).unwrap());
         database.migrate_default_recipient_mention_v166().unwrap();
         assert!(database.schema_migration_applied(166).unwrap());
+        database.migrate_task_description_v167().unwrap();
+        assert!(database.schema_migration_applied(167).unwrap());
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)

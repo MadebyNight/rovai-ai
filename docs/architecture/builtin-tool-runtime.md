@@ -9,10 +9,10 @@ last_updated: 2026-09-20
 # Built-in Tool Runtime Architecture
 
 本文件说明 Rovai built-in operations 的长期组件结构。当前字段与版本以
-[Built-in Tool Transport v30](../contracts/builtin-tool-transport-v30.md)、
+[Built-in Tool Transport v31](../contracts/builtin-tool-transport-v31.md)、
 [Built-in Tool Agent Output Projection v1](../contracts/builtin-tool-agent-output-projection-v1.md)、
 [Camp History v8](../contracts/camp-history-v8.md)、
-[Durable Task v3](../contracts/durable-task-v3.md) 和
+[Durable Task v4](../contracts/durable-task-v4.md) 和
 [Camp Message Send v22](../contracts/camp-message-send-v22.md)、
 [Current User Attention v7](../contracts/current-user-attention-v7.md)与
 [Missing-Send Recovery Publication v2](../contracts/missing-send-recovery-publication-v2.md) 为准；v19 及更早 Transport 只保留
@@ -159,8 +159,8 @@ Automation ID/version、队员、项目、渠道及输入。`enabled` 只控制�
 
 Agent 在 operation 不清楚时使用 `rovai --help`，在本次 invocation 所需 syntax 不清楚时查询所选
 operation 的精确 `--help`，并尽量复用当前 Native Session 已有的 help。根 `send` 使用
-`rovai send --help`；分组命令必须包含 action，例如 `rovai task create --help`。不存在
-`rovai task|camp|memory --help` 教学别名。Help 只列必要 flags、输入来源互斥规则、关键约束
+`rovai send --help`；普通分组命令必须包含 action，例如 `rovai task create --help`。Task 另有
+`rovai task --help` 的四项 operation 索引；Camp、Memory 等其他 family 不新增教学别名。Help 只列必要 flags、输入来源互斥规则、关键约束
 和短示例，不输出完整 JSON Schema、Envelope、receipt 或 catalog。Dotted canonical operation
 仍是 Core 内部语义身份，不能直接变成通用 Agent 命令。
 
@@ -195,9 +195,9 @@ Domain Service 保留 line-leading 连续有效 mention 的兼容 parser，未�
 CLI、Runtime Adapter、Bootstrap 与 Skill 都不重写正文或教学该 grammar。`--public-only` 在任何 alias/member lookup 前绕过正文寻址，并与显式
 `to/taskId` 原子冲突；`agentAddressingMode` 表达 caller intent，`effectiveRecipients/deliveryIds` 表达实际结果。
 该 schema 继续进入当前 catalog digest。
-当前 v30 contract/CLI command version、`builtin_cli.transport.v30` capability 与 IPC protocol 2 必须同时进入
+当前 v31 contract/CLI command version、`builtin_cli.transport.v31` capability 与 IPC protocol 2 必须同时进入
 Binding compatibility 和 digest。Camp History 使用 v8；Native Binding context contract 加入内部
-`sessionCharterRevision: 10`；Mission 完成判断教学的变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
+`sessionCharterRevision: 12`；Task help 路由教学的变化轮换 Binding。Bootstrap v3/Formatter 3 不变；public 动态 Context
 使用 Formatter 27 / ContextManifest 27，Single Chat 继续使用 25，不做 endpoint 猜测并 fail closed。
 
 Operation-specific errors use the same catalog entry both for discovery and for the emitted invocation recovery.
@@ -230,7 +230,7 @@ canonical result 或 Evidence；这条 narrow importer 与 Renderer 上传继续
 | `camp.message.send` | `{messageId, agentAddressingMode, effectiveRecipients, deliveryIds}` |
 | `member.create` | `{agentId, version, avatarRef, avatarStatus}` |
 | `team.create_task` | `{taskId, title, status, assigneeAgentId, version, availableActions}` |
-| `team.get_task` | 完整 `TaskDetail` |
+| `team.get_task` | `{taskId, title, description, status, assigneeAgentId, version, availableActions}` 加至多一个匹配当前状态的说明字段 |
 | `team.update_task` | `{taskId, title, status, assigneeAgentId, version, changed, availableActions}` |
 | `team.list_tasks` | 紧凑 `TaskListPage` |
 | `memory.view` | complete exact-Scope canonical result；不分页、不截断 |
@@ -249,9 +249,10 @@ canonical result 或 Evidence；这条 narrow importer 与 Renderer 上传继续
 传输，不推断、拆分或改写。Body-free stale/unavailable Read result 不含 target。`memory.search` 保留 flat
 Scope discovery metadata，不承担 complete exact-Scope duplicate judgment。
 
-Task service 在 mutation 事务中形成完整 exact-version `TaskDetail` canonical result，并由
+Task service 在 mutation 事务中形成完整 exact-version canonical result，并由
 Command Gateway 持久化后才交给 Transport projection。CLI 不能在 commit 后重新读取 live Task，
-也不能从 compact stdout 反推、补造或覆盖 Core result。Get/List 的不同结果层次属于 Task
+也不能从 compact stdout 反推、补造或覆盖 Core result。Get 只选择七个基础字段，并仅在 blocked、completed、
+cancelled 时分别加入对应说明；List 继续为摘要。两者的不同结果层次属于 Task
 Read Side 合同，不是 generic projection heuristic。
 
 每项 projection 都有闭合的 `agentOutputSchema` 和 golden fixture；对象外字段被拒绝。边界规则

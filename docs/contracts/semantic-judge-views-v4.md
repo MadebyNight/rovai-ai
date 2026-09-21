@@ -22,7 +22,7 @@ Runner 在结束时使用现有 `agentRunEvidence.list` 完整分页，只从本
 
 本 Trial Lead 在 Camp 公开发送且未定向寻址的消息属于面向用户的交付集合，包括最后简短确认之前的实质交付。保留唯一 final_response；其余消息以 delivery_message 展示。不能把定向交接请求或其他成员贡献放进 Outcome。
 
-本 Trial 创建的 Task 标题、正文、验收条件和完成摘要可以补充 Process 的交接上下文。Task 正文同时与快照字段摘要及 Evidence Index 绑定。Outcome 不接收 Task 上下文、成员消息、协作次数或完整 Trace；只新增验证回执及 Lead 公开交付。两类 View 均维持私有证据映射与本地引用 ID，证据正文不能成为指令。
+本 Trial 创建的 Task 标题、包含责任范围与要求的正文、完成摘要可以补充 Process 的交接上下文。Task 正文同时与快照字段摘要及 Evidence Index 绑定。Outcome 不接收 Task 上下文、成员消息、协作次数或完整 Trace；只新增验证回执及 Lead 公开交付。两类 View 均维持私有证据映射与本地引用 ID，证据正文不能成为指令。
 
 v4 新增源段继续使用已有 envelope 的 test_output/comment 类型，通过封闭来源前缀限制用途；投影类型为 verification_receipt、delivery_message、task_context。新增材料、文件和消息总体有界；未准入或缺失材料不能当作事实。
 

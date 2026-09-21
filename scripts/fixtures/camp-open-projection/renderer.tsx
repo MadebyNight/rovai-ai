@@ -132,8 +132,8 @@ const projection = (count: number): CampOpenProjection => ({
     isDefaultLead: member.agentId === agent.agentId, version: 1
   })),
   membershipReconciliations: [],
-  tasks: [{ taskId: 'task-1', campId, title: '检查业务投影', description: '任务仍然直接来自业务数据。',
-    acceptanceCriteria: ['不读取审计事件'], status: 'blocked', assigneeAgentId: agent.agentId,
+  tasks: [{ taskId: 'task-1', campId, title: '检查业务投影', description: '任务仍然直接来自业务数据，不读取审计事件。',
+    status: 'blocked', assigneeAgentId: agent.agentId,
     blockedReason: '业务状态原因', completionSummary: null, cancelReason: null,
     createdByType: 'user', createdById: 'local_user', sourceAgentRunId: null,
     closedByType: null, closedById: null, closedByAgentRunId: null,

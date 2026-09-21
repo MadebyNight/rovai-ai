@@ -1,8 +1,8 @@
 ---
 document_type: versions-index
 authority: version-lifecycle
-current_version: v1.62
-last_updated: 2026-09-20
+current_version: v1.63
+last_updated: 2026-09-21
 ---
 
 # Rovai-ai 版本记录
@@ -214,4 +214,5 @@ last_updated: 2026-09-20
 | v1.59 | `historical` | 统一 Rust Host、共享 Web 服务与三平台 Server；实施中快照 | [v1.59/README.md](v1.59/README.md) |
 | v1.60 | `historical` | Camp 消息、Delivery 队列与多输入 AgentRun clean break；实现及自动化验证已完成 | [v1.60/README.md](v1.60/README.md) |
 | v1.61 | `historical` | Mission 全局发现、内部 Agent ID、UI 展示编号、结构化附件、当前 Mission 写入边界与默认接收者提示 | [v1.61/README.md](v1.61/README.md) |
-| v1.62 | `current` | Mission 状态解耦、启动与执行提示、异步 Worktree 清理、独立列滚动及共享执行工作区 | [v1.62/README.md](v1.62/README.md) |
+| v1.62 | `historical` | Mission 状态解耦、启动与执行提示、异步 Worktree 清理、独立列滚动及共享执行工作区 | [v1.62/README.md](v1.62/README.md) |
+| v1.63 | `current` | Task 单一责任正文、历史要求兼容读取、精简 get 投影与版本化 CLI/Host clean break | [v1.63/README.md](v1.63/README.md) |

@@ -24,8 +24,8 @@ use crate::{
     },
     channel::ChannelService,
     collaboration::{
-        CollaborationService, CreateTaskCommand, TaskAcceptanceCriteriaUpdate, TaskAssigneeFilter,
-        TaskAssigneeUpdate, TaskDetail, TaskListPage, TaskListQuery, TaskStatus, UpdateTaskCommand,
+        CollaborationService, CreateTaskCommand, TaskAssigneeFilter, TaskAssigneeUpdate,
+        TaskDetail, TaskListPage, TaskListQuery, TaskStatus, UpdateTaskCommand,
         append_domain_event,
     },
     command::{
@@ -105,8 +105,6 @@ pub struct TeamCreateTaskInput {
     pub title: String,
     #[serde(default)]
     pub description: String,
-    #[serde(default)]
-    pub acceptance_criteria: Vec<String>,
     pub assignee_agent_id: String,
 }
 
@@ -132,9 +130,6 @@ pub struct TeamUpdateTaskInput {
     pub expected_version: i64,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub acceptance_criteria: Option<Vec<String>>,
-    #[serde(default)]
-    pub clear_acceptance_criteria: bool,
     pub status: Option<TaskStatus>,
     #[serde(default, deserialize_with = "deserialize_non_null_optional_string")]
     pub assignee_agent_id: Option<String>,
@@ -572,7 +567,7 @@ impl TeamToolService {
         json!({
             "type": "object",
             "additionalProperties": false,
-            "description": "Create only a durable responsibility that must survive AgentRuns or handoffs, has one explicit owner, and can independently complete, block, or transfer. Prefer advancing an existing Task. Do not create Tasks for analysis, consultation, one-off review, tool operations, local plans, A2A requests, or steps inside another Task. Only the User or current Camp Default Lead may create a Task.",
+            "description": "Create an independently owned task that persists across runs or handoffs.\nPrefer existing tasks; do not create tasks for one-off collaboration or local steps.\nUser/Default Lead only. Put scope and requirements in description.\nDoes not notify or start work; use rovai send --task-id.",
             "required": ["title", "assigneeAgentId"],
             "properties": {
                 "title": {
@@ -583,12 +578,8 @@ impl TeamToolService {
                 },
                 "description": {
                     "type": "string",
-                    "maxLength": 8000,
-                    "description": "Optional durable scope and constraints. Do not copy a local execution plan into Task steps."
-                },
-                "acceptanceCriteria": {
-                    "type": "array", "maxItems": 12, "uniqueItems": true,
-                    "items": {"type": "string", "minLength": 1, "maxLength": 500}
+                    "maxLength": 16000,
+                    "description": "Task scope and requirements."
                 },
                 "assigneeAgentId": {
                     "type": "string",
@@ -614,18 +605,17 @@ impl TeamToolService {
         json!({
             "type": "object",
             "additionalProperties": false,
-            "description": "Atomically update at least one field. User/current Default Lead own responsibility definition. An ordinary current Assignee may patch only status and its matching blockedReason or completionSummary on its own Task. Core authorization and field-level mutation rules are authoritative.",
+            "description": "Update a non-terminal task using the version you read.\nUser/Default Lead may edit task content, assignment and status.\nOther assignees may update only their own status and matching blockedReason or completionSummary.\nReread on conflict. Does not notify or start work.",
             "required": ["taskId", "expectedVersion"],
             "properties": {
                 "taskId": {"type": "string", "minLength": 1},
                 "expectedVersion": {"type": "integer", "minimum": 1},
                 "title": {"type": "string", "minLength": 1, "maxLength": 160},
-                "description": {"type": "string", "maxLength": 8000},
-                "acceptanceCriteria": {
-                    "type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true,
-                    "items": {"type": "string", "minLength": 1, "maxLength": 500}
+                "description": {
+                    "type": "string",
+                    "maxLength": 16000,
+                    "description": "Task scope and requirements."
                 },
-                "clearAcceptanceCriteria": {"type": "boolean"},
                 "status": {
                     "type": "string",
                     "enum": ["pending", "in_progress", "blocked", "completed", "cancelled"]
@@ -1248,7 +1238,6 @@ impl TeamToolService {
                 camp_id: sender.camp_id,
                 title: invocation.input.title.clone(),
                 description: invocation.input.description.clone(),
-                acceptance_criteria: invocation.input.acceptance_criteria.clone(),
                 assignee_agent_id: invocation.input.assignee_agent_id.clone(),
             },
         };
@@ -1345,14 +1334,6 @@ impl TeamToolService {
                 "clearAssignee cannot be combined with assigneeAgentId",
             ));
         }
-        if invocation.input.clear_acceptance_criteria
-            && invocation.input.acceptance_criteria.is_some()
-        {
-            return Err(invocation_error(
-                "team_tool.invalid_input",
-                "clearAcceptanceCriteria cannot be combined with acceptanceCriteria",
-            ));
-        }
         let assignee = match (
             &invocation.input.assignee_agent_id,
             invocation.input.clear_assignee,
@@ -1362,16 +1343,6 @@ impl TeamToolService {
             (Some(agent_id), false) => TaskAssigneeUpdate::Assign {
                 agent_id: agent_id.clone(),
             },
-        };
-        let acceptance_criteria = match (
-            invocation.input.acceptance_criteria.as_ref(),
-            invocation.input.clear_acceptance_criteria,
-        ) {
-            (_, true) => TaskAcceptanceCriteriaUpdate::Clear,
-            (Some(items), false) => TaskAcceptanceCriteriaUpdate::Replace {
-                items: items.clone(),
-            },
-            (None, false) => TaskAcceptanceCriteriaUpdate::Unchanged,
         };
         let envelope = CommandEnvelope {
             command_id: team_command_id(
@@ -1391,7 +1362,6 @@ impl TeamToolService {
                 expected_version: invocation.input.expected_version,
                 title: invocation.input.title.clone(),
                 description: invocation.input.description.clone(),
-                acceptance_criteria,
                 status: invocation.input.status,
                 assignee,
                 blocked_reason: invocation.input.blocked_reason.clone(),

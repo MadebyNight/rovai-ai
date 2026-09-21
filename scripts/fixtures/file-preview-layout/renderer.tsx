@@ -207,7 +207,7 @@ const api: FilePreviewApi = {
 
 const task: TaskView = {
   taskId: 'task-1', campId: 'camp-1', title: '检查文件预览的拖拽边界，并保留窄会话中的完整任务信息',
-  description: '验证会话与文件预览可以独立调整。', acceptanceCriteria: ['保留草稿', '文件可以重新打开'],
+  description: '验证会话与文件预览可以独立调整，保留草稿，并允许重新打开文件。',
   status: 'pending', assigneeAgentId: null, blockedReason: null, completionSummary: null, cancelReason: null,
   createdByType: 'user', createdById: 'local_user', sourceAgentRunId: null,
   closedByType: null, closedById: null, closedByAgentRunId: null, version: 1,

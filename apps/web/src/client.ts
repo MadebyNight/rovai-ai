@@ -4,6 +4,9 @@ import { RECOVERY_KEY, type RecoveryStorage } from './tab-recovery'
 import { fileDigest } from './file-digest'
 import { newCommandId } from '../../desktop/src/shared/command-id'
 import type { ChannelSettingsSnapshot, FilePreviewBinaryContent, FilePreviewOperationResult, LocalAttachmentSourceView } from '@contracts'
+
+const HOST_WEB_PROTOCOL_VERSION = 3
+
 class HttpRequestError extends Error {
   constructor(readonly status: number, readonly code: string) { super(`请求未完成（${code}）。`) }
 }
@@ -394,7 +397,7 @@ export class ConsoleClient {
     const generation = this.#generation
     const response = await this.#fetch(`${this.origin}/api/v1/${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: 2, ...credential, ...(this.#editor ? { editor: this.#editor } : {}) }), credentials: 'omit', redirect: 'error', cache: 'no-store',
+      body: JSON.stringify({ protocolVersion: HOST_WEB_PROTOCOL_VERSION, ...credential, ...(this.#editor ? { editor: this.#editor } : {}) }), credentials: 'omit', redirect: 'error', cache: 'no-store',
       signal: this.#lifetime.signal
     })
     if (!response.ok) throw new Error(response.status === 409 ? 'Web 与 Host 协议不兼容，请使用同一版本。' : response.status === 429 ? '登录暂受限，请稍后再试。' : response.status >= 500 ? '服务暂不可用，请稍后重试。' : path === 'login-ticket' ? '扫码登录未完成，二维码可能已过期或已使用。请在运行服务的 Desktop 重新生成，或使用登录 Token 登录。' : 'Token 无效，请检查后重试。')
@@ -410,7 +413,7 @@ export class ConsoleClient {
   }
 
   #acceptSession(session: SessionResponse): void {
-    if (session.protocolVersion !== 2) throw new Error('Web 与 Host 协议不兼容，请使用同一版本。')
+    if (session.protocolVersion !== HOST_WEB_PROTOCOL_VERSION) throw new Error('Web 与 Host 协议不兼容，请使用同一版本。')
     if (typeof session.token !== 'string' || !/^[a-f0-9]{64}$/.test(session.token)) throw new Error('会话响应无效。')
     if (typeof session.clientId !== 'string' || !/^[a-f0-9]{64}$/.test(session.clientId)
       || typeof session.editorProof !== 'string' || !/^[a-f0-9]{64}$/.test(session.editorProof)

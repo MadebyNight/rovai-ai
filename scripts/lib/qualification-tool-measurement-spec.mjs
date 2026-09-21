@@ -191,7 +191,6 @@ export async function materializeToolMeasurementFixtures({
       campId,
       title: task.title,
       description: task.description,
-      acceptanceCriteria: task.acceptanceCriteria,
       assigneeAgentId: task.assigneeAgentId
     })
     const result = response.commandResult ?? response
@@ -208,7 +207,6 @@ export async function materializeToolMeasurementFixtures({
       contentDigest: withDigest(digestJson({
         title: task.title,
         description: task.description,
-        acceptanceCriteria: task.acceptanceCriteria,
         assigneeAgentId: task.assigneeAgentId
       }))
     })
@@ -420,13 +418,10 @@ function validateFixture(fixture, spec) {
     }
   }
   for (const task of fixture.tasks) {
-    exactKeys(task, [
-      'symbol', 'title', 'description', 'acceptanceCriteria', 'assigneeAgentId'
-    ], 'Task fixture')
+    exactKeys(task, ['symbol', 'title', 'description', 'assigneeAgentId'], 'Task fixture')
     addSymbol(symbols, task.symbol)
     boundedText(task.title, 'Task fixture title', 1, 240)
-    boundedText(task.description, 'Task fixture description', 0, 4_000)
-    boundedStrings(task.acceptanceCriteria, 'Task fixture acceptanceCriteria', 0, 32)
+    boundedText(task.description, 'Task fixture description', 0, 16_000)
     if (task.assigneeAgentId !== null) {
       stableId(task.assigneeAgentId, 'Task fixture assigneeAgentId')
     }
