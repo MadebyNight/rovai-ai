@@ -2661,68 +2661,77 @@ button.camp-world-map-live-caption { cursor: pointer; font: inherit; }
   padding: 36px 0 56px;
   text-align: center;
 }
-.empty-camp-mark { width: 96px; height: 66px; margin-bottom: 14px; color: var(--rail-logo); }
 .empty-camp-welcome h2 {
   margin: 0;
   font: 700 clamp(23px, 2.4vw, 30px)/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   letter-spacing: -.035em;
 }
-.empty-camp-context {
+.timeline-track:has(> .camp-home-welcome) { display: grid; align-items: center; }
+.empty-camp-welcome.camp-home-welcome {
+  width: 100%;
+  min-height: 0;
+  padding: 24px 0 68px;
+}
+.empty-camp-welcome.camp-home-welcome h2 {
+  font-size: 26px;
+  font-weight: 550;
+  line-height: 1.45;
+  letter-spacing: -.025em;
+}
+.camp-home-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  gap: 8px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.camp-home-project {
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.camp-home-separator { color: var(--muted); }
+.camp-home-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 7px;
-  margin-top: 17px;
+  gap: 8px;
+  margin-top: 28px;
 }
-.empty-camp-context > span {
-  display: inline-flex;
-  min-height: 27px;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
+.camp-home-actions button {
+  min-height: 38px;
+  padding: 8px 16px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 7px;
   color: var(--muted);
   background: var(--surface-raised);
-  font-size: 10.5px;
-}
-.empty-camp-context strong { font-size: inherit; font-weight: 600; }
-.empty-camp-context i:not(.empty-camp-readiness) {
-  display: inline-grid;
-  width: 15px;
-  height: 15px;
-  place-items: center;
-  color: var(--brand-ink);
-  font-size: 9px;
-  font-style: normal;
-}
-.empty-camp-avatar { --member-avatar-size: 18px !important; }
-.empty-camp-readiness { width: 6px; height: 6px; border-radius: 50%; background: var(--aurora); }
-.starter-prompts {
-  display: grid;
-  width: min(600px, 100%);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 24px;
-  text-align: left;
-}
-.starter-prompts button {
-  display: grid;
-  min-width: 0;
-  min-height: 78px;
-  gap: 5px;
-  align-content: start;
-  padding: 10px 11px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--ink);
-  background: var(--surface-raised);
   cursor: pointer;
-  text-align: left;
+  font-size: 12.5px;
+  font-weight: 450;
+  line-height: 1.5;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
-.starter-prompts button:hover { border-color: color-mix(in srgb, var(--brand) 35%, var(--line)); background: var(--brand-soft); }
-.starter-prompts strong { font-size: 11.5px; }
-.starter-prompts span { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.camp-home-actions button:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--surface-subtle);
+}
+.camp-home-actions button:active {
+  background: var(--neutral-selected);
+  transform: none;
+}
+.camp-home-runtime {
+  margin: 16px 0 0;
+  color: var(--attention);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .timeline-track:has(> .first-run-camp-welcome) { display: grid; align-items: center; }
 .first-run-camp-welcome { width: min(680px, 100%); min-height: 0; margin: auto; padding: 0; text-align: left; }
 .first-run-camp-intro { display: grid; width: 100%; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 16px; }
@@ -8066,8 +8075,12 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
 .settings-panel-notifications .notification-switch input:checked::after { background: var(--workspace-steel); }
 
 @media (max-width: 1179px) {
-  .starter-prompts { width: min(520px, 100%); grid-template-columns: 1fr; }
-  .starter-prompts button { min-height: 58px; }
+  .camp-home-context { max-width: 330px; }
+  .camp-home-project { max-width: 180px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .camp-home-actions button { transition: none; }
 }
 
 @media (max-width: 1080px) {
