@@ -283,8 +283,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.63";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 117;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.64";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 118;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -726,6 +726,7 @@ struct CurrentMigrationState {
     v165: bool,
     v166: bool,
     v167: bool,
+    v168: bool,
 }
 
 impl CurrentMigrationState {
@@ -747,11 +748,19 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v168 {
+            let mut previous = *self;
+            previous.v168 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v167
+                && previous.admits("v1.63", 117, classifier);
+        }
         if self.v167 {
             let mut previous = *self;
             previous.v167 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
-                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            return contract == "v1.63"
+                && schema == 117
                 && self.v166
                 && previous.admits("v1.61", 116, classifier);
         }
@@ -3032,6 +3041,8 @@ pub(crate) fn classify_database_contract(
         migrations.v166 && default_recipient_mention_v166_schema_matches(connection)?;
     let task_description_schema_matches =
         migrations.v167 && task_description_v167_schema_matches(connection)?;
+    let execution_lifecycle_schema_matches =
+        migrations.v168 && execution_lifecycle_v168_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
         &marker,
         migrations,
@@ -3102,6 +3113,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v165 && !single_chat_operation_policy_schema_matches)
         || (migrations.v166 && !default_recipient_mention_schema_matches)
         || (migrations.v167 && !task_description_schema_matches)
+        || (migrations.v168 && !execution_lifecycle_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3132,6 +3144,81 @@ pub(crate) fn classify_database_contract(
             marker,
         ))
     }
+}
+
+fn execution_lifecycle_v168_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let required_columns: i64 = connection.query_row(
+        r#"
+        SELECT
+            EXISTS(SELECT 1 FROM pragma_table_info('agent_run')
+                   WHERE name = 'execution_evidence_change_sequence' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'operation_id' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'revision' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'change_sequence' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'input_blob_id' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'input_preview_json' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'input_byte_count' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'input_content_state' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'result_blob_id' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'result_preview_json' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'result_byte_count' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'result_content_state' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+                   WHERE name = 'updated_at' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_file_change_projection')
+                   WHERE name = 'source_change_sequence' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_file_change_projection')
+                   WHERE name = 'revision' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_file_change_projection')
+                   WHERE name = 'updated_at' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_file_change_projection')
+                   WHERE name = 'last_attempted_source_change_sequence' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_file_change_projection')
+                   WHERE name = 'last_error_code' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_epoch_state')
+                   WHERE name = 'agent_run_id' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_epoch_state')
+                   WHERE name = 'execution_epoch' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_epoch_state')
+                   WHERE name = 'file_facts_change_sequence' AND type = 'INTEGER')
+          + EXISTS(SELECT 1 FROM pragma_table_info('agent_run_execution_epoch_state')
+                   WHERE name = 'updated_at' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('managed_blob')
+                   WHERE name = 'gc_candidate_at' AND type = 'TEXT')
+          + EXISTS(SELECT 1 FROM pragma_table_info('managed_blob')
+                   WHERE name = 'gc_candidate_owner' AND type = 'TEXT')
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    let required_objects: i64 = connection.query_row(
+        r#"
+        SELECT COUNT(*) FROM sqlite_master
+        WHERE (type = 'table' AND name = 'agent_run_execution_epoch_state')
+           OR (type = 'index' AND name IN (
+               'agent_run_execution_evidence_operation_unique',
+               'agent_run_execution_evidence_change_unique',
+               'agent_run_execution_evidence_change_idx',
+               'agent_run_execution_evidence_input_blob_idx',
+               'agent_run_execution_evidence_result_blob_idx',
+               'managed_blob_gc_candidate_idx'
+           ))
+        "#,
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(required_columns == 24 && required_objects == 7)
 }
 
 fn legacy_delivery_first_v162_source(
@@ -4160,7 +4247,7 @@ fn connection_has_current_data_contract(connection: &Connection) -> rusqlite::Re
                AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 146)
                AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 147)
                AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 148)
-               AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 167)
+               AND EXISTS(SELECT 1 FROM schema_migration WHERE version = 168)
         FROM rovai_data_contract
         WHERE singleton = 1
         "#,
@@ -4275,7 +4362,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 164),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 165),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 166),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 167)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 167),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 168)
         "#,
         [],
         |row| {
@@ -4378,6 +4466,7 @@ fn load_current_migration_state(
                 v165: row.get(95)?,
                 v166: row.get(96)?,
                 v167: row.get(97)?,
+                v168: row.get(98)?,
             })
         },
     )
@@ -7374,6 +7463,9 @@ impl Database {
             if !self.schema_migration_applied(167)? {
                 migration_step!("migration_167", self.migrate_task_description_v167());
             }
+            if !self.schema_migration_applied(168)? {
+                migration_step!("migration_168", self.migrate_execution_lifecycle_v168());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -8078,6 +8170,9 @@ impl Database {
         }
         if !self.schema_migration_applied(167)? {
             migration_step!("migration_167", self.migrate_task_description_v167());
+        }
+        if !self.schema_migration_applied(168)? {
+            migration_step!("migration_168", self.migrate_execution_lifecycle_v168());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -26432,9 +26527,11 @@ impl Database {
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.63"
+                            && marker.projection_schema_version == 117
                 ),
-                "Task description migration failed current schema admission"
+                "Task description migration failed v1.63/schema 117 source admission"
             );
             validate_migration_foreign_keys(&tx, &["task"])?;
             tx.commit()?;
@@ -26443,6 +26540,128 @@ impl Database {
         let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
         result?;
         foreign_keys_result?;
+        Ok(())
+    }
+
+    fn migrate_execution_lifecycle_v168(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&transaction)?,
+                DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.63"
+                        && marker.projection_schema_version == 117
+            ),
+            "Execution lifecycle migration requires the exact v1.63/schema 117 source"
+        );
+        transaction.execute_batch(
+            r#"
+            ALTER TABLE agent_run ADD COLUMN
+                execution_evidence_change_sequence INTEGER NOT NULL DEFAULT 0
+                CHECK(execution_evidence_change_sequence >= 0);
+
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN operation_id TEXT;
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN revision INTEGER
+                CHECK(revision IS NULL OR revision >= 1);
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN change_sequence INTEGER
+                CHECK(change_sequence IS NULL OR change_sequence >= 1);
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN input_preview_json TEXT
+                CHECK(input_preview_json IS NULL OR json_valid(input_preview_json));
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN input_blob_id TEXT
+                REFERENCES managed_blob(id);
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN input_byte_count INTEGER
+                CHECK(input_byte_count IS NULL OR input_byte_count >= 0);
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN input_content_state TEXT
+                CHECK(input_content_state IS NULL OR input_content_state IN (
+                    'inline', 'blob', 'too_large', 'unavailable'
+                ));
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN result_preview_json TEXT
+                CHECK(result_preview_json IS NULL OR json_valid(result_preview_json));
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN result_blob_id TEXT
+                REFERENCES managed_blob(id);
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN result_byte_count INTEGER
+                CHECK(result_byte_count IS NULL OR result_byte_count >= 0);
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN result_content_state TEXT
+                CHECK(result_content_state IS NULL OR result_content_state IN (
+                    'inline', 'blob', 'too_large', 'unavailable'
+                ));
+            ALTER TABLE agent_run_execution_evidence ADD COLUMN updated_at TEXT;
+
+            CREATE UNIQUE INDEX agent_run_execution_evidence_operation_unique
+                ON agent_run_execution_evidence(operation_id)
+                WHERE operation_id IS NOT NULL;
+            CREATE UNIQUE INDEX agent_run_execution_evidence_change_unique
+                ON agent_run_execution_evidence(agent_run_id, change_sequence)
+                WHERE change_sequence IS NOT NULL;
+            CREATE INDEX agent_run_execution_evidence_change_idx
+                ON agent_run_execution_evidence(agent_run_id, change_sequence);
+            CREATE INDEX agent_run_execution_evidence_input_blob_idx
+                ON agent_run_execution_evidence(input_blob_id)
+                WHERE input_blob_id IS NOT NULL;
+            CREATE INDEX agent_run_execution_evidence_result_blob_idx
+                ON agent_run_execution_evidence(result_blob_id)
+                WHERE result_blob_id IS NOT NULL;
+
+            CREATE TABLE agent_run_execution_epoch_state (
+                agent_run_id TEXT NOT NULL REFERENCES agent_run(id) ON DELETE CASCADE,
+                execution_epoch INTEGER NOT NULL CHECK(execution_epoch >= 0),
+                file_facts_change_sequence INTEGER NOT NULL DEFAULT 0
+                    CHECK(file_facts_change_sequence >= 0),
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(agent_run_id, execution_epoch)
+            );
+
+            ALTER TABLE agent_run_file_change_projection ADD COLUMN
+                source_change_sequence INTEGER NOT NULL DEFAULT 0
+                CHECK(source_change_sequence >= 0);
+            ALTER TABLE agent_run_file_change_projection ADD COLUMN
+                revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1);
+            ALTER TABLE agent_run_file_change_projection ADD COLUMN updated_at TEXT;
+            ALTER TABLE agent_run_file_change_projection ADD COLUMN
+                last_attempted_source_change_sequence INTEGER
+                CHECK(last_attempted_source_change_sequence IS NULL
+                      OR last_attempted_source_change_sequence >= 0);
+            ALTER TABLE agent_run_file_change_projection ADD COLUMN last_error_code TEXT;
+            UPDATE agent_run_file_change_projection SET updated_at = created_at;
+
+            ALTER TABLE managed_blob ADD COLUMN gc_candidate_at TEXT;
+            ALTER TABLE managed_blob ADD COLUMN gc_candidate_owner TEXT
+                CHECK(gc_candidate_owner IS NULL OR gc_candidate_owner IN (
+                    'execution_lifecycle', 'file_change_projection'
+                ));
+            CREATE INDEX managed_blob_gc_candidate_idx
+                ON managed_blob(gc_candidate_at, id)
+                WHERE gc_candidate_at IS NOT NULL;
+
+            INSERT INTO schema_migration(version, applied_at)
+            VALUES (168, datetime('now'));
+            UPDATE rovai_data_contract
+            SET contract_version = 'v1.64', projection_schema_version = 118,
+                reset_reason = NULL, updated_at = datetime('now')
+            WHERE singleton = 1;
+            "#,
+        )?;
+        anyhow::ensure!(
+            execution_lifecycle_v168_schema_matches(&transaction)?,
+            "Execution lifecycle migration did not create the required schema"
+        );
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&transaction)?,
+                DatabaseContractClassification::Current(_)
+            ),
+            "Execution lifecycle migration failed current schema admission"
+        );
+        validate_migration_foreign_keys(
+            &transaction,
+            &[
+                "agent_run_execution_evidence",
+                "agent_run_execution_epoch_state",
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -31661,7 +31880,72 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v167_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=168)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    tx.execute_batch(
+        r#"
+        DROP INDEX agent_run_execution_evidence_operation_unique;
+        DROP INDEX agent_run_execution_evidence_change_unique;
+        DROP INDEX agent_run_execution_evidence_change_idx;
+        DROP INDEX agent_run_execution_evidence_input_blob_idx;
+        DROP INDEX agent_run_execution_evidence_result_blob_idx;
+        DROP INDEX managed_blob_gc_candidate_idx;
+        DROP TABLE agent_run_execution_epoch_state;
+
+        ALTER TABLE agent_run DROP COLUMN execution_evidence_change_sequence;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN operation_id;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN revision;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN change_sequence;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN input_preview_json;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN input_blob_id;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN input_byte_count;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN input_content_state;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN result_preview_json;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN result_blob_id;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN result_byte_count;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN result_content_state;
+        ALTER TABLE agent_run_execution_evidence DROP COLUMN updated_at;
+        ALTER TABLE agent_run_file_change_projection DROP COLUMN source_change_sequence;
+        ALTER TABLE agent_run_file_change_projection DROP COLUMN revision;
+        ALTER TABLE agent_run_file_change_projection DROP COLUMN updated_at;
+        ALTER TABLE agent_run_file_change_projection DROP COLUMN last_attempted_source_change_sequence;
+        ALTER TABLE agent_run_file_change_projection DROP COLUMN last_error_code;
+        ALTER TABLE managed_blob DROP COLUMN gc_candidate_at;
+        ALTER TABLE managed_blob DROP COLUMN gc_candidate_owner;
+
+        DELETE FROM schema_migration WHERE version=168;
+        UPDATE rovai_data_contract
+        SET contract_version='v1.63', projection_schema_version=117
+        WHERE singleton=1;
+        "#,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    assert!(!execution_lifecycle_v168_schema_matches(connection).unwrap());
+    assert!(matches!(
+        classify_database_contract(connection).unwrap(),
+        DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.63" && marker.projection_schema_version == 117
+    ));
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v166_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v167_source_for_test(connection);
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=167)",
@@ -35676,6 +35960,7 @@ mod tests {
         ));
         database.migrate_default_recipient_mention_v166().unwrap();
         database.migrate_task_description_v167().unwrap();
+        database.migrate_execution_lifecycle_v168().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -35730,6 +36015,60 @@ mod tests {
             )
             .unwrap();
         assert_eq!(marker, ("v1.61".to_string(), 116));
+        database.migrate_task_description_v167().unwrap();
+        database.migrate_execution_lifecycle_v168().unwrap();
+        assert!(execution_lifecycle_v168_schema_matches(database.connection()).unwrap());
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v168_execution_lifecycle_migration_is_atomic_and_exact_source_only() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-v168-execution-lifecycle-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v167_source_for_test(database.connection());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.63"
+                    && marker.projection_schema_version == 117
+        ));
+        database
+            .connection()
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_execution_lifecycle_receipt
+                 BEFORE INSERT ON schema_migration WHEN NEW.version = 168
+                 BEGIN SELECT RAISE(ABORT, 'execution lifecycle receipt failure'); END;",
+            )
+            .unwrap();
+
+        assert!(
+            database
+                .migrate_execution_lifecycle_v168()
+                .unwrap_err()
+                .to_string()
+                .contains("execution lifecycle receipt failure")
+        );
+        assert!(!database.schema_migration_applied(168).unwrap());
+        assert!(!execution_lifecycle_v168_schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.63"
+                    && marker.projection_schema_version == 117
+        ));
+
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_execution_lifecycle_receipt;")
+            .unwrap();
+        database.migrate_execution_lifecycle_v168().unwrap();
+        assert!(database.schema_migration_applied(168).unwrap());
+        assert!(execution_lifecycle_v168_schema_matches(database.connection()).unwrap());
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -35748,7 +36087,12 @@ mod tests {
 
         assert!(database.schema_migration_applied(167).unwrap());
         assert!(task_description_v167_schema_matches(database.connection()).unwrap());
-        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        assert!(matches!(
+            classify_database_contract(database.connection()).unwrap(),
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.63"
+                    && marker.projection_schema_version == 117
+        ));
         assert!(
             table_columns(database.connection(), "task")
                 .unwrap()
@@ -35843,6 +36187,7 @@ mod tests {
             .unwrap();
         database.migrate_default_recipient_mention_v166().unwrap();
         database.migrate_task_description_v167().unwrap();
+        database.migrate_execution_lifecycle_v168().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -35898,6 +36243,7 @@ mod tests {
             .unwrap();
         database.migrate_default_recipient_mention_v166().unwrap();
         database.migrate_task_description_v167().unwrap();
+        database.migrate_execution_lifecycle_v168().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -36048,6 +36394,7 @@ mod tests {
             .unwrap();
         database.migrate_default_recipient_mention_v166().unwrap();
         database.migrate_task_description_v167().unwrap();
+        database.migrate_execution_lifecycle_v168().unwrap();
         let successor_run_id = claim_waiting_delivery_batches(&mut database, 1)
             .unwrap()
             .pop()
@@ -36392,6 +36739,7 @@ mod tests {
             v165: version >= 165,
             v166: version >= 166,
             v167: version >= 167,
+            v168: version >= 168,
         }
     }
 
@@ -36558,10 +36906,16 @@ mod tests {
                 165,
             ),
             (
-                "current",
-                CURRENT_DATA_CONTRACT_VERSION,
-                CURRENT_PROJECTION_SCHEMA_VERSION,
+                "v1.61/schema 116 before Task single-description",
+                "v1.61",
+                116,
                 166,
+            ),
+            (
+                "v1.63/schema 117 before execution lifecycle",
+                "v1.63",
+                117,
+                167,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -37033,7 +37387,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(167);
+        let current = migration_state_through(168);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -37071,7 +37425,25 @@ mod tests {
         missing_notification_single_chat.v146 = false;
         let mut missing_pi_edit_diff_classifier = current;
         missing_pi_edit_diff_classifier.v147 = false;
+        let mut missing_task_description = current;
+        missing_task_description.v167 = false;
+        let mut missing_execution_lifecycle = current;
+        missing_execution_lifecycle.v168 = false;
         let rejected = [
+            (
+                "current marker without execution lifecycle migration",
+                missing_execution_lifecycle,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
+            (
+                "current marker without Task single-description migration",
+                missing_task_description,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
             (
                 "current marker without notification Single Chat migration",
                 missing_notification_single_chat,
@@ -37487,7 +37859,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(167));
+        assert_eq!(state, migration_state_through(168));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -38217,6 +38589,8 @@ mod tests {
         assert!(database.schema_migration_applied(166).unwrap());
         database.migrate_task_description_v167().unwrap();
         assert!(database.schema_migration_applied(167).unwrap());
+        database.migrate_execution_lifecycle_v168().unwrap();
+        assert!(database.schema_migration_applied(168).unwrap());
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)

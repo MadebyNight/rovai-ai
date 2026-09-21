@@ -2,7 +2,7 @@
 document_type: architecture
 authority: file-preview-components-and-boundaries
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-22
 ---
 
 # File Preview Architecture
@@ -35,7 +35,7 @@ explicit local-link click
 
 - **Core** 拥有 Camp、Message、Attachment、Runtime Evidence 与当前文件身份映射；
 - **Desktop Main** 拥有宿主路径、原生选择器、Root Grant、只读文件能力、reopen token、HTML/asset token、watcher 和系统操作；
-- **Preload** 只暴露 [File Preview v17](../contracts/file-preview-v17.md) 的场景化方法；iframe 不获得 Preload；
+- **Preload** 只暴露 [File Preview v18](../contracts/file-preview-v18.md) 的场景化方法；iframe 不获得 Preload；
 - **Renderer** 拥有按 Camp 隔离的窗口内 Tab shell、布局与阅读状态，只把显式 Markdown link 分类为本地文件或 Web
   入口；inline-code 和正文不进入文件识别，也不读取磁盘。Activity 与 Execution 是 Renderer-only 合成标签，
   只借用同一 Tab shell 和分栏 host，不进入文件 controller、resource owner 或恢复来源。Tab shell 不拥有文件能力
@@ -127,12 +127,14 @@ Main 签发的稳定来源路径匹配。去重不升级权限。
 ## Camp 文件会话与恢复
 
 Renderer 的 `file-preview-session.ts` 保存最多 24 个 Camp 的轻量快照：稳定标签 ID、可重验来源、安全呈现、
-顺序、活动项、显隐和阅读位置。File Change 保存既有 summary、selected evidence ID 和位置，不复制 detail。
+顺序、活动项、显隐和阅读位置。File Change 保存既有 summary、selected evidence ID、projection revision 和位置，
+不复制 detail。来源水位推进时，Renderer 以 exact Run/epoch 原位更新同一标签，保留选择、展开、查找与滚动；
+较旧的异步 detail response 不能覆盖较新的 projection，刷新失败时继续显示上一份明确标为 stale 的可读内容。
 `file-preview-resources.ts` 是窗口级资源所有者，`file-preview-controller.ts` 维护各 session 的正文、分页、Blob URL、
 句柄、资源映射、站点和加载请求。React 只订阅状态，通过稳定的预览容器显示当前 Camp；不常驻完整 Camp 或 Runtime。
 
 最多 8 个热 Camp、128 MiB 不可见可重建内容、4 个 HTML 页面实例分别回收；集中配置与完整规则见
-[File Preview v17](../contracts/file-preview-v17.md)。保留不可重新取得内容，不通过普通回收丢弃临时唯一副本。
+[File Preview v18](../contracts/file-preview-v18.md)。保留不可重新取得内容，不通过普通回收丢弃临时唯一副本。
 24 个快照包含热 Camp。只有用户切回/打开/激活更新 LRU，后台完成和监听不更新。
 
 切 Camp 只切显示。热命中直接复用标签内容、Blob URL 和 iframe，不重读、不重验、不重新准备站点；冷恢复仅加载
@@ -203,7 +205,7 @@ Renderer 的文档期限由当前根 `documentId` 拥有，重复握手及子 fr
 无响应显示非阻塞的未知状态。服务端诊断采用有界回放与文档订阅起点，按请求开始序号过滤旧记录和延迟旧请求，
 子页面不清空根页面诊断，新的导航不继承历史页已耗尽的展示额度。
 查找使用有界可见正文快照、现有 Worker 和高亮定位；源码独立读取未注入内容。完整 wire、限制和状态见
-[File Preview v17](../contracts/file-preview-v17.md)。
+[File Preview v18](../contracts/file-preview-v18.md)。
 
 Markdown 继续使用 `rovai-preview://asset/<tab-token>/<segments>`，在 app.ready 前注册 secure standard scheme，
 实际窗口 Session 安装 sender gate 与 protocol handler。token 绑定窗口、Camp、句柄、generation 和文档目录；

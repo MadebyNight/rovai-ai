@@ -880,6 +880,7 @@ export interface SingleChatRunView {
   endedAt: string | null
   finalConversationMessageId: string | null
   executionEvidenceCount: number
+  executionEvidenceChangeSequence: number
 }
 
 export interface SingleChatSnapshot {
@@ -1794,6 +1795,7 @@ export interface AgentRunView {
   a2aRootAgentRunId: string | null
   a2aDepth: number
   executionEvidenceCount: number
+  executionEvidenceChangeSequence: number
   hasUnsettledExternalEffects: boolean
   workspace: {
     path: string
@@ -1910,6 +1912,9 @@ export interface AgentRunExecutionEvidenceView {
   agentRunId: string
   executionEpoch: number
   sequence: number
+  operationId?: string | null
+  revision?: number | null
+  changeSequence?: number | null
   eventType: string
   kind:
     | 'reasoning_summary'
@@ -1941,7 +1946,7 @@ export interface AgentRunExecutionEvidencePage {
 
 /** Logical execution items, ordered by their stable first evidence sequence. */
 export interface AgentRunExecutionWindowPage {
-  schemaVersion: 1
+  schemaVersion: 2
   campId: string
   agentRunId: string
   requestedBeforeSequence: number | null
@@ -1949,6 +1954,8 @@ export interface AgentRunExecutionWindowPage {
   nextAfterSequence?: number | null
   nextBeforeSequence: number | null
   throughSequence: number
+  throughChangeSequence: number
+  runtimePhase?: 'thinking' | 'executing'
   hasMore: boolean
   /** Unfinished operations older than the first page remain visible, outside the cursor. */
   activeEvidence?: AgentRunExecutionEvidenceView[]
@@ -1957,12 +1964,14 @@ export interface AgentRunExecutionWindowPage {
 }
 
 export interface AgentRunExecutionWindowChanges {
-  schemaVersion: 1
+  schemaVersion: 2
   campId: string
   agentRunId: string
-  requestedAfterSequence: number
-  nextAfterSequence: number
+  requestedAfterChangeSequence: number
+  nextAfterChangeSequence: number
   throughSequence: number
+  throughChangeSequence: number
+  runtimePhase?: 'thinking' | 'executing'
   hasMore: boolean
   evidence: AgentRunExecutionEvidenceView[]
   /** In-place updates of previously loaded, unfinished evidence (including text). */
@@ -2210,9 +2219,12 @@ export interface AgentRunChangedFileSummaryView {
 }
 
 export interface AgentRunFileChangesView {
-  schemaVersion: 2
+  schemaVersion: 2 | 3
   agentRunId: string
   executionEpoch: number
+  sourceChangeSequence?: number
+  revision?: number
+  isStale?: boolean
   files: AgentRunChangedFileSummaryView[]
   fileCount: number
   operationCount: number
@@ -2235,7 +2247,7 @@ export interface AgentRunChangedFileDetailView extends AgentRunChangedFileSummar
 }
 
 export interface AgentRunFileChangesDetailView {
-  schemaVersion: 2
+  schemaVersion: 2 | 3
   card: AgentRunFileChangesView
   files: AgentRunChangedFileDetailView[]
 }

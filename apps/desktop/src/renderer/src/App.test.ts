@@ -534,6 +534,7 @@ describe('active Camp event invalidation', () => {
           permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
           triggerDeliveryGeneration: 0, a2aParentAgentRunId: null,
           a2aRootAgentRunId: null, a2aDepth: 0, executionEvidenceCount: 0,
+          executionEvidenceChangeSequence: 0,
           hasUnsettledExternalEffects: false, workspace: { path: '/quick-chat' },
           startingGitObservation: null, endingGitObservation: null,
           version: terminal ? 2 : 1, createdAt: '2026-08-25T00:00:00Z',
@@ -1404,6 +1405,7 @@ describe('task event projections', () => {
       a2aRootAgentRunId: null,
       a2aDepth: 0,
       executionEvidenceCount: 1,
+      executionEvidenceChangeSequence: 1,
       hasUnsettledExternalEffects: false,
       workspace: null,
       startingGitObservation: null,
@@ -3751,6 +3753,7 @@ describe('task event projections', () => {
         permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct', triggerDeliveryGeneration: 0,
         a2aParentAgentRunId: null, a2aRootAgentRunId: null, a2aDepth: 0,
         executionEvidenceCount: 3,
+        executionEvidenceChangeSequence: 3,
         hasUnsettledExternalEffects: false,
         workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
         version: 2,
@@ -3792,6 +3795,7 @@ describe('task event projections', () => {
       invocationKind: 'batch' as const,
       status: 'succeeded' as const,
       executionEvidenceCount: 0,
+      executionEvidenceChangeSequence: 0,
       createdAt: '2026-07-28T04:30:00Z',
       startedAt: '2026-07-28T04:30:01Z',
       endedAt: '2026-07-28T04:31:00Z',
@@ -5365,7 +5369,7 @@ describe('task event projections', () => {
         payload: { itemId: 'reasoning-1', delta: '先检查现有实现。' }
       }
     }, 'live-1')
-    expect(reasoningEvent).not.toBeNull()
+    expect(reasoningEvent).toBeNull()
 
     const captured = [
       reasoningEvent,
@@ -5683,7 +5687,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: 2, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: 2, executionEvidenceChangeSequence: 2,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-20T15:50:27Z', startedAt: '2026-08-20T15:50:28Z',
       endedAt: null, updatedAt: '2026-08-20T15:50:29Z'
@@ -5857,7 +5862,8 @@ describe('task event projections', () => {
       runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct', triggerDeliveryGeneration: 0,
       a2aParentAgentRunId: null, a2aRootAgentRunId: null, a2aDepth: 0,
-      executionEvidenceCount: 0, hasUnsettledExternalEffects: false,
+      executionEvidenceCount: 0, executionEvidenceChangeSequence: 0,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-18T00:00:00Z', startedAt: '2026-08-18T00:00:01Z',
       endedAt: '2026-08-18T00:00:02Z', updatedAt: '2026-08-18T00:00:02Z'
@@ -5902,7 +5908,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: 1, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: 1, executionEvidenceChangeSequence: 1,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-09-03T08:00:00Z', startedAt: '2026-09-03T08:00:01Z',
       endedAt: '2026-09-03T08:00:02Z', updatedAt: '2026-09-03T08:00:02Z'
@@ -5993,7 +6000,8 @@ describe('task event projections', () => {
       runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct', triggerDeliveryGeneration: 0,
       a2aParentAgentRunId: null, a2aRootAgentRunId: null, a2aDepth: 0,
-      executionEvidenceCount: 1, hasUnsettledExternalEffects: false,
+      executionEvidenceCount: 1, executionEvidenceChangeSequence: 1,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-14T00:00:00Z', startedAt: '2026-08-14T00:00:01Z',
       endedAt: null, updatedAt: '2026-08-14T00:00:02Z'
@@ -6038,7 +6046,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: 1, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: 1, executionEvidenceChangeSequence: 1,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-26T00:00:00Z', startedAt: '2026-08-26T00:00:01Z',
       endedAt: null, updatedAt: '2026-08-26T00:00:02Z'
@@ -6093,7 +6102,7 @@ describe('task event projections', () => {
       renderToStaticMarkup(createElement(RunExecutionDisclosure, {
         run, progress: { items }, finalBody, campId: 'camp-live-tail', focused: true
       }))
-    expect(renderLive()).toContain('<span>思考中</span>')
+    expect(renderLive()).toContain('<span>执行中</span>')
     for (const items of [
       [{ key: 'narration:first', kind: 'narration' as const, body: '第一段流式正文' }],
       [{ key: 'plan:first', kind: 'plan' as const, explanation: '准备检查', plan: [] }]
@@ -6193,7 +6202,8 @@ describe('task event projections', () => {
       runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct', triggerDeliveryGeneration: 0,
       a2aParentAgentRunId: null, a2aRootAgentRunId: null, a2aDepth: 0,
-      executionEvidenceCount: 2, hasUnsettledExternalEffects: false,
+      executionEvidenceCount: 2, executionEvidenceChangeSequence: 2,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-18T00:00:00Z', startedAt: '2026-08-18T00:00:00Z',
       endedAt: '2026-08-18T00:00:02Z', updatedAt: '2026-08-18T00:00:02Z'
@@ -6239,7 +6249,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: icons.length, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: icons.length,
+      executionEvidenceChangeSequence: icons.length, hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-19T00:00:00Z', startedAt: '2026-08-19T00:00:00Z',
       endedAt: '2026-08-19T00:00:09Z', updatedAt: '2026-08-19T00:00:09Z'
@@ -6332,7 +6343,8 @@ describe('task event projections', () => {
       runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct', triggerDeliveryGeneration: 0,
       a2aParentAgentRunId: null, a2aRootAgentRunId: null, a2aDepth: 0,
-      executionEvidenceCount: 2, hasUnsettledExternalEffects: false,
+      executionEvidenceCount: 2, executionEvidenceChangeSequence: 2,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-18T00:00:00Z', startedAt: '2026-08-18T00:00:00Z',
       endedAt: '2026-08-18T00:00:01Z', updatedAt: '2026-08-18T00:00:01Z'
@@ -6503,7 +6515,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: 2, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: 2, executionEvidenceChangeSequence: 2,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-27T00:00:00Z', startedAt: '2026-08-27T00:00:00Z',
       endedAt: '2026-08-27T00:00:02Z', updatedAt: '2026-08-27T00:00:02Z'
@@ -6634,7 +6647,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: 4, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: 4, executionEvidenceChangeSequence: 4,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-08-27T00:00:00Z', startedAt: '2026-08-27T00:00:00Z',
       endedAt: '2026-08-27T00:00:02Z', updatedAt: '2026-08-27T00:00:02Z'
@@ -7149,7 +7163,8 @@ describe('task event projections', () => {
       terminalReasonCode: null, failure: null, runtimeModel: null,
       permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct',
       triggerDeliveryGeneration: 0, a2aParentAgentRunId: null, a2aRootAgentRunId: null,
-      a2aDepth: 0, executionEvidenceCount: 2, hasUnsettledExternalEffects: false,
+      a2aDepth: 0, executionEvidenceCount: 2, executionEvidenceChangeSequence: 2,
+      hasUnsettledExternalEffects: false,
       workspace: { path: '/repo' }, startingGitObservation: null, endingGitObservation: null,
       version: 1, createdAt: '2026-09-06T00:00:00Z', startedAt: '2026-09-06T00:00:00Z',
       endedAt: '2026-09-06T00:00:01Z', updatedAt: '2026-09-06T00:00:01Z'

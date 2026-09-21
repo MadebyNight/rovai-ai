@@ -2,7 +2,7 @@
 document_type: runtime-activity-mapping-registry
 authority: runtime-activity-mapping-catalog
 classifier_version: activity-v4
-last_updated: 2026-09-16
+last_updated: 2026-09-22
 ---
 
 # Runtime Activity Mapping Registry
@@ -321,5 +321,5 @@ Canonical Activity 分类，结构化 kind 仍映射 `shell.execute`。`grep_sea
 
 `tool.updated.result` 的公开路径只来自同一 ToolCall 的完整 input.file_path。Edit 的 native display.file_diff
 需路径、hunk 和计数全都一致；Write 只有 operation 时不补造 Diff。具体准入见
-[Runtime File Change Observation v5](../contracts/runtime-file-change-observation-v5.md)。该新 Runtime 复用已有 typed kind
+[Runtime File Change Observation v6](../contracts/runtime-file-change-observation-v6.md)。该新 Runtime 复用已有 typed kind
 分类规则，不改变现有 Runtime 的字段解释，因此保持 activity-v4，无历史回写。

@@ -3,12 +3,12 @@ document_type: architecture
 architecture: runtime-file-change-observation
 authority: command-and-agent-run-file-change-boundaries
 status: accepted
-last_updated: 2026-09-07
+last_updated: 2026-09-22
 ---
 
 # Runtime File Change Observation 架构
 
-字段、归约与授权接口见 [Runtime File Change Observation v5](../contracts/runtime-file-change-observation-v5.md)。
+字段、归约与授权接口见 [Runtime File Change Observation v6](../contracts/runtime-file-change-observation-v6.md)。
 本架构只消费 Runtime 明确报告的文件变化，不读取当前文件、不扫描工作区，也不依赖 Git。
 
 ## 产品模型
@@ -17,18 +17,18 @@ last_updated: 2026-09-07
 Runtime terminal file event
   -> Adapter-specific public normalizer
   -> exact managed-output-root exclusion
-  -> append-only Execution Evidence
+  -> versioned Operation Evidence / independent snapshot Evidence
        -> Canonical Activity projector
             -> Command View `阅读 | 新增 | 编辑 <file>`
             -> optional inline Command Diff
        -> AgentRun file-change projector
-            -> one projection per agentRunId + executionEpoch
+            -> one versioned projection per agentRunId + executionEpoch
             -> one timeline card `Files Changed`
             -> inline file detail
 ```
 
 `Command Diff` 回答一次 Operation 明确报告了什么；`AgentRun File Changes` 汇总一个 Run 在本次 execution epoch
-中已经成功报告的文件变化。两者读取同一份 append-only Evidence，但分别投影，不互相依赖，也不创建第二套
+中已经成功报告的文件变化。两者读取同一份已准入 Evidence 当前 revision 与独立 snapshot，但分别投影，不互相依赖，也不创建第二套
 Canonical Activity。
 
 工作区当前状态不属于这条观测链。产品没有 baseline、final、Window、participant、coordinator、Git tree、
@@ -70,6 +70,8 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
 
 - 投影 key 是 `agentRunId + executionEpoch`。Core 在 Run terminal ingress 已落库后执行；成功、失败或取消 Run
   都可以包含 terminal 前已经确认成功的文件操作；
+- exact epoch 另有 `fileFactsChangeSequence`，直接复用每次文件事实有效变化取得的 Run change sequence；
+  operation lifecycle、独立文件 Evidence 与 Run snapshot 都推进同一水位，无关正文和 phase 不推进；
 - schema 2 `operationKind=read` 永远不进入本投影；schema 1 历史 write/changeKind 和 schema 2 write 继续按既有
   规则归约；
 - 正常 terminal callback 本身位于顺序消费的 Runtime ingress queue 中；取消路径则由 Host 级 ingress fence 将
@@ -89,11 +91,15 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
 - 移除 `runtime_diff_no_changes` 后，同文件只要仍有可靠 Diff，就按其语义计算逐文件 `+A −D`：连续完整状态链
   使用净统计，其余可靠块累计统计。只有所有文件都有可靠统计时卡片才显示总 `+A −D`；任一文件只有
   operation-only 时，整张卡片回退为 `N 个文件 · M 次修改`；
-- 投影状态为 `complete | no_changes`。`complete` 的 detail 进入 sensitive Managed Blob；`no_changes` 是内部
-  幂等 checkpoint，不进入会话；
-- startup recovery 对尚未投影的 terminal Run 重放同一 projector。唯一键与不可变 source Evidence 保证每个
-  execution epoch 至多一张卡片；取消 barrier 无法在期限内证明完成时保留缺失 projection，不提前写
-  `no_changes`，由 recovery 在已有 Evidence 上重放。
+- 投影状态为 `complete | no_changes`，同时保存已消费的 `sourceChangeSequence` 与 projection revision；两种状态
+  都只在来源水位相等时可复用，合法迟到文件事实会使其 stale。`complete` 的 detail 进入 sensitive Managed Blob；
+  `no_changes` 是可失效的内部 checkpoint，不进入会话；
+- projector 读取来源快照后复用既有归约，发布前在 Immediate transaction 内复核 exact-epoch 水位，并原子切换
+  摘要、detail 引用、来源水位、revision 与错误状态。来源已变化时旧计算不发布；同 path 重算复用已有
+  `evidenceFileId`，新文件才分配新 ID；
+- startup/maintenance recovery 对尚未投影或来源水位更高的 terminal Run 重放同一 projector。唯一键保证每个
+  execution epoch 至多一张当前卡片；取消 barrier 无法在期限内证明完成时保留缺失 projection，不提前写
+  `no_changes`。重算失败保留上一份可读结果并标 stale，由后续维护或读取重试。
 
 ### Read Side 与 Renderer
 
@@ -104,6 +110,8 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
   完整净差异显示 unified diff；exact mutation 显示没有虚假 hunk/行号的片段块；operation history 保留全部
   operation 的时序、计数和原始序号，但不为 operation-only 记录渲染空白占位块；operation-only 文件显示诚实空态；
 - 卡片和 Review 都只消费 typed projection 与受管 detail blob，不读取当前 workspace 或执行 Git；
+- 卡片与 detail 携带相同 projection source water/revision。Renderer 拒绝较旧异步响应；已打开 Review 原位失效
+  detail，并保留 Tab、文件选择、展开和滚动，不通过卸载卡片刷新；
 - 没有可靠文件 Evidence 时不显示卡片，不显示 unavailable 占位，也不读取当前 workspace 重建；
 - 历史 v1-v3 Evidence、Canonical activity 与既有 projection 不 backfill、不重写；exclusion 和 Pi edit patch 映射只作用于
   新 ingress，Renderer/read wire 不变。
@@ -161,14 +169,16 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
 
 - 文件变化是附加观察能力；Evidence 归一化、投影或 detail blob 失败不能反向改变 Run 终态；
 - 失败只记录安全诊断并允许启动恢复重试，不扫描文件系统补偿；
-- Managed Blob 由 projection row 作为 GC root。Camp 删除遵循既有 Run/Evidence/Blob 引用闭包；
+- 当前 detail Managed Blob 由 projection row 作为 GC root。重算替换的旧 detail 按解除引用时间进入封闭
+  `file_change_projection` GC candidate；宽限后复核全部 Managed Blob 外键和在途读取再删除。Camp 删除仍遵循
+  既有 Run/Evidence/Blob 引用闭包，历史无标记 Blob 不因本增量扫描；
 - `ROVAI_RUN_TMP` 是可重置的临时交付区；通过 `rovai send --file` 成功发布后的 Managed Attachment 属于独立资源
   合同，临时源路径不因此成为文件变化；
 - 文件变化 Evidence 不进入模型上下文、Runtime Bootstrap、Camp public message 或 Agent built-in 读取面。
 
 ## 相关规范
 
-- [Runtime File Change Observation v5](../contracts/runtime-file-change-observation-v5.md)
+- [Runtime File Change Observation v6](../contracts/runtime-file-change-observation-v6.md)
 - [Execution Evidence 与 Canonical Activity 不变量](foundational-invariants.md#evidence-canonical-activity)
 - [Camp 会话工作区](../ui/components/conversation-workspace.md)
 - [v1.29 决定](../versions/v1.29/decisions.md#v1-29-d08)

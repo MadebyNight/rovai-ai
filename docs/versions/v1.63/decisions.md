@@ -1,9 +1,9 @@
 ---
 document_type: version-decisions
 version: v1.63
-lifecycle: current
+lifecycle: historical
 authority: decision-rationale
-last_updated: 2026-09-21
+last_updated: 2026-09-22
 ---
 
 # v1.63 版本决定

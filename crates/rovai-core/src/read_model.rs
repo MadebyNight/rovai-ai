@@ -363,6 +363,7 @@ pub struct AgentRunView {
     pub a2a_root_agent_run_id: Option<String>,
     pub a2a_depth: i64,
     pub execution_evidence_count: i64,
+    pub execution_evidence_change_sequence: i64,
     pub has_unsettled_external_effects: bool,
     pub workspace: Option<RunWorkspaceView>,
     pub starting_git_observation: Option<GitObservation>,
@@ -484,6 +485,9 @@ pub struct AgentRunExecutionEvidenceView {
     pub agent_run_id: String,
     pub execution_epoch: i64,
     pub sequence: i64,
+    pub operation_id: Option<String>,
+    pub revision: Option<i64>,
+    pub change_sequence: Option<i64>,
     pub event_type: String,
     pub kind: String,
     pub phase: String,
@@ -1425,7 +1429,8 @@ impl ReadModelService {
                 SELECT id, agent_run_id, execution_epoch, sequence,
                        event_type, kind, phase, payload_preview_json,
                        content_blob_id, content_byte_count,
-                       is_truncated, occurred_at
+                       is_truncated, occurred_at,
+                       operation_id, revision, change_sequence
                 FROM agent_run_execution_evidence
                 WHERE agent_run_id = ?1 AND sequence > ?2
                 ORDER BY sequence
@@ -3064,6 +3069,7 @@ fn load_agent_runs(
                (SELECT COUNT(*)
                 FROM agent_run_execution_evidence
                 WHERE agent_run_execution_evidence.agent_run_id = agent_run.id),
+               agent_run.execution_evidence_change_sequence,
                CASE
                  WHEN agent_run.cancel_requested_at IS NOT NULL
                   AND agent_run.terminal_resolution_source IS NULL
@@ -3188,21 +3194,22 @@ fn load_agent_runs(
                 row.get::<_, Option<String>>(21)?,
                 row.get::<_, i64>(22)?,
                 row.get::<_, i64>(23)?,
-                row.get::<_, i64>(24)? != 0,
-                row.get::<_, Option<String>>(25)?,
+                row.get::<_, i64>(24)?,
+                row.get::<_, i64>(25)? != 0,
                 row.get::<_, Option<String>>(26)?,
                 row.get::<_, Option<String>>(27)?,
-                row.get::<_, String>(28)?,
-                row.get::<_, i64>(29)?,
-                row.get::<_, String>(30)?,
-                row.get::<_, Option<String>>(31)?,
+                row.get::<_, Option<String>>(28)?,
+                row.get::<_, String>(29)?,
+                row.get::<_, i64>(30)?,
+                row.get::<_, String>(31)?,
                 row.get::<_, Option<String>>(32)?,
-                row.get::<_, String>(33)?,
-                row.get::<_, Option<String>>(34)?,
+                row.get::<_, Option<String>>(33)?,
+                row.get::<_, String>(34)?,
                 row.get::<_, Option<String>>(35)?,
                 row.get::<_, Option<String>>(36)?,
-                row.get::<_, String>(37)?,
-                row.get::<_, Option<String>>(38)?,
+                row.get::<_, Option<String>>(37)?,
+                row.get::<_, String>(38)?,
+                row.get::<_, Option<String>>(39)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3233,6 +3240,7 @@ fn load_agent_runs(
                 a2a_root_agent_run_id,
                 a2a_depth,
                 execution_evidence_count,
+                execution_evidence_change_sequence,
                 has_unsettled_external_effects,
                 workspace,
                 starting_git_observation,
@@ -3285,6 +3293,7 @@ fn load_agent_runs(
                     a2a_root_agent_run_id,
                     a2a_depth,
                     execution_evidence_count,
+                    execution_evidence_change_sequence,
                     has_unsettled_external_effects,
                     workspace: Some(match workspace {
                         Some(value) => {
@@ -3333,7 +3342,8 @@ fn load_execution_evidence(
                  evidence.sequence, evidence.event_type, evidence.kind,
                  evidence.phase, evidence.payload_preview_json,
                  evidence.content_blob_id, evidence.content_byte_count,
-                 evidence.is_truncated, evidence.occurred_at
+                 evidence.is_truncated, evidence.occurred_at,
+                 evidence.operation_id, evidence.revision, evidence.change_sequence
           FROM agent_run_execution_evidence AS evidence
           JOIN agent_run ON agent_run.id = evidence.agent_run_id
           LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
@@ -3368,7 +3378,8 @@ pub(crate) fn public_execution_evidence_for_agent_run(
                evidence.sequence, evidence.event_type, evidence.kind,
                evidence.phase, evidence.payload_preview_json,
                evidence.content_blob_id, evidence.content_byte_count,
-               evidence.is_truncated, evidence.occurred_at
+               evidence.is_truncated, evidence.occurred_at,
+               evidence.operation_id, evidence.revision, evidence.change_sequence
         FROM agent_run_execution_evidence AS evidence
         WHERE evidence.agent_run_id = ?1
           AND evidence.event_type NOT IN (
@@ -3401,6 +3412,9 @@ pub(crate) type ExecutionEvidenceRow = (
     i64,
     bool,
     String,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
 );
 
 pub(crate) fn execution_evidence_row(
@@ -3419,6 +3433,9 @@ pub(crate) fn execution_evidence_row(
         row.get(9)?,
         row.get::<_, i64>(10)? != 0,
         row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
     ))
 }
 
@@ -3438,12 +3455,18 @@ pub(crate) fn execution_evidence_view(
         content_byte_count,
         is_truncated,
         occurred_at,
+        operation_id,
+        revision,
+        change_sequence,
     ) = row;
     Ok(AgentRunExecutionEvidenceView {
         id,
         agent_run_id,
         execution_epoch,
         sequence,
+        operation_id,
+        revision,
+        change_sequence,
         event_type,
         kind,
         phase,
@@ -5811,10 +5834,11 @@ mod slow_tests {
                         id, agent_run_id, execution_epoch, sequence,
                         event_type, kind, phase, source_event_key,
                         payload_preview_json, content_blob_id,
-                        content_byte_count, is_truncated, occurred_at
+                        content_byte_count, is_truncated, occurred_at,
+                        revision, change_sequence, updated_at
                     ) VALUES (
                         ?1, ?2, 0, ?3, 'agent.text.delta', 'narration',
-                        'updated', NULL, ?4, NULL, 32, 0, ?5
+                        'updated', NULL, ?4, NULL, 32, 0, ?5, 1, ?3, ?5
                     )
                     "#,
                     params![
@@ -5839,11 +5863,12 @@ mod slow_tests {
                     id, agent_run_id, execution_epoch, sequence,
                     event_type, kind, phase, source_event_key,
                     payload_preview_json, content_blob_id,
-                    content_byte_count, is_truncated, occurred_at
+                    content_byte_count, is_truncated, occurred_at,
+                    revision, change_sequence, updated_at
                 ) VALUES (
                     'evidence-4', ?1, 0, 4, 'activity.completed', 'command',
                     'completed', 'activity.completed:command-1:completed',
-                    ?2, NULL, 96, 0, ?3
+                    ?2, NULL, 96, 0, ?3, 1, 4, ?3
                 )
                 "#,
                 params![
@@ -5859,6 +5884,13 @@ mod slow_tests {
                     .to_string(),
                     now,
                 ],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET execution_evidence_change_sequence = 4 WHERE id = ?1",
+                [agent_run_id],
             )
             .unwrap();
         database
@@ -5987,7 +6019,7 @@ mod slow_tests {
         assert_eq!(delta.evidence.len(), 1);
         assert_eq!(delta.evidence[0].sequence, 3);
         assert_eq!(delta.evidence[0].id, "evidence-4");
-        assert_eq!(delta.next_after_sequence, 4);
+        assert_eq!(delta.next_after_change_sequence, 4);
         assert!(!delta.has_more);
         assert!(
             delta.evidence[0].payload["item"]
@@ -5998,11 +6030,11 @@ mod slow_tests {
             crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 0, &[], 1)
                 .unwrap();
         assert!(first_delta.has_more);
-        assert_eq!(first_delta.next_after_sequence, 1);
+        assert_eq!(first_delta.next_after_change_sequence, 1);
         let second_delta =
             crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 1, &[], 1)
                 .unwrap();
-        assert_eq!(second_delta.next_after_sequence, 2);
+        assert_eq!(second_delta.next_after_change_sequence, 2);
         let forward = crate::execution_window::read_range(
             &mut database,
             camp_id,
@@ -6291,7 +6323,7 @@ mod slow_tests {
         assert_eq!(
             crate::execution_window::read_changes(&mut database, camp_id, agent_run_id, 0, &[], 1,)
                 .unwrap()
-                .next_after_sequence,
+                .next_after_change_sequence,
             1
         );
 

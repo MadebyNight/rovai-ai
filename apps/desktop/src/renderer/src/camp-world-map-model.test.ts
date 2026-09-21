@@ -64,6 +64,7 @@ function run(
     a2aRootAgentRunId: null,
     a2aDepth: 0,
     executionEvidenceCount: 0,
+    executionEvidenceChangeSequence: 0,
     hasUnsettledExternalEffects: false,
     workspace: null,
     startingGitObservation: null,

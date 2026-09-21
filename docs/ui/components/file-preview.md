@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-file-preview
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-22
 ---
 
 # Camp 文件预览区
@@ -108,7 +108,7 @@ Mission 的活动与执行台都是同一标签集合中的非文件 Tab。活�
 也不提供文件搜索。使命顶栏跨越整个会话，标签栏放在预览正文上方；普通会话仍保留共享顶栏结构。
 Mission 进入时先建立活动；有 running Run 且用户保存位置为右侧时，再建立并选择 Execution，活动标签继续
 保留。活动入口的切换和抽屉行为见[使命板](mission-board.md)，执行进入规则见
-[Run Process Detail Surface v40](../../contracts/run-process-detail-surface-v40.md)。
+[Run Process Detail Surface v41](../../contracts/run-process-detail-surface-v41.md)。
 
 Tabs 使用 Codex toolbar 语法：小间距、无逐项边框、当前项用次级 surface 和文字对比表达，不使用品牌下划线。
 普通文件 Tab 与会话文件链接按文件名共用相同资源视觉类型，不直接用 `FilePreviewKind` 选图标；左侧复用文件引用的
@@ -164,6 +164,11 @@ Tab。全 operation-only 卡片使用“查看文件”，header 默认打开第
 切换到宽预览或离开当前 Tab 时收起下拉；文件选择框仍属于文件查找区域。上一/下一文件使用有可访问名称的图标按钮，
 旁边显示当前位置；“打开当前文件”使用图标加文字。只有一个文件时不显示多余的文件列表或切换控件。
 宽预览文件选中使用整行中性底色与细边框，不加左侧竖线。长差异行在证据区域内横向滚动，短行不保留原全页 Review 的固定最小宽度。
+
+同一 Run/epoch 的来源水位推进时，既有 File Change Tab 按 projection revision 原位同步新摘要与 detail，不能卸载
+标签或重建预览 Pane。文件仍存在时保留选中 identity；否则选择第一个可审查文件。展开、查找、滚动和 Pane 比例
+继续保留。旧异步 response 必须被 revision fence 拒绝；重算失败时上一份 detail 继续可读并明确显示待更新状态，
+原位提供重试。旧 `no_changes` 被合法迟到事实推翻后，会话中可以新增同一 Run/epoch 的 Files Changed 卡片。
 
 卡片与历史 Diff 使用双主题的 `--file-change-*` 色彩 token；中性内容底色配较浅的增删行底色，保留符号与可靠行号。
 代码继续跟随 `--code-preview-font-size`（默认 14px），行高 1.6，行号 .85em；完整差异前三列随字号使用

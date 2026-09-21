@@ -43,6 +43,7 @@ function run(overrides: Partial<SingleChatRunView> = {}): SingleChatRunView {
     endedAt: '2026-09-03T10:39:17.000Z',
     finalConversationMessageId: 'message-2',
     executionEvidenceCount: 0,
+    executionEvidenceChangeSequence: 0,
     ...overrides
   }
 }
@@ -172,9 +173,9 @@ describe('Single Chat presentation', () => {
         expect(markup).not.toMatch(/Thinking|工作了|正在工作|等待开始|正在处理|分.*秒/)
         if (items.length) {
           expect(markup).toContain('继续核对结果')
-          expect(markup).not.toMatch(/连接中|思考中/)
+          expect(markup).not.toMatch(/连接中|执行中/)
         } else {
-          expect(markup).toContain(`<span>${status === 'queued' ? '连接中' : '思考中'}</span>`)
+          expect(markup).toContain(`<span>${status === 'queued' ? '连接中' : '执行中'}</span>`)
         }
       }
     }

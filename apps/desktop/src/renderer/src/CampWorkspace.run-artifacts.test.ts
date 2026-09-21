@@ -16,6 +16,7 @@ function run(overrides: Partial<AgentRunView> = {}): AgentRunView {
     terminalReasonCode: null, failure: null, runtimeModel: null, executionEpoch: 1,
     permissionSemantics: 'runtime_managed_v2', invocationKind: 'direct', triggerDeliveryGeneration: 0,
     a2aParentAgentRunId: null, a2aRootAgentRunId: null, a2aDepth: 0, executionEvidenceCount: 1,
+    executionEvidenceChangeSequence: 1,
     hasUnsettledExternalEffects: false, workspace: null, startingGitObservation: null,
     endingGitObservation: null, version: 1, createdAt, startedAt: createdAt, endedAt,
     updatedAt: endedAt, ...overrides

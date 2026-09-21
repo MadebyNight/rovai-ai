@@ -3,8 +3,10 @@
 //! live here; terminal flush is therefore allowed after cancellation without admitting late input.
 use crate::{
     db::Database,
-    execution_evidence::{AgentRunExecutionEvidence, RecordedExecutionEvidence},
-    managed_blob::ManagedBlobStore,
+    execution_evidence::{
+        AgentRunExecutionEvidence, RecordedExecutionEvidence, allocate_change_sequence,
+    },
+    managed_blob::{GC_OWNER_EXECUTION_LIFECYCLE, ManagedBlobStore, attach_gc_candidate},
     read_model::AgentRunExecutionEvidenceView,
 };
 use anyhow::{Context, Result};
@@ -56,6 +58,8 @@ struct TextBlock {
     native_id: Option<String>,
     kind: String,
     sequence: i64,
+    revision: i64,
+    change_sequence: i64,
     started_at: String,
     body: Body,
     utf16_len: usize,
@@ -127,26 +131,15 @@ impl Drop for Body {
 }
 
 pub(crate) fn is_text_delta(event: &str) -> bool {
-    matches!(
-        event,
-        "agent.text.delta" | "agent.thought.delta" | "agent.reasoning.summary.delta"
-    )
+    event == "agent.text.delta"
 }
 fn event_kind(event: &str) -> &str {
-    if event.starts_with("agent.text") {
-        "narration"
-    } else if event.starts_with("agent.thought") {
-        "thought"
-    } else {
-        "reasoning_summary"
-    }
+    debug_assert!(event.starts_with("agent.text"));
+    "narration"
 }
 fn block_event(kind: &str) -> &'static str {
-    match kind {
-        "narration" => "agent.text.block",
-        "thought" => "agent.thought.block",
-        _ => "agent.reasoning.summary.block",
-    }
+    debug_assert_eq!(kind, "narration");
+    "agent.text.block"
 }
 fn native_identity<'a>(payload: &'a Value, kind: &str) -> Option<&'a str> {
     ["itemId", "messageId"]
@@ -182,12 +175,11 @@ impl TextBlock {
             agent_run_id: self.run.clone(),
             execution_epoch: self.epoch,
             sequence: self.sequence,
+            operation_id: None,
+            revision: Some(self.revision),
+            change_sequence: Some(self.change_sequence),
             event_type: block_event(&self.kind).into(),
-            kind: if self.kind == "thought" {
-                "reasoning_summary".into()
-            } else {
-                self.kind.clone()
-            },
+            kind: self.kind.clone(),
             phase: phase.into(),
             content_byte_count: payload.to_string().len() as i64,
             payload,
@@ -209,14 +201,26 @@ pub(crate) fn observe(
     payload: &Value,
 ) -> Result<Option<Option<RecordedExecutionEvidence>>> {
     let native_type = payload.pointer("/item/type").and_then(Value::as_str);
-    let native_text = matches!(native_type, Some("agentMessage" | "reasoning"));
+    let private_reasoning = matches!(
+        event,
+        "agent.thought.delta"
+            | "agent.thought.block"
+            | "agent.reasoning.summary.delta"
+            | "agent.reasoning.summary.block"
+    ) || native_type == Some("reasoning");
+    let native_text = native_type == Some("agentMessage");
     let native_user_message = native_type == Some("userMessage");
     let completion =
         event == "agent.text.completed" || (event == "activity.completed" && native_text);
     let boundary = event == "agent.text.boundary";
     if !admitted(database, run, epoch)? {
         return Ok(
-            if is_text_delta(event) || native_text || native_user_message || completion || boundary
+            if is_text_delta(event)
+                || private_reasoning
+                || native_text
+                || native_user_message
+                || completion
+                || boundary
             {
                 Some(None)
             } else {
@@ -226,6 +230,20 @@ pub(crate) fn observe(
     }
     let mut buffer = std::mem::take(&mut database.execution_text);
     let result = (|| {
+        if private_reasoning {
+            let keys: Vec<_> = buffer
+                .blocks
+                .iter()
+                .filter(|(_, block)| {
+                    block.run == run && block.epoch == epoch && block.native_id.is_none()
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in keys {
+                finish(database, store, &mut buffer, &key, None, "completed")?;
+            }
+            return Ok(Some(None));
+        }
         if is_text_delta(event) {
             let kind = event_kind(event);
             let native = native_identity(payload, kind);
@@ -282,17 +300,18 @@ pub(crate) fn observe(
             );
             live.id = format!("{}:delta:{offset}", block.id);
             live.event_type = event.into();
+            // A delta is a transient transport fragment, not a durable row revision. Keeping the
+            // durable block version here would make Renderer replacement semantics drop text.
+            live.revision = None;
+            live.change_sequence = None;
             return Ok(Some(Some(RecordedExecutionEvidence {
                 evidence: live,
                 inserted: false,
+                file_facts_changed: false,
             })));
         }
         if completion {
-            let kind = if native_type == Some("reasoning") {
-                "reasoning_summary"
-            } else {
-                "narration"
-            };
+            let kind = "narration";
             let native = payload
                 .pointer("/item/id")
                 .and_then(Value::as_str)
@@ -393,13 +412,17 @@ pub(crate) fn observe(
 }
 
 fn start(
-    database: &Database,
+    database: &mut Database,
     run: &str,
     epoch: i64,
     kind: &str,
     native: Option<&str>,
 ) -> Result<TextBlock> {
-    let sequence = database.connection().query_row("SELECT COALESCE(MAX(sequence),0)+1 FROM agent_run_execution_evidence WHERE agent_run_id=?1",[run],|r|r.get(0))?;
+    let transaction = database
+        .connection_mut()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let sequence = transaction.query_row("SELECT COALESCE(MAX(sequence),0)+1 FROM agent_run_execution_evidence WHERE agent_run_id=?1",[run],|r|r.get(0))?;
+    let change_sequence = allocate_change_sequence(&transaction, run)?;
     let block = TextBlock {
         id: Uuid::new_v4().to_string(),
         run: run.into(),
@@ -407,13 +430,16 @@ fn start(
         native_id: native.map(str::to_owned),
         kind: kind.into(),
         sequence,
+        revision: 1,
+        change_sequence,
         started_at: chrono::Utc::now().to_rfc3339(),
         body: Body::default(),
         utf16_len: 0,
     };
     let payload = block.payload(String::new(), "streaming").to_string();
-    database.connection().execute("INSERT INTO agent_run_execution_evidence(id,agent_run_id,execution_epoch,sequence,event_type,kind,phase,source_event_key,payload_preview_json,content_blob_id,content_byte_count,is_truncated,occurred_at) VALUES(?1,?2,?3,?4,?5,?6,'updated',?7,?8,NULL,?9,0,?10)",
-        params![block.id,run,epoch,sequence,block_event(kind),if kind=="thought" {"reasoning_summary"} else {kind},native.map(|n|source_key(epoch,kind,n)),payload,payload.len() as i64,block.started_at])?;
+    transaction.execute("INSERT INTO agent_run_execution_evidence(id,agent_run_id,execution_epoch,sequence,event_type,kind,phase,source_event_key,payload_preview_json,content_blob_id,content_byte_count,is_truncated,occurred_at,revision,change_sequence,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'updated',?7,?8,NULL,?9,0,?10,1,?11,?10)",
+        params![block.id,run,epoch,sequence,block_event(kind),kind,native.map(|n|source_key(epoch,kind,n)),payload,payload.len() as i64,block.started_at,change_sequence])?;
+    transaction.commit()?;
     Ok(block)
 }
 
@@ -440,7 +466,13 @@ fn finish(
     let blob = if encoded.len() > 16 * 1024 {
         Some(
             store
-                .put_bytes(database, &encoded, "application/json", "sensitive")?
+                .put_bytes_candidate(
+                    database,
+                    &encoded,
+                    "application/json",
+                    "sensitive",
+                    GC_OWNER_EXECUTION_LIFECYCLE,
+                )?
                 .id,
         )
     } else {
@@ -455,16 +487,33 @@ fn finish(
     } else {
         "failed"
     };
-    database.connection().execute("UPDATE agent_run_execution_evidence SET phase=?2,payload_preview_json=?3,content_blob_id=?4,content_byte_count=?5,is_truncated=?6 WHERE id=?1",
-        params![block.id,phase,preview.to_string(),blob,encoded.len() as i64,blob.is_some()])?;
+    let transaction = database
+        .connection_mut()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let change_sequence = allocate_change_sequence(&transaction, &block.run)?;
+    let revision = block.revision.saturating_add(1);
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let updated = transaction.execute("UPDATE agent_run_execution_evidence SET phase=?2,payload_preview_json=?3,content_blob_id=?4,content_byte_count=?5,is_truncated=?6,revision=?7,change_sequence=?8,updated_at=?9 WHERE id=?1",
+        params![block.id,phase,preview.to_string(),blob,encoded.len() as i64,blob.is_some(),revision,change_sequence,updated_at])?;
+    anyhow::ensure!(
+        updated == 1,
+        "Execution text block disappeared before finalization"
+    );
+    if let Some(blob_id) = blob.as_deref() {
+        attach_gc_candidate(&transaction, blob_id)?;
+    }
+    transaction.commit()?;
     let mut evidence = block.event(payload, phase);
     evidence.content_blob_id = blob;
+    evidence.revision = Some(revision);
+    evidence.change_sequence = Some(change_sequence);
     // Live terminal output is complete; persisted previews remain lazy Blob-backed.
     evidence.content_byte_count = encoded.len() as i64;
     buffer.blocks.remove(k);
     Ok(Some(RecordedExecutionEvidence {
         evidence,
         inserted: false,
+        file_facts_changed: false,
     }))
 }
 
@@ -737,30 +786,30 @@ mod slow_tests {
             "activity.started",
             json!({"item":{"type":"commandExecution","id":"tool-1","command":"pwd"}}),
         );
-        let complete=write(&mut database,"activity.completed",json!({"item":{"type":"agentMessage","id":"A","text":format!("{}终态",delta.repeat(1000))}})).unwrap();
-        // Text completion mutates the same row: refresh IDs must work without a new raw sequence.
-        let current_sequence: i64 = database
+        let before_completion_change: i64 = database
             .connection()
             .query_row(
-                "SELECT MAX(sequence) FROM agent_run_execution_evidence WHERE agent_run_id=?1",
+                "SELECT execution_evidence_change_sequence FROM agent_run WHERE id=?1",
                 [run],
                 |row| row.get(0),
             )
             .unwrap();
+        let complete=write(&mut database,"activity.completed",json!({"item":{"type":"agentMessage","id":"A","text":format!("{}终态",delta.repeat(1000))}})).unwrap();
+        // Text completion mutates the same display row and advances the independent change cursor.
         let delta_view = crate::execution_window::read_changes(
             &mut database,
             camp,
             run,
-            current_sequence,
-            &[live.evidence[0].id.clone()],
+            before_completion_change,
+            &[],
             24,
         )
         .unwrap();
-        assert!(delta_view.evidence.is_empty());
-        assert_eq!(delta_view.refreshed_evidence.len(), 1);
-        assert_eq!(delta_view.refreshed_evidence[0].phase, "completed");
+        assert_eq!(delta_view.evidence.len(), 1);
+        assert!(delta_view.refreshed_evidence.is_empty());
+        assert_eq!(delta_view.evidence[0].phase, "completed");
         assert_eq!(
-            delta_view.refreshed_evidence[0].content_blob_id,
+            delta_view.evidence[0].content_blob_id,
             complete.content_blob_id
         );
         assert_eq!(first.sequence, complete.sequence);
@@ -848,7 +897,6 @@ mod slow_tests {
                 "agent.text.block",
                 "activity.started",
                 "agent.text.block",
-                "agent.thought.block",
                 "runtime.action",
                 "agent.text.block"
             ]
@@ -887,8 +935,14 @@ mod slow_tests {
                 &json!({"itemId":"A","delta":"received summary"}),
             )
             .unwrap();
-        let summary = ExecutionEvidenceService.record_runtime_event(&mut database, &store, run, 2, "activity.completed", &json!({"item":{"type":"reasoning","id":"A","summary":["full summary","second part"]}})).unwrap().unwrap();
-        assert_eq!(summary.payload["text"], "full summary\nsecond part");
+        let summary = ExecutionEvidenceService.record_runtime_event(&mut database, &store, run, 2, "activity.completed", &json!({"item":{"type":"reasoning","id":"A","summary":["full summary","second part"]}})).unwrap();
+        assert!(summary.is_none());
+        let private_rows: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM agent_run_execution_evidence WHERE agent_run_id=?1 AND execution_epoch=2 AND kind='reasoning_summary'",
+            [run],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(private_rows, 0);
         // ACP transports messageId rather than itemId. Preserve even concurrent
         // named messages without a native completion packet until Run settlement.
         let mut acp_ids = Vec::new();

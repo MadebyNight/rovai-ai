@@ -47,6 +47,7 @@ pub struct ExecutionWindowPage {
     pub next_after_sequence: Option<i64>,
     pub next_before_sequence: Option<i64>,
     pub through_sequence: i64,
+    pub through_change_sequence: i64,
     pub has_more: bool,
     pub evidence: Vec<AgentRunExecutionEvidenceView>,
     pub active_evidence: Vec<AgentRunExecutionEvidenceView>,
@@ -92,6 +93,11 @@ pub fn read_range(
     let through_sequence: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence), 0) FROM agent_run_execution_evidence WHERE agent_run_id = ?1",
         [agent_run_id], |row| row.get(0),
+    )?;
+    let through_change_sequence: i64 = transaction.query_row(
+        "SELECT execution_evidence_change_sequence FROM agent_run WHERE id = ?1",
+        [agent_run_id],
+        |row| row.get(0),
     )?;
     let limit = limit.clamp(1, 96);
     let mut selected = select_items(
@@ -153,7 +159,7 @@ pub fn read_range(
     transaction.commit()?;
     crate::execution_text::overlay(database, &mut evidence)?;
     Ok(ExecutionWindowPage {
-        schema_version: 1,
+        schema_version: 2,
         camp_id: camp_id.to_string(),
         agent_run_id: agent_run_id.to_string(),
         requested_before_sequence: before_sequence,
@@ -161,6 +167,7 @@ pub fn read_range(
         next_after_sequence,
         next_before_sequence,
         through_sequence,
+        through_change_sequence,
         has_more,
         evidence,
         active_evidence,
@@ -189,7 +196,7 @@ fn select_items(
           SELECT source.value AS id, operation_id, execution_epoch, first_evidence_sequence
           FROM ranked, json_each(source_evidence_ids_json) AS source WHERE rank = 1
         ), entries AS MATERIALIZED (
-          SELECT e.id, e.sequence,
+          SELECT e.id, e.sequence, e.change_sequence,
                  CASE WHEN o.operation_id IS NOT NULL THEN 'operation:' || o.execution_epoch || ':' || o.operation_id
                       WHEN e.event_type = 'runtime.compaction.display' THEN 'compaction:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.compactionId'), e.id)
                       WHEN e.event_type = 'runtime.diagnostic' THEN 'diagnostic:' || e.execution_epoch || ':' || COALESCE(json_extract(e.payload_preview_json, '$.diagnosticId'), e.id)
@@ -204,7 +211,8 @@ fn select_items(
             AND e.kind <> 'reasoning_summary'
         ), items AS (
           SELECT item_key, MIN(first_sequence) AS first_sequence,
-                 json_group_array(id) AS evidence_ids, MAX(sequence) AS change_sequence
+                 json_group_array(id) AS evidence_ids,
+                 COALESCE(MAX(change_sequence), 0) AS change_sequence
           FROM entries GROUP BY item_key
         )
         SELECT first_sequence, evidence_ids, change_sequence FROM items
@@ -241,37 +249,43 @@ pub struct ExecutionWindowChanges {
     pub schema_version: i64,
     pub camp_id: String,
     pub agent_run_id: String,
-    pub requested_after_sequence: i64,
-    pub next_after_sequence: i64,
+    pub requested_after_change_sequence: i64,
+    pub next_after_change_sequence: i64,
     pub through_sequence: i64,
+    pub through_change_sequence: i64,
     pub has_more: bool,
     pub evidence: Vec<AgentRunExecutionEvidenceView>,
     pub refreshed_evidence: Vec<AgentRunExecutionEvidenceView>,
 }
 
-/// Advance by raw change sequence, not the logical item's stable display position.
-/// Unfinished text blocks mutate in place; explicitly reread their IDs until settled.
+/// Advance by the persisted Run-wide change sequence, never the stable display position.
 pub fn read_changes(
     database: &mut Database,
     camp_id: &str,
     agent_run_id: &str,
-    after_sequence: i64,
+    after_change_sequence: i64,
     refresh_evidence_ids: &[String],
     limit: i64,
 ) -> Result<ExecutionWindowChanges> {
     ensure!(
-        after_sequence >= 0 && refresh_evidence_ids.len() <= 256,
+        after_change_sequence >= 0 && refresh_evidence_ids.len() <= 256,
         "Invalid execution change cursor or refresh set"
     );
     let transaction = database.connection_mut().transaction()?;
     let belongs = agent_run_belongs_to_camp(&transaction, camp_id, agent_run_id)?;
     ensure!(belongs, "AgentRun does not exist in this Camp");
+    let through_change_sequence: i64 = transaction.query_row(
+        "SELECT execution_evidence_change_sequence FROM agent_run WHERE id = ?1",
+        [agent_run_id],
+        |row| row.get(0),
+    )?;
     let through_sequence: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(sequence), 0) FROM agent_run_execution_evidence WHERE agent_run_id = ?1",
-        [agent_run_id], |row| row.get(0),
+        [agent_run_id],
+        |row| row.get(0),
     )?;
     ensure!(
-        after_sequence <= through_sequence,
+        after_change_sequence <= through_change_sequence,
         "Execution change cursor is ahead of this Run"
     );
     let limit = limit.clamp(1, 96);
@@ -279,17 +293,17 @@ pub fn read_changes(
         &transaction,
         agent_run_id,
         None,
-        Some(after_sequence),
+        Some(after_change_sequence),
         None,
         None,
         limit + 1,
     )?;
     let has_more = selected.len() > limit as usize;
     selected.truncate(limit as usize);
-    let next_after_sequence = if has_more {
+    let next_after_change_sequence = if has_more {
         selected.last().expect("nonempty changes").2
     } else {
-        through_sequence
+        through_change_sequence
     };
     let mut evidence = project_items(
         &transaction,
@@ -319,12 +333,13 @@ pub fn read_changes(
     crate::execution_text::overlay(database, &mut evidence)?;
     crate::execution_text::overlay(database, &mut refreshed_evidence)?;
     Ok(ExecutionWindowChanges {
-        schema_version: 1,
+        schema_version: 2,
         camp_id: camp_id.to_owned(),
         agent_run_id: agent_run_id.to_owned(),
-        requested_after_sequence: after_sequence,
-        next_after_sequence,
+        requested_after_change_sequence: after_change_sequence,
+        next_after_change_sequence,
         through_sequence,
+        through_change_sequence,
         has_more,
         evidence,
         refreshed_evidence,
@@ -536,7 +551,7 @@ fn load_summaries(
              ELSE payload_preview_json END,
            content_blob_id, content_byte_count,
            CASE WHEN event_type IN ('activity.started', 'activity.completed', 'runtime.action') THEN 1 ELSE is_truncated END,
-           occurred_at
+           occurred_at, operation_id, revision, change_sequence
            FROM agent_run_execution_evidence
            WHERE agent_run_id = ?1 AND id IN (SELECT value FROM json_each(?2))
              AND event_type <> 'command.output.delta' ORDER BY sequence"#,
@@ -566,7 +581,8 @@ pub fn content_canonical(
     let connection = database.connection();
     let mut statement = connection.prepare(
         "SELECT id, agent_run_id, execution_epoch, sequence, event_type, kind, phase,
-         '{}', content_blob_id, content_byte_count, is_truncated, occurred_at
+         '{}', content_blob_id, content_byte_count, is_truncated, occurred_at,
+         operation_id, revision, change_sequence
          FROM agent_run_execution_evidence WHERE id = ?1",
     )?;
     let item = statement

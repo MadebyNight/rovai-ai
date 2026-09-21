@@ -725,11 +725,19 @@ export function groupExecutionEventsByRunId(
     }
 
     const previous = eventsById.get(event.id)
+    const previousRevision = previous?.revision ?? 0
+    const incomingRevision = event.revision ?? 0
+    const previousChange = previous?.changeSequence ?? 0
+    const incomingChange = event.changeSequence ?? 0
+    const newer = Boolean(previous) && (incomingRevision > previousRevision
+      || (incomingRevision === previousRevision && incomingChange > previousChange))
+    const older = Boolean(previous) && (incomingRevision < previousRevision
+      || (incomingRevision === previousRevision && incomingChange < previousChange))
     const blockUpdate = event.eventType === 'agent.text.block' && previous
       && (blockState(previous.payload).status === 'streaming')
       && (blockState(event.payload).status !== 'streaming'
         || Number(blockState(event.payload).textLength) >= Number(blockState(previous.payload).textLength))
-    if (authoritative || !previous || blockUpdate) {
+    if (!previous || newer || blockUpdate || (authoritative && !older)) {
       eventsById.set(event.id, event)
     }
   }
@@ -1665,6 +1673,9 @@ export function CampWorkspace({
   const { profile: currentUserProfile } = useCurrentUserProfile()
   const currentUserName = currentUserDisplayName(currentUserProfile)
   const filePreview = useOptionalFilePreview()
+  useEffect(() => {
+    filePreview?.syncFileChanges(snapshot.camp.id, snapshot.agentRunFileChanges)
+  }, [filePreview?.syncFileChanges, snapshot.agentRunFileChanges, snapshot.camp.id])
   const executionPreviewHost = useExecutionPreviewHost(snapshot.camp.id)
   const notifyError = onNotifyError ?? onNotify
   const openCurrentAgentRunFile = useCallback((
@@ -9841,7 +9852,13 @@ function RunExecutionContent({
   const completeEvidence = selectCompletePresentableExecutionEvidence(
     displayedEvidence ?? truncatedEvidence
   )
-  const initialFeedback = executionInitialFeedback(run.status, processItems, Boolean(finalBody))
+  const runtimePhase = windowedEvidence ? windowPage.runtimePhase : effectiveProgress?.runtimePhase
+  const initialFeedback = executionInitialFeedback(
+    run.status,
+    processItems,
+    Boolean(finalBody),
+    runtimePhase
+  )
   const feedback = run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
     : run.failure?.code === 'runtime_network_interrupted' ? '正在恢复连接'
       : activeRetryDiagnostic
@@ -10218,7 +10235,12 @@ export function RunExecutionDisclosure({
         {mobile && <time className="mobile-run-time">{runIntervalLabel(run)}</time>}
         <span className="process-disclosure-label">{mobile ? agentRunPresentation(run, cancelling).label : !liveOpen && (nonTerminal
           ? cancelling ? '正在停止' : run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
-            : executionInitialFeedback(run.status, progress?.items ?? [], Boolean(finalBody)) ?? '执行中'
+            : executionInitialFeedback(
+              run.status,
+              progress?.items ?? [],
+              Boolean(finalBody),
+              progress?.runtimePhase
+            ) ?? '执行中'
           : executionRunSummary(run, run.updatedAt))}</span>
         {mobile && focused && nonTerminal && <span className="current-run-badge">当前执行</span>}
         <span className="process-disclosure-slot" aria-hidden="true">

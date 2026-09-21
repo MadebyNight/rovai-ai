@@ -80,7 +80,8 @@ SELECT json_object(
     'failureOrigin', json_extract(r.public_runtime_failure_json, '$.origin'),
     'failurePhase', json_extract(r.public_runtime_failure_json, '$.phase'),
     'failureCode', json_extract(r.public_runtime_failure_json, '$.code'),
-    'evidenceCount', (SELECT COUNT(*) FROM agent_run_execution_evidence e WHERE e.agent_run_id = r.id)
+    'evidenceCount', (SELECT COUNT(*) FROM agent_run_execution_evidence e WHERE e.agent_run_id = r.id),
+    'evidenceChangeSequence', r.execution_evidence_change_sequence
 )
 FROM agent_run r JOIN eligible_turns t ON t.id = r.camp_turn_id
 WHERE julianday(r.created_at) < julianday(:until)
@@ -139,8 +140,10 @@ SELECT json_object(
     'activityDomain', a.activity_domain, 'semanticKind', a.semantic_kind,
     'phase', a.phase, 'outcome', a.outcome, 'coverageLevel', a.coverage_level,
     'sourceAuthority', a.source_authority,
+    'evidenceRevision', last_e.revision, 'evidenceChangeSequence', last_e.change_sequence,
     'firstEvidenceSequence', a.first_evidence_sequence, 'lastEvidenceSequence', a.last_evidence_sequence,
-    'firstObservedAt', first_e.occurred_at, 'lastObservedAt', last_e.occurred_at,
+    'firstObservedAt', first_e.occurred_at,
+    'lastObservedAt', COALESCE(last_e.updated_at, last_e.occurred_at),
     'originalTerminalObservedAt', original_e.occurred_at,
     'originalTerminalEvidenceSequence', original_e.sequence,
     'idempotentReplay', CASE WHEN a.source_authority = 'core'

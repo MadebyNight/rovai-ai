@@ -4,11 +4,12 @@ import type { ExecutionProgressItem } from './ui-model'
 export function executionInitialFeedback(
   status: SingleChatRunView['status'],
   items: readonly ExecutionProgressItem[],
-  hasFinal = false
+  hasFinal = false,
+  runtimePhase?: 'thinking' | 'executing'
 ): string | null {
   if (hasFinal || items.some((item) => item.kind === 'narration' || item.kind === 'plan' || item.kind === 'tool')) return null
   if (status === 'queued') return '连接中'
-  if (status === 'running') return '思考中'
+  if (status === 'running') return runtimePhase === 'thinking' ? '思考中' : '执行中'
   return null
 }
 
