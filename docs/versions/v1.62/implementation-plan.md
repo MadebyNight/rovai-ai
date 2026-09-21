@@ -217,6 +217,16 @@ last_updated: 2026-09-20
   断言目标投影不变且 SQL VM 工作量不随规模增长；既有 Evidence 分页 owner 证明单 Run 原始计数仍为 85。
 - [x] 同步合同、架构、当前决定导航、Renderer schema fence 与 fixture；不增加 Migration、持久字段或新的 Rust test owner。
 
+## Gate 20：启动加载品牌画布
+
+- [x] 保留唯一 400ms anti-flash 截止时间与已挂载的非权威目标框架，超时后以实心整窗画布阻断视觉与交互。
+- [x] 正常加载只显示 48px 完整 Rovai horizon 标记；移除可见文案、Spinner、进度、骨架和底层模糊预览，保留 polite
+  busy status。
+- [x] 增加 1600ms 轻呼吸、180ms ready 退出与 `prefers-reduced-motion` 静止呈现；日夜主题均使用既有语义 token。
+- [x] 将本机偏好／目标读取失败收敛为独立恢复面，保留安全文案、重试、诊断、焦点进入与键盘约束。
+- [x] 扩展现有 Renderer 单测和隔离 Electron startup fixture，覆盖 anti-flash、完整视口、品牌几何、主题、动效、退出与恢复；
+  不增加 Rust test owner、数据库字段、Core wire 或 Migration。
+
 ## Rust 测试准入记录
 
 不新增独立 Rust test owner。既有 Mission command owner 扩展四状态无来源、有效/无效来源、清除、no-op、
@@ -280,12 +290,19 @@ Run-local 计数，并改为断言 Open 不公开 Camp-wide coverage；既有
 Evidence 历史。这两个边界分别需要完整 Read Model 和 SQLite progress handler；纯 SQL 单元测试
 不能证明序列化 wire 或整条 Open 路径的工作量。删除测试为零。
 
+启动加载品牌画布不新增 Rust test owner：它只改变 Renderer 呈现、焦点与退出过渡，不改变 Supervisor、Core wire、
+数据库或启动恢复。既有 `App.test.ts` 拥有组件状态与安全文案断言，隔离 Electron startup fixture 拥有真实生产组件、
+计时、完整视口、日夜主题、缩放、reduced motion、退出和恢复边界。删除测试为零。
+
 Mission 续作提示不新增 Rust test owner：既有 `session_charter_publishes_one_cli_only_builtin_contract` 继续拥有
 Mission／普通 Camp 的逐字 Charter 边界，既有 `binding_contract_freezes_each_context_axis_version` 继续拥有
 Session Charter revision 与 Binding compatibility digest。只扩展这两个 owner 的期望值和唯一性断言。
 
 ## 实施收口
 
+- 启动加载品牌画布增量：`App.test.ts` 174/174、`pnpm test:startup-presentation` 1/1、`pnpm typecheck`、
+  `pnpm build:desktop`、`pnpm docs:test`、普通与固定 base 的 diff-aware 文档门禁及 `git diff --check` 通过；
+  隔离 Electron 截图复核日间纯白、夜间实心深色、200% reduced motion 和独立错误恢复面。
 - Camp Open Evidence coverage 收敛：单 Run 的 85 条原始 Evidence 计数 owner、Camp Open 纯读投影
   owner 与规模 owner 各 1/1 passed；50,000→5,000,000 条无关 Event 及 1,000→100,000 条无关
   Evidence 下目标 Open 保持在 2450–2451 SQLite VM steps。`App.test.ts` 174/174、`pnpm typecheck`、

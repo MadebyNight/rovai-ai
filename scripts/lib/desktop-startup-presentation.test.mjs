@@ -13,7 +13,7 @@ import { admitElectronIntegrationTest } from './electron-sandbox-capability.mjs'
 const root = resolve(import.meta.dirname, '../..')
 const fixtureSource = join(root, 'scripts/fixtures/desktop-startup-presentation')
 
-test('the production App preserves route-local cold startup feedback and Core admission', { timeout: 60_000 }, async (t) => {
+test('the production App presents the full-window brand loader without weakening Core admission', { timeout: 60_000 }, async (t) => {
   if (!admitElectronIntegrationTest(t)) return
   const fixture = await mkdtemp(join(tmpdir(), 'rovai-startup-presentation-test-'))
   let child

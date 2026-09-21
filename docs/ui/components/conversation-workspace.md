@@ -108,13 +108,13 @@ Camp open/refresh 仅返回最多 96 个 Run 摘要与每个返回 Run 的原始
 控件使用局部 overlay 和有界几何测量；不扫描全部正文、增加首屏请求或改变分页、内容缓存与虚拟列表预算。
 较新页读取失败仍在执行记录内保留原位重试。
 
-冷启动恢复与应用内切换的呈现边界不同。Main Window Session 一旦给出恢复目标，全局 StartupGate 必须
-关闭并显示对应一级页面框架；Camp shell 可暂时显示标题区、局部状态与结构占位，但不得伪装成 meaningful
-content，也不得在 `camps.enter` 成功前提交权威 Camp。成功 enter 的 Active Camp 保持 Active；meaningful
+冷启动恢复与应用内切换的呈现边界不同。Main Window Session 一旦给出恢复目标，Renderer 必须挂载对应一级页面框架；
+不足 400ms 不显示加载提示，超时后由共享的不透明整窗品牌画布遮住框架，直到真实目标内容可用再淡出。Camp shell 不得
+用标题区、骨架或结构占位伪装 meaningful content，也不得在 `camps.enter` 成功前提交权威 Camp。成功 enter 的 Active Camp 保持 Active；meaningful
 未激活的 Pending Camp 外壳保持 Pending。若该 Camp 已有有效 Desktop-local Composer snapshot，则在 Camp
-权威进入后恢复，但本机草稿本身不会激活 Camp 或使其进入导航。Members 与 Memory 同样在自己的内容区域读取，
-不能继续占用全屏“正在恢复上次位置”。失败留在局部 surface 重试；仅明确 `camps.exists === false` 的已删除
-Camp 可以回到 Quick Chat。Notification navigation、恢复位置写入和已读确认要等权威 route commit。
+权威进入后恢复，但本机草稿本身不会激活 Camp 或使其进入导航。Members 与 Memory 同样由自己的读取 owner 取得数据，
+但冷启动可见等待共用品牌画布；失败切换到独立恢复面，应用已就绪后的普通切换仍留在局部 surface 重试。仅明确
+`camps.exists === false` 的已删除 Camp 可以回到 Quick Chat。Notification navigation、恢复位置写入和已读确认要等权威 route commit。
 
 ## Camp 队员管理
 

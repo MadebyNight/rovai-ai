@@ -92,6 +92,7 @@ import { MissionSurface } from './MissionSurface'
 import { MissionHeader } from './MissionHeader'
 import { FilePreviewProvider } from './FilePreviewContext'
 import { NavigationShell } from './NavigationShell'
+import { StartupLoadingCanvas } from './StartupLoadingCanvas'
 import { createDesktopNavigation, type NavigationTarget, type NavigationTransaction, type NavigationIntent, type MemoryNavigationTarget } from './desktop-navigation'
 import { forgetFilePreviewSession } from './file-preview-session'
 import { AppearanceSettings } from './AppearanceSettings'
@@ -746,6 +747,7 @@ export function StartupWorkspace({
     : view === 'members' ? 'members-content'
       : view === 'memory' ? 'memory-content' : 'task-content compose-content'
   return (
+    <>
     <NavigationShell platform={window.rovai.platform} disabled
       className={view === 'camp' ? 'app-shell-camp' : ''}
       data-startup-frame={target?.kind ?? 'location'}
@@ -778,18 +780,23 @@ export function StartupWorkspace({
       />}
       {dragPage && <WindowDragStrip page={dragPage} />}
       <main className={`content ${contentClass}`} aria-busy="true">
-        {(feedbackVisible || error) && (target
+        {error && (target
           ? <StartupRouteLoading
               kind={target.kind}
-              waiting={error !== null}
+              waiting
               error={error}
               onRetry={onRetry}
               onExportDiagnostics={() => window.rovai.exportDiagnostics()}
             />
-          : <StartupGate waiting={error !== null} error={error} onRetry={onRetry}
+          : <StartupGate waiting error={error} onRetry={onRetry}
               onExportDiagnostics={() => window.rovai.exportDiagnostics()} />)}
       </main>
     </NavigationShell>
+    <StartupLoadingCanvas
+      visible={feedbackVisible && error === null}
+      route={target?.kind ?? 'location'}
+    />
+    </>
   )
 }
 
@@ -3859,6 +3866,10 @@ export function BusinessApp({
   const startupRoutePending = !startupGateVisible && startupStatus !== 'resolved'
     ? startupRouteTarget
     : null
+  const startupLoadingVisible = startupStatus === 'loading' && startupFeedbackVisible && !shuttingDown
+  const startupLoadingRoute = startupGateVisible
+    ? 'location'
+    : startupRoutePending?.kind ?? startupRouteTarget?.kind ?? 'location'
   const inlineNotices = memoryReviewNotice
     || memoryAutoNotice.count > 0
     || (!shuttingDown && (error || locationSaveError))
@@ -3968,12 +3979,12 @@ export function BusinessApp({
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
       missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify} onWorkspaceCleanupRequested={refreshMissionAfterWorkspaceCleanup}/> : null}>
     <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onWorkspaceCleaned={refreshMissionAfterWorkspaceCleanup} onDeleted={onMissionDeleted} onOpen={mission => { void openMission(mission).catch(error => notifyError(missionError(error))) }} onError={notifyError}>
-    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupGateVisible || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
+    <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupStatus !== 'resolved' || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
       <CampNavigation
         platform={client.platform}
         footer={sidebarFooter}
         view={view === 'camp' && missionCamp ? 'missions' : view}
-        state={startupGateVisible ? 'loading' : navigationState}
+        state={startupStatus === 'resolved' ? navigationState : 'loading'}
         navigation={displayNavigation}
         groupLimits={navigationGroupLimits}
         onGroupLimitChange={navigationRefreshCoordinator.resizeGroup}
@@ -4039,9 +4050,9 @@ export function BusinessApp({
 
       <main className={`content ${pageContentClassName[missionDrawer ? 'missions' : view]}${missionCamp && view === 'camp' ? ' mission-active-content' : ''}`}>
         {mobile && view === 'settings' && !mobileSettingsList && <div className="mobile-settings-back"><MobileBack label="返回设置" onClick={() => setMobileSettingsList(true)} /><span>设置</span></div>}
-        {startupGateVisible && startupFeedbackVisible && (
+        {startupGateVisible && startupStatus === 'waiting' && (
           <StartupGate
-            waiting={startupStatus === 'waiting'}
+            waiting
             error={startupError}
             onRetry={retryStartup}
             onExportDiagnostics={desktop ? () => desktop.exportDiagnostics() : undefined}
@@ -4052,10 +4063,10 @@ export function BusinessApp({
           <AppToast toast={toast} onClose={() => setToast(null)} />
         )}
 
-        {!startupGateVisible && startupFeedbackVisible && startupRoutePending?.kind === 'camp' && view === 'camp' && (
+        {!startupGateVisible && startupStatus === 'waiting' && startupRoutePending?.kind === 'camp' && view === 'camp' && (
           <StartupRouteLoading
             kind="camp"
-            waiting={startupStatus === 'waiting'}
+            waiting
             error={startupError}
             onRetry={retryStartup}
             onExportDiagnostics={desktop ? () => desktop.exportDiagnostics() : undefined}
@@ -4218,11 +4229,11 @@ export function BusinessApp({
 
         {!startupGateVisible && view === 'members' && (
           startupRoutePending?.kind === 'members'
-            ? startupFeedbackVisible
+            ? startupStatus === 'waiting'
               ? (
                 <StartupRouteLoading
                   kind="members"
-                  waiting={startupStatus === 'waiting'}
+                  waiting
                   error={startupError}
                   onRetry={retryStartup}
                   onExportDiagnostics={desktop ? () => desktop.exportDiagnostics() : undefined}
@@ -4266,7 +4277,7 @@ export function BusinessApp({
               )
         )}
       </main>
-      {mobile && view !== 'camp' && view !== 'missions' && <MobileNavigation view={view} disabled={startupGateVisible || shuttingDown} onNavigate={(target) => {
+      {mobile && view !== 'camp' && view !== 'missions' && <MobileNavigation view={view} disabled={startupStatus !== 'resolved' || shuttingDown} onNavigate={(target) => {
         if (target === 'settings') setMobileSettingsList(true)
         chooseView(target)
       }} />}
@@ -4328,6 +4339,7 @@ export function BusinessApp({
         onDownload={appUpdates.download}
       />}
     </NavigationShell>
+    <StartupLoadingCanvas visible={startupLoadingVisible} route={startupLoadingRoute} />
     </MissionInteractionProvider>
     </FilePreviewProvider>
     </MobileLayoutProvider>
@@ -4356,7 +4368,7 @@ function StartupRecoveryActions({ onRetry, onExportDiagnostics }: {
     finally { setExporting(false) }
   }
   return <div className="startup-route-actions">
-    <button className="quiet-button" type="button" onClick={onRetry}>重新打开</button>
+    <button className="primary-button" type="button" onClick={onRetry}>重新打开</button>
     {onExportDiagnostics && <button className="quiet-button" type="button" disabled={exporting} onClick={() => void exportDiagnostics()}>
       {exporting ? '正在导出…' : '导出诊断'}
     </button>}
@@ -4364,9 +4376,60 @@ function StartupRecoveryActions({ onRetry, onExportDiagnostics }: {
   </div>
 }
 
+function StartupRecoverySurface({
+  route,
+  headingLevel,
+  onRetry,
+  onExportDiagnostics
+}: {
+  route: string
+  headingLevel: 1 | 2
+  onRetry(): void
+  onExportDiagnostics?: () => Promise<unknown>
+}): React.JSX.Element {
+  const headingRef = useRef<HTMLHeadingElement>(null)
+
+  useEffect(() => {
+    headingRef.current?.focus({ preventScroll: true })
+  }, [])
+
+  const title = headingLevel === 1
+    ? <h1 id="startup-recovery-title" ref={headingRef} tabIndex={-1}>暂时无法打开会话</h1>
+    : <h2 id="startup-recovery-title" ref={headingRef} tabIndex={-1}>暂时无法打开会话</h2>
+
+  return (
+    <section
+      className="startup-recovery-canvas"
+      data-startup-route={route}
+      data-startup-status="waiting"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="startup-recovery-title"
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return
+        const actions = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        if (!actions.length) return
+        const first = actions[0]
+        const last = actions.at(-1)!
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === headingRef.current)) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }}
+    >
+      <div className="startup-recovery-content">
+        {title}
+        <StartupRecoveryActions onRetry={onRetry} onExportDiagnostics={onExportDiagnostics} />
+      </div>
+    </section>
+  )
+}
+
 export function StartupGate({
   waiting,
-  error,
   onRetry,
   onExportDiagnostics
 }: {
@@ -4375,38 +4438,13 @@ export function StartupGate({
   onRetry(): void
   onExportDiagnostics?: () => Promise<unknown>
 }): React.JSX.Element {
-  return (
-    <section
-      className="startup-route-loading startup-route-loading-location"
-      aria-busy={!waiting}
-      aria-live="polite"
-      data-startup-route="location"
-      data-startup-status={waiting ? 'waiting' : 'loading'}
-    >
-      <header className="startup-route-status">
-        <span className="startup-route-progress" aria-hidden="true" />
-        <div>
-          <h1 role={error ? 'alert' : undefined}>{waiting ? '暂时无法打开会话' : '正在打开会话'}</h1>
-          <p>{waiting
-            ? onExportDiagnostics ? '请重新打开，或导出诊断以排查原因。' : '请检查连接后重新打开。'
-            : '准备好后会自动打开。'}</p>
-        </div>
-        {waiting && <StartupRecoveryActions onRetry={onRetry} onExportDiagnostics={onExportDiagnostics} />}
-      </header>
-      <div className="startup-route-skeleton" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
-    </section>
-  )
+  if (!waiting) return <StartupLoadingCanvas visible route="location" />
+  return <StartupRecoverySurface route="location" headingLevel={1} onRetry={onRetry} onExportDiagnostics={onExportDiagnostics} />
 }
 
 export function StartupRouteLoading({
   kind,
   waiting,
-  error,
   onRetry,
   onExportDiagnostics
 }: {
@@ -4416,32 +4454,8 @@ export function StartupRouteLoading({
   onRetry(): void
   onExportDiagnostics?: () => Promise<unknown>
 }): React.JSX.Element {
-  return (
-    <section
-      className={`startup-route-loading startup-route-loading-${kind}`}
-      aria-busy={!waiting}
-      aria-live="polite"
-      data-startup-route={kind}
-      data-startup-status={waiting ? 'waiting' : 'loading'}
-    >
-      <header className="startup-route-status">
-        <span className="startup-route-progress" aria-hidden="true" />
-        <div>
-          <h2 role={error ? 'alert' : undefined}>{waiting ? '暂时无法打开会话' : '正在打开会话'}</h2>
-          <p>{waiting
-            ? onExportDiagnostics ? '请重新打开，或导出诊断以排查原因。' : '请检查连接后重新打开。'
-            : '准备好后会自动打开。'}</p>
-        </div>
-        {waiting && <StartupRecoveryActions onRetry={onRetry} onExportDiagnostics={onExportDiagnostics} />}
-      </header>
-      <div className="startup-route-skeleton" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
-    </section>
-  )
+  if (!waiting) return <StartupLoadingCanvas visible route={kind} />
+  return <StartupRecoverySurface route={kind} headingLevel={2} onRetry={onRetry} onExportDiagnostics={onExportDiagnostics} />
 }
 
 

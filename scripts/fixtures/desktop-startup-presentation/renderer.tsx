@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { App } from '../../../apps/desktop/src/renderer/src/App'
 import { NewConversationDialog } from '../../../apps/desktop/src/renderer/src/NewConversationDialog'
+import { STARTUP_LOADING_EXIT_MS, StartupLoadingCanvas } from '../../../apps/desktop/src/renderer/src/StartupLoadingCanvas'
 import { DEFAULT_APPEARANCE } from '../../../apps/desktop/src/shared/appearance'
 import '../../../apps/desktop/src/renderer/src/styles.css'
 
@@ -139,11 +140,46 @@ function publish(next: Partial<SupervisorSnapshot>) {
 
 function pageFrame(kind: string, feedback: boolean) {
   check(document.querySelector('.unified-sidebar'), 'Startup must preserve the ordinary navigation rail')
-  check(!document.querySelector('.bootstrap-shell, .onboarding-app-shell'), 'Ordinary startup must not use a full-screen gate')
+  check(!document.querySelector('.bootstrap-shell, .onboarding-app-shell'), 'Ordinary startup must not use the recovery shell')
   check(document.querySelector(`[data-startup-frame="${kind}"]`), `Expected the ${kind} target frame`)
-  check(Boolean(document.querySelector('.startup-route-loading')) === feedback, `Feedback visibility at ${now}ms is incorrect`)
+  const canvas = document.querySelector<HTMLElement>('.startup-loading-canvas')
+  check(Boolean(canvas) === feedback, `Feedback visibility at ${now}ms is incorrect`)
+  if (canvas) {
+    check(canvas.dataset.startupRoute === kind, `Expected ${kind} on the full-window startup canvas`)
+    check(canvas.getAttribute('aria-busy') === 'true' && canvas.getAttribute('role') === 'status',
+      'Loading canvas must expose one polite busy status')
+    check(canvas.querySelector('.sr-only')?.textContent === '正在打开会话',
+      'Loading canvas keeps its status available to assistive technology')
+    check(!canvas.querySelector('h1, h2, p, button, .startup-route-progress, .startup-route-skeleton'),
+      'Loading canvas must not render visible copy, progress chrome or recovery actions')
+    const rect = canvas.getBoundingClientRect()
+    check(Math.abs(rect.left) < 1 && Math.abs(rect.top) < 1
+      && Math.abs(rect.width - window.innerWidth) < 1 && Math.abs(rect.height - window.innerHeight) < 1,
+    'Loading canvas must cover the complete Renderer viewport')
+    const mark = canvas.querySelector<SVGElement>('.startup-loading-mark')
+    check(mark, 'Loading canvas must include the Rovai horizon mark')
+    check(mark.dataset.brandMark === 'horizon' && mark.querySelectorAll('path').length === 2
+      && Boolean(mark.querySelector('[data-brand-point="rendezvous"]')),
+    'Loading canvas must use the complete Rovai horizon mark')
+    const markRect = mark.getBoundingClientRect()
+    check(Math.abs(markRect.width - 48) < 1 && Math.abs(markRect.height - 48) < 1,
+      'Loading mark must keep its approved 48px geometry')
+    check(Math.abs(markRect.left + markRect.width / 2 - window.innerWidth / 2) < 1
+      && Math.abs(markRect.top + markRect.height / 2 - window.innerHeight / 2) < 1,
+    'Loading mark must remain centered in the full window')
+  }
   check(!document.querySelector('.sidebar-empty'), 'Unknown navigation is not an empty workspace')
   check(document.documentElement.scrollWidth <= window.innerWidth, 'Startup must not overflow horizontally')
+}
+
+function recoveryFrame(kind: string) {
+  const recovery = document.querySelector<HTMLElement>('.startup-recovery-canvas')
+  check(recovery, `Expected ${kind} startup recovery`)
+  check(recovery.dataset.startupRoute === kind, `Expected ${kind} startup recovery route`)
+  check(recovery.getAttribute('role') === 'alertdialog' && recovery.textContent?.includes('暂时无法打开会话'),
+    'Startup recovery must be a focused alert dialog with safe product copy')
+  check(recovery.textContent?.includes('重新打开') && !recovery.querySelector('.startup-loading-mark'),
+    'Startup recovery must be separate from the brand loading state')
 }
 
 function noAuthority() {
@@ -168,7 +204,7 @@ Object.assign(window, { startupTest: {
       await advance(1)
       pageFrame(target.kind, true)
       noAuthority()
-      cases.push(`${target.kind}: 399ms silent, 400ms local feedback`)
+      cases.push(`${target.kind}: 399ms silent, 400ms full-window brand feedback`)
     }
 
     await reset()
@@ -183,14 +219,14 @@ Object.assign(window, { startupTest: {
     check(document.querySelector('.shutdown-scrim.is-pending'),
       'Shutdown must block interaction during the anti-flash window')
     await advance(399)
-    check(!document.querySelector('.shutdown-scrim.is-visible, .startup-route-loading'),
+    check(!document.querySelector('.shutdown-scrim.is-visible, .startup-loading-canvas'),
       'Shutdown must not expose opening feedback during the anti-flash window')
     await advance(1)
     check(document.querySelector('.shutdown-scrim.is-visible'),
       'Shutdown before authority ready must show safe-exit feedback after 400ms')
     check(document.body.textContent?.includes('正在安全退出'),
       'Shutdown before authority ready must use the safe-exit copy')
-    check(!document.querySelector('.startup-route-loading'),
+    check(!document.querySelector('.startup-loading-canvas'),
       'Shutdown feedback must replace route-opening feedback rather than compete with it')
     noAuthority()
     cases.push('pre-ready shutdown preserves its frame and shows only safe-exit feedback')
@@ -201,7 +237,8 @@ Object.assign(window, { startupTest: {
     pageFrame('camp', false)
     await advance(1)
     pageFrame('camp', true)
-    check(document.querySelector('main')?.textContent?.includes('正在打开会话'), 'Migration uses ordinary opening feedback')
+    check(document.querySelector('.startup-loading-canvas .sr-only')?.textContent === '正在打开会话',
+      'Migration uses the same accessible brand loading status')
     check(!document.body.textContent?.match(/升级|数据库|migration|staging|schema|复制页数/), 'Internal migration details must not reach the opening UI')
     noAuthority()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))
@@ -214,7 +251,8 @@ Object.assign(window, { startupTest: {
     initialSupervisor.resolve({ ...starting(), runtimeMode: 'full_core', fullCoreState: 'ready',
       capabilities: { ...supervisor.capabilities, authoritativeWorkspace: true, coreRequests: true } })
     await advance(400)
-    check(document.querySelector('main')?.textContent?.includes('正在打开会话'), 'A stale initial ready snapshot cannot replace a newer starting event')
+    check(document.querySelector('.startup-loading-canvas .sr-only')?.textContent === '正在打开会话',
+      'A stale initial ready snapshot cannot replace a newer starting event')
     noAuthority()
     cases.push('subscribe-first startup ignores a late initial Supervisor snapshot')
 
@@ -228,7 +266,7 @@ Object.assign(window, { startupTest: {
       capabilities: { ...supervisor.capabilities, authoritativeWorkspace: true, coreRequests: true } })
     await flush()
     check(document.querySelector('.onboarding-welcome'), 'A real first install proceeds immediately once ready; 400ms is not a minimum delay')
-    check(!document.querySelector('.startup-route-loading, .bootstrap-shell'), 'Fast startup must not flash loading')
+    check(!document.querySelector('.startup-loading-canvas, .bootstrap-shell'), 'Fast startup must not flash loading')
     check(!calls.includes('camps.enter'), 'A fresh first-run flow must not enter an existing Camp')
     cases.push('first-run authority gate stays intact without imposing a 400ms minimum delay')
 
@@ -252,8 +290,8 @@ Object.assign(window, { startupTest: {
     check(calls.includes('camps.enter'), 'The restored Camp begins loading once authority and onboarding are ready')
     check(!calls.includes('navigation.campViewed') && !calls.includes('desktopSession.commitRestorableLocation'),
       'A candidate route is not a committed/read Camp')
-    check(document.querySelector('[data-startup-route="camp"]'), 'The same local feedback survives authority handoff')
-    check(!document.querySelector('.bootstrap-shell, .onboarding-app-shell'), 'No intermediate full-screen gate')
+    check(document.querySelector('.startup-loading-canvas[data-startup-route="camp"]'), 'The same brand canvas survives authority handoff')
+    check(!document.querySelector('.bootstrap-shell, .onboarding-app-shell'), 'No intermediate recovery shell')
     const currentRail = document.querySelector('.unified-sidebar')
     listeners.forEach(listener => listener(starting()))
     await flush()
@@ -275,8 +313,9 @@ Object.assign(window, { startupTest: {
     await reset(null)
     localSession.reject(new Error('Local session read failed'))
     await flush()
-    pageFrame('location', true)
-    check(document.querySelector('[role="alert"]')?.textContent?.includes('暂时无法打开会话'),
+    pageFrame('location', false)
+    recoveryFrame('location')
+    check(document.querySelector('[role="alertdialog"]')?.textContent?.includes('暂时无法打开会话'),
       'Local session failure must expose recovery before 400ms')
     check(!document.body.textContent?.includes('Local session read failed'), 'Local technical failure stays out of visible copy')
     noAuthority()
@@ -339,7 +378,7 @@ Object.assign(window, { startupTest: {
       'Planned shutdown must retain the mounted authoritative workspace')
     check(document.querySelector('.shutdown-scrim.is-pending'),
       'The retained authority surface must be guarded during the anti-flash window')
-    check(!document.querySelector('.startup-route-loading'),
+    check(!document.querySelector('.startup-loading-canvas'),
       'Planned shutdown must not remount the route-opening surface')
     await advance(399)
     check(!document.querySelector('.shutdown-scrim.is-visible'),
@@ -414,13 +453,13 @@ Object.assign(window, { startupTest: {
     const stamp = '2026-09-13T00:00:00Z'
     const coverage = { loadedCount: 0, totalCount: 0, omittedCount: 0, complete: true }
     const campProjection = (id: string) => ({
-      schemaVersion: 7, throughGlobalSequence: 0,
+      schemaVersion: 8, throughGlobalSequence: 0,
       camp: { id, title: '导航会话 ' + id, activationState: 'active', projectBindingKind: 'quick_chat',
         projectPath: '/fixture/quick-chat', defaultLeadAgentId: null, membershipGeneration: 1, version: 1, createdAt: stamp, updatedAt: stamp },
       members: [], membershipReconciliations: [], tasks: [], messages: [], messageDeliveries: [], turns: [],
       agentRuns: [], executionEvidence: [], approvals: [], agentRunFileChanges: [],
       coverage: { tasks: coverage, messages: { ...coverage, hasEarlier: false, oldestLoadedSequence: null, newestLoadedSequence: null },
-        messageDeliveries: coverage, turns: coverage, agentRuns: coverage, executionEvidence: coverage, approvals: coverage }
+        messageDeliveries: coverage, turns: coverage, agentRuns: coverage, approvals: coverage }
     })
     responses.set('navigation.snapshot', { schemaVersion: 3, throughGlobalSequence: 0, projects: [], quickChat: {
       totalCount: 4, recentCamps: ['A', 'B', 'C', 'D'].map(id => ({ id, title: '导航会话 ' + id, activationState: 'active',
@@ -795,6 +834,23 @@ Object.assign(window, { startupTest: {
     check(document.getElementById('new-camp-lead-value')!.textContent === 'agent-b'
       && !document.querySelector<HTMLButtonElement>('.compact-primary')!.disabled, 'Selecting the first recovered member also establishes a Lead')
 
+    flushSync(() => root!.render(<StartupLoadingCanvas visible route="camp" />))
+    await flush()
+    check(document.querySelector('.startup-loading-canvas:not(.is-exiting)'),
+      'The standalone brand canvas must begin in its visible phase')
+    flushSync(() => root!.render(<StartupLoadingCanvas visible={false} route="camp" />))
+    await flush()
+    const exitingCanvas = document.querySelector<HTMLElement>('.startup-loading-canvas.is-exiting')
+    check(exitingCanvas, 'Ready content must wait behind the startup canvas exit phase')
+    check(getComputedStyle(exitingCanvas).transitionDuration === '0.18s',
+      'The startup canvas must use the approved 180ms exit')
+    await advance(STARTUP_LOADING_EXIT_MS - 1)
+    check(document.querySelector('.startup-loading-canvas.is-exiting'),
+      'The startup canvas must remain mounted until its exit completes')
+    await advance(1)
+    check(!document.querySelector('.startup-loading-canvas'),
+      'The startup canvas must release the ready workspace after its exit')
+    cases.push('startup brand canvas fades before revealing ready content')
 
     return { ok: true, cases }
   },
@@ -857,18 +913,26 @@ Object.assign(window, { startupTest: {
     document.documentElement.dataset.theme = theme
     await flush()
     if (state === 'loading') pageFrame('camp', true)
+    if (state === 'local-error') recoveryFrame('location')
     check(document.documentElement.scrollWidth <= window.innerWidth, 'Startup recovery must not overflow horizontally')
     if (state !== 'loading') {
       check(document.body.textContent?.includes('暂时无法打开会话'), 'Failure capture keeps the same product title')
       check(document.body.textContent?.includes('导出诊断'), 'Failure capture retains diagnostics')
     }
     noAuthority()
-    const progress = document.querySelector('.startup-route-progress')
+    const loading = document.querySelector<HTMLElement>('.startup-loading-canvas')
+    const mark = document.querySelector<SVGElement>('.startup-loading-mark')
+    if (state === 'loading') {
+      check(loading && mark, 'Loading capture must include the full-window brand canvas')
+      const expectedSurface = theme === 'night' ? 'rgb(24, 29, 33)' : 'rgb(255, 255, 255)'
+      check(getComputedStyle(loading).backgroundColor === expectedSurface,
+        `Loading canvas must use the ${theme} solid surface`)
+    }
     return {
       width: window.innerWidth,
       height: window.innerHeight,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
-      animation: progress ? getComputedStyle(progress).animationName : 'none'
+      animation: mark ? getComputedStyle(mark).animationName : 'none'
     }
   }
 } })
