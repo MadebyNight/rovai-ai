@@ -34,6 +34,7 @@ function render(value: AppUpdateSnapshot | null, options: {
   loading?: boolean
   loadError?: boolean
   actionError?: AppUpdateActionError
+  readOnly?: boolean
 } = {}): string {
   return renderToStaticMarkup(createElement(AboutUpdatesSettingsView, {
     snapshot: value,
@@ -41,6 +42,7 @@ function render(value: AppUpdateSnapshot | null, options: {
     loading: options.loading ?? false,
     loadError: options.loadError ?? false,
     actionError: options.actionError ?? null,
+    readOnly: options.readOnly ?? false,
     onCheck: () => undefined,
     onDownload: () => undefined,
     onInstall: () => undefined
@@ -50,6 +52,8 @@ function render(value: AppUpdateSnapshot | null, options: {
 describe('AboutUpdatesSettingsView', () => {
   it('always shows the installed version and keeps all update mutations user initiated', () => {
     const markup = render(snapshot())
+    expect(markup).toContain('class="about-updates-settings" data-update-read-only="false"')
+    expect(markup).toContain('class="about-update-control" data-update-status="idle"')
     expect(markup).toContain('<h1>关于与更新</h1>')
     expect(markup).toContain('版本 v0.0.2')
     expect(markup).toContain('>检查更新</button>')
@@ -102,10 +106,17 @@ describe('AboutUpdatesSettingsView', () => {
       bytesPerSecond: 5_000_000
     }))
     expect(markup).toContain('正在下载 42%')
+    expect(markup).toContain('class="about-update-control" data-update-status="downloading"')
     expect(markup).toContain('<progress max="100" value="42.3"')
     expect(markup).toContain('40.4 MB / 95.4 MB')
     expect(markup).toContain('4.8 MB/s')
     expect(markup).toContain('下载期间可以继续使用')
+  })
+
+  it('marks a read-only host without rendering update actions', () => {
+    const markup = render(snapshot({ status: 'up_to_date' }), { readOnly: true })
+    expect(markup).toContain('class="about-updates-settings" data-update-read-only="true"')
+    expect(markup).not.toContain('class="about-update-control"')
   })
 
   it('offers installation only after the update is downloaded', () => {

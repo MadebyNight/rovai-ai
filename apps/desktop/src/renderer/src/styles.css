@@ -5038,9 +5038,10 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
 .about-download-progress-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .about-download-progress-heading span { color: var(--muted); font-size: 10.5px; }
 .about-download-progress-heading strong { color: var(--ink); font: 650 10.5px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
-.about-download-progress progress { display: block; width: 100%; height: 6px; overflow: hidden; appearance: none; border: 0; border-radius: 999px; background: var(--surface-muted); }
+.about-download-progress progress { display: block; width: 100%; height: 6px; overflow: hidden; appearance: none; border: 0; border-radius: 999px; background: var(--surface-muted); accent-color: var(--update-progress-fill); }
 .about-download-progress progress::-webkit-progress-bar { border-radius: inherit; background: var(--surface-muted); }
-.about-download-progress progress::-webkit-progress-value { border-radius: inherit; background: var(--brand); }
+.about-download-progress progress::-webkit-progress-value { border-radius: inherit; background: var(--update-progress-fill); }
+.about-download-progress progress::-moz-progress-bar { border-radius: inherit; background: var(--update-progress-fill); }
 .about-download-progress-meta { color: var(--faint); font: 500 9.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
 .about-update-status { display: grid; min-height: 54px; grid-template-columns: 8px minmax(0, 1fr); align-items: start; gap: 10px; padding: 11px 13px; border-radius: 9px; color: var(--muted); background: var(--workspace-surface-subtle); }
 .about-update-status-mark { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; color: var(--neutral); background: currentColor; }
@@ -7916,8 +7917,8 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
   display: grid;
   width: min(340px, calc(100vw - 36px));
   grid-template-columns: minmax(0, 1fr) 30px;
-  gap: 8px 6px;
-  padding: 13px 10px 10px 15px;
+  gap: 12px 6px;
+  padding: 15px 12px 12px 16px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -7929,14 +7930,17 @@ button.attachment-open:disabled { cursor: wait; opacity: .76; }
 @keyframes app-update-prompt-in { from { transform: translateY(7px); opacity: 0; } }
 .app-update-prompt-copy { display: grid; min-width: 0; gap: 3px; }
 .app-update-prompt-copy strong { color: var(--ink); font-size: 12.5px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
-.app-update-prompt-copy > span { color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.app-update-prompt-copy > span { margin-top: 1px; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .app-update-prompt-copy small { color: var(--danger); font-size: 9.5px; line-height: 1.4; }
 .app-update-prompt-close { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 0; border-radius: 6px; color: var(--faint); background: transparent; cursor: pointer; }
 .app-update-prompt-close:hover:not(:disabled) { color: var(--ink); background: var(--surface-muted); }
 .app-update-prompt-close:disabled { cursor: default; opacity: .5; }
 .app-update-prompt-close svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 1.6; }
 .app-update-prompt-actions { display: flex; min-width: 0; grid-column: 1 / -1; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
-.app-update-prompt-actions button { min-height: 27px; padding: 4px 8px; font-size: 9.5px; }
+.app-update-prompt-actions button { min-height: 30px; padding: 4px 8px; font-size: 10.5px; }
+.app-update-prompt .primary-button { border-color: var(--conversation-action); color: var(--conversation-action-contrast); background: var(--conversation-action); }
+.app-update-prompt .primary-button:hover:not(:disabled) { border-color: var(--conversation-action-hover); background: var(--conversation-action-hover); }
+:is(.about-update-actions, .app-update-prompt-actions) button:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; }
 @media (max-height: 720px) {
   .app-update-prompt { right: 10px; bottom: 10px; }
   .app-update-prompt.is-above-composer { bottom: 124px; }
