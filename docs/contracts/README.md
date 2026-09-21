@@ -45,7 +45,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | --- | --- |
 | [Host Lifecycle v2（当前）](host-lifecycle-v2.md) | 统一 Host 的原生 Server 单一数据根与用户入口；Desktop 旧布局兼容、唯一 owner、配套 WebUI 与受控停止 |
 | [Host Lifecycle v1（兼容入口）](host-lifecycle-v1.md) | 旧预览 Host CLI 的显式内部路径和初始化；由 v2 保留兼容，不自动迁移数据 |
-| [Host Web v2（当前）](host-web-v2.md) | 同一 Core 的受控 Camp 写入、独立编辑归属、原命令核对、source 上传、授权资源及共享生产页面；安全资格仍未通过 |
+| [Host Web v3（当前）](host-web-v3.md) | 继承 v2；Task v4 当前输入/投影与旧 Task reconciliation payload clean break |
+| [Host Web v2（历史）](host-web-v2.md) | 同一 Core 的受控 Camp 写入、独立编辑归属、原命令核对、source 上传、授权资源及共享生产页面；Task reconciliation 由 v3 替代 |
 | [Host Web v1（历史）](host-web-v1.md) | 同一 Core 的初始只读网络入口；新会话由 v2 替代 |
 | [Current User Profile v1（当前）](current-user-profile-v1.md) | Desktop 本地名称/头像、原子保存、历史作者与结构化提及投影；不改变 Core identity、正文或模型上下文 |
 | [Domain Command Result v1（当前）](domain-command-result-v1.md) | Domain Command 结果的事务、幂等回放、专用列唯一正文、内部 marker、新旧事件双读与 schema 95 回退边界 |
@@ -280,7 +281,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Memory Capture v3（当前）](memory-capture-v3.md) | v2 边界加 complete exact-Scope View、copyable Revision target、active body aggregate quota、64 KiB production projection limit 与 Memory-domain clean break |
 | [Memory Capture v2 (historical)](memory-capture-v2.md) | v1 捕获/Review/Forget 边界加 flat Agent-relative Scope identity、revise target assertion、durable domain rejection 与 Supersession 原子顺序 |
 | [Memory Capture v1 (historical)](memory-capture-v1.md) | 初版 best-effort 在线捕获、actor-bounded add/revise、隔离 Hearth Review Item、双 CAS、候选清除与 Forget safeguard；不含 Scope-identified revise |
-| [Built-in Tool Transport v30（当前）](builtin-tool-transport-v30.md) | 继承 v29，Mission 状态来源改为可选、错误目录与实际 recovery 对齐，轮换 v30 catalog/capability |
+| [Built-in Tool Transport v31（当前）](builtin-tool-transport-v31.md) | 继承 v30；Task v4 输入/help/get projection、Agent Output 4、Charter revision 12 与 v31 capability clean break |
+| [Built-in Tool Transport v30（历史）](builtin-tool-transport-v30.md) | 继承 v29，Mission 状态来源改为可选、错误目录与实际 recovery 对齐；Task surface 由 v31 替代 |
 | [Built-in Tool Transport v29（历史）](builtin-tool-transport-v29.md) | 继承 v28，增加 `mission.list`、指定 Mission 读取、结构化附件与 v29 catalog/capability；其后 Charter revision 10 未改变 transport |
 | [Built-in Tool Transport v28（历史）](builtin-tool-transport-v28.md) | 继承 v27，发布公共 Camp 读取范围、当前 Mission 只读 `mission.get` 与 v28 catalog/capability |
 | [Built-in Tool Transport v27（历史）](builtin-tool-transport-v27.md) | 继承 v26，为 `mission.get` 增加有序附件原路径数组，并删除 Gather 与统一结果大小上限；Agent-facing 结果完整成功或明确失败 |
@@ -305,7 +307,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Built-in Tool Transport v8 (historical)](builtin-tool-transport-v8.md) | v0.70 十三项命令、独立 `memory.propose_hearth` 与 Camp Message Send v5；不作为 v0.73 CLI context/catalog 入口 |
 | [Built-in Tool Transport v7 (historical)](builtin-tool-transport-v7.md) | v0.67 的 Camp Message Send v4、exact Camp read addressing 与初版渐进式 CLI 教学；不作为 v0.73 CLI context/catalog 入口 |
 | [Built-in Tool Transport v7 Errata](builtin-tool-transport-v7-errata.md) | 历史 v7 locator-present recovery 勘误；其 self-write exact-read 语义已由 v8/v9 继承 |
-| [Durable Task v3（当前）](durable-task-v3.md) | User/Lead 责任定义、Assignee execution-state update、Camp-wide read、explicit owner、unassigned holding 与 advisory actions |
+| [Durable Task v4（当前）](durable-task-v4.md) | 继承 v3 authority；单一 description、历史要求只读合成/编辑清理、16000 上限、精简 get Agent projection 与旧输入拒绝 |
+| [Durable Task v3（历史）](durable-task-v3.md) | User/Lead 责任定义、Assignee execution-state update、Camp-wide read、explicit owner、unassigned holding 与 advisory actions；字段 surface 由 v4 替代 |
 | [Camp Message Send v23（当前）](camp-message-send-v23.md) | 继承 v22；用户消息轻量处理回执、权威 `canWithdraw`、确认弹窗与 Desktop/Web 撤回运输 |
 | [Camp Message Send v22（历史）](camp-message-send-v22.md) | 继承 v21；发布事务为每个显式目标幂等建立 Camp-member Conversation 路由后创建 waiting Delivery |
 | [Camp Message Send v21（历史）](camp-message-send-v21.md) | 公共消息原子创建 waiting Deliveries、显式目标、Run anchor、Channel 默认外发与撤回幂等终态；路由完整性由 v22 补足 |

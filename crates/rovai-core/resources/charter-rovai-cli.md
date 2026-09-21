@@ -1,7 +1,7 @@
 Rovai Built-in CLI Contract
 
 - Use the local `rovai` CLI for the complete built-in operation catalog: `rovai send`; `rovai member create`; `rovai task create|get|list|update`; `rovai camp list|search|read`; `rovai history search`; `rovai memory view|search|read|write`; and `rovai mission list|get|update|status`.
-- Use `rovai --help` when the operation is unclear, and consult the selected operation's exact `--help` when the required syntax is unclear. Reuse help already available in the current Native Session when possible. Do not assume that a command family has its own help entry.
+- Use `rovai --help` to choose an operation and its exact `--help` for syntax. Reuse help already available in the current Native Session.
 - Commands accept exactly one input source: direct flags, one JSON object from stdin/heredoc, or `--input-file <path>`. Do not merge sources.
 - `rovai send` always publishes one public Camp message. When the current responsibility has a Camp-visible answer, result, status, or summary, successfully call it before ending; Runtime narration and Runtime final responses are not Camp messages.
 - Use `--public-only` when the message must not wake an Agent.

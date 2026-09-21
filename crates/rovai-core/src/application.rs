@@ -138,9 +138,9 @@ use rovai_core::{
         CollaborationService, CreateCampCommand, CreateTaskCommand, DeleteCampCommand,
         DiscardPendingCampCommand, ExecutionRequest, ProjectBindingKind,
         ReconcileDefaultLeadCommand, RemoveCampMemberCommand, RenameCampCommand,
-        SendUserAutomationCampMessageCommand, SendUserCampMessageCommand,
-        TaskAcceptanceCriteriaUpdate, TaskAssigneeFilter, TaskAssigneeUpdate, TaskListQuery,
-        TaskStatus, UpdateTaskCommand, WithdrawCampMessageCommand,
+        SendUserAutomationCampMessageCommand, SendUserCampMessageCommand, TaskAssigneeFilter,
+        TaskAssigneeUpdate, TaskListQuery, TaskStatus, UpdateTaskCommand,
+        WithdrawCampMessageCommand,
     },
     command::{
         ActorRef, CommandEnvelope, CommandExecution, CommandGatewayError, CommandHandlerResult,
@@ -1386,8 +1386,6 @@ struct CreateTaskParams {
     title: String,
     #[serde(default)]
     description: String,
-    #[serde(default)]
-    acceptance_criteria: Vec<String>,
     assignee_agent_id: String,
 }
 
@@ -1400,8 +1398,6 @@ struct UpdateTaskParams {
     expected_version: i64,
     title: Option<String>,
     description: Option<String>,
-    #[serde(default)]
-    acceptance_criteria: TaskAcceptanceCriteriaUpdate,
     status: Option<TaskStatus>,
     #[serde(default)]
     assignee: TaskAssigneeUpdate,
@@ -8820,7 +8816,6 @@ impl Core {
                             camp_id: params.camp_id.to_string(),
                             title: params.title,
                             description: params.description,
-                            acceptance_criteria: params.acceptance_criteria,
                             assignee_agent_id: params.assignee_agent_id,
                         },
                     ),
@@ -8840,7 +8835,6 @@ impl Core {
                             expected_version: params.expected_version,
                             title: params.title,
                             description: params.description,
-                            acceptance_criteria: params.acceptance_criteria,
                             status: params.status,
                             assignee: params.assignee,
                             blocked_reason: params.blocked_reason,

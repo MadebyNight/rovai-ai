@@ -4,7 +4,7 @@ contract: context-manifest-evidence-v27
 authority: public-multi-input-agent-run-context-evidence
 status: accepted
 version: 27
-last_updated: 2026-09-19
+last_updated: 2026-09-21
 ---
 
 # ContextManifest Evidence v27
@@ -29,9 +29,18 @@ Rovai Mission Contract
 
 The additional guidance tells follow-up Runs to continue in the already prepared Mission working directory on
 its current checkout by default. It neither locks the branch nor changes workspace preparation, cleanup, Git
-observation, Runtime compaction, or `[WORKSPACE]` delivery. Ordinary public Camp and Single Chat Charters remain
-unchanged. Session Charter revision 11 rotates new Binding compatibility; historical Bootstrap evidence,
-Manifest rows and frozen input bytes remain immutable.
+observation, Runtime compaction, or `[WORKSPACE]` delivery. The Mission-only block itself is unchanged in v1.63.
+
+All new public bindings use Session Charter revision 12. Its shared Built-in CLI block replaces only the help-routing
+line with:
+
+```text
+- Use `rovai --help` to choose an operation and its exact `--help` for syntax. Reuse help already available in the current Native Session.
+```
+
+This aligns the stable Charter with the v31 `rovai task --help` family index without adding Task fields or workflows.
+Revision 12 rotates new Binding compatibility; historical Bootstrap evidence, Manifest rows and frozen input bytes remain
+immutable. Formatter 27, Manifest 27, Profile 8, section selection, ordering and evidence do not change.
 
 For an Agent-facing public batch projection, Core first renders the stored Structured Camp Message Content.
 When and only when `addressMode = default` has exactly one frozen `addressedAgentId`, Core prefixes that

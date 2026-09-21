@@ -93,9 +93,9 @@ pub fn agent_output_schema(operation: &str) -> Result<Value> {
             ]
         })),
         "team.create_task" => Ok(task_mutation_agent_schema(false)),
+        "team.get_task" => Ok(task_get_agent_schema()),
         "team.update_task" => Ok(task_mutation_agent_schema(true)),
         "member.create"
-        | "team.get_task"
         | "team.list_tasks"
         | "camp.list"
         | "camp.search"
@@ -207,6 +207,11 @@ fn project_success(operation: &str, result: Value) -> Result<Value> {
                 .context("Canonical Operation Result must be an object")?,
             false,
         ),
+        "team.get_task" => project_task_get(
+            result
+                .as_object()
+                .context("Canonical Operation Result must be an object")?,
+        ),
         "team.update_task" => project_task_mutation(
             result
                 .as_object()
@@ -214,7 +219,6 @@ fn project_success(operation: &str, result: Value) -> Result<Value> {
             true,
         ),
         "member.create"
-        | "team.get_task"
         | "team.list_tasks"
         | "camp.list"
         | "camp.search"
@@ -266,6 +270,88 @@ fn task_mutation_agent_schema(include_changed: bool) -> Value {
         "type": "object", "additionalProperties": false,
         "required": required, "properties": properties
     })
+}
+
+fn task_get_agent_schema() -> Value {
+    let branch = |status: &str, note: Option<&str>| {
+        let mut required = vec![
+            "taskId",
+            "title",
+            "description",
+            "status",
+            "assigneeAgentId",
+            "version",
+            "availableActions",
+        ];
+        let mut properties = json!({
+            "taskId": {"type": "string"},
+            "title": {"type": "string"},
+            "description": {"type": "string", "maxLength": 16000},
+            "status": {"const": status},
+            "assigneeAgentId": {"type": ["string", "null"]},
+            "version": {"type": "integer", "minimum": 1},
+            "availableActions": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {"type": "string", "enum": ["update"]}
+            }
+        });
+        if let Some(note) = note {
+            required.push(note);
+            properties[note] = json!({"type": "string", "minLength": 1, "maxLength": 4000});
+        }
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": required,
+            "properties": properties
+        })
+    };
+    json!({
+        "oneOf": [
+            branch("pending", None),
+            branch("in_progress", None),
+            branch("blocked", Some("blockedReason")),
+            branch("completed", Some("completionSummary")),
+            branch("cancelled", Some("cancelReason"))
+        ]
+    })
+}
+
+fn project_task_get(object: &Map<String, Value>) -> Result<Value> {
+    let mut projected = Map::new();
+    for key in [
+        "taskId",
+        "title",
+        "description",
+        "status",
+        "assigneeAgentId",
+        "version",
+        "availableActions",
+    ] {
+        projected.insert(
+            key.to_string(),
+            object
+                .get(key)
+                .with_context(|| format!("Task get result has no {key}"))?
+                .clone(),
+        );
+    }
+    let note = match object.get("status").and_then(Value::as_str) {
+        Some("pending" | "in_progress") => None,
+        Some("blocked") => Some("blockedReason"),
+        Some("completed") => Some("completionSummary"),
+        Some("cancelled") => Some("cancelReason"),
+        _ => bail!("Task get result has an unknown status"),
+    };
+    if let Some(note) = note {
+        let value = object
+            .get(note)
+            .filter(|value| value.is_string())
+            .with_context(|| format!("Task get result has no matching {note}"))?;
+        projected.insert(note.to_string(), value.clone());
+    }
+    Ok(Value::Object(projected))
 }
 
 fn project_task_mutation(object: &Map<String, Value>, include_changed: bool) -> Result<Value> {
@@ -712,6 +798,61 @@ mod tests {
             )
             .unwrap();
             assert_eq!(project_envelope(envelope).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn task_get_projects_only_the_note_matching_the_current_status() {
+        for (status, note_key, note_value) in [
+            ("blocked", "blockedReason", "等待输入"),
+            ("completed", "completionSummary", "已经完成"),
+            ("cancelled", "cancelReason", "范围取消"),
+        ] {
+            let mut canonical = json!({
+                "taskId": "task_123",
+                "campId": "camp_123",
+                "title": "Task",
+                "description": "Scope and requirements",
+                "status": status,
+                "assigneeAgentId": "agent_1",
+                "blockedReason": null,
+                "completionSummary": null,
+                "cancelReason": null,
+                "createdByType": "user",
+                "createdById": "local_user",
+                "sourceAgentRunId": null,
+                "closedByType": null,
+                "closedById": null,
+                "closedByAgentRunId": null,
+                "version": 2,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "closedAt": null,
+                "availableActions": []
+            });
+            canonical[note_key] = json!(note_value);
+            let projected = project_envelope(
+                BuiltinToolInvocationEnvelope::success(
+                    "team.get_task",
+                    "7b5db24c-4a43-4cab-9217-d982b08f7691",
+                    canonical,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(projected[note_key], note_value);
+            assert_eq!(projected.as_object().unwrap().len(), 8);
+            for unrelated in [
+                "campId",
+                "createdById",
+                "blockedReason",
+                "completionSummary",
+                "cancelReason",
+            ] {
+                if unrelated != note_key {
+                    assert!(projected.get(unrelated).is_none());
+                }
+            }
         }
     }
 

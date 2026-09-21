@@ -70,7 +70,7 @@ try {
   assert.ok(origin)
   const response = await fetch(origin + '/api/v1/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ protocolVersion: 2, administratorToken: administrator }), redirect: 'error'
+    body: JSON.stringify({ protocolVersion: 3, administratorToken: administrator }), redirect: 'error'
   })
   assert.equal(response.status, 200)
   token = (await response.json()).token
@@ -214,7 +214,7 @@ try {
     const resumed = await desktop.evaluate(`window.rovai.hostWeb.start({listen:${JSON.stringify(new URL(origin).host)},allowInsecureLan:false})`)
     assert.equal(resumed.origin, origin)
     assert.equal(resumed.administratorToken, administrator)
-    const relogin = await fetch(origin + '/api/v1/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: administrator }), redirect: 'error' })
+    const relogin = await fetch(origin + '/api/v1/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 3, administratorToken: administrator }), redirect: 'error' })
     assert.equal(relogin.status, 200); token = (await relogin.json()).token
     await browser.wait(`document.querySelector('#administrator-token')!==null`)
     await browser.click(`document.querySelector('#administrator-token')`)

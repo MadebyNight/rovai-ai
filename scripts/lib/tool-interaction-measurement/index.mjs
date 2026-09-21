@@ -1263,7 +1263,6 @@ function projectOperationInput(operation, value) {
     description: boundedNullableString(value.description),
     descriptionCharCount: boundedInteger(value.descriptionCharCount),
     descriptionTruncated: booleanOrNull(value.descriptionTruncated),
-    acceptanceCriteria: boundedStrings(value.acceptanceCriteria, 32),
     assigneeAgentId: boundedNullableString(value.assigneeAgentId)
   })
   if (operation === 'team.get_task') return compactObject({
@@ -1275,11 +1274,9 @@ function projectOperationInput(operation, value) {
     requestedStatus: boundedNullableString(value.requestedStatus),
     assigneeAgentId: boundedNullableString(value.assigneeAgentId),
     clearAssignee: booleanOrNull(value.clearAssignee),
-    clearAcceptanceCriteria: booleanOrNull(value.clearAcceptanceCriteria),
     changedFields: boundedStrings(value.changedFields, 32),
     title: boundedNullableString(value.title),
     description: boundedNullableString(value.description),
-    acceptanceCriteria: boundedStrings(value.acceptanceCriteria, 32),
     blockedReason: boundedNullableString(value.blockedReason),
     completionSummary: boundedNullableString(value.completionSummary),
     cancelReason: boundedNullableString(value.cancelReason)

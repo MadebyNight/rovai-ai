@@ -50,7 +50,7 @@ export const RECEIPT_OUTCOME_RUBRIC = Object.freeze({
 })
 export const RECEIPT_PROCESS_RUBRIC = Object.freeze({
   ...EVIDENCE_PROCESS_RUBRIC,
-  handoff_clarity: `${EVIDENCE_PROCESS_RUBRIC.handoff_clarity} Task context segments contain retained Task descriptions and acceptance criteria; a concise handoff may refer to that existing task context. Do not require all details to be repeated verbatim in the handoff message.`
+  handoff_clarity: `${EVIDENCE_PROCESS_RUBRIC.handoff_clarity} Task context segments contain retained Task descriptions with their scope and requirements; a concise handoff may refer to that existing task context. Do not require all details to be repeated verbatim in the handoff message.`
 })
 
 export const OBSERVABLE_OUTCOME_RUBRIC = Object.freeze({

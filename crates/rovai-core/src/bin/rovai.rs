@@ -115,6 +115,10 @@ async fn run() -> Result<u8> {
         print_root_help();
         return Ok(0);
     }
+    if args.as_slice() == ["task", "--help"] {
+        print!("{}", task_family_help_text());
+        return Ok(0);
+    }
     if let Some(description) = operation_help(&args)? {
         print_operation_help(&description);
         return Ok(0);
@@ -438,7 +442,7 @@ fn invocation_identity(args: &[String]) -> Option<BuiltinToolCliIdentity> {
 }
 
 fn is_family_help(args: &[String]) -> bool {
-    matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "task" | "camp" | "history" | "memory" | "single-chat" | "automation" | "mission"))
+    matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "camp" | "history" | "memory" | "single-chat" | "automation" | "mission"))
 }
 
 fn load_context() -> Result<BuiltinToolCliContext> {
@@ -1370,6 +1374,10 @@ fn root_help_text(managed_runtime: bool) -> String {
     text
 }
 
+fn task_family_help_text() -> &'static str {
+    "rovai task\n\n  create  Create a durable task.\n  get     Read task details and version.\n  list    List task summaries.\n  update  Update an existing task.\n\nUse rovai task <command> --help for arguments.\n"
+}
+
 fn user_automation_available_in_current_process() -> bool {
     user_automation_available_in_process(
         env::var(ROVAI_CLI_CONTEXT_ENV).ok().as_deref(),
@@ -1578,6 +1586,14 @@ fn render_flat_input_help(output: &mut String, description: &BuiltinToolDescript
                 output,
                 "      Optional run-readable PNG/JPEG path. If unavailable, omit it and Rovai uses the default avatar."
             )
+                .expect("writing help to a String cannot fail");
+        }
+        if matches!(
+            description.name.as_str(),
+            "team.create_task" | "team.update_task"
+        ) && argument.field == "description"
+        {
+            writeln!(output, "      Task scope and requirements.")
                 .expect("writing help to a String cannot fail");
         }
         if matches!(description.name.as_str(), "camp.search" | "camp.read")
@@ -2078,7 +2094,6 @@ mod tests {
         assert!(builtin_tool_identity_by_command("tool", "describe").is_none());
         for family in [
             "member",
-            "task",
             "camp",
             "history",
             "memory",
@@ -2089,6 +2104,13 @@ mod tests {
             assert!(operation_help(&args).unwrap().is_none());
             assert!(is_family_help(&args));
         }
+        let task_help = ["task".to_string(), "--help".to_string()];
+        assert!(operation_help(&task_help).unwrap().is_none());
+        assert!(!is_family_help(&task_help));
+        assert_eq!(
+            task_family_help_text(),
+            "rovai task\n\n  create  Create a durable task.\n  get     Read task details and version.\n  list    List task summaries.\n  update  Update an existing task.\n\nUse rovai task <command> --help for arguments.\n"
+        );
     }
 
     #[test]
@@ -2134,7 +2156,6 @@ mod tests {
         }
         for family in [
             "member",
-            "task",
             "camp",
             "history",
             "memory",
@@ -2145,6 +2166,7 @@ mod tests {
             assert!(operation_help(&args).unwrap().is_none());
             assert!(is_family_help(&args));
         }
+        assert!(!is_family_help(&["task".to_string(), "--help".to_string()]));
         let view = builtin_tool_description("memory.view").unwrap();
         let help = operation_help_text(&view);
         assert!(help.contains("One of: hearth, companion, relationship."));
@@ -2473,13 +2495,10 @@ rovai send --input-file request.json"#,
         ])
         .unwrap()
         .unwrap();
-        assert!(description.summary.contains("current Default Lead"));
-        assert!(
-            description
-                .summary
-                .contains("Prefer advancing an existing Task")
+        assert_eq!(
+            description.summary,
+            "Create an independently owned task that persists across runs or handoffs.\nPrefer existing tasks; do not create tasks for one-off collaboration or local steps.\nUser/Default Lead only. Put scope and requirements in description.\nDoes not notify or start work; use rovai send --task-id."
         );
-        assert!(description.summary.contains("one-off review"));
         let assignee = description
             .arguments
             .iter()
@@ -2487,6 +2506,12 @@ rovai send --input-file request.json"#,
             .unwrap();
         assert!(assignee.required);
         assert_eq!(assignee.flag, "--assignee-agent-id");
+        assert!(
+            description
+                .arguments
+                .iter()
+                .all(|argument| argument.flag != "--acceptance-criteria")
+        );
     }
 
     #[cfg(unix)]

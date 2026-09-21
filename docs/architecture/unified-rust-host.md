@@ -10,7 +10,7 @@ last_updated: 2026-09-19
 [Runtime 兼容性](../runtime-compatibility.md)，不能由目标结构推断完成。
 现有准入、事务、Runtime 与关闭合同继续有效；新增 wire 合同随对应实现明确发布。
 原生 Server 数据根、初始 CLI 兼容、初始化准入和停止适配由[Host Lifecycle v2](../contracts/host-lifecycle-v2.md)拥有；
-当前受控网络入口由[Host Web v2](../contracts/host-web-v2.md)拥有。
+当前受控网络入口由[Host Web v3](../contracts/host-web-v3.md)拥有；未变更的详细边界继续由其继承的 v2 章节定义。
 
 当前已实现父进程匿名管道与进程内请求共用一个 Host/Core、共享生产 Camp 页面、客户端草稿、source 上传及
 逐项准入的 Camp 写入。以下 UDS/Named Pipe 身份握手与完整公共 DTO 生成仍是后续目标，

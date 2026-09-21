@@ -9648,7 +9648,6 @@ export function TaskTimelineCard({
 }): JSX.Element {
   const descriptionId = useId()
   const presentation = taskTimelineCardPresentation(task)
-  const acceptanceCriteriaLabel = `${task.acceptanceCriteria.length} 个验收条件`
   const ownerStyle = task.assigneeAgentId
     ? { '--task-owner-accent': identityColorToken(task.assigneeAgentId) } as CSSProperties
     : undefined
@@ -9677,7 +9676,6 @@ export function TaskTimelineCard({
             <i className="task-owner-mark" aria-hidden="true" />
             <span>负责人 · {assigneeName}</span>
           </span>
-          <span>{acceptanceCriteriaLabel}</span>
           <time dateTime={task.updatedAt}>更新于 {messageClockTime(task.updatedAt)}</time>
         </span>
         <span className="task-card-note">
@@ -9691,7 +9689,7 @@ export function TaskTimelineCard({
         </svg>
       </span>
       <span className="sr-only" id={descriptionId}>
-        状态：{taskStatusLabel(task.status)}；负责人：{assigneeName}；{acceptanceCriteriaLabel}；
+        状态：{taskStatusLabel(task.status)}；负责人：{assigneeName}；
         {presentation.noteLabel}：{presentation.note}
       </span>
     </button>
@@ -10335,7 +10333,6 @@ function runIntervalLabel(run: AgentRunView): string {
 interface TaskEditorDraft {
   title: string
   description: string
-  acceptanceCriteriaText: string
   assigneeAgentId: string
   status: TaskStatus
   blockedReason: string
@@ -10373,7 +10370,6 @@ export function TaskPanel({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [acceptanceCriteriaText, setAcceptanceCriteriaText] = useState('')
   const [assigneeAgentId, setAssigneeAgentId] = useState('')
   const [status, setStatus] = useState<TaskStatus>('pending')
   const [blockedReason, setBlockedReason] = useState('')
@@ -10405,7 +10401,6 @@ export function TaskPanel({
     setSelectedTaskId(null)
     setTitle('')
     setDescription('')
-    setAcceptanceCriteriaText('')
     setAssigneeAgentId('')
     setStatus('pending')
     setBlockedReason('')
@@ -10418,7 +10413,6 @@ export function TaskPanel({
   const applyDraft = (draft: TaskEditorDraft): void => {
     setTitle(draft.title)
     setDescription(draft.description)
-    setAcceptanceCriteriaText(draft.acceptanceCriteriaText)
     setAssigneeAgentId(draft.assigneeAgentId)
     setStatus(draft.status)
     setBlockedReason(draft.blockedReason)
@@ -10430,7 +10424,7 @@ export function TaskPanel({
   const closeEditor = (): void => {
     if (submitting) return
     drafts.current.set(selectedTaskId ?? 'new', {
-      title, description, acceptanceCriteriaText, assigneeAgentId, status,
+      title, description, assigneeAgentId, status,
       blockedReason, completionSummary, expectedVersion
     })
     setEditorOpen(false)
@@ -10449,7 +10443,6 @@ export function TaskPanel({
     applyDraft(drafts.current.get(task.taskId) ?? {
       title: task.title,
       description: task.description,
-      acceptanceCriteriaText: task.acceptanceCriteria.join('\n'),
       assigneeAgentId: task.assigneeAgentId ?? '',
       status: task.status,
       blockedReason: task.blockedReason ?? '',
@@ -10493,7 +10486,6 @@ export function TaskPanel({
         campId: snapshot.camp.id,
         title: title.trim(),
         description: description.trim(),
-        acceptanceCriteria: parseAcceptanceCriteria(acceptanceCriteriaText),
         assigneeAgentId
       })
       if (result.status === 'rejected') {
@@ -10532,7 +10524,6 @@ export function TaskPanel({
       : assigneeAgentId
         ? { operation: 'assign' as const, agentId: assigneeAgentId }
         : { operation: 'clear' as const }
-    const criteria = parseAcceptanceCriteria(acceptanceCriteriaText)
     try {
       const result = await client.request<StoredCommandResult>('tasks.update', {
         commandId: newCommandId(),
@@ -10541,9 +10532,6 @@ export function TaskPanel({
         expectedVersion,
         title: title.trim(),
         description: description.trim(),
-        acceptanceCriteria: criteria.length > 0
-          ? { operation: 'replace', items: criteria }
-          : { operation: 'clear' },
         status,
         assignee,
         blockedReason: status === 'blocked' ? blockedReason.trim() : undefined,
@@ -10585,8 +10573,7 @@ export function TaskPanel({
         expectedVersion,
         status: 'cancelled',
         cancelReason: cancelReason.trim(),
-        assignee: { operation: 'unchanged' },
-        acceptanceCriteria: { operation: 'unchanged' }
+        assignee: { operation: 'unchanged' }
       })
       if (result.status === 'rejected') {
         setFormError(taskCommandMessage(result))
@@ -10645,7 +10632,6 @@ export function TaskPanel({
                 <span className="task-list-meta">
                   <b className={`state-${task.status}`}>{taskStatusLabel(task.status)}</b>
                   <small>{taskAssigneeName(task, snapshot)}</small>
-                  {task.acceptanceCriteria.length > 0 && <small>{task.acceptanceCriteria.length} 个验收条件</small>}
                 </span>
                 {task.status === 'blocked' && task.blockedReason && <small className="task-list-note">{task.blockedReason}</small>}
               </span>
@@ -10662,12 +10648,7 @@ export function TaskPanel({
         </div>
         <h3>{detailTask.title}</h3>
         <div className="task-detail-meta"><span className={`task-detail-status state-${detailTask.status}`}>{taskStatusLabel(detailTask.status)}</span><span>{taskAssigneeName(detailTask, snapshot)}</span></div>
-        <section className="task-detail-section"><strong>说明</strong><p className="task-detail-copy">{detailTask.description || '暂无说明'}</p></section>
-        <section className="task-detail-section"><strong>验收条件 <small>{detailTask.acceptanceCriteria.length}</small></strong>
-          {detailTask.acceptanceCriteria.length > 0
-            ? <ol className="task-acceptance-list">{detailTask.acceptanceCriteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ol>
-            : <p>暂无验收条件</p>}
-        </section>
+        <section className="task-detail-section"><strong>责任范围与要求</strong><p className="task-detail-copy">{detailTask.description || '暂无责任范围与要求'}</p></section>
         {detailTask.blockedReason && <section className="task-detail-section task-outcome is-blocked"><strong>阻塞原因</strong><p className="task-detail-copy">{detailTask.blockedReason}</p></section>}
         {detailTask.completionSummary && <section className="task-detail-section task-outcome is-completed"><strong>完成摘要</strong><p className="task-detail-copy">{detailTask.completionSummary}</p></section>}
         {detailTask.cancelReason && <section className="task-detail-section task-outcome"><strong>取消原因</strong><p className="task-detail-copy">{detailTask.cancelReason}</p></section>}
@@ -10691,7 +10672,7 @@ export function TaskPanel({
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay app-dialog-overlay" />
           <AppDialogContent className="task-editor-dialog" width="wide">
-            <AppDialogHeader icon="pencil" title={mode === 'create' ? '新建任务' : '编辑任务'} description={mode === 'create' ? '记录需要持续跟踪的责任与验收条件。' : `版本 ${expectedVersion} · 修改任务内容与状态。`}
+            <AppDialogHeader icon="pencil" title={mode === 'create' ? '新建任务' : '编辑任务'} description={mode === 'create' ? '记录需要持续跟踪的责任范围与要求。' : `版本 ${expectedVersion} · 修改任务内容与状态。`}
             hideDescription />
             <form className="task-editor" onSubmit={(event) => void (mode === 'create' ? submitCreate(event) : submitUpdate(event))}>
               <AppDialogBody>
@@ -10700,7 +10681,6 @@ export function TaskPanel({
                 <TaskFields
                   title={title}
                   description={description}
-                  acceptanceCriteriaText={acceptanceCriteriaText}
                   assigneeAgentId={assigneeAgentId}
                   status={mode === 'create' ? 'pending' : status}
                   blockedReason={blockedReason}
@@ -10712,7 +10692,6 @@ export function TaskPanel({
                   autoFocusTitle
                   onTitle={setTitle}
                   onDescription={setDescription}
-                  onAcceptanceCriteria={setAcceptanceCriteriaText}
                   onAssignee={setAssigneeAgentId}
                   onStatus={setStatus}
                   onBlockedReason={setBlockedReason}
@@ -10755,7 +10734,6 @@ export function TaskPanel({
 function TaskFields({
   title,
   description,
-  acceptanceCriteriaText,
   assigneeAgentId,
   status,
   blockedReason = '',
@@ -10768,7 +10746,6 @@ function TaskFields({
   autoFocusTitle = false,
   onTitle,
   onDescription,
-  onAcceptanceCriteria,
   onAssignee,
   onStatus,
   onBlockedReason = () => {},
@@ -10776,7 +10753,6 @@ function TaskFields({
 }: {
   title: string
   description: string
-  acceptanceCriteriaText: string
   assigneeAgentId: string
   status: TaskStatus
   blockedReason?: string
@@ -10789,7 +10765,6 @@ function TaskFields({
   autoFocusTitle?: boolean
   onTitle(value: string): void
   onDescription(value: string): void
-  onAcceptanceCriteria(value: string): void
   onAssignee(value: string): void
   onStatus(value: TaskStatus): void
   onBlockedReason?(value: string): void
@@ -10801,8 +10776,7 @@ function TaskFields({
   return (
     <>
       <label className="task-field"><span>标题</span><input value={title} maxLength={160} required data-dialog-autofocus={autoFocusTitle || undefined} disabled={disabled} onChange={(event) => onTitle(event.currentTarget.value)} /></label>
-      <label className="task-field"><span>说明</span><textarea value={description} rows={4} maxLength={8000} disabled={disabled} onChange={(event) => onDescription(event.currentTarget.value)} placeholder="记录需要跨消息持续跟踪的责任与边界…" /></label>
-      <label className="task-field"><span>验收条件（每行一项，最多 12 项）</span><textarea value={acceptanceCriteriaText} rows={3} maxLength={6000} disabled={disabled} onChange={(event) => onAcceptanceCriteria(event.currentTarget.value)} /></label>
+      <label className="task-field"><span>责任范围与要求</span><textarea value={description} rows={6} maxLength={16000} disabled={disabled} onChange={(event) => onDescription(event.currentTarget.value)} placeholder="记录需要跨消息持续跟踪的责任范围与要求…" /></label>
       <div className="task-field-grid">
         <label className="task-field"><span>负责人</span><select value={assigneeAgentId} required={requireAssignee} disabled={disabled} onChange={(event) => onAssignee(event.currentTarget.value)}><option value="">{requireAssignee ? '请选择负责人' : '未分配'}</option>{unavailableAssignee && <option value={assigneeAgentId}>队员不可用</option>}{members.map((member) => <option value={member.agentId} key={member.agentId}>{member.displayName}{member.profilePresence === 'away' ? '（离开）' : ''}</option>)}</select></label>
         {showStatus && <label className="task-field"><span>状态</span><select value={status} disabled={disabled} onChange={(event) => onStatus(event.currentTarget.value as TaskStatus)}><option value="pending">待处理</option><option value="in_progress">进行中</option><option value="blocked">已阻塞</option><option value="completed">已完成</option>{status === 'cancelled' && <option value="cancelled">已取消</option>}</select></label>}
@@ -10820,14 +10794,6 @@ function taskStatusLabel(status: TaskStatus): string {
   if (status === 'completed') return '已完成'
   if (status === 'cancelled') return '已取消'
   return '待处理'
-}
-
-function parseAcceptanceCriteria(value: string): string[] {
-  return value
-    .split('\n')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 12)
 }
 
 function formatDateTime(value: string): string {

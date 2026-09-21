@@ -703,9 +703,6 @@ export function buildTaskStateContent(task) {
       ?? (typeof task?.title === 'string' ? sha256(task.title) : null),
     descriptionDigest: task?.descriptionDigest
       ?? (typeof task?.description === 'string' ? sha256(task.description) : null),
-    acceptanceCriteriaDigest: Array.isArray(task?.acceptanceCriteria)
-      ? withSha256Prefix(digestJson(task.acceptanceCriteria))
-      : null,
     blockedReasonDigest: typeof task?.blockedReason === 'string'
       ? withSha256Prefix(sha256(task.blockedReason))
       : null,

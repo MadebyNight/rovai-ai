@@ -56,7 +56,7 @@ try {
   const administrator = randomBytes(32).toString('hex')
   active = launchHeadless(administrator)
   const origin = await active.origin()
-  const login = await fetch(`${origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: administrator }), redirect: 'error' })
+  const login = await fetch(`${origin}/api/v1/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 3, administratorToken: administrator }), redirect: 'error' })
   assert.equal(login.status, 200)
   const token = (await login.json()).token
   const opened = await fetch(`${origin}/api/v1/request`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ operation: 'camps.open', params: { campId, traceId: randomUUID() } }), redirect: 'error' }).then(response=>response.json())

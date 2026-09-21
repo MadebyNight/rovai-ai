@@ -148,7 +148,6 @@ pub(super) fn reconcile(
                         camp_id: params.camp_id.to_string(),
                         title: params.title,
                         description: params.description,
-                        acceptance_criteria: params.acceptance_criteria,
                         assignee_agent_id: params.assignee_agent_id,
                     },
                 ),
@@ -166,7 +165,6 @@ pub(super) fn reconcile(
                         expected_version: params.expected_version,
                         title: params.title,
                         description: params.description,
-                        acceptance_criteria: params.acceptance_criteria,
                         status: params.status,
                         assignee: params.assignee,
                         blocked_reason: params.blocked_reason,
@@ -270,5 +268,32 @@ pub(super) fn reconcile(
             )
         }
         _ => anyhow::bail!("command reconciliation is not admitted"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_reconciliation_rejects_removed_input_fields() {
+        let create = serde_json::from_value::<CreateTaskParams>(json!({
+            "commandId": "command-old-create",
+            "campId": "camp-old",
+            "title": "Old create",
+            "description": "Old payload",
+            "acceptanceCriteria": ["legacy"],
+            "assigneeAgentId": "agent-old"
+        }));
+        assert!(create.is_err());
+
+        let update = serde_json::from_value::<UpdateTaskParams>(json!({
+            "commandId": "command-old-update",
+            "campId": "camp-old",
+            "taskId": "task-old",
+            "expectedVersion": 1,
+            "clearAcceptanceCriteria": true
+        }));
+        assert!(update.is_err());
     }
 }

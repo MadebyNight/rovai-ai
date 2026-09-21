@@ -19,7 +19,7 @@ try {
  const validated=await host.request('workspaces.validate',{path:workspace})
  const camp=await host.request('camps.create',{commandId:crypto.randomUUID(),name:'Resource measurement',workspace:validated,memberAgentIds:[members[0].agentId],defaultLeadAgentId:members[0].agentId,collaborationMode:'peer'})
  const service=await host.request('host.web.start',{listen:'127.0.0.1:0',uiDirectory:process.env.ROVAI_WEB_UI ?? join(root,'out/web')})
- const auth=await fetch(service.origin+'/api/v1/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({protocolVersion:2,administratorToken:service.administratorToken})}).then(r=>r.json())
+ const auth=await fetch(service.origin+'/api/v1/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({protocolVersion:3,administratorToken:service.administratorToken})}).then(r=>r.json())
  const call=async (action,request,binary=false)=>{
    const r=await fetch(service.origin+'/api/v1/files'+(binary?'/bytes':''),{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${auth.token}`},body:JSON.stringify({action,request})})
    assert.equal(r.status,200);return r

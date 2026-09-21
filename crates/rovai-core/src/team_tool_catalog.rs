@@ -389,7 +389,6 @@ fn task_detail_success_schema(include_changed: bool) -> Value {
         "campId",
         "title",
         "description",
-        "acceptanceCriteria",
         "status",
         "assigneeAgentId",
         "blockedReason",
@@ -414,8 +413,7 @@ fn task_detail_success_schema(include_changed: bool) -> Value {
         "taskId": {"type": "string"},
         "campId": {"type": "string"},
         "title": {"type": "string"},
-        "description": {"type": "string", "maxLength": 8000},
-        "acceptanceCriteria": {"type": "array", "maxItems": 12, "items": {"type": "string"}},
+        "description": {"type": "string", "maxLength": 16000},
         "status": {"type": "string", "enum": ["pending", "in_progress", "blocked", "completed", "cancelled"]},
         "assigneeAgentId": {"type": ["string", "null"]},
         "blockedReason": {"type": ["string", "null"]},
@@ -1102,28 +1100,28 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
         json!({
             "name": TEAM_CREATE_TASK_TOOL_NAME,
             "title": "Create a durable Task",
-            "description": "Create a durable Camp responsibility only when work must persist across AgentRuns or handoffs, has one explicit current Camp owner, and can independently complete, block, or transfer. Prefer advancing an existing Task. Do not create Tasks for analysis, consultation, one-off review, tool operations, local plans, A2A requests, or steps inside another Task. Only the User or current Default Lead may create. Creation does not notify, wake, or start the Assignee; use rovai send --task-id when execution must begin now.",
+            "description": "Create an independently owned task that persists across runs or handoffs.\nPrefer existing tasks; do not create tasks for one-off collaboration or local steps.\nUser/Default Lead only. Put scope and requirements in description.\nDoes not notify or start work; use rovai send --task-id.",
             "inputSchema": TeamToolService::create_task_input_schema(),
             "outputSchema": task_detail_success_schema(false)
         }),
         json!({
             "name": TEAM_GET_TASK_TOOL_NAME,
             "title": "Get a durable Task",
-            "description": "Read one complete current Camp Task by stable taskId. Every current fenced Camp Agent has the same read scope; this read grants no write authority. Use it to obtain full content and current version before updating. availableActions is advisory capability metadata. Core authorization and field-level mutation rules are authoritative.",
+            "description": "Read a task's content, status, owner and current version in this Camp.",
             "inputSchema": TeamToolService::get_task_input_schema(),
             "outputSchema": task_detail_success_schema(false)
         }),
         json!({
             "name": TEAM_UPDATE_TASK_TOOL_NAME,
             "title": "Update a durable Task",
-            "description": "Atomically update an authorized non-terminal Task using its current version. User/current Default Lead own responsibility definition; an ordinary current Assignee may update only status and its matching blockedReason or completionSummary on its own Task. availableActions is advisory capability metadata; Core authorization and field-level mutation rules are authoritative. A successful update does not wake an Assignee.",
+            "description": "Update a non-terminal task using the version you read.\nUser/Default Lead may edit task content, assignment and status.\nOther assignees may update only their own status and matching blockedReason or completionSummary.\nReread on conflict. Does not notify or start work.",
             "inputSchema": TeamToolService::update_task_input_schema(),
             "outputSchema": task_detail_success_schema(true)
         }),
         json!({
             "name": TEAM_LIST_TASKS_TOOL_NAME,
             "title": "List Camp Tasks",
-            "description": "Read a bounded page of minimal Task summaries for the current Camp. Every current fenced Camp Agent has the same read scope; this read grants no write authority. availableActions is advisory capability metadata. Core authorization and field-level mutation rules are authoritative. Use rovai task get for full content and current version. This is not a waiting primitive and must not be polled.",
+            "description": "List task summaries in this Camp. Use task get for details. Do not poll.",
             "inputSchema": TeamToolService::list_tasks_input_schema(),
             "outputSchema": task_list_success_schema()
         }),
@@ -1239,6 +1237,35 @@ mod tests {
     }
 
     #[test]
+    fn task_descriptions_and_input_schemas_use_the_current_copy() {
+        let definitions = builtin_tool_definitions();
+        let definition = |name: &str| {
+            definitions
+                .iter()
+                .find(|definition| definition["name"] == name)
+                .unwrap()
+        };
+        let create = definition(TEAM_CREATE_TASK_TOOL_NAME);
+        let update = definition(TEAM_UPDATE_TASK_TOOL_NAME);
+        assert_eq!(create["description"], create["inputSchema"]["description"]);
+        assert_eq!(update["description"], update["inputSchema"]["description"]);
+        assert_eq!(
+            definition(TEAM_GET_TASK_TOOL_NAME)["description"],
+            "Read a task's content, status, owner and current version in this Camp."
+        );
+        assert_eq!(
+            definition(TEAM_LIST_TASKS_TOOL_NAME)["description"],
+            "List task summaries in this Camp. Use task get for details. Do not poll."
+        );
+        for current in [create, update] {
+            assert_eq!(
+                current["inputSchema"]["properties"]["description"]["description"],
+                "Task scope and requirements."
+            );
+        }
+    }
+
+    #[test]
     fn retired_context_operations_are_not_accepted() {
         assert!(
             validate_builtin_tool_input(
@@ -1346,6 +1373,48 @@ mod tests {
 
     #[test]
     fn ipc_input_validation_enforces_catalog_bounds_before_domain_dispatch() {
+        for input in [
+            json!({
+                "title": "legacy",
+                "assigneeAgentId": "agent_1",
+                "acceptanceCriteria": ["removed"]
+            }),
+            json!({
+                "taskId": "task_1",
+                "expectedVersion": 1,
+                "clearAcceptanceCriteria": true
+            }),
+        ] {
+            let operation = if input.get("taskId").is_some() {
+                TEAM_UPDATE_TASK_TOOL_NAME
+            } else {
+                TEAM_CREATE_TASK_TOOL_NAME
+            };
+            assert!(
+                validate_builtin_tool_input(operation, &input).is_err(),
+                "legacy Task fields must be rejected: {input}"
+            );
+        }
+        validate_builtin_tool_input(
+            TEAM_CREATE_TASK_TOOL_NAME,
+            &json!({
+                "title": "long description",
+                "description": "x".repeat(16_000),
+                "assigneeAgentId": "agent_1"
+            }),
+        )
+        .unwrap();
+        assert!(
+            validate_builtin_tool_input(
+                TEAM_CREATE_TASK_TOOL_NAME,
+                &json!({
+                    "title": "too long",
+                    "description": "x".repeat(16_001),
+                    "assigneeAgentId": "agent_1"
+                })
+            )
+            .is_err()
+        );
         assert!(
             validate_builtin_tool_input(TEAM_LIST_TASKS_TOOL_NAME, &json!({"statuses": []}))
                 .is_err()

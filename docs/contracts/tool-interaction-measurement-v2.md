@@ -53,7 +53,7 @@ relevant Task 和 distractor Task 上测量，不需要把运行前未知的随�
 Core 必须在真实操作前 durable 记录 input-digest-bound `started` Evidence，在终态记录 result-digest-bound
 Evidence；两者是一个 logical interaction。`operationProjection@2` 是字段闭合、有界、可重算 digest 的投影：
 
-- Camp/Task 保留语义判断所需的 bounded query、handoff、acceptance criteria、status/assignee/version；
+- Camp/Task 保留语义判断所需的 bounded query、handoff、统一 description、status/assignee/version；
 - Memory v3 保留 nested Target、current Revision、cache state、scope/direction 与 bounded retrieval keys；
 - Memory write/read/view 只保留经过 secret detector 的 bounded semantic body；命中 secret、超限或缺少精确
   source binding 时显式 redacted/truncated/unavailable；

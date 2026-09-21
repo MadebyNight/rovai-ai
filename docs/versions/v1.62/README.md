@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.62
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -11,7 +11,7 @@ last_updated: 2026-09-20
 
 # Rovai-ai v1.62：Mission 状态解耦、执行提示与工作区收敛
 
-前置：[v1.61](../v1.61/README.md)。本版让 Mission 业务状态成为真正独立的操作：有权修改当前
+前置：[v1.61](../v1.61/README.md)。后续：[v1.63](../v1.63/README.md)。本版让 Mission 业务状态成为真正独立的操作：有权修改当前
 Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状态都只是可选关联；并把 Worktree 清理改为
 持久意图驱动的后台流程，让使命板各状态列独立滚动，同时让启动入口和执行提示直接跟随 Delivery/AgentRun
 事实，并保留既有视觉体系。

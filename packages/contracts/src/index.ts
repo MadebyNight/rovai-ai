@@ -1080,7 +1080,6 @@ export interface TaskView {
   campId: string
   title: string
   description: string
-  acceptanceCriteria: string[]
   status: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled'
   assigneeAgentId: string | null
   blockedReason: string | null
@@ -1118,11 +1117,6 @@ export type TaskStatus = TaskView['status']
 export type TaskAssigneePatch =
   | { operation: 'unchanged' }
   | { operation: 'assign'; agentId: string }
-  | { operation: 'clear' }
-
-export type TaskAcceptanceCriteriaPatch =
-  | { operation: 'unchanged' }
-  | { operation: 'replace'; items: string[] }
   | { operation: 'clear' }
 
 export type StructuredCampMessageSegment =

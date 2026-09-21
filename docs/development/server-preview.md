@@ -138,7 +138,7 @@ rovai-host run --data-dir <dataDir> --skill-library-root <skillLibraryRoot>
 应将完整控制台地址交给客户端，不能通过预览端口登录。浏览器 IndexedDB 保存普通 Session，
 标签页另存编辑证明和草稿；刷新保留原编辑，浏览器重开没有标签页编辑材料时新建独立编辑身份。
 登录后的单一 Owner 可以选择 Host 有权访问的工作目录，无须预授权。真正过期或撤销后仍可使用原长期 Token 手动登录。
-Web 与 Host 必须使用同一协议版本，当前为 [Host Web v2](../contracts/host-web-v2.md)。
+Web 与 Host 必须使用同一协议版本，当前为 [Host Web v3](../contracts/host-web-v3.md)。
 
 ## 网络与停止
 

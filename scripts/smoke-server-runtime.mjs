@@ -118,7 +118,7 @@ async function waitRun(campId, id, marker) {
 try {
   await start()
   const administrator = (await readFile(join(data, 'server-token'), 'utf8')).trim()
-  const login = await fetch(origin + '/api/v1/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, administratorToken: administrator }) })
+  const login = await fetch(origin + '/api/v1/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ protocolVersion: 3, administratorToken: administrator }) })
   assert.equal(login.status, 200); session = (await login.json()).token
   await request('health.check')
   // An explicitly selected native account can be used without copying its

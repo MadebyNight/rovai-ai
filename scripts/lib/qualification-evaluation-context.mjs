@@ -81,7 +81,7 @@ export function buildEvaluationContext(snapshot, boundary) {
     receipts.push({sourceEvidenceId:event.id,sourcePayloadDigest:digestJson(event.payload),content,contentDigest:sha256(content)})
   }
   const tasks = (snapshot.tasks ?? []).filter(task => runIds.has(task.sourceAgentRunId)).map(task => ({taskId:task.taskId??task.id,
-    content:JSON.stringify({title:task.title,description:task.description,status:task.status,acceptanceCriteria:task.acceptanceCriteria,completionSummary:task.completionSummary})})).filter(task=>task.content.length<=MAX_TEXT)
+    content:JSON.stringify({title:task.title,description:task.description,status:task.status,completionSummary:task.completionSummary})})).filter(task=>task.content.length<=MAX_TEXT)
   return {policyId:EVALUATION_CONTEXT_POLICY,receipts,omitted,tasks,deliveryMessageIds,
     coverage:{paginationRequired:true,allRuntimeCommandsClaimed:false,limits:{maximumReceipts:MAX_RECEIPTS,maximumText:MAX_TEXT,maximumTotal:MAX_TOTAL}}}
 }

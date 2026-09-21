@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub const DURABLE_TASK_CONTRACT_VERSION: u32 = 3;
+pub const DURABLE_TASK_CONTRACT_VERSION: u32 = 4;
 const TRUSTED_MEMBERSHIP_SYSTEM_COMPONENTS: &[&str] = &["channel-membership-sync"];
 
 use crate::{
@@ -427,8 +427,6 @@ pub struct CreateTaskCommand {
     pub camp_id: String,
     pub title: String,
     pub description: String,
-    #[serde(default)]
-    pub acceptance_criteria: Vec<String>,
     pub assignee_agent_id: String,
 }
 
@@ -471,17 +469,6 @@ pub enum TaskAssigneeUpdate {
     Clear,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "operation", rename_all = "snake_case")]
-pub enum TaskAcceptanceCriteriaUpdate {
-    #[default]
-    Unchanged,
-    Replace {
-        items: Vec<String>,
-    },
-    Clear,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTaskCommand {
@@ -489,8 +476,6 @@ pub struct UpdateTaskCommand {
     pub expected_version: i64,
     pub title: Option<String>,
     pub description: Option<String>,
-    #[serde(default)]
-    pub acceptance_criteria: TaskAcceptanceCriteriaUpdate,
     pub status: Option<TaskStatus>,
     #[serde(default)]
     pub assignee: TaskAssigneeUpdate,
@@ -512,7 +497,8 @@ pub struct TaskRecord {
     pub camp_id: String,
     pub title: String,
     pub description: String,
-    pub acceptance_criteria: Vec<String>,
+    #[serde(skip)]
+    pub(crate) acceptance_criteria: Vec<String>,
     pub status: TaskStatus,
     pub assignee_agent_id: Option<String>,
     pub blocked_reason: Option<String>,
@@ -2211,8 +2197,6 @@ impl CollaborationService {
             validate_task_input(&envelope.payload)?;
             let title = envelope.payload.title.trim().to_string();
             let description = envelope.payload.description.trim().to_string();
-            let acceptance_criteria =
-                normalize_acceptance_criteria(&envelope.payload.acceptance_criteria, true)?;
             let task_id = Uuid::new_v4().to_string();
             if envelope.camp_id.as_deref() != Some(envelope.payload.camp_id.as_str()) {
                 return Ok(rejected(
@@ -2296,7 +2280,7 @@ impl CollaborationService {
                     envelope.payload.camp_id,
                     title,
                     description,
-                    serde_json::to_string(&acceptance_criteria)?,
+                    "[]",
                     envelope.payload.assignee_agent_id,
                     created_by_type,
                     created_by_id,
@@ -2427,14 +2411,16 @@ impl CollaborationService {
                 projected.title = title.trim().to_string();
             }
             if let Some(description) = &envelope.payload.description {
-                projected.description = description.trim().to_string();
-            }
-            match &envelope.payload.acceptance_criteria {
-                TaskAcceptanceCriteriaUpdate::Unchanged => {}
-                TaskAcceptanceCriteriaUpdate::Replace { items } => {
-                    projected.acceptance_criteria = normalize_acceptance_criteria(items, false)?;
+                let description = description.trim().to_string();
+                if description
+                    != synthesize_task_description(
+                        &projected.description,
+                        &projected.acceptance_criteria,
+                    )
+                {
+                    projected.description = description;
+                    projected.acceptance_criteria.clear();
                 }
-                TaskAcceptanceCriteriaUpdate::Clear => projected.acceptance_criteria.clear(),
             }
             if let Some(status) = envelope.payload.status {
                 projected.status = status;
@@ -2502,14 +2488,10 @@ impl CollaborationService {
 
             let changed = task_business_fields_changed(&original, &projected);
             if !changed {
-                let detail = TaskDetail {
-                    available_actions: task_available_actions(
-                        &envelope.actor,
-                        &original,
-                        can_update_any,
-                    ),
-                    task: original,
-                };
+                let detail = public_task_detail(
+                    original,
+                    task_available_actions(&envelope.actor, &projected, can_update_any),
+                );
                 let mut value = serde_json::to_value(detail)?;
                 value["changed"] = json!(false);
                 return Ok(CommandHandlerResult::applied(
@@ -2629,8 +2611,10 @@ impl CollaborationService {
         let rows = statement.query_map([camp_id], task_record_from_row)?;
         let mut tasks = Vec::new();
         for row in rows {
-            let task = row?;
+            let mut task = row?;
             if scope.can_read(&task) {
+                task.description =
+                    synthesize_task_description(&task.description, &task.acceptance_criteria);
                 tasks.push(task);
             }
         }
@@ -2756,9 +2740,9 @@ impl CollaborationService {
             .optional()?;
         Ok(task
             .filter(|candidate| scope.can_read(candidate))
-            .map(|task| TaskQueryItem {
-                available_actions: task_available_actions(actor, &task, can_update_any),
-                task,
+            .map(|task| {
+                let available_actions = task_available_actions(actor, &task, can_update_any);
+                public_task_detail(task, available_actions)
             }))
     }
 
@@ -4638,12 +4622,45 @@ fn load_task_detail(
     actor: &ActorRef,
     can_update_any: bool,
 ) -> Result<Option<TaskDetail>> {
-    Ok(
-        load_task_record(transaction, task_id)?.map(|task| TaskDetail {
-            available_actions: task_available_actions(actor, &task, can_update_any),
-            task,
-        }),
-    )
+    Ok(load_task_record(transaction, task_id)?.map(|task| {
+        let available_actions = task_available_actions(actor, &task, can_update_any);
+        public_task_detail(task, available_actions)
+    }))
+}
+
+fn public_task_detail(mut task: TaskRecord, available_actions: Vec<String>) -> TaskDetail {
+    task.description = synthesize_task_description(&task.description, &task.acceptance_criteria);
+    TaskDetail {
+        task,
+        available_actions,
+    }
+}
+
+pub(crate) fn synthesize_task_description(
+    raw_description: &str,
+    legacy_acceptance_criteria: &[String],
+) -> String {
+    let items = legacy_acceptance_criteria
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return raw_description.to_string();
+    }
+    let supplement = format!(
+        "补充要求：\n{}",
+        items
+            .into_iter()
+            .map(|item| format!("- {item}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if raw_description.is_empty() {
+        supplement
+    } else {
+        format!("{raw_description}\n\n{supplement}")
+    }
 }
 
 fn task_list_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskListRow> {
@@ -5549,10 +5566,9 @@ fn validate_task_input(command: &CreateTaskCommand) -> Result<()> {
     if command.title.trim().chars().count() > 160 {
         anyhow::bail!("Task title must not exceed 160 characters");
     }
-    if command.description.trim().chars().count() > 8_000 {
-        anyhow::bail!("Task description must not exceed 8000 characters");
+    if command.description.trim().chars().count() > 16_000 {
+        anyhow::bail!("Task description must not exceed 16000 characters");
     }
-    normalize_acceptance_criteria(&command.acceptance_criteria, true)?;
     Ok(())
 }
 
@@ -5562,10 +5578,6 @@ fn validate_task_update_input(command: &UpdateTaskCommand) -> Result<()> {
     }
     if command.title.is_none()
         && command.description.is_none()
-        && matches!(
-            command.acceptance_criteria,
-            TaskAcceptanceCriteriaUpdate::Unchanged
-        )
         && command.status.is_none()
         && matches!(command.assignee, TaskAssigneeUpdate::Unchanged)
         && command.blocked_reason.is_none()
@@ -5582,12 +5594,9 @@ fn validate_task_update_input(command: &UpdateTaskCommand) -> Result<()> {
     if command
         .description
         .as_ref()
-        .is_some_and(|description| description.trim().chars().count() > 8_000)
+        .is_some_and(|description| description.trim().chars().count() > 16_000)
     {
-        anyhow::bail!("Task description must not exceed 8000 characters");
-    }
-    if let TaskAcceptanceCriteriaUpdate::Replace { items } = &command.acceptance_criteria {
-        normalize_acceptance_criteria(items, false)?;
+        anyhow::bail!("Task description must not exceed 16000 characters");
     }
     if let TaskAssigneeUpdate::Assign { agent_id } = &command.assignee
         && agent_id.trim().is_empty()
@@ -5606,35 +5615,6 @@ fn validate_task_update_input(command: &UpdateTaskCommand) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn normalize_acceptance_criteria(items: &[String], allow_empty: bool) -> Result<Vec<String>> {
-    if (!allow_empty && items.is_empty()) || items.len() > 12 {
-        anyhow::bail!("acceptanceCriteria must contain 1 to 12 items");
-    }
-    let normalized = items
-        .iter()
-        .map(|item| item.trim().to_string())
-        .collect::<Vec<_>>();
-    if normalized
-        .iter()
-        .any(|item| item.is_empty() || item.chars().count() > 500)
-    {
-        anyhow::bail!("Each acceptance criterion must contain 1 to 500 characters");
-    }
-    if normalized
-        .iter()
-        .map(|item| item.chars().count())
-        .sum::<usize>()
-        > 6_000
-    {
-        anyhow::bail!("acceptanceCriteria must not exceed 6000 characters in total");
-    }
-    let mut unique = BTreeSet::new();
-    if normalized.iter().any(|item| !unique.insert(item.clone())) {
-        anyhow::bail!("acceptanceCriteria must not contain duplicates");
-    }
-    Ok(normalized)
 }
 
 fn validate_projected_task(task: &TaskRecord) -> std::result::Result<(), String> {
@@ -5708,10 +5688,6 @@ fn agent_can_update_task(actor: &ActorRef, current_assignee: Option<&str>) -> bo
 fn assignee_update_fields_allowed(command: &UpdateTaskCommand) -> bool {
     command.title.is_none()
         && command.description.is_none()
-        && matches!(
-            command.acceptance_criteria,
-            TaskAcceptanceCriteriaUpdate::Unchanged
-        )
         && matches!(command.assignee, TaskAssigneeUpdate::Unchanged)
         && command.cancel_reason.is_none()
 }
@@ -6599,6 +6575,31 @@ fn camp_is_pending(transaction: &Connection, camp_id: &str) -> Result<bool> {
         )
         .optional()?
         .unwrap_or(false))
+}
+
+#[cfg(test)]
+mod task_description_tests {
+    use super::synthesize_task_description;
+
+    #[test]
+    fn legacy_acceptance_criteria_are_synthesized_once_in_order() {
+        assert_eq!(synthesize_task_description("范围", &[]), "范围");
+        assert_eq!(
+            synthesize_task_description(
+                "",
+                &[
+                    " 第一项 ".to_string(),
+                    "  ".to_string(),
+                    "第二项".to_string()
+                ]
+            ),
+            "补充要求：\n- 第一项\n- 第二项"
+        );
+        assert_eq!(
+            synthesize_task_description("已有范围", &["第一项".to_string(), "第二项".to_string()]),
+            "已有范围\n\n补充要求：\n- 第一项\n- 第二项"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "slow-tests"))]
@@ -8042,7 +8043,6 @@ mod slow_tests {
                         camp_id: camp_id.clone(),
                         title: "由即将离队成员负责".to_string(),
                         description: "验证职责释放".to_string(),
-                        acceptance_criteria: Vec::new(),
                         assignee_agent_id: "agent_2".to_string(),
                     },
                 ),
@@ -10836,6 +10836,123 @@ mod slow_tests {
                 .unwrap();
             assert_eq!(exists, 0);
         }
+        drop(database);
+        std::fs::remove_dir_all(directory).expect("temporary database should be removable");
+    }
+
+    #[test]
+    fn legacy_task_requirements_are_projected_and_only_cleared_by_a_changed_description() {
+        let (mut database, directory) = test_database();
+        let service = CollaborationService::default();
+        let camp_id = create_camp_with_members(&service, &mut database, &directory, &["agent_2"]);
+        let created = service
+            .create_task(
+                &mut database,
+                &user_envelope(
+                    "create-legacy-description-task",
+                    Some(&camp_id),
+                    CreateTaskCommand {
+                        camp_id: camp_id.clone(),
+                        title: "历史任务".to_string(),
+                        description: "原始范围".to_string(),
+                        assignee_agent_id: "agent_2".to_string(),
+                    },
+                ),
+            )
+            .unwrap();
+        let task_id = created.result.payload["taskId"].as_str().unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE task SET acceptance_criteria_json=?2 WHERE id=?1",
+                params![task_id, r#"["第一项","  ","第二项"]"#],
+            )
+            .unwrap();
+        let user = ActorRef::User {
+            user_id: "local_user".to_string(),
+        };
+        let projected = service
+            .get_visible_task(&database, &camp_id, task_id, &user, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            projected.task.description,
+            "原始范围\n\n补充要求：\n- 第一项\n- 第二项"
+        );
+        let serialized = serde_json::to_value(&projected).unwrap();
+        assert!(serialized.get("acceptanceCriteria").is_none());
+
+        let unrelated = service
+            .update_task(
+                &mut database,
+                &user_envelope(
+                    "update-legacy-task-title",
+                    Some(&camp_id),
+                    UpdateTaskCommand {
+                        task_id: task_id.to_string(),
+                        expected_version: 1,
+                        title: Some("历史任务（已重命名）".to_string()),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(unrelated.result.payload["version"], 2);
+        let preserved: String = database
+            .connection()
+            .query_row(
+                "SELECT acceptance_criteria_json FROM task WHERE id=?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, r#"["第一项","  ","第二项"]"#);
+
+        let public_description = projected.task.description;
+        let unchanged = service
+            .update_task(
+                &mut database,
+                &user_envelope(
+                    "resubmit-synthesized-description",
+                    Some(&camp_id),
+                    UpdateTaskCommand {
+                        task_id: task_id.to_string(),
+                        expected_version: 2,
+                        description: Some(public_description),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(unchanged.result.code, "task.unchanged");
+        assert_eq!(unchanged.result.payload["version"], 2);
+
+        let changed = service
+            .update_task(
+                &mut database,
+                &user_envelope(
+                    "replace-synthesized-description",
+                    Some(&camp_id),
+                    UpdateTaskCommand {
+                        task_id: task_id.to_string(),
+                        expected_version: 2,
+                        description: Some("统一后的范围与要求".to_string()),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(changed.result.payload["version"], 3);
+        let stored: (String, String) = database
+            .connection()
+            .query_row(
+                "SELECT description, acceptance_criteria_json FROM task WHERE id=?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, ("统一后的范围与要求".to_string(), "[]".to_string()));
+
         drop(database);
         std::fs::remove_dir_all(directory).expect("temporary database should be removable");
     }
