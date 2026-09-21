@@ -22,7 +22,7 @@ SQLite 阻断时继续工作；SQLite authority 仍然 fail closed。这个拆�
 | DatabaseAdmission | exact Rovai/Lumen artifact 观察、只读优先探测、租约内 SQLite journal recovery、一次性票据、typed blocker | schema 写入、自动 quarantine、UI 文案 |
 | Database open/init | 票据消费后的 exact open，或 confirmed absence 上的 staging initialization | 目录扫描式猜测、覆盖竞态 target |
 | AuthorityMigrationRunner | exact 原位逐版本事务、receipt 续跑、重新准入、旧 manifest 中断恢复 | 常规整库副本、替换主文件、失败后创建空 authority |
-| Renderer startup boundary | 订阅 Supervisor、读取本机恢复目标、立即显示页面框架、400ms 局部反馈；明确阻断时展示恢复壳层 | 未准入时挂载权威 hooks、合成业务空集合 |
+| Renderer startup boundary | 订阅 Supervisor、读取本机恢复目标、立即挂载页面框架、400ms 后显示不透明整窗品牌画布；明确阻断时展示恢复壳层 | 未准入时挂载权威 hooks、合成业务空集合 |
 
 ## Startup sequence
 
@@ -54,9 +54,10 @@ Runtime attachment storage admission发生在数据库已经分类且 lease 仍�
 authority。Full Core ready 之前，Renderer 不调用 `navigation.snapshot`、Camp、Member、Memory 或 Onboarding 的
 Core-backed read path。
 
-页面框架不是权威查询树。Root 从首次挂载起只计一次 400ms；正常检查、迁移和自动重启都保留既有 rail/顶行，超时仅在
-目标内容区统一呈现“正在打开会话”，不根据内部 phase 展示数据库术语。ready 后读取 Onboarding、偏好和目标投影时
-继续使用同一截止时间，不插入第二个全屏 gate。
+页面框架不是权威查询树。Root 从首次挂载起只计一次 400ms；正常检查、迁移和自动重启都保留既有 rail/顶行 DOM，超时后
+用不透明整窗品牌画布遮住框架，只向辅助技术统一呈现“正在打开会话”，不根据内部 phase 展示数据库术语。画布不挂载
+权威 hook，不用模糊背景、骨架或可见阶段信息伪装进度；ready 后读取 Onboarding、偏好和目标投影时继续使用同一截止时间，
+最终内容可用后以 180ms 退出，不插入第二个 gate。
 只有 `blocked` / `crashed` 才切换到带重试、主题与诊断的 Bootstrap Shell。数据未返回前不展示业务空态、不确认已读、
 不提交恢复位置。精确呈现由 [冷启动反馈](../ui/components/app-shell-navigation.md#冷启动反馈)拥有。
 

@@ -296,7 +296,7 @@ describe('availability-first workspace gate', () => {
       const markup = renderToStaticMarkup(createElement(App))
       expect(markup).toContain('unified-sidebar')
       expect(markup).not.toContain('bootstrap-shell')
-      expect(markup).not.toContain('startup-route-loading')
+      expect(markup).not.toContain('startup-loading-canvas')
       expect(markup).not.toContain('sidebar-empty')
       expect(markup).not.toContain('onboarding-app-shell')
     } finally {
@@ -690,7 +690,7 @@ describe('cold startup route presentation', () => {
     })).toBe(false)
   })
 
-  it('renders delayed Camp opening as a local content state with an inline retry', () => {
+  it('renders delayed Camp opening as a full-window brand canvas with separate recovery', () => {
     const loading = renderToStaticMarkup(createElement(StartupRouteLoading, {
       kind: 'camp',
       waiting: false,
@@ -705,13 +705,22 @@ describe('cold startup route presentation', () => {
       onExportDiagnostics: async () => null
     }))
     expect(loading).toContain('data-startup-route="camp"')
+    expect(loading).toContain('class="startup-loading-canvas"')
+    expect(loading).toContain('role="status"')
+    expect(loading).toContain('aria-busy="true"')
+    expect(loading).toContain('data-brand-mark="horizon"')
     expect(loading).toContain('正在打开会话')
-    expect(loading).toContain('准备好后会自动打开')
-    expect(loading).not.toContain('startup-gate')
+    expect(loading).not.toContain('准备好后会自动打开')
+    expect(loading).not.toContain('startup-route-status')
+    expect(loading).not.toContain('startup-route-progress')
+    expect(loading).not.toContain('startup-route-skeleton')
     expect(waiting).not.toContain('Core unavailable')
+    expect(waiting).toContain('class="startup-recovery-canvas"')
+    expect(waiting).toContain('role="alertdialog"')
     expect(waiting).toContain('暂时无法打开会话')
     expect(waiting).toContain('重新打开')
     expect(waiting).toContain('导出诊断')
+    expect(waiting).not.toContain('准备好后会自动打开')
     const browserWaiting = renderToStaticMarkup(createElement(StartupRouteLoading, {
       kind: 'camp', waiting: true, error: 'Host unavailable', onRetry: () => undefined
     }))

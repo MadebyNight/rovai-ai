@@ -42,6 +42,8 @@ Mission 的 Agent 可直接设置任一状态，`sourceMessageId` 对所有状�
 - 使命板一级入口蓝点按 Core-owned `hasUnread` 统计有未读 Agent 回复的使命，不再复用 `needs_you` 状态。
 - 当前普通或 Mission Camp workspace 位于前台时，该 Camp 全语义通知不弹临时浮层，但精确来源未读保持不变。
 - AgentRun 通知跨底部、Inspector 与右侧 Portal 使用同一可见性和定位边界；关闭的右侧执行标签可被精确恢复。
+- 冷启动超过 400ms 时以不透明整窗品牌画布替代内容区“正在打开会话”；只保留完整 Logo 的轻呼吸，ready 后短暂淡出，
+  错误恢复继续使用独立可操作界面。
 
 字段级协议见 [Mission v11](../../contracts/mission-v11.md)与
 [Built-in Tool Transport v30](../../contracts/builtin-tool-transport-v30.md)；执行与消息增量见
@@ -61,6 +63,8 @@ Mission 启动与执行提示的 Core/Renderer/合同实现与全量门禁已经
 终态工具组步骤数已恢复统计全部已结算逻辑操作；失败步骤保留失败状态，同时进入“已完成 N 个步骤”的 N。
 当前 Camp 通知静默和右侧 AgentRun Portal 定位回归也已完成；普通 Camp、完整 Mission 会话与使命板抽屉使用
 同一 quiet scope，失焦或离开该 Camp 后恢复提醒，静默不会写入 acknowledgement。
+启动加载呈现增量已经收敛为日夜主题实心画布、48px 完整品牌标记、400ms anti-flash 与 180ms 退出；不改变
+Supervisor、Core capability、恢复目标或 Renderer wire。
 本版不轮换 data contract：继续使用 v1.61/schema 116；清理复用 schema 112 已有 workspace 状态、命令身份、
 expected OID 与双检查点，不新增 Migration。
 
@@ -193,6 +197,15 @@ Open schema 8 删除 `coverage.executionEvidence`，不用 0 或局部求和伪�
 `executionEvidenceCount` 均保留。可见 Run 的详情继续按需分页，既有
 `reasoning_summary` 展示过滤不变。
 
+## 启动加载品牌画布增量
+
+Renderer 继续先挂载不可交互的目标框架并沿用同一个 400ms 截止时间；超时后用不透明的全视口纯色画布覆盖框架，
+中央仅保留完整 Rovai horizon 标记及轻微明暗呼吸。可见层不再显示“正在打开会话”、进度圈、骨架或模糊的底层内容，
+但 polite busy status 仍为辅助技术提供同一状态。`prefers-reduced-motion` 下标记静止，真实内容可用后以 180ms 淡出。
+
+偏好读取或目标加载失败直接切换到独立恢复面，保留安全标题、重试与诊断动作，不把原始异常带入产品界面。该增量只调整
+Renderer 呈现与焦点边界，不改变数据库、Supervisor snapshot、Core 请求门禁、Onboarding 或恢复位置提交语义。
+
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
@@ -200,8 +213,8 @@ Open schema 8 删除 `coverage.executionEvidence`，不用 0 或局部求和伪�
 | Version lifecycle | 已更新 | v1.61 冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.62 |
 | Decisions | 已更新 | [版本决定](decisions.md)记录状态/消息解耦、异步 cleanup owner、独立列滚动、受管分支与实时 checkout 分离，以及移除无消费者的 Camp-wide Evidence 精确 coverage 取舍；Agent Run Card、运行中会话总览与当前 Camp quiet scope 均是可逆 Renderer 策略并由当前合同完整说明 |
 | Contracts | 已更新 | 发布 [Mission v8](../../contracts/mission-v8.md)、v9、v10 后继续发布当前 [Mission v11](../../contracts/mission-v11.md)，并从 [Run Process Detail Surface v35](../../contracts/run-process-detail-surface-v35.md)继续发布 v36、v37、v38、v39 与当前 [v40](../../contracts/run-process-detail-surface-v40.md)，同时发布 [File Preview v17](../../contracts/file-preview-v17.md)、[Camp Message Send v23](../../contracts/camp-message-send-v23.md)、[Notification Episode v8](../../contracts/notification-episode-v8.md)、[Current User Attention v7](../../contracts/current-user-attention-v7.md)及当前 [Camp Open Projection v22](../../contracts/camp-open-projection-v22.md)；[ContextManifest v27](../../contracts/context-manifest-evidence-v27.md)记录 Session Charter revision 11，Built-in 继续使用 [v30](../../contracts/builtin-tool-transport-v30.md) |
-| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner，且 Camp Open 成本不再随其他 Camp 的 Evidence 增长；通知架构明确当前 Camp quiet scope、精确已读独立和 execution Portal 边界 |
-| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、运行中会话总览、回执和共享分栏，并补齐当前 Camp 静默与右侧 AgentRun 精确定位 |
+| Architecture | 已更新 | Mission 明确状态、cleanup、启动可用性、claim 后执行投影、checkout 执行准入及固定基准 Diff 边界；File Preview、Public Message Delivery 与统一 Host 同步共享标签、撤回和 Host 准入；Camp Open、启动恢复与文本维护明确读取/恢复 owner，且 Camp Open 成本不再随其他 Camp 的 Evidence 增长；Renderer 启动边界增加不透明整窗品牌画布但不改变 capability gate；通知架构明确当前 Camp quiet scope、精确已读独立和 execution Portal 边界 |
+| UI | 已更新 | [使命板 UI](../../ui/components/mission-board.md)增加独立列滚动、清理恢复、一致启动/执行反馈、Core-owned 未读入口蓝点及实时 checkout/Diff 刷新；[Camp 会话工作区](../../ui/components/conversation-workspace.md)和[文件预览区](../../ui/components/file-preview.md)同步三位置执行台、进入规则、运行中会话总览、回执和共享分栏，并补齐当前 Camp 静默与右侧 AgentRun 精确定位；[App Shell](../../ui/components/app-shell-navigation.md#冷启动反馈)将超时启动反馈收敛为整窗品牌画布与独立恢复面 |
 | Runtime Activity | 确认无需更新 | 不改变 Canonical Runtime Activity 分类、证据来源或展示映射 |
 | Runtime compatibility | 确认无需更新 | 不改变 Runtime Adapter 行为或平台资格；只轮换 Rovai-owned Built-in capability |
 | Documentation routing | 已更新 | 文档任务入口、合同索引、当前决定导航和版本索引指向 v1.62 及本增量的当前权威 |

@@ -2,7 +2,7 @@
 document_type: ui-component-spec
 authority: desktop-bootstrap-shell-presentation
 status: accepted
-last_updated: 2026-08-31
+last_updated: 2026-09-20
 ---
 
 # Desktop Bootstrap Shell
@@ -11,9 +11,10 @@ Bootstrap Shell 是 Supervisor 明确进入 `blocked` / `crashed` 后可见的�
 与既有品牌，不是每次启动的默认页面，也不是空工作区。
 
 BrowserWindow 创建后先显示普通 App rail/顶行；本机 Main Window Session 给出恢复目标后显示对应页面框架。Core 的正常
-检查、迁移和自动重启都不接管全屏；前 400ms 没有加载提示，超时仅在目标内容区显示“正在打开会话”。框架只含非权威 chrome，
-未取得能力前不挂载查询 hooks、显示业务空态或启用业务操作。ready 后仍未完成的 Onboarding admission 与目标投影读取
-沿用同一计时，不能重置 400ms 或闪现另一张全屏启动页。
+检查、迁移和自动重启在前 400ms 不显示加载提示；超时后由完整 Renderer 视口的不透明品牌画布遮住仍挂载的页面框架。
+画布只有居中的完整 Rovai horizon 标记及辅助技术可读的“正在打开会话”，不属于 Bootstrap Shell，也不显示恢复动作。
+框架只含非权威 chrome，未取得能力前不挂载查询 hooks、显示业务空态或启用业务操作。ready 后仍未完成的 Onboarding
+admission 与目标投影读取沿用同一计时，不能重置 400ms 或切换另一套加载面。
 
 ## Structure
 
@@ -31,8 +32,9 @@ sessionData；独立壳层偏好不会覆盖正式工作区偏好。产品恢复
 - 切换 `system/day/night` 本机主题；
 - 阅读本机偏好降级提示。
 
-正常迁移与其他内部启动步骤始终使用“正在打开会话”，不显示百分比或单独的迁移完成状态；只由更高 revision 的 ready
-snapshot 与真实目标数据结束等待。有限瞬时重试期间继续原页面框架和原 400ms 计时。诊断导出在 Core 不可用时包含
+正常迁移与其他内部启动步骤在无障碍状态中统一使用“正在打开会话”，可见画布只保留品牌标记，不显示百分比或单独的迁移
+完成状态；只由更高 revision 的 ready snapshot 与真实目标数据结束等待。有限瞬时重试期间继续原页面框架和原 400ms
+计时。诊断导出在 Core 不可用时包含
 Desktop/App/platform 与完整 Supervisor snapshot，不尝试调用 Core diagnostics。局部偏好与动作失败同样使用安全产品
 提示，不把底层异常直接展示出来。
 
@@ -42,7 +44,7 @@ Desktop/App/platform 与完整 Supervisor snapshot，不尝试调用 Core diagno
 - authority capability ready 前，权威 hooks 不得挂载；正常页面的非权威框架不受此限制；
 - 状态卡使用 polite live region，动作失败使用 alert；按钮 busy 时不可重复触发；
 - 主题按钮使用 `aria-pressed`，全部动作支持键盘与 `:focus-visible`；
-- `prefers-reduced-motion` 下停止普通 loading 动画，保留文字反馈；
+- `prefers-reduced-motion` 下停止品牌呼吸与退出过渡，保留辅助技术状态；
 - 窄窗口改为单列，动作保持可达，不出现横向滚动。
 
 ## Full Core feature degradation
