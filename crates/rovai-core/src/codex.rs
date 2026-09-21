@@ -1190,7 +1190,7 @@ impl CodexRuntime {
         self.host.builtin_tool_process_config()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "extended-tests"))]
     pub async fn process_id(&self) -> Option<u32> {
         self.host.child.lock().await.id()
     }
@@ -2274,7 +2274,7 @@ pub fn completed_turn(params: &Value) -> Result<CompletedTurn> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
 

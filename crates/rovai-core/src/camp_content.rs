@@ -690,7 +690,7 @@ pub fn canonical_content_digest(content: &[StructuredCampMessageSegment]) -> Res
     Ok(format!("sha256:{}", canonical_json_digest(&value)?))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::{
         ComposerAtom, ComposerDocument, ComposerSegment, ExternalQuoteAttachmentSummary,

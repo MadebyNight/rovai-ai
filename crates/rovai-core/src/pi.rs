@@ -447,7 +447,7 @@ pub(super) async fn read_jsonl_record<R: AsyncBufRead + Unpin>(
     Ok(Some(record))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use tokio::io::BufReader;

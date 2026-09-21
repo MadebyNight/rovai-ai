@@ -3547,13 +3547,13 @@ pub fn find_adapter(kind: AdapterKind) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "extended-tests"))]
 mod native_home_probe_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "extended-tests"))]
 mod claude_catalog_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use rovai_core::agent_runtime_adapter::{AcpProbeObservation, AgentRuntimeAdapterRegistry};

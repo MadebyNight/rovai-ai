@@ -477,7 +477,7 @@ impl OutputTarget {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
 

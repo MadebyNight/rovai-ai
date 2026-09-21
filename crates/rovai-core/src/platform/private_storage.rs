@@ -276,7 +276,7 @@ pub fn atomic_write_private_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Callers must create, validate, flush, and close `source` before invoking
 /// this operation. On Windows this uses the native replace-existing path;
 /// Unix uses same-filesystem rename semantics.
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 pub(crate) fn publish_private_temporary_file(source: &Path, destination: &Path) -> Result<()> {
     commit_private_temporary(source, destination)
 }

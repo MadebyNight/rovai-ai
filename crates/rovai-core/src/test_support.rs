@@ -248,6 +248,7 @@ pub(crate) fn seeded_runtime_database_fast_owned() -> OwnedTestDatabase {
     )
 }
 
+#[cfg(feature = "extended-tests")]
 pub(crate) fn fresh_schema_database_at(directory: &Path) -> Database {
     clone_template_to(
         FRESH_SCHEMA_TEMPLATE.get_or_init(|| build_template("fresh-template", false)),

@@ -6810,7 +6810,7 @@ fn entity_ref(entity_type: &str, entity_id: &str) -> EntityReference {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
     use crate::{

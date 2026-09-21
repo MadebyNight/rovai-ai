@@ -253,7 +253,7 @@ pub(super) fn downgrade_for_test(connection: &Connection) {
     connection.execute_batch("PRAGMA foreign_keys=ON").unwrap();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extended-tests"))]
 mod tests {
     use super::*;
 
