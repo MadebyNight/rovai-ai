@@ -203,8 +203,11 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const created = await call(first, 'camps.create', createParams)
     assert.equal(created.status, 'applied')
     const campId = created.payload.campId
-    for (const operation of ['agentRunExecution.page', 'agentRunExecution.changes']) {
-      const response = await authorized(first, 'request', { method: 'POST', body: JSON.stringify({ operation, params: { campId, agentRunId: 'missing-run', afterSequence: 1, limit: 12 } }) })
+    for (const [operation, cursor] of [
+      ['agentRunExecution.page', { afterSequence: 1 }],
+      ['agentRunExecution.changes', { afterChangeSequence: 1 }]
+    ]) {
+      const response = await authorized(first, 'request', { method: 'POST', body: JSON.stringify({ operation, params: { campId, agentRunId: 'missing-run', ...cursor, limit: 12 } }) })
       assert.equal(response.status, 200)
       const reply = await response.json()
       assert.match(reply.error?.message ?? '', /AgentRun does not exist in this Camp/)
