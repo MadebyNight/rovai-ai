@@ -2296,6 +2296,8 @@ button.file-preview-html-feedback:hover,
 .execution-process-timeline { position: relative; display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .execution-process-timeline::before { position: absolute; top: 24px; bottom: 23px; left: 6px; width: 1px; background: var(--line-strong); content: ""; }
 .execution-process-stage { position: relative; display: grid; min-width: 0; grid-template-columns: 14px minmax(0, 1fr); gap: 9px; padding: 0 0 13px; border-radius: 8px; scroll-margin: 22px; }
+:root:not([data-mobile-web="true"]) .execution-process-timeline::before { bottom: 18px; }
+:root:not([data-mobile-web="true"]) .execution-process-stage { padding-bottom: 8px; }
 .execution-process-node { position: sticky; top: 17px; align-self: start; z-index: 1; display: inline-grid; width: 14px; height: 14px; margin-top: 17px; place-items: center; color: var(--muted); background: var(--conversation-surface); }
 .execution-process-node svg { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.45; vector-effect: non-scaling-stroke; }
 .execution-process-node.tone-info { color: var(--info); }
@@ -2356,6 +2358,8 @@ button.file-preview-html-feedback:hover,
 .execution-run-operations svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.45; }
 .execution-process-card > [id^="execution-run-content-"] { padding: 12px 10px 10px; }
 .execution-process-card .execution-disclosure { margin-top: 0; }
+:root:not([data-mobile-web="true"]) .execution-process-card > [id^="execution-run-content-"] { padding: 8px 10px; }
+:root:not([data-mobile-web="true"]) .execution-process-card > [id^="execution-run-content-"] > .execution-disclosure { margin: 0; }
 .execution-current-empty { padding: 18px 10px; color: var(--faint); font-size: 11px; text-align: center; }
 .execution-history-section { margin-top: 1px; }
 .execution-history-section.is-first { margin-top: 0; }
@@ -3884,6 +3888,7 @@ button.task-event-card:focus-visible .task-card-chevron { color: var(--brand-ink
 .execution-disclosure.worked > summary:hover .process-disclosure-slot,
 .execution-disclosure.worked > summary:focus-visible .process-disclosure-slot { color: var(--ink); background: var(--surface-hover); }
 .process-content { --process-item-gap: 14px; --process-copy-line-height: 1.68; display: grid; gap: var(--process-item-gap); padding: 13px 0 6px; }
+:root:not([data-mobile-web="true"]) .execution-process-card .process-content { --process-item-gap: 8px; padding: 0; }
 /* Keep adjacent activity rows compact within the wider narrative rhythm. */
 .process-content > .tool-activity-group + .compaction-event,
 .process-content > .compaction-event + :is(.tool-activity-group, .compaction-event) { margin-top: calc(4px - var(--process-item-gap)); }
