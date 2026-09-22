@@ -319,10 +319,10 @@ Built-in 去重后的命令与输出另由 `pnpm test:command-view` 挂载生产
   Built-in 有唯一已确认 Shell 载体时只显示一条 Core Tool，标题保留完整命令，详情保留正文参数与原始输出；
   无关联时回退公共 `canonicalInput`，缺少输入或仅有 projection 辅助事实时不可展开。混合与不确定关联保留，
   不凭名称借用其他调用；成功步骤与失败、停止、未知数量分开，分页不声称整轮总量。
-- 超过 Renderer 原预览上限且由 Managed Blob 保存完整 Payload 的 Tool 输出在精确 Tool disclosure 打开前
-  不读取、不把全文挂入 DOM；只打开外层 Tool 组仍必须保持零结果 region，打开精确 Tool 行后才按需读取并
-  在固定最大高度的可聚焦结果 region 内完整渲染，
-  首、中、末 8,000 行以上标记都存在，不显示截断提示或复制按钮。溢出使用内部滚动条，Arrow、
+- 超过 7,680 UTF-8 字节的普通 Tool 输出在持久化投影中只保留预算内前缀，超出部分不写入 SQLite、
+  Managed Blob 或详情读取结果；只打开外层 Tool 组仍必须保持零结果 region，打开精确 Tool 行后才按需读取
+  结果，并在固定最大高度的可聚焦结果 region 内渲染。预算内首、中标记存在、预算外末标记不存在，
+  结果下方显示“结果过长，部分内容已省略。”，无完整结果恢复入口或复制按钮。溢出使用内部滚动条，Arrow、
   Page Up/Down、Space、Home/End 可滚动，Escape 返回对应 summary 且不关闭 Drawer；读取失败保留精确
   错误与重试，成功后焦点进入结果。`1040×700` 与 200% zoom 下结果、执行台、Approval Dock 和 Composer
   无横向溢出或相互遮挡；DOM 不存在 standalone“查看完整工具调用”、`.complete-evidence-control` 或

@@ -91,7 +91,7 @@ completion 的协调循环。
 `camp_message_delivery` 全部投影到 `messageDeliveries`，不按消息作者过滤。用户消息没有 `sourceAgentRunId` 仍是
 同一 waiting 队列事实；Renderer 可在 claim 前显示只读排队卡。完整字段与 coverage 边界见
 [Camp Open Projection v23](../contracts/camp-open-projection-v23.md)，展示见
-[Run Process Detail Surface v41](../contracts/run-process-detail-surface-v41.md)。
+[Run Process Detail Surface v42](../contracts/run-process-detail-surface-v42.md)。
 
 自动上下文、`camp.read`、搜索、线程、reply 展开和结构化引用共享同一消息可见性服务。公共 Camp 历史对所有受认证
 队员可读；目标 Camp membership 只控制参与、寻址与执行，不是历史 ACL。外层消息可见不代表它引用的 source 可见；

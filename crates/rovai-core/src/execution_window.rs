@@ -1,5 +1,6 @@
 //! Bounded execution read surface. Pagination owns logical operations, never half of a
-//! start/completion pair. Full output and diffs remain behind the evidence content read.
+//! start/completion pair. Saved output and complete structured diffs remain behind the evidence
+//! content read; ordinary Tool output beyond the persistence budget has no recovery path.
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -418,9 +419,9 @@ fn project_items(
     Ok(evidence)
 }
 
-// A compact presentation association keeps the exact-result proof available even
-// when the enclosed Core activity is on the adjacent page. The renderer still
-// checks that the command is a pure CLI carrier before omitting the duplicate.
+// A compact presentation association keeps a digest-bound exact Agent-output proof available
+// when the enclosed Core activity is on the adjacent page. Historical rows retain their exact
+// result comparison. The renderer still checks that the command is a pure CLI carrier.
 fn supporting_builtin_operation(
     connection: &Connection,
     item: &AgentRunExecutionEvidenceView,
@@ -439,17 +440,40 @@ fn supporting_builtin_operation(
     if !command.contains("rovai") {
         return Ok(None);
     }
-    let output: Option<String> = connection.query_row(
-        "SELECT COALESCE(json_extract(payload_preview_json, '$.output'),
-          json_extract(payload_preview_json, '$.item.aggregatedOutput'), json_extract(payload_preview_json, '$.item.output'))
-         FROM agent_run_execution_evidence WHERE id = ?1", [&item.id], |row| row.get(0),
-    ).optional()?.flatten();
-    let Some(response) = output
-        .and_then(|output| serde_json::from_str::<Value>(&output).ok())
-        .filter(|value| value.as_object().is_some_and(|object| !object.is_empty()))
-    else {
+    let payload_json: Option<String> = connection
+        .query_row(
+            "SELECT payload_preview_json FROM agent_run_execution_evidence WHERE id = ?1",
+            [&item.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(payload_json) = payload_json else {
         return Ok(None);
     };
+    let payload: Value = serde_json::from_str(&payload_json)?;
+    let result_digest = payload
+        .get("resultDigest")
+        .and_then(Value::as_str)
+        .filter(|digest| !digest.is_empty());
+    let historical_response = result_digest
+        .is_none()
+        .then(|| {
+            payload
+                .get("output")
+                .or_else(|| payload.pointer("/item/aggregatedOutput"))
+                .or_else(|| payload.pointer("/item/output"))
+                .and_then(|output| {
+                    output
+                        .as_str()
+                        .and_then(|output| serde_json::from_str::<Value>(output.trim()).ok())
+                        .or_else(|| Some(output.clone()))
+                })
+                .filter(|value| value.as_object().is_some_and(|object| !object.is_empty()))
+        })
+        .flatten();
+    if result_digest.is_none() && historical_response.is_none() {
+        return Ok(None);
+    }
     let mut statement = connection.prepare(
         "SELECT c.operation_id, e.payload_preview_json FROM canonical_runtime_activity c
          JOIN json_each(c.source_evidence_ids_json) source
@@ -483,59 +507,68 @@ fn supporting_builtin_operation(
         if envelope["ok"] != true || envelope["operation"] != operation {
             continue;
         }
-        let result = &envelope["result"];
-        let keys: Option<&[&str]> = match operation {
-            "camp.message.send" => Some(&[
-                "messageId",
-                "agentAddressingMode",
-                "effectiveRecipients",
-                "deliveryIds",
-            ]),
-            "team.create_task" => Some(&[
-                "taskId",
-                "title",
-                "status",
-                "assigneeAgentId",
-                "version",
-                "availableActions",
-            ]),
-            "team.update_task" => Some(&[
-                "taskId",
-                "title",
-                "status",
-                "assigneeAgentId",
-                "version",
-                "availableActions",
-                "changed",
-            ]),
-            "memory.write" if result["outcome"] == "effective" => {
-                Some(&["outcome", "memoryId", "revisionId"])
-            }
-            "memory.write" if result["outcome"] == "review_pending" => {
-                Some(&["outcome", "reviewItemId"])
-            }
-            _ => None,
+        let exact_result = if let Some(result_digest) = result_digest {
+            payload.get("agentOutputDigest").and_then(Value::as_str) == Some(result_digest)
+        } else {
+            historical_builtin_cli_result(operation, &envelope["result"]).as_ref()
+                == historical_response.as_ref()
         };
-        if keys.is_some_and(|keys| keys.iter().any(|key| result.get(*key).is_none())) {
-            continue;
-        }
-        let result = keys
-            .map(|keys| {
-                keys.iter()
-                    .filter_map(|key| {
-                        result
-                            .get(*key)
-                            .map(|value| (key.to_string(), value.clone()))
-                    })
-                    .collect::<serde_json::Map<_, _>>()
-            })
-            .map(Value::Object)
-            .unwrap_or_else(|| result.clone());
-        if result == response {
+        if exact_result {
             matched.insert(id, operation.to_string());
         }
     }
     Ok((matched.len() == 1).then(|| matched.into_values().next().unwrap()))
+}
+
+fn historical_builtin_cli_result(operation: &str, result: &Value) -> Option<Value> {
+    let keys: Option<&[&str]> = match operation {
+        "camp.message.send" => Some(&[
+            "messageId",
+            "agentAddressingMode",
+            "effectiveRecipients",
+            "deliveryIds",
+        ]),
+        "team.create_task" => Some(&[
+            "taskId",
+            "title",
+            "status",
+            "assigneeAgentId",
+            "version",
+            "availableActions",
+        ]),
+        "team.update_task" => Some(&[
+            "taskId",
+            "title",
+            "status",
+            "assigneeAgentId",
+            "version",
+            "availableActions",
+            "changed",
+        ]),
+        "memory.write" if result["outcome"] == "effective" => {
+            Some(&["outcome", "memoryId", "revisionId"])
+        }
+        "memory.write" if result["outcome"] == "review_pending" => {
+            Some(&["outcome", "reviewItemId"])
+        }
+        _ => None,
+    };
+    if keys.is_some_and(|keys| keys.iter().any(|key| result.get(*key).is_none())) {
+        return None;
+    }
+    Some(
+        keys.map(|keys| {
+            keys.iter()
+                .filter_map(|key| {
+                    result
+                        .get(*key)
+                        .map(|value| (key.to_string(), value.clone()))
+                })
+                .collect::<serde_json::Map<_, _>>()
+        })
+        .map(Value::Object)
+        .unwrap_or_else(|| result.clone()),
+    )
 }
 
 fn load_summaries(
@@ -552,6 +585,7 @@ fn load_summaries(
            content_blob_id, content_byte_count,
            CASE WHEN event_type IN ('activity.started', 'activity.completed', 'runtime.action') THEN 1 ELSE is_truncated END,
            occurred_at, operation_id, revision, change_sequence
+           , output_truncated
            FROM agent_run_execution_evidence
            WHERE agent_run_id = ?1 AND id IN (SELECT value FROM json_each(?2))
              AND event_type <> 'command.output.delta' ORDER BY sequence"#,
@@ -582,7 +616,7 @@ pub fn content_canonical(
     let mut statement = connection.prepare(
         "SELECT id, agent_run_id, execution_epoch, sequence, event_type, kind, phase,
          '{}', content_blob_id, content_byte_count, is_truncated, occurred_at,
-         operation_id, revision, change_sequence
+         operation_id, revision, change_sequence, output_truncated
          FROM agent_run_execution_evidence WHERE id = ?1",
     )?;
     let item = statement

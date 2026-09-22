@@ -160,6 +160,23 @@ describe('Rovai Shell carrier presentation', () => {
     expect(steps([pagedShell])).toHaveLength(1)
   })
 
+  it('uses the Agent-output digest after the full Core result and Shell suffix are discarded', () => {
+    const core = builtin()
+    const corePayload = core.payload as Record<string, unknown>
+    corePayload.agentOutputDigest = 'digest:agent-output'
+    corePayload.rawOutputDigest = 'digest:raw-business-result'
+    corePayload.coreEnvelope = { operation: 'camp.message.send', ok: true }
+    corePayload.operationProjection = { operation: 'camp.message.send', canonicalInput: {} }
+    const carrier = shell()
+    const carrierPayload = carrier.payload as { resultDigest?: string, item: Record<string, unknown> }
+    carrierPayload.resultDigest = 'digest:agent-output'
+    carrierPayload.item.aggregatedOutput = '{"savedPrefix":'
+
+    expect(steps([core, carrier]).map(step => step.id)).toEqual(['core-1'])
+    carrierPayload.resultDigest = 'digest:different-output'
+    expect(steps([core, carrier])).toHaveLength(2)
+  })
+
   it('preserves multiline input, long values and complete JSON output on the one retained Tool', () => {
     const body = `line one\n  line two ${'long-value-'.repeat(500)} SECRET_TEST_VALUE`
     const command = `rovai memory write --body '${body}'`

@@ -496,6 +496,8 @@ pub struct AgentRunExecutionEvidenceView {
     pub content_blob_id: Option<String>,
     pub content_byte_count: i64,
     pub is_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_truncated: Option<bool>,
     pub occurred_at: String,
     pub canonical: Option<CanonicalRuntimeActivity>,
 }
@@ -1432,7 +1434,7 @@ impl ReadModelService {
                        event_type, kind, phase, payload_preview_json,
                        content_blob_id, content_byte_count,
                        is_truncated, occurred_at,
-                       operation_id, revision, change_sequence
+                       operation_id, revision, change_sequence, output_truncated
                 FROM agent_run_execution_evidence
                 WHERE agent_run_id = ?1 AND sequence > ?2
                 ORDER BY sequence
@@ -3347,7 +3349,8 @@ fn load_execution_evidence(
                  evidence.phase, evidence.payload_preview_json,
                  evidence.content_blob_id, evidence.content_byte_count,
                  evidence.is_truncated, evidence.occurred_at,
-                 evidence.operation_id, evidence.revision, evidence.change_sequence
+                 evidence.operation_id, evidence.revision, evidence.change_sequence,
+                 evidence.output_truncated
           FROM agent_run_execution_evidence AS evidence
           JOIN agent_run ON agent_run.id = evidence.agent_run_id
           LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
@@ -3383,7 +3386,8 @@ pub(crate) fn public_execution_evidence_for_agent_run(
                evidence.phase, evidence.payload_preview_json,
                evidence.content_blob_id, evidence.content_byte_count,
                evidence.is_truncated, evidence.occurred_at,
-               evidence.operation_id, evidence.revision, evidence.change_sequence
+               evidence.operation_id, evidence.revision, evidence.change_sequence,
+               evidence.output_truncated
         FROM agent_run_execution_evidence AS evidence
         WHERE evidence.agent_run_id = ?1
           AND evidence.event_type NOT IN (
@@ -3419,6 +3423,7 @@ pub(crate) type ExecutionEvidenceRow = (
     Option<String>,
     Option<i64>,
     Option<i64>,
+    Option<bool>,
 );
 
 pub(crate) fn execution_evidence_row(
@@ -3440,6 +3445,7 @@ pub(crate) fn execution_evidence_row(
         row.get(12)?,
         row.get(13)?,
         row.get(14)?,
+        row.get::<_, Option<i64>>(15)?.map(|value| value != 0),
     ))
 }
 
@@ -3462,6 +3468,7 @@ pub(crate) fn execution_evidence_view(
         operation_id,
         revision,
         change_sequence,
+        output_truncated,
     ) = row;
     Ok(AgentRunExecutionEvidenceView {
         id,
@@ -3479,6 +3486,7 @@ pub(crate) fn execution_evidence_view(
         content_blob_id,
         content_byte_count,
         is_truncated,
+        output_truncated,
         occurred_at,
         canonical: None,
     })
@@ -6210,6 +6218,7 @@ mod slow_tests {
         // A CLI carrier and its Core operation may straddle a page boundary.
         // Exact result association travels as metadata, without either output body.
         let response = json!({"taskId": "fixture-task", "title": "fixture"});
+        let response_digest = crate::command::canonical_json_digest(&response).unwrap();
         for (id, sequence, event_type, payload) in [
             (
                 "carrier-start",
@@ -6221,13 +6230,13 @@ mod slow_tests {
                 "core-get",
                 91,
                 "runtime.action",
-                json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "coreEnvelope": {"ok": true, "operation": "team.get_task", "result": response}}),
+                json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "agentOutputDigest": response_digest, "coreEnvelope": {"ok": true, "operation": "team.get_task"}}),
             ),
             (
                 "carrier-end",
                 94,
                 "activity.completed",
-                json!({"item": {"id": "carrier", "type": "commandExecution", "status": "completed", "aggregatedOutput": response.to_string()}}),
+                json!({"resultDigest": response_digest, "item": {"id": "carrier", "type": "commandExecution", "status": "completed", "aggregatedOutput": response.to_string()}}),
             ),
         ] {
             database.connection().execute(
@@ -6275,12 +6284,37 @@ mod slow_tests {
                 .get("aggregatedOutput")
                 .is_none()
         );
-        database.connection().execute("UPDATE agent_run_execution_evidence SET payload_preview_json = json_set(payload_preview_json, '$.coreEnvelope.result.title', 'different') WHERE id = 'core-get'", []).unwrap();
+        database.connection().execute("UPDATE agent_run_execution_evidence SET payload_preview_json = json_set(payload_preview_json, '$.agentOutputDigest', 'different') WHERE id = 'core-get'", []).unwrap();
         let distinct =
             crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(91), 1)
                 .unwrap();
         assert!(
             distinct.evidence[0]
+                .payload
+                .get("executionWindowBuiltinOperation")
+                .is_none()
+        );
+        database.connection().execute(
+            "UPDATE agent_run_execution_evidence SET payload_preview_json = ?2 WHERE id = ?1",
+            params!["carrier-end", json!({"item": {"id": "carrier", "type": "commandExecution", "status": "completed", "aggregatedOutput": response.to_string()}}).to_string()],
+        ).unwrap();
+        database.connection().execute(
+            "UPDATE agent_run_execution_evidence SET payload_preview_json = ?2 WHERE id = ?1",
+            params!["core-get", json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "coreEnvelope": {"ok": true, "operation": "team.get_task", "result": response}}).to_string()],
+        ).unwrap();
+        let historical =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(91), 1)
+                .unwrap();
+        assert_eq!(
+            historical.evidence[0].payload["executionWindowBuiltinOperation"],
+            "team.get_task"
+        );
+        database.connection().execute("UPDATE agent_run_execution_evidence SET payload_preview_json = json_set(payload_preview_json, '$.coreEnvelope.result.title', 'different') WHERE id = 'core-get'", []).unwrap();
+        let historical_distinct =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(91), 1)
+                .unwrap();
+        assert!(
+            historical_distinct.evidence[0]
                 .payload
                 .get("executionWindowBuiltinOperation")
                 .is_none()

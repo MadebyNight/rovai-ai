@@ -1935,6 +1935,8 @@ export interface AgentRunExecutionEvidenceView {
   contentBlobId: string | null
   contentByteCount: number
   isTruncated: boolean
+  /** True only when ordinary Tool output bytes were permanently discarded; absent is historical/unknown. */
+  outputTruncated?: boolean | null
   occurredAt: string
   canonical?: CanonicalRuntimeActivityView | null
 }
@@ -1964,7 +1966,7 @@ export interface AgentRunExecutionWindowPage {
   hasMore: boolean
   /** Unfinished operations older than the first page remain visible, outside the cursor. */
   activeEvidence?: AgentRunExecutionEvidenceView[]
-  /** Commands contain display metadata; isTruncated also marks deferred output/diff. */
+  /** Commands contain display metadata; isTruncated marks deferred payload/diff, not lost Tool output. */
   evidence: AgentRunExecutionEvidenceView[]
 }
 

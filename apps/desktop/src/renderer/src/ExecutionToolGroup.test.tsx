@@ -6,6 +6,7 @@ import {
   ExecutionToolGroupStateContext,
   ToolActivityGroup,
   ToolCallRow,
+  ToolOutputTruncationNotice,
   selectCompletePresentableExecutionEvidence
 } from './ExecutionToolGroup'
 import type { ToolProgressItem } from './execution-tool-grouping'
@@ -29,6 +30,31 @@ const renderGroup = (items: ToolProgressItem[], expanded = false, liveTail = fal
 )
 
 describe('command disclosure presentation', () => {
+  it('states permanent Tool output loss without offering a full-result recovery path', () => {
+    const markup = renderToStaticMarkup(<ToolOutputTruncationNotice visible />)
+    expect(markup).toContain('结果过长，部分内容已省略。')
+    expect(markup).not.toContain('读取完整结果')
+    expect(renderToStaticMarkup(<ToolOutputTruncationNotice visible={false} />)).toBe('')
+  })
+
+  it('keeps bounded inline output addressable for the saved-result detail notice', () => {
+    const evidence = {
+      id: 'bounded-output', agentRunId: 'run', executionEpoch: 1, sequence: 1,
+      eventType: 'activity.completed', kind: 'command', phase: 'completed', payload: {},
+      contentBlobId: null, contentByteCount: 8_000, isTruncated: false,
+      outputTruncated: true, occurredAt: '2026-09-22T00:00:00Z',
+      canonical: {
+        operationId: 'command-1', classifierVersion: 'activity-v4', activityDomain: 'shell',
+        semanticKind: 'shell.execute', toolName: null, presentationHint: null, phase: 'terminal',
+        outcome: 'succeeded', sourceAuthority: 'runtime', credibility: 'runtime_structured',
+        coverageLevel: 'fine_grained', sourceEvidenceIds: ['bounded-output'],
+        firstEvidenceSequence: 1, lastEvidenceSequence: 1, revision: 1
+      }
+    } satisfies AgentRunExecutionEvidenceView
+    expect(selectCompletePresentableExecutionEvidence([evidence]).byToolId.get('command-1')?.id)
+      .toBe('bounded-output')
+  })
+
   it.each(['succeeded', 'failed', 'cancelled'] as const)(
     'gives the authoritative %s Run priority over a retained cancellation flag', runStatus => {
       const completed = renderGroup([tool('done', 'terminal', 'completed')], true, false, runStatus, true)
