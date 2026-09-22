@@ -26,6 +26,7 @@ import type {
   HealthStatus,
   MessageDeliveryView,
   NotificationActionView,
+  NavigationSnapshot,
   RovaiApi,
   SupervisorSnapshot
 } from '@contracts'
@@ -60,6 +61,7 @@ import {
   effectiveCancellingTurnIds,
   notificationFocusMatchesAction,
   missionDrawerSuppressesExecutionAutoOpen,
+  navigationWithoutDeletedCamps,
   optimisticCampMessage,
   prepareActiveAutomationForAppQuit,
   prepareActiveCampForAppQuit,
@@ -285,6 +287,29 @@ describe('application toast semantics', () => {
     expect(neutral).toContain('class="app-toast"')
     expect(neutral).toContain('role="status"')
     expect(neutral).toContain('aria-live="polite"')
+  })
+})
+
+describe('accepted Camp deletion tombstone', () => {
+  it('removes a Camp from stale navigation snapshots and adjusts its group count', () => {
+    const deleted = {
+      id: 'camp-delete', title: '待删除', activationState: 'active' as const,
+      projectBindingKind: 'quick_chat' as const, projectPath: '', defaultLead: null,
+      marker: 'none' as const, lastActivityAt: '2026-09-21T00:00:00Z',
+      lastActivityGlobalSequence: 2, latestCompletionGlobalSequence: 0, version: 1
+    }
+    const kept = { ...deleted, id: 'camp-keep', title: '保留' }
+    const snapshot: NavigationSnapshot = {
+      schemaVersion: 3,
+      throughGlobalSequence: 2,
+      quickChat: { totalCount: 2, recentCamps: [deleted, kept] },
+      projects: []
+    }
+
+    const filtered = navigationWithoutDeletedCamps(snapshot, new Set(['camp-delete']))
+
+    expect(filtered.quickChat.totalCount).toBe(1)
+    expect(filtered.quickChat.recentCamps.map((camp) => camp.id)).toEqual(['camp-keep'])
   })
 })
 

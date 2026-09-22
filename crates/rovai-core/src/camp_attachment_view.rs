@@ -20,7 +20,8 @@ use crate::{
         inspect_runtime_attachment_copy,
     },
     camp_id::CampId,
-    command::canonical_json_digest,
+    collaboration::append_domain_event,
+    command::{ActorRef, canonical_json_digest},
     db::Database,
     message_delivery::settle_attachment_projection_failure,
 };
@@ -109,6 +110,13 @@ pub struct PreparedCampAttachmentCleanup {
     pub operation_id: String,
     pub camp_id: String,
     pub command_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedCampAttachmentCleanupCompletion {
+    cleanup: PreparedCampAttachmentCleanup,
+    cleanup_root_relative_path: PathBuf,
+    cleanup_root_identity_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,11 +484,11 @@ impl CampAttachmentViewStore {
         database: &mut Database,
         attachment_store: &CampAttachmentStore,
     ) -> Result<()> {
-        self.recover_incomplete_operations(database)?;
+        self.recover_incomplete_operations(database, attachment_store)?;
         let camp_ids = {
             let mut statement = database
                 .connection()
-                .prepare("SELECT id FROM camp ORDER BY id")?;
+                .prepare("SELECT id FROM camp WHERE deletion_operation_id IS NULL ORDER BY id")?;
             statement
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
@@ -1635,10 +1643,18 @@ impl CampAttachmentViewStore {
             .query_row(
                 r#"
                 SELECT EXISTS(
-                    SELECT 1
+                    SELECT agent_run.id
                     FROM agent_run
-                    LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-                    WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+                    WHERE agent_run.invocation_kind = 'batch'
+                      AND agent_run.camp_id = ?1
+                      AND agent_run.status = 'running'
+                      AND agent_run.execution_lease_owner IS NOT NULL
+                    UNION ALL
+                    SELECT agent_run.id
+                    FROM agent_run
+                    JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                    WHERE agent_run.invocation_kind IS NOT 'batch'
+                      AND camp_turn.camp_id = ?1
                       AND agent_run.status = 'running'
                       AND agent_run.execution_lease_owner IS NOT NULL
                 )
@@ -1852,11 +1868,82 @@ impl CampAttachmentViewStore {
         Ok(())
     }
 
+    /// Atomically hands post-delete resource ownership to the existing cleanup
+    /// journal. The caller must delete the Camp aggregate in this transaction;
+    /// committing this transition while the Camp remains present is invalid.
+    pub(crate) fn commit_camp_delete_cleanup_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        cleanup: &PreparedCampAttachmentCleanup,
+    ) -> Result<()> {
+        CampId::parse(&cleanup.camp_id)?;
+        validate_operation_id(&cleanup.operation_id)?;
+        let deletion_operation_id: Option<String> = transaction
+            .query_row(
+                "SELECT deletion_operation_id FROM camp WHERE id=?1",
+                [&cleanup.camp_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if deletion_operation_id.as_deref() != Some(cleanup.command_id.as_str()) {
+            anyhow::bail!(
+                "camp_attachment_view_recovery_required: cleanup does not own the Camp deletion"
+            );
+        }
+        let changed = transaction.execute(
+            r#"
+            UPDATE camp_attachment_view_operation
+            SET status = 'committed', error_code = NULL,
+                deletion_attempt_count = 0,
+                deletion_next_attempt_at = ?4,
+                deletion_attention_required = 0,
+                updated_at = ?4
+            WHERE id = ?1 AND camp_id = ?2 AND command_id = ?3
+              AND kind = 'camp_delete_cleanup'
+              AND status IN ('planned', 'recovery_required')
+            "#,
+            params![
+                cleanup.operation_id,
+                cleanup.camp_id,
+                cleanup.command_id,
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )?;
+        if changed != 1 {
+            let status = transaction
+                .query_row(
+                    "SELECT status FROM camp_attachment_view_operation WHERE id=?1 AND command_id=?2",
+                    params![cleanup.operation_id, cleanup.command_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if status.as_deref() != Some("committed") {
+                anyhow::bail!("camp_attachment_view_recovery_required");
+            }
+        }
+        Ok(())
+    }
+
     pub fn complete_camp_delete_cleanup(
         &self,
         database: &mut Database,
+        attachment_store: &CampAttachmentStore,
         cleanup: &PreparedCampAttachmentCleanup,
     ) -> Result<()> {
+        let Some(completion) = self.prepare_camp_delete_cleanup_completion(database, cleanup)?
+        else {
+            return Ok(());
+        };
+        self.apply_camp_delete_cleanup_files(attachment_store, &completion)?;
+        self.finalize_camp_delete_cleanup(database, &completion)
+    }
+
+    pub(crate) fn prepare_camp_delete_cleanup_completion(
+        &self,
+        database: &Database,
+        cleanup: &PreparedCampAttachmentCleanup,
+    ) -> Result<Option<PreparedCampAttachmentCleanupCompletion>> {
         CampId::parse(&cleanup.camp_id)?;
         validate_operation_id(&cleanup.operation_id)?;
         let operation = database
@@ -1879,7 +1966,7 @@ impl CampAttachmentViewStore {
             .optional()?
             .context("camp_attachment_view_recovery_required: cleanup operation is missing")?;
         if operation.0 == "completed" {
-            return Ok(());
+            return Ok(None);
         }
         if operation.0 != "committed" {
             anyhow::bail!("camp_attachment_view_recovery_required: cleanup is not committed");
@@ -1894,16 +1981,42 @@ impl CampAttachmentViewStore {
         if relative != expected_relative {
             anyhow::bail!("camp_attachment_view_recovery_required: cleanup path changed");
         }
-        crate::storage_layout::remove_camp_attachment_output(&self.root, &cleanup.camp_id)?;
-        let camp_root = self.root.join(&relative);
+        Ok(Some(PreparedCampAttachmentCleanupCompletion {
+            cleanup: cleanup.clone(),
+            cleanup_root_relative_path: relative,
+            cleanup_root_identity_digest: operation.2,
+        }))
+    }
+
+    pub(crate) fn apply_camp_delete_cleanup_files(
+        &self,
+        attachment_store: &CampAttachmentStore,
+        completion: &PreparedCampAttachmentCleanupCompletion,
+    ) -> Result<()> {
+        Self::apply_camp_delete_cleanup_files_at_root(&self.root, attachment_store, completion)
+    }
+
+    pub(crate) fn apply_camp_delete_cleanup_files_at_root(
+        view_root: &Path,
+        attachment_store: &CampAttachmentStore,
+        completion: &PreparedCampAttachmentCleanupCompletion,
+    ) -> Result<()> {
+        let cleanup = &completion.cleanup;
+        // The journal owns both attachment authorities after the aggregate is
+        // gone. A crash after either removal is safe because absence is the
+        // idempotent completion state.
+        attachment_store.remove_camp(&cleanup.camp_id)?;
+        crate::storage_layout::remove_camp_attachment_output(view_root, &cleanup.camp_id)?;
+        let camp_root = view_root.join(&completion.cleanup_root_relative_path);
         if path_entry_exists(&camp_root)? {
-            let expected_identity = operation
-                .2
+            let expected_identity = completion
+                .cleanup_root_identity_digest
+                .as_ref()
                 .context("camp_attachment_view_recovery_required: cleanup identity is missing")?;
-            if entry_identity_digest(&camp_root)? != expected_identity {
+            if entry_identity_digest(&camp_root)? != expected_identity.as_str() {
                 anyhow::bail!("camp_attachment_view_recovery_required: cleanup identity changed");
             }
-            let camps_root = self.root.join("camps");
+            let camps_root = view_root.join("camps");
             set_directory_mode(&camps_root, 0o700)?;
             let cleanup_result = (|| -> Result<()> {
                 remove_managed_tree(&camp_root)?;
@@ -1912,10 +2025,19 @@ impl CampAttachmentViewStore {
             let restore_result = set_directory_mode(&camps_root, 0o100);
             cleanup_result?;
             restore_result?;
-        } else if operation.2.is_some() {
+        } else if completion.cleanup_root_identity_digest.is_some() {
             // A preceding cleanup attempt may have removed the exact tree before
             // crashing. Absence is the only safe adopt state after Camp deletion.
         }
+        Ok(())
+    }
+
+    pub(crate) fn finalize_camp_delete_cleanup(
+        &self,
+        database: &mut Database,
+        completion: &PreparedCampAttachmentCleanupCompletion,
+    ) -> Result<()> {
+        let cleanup = &completion.cleanup;
         let now = chrono::Utc::now().to_rfc3339();
         let transaction = database.connection_mut().transaction()?;
         transaction.execute(
@@ -1926,16 +2048,66 @@ impl CampAttachmentViewStore {
             "DELETE FROM camp_attachment_view WHERE camp_id = ?1",
             [&cleanup.camp_id],
         )?;
+        transaction.execute(
+            r#"
+            DELETE FROM mission_workspace
+            WHERE camp_id = ?1 AND cleanup_command_id = ?2
+              AND cleanup_worktree_removed = 1 AND cleanup_branch_removed = 1
+            "#,
+            params![cleanup.camp_id, cleanup.command_id],
+        )?;
         let changed = transaction.execute(
             r#"
             UPDATE camp_attachment_view_operation
-            SET status = 'completed', completed_at = ?2, updated_at = ?2
+            SET status = 'completed', completed_at = ?2, updated_at = ?2,
+                cleanup_root_relative_path = '',
+                cleanup_root_identity_digest = NULL,
+                error_code = NULL,
+                deletion_next_attempt_at = NULL,
+                deletion_attention_required = 0
             WHERE id = ?1 AND status = 'committed'
             "#,
             params![cleanup.operation_id, now],
         )?;
         if changed != 1 {
+            let completed: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM camp_attachment_view_operation WHERE id=?1 AND status='completed')",
+                [&cleanup.operation_id],
+                |row| row.get(0),
+            )?;
+            if completed {
+                transaction.commit()?;
+                return Ok(());
+            }
             anyhow::bail!("camp_attachment_view_recovery_required");
+        }
+        let asynchronous_deletion: bool = transaction.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM event_log
+                WHERE command_id = ?1
+                  AND command_type = 'camp.delete'
+                  AND result_status = 'accepted'
+            )
+            "#,
+            [&cleanup.command_id],
+            |row| row.get(0),
+        )?;
+        if asynchronous_deletion {
+            append_domain_event(
+                &transaction,
+                "camp.deletion_completed",
+                Some(&cleanup.camp_id),
+                Some(("camp_deletion", &cleanup.command_id)),
+                &ActorRef::System {
+                    component_id: "camp-deletion-coordinator".to_string(),
+                },
+                None,
+                &json!({
+                    "campId": cleanup.camp_id,
+                    "operationId": cleanup.command_id,
+                }),
+            )?;
         }
         transaction.commit()?;
         Ok(())
@@ -2600,7 +2772,11 @@ impl CampAttachmentViewStore {
         }
     }
 
-    fn recover_incomplete_operations(&self, database: &mut Database) -> Result<()> {
+    fn recover_incomplete_operations(
+        &self,
+        database: &mut Database,
+        _attachment_store: &CampAttachmentStore,
+    ) -> Result<()> {
         // Builds after Migration 102 could cancel a cleanup without settling
         // its writer intent. Repair only that terminal legacy shape before the
         // unresolved-operation scan so affected Camps can admit new Runs.
@@ -2652,10 +2828,23 @@ impl CampAttachmentViewStore {
                             "camp_attachment_view_recovery_required: committed cleanup still has a Camp"
                         );
                     }
+                    let owns_deletion: bool = database.connection().query_row(
+                        "SELECT EXISTS(SELECT 1 FROM camp WHERE id=?1 AND deletion_operation_id=?2)",
+                        params![camp_id, cleanup.command_id],
+                        |row| row.get(0),
+                    )?;
+                    if owns_deletion {
+                        // The Camp deletion coordinator resumes this planned
+                        // handoff. Cancelling it here would reopen the exact
+                        // crash window the journal is meant to close.
+                        continue;
+                    }
                     self.cancel_camp_delete_cleanup(database, &cleanup)?;
                 } else {
                     self.commit_camp_delete_cleanup(database, &cleanup)?;
-                    self.complete_camp_delete_cleanup(database, &cleanup)?;
+                    // Resource removal belongs to the bounded Camp deletion
+                    // coordinator. Reconciliation repairs the durable handoff
+                    // only; it must not race a second filesystem worker.
                 }
                 continue;
             }
@@ -7528,9 +7717,27 @@ mod tests {
 
         // Simulate a crash after the Camp transaction commits but before the
         // cleanup operation advances from planned. Startup reconciliation must
-        // use Camp absence as the durable outcome and finish the exact tree.
+        // use Camp absence as the durable outcome and commit the handoff; the
+        // bounded deletion coordinator then finishes the exact tree.
         view.reconcile(&mut database, &CampAttachmentStore::new(&data_dir))
             .unwrap();
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT status FROM camp_attachment_view_operation WHERE id = ?1",
+                    [&cleanup.operation_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "committed"
+        );
+        view.complete_camp_delete_cleanup(
+            &mut database,
+            &CampAttachmentStore::new(&data_dir),
+            &cleanup,
+        )
+        .unwrap();
         assert!(!output.exists());
         assert_eq!(fs::read(&external).unwrap(), b"external");
         assert!(sibling.join("keep.txt").exists());
@@ -7559,12 +7766,24 @@ mod tests {
             database
                 .connection()
                 .query_row(
-                    "SELECT status FROM camp_attachment_view_operation WHERE id = ?1",
+                    r#"
+                    SELECT status, cleanup_root_relative_path,
+                           cleanup_root_identity_digest, error_code
+                    FROM camp_attachment_view_operation
+                    WHERE id = ?1
+                    "#,
                     [&cleanup.operation_id],
-                    |row| row.get::<_, String>(0),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
                 )
                 .unwrap(),
-            "completed"
+            ("completed".to_string(), "".to_string(), None, None)
         );
         assert_eq!(
             database

@@ -7,7 +7,7 @@ import { seedCompletedOnboardingForAcceptance } from './lib/dev-desktop.mjs'
 const root = resolve(import.meta.dirname, '..')
 const appPath = resolve(process.argv[2] ?? join(root, 'dist', 'mac-arm64', 'Rovai AI.app'))
 const acceptanceScope = process.env.ROVAI_SIDEBAR_ACCEPT_SCOPE ?? 'all'
-if (!['all', 'navigation-windows'].includes(acceptanceScope)) throw new Error('Unknown sidebar acceptance scope')
+if (!['all', 'navigation-windows', 'deletion-latency'].includes(acceptanceScope)) throw new Error('Unknown sidebar acceptance scope')
 const fixtureRoot = process.env.ROVAI_SIDEBAR_ACCEPT_FIXTURE_ROOT
   ?? await mkdtemp(join(tmpdir(), 'rovai-sidebar-ui-accept-'))
 const dataDir = join(fixtureRoot, 'user-data')
@@ -20,6 +20,7 @@ const outputDir = process.env.ROVAI_SIDEBAR_ACCEPT_OUTPUT_DIR
 const databasePath = join(dataDir, 'rovai.sqlite')
 const firstPort = Number(process.env.ROVAI_SIDEBAR_ACCEPT_DEBUG_PORT ?? 9491)
 const renamedTitle = '侧栏操作验收已重命名'
+const deletionAcceptanceP95LimitMs = 250
 
 await mkdir(dataDir, { recursive: true })
 await mkdir(workspaceDir, { recursive: true })
@@ -65,7 +66,17 @@ try {
   await assertTargetMoved(desktopApp.cdp, projectTarget, '.navigation-projects')
   await assertProjectPaginationCount(desktopApp.cdp, '.navigation-projects', 15)
 
-  if (acceptanceScope === 'navigation-windows') {
+  if (acceptanceScope === 'deletion-latency') {
+    const deletionAcceptance = await measureAcceptedDeletionLatency(desktopApp.cdp, 8)
+    console.log(JSON.stringify({
+      ok: true,
+      scope: acceptanceScope,
+      app: basename(appPath),
+      fixtureRoot,
+      outputDir,
+      deletionAcceptance
+    }, null, 2))
+  } else if (acceptanceScope === 'navigation-windows') {
     await setTheme(desktopApp.cdp, 'night')
     await capture(desktopApp.cdp, join(outputDir, 'navigation-windows-night.png'))
     await closeApp(desktopApp)
@@ -124,7 +135,7 @@ try {
     await waitForExpression(desktopApp.cdp, `!document.querySelector('.camp-action-dialog')`)
     await assertNoTargetRefocus(desktopApp.cdp, deleteTarget)
     await openDeleteDialog(desktopApp.cdp, deleteTarget)
-    await clickButton(desktopApp.cdp, '.camp-action-dialog .danger-button', '永久删除对话')
+    await clickButton(desktopApp.cdp, '.camp-action-dialog .danger-button', '删除')
     await waitForExpression(desktopApp.cdp, `(() => {
       const target = ${JSON.stringify(deleteTarget)}
       return ![...document.querySelectorAll('[data-sidebar-menu-target]')]
@@ -133,6 +144,7 @@ try {
     })()`, 15_000)
     await assertHoverAndFocusVisibility(desktopApp.cdp, campTarget)
     await assertQuestionMarkHelpHoverOnly(desktopApp.cdp)
+    const deletionAcceptance = await measureAcceptedDeletionLatency(desktopApp.cdp, 8)
 
     // Exercise removal only after all ordinary project/camp actions have run. Pin
     // both the Project and a Camp first so the acceptance also proves removal
@@ -214,6 +226,7 @@ try {
         projectRemovalPersistsAcrossRestart: true,
         renameAndDeleteDialogs: true,
         permanentDelete: true,
+        deletionAcceptedP95Within250Ms: deletionAcceptance.p95Ms <= deletionAcceptanceP95LimitMs,
         restartPersistence: true,
         menuViewportCollision: true,
         longTitleTruncation: true,
@@ -228,7 +241,8 @@ try {
         deleteDialog: deleteDialogCapture,
         projectRemovalDialog: projectRemoval.dialogCapture,
         compactMenu: compactMenuCapture
-      }
+      },
+      deletionAcceptance
     }, null, 2))
   }
 } finally {
@@ -293,6 +307,44 @@ async function createCamp(core, input) {
   assert(created.status === 'applied' && created.payload?.campId,
     `Could not create sidebar fixture Camp: ${JSON.stringify(created)}`)
   return created.payload.campId
+}
+
+async function measureAcceptedDeletionLatency(cdp, sampleCount) {
+  const core = { request: (method, params = {}) => request(cdp, method, params) }
+  const preflight = await core.request('camps.creationPreflight')
+  const common = {
+    memberAgentIds: preflight.presentMembers.map((member) => member.agentId),
+    defaultLeadAgentId: preflight.initialLeadAgentId,
+    collaborationMode: 'peer',
+    workspace: null
+  }
+  const samplesMs = []
+  for (let index = 0; index < sampleCount; index += 1) {
+    const campId = await createCamp(core, {
+      ...common,
+      name: `异步删除受理时延样本 ${index + 1}`
+    })
+    const target = `camp:${campId}`
+    const targetVisible = `(() => [...document.querySelectorAll('[data-sidebar-menu-target]')]
+      .some((element) => element.dataset.sidebarMenuTarget === ${JSON.stringify(target)}))()`
+    await waitForExpression(cdp, targetVisible, 15_000)
+    await openDeleteDialog(cdp, target)
+    const startedAt = performance.now()
+    await clickButton(cdp, '.camp-action-dialog .danger-button', '删除')
+    await waitForExpression(cdp, `!(${targetVisible}) && !document.querySelector('.camp-action-dialog')`, 15_000)
+    samplesMs.push(Number((performance.now() - startedAt).toFixed(2)))
+  }
+  const p50Ms = percentile(samplesMs, 0.5)
+  const p95Ms = percentile(samplesMs, 0.95)
+  assert(p95Ms <= deletionAcceptanceP95LimitMs,
+    `Accepted deletion p95 ${p95Ms}ms exceeded ${deletionAcceptanceP95LimitMs}ms: ${JSON.stringify(samplesMs)}`)
+  return { sampleCount, p50Ms, p95Ms, limitP95Ms: deletionAcceptanceP95LimitMs, samplesMs }
+}
+
+function percentile(values, quantile) {
+  assert(values.length > 0, 'Percentile requires at least one sample')
+  const ordered = [...values].sort((left, right) => left - right)
+  return ordered[Math.max(0, Math.ceil(ordered.length * quantile) - 1)]
 }
 
 async function assertSidebarContract(cdp, context) {
@@ -823,7 +875,7 @@ async function assertExpandedWindowFreshness(cdp) {
     commandId: crypto.randomUUID(),
     command: { campId: target.id, expectedVersion: current.version, force: true }
   })
-  assert(deleted.status === 'applied', `Fixture delete failed: ${JSON.stringify(deleted)}`)
+  assert(deleted.status === 'accepted', `Fixture delete was not accepted: ${JSON.stringify(deleted)}`)
   await waitForExpression(cdp, `!document.querySelector(${JSON.stringify(targetSelector)})
     && document.querySelector(${JSON.stringify(selector)})?.querySelectorAll('.camp-nav-row').length === 15`)
 }
@@ -1142,11 +1194,12 @@ async function openDeleteDialog(cdp, target) {
     title: document.querySelector('.camp-action-dialog h2')?.textContent ?? '',
     description: document.querySelector('.camp-action-dialog')?.textContent ?? '',
     dangerButton: [...document.querySelectorAll('.camp-action-dialog .danger-button')]
-      .some((button) => button.textContent?.trim() === '永久删除对话')
+      .some((button) => button.textContent?.trim() === '删除')
   })`)
-  assert(state.title.includes('永久删除')
-      && state.description.includes('不可撤销')
-      && state.description.includes('本地项目目录')
+  assert(state.title.includes('删除对话')
+      && state.description.includes('保存的附件')
+      && state.description.includes('原始工作区文件')
+      && state.description.includes('外部引用文件')
       && state.dangerButton,
   `Delete confirmation semantics were incomplete: ${JSON.stringify(state)}`)
 }

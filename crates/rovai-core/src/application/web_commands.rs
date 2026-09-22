@@ -67,6 +67,7 @@ pub(super) fn reconcile(
         "missions.linkPr" => user!(crate::mission::LinkMissionPrCommand),
         "camps.rename" => camp!(RenameCampCommand),
         "camps.delete" => camp!(DeleteCampCommand),
+        "camps.retryDeletion" => user!(RetryCampDeletionCommand),
         "camps.discardPending" => camp!(DiscardPendingCampCommand),
         "camps.members.fast.set" => camp!(rovai_core::camp_fast::SetCampMemberFastCommand),
         "members.remove" => user!(RemoveMemberCommand),

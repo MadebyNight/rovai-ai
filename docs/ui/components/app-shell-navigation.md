@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-app-shell-navigation
 status: accepted
-last_updated: 2026-09-20
+last_updated: 2026-09-22
 ---
 
 # App Shell 与统一侧栏
@@ -69,8 +69,14 @@ Desktop 与宽屏 WebUI 的置顶 Camp 在标题左侧显示 17px 对话图标�
 旧 Camp 不批量改名，`/new` 后关闭的旧绑定仍保留来源。字段与命名事务见
 [Channel Camp Naming v1](../../contracts/channel-camp-naming-v1.md)。既有长标题截断和完整可访问名称保持不变。
 
-删除对话确认只显示标题“删除对话？”、提示“此操作不可撤销。”和“取消 / 删除”按钮；提交时显示“正在删除…”。
-精简文案不改变删除数据和向运行中执行提交停止请求的业务语义。
+删除对话确认只显示标题“删除对话？”，说明保存的附件会一并删除、原始工作区文件和外部引用文件不受影响，并提供
+“取消 / 删除”按钮；提交时短暂显示“正在删除…”。Core 返回 `accepted` 后立即关闭 Dialog、离开当前 Camp 并从全部正常导航分组移除；本窗口派生
+tombstone 必须过滤受理前已经发出的迟到 Navigation snapshot，导航刷新或预览释放失败不能恢复该行或推翻受理。
+正常完成不显示阶段、进度、“永久删除完成”或任务区。
+
+后台自动恢复耗尽且确实需要用户介入时，只使用现有局部持久通知“删除未完成，请重试。”和一个“重试”动作；
+重试继续原 operation，Camp 不重新进入列表。同一 `operationId + attentionRevision` 在一个窗口会话只提醒一次，重启后
+未解决事项仍可再次提醒。不使用全局大红条，不向 Renderer 暴露 Runtime stop、数据库删除或资源 cleanup 阶段。
 
 Project 三点菜单依次提供“置顶项目 / 取消置顶项目”“重命名”“移除项目”；刚选择且尚无 Camp 的目录也可重命名。
 “重命名项目”沿用通用单字段 Dialog：项目名称、只读工作目录、“取消 / 保存名称”。打开时聚焦并全选原名称；

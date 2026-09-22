@@ -234,6 +234,7 @@ pub enum MissionWorkspaceDisposition {
 impl sealed::Sealed for DeleteCampCommand {}
 impl DomainCommand for DeleteCampCommand {
     const TYPE: &'static str = "camp.delete";
+    const ALLOWED_WHILE_CAMP_DELETING: bool = true;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5313,8 +5314,14 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         r#"
         SELECT agent_run.id
         FROM agent_run
-        LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-        WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
+        WHERE agent_run.invocation_kind = 'batch'
+          AND agent_run.camp_id = ?1
+        UNION ALL
+        SELECT agent_run.id
+        FROM agent_run
+        JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+        WHERE agent_run.invocation_kind IS NOT 'batch'
+          AND camp_turn.camp_id = ?1
         "#
     } else {
         r#"
@@ -5459,7 +5466,15 @@ pub(crate) fn delete_camp_aggregate(transaction: &Connection, camp_id: &str) -> 
         [camp_id],
     )?;
     transaction.execute(
-        "DELETE FROM event_log WHERE camp_id = ?1 OR task_id IN (SELECT id FROM task WHERE camp_id = ?1)",
+        r#"
+        DELETE FROM event_log
+        WHERE (camp_id = ?1 OR task_id IN (SELECT id FROM task WHERE camp_id = ?1))
+          AND NOT (
+              event_type = 'command.result'
+              AND command_type = 'camp.delete'
+              AND result_status = 'accepted'
+          )
+        "#,
         [camp_id],
     )?;
     transaction.execute(

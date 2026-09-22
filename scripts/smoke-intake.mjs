@@ -110,8 +110,8 @@ try {
         expectedVersion: restoredEmptySnapshot.camp.version
       }
     })
-    if (deletion.status !== 'applied' || deletion.code !== 'camp.deleted') {
-      throw new Error(`Quiescent Windows Camp could not be permanently deleted: ${JSON.stringify(deletion)}`)
+    if (deletion.status !== 'accepted' || deletion.code !== 'camp.delete_accepted') {
+      throw new Error(`Quiescent Windows Camp deletion was not accepted: ${JSON.stringify(deletion)}`)
     }
     await core.stop()
     core = startCore(dataDir)
@@ -230,8 +230,8 @@ try {
       expectedVersion: restoredSnapshot.camp.version
     }
   })
-  if (deletion.status !== 'applied' || deletion.code !== 'camp.deleted') {
-    throw new Error(`Quiescent Camp could not be permanently deleted: ${JSON.stringify(deletion)}`)
+  if (deletion.status !== 'accepted' || deletion.code !== 'camp.delete_accepted') {
+    throw new Error(`Quiescent Camp deletion was not accepted: ${JSON.stringify(deletion)}`)
   }
   const afterDeletion = await core.request('navigation.snapshot')
   if (afterDeletion.quickChat.totalCount !== 0 || afterDeletion.projects.length !== 0) {

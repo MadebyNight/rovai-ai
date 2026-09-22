@@ -731,6 +731,11 @@ export interface StoredCommandResult {
   recordedAt: string
 }
 
+export interface CampDeletionIssue {
+  operationId: string
+  attentionRevision: number
+}
+
 export interface CreateTaskAndQueueExecutionResult {
   execution: StoredCommandResult | null
   replayed: boolean
@@ -3882,6 +3887,8 @@ export type CoreMethod =
   | 'camps.enter'
   | 'camps.open'
   | 'camps.delete'
+  | 'camps.deletionIssues'
+  | 'camps.retryDeletion'
   | 'singleChat.list'
   | 'singleChat.get'
   | 'singleChat.open'

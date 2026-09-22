@@ -212,6 +212,14 @@ impl Core {
             };
             let workspace = select_candidate(&git, &repository, &mission, &host, 1).await?;
             let database = self.database.lock().await;
+            let deletion_in_progress: bool = database.connection().query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM camp WHERE id=?1 AND deletion_operation_id IS NULL)",
+                [&candidate.camp_id],
+                |row| row.get(0),
+            )?;
+            if deletion_in_progress {
+                return Ok(None);
+            }
             mission_workspace::persist_plan(database.connection(), &workspace)?;
             workspace
         };
@@ -222,7 +230,7 @@ impl Core {
         {
             let database = self.database.lock().await;
             let changed = database.connection().execute(
-                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_failed'",
+                "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='cleanup_failed' AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NOT NULL)",
                 params![workspace.id, chrono::Utc::now().to_rfc3339()],
             )?;
             if changed == 1 {
@@ -255,10 +263,13 @@ impl Core {
                 // managed branch still exists.
                 git.validate_execution_workspace(&workspace).await?;
                 let database = self.database.lock().await;
-                database.connection().execute(
-                    "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1",
+                let changed = database.connection().execute(
+                    "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?2 WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NOT NULL)",
                     params![workspace.id, chrono::Utc::now().to_rfc3339()],
                 )?;
+                if changed != 1 {
+                    return Ok(None);
+                }
                 workspace.cleanup_command_id = None;
                 workspace.cleanup_expected_branch_oid = None;
                 workspace.cleanup_worktree_removed = false;
@@ -301,10 +312,13 @@ impl Core {
                 workspace.cleanup_branch_removed = false;
                 workspace.diagnostic = None;
                 let database = self.database.lock().await;
-                database.connection().execute(
-                    "UPDATE mission_workspace SET base_branch=?2,base_sha=?3,preparation_token=?4,preparation_kind=?5,generation=?6,state='preparing',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?7 WHERE id=?1",
+                let changed = database.connection().execute(
+                    "UPDATE mission_workspace SET base_branch=?2,base_sha=?3,preparation_token=?4,preparation_kind=?5,generation=?6,state='preparing',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=NULL,updated_at=?7 WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NOT NULL)",
                     params![workspace.id, workspace.base_branch, workspace.base_sha, workspace.preparation_token, workspace.preparation_kind, workspace.generation, chrono::Utc::now().to_rfc3339()],
                 )?;
+                if changed != 1 {
+                    return Ok(None);
+                }
             }
         }
         if workspace.state == "preparing" {
@@ -338,13 +352,16 @@ impl Core {
                         next.preparation_token = workspace.preparation_token.clone();
                         next.generation = workspace.generation;
                         let database = self.database.lock().await;
-                        database.connection().execute("UPDATE mission_workspace SET worktree_path=?2,working_directory=?3,branch=?4,updated_at=?5 WHERE id=?1 AND state='preparing'",params![next.id,next.worktree_path,next.working_directory,next.branch,chrono::Utc::now().to_rfc3339()])?;
+                        let changed = database.connection().execute("UPDATE mission_workspace SET worktree_path=?2,working_directory=?3,branch=?4,updated_at=?5 WHERE id=?1 AND state='preparing' AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NOT NULL)",params![next.id,next.worktree_path,next.working_directory,next.branch,chrono::Utc::now().to_rfc3339()])?;
+                        if changed != 1 {
+                            return Ok(None);
+                        }
                         workspace = next;
                     }
                     Err(error) => {
                         let database = self.database.lock().await;
                         database.connection().execute(
-                            "UPDATE mission_workspace SET diagnostic=?2,updated_at=?3 WHERE id=?1",
+                            "UPDATE mission_workspace SET diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='preparing'",
                             params![
                                 workspace.id,
                                 format!("{error:#}"),
@@ -356,7 +373,10 @@ impl Core {
                 }
             }
             let database = self.database.lock().await;
-            database.connection().execute("UPDATE mission_workspace SET state='ready',diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='preparing'",params![workspace.id,chrono::Utc::now().to_rfc3339()])?;
+            let changed = database.connection().execute("UPDATE mission_workspace SET state='ready',diagnostic=NULL,updated_at=?2 WHERE id=?1 AND state='preparing' AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NOT NULL)",params![workspace.id,chrono::Utc::now().to_rfc3339()])?;
+            if changed != 1 {
+                return Ok(None);
+            }
             workspace.state = "ready".into();
         }
         git.validate_execution_workspace(&workspace).await?;
@@ -579,7 +599,7 @@ impl Core {
     ) -> Result<()> {
         let workspaces = {
             let database = self.database.lock().await;
-            let mut statement=database.connection().prepare("SELECT DISTINCT mission_id FROM mission_workspace WHERE state='cleanup_pending' AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1) AND (?1 IS NULL OR camp_id=?1)")?;
+            let mut statement=database.connection().prepare("SELECT DISTINCT mission_id FROM mission_workspace WHERE state='cleanup_pending' AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1) AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NOT NULL) AND (?1 IS NULL OR camp_id=?1)")?;
             let ids = statement
                 .query_map([camp_id], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -645,7 +665,7 @@ impl Core {
                     let restored = failure.restore_ready
                         && !workspace.cleanup_worktree_removed
                         && database.connection().execute(
-                            "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='cleanup_pending' AND EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",
+                            "UPDATE mission_workspace SET state='ready',cleanup_command_id=NULL,cleanup_expected_branch_oid=NULL,cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic=?2,updated_at=?3 WHERE id=?1 AND state='cleanup_pending' AND EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id AND camp.deletion_operation_id IS NULL)",
                             params![workspace.id, &diagnostic, chrono::Utc::now().to_rfc3339()],
                         )? == 1;
                     if restored {
@@ -677,6 +697,9 @@ impl Core {
                 publish_started_at.elapsed().as_millis(),
                 attempt_started_at.elapsed().as_millis(),
             );
+            // A Camp deletion operation may be waiting for this existing
+            // resource journal before it can emit deletion completion.
+            self.camp_deletion_notify.notify_one();
         }
         Ok(())
     }
@@ -811,7 +834,7 @@ impl Core {
             }
             "missions.cleanup.list" => {
                 let database = self.database.lock().await;
-                let mut stmt=database.connection().prepare("SELECT mission_id FROM mission_workspace WHERE state IN ('cleanup_pending','cleanup_failed') AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id) ORDER BY updated_at")?;
+                let mut stmt=database.connection().prepare("SELECT mission_id FROM mission_workspace WHERE state IN ('cleanup_pending','cleanup_failed') AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id) AND NOT EXISTS(SELECT 1 FROM camp_attachment_view_operation AS deletion WHERE deletion.kind='camp_delete_cleanup' AND deletion.command_id=mission_workspace.cleanup_command_id) ORDER BY updated_at")?;
                 let ids = stmt
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -835,7 +858,7 @@ impl Core {
                 let retry_command_id = uuid::Uuid::new_v4().to_string();
                 let (scheduled, camp_id, pending) = {
                     let database = self.database.lock().await;
-                    let camp_id = database.connection().query_row("SELECT camp_id FROM mission_workspace WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id)",[&query.workspace_id],|r|r.get::<_,String>(0)).optional()?;
+                    let camp_id = database.connection().query_row("SELECT camp_id FROM mission_workspace WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM camp WHERE camp.id=mission_workspace.camp_id) AND NOT EXISTS(SELECT 1 FROM camp_attachment_view_operation AS deletion WHERE deletion.kind='camp_delete_cleanup' AND deletion.command_id=mission_workspace.cleanup_command_id)",[&query.workspace_id],|r|r.get::<_,String>(0)).optional()?;
                     let scheduled = if camp_id.is_some() {
                         database.connection().execute(
                             "UPDATE mission_workspace SET state='cleanup_pending',cleanup_command_id=?2,diagnostic=NULL,updated_at=?3 WHERE id=?1 AND state='cleanup_failed' AND NOT (cleanup_worktree_removed=1 AND cleanup_branch_removed=1)",

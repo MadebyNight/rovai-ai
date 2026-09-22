@@ -205,7 +205,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const campId = created.payload.campId
     for (const [operation, cursor] of [
       ['agentRunExecution.page', { afterSequence: 1 }],
-      ['agentRunExecution.changes', { afterChangeSequence: 1 }]
+      ['agentRunExecution.changes', { afterChangeSequence: 1, refreshEvidenceIds: [] }]
     ]) {
       const response = await authorized(first, 'request', { method: 'POST', body: JSON.stringify({ operation, params: { campId, agentRunId: 'missing-run', ...cursor, limit: 12 } }) })
       assert.equal(response.status, 200)
@@ -531,7 +531,7 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.deepEqual((await call(first, 'commands.reconcile', { operation: 'camps.rename', params: renameParams })).result, renamed)
     const deleteParams = { commandId: crypto.randomUUID(), command: { campId: temporaryId, expectedVersion: (await call(first, 'camps.open', { campId: temporaryId, traceId: crypto.randomUUID() })).camp.version, force: false } }
     const deleted = await call(first, 'camps.delete', deleteParams)
-    assert.equal(deleted.status, 'applied')
+    assert.equal(deleted.status, 'accepted')
     assert.equal(await call(first, 'camps.exists', { campId: temporaryId }), false)
     assert.deepEqual((await call(first, 'commands.reconcile', { operation: 'camps.delete', params: deleteParams })).result, deleted, 'deleted Camp receipts remain queryable')
     const unusedBeforeRotation = await host.request('host.web.loginTicket')

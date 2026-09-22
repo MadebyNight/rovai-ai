@@ -508,6 +508,7 @@ struct ProcessEntry {
 #[derive(Default)]
 struct FleetState {
     shutdown_started: bool,
+    deleting_camps: HashSet<String>,
     processes: HashMap<String, ProcessEntry>,
     process_by_run: HashMap<RunLeaseKey, String>,
     resident_processes: HashSet<String>,
@@ -704,6 +705,14 @@ impl FleetState {
     ) -> FleetAcquirePlan {
         if self.shutdown_started {
             return FleetAcquirePlan::Blocked("Runtime Fleet is shutting down".to_string());
+        }
+        if request
+            .compatibility
+            .invalidation_camp_id
+            .as_ref()
+            .is_some_and(|camp_id| self.deleting_camps.contains(camp_id))
+        {
+            return FleetAcquirePlan::Blocked("Camp deletion is in progress".to_string());
         }
         let run_lease = request.run_lease();
         if let Some(process_id) = self.process_by_run.get(&run_lease)
@@ -1359,6 +1368,11 @@ impl AgentRuntimeFleetManager {
             let _operation = operations.lock().await;
             let mut state = state.lock().await;
             (|| {
+                let camp_is_deleting = state
+                    .processes
+                    .get(&reservation_id)
+                    .and_then(|entry| entry.compatibility.invalidation_camp_id.as_ref())
+                    .is_some_and(|camp_id| state.deleting_camps.contains(camp_id));
                 let entry = state
                     .processes
                     .get_mut(&reservation_id)
@@ -1366,6 +1380,7 @@ impl AgentRuntimeFleetManager {
                 if entry.state != FleetProcessState::Starting
                     || entry.run_lease.as_ref() != Some(&run_lease)
                     || entry.retire_after_run
+                    || camp_is_deleting
                     || completion.is_cancelled()
                     || !entry
                         .startup
@@ -1633,6 +1648,50 @@ impl AgentRuntimeFleetManager {
             .await;
     }
 
+    /// Installs the process-local projection of the durable Camp deletion
+    /// marker and immediately starts retiring every matching Host. This call
+    /// never waits for external process shutdown; the coordinator verifies
+    /// reaping before it advances to database deletion.
+    pub(crate) async fn mark_camp_deleting(&self, camp_id: &str) {
+        self.install_camp_deletion_cutover(camp_id, || Ok(((), true)))
+            .await
+            .expect("infallible Camp deletion Fleet projection failed");
+    }
+
+    /// Serializes the durable database cutover with Runtime acquire/Starting
+    /// commit. The closure commits authority while the Fleet admission gate is
+    /// held; an accepted outcome installs the process-local tombstone before
+    /// that gate is released.
+    pub(crate) async fn install_camp_deletion_cutover<T>(
+        &self,
+        camp_id: &str,
+        cutover: impl FnOnce() -> Result<(T, bool)>,
+    ) -> Result<T> {
+        let operation = self.operations.lock().await;
+        let (value, accepted) = cutover()?;
+        let plans = if accepted {
+            let mut state = self.state.lock().await;
+            state.deleting_camps.insert(camp_id.to_string());
+            let process_ids = state
+                .processes
+                .iter()
+                .filter(|(_, entry)| entry.compatibility.belongs_to_camp(camp_id))
+                .map(|(process_id, _)| process_id.clone())
+                .collect::<Vec<_>>();
+            process_ids
+                .into_iter()
+                .map(|process_id| state.plan_stop(&process_id))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        drop(operation);
+        for plan in plans {
+            let _ = self.dispatch_stop_plan(plan);
+        }
+        Ok(value)
+    }
+
     pub(crate) async fn fence_camp_for_attachment_mutation(&self, camp_id: &str) -> Result<()> {
         let plans = {
             let _operation = self.operations.lock().await;
@@ -1681,6 +1740,7 @@ impl AgentRuntimeFleetManager {
         let plans = {
             let _operation = self.operations.lock().await;
             let mut state = self.state.lock().await;
+            state.deleting_camps.insert(camp_id.to_string());
             let process_ids = state
                 .processes
                 .iter()
@@ -2633,6 +2693,171 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Acquire)
         );
         assert!(fleet.state.lock().await.processes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn accepted_deletion_cutover_blocks_every_later_acquire() {
+        let fleet = AgentRuntimeFleetManager::new(test_config(Duration::from_secs(1)));
+        let value = fleet
+            .install_camp_deletion_cutover("camp-a", || Ok(("accepted", true)))
+            .await
+            .unwrap();
+        assert_eq!(value, "accepted");
+
+        let result = fleet
+            .acquire(acquire_request("after-delete", "camp-a"), || async {
+                panic!("a deleting Camp must be rejected before Runtime spawn")
+            })
+            .await;
+        let error = match result {
+            Ok(_) => panic!("a deleting Camp unexpectedly acquired a Runtime"),
+            Err(error) => error.to_string(),
+        };
+        assert_eq!(error, "Camp deletion is in progress");
+    }
+
+    #[tokio::test]
+    async fn deletion_acceptance_never_waits_for_any_fleet_process_state() {
+        struct Case {
+            label: &'static str,
+            process_state: Option<FleetProcessState>,
+            has_host: bool,
+            has_stop_completion: bool,
+        }
+
+        let cases = [
+            Case {
+                label: "no-host",
+                process_state: None,
+                has_host: false,
+                has_stop_completion: false,
+            },
+            Case {
+                label: "warm",
+                process_state: Some(FleetProcessState::IdleWarm),
+                has_host: true,
+                has_stop_completion: false,
+            },
+            Case {
+                label: "starting",
+                process_state: Some(FleetProcessState::Starting),
+                has_host: false,
+                has_stop_completion: false,
+            },
+            Case {
+                label: "running-resident",
+                process_state: Some(FleetProcessState::BusyResident),
+                has_host: true,
+                has_stop_completion: false,
+            },
+            Case {
+                label: "running-burst",
+                process_state: Some(FleetProcessState::BusyBurst),
+                has_host: true,
+                has_stop_completion: false,
+            },
+            Case {
+                label: "stopping",
+                process_state: Some(FleetProcessState::Stopping),
+                has_host: true,
+                has_stop_completion: true,
+            },
+            Case {
+                label: "inconsistent-hostless-entry",
+                process_state: Some(FleetProcessState::BusyResident),
+                has_host: false,
+                has_stop_completion: false,
+            },
+        ];
+
+        for case in cases {
+            let fleet = AgentRuntimeFleetManager::new(test_config(Duration::from_secs(5)));
+            let startup = (case.process_state == Some(FleetProcessState::Starting))
+                .then(|| Arc::new(FleetStartupOperation::new()));
+            let stop = case
+                .has_stop_completion
+                .then(|| Arc::new(FleetStopCompletion::new()));
+
+            if let Some(process_state) = case.process_state {
+                let process_id = format!("delete-{}", case.label);
+                let host = case.has_host.then(|| {
+                    RuntimeProcessHost::Fake(Arc::new(FakeRuntimeProcessHost {
+                        process_id: process_id.clone(),
+                        shutdown_delay: Duration::from_secs(2),
+                        reaped: std::sync::atomic::AtomicBool::new(false),
+                        shutdown_calls: std::sync::atomic::AtomicUsize::new(0),
+                        zcode_background: AtomicBool::new(false),
+                    }))
+                });
+                let residency = if process_state == FleetProcessState::BusyBurst {
+                    FleetResidency::Burst
+                } else {
+                    FleetResidency::Resident
+                };
+                let mut state = fleet.state.lock().await;
+                state.insert_process(ProcessEntry {
+                    process_id: process_id.clone(),
+                    adapter_kind: AdapterKind::CodexCli,
+                    compatibility: RuntimeCompatibilityKey::member(
+                        "camp-matrix",
+                        "agent-1",
+                        "digest-1",
+                    ),
+                    state: process_state,
+                    residency,
+                    host,
+                    startup: startup.clone(),
+                    stop: stop.clone(),
+                    run_lease: None,
+                    idle_since: (process_state == FleetProcessState::IdleWarm).then(Instant::now),
+                    last_used_sequence: 1,
+                    retire_after_run: false,
+                    retirement: None,
+                });
+                if process_state == FleetProcessState::IdleWarm {
+                    state.idle_lru.insert((1, process_id));
+                }
+            }
+
+            let accepted = tokio::time::timeout(
+                Duration::from_millis(250),
+                fleet.install_camp_deletion_cutover("camp-matrix", || Ok((case.label, true))),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "{} deletion acceptance waited for Runtime shutdown",
+                    case.label
+                )
+            })
+            .unwrap();
+            assert_eq!(accepted, case.label);
+
+            let state = fleet.state.lock().await;
+            assert!(state.deleting_camps.contains("camp-matrix"));
+            if case.process_state == Some(FleetProcessState::Starting) {
+                assert!(startup.as_ref().unwrap().is_cancelled());
+                assert!(state.processes.values().all(|entry| entry.retire_after_run));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_deletion_cutover_does_not_install_a_tombstone() {
+        let fleet = AgentRuntimeFleetManager::new(test_config(Duration::from_secs(1)));
+        fleet
+            .install_camp_deletion_cutover("camp-a", || Ok(((), false)))
+            .await
+            .unwrap();
+
+        let lease = fleet
+            .acquire(acquire_request("after-rejection", "camp-a"), || async {
+                Ok(fake_host("after-rejection-host"))
+            })
+            .await
+            .unwrap();
+        assert_eq!(lease.host.process_id(), "after-rejection-host");
+        fleet.shutdown_all().await;
     }
 
     #[tokio::test]

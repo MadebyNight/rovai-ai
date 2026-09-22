@@ -567,16 +567,19 @@ impl MissionService {
         let row_limit = i64::try_from(limit + 1).context("Mission list limit overflowed")?;
         let mut statement = database.connection().prepare(
             r#"
-            SELECT id, number, camp_id, title, status, updated_at
+            SELECT mission.id, mission.number, mission.camp_id, mission.title,
+                   mission.status, mission.updated_at
             FROM mission
-            WHERE (?1 IS NULL OR number < ?1)
-              AND (?2 IS NULL OR status = ?2)
+            JOIN camp ON camp.id = mission.camp_id
+            WHERE (?1 IS NULL OR mission.number < ?1)
+              AND camp.deletion_operation_id IS NULL
+              AND (?2 IS NULL OR mission.status = ?2)
               AND (
                     ?3 IS NULL
-                    OR instr(lower(title), lower(?3)) > 0
-                    OR id = ?3
+                    OR instr(lower(mission.title), lower(?3)) > 0
+                    OR mission.id = ?3
                   )
-            ORDER BY number DESC
+            ORDER BY mission.number DESC
             LIMIT ?4
             "#,
         )?;
@@ -640,7 +643,7 @@ impl MissionService {
     pub fn list(&self, database: &Database) -> Result<Vec<MissionRecord>> {
         let mut statement = database
             .connection()
-            .prepare("SELECT id FROM mission ORDER BY updated_at DESC,id DESC")?;
+            .prepare("SELECT mission.id FROM mission JOIN camp ON camp.id=mission.camp_id WHERE camp.deletion_operation_id IS NULL ORDER BY mission.updated_at DESC,mission.id DESC")?;
         let ids = statement
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -825,7 +828,7 @@ pub(crate) fn mission_for_camp(
 }
 
 fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord>> {
-    let row = connection.query_row("SELECT m.id,m.number,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.source_attachments_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1", [id], |r| Ok((
+    let row = connection.query_row("SELECT m.id,m.number,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.source_attachments_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1 AND c.deletion_operation_id IS NULL", [id], |r| Ok((
         r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?,r.get::<_,i64>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,r.get::<_,String>(13)?,r.get::<_,Option<String>>(14)?))).optional()?;
     let Some((
         mission_id,

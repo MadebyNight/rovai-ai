@@ -56,6 +56,7 @@ const FIND_NAVIGATION_CAMP_SQL: &str = r#"
     LEFT JOIN channel_conversation ON channel_conversation.id = channel_binding.channel_conversation_id
     LEFT JOIN camp_composer_draft ON camp_composer_draft.camp_id = camp.id
     WHERE camp.id = ?1
+      AND camp.deletion_operation_id IS NULL
       AND (camp.activation_state = 'active'
         OR length(trim(COALESCE(camp_composer_draft.body, ''))) > 0
         OR EXISTS(SELECT 1 FROM prepared_attachment WHERE camp_id = camp.id))
@@ -903,7 +904,7 @@ impl ReadModelService {
         database
             .connection()
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1)",
+                "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1 AND deletion_operation_id IS NULL)",
                 [camp_id],
                 |row| row.get(0),
             )
@@ -914,7 +915,7 @@ impl ReadModelService {
         database
             .connection()
             .query_row(
-                "SELECT activation_state = 'pending' FROM camp WHERE id = ?1",
+                "SELECT activation_state = 'pending' FROM camp WHERE id = ?1 AND deletion_operation_id IS NULL",
                 [camp_id],
                 |row| row.get(0),
             )
@@ -940,6 +941,7 @@ impl ReadModelService {
                    camp.updated_at
             FROM camp
             WHERE camp.activation_state = 'active'
+              AND camp.deletion_operation_id IS NULL
             ORDER BY camp.updated_at DESC, camp.id
             "#,
         )?;
@@ -1804,7 +1806,8 @@ fn load_navigation_camps(
           ON activity_event.global_sequence = navigation_activity.last_activity_sequence
         LEFT JOIN camp_view_state ON camp_view_state.camp_id = camp.id
         LEFT JOIN camp_composer_draft ON camp_composer_draft.camp_id = camp.id AND camp_composer_draft.client_id = ?1
-        WHERE NOT EXISTS(SELECT 1 FROM mission WHERE mission.camp_id=camp.id)
+        WHERE camp.deletion_operation_id IS NULL
+          AND NOT EXISTS(SELECT 1 FROM mission WHERE mission.camp_id=camp.id)
           AND (camp.activation_state = 'active'
            OR length(trim(COALESCE(camp_composer_draft.body, ''))) > 0
            OR (camp_composer_draft.source_attachments_json IS NOT NULL AND camp_composer_draft.source_attachments_json <> '[]')
@@ -2044,6 +2047,7 @@ fn load_camp(transaction: &Transaction<'_>, camp_id: &str) -> Result<Option<Camp
             LEFT JOIN channel_conversation_binding AS channel_binding ON channel_binding.camp_id = camp.id
             LEFT JOIN channel_conversation ON channel_conversation.id = channel_binding.channel_conversation_id
             WHERE camp.id = ?1
+              AND camp.deletion_operation_id IS NULL
             "#,
             [camp_id],
             |row| {

@@ -144,6 +144,7 @@ export function CampNavigation({
   onCampIdCopied = () => undefined,
   onRename,
   onDelete,
+  onDeleteError,
   onError
 }: {
   settingsNavigation?: React.ReactNode
@@ -185,6 +186,7 @@ export function CampNavigation({
   onCampIdCopied?(): void
   onRename(camp: NavigationCampItem, title: string): Promise<void>
   onDelete(camp: NavigationCampItem): Promise<void>
+  onDeleteError?(error: unknown): void
   onError(error: unknown): void
 }): JSX.Element {
   const client = useCampClient()
@@ -319,7 +321,7 @@ export function CampNavigation({
       await onDelete(action.camp)
       setAction(null)
     } catch (error) {
-      onError(error)
+      ;(onDeleteError ?? onError)(error)
     } finally {
       setActionBusy(false)
     }

@@ -30,11 +30,14 @@ impl CampOpenService {
         let activation_state = database
             .connection()
             .query_row(
-                "SELECT activation_state FROM camp WHERE id = ?1",
+                "SELECT activation_state FROM camp WHERE id = ?1 AND deletion_operation_id IS NULL",
                 [&camp_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
+        if activation_state.is_none() {
+            anyhow::bail!("Camp does not exist or is being deleted");
+        }
         let pending = activation_state.as_deref() == Some("pending");
         // Enter may be a pure read. A real, previously submitted reconciliation still
         // replays its original receipt (including rejection) even if membership changed.

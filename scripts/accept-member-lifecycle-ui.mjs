@@ -1327,8 +1327,8 @@ try {
     }
   })
   assert(
-    deletedProjectCamp.status === 'applied',
-    `Could not delete the project Camp fixture: ${JSON.stringify(deletedProjectCamp)}`
+    deletedProjectCamp.status === 'accepted',
+    `Could not accept deletion of the project Camp fixture: ${JSON.stringify(deletedProjectCamp)}`
   )
   await openCamp(running.cdp, campTitle)
   await closeApp(running)

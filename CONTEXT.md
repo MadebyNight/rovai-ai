@@ -27,6 +27,14 @@ _Avoid_: current operation, multi-send alias, renamed aggregate, reply counter, 
 A shared collaboration aggregate containing participants, public discussion, private Agent continuities, resources, and outcomes. Its Core-owned Activation State is `pending | active`: explicit Dialog creation becomes Active immediately and may validly contain no public messages, while one-click creation begins as a Pending Camp Draft and becomes Active only with its first accepted user message. A Camp created without a user-configured name starts as `未命名对话`; its first accepted user message generates the name only while the user has never explicitly named or renamed that Camp. The product may present an Active Camp as a conversation, but domain code must not call it a Conversation. User deletion permanently removes the Camp aggregate; Rovai-ai does not model Camp archive or trash.
 _Avoid_: Public Conversation, Task, Project, Archived Camp
 
+**Camp Deletion Intent**:
+The durable, irrevocable intent stored on a Camp when `camps.delete` is accepted. It closes new business admission, correlates retries through the first accepted command ID, and remains the pre-aggregate recovery authority until Runtime isolation and the Cleanup Handoff are safe. Its `operationId` is a correlation identity shared by the receipt, Camp marker and cleanup journal; it is not a Task, a user-managed workflow, a separate aggregate or a requirement for a dedicated deletion table.
+_Avoid_: archive state, cancellable delete, in-memory job, deletion Task, operation aggregate
+
+**Camp Cleanup Handoff**:
+The atomic transfer of the remaining Camp-owned resource cleanup obligation from the still-existing Camp to the existing `camp_attachment_view_operation` journal in the same transaction that deletes the Camp aggregate. After handoff, that journal and any deletion-owned Mission Workspace cleanup record survive independently and are the recovery authority for idempotent resource removal; external Source Refs, project directories and Runtime-native Home remain outside the obligation.
+_Avoid_: best-effort post-delete callback, new file queue, Camp tombstone retained through all cleanup, external source deletion
+
 **Camp ID**:
 The sole Core-owned primary identity of one Camp, serialized as `rvcamp_` followed by the 26-character lowercase canonical Crockford Base32 encoding of an RFC-compatible UUIDv7. The same value is used in Camp primary and foreign keys, domain and Renderer APIs, model context, built-in tools, logs, events, and managed Camp paths; there is no internal UUID, `CampRef`, legacy alias, or identity mapping. A Camp ID is never a Native Session, Thread, Turn, Conversation, or Binding identifier and cannot be used to resume or load Runtime state.
 _Avoid_: bare UUID Camp ID, CampRef, internal Camp UUID, legacy Camp alias, Native Session locator

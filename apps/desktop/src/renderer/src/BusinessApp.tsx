@@ -19,6 +19,7 @@ import type {
   CampActivationState,
   CampCreationPreflight,
   CampComposerDraftView,
+  CampDeletionIssue,
   CampMessagePage,
   CampMessageAroundSnapshot,
   CampMessageView,
@@ -770,6 +771,7 @@ export function StartupWorkspace({
         onRemoveProject={ignoreAsync}
         onRename={ignoreAsync}
         onDelete={ignoreAsync}
+        onDeleteError={ignore}
         onError={ignore}
       />
       {view === 'camp' && <AppHeader
@@ -947,6 +949,27 @@ type AppToastValue = {
   message: string
   tone: 'neutral' | 'danger'
   action?: { label: string; onSelect(): void }
+  persistent?: boolean
+}
+
+export function navigationWithoutDeletedCamps(
+  snapshot: NavigationSnapshot,
+  deletingCampIds: ReadonlySet<string>
+): NavigationSnapshot {
+  const filterGroup = <T extends { totalCount: number; recentCamps: NavigationCampItem[] }>(group: T): T => {
+    const recentCamps = group.recentCamps.filter((camp) => !deletingCampIds.has(camp.id))
+    const removed = group.recentCamps.length - recentCamps.length
+    return removed === 0
+      ? group
+      : { ...group, recentCamps, totalCount: Math.max(0, group.totalCount - removed) }
+  }
+  return {
+    ...snapshot,
+    quickChat: filterGroup(snapshot.quickChat),
+    projects: snapshot.projects
+      .map(filterGroup)
+      .filter((project) => project.totalCount > 0)
+  }
 }
 
 export function AppToast({
@@ -1101,10 +1124,12 @@ export function BusinessApp({
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<AppToastValue | null>(null)
   const notify = useCallback((message: string): void => {
-    setToast({ message, tone: 'neutral' })
+    setToast((current) => current?.persistent ? current : { message, tone: 'neutral' })
   }, [])
-  const notifyError = useCallback((message: string, action?: { label: string; onSelect(): void }): void => {
-    setToast({ message, tone: 'danger', action })
+  const notifyError = useCallback((message: string, action?: { label: string; onSelect(): void }, persistent = false): void => {
+    setToast((current) => current?.persistent && !persistent
+      ? current
+      : { message, tone: 'danger', action, persistent })
   }, [])
   const [openingCampId, setOpeningCampId] = useState<string | null>(null)
   const [runtimeRecovery, setRuntimeRecovery] = useState<CampRuntimeRecovery | null>(null)
@@ -1123,6 +1148,8 @@ export function BusinessApp({
   const healthRequest = useRef<Promise<HealthStatus> | null>(null)
   const agentListRequest = useRef<Promise<AgentProfile[]> | null>(null)
   const navigationSnapshotRef = useRef<NavigationSnapshot | null>(null)
+  const deletingCampIdsRef = useRef(new Set<string>())
+  const shownDeletionIssuesRef = useRef(new Set<string>())
   const projectOrderSyncGeneration = useRef(0)
   const overviewRequest = useRef<Promise<boolean> | null>(null)
   const startupSnapshotRequest = useRef<Promise<void> | null>(null)
@@ -1364,8 +1391,12 @@ export function BusinessApp({
     nextNavigation: NavigationSnapshot,
     groupLimits: NavigationGroupLimits
   ): void => {
-    navigationSnapshotRef.current = nextNavigation
-    setNavigation(nextNavigation)
+    const visibleNavigation = navigationWithoutDeletedCamps(
+      nextNavigation,
+      deletingCampIdsRef.current
+    )
+    navigationSnapshotRef.current = visibleNavigation
+    setNavigation(visibleNavigation)
     setNavigationGroupLimits(groupLimits)
     setNavigationState('ready')
   }, [])
@@ -1390,6 +1421,35 @@ export function BusinessApp({
     if (!snapshot) throw new Error('会话导航暂时不可用，请重试。')
     return snapshot
   }, [navigationRefreshCoordinator])
+
+  const retryCampDeletion = useCallback((operationId: string): void => {
+    const retry = (): void => {
+      void client.request<StoredCommandResult>('camps.retryDeletion', {
+        commandId: newCommandId(),
+        command: { operationId }
+      }).then((result) => {
+        if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
+        setToast(null)
+      }).catch(() => {
+        notifyError('删除未完成，请重试。', { label: '重试', onSelect: retry }, true)
+      })
+    }
+    retry()
+  }, [client, notifyError])
+
+  const loadCampDeletionIssues = useCallback(async (): Promise<void> => {
+    const issues = await client.request<CampDeletionIssue[]>('camps.deletionIssues')
+    const issue = issues.find(({ operationId, attentionRevision }) => (
+      !shownDeletionIssuesRef.current.has(`${operationId}:${attentionRevision}`)
+    ))
+    if (!issue) return
+    shownDeletionIssuesRef.current.add(`${issue.operationId}:${issue.attentionRevision}`)
+    notifyError(
+      '删除未完成，请重试。',
+      { label: '重试', onSelect: () => retryCampDeletion(issue.operationId) },
+      true
+    )
+  }, [client, notifyError, retryCampDeletion])
 
   const loadOnboarding = useCallback((): Promise<void> => {
     if (!desktop) return Promise.resolve()
@@ -1472,7 +1532,9 @@ export function BusinessApp({
             setProjectNames(resolvedNavigationPreferences.projectNames)
           }
           setRemovedProjectAuthorityReady(true)
-          setPinnedCampItems(resolvedPins.camps)
+          setPinnedCampItems(
+            resolvedPins.camps.filter((camp) => !deletingCampIdsRef.current.has(camp.id))
+          )
         })()
         const results = await Promise.allSettled([
           navigationOverviewPromise,
@@ -1904,10 +1966,15 @@ export function BusinessApp({
   }, [refreshActiveCampSnapshot])
 
   useEffect(() => {
-    if (!toast) return undefined
+    if (!toast || toast.persistent) return undefined
     const timer = setTimeout(() => setToast(null), 3_200)
     return () => clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (startupStatus !== 'resolved') return
+    void loadCampDeletionIssues().catch(() => undefined)
+  }, [loadCampDeletionIssues, startupStatus])
 
   useEffect(() => {
     if (notificationFocus?.kind !== 'camp_message' && notificationFocus?.kind !== 'agent_run') {
@@ -2413,16 +2480,35 @@ export function BusinessApp({
           ]).catch(() => undefined)
         }, 80)
       }
+      if (event.method === 'navigation.invalidated') {
+        const reason = stringField(params, 'reason')
+        const deletingCampId = stringField(params, 'campId')
+        if (reason === 'camps.deletion_attention') {
+          void loadCampDeletionIssues().catch(() => undefined)
+        }
+        if (
+          deletingCampId
+          && (
+            reason === 'camps.delete_accepted'
+            || reason === 'camp.deleted'
+            || reason === 'camps.deletion_attention'
+          )
+        ) {
+          hideAcceptedCampDeletion(deletingCampId)
+        }
+      }
       if (shouldRefreshNavigationForCoreEvent(event, shuttingDownRef.current)) {
         void navigationRefreshCoordinator.refresh('invalidation').catch(() => undefined)
       }
       const campId = activeCampIdRef.current
-      const refresh = refreshActiveCampForCoreEvent(
-        event,
-        campId,
-        activeCampRefreshCoordinator,
-        shuttingDownRef.current
-      )
+      const refresh = campId && deletingCampIdsRef.current.has(campId)
+        ? null
+        : refreshActiveCampForCoreEvent(
+            event,
+            campId,
+            activeCampRefreshCoordinator,
+            shuttingDownRef.current
+          )
       if (refresh && campId) {
         void refresh.catch((nextError) => {
           if (activeCampIdRef.current === campId) setError(errorMessage(nextError))
@@ -2436,6 +2522,7 @@ export function BusinessApp({
     loadInstallations,
     loadMemberData,
     loadOverview,
+    loadCampDeletionIssues,
     navigationRefreshCoordinator
   ])
 
@@ -2576,10 +2663,13 @@ export function BusinessApp({
   useEffect(() => client.onInvalidated?.(() => {
     void uiPreferences.generalPreferences.get().then(setGeneralPreferences).catch((e) => setError(errorMessage(e)))
     void loadNavigation('invalidation').catch(() => undefined)
+    void loadCampDeletionIssues().catch(() => undefined)
     const campId = activeCampIdRef.current
-    if (campId) void activeCampRefreshCoordinator.refresh(campId).catch((e) => setError(errorMessage(e)))
+    if (campId && !deletingCampIdsRef.current.has(campId)) {
+      void activeCampRefreshCoordinator.refresh(campId).catch((e) => setError(errorMessage(e)))
+    }
     void loadAgents().catch(() => undefined)
-  }), [client, uiPreferences, loadNavigation, loadAgents, activeCampRefreshCoordinator])
+  }), [client, uiPreferences, loadNavigation, loadCampDeletionIssues, loadAgents, activeCampRefreshCoordinator])
 
   const chooseCurrentProject = (
     nextProject: CurrentProject,
@@ -3202,17 +3292,8 @@ export function BusinessApp({
         command: campDeleteCommand(camp)
       })
       if (result.status === 'rejected') throw new Error(commandFailureMessage(result))
-      clearLocalCampComposerDraft(camp.id)
-      const discardComposerAttachments = client.composerAttachments.discard?.(camp.id)
-      if (discardComposerAttachments) {
-        await discardComposerAttachments.catch(() => undefined)
-      }
-      forgetFilePreviewSession(camp.id, activeCampId === camp.id)
-      campSnapshotCache.current.delete(camp.id)
-      if (activeCampId === camp.id) {
-        forgetRemovedCampSurface(camp.id)
-      }
-      await loadNavigation()
+      hideAcceptedCampDeletion(camp.id)
+      void loadNavigation('invalidation').catch(() => undefined)
     } finally {
       setBusy(null)
     }
@@ -3518,6 +3599,26 @@ export function BusinessApp({
     }
   }
 
+  function hideAcceptedCampDeletion(campId: string): void {
+    deletingCampIdsRef.current.add(campId)
+    const currentNavigation = navigationSnapshotRef.current
+    if (currentNavigation) {
+      const nextNavigation = navigationWithoutDeletedCamps(
+        currentNavigation,
+        deletingCampIdsRef.current
+      )
+      navigationSnapshotRef.current = nextNavigation
+      setNavigation(nextNavigation)
+    }
+    setPinnedCampItems((current) => current.filter((camp) => camp.id !== campId))
+    clearLocalCampComposerDraft(campId)
+    const discardComposerAttachments = client.composerAttachments.discard?.(campId)
+    if (discardComposerAttachments) void discardComposerAttachments.catch(() => undefined)
+    forgetFilePreviewSession(campId, activeCampIdRef.current === campId)
+    campSnapshotCache.current.delete(campId)
+    forgetRemovedCampSurface(campId)
+  }
+
   const refreshPendingCampNavigation = (): void => {
     void loadNavigation('invalidation').catch(() => undefined)
   }
@@ -3557,7 +3658,7 @@ export function BusinessApp({
     // a pending input as an optimistic public CampMessage before that decision.
     setBusy('camp-message')
     setError(null)
-    setToast(null)
+    setToast((current) => current?.persistent ? current : null)
     setRuntimeRecovery((current) => current?.campId === campId ? null : current)
     let rejectedForRuntime = false
     try {
@@ -3786,13 +3887,13 @@ export function BusinessApp({
     ])
   }
   const onMissionDeleted = async (campId: string): Promise<void> => {
-    forgetFilePreviewSession(campId, activeCampIdRef.current === campId)
-    campSnapshotCache.current.delete(campId)
-    if (activeCampIdRef.current === campId) {
-      forgetRemovedCampSurface(campId)
+    const wasActive = activeCampIdRef.current === campId
+    hideAcceptedCampDeletion(campId)
+    if (wasActive) {
       await desktopNavigation.replace({ kind: 'missions' }, { prepared: true })
     }
-    await Promise.all([missionList.refresh(), loadNavigation()])
+    void missionList.refresh()
+    void loadNavigation('invalidation').catch(() => undefined)
   }
   const missionSource = (messageId: string): void => {
     setNotificationFocus({ requestId: ++notificationFocusSequence.current, kind: 'camp_message', campTurnId: null, messageId, active: true })
@@ -4036,6 +4137,7 @@ export function BusinessApp({
         }}
         onRename={renameCamp}
         onDelete={deleteCamp}
+        onDeleteError={(nextError) => notifyError(errorMessage(nextError))}
         onError={(nextError) => setError(errorMessage(nextError))}
       />
       {!startupGateVisible && view === 'camp' && !missionCamp && <AppHeader

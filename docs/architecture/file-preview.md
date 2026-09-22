@@ -216,7 +216,8 @@ Markdown 继续使用 `rovai-preview://asset/<tab-token>/<segments>`，在 app.r
 - Tab 关闭：handle、reopen token、asset token、HTML 站点的请求/诊断流/端口与 watcher subscription；
 - Pane 隐藏/Camp route commit：只改变显示，保留 session 资源和阅读状态；
 - LRU：按内容、HTML 实例、逻辑句柄、热 Camp、冷快照分别回收，不删除业务对象；
-- Camp 永久删除：清除该 Camp 的窗口 session，并阻止当前 route 离开 effect 把删除前 shell 写回；
+- Camp 永久删除：Core accepted 后立即阻止当前 route 离开 effect 把删除前 shell 写回，并在请求关键路径之外
+  best-effort 清除该 Camp 的窗口 session；释放失败不推翻删除受理，由后台资源 owner 继续安全清理；
 - webContents 销毁/应用退出：幂等释放对应或全部资源。
 
 不支持格式在来源与本地文件校验后直接交给系统默认应用，并在返回前释放一次性解析材料；它不进入上述长期资源图。

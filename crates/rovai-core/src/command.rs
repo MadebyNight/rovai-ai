@@ -21,6 +21,7 @@ pub(crate) mod sealed {
 
 pub trait DomainCommand: sealed::Sealed + Serialize {
     const TYPE: &'static str;
+    const ALLOWED_WHILE_CAMP_DELETING: bool = false;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,7 +261,24 @@ impl DomainCommandGateway {
             return replay_or_conflict(result, envelope, &request_digest);
         }
 
-        let handler_result = handler(&transaction)?;
+        let deletion_in_progress = if C::ALLOWED_WHILE_CAMP_DELETING {
+            false
+        } else if let Some(camp_id) = envelope.camp_id.as_deref() {
+            camp_deletion_in_progress(&transaction, camp_id)?
+        } else {
+            false
+        };
+        let handler_result = if deletion_in_progress {
+            CommandHandlerResult::rejected(
+                "camp.deletion_in_progress",
+                json!({
+                    "campId": envelope.camp_id,
+                    "message": "Camp deletion is already in progress",
+                }),
+            )
+        } else {
+            handler(&transaction)?
+        };
         let recorded_at = chrono::Utc::now().to_rfc3339();
         let stored_result = StoredCommandResult {
             command_id: envelope.command_id.clone(),
@@ -285,6 +303,22 @@ impl DomainCommandGateway {
             replayed: false,
         })
     }
+}
+
+fn camp_deletion_in_progress(connection: &rusqlite::Connection, camp_id: &str) -> Result<bool> {
+    let column_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('camp') WHERE name='deletion_operation_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !column_exists {
+        return Ok(false);
+    }
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM camp WHERE id=?1 AND deletion_operation_id IS NOT NULL)",
+        [camp_id],
+        |row| row.get(0),
+    )?)
 }
 
 fn validate_envelope<C>(envelope: &CommandEnvelope<C>) -> Result<()>

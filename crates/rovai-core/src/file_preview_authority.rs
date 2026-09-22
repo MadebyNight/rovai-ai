@@ -91,6 +91,7 @@ fn directory_camp_root(database: &Database, camp_id: &str) -> Result<Option<Stri
             FROM camp
             WHERE id = ?1
               AND activation_state = 'active'
+              AND deletion_operation_id IS NULL
               AND project_binding_kind = 'directory'
             "#,
             [camp_id],
@@ -130,6 +131,7 @@ fn run_evidence_root(
               AND agent_run.execution_epoch = ?2
               AND camp.id = ?3
               AND camp.activation_state = 'active'
+              AND camp.deletion_operation_id IS NULL
             "#,
             params![agent_run_id, execution_epoch, camp_id],
             |row| {
@@ -354,6 +356,7 @@ fn message_source(
             WHERE message.id = ?1 AND message.camp_id = ?2
               AND message.tombstoned_at IS NULL
               AND camp.activation_state = 'active'
+              AND camp.deletion_operation_id IS NULL
             "#,
             params![message_id, camp_id],
             |row| {
@@ -455,6 +458,7 @@ fn run_activity_authorizes_file(
               AND evidence.execution_epoch = ?3
               AND camp.id = ?4
               AND camp.activation_state = 'active'
+              AND camp.deletion_operation_id IS NULL
               AND activity.classifier_version IN (?5, ?6, ?7, ?8)
               AND EXISTS (
                   SELECT 1
