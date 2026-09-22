@@ -30,6 +30,10 @@ last_updated: 2026-09-22
 - [x] Runtime cleanup target 从既有 Run 的 `id + execution_epoch + adapter_kind` 恢复；未确认隔离不前进。
 - [x] `camp_delete_cleanup` journal 与 Camp 聚合删除、唯一 `camp.deleted` 在同一事务；删库后 journal 独立续跑。
 - [x] 明确 cleanup 的 Mission Worktree/branch 复用既有 worker 和双检查点；retain 从删除 ownership 中移除。
+- [x] Mission 准备的迟到写回正向确认 Camp 存活且未删除，并以 `state + generation + preparation_token` CAS；后台聚合删除
+  与破坏性 Git cleanup 共用 Workspace 生命周期 gate，前台受理不等待该 gate。
+- [x] deletion-owned Mission 行保留至 journal 最终事务；accepted receipt 已承诺 Workspace cleanup 时，空 owner 集合
+  fail closed，不得误写完成。
 - [x] 完成时清除资源 identity、路径、错误和 retry 诊断，所有承诺资源完成后才写 `camp.deletion_completed`。
 
 ## Gate 3：失败、重试与界面
@@ -94,6 +98,8 @@ Dialog 关闭且 Camp 行消失为 p50 16.47ms、p95 112.60ms，低于 p95 ≤ 2
 - [x] 隔离 `scripts/smoke-core.mjs` 完成 accepted → `camp.deleted` → `camp.deletion_completed`
 - [x] 本地打包 App 的 8 次点击确认到列表移除验收通过：p50 16.47ms、p95 112.60ms，门槛 p95 ≤ 250ms
 - [x] 默认 Rust workspace 409 项通过（另有 1 项手工 Runtime smoke 按设计忽略），并通过 cleanup handoff 扩展回归
+- [x] P1 follow-up 的真实 Git 并发回归在准备校验处受控暂停，穿过正式 accepted receipt、cleanup handoff 与 Camp 聚合
+  删除，证明迟到准备返回 `None`、owner/checkpoint 保留、破坏性 cleanup 等待生命周期 gate，且 journal 只在双检查点后完成
 - [x] Desktop Renderer 与 Web/Host 删除契约通过；v1.64 execution page/changes cursor 的 Host 集成 fixture 同步到当前合同；文档普通及 diff-aware 治理、Impeccable 静态 detector 与最终
   diff 检查通过
 
@@ -108,3 +114,15 @@ replay，以及 bounded retry delay。Runtime Fleet 既有模块内 owner 扩展
 同一 owner 的状态矩阵证明 Runtime 状态不改变受理同步边界。attachment cleanup 既有 extended owner 扩展
 Authority/default output/View 的恢复。其余准入入口优先扩展原 owner 或由编译、Host/Renderer 集成测试覆盖，不为每个入口
 复制一套 deletion fixture。
+
+P1 follow-up 新增 `late_mission_preparation_cannot_erase_camp_deletion_cleanup_owner`，唯一拥有“真实 Mission Git 校验已在途，
+Camp 随后 accepted 并完成聚合删除”的并发 seam。修复前该输入把 Workspace 从 `cleanup_pending + operationId` 写回
+`ready + NULL`，随后 journal 把空 owner 集合误报为 completed；现有 SQL、Git 或 cleanup journal 单测都不能覆盖跨模块的
+gate、持久 handoff 与真实文件清理顺序。该 owner 还受控清空一次关联 ID，单独证明已承诺 cleanup 的空集合会
+fail closed；因此使用隔离数据库和临时 Git 仓库进入 `slow-tests`。最小验证命令为：
+
+```bash
+cargo test -p rovai-core --features slow-tests --lib \
+  application::tests::late_mission_preparation_cannot_erase_camp_deletion_cleanup_owner \
+  -- --exact --nocapture
+```

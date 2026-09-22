@@ -439,22 +439,9 @@ impl CampDeletionService {
             unconfirmed == 0,
             "Camp execution cleanup is unconfirmed; deletion remains fenced"
         );
-        let workspace_cleanup_scheduled: bool = transaction
-            .query_row(
-                r#"
-                SELECT COALESCE(
-                    json_extract(result_payload_json, '$.workspaceCleanupScheduled'),
-                    0
-                )
-                FROM event_log
-                WHERE command_id = ?1
-                  AND command_type = 'camp.delete'
-                  AND result_status = 'accepted'
-                "#,
-                [&candidate.operation_id],
-                |row| row.get(0),
-            )
-            .context("Camp deletion acceptance receipt is missing")?;
+        let workspace_cleanup_scheduled =
+            workspace_cleanup_scheduled(&transaction, &candidate.operation_id)?
+                .context("Camp deletion acceptance receipt is missing")?;
         if !workspace_cleanup_scheduled {
             // A retained Mission worktree is deliberately outside deletion
             // ownership. Drop its internal cleanup journal before the legacy
@@ -515,6 +502,47 @@ impl CampDeletionService {
             })?
             .collect::<rusqlite::Result<_>>()?)
     }
+}
+
+pub(crate) fn workspace_cleanup_scheduled(
+    connection: &Connection,
+    operation_id: &str,
+) -> Result<Option<bool>> {
+    let scheduled = connection
+        .query_row(
+            r#"
+            SELECT COALESCE(
+                json_extract(result_payload_json, '$.workspaceCleanupScheduled'),
+                0
+            )
+            FROM event_log
+            WHERE command_id = ?1
+              AND command_type = 'camp.delete'
+              AND result_status IN ('accepted','applied')
+            "#,
+            [operation_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if scheduled.is_none() {
+        let asynchronous_handoff: bool = connection.query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM event_log
+                WHERE event_type='camp.deleted'
+                  AND entity_type='camp_deletion'
+                  AND entity_id=?1
+            )
+            "#,
+            [operation_id],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !asynchronous_handoff,
+            "Camp deletion acceptance receipt is missing"
+        );
+    }
+    Ok(scheduled)
 }
 
 fn accepted_result(
@@ -746,6 +774,11 @@ mod tests {
 
         assert_eq!(accepted.result.status, CommandResultStatus::Accepted);
         assert_eq!(accepted.result.payload["workspaceCleanupScheduled"], true);
+        assert!(
+            workspace_cleanup_scheduled(database.connection(), &operation_id).unwrap()
+                == Some(true),
+            "the retained acceptance receipt is the cleanup completion authority"
+        );
         assert_eq!(
             database
                 .connection()

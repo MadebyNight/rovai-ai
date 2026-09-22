@@ -109,7 +109,7 @@ use rovai_core::{
     camp_attachment_publication::unresolved_publication_camp_ids,
     camp_attachment_view::{CampAttachmentViewStore, PreparedCampAttachmentCleanup},
     camp_content::ComposerDocument,
-    camp_deletion::{CampDeletionService, RetryCampDeletionCommand},
+    camp_deletion::{CampDeletionService, RetryCampDeletionCommand, workspace_cleanup_scheduled},
     camp_history::{
         CAMP_LIST_TOOL_NAME, CAMP_READ_TOOL_NAME, CAMP_SEARCH_TOOL_NAME, CampHistoryService,
         CampListInput, CampReadInput, CampSearchInput, HISTORY_SEARCH_TOOL_NAME,
@@ -2656,8 +2656,11 @@ impl Core {
         })
         .await
         .context("Camp deletion filesystem cleanup task failed")??;
-        let mission_resources = {
+        let (workspace_cleanup_was_scheduled, mission_resources) = {
             let database = self.database.lock().await;
+            let workspace_cleanup_was_scheduled =
+                workspace_cleanup_scheduled(database.connection(), &cleanup.command_id)?
+                    .unwrap_or(false);
             let mut statement = database.connection().prepare(
                 r#"
                 SELECT state, cleanup_worktree_removed, cleanup_branch_removed
@@ -2665,7 +2668,7 @@ impl Core {
                 WHERE camp_id = ?1 AND cleanup_command_id = ?2
                 "#,
             )?;
-            statement
+            let mission_resources = statement
                 .query_map(
                     rusqlite::params![cleanup.camp_id, cleanup.command_id],
                     |row| {
@@ -2676,8 +2679,13 @@ impl Core {
                         ))
                     },
                 )?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            (workspace_cleanup_was_scheduled, mission_resources)
         };
+        anyhow::ensure!(
+            !workspace_cleanup_was_scheduled || !mission_resources.is_empty(),
+            "mission_workspace_cleanup_owner_missing"
+        );
         if mission_resources
             .iter()
             .any(|(state, _, _)| state == "cleanup_failed")
@@ -2697,6 +2705,12 @@ impl Core {
             self.mission_workspace_cleanup_notify.notify_one();
             return Ok(false);
         }
+        anyhow::ensure!(
+            mission_resources
+                .iter()
+                .all(|(state, _, _)| state == "cleanup_pending"),
+            "mission_workspace_cleanup_state_invalid"
+        );
         let mut database = self.database.lock().await;
         self.attachment_views
             .finalize_camp_delete_cleanup(&mut database, &completion)?;
@@ -2839,6 +2853,11 @@ impl Core {
                 let (_view_mutation, _) = self
                     .acquire_camp_attachment_mutation(&candidate.camp_id)
                     .await?;
+                // The request path has already installed the durable deletion
+                // fence. Waiting for an in-flight Mission Git preparation is a
+                // background concern, and keeps aggregate deletion inside the
+                // same lifecycle boundary as destructive workspace cleanup.
+                let _workspace_lifecycle = self.mission_workspace_gate.lock().await;
                 let cleanup = {
                     let mut database = self.database.lock().await;
                     self.attachment_views
@@ -27577,6 +27596,323 @@ done
         assert_eq!(invalidation["method"], "navigation.invalidated");
         assert_eq!(invalidation["params"]["reason"], "agent_run.terminal");
         assert_eq!(invalidation["params"]["campId"], "rvcamp_test");
+    }
+
+    #[cfg(all(target_os = "macos", feature = "slow-tests"))]
+    #[tokio::test]
+    async fn late_mission_preparation_cannot_erase_camp_deletion_cleanup_owner() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "rovai-camp-delete-mission-race-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let source = fs::canonicalize(&source).unwrap();
+        let git_path = crate::runtime_discovery::resolve_active_command_path("git")
+            .expect("Git is required for the Mission deletion race regression");
+        let git = |arguments: &[&str]| {
+            let output = std::process::Command::new(&git_path)
+                .arg("-C")
+                .arg(&source)
+                .args(arguments)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "Git fixture command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "Mission Deletion Race Test"]);
+        git(&[
+            "config",
+            "user.email",
+            "mission-deletion-race@example.invalid",
+        ]);
+        fs::write(source.join("tracked.txt"), "base\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        git(&["commit", "-m", "base"]);
+
+        let core = Arc::new(runtime_resolution_test_core(&root).unwrap());
+        *core.runtime_search_environment.write().await =
+            Arc::new(RuntimeSearchEnvironment::for_test_paths(
+                2,
+                vec![git_path.parent().unwrap().to_path_buf()],
+            ));
+        let (camp_id, candidate) = {
+            let mut database = core.database.lock().await;
+            let agent_id = AgentProfileService::default()
+                .list_profiles(&database)
+                .unwrap()
+                .into_iter()
+                .next()
+                .expect("the startup database should include a default member")
+                .agent_id;
+            rovai_core::agent_profile::configure_test_runtime(&database, &[agent_id.as_str()]);
+            let created = crate::mission::MissionService::default()
+                .create(
+                    &mut database,
+                    &CommandEnvelope {
+                        command_id: uuid::Uuid::new_v4().to_string(),
+                        actor: ActorRef::User {
+                            user_id: "test-user".into(),
+                        },
+                        camp_id: None,
+                        expected_versions: Vec::new(),
+                        execution_epoch: None,
+                        payload: crate::mission::CreateMissionCommand {
+                            title: "Camp deletion Mission race".into(),
+                            description: String::new(),
+                            project_path: source.to_string_lossy().into_owned(),
+                            project_binding_kind: ProjectBindingKind::Directory,
+                            member_agent_ids: vec![agent_id.clone()],
+                            default_lead_agent_id: agent_id,
+                            tags: Vec::new(),
+                            source_attachments: Vec::new(),
+                        },
+                    },
+                )
+                .unwrap();
+            let mission_id = created.result.payload["missionId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let camp_id = created.result.payload["campId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            core.attachment_views
+                .ensure_empty_camp_ready(&mut database, &camp_id)
+                .unwrap();
+            let started = crate::mission::MissionService::default()
+                .start(
+                    &mut database,
+                    &CommandEnvelope {
+                        command_id: uuid::Uuid::new_v4().to_string(),
+                        actor: ActorRef::User {
+                            user_id: "test-user".into(),
+                        },
+                        camp_id: Some(camp_id.clone()),
+                        expected_versions: Vec::new(),
+                        execution_epoch: None,
+                        payload: crate::mission::StartMissionCommand { mission_id },
+                    },
+                )
+                .unwrap();
+            assert_eq!(started.result.status, CommandResultStatus::Accepted);
+            let agent_run_id = claim_waiting_delivery_batches(&mut database, 1)
+                .unwrap()
+                .into_iter()
+                .next()
+                .expect("Mission start should create a dispatchable AgentRun");
+            let candidate = ExecutionRuntimeService::default()
+                .load_dispatchable_agent_run(&database, &agent_run_id)
+                .unwrap()
+                .expect("Mission AgentRun should be dispatchable");
+            (camp_id, candidate)
+        };
+
+        let prepared = core
+            .prepare_mission_workspace(&candidate)
+            .await
+            .unwrap()
+            .expect("initial Mission workspace preparation should succeed");
+        let worktree = PathBuf::from(&prepared.execution_root);
+        assert!(worktree.exists());
+
+        let wrapper_root = root.join("blocking-git");
+        fs::create_dir_all(&wrapper_root).unwrap();
+        let entered = wrapper_root.join("entered");
+        let release = wrapper_root.join("release");
+        let invocations = wrapper_root.join("invocations");
+        let quote = |path: &Path| path.to_string_lossy().replace('\'', "'\\''");
+        write_runtime_resolution_executable(
+            &wrapper_root.join("git"),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nfor argument in \"$@\"; do\n  if [ \"$argument\" = \"--show-toplevel\" ]; then\n    : > '{}'\n    while [ ! -e '{}' ]; do /bin/sleep 0.01; done\n    break\n  fi\ndone\nexec '{}' \"$@\"\n",
+                quote(&invocations),
+                quote(&entered),
+                quote(&release),
+                quote(&git_path),
+            ),
+        );
+        *core.runtime_search_environment.write().await = Arc::new(
+            RuntimeSearchEnvironment::for_test_paths(3, vec![wrapper_root.clone()]),
+        );
+
+        let prepare_task = tokio::spawn({
+            let core = core.clone();
+            let candidate = candidate.clone();
+            async move { core.prepare_mission_workspace(&candidate).await }
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !entered.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("late preparation did not reach the controlled Git validation");
+        let blocked_invocation_count = fs::read_to_string(&invocations).unwrap().lines().count();
+
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let cleanup = {
+            let mut database = core.database.lock().await;
+            let version = database
+                .connection()
+                .query_row("SELECT version FROM camp WHERE id=?1", [&camp_id], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap();
+            let accepted = CampDeletionService::default()
+                .accept(
+                    &mut database,
+                    &CommandEnvelope {
+                        command_id: operation_id.clone(),
+                        actor: ActorRef::User {
+                            user_id: "test-user".into(),
+                        },
+                        camp_id: Some(camp_id.clone()),
+                        expected_versions: Vec::new(),
+                        execution_epoch: None,
+                        payload: DeleteCampCommand {
+                            camp_id: camp_id.clone(),
+                            expected_version: version,
+                            force: true,
+                            workspace_disposition:
+                                rovai_core::collaboration::MissionWorkspaceDisposition::Cleanup,
+                        },
+                    },
+                )
+                .unwrap();
+            assert_eq!(accepted.result.status, CommandResultStatus::Accepted);
+            assert_eq!(accepted.result.payload["workspaceCleanupScheduled"], true);
+            let cleanup = core
+                .attachment_views
+                .prepare_camp_delete_cleanup(&mut database, &camp_id, &operation_id)
+                .unwrap()
+                .expect("Camp deletion should prepare its resource handoff");
+            let deletion = CampDeletionService::default()
+                .due_camps(&database, 1)
+                .unwrap()
+                .into_iter()
+                .next()
+                .expect("accepted Camp deletion should be due");
+            CampDeletionService::default()
+                .commit_business_delete(&mut database, &core.attachment_views, &deletion, &cleanup)
+                .unwrap();
+            cleanup
+        };
+
+        {
+            let database = core.database.lock().await;
+            database
+                .connection()
+                .execute(
+                    "UPDATE mission_workspace SET cleanup_command_id=NULL WHERE camp_id=?1",
+                    [&camp_id],
+                )
+                .unwrap();
+        }
+        let missing_owner = core
+            .finish_background_camp_deletion_cleanup(&cleanup)
+            .await
+            .expect_err("a promised Mission cleanup must not complete with an empty owner set");
+        assert!(format!("{missing_owner:#}").contains("mission_workspace_cleanup_owner_missing"));
+        {
+            let database = core.database.lock().await;
+            database
+                .connection()
+                .execute(
+                    "UPDATE mission_workspace SET cleanup_command_id=?2 WHERE camp_id=?1",
+                    rusqlite::params![camp_id, operation_id],
+                )
+                .unwrap();
+        }
+
+        let cleanup_task = tokio::spawn({
+            let core = core.clone();
+            let camp_id = camp_id.clone();
+            async move { core.cleanup_mission_workspaces_locked(Some(&camp_id)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            fs::read_to_string(&invocations).unwrap().lines().count(),
+            blocked_invocation_count,
+            "destructive Mission cleanup crossed the in-flight preparation lifecycle gate"
+        );
+        assert!(worktree.exists());
+        assert!(
+            !core
+                .finish_background_camp_deletion_cleanup(&cleanup)
+                .await
+                .unwrap(),
+            "the cleanup journal completed before Mission resources were removed"
+        );
+
+        fs::write(&release, "release\n").unwrap();
+        let late_preparation = prepare_task
+            .await
+            .expect("late preparation task panicked")
+            .unwrap();
+        assert!(
+            late_preparation.is_none(),
+            "a preparation started before deletion returned a runnable workspace"
+        );
+        cleanup_task
+            .await
+            .expect("Mission cleanup task panicked")
+            .unwrap();
+
+        {
+            let database = core.database.lock().await;
+            let cleanup_state = database
+                .connection()
+                .query_row(
+                    "SELECT state,cleanup_command_id,cleanup_worktree_removed,cleanup_branch_removed FROM mission_workspace WHERE camp_id=?1",
+                    [&camp_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, bool>(2)?,
+                            row.get::<_, bool>(3)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(cleanup_state.0, "cleanup_pending");
+            assert_eq!(cleanup_state.1.as_deref(), Some(operation_id.as_str()));
+            assert!(cleanup_state.2 && cleanup_state.3);
+        }
+        assert!(
+            core.finish_background_camp_deletion_cleanup(&cleanup)
+                .await
+                .unwrap(),
+            "the journal should complete after both Mission cleanup checkpoints"
+        );
+        {
+            let database = core.database.lock().await;
+            let final_state = database
+                .connection()
+                .query_row(
+                    "SELECT status,(SELECT COUNT(*) FROM mission_workspace WHERE camp_id=?2) FROM camp_attachment_view_operation WHERE id=?1",
+                    rusqlite::params![cleanup.operation_id, camp_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap();
+            assert_eq!(final_state, ("completed".to_string(), 0));
+        }
+        assert!(!worktree.exists());
+
+        drop(core);
+        use std::os::unix::fs::PermissionsExt;
+        let camps_root = root.join("runtime-files/camps");
+        if camps_root.exists() {
+            fs::set_permissions(&camps_root, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(all(target_os = "macos", feature = "slow-tests"))]

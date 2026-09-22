@@ -103,6 +103,16 @@ Camp 不需要存活到所有文件清理结束。Camp 删除后，journal 幂�
 Published View；`workspaceDisposition='cleanup'` 时既有 Mission cleanup owner 继续 Worktree/受管分支双检查点，journal
 等待其完成。retain 时 Worktree、分支和项目目录不属于删除范围。
 
+删除受理不能等待在途 Mission Git 准备，但准备流程的任何迟到数据库写回必须同时满足：Camp 行仍存在、
+`deletion_operation_id IS NULL`，且 Workspace 的 `state + generation + preparation_token` 与读取时一致。Runtime 隔离后的
+聚合删除以及破坏性 Mission cleanup 必须在后台等待同一 Workspace 生命周期 gate；迟到准备不得恢复 `ready`、清除
+`cleanup_command_id` 或返回可运行 Workspace。
+
+若 accepted receipt 的 `workspaceCleanupScheduled` 为 `true`，删除 owner 行必须保留到 Worktree 与受管分支双检查点完成，
+再由 cleanup journal 的最终事务删除。未完成 journal 看到空 owner 集合属于可恢复错误
+`mission_workspace_cleanup_owner_missing`，不得产生 `camp.deletion_completed`。没有该 receipt 的旧式 cleanup journal
+只有在不存在异步 `camp.deleted` handoff 证据时才按旧流程恢复；已有异步 handoff 却缺 receipt 必须 fail closed。
+
 全部承诺资源完成后才产生 `camp.deletion_completed`。外部 Source Ref、任意用户项目目录、Runtime 原生 Home、Provider
 历史和其他 Camp 引用的外部文件始终不在删除范围。完成后必须清除 journal 的路径 identity、错误、retry 诊断及完成
 不再需要的 Mission cleanup 记录。
@@ -157,6 +167,8 @@ Camp 行消失的 p95 不超过 250ms；后台完成时长不计入该门槛，�
 - Starting 竞争、旧 lease/callback、渠道输入和所有统一准入入口不能恢复业务写入；
 - Runtime 停止失败不能进入数据库阶段；各 checkpoint 崩溃重启可幂等续跑；
 - cleanup 与 Mission Git 失败自动恢复，耗尽后一次提醒，用户 retry 继续原 operation；
+- 在途 Mission 准备与删除竞争时，迟到写回不能清除 cleanup owner，破坏性 cleanup 等待生命周期 gate，承诺过 Mission
+  cleanup 的 journal 不以空 owner 集合完成；
 - 预览释放／导航刷新失败不改变 accepted，旧 Navigation 响应不能复现 Camp；
 - completed 清除敏感路径/identity/错误快照，仅保留最小幂等 receipt；
 - SQL 前后执行计划与代表性基准、前台 p50/p95、后台各阶段耗时分别留证。
