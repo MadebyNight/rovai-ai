@@ -105,6 +105,12 @@ enum PersistableOutputUpdate {
 }
 
 #[derive(Debug, Clone)]
+struct SelectedPersistableOutput {
+    value: Value,
+    typed_text_blocks: bool,
+}
+
+#[derive(Debug, Clone)]
 struct PersistableResult {
     payload: Value,
     output_truncated: Option<bool>,
@@ -808,15 +814,12 @@ impl ExecutionEvidenceService {
             workspace_json.as_deref(),
             managed_output_root,
         );
+        let output_update = persistable_output_update(event_type, &payload);
         let PersistableResult {
             payload,
             output_truncated,
             output_update,
-        } = prepare_persistable_result(
-            event_type,
-            payload,
-            persistable_output_update(event_type, source_payload),
-        )?;
+        } = prepare_persistable_result(event_type, payload, output_update)?;
         if let Some(recorded) = self.record_operation_lifecycle(
             database,
             blob_store,
@@ -1661,46 +1664,33 @@ impl ExecutionEvidenceService {
     }
 }
 
+// Adapter/Core normalization has already reduced each supported protocol to these public result
+// carriers. A non-null carrier, including an explicit empty string, is therefore a complete
+// snapshot; an omitted/null carrier is a metadata-only observation. The lifecycle reducer consumes
+// this closed state and never re-infers output semantics from phase or payload shape.
 fn persistable_output_update(event_type: &str, payload: &Value) -> Option<PersistableOutputUpdate> {
     match event_type {
         "command.output.delta" => Some(PersistableOutputUpdate::OrderedDelta),
-        "runtime.action" => Some(
-            if payload
-                .get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|status| {
-                    matches!(
-                        status,
-                        "completed"
-                            | "succeeded"
-                            | "success"
-                            | "failed"
-                            | "error"
-                            | "declined"
-                            | "denied"
-                            | "cancelled"
-                            | "canceled"
-                            | "not_executed"
-                    )
-                })
-            {
+        "runtime.action" => Some(if has_persistable_output(payload) {
+            PersistableOutputUpdate::CompleteSnapshot
+        } else {
+            PersistableOutputUpdate::MetadataOnly
+        }),
+        "activity.started" | "activity.completed" if is_persistable_tool_item(payload) => {
+            Some(if has_persistable_output(payload) {
                 PersistableOutputUpdate::CompleteSnapshot
             } else {
                 PersistableOutputUpdate::MetadataOnly
-            },
-        ),
-        "activity.started" if is_persistable_tool_item(payload) => {
-            Some(PersistableOutputUpdate::MetadataOnly)
-        }
-        "activity.completed" if is_persistable_tool_item(payload) => {
-            if payload.get("reasonCode").and_then(Value::as_str) == Some("runtime_interrupted") {
-                Some(PersistableOutputUpdate::MetadataOnly)
-            } else {
-                Some(PersistableOutputUpdate::CompleteSnapshot)
-            }
+            })
         }
         _ => None,
     }
+}
+
+fn has_persistable_output(payload: &Value) -> bool {
+    select_persistable_output(payload).is_some()
+        || select_output_field(payload, &["summary"], &["summary"]).is_some()
+        || select_persistable_error(payload).is_some()
 }
 
 fn is_persistable_tool_item(payload: &Value) -> bool {
@@ -1743,7 +1733,10 @@ fn prepare_persistable_result(
         .then(|| select_output_field(&payload, &["summary"], &["summary"]))
         .flatten();
     let error = select_persistable_error(&payload);
-    let result_digest = main.as_ref().map(persistable_output_digest).transpose()?;
+    let result_digest = main
+        .as_ref()
+        .map(|output| persistable_output_digest(&output.value))
+        .transpose()?;
     remove_persisted_output_aliases(&mut payload);
 
     if output_update == PersistableOutputUpdate::MetadataOnly {
@@ -1754,12 +1747,14 @@ fn prepare_persistable_result(
         });
     }
 
-    let main_text = main
-        .as_ref()
-        .or(summary.as_ref())
-        .map(output_value_text)
-        .transpose()?
-        .flatten();
+    let main_text = match main.as_ref() {
+        Some(output) => selected_output_text(output)?,
+        None => summary
+            .as_ref()
+            .map(output_value_text)
+            .transpose()?
+            .flatten(),
+    };
     let error_text = error.as_ref().map(error_value_text).transpose()?.flatten();
     let combined = combine_output_and_error(main_text.as_deref(), error_text.as_deref());
     let (persisted, output_truncated) = combined
@@ -1779,11 +1774,44 @@ fn prepare_persistable_result(
     })
 }
 
-fn select_persistable_output(payload: &Value) -> Option<Value> {
-    select_output_field(payload, &["aggregatedOutput"], &["output"])
-        .or_else(|| select_output_field(payload, &["output"], &["output"]))
-        .or_else(|| stdout_stderr_output(payload))
-        .or_else(|| select_output_field(payload, &["content"], &["content"]))
+fn select_persistable_output(payload: &Value) -> Option<SelectedPersistableOutput> {
+    let item = payload.get("item").filter(|item| item.is_object());
+    if let Some(value) = item
+        .and_then(|item| item.get("aggregatedOutput"))
+        .or_else(|| payload.get("aggregatedOutput"))
+        .filter(|value| !value.is_null())
+    {
+        return Some(SelectedPersistableOutput {
+            value: value.clone(),
+            typed_text_blocks: false,
+        });
+    }
+    if let Some(value) = item
+        .and_then(|item| item.get("output"))
+        .or_else(|| payload.get("output"))
+        .filter(|value| !value.is_null())
+    {
+        return Some(SelectedPersistableOutput {
+            value: value.clone(),
+            typed_text_blocks: item
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str)
+                == Some("mcpToolCall"),
+        });
+    }
+    if let Some(value) = stdout_stderr_output(payload) {
+        return Some(SelectedPersistableOutput {
+            value,
+            typed_text_blocks: false,
+        });
+    }
+    item.and_then(|item| item.get("content"))
+        .or_else(|| payload.get("content"))
+        .filter(|value| !value.is_null())
+        .map(|value| SelectedPersistableOutput {
+            value: value.clone(),
+            typed_text_blocks: true,
+        })
 }
 
 fn select_output_field(
@@ -1832,20 +1860,36 @@ fn output_value_text(value: &Value) -> Result<Option<String>> {
     if let Some(value) = value.as_str() {
         return Ok(Some(value.to_string()));
     }
-    let content = value
-        .get("content")
-        .and_then(Value::as_array)
-        .or_else(|| value.as_array());
-    if let Some(content) = content {
-        let text = content
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>();
-        if !text.is_empty() {
-            return Ok(Some(text.join("\n")));
-        }
-    }
     Ok(Some(serde_json::to_string(value)?))
+}
+
+fn selected_output_text(output: &SelectedPersistableOutput) -> Result<Option<String>> {
+    if !output.typed_text_blocks {
+        return output_value_text(&output.value);
+    }
+    let content = match &output.value {
+        Value::Array(content) => Some(content.as_slice()),
+        Value::Object(object) if object.len() == 1 => object
+            .get("content")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice),
+        _ => None,
+    };
+    let Some(content) = content.filter(|content| !content.is_empty()) else {
+        return output_value_text(&output.value);
+    };
+    let text = content
+        .iter()
+        .map(|block| {
+            (block.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| block.get("text").and_then(Value::as_str))
+                .flatten()
+        })
+        .collect::<Option<Vec<_>>>();
+    match text {
+        Some(text) => Ok(Some(text.join("\n"))),
+        None => output_value_text(&output.value),
+    }
 }
 
 fn error_value_text(value: &Value) -> Result<Option<String>> {
@@ -3409,6 +3453,62 @@ mod tests {
             Some(r#"{"a":1,"b":2}"#.to_string())
         );
 
+        let generic_result = json!([
+            {"path":"src/a.ts","line":12,"text":"匹配内容 A"},
+            {"path":"src/b.ts","line":35,"text":"匹配内容 B"}
+        ]);
+        let (event_type, payload) = crate::codex::normalize_event(
+            "item/completed",
+            &json!({
+                "item": {
+                    "id": "dynamic-1",
+                    "type": "dynamicToolCall",
+                    "status": "completed",
+                    "output": generic_result.clone(),
+                }
+            }),
+        );
+        let payload = normalize_public_payload(event_type, &payload);
+        let generic_json = prepare_persistable_result(
+            event_type,
+            payload.clone(),
+            persistable_output_update(event_type, &payload),
+        )
+        .unwrap();
+        let persisted = generic_json.payload["item"]["output"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(persisted).unwrap(),
+            generic_result
+        );
+        assert_eq!(generic_json.output_truncated, Some(false));
+
+        let result_with_content_metadata = json!({
+            "content": [{"type":"text","text":"typed text"}],
+            "rowCount": 1,
+        });
+        let payload = normalize_public_payload(
+            "activity.completed",
+            &json!({
+                "item": {
+                    "id": "mcp-structured-1",
+                    "type": "mcpToolCall",
+                    "status": "completed",
+                    "result": result_with_content_metadata.clone(),
+                }
+            }),
+        );
+        let structured_json = prepare_persistable_result(
+            "activity.completed",
+            payload.clone(),
+            persistable_output_update("activity.completed", &payload),
+        )
+        .unwrap();
+        let persisted = structured_json.payload["item"]["output"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(persisted).unwrap(),
+            result_with_content_metadata
+        );
+
         assert_eq!(
             persistable_output_update("command.output.delta", &Value::Null),
             Some(PersistableOutputUpdate::OrderedDelta)
@@ -3419,6 +3519,38 @@ mod tests {
                 &json!({"item":{"type":"commandExecution"}})
             ),
             Some(PersistableOutputUpdate::MetadataOnly)
+        );
+        assert_eq!(
+            persistable_output_update(
+                "activity.started",
+                &json!({"item":{"type":"commandExecution","aggregatedOutput":"partial"}})
+            ),
+            Some(PersistableOutputUpdate::CompleteSnapshot)
+        );
+        assert_eq!(
+            persistable_output_update(
+                "activity.completed",
+                &json!({"item":{"type":"commandExecution","status":"completed"}})
+            ),
+            Some(PersistableOutputUpdate::MetadataOnly)
+        );
+        assert_eq!(
+            persistable_output_update(
+                "runtime.action",
+                &json!({"status":"in_progress","output":"partial"})
+            ),
+            Some(PersistableOutputUpdate::CompleteSnapshot)
+        );
+        assert_eq!(
+            persistable_output_update(
+                "runtime.action",
+                &json!({"status":"completed","output":null})
+            ),
+            Some(PersistableOutputUpdate::MetadataOnly)
+        );
+        assert_eq!(
+            persistable_output_update("runtime.action", &json!({"status":"completed","output":""})),
+            Some(PersistableOutputUpdate::CompleteSnapshot)
         );
     }
 
@@ -5220,6 +5352,105 @@ mod tests {
         assert!(started_tool.inserted);
         assert_eq!(started_tool.sequence, 10);
 
+        let (pi_event_type, pi_update) = crate::pi::normalize_event(&json!({
+            "type": "tool_execution_update",
+            "toolCallId": "pi-streamed-result",
+            "toolName": "grep",
+            "args": {"query": "needle"},
+            "partialResult": {
+                "content": [{"type": "text", "text": "找到 3 个文件……"}]
+            }
+        }));
+        let pi_streamed = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                pi_event_type,
+                &pi_update,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(pi_streamed.inserted);
+        assert_eq!(pi_streamed.sequence, 11);
+        assert_eq!(pi_streamed.payload["output"], "找到 3 个文件……");
+        assert_eq!(pi_streamed.output_truncated, Some(false));
+
+        let (pi_event_type, pi_terminal) = crate::pi::normalize_event(&json!({
+            "type": "tool_execution_end",
+            "toolCallId": "pi-streamed-result",
+            "toolName": "grep",
+            "args": {"query": "needle"},
+            "isError": false
+        }));
+        let pi_terminal = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                pi_event_type,
+                &pi_terminal,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!pi_terminal.inserted);
+        assert_eq!(pi_terminal.id, pi_streamed.id);
+        assert_eq!(pi_terminal.payload["output"], "找到 3 个文件……");
+        assert_eq!(pi_terminal.output_truncated, Some(false));
+
+        let snapshot_marker = "TERMINAL_SNAPSHOT_TAIL_MUST_NOT_PERSIST";
+        let terminal_snapshot = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "runtime.action",
+                &json!({
+                    "eventId": "pi-terminal-snapshot",
+                    "toolCallId": "pi-streamed-result",
+                    "toolName": "grep",
+                    "status": "completed",
+                    "kind": "read",
+                    "output": format!("{}{snapshot_marker}", "s".repeat(7_680)),
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        let saved_terminal_snapshot = terminal_snapshot.payload["output"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            saved_terminal_snapshot.len(),
+            PERSISTED_TOOL_OUTPUT_LIMIT_BYTES
+        );
+        assert!(!saved_terminal_snapshot.contains(snapshot_marker));
+        assert_eq!(terminal_snapshot.output_truncated, Some(true));
+
+        let terminal_metadata = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "runtime.action",
+                &json!({
+                    "eventId": "pi-terminal-metadata",
+                    "toolCallId": "pi-streamed-result",
+                    "toolName": "grep",
+                    "status": "completed",
+                    "kind": "read",
+                    "title": "completed without repeated output",
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(terminal_metadata.payload["output"], saved_terminal_snapshot);
+        assert_eq!(terminal_metadata.output_truncated, Some(true));
+
         let interrupted_started = ExecutionEvidenceService
             .record_runtime_event(
                 &mut database,
@@ -5238,7 +5469,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(interrupted_started.sequence, 11);
+        assert_eq!(interrupted_started.sequence, 12);
 
         let materialized = ContextService
             .materialize(
@@ -5304,7 +5535,7 @@ mod tests {
             .unwrap()
             .expect("an already-started Activity must receive one interruption terminal");
         assert_eq!(interrupted.id, interrupted_started.id);
-        assert_eq!(interrupted.sequence, 11);
+        assert_eq!(interrupted.sequence, 12);
         assert_eq!(interrupted.payload["reasonCode"], "runtime_interrupted");
         let interrupted_canonical = interrupted.canonical.as_ref().unwrap();
         assert_eq!(interrupted_canonical.phase, "terminal");
@@ -5359,7 +5590,7 @@ mod tests {
             .unwrap()
             .expect("terminal Team Tool result must survive the Turn fence");
         assert!(failed.inserted);
-        assert_eq!(failed.sequence, 12);
+        assert_eq!(failed.sequence, 13);
         assert_eq!(
             failed.payload["errorCode"],
             "team_tool.execution_budget_exhausted"
@@ -5392,7 +5623,7 @@ mod tests {
             .expect("the first replay observation must remain visible");
         assert!(!replay.inserted);
         assert_eq!(replay.id, failed.id);
-        assert_eq!(replay.sequence, 12);
+        assert_eq!(replay.sequence, 13);
         assert_eq!(replay.payload["idempotentReplay"], true);
 
         let replay_duplicate = ExecutionEvidenceService
@@ -5407,7 +5638,7 @@ mod tests {
             .unwrap();
         assert!(!replay_duplicate.inserted);
         assert_eq!(replay_duplicate.id, replay.id);
-        assert_eq!(replay_duplicate.sequence, 12);
+        assert_eq!(replay_duplicate.sequence, 13);
 
         // Extend the existing durable fencing owner: only a registered ZCode
         // background identity may update its original completed epoch.
