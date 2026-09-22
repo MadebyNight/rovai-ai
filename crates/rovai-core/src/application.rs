@@ -8972,10 +8972,14 @@ impl Core {
                     &database,
                     &params.evidence_id,
                 )?;
-                let (revision, change_sequence) = database.connection().query_row(
-                    "SELECT revision, change_sequence FROM agent_run_execution_evidence WHERE id = ?1",
+                let (revision, change_sequence, output_truncated) = database.connection().query_row(
+                    "SELECT revision, change_sequence, output_truncated FROM agent_run_execution_evidence WHERE id = ?1",
                     [&params.evidence_id],
-                    |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+                    |row| Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?.map(|value| value != 0),
+                    )),
                 )?;
                 let read_ms = read_started_at.elapsed().as_millis();
                 drop(database);
@@ -8984,6 +8988,7 @@ impl Core {
                     "evidenceId": params.evidence_id,
                     "revision": revision,
                     "changeSequence": change_sequence,
+                    "outputTruncated": output_truncated,
                     "payload": payload,
                     "canonical": canonical,
                 });
@@ -17771,6 +17776,7 @@ async fn process_agent_run_pi_message(
                         "evidenceId": evidence_id,
                         "revision": evidence.as_ref().and_then(|value| value.revision),
                         "changeSequence": evidence.as_ref().and_then(|value| value.change_sequence),
+                        "outputTruncated": evidence.as_ref().and_then(|value| value.output_truncated),
                         "payload": public_payload,
                         "canonical": evidence.as_ref().and_then(|value| value.canonical.as_ref()),
                     }),
@@ -18462,6 +18468,7 @@ async fn process_acp_events(
                             "executionEpoch":execution_epoch,"adapterKind":AdapterKind::ZcodeApp,
                             "nativeMethod":"_zcode/background","evidenceId":evidence.id,
                             "revision":evidence.revision,"changeSequence":evidence.change_sequence,
+                            "outputTruncated":evidence.output_truncated,
                             "payload":evidence.payload,"canonical":evidence.canonical}),
                         );
                     }
@@ -18868,6 +18875,7 @@ async fn process_agent_run_acp_delta_batch(
                 "evidenceId": evidence.id,
                 "revision": evidence.revision,
                 "changeSequence": evidence.change_sequence,
+                "outputTruncated": evidence.output_truncated,
                 "payload": evidence.payload,
                 "canonical": evidence.canonical,
             }),
@@ -19110,6 +19118,7 @@ async fn process_agent_run_acp_message(
             "evidenceId": evidence_id,
             "revision": evidence.as_ref().and_then(|evidence| evidence.revision),
             "changeSequence": evidence.as_ref().and_then(|evidence| evidence.change_sequence),
+            "outputTruncated": evidence.as_ref().and_then(|evidence| evidence.output_truncated),
             "payload": public_payload,
             "canonical": evidence.as_ref().and_then(|evidence| evidence.canonical.as_ref()),
         }),
@@ -19609,6 +19618,7 @@ async fn process_runtime_event(
             "evidenceId": evidence.id,
             "revision": evidence.revision,
             "changeSequence": evidence.change_sequence,
+            "outputTruncated": evidence.output_truncated,
             "payload": evidence.payload,
             "canonical": evidence.canonical,
         }),
@@ -19811,6 +19821,7 @@ async fn persist_runtime_compaction_display(
             "evidenceId": evidence.id,
             "revision": evidence.revision,
             "changeSequence": evidence.change_sequence,
+            "outputTruncated": evidence.output_truncated,
             "payload": evidence.payload,
             "canonical": evidence.canonical,
         }),
@@ -21035,6 +21046,7 @@ async fn process_agent_run_codex_delta_batch(
                 "evidenceId": evidence.id,
                 "revision": evidence.revision,
                 "changeSequence": evidence.change_sequence,
+                "outputTruncated": evidence.output_truncated,
                 "payload": evidence.payload,
                 "canonical": evidence.canonical,
             }),
@@ -21090,6 +21102,7 @@ async fn persist_interrupted_codex_activities(
                 "evidenceId": evidence.id,
                 "revision": evidence.revision,
                 "changeSequence": evidence.change_sequence,
+                "outputTruncated": evidence.output_truncated,
                 "payload": evidence.payload,
                 "canonical": evidence.canonical,
             }),
@@ -21264,6 +21277,7 @@ async fn process_agent_run_codex_message(
             "evidenceId": evidence_id,
             "revision": evidence.as_ref().and_then(|evidence| evidence.revision),
             "changeSequence": evidence.as_ref().and_then(|evidence| evidence.change_sequence),
+            "outputTruncated": evidence.as_ref().and_then(|evidence| evidence.output_truncated),
             "payload": public_payload,
             "canonical": evidence.as_ref().and_then(|evidence| evidence.canonical.as_ref()),
         }),
@@ -22300,6 +22314,7 @@ async fn process_agent_run_maintenance(
                         "evidenceId": evidence.id,
                         "revision": evidence.revision,
                         "changeSequence": evidence.change_sequence,
+                        "outputTruncated": evidence.output_truncated,
                         "payload": evidence.payload,
                         "canonical": evidence.canonical,
                     }));

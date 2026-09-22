@@ -7,6 +7,8 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::{
+    builtin_tool_cli_output::project_envelope,
+    builtin_tool_transport::BuiltinToolInvocationEnvelope,
     canonical_activity::{self, CanonicalRuntimeActivity, EvidenceActivityFacts},
     db::Database,
     managed_blob::{
@@ -22,6 +24,7 @@ use crate::{
 };
 
 const INLINE_PAYLOAD_LIMIT_BYTES: usize = 16 * 1024;
+pub const PERSISTED_TOOL_OUTPUT_LIMIT_BYTES: usize = 7_680;
 const RUNTIME_RUN_DIFF_EXECUTION_ROOT_MISSING: &str = "runtime_run_diff_execution_root_missing";
 const RUNTIME_RUN_DIFF_MANAGED_OUTPUT_FILTER_UNSAFE: &str =
     "runtime_run_diff_managed_output_filter_unsafe";
@@ -46,6 +49,8 @@ pub struct AgentRunExecutionEvidence {
     pub content_blob_id: Option<String>,
     pub content_byte_count: i64,
     pub is_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_truncated: Option<bool>,
     pub occurred_at: String,
     pub canonical: Option<CanonicalRuntimeActivity>,
 }
@@ -87,8 +92,23 @@ struct LifecycleEvidenceRow {
     occurred_at: String,
     revision: i64,
     change_sequence: i64,
+    output_truncated: Option<bool>,
     input: LifecycleContentPart,
     result: Option<LifecycleContentPart>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersistableOutputUpdate {
+    CompleteSnapshot,
+    OrderedDelta,
+    MetadataOnly,
+}
+
+#[derive(Debug, Clone)]
+struct PersistableResult {
+    payload: Value,
+    output_truncated: Option<bool>,
+    output_update: Option<PersistableOutputUpdate>,
 }
 
 impl PreparedRuntimeEvidence {
@@ -404,6 +424,7 @@ impl ExecutionEvidenceService {
                     content_blob_id: None,
                     content_byte_count: evidence.content_byte_count,
                     is_truncated: false,
+                    output_truncated: None,
                     occurred_at: evidence.occurred_at,
                     canonical,
                 },
@@ -787,6 +808,15 @@ impl ExecutionEvidenceService {
             workspace_json.as_deref(),
             managed_output_root,
         );
+        let PersistableResult {
+            payload,
+            output_truncated,
+            output_update,
+        } = prepare_persistable_result(
+            event_type,
+            payload,
+            persistable_output_update(event_type, source_payload),
+        )?;
         if let Some(recorded) = self.record_operation_lifecycle(
             database,
             blob_store,
@@ -797,6 +827,8 @@ impl ExecutionEvidenceService {
             phase,
             source_event_key.as_deref(),
             &payload,
+            output_update,
+            output_truncated,
             allow_fenced_terminal_tool_result,
         )? {
             return Ok(recorded);
@@ -892,10 +924,10 @@ impl ExecutionEvidenceService {
                 event_type, kind, phase, source_event_key,
                 payload_preview_json, content_blob_id,
                 content_byte_count, is_truncated, occurred_at,
-                revision, change_sequence, updated_at
+                output_truncated, revision, change_sequence, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-                ?9, ?10, ?11, ?12, ?13, 1, ?14, ?13
+                ?9, ?10, ?11, ?12, ?13, ?14, 1, ?15, ?13
             )
             "#,
             params![
@@ -912,6 +944,7 @@ impl ExecutionEvidenceService {
                 encoded.len() as i64,
                 i64::from(is_truncated),
                 occurred_at,
+                output_truncated.map(i64::from),
                 change_sequence,
             ],
         )?;
@@ -998,6 +1031,7 @@ impl ExecutionEvidenceService {
                 content_blob_id,
                 content_byte_count: encoded.len() as i64,
                 is_truncated,
+                output_truncated,
                 occurred_at,
                 canonical,
             },
@@ -1018,6 +1052,8 @@ impl ExecutionEvidenceService {
         phase: &str,
         source_event_key: Option<&str>,
         payload: &Value,
+        output_update: Option<PersistableOutputUpdate>,
+        incoming_output_truncated: Option<bool>,
         allow_fenced_terminal_tool_result: bool,
     ) -> Result<Option<Option<RecordedExecutionEvidence>>> {
         let proposed_id = Uuid::new_v4().to_string();
@@ -1091,6 +1127,7 @@ impl ExecutionEvidenceService {
             .as_ref()
             .and_then(|row| row.result.as_ref())
             .map(|part| part.value.clone());
+        let mut next_output_truncated = existing.as_ref().and_then(|row| row.output_truncated);
         if !incoming_is_start {
             let incoming_result = json_difference(payload, &next_input).unwrap_or_else(
                 || serde_json::json!({"_rovaiLifecycle": {"resultObserved": true}}),
@@ -1114,13 +1151,47 @@ impl ExecutionEvidenceService {
                     });
                     old
                 }
+                Some(mut old) if output_update == Some(PersistableOutputUpdate::OrderedDelta) => {
+                    next_output_truncated = Some(append_ordered_delta(
+                        &mut old,
+                        &incoming_result,
+                        next_output_truncated,
+                        incoming_output_truncated,
+                    ));
+                    let mut incoming_metadata = incoming_result;
+                    remove_persisted_output_aliases(&mut incoming_metadata);
+                    fill_missing(&mut incoming_metadata, &old);
+                    incoming_metadata
+                }
+                Some(old) if output_update == Some(PersistableOutputUpdate::CompleteSnapshot) => {
+                    let mut old_metadata = old;
+                    remove_persisted_output_aliases(&mut old_metadata);
+                    let mut latest = incoming_result;
+                    fill_missing(&mut latest, &old_metadata);
+                    next_output_truncated = incoming_output_truncated;
+                    latest
+                }
                 Some(old) => {
                     let mut latest = incoming_result;
                     fill_missing(&mut latest, &old);
                     latest
                 }
-                None => incoming_result,
+                None => {
+                    next_output_truncated = match output_update {
+                        Some(PersistableOutputUpdate::CompleteSnapshot) => {
+                            incoming_output_truncated
+                        }
+                        Some(PersistableOutputUpdate::OrderedDelta) => {
+                            Some(incoming_output_truncated.unwrap_or(false))
+                        }
+                        _ => next_output_truncated,
+                    };
+                    incoming_result
+                }
             });
+        }
+        if terminal_conflict {
+            next_output_truncated = existing.as_ref().and_then(|row| row.output_truncated);
         }
 
         let existing_is_terminal = existing
@@ -1143,6 +1214,7 @@ impl ExecutionEvidenceService {
                 && row.phase == next_phase
                 && row.event_type == next_event_type
                 && row.kind == next_kind
+                && row.output_truncated == next_output_truncated
         });
 
         let occurred_at = chrono::Utc::now().to_rfc3339();
@@ -1274,10 +1346,10 @@ impl ExecutionEvidenceService {
                     operation_id, revision, change_sequence,
                     input_preview_json, input_blob_id, input_byte_count, input_content_state,
                     result_preview_json, result_blob_id, result_byte_count, result_content_state,
-                    updated_at
+                    output_truncated, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
                 )
                 "#,
                 params![
@@ -1306,6 +1378,7 @@ impl ExecutionEvidenceService {
                         .and_then(|part| part.blob_id.as_ref()),
                     next_result_part.as_ref().map(|part| part.byte_count),
                     next_result_part.as_ref().map(|part| &part.state),
+                    next_output_truncated.map(i64::from),
                     occurred_at,
                 ],
             )?;
@@ -1322,7 +1395,7 @@ impl ExecutionEvidenceService {
                     input_byte_count = ?13, input_content_state = ?14,
                     result_preview_json = ?15, result_blob_id = ?16,
                     result_byte_count = ?17, result_content_state = ?18,
-                    updated_at = ?19
+                    output_truncated = ?19, updated_at = ?20
                 WHERE id = ?1
                 "#,
                 params![
@@ -1346,6 +1419,7 @@ impl ExecutionEvidenceService {
                         .and_then(|part| part.blob_id.as_ref()),
                     next_result_part.as_ref().map(|part| part.byte_count),
                     next_result_part.as_ref().map(|part| &part.state),
+                    next_output_truncated.map(i64::from),
                     occurred_at,
                 ],
             )?;
@@ -1487,6 +1561,7 @@ impl ExecutionEvidenceService {
                 content_blob_id: None,
                 content_byte_count,
                 is_truncated,
+                output_truncated: next_output_truncated,
                 occurred_at: original_occurred_at,
                 canonical,
             },
@@ -1586,12 +1661,315 @@ impl ExecutionEvidenceService {
     }
 }
 
+fn persistable_output_update(event_type: &str, payload: &Value) -> Option<PersistableOutputUpdate> {
+    match event_type {
+        "command.output.delta" => Some(PersistableOutputUpdate::OrderedDelta),
+        "runtime.action" => Some(
+            if payload
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| {
+                    matches!(
+                        status,
+                        "completed"
+                            | "succeeded"
+                            | "success"
+                            | "failed"
+                            | "error"
+                            | "declined"
+                            | "denied"
+                            | "cancelled"
+                            | "canceled"
+                            | "not_executed"
+                    )
+                })
+            {
+                PersistableOutputUpdate::CompleteSnapshot
+            } else {
+                PersistableOutputUpdate::MetadataOnly
+            },
+        ),
+        "activity.started" if is_persistable_tool_item(payload) => {
+            Some(PersistableOutputUpdate::MetadataOnly)
+        }
+        "activity.completed" if is_persistable_tool_item(payload) => {
+            if payload.get("reasonCode").and_then(Value::as_str) == Some("runtime_interrupted") {
+                Some(PersistableOutputUpdate::MetadataOnly)
+            } else {
+                Some(PersistableOutputUpdate::CompleteSnapshot)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_persistable_tool_item(payload: &Value) -> bool {
+    matches!(
+        payload.pointer("/item/type").and_then(Value::as_str),
+        Some(
+            "commandExecution"
+                | "mcpToolCall"
+                | "dynamicToolCall"
+                | "webSearch"
+                | "imageGeneration"
+                | "collabToolCall"
+                | "collabAgentToolCall"
+        )
+    )
+}
+
+fn prepare_persistable_result(
+    event_type: &str,
+    mut payload: Value,
+    output_update: Option<PersistableOutputUpdate>,
+) -> Result<PersistableResult> {
+    let Some(output_update) = output_update else {
+        return Ok(PersistableResult {
+            payload,
+            output_truncated: None,
+            output_update: None,
+        });
+    };
+
+    if let Some(projection) = payload
+        .get_mut("operationProjection")
+        .and_then(Value::as_object_mut)
+    {
+        projection.remove("canonicalResult");
+    }
+
+    let main = select_persistable_output(&payload);
+    let summary = (main.is_none())
+        .then(|| select_output_field(&payload, &["summary"], &["summary"]))
+        .flatten();
+    let error = select_persistable_error(&payload);
+    let result_digest = main.as_ref().map(persistable_output_digest).transpose()?;
+    remove_persisted_output_aliases(&mut payload);
+
+    if output_update == PersistableOutputUpdate::MetadataOnly {
+        return Ok(PersistableResult {
+            payload,
+            output_truncated: None,
+            output_update: Some(output_update),
+        });
+    }
+
+    let main_text = main
+        .as_ref()
+        .or(summary.as_ref())
+        .map(output_value_text)
+        .transpose()?
+        .flatten();
+    let error_text = error.as_ref().map(error_value_text).transpose()?.flatten();
+    let combined = combine_output_and_error(main_text.as_deref(), error_text.as_deref());
+    let (persisted, output_truncated) = combined
+        .as_deref()
+        .map(|text| truncate_utf8_prefix(text, PERSISTED_TOOL_OUTPUT_LIMIT_BYTES))
+        .unwrap_or_else(|| (String::new(), false));
+    if combined.is_some() {
+        store_persisted_output(event_type, &mut payload, persisted);
+    }
+    if let Some(digest) = result_digest {
+        payload["resultDigest"] = Value::String(digest);
+    }
+    Ok(PersistableResult {
+        payload,
+        output_truncated: Some(output_truncated),
+        output_update: Some(output_update),
+    })
+}
+
+fn select_persistable_output(payload: &Value) -> Option<Value> {
+    select_output_field(payload, &["aggregatedOutput"], &["output"])
+        .or_else(|| select_output_field(payload, &["output"], &["output"]))
+        .or_else(|| stdout_stderr_output(payload))
+        .or_else(|| select_output_field(payload, &["content"], &["content"]))
+}
+
+fn select_output_field(
+    payload: &Value,
+    item_fields: &[&str],
+    root_fields: &[&str],
+) -> Option<Value> {
+    for field in item_fields {
+        if let Some(value) = payload
+            .pointer(&format!("/item/{field}"))
+            .filter(|value| !value.is_null())
+        {
+            return Some(value.clone());
+        }
+    }
+    for field in root_fields {
+        if let Some(value) = payload.get(*field).filter(|value| !value.is_null()) {
+            return Some(value.clone());
+        }
+    }
+    None
+}
+
+fn stdout_stderr_output(payload: &Value) -> Option<Value> {
+    let item = payload.get("item").unwrap_or(&Value::Null);
+    let source = if item.is_object() { item } else { payload };
+    let stdout = source.get("stdout").and_then(Value::as_str);
+    let stderr = source.get("stderr").and_then(Value::as_str);
+    match (stdout, stderr) {
+        (None, None) => None,
+        (Some(stdout), None) => Some(Value::String(stdout.to_string())),
+        (None, Some(stderr)) => Some(Value::String(stderr.to_string())),
+        (Some(stdout), Some(stderr)) => Some(Value::String(format!("{stdout}\n{stderr}"))),
+    }
+}
+
+fn select_persistable_error(payload: &Value) -> Option<Value> {
+    payload
+        .pointer("/item/error")
+        .filter(|value| !value.is_null())
+        .or_else(|| payload.get("error").filter(|value| !value.is_null()))
+        .cloned()
+}
+
+fn output_value_text(value: &Value) -> Result<Option<String>> {
+    if let Some(value) = value.as_str() {
+        return Ok(Some(value.to_string()));
+    }
+    let content = value
+        .get("content")
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array());
+    if let Some(content) = content {
+        let text = content
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        if !text.is_empty() {
+            return Ok(Some(text.join("\n")));
+        }
+    }
+    Ok(Some(serde_json::to_string(value)?))
+}
+
+fn error_value_text(value: &Value) -> Result<Option<String>> {
+    if let Some(value) = value.as_str() {
+        return Ok(Some(value.to_string()));
+    }
+    let messages = ["message", "stack"]
+        .into_iter()
+        .filter_map(|field| value.get(field).and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    if !messages.is_empty() {
+        return Ok(Some(messages.join("\n")));
+    }
+    output_value_text(value)
+}
+
+fn combine_output_and_error(output: Option<&str>, error: Option<&str>) -> Option<String> {
+    match (output, error) {
+        (None, None) => None,
+        (Some(output), None) => Some(output.to_string()),
+        (None, Some(error)) => Some(error.to_string()),
+        (Some(""), Some(error)) => Some(error.to_string()),
+        (Some(output), Some("")) => Some(output.to_string()),
+        (Some(output), Some(error)) => Some(format!("{output}\n{error}")),
+    }
+}
+
+fn persistable_output_digest(value: &Value) -> Result<String> {
+    let digest_value = value
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text.trim()).ok())
+        .unwrap_or_else(|| value.clone());
+    crate::command::canonical_json_digest(&digest_value)
+}
+
+fn truncate_utf8_prefix(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_string(), true)
+}
+
+fn remove_persisted_output_aliases(payload: &mut Value) {
+    if let Some(object) = payload.as_object_mut() {
+        for field in ["output", "stdout", "stderr", "content", "summary", "error"] {
+            object.remove(field);
+        }
+        if let Some(item) = object.get_mut("item").and_then(Value::as_object_mut) {
+            for field in [
+                "aggregatedOutput",
+                "output",
+                "result",
+                "stdout",
+                "stderr",
+                "content",
+                "summary",
+                "error",
+            ] {
+                item.remove(field);
+            }
+        }
+    }
+}
+
+fn store_persisted_output(event_type: &str, payload: &mut Value, output: String) {
+    if matches!(event_type, "activity.started" | "activity.completed") {
+        let is_command =
+            payload.pointer("/item/type").and_then(Value::as_str) == Some("commandExecution");
+        if is_command {
+            payload["item"]["aggregatedOutput"] = Value::String(output);
+        } else {
+            payload["item"]["output"] = Value::String(output);
+        }
+    } else {
+        payload["output"] = Value::String(output);
+    }
+}
+
+fn persisted_output_text(payload: &Value) -> Option<&str> {
+    payload
+        .pointer("/item/aggregatedOutput")
+        .or_else(|| payload.pointer("/item/output"))
+        .or_else(|| payload.get("output"))
+        .and_then(Value::as_str)
+}
+
+fn set_existing_persisted_output(payload: &mut Value, output: String) {
+    if payload.pointer("/item/aggregatedOutput").is_some() {
+        payload["item"]["aggregatedOutput"] = Value::String(output);
+    } else if payload.pointer("/item/output").is_some() {
+        payload["item"]["output"] = Value::String(output);
+    } else {
+        payload["output"] = Value::String(output);
+    }
+}
+
+fn append_ordered_delta(
+    existing: &mut Value,
+    incoming: &Value,
+    existing_truncated: Option<bool>,
+    incoming_truncated: Option<bool>,
+) -> bool {
+    if existing_truncated == Some(true) {
+        return true;
+    }
+    let current = persisted_output_text(existing).unwrap_or_default();
+    let delta = persisted_output_text(incoming).unwrap_or_default();
+    let combined = format!("{current}{delta}");
+    let (persisted, truncated) = truncate_utf8_prefix(&combined, PERSISTED_TOOL_OUTPUT_LIMIT_BYTES);
+    set_existing_persisted_output(existing, persisted);
+    truncated || incoming_truncated == Some(true)
+}
+
 fn lifecycle_input_payload(payload: &Value) -> Value {
     let mut input = payload.clone();
     if let Some(object) = input.as_object_mut() {
         for field in [
             "output",
             "rawOutputDigest",
+            "resultDigest",
             "errorCode",
             "runtimeDiff",
             "runtimeFileOperation",
@@ -1610,6 +1988,7 @@ fn lifecycle_input_payload(payload: &Value) -> Value {
                 "summary",
                 "changes",
                 "error",
+                "errorCode",
             ] {
                 item.remove(field);
             }
@@ -1837,7 +2216,7 @@ fn load_lifecycle_evidence(
         .query_row(
             r#"
             SELECT id, sequence, event_type, kind, phase, occurred_at,
-                   revision, change_sequence,
+                   revision, change_sequence, output_truncated,
                    input_preview_json, input_blob_id, input_byte_count, input_content_state,
                    result_preview_json, result_blob_id, result_byte_count, result_content_state
             FROM agent_run_execution_evidence
@@ -1854,14 +2233,15 @@ fn load_lifecycle_evidence(
                     row.get::<_, String>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<i64>>(8)?.map(|value| value != 0),
+                    row.get::<_, String>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, String>(12)?,
                     row.get::<_, Option<String>>(13)?,
-                    row.get::<_, Option<i64>>(14)?,
-                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<i64>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             },
         )
@@ -1875,6 +2255,7 @@ fn load_lifecycle_evidence(
         occurred_at,
         revision,
         change_sequence,
+        output_truncated,
         input_preview,
         input_blob,
         input_bytes,
@@ -1915,6 +2296,7 @@ fn load_lifecycle_evidence(
         occurred_at,
         revision,
         change_sequence,
+        output_truncated,
         input,
         result,
     }))
@@ -1957,6 +2339,7 @@ fn lifecycle_evidence_view(
                 .result
                 .as_ref()
                 .is_some_and(|part| part.state != "inline"),
+        output_truncated: row.output_truncated,
         occurred_at: row.occurred_at.clone(),
         canonical,
     }
@@ -2071,6 +2454,20 @@ fn normalize_public_payload(event_type: &str, payload: &Value) -> Value {
             "runtimeRunDiff": payload.get("runtimeRunDiff"),
         }),
         "runtime.action" => {
+            let core_envelope = payload.get("coreEnvelope");
+            let agent_output_digest = builtin_agent_output_digest(payload);
+            let public_output = payload
+                .get("output")
+                .filter(|value| !value.is_null())
+                .or_else(|| core_envelope.and_then(|envelope| envelope.get("result")));
+            let public_error = payload
+                .get("error")
+                .filter(|value| !value.is_null())
+                .or_else(|| core_envelope.and_then(|envelope| envelope.get("error")));
+            let public_error_code = payload
+                .get("errorCode")
+                .filter(|value| !value.is_null())
+                .or_else(|| public_error.and_then(|error| error.get("code")));
             let mut normalized = serde_json::json!({
                 "toolCallId": payload.get("toolCallId"),
                 "status": payload.get("status"),
@@ -2082,10 +2479,16 @@ fn normalize_public_payload(event_type: &str, payload: &Value) -> Value {
                 "authorizationDecision": payload.get("authorizationDecision"),
                 "locationCount": payload.get("locationCount"),
                 "input": payload.get("input"),
-                "output": payload.get("output"),
+                "output": public_output,
+                "stdout": payload.get("stdout"),
+                "stderr": payload.get("stderr"),
+                "content": payload.get("content"),
+                "summary": payload.get("summary"),
+                "error": public_error,
                 "rawInputDigest": payload.get("rawInputDigest"),
                 "rawOutputDigest": payload.get("rawOutputDigest"),
-                "errorCode": payload.get("errorCode"),
+                "agentOutputDigest": agent_output_digest,
+                "errorCode": public_error_code,
                 "idempotentReplay": payload.get("idempotentReplay"),
                 "receiptId": payload.get("receiptId"),
                 "operationProjection": payload.get("operationProjection"),
@@ -2096,7 +2499,7 @@ fn normalize_public_payload(event_type: &str, payload: &Value) -> Value {
                 normalized["zcodeBackground"] = background.clone();
             }
             if let Some(core_envelope) = payload.get("coreEnvelope") {
-                normalized["coreEnvelope"] = core_envelope.clone();
+                normalized["coreEnvelope"] = public_core_envelope(core_envelope);
             }
             normalized
         }
@@ -2118,16 +2521,47 @@ fn normalize_public_payload(event_type: &str, payload: &Value) -> Value {
                     "exitCode": item.get("exitCode"),
                     "aggregatedOutput": item.get("aggregatedOutput"),
                     "output": public_activity_output(item),
+                    "stdout": item.get("stdout"),
+                    "stderr": item.get("stderr"),
+                    "content": item.get("content"),
                     "summary": item.get("summary"),
                     "changes": item.get("changes"),
                     "tool": item.get("tool"),
                     "server": item.get("server"),
                     "error": item.get("error"),
+                    "errorCode": item.get("errorCode")
+                        .filter(|value| !value.is_null())
+                        .or_else(|| payload.get("errorCode").filter(|value| !value.is_null()))
+                        .or_else(|| item.pointer("/error/code"))
+                        .or_else(|| payload.pointer("/error/code")),
                 }
             })
         }
         _ => Value::Null,
     }
+}
+
+fn builtin_agent_output_digest(payload: &Value) -> Option<String> {
+    let envelope = serde_json::from_value::<BuiltinToolInvocationEnvelope>(
+        payload.get("coreEnvelope")?.clone(),
+    )
+    .ok()?;
+    let output = project_envelope(envelope).ok()?;
+    crate::command::canonical_json_digest(&output).ok()
+}
+
+fn public_core_envelope(envelope: &Value) -> Value {
+    serde_json::json!({
+        "contractVersion": envelope.get("contractVersion"),
+        "ok": envelope.get("ok"),
+        "operation": envelope.get("operation"),
+        "requestId": envelope.get("requestId"),
+        "receipt": envelope.get("receipt"),
+        "error": {
+            "code": envelope.pointer("/error/code"),
+            "recovery": envelope.pointer("/error/recovery"),
+        }
+    })
 }
 
 fn public_activity_output(item: &Value) -> Option<Value> {
@@ -2570,7 +3004,7 @@ fn load_by_source_key(
             SELECT id, agent_run_id, execution_epoch, sequence,
                    event_type, kind, phase, payload_preview_json,
                    content_blob_id, content_byte_count, is_truncated, occurred_at,
-                   operation_id, revision, change_sequence
+                   operation_id, revision, change_sequence, output_truncated
             FROM agent_run_execution_evidence
             WHERE agent_run_id = ?1 AND source_event_key = ?2
             "#,
@@ -2593,6 +3027,7 @@ fn load_by_source_key(
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<i64>>(13)?,
                     row.get::<_, Option<i64>>(14)?,
+                    row.get::<_, Option<i64>>(15)?.map(|value| value != 0),
                 ))
             },
         )
@@ -2614,6 +3049,7 @@ fn load_by_source_key(
                 operation_id,
                 revision,
                 change_sequence,
+                output_truncated,
             )| {
                 Ok(AgentRunExecutionEvidence {
                     id,
@@ -2630,6 +3066,7 @@ fn load_by_source_key(
                     content_blob_id,
                     content_byte_count,
                     is_truncated,
+                    output_truncated,
                     occurred_at,
                     canonical: None,
                 })
@@ -2890,6 +3327,211 @@ mod tests {
         team_tool::TeamToolService,
     };
     use serde_json::json;
+
+    #[test]
+    fn persistable_tool_result_uses_closed_updates_and_a_utf8_byte_budget() {
+        let oversized = format!("{}界NEVER_PERSIST", "a".repeat(7_679));
+        let prepared = prepare_persistable_result(
+            "activity.completed",
+            json!({
+                "item": {
+                    "id": "command-1",
+                    "type": "commandExecution",
+                    "status": "completed",
+                    "aggregatedOutput": oversized,
+                    "output": "lower-priority alias",
+                    "summary": "fallback only",
+                }
+            }),
+            Some(PersistableOutputUpdate::CompleteSnapshot),
+        )
+        .unwrap();
+        let output = prepared.payload["item"]["aggregatedOutput"]
+            .as_str()
+            .unwrap();
+        assert_eq!(output.len(), 7_679);
+        assert!(output.is_char_boundary(output.len()));
+        assert!(!output.contains("NEVER_PERSIST"));
+        assert_eq!(prepared.output_truncated, Some(true));
+        assert!(prepared.payload["item"].get("output").is_none());
+        assert!(prepared.payload["item"].get("summary").is_none());
+        serde_json::to_string(&prepared.payload).unwrap();
+        let (emoji_prefix, emoji_truncated) = truncate_utf8_prefix(
+            &format!("{}🙂", "a".repeat(7_679)),
+            PERSISTED_TOOL_OUTPUT_LIMIT_BYTES,
+        );
+        assert_eq!(emoji_prefix.len(), 7_679);
+        assert!(emoji_truncated);
+
+        let explicit_empty = prepare_persistable_result(
+            "activity.completed",
+            json!({
+                "item": {
+                    "id": "command-2",
+                    "type": "commandExecution",
+                    "status": "completed",
+                    "aggregatedOutput": "",
+                    "output": "must not become the result",
+                    "summary": "must not become the result",
+                }
+            }),
+            Some(PersistableOutputUpdate::CompleteSnapshot),
+        )
+        .unwrap();
+        assert_eq!(explicit_empty.payload["item"]["aggregatedOutput"], "");
+        assert_eq!(explicit_empty.output_truncated, Some(false));
+
+        let shared_error_budget = prepare_persistable_result(
+            "activity.completed",
+            json!({
+                "item": {
+                    "id": "tool-3",
+                    "type": "mcpToolCall",
+                    "status": "failed",
+                    "output": {"content": [
+                        {"type": "text", "text": "a".repeat(7_679)}
+                    ]},
+                    "error": {"message": "ERROR_MUST_NOT_SURVIVE", "stack": "stack"}
+                }
+            }),
+            Some(PersistableOutputUpdate::CompleteSnapshot),
+        )
+        .unwrap();
+        let output = shared_error_budget.payload["item"]["output"]
+            .as_str()
+            .unwrap();
+        assert_eq!(output.len(), PERSISTED_TOOL_OUTPUT_LIMIT_BYTES);
+        assert!(output.ends_with('\n'));
+        assert!(!output.contains("ERROR_MUST_NOT_SURVIVE"));
+        assert_eq!(shared_error_budget.output_truncated, Some(true));
+        assert_eq!(
+            output_value_text(&json!({"b": 2, "a": 1})).unwrap(),
+            Some(r#"{"a":1,"b":2}"#.to_string())
+        );
+
+        assert_eq!(
+            persistable_output_update("command.output.delta", &Value::Null),
+            Some(PersistableOutputUpdate::OrderedDelta)
+        );
+        assert_eq!(
+            persistable_output_update(
+                "activity.started",
+                &json!({"item":{"type":"commandExecution"}})
+            ),
+            Some(PersistableOutputUpdate::MetadataOnly)
+        );
+    }
+
+    #[test]
+    fn builtin_agent_output_digest_keeps_carrier_proof_without_a_second_result_body() {
+        let raw_result = json!({
+            "status": "accepted",
+            "messageId": "msg_123",
+            "agentAddressingMode": "automatic",
+            "visibility": "camp_public",
+            "campTurnId": "turn_1",
+            "effectiveRecipients": ["agent_27"],
+            "recipientPresentation": {},
+            "recipientSetDigest": "sha256:digest",
+            "deliveryIds": ["delivery_1"],
+            "allocatedAgentRunResponsibilities": 1
+        });
+        let envelope = BuiltinToolInvocationEnvelope::success(
+            "camp.message.send",
+            "7b5db24c-4a43-4cab-9217-d982b08f7691",
+            raw_result.clone(),
+        )
+        .unwrap();
+        let agent_output = project_envelope(envelope.clone()).unwrap();
+        let agent_output_digest = crate::command::canonical_json_digest(&agent_output).unwrap();
+        let raw_output_digest = crate::command::canonical_json_digest(&raw_result).unwrap();
+        assert_ne!(agent_output_digest, raw_output_digest);
+
+        let normalized = normalize_public_payload(
+            "runtime.action",
+            &json!({
+                "toolCallId": "builtin-1",
+                "status": "completed",
+                "kind": "builtin_tool_invocation",
+                "sourceAuthority": "core",
+                "canonicalTool": "camp.message.send",
+                "rawOutputDigest": raw_output_digest,
+                "operationProjection": {"canonicalResult": agent_output},
+                "coreEnvelope": envelope,
+            }),
+        );
+        assert_eq!(normalized["agentOutputDigest"], agent_output_digest);
+        assert_eq!(normalized["errorCode"], Value::Null);
+
+        let prepared = prepare_persistable_result(
+            "runtime.action",
+            normalized,
+            Some(PersistableOutputUpdate::CompleteSnapshot),
+        )
+        .unwrap();
+        assert_eq!(prepared.payload["resultDigest"], raw_output_digest);
+        assert_eq!(prepared.payload["agentOutputDigest"], agent_output_digest);
+        assert!(prepared.payload["coreEnvelope"].get("result").is_none());
+        assert!(
+            prepared.payload["operationProjection"]
+                .get("canonicalResult")
+                .is_none()
+        );
+
+        let failed = normalize_public_payload(
+            "runtime.action",
+            &json!({
+                "status": "failed",
+                "error": {"code": "tool.failed", "message": "failed"}
+            }),
+        );
+        assert_eq!(failed["errorCode"], "tool.failed");
+        let failed_activity = normalize_public_payload(
+            "activity.completed",
+            &json!({
+                "errorCode": "command.failed",
+                "item": {"type": "commandExecution", "status": "failed"}
+            }),
+        );
+        assert_eq!(failed_activity["item"]["errorCode"], "command.failed");
+    }
+
+    #[test]
+    fn ordered_delta_appends_only_remaining_budget_and_metadata_preserves_loss_state() {
+        let mut existing = json!({"item": {"aggregatedOutput": "a".repeat(7_678)}});
+        let incoming = json!({"item": {"aggregatedOutput": "界tail"}});
+        assert!(append_ordered_delta(
+            &mut existing,
+            &incoming,
+            Some(false),
+            Some(false),
+        ));
+        assert_eq!(
+            existing["item"]["aggregatedOutput"].as_str().unwrap().len(),
+            7_678
+        );
+
+        let before = existing.clone();
+        assert!(append_ordered_delta(
+            &mut existing,
+            &json!({"item": {"aggregatedOutput": "ignored"}}),
+            Some(true),
+            Some(false),
+        ));
+        assert_eq!(existing, before);
+
+        let metadata = prepare_persistable_result(
+            "activity.started",
+            json!({
+                "status": "inProgress",
+                "item": {"type": "commandExecution", "aggregatedOutput": "must disappear"}
+            }),
+            Some(PersistableOutputUpdate::MetadataOnly),
+        )
+        .unwrap();
+        assert_eq!(metadata.output_truncated, None);
+        assert!(metadata.payload["item"].get("aggregatedOutput").is_none());
+    }
 
     #[test]
     fn provider_packets_are_reduced_to_public_evidence_fields() {
@@ -4130,7 +4772,9 @@ mod tests {
             .unwrap();
         assert_eq!(durable_delta_count, 0);
 
-        let secret = format!("EVIDENCE_ONLY_{}", "x".repeat(573_647));
+        let discarded_output_marker = "OUTPUT_AFTER_7680_MUST_NOT_PERSIST";
+        let output = format!("{}{discarded_output_marker}", "x".repeat(7_680));
+        let structured_diff = format!("DIFF_REMAINS_READABLE\n{}", "d".repeat(20_000));
         let started_command = ExecutionEvidenceService
             .record_runtime_event(
                 &mut database,
@@ -4164,7 +4808,12 @@ mod tests {
                         "command": "cargo test",
                         "status": "completed",
                         "exitCode": 0,
-                        "aggregatedOutput": secret,
+                        "aggregatedOutput": output,
+                        "changes": [{
+                            "path": "src/output-limit.rs",
+                            "changeKind": "update",
+                            "diff": structured_diff,
+                        }],
                     }
                 }),
             )
@@ -4172,6 +4821,7 @@ mod tests {
             .unwrap();
         assert!(!evidence.inserted);
         assert!(evidence.is_truncated);
+        assert_eq!(evidence.output_truncated, Some(true));
         assert!(evidence.content_blob_id.is_none());
         assert_eq!(evidence.id, started_command.id);
         assert_eq!(evidence.sequence, 1);
@@ -4189,7 +4839,90 @@ mod tests {
         let full_payload = ExecutionEvidenceService
             .read_full_payload(&database, &blob_store, &camp_id, &evidence.id)
             .unwrap();
-        assert_eq!(full_payload["item"]["aggregatedOutput"], secret);
+        let saved_output = full_payload["item"]["aggregatedOutput"].as_str().unwrap();
+        assert_eq!(
+            saved_output.as_bytes().len(),
+            PERSISTED_TOOL_OUTPUT_LIMIT_BYTES
+        );
+        assert!(!full_payload.to_string().contains(discarded_output_marker));
+        assert!(full_payload.to_string().contains("DIFF_REMAINS_READABLE"));
+        let (payload_preview, result_preview, result_blob_id): (String, Option<String>, Option<String>) =
+            database.connection().query_row(
+                "SELECT payload_preview_json, result_preview_json, result_blob_id FROM agent_run_execution_evidence WHERE id = ?1",
+                [&evidence.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+        assert!(!payload_preview.contains(discarded_output_marker));
+        assert!(!result_preview.unwrap().contains(discarded_output_marker));
+        let result_blob_id =
+            result_blob_id.expect("structured diff should keep the result Blob-backed");
+        let result_blob = blob_store.read_bytes(&database, &result_blob_id).unwrap();
+        let result_blob = String::from_utf8(result_blob).unwrap();
+        assert!(!result_blob.contains(discarded_output_marker));
+        assert!(result_blob.contains("DIFF_REMAINS_READABLE"));
+        let serialized_event = serde_json::to_string(&evidence.evidence).unwrap();
+        assert!(!serialized_event.contains(discarded_output_marker));
+        assert!(serialized_event.contains("\"outputTruncated\":true"));
+
+        let metadata_only = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.started",
+                &json!({
+                    "item": {
+                        "id": "command-1",
+                        "type": "commandExecution",
+                        "command": "cargo test",
+                        "status": "inProgress",
+                        "title": "late metadata",
+                        "aggregatedOutput": "must not replace the accepted snapshot",
+                    }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata_only.output_truncated, Some(true));
+        assert_eq!(
+            ExecutionEvidenceService
+                .read_full_payload(&database, &blob_store, &camp_id, &evidence.id)
+                .unwrap()["item"]["aggregatedOutput"],
+            saved_output
+        );
+
+        let replacement = ExecutionEvidenceService
+            .record_runtime_event(
+                &mut database,
+                &blob_store,
+                &run_id,
+                execution_epoch,
+                "activity.completed",
+                &json!({
+                    "item": {
+                        "id": "command-1",
+                        "type": "commandExecution",
+                        "command": "cargo test",
+                        "status": "completed",
+                        "exitCode": 0,
+                        "aggregatedOutput": "short replacement",
+                    }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(replacement.output_truncated, Some(false));
+        assert_eq!(
+            replacement.payload["item"]["aggregatedOutput"],
+            "short replacement"
+        );
+        assert!(
+            replacement
+                .payload
+                .to_string()
+                .contains("DIFF_REMAINS_READABLE")
+        );
         let canonical_count: i64 = database
             .connection()
             .query_row(
@@ -4522,7 +5255,7 @@ mod tests {
         let ContextMaterialization::Ready(context) = materialized else {
             panic!("small Camp context should materialize");
         };
-        assert!(!context.rendered_payload.contains("EVIDENCE_ONLY_"));
+        assert!(!context.rendered_payload.contains(discarded_output_marker));
 
         let run_version: i64 = database
             .connection()

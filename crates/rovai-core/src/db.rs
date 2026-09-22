@@ -283,8 +283,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.65";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 119;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.66";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 120;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -728,6 +728,7 @@ struct CurrentMigrationState {
     v167: bool,
     v168: bool,
     v169: bool,
+    v170: bool,
 }
 
 impl CurrentMigrationState {
@@ -749,11 +750,19 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v170 {
+            let mut previous = *self;
+            previous.v170 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v169
+                && previous.admits("v1.65", 119, classifier);
+        }
         if self.v169 {
             let mut previous = *self;
             previous.v169 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
-                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            return contract == "v1.65"
+                && schema == 119
                 && self.v168
                 && previous.admits("v1.64", 118, classifier);
         }
@@ -3054,6 +3063,8 @@ pub(crate) fn classify_database_contract(
         migrations.v168 && execution_lifecycle_v168_schema_matches(connection)?;
     let camp_deletion_schema_matches =
         migrations.v169 && camp_deletion_v169_schema_matches(connection)?;
+    let tool_output_schema_matches =
+        migrations.v170 && tool_output_v170_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
         &marker,
         migrations,
@@ -3126,6 +3137,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v167 && !task_description_schema_matches)
         || (migrations.v168 && !execution_lifecycle_schema_matches)
         || (migrations.v169 && !camp_deletion_schema_matches)
+        || (migrations.v170 && !tool_output_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3549,6 +3561,19 @@ fn camp_deletion_v169_schema_matches(connection: &Connection) -> rusqlite::Resul
         |row| row.get(0),
     )?;
     Ok(camp_columns == 7 && journal_columns == 4 && indexes == 4)
+}
+
+fn tool_output_v170_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    connection.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('agent_run_execution_evidence')
+            WHERE name = 'output_truncated' AND type = 'INTEGER'
+        )
+        "#,
+        [],
+        |row| row.get(0),
+    )
 }
 
 fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -4418,7 +4443,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 166),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 167),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 168),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 169)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 169),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 170)
         "#,
         [],
         |row| {
@@ -4523,6 +4549,7 @@ fn load_current_migration_state(
                 v167: row.get(97)?,
                 v168: row.get(98)?,
                 v169: row.get(99)?,
+                v170: row.get(100)?,
             })
         },
     )
@@ -7525,6 +7552,9 @@ impl Database {
             if !self.schema_migration_applied(169)? {
                 migration_step!("migration_169", self.migrate_camp_deletion_v169());
             }
+            if !self.schema_migration_applied(170)? {
+                migration_step!("migration_170", self.migrate_tool_output_v170());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -8235,6 +8265,9 @@ impl Database {
         }
         if !self.schema_migration_applied(169)? {
             migration_step!("migration_169", self.migrate_camp_deletion_v169());
+        }
+        if !self.schema_migration_applied(170)? {
+            migration_step!("migration_170", self.migrate_tool_output_v170());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -26800,9 +26833,53 @@ impl Database {
         anyhow::ensure!(
             matches!(
                 classify_database_contract(&transaction)?,
+                DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.65"
+                        && marker.projection_schema_version == 119
+            ),
+            "Camp deletion migration failed v1.65/schema 119 source admission"
+        );
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn migrate_tool_output_v170(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&transaction)?,
+                DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.65"
+                        && marker.projection_schema_version == 119
+            ),
+            "Tool output migration requires the exact v1.65/schema 119 source"
+        );
+        transaction.execute_batch(
+            r#"
+            ALTER TABLE agent_run_execution_evidence
+                ADD COLUMN output_truncated INTEGER
+                    CHECK(output_truncated IS NULL OR output_truncated IN (0, 1));
+
+            INSERT INTO schema_migration(version, applied_at)
+            VALUES (170, datetime('now'));
+            UPDATE rovai_data_contract
+            SET contract_version = 'v1.66', projection_schema_version = 120,
+                reset_reason = NULL, updated_at = datetime('now')
+            WHERE singleton = 1;
+            "#,
+        )?;
+        anyhow::ensure!(
+            tool_output_v170_schema_matches(&transaction)?,
+            "Tool output migration did not create the required schema"
+        );
+        anyhow::ensure!(
+            matches!(
+                classify_database_contract(&transaction)?,
                 DatabaseContractClassification::Current(_)
             ),
-            "Camp deletion migration failed current schema admission"
+            "Tool output migration failed current schema admission"
         );
         transaction.commit()?;
         Ok(())
@@ -32023,7 +32100,39 @@ fn downgrade_current_schema_to_v151_source_for_test(connection: &Connection) {
 }
 
 #[cfg(test)]
+fn downgrade_current_schema_to_v169_source_for_test(connection: &Connection) {
+    let applied: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=170)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !applied {
+        return;
+    }
+    connection
+        .execute_batch(
+            r#"
+            ALTER TABLE agent_run_execution_evidence DROP COLUMN output_truncated;
+            DELETE FROM schema_migration WHERE version=170;
+            UPDATE rovai_data_contract
+            SET contract_version='v1.65', projection_schema_version=119
+            WHERE singleton=1;
+            "#,
+        )
+        .unwrap();
+    assert!(!tool_output_v170_schema_matches(connection).unwrap());
+    assert!(matches!(
+        classify_database_contract(connection).unwrap(),
+        DatabaseContractClassification::SupportedMigrationSource(ref marker)
+            if marker.contract_version == "v1.65" && marker.projection_schema_version == 119
+    ));
+}
+
+#[cfg(test)]
 fn downgrade_current_schema_to_v168_source_for_test(connection: &Connection) {
+    downgrade_current_schema_to_v169_source_for_test(connection);
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=169)",
@@ -36119,6 +36228,53 @@ mod tests {
     }
 
     #[test]
+    fn v170_adds_nullable_tool_output_loss_without_backfilling_history() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-v170-tool-output-limit-{}", Uuid::new_v4()));
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&directory);
+        downgrade_current_schema_to_v169_source_for_test(database.connection());
+        assert!(!database.schema_migration_applied(170).unwrap());
+        assert!(!tool_output_v170_schema_matches(database.connection()).unwrap());
+        database
+            .connection()
+            .execute_batch(
+                r#"
+                PRAGMA foreign_keys=OFF;
+                INSERT INTO agent_run_execution_evidence(
+                    id, agent_run_id, execution_epoch, sequence,
+                    event_type, kind, phase, payload_preview_json,
+                    content_byte_count, is_truncated, occurred_at
+                ) VALUES (
+                    'historical-output', 'historical-run', 1, 1,
+                    'activity.completed', 'command', 'completed',
+                    '{"item":{"aggregatedOutput":"historical"}}',
+                    52, 0, datetime('now')
+                );
+                PRAGMA foreign_keys=ON;
+                "#,
+            )
+            .unwrap();
+
+        database.migrate_tool_output_v170().unwrap();
+
+        assert!(database.schema_migration_applied(170).unwrap());
+        assert!(tool_output_v170_schema_matches(database.connection()).unwrap());
+        let output_truncated: Option<i64> = database
+            .connection()
+            .query_row(
+                "SELECT output_truncated FROM agent_run_execution_evidence WHERE id='historical-output'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(output_truncated, None);
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
+
+        drop(database);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn v165_upgrades_and_admits_the_single_chat_operation_policy() {
         let directory = std::env::temp_dir().join(format!(
             "rovai-v165-single-chat-operation-policy-{}",
@@ -36151,6 +36307,7 @@ mod tests {
         database.migrate_task_description_v167().unwrap();
         database.migrate_execution_lifecycle_v168().unwrap();
         database.migrate_camp_deletion_v169().unwrap();
+        database.migrate_tool_output_v170().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -36210,6 +36367,7 @@ mod tests {
         assert!(execution_lifecycle_v168_schema_matches(database.connection()).unwrap());
         database.migrate_camp_deletion_v169().unwrap();
         assert!(camp_deletion_v169_schema_matches(database.connection()).unwrap());
+        database.migrate_tool_output_v170().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -36269,6 +36427,7 @@ mod tests {
         database.migrate_camp_deletion_v169().unwrap();
         assert!(database.schema_migration_applied(169).unwrap());
         assert!(camp_deletion_v169_schema_matches(database.connection()).unwrap());
+        database.migrate_tool_output_v170().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -36390,6 +36549,7 @@ mod tests {
         database.migrate_task_description_v167().unwrap();
         database.migrate_execution_lifecycle_v168().unwrap();
         database.migrate_camp_deletion_v169().unwrap();
+        database.migrate_tool_output_v170().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
@@ -36447,6 +36607,7 @@ mod tests {
         database.migrate_task_description_v167().unwrap();
         database.migrate_execution_lifecycle_v168().unwrap();
         database.migrate_camp_deletion_v169().unwrap();
+        database.migrate_tool_output_v170().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
 
         drop(database);
@@ -36599,6 +36760,7 @@ mod tests {
         database.migrate_task_description_v167().unwrap();
         database.migrate_execution_lifecycle_v168().unwrap();
         database.migrate_camp_deletion_v169().unwrap();
+        database.migrate_tool_output_v170().unwrap();
         let successor_run_id = claim_waiting_delivery_batches(&mut database, 1)
             .unwrap()
             .pop()
@@ -36945,6 +37107,7 @@ mod tests {
             v167: version >= 167,
             v168: version >= 168,
             v169: version >= 169,
+            v170: version >= 170,
         }
     }
 
@@ -37129,10 +37292,16 @@ mod tests {
                 168,
             ),
             (
+                "v1.65/schema 119 before Tool output limit",
+                "v1.65",
+                119,
+                169,
+            ),
+            (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                169,
+                170,
             ),
             (
                 "v1.59/schema 103 before private client drafts",
@@ -37604,7 +37773,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(169);
+        let current = migration_state_through(170);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -38076,7 +38245,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(169));
+        assert_eq!(state, migration_state_through(170));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -38810,6 +38979,7 @@ mod tests {
         assert!(database.schema_migration_applied(168).unwrap());
         database.migrate_camp_deletion_v169().unwrap();
         assert!(database.schema_migration_applied(169).unwrap());
+        database.migrate_tool_output_v170().unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
         let migrated = crate::mission::MissionService::default()
             .get(&database, &mission_id)

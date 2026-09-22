@@ -477,7 +477,7 @@ last_updated: 2026-09-22
 
 ### Evidence 与 Canonical Activity
 
-- Runtime source event、Execution Evidence、Canonical Runtime Activity 和 Renderer presentation 是四个显式层。Runtime/Core 只声明它们真实观测或介入的事实；新 command/tool operation 在可靠原生/Core identity 下归约为一条可变生命周期 Evidence，无法可靠关联与独立事实继续使用追加记录；公开文本按独立正文块定稿。生命周期行保留稳定展示 `sequence`，每次有效变更同事务递增行 `revision` 与 Run-wide `changeSequence`，语义重复不推进；所有层继续保留来源和原始观测边界。执行展示中的正文、命令与工具结果保留原值，不做敏感文本匹配或替换。Core classifier 拥有 canonical 语义；Renderer 只本地化/分组/呈现。任一层都不能用未报告行为、进程消失、命令文本或 UI 提示补写“已执行”。字段与读取边界见 [Run Process Detail Surface v41](../contracts/run-process-detail-surface-v41.md)。
+- Runtime source event、Execution Evidence、Canonical Runtime Activity 和 Renderer presentation 是四个显式层。Runtime/Core 只声明它们真实观测或介入的事实；新 command/tool operation 在可靠原生/Core identity 下归约为一条可变生命周期 Evidence，无法可靠关联与独立事实继续使用追加记录；公开文本按独立正文块定稿。生命周期行保留稳定展示 `sequence`，每次有效变更同事务递增行 `revision` 与 Run-wide `changeSequence`，语义重复不推进；所有层继续保留来源和原始观测边界。正文与命令保留原值且不做敏感文本匹配或替换；新 Tool 普通输出只在 Runtime 已完成 Agent 投递后，由统一持久化投影保留最长 7,680 UTF-8 字节，后缀永久舍弃。Core classifier 拥有 canonical 语义；Renderer 只本地化/分组/呈现。任一层都不能用未报告行为、进程消失、命令文本或 UI 提示补写“已执行”。字段与读取边界见 [Run Process Detail Surface v42](../contracts/run-process-detail-surface-v42.md)。
 - Canonical Runtime Activity 是 Core 从已准入 Evidence 当前 revision 构建、持久但可重建的版本化投影，不是新的效果真源。Lifecycle/Read Side 只从选定的 canonical projection 派生，不跳过它直接从 Runtime 标题或 evidence payload 猜状态。terminal-only、迟到 started 和互斥终态使用同一 reducer；迟到字段只补缺失，terminal 不回退，冲突 outcome 保持 `unsettled`。
 - `source_event_key` 与 Core-scoped `operationId` 是严格分离的身份：前者只在一个已声明 observation scope 内去重单个来源事件，后者才能跨 phase/evidence 合并同一操作。Core 只接受协议原生 ID、自有调用/receipt 关联或 Adapter 按封闭规则构造的可证明身份；不用时间、文本、路径或顺序相似性聚合。重放使用同一规则得到同一 identity/归约结果。
 - Activity Domain（历史字段名 `capabilityKind`）是稳定顶层观测域；可选 `semanticKind` 只能在 Evidence 支持时细分，`presentationHint` 永不成为 canonical semantics。Domain/kind 词汇扩展必须在 Mapping Registry 注册、版本化并提供 replay fixture；无证据时保留已有域或 `unknown`。
@@ -538,12 +538,14 @@ last_updated: 2026-09-22
   sink，该路径不再执行 Run/epoch/lease 数据库 admission；terminal 尚未被 Core 消费的竞态中即使分类为 current，
   结果仍是丢弃。它不写 Execution Evidence、不推进 Canonical Activity、不创建 Managed Blob，也不进入 Renderer
   live event state。
-  `item/completed` 的 `aggregatedOutput` 是 Command 最终输出的唯一权威，大输出继续按既有阈值进入 Managed Blob。
+  `item/completed` 的 `aggregatedOutput` 是 Adapter 提供完整 Command 快照的唯一权威；Agent 投递完成后进入
+  Evidence 的持久化副本再按 7,680 UTF-8 字节上限归约，结构化文件事实不随普通输出截断。
   Migration 143 只压缩同一 Canonical Command 内已被后续 terminal `aggregatedOutput` 覆盖的历史 delta，
   并按原顺序修复其 Canonical 来源；没有 terminal aggregate 的部分输出继续作为唯一事实保留。
-- Adapter 必须优先从原生 terminal semantic event 提供完整公开输出。若未来某个 Adapter 无法提供完整 terminal
-  aggregate，只能在 Adapter 内使用有硬上限、Run 结束即删除的临时 spool，并在 terminal 生成完整或明确
-  truncated 的单一结果；Core 与 Renderer 都不得无限拼接字符串，也不得退回逐片段持久化。
+- Adapter 必须优先从原生 terminal semantic event 提供交给 Agent 的完整公开输出。若未来某个 Adapter 无法提供完整
+  terminal aggregate，只能在 Adapter 内使用有硬上限、Run 结束即删除的临时 spool，并在 terminal 生成完整或明确
+  truncated 的单一结果；Core 与 Renderer 都不得无限拼接字符串，也不得退回逐片段持久化。Evidence 的普通输出
+  副本随后独立执行 [Run Process Detail Surface v42](../contracts/run-process-detail-surface-v42.md) 的永久预算。
 
 <a id="evidence-usage"></a>
 
@@ -551,9 +553,9 @@ last_updated: 2026-09-22
 
 - AgentRun Execution Evidence 是独立、用户可见但默认不回流 Agent 的权威记录，不归 Task、Message、Activity presentation 或 Runtime cache 所有。新可靠 operation 与公开正文 block 各自只占一个稳定展示位置，以 revision/change sequence 原位更新；无法可靠关联、历史和独立事实仍保留原记录边界。transport delta 只作实时运输。私有 thought/reasoning 在持久化、临时文件、日志和 Renderer state 前丢弃，只派生不含正文的瞬时 `thinking | executing` phase；历史已持久化 reasoning 不回写。取消、失败、受控退出保存已接受的公开内容并标明中断，不把整个 Run 简化为最后一段。
 
-  小内容在 SQLite；生命周期输入与结果分别 inline 或进入各自 Managed Blob，详情按需组合而不写第三份副本。每个部分独立执行 64 MiB 上限，失败以 incomplete 状态表达，不能改写 operation outcome 或 Files Changed。新 replaceable-content 路径在权威引用事务前持久登记 GC candidate，挂接后解除；引用替换按 detach time 重新登记。Core 维护只处理封闭 owner，宽限后动态复核全部 Managed Blob 外键并保护同进程在途读取；历史无标记 Blob 不扫描清理。
+  小内容在 SQLite；生命周期输入与结果分别 inline 或进入各自 Managed Blob，详情按需组合而不写第三份副本。输入和结构化结果仍独立执行 64 MiB 上限；新 Tool 普通输出在进入 SQLite/Blob/event/log 前先执行 7,680 UTF-8 字节永久上限，丢失只由 nullable `outputTruncated` 表达，不能复用 Blob preview 标记。失败或输出截断不能改写 operation outcome 或 Files Changed。新 replaceable-content 路径在权威引用事务前持久登记 GC candidate，挂接后解除；引用替换按 detach time 重新登记。Core 维护只处理封闭 owner，宽限后动态复核全部 Managed Blob 外键并保护同进程在途读取；历史无标记 Blob 不扫描清理。
 
-  Camp Open 返回每个有界 Run 的记录计数与独立 `executionEvidenceChangeSequence`；计数不再承担 revision。执行台按视口读取有界逻辑条目页，展示分页继续使用 `sequence`，增量读取使用 `changeSequence`；历史与实时按稳定 ID/revision 去重，旧异步结果不得覆盖新状态。首屏后只预取相邻一页，较早记录按需分页，完整工具结果与文件 diff 在对应行展开后读取。业务终态已提交而正文定稿失败时，同一进程内 block 记录有界退避并由既有 AgentRun maintenance tick 只重试文本；未到期时不扫描持久状态，成功后复用 block event，重试不重放领域命令。进程重启不声称恢复尚未持久化的 block。原生 `userMessage` 的空生命周期不复制 CampMessage；Migration 143 的历史压缩边界保持不变。字段与有界存储见 [Run Process Detail Surface v41](../contracts/run-process-detail-surface-v41.md)。
+  Camp Open 返回每个有界 Run 的记录计数与独立 `executionEvidenceChangeSequence`；计数不再承担 revision。执行台按视口读取有界逻辑条目页，展示分页继续使用 `sequence`，增量读取使用 `changeSequence`；历史与实时按稳定 ID/revision 去重，旧异步结果不得覆盖新状态。首屏后只预取相邻一页，较早记录按需分页，已保存工具结果与文件 diff 在对应行展开后读取；普通输出已丢失的后缀没有恢复入口。业务终态已提交而正文定稿失败时，同一进程内 block 记录有界退避并由既有 AgentRun maintenance tick 只重试文本；未到期时不扫描持久状态，成功后复用 block event，重试不重放领域命令。进程重启不声称恢复尚未持久化的 block。原生 `userMessage` 的空生命周期不复制 CampMessage；Migration 143 的历史压缩边界保持不变。字段与有界存储见 [Run Process Detail Surface v42](../contracts/run-process-detail-surface-v42.md)。
 - Renderer 对文本、结构化数据、二进制/未知类型和链接使用安全、有界渲染；不执行 evidence 内容、不把它当作 Agent 消息、Task 完成证明或可重放命令。保留/回收由权威 Run/Camp 引用和 Managed Blob GC 决定，不因 UI 清理或 Agent 不可见而提前删除。
 - Runtime Monitoring 只拥有 Usage-derived metering：原始 observation、归一化 usage、flush/rollup 和 bounded snapshot 由当前五表合同约束。缺失 token/cache/cost 保持稀疏 unknown，不补零或跨 grain 重复计费。
 - Usage raw observation、normalized grain、flush cursor/lease、rollup 和 bounded snapshot 保持独立身份/幂等键；读取按成员/Run/时间范围限界，retention/rollup 不改写已归一化 grain 或从缺失值补数。Cost 只在精确模型、价格版本、token category/grain 可证明且不重复计费时估算；Coverage、unknown 与数据新鲜度随 Snapshot 返回，UI 不把部分支持展示成完整精确账单。
@@ -615,7 +617,7 @@ last_updated: 2026-09-22
   执行台。该 selection 不持久化；重进时重新推导，
   不是恢复旧 Drawer 状态。显式“移到右侧”和其他既有精确执行导航仍会显示并激活“执行”。移动必须复用
   同一已挂载 DOM，保留 selection、disclosure、局部加载和嵌套阅读位置，不复制 console、不改变 Run 状态。
-- Tool 全文不属于 Camp open 默认 DOM；截断 Evidence/Managed Blob 只在用户展开精确 Canonical Tool 行后读取，并只提取公开结果字段。读取成功后允许完整结果在当前 Drawer 会话内挂载于有最大高度的内部滚动 region，但不得暴露 Envelope 或建立 standalone raw Evidence surface。
+- Tool 结果不属于 Camp open 默认 DOM；Evidence/Managed Blob 只在用户展开精确 Canonical Tool 行后读取，并只提取公开结果字段。读取成功后允许预算内结果在当前 Drawer 会话内挂载于有最大高度的内部滚动 region；`outputTruncated=true` 必须显示“结果过长，部分内容已省略。”，不得暴露 Envelope、承诺恢复丢失后缀或建立 standalone raw Evidence surface。
 - 任一 Shell Activity 只要同一公开 payload 提供 command，就使用统一完整命令标题，保留命令原值；disclosure 第一行以
   `$ ` 紧接完整命令，存在公开输出时从下一行连续显示，不插入“命令 / 输出”标签或空白分隔行。没有 command
   时保留 Runtime toolName/title/domain fallback，不从其他字段补写。

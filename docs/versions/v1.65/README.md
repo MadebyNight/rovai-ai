@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.65
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -11,7 +11,7 @@ last_updated: 2026-09-22
 
 # Rovai-ai v1.65：可靠异步 Camp 删除与聚合 SQL 收敛
 
-前置：[v1.64](../v1.64/README.md)。本版把 Camp 永久删除改为所有 Runtime 状态共用的可靠异步流程：确认请求只完成
+前置：[v1.64](../v1.64/README.md)。后续：[v1.66](../v1.66/README.md)。本版把 Camp 永久删除改为所有 Runtime 状态共用的可靠异步流程：确认请求只完成
 原子准入 cutover 并返回 accepted，后台依次确认 Runtime 隔离、删除业务聚合和清理受管资源。实现不新增删除任务表，
 而是在删库前由 Camp Deletion Intent 恢复、删库时原子交给既有 attachment cleanup journal，删库后继续由既有资源
 owner 完成。

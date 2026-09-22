@@ -30,9 +30,9 @@ export function createExecutionPublicResultProjector(
       if (payload.sourceAuthority === 'core') {
         const envelope = record(payload.coreEnvelope)
         const projection = record(payload.operationProjection)
-        output = textualResult(envelope.result) ?? textualResult(envelope.error)
+        output = output ?? textualResult(envelope.result) ?? textualResult(envelope.error)
           ?? textualResult(record(envelope.error).message)
-          ?? textualResult(projection.canonicalResult) ?? output
+          ?? textualResult(projection.canonicalResult)
       }
     }
     if (output !== undefined) outputs.set(operationId, output)

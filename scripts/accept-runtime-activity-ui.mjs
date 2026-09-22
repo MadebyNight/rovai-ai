@@ -58,12 +58,19 @@ const recoveryBlockedRunId = 'run-copilot'
 const longToolOutputFirstMarker = 'ROVAI_LONG_TOOL_OUTPUT_BEGIN'
 const longToolOutputMiddleMarker = 'ROVAI_LONG_TOOL_OUTPUT_MIDDLE'
 const longToolOutputLastMarker = 'ROVAI_LONG_TOOL_OUTPUT_END'
-const longToolOutput = Array.from({ length: 8_432 }, (_, index) => {
+const persistedToolOutputByteLimit = 7_680
+const originalLongToolOutput = Array.from({ length: 1_000 }, (_, index) => {
   if (index === 0) return `${longToolOutputFirstMarker} · line 1`
-  if (index === 4_215) return `${longToolOutputMiddleMarker} · line ${index + 1}`
-  if (index === 8_431) return `${longToolOutputLastMarker} · line ${index + 1}`
+  if (index === 80) return `${longToolOutputMiddleMarker} · line ${index + 1}`
+  if (index === 999) return `${longToolOutputLastMarker} · line ${index + 1}`
   return `fixture output line ${index + 1} · vehicle prepayment reconciliation`
 }).join('\n')
+const longToolOutput = Buffer.from(originalLongToolOutput).subarray(0, persistedToolOutputByteLimit).toString()
+if (Buffer.byteLength(longToolOutput) !== persistedToolOutputByteLimit
+  || !longToolOutput.includes(longToolOutputMiddleMarker)
+  || longToolOutput.includes(longToolOutputLastMarker)) {
+  throw new Error('The bounded Tool output fixture does not exercise the persistence limit')
+}
 const directoryAttachmentSource = join(fixtureRoot, '项目资料')
 const fixtureExecutionRoot = join(fixtureRoot, 'workspace')
 const codexExpectedCommand = 'rovai camp read --limit 20'
@@ -186,6 +193,13 @@ try {
     `document.querySelectorAll(${JSON.stringify(runArticleSelector)}).length`)
   assert(renderedMessageCount === runtimes.length,
     `Expected ${runtimes.length} rendered Agent messages, found ${renderedMessageCount}: ${await evaluate(app.cdp, 'document.body.innerText.slice(0, 5000)')}`)
+  if (previewOnly || completeToolOnly) {
+    await evaluate(app.cdp, `document.querySelector(
+      ${JSON.stringify(`.run-pulse-chip[data-agent-id="${activeAgentId}"]`)}
+    )?.click()`)
+    await waitForExpression(app.cdp,
+      `document.querySelector('.run-pulse-chip.is-selected')?.dataset.agentId === ${JSON.stringify(activeAgentId)}`)
+  }
   const workspaceEntryExecution = await evaluate(app.cdp, `(() => ({
     placement: document.querySelector('.execution-drawer')?.dataset.placement ?? null,
     selectedAgentId: document.querySelector('.run-pulse-chip.is-selected')?.dataset.agentId ?? null,
@@ -195,7 +209,7 @@ try {
   assert(workspaceEntryExecution.placement === 'inspector'
     && workspaceEntryExecution.selectedAgentId === activeAgentId
     && workspaceEntryExecution.focusedRunId === activeRunId
-    && !workspaceEntryExecution.drawerOwnsFocus,
+    && ((previewOnly || completeToolOnly) || !workspaceEntryExecution.drawerOwnsFocus),
     `A fresh installation did not open the latest Run in the popover without stealing focus: ${JSON.stringify(workspaceEntryExecution)}`)
   if (placementRestartOnly) {
     const restart = await verifyExecutionPlacementAcrossRestart(app)
@@ -2207,6 +2221,7 @@ async function seedActivity(entry, index) {
       contentBlobId: blob?.id ?? null,
       contentByteCount: encoded.byteLength,
       isTruncated: Boolean(blob),
+      outputTruncated: item.id === 'evidence-codex-complete',
       blob
     })
   }
@@ -2215,7 +2230,8 @@ async function seedActivity(entry, index) {
     ${sqlLiteral(item.eventType)}, ${sqlLiteral(item.kind)}, ${sqlLiteral(item.phase)},
     ${sqlLiteral(`${item.eventType}:${operationId}:${item.phase}`)},
     ${sqlLiteral(JSON.stringify(item.payloadPreview))}, ${sqlNullable(item.contentBlobId)},
-    ${item.contentByteCount}, ${item.isTruncated ? 1 : 0}, ${sqlLiteral(occurredAt)}
+    ${item.contentByteCount}, ${item.isTruncated ? 1 : 0}, ${item.outputTruncated ? 1 : 0},
+    ${sqlLiteral(occurredAt)}
   )`).join(',\n')
   const managedBlobStatements = preparedEvidence.flatMap((item) => item.blob ? [`
     INSERT INTO managed_blob(
@@ -2237,7 +2253,7 @@ async function seedActivity(entry, index) {
     INSERT INTO agent_run_execution_evidence(
       id, agent_run_id, execution_epoch, sequence, event_type, kind, phase,
       source_event_key, payload_preview_json, content_blob_id,
-      content_byte_count, is_truncated, occurred_at
+      content_byte_count, is_truncated, output_truncated, occurred_at
     ) VALUES ${evidenceRows};
     INSERT INTO canonical_runtime_activity(
       agent_run_id, execution_epoch, operation_id, classifier_version,
@@ -2598,7 +2614,10 @@ async function verifyResponsiveRuntimeModelLayouts(cdp, capturesDirectory) {
   assert(openedLongResultAtZoom, '200% zoom could not open the long Tool result')
   await waitForExpression(cdp, `(() => {
     const result = document.querySelector('.execution-drawer .tool-call-result-scroll')
-    return result?.textContent?.includes(${JSON.stringify(longToolOutputLastMarker)})
+    const notice = document.querySelector('.execution-drawer .tool-result-truncation-note')
+    return result?.textContent?.includes(${JSON.stringify(longToolOutputMiddleMarker)})
+      && !result.textContent.includes(${JSON.stringify(longToolOutputLastMarker)})
+      && notice?.textContent?.trim() === '结果过长，部分内容已省略。'
   })()`, 30_000)
   const zoom200 = await collectFocusedRuntimeModelLayout(cdp)
   assertFocusedRuntimeModelLayout(zoom200, '200% zoom bottom Drawer')
@@ -2608,8 +2627,8 @@ async function verifyResponsiveRuntimeModelLayouts(cdp, capturesDirectory) {
     && zoom200.toolResult.width <= zoom200.toolResult.detailWidth + 1
     && zoom200.toolResult.height <= zoom200.toolResult.maxViewportHeight + 1
     && zoom200.toolResult.middleMarkerVisible
-    && zoom200.toolResult.lastMarkerVisible,
-  `200% zoom did not keep the complete Tool result inside its local scroll region: ${JSON.stringify(zoom200)}`)
+    && !zoom200.toolResult.lastMarkerVisible,
+  `200% zoom did not keep the bounded Tool result inside its local scroll region: ${JSON.stringify(zoom200)}`)
   const zoom200Capture = join(capturesDirectory, 'runtime-model-zoom-200.png')
   await capture(cdp, zoom200Capture)
 
@@ -2953,7 +2972,7 @@ async function verifyCompleteToolOutput(cdp) {
       found: Boolean(disclosure),
       groupOpen: group?.open ?? false,
       resultWasAlreadyActivated: beforeText.includes(${JSON.stringify(longToolOutputMiddleMarker)})
-        && beforeText.includes(${JSON.stringify(longToolOutputLastMarker)})
+        && beforeText.includes('结果过长，部分内容已省略。')
     }
   })()`)
   assert(opened.found && opened.groupOpen,
@@ -2961,8 +2980,10 @@ async function verifyCompleteToolOutput(cdp) {
   await waitForExpression(cdp, `(() => {
     const result = document.querySelector('.execution-drawer .tool-call-result-scroll')
     const text = result?.textContent ?? ''
+    const notice = document.querySelector('.execution-drawer .tool-result-truncation-note')
     return text.includes(${JSON.stringify(longToolOutputMiddleMarker)})
-      && text.includes(${JSON.stringify(longToolOutputLastMarker)})
+      && !text.includes(${JSON.stringify(longToolOutputLastMarker)})
+      && notice?.textContent?.trim() === '结果过长，部分内容已省略。'
   })()`, 30_000)
 
   const presentation = await evaluate(cdp, `(() => {
@@ -2980,7 +3001,9 @@ async function verifyCompleteToolOutput(cdp) {
       hasMiddleMarker: text.includes(${JSON.stringify(longToolOutputMiddleMarker)}),
       hasLastMarker: text.includes(${JSON.stringify(longToolOutputLastMarker)}),
       startsWithCommandAndOutput: text.startsWith(${JSON.stringify(`$ ${codexExpectedCommand}\n${longToolOutputFirstMarker}`)}),
-      endsWithPublicOutput: text.endsWith(${JSON.stringify(`${longToolOutputLastMarker} · line 8432`)}),
+      endsWithPersistedOutput: text.endsWith(${JSON.stringify(longToolOutput)}),
+      persistedOutputBytes: new TextEncoder().encode(text.slice(${JSON.stringify(`$ ${codexExpectedCommand}\n`)}.length)).byteLength,
+      truncationNotice: detail?.querySelector('.tool-result-truncation-note')?.textContent?.trim() ?? null,
       hasCutNotice: text.includes('…（后续内容未显示）'),
       leakedEnvelope: text.startsWith('{') || text.includes('"_rovaiTruncated"'),
       copyButtonCount: detail?.querySelectorAll('.tool-output-copy-button').length ?? 0,
@@ -2999,19 +3022,21 @@ async function verifyCompleteToolOutput(cdp) {
   })()`)
   assert(presentation.hasFirstMarker
     && presentation.hasMiddleMarker
-    && presentation.hasLastMarker
+    && !presentation.hasLastMarker
     && presentation.startsWithCommandAndOutput
-    && presentation.endsWithPublicOutput
-    && presentation.lineCount === 8_433
+    && presentation.endsWithPersistedOutput
+    && presentation.persistedOutputBytes === persistedToolOutputByteLimit
+    && presentation.truncationNotice === '结果过长，部分内容已省略。'
+    && presentation.lineCount === longToolOutput.split('\n').length + 1
     && presentation.verticalOverflow
     && !presentation.hasCutNotice
     && !presentation.leakedEnvelope,
-  `Long Tool output was not rendered as one complete public result: ${JSON.stringify(presentation)}`)
+  `Long Tool output did not render as one bounded saved result: ${JSON.stringify(presentation)}`)
   assert(presentation.copyButtonCount === 0
     && presentation.legacyCompleteControlCount === 0
     && presentation.role === 'region'
     && presentation.tabIndex === 0
-    && presentation.ariaLabel?.includes('完整结果')
+    && presentation.ariaLabel === `${codexExpectedCommand}的结果，可滚动`
     && presentation.summaryAriaLabel === null
     && presentation.groupOpen
     && presentation.resultHeight <= 221
@@ -3019,7 +3044,7 @@ async function verifyCompleteToolOutput(cdp) {
     && presentation.scrollbarGutter?.includes('stable')
     && presentation.whiteSpace === 'pre-wrap'
     && presentation.overflowWrap === 'anywhere',
-  `Complete Tool result accessibility or bounded-scroll contract failed: ${JSON.stringify(presentation)}`)
+  `Bounded Tool result accessibility or scroll contract failed: ${JSON.stringify(presentation)}`)
 
   await evaluate(cdp, `document.querySelector('.execution-drawer .tool-call-result-scroll')?.focus()`)
   await pressKey(cdp, 'End', 'End', 35)

@@ -46,11 +46,11 @@ export function isPresentableExecutionEvidence(
 export function selectCompletePresentableExecutionEvidence(
   evidence: AgentRunExecutionEvidenceView[]
 ): ReturnType<typeof selectCompleteExecutionEvidence<PresentableExecutionEvidence>> {
-  // Truncated entries back deferred detail reads. Canonical diffs also need their
-  // exact Evidence identity even when the complete projection is already inline.
+  // Deferred payloads, permanently bounded output and Canonical diffs need their
+  // exact Evidence identity even when the saved result projection is already inline.
   return selectCompleteExecutionEvidence(
     evidence
-      .filter((item) => item.isTruncated || item.canonical?.diffProjection != null)
+      .filter((item) => item.isTruncated || item.outputTruncated === true || item.canonical?.diffProjection != null)
       .filter(isPresentableExecutionEvidence)
   )
 }
@@ -64,9 +64,16 @@ interface ToolResultViewState {
   error: string | null
 }
 
-function toolResultErrorMessage(error: unknown): string {
+function toolResultErrorMessage(error: unknown, outputWasTruncated: boolean): string {
+  const resultLabel = outputWasTruncated ? '结果' : '完整结果'
   const detail = readErrorMessage(error, '').trim()
-  return detail ? `读取完整结果失败：${detail}` : '读取完整结果失败：未知错误'
+  return detail ? `读取${resultLabel}失败：${detail}` : `读取${resultLabel}失败：未知错误`
+}
+
+export function ToolOutputTruncationNotice({ visible }: { visible: boolean }): JSX.Element | null {
+  return visible
+    ? <p className="tool-result-truncation-note" role="note">结果过长，部分内容已省略。</p>
+    : null
 }
 
 function handleToolResultKeyDown(
@@ -135,6 +142,8 @@ function ToolCallDetail({
 }): JSX.Element {
   const client = useCampClient()
   const evidenceId = completeEvidence?.id ?? null
+  const outputWasTruncated = !inputOnly && completeEvidence?.outputTruncated === true
+  const resultLabel = outputWasTruncated ? '结果' : '完整结果'
   const [result, setResult] = useExecutionRetainedState<ToolResultViewState>(`result:${resultKey}:${evidenceId}`, () => ({
     evidenceId,
     status: evidenceId ? 'idle' : 'ready',
@@ -208,10 +217,10 @@ function ToolCallDetail({
         evidenceId: completeEvidence.id,
         status: 'failed',
         text: '',
-        error: toolResultErrorMessage(error)
+        error: toolResultErrorMessage(error, outputWasTruncated)
       })
     }
-  }, [client, campId, completeEvidence])
+  }, [client, campId, completeEvidence, outputWasTruncated])
 
   useEffect(() => {
     if (
@@ -250,29 +259,30 @@ function ToolCallDetail({
             data-tool-result-key={resultKey}
             tabIndex={0}
             role="region"
-            aria-label={`${title}的${inputOnly ? '入参' : '完整结果'}，可滚动`}
+            aria-label={`${title}的${inputOnly ? '入参' : resultLabel}，可滚动`}
             aria-describedby={scrollHelpId}
             onKeyDown={(event) => handleToolResultKeyDown(event, summaryRef.current)}
           >
             {result.text}
           </pre>
+          <ToolOutputTruncationNotice visible={outputWasTruncated} />
         </>
       )}
       {result.status === 'idle' && (
         <div className="tool-result-state" role="status">
-          <span>展开后读取完整结果。</span>
+          <span>展开后读取{resultLabel}。</span>
         </div>
       )}
       {result.status === 'loading' && (
         <div className="tool-result-state" role="status" aria-live="polite">
           <span className="tool-result-spinner" aria-hidden="true" />
-          <span>正在读取完整结果…</span>
+          <span>正在读取{resultLabel}…</span>
         </div>
       )}
       {result.status === 'failed' && (
         <div className="tool-result-state is-error" role="alert">
           <span className="tool-result-state-copy">
-            <strong>未能读取完整结果</strong>
+            <strong>未能读取{resultLabel}</strong>
             <span>{result.error}</span>
           </span>
           <button

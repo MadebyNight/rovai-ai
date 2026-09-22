@@ -32,7 +32,7 @@ Projector 对单个 Run/epoch 读取一致来源快照和当前水位，复用�
 
 重算按规范化 path 复用已有 `evidenceFileId`，只有新文件分配新 ID。固定 operation 展示 `sequence` 不能替代
 文件事实的原始观测顺序；重复状态通知不增加 operation count。新 detail 替换旧 detail 后，旧 Blob 以
-`file_change_projection` owner 和解除引用时间进入 [Run Process Detail Surface v41](run-process-detail-surface-v41.md)
+`file_change_projection` owner 和解除引用时间进入 [Run Process Detail Surface v42](run-process-detail-surface-v42.md)
 定义的定向 GC。
 
 来源读取或重算失败时保留上一份可读 projection，并把它公开为 `isStale=true`，同时记录待更新水位供下一次

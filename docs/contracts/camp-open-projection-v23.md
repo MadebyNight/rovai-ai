@@ -15,7 +15,7 @@ Evidence coverage 和读取复杂度。本版只为每个返回的 `AgentRunView
 `executionEvidenceChangeSequence`。
 
 该字段是 Run 内最近一次有效 Evidence INSERT/UPDATE 的单调水位，来源与记录更新同事务提交。Renderer 使用它
-失效执行窗口缓存，并以 [Run Process Detail Surface v41](run-process-detail-surface-v41.md) 的 change cursor 增量读取。
+失效执行窗口缓存，并以 [Run Process Detail Surface v42](run-process-detail-surface-v42.md) 的 change cursor 增量读取。
 `executionEvidenceCount` 继续表示原始持久行数，只用于计数和历史兼容；记录原位更新时它可以不变，因而不得再作为
 revision 或刷新信号。
 

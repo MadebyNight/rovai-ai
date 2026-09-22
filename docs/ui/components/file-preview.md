@@ -108,7 +108,7 @@ Mission 的活动与执行台都是同一标签集合中的非文件 Tab。活�
 也不提供文件搜索。使命顶栏跨越整个会话，标签栏放在预览正文上方；普通会话仍保留共享顶栏结构。
 Mission 进入时先建立活动；有 running Run 且用户保存位置为右侧时，再建立并选择 Execution，活动标签继续
 保留。活动入口的切换和抽屉行为见[使命板](mission-board.md)，执行进入规则见
-[Run Process Detail Surface v41](../../contracts/run-process-detail-surface-v41.md)。
+[Run Process Detail Surface v42](../../contracts/run-process-detail-surface-v42.md)。
 
 Tabs 使用 Codex toolbar 语法：小间距、无逐项边框、当前项用次级 surface 和文字对比表达，不使用品牌下划线。
 普通文件 Tab 与会话文件链接按文件名共用相同资源视觉类型，不直接用 `FilePreviewKind` 选图标；左侧复用文件引用的

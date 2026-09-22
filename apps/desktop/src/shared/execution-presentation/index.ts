@@ -79,6 +79,7 @@ export type LiveRuntimeEvent = {
   eventType: string
   revision?: number | null
   changeSequence?: number | null
+  outputTruncated?: boolean | null
   payload: unknown
   canonical?: CanonicalRuntimeActivityView | null
   createdAt: string
@@ -340,6 +341,7 @@ export function liveRuntimeEventFromCore(
     eventType: event.method,
     revision: numberField(params, 'revision'),
     changeSequence: numberField(params, 'changeSequence'),
+    outputTruncated: typeof params.outputTruncated === 'boolean' ? params.outputTruncated : null,
     payload: Object.prototype.hasOwnProperty.call(params, 'payload') ? params.payload : params,
     canonical: canonicalRuntimeActivity(params.canonical),
     createdAt: stringField(asRecord(params.payload), 'blockStartedAt') ?? createdAt
@@ -356,6 +358,7 @@ export function liveRuntimeEventFromExecutionEvidence(
     eventType: evidence.eventType,
     revision: evidence.revision,
     changeSequence: evidence.changeSequence,
+    outputTruncated: evidence.outputTruncated,
     payload: evidence.payload,
     canonical: evidence.canonical,
     createdAt: evidence.occurredAt

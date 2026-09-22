@@ -1,7 +1,7 @@
 ---
 document_type: versions-index
 authority: version-lifecycle
-current_version: v1.65
+current_version: v1.66
 last_updated: 2026-09-22
 ---
 
@@ -217,4 +217,5 @@ last_updated: 2026-09-22
 | v1.62 | `historical` | Mission 状态解耦、启动与执行提示、异步 Worktree 清理、独立列滚动及共享执行工作区 | [v1.62/README.md](v1.62/README.md) |
 | v1.63 | `historical` | Task 单一责任正文、历史要求兼容读取、精简 get 投影与版本化 CLI/Host clean break | [v1.63/README.md](v1.63/README.md) |
 | v1.64 | `historical` | Execution Evidence 生命周期减重、独立变更水位、私有思考边界与可恢复 Files Changed 重算 | [v1.64/README.md](v1.64/README.md) |
-| v1.65 | `current` | 可靠异步 Camp 删除、阶段交接、最小重试界面与聚合 SQL 收敛 | [v1.65/README.md](v1.65/README.md) |
+| v1.65 | `historical` | 可靠异步 Camp 删除、阶段交接、最小重试界面与聚合 SQL 收敛 | [v1.65/README.md](v1.65/README.md) |
+| v1.66 | `current` | 新 Tool 持久化输出 7,680 UTF-8 字节上限、显式三态归约与诚实丢失提示 | [v1.66/README.md](v1.66/README.md) |

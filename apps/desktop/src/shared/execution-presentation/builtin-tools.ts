@@ -112,7 +112,9 @@ export function builtinShellAssociations(
       coreIdentities.set(id, { id, operation, first: event.canonical.firstEvidenceSequence, last: event.canonical.lastEvidenceSequence })
       const envelope = record(payload.coreEnvelope)
       if (envelope.operation !== operation || envelope.ok !== true) continue
-      const signature = stableJson(cliResult(operation, envelope.result))
+      const signature = typeof payload.agentOutputDigest === 'string'
+        ? payload.agentOutputDigest
+        : stableJson(cliResult(operation, envelope.result))
       if (signature && signature !== '{}') core.set(id, { operation, signature, first: event.canonical?.firstEvidenceSequence ?? 0, last: event.canonical?.lastEvidenceSequence ?? 0 })
       continue
     }
@@ -126,12 +128,16 @@ export function builtinShellAssociations(
       continue
     }
     const item = record(payload.item)
-    const output = payload.output ?? item.aggregatedOutput ?? item.output
-    // Only a complete JSON response is proof; never match a substring of a mixed log.
-    let decoded: unknown
-    try { decoded = typeof output === 'string' ? JSON.parse(output.trim()) : output } catch { continue }
-    const response = record(decoded)
-    const signature = stableJson(response)
+    let signature: string | null
+    if (typeof payload.resultDigest === 'string') {
+      signature = payload.resultDigest
+    } else {
+      const output = payload.output ?? item.aggregatedOutput ?? item.output
+      // Historical evidence has no digest; only a complete JSON response is proof.
+      let decoded: unknown
+      try { decoded = typeof output === 'string' ? JSON.parse(output.trim()) : output } catch { continue }
+      signature = stableJson(record(decoded))
+    }
     if (!signature || signature === '{}') continue
     const outcome = event.canonical?.outcome
     if (outcome !== 'succeeded') continue

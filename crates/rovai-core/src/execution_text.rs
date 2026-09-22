@@ -185,6 +185,7 @@ impl TextBlock {
             payload,
             content_blob_id: None,
             is_truncated: false,
+            output_truncated: None,
             occurred_at: self.started_at.clone(),
             canonical: None,
         }

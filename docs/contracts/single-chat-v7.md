@@ -13,6 +13,6 @@ last_updated: 2026-09-22
 本版只为 `SingleChatRunView` 增加必需、非负的 `executionEvidenceChangeSequence`，其语义与
 [Camp Open Projection v23](camp-open-projection-v23.md) 相同。
 
-Single Chat 执行窗口使用 [Run Process Detail Surface v41](run-process-detail-surface-v41.md) 的独立 change cursor；
+Single Chat 执行窗口使用 [Run Process Detail Surface v42](run-process-detail-surface-v42.md) 的独立 change cursor；
 `executionEvidenceCount` 不再充当更新 revision。历史 Run 水位为 0 且不回填，私有 Conversation、审批、注意力、
 附件和迟到 fence 均不改变。
