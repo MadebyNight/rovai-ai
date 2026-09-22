@@ -109,6 +109,7 @@ use rovai_core::{
     camp_attachment_publication::unresolved_publication_camp_ids,
     camp_attachment_view::{CampAttachmentViewStore, PreparedCampAttachmentCleanup},
     camp_content::ComposerDocument,
+    camp_deletion::{CampDeletionService, RetryCampDeletionCommand},
     camp_history::{
         CAMP_LIST_TOOL_NAME, CAMP_READ_TOOL_NAME, CAMP_SEARCH_TOOL_NAME, CampHistoryService,
         CampListInput, CampReadInput, CampSearchInput, HISTORY_SEARCH_TOOL_NAME,
@@ -947,7 +948,6 @@ fn request_invalidates_navigation(method: &str) -> bool {
             | "camps.changeDefaultLead"
             | "camps.reconcileDefaultLead"
             | "camps.enter"
-            | "camps.delete"
             | "messageQuotes.mutateDraft"
             | "camp.messages.send"
             | "camp.messages.withdraw"
@@ -2094,6 +2094,8 @@ struct Core {
     mission_workspace_gate: Mutex<()>,
     mission_workspace_cleanup_gate: Mutex<()>,
     mission_workspace_cleanup_notify: Notify,
+    camp_deletion_gate: Mutex<()>,
+    camp_deletion_notify: Notify,
     mission_git_read_capacity: Semaphore,
     mission_diff_snapshots: Mutex<crate::mission_workspace::MissionDiffSnapshotCache>,
     #[cfg(test)]
@@ -2623,8 +2625,82 @@ impl Core {
         let mut database = self.database.lock().await;
         self.attachment_views
             .commit_camp_delete_cleanup(&mut database, cleanup)?;
+        self.attachment_views.complete_camp_delete_cleanup(
+            &mut database,
+            &CampAttachmentStore::new(&self.data_dir),
+            cleanup,
+        )
+    }
+
+    async fn finish_background_camp_deletion_cleanup(
+        &self,
+        cleanup: &PreparedCampAttachmentCleanup,
+    ) -> Result<bool> {
+        let completion = {
+            let database = self.database.lock().await;
+            self.attachment_views
+                .prepare_camp_delete_cleanup_completion(&database, cleanup)?
+        };
+        let Some(completion) = completion else {
+            return Ok(true);
+        };
+        let attachment_store = CampAttachmentStore::new(&self.data_dir);
+        let view_root = self.attachment_views.root().to_path_buf();
+        let cleanup_files = completion.clone();
+        tokio::task::spawn_blocking(move || {
+            CampAttachmentViewStore::apply_camp_delete_cleanup_files_at_root(
+                &view_root,
+                &attachment_store,
+                &cleanup_files,
+            )
+        })
+        .await
+        .context("Camp deletion filesystem cleanup task failed")??;
+        let mission_resources = {
+            let database = self.database.lock().await;
+            let mut statement = database.connection().prepare(
+                r#"
+                SELECT state, cleanup_worktree_removed, cleanup_branch_removed
+                FROM mission_workspace
+                WHERE camp_id = ?1 AND cleanup_command_id = ?2
+                "#,
+            )?;
+            statement
+                .query_map(
+                    rusqlite::params![cleanup.camp_id, cleanup.command_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, bool>(1)?,
+                            row.get::<_, bool>(2)?,
+                        ))
+                    },
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if mission_resources
+            .iter()
+            .any(|(state, _, _)| state == "cleanup_failed")
+        {
+            anyhow::bail!("mission_workspace_cleanup_failed");
+        }
+        if mission_resources
+            .iter()
+            .any(|(_, worktree_removed, branch_removed)| !worktree_removed || !branch_removed)
+        {
+            anyhow::ensure!(
+                mission_resources
+                    .iter()
+                    .all(|(state, _, _)| state == "cleanup_pending"),
+                "mission_workspace_cleanup_state_invalid"
+            );
+            self.mission_workspace_cleanup_notify.notify_one();
+            return Ok(false);
+        }
+        let mut database = self.database.lock().await;
         self.attachment_views
-            .complete_camp_delete_cleanup(&mut database, cleanup)
+            .finalize_camp_delete_cleanup(&mut database, &completion)?;
+        Ok(true)
     }
 
     fn known_agent_ids(database: &Database) -> Result<BTreeSet<String>> {
@@ -2672,46 +2748,258 @@ impl Core {
         self: &Arc<Self>,
         targets: &[CampRuntimeCleanupTarget],
     ) -> Result<()> {
-        let mut tasks = tokio::task::JoinSet::new();
-        for target in targets {
-            let core = self.clone();
-            let target = target.clone();
-            tasks.spawn(async move {
-                let fence = core
-                    .cleanup_agent_run_runtime(
-                        &target.agent_run_id,
-                        target.execution_epoch,
-                        target.adapter_kind.as_str(),
-                    )
-                    .await;
-                (target, fence)
-            });
-        }
         let mut confirmed = true;
-        while let Some(result) = tasks.join_next().await {
-            let (target, fence) = result?;
-            if fence == RuntimeCancellationIngressFence::Unproven {
-                confirmed = false;
-            } else {
-                let database = self.database.lock().await;
-                ExecutionRuntimeService::default().record_runtime_cleanup_completed(
-                    &database,
-                    &target.agent_run_id,
-                    target.execution_epoch,
-                )?;
-                drop(database);
-                self.planned_shutdown
-                    .cleanup_completed(&ActiveExecutionKey::new(
+        // Bound fan-out so deleting a large historical Camp cannot saturate
+        // process shutdown, disk, or adapter control channels.
+        for batch in targets.chunks(4) {
+            let mut tasks = tokio::task::JoinSet::new();
+            for target in batch {
+                let core = self.clone();
+                let target = target.clone();
+                tasks.spawn(async move {
+                    let fence = core
+                        .cleanup_agent_run_runtime(
+                            &target.agent_run_id,
+                            target.execution_epoch,
+                            target.adapter_kind.as_str(),
+                        )
+                        .await;
+                    (target, fence)
+                });
+            }
+            while let Some(result) = tasks.join_next().await {
+                let (target, fence) = result?;
+                if fence == RuntimeCancellationIngressFence::Unproven {
+                    confirmed = false;
+                } else {
+                    let database = self.database.lock().await;
+                    ExecutionRuntimeService::default().record_runtime_cleanup_completed(
+                        &database,
                         &target.agent_run_id,
                         target.execution_epoch,
-                    ))
-                    .await;
+                    )?;
+                    drop(database);
+                    self.planned_shutdown
+                        .cleanup_completed(&ActiveExecutionKey::new(
+                            &target.agent_run_id,
+                            target.execution_epoch,
+                        ))
+                        .await;
+                }
             }
         }
         if !confirmed {
             anyhow::bail!("Camp execution cleanup is unconfirmed; deletion remains fenced");
         }
         Ok(())
+    }
+
+    async fn process_camp_deletions(self: &Arc<Self>) {
+        let Ok(_gate) = self.camp_deletion_gate.try_lock() else {
+            return;
+        };
+        if let Err(error) = self.process_camp_deletions_locked().await {
+            eprintln!("Camp deletion coordinator scan failed: {error:#}");
+        }
+    }
+
+    async fn process_camp_deletions_locked(self: &Arc<Self>) -> Result<()> {
+        let service = CampDeletionService::default();
+        let candidates = {
+            let database = self.database.lock().await;
+            service.due_camps(&database, 4)?
+        };
+        for candidate in candidates {
+            self.runtime_fleet
+                .mark_camp_deleting(&candidate.camp_id)
+                .await;
+            let queue_delay_ms = elapsed_since_rfc3339_ms(&candidate.requested_at);
+            let runtime_started_at = Instant::now();
+            let runtime_result = async {
+                let targets = {
+                    let database = self.database.lock().await;
+                    ExecutionRuntimeService::default()
+                        .list_camp_runtime_cleanup_targets(&database, &candidate.camp_id)
+                }?;
+                self.stop_deleted_camp_runtimes(&targets).await?;
+                self.runtime_fleet
+                    .force_fence_camp_for_deletion(&candidate.camp_id)
+                    .await
+            }
+            .await;
+            if let Err(error) = runtime_result {
+                self.record_camp_deletion_failure(&candidate, "runtime_stop_failed", &error)
+                    .await;
+                continue;
+            }
+            let runtime_stop_ms = runtime_started_at.elapsed().as_millis();
+
+            let database_started_at = Instant::now();
+            let database_result = async {
+                let (_view_mutation, _) = self
+                    .acquire_camp_attachment_mutation(&candidate.camp_id)
+                    .await?;
+                let cleanup = {
+                    let mut database = self.database.lock().await;
+                    self.attachment_views
+                        .prepare_camp_delete_cleanup(
+                            &mut database,
+                            &candidate.camp_id,
+                            &candidate.operation_id,
+                        )?
+                        .context("Camp deletion cleanup handoff was not prepared")?
+                };
+                {
+                    let mut database = self.database.lock().await;
+                    service.commit_business_delete(
+                        &mut database,
+                        &self.attachment_views,
+                        &candidate,
+                        &cleanup,
+                    )?;
+                    self.mark_skill_projections_dirty_best_effort(&mut database, true);
+                }
+                Ok::<_, anyhow::Error>(cleanup)
+            }
+            .await;
+            let cleanup = match database_result {
+                Ok(cleanup) => cleanup,
+                Err(error) => {
+                    self.record_camp_deletion_failure(&candidate, "database_delete_failed", &error)
+                        .await;
+                    continue;
+                }
+            };
+            let database_ms = database_started_at.elapsed().as_millis();
+            self.forget_deleted_camp_runtimes(&candidate.camp_id).await;
+            self.mission_workspace_cleanup_notify.notify_one();
+            emit_navigation_invalidated(&self.output, "camp.deleted", Some(&candidate.camp_id));
+            eprintln!(
+                "[camp-deletion] operation={} camp={} stage=business_deleted queue_delay_ms={} runtime_stop_ms={} database_ms={}",
+                candidate.operation_id,
+                candidate.camp_id,
+                queue_delay_ms,
+                runtime_stop_ms,
+                database_ms,
+            );
+
+            let cleanup_started_at = Instant::now();
+            let cleanup_result = self.finish_background_camp_deletion_cleanup(&cleanup).await;
+            match cleanup_result {
+                Ok(true) => eprintln!(
+                    "[camp-deletion] operation={} camp={} stage=completed cleanup_ms={}",
+                    candidate.operation_id,
+                    candidate.camp_id,
+                    cleanup_started_at.elapsed().as_millis(),
+                ),
+                Ok(false) => eprintln!(
+                    "[camp-deletion] operation={} camp={} stage=resource_cleanup_waiting cleanup_ms={}",
+                    candidate.operation_id,
+                    candidate.camp_id,
+                    cleanup_started_at.elapsed().as_millis(),
+                ),
+                Err(error) => {
+                    self.record_camp_cleanup_failure(&cleanup, &error).await;
+                }
+            }
+        }
+
+        // A committed cleanup is independent of the Camp aggregate. Process
+        // it from the same bounded recovery loop, including after restart.
+        let cleanups = {
+            let database = self.database.lock().await;
+            service.due_cleanups(&database, 4)?
+        };
+        for candidate in cleanups {
+            let cleanup_started_at = Instant::now();
+            let result = self
+                .finish_background_camp_deletion_cleanup(&candidate.cleanup)
+                .await;
+            match result {
+                Ok(true) => eprintln!(
+                    "[camp-deletion] operation={} camp={} stage=completed queue_delay_ms={} cleanup_ms={}",
+                    candidate.cleanup.command_id,
+                    candidate.cleanup.camp_id,
+                    elapsed_since_rfc3339_ms(&candidate.queued_at),
+                    cleanup_started_at.elapsed().as_millis(),
+                ),
+                Ok(false) => eprintln!(
+                    "[camp-deletion] operation={} camp={} stage=resource_cleanup_waiting queue_delay_ms={} cleanup_ms={}",
+                    candidate.cleanup.command_id,
+                    candidate.cleanup.camp_id,
+                    elapsed_since_rfc3339_ms(&candidate.queued_at),
+                    cleanup_started_at.elapsed().as_millis(),
+                ),
+                Err(error) => {
+                    self.record_camp_cleanup_failure(&candidate.cleanup, &error)
+                        .await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn record_camp_deletion_failure(
+        &self,
+        candidate: &rovai_core::camp_deletion::CampDeletionCandidate,
+        error_code: &str,
+        error: &anyhow::Error,
+    ) {
+        let attention = {
+            let database = self.database.lock().await;
+            CampDeletionService::default().record_camp_failure(&database, candidate, error_code)
+        };
+        match attention {
+            Ok(attention) => {
+                eprintln!(
+                    "[camp-deletion] operation={} camp={} stage={} error={error:#}",
+                    candidate.operation_id, candidate.camp_id, error_code,
+                );
+                if attention {
+                    emit_navigation_invalidated(
+                        &self.output,
+                        "camps.deletion_attention",
+                        Some(&candidate.camp_id),
+                    );
+                }
+            }
+            Err(record_error) => eprintln!(
+                "[camp-deletion] operation={} camp={} stage={} error={error:#}; failure checkpoint error={record_error:#}",
+                candidate.operation_id, candidate.camp_id, error_code,
+            ),
+        }
+    }
+
+    async fn record_camp_cleanup_failure(
+        &self,
+        cleanup: &PreparedCampAttachmentCleanup,
+        error: &anyhow::Error,
+    ) {
+        let attention = {
+            let mut database = self.database.lock().await;
+            CampDeletionService::default().record_cleanup_failure(
+                &mut database,
+                cleanup,
+                "resource_cleanup_failed",
+            )
+        };
+        match attention {
+            Ok(attention) => {
+                eprintln!(
+                    "[camp-deletion] operation={} camp={} stage=resource_cleanup_failed error={error:#}",
+                    cleanup.command_id, cleanup.camp_id,
+                );
+                if attention {
+                    emit_navigation_invalidated(&self.output, "camps.deletion_attention", None);
+                } else {
+                    self.mission_workspace_cleanup_notify.notify_one();
+                }
+            }
+            Err(record_error) => eprintln!(
+                "[camp-deletion] operation={} camp={} stage=resource_cleanup_failed error={error:#}; failure checkpoint error={record_error:#}",
+                cleanup.command_id, cleanup.camp_id,
+            ),
+        }
     }
 
     async fn expire_elapsed_execution_budgets(&self, output: &mpsc::UnboundedSender<String>) {
@@ -8389,142 +8677,72 @@ impl Core {
                 Ok(value)
             }
             "camps.delete" => {
-                let _mission_preparation = self.mission_workspace_gate.lock().await;
+                let started_at = Instant::now();
                 let params: UserCommandParams<DeleteCampCommand> =
                     serde_json::from_value(request.params.clone())?;
                 let camp_id = params.command.camp_id.clone();
-                let command_id = params.command_id.clone();
-                let force = params.command.force;
                 let envelope =
                     user_camp_command_envelope(params.command_id, camp_id.clone(), params.command);
-                if let Some(replay) = {
-                    let database = self.database.lock().await;
-                    DomainCommandGateway.replay_if_recorded(&database, &envelope)?
-                } {
-                    if replay
-                        .result
-                        .payload
-                        .get("workspaceCleanupScheduled")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        self.mission_workspace_cleanup_notify.notify_one();
-                    }
-                    return Ok(serde_json::to_value(replay.result)?);
+                let mut database = self.database.lock().await;
+                let execution = self
+                    .runtime_fleet
+                    .install_camp_deletion_cutover(&camp_id, || {
+                        let execution =
+                            CampDeletionService::default().accept(&mut database, &envelope)?;
+                        let accepted = execution.result.status == CommandResultStatus::Accepted;
+                        Ok((execution, accepted))
+                    })
+                    .await?;
+                drop(database);
+                if execution.result.status == CommandResultStatus::Accepted {
+                    // The durable marker is authoritative. Install its derived
+                    // in-process fence before returning, but never wait for a
+                    // Runtime or filesystem operation on the request path.
+                    self.camp_deletion_notify.notify_one();
+                    emit_navigation_invalidated(
+                        &self.output,
+                        "camps.delete_accepted",
+                        Some(&camp_id),
+                    );
+                    eprintln!(
+                        "[camp-deletion] operation={} camp={} stage=accepted accept_ms={} replayed={}",
+                        execution
+                            .result
+                            .payload
+                            .get("operationId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown"),
+                        camp_id,
+                        started_at.elapsed().as_millis(),
+                        execution.replayed,
+                    );
                 }
-                let (runtime_cleanup_targets, prior_blockers) = if force {
+                Ok(serde_json::to_value(execution.result)?)
+            }
+            "camps.deletionIssues" => {
+                let database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    CampDeletionService::default().issues(&database)?,
+                )?)
+            }
+            "camps.retryDeletion" => {
+                let params: UserCommandParams<RetryCampDeletionCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let operation_id = params.command.operation_id.clone();
+                let execution = {
                     let mut database = self.database.lock().await;
-                    let blockers = match ExecutionRuntimeService::default()
-                        .settle_forced_camp_deletion(
-                            &mut database,
-                            &camp_id,
-                            envelope.payload.expected_version,
-                            &command_id,
-                        )? {
-                        Ok(blockers) => blockers,
-                        Err(rejection) => {
-                            let execution =
-                                DomainCommandGateway
-                                    .execute(&mut database, &envelope, |_| Ok(rejection))?;
-                            return Ok(serde_json::to_value(execution.result)?);
-                        }
-                    };
-                    (
-                        ExecutionRuntimeService::default()
-                            .list_camp_runtime_cleanup_targets(&database, &camp_id)?,
-                        blockers,
-                    )
-                } else {
-                    (Vec::new(), Vec::new())
+                    CampDeletionService::default().retry(
+                        &mut database,
+                        &user_command_envelope(params.command_id, params.command),
+                    )?
                 };
-                if force {
-                    self.stop_deleted_camp_runtimes(&runtime_cleanup_targets)
-                        .await?;
-                    self.runtime_fleet
-                        .force_fence_camp_for_deletion(&camp_id)
-                        .await?;
-                }
-                let (_view_mutation, _) = self.acquire_camp_attachment_mutation(&camp_id).await?;
-                let mut database = self.database.lock().await;
-                let cleanup = self.attachment_views.prepare_camp_delete_cleanup(
-                    &mut database,
-                    &camp_id,
-                    &command_id,
-                )?;
-                drop(database);
-                if !force
-                    && let Err(error) = self
-                        .runtime_fleet
-                        .fence_camp_for_attachment_mutation(&camp_id)
-                        .await
-                {
-                    if let Some(cleanup) = cleanup.as_ref() {
-                        let mut database = self.database.lock().await;
-                        self.attachment_views
-                            .cancel_camp_delete_cleanup(&mut database, cleanup)?;
-                    }
-                    return Err(error);
-                }
-                let mut database = self.database.lock().await;
-                let execution = match CollaborationService::default().delete_camp_after_settlement(
-                    &mut database,
-                    &envelope,
-                    &prior_blockers,
-                ) {
-                    Ok(execution) => execution,
-                    Err(error) => {
-                        if let Some(cleanup) = cleanup.as_ref()
-                            && let Err(cancel_error) = self
-                                .attachment_views
-                                .cancel_camp_delete_cleanup(&mut database, cleanup)
-                        {
-                            return Err(cancel_error.context(format!(
-                                "Camp deletion failed ({error:#}) and its attachment cleanup reservation could not be released"
-                            )));
-                        }
-                        return Err(error);
-                    }
-                };
-                if execution.result.status == CommandResultStatus::Applied {
-                    self.mark_skill_projections_dirty_best_effort(&mut database, true);
-                } else if let Some(cleanup) = cleanup.as_ref() {
-                    self.attachment_views
-                        .cancel_camp_delete_cleanup(&mut database, cleanup)?;
-                }
-                let should_remove_attachments =
-                    execution.result.status == CommandResultStatus::Applied;
-                let deleted_camp_id = execution
-                    .result
-                    .payload
-                    .get("campId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let workspace_cleanup_scheduled = execution
-                    .result
-                    .payload
-                    .get("workspaceCleanupScheduled")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                drop(database);
-                if should_remove_attachments && let Some(camp_id) = deleted_camp_id {
-                    self.forget_deleted_camp_runtimes(&camp_id).await;
-                    if workspace_cleanup_scheduled {
-                        self.mission_workspace_cleanup_notify.notify_one();
-                    }
-                    if let Err(error) = self.finish_camp_attachment_cleanup(cleanup.as_ref()).await
-                    {
-                        self.finish_subsystem("attachments", Err(error.context(format!(
-                            "Camp {camp_id} was deleted; its attachment cleanup remains pending. Retry attachment recovery."
-                        ))));
-                    }
-                    if let Err(error) =
-                        CampAttachmentStore::for_client(&self.data_dir, request.client.clone())
-                            .remove_camp(&camp_id)
-                    {
-                        eprintln!(
-                            "Camp {camp_id} was deleted but managed attachment cleanup failed: {error:#}"
-                        );
-                    }
+                if execution.result.status != CommandResultStatus::Rejected {
+                    self.camp_deletion_notify.notify_one();
+                    emit_navigation_invalidated(&self.output, "camps.retryDeletion", None);
+                    eprintln!(
+                        "[camp-deletion] operation={} stage=retry_accepted replayed={}",
+                        operation_id, execution.replayed
+                    );
                 }
                 Ok(serde_json::to_value(execution.result)?)
             }
@@ -15313,6 +15531,17 @@ fn user_camp_command_envelope<P>(
     }
 }
 
+fn elapsed_since_rfc3339_ms(timestamp: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|started| {
+            chrono::Utc::now()
+                .signed_duration_since(started.with_timezone(&chrono::Utc))
+                .num_milliseconds()
+                .max(0)
+        })
+        .unwrap_or(0)
+}
+
 fn system_command_envelope<P>(
     command_id: String,
     component_id: &str,
@@ -16036,6 +16265,8 @@ async fn run_core(
         mission_workspace_gate: Mutex::new(()),
         mission_workspace_cleanup_gate: Mutex::new(()),
         mission_workspace_cleanup_notify: Notify::new(),
+        camp_deletion_gate: Mutex::new(()),
+        camp_deletion_notify: Notify::new(),
         mission_git_read_capacity: Semaphore::new(MISSION_GIT_READ_CONCURRENCY_LIMIT),
         mission_diff_snapshots: Mutex::new(
             crate::mission_workspace::MissionDiffSnapshotCache::default(),
@@ -16188,6 +16419,16 @@ async fn run_core(
         builtin_tool_leases,
         data_dir,
     });
+    // Project the durable deletion fence into the Fleet before any scheduler
+    // can acquire or finish starting a Runtime for these Camps. Recovery work
+    // itself remains asynchronous and does not delay the ready frame.
+    let deleting_camp_ids = {
+        let database = core.database.lock().await;
+        CampDeletionService::default().deleting_camp_ids(&database)?
+    };
+    for camp_id in deleting_camp_ids {
+        core.runtime_fleet.mark_camp_deleting(&camp_id).await;
+    }
     let (attachment_projection_shutdown_tx, attachment_projection_shutdown_rx) = oneshot::channel();
     let mut attachment_projection_handle = tokio::spawn(process_attachment_projection_worker(
         core.clone(),
@@ -22001,6 +22242,11 @@ async fn process_agent_run_maintenance(
         Duration::from_secs(60),
     );
     managed_blob_gc_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut camp_deletion_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(1),
+        Duration::from_secs(15),
+    );
+    camp_deletion_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -22052,6 +22298,12 @@ async fn process_agent_run_maintenance(
                     }
                 });
             },
+            _ = core.camp_deletion_notify.notified() => {
+                let deletion_core = Arc::clone(&core);
+                tokio::spawn(async move {
+                    deletion_core.process_camp_deletions().await;
+                });
+            },
             _ = mcp_cleanup_interval.tick() => {
                 core.cleanup_mcp_projections_best_effort().await;
                 let cleanup_core=Arc::clone(&core);
@@ -22093,6 +22345,12 @@ async fn process_agent_run_maintenance(
                 if let Err(error) = result {
                     eprintln!("Managed Blob candidate collection remains pending: {error:#}");
                 }
+            },
+            _ = camp_deletion_interval.tick() => {
+                let deletion_core = Arc::clone(&core);
+                tokio::spawn(async move {
+                    deletion_core.process_camp_deletions().await;
+                });
             },
             _ = &mut shutdown => break,
         }
@@ -23749,6 +24007,8 @@ mod tests {
             mission_workspace_gate: Mutex::new(()),
             mission_workspace_cleanup_gate: Mutex::new(()),
             mission_workspace_cleanup_notify: Notify::new(),
+            camp_deletion_gate: Mutex::new(()),
+            camp_deletion_notify: Notify::new(),
             mission_git_read_capacity: Semaphore::new(MISSION_GIT_READ_CONCURRENCY_LIMIT),
             mission_diff_snapshots: Mutex::new(
                 crate::mission_workspace::MissionDiffSnapshotCache::default(),

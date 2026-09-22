@@ -13,13 +13,15 @@ const fixtureRoot = await mkdtemp(join(tmpdir(), 'rovai-core-smoke-'))
 const projectRoot = join(fixtureRoot, 'project')
 const ordinaryRoot = join(fixtureRoot, 'ordinary')
 const emptyGitRoot = join(fixtureRoot, 'empty-git')
-const dataDir = join(fixtureRoot, 'data')
+let dataDir = join(fixtureRoot, 'data')
 let core = null
 
 try {
   await mkdir(projectRoot)
   await mkdir(ordinaryRoot)
   await mkdir(emptyGitRoot)
+  await mkdir(dataDir)
+  dataDir = await realpath(dataDir)
   await writeFile(join(projectRoot, 'README.md'), '# Rovai-ai Core Smoke\n')
   await run('git', ['init', '-b', 'main'], projectRoot)
   await run('git', ['config', 'user.name', 'Rovai-ai Smoke'], projectRoot)
@@ -125,7 +127,7 @@ try {
       commandId: crypto.randomUUID(),
       command: { campId, expectedVersion: snapshot.camp.version }
     })
-    if (deletion.status !== 'applied') {
+    if (deletion.status !== 'accepted' || deletion.code !== 'camp.delete_accepted') {
       throw new Error(`Smoke Camp deletion failed: ${JSON.stringify(deletion)}`)
     }
   }

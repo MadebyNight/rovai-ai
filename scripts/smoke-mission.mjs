@@ -62,6 +62,7 @@ function startCore() {
 }
 const command = (method, command) => client.request(method, { commandId: crypto.randomUUID(), command })
 const applied = value => { assert.equal(value.status, 'applied', JSON.stringify(value)); return value.payload }
+const accepted = value => { assert.equal(value.status, 'accepted', JSON.stringify(value)); return value.payload }
 async function createProfile(displayName) {
   const result = await command('members.create', { displayName, teamRole: '使命验收队员', professionalResponsibilities: '执行隔离使命验收步骤并核对真实 Core 结果。',
     personalityTraits: ['严谨'], workingPrinciples: '收到 mission_start 时先用 rovai mission get 读取描述，再执行其中指定的 Node 脚本。其他消息执行其中明确指定的 Node 脚本。不要改写脚本，不要额外创建 Task 或委派；脚本负责发布本次结果。', growthTopic: '' })
@@ -245,7 +246,7 @@ try {
   applied(await command('missions.workspace.cleanup', { missionId: mission.missionId }))
   await waitForWorkspaceCleanupFinished(mission.missionId)
   const currentMission = await client.request('camps.snapshot', { campId: mission.campId })
-  applied(await command('camps.delete', { campId: mission.campId, expectedVersion: currentMission.camp.version, force: false, workspaceDisposition: 'retain' }))
+  accepted(await command('camps.delete', { campId: mission.campId, expectedVersion: currentMission.camp.version, force: false, workspaceDisposition: 'retain' }))
   assert.equal(db.prepare('SELECT count(*) n FROM mission_workspace WHERE mission_id=?').get(mission.missionId).n, 0)
   report.cases.push('dirty cleanup is refused asynchronously without leaving cleanup_failed; a legacy untouched failure recovers on retry; clean non-managed checkout cleanup preserves its branch and the next Run rebuilds through the preparation path')
   report.runs = [...rebuiltSnapshot.agentRuns, ...plainSnapshot.agentRuns].map(({ id, status, workspace }) => ({ id, status, workspace }))

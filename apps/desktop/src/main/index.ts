@@ -282,6 +282,8 @@ const allowedMethods = new Set<CoreMethod>([
   'camps.enter',
   'camps.open',
   'camps.delete',
+  'camps.deletionIssues',
+  'camps.retryDeletion',
   'singleChat.list',
   'singleChat.get',
   'singleChat.open',
@@ -1097,11 +1099,19 @@ ipcMain.handle('rovai:request', async (_event, method: CoreMethod, params?: unkn
     }
   }
   try {
+    const value = await core.request(method, params)
     if ((method === 'camps.delete' || method === 'camps.discardPending') && params && typeof params === 'object') {
       const command = (params as { command?: { campId?: unknown } }).command
-      if (typeof command?.campId === 'string') await filePreview.releaseCamp(command.campId)
+      const status = value && typeof value === 'object'
+        ? (value as { status?: unknown }).status
+        : undefined
+      if (typeof command?.campId === 'string' && status !== 'rejected') {
+        void filePreview.releaseCamp(command.campId).catch((error) => {
+          console.warn(`Camp ${command.campId as string} preview release remains pending`, error)
+        })
+      }
     }
-    return { kind: 'value', value: await core.request(method, params) }
+    return { kind: 'value', value }
   } catch (error) {
     if (error instanceof RovaiRequestError) {
       return { kind: 'failure', failure: error.toFailure() }

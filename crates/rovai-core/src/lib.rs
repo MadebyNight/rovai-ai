@@ -29,6 +29,7 @@ pub mod camp_attachment;
 pub mod camp_attachment_publication;
 pub mod camp_attachment_view;
 pub mod camp_content;
+pub(crate) mod camp_deletion;
 pub mod camp_fast;
 pub mod camp_history;
 pub mod camp_id;

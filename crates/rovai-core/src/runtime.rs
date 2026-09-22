@@ -1147,7 +1147,38 @@ impl ExecutionRuntimeService {
                 json!({ "currentVersion": version }),
             )));
         }
-        let blockers = crate::collaboration::camp_delete_blockers(&transaction, camp_id)?;
+        let blockers =
+            self.settle_camp_deletion_in_transaction(&transaction, camp_id, command_id)?;
+        transaction.commit()?;
+        Ok(Ok(blockers))
+    }
+
+    pub(crate) fn settle_camp_deletion_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        camp_id: &str,
+        command_id: &str,
+    ) -> Result<Vec<Value>> {
+        let blockers = crate::collaboration::camp_delete_blockers(transaction, camp_id)?;
+        self.apply_camp_deletion_settlement(transaction, camp_id, command_id)?;
+        Ok(blockers)
+    }
+
+    pub(crate) fn settle_camp_deletion_cutover_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        camp_id: &str,
+        command_id: &str,
+    ) -> Result<()> {
+        self.apply_camp_deletion_settlement(transaction, camp_id, command_id)
+    }
+
+    fn apply_camp_deletion_settlement(
+        &self,
+        transaction: &Transaction<'_>,
+        camp_id: &str,
+        command_id: &str,
+    ) -> Result<()> {
         let turn_ids = {
             let mut statement = transaction.prepare(
                 "SELECT id FROM camp_turn WHERE camp_id = ?1 AND status IN ('running', 'waiting')",
@@ -1193,8 +1224,7 @@ impl ExecutionRuntimeService {
             "#,
             params![camp_id, now],
         )?;
-        transaction.commit()?;
-        Ok(Ok(blockers))
+        Ok(())
     }
 
     pub fn list_camp_runtime_cleanup_targets(
@@ -1204,13 +1234,32 @@ impl ExecutionRuntimeService {
     ) -> Result<Vec<CampRuntimeCleanupTarget>> {
         let mut statement = database.connection().prepare(
             r#"
-            SELECT agent_run.id, agent_run.execution_epoch,
-                   agent_run.runtime_adapter_kind
-            FROM agent_run
-            LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
-            WHERE COALESCE(agent_run.camp_id, camp_turn.camp_id) = ?1
-              AND (agent_run.status IN ('queued', 'running', 'waiting') OR (agent_run.cancel_requested_at IS NOT NULL AND agent_run.cancel_acknowledged_at IS NULL))
-            ORDER BY agent_run.id
+            SELECT target.id, target.execution_epoch, target.runtime_adapter_kind
+            FROM (
+                SELECT agent_run.id, agent_run.execution_epoch,
+                       agent_run.runtime_adapter_kind
+                FROM agent_run
+                WHERE agent_run.invocation_kind = 'batch'
+                  AND agent_run.camp_id = ?1
+                  AND (
+                      agent_run.status IN ('queued', 'running', 'waiting')
+                      OR (agent_run.cancel_requested_at IS NOT NULL
+                          AND agent_run.cancel_acknowledged_at IS NULL)
+                  )
+                UNION ALL
+                SELECT agent_run.id, agent_run.execution_epoch,
+                       agent_run.runtime_adapter_kind
+                FROM agent_run
+                JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+                WHERE agent_run.invocation_kind IS NOT 'batch'
+                  AND camp_turn.camp_id = ?1
+                  AND (
+                      agent_run.status IN ('queued', 'running', 'waiting')
+                      OR (agent_run.cancel_requested_at IS NOT NULL
+                          AND agent_run.cancel_acknowledged_at IS NULL)
+                  )
+            ) AS target
+            ORDER BY target.id
             "#,
         )?;
         let rows = statement
@@ -1355,6 +1404,7 @@ impl ExecutionRuntimeService {
                        AND agent_run.runtime_recovery_required = 1))
               AND agent_run.input_ready_at IS NOT NULL
               AND agent_run.cancel_requested_at IS NULL
+              AND camp.deletion_operation_id IS NULL
               AND camp_member.status = 'active'
               AND camp_member.leave_requested_at IS NULL
               AND agent_profile.profile_status = 'present'
@@ -1522,6 +1572,7 @@ impl ExecutionRuntimeService {
                 WHERE agent_run.id = ?1
                   AND agent_run.status IN ('running', 'waiting')
                   AND agent_run.cancel_requested_at IS NULL
+                  AND camp.deletion_operation_id IS NULL
                   AND agent_run.execution_epoch = ?2
                   AND (
                       agent_run.invocation_kind = 'batch'
@@ -5291,8 +5342,10 @@ fn load_terminal_target(
                    agent_run.anchor_message_id
             FROM agent_run
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
+            JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
             JOIN conversation ON conversation.id = agent_run.conversation_id
             WHERE agent_run.id = ?1
+              AND camp.deletion_operation_id IS NULL
             "#,
             [agent_run_id],
             |row| {
@@ -6291,6 +6344,7 @@ fn load_claimable_run(transaction: &Transaction<'_>, run_id: &str) -> Result<Opt
               ON camp_member.camp_id = camp.id
              AND camp_member.agent_id = conversation.agent_id
             WHERE agent_run.id = ?1
+              AND camp.deletion_operation_id IS NULL
             "#,
             [run_id],
             |row| {

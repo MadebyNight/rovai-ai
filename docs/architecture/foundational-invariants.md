@@ -146,7 +146,7 @@ last_updated: 2026-09-22
   幂等创建首个成员、Runtime 选择和“初次集结”Camp，不把半完成状态伪装为已完成；无可用 Runtime 且
   provisioning 尚未开始时可以原子完成为 `runtime_deferred`，但不得创建成员、Runtime 配置、Camp、Run 或
   onboarding restore target，也不得在以后启动时重新打开训练营。
-- Camp 永久删除保持 User-only、exact-version 和单事务聚合删除。普通模式要求 quiescent；用户明确确认的 force 模式先持久化停止/隔离边界，再删除 Camp 聚合并异步清理受管资源，不能把未知 Runtime 外部效果宣称为已撤销。 Camp 同时拥有并清理自己的永久输出目录，包括已编辑/未发布内容；外部 Source Ref 从不逐路径删除，其他 Camp 的共享引用不保活源文件。Run 结束、预览释放/LRU 或单条消息删除不删除永久输出。清理失败保留持久操作并通过既有恢复入口重试。
+- Camp 永久删除保持 User-only、exact-version、单事务聚合删除和不可撤销。所有 Runtime 状态共用异步受理：短事务原子结算当前业务、在 Camp 写 Deletion Intent 并关闭新执行准入，前台返回 `accepted + operationId`，不等待 Runtime、数据库聚合或文件系统。后台只有在精确 Runtime 停止/隔离确认后，才在同一事务建立既有 cleanup journal handoff、删除 Camp 聚合并产生 `camp.deleted`；journal 与可选 Mission cleanup 完成全部承诺资源后才产生 `camp.deletion_completed`。删库前由 Camp marker 恢复，删库后由既有 journal 恢复，不新增全过程删除表；accepted receipt 必须存活以支持 replay。旧 Starting、lease 和 callback 不能恢复业务写入，正常 read side 排除 deleting Camp。Camp 清理自己的 Authority 附件根、永久输出目录和 legacy View，包括已编辑/未发布内容；外部 Source Ref、项目目录、Runtime 原生 Home 与明确 retain 的 Mission Workspace 不删除。自动恢复耗尽后只暴露原 operation 的统一重试，不把内部阶段交给用户。完整组件与协议见 [Camp 永久删除](camp-deletion.md)和 [Camp Permanent Deletion v4](../contracts/camp-permanent-deletion-v4.md)。
 
 ## 成员身份、生命周期与投影
 

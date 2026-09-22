@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.64
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -11,7 +11,7 @@ last_updated: 2026-09-22
 
 # Rovai-ai v1.64：Execution Evidence 生命周期减重与可恢复投影
 
-前置：[v1.63](../v1.63/README.md)。本版把新 command/tool Execution Evidence 从 started/result 多行改为统一
+前置：[v1.63](../v1.63/README.md)。后续：[v1.65](../v1.65/README.md)。本版把新 command/tool Execution Evidence 从 started/result 多行改为统一
 Operation 生命周期记录，以独立变更水位保证原位更新可见；私有思考只保留不含正文的瞬时运行 phase。输入、结果和
 Files Changed detail 使用可恢复的受限 Blob 回收，文件变化投影在合法迟到事实到达后按 exact Run/epoch 水位失效
 重算。历史数据保持原样，不回填。

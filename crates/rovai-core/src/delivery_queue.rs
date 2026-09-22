@@ -127,6 +127,7 @@ fn reconcile_waiting_delivery_conversations(transaction: &Transaction<'_>) -> Re
             r#"
             SELECT DISTINCT delivery.camp_id, delivery.recipient_agent_id
             FROM camp_message_delivery AS delivery
+            JOIN camp ON camp.id = delivery.camp_id
             JOIN camp_member
               ON camp_member.camp_id = delivery.camp_id
              AND camp_member.agent_id = delivery.recipient_agent_id
@@ -136,6 +137,7 @@ fn reconcile_waiting_delivery_conversations(transaction: &Transaction<'_>) -> Re
              AND conversation.agent_id = delivery.recipient_agent_id
              AND conversation.kind = 'camp_member'
             WHERE delivery.status = 'waiting'
+              AND camp.deletion_operation_id IS NULL
               AND camp_member.status = 'active'
               AND camp_member.leave_requested_at IS NULL
               AND agent_profile.profile_status = 'present'
@@ -167,15 +169,19 @@ pub fn has_pending_delivery_batch_work(database: &Database) -> Result<bool> {
         r#"
         SELECT EXISTS(
             SELECT 1
-            FROM camp_message_delivery
-            WHERE status = 'waiting'
+            FROM camp_message_delivery AS delivery
+            JOIN camp ON camp.id = delivery.camp_id
+            WHERE delivery.status = 'waiting'
+              AND camp.deletion_operation_id IS NULL
         ) OR EXISTS(
             SELECT 1
             FROM agent_run
-            WHERE invocation_kind = 'batch'
-              AND status = 'queued'
-              AND input_ready_at IS NOT NULL
-              AND cancel_requested_at IS NULL
+            JOIN camp ON camp.id = agent_run.camp_id
+            WHERE agent_run.invocation_kind = 'batch'
+              AND agent_run.status = 'queued'
+              AND agent_run.input_ready_at IS NOT NULL
+              AND agent_run.cancel_requested_at IS NULL
+              AND camp.deletion_operation_id IS NULL
         )
         "#,
         [],
@@ -185,7 +191,7 @@ pub fn has_pending_delivery_batch_work(database: &Database) -> Result<bool> {
 
 pub fn has_waiting_delivery_batch_work(database: &Database) -> Result<bool> {
     Ok(database.connection().query_row(
-        "SELECT EXISTS(SELECT 1 FROM camp_message_delivery WHERE status = 'waiting')",
+        "SELECT EXISTS(SELECT 1 FROM camp_message_delivery AS delivery JOIN camp ON camp.id=delivery.camp_id WHERE delivery.status='waiting' AND camp.deletion_operation_id IS NULL)",
         [],
         |row| row.get(0),
     )?)
@@ -216,6 +222,7 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
                            MIN(delivery.created_at) AS first_created_at,
                            MIN(delivery.queue_sequence) AS first_queue_sequence
                     FROM camp_message_delivery AS delivery
+                    JOIN camp ON camp.id = delivery.camp_id
                     JOIN conversation
                       ON conversation.camp_id = delivery.camp_id
                      AND conversation.agent_id = delivery.recipient_agent_id
@@ -226,6 +233,7 @@ pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Re
                     JOIN agent_profile
                       ON agent_profile.id = delivery.recipient_agent_id
                     WHERE delivery.status = 'waiting'
+                      AND camp.deletion_operation_id IS NULL
                       AND camp_member.status = 'active'
                       AND camp_member.leave_requested_at IS NULL
                       AND agent_profile.profile_status = 'present'

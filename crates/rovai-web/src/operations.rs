@@ -49,6 +49,10 @@ pub enum Operation {
     CampRename,
     #[serde(rename = "camps.delete")]
     CampDelete,
+    #[serde(rename = "camps.deletionIssues")]
+    CampDeletionIssues,
+    #[serde(rename = "camps.retryDeletion")]
+    CampRetryDeletion,
     #[serde(rename = "camps.discardPending")]
     CampDiscardPending,
     #[serde(rename = "camps.members.fast.check")]
@@ -386,6 +390,8 @@ impl Operation {
             Self::MissionLinkPr => "missions.linkPr",
             Self::CampRename => "camps.rename",
             Self::CampDelete => "camps.delete",
+            Self::CampDeletionIssues => "camps.deletionIssues",
+            Self::CampRetryDeletion => "camps.retryDeletion",
             Self::CampDiscardPending => "camps.discardPending",
             Self::CampFastCheck => "camps.members.fast.check",
             Self::CampFastSet => "camps.members.fast.set",

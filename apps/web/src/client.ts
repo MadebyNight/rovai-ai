@@ -24,6 +24,8 @@ export type WorkspaceListing = { name: string; projectPath: string; parentPath: 
 export const WEB_OPERATIONS = [
   'camps.rename',
   'camps.delete',
+  'camps.deletionIssues',
+  'camps.retryDeletion',
   'camps.discardPending',
   'camps.members.fast.check',
   'camps.members.fast.set',
@@ -169,6 +171,7 @@ export type WebOperation = typeof WEB_OPERATIONS[number]
 const RECONCILABLE_COMMANDS = new Set<WebOperation>([
   'camps.rename',
   'camps.delete',
+  'camps.retryDeletion',
   'camps.discardPending',
   'camps.members.fast.set',
   'members.remove',

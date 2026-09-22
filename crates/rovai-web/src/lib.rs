@@ -585,20 +585,40 @@ async fn request(
     let Ok(_permit) = state.requests.clone().try_acquire_owned() else {
         return error(StatusCode::TOO_MANY_REQUESTS, "request_capacity");
     };
-    if matches!(
+    let preview_release_camp_id = matches!(
         body.operation,
         operations::Operation::CampDelete | operations::Operation::CampDiscardPending
-    ) && let Some(camp_id) = body.params["command"]["campId"].as_str()
-    {
-        state.files.release_camp(camp_id);
-    }
-    match tokio::time::timeout(
-        body.operation.timeout(),
-        state.core.request_for_editor(body.operation.method(), body.params, rovai_core::draft_client::DraftClient::verified_web(&session.client_id).expect("Host-created editor identity")),
     )
-    .await
-    {
-        Ok(Ok(reply)) => Json(json!({"result":reply.result.map(|value| body.operation.project(value)),"error":reply.error})).into_response(),
+    .then(|| {
+        body.params["command"]["campId"]
+            .as_str()
+            .map(str::to_string)
+    })
+    .flatten();
+    let result = tokio::time::timeout(
+        body.operation.timeout(),
+        state.core.request_for_editor(
+            body.operation.method(),
+            body.params,
+            rovai_core::draft_client::DraftClient::verified_web(&session.client_id)
+                .expect("Host-created editor identity"),
+        ),
+    )
+    .await;
+    match result {
+        Ok(Ok(reply)) => {
+            let accepted = reply.error.is_none()
+                && reply
+                    .result
+                    .as_ref()
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|status| status != "rejected");
+            if accepted && let Some(camp_id) = preview_release_camp_id.as_deref() {
+                state.files.release_camp(camp_id);
+            }
+            Json(json!({"result":reply.result.map(|value| body.operation.project(value)),"error":reply.error})).into_response()
+        }
         Ok(Err(_)) => error(StatusCode::SERVICE_UNAVAILABLE, "core_unavailable"),
         Err(_) => error(StatusCode::GATEWAY_TIMEOUT, "result_unavailable"),
     }

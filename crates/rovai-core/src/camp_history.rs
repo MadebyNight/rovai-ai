@@ -618,6 +618,7 @@ fn load_run_fence(
               AND agent_run.status = 'running'
               AND conversation.agent_id = ?4
               AND camp.id = ?3
+              AND camp.deletion_operation_id IS NULL
               AND manifest.history_fence_version = 1
             "#,
             params![
@@ -672,6 +673,7 @@ fn load_history_camps(transaction: &Transaction<'_>, fence: &RunFence) -> Result
           ON snapshot.context_manifest_id = ?1
          AND snapshot.camp_id = camp.id
         WHERE camp.id <> ?3
+          AND camp.deletion_operation_id IS NULL
         ORDER BY camp.id
         "#,
     );
@@ -717,6 +719,7 @@ fn resolve_camp_target(
             SELECT 1
             FROM camp
             WHERE camp.id = ?1
+              AND camp.deletion_operation_id IS NULL
             "#,
             [camp_id],
             |_| Ok(()),
@@ -743,7 +746,7 @@ fn resolve_live_read_target(
     let camp_id = requested_camp_id.unwrap_or(&fence.current_camp_id);
     let boundary = transaction
         .query_row(
-            "SELECT last_message_sequence FROM camp WHERE id = ?1",
+            "SELECT last_message_sequence FROM camp WHERE id = ?1 AND deletion_operation_id IS NULL",
             [camp_id],
             |row| row.get::<_, i64>(0),
         )
@@ -918,7 +921,8 @@ fn load_history_body_candidates(
         JOIN camp_message AS message ON message.camp_id = camp.id
         JOIN public_camp_message_publication AS publication
           ON publication.message_id = message.id
-        WHERE publication.global_sequence <= ?3
+        WHERE camp.deletion_operation_id IS NULL
+          AND publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
           AND message.recall_state NOT IN ('recallable', 'withdrawn')
           AND NOT EXISTS (
@@ -951,7 +955,8 @@ fn load_history_body_candidates(
         JOIN camp_message_fts ON camp_message_fts.rowid = message.rowid
         JOIN public_camp_message_publication AS publication
           ON publication.message_id = message.id
-        WHERE publication.global_sequence <= ?3
+        WHERE camp.deletion_operation_id IS NULL
+          AND publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
           AND message.recall_state NOT IN ('recallable', 'withdrawn')
           AND NOT EXISTS (
@@ -1098,7 +1103,8 @@ fn merge_history_principal_candidates(
         JOIN camp_message AS message ON message.camp_id = camp.id
         JOIN public_camp_message_publication AS publication
           ON publication.message_id = message.id
-        WHERE publication.global_sequence <= ?3
+        WHERE camp.deletion_operation_id IS NULL
+          AND publication.global_sequence <= ?3
           AND message.tombstoned_at IS NULL
           AND message.recall_state NOT IN ('recallable', 'withdrawn')
           AND NOT EXISTS (
@@ -1259,6 +1265,7 @@ fn merge_history_reference_candidates(
             JOIN public_camp_message_publication AS publication
               ON publication.message_id = message.id
             WHERE reference.kind = ?3 AND reference.value = ?4
+              AND camp.deletion_operation_id IS NULL
               AND publication.global_sequence <= ?5
               AND message.tombstoned_at IS NULL
               AND message.recall_state NOT IN ('recallable', 'withdrawn')

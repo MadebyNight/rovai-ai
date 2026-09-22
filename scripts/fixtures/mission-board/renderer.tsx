@@ -74,6 +74,7 @@ const seedScrollableLanes=(count=10)=>{
 }
 const clearScrollableLanes=()=>{for(let index=items.length-1;index>=0;--index)if(items[index].missionId.startsWith('scroll-'))items.splice(index,1);changed()}
 const applied=(payload:any={})=>({status:'applied',code:'ok',payload})
+const accepted=(payload:any={})=>({status:'accepted',code:'camp.delete_accepted',payload})
 const workspaceFor=(m:MissionRecord,state?:'cleanup_pending'|'cleanup_failed'|'cleaned')=>{
  const n=String(m.number).padStart(3,'0'),cleanup=m.workspaceCleanup
  return {id:`workspace-${m.missionId}`,missionId:m.missionId,campId:m.campId,executionHostId:'host',sourceDirectory:'/workspace/rovai-ai',repositoryRoot:'/workspace/rovai-ai',gitCommonDir:'/workspace/rovai-ai/.git',workingDirectory:'/workspace/rovai-ai-mission-'+n,worktreePath:'/workspace/rovai-ai-mission-'+n,baseBranch:'main',managedBranch:'rovai/mission/'+n,baseSha:'a'.repeat(40),state:state??(cleanup?.state==='cleaning'?'cleanup_pending':cleanup?.state==='failed'?'cleanup_failed':cleanup?.state==='cleaned'||!m.workspaceResourcesPresent?'cleaned':'ready'),cleanupWorktreeRemoved:cleanup?.worktreeRemoved??!m.workspaceResourcesPresent,cleanupBranchRemoved:cleanup?.branchRemoved??!m.workspaceResourcesPresent,diagnostic:cleanup?.diagnostic??null}
@@ -192,7 +193,7 @@ const client={...model.client,onInvalidated:undefined,onEvent:(fn:any)=>{events.
  if(method==='camps.changeDefaultLead'){m!.defaultLeadAgentId=c.successorAgentId;snapshot(m!).camp.defaultLeadAgentId=c.successorAgentId;changed();return applied()}
  if(method==='camps.delete'){
   if(c.workspaceDisposition==='cleanup'&&m!.workspaceResourcesPresent)orphanCleanups.push(workspaceFor(m!,'cleanup_pending'))
-  items.splice(items.indexOf(m!),1);changed();return applied({campId:m!.campId,workspaceCleanupScheduled:c.workspaceDisposition==='cleanup'})
+  items.splice(items.indexOf(m!),1);changed();return accepted({campId:m!.campId,operationId:p.commandId,workspaceCleanupScheduled:c.workspaceDisposition==='cleanup'})
  }
  return model.client.request(method as any,p)
 }}

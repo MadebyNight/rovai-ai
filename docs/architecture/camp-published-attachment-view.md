@@ -60,8 +60,11 @@ HTML 按真实来源目录解析资源；Web 资源能力绑定已有句柄、Se
 
 ## 归属与生命周期
 
-Camp 拥有它的默认输出目录及历史自有附件，不拥有任意 sourcePath。删除 Camp 通过已有停止/释放/清理协调，
-精确删除自有目录（包括未发布和已编辑内容），失败写入既有 cleanup operation 并重试。
+Camp 拥有 Authority 附件根、默认输出目录及历史自有附件，不拥有任意 sourcePath。异步删除先以 Camp marker
+等待 Runtime 停止/隔离，再在聚合删除事务内把三个受管目录的清理义务交给既有
+`camp_attachment_view_operation(kind='camp_delete_cleanup')`；Camp 删除后该 journal 独立恢复，精确删除自有目录
+（包括未发布和已编辑内容），失败自动退避并可继续同一 operation。Mission Worktree/branch 仍由自己的 cleanup owner
+负责，journal 只等待其检查点，不复制 Git 清理状态。完整流程见 [Camp 永久删除](camp-deletion.md)。
 Run 结束、消息删除、预览关闭/LRU 不删除永久输出。外部原文件不删除；跨 Camp 引用在拥有者删除后可失效。
 不增加引用计数、保活、迁移、回收站、全盘路径/内容去重或无引用垃圾扫描。
 

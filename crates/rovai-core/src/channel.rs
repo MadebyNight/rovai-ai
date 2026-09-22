@@ -5270,6 +5270,28 @@ impl ChannelService {
                 .camp_id
                 .clone()
                 .context("channel binding Camp creation did not persist an identity")?;
+            let deletion_in_progress: bool = transaction.query_row(
+                "SELECT deletion_operation_id IS NOT NULL FROM camp WHERE id = ?1",
+                [&camp_id],
+                |row| row.get(0),
+            )?;
+            if deletion_in_progress {
+                mark_aggregate_failed(
+                    transaction,
+                    &aggregate.id,
+                    "camp_deletion_in_progress",
+                    &now_text,
+                )?;
+                return Ok(CommandHandlerResult::applied(
+                    "channel.inbound.failed",
+                    json!({
+                        "aggregateId": aggregate.id,
+                        "status": "failed",
+                        "failureCode": "camp_deletion_in_progress",
+                    }),
+                    None,
+                ));
+            }
             let missing_members =
                 missing_active_members(transaction, &camp_id, &frozen.target_agent_ids)?;
             if !missing_members.is_empty() {
