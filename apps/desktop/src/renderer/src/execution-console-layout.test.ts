@@ -2,11 +2,12 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
+const mobileStyles = readFileSync(new URL('../../../../web/src/mobile.css', import.meta.url), 'utf8')
 const workspaceSource = readFileSync(new URL('./CampWorkspace.tsx', import.meta.url), 'utf8')
 
-function styleBlock(selector: string): string | null {
+function styleBlock(selector: string, source = styles): string | null {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return styles.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? null
+  return source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? null
 }
 
 describe('execution console layout', () => {
@@ -116,6 +117,33 @@ describe('execution console layout', () => {
     expect(styleBlock('.execution-run-card-header')).toMatch(/top:\s*0/)
     expect(styleBlock('.execution-run-summary')).toMatch(/font-weight:\s*600/)
     expect(styleBlock('.execution-drawer-body')).toMatch(/scroll-padding-block:\s*60px 16px/)
+  })
+
+  it('uses the confirmed 8px Run rhythm on Desktop and Web without changing Mobile', () => {
+    expect(styleBlock(':root:not([data-mobile-web="true"]) .execution-process-timeline::before'))
+      .toMatch(/bottom:\s*18px/)
+    expect(styleBlock(':root:not([data-mobile-web="true"]) .execution-process-stage'))
+      .toMatch(/padding-bottom:\s*8px/)
+    expect(styleBlock('.execution-process-card > [id^="execution-run-content-"]'))
+      .toMatch(/padding:\s*12px 10px 10px/)
+    expect(styleBlock(':root:not([data-mobile-web="true"]) .execution-process-card > [id^="execution-run-content-"]'))
+      .toMatch(/padding:\s*8px 10px/)
+    expect(styleBlock(':root:not([data-mobile-web="true"]) .execution-process-card > [id^="execution-run-content-"] > .execution-disclosure'))
+      .toMatch(/margin:\s*0/)
+    expect(styleBlock(':root:not([data-mobile-web="true"]) .execution-process-card .process-content'))
+      .toMatch(/--process-item-gap:\s*8px;\s*padding:\s*0/)
+    expect(workspaceSource).toMatch(/const processItemGap = mobile \? 14 : 8/)
+    expect(workspaceSource).toMatch(/enabled=\{windowedEvidence\} gap=\{processItemGap\}/)
+    expect(workspaceSource).toMatch(/\? 4 : processItemGap/)
+
+    expect(styleBlock('html[data-mobile-web="true"] .execution-process-stage', mobileStyles))
+      .toMatch(/padding-bottom:\s*8px/)
+    expect(styleBlock('html[data-mobile-web="true"] .execution-drawer .process-content', mobileStyles))
+      .toMatch(/--process-item-gap:\s*4px;[^}]*padding:\s*4px 0 2px/)
+    expect(styleBlock('html[data-mobile-web="true"] .execution-disclosure > summary', mobileStyles))
+      .toMatch(/min-height:\s*44px/)
+    expect(styleBlock('html[data-mobile-web="true"] .execution-drawer :is(.tool-call-summary, .tool-group-summary)', mobileStyles))
+      .toMatch(/min-height:\s*32px/)
   })
 
   it('swaps live elapsed time only on title hover or visible keyboard focus in a fixed slot', () => {

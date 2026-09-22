@@ -9737,6 +9737,7 @@ function RunExecutionContent({
   onFileOpenError(message: string): void
 }): JSX.Element {
   const client = useCampClient()
+  const mobile = useMobileLayout()
   const nonTerminal = NON_TERMINAL_RUNS.has(run.status)
   const publicFailure = run.status === 'failed' ? run.failure : null
   const showUnsettledWarning = agentRunShowsUnsettledWarning(run)
@@ -9876,6 +9877,7 @@ function RunExecutionContent({
   const earlierLoading = windowPage.loading
     && windowPage.direction !== 'newer'
     && (!nonTerminal || windowPage.evidence.length > 0)
+  const processItemGap = mobile ? 14 : 8
 
   return (
     <ExecutionContentContext.Provider value={windowedEvidence ? windowPage.contentCache : null}>
@@ -9907,9 +9909,9 @@ function RunExecutionContent({
           仍有外部效果待确认
         </p>
       )}
-      <ExecutionVirtualList items={groupedProcessItems} enabled={windowedEvidence}
+      <ExecutionVirtualList items={groupedProcessItems} enabled={windowedEvidence} gap={processItemGap}
         gapAfter={(item, next) => (item.kind === 'toolGroup' && next.kind === 'compaction')
-          || (item.kind === 'compaction' && (next.kind === 'toolGroup' || next.kind === 'compaction')) ? 4 : 14}
+          || (item.kind === 'compaction' && (next.kind === 'toolGroup' || next.kind === 'compaction')) ? 4 : processItemGap}
         onVisible={visible => {
         const keys = visible.flatMap(item => item.kind === 'toolGroup' ? item.items.map(child => child.key) : [item.key])
         const sequences = keys.flatMap(key => sequenceByKey.has(key) ? [sequenceByKey.get(key)!] : [])
