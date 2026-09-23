@@ -19,6 +19,22 @@ const pending: PendingFeishuAttachments = {
 }
 
 describe('Feishu inbound attachments', () => {
+  it('preserves file cards in a rich post that the SDK omits from normalized resources', async () => {
+    const body = { title: '', content: [[{ tag: 'text', text: '读取校验码' }]],
+      files: [{ file_key: 'file_one', file_name: 'read-me.txt', is_folder: false },
+        { file_key: 'file_one', file_name: 'read-me.txt', is_folder: false }] }
+    for (const content of [body, { zh_cn: body }]) {
+      const message = await normalize({ sender: { sender_id: { open_id: 'user' } },
+        message: { message_id: 'message', chat_id: 'chat', chat_type: 'p2p', message_type: 'post',
+          content: JSON.stringify(content) }
+      } as RawMessageEvent, { botIdentity: { openId: 'bot', name: 'Rovai' }, includeRaw: true })
+      expect(message.resources).toEqual([])
+      expect(feishuInboundResources(message)).toEqual([
+        { fileKey: 'file_one', name: 'read-me.txt', kind: 'file' }
+      ])
+    }
+  })
+
   it('keeps rich-post images in order and downloads each referenced resource once', async () => {
     const message = await normalize({
       sender: { sender_id: { open_id: 'user' } },

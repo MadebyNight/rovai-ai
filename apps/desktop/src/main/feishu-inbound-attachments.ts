@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk'
+import type { LarkChannel, NormalizedMessage, RawMessageEvent } from '@larksuiteoapi/node-sdk'
 
 export type InboundResource = { fileKey: string; name: string; kind: string }
 export type PendingFeishuAttachments = {
@@ -20,11 +20,31 @@ const MAX_BYTES = 100 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 60_000
 
 export function feishuInboundResources(message: NormalizedMessage): InboundResource[] {
+  const resources: InboundResource[] = message.resources.map(resource => ({
+    fileKey: resource.fileKey, name: resource.fileName || resource.type, kind: resource.type
+  }))
+  // SDK 1.73 normalizes post.content but omits the sibling post.files array
+  // returned by Feishu for text composed together with file attachments.
+  if (message.rawContentType === 'post' && message.raw) {
+    let post
+    try { post = JSON.parse((message.raw as RawMessageEvent).message.content) } catch { post = null }
+    const body = Array.isArray(post?.content) ? post
+      : Object.values(post ?? {}).find((value): value is { content: unknown[]; files?: unknown } =>
+        typeof value === 'object' && value !== null && 'content' in value && Array.isArray(value.content))
+    if (Array.isArray(body?.files)) {
+      for (const file of body.files) {
+        if (typeof file?.file_key !== 'string' || !file.file_key) continue
+        resources.push({ fileKey: file.file_key,
+          name: typeof file.file_name === 'string' ? file.file_name : 'file',
+          kind: file.is_folder === true ? 'folder' : 'file' })
+      }
+    }
+  }
   const seen = new Set<string>()
-  return message.resources.flatMap(resource => {
+  return resources.flatMap(resource => {
     if (seen.has(resource.fileKey)) return []
     seen.add(resource.fileKey)
-    return [{ fileKey: resource.fileKey, name: resource.fileName || resource.type, kind: resource.type }]
+    return [resource]
   })
 }
 
@@ -37,7 +57,7 @@ export async function withFeishuInboundFiles<T>(
   consume: (files: string[]) => Promise<T>,
   signal?: AbortSignal
 ): Promise<T> {
-  if (pending.resources.some(resource => resource.kind === 'sticker')) {
+  if (pending.resources.some(resource => ['sticker', 'folder'].includes(resource.kind))) {
     throw new Error('channel.attachments.unsupported')
   }
   const directory = await mkdtemp(join(tmpdir(), 'rovai-feishu-inbound-'))
