@@ -1965,6 +1965,10 @@ export function CampWorkspace({
     : inspectorTab
   // Secondary phone panels return to the last primary view, without becoming navigation history.
   const mobilePrimaryView = useRef<'conversation' | 'execution'>('conversation')
+  const [mobileExecutionMaximized, setMobileExecutionMaximized] = useState(false)
+  useEffect(() => {
+    if (!inspectorVisible || inspectorSurfaceTab !== 'execution') setMobileExecutionMaximized(false)
+  }, [inspectorVisible, inspectorSurfaceTab])
   useLayoutEffect(() => {
     if (!mobile || singleChatVisible || (inspectorVisible && inspectorSurfaceTab !== 'execution')) return
     mobilePrimaryView.current = inspectorVisible ? 'execution' : 'conversation'
@@ -4444,7 +4448,7 @@ export function CampWorkspace({
     && Boolean(filePreview?.paneVisible && filePreview.activeTab?.kind === 'execution')
 
   return (
-    <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} data-mobile-execution-maximized={mobile && mobileExecutionMaximized || undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <RevealNotificationConversation active={!!notificationFocus?.active
@@ -5229,6 +5233,8 @@ export function CampWorkspace({
               executionExpanded={executionPlacement === 'inspector'
                 ? inspectorVisible && inspectorSurfaceTab === 'execution'
                 : rightExecutionVisible}
+              mobileExecutionMaximized={mobileExecutionMaximized}
+              onToggleMobileExecutionMaximized={mobile ? () => setMobileExecutionMaximized((expanded) => !expanded) : undefined}
               runningMembers={runningMembers}
               executionCount={executionProcesses.length}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
@@ -9841,8 +9847,17 @@ function RunExecutionContent({
   const hasActiveTool = toolActivityGroupHasActiveTool(activeToolItems, run.status)
   const hasActiveCompaction = executionHasActiveCompaction(processItems)
   const trailingProcessItem = groupedProcessItems[groupedProcessItems.length - 1]
+  const runtimePhase = windowedEvidence ? windowPage.runtimePhase : effectiveProgress?.runtimePhase
+  const thinkingAfterTool = run.status === 'running'
+    && runtimePhase === 'thinking'
+    && trailingProcessItem?.kind === 'toolGroup'
+    && (!windowedEvidence || !windowPage.hasNewer)
+    && !hasActiveTool
+    && !hasActiveCompaction
+    && !finalBody
   const liveTailToolGroupKey = run.status === 'running'
     && !cancelling
+    && !thinkingAfterTool
     && trailingProcessItem?.kind === 'toolGroup'
     ? trailingProcessItem.key
     : null
@@ -9853,18 +9868,18 @@ function RunExecutionContent({
   const completeEvidence = selectCompletePresentableExecutionEvidence(
     displayedEvidence ?? truncatedEvidence
   )
-  const runtimePhase = windowedEvidence ? windowPage.runtimePhase : effectiveProgress?.runtimePhase
   const initialFeedback = executionInitialFeedback(
     run.status,
     processItems,
     Boolean(finalBody),
     runtimePhase
   )
+  const phaseFeedback = thinkingAfterTool ? '思考中' : initialFeedback
   const feedback = run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
     : run.failure?.code === 'runtime_network_interrupted' ? '正在恢复连接'
       : activeRetryDiagnostic
         ? `等待 Claude Code 自动重试（${activeRetryDiagnostic.attempt}/${activeRetryDiagnostic.maxAttempts}）`
-        : initialFeedback
+        : phaseFeedback
   const sequenceByKey = useMemo(() => new Map<string, number>((displayedEvidence ?? []).flatMap(item => [
     [`narration:${item.id}`, item.sequence] as const,
     [`tool:${item.canonical?.operationId ?? item.id}`, item.sequence] as const
@@ -10064,7 +10079,7 @@ function RunExecutionContent({
         && liveTailToolGroupKey === null
         && feedback
         && (
-          <div className={`process-action current${feedback === initialFeedback ? ' is-initial-feedback' : ''}`} role="status">
+          <div className={`process-action current${feedback === phaseFeedback ? ' is-phase-feedback' : ''}`} role="status">
             <span className="process-spinner" aria-hidden="true" />
             <RunningText text={feedback} />
           </div>
