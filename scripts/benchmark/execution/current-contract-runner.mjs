@@ -66,6 +66,10 @@ export async function runCurrentContractConformance({
   }
   const evidenceDigest = digestJson(evidenceRecord)
   const productContract = await collectProductContractFingerprint({ repositoryRoot, coreExecutable })
+  const productContractMatched =
+    productContract.dataContractVersion.value === CURRENT_CONTRACT_DATA_STORE.version &&
+    productContract.dataContractSchemaVersion.value ===
+      CURRENT_CONTRACT_DATA_STORE.projectionSchemaVersion
   const executionEnvironment = buildExecutionEnvironment({
     teamRuntimeCompatibilityDigest: digestJson({
       runner: 'cargo-test',
@@ -83,13 +87,10 @@ export async function runCurrentContractConformance({
       privateSealedPack: 'not_used'
     }
   })
-  const hardOutcome = infrastructurePassed ? (testsPassed ? 'pass' : 'fail') : 'unavailable'
+  const hardOutcome = infrastructurePassed ? (testsPassed && productContractMatched ? 'pass' : 'fail') : 'unavailable'
   const failureTaxonomy = classifyBenchmarkFailure({
     benchmarkContractValid: true,
-    productContractMatched:
-      productContract.dataContractVersion.value === CURRENT_CONTRACT_DATA_STORE.version &&
-      productContract.dataContractSchemaVersion.value ===
-        CURRENT_CONTRACT_DATA_STORE.projectionSchemaVersion,
+    productContractMatched,
     environmentValid: infrastructurePassed,
     evaluationState: infrastructurePassed ? 'complete' : 'pending',
     verifiedDelivery: infrastructurePassed ? (testsPassed ? 'pass' : 'fail') : 'unavailable',
@@ -131,7 +132,7 @@ export async function runCurrentContractConformance({
     outcome: {
       validity: infrastructurePassed ? 'valid' : 'invalid',
       evaluationState: infrastructurePassed ? 'complete' : 'pending',
-      verifiedDelivery: infrastructurePassed ? (testsPassed ? 'pass' : 'fail') : 'unavailable',
+      verifiedDelivery: infrastructurePassed ? (testsPassed && productContractMatched ? 'pass' : 'fail') : 'unavailable',
       orchestrationConvergence: infrastructurePassed ? 'pass' : 'unavailable',
       postDispatchHumanIntervention: 'absent',
       hardOutcome,
