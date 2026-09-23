@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 const BUILTIN_CLI_CHARTER: &str = include_str!("../resources/charter-rovai-cli.md");
 const SINGLE_CHAT_SESSION_CHARTER: &str = include_str!("../resources/charter-rovai-single-chat.md");
-const SINGLE_CHAT_GUIDANCE: &str = include_str!("../resources/single-chat-guidance-v1.json");
+const SINGLE_CHAT_GUIDANCE: &str = include_str!("../resources/single-chat-guidance-v2.json");
 const FEISHU_FILE_DELIVERY_GUIDANCE: &str = "This Camp is connected to an external channel. Local file paths and Runtime image previews are not delivered there; when the recipient needs the file itself, include `--file <path>` in the corresponding `rovai send` message.";
 const CODEX_FINAL_CAMP_ANSWER_GUIDANCE: &str = "When publishing the Camp-visible final answer with `rovai send`, use the complete final response in polished Markdown; do not send a compressed one-line summary and then write a richer Runtime final.";
 // Historical ContextManifest v22-v25 rows remain readable after the v1.60
@@ -46,9 +46,8 @@ use crate::{
         PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
     },
     context_delivery::{
-        ContextDeliveryProfile, PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7, body_prefix,
-        current_context_delivery_profile, current_public_camp_batch_context_delivery_profile,
-        unicode_scalar_count,
+        ContextDeliveryProfile, body_prefix, current_context_delivery_profile,
+        current_public_camp_batch_context_delivery_profile, unicode_scalar_count,
     },
     current_input_skill::{
         CurrentInputSkillLink, SkillSelectionSnapshot, parse_skill_selection_snapshot,
@@ -68,17 +67,21 @@ pub const CONTEXT_FORMATTER_VERSION: i64 = AGENT_RUN_CONTEXT_FORMATTER_VERSION;
 pub const DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES: usize = 96 * 1024;
 const MIN_CONTEXT_PAYLOAD_BYTES: usize = 8 * 1024;
 const DELIVERY_FIRST_PAYLOAD_BOOTSTRAP_RESERVE_BYTES: usize = 32 * 1024;
-const HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION: i64 = 26;
-
-fn context_manifest_is_dispatchable(manifest_version: i64, formatter_version: i64) -> bool {
-    matches!(
-        (manifest_version, formatter_version),
-        (22, 22) | (23, 23) | (24, 24) | (25, 25) | (26, 26)
-    ) || (manifest_version, formatter_version)
-        == (
-            PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
-            PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION,
-        )
+fn context_manifest_is_dispatchable(
+    manifest_version: i64,
+    formatter_version: i64,
+    profile_version: i64,
+    invocation_kind: &str,
+) -> bool {
+    if invocation_kind == "batch" {
+        manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+            && formatter_version == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
+            && profile_version == 8
+    } else {
+        manifest_version == CONTEXT_MANIFEST_VERSION
+            && formatter_version == CONTEXT_FORMATTER_VERSION
+            && profile_version == 6
+    }
 }
 
 trait ContextReadConnection {
@@ -273,7 +276,6 @@ struct PreparedBootstrapEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MemberIdentityBootstrapProjection {
-    schema_version: i64,
     name: String,
     team_role: String,
     professional_responsibilities: String,
@@ -633,15 +635,10 @@ impl ContextService {
                 )
             })
             .transpose()?;
-        let profile = match batch_context_manifest_version {
-            Some(HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION) => {
-                PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V7.validate()?
-            }
-            Some(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION) => {
-                current_public_camp_batch_context_delivery_profile()?
-            }
-            Some(_) => unreachable!("batch context version was validated"),
-            None => current_context_delivery_profile()?,
+        let profile = if batch_context_manifest_version.is_some() {
+            current_public_camp_batch_context_delivery_profile()?
+        } else {
+            current_context_delivery_profile()?
         };
         let profile_json = serde_json::to_value(profile)?;
         let profile_digest = profile.canonical_digest()?;
@@ -1083,14 +1080,14 @@ impl ContextService {
             batch_context_manifest_version.unwrap_or(CONTEXT_MANIFEST_VERSION);
         let context_formatter_version = batch_context_manifest_version
             .map(|version| {
-                debug_assert!(matches!(version, 26 | 27));
+                debug_assert_eq!(version, PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION);
                 version
             })
             .unwrap_or(CONTEXT_FORMATTER_VERSION);
         let run_facts_schema_version = if snapshot.invocation_kind == "batch" {
-            5_i64
+            6_i64
         } else {
-            4_i64
+            5_i64
         };
         let inserted = transaction.execute(
             r#"
@@ -1608,7 +1605,7 @@ impl ContextService {
             "a2aGuidanceEvidence": a2a_guidance.evidence.clone(),
             "a2aGuidanceEvidenceDigest": a2a_guidance.evidence_digest.clone(),
             "contextManifestVersion": CONTEXT_MANIFEST_VERSION,
-            "runFactsSchemaVersion": 4,
+            "runFactsSchemaVersion": 5,
             "workspaceFact": workspace_fact.value,
             "workspaceFactDigest": workspace_fact.digest,
             "workspaceFactIncluded": workspace_fact.included,
@@ -2056,6 +2053,8 @@ impl ContextService {
                        context_manifest.collaboration_state_included,
                        context_manifest.context_manifest_version,
                        context_manifest.formatter_version,
+                       context_manifest.context_delivery_profile_version,
+                       agent_run.invocation_kind,
                        context_manifest.camp_attachment_view_receipt_json,
                        context_manifest.camp_attachment_view_receipt_digest
                 FROM context_manifest
@@ -2079,8 +2078,10 @@ impl ContextService {
                         row.get::<_, bool>(9)?,
                         row.get::<_, i64>(10)?,
                         row.get::<_, i64>(11)?,
-                        row.get::<_, Option<String>>(12)?,
-                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, String>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, Option<String>>(15)?,
                     ))
                 },
             )
@@ -2104,15 +2105,15 @@ impl ContextService {
         if row.5 != "running" || row.6 != execution_epoch {
             anyhow::bail!("AgentRun or Native Binding changed before input delivery");
         }
-        if !context_manifest_is_dispatchable(row.10, row.11) {
+        if !context_manifest_is_dispatchable(row.10, row.11, row.12, &row.13) {
             anyhow::bail!("ContextManifest cannot be dispatched");
         }
         let (runtime_attachment_auth_receipt, runtime_attachment_auth_receipt_digest) =
             optional_legacy_runtime_auth(
                 &transaction,
                 &row.7,
-                row.12.as_deref(),
-                row.13.as_deref(),
+                row.14.as_deref(),
+                row.15.as_deref(),
             )?;
         let runtime_payload_digest = runtime_payload_digest.unwrap_or(row.0.as_str());
         let runtime_request_digest = canonical_json_digest(&json!({
@@ -3163,7 +3164,6 @@ fn load_latest_member_identity(
     validate_stored_member_identity(&row.0, &row.1, &row.2, &personality_traits, &row.4, &row.5)
         .context("Native Session Bootstrap Member Identity is invalid")?;
     Ok(MemberIdentityBootstrapProjection {
-        schema_version: 1,
         name: row.0,
         team_role: row.1,
         professional_responsibilities: row.2,
@@ -3647,7 +3647,6 @@ struct ConversationModeFact {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RunFacts {
-    schema_version: i64,
     attachment_output_root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     mission: Option<crate::mission::MissionFacts>,
@@ -3691,7 +3690,6 @@ fn build_collaboration_state(
         .map(|member| member.agent_id.clone());
     let self_is_default_lead = default_lead_agent_id.as_deref() == Some(self_agent_id);
     json!({
-        "schemaVersion": 2,
         "peers": peers,
         "defaultLeadAgentId": default_lead_agent_id,
         "selfIsDefaultLead": self_is_default_lead,
@@ -3709,11 +3707,6 @@ fn build_run_facts<R: ContextReadConnection>(
         .as_ref()
         .map(|selected| selected.details_version);
     let mut facts = RunFacts {
-        schema_version: if snapshot.invocation_kind == "batch" {
-            5
-        } else {
-            4
-        },
         mission: selected_mission.map(|selected| selected.facts),
         attachment_output_root: crate::storage_layout::resolve_attachment_output_root(
             database.context_connection(),
@@ -4287,11 +4280,7 @@ fn frozen_batch_context_manifest_version(
     );
     let version = minimum.context("Batch AgentRun context version is missing")?;
     anyhow::ensure!(
-        matches!(
-            version,
-            HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
-                | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
-        ),
+        version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
         "Batch AgentRun uses an unsupported context version"
     );
     Ok(version)
@@ -6654,7 +6643,6 @@ struct SelfActiveTaskProjection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SelectedSelfActiveTask {
     item: SelfActiveTaskItem,
-    version: i64,
     updated_at: String,
 }
 
@@ -6662,7 +6650,6 @@ struct SelectedSelfActiveTask {
 #[serde(rename_all = "camelCase")]
 struct SelfActiveTaskReference {
     task_id: String,
-    version: i64,
     updated_at: String,
 }
 
@@ -6705,7 +6692,6 @@ fn self_active_task_evidence(
             .iter()
             .map(|task| SelfActiveTaskReference {
                 task_id: task.item.task_id.clone(),
-                version: task.version,
                 updated_at: task.updated_at.clone(),
             })
             .collect(),
@@ -6721,7 +6707,7 @@ fn load_self_active_tasks<R: ContextReadConnection>(
 ) -> Result<(Vec<SelectedSelfActiveTask>, usize)> {
     let mut statement = database.context_connection().prepare(
         r#"
-        SELECT id, title, status, version, updated_at
+        SELECT id, title, status, updated_at
         FROM task
         WHERE camp_id = ?1
           AND assignee_agent_id = ?2
@@ -6737,8 +6723,7 @@ fn load_self_active_tasks<R: ContextReadConnection>(
                     title: row.get(1)?,
                     status: row.get(2)?,
                 },
-                version: row.get(3)?,
-                updated_at: row.get(4)?,
+                updated_at: row.get(3)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -7321,11 +7306,8 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !matches!(row.15, 22..=27) {
+    if !context_manifest_is_dispatchable(row.15, row.15, row.16, &snapshot.invocation_kind) {
         anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
-    }
-    if snapshot.invocation_kind == "gather_completion" && !matches!(row.15, 22..=25) {
-        anyhow::bail!("Gather completion requires a Gather-capable context formatter");
     }
     if row.31 != AGENT_MESSAGE_PROJECTION_AUDIENCE {
         anyhow::bail!("Stored ContextManifest projection audience is invalid");
@@ -7369,19 +7351,11 @@ fn load_existing_manifest(
     )?;
     let stored_profile: ContextDeliveryProfile = serde_json::from_str(&row.17)
         .context("Stored ContextManifest delivery profile is invalid")?;
-    let mut current_profile = if row.15 == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION {
+    let current_profile = if row.15 == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION {
         current_public_camp_batch_context_delivery_profile()?
     } else {
         current_context_delivery_profile()?
     };
-    // Frozen v22/v23 bytes retain Profiles 4/5. Newly formatted input uses Profile 6.
-    if row.15 == 22 {
-        current_profile.profile_version = 4;
-    } else if row.15 == 23 || (row.15 == 24 && row.16 == 5) {
-        current_profile.profile_version = 5;
-    } else if row.15 == 26 {
-        current_profile.profile_version = 7;
-    }
     if row.16 != current_profile.profile_version
         || stored_profile != current_profile
         || row.18 != current_profile.canonical_digest()?
@@ -7586,22 +7560,14 @@ fn validate_frozen_view_receipt(
     let version = selection
         .get("contextManifestVersion")
         .and_then(Value::as_i64);
-    if !matches!(version, Some(22..=25))
-        || selection.get("runFactsSchemaVersion")
-            != Some(&json!(match version {
-                Some(25) => 4,
-                Some(24) => 3,
-                _ => 2,
-            }))
+    if version != Some(CONTEXT_MANIFEST_VERSION)
+        || selection.get("runFactsSchemaVersion") != Some(&json!(5))
     {
         anyhow::bail!("Frozen Delivery Context uses an obsolete Attachment contract");
     }
-    if (version == Some(25)
-        || (version == Some(24)
-            && selection.get("contextDeliveryProfileVersion") == Some(&json!(5))))
-        && selection
-            .get("campAttachmentViewReceipt")
-            .is_none_or(Value::is_null)
+    if selection
+        .get("campAttachmentViewReceipt")
+        .is_none_or(Value::is_null)
         && selection
             .get("campAttachmentViewReceiptDigest")
             .is_none_or(Value::is_null)
@@ -7848,10 +7814,7 @@ fn materialize_frozen_delivery_context(
         .then(|| serde_json::to_string(receipt_value))
         .transpose()?;
     let camp_attachment_view_receipt_digest = required("campAttachmentViewReceiptDigest")?.as_str();
-    if !matches!(
-        (context_manifest_version, run_facts_schema_version),
-        (22 | 23, 2) | (24, 3) | (25, 4)
-    ) {
+    if (context_manifest_version, run_facts_schema_version) != (CONTEXT_MANIFEST_VERSION, 5) {
         anyhow::bail!("Frozen Delivery Context version evidence is inconsistent");
     }
     if let Some(digest) = camp_attachment_view_receipt_digest {
@@ -7860,12 +7823,7 @@ fn materialize_frozen_delivery_context(
         {
             anyhow::bail!("Frozen Delivery Context View evidence is inconsistent");
         }
-    } else if !(context_manifest_version == 25
-        || (context_manifest_version == 24
-            && selection.get("contextDeliveryProfileVersion") == Some(&json!(5))))
-        || camp_attachment_view_receipt_version.is_some()
-        || !receipt_value.is_null()
-    {
+    } else if camp_attachment_view_receipt_version.is_some() || !receipt_value.is_null() {
         anyhow::bail!("Frozen Delivery Context View evidence is incomplete");
     }
 
@@ -8531,7 +8489,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_context_version_snapshot_is_complete_uniform_and_historical() {
+    fn batch_context_version_snapshot_requires_current_uniform_input() {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
@@ -8541,66 +8499,39 @@ mod tests {
                     context_manifest_version INTEGER
                 );
                 INSERT INTO agent_run_input VALUES ('historical', 26);
-                INSERT INTO agent_run_input VALUES ('current', 27);
-                INSERT INTO agent_run_input VALUES ('current', 27);
+                INSERT INTO agent_run_input VALUES ('current', 28);
+                INSERT INTO agent_run_input VALUES ('current', 28);
                 INSERT INTO agent_run_input VALUES ('mixed', 26);
-                INSERT INTO agent_run_input VALUES ('mixed', 27);
+                INSERT INTO agent_run_input VALUES ('mixed', 28);
                 INSERT INTO agent_run_input VALUES ('missing', NULL);
                 "#,
             )
             .unwrap();
 
         assert_eq!(
-            frozen_batch_context_manifest_version(&connection, "historical").unwrap(),
-            HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
-        );
-        assert_eq!(
             frozen_batch_context_manifest_version(&connection, "current").unwrap(),
             PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
         );
-        for invalid in ["mixed", "missing", "absent"] {
+        for invalid in ["historical", "mixed", "missing", "absent"] {
             assert!(frozen_batch_context_manifest_version(&connection, invalid).is_err());
         }
     }
 
     #[test]
-    fn dispatch_admission_tracks_current_and_historical_context_contracts() {
-        for supported in [
-            (22, 22),
-            (23, 23),
-            (24, 24),
-            (CONTEXT_MANIFEST_VERSION, CONTEXT_FORMATTER_VERSION),
-            (
-                HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
-                HISTORICAL_PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
-            ),
-            (
-                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
-                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION,
-            ),
+    fn dispatch_admission_accepts_only_new_context_contracts() {
+        assert!(context_manifest_is_dispatchable(26, 26, 6, "single_chat"));
+        assert!(context_manifest_is_dispatchable(28, 28, 8, "batch"));
+        for (manifest, formatter, profile, invocation) in [
+            (25, 25, 6, "single_chat"),
+            (26, 26, 7, "batch"),
+            (27, 27, 8, "batch"),
+            (28, 27, 8, "batch"),
+            (28, 28, 6, "batch"),
+            (26, 26, 8, "single_chat"),
         ] {
-            assert!(
-                context_manifest_is_dispatchable(supported.0, supported.1),
-                "current and replayable ContextManifest pairs must remain dispatchable: {supported:?}"
-            );
-        }
-
-        for rejected in [
-            (21, 21),
-            (
-                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
-                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION - 1,
-            ),
-            (
-                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION - 1,
-                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION,
-            ),
-            (
-                PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION + 1,
-                PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION + 1,
-            ),
-        ] {
-            assert!(!context_manifest_is_dispatchable(rejected.0, rejected.1));
+            assert!(!context_manifest_is_dispatchable(
+                manifest, formatter, profile, invocation
+            ));
         }
     }
 
@@ -8888,7 +8819,6 @@ mod slow_tests {
 
     fn test_run_facts() -> RunFacts {
         RunFacts {
-            schema_version: 4,
             mission: None,
             attachment_output_root: "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf"
                 .to_string(),
@@ -9018,7 +8948,6 @@ mod slow_tests {
     #[test]
     fn bootstrap_formatter_has_fixed_three_section_and_identity_field_order() {
         let identity = MemberIdentityBootstrapProjection {
-            schema_version: 1,
             name: "A \"quoted\" name".to_string(),
             team_role: String::new(),
             professional_responsibilities: "line one\nline two".to_string(),
@@ -9030,7 +8959,7 @@ mod slow_tests {
         assert_eq!(
             formatted,
             "[SESSION_CHARTER]\ncharter\n[/SESSION_CHARTER]\n\n\
-[MEMBER_IDENTITY]\n{\n  \"schemaVersion\": 1,\n  \"name\": \"A \\\"quoted\\\" name\",\n  \
+[MEMBER_IDENTITY]\n{\n  \"name\": \"A \\\"quoted\\\" name\",\n  \
 \"teamRole\": \"\",\n  \"professionalResponsibilities\": \"line one\\nline two\",\n  \
 \"personalityTraits\": [],\n  \"workingPrinciples\": \"\",\n  \"growthTopic\": \"\"\n}\n\
 [/MEMBER_IDENTITY]\n\n[MEMORY_ENTRYPOINT]\nentrypoint\n[/MEMORY_ENTRYPOINT]"
@@ -9040,7 +8969,6 @@ mod slow_tests {
     #[test]
     fn bootstrap_formatter_omits_an_empty_memory_entrypoint_section() {
         let identity = MemberIdentityBootstrapProjection {
-            schema_version: 1,
             name: "Single Chat member".to_string(),
             team_role: String::new(),
             professional_responsibilities: String::new(),
@@ -9058,14 +8986,14 @@ mod slow_tests {
     fn single_chat_contract_bytes_and_dynamic_section_order_are_exact() {
         assert_eq!(
             sha256_text(SINGLE_CHAT_SESSION_CHARTER),
-            "sha256:1e1af588a02e926b0ca49c2fb2078bd2a2f9ba53e7c3538f3220b6c60519fb9e"
+            "sha256:4c2b7501d325b8d610e9589b127af6e554af13092aaff723a1f9c7ba1578048b"
         );
         assert_eq!(
             sha256_text(SINGLE_CHAT_GUIDANCE),
-            "sha256:31b92852b9c8497b5f759d67168460932cd7a1cebf219d01feda6484644e48f9"
+            "sha256:1c32bf1dccf2d614482f51cdd0f9b3ce4a5ad907bd23bb636236c564f730c4e7"
         );
         let guidance: Value = serde_json::from_str(SINGLE_CHAT_GUIDANCE).unwrap();
-        assert_eq!(guidance["schemaVersion"], 2);
+        assert!(guidance.get("schemaVersion").is_none());
         for forbidden in [
             "sessionContinuity",
             "continuity lost",
@@ -9260,7 +9188,7 @@ mod slow_tests {
     }
 
     #[test]
-    fn collaboration_state_v2_is_peer_only_and_presence_stable() {
+    fn collaboration_state_is_peer_only_and_presence_stable() {
         let members = vec![
             CollaborationProjectionMember {
                 agent_id: "agent-a".to_string(),
@@ -9287,7 +9215,6 @@ mod slow_tests {
         assert_eq!(
             state,
             json!({
-                "schemaVersion": 2,
                 "peers": [
                     {
                         "agentId": "agent-b",
@@ -9321,7 +9248,6 @@ mod slow_tests {
         assert_eq!(
             build_collaboration_state(&peer_lead_members, "agent-a"),
             json!({
-                "schemaVersion": 2,
                 "peers": [
                     {
                         "agentId": "agent-b",
@@ -9340,7 +9266,6 @@ mod slow_tests {
         assert_eq!(
             build_collaboration_state(&no_lead_members, "agent-a"),
             json!({
-                "schemaVersion": 2,
                 "peers": [
                     {
                         "agentId": "agent-b",
@@ -9358,7 +9283,6 @@ mod slow_tests {
         assert_eq!(
             build_collaboration_state(&peer_lead_members, "agent-a"),
             json!({
-                "schemaVersion": 2,
                 "peers": [],
                 "defaultLeadAgentId": null,
                 "selfIsDefaultLead": false,
@@ -10465,765 +10389,6 @@ mod slow_tests {
     }
 
     #[test]
-    fn v68_through_v71_clean_break_preserves_business_history_and_removes_old_context_state() {
-        let mut fixture = fixture();
-        let directory = fixture.directory.clone();
-        let camp_id = fixture.camp_id.clone();
-        let first_run_id = fixture.run_id.clone();
-        let execution = bind_fixture_native_session(&mut fixture, "pre-v50-native-session");
-        let conversation_id = execution.conversation_id.clone();
-        let store = ManagedBlobStore::new(&fixture.directory);
-        let ContextMaterialization::Ready(first_context) = ContextService
-            .materialize(
-                &mut fixture.database,
-                &store,
-                &MaterializeContextRequest {
-                    agent_run_id: &first_run_id,
-                    execution_epoch: fixture.execution_epoch,
-                    charter_delivery_mode: CharterDeliveryMode::FirstPayload,
-                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
-                },
-            )
-            .unwrap()
-        else {
-            panic!("first pre-v50 context should materialize")
-        };
-        let first_delivery = ContextService
-            .prepare_input_delivery_for_context(
-                &mut fixture.database,
-                &first_run_id,
-                fixture.execution_epoch,
-                &first_context,
-            )
-            .unwrap();
-        ContextService
-            .acknowledge_input_delivery(
-                &mut fixture.database,
-                &first_delivery.id,
-                "pre-v50-accepted-input",
-            )
-            .unwrap();
-        let (second_run_id, second_epoch) = complete_run_and_start_followup(
-            &mut fixture,
-            &first_run_id,
-            "PRE_V50_UNFINISHED_INPUT",
-        );
-        let ContextMaterialization::Ready(second_context) = ContextService
-            .materialize(
-                &mut fixture.database,
-                &store,
-                &MaterializeContextRequest {
-                    agent_run_id: &second_run_id,
-                    execution_epoch: second_epoch,
-                    charter_delivery_mode: CharterDeliveryMode::FirstPayload,
-                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
-                },
-            )
-            .unwrap()
-        else {
-            panic!("second pre-v50 context should materialize")
-        };
-        ContextService
-            .prepare_input_delivery_for_context(
-                &mut fixture.database,
-                &second_run_id,
-                second_epoch,
-                &second_context,
-            )
-            .unwrap();
-
-        let now = chrono::Utc::now().to_rfc3339();
-        let message_ids = {
-            let mut statement = fixture
-                .database
-                .connection()
-                .prepare("SELECT id FROM camp_message WHERE camp_id = ?1 ORDER BY sequence")
-                .unwrap();
-            statement
-                .query_map([&camp_id], |row| row.get::<_, String>(0))
-                .unwrap()
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .unwrap()
-        };
-        assert_eq!(message_ids.len(), 2);
-        // v68-v71 owned legacy MessageDelivery cleanup, so give those synthetic
-        // rows a standalone historical CampTurn without rewriting the current
-        // Delivery-first AgentRuns back into the retired execution model.
-        let second_camp_turn_id = Uuid::new_v4().to_string();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO camp_turn(
-                    id, camp_id, trigger_type, trigger_id, status,
-                    version, created_at, updated_at
-                ) VALUES (?1, ?2, 'camp_message', ?3, 'running', 1, ?4, ?4)
-                "#,
-                params![second_camp_turn_id, camp_id, message_ids[1], now],
-            )
-            .unwrap();
-        let waiting_delivery_id = Uuid::new_v4().to_string();
-        let waiting_attempt_id = Uuid::new_v4().to_string();
-        let attempting_delivery_id = Uuid::new_v4().to_string();
-        let attempting_attempt_id = Uuid::new_v4().to_string();
-        for (
-            delivery_id,
-            attempt_id,
-            message_id,
-            queue_sequence,
-            dispatch_phase,
-            wait_condition,
-            manifest_id,
-        ) in [
-            (
-                &waiting_delivery_id,
-                &waiting_attempt_id,
-                &message_ids[0],
-                10_001_i64,
-                "attempted_waiting",
-                Some("target_busy"),
-                &first_context.manifest_id,
-            ),
-            (
-                &attempting_delivery_id,
-                &attempting_attempt_id,
-                &message_ids[1],
-                10_002_i64,
-                "attempting",
-                None,
-                &second_context.manifest_id,
-            ),
-        ] {
-            fixture
-                .database
-                .connection()
-                .execute(
-                    r#"
-                    INSERT INTO message_delivery(
-                        id, camp_id, camp_turn_id, message_id,
-                        recipient_agent_id, recipient_canonical_position,
-                        recipient_digest, message_body_digest,
-                        source_agent_run_id, edge_kind,
-                        target_parent_agent_run_id, return_to_agent_run_id,
-                        a2a_root_agent_run_id, a2a_depth,
-                        ancestor_agent_ids_json, recipient_presentation_snapshot_json,
-                        frozen_snapshot_json, queue_sequence,
-                        status, dispatch_phase, wait_condition,
-                        dispatch_attempt_count, active_dispatch_attempt_id,
-                        scheduler_correlation_id, context_manifest_id,
-                        retry_generation, manual_intervention_required,
-                        version, created_at, updated_at
-                    ) VALUES (
-                        ?1, ?2, ?3, ?4, 'agent_1', 0,
-                        'sha256:recipient', 'sha256:body',
-                        ?5, 'forward', ?5, NULL, ?5, 1, '[]', '{}',
-                        '{"frozenContext":{"formatterVersion":10}}', ?6,
-                        'pending', ?7, ?8, 1, ?9, ?10, ?11,
-                        0, 0, 1, ?12, ?12
-                    )
-                    "#,
-                    params![
-                        delivery_id,
-                        camp_id,
-                        second_camp_turn_id,
-                        message_id,
-                        first_run_id,
-                        queue_sequence,
-                        dispatch_phase,
-                        wait_condition,
-                        attempt_id,
-                        format!("pre-v50-{dispatch_phase}"),
-                        manifest_id,
-                        now,
-                    ],
-                )
-                .unwrap();
-            fixture
-                .database
-                .connection()
-                .execute(
-                    r#"
-                    INSERT INTO message_delivery_attempt(
-                        id, delivery_id, ordinal, retry_generation,
-                        trigger_kind, scheduler_correlation_id,
-                        status, wait_condition, context_manifest_id,
-                        started_at, ended_at
-                    ) VALUES (
-                        ?1, ?2, 1, 0, 'accepted', ?3,
-                        ?4, ?5, ?6, ?7, ?8
-                    )
-                    "#,
-                    params![
-                        attempt_id,
-                        delivery_id,
-                        format!("pre-v50-{dispatch_phase}"),
-                        if dispatch_phase == "attempting" {
-                            "attempting"
-                        } else {
-                            "waiting"
-                        },
-                        wait_condition,
-                        manifest_id,
-                        now,
-                        (dispatch_phase != "attempting").then_some(now.as_str()),
-                    ],
-                )
-                .unwrap();
-        }
-        let observer_lease_id = Uuid::new_v4().to_string();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO bootstrap_redelivery_requirement(
-                    conversation_id, native_binding_id,
-                    native_binding_generation, adapter_kind,
-                    requested_revision, acknowledged_revision,
-                    created_at, updated_at
-                ) VALUES (?1, ?2, 1, 'opencode-cli', 1, 0, ?3, ?3)
-                "#,
-                params![conversation_id, fixture.native_binding_id, now],
-            )
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO native_session_resume_attempt(
-                    conversation_id, installation_id, installation_generation,
-                    status, attempted_at, completed_at
-                ) VALUES (?1, ?2, 1, 'succeeded', ?3, ?3)
-                "#,
-                params![conversation_id, execution.runtime.installation_id, now],
-            )
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO native_session_compaction_observer_lease(
-                    id, conversation_id, adapter_installation_id, adapter_kind,
-                    host_instance_id, relay_process_id, native_session_id,
-                    native_binding_id, native_binding_generation,
-                    detector_policy_epoch, status, created_at, updated_at
-                ) VALUES (
-                    ?1, ?2, ?3, 'opencode-cli', 'pre-v50-host', 'pre-v50-relay',
-                    'pre-v50-native-session', ?4, 1, 1, 'active', ?5, ?5
-                )
-                "#,
-                params![
-                    observer_lease_id,
-                    conversation_id,
-                    execution.runtime.installation_id,
-                    fixture.native_binding_id,
-                    now,
-                ],
-            )
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                INSERT INTO native_session_compaction_observation(
-                    id, observer_lease_id, native_binding_id,
-                    native_binding_generation, source_observation_id,
-                    source_signal, admission_point, source_event_digest,
-                    requested_revision, observed_at, committed_at
-                ) VALUES (
-                    ?1, ?2, ?3, 1, 'pre-v50-observation', 'preCompact',
-                    'imminent_edge', 'sha256:pre-v50-observation', 1, ?4, ?4
-                )
-                "#,
-                params![
-                    Uuid::new_v4().to_string(),
-                    observer_lease_id,
-                    fixture.native_binding_id,
-                    now,
-                ],
-            )
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute_batch(
-                r#"
-                PRAGMA foreign_keys = OFF;
-                -- The current-schema fixture includes post-v71 Pi receipt objects.
-                -- Remove those dependants so this test can replay only v68-v71.
-                DROP TRIGGER IF EXISTS pi_managed_input_acceptance_update_guard;
-                DROP TRIGGER IF EXISTS pi_managed_input_receipt_delete_guard;
-                DROP TRIGGER IF EXISTS pi_managed_input_receipt_update_guard;
-                DROP TRIGGER IF EXISTS pi_managed_input_receipt_insert_guard;
-                DROP TABLE IF EXISTS pi_managed_input_receipt;
-                DROP INDEX IF EXISTS runtime_input_delivery_pi_binding_unique;
-                ALTER TABLE conversation
-                    RENAME COLUMN native_collaboration_state_digest
-                    TO native_member_state_digest;
-                UPDATE rovai_data_contract
-                SET contract_version = 'v0.48', projection_schema_version = 26;
-                DELETE FROM schema_migration WHERE version = 68;
-                DELETE FROM schema_migration WHERE version = 69;
-                DELETE FROM schema_migration WHERE version = 70;
-                DELETE FROM schema_migration WHERE version = 71;
-                PRAGMA foreign_keys = ON;
-                "#,
-            )
-            .unwrap();
-        drop(fixture.database);
-
-        let reopened = Database::open(&directory).unwrap();
-        let first_run: (String, Option<String>) = reopened
-            .connection()
-            .query_row(
-                "SELECT status, last_error_code FROM agent_run WHERE id = ?1",
-                [&first_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(first_run, ("succeeded".to_string(), None));
-        let second_run: (String, Option<String>) = reopened
-            .connection()
-            .query_row(
-                "SELECT status, last_error_code FROM agent_run WHERE id = ?1",
-                [&second_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            second_run,
-            (
-                "failed".to_string(),
-                Some("context_formatter_v11_required".to_string())
-            )
-        );
-        let business_message_count: i64 = reopened
-            .connection()
-            .query_row(
-                "SELECT COUNT(*) FROM camp_message WHERE camp_id = ?1",
-                [&camp_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(business_message_count, 2);
-        let migrated_deliveries: i64 = reopened
-            .connection()
-            .query_row(
-                r#"
-                SELECT COUNT(*)
-                FROM message_delivery
-                WHERE id IN (?1, ?2)
-                  AND status = 'failed' AND dispatch_phase = 'terminal'
-                  AND wait_condition IS NULL AND active_dispatch_attempt_id IS NULL
-                  AND failure_code = 'context_formatter_v11_required'
-                  AND context_manifest_id IS NULL
-                  AND json_type(frozen_snapshot_json, '$.frozenContext') IS NULL
-                "#,
-                params![waiting_delivery_id, attempting_delivery_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(migrated_deliveries, 2);
-        let waiting_attempt: (String, Option<String>) = reopened
-            .connection()
-            .query_row(
-                "SELECT status, context_manifest_id FROM message_delivery_attempt WHERE id = ?1",
-                [&waiting_attempt_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(waiting_attempt, ("waiting".to_string(), None));
-        let attempting_attempt: (String, Option<String>, bool) = reopened
-            .connection()
-            .query_row(
-                r#"
-                SELECT status, context_manifest_id, ended_at IS NOT NULL
-                FROM message_delivery_attempt WHERE id = ?1
-                "#,
-                [&attempting_attempt_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(attempting_attempt, ("failed".to_string(), None, true));
-        for table in [
-            "native_session_bootstrap_evidence",
-            "context_manifest",
-            "context_manifest_history_camp",
-            "runtime_input_delivery",
-            "bootstrap_redelivery_requirement",
-            "native_session_resume_attempt",
-            "native_session_compaction_observer_lease",
-            "native_session_compaction_observation",
-        ] {
-            let count: i64 = reopened
-                .connection()
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            assert_eq!(
-                count, 0,
-                "{table} should be empty after the v71 clean break"
-            );
-        }
-        let binding_state: (
-            Option<String>,
-            Option<String>,
-            i64,
-            i64,
-            Option<String>,
-            Option<String>,
-        ) = reopened
-            .connection()
-            .query_row(
-                r#"
-                SELECT native_session_id, native_binding_id,
-                       native_binding_generation,
-                       last_accepted_public_boundary_sequence,
-                       native_charter_digest, native_collaboration_state_digest
-                FROM conversation WHERE id = ?1
-                "#,
-                [&conversation_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(binding_state, (None, None, 0, 0, None, None));
-        let evidence_sql: String = reopened
-            .connection()
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'native_session_bootstrap_evidence'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(evidence_sql.contains("native_session_bootstrap_v3"));
-        assert!(evidence_sql.contains("bootstrap_formatter_version = 3"));
-        assert!(!evidence_sql.contains("native_session_bootstrap_v2"));
-        let manifest_sql: String = reopened
-            .connection()
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'context_manifest'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(manifest_sql.contains("formatter_version = 13"));
-        assert!(manifest_sql.contains("CHECK(context_delivery_profile_version = 3)"));
-        assert!(manifest_sql.contains("collaboration_state_included INTEGER NOT NULL"));
-        assert!(manifest_sql.contains("shared_message_evidence_json TEXT NOT NULL"));
-        assert!(manifest_sql.contains("shared_message_evidence_digest TEXT NOT NULL"));
-        assert!(manifest_sql.contains("run_notice_payload_json TEXT NOT NULL"));
-        assert!(manifest_sql.contains("self_active_task_evidence_json TEXT NOT NULL"));
-        assert!(manifest_sql.contains("self_active_task_evidence_digest TEXT NOT NULL"));
-        let delivery_sql: String = reopened
-            .connection()
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runtime_input_delivery'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(delivery_sql.contains("CHECK(bootstrap_redelivery_envelope_version = 2)"));
-        assert!(delivery_sql.contains("CHECK(bootstrap_redelivery_formatter_version = 2)"));
-        let contract: (String, i64, i64, i64, i64, i64, i64) = reopened
-            .connection()
-            .query_row(
-                r#"
-                SELECT contract_version, projection_schema_version,
-                       (SELECT COUNT(*) FROM schema_migration WHERE version = 67),
-                       (SELECT COUNT(*) FROM schema_migration WHERE version = 68),
-                       (SELECT COUNT(*) FROM schema_migration WHERE version = 69),
-                       (SELECT COUNT(*) FROM schema_migration WHERE version = 70),
-                       (SELECT COUNT(*) FROM schema_migration WHERE version = 71)
-                FROM rovai_data_contract WHERE singleton = 1
-                "#,
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(contract, ("v0.54".to_string(), 30, 1, 1, 1, 1, 1));
-        let foreign_key_violations: i64 = reopened
-            .connection()
-            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(foreign_key_violations, 0);
-        drop(reopened);
-
-        let reopened_again = Database::open(&directory).unwrap();
-        let second_run_after_restart: (String, Option<String>) = reopened_again
-            .connection()
-            .query_row(
-                "SELECT status, last_error_code FROM agent_run WHERE id = ?1",
-                [&second_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(second_run_after_restart, second_run);
-        drop(reopened_again);
-        remove_managed_attachment_tree(&directory).unwrap();
-    }
-
-    #[test]
-    fn v93_clean_break_preserves_business_history_and_removes_old_context_state() {
-        let mut fixture = fixture();
-        bind_fixture_native_session(&mut fixture, "pre-v93-native-session");
-        let store = ManagedBlobStore::new(&fixture.directory);
-        let ContextMaterialization::Ready(context) = ContextService
-            .materialize(
-                &mut fixture.database,
-                &store,
-                &MaterializeContextRequest {
-                    agent_run_id: &fixture.run_id,
-                    execution_epoch: fixture.execution_epoch,
-                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
-                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
-                },
-            )
-            .unwrap()
-        else {
-            panic!("pre-v93 context fixture should materialize");
-        };
-        ContextService
-            .prepare_input_delivery(
-                &mut fixture.database,
-                &fixture.run_id,
-                fixture.execution_epoch,
-                &context.manifest_id,
-            )
-            .unwrap();
-        let message_count_before: i64 = fixture
-            .database
-            .connection()
-            .query_row("SELECT COUNT(*) FROM camp_message", [], |row| row.get(0))
-            .unwrap();
-
-        crate::db::downgrade_current_schema_to_v98_source_for_test(fixture.database.connection());
-
-        fixture
-            .database
-            .connection()
-            .execute_batch("PRAGMA foreign_keys = OFF;")
-            .unwrap();
-        let current_schema: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'context_manifest'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let v92_schema = current_schema
-            .replacen(
-                "CREATE TABLE context_manifest",
-                "CREATE TABLE context_manifest_v92_test",
-                1,
-            )
-            .replacen(
-                "CREATE TABLE \"context_manifest\"",
-                "CREATE TABLE context_manifest_v92_test",
-                1,
-            )
-            .replace(
-                "message_projection_audience TEXT NOT NULL CHECK(message_projection_audience = 'agent_v1'),\n                    a2a_guidance_evidence_json TEXT NOT NULL,\n                    a2a_guidance_evidence_digest TEXT NOT NULL,\n                    ",
-                "",
-            )
-            .replace(
-                "CHECK(formatter_version = 20)",
-                "CHECK(formatter_version = 18)",
-            );
-        assert!(!v92_schema.contains("message_projection_audience"));
-        assert!(!v92_schema.contains("a2a_guidance_evidence_json"));
-        assert!(v92_schema.contains("formatter_version = 18"));
-        fixture
-            .database
-            .connection()
-            .execute_batch(&v92_schema)
-            .unwrap();
-        let columns = {
-            let mut statement = fixture
-                .database
-                .connection()
-                .prepare("PRAGMA table_info(context_manifest)")
-                .unwrap();
-            statement
-                .query_map([], |row| row.get::<_, String>(1))
-                .unwrap()
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .unwrap()
-        };
-        let destination_columns = columns
-            .iter()
-            .filter(|column| {
-                !matches!(
-                    column.as_str(),
-                    "message_projection_audience"
-                        | "a2a_guidance_evidence_json"
-                        | "a2a_guidance_evidence_digest"
-                )
-            })
-            .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let source_columns = columns
-            .iter()
-            .filter(|column| {
-                !matches!(
-                    column.as_str(),
-                    "message_projection_audience"
-                        | "a2a_guidance_evidence_json"
-                        | "a2a_guidance_evidence_digest"
-                )
-            })
-            .map(|column| {
-                if column == "formatter_version" {
-                    "18".to_string()
-                } else {
-                    format!("\"{}\"", column.replace('"', "\"\""))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        fixture
-            .database
-            .connection()
-            .execute_batch(&format!(
-                "INSERT INTO context_manifest_v92_test({destination_columns}) SELECT {source_columns} FROM context_manifest"
-            ))
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute_batch(
-                r#"
-                DROP INDEX context_manifest_blob_idx;
-                DROP INDEX context_manifest_bootstrap_idx;
-                DROP TABLE context_manifest;
-                ALTER TABLE context_manifest_v92_test RENAME TO context_manifest;
-                CREATE INDEX context_manifest_blob_idx ON context_manifest(rendered_payload_blob_id);
-                CREATE INDEX context_manifest_bootstrap_idx ON context_manifest(bootstrap_evidence_id);
-                ALTER TABLE agent_run DROP COLUMN public_runtime_failure_json;
-                ALTER TABLE adapter_probe_attempt DROP COLUMN public_runtime_failure_json;
-                ALTER TABLE camp_message DROP COLUMN agent_addressing_mode;
-                UPDATE rovai_data_contract
-                SET contract_version = 'v0.99', projection_schema_version = 47
-                WHERE singleton = 1;
-                DELETE FROM schema_migration WHERE version = 98;
-                DELETE FROM schema_migration WHERE version = 97;
-                DELETE FROM schema_migration WHERE version = 96;
-                DELETE FROM schema_migration WHERE version = 95;
-                DELETE FROM schema_migration WHERE version = 94;
-                DELETE FROM schema_migration WHERE version = 93;
-                PRAGMA foreign_keys = ON;
-                "#,
-            )
-            .unwrap();
-
-        let directory = fixture.directory.clone();
-        let run_id = fixture.run_id.clone();
-        remove_managed_attachment_tree(fixture.database.runtime_camp_files_root()).unwrap();
-        drop(fixture.database);
-        let reopened = Database::open(&directory).unwrap();
-
-        let message_count_after: i64 = reopened
-            .connection()
-            .query_row("SELECT COUNT(*) FROM camp_message", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(message_count_after, message_count_before);
-        let run: (String, Option<String>) = reopened
-            .connection()
-            .query_row(
-                "SELECT status, last_error_code FROM agent_run WHERE id = ?1",
-                [&run_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            run,
-            (
-                "failed".to_string(),
-                Some("context_formatter_v19_required".to_string())
-            )
-        );
-        for table in [
-            "context_manifest",
-            "context_manifest_history_camp",
-            "runtime_input_delivery",
-        ] {
-            let count: i64 = reopened
-                .connection()
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            assert_eq!(
-                count, 0,
-                "{table} should be empty after the v93 clean break"
-            );
-        }
-        let manifest_schema: String = reopened
-            .connection()
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'context_manifest'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(manifest_schema.contains("run_fact_payload_json"));
-        assert!(!manifest_schema.contains("run_notice_"));
-        assert!(manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27)"));
-        assert!(manifest_schema.contains("message_projection_audience TEXT NOT NULL"));
-        assert!(manifest_schema.contains("a2a_guidance_evidence_json TEXT NOT NULL"));
-        let contract: (String, i64, i64) = reopened
-            .connection()
-            .query_row(
-                r#"
-                SELECT contract_version, projection_schema_version,
-                       (SELECT COUNT(*) FROM schema_migration WHERE version = 93)
-                FROM rovai_data_contract WHERE singleton = 1
-                "#,
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            contract,
-            (
-                crate::db::CURRENT_DATA_CONTRACT_VERSION.to_string(),
-                crate::db::CURRENT_PROJECTION_SCHEMA_VERSION,
-                1
-            )
-        );
-        drop(reopened);
-        remove_managed_attachment_tree(&directory).unwrap();
-    }
-
-    #[test]
     fn managed_v2_context_projects_the_database_path_without_probing_the_payload() {
         let mut fixture = fixture();
         let blob_store = ManagedBlobStore::new(&fixture.directory);
@@ -11380,75 +10545,6 @@ mod slow_tests {
         )
         .unwrap();
         draft_store.remove_camp(&fixture.camp_id).unwrap();
-        fixture.cleanup();
-    }
-
-    #[test]
-    fn migrated_unmaterialized_batch_run_keeps_its_v26_projection() {
-        let mut fixture = fixture();
-        fixture
-            .database
-            .connection()
-            .execute_batch("DROP TRIGGER agent_run_input_context_projection_immutable;")
-            .unwrap();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
-                UPDATE agent_run_input
-                SET context_manifest_version = 26,
-                    default_recipient_display_name = NULL
-                WHERE agent_run_id = ?1
-                "#,
-                [&fixture.run_id],
-            )
-            .unwrap();
-
-        let store = ManagedBlobStore::new(&fixture.directory);
-        let ContextMaterialization::Ready(materialized) = ContextService
-            .materialize(
-                &mut fixture.database,
-                &store,
-                &MaterializeContextRequest {
-                    agent_run_id: &fixture.run_id,
-                    execution_epoch: fixture.execution_epoch,
-                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
-                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
-                },
-            )
-            .unwrap()
-        else {
-            panic!("historical batch Context should be ready");
-        };
-        let run_input: Value = materialized
-            .rendered_payload
-            .split_once("[RUN_INPUT]\n")
-            .and_then(|(_, suffix)| suffix.split_once("\n[/RUN_INPUT]"))
-            .map(|(payload, _)| serde_json::from_str(payload).unwrap())
-            .expect("historical batch Context must contain RUN_INPUT");
-        assert_eq!(run_input["messages"][0]["body"], "第一条公开问题");
-        let axes: (i64, i64, i64, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                r#"
-                SELECT context_manifest_version, formatter_version,
-                       context_delivery_profile_version, current_input_source_json
-                FROM context_manifest WHERE id = ?1
-                "#,
-                [&materialized.manifest_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!((axes.0, axes.1, axes.2), (26, 26, 7));
-        let input_evidence: Value = serde_json::from_str(&axes.3).unwrap();
-        assert!(
-            input_evidence["messages"][0]
-                .get("defaultRecipientMention")
-                .is_none()
-        );
-
         fixture.cleanup();
     }
 
@@ -13530,7 +12626,7 @@ mod slow_tests {
                 .contains("COLLABORATION_STATE describes peers only")
         );
         assert!(prepared.rendered_payload.contains("[COLLABORATION_STATE]"));
-        assert!(prepared.rendered_payload.contains("\"schemaVersion\":2"));
+        assert!(!prepared.rendered_payload.contains("\"schemaVersion\""));
         assert!(prepared.rendered_payload.contains("\"peers\":[]"));
         assert!(
             prepared
@@ -13936,7 +13032,7 @@ mod slow_tests {
             panic!("initial Collaboration State should materialize")
         };
         assert!(initial.rendered_payload.contains("[COLLABORATION_STATE]"));
-        assert!(initial.rendered_payload.contains("\"schemaVersion\":2"));
+        assert!(!initial.rendered_payload.contains("\"schemaVersion\""));
         assert!(initial.rendered_payload.contains("\"peers\""));
         assert!(initial.rendered_payload.contains("PEER_INITIAL_NAME"));
         assert!(initial.rendered_payload.contains("PEER_INITIAL_ROLE"));
@@ -14093,7 +13189,7 @@ mod slow_tests {
         };
         assert!(!second.bootstrap_in_runtime_payload);
         assert!(!second.rendered_payload.contains("[COLLABORATION_STATE]"));
-        assert!(!second.rendered_payload.contains("SELF_EDITED_NAME"));
+        assert!(!second.rendered_payload.contains("[MEMBER_IDENTITY]"));
         assert_eq!(
             second.collaboration_state_digest,
             initial.collaboration_state_digest
@@ -14190,7 +13286,7 @@ mod slow_tests {
                 .rendered_payload
                 .contains("PEER_UPDATED_PRIVATE_GROWTH")
         );
-        assert!(!third.rendered_payload.contains("SELF_EDITED_NAME"));
+        assert!(!third.rendered_payload.contains("[MEMBER_IDENTITY]"));
         assert!(
             third
                 .rendered_payload
@@ -14886,15 +13982,14 @@ mod slow_tests {
         );
         assert_eq!(
             rendered.payload_json,
-            "{\"schemaVersion\":4,\"attachmentOutputRoot\":\"/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf\",\"taskContext\":{\"taskId\":\"task-1\",\"referenceMode\":\"frozen\",\"laterChangesRetargetRun\":false}}"
+            "{\"attachmentOutputRoot\":\"/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf\",\"taskContext\":{\"taskId\":\"task-1\",\"referenceMode\":\"frozen\",\"laterChangesRetargetRun\":false}}"
         );
         assert_eq!(rendered.digest, sha256_text(&rendered.payload_json));
     }
 
     #[test]
-    fn run_facts_v4_always_includes_output_root_and_omits_other_absent_fields() {
+    fn run_facts_always_includes_output_root_and_omits_other_absent_fields() {
         let facts = RunFacts {
-            schema_version: 4,
             mission: None,
             attachment_output_root: test_run_facts().attachment_output_root,
             conversation_mode: None,
@@ -14932,7 +14027,6 @@ mod slow_tests {
         assert_eq!(
             serde_json::from_str::<Value>(&rendered.payload_json).unwrap(),
             json!({
-                "schemaVersion": 4,
                 "attachmentOutputRoot": "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf",
                 "taskContext": {
                     "taskId": "task-1",
@@ -14968,7 +14062,6 @@ mod slow_tests {
         assert_eq!(rendered.references.len(), 6);
 
         let non_gather_budget = RunFacts {
-            schema_version: 4,
             delegation: Some(DelegationFact {
                 new_a2a_dispatch_allowed: false,
                 new_a2a_target_contact_allowed: false,
@@ -14988,7 +14081,7 @@ mod slow_tests {
         assert!(
             camp_resources_only
                 .payload_json
-                .contains("\"schemaVersion\":4")
+                .contains("\"attachmentOutputRoot\"")
         );
         let shared_conversation = SharedConversation {
             camp_id: "rvcamp_01h47kvsy5fk1shh6w1g60eecf".to_string(),

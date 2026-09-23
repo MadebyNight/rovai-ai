@@ -400,7 +400,6 @@ fn task_detail_success_schema(include_changed: bool) -> Value {
         "closedByType",
         "closedById",
         "closedByAgentRunId",
-        "version",
         "createdAt",
         "updatedAt",
         "closedAt",
@@ -425,7 +424,6 @@ fn task_detail_success_schema(include_changed: bool) -> Value {
         "closedByType": {"type": ["string", "null"]},
         "closedById": {"type": ["string", "null"]},
         "closedByAgentRunId": {"type": ["string", "null"]},
-        "version": {"type": "integer", "minimum": 1},
         "createdAt": {"type": "string", "format": "date-time"},
         "updatedAt": {"type": "string", "format": "date-time"},
         "closedAt": {"type": ["string", "null"], "format": "date-time"},
@@ -1107,14 +1105,14 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
         json!({
             "name": TEAM_GET_TASK_TOOL_NAME,
             "title": "Get a durable Task",
-            "description": "Read a task's content, status, owner and current version in this Camp.",
+            "description": "Read a task's current content, status and owner in this Camp.",
             "inputSchema": TeamToolService::get_task_input_schema(),
             "outputSchema": task_detail_success_schema(false)
         }),
         json!({
             "name": TEAM_UPDATE_TASK_TOOL_NAME,
             "title": "Update a durable Task",
-            "description": "Update a non-terminal task using the version you read.\nUser/Default Lead may edit task content, assignment and status.\nOther assignees may update only their own status and matching blockedReason or completionSummary.\nReread on conflict. Does not notify or start work.",
+            "description": "Update explicit fields of a non-terminal task.\nUser/Default Lead may edit task content, assignment and status.\nOther assignees may update only their own status and matching blockedReason or completionSummary.\nDoes not notify or start work.",
             "inputSchema": TeamToolService::update_task_input_schema(),
             "outputSchema": task_detail_success_schema(true)
         }),
@@ -1251,7 +1249,7 @@ mod tests {
         assert_eq!(update["description"], update["inputSchema"]["description"]);
         assert_eq!(
             definition(TEAM_GET_TASK_TOOL_NAME)["description"],
-            "Read a task's content, status, owner and current version in this Camp."
+            "Read a task's current content, status and owner in this Camp."
         );
         assert_eq!(
             definition(TEAM_LIST_TASKS_TOOL_NAME)["description"],
