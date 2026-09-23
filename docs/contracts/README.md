@@ -165,7 +165,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v18（当前）](file-preview-v18.md) | Files Changed projection 原位刷新、旧 detail 响应 fence 与 Tab 阅读状态保留 |
+| [File Preview v19（当前）](file-preview-v19.md) | Run Diff 与 Files Changed 的当前文件预览接受精确证据中的根外绝对路径，保留相对路径的 Run 工作目录解析与来源校验 |
+| [File Preview v18（历史）](file-preview-v18.md) | Files Changed projection 原位刷新、旧 detail 响应 fence 与 Tab 阅读状态保留 |
 | [File Preview v17（历史）](file-preview-v17.md) | Execution、Mission Activity 与文件共享标签集合、分栏宿主与已保存宽度 |
 | [File Preview v16（历史）](file-preview-v16.md) | Command 修改文件以 exact Run Activity Evidence 授权，并优先解析来源 AgentRun executionRoot；同名相对路径按实际文件身份去重 |
 | [File Preview v15（历史）](file-preview-v15.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流；Command Activity 文件来源由 v16 替代 |
