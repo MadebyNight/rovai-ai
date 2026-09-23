@@ -1,5 +1,6 @@
 import { digestJson, sha256 } from './qualification-common.mjs'
 import { isBudgetedPublicA2aDelivery } from './qualification-evaluation.mjs'
+import { isBatchTrialBoundary, trialAgentDeliveries, trialRuns } from './qualification-trial-scope.mjs'
 
 export function extractEvidenceIdentity(payload) {
   if (!payload || typeof payload !== 'object') return null
@@ -133,9 +134,8 @@ export function deriveCollaborationEvidence(snapshot, dispatchBoundary) {
 }
 
 function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
-  const runs = Array.isArray(snapshot.agentRuns)
-    ? snapshot.agentRuns.filter((run) => run.campTurnId === dispatchBoundary.campTurnId)
-    : []
+  const batchTrial = isBatchTrialBoundary(dispatchBoundary)
+  const runs = trialRuns(snapshot, dispatchBoundary)
   const runIds = new Set(runs.map((run) => run.id))
   const runById = new Map(runs.map((run) => [run.id, run]))
   const messages = Array.isArray(snapshot.messages) ? snapshot.messages : []
@@ -145,16 +145,21 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
     : []).filter((manifest) => runIds.has(manifest.agentRunId)).map((manifest) => [manifest.id, manifest]))
   const deliveriesAvailable = Array.isArray(snapshot.messageDeliveries)
   const deliveries = deliveriesAvailable
-    ? snapshot.messageDeliveries.filter((delivery) => delivery.campTurnId === dispatchBoundary.campTurnId && isBudgetedPublicA2aDelivery(snapshot, delivery))
+    ? batchTrial
+      ? trialAgentDeliveries(snapshot, dispatchBoundary)
+      : snapshot.messageDeliveries.filter((delivery) => delivery.campTurnId === dispatchBoundary.campTurnId && isBudgetedPublicA2aDelivery(snapshot, delivery))
     : []
   const deliveryIds = new Set(deliveries.map(delivery => delivery.id))
   const receiptEvents = (Array.isArray(snapshot.timeline) ? snapshot.timeline : []).filter((event) => (
-    event.eventType === 'message_delivery.accepted'
-      && event.payload?.campTurnId === dispatchBoundary.campTurnId
-      && deliveryIds.has(event.payload?.deliveryId)
+    batchTrial
+      ? event.eventType === 'camp_message_delivery.waiting' && deliveryIds.has(event.entityId)
+      : event.eventType === 'message_delivery.accepted'
+        && event.payload?.campTurnId === dispatchBoundary.campTurnId
+        && deliveryIds.has(event.payload?.deliveryId)
   ))
   const receiptByDeliveryId = new Map(receiptEvents.flatMap((event) => (
-    event.payload?.deliveryId ? [[event.payload.deliveryId, event]] : []
+    batchTrial ? [[event.entityId, event]]
+      : event.payload?.deliveryId ? [[event.payload.deliveryId, event]] : []
   )))
   deliveries.sort((a, b) => {
     const left = receiptByDeliveryId.get(a.id), right = receiptByDeliveryId.get(b.id)
@@ -167,14 +172,32 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
     assigneeAgentId: task.assigneeAgentId,
     sourceAgentRunId: task.sourceAgentRunId
   }))
+  const batchRunDepths = batchTrial
+    ? new Map([[dispatchBoundary.rootAgentRunId, 0]])
+    : null
   const calls = deliveries.map((delivery, index) => {
     const message = messageById.get(delivery.messageId) ?? null
     const receipt = receiptByDeliveryId.get(delivery.id) ?? null
     const recipientRunId = delivery.targetAgentRunId ?? null
     const recipientRun = recipientRunId ? runById.get(recipientRunId) ?? null : null
-    const manifest = delivery.contextManifestId ? manifests.get(delivery.contextManifestId) ?? null : null
+    const manifest = delivery.contextManifestId
+      ? manifests.get(delivery.contextManifestId) ?? null
+      : [...manifests.values()].find(candidate => candidate.agentRunId === recipientRunId) ?? null
     const runtimeInputDelivery = manifest?.delivery ?? null
-    const depth = receipt?.payload?.a2aDepth ?? recipientRun?.a2aDepth ?? null
+    const sourceRunId = message?.sourceAgentRunId ?? delivery.sourceAgentRunId ?? null
+    const sourceDepth = batchRunDepths?.get(sourceRunId)
+    const depth = batchTrial
+      ? Number.isSafeInteger(sourceDepth)
+        ? delivery.edgeKind === 'forward' ? sourceDepth + 1
+          : delivery.edgeKind === 'return' ? Math.max(0, sourceDepth - 1)
+            : null
+        : null
+      : receipt?.payload?.a2aDepth ?? recipientRun?.a2aDepth ?? null
+    if (batchRunDepths && recipientRunId) {
+      const previousDepth = batchRunDepths.get(recipientRunId)
+      batchRunDepths.set(recipientRunId,
+        previousDepth === undefined ? depth : previousDepth === depth ? depth : null)
+    }
     return {
       callId: delivery.id,
       deliveryId: delivery.id,
@@ -199,7 +222,7 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
       senderAgentId: message?.authorId ?? message?.senderAgentId ?? null,
       recipientAgentId: delivery.recipientAgentId ?? null,
       contentDigest: typeof message?.body === 'string' ? sha256(message.body) : null,
-      sourceAgentRunId: message?.sourceAgentRunId ?? delivery.sourceAgentRunId ?? null,
+      sourceAgentRunId: sourceRunId,
       recipientRunId,
       taskId: delivery.taskId ?? recipientRun?.taskId ?? null,
       depth,
@@ -217,7 +240,7 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
       recipientRunStartedAt: recipientRun?.startedAt ?? null,
       recipientRunTerminalAt: recipientRun?.endedAt ?? null,
       recipientRunReason: recipientRun?.waitReason ?? null,
-      delivered: ['running', 'settled', 'failed', 'cancelled'].includes(delivery.status),
+      delivered: ['claimed', 'running', 'settled', 'failed', 'cancelled'].includes(delivery.status),
       failed: ['failed', 'cancelled', 'interrupted_before_dispatch'].includes(delivery.status),
       messageVisibility: 'public_to_camp',
       mechanicalSettlement: deriveCurrentMechanicalSettlement(delivery, recipientRun)
@@ -225,7 +248,7 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
   })
   const turn = (Array.isArray(snapshot.turns) ? snapshot.turns : [])
     .find((candidate) => candidate.id === dispatchBoundary.campTurnId)
-  const authoritativeAcceptedA2a = turn?.executionBudget?.acceptedA2a
+  const authoritativeAcceptedA2a = batchTrial ? deliveries.length : turn?.executionBudget?.acceptedA2a
   const acceptanceCoverageComplete = deliveriesAvailable
     && Number.isInteger(authoritativeAcceptedA2a)
     && authoritativeAcceptedA2a === deliveries.length
@@ -249,7 +272,7 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
   )
   return {
     status: 'observed',
-    sourceSurface: 'public_message_delivery_v1',
+    sourceSurface: batchTrial ? 'public_message_delivery_v9' : 'public_message_delivery_v1',
     members: [...new Set(runs.map((run) => run.agentId).filter(Boolean))],
     runGraph: runs.map((run) => ({
       id: run.id,
@@ -271,7 +294,9 @@ function deriveCurrentPublicA2aEvidence(snapshot, dispatchBoundary) {
       observedDurableMemberCalls: deliveries.length,
       settledMemberCalls: acceptanceCoverageComplete ? observedSettledMemberCalls : null,
       observedSettledMemberCalls,
-      maximumDepth: Math.max(0, ...runs.map((run) => run.a2aDepth ?? 0)),
+      maximumDepth: batchTrial
+        ? Math.max(0, ...calls.map(call => call.depth ?? 0))
+        : Math.max(0, ...runs.map((run) => run.a2aDepth ?? 0)),
       completedTasks: taskFacts.filter((task) => task.status === 'completed').length,
       coverage: acceptanceCoverageComplete
         ? 'complete_with_message_delivery_receipts'
@@ -413,7 +438,7 @@ function deriveCurrentMechanicalSettlement(delivery, recipientRun) {
   if (!delivery || typeof delivery.status !== 'string') {
     return { state: 'indeterminate', reason: 'message_delivery_status_unavailable' }
   }
-  if (['pending', 'running'].includes(delivery.status)) {
+  if (['waiting', 'claimed', 'pending', 'running'].includes(delivery.status)) {
     return { state: 'unsettled', reason: `message_delivery_${delivery.status}` }
   }
   if (['settled', 'failed', 'cancelled', 'interrupted_before_dispatch'].includes(delivery.status)) {
@@ -542,7 +567,7 @@ function compareNullableNumber(left, right) {
 
 export function collectFinalResponseEvidence(snapshot, dispatchBoundary) {
   if (!snapshot || !dispatchBoundary) return { privateMessages: [], references: [] }
-  const turnRuns = snapshot.agentRuns.filter((run) => run.campTurnId === dispatchBoundary.campTurnId)
+  const turnRuns = trialRuns(snapshot, dispatchBoundary)
   const leadAgentId = turnRuns.find((run) => run.id === dispatchBoundary.rootAgentRunId)?.agentId
   if (!leadAgentId) return { privateMessages: [], references: [] }
   const runIds = new Set(turnRuns.filter((run) => run.agentId === leadAgentId).map((run) => run.id))

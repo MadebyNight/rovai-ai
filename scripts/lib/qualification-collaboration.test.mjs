@@ -152,6 +152,36 @@ test('current Public A2A evidence fails closed when the accepted counter is not 
   assert.equal(evidence.metrics.coverage, 'partial_message_delivery_receipt_coverage')
 })
 
+test('batch Message Delivery derives a call depth from the source and target Runs', () => {
+  const snapshot = currentPublicA2aSnapshot()
+  snapshot.schemaVersion = 34
+  snapshot.turns = []
+  for (const run of snapshot.agentRuns) {
+    run.campTurnId = null
+    run.invocationKind = 'batch'
+    run.a2aDepth = 0
+  }
+  snapshot.messages.unshift({ id: 'root-message', sequence: 1, authorType: 'user' })
+  snapshot.messageDeliveries.unshift({
+    id: 'root-delivery', messageId: 'root-message', status: 'settled',
+    targetAgentRunId: 'run-lead', deliveryKind: 'public_a2a', dispatchDisposition: 'dispatch'
+  })
+  Object.assign(snapshot.messageDeliveries[1], {
+    campTurnId: null, deliveryKind: 'public_a2a',
+    dispatchDisposition: 'dispatch', edgeKind: 'forward'
+  })
+  snapshot.timeline[0].eventType = 'camp_message_delivery.waiting'
+  snapshot.timeline[0].entityId = 'delivery-1'
+  const evidence = deriveCollaborationEvidence(snapshot, {
+    scope: 'isolated_camp_message_batch',
+    rootCampMessageId: 'root-message',
+    rootAgentRunId: 'run-lead'
+  })
+  assert.equal(evidence.a2a[0].depth, 1)
+  assert.equal(evidence.metrics.maximumDepth, 1)
+  assert.equal(evidence.metrics.coverage, 'complete_with_message_delivery_receipts')
+})
+
 test('current delivery kinds and per-message recipient positions do not create phantom or duplicate A2A calls', () => {
   const snapshot = currentPublicA2aSnapshot()
   snapshot.schemaVersion = 34

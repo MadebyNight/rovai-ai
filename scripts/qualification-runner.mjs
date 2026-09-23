@@ -4,6 +4,7 @@ import { appendFile, chmod, mkdir, readFile, realpath, rm, writeFile } from 'nod
 import { arch, platform, release, type as osType } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { captureRegressionMemoryState, materializeRegressionFixture, validateRegressionConfiguration } from './lib/context-regression-fixture.mjs'
+import { isBatchTrialBoundary, trialAgentDeliveries, trialDeliveries, trialRootRun, trialRuns } from './lib/qualification-trial-scope.mjs'
 import { removeEphemeralRuntimeCampFilesRoot } from './lib/runtime-camp-files-root.mjs'
 import {
   QUALIFICATION_RUNNER_VERSION,
@@ -404,13 +405,15 @@ async function runTrial(options, registerCleanup) {
       throw new Error(`qualification dispatch was not accepted: ${JSON.stringify(commandResult)}`)
     }
     dispatchAccepted = true
-    const frozenBudgetInspection = inspectFrozenExecutionBudget(
-      commandResult.payload.executionBudget,
-      caseBudget
-    )
+    const batchPublication = !commandResult.payload.campTurnId
+      && Array.isArray(commandResult.payload.deliveryIds)
+    const frozenBudgetInspection = batchPublication
+      ? { budget: null, issues: [] }
+      : inspectFrozenExecutionBudget(commandResult.payload.executionBudget, caseBudget)
     observationIntegrityIssues.push(...frozenBudgetInspection.issues)
     dispatchBoundary = {
       schemaVersion: 1,
+      scope: batchPublication ? 'isolated_camp_message_batch' : 'camp_turn',
       commandId,
       acceptedAt: frozenBudgetInspection.budget?.acceptedAt ?? new Date().toISOString(),
       runnerObservedAcceptedAt: new Date().toISOString(),
@@ -427,6 +430,27 @@ async function runTrial(options, registerCleanup) {
         : null,
       commandResultDigest: digestJson(commandResult)
     }
+    await atomicWriteJson(join(evidenceDirectory, 'publication-receipt.json'), commandResult)
+    if (batchPublication) {
+      if ((preDispatchSnapshot.agentRuns ?? []).length > 0 || !dispatchBoundary.rootCampMessageId) {
+        throw new Error('Batch Trial requires a fresh Camp and a root message identity')
+      }
+      const claimed = await waitFor(async () => {
+        const snapshot = await core.request('camps.snapshot', { campId }, 60_000)
+        const rootDelivery = trialDeliveries(snapshot, dispatchBoundary)
+          .find(delivery => delivery.messageId === dispatchBoundary.rootCampMessageId)
+        if (rootDelivery && ['failed', 'cancelled'].includes(rootDelivery.status)) {
+          return { failed: rootDelivery.failureCode ?? rootDelivery.status }
+        }
+        const rootRun = trialRootRun(snapshot, dispatchBoundary)
+        return rootRun ? { rootRun, rootDelivery } : null
+      }, 'claimed root batch Run', 60_000)
+      if (claimed.failed) throw new Error(`root Delivery failed before claim: ${claimed.failed}`)
+      dispatchBoundary.rootAgentRunId = claimed.rootRun.id
+      dispatchBoundary.rootAgentRunIds = [claimed.rootRun.id]
+      dispatchBoundary.rootDeliveryId = claimed.rootDelivery.id
+      dispatchBoundary.rootIdentityAuthority = 'claimed_delivery_snapshot'
+    }
     await atomicWriteJson(join(evidenceDirectory, 'dispatch-boundary.json'), dispatchBoundary)
     await appendLifecycle('dispatched', {
       campId: dispatchBoundary.campId,
@@ -437,9 +461,7 @@ async function runTrial(options, registerCleanup) {
 
     const observation = await observeTrial({
       core,
-      campId: dispatchBoundary.campId,
-      campTurnId: dispatchBoundary.campTurnId,
-      rootAgentRunId: dispatchBoundary.rootAgentRunId,
+      dispatchBoundary,
       budget: caseBudget,
       frozenBudget: frozenBudgetInspection.budget,
       runnerClockAnchor,
@@ -961,17 +983,19 @@ async function runTrial(options, registerCleanup) {
       frozen: dispatchBoundary?.executionBudget ?? null,
       event: budgetEvent,
       watchdogEvent: budgetWatchdogEvent,
-      observedAgentRuns: finalSnapshot?.agentRuns?.filter(
-        (run) => run.campTurnId === dispatchBoundary?.campTurnId
-      ).length ?? 0,
-      observedAcceptedA2a: finalSnapshot?.turns?.find(
-        (turn) => turn.id === dispatchBoundary?.campTurnId
-      )?.executionBudget?.acceptedA2a ?? null,
+      observedAgentRuns: trialRuns(finalSnapshot, dispatchBoundary).length,
+      observedAcceptedA2a: isBatchTrialBoundary(dispatchBoundary)
+        ? trialAgentDeliveries(finalSnapshot, dispatchBoundary).length
+        : finalSnapshot?.turns?.find(
+          (turn) => turn.id === dispatchBoundary?.campTurnId
+        )?.executionBudget?.acceptedA2a ?? null,
       observedDurableA2aEffects: observedDurableMemberCallEffects(
         finalSnapshot,
-        dispatchBoundary?.campTurnId
+        dispatchBoundary
       ).length,
-      acceptedA2aAuthority: finalSnapshot?.turns?.find(
+      acceptedA2aAuthority: isBatchTrialBoundary(dispatchBoundary)
+        ? 'runner_observed_durable_agent_deliveries'
+        : finalSnapshot?.turns?.find(
         (turn) => turn.id === dispatchBoundary?.campTurnId
       )?.executionBudget
         ? 'core_canonical_acceptance_receipt_counter'
@@ -1264,15 +1288,15 @@ async function collectEnvironmentManifest({
 
 async function observeTrial({
   core,
-  campId,
-  campTurnId,
-  rootAgentRunId,
+  dispatchBoundary,
   budget,
   frozenBudget,
   runnerClockAnchor,
   usageBefore,
   observationPath
 }) {
+  const { campId, campTurnId, rootAgentRunId } = dispatchBoundary
+  const batchTrial = isBatchTrialBoundary(dispatchBoundary)
   let budgetEvent = null
   let watchdogEvent = null
   let cancellationSent = false
@@ -1321,9 +1345,9 @@ async function observeTrial({
     }
     const observedMonotonic = performance.now()
     const elapsedSeconds = (observedMonotonic - runnerClockAnchor.monotonicMs) / 1000
-    const runs = snapshot.agentRuns.filter((run) => run.campTurnId === campTurnId)
-    const observedA2aEffects = observedDurableMemberCallEffects(snapshot, campTurnId).length
-    const turn = snapshot.turns.find((candidate) => candidate.id === campTurnId)
+    const runs = trialRuns(snapshot, dispatchBoundary)
+    const observedA2aEffects = observedDurableMemberCallEffects(snapshot, dispatchBoundary).length
+    const turn = batchTrial ? null : snapshot.turns.find((candidate) => candidate.id === campTurnId)
     const coreBudget = turn?.executionBudget ?? null
     const deliveryUnknownRuns = runs.filter((run) => run.waitReason === 'delivery_unknown')
     const projectedWallTimeMs = runnerClockAnchor.wallTimeMs
@@ -1334,7 +1358,18 @@ async function observeTrial({
         'Runner wall clock diverged from its monotonic projection beyond tolerance'
       )
     }
-    if (frozenBudget && coreBudget) {
+    if (batchTrial) {
+      if (!budgetEvent && (runs.length > budget.maxAgentRuns
+          || observedA2aEffects > budget.maxAcceptedA2a)) {
+        budgetEvent = {
+          authority: 'runner_observed_batch_limits',
+          reason: runs.length > budget.maxAgentRuns ? 'agent_run_limit' : 'accepted_a2a_limit',
+          elapsedSeconds,
+          agentRuns: runs.length,
+          observedA2aEffects
+        }
+      }
+    } else if (frozenBudget && coreBudget) {
       const configurationMatches = coreBudget.schemaVersion === frozenBudget.schemaVersion
         && coreBudget.acceptedAt === frozenBudget.acceptedAt
         && coreBudget.deadlineAt === frozenBudget.deadlineAt
@@ -1362,7 +1397,7 @@ async function observeTrial({
         'Core authoritative counters exceeded their frozen ceilings'
       )
     }
-    if (!budgetEvent && coreBudget?.exhaustedAt) {
+    if (!batchTrial && !budgetEvent && coreBudget?.exhaustedAt) {
       budgetEvent = {
         authority: 'core_execution_budget',
         reason: coreBudget.exhaustionReason,
@@ -1387,20 +1422,30 @@ async function observeTrial({
     } else if (!budgetEvent
         && !watchdogEvent
         && observedMonotonic > runnerDeadlineMonotonic + clockToleranceMs) {
-      addIntegrityIssue(
-        'execution_budget.core_runner_deadline_disagreement',
-        'Runner monotonic watchdog passed the frozen deadline without Core exhaustion'
-      )
-      watchdogEvent = {
-        reason: 'runner_elapsed_watchdog',
-        elapsedSeconds,
-        agentRuns: runs.length,
-        observedA2aEffects,
-        authority: 'runner_independent_watchdog'
+      if (batchTrial) {
+        budgetEvent = {
+          authority: 'runner_observed_batch_limits',
+          reason: 'elapsed_limit',
+          elapsedSeconds,
+          agentRuns: runs.length,
+          observedA2aEffects
+        }
+      } else {
+        addIntegrityIssue(
+          'execution_budget.core_runner_deadline_disagreement',
+          'Runner monotonic watchdog passed the frozen deadline without Core exhaustion'
+        )
+        watchdogEvent = {
+          reason: 'runner_elapsed_watchdog',
+          elapsedSeconds,
+          agentRuns: runs.length,
+          observedA2aEffects,
+          authority: 'runner_independent_watchdog'
+        }
       }
     }
     const allRunsTerminal = runs.length > 0 && runs.every((run) => isRunTerminal(run.status))
-    const unattendedRetryBoundary = !budgetEvent && !watchdogEvent
+    const unattendedRetryBoundary = !batchTrial && !budgetEvent && !watchdogEvent
       ? deriveUnattendedRetryBoundary(snapshot, campTurnId)
       : null
     if (unattendedRetryBoundary) {
@@ -1415,7 +1460,18 @@ async function observeTrial({
     } else {
       unattendedRetrySince = null
     }
-    if (watchdogEvent
+    if (batchTrial && (watchdogEvent || budgetEvent) && !cancellationSent) {
+      const cancellations = []
+      for (const run of runs.filter(run => !isRunTerminal(run.status))) {
+        const cancelled = await core.request('agentRuns.cancel', {
+          commandId: crypto.randomUUID(),
+          command: { campId, agentRunId: run.id, expectedVersion: run.version }
+        })
+        cancellations.push({ agentRunId: run.id, resultDigest: digestJson(cancelled) })
+      }
+      cancellationSent = true
+      ;(watchdogEvent ?? budgetEvent).cancellations = cancellations
+    } else if (watchdogEvent
         && watchdogEvent.reason !== 'unattended_manual_retry'
         && !cancellationSent
         && turn
@@ -1426,6 +1482,13 @@ async function observeTrial({
       })
       cancellationSent = true
       watchdogEvent.cancellationResultDigest = digestJson(cancelled)
+    }
+    const batchDeliveries = batchTrial ? trialDeliveries(snapshot, dispatchBoundary) : []
+    if (batchTrial && allRunsTerminal
+        && batchDeliveries.length > 0
+        && batchDeliveries.every(delivery => ['settled', 'failed', 'cancelled'].includes(delivery.status))
+        && !snapshot.approvals.some(approval => approval.status === 'pending')) {
+      return finishObservation(snapshot, runs)
     }
     if (turn && isTurnTerminal(turn.status) && allRunsTerminal) {
       return finishObservation(snapshot, runs)
@@ -1456,7 +1519,7 @@ async function observeTrial({
       runs
     )
     snapshot.executionEvidence = executionEvidenceCoverage.evidence
-    snapshot.evaluationContext = buildEvaluationContext(snapshot, { campTurnId, rootAgentRunId })
+    snapshot.evaluationContext = buildEvaluationContext(snapshot, dispatchBoundary)
     await writePrivateJsonExclusive(join(dirname(observationPath), 'private-command-evidence.json'), buildEvaluationCommandSources(snapshot, snapshot.evaluationContext))
     const usageAfter = await captureRuntimeUsage(core.request)
     await writePrivateJsonExclusive(join(dirname(observationPath), 'runtime-usage-after.json'), usageAfter)

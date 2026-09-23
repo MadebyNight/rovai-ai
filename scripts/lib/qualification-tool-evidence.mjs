@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { extractEvidenceIdentity } from './qualification-collaboration.mjs'
 import { canonicalJson } from './qualification-common.mjs'
+import { trialRuns } from './qualification-trial-scope.mjs'
 
 const TERMINAL_PHASES = new Set(['completed', 'failed'])
 const TOOL_EVIDENCE_KINDS = new Set(['tool_call', 'tool_result', 'command', 'file_change'])
@@ -122,9 +123,7 @@ export async function collectAgentRunExecutionEvidencePages(
 
 export function deriveToolEvidence(snapshot, dispatchBoundary, sourceCoverage) {
   if (!snapshot || !dispatchBoundary) return unavailableToolEvidence()
-  const runIds = new Set(snapshot.agentRuns
-    .filter((run) => run.campTurnId === dispatchBoundary.campTurnId)
-    .map((run) => run.id))
+  const runIds = new Set(trialRuns(snapshot, dispatchBoundary).map(run => run.id))
   const groups = new Map()
   for (const evidence of snapshot.executionEvidence ?? []) {
     if (!runIds.has(evidence.agentRunId) || !TOOL_EVIDENCE_KINDS.has(evidence.kind)) continue

@@ -647,6 +647,38 @@ test('history created before the durable dispatch watermark is not post-dispatch
   assert.deepEqual(observed.evidence[0].messageIds, ['intervention'])
 })
 
+test('initial message delivery receipt is not human intervention in batch dispatch', () => {
+  const snapshot = hardEvidenceSnapshot()
+  snapshot.turns = []
+  snapshot.timeline = snapshot.timeline.filter(event => event.eventType === 'camp_message.sent')
+  snapshot.timeline.push({
+    globalSequence: 14,
+    eventId: 'event-root-delivery',
+    eventType: 'camp_message_delivery.waiting',
+    entityId: 'delivery-root',
+    actorType: 'user'
+  })
+  const boundary = {
+    scope: 'isolated_camp_message_batch',
+    rootCampMessageId: 'message-1',
+    rootAgentRunId: 'run-root',
+    rootAgentRunIds: ['run-root'],
+    rootDeliveryId: 'delivery-root',
+    preDispatchThroughGlobalSequence: 10
+  }
+  assert.equal(deriveHumanInterventionEvidence(snapshot, boundary, { mode: 'demo' }).status, 'absent')
+  snapshot.timeline.push({
+    globalSequence: 15,
+    eventId: 'event-user-control',
+    eventType: 'agent_run.cancel_requested',
+    entityId: 'run-root',
+    actorType: 'user'
+  })
+  const observed = deriveHumanInterventionEvidence(snapshot, boundary, { mode: 'demo' })
+  assert.equal(observed.status, 'present')
+  assert.deepEqual(observed.evidence[0].eventIds, ['event-user-control'])
+})
+
 test('public A2A budgets exclude completion deliveries while convergence still waits for them', () => {
   const snapshot = hardEvidenceSnapshot()
   snapshot.schemaVersion = 34
