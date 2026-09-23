@@ -280,7 +280,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Accepted Input Recovery v1（历史）](accepted-input-recovery-v1.md) | accepted Runtime input 的启动分类、`recovery_blocked`、Scheduler fence、用户命令与 Stop/预算 outcome-unknown 收敛；不含 Migration 99 |
 | [Collaboration State v3（当前）](collaboration-state-v3.md) | 模型正文删除 schemaVersion，peer、Lead 与 digest 业务语义不变 |
 | [Collaboration State v2（历史）](collaboration-state-v2.md) | peer-only routing identity、稳定 CampMember 选择、Lead ID/Boolean、完整 projection digest、独立 inclusion、accepted ACK 与 v0.50 clean break |
-| [Camp History v8（当前）](camp-history-v8.md) | 所有受认证队员可读取全部存续公共 Camp；目标 membership 不是 ACL，旧 Manifest 漏项动态兼容，`camp.read` 实时 |
+| [Camp History v9（当前）](camp-history-v9.md) | 按需实时读取；`camp.read` 默认 20、显式整数 1–100、诚实分页 |
+| [Camp History v8（历史）](camp-history-v8.md) | 所有受认证队员可读取全部存续公共 Camp；目标 membership 不是 ACL，旧 Manifest 漏项动态兼容 |
 | [Camp History v7（历史）](camp-history-v7.md) | 调用时实时可见性、recipient suppression、撤回过滤与完整分页结果；其继承的目标 Camp 授权由 v8 替代 |
 | [Camp History v6（历史）](camp-history-v6.md) | Agent 附件原路径引用、默认输出位置及新旧记录读取分流 |
 | [Camp History Retrieval v5（历史）](camp-history-v5.md) | v3 读取/授权/身份语义不变；CLI 在 Schema 前把省略 mode 安全补全为 timeline/before/20，消息锚点模式仍显式 |
@@ -430,7 +431,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
 | [Run Input Skill Links v2（当前）](current-input-skill-links-v2.md) | Structured Skill Mention、claim-time 批次快照、verified resolver 与 per-message `RUN_INPUT.messages[].skills` |
 | [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v28（当前）](context-manifest-evidence-v28.md) | public 28/8、非 batch 26/6，新模型投影无 schemaVersion，Task evidence 无对象版本 |
+| [ContextManifest Evidence v29（当前 public Camp）](context-manifest-evidence-v29.md) | public 29/9/7，无自动公屏历史；RUN_INPUT 完整、historyHint 冻结 |
+| [ContextManifest Evidence v28（历史 public Camp）](context-manifest-evidence-v28.md) | public 28/8、非 batch 26/6，新模型投影无 schemaVersion，Task evidence 无对象版本 |
 | [ContextManifest Evidence v27（历史 public Camp）](context-manifest-evidence-v27.md) | 继承 v26 多输入、增量窗口与 Mission-only Charter revision 10；默认寻址消息在 Agent 自动上下文中派生冻结接收者 Mention，不修改用户原文或实时 read |
 | [ContextManifest Evidence v26（历史 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、Mission-only Charter revision 10、执行配置与可见性 evidence；冻结 Run 原样恢复 |
 | [ContextManifest Evidence v25（历史 Single Chat / public）](context-manifest-evidence-v25.md) | Single Chat 继续使用；冻结 public 22–25 原样保留 |
@@ -443,7 +445,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v17（历史）](context-manifest-evidence-v17.md) | Formatter v19、`agent_v1` message audience、closed forward/return A2A guidance evidence、Gather v3 与 exact frozen recovery |
 | [ContextManifest Evidence v16（历史）](context-manifest-evidence-v16.md) | Formatter v18、Skill selection/availability/Exposure/resolution、exact payload 与 Migration 91 clean-break recovery |
 | [ContextManifest Evidence v15（历史）](context-manifest-evidence-v15.md) | Formatter v17、compact history/offset、Run Facts exact bytes/evidence 与旧 v15 recovery 边界 |
-| [Run Facts v6（当前 public Camp）](run-facts-v6.md) | 模型正文删除 schemaVersion，内部合同号 6 |
+| [Run Facts v7（当前 public Camp）](run-facts-v7.md) | 必有 historyHint；内部合同号 7，模型不含技术版本 |
+| [Run Facts v6（历史 public Camp）](run-facts-v6.md) | 模型正文删除 schemaVersion，内部合同号 6 |
 | [Run Facts 非 batch v5（当前）](run-facts-nonbatch-v5.md) | 普通 Camp/A2A/Single Chat 删除模型正文 schemaVersion，内部合同号 5 |
 | [Run Facts v5（历史 public Camp）](run-facts-v5.md) | 删除 gather/delegation/conversationMode，Mission notice 指向 RUN_INPUT |
 | [Run Facts v4（历史 Single Chat / public）](run-facts-v4.md) | Single Chat 保留 conversationMode；旧 public frozen payload 原样解释 |
@@ -453,7 +456,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v14（历史）](context-manifest-evidence-v14.md) | Formatter v16、Gather result notice、完整 request/current generation evidence 与旧 v14/v15 exact recovery |
 | [ContextManifest Evidence v13（历史）](context-manifest-evidence-v13.md) | Formatter v15、`gather_completion` 与 completion input v1 frozen evidence |
 | [ContextManifest Evidence v12 (historical)](context-manifest-evidence-v12.md) | v11 self-active semantics 加 Formatter v14 的 `mentionsCurrentUser`、Structured Content/projected body evidence 与 frozen recovery |
-| [Context Delivery Profile v8（当前 public Camp）](context-delivery-profile-v8.md) | 继承 v7 数值；默认接收 Mention 进入精确正文与 payload 预算 |
+| [Context Delivery Profile v9（当前 public Camp）](context-delivery-profile-v9.md) | 仅保留 Self Active Task 上限；完整 RUN_INPUT 优先，historyHint 计入预算 |
+| [Context Delivery Profile v8（历史 public Camp）](context-delivery-profile-v8.md) | 继承 v7 数值；默认接收 Mention 进入精确正文与 payload 预算 |
 | [Context Delivery Profile v7（历史 public Camp）](context-delivery-profile-v7.md) | mandatory RUN_INPUT 优先、默认 96 KiB、完整 FIFO prefix 与最新完整历史后缀 |
 | [Context Delivery Profile v6（当前 Single Chat / 历史 public）](context-delivery-profile-v6.md) | Single Chat 与冻结 public Manifest 继续使用 |
 | [Context Delivery Profile v5（historical）](context-delivery-profile-v5.md) | v3 数值与 Task/reference 语义不变；当前 Agent 自身消息在 recent top-15 和 whole-history omission 前失去候选资格 |
