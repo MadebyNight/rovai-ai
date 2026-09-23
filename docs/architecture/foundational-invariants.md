@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: current-foundational-invariants
-last_updated: 2026-09-22
+last_updated: 2026-09-24
 ---
 
 # 当前基础架构不变量
@@ -174,6 +174,7 @@ last_updated: 2026-09-22
 
 ### 头像、内置外观与 Native Session 身份
 
+- Core 在新队员创建、资料或头像修改、Runtime 配置、Presence、移除或排序命令首次成功提交后，通过同一事件通道发 `members.invalidated { reason }`。Agent 内置 `member.create` 也遵守此提交边界；拒绝和幂等重放不发通知。事件只是名册失效提示，不携带可直接应用的队员状态。Main 原样转发，Renderer 用 `members.list` 重读完整名册。
 - `avatarRef` 是 AgentProfile 唯一头像领域字段，引用受控内置外观或应用受管不可变本地资产。选择、解码、规范化、限尺/重编码、原子保存和引用提交分层校验；先物化不可变资产、再事务提交 ref，失败/替换产生的孤儿由延迟安全 GC 回收。原路径、原图元数据和图像正文不得进入 SQLite、日志、诊断或导出。
 - 每个封闭内置角色只有一套当前 packaged appearance/preset；升级直接替换受控引用背后的当前内容，不维护旧图库，也不从外观推导角色、Capability、Runtime、权限或生命周期。
 - 用户导入图像仅存本地，备份/导出默认只包含安全 ref/受控资产而不恢复原始文件路径；缺失、损坏或未随备份携带时降级为中性展示，不修改身份或从不可信路径回读。

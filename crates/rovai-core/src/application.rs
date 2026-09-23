@@ -728,6 +728,7 @@ fn request_runs_outside_main_queue(method: &str) -> bool {
             | "runtime.startup.save"
             | "runtime.networkRecovery.wake"
             | "runtime.modelCatalog.open"
+            | "workspaces.inspect"
             | "camp.messages.send"
             | "camp.messages.withdraw"
             | "userAutomation.camp.send"
@@ -5560,6 +5561,7 @@ impl Core {
         let mut evidence_replayed = false;
         let mut evidence_receipt_id = None;
         let mut delivery_batch_state_changed = false;
+        let mut member_roster_changed = false;
         let result: Result<Value> = async {
             let mut database = self.database.lock().await;
             let service = TeamToolService::default();
@@ -5690,6 +5692,7 @@ impl Core {
                         .context("member.create input is invalid")?;
                     let outcome =
                         create_member(&mut database, &self.data_dir, &authenticated_run, input)?;
+                    member_roster_changed = member_roster_change_applied(&outcome.execution);
                     evidence_replayed = outcome.execution.replayed;
                     evidence_receipt_id = outcome.execution.result.payload["agentId"]
                         .as_str()
@@ -6362,6 +6365,9 @@ impl Core {
             Ok(operation_result)
         }
         .await;
+        if result.is_ok() && member_roster_changed {
+            emit_member_roster_invalidated(&self.output, MEMBER_CREATE_TOOL_NAME);
+        }
         if delivery_batch_state_changed {
             self.delivery_batch_scheduler_notify.notify_one();
         }
@@ -7594,6 +7600,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.update" => {
@@ -7604,6 +7612,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.avatar.set" => {
@@ -7614,6 +7624,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.runtime.set" => {
@@ -7635,6 +7647,7 @@ impl Core {
                     }
                     execution
                 };
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 if execution.result.status == CommandResultStatus::Applied {
                     self.pump_runtime_ready_recipient(&agent_id).await?;
                 }
@@ -7667,6 +7680,8 @@ impl Core {
                 if execution.result.status == CommandResultStatus::Applied {
                     self.mark_skill_projections_dirty_best_effort(&mut database, true);
                 }
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.presence.set" => {
@@ -7684,6 +7699,7 @@ impl Core {
                 let wake_delivery_scheduler =
                     became_present && execution.result.status == CommandResultStatus::Applied;
                 drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 if wake_delivery_scheduler {
                     self.delivery_batch_scheduler_notify.notify_one();
                 }
@@ -7713,6 +7729,7 @@ impl Core {
                 }
                 let state_changed = execution.result.status == CommandResultStatus::Applied;
                 drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 if state_changed {
                     self.delivery_batch_scheduler_notify.notify_one();
                 }
@@ -7726,6 +7743,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "memory.list" => {
@@ -23261,6 +23280,24 @@ fn emit_navigation_invalidated(
     );
 }
 
+fn member_roster_change_applied(execution: &CommandExecution) -> bool {
+    !execution.replayed && execution.result.status == CommandResultStatus::Applied
+}
+
+fn emit_member_roster_if_applied(
+    output: &mpsc::UnboundedSender<String>,
+    reason: &str,
+    execution: &CommandExecution,
+) {
+    if member_roster_change_applied(execution) {
+        emit_member_roster_invalidated(output, reason);
+    }
+}
+
+fn emit_member_roster_invalidated(output: &mpsc::UnboundedSender<String>, reason: &str) {
+    emit(output, "members.invalidated", json!({ "reason": reason }));
+}
+
 fn emit_agent_run_terminal(
     output: &mpsc::UnboundedSender<String>,
     camp_id: Option<&str>,
@@ -26915,7 +26952,7 @@ done
 
     #[cfg(feature = "slow-tests")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn execution_page_does_not_inherit_an_unrelated_non_database_wait() {
+    async fn independent_reads_do_not_inherit_an_unrelated_non_database_wait() {
         struct InstalledBarrier(RequestDispatchTestBarrier);
 
         impl Drop for InstalledBarrier {
@@ -26949,6 +26986,8 @@ done
             uuid::Uuid::new_v4()
         ));
         let data_dir = root.join("data");
+        let workspace_dir = root.join("workspace");
+        fs::create_dir_all(&workspace_dir).unwrap();
         let runtime_camp_files_root =
             rovai_core::storage_layout::server_runtime_root(&data_dir).unwrap();
         let (service, runner) = embedded(
@@ -26994,10 +27033,22 @@ done
                 )
                 .await
         });
+        let inspection_service = service.clone();
+        let mut inspection_request = tokio::spawn(async move {
+            inspection_service
+                .request(
+                    "workspaces.inspect",
+                    json!({ "path": workspace_dir.to_str().unwrap() }),
+                )
+                .await
+        });
         let barrier_release_at = tokio::time::Instant::now() + Duration::from_secs(3);
         let page_before_release =
             tokio::time::timeout_at(barrier_release_at, &mut page_request).await;
         let page_finished_while_blocked = page_before_release.is_ok();
+        let inspection_before_release =
+            tokio::time::timeout_at(barrier_release_at, &mut inspection_request).await;
+        let inspection_finished_while_blocked = inspection_before_release.is_ok();
 
         tokio::time::sleep_until(barrier_release_at).await;
         barrier.release.notify_waiters();
@@ -27005,6 +27056,10 @@ done
         let page_reply = match page_before_release {
             Ok(completed) => completed.unwrap().unwrap(),
             Err(_) => page_request.await.unwrap().unwrap(),
+        };
+        let inspection_reply = match inspection_before_release {
+            Ok(completed) => completed.unwrap().unwrap(),
+            Err(_) => inspection_request.await.unwrap().unwrap(),
         };
         drop(service);
         if tokio::time::timeout(Duration::from_secs(10), &mut runner_task)
@@ -27039,6 +27094,15 @@ done
                 .and_then(|error| error.get("code")),
             Some(&json!("CORE_REQUEST_FAILED")),
             "the nonexistent Run should still reach the ordinary execution-page validation"
+        );
+        assert!(
+            inspection_finished_while_blocked,
+            "workspace inspection waited for unrelated non-database work"
+        );
+        assert!(
+            inspection_reply.error.is_none(),
+            "the independent workspace inspection should succeed: {:?}",
+            inspection_reply.error
         );
     }
 
