@@ -397,6 +397,12 @@ try {
         || resumedStart?.params?.adapterKind !== specification.adapterKind) {
       throw new Error(`${specification.adapterKind} emitted the wrong Adapter identity`)
     }
+    const createdMemberNotifications = core.events.filter((event) =>
+      event.method === 'members.invalidated' && event.params?.reason === 'member.create'
+    )
+    if (createdMemberNotifications.length !== results.length + 1) {
+      throw new Error(`${specification.adapterKind} did not emit one committed member roster notification`)
+    }
     const firstRun = sourceSnapshot.agentRuns.find((run) => run.id === source.agentRunId)
     const secondRun = resumedSnapshot.agentRuns.find((run) => run.id === resumed.agentRunId)
     if (!firstRun || !secondRun || firstRun.conversationId !== secondRun.conversationId) {
