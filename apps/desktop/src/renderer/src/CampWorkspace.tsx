@@ -1965,6 +1965,10 @@ export function CampWorkspace({
     : inspectorTab
   // Secondary phone panels return to the last primary view, without becoming navigation history.
   const mobilePrimaryView = useRef<'conversation' | 'execution'>('conversation')
+  const [mobileExecutionMaximized, setMobileExecutionMaximized] = useState(false)
+  useEffect(() => {
+    if (!inspectorVisible || inspectorSurfaceTab !== 'execution') setMobileExecutionMaximized(false)
+  }, [inspectorVisible, inspectorSurfaceTab])
   useLayoutEffect(() => {
     if (!mobile || singleChatVisible || (inspectorVisible && inspectorSurfaceTab !== 'execution')) return
     mobilePrimaryView.current = inspectorVisible ? 'execution' : 'conversation'
@@ -4444,7 +4448,7 @@ export function CampWorkspace({
     && Boolean(filePreview?.paneVisible && filePreview.activeTab?.kind === 'execution')
 
   return (
-    <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
+    <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} data-mobile-execution-maximized={mobile && mobileExecutionMaximized || undefined} aria-label={`会话：${formatCampTitle(snapshot.camp)}`}>
       <FilePreviewWorkspace
       >
         <RevealNotificationConversation active={!!notificationFocus?.active
@@ -5229,6 +5233,8 @@ export function CampWorkspace({
               executionExpanded={executionPlacement === 'inspector'
                 ? inspectorVisible && inspectorSurfaceTab === 'execution'
                 : rightExecutionVisible}
+              mobileExecutionMaximized={mobileExecutionMaximized}
+              onToggleMobileExecutionMaximized={mobile ? () => setMobileExecutionMaximized((expanded) => !expanded) : undefined}
               runningMembers={runningMembers}
               executionCount={executionProcesses.length}
               taskCount={openCoverage?.tasks.totalCount ?? snapshot.tasks.length}
