@@ -9841,8 +9841,17 @@ function RunExecutionContent({
   const hasActiveTool = toolActivityGroupHasActiveTool(activeToolItems, run.status)
   const hasActiveCompaction = executionHasActiveCompaction(processItems)
   const trailingProcessItem = groupedProcessItems[groupedProcessItems.length - 1]
+  const runtimePhase = windowedEvidence ? windowPage.runtimePhase : effectiveProgress?.runtimePhase
+  const thinkingAfterTool = run.status === 'running'
+    && runtimePhase === 'thinking'
+    && trailingProcessItem?.kind === 'toolGroup'
+    && (!windowedEvidence || !windowPage.hasNewer)
+    && !hasActiveTool
+    && !hasActiveCompaction
+    && !finalBody
   const liveTailToolGroupKey = run.status === 'running'
     && !cancelling
+    && !thinkingAfterTool
     && trailingProcessItem?.kind === 'toolGroup'
     ? trailingProcessItem.key
     : null
@@ -9853,18 +9862,18 @@ function RunExecutionContent({
   const completeEvidence = selectCompletePresentableExecutionEvidence(
     displayedEvidence ?? truncatedEvidence
   )
-  const runtimePhase = windowedEvidence ? windowPage.runtimePhase : effectiveProgress?.runtimePhase
   const initialFeedback = executionInitialFeedback(
     run.status,
     processItems,
     Boolean(finalBody),
     runtimePhase
   )
+  const phaseFeedback = thinkingAfterTool ? '思考中' : initialFeedback
   const feedback = run.status === 'waiting' ? agentRunWaitDetail(run.waitReason) ?? '等待继续'
     : run.failure?.code === 'runtime_network_interrupted' ? '正在恢复连接'
       : activeRetryDiagnostic
         ? `等待 Claude Code 自动重试（${activeRetryDiagnostic.attempt}/${activeRetryDiagnostic.maxAttempts}）`
-        : initialFeedback
+        : phaseFeedback
   const sequenceByKey = useMemo(() => new Map<string, number>((displayedEvidence ?? []).flatMap(item => [
     [`narration:${item.id}`, item.sequence] as const,
     [`tool:${item.canonical?.operationId ?? item.id}`, item.sequence] as const
@@ -10064,7 +10073,7 @@ function RunExecutionContent({
         && liveTailToolGroupKey === null
         && feedback
         && (
-          <div className={`process-action current${feedback === initialFeedback ? ' is-initial-feedback' : ''}`} role="status">
+          <div className={`process-action current${feedback === phaseFeedback ? ' is-phase-feedback' : ''}`} role="status">
             <span className="process-spinner" aria-hidden="true" />
             <RunningText text={feedback} />
           </div>
