@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.68
 authority: version-implementation-and-acceptance
-status: in_progress
+status: completed
 last_updated: 2026-09-23
 ---
 
@@ -19,11 +19,17 @@ last_updated: 2026-09-23
 
 | 项目 | 核查证据 | 状态 |
 | --- | --- | --- |
-| 新公屏上下文无自动历史且 `RUN_INPUT` 完整，`historyHint` 冻结 | Context owner tests、Manifest/payload digest | 进行中 |
-| schema 172 保留旧行、限制新写入并通过重启 | Migration owner test、分类器与 foreign key check | 进行中 |
-| 默认/100 条、错误、分页及长间隔历史读取 | Camp History / Built-in CLI owner tests | 进行中 |
-| 文档和仓库门禁 | `pnpm docs:check`、`pnpm docs:check:decisions`、Rust workspace | 进行中 |
-| 真实模型对照 Gate | [双轨评测](../../development/evaluation.md#上下文改动-gate)的旧/新产品与 Case | 进行中 |
+| 新公屏上下文无自动历史且 `RUN_INPUT` 完整，`historyHint` 冻结 | Context owner tests、Manifest/payload digest；真实 `DEMO-109` 候选 Manifest | 通过 |
+| schema 172 保留旧行、限制新写入并通过重启 | Migration owner test、分类器与 foreign key check | 通过 |
+| 默认/100 条、错误、分页及长间隔历史读取 | Camp History 230 条消息 owner、Built-in CLI schema/help 与负向输入 | 通过 |
+| 文档和仓库门禁 | `pnpm docs:test`、`pnpm docs:check:ci`、`pnpm test:rust:pr`；全量扩展 Rust 测试另见下文 | PR 门禁通过；全量扩展未通过 |
+| 真实模型对照 Gate | 两次通用 Gate 报告；另有 `DEMO-109` 基线/候选真实 Trial | Gate 证据不足；单 Case 两侧硬验收通过 |
+
+两次通用 Gate 均在合同阶段被阻断，12 Case × 两侧的 24 个 Trial 未运行，
+不能声明通用非劣性。全量扩展 Rust 测试的一次运行有 815 通过、56 失败、6 忽略；
+两项本次引入的断言/历史摘要问题已修复并定向通过，其余失败中至少一类早期迁移夹具
+已在合入前基线复现。准确的验证范围、报告定位和限制见
+[独立变更说明](model-context-change-public-history-hint.md#实施与验证记录2026-09-23)。
 
 ## Rust 测试准入与退役
 

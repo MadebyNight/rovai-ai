@@ -8,7 +8,7 @@ confirmed_by: Principal
 confirmed_at: 2026-09-23T14:34:51Z
 confirmed_revision: 1
 authority: proposed-model-input-change-statement
-implementation_status: in_progress
+implementation_status: completed
 last_updated: 2026-09-23
 ---
 
@@ -338,3 +338,38 @@ Charter revision 在当前共享 Binding compatibility digest 中升级，确保
 `confirmation_status: confirmed`、`confirmed_revision: 1`。确认者为 Principal，
 时间与来源为上述 Camp 消息。原始 Mission、范围澄清和实现者判断不替代此确认；
 如方案语义改变，先递增 revision，再重新确认。
+
+## 实施与验证记录（2026-09-23）
+
+已按确认的 revision 1 实施；核心提交为 `29a0c2c6`，旧 Profile 摘要路径的修正提交为
+`14018d8f`。实际公开轴为 Run Facts 7、Formatter/Manifest 29、Profile 9、
+Charter revision 13、Camp History 9；数据合同为 v1.68/schema 122，migration 172。
+非 batch 26/5/6 轴未变。Profile 9 冻结 JSON 仅含 `profileVersion` 和
+`maxSelfActiveTasks`。旧业务行及 ContextManifest/AgentRunInput 证据在升级时保留原字节，
+新公开 batch 写入受 29/9/7 约束；旧格式执行仍不续派或恢复。
+
+`pnpm test:rust:pr`、42 项 Context 慢速测试、230 条消息的 `camp.read` 倒翻 owner 测试、
+schema 172 保留/门禁/重启 owner 测试、旧 Profile 4 摘要迁移定向测试、
+`cargo fmt --all -- --check`、`pnpm docs:test`、`pnpm docs:check`、
+`DOCS_BASE_REF=origin/main pnpm docs:check:ci` 与 `git diff --check` 通过。
+构建出的 CLI help 显示默认 20、显式 1–100；101 与小数值返回参数错误。
+一次全量扩展 Rust 检查记录 815 通过、56 失败、6 忽略；其中本次的旧触发器断言和
+Profile 4 摘要问题已修正并分别定向通过。合入前基线也复现早期迁移夹具失败，
+但全量扩展检查仍未通过，不能将余下失败概括为已全部证实的既有问题。
+
+冻结的 12 个通用 Case Gate 保留两次尝试：基线 `776f1345`，最终候选
+`14018d8f`，计划 digest `386a3d74…`（第二次计划因候选产品更新而另有 digest）。
+两次报告均为 `insufficient`、无已证实新回归、各有 57 项证据缺口；
+基线合同检查已有 3 项失败，候选合同清单仍要求已退役的自动历史 cursor 测试，
+因此 24 个计划 Trial 均未启动，Judge 未评分。报告保存在本机
+`/tmp/rovai-m053-gate-campaign/attempt-01` 与 `attempt-02`；
+这不是 12 Case Gate 通过的证据。
+
+另以原封存 `DEMO-109` 单独运行真实 Runtime：基线和最终候选的硬验收均通过，
+都从序号 1 的公屏原文交付 `region=eu-west`、`retryLimit=4`。
+候选实际 Manifest 记录 Formatter 29、Profile 9、必有的无旧边界
+`historyHint`，自动历史 evidence、recent refs 与遗漏均为空；
+工具账本记录基线 2 次、候选 1 次 `camp.read`。
+两侧单次耗时分别约 135 秒、205 秒；该诊断 Case 无语义 Judge，
+也不能替代受合同检查阻断的通用 Gate 或证明总体耗时趋势。
+原始 Trial 保存在本机 `/tmp/rovai-m053-supplemental-trials/DEMO-109-*`。

@@ -4,7 +4,7 @@ version: v1.68
 lifecycle: current
 authority: version-scope-and-status
 design_status: confirmed
-implementation_status: in_progress
+implementation_status: completed
 model_context_change: true
 last_updated: 2026-09-23
 ---
@@ -14,6 +14,8 @@ last_updated: 2026-09-23
 前置：[v1.67](../v1.67/README.md)。本版按已二次确认的[模型上下文变更说明 revision 1](model-context-change-public-history-hint.md)，从新公开 Camp Run 移除自动公屏历史投影，完整保留 `RUN_INPUT`，在 `RUN_FACTS.historyHint` 冻结上一次有效接受执行前的公屏边界。`camp.read` 默认返回 20 条，显式上限为 100 条并保持诚实分页。旧格式执行不续派、恢复、转换或重播；已有业务行及历史审计原字节保留。
 
 实施范围及验收见[实施计划](implementation-plan.md)，取舍见[版本决定](decisions.md)。
+实现和定向验证已完成；完整通用 Gate 因基线合同失败和候选评测清单引用旧自动历史测试而证据不足，
+两次报告及一项真实历史定位 Case 的结果见[独立变更说明](model-context-change-public-history-hint.md#实施与验证记录2026-09-23)。
 
 ## 跨版本文档影响
 
