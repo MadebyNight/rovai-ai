@@ -3,7 +3,7 @@ document_type: contract
 contract: managed-runtime-process-v2
 status: accepted
 source_version: v1.58
-last_updated: 2026-09-14
+last_updated: 2026-09-23
 ---
 
 # Managed Runtime Process v2
@@ -58,6 +58,11 @@ Windows launch policy 只允许以下封闭 entrypoint：
 
 `.com`、`.ps1`、PowerShell fallback、PATHEXT 全量扩展和调用方自行拼装的通用 Shell command 不属于本合同。
 用户 prompt 仍只能经 stdin 投递；command shim argv 只承载 Adapter 声明的控制参数。
+
+Claude Adapter 的完整 Session Bootstrap 通过官方 `--append-system-prompt-file` 引用私有临时 UTF-8 文件；
+非空设置同样通过 `--settings` 文件路径传递，避免多行正文和 JSON 字面引号进入 command shim argv。
+文件 guard 保持到 one-shot 进程退出或启动失败，再清理文件；新建与恢复 Session 使用相同交付方式。
+参数语义见 [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference)。
 
 Discovery 可以把已知 npm/pnpm 生成的 Codex `codex.cmd` 作为只读 locator：有界验证精确模板、
 `@openai/codex` entrypoint、对应 Windows x64 platform package 与固定 vendor 路径后，只把最终 canonical

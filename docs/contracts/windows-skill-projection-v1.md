@@ -3,7 +3,7 @@ document_type: contract
 contract: windows-skill-projection-v1
 status: accepted
 source_version: v1.05
-last_updated: 2026-08-18
+last_updated: 2026-09-23
 ---
 
 # Windows Skill Projection v1
@@ -103,6 +103,13 @@ The gate is keyed by opened canonical root identity:
 - terminal registrations are pruned only after authoritative AgentRun status/epoch proves they are no longer active;
 - Core restart reuses persisted registrations, reconstructs active/recovery facts, resolves journals, then opens admission;
 - ambiguous recovery leaves the root blocked with a stable `skill_projection_recovery_required` reason.
+
+Before the first launch registers a root, preflight includes the Runtime delivery groups of the configured Camp members
+sharing that root, as well as the requested Runtime and active Runs. This prepares later teammates without requiring
+mutation while the lead is active. It reads configured requirements from the database and does not scan other roots.
+If a later preflight still requires exclusive mutation, it returns `SkillProjectionGateBusy` through normal launch-failure
+settlement instead of retrying indefinitely. Existing active registrations remain authoritative; this does not permit
+replacement, deletion, or journal recovery during their lifetime.
 
 Migration 97 installs the registration table plus nullable `operation_id` and `entry_identity` observation columns and
 advances the exact `v1.13 / schema 51 / migration 96` source to Data Contract `v1.15 / projection schema 52`. Existing

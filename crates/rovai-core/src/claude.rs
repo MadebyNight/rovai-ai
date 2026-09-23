@@ -43,6 +43,34 @@ use crate::{
 
 const MAX_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
 
+// Keep prompt/settings bytes out of argv, including for Windows command shims.
+// The guard lives through process exit and also removes files on launch failure.
+struct ClaudeLaunchFile(PathBuf);
+
+impl ClaudeLaunchFile {
+    fn write(directory: &Path, contents: &[u8]) -> Result<Self> {
+        use rovai_core::platform::private_storage::{
+            create_private_new_file, prepare_private_directory,
+        };
+        use std::io::Write;
+
+        let directory = prepare_private_directory(&directory.join("claude-inputs"))?;
+        let path = directory.join(format!("{}.txt", uuid::Uuid::new_v4()));
+        let mut file = create_private_new_file(&path)?;
+        let guard = Self(path);
+        let written = file.write_all(contents).and_then(|()| file.flush());
+        drop(file);
+        written?;
+        Ok(guard)
+    }
+}
+
+impl Drop for ClaudeLaunchFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub struct ClaudeCodeRunRequest {
     pub agent_run_id: String,
     pub execution_epoch: i64,
@@ -413,11 +441,29 @@ impl ClaudeCodeCliRuntimeAdapter {
             // Core already validated this value against the Runtime's model catalog.
             command.args(["--effort", effort]);
         }
+        let bootstrap_file = request
+            .session_bootstrap
+            .as_deref()
+            .map(|bootstrap| {
+                ClaudeLaunchFile::write(&self.private_runtime_dir, bootstrap.as_bytes())
+            })
+            .transpose()?;
+        let settings_file = if inline_settings
+            .as_object()
+            .is_some_and(|settings| !settings.is_empty())
+        {
+            Some(ClaudeLaunchFile::write(
+                &self.private_runtime_dir,
+                &serde_json::to_vec(&inline_settings)?,
+            )?)
+        } else {
+            None
+        };
         command.args(launch_session_arguments(
             request.resumable_native_session_id.as_deref(),
             &native_session_id,
-            request.session_bootstrap.as_deref(),
-            &inline_settings,
+            bootstrap_file.as_ref().map(|file| file.0.as_path()),
+            settings_file.as_ref().map(|file| file.0.as_path()),
         )?);
         if !request.persist_session {
             command.arg("--no-session-persistence").arg("--tools=");
@@ -1883,34 +1929,28 @@ fn validate_session_id(value: &str) -> Result<()> {
 fn launch_session_arguments(
     resume: Option<&str>,
     session_id: &str,
-    bootstrap: Option<&str>,
-    settings: &Value,
+    bootstrap: Option<&Path>,
+    settings: Option<&Path>,
 ) -> Result<Vec<String>> {
-    let mut args = session_arguments(resume, session_id, bootstrap);
-    if settings
-        .as_object()
-        .is_some_and(|settings| !settings.is_empty())
-    {
-        args.extend(["--settings".to_string(), serde_json::to_string(settings)?]);
-    }
-    Ok(args)
-}
-
-fn session_arguments(
-    resumable_session_id: Option<&str>,
-    native_session_id: &str,
-    session_bootstrap: Option<&str>,
-) -> Vec<String> {
-    let mut arguments = if let Some(session_id) = resumable_session_id {
+    let mut arguments = if let Some(session_id) = resume {
         vec!["--resume".to_string(), session_id.to_string()]
     } else {
-        vec!["--session-id".to_string(), native_session_id.to_string()]
+        vec!["--session-id".to_string(), session_id.to_string()]
     };
-    if let Some(bootstrap) = session_bootstrap {
-        arguments.push("--append-system-prompt".to_string());
-        arguments.push(bootstrap.to_string());
+    for (flag, path) in [
+        ("--append-system-prompt-file", bootstrap),
+        ("--settings", settings),
+    ] {
+        if let Some(path) = path {
+            arguments.push(flag.to_string());
+            arguments.push(
+                path.to_str()
+                    .context("Claude launch file path is not Unicode")?
+                    .to_string(),
+            );
+        }
     }
-    arguments
+    Ok(arguments)
 }
 
 #[cfg(unix)]
@@ -2035,52 +2075,87 @@ mod tests {
 
     #[test]
     fn appends_complete_bootstrap_for_new_and_resumed_sessions() {
-        for resume in [None, Some("resume-id")] {
-            for fast in [None, Some(true), Some(false)] {
-                let mut settings = json!({});
-                rovai_core::camp_fast::merge_claude_inline_settings(&mut settings, fast).unwrap();
-                let args = launch_session_arguments(resume, "new-id", Some("bootstrap"), &settings)
+        let root =
+            std::env::temp_dir().join(format!("rovai-claude-launch-{}", uuid::Uuid::new_v4()));
+        rovai_core::platform::private_storage::prepare_private_directory(&root).unwrap();
+        for bootstrap in ["single line", "中文\nline \"two\"", "中文\r\n100% complete"] {
+            for resume in [None, Some("resume-id")] {
+                for fast in [None, Some(true), Some(false)] {
+                    let bootstrap_file =
+                        ClaudeLaunchFile::write(&root, bootstrap.as_bytes()).unwrap();
+                    let mut settings = json!({});
+                    rovai_core::camp_fast::merge_claude_inline_settings(&mut settings, fast)
+                        .unwrap();
+                    let settings_file = fast.map(|_| {
+                        ClaudeLaunchFile::write(&root, &serde_json::to_vec(&settings).unwrap())
+                            .unwrap()
+                    });
+                    let args = launch_session_arguments(
+                        resume,
+                        "new-id",
+                        Some(&bootstrap_file.0),
+                        settings_file.as_ref().map(|file| file.0.as_path()),
+                    )
                     .unwrap();
-                assert_eq!(
-                    args[0],
-                    if resume.is_some() {
-                        "--resume"
-                    } else {
-                        "--session-id"
-                    }
-                );
-                assert_eq!(
-                    args.iter()
-                        .filter(|arg| arg.as_str() == "--settings")
-                        .count(),
-                    usize::from(fast.is_some())
-                );
-                if let Some(fast) = fast {
                     assert_eq!(
-                        serde_json::from_str::<Value>(args.last().unwrap()).unwrap()["fastMode"],
-                        fast
+                        args[0],
+                        if resume.is_some() {
+                            "--resume"
+                        } else {
+                            "--session-id"
+                        }
                     );
+                    assert_eq!(args[2], "--append-system-prompt-file");
+                    assert_eq!(std::fs::read(&args[3]).unwrap(), bootstrap.as_bytes());
+                    assert!(
+                        args.iter()
+                            .all(|arg| !arg.contains(['\n', '\r', '\"', '%']))
+                    );
+                    #[cfg(windows)]
+                    {
+                        use rovai_core::windows_runtime_entrypoint::serialize_command_shim_command_line;
+                        use std::ffi::{OsStr, OsString};
+                        let serialize = |args: Vec<OsString>| {
+                            serialize_command_shim_command_line(
+                                OsStr::new(r"C:\Windows\System32\cmd.exe"),
+                                Path::new(r"C:\runtime\claude.cmd"),
+                                &args,
+                            )
+                        };
+                        serialize(args.iter().map(OsString::from).collect()).unwrap();
+                        if bootstrap.contains('\n') {
+                            let legacy =
+                                serialize(vec!["--append-system-prompt".into(), bootstrap.into()]);
+                            assert!(
+                                legacy
+                                    .unwrap_err()
+                                    .to_string()
+                                    .contains("command-line break")
+                            );
+                        }
+                    }
+                    if let Some(fast) = fast {
+                        assert_eq!(args[4], "--settings");
+                        let value: Value =
+                            serde_json::from_slice(&std::fs::read(&args[5]).unwrap()).unwrap();
+                        assert_eq!(value["fastMode"], fast);
+                    } else {
+                        assert_eq!(args.len(), 4);
+                    }
+                    let bootstrap_path = bootstrap_file.0.clone();
+                    let settings_path = settings_file.as_ref().map(|file| file.0.clone());
+                    drop(bootstrap_file);
+                    drop(settings_file);
+                    assert!(!bootstrap_path.exists());
+                    assert!(settings_path.is_none_or(|path| !path.exists()));
                 }
             }
         }
         assert_eq!(
-            session_arguments(None, "new-id", Some("bootstrap-new")),
-            vec![
-                "--session-id",
-                "new-id",
-                "--append-system-prompt",
-                "bootstrap-new",
-            ]
+            launch_session_arguments(None, "new-id", None, None).unwrap(),
+            vec!["--session-id", "new-id"]
         );
-        assert_eq!(
-            session_arguments(Some("resume-id"), "unused", Some("bootstrap-latest")),
-            vec![
-                "--resume",
-                "resume-id",
-                "--append-system-prompt",
-                "bootstrap-latest",
-            ]
-        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

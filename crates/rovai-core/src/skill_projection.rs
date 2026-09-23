@@ -589,6 +589,17 @@ impl SkillProjectionReconciler {
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
+        // Windows cannot publish another Runtime's skills once the first Run
+        // registers this root. Prepare the configured team before taking that
+        // shared admission, including members that have not been dispatched yet.
+        #[cfg(windows)]
+        for requirement in self.known_execution_roots(database)? {
+            if requirement.execution_root == canonical_root_text
+                || requirement.execution_root == requested_root_text
+            {
+                delivery_groups.extend(requirement.delivery_groups);
+            }
+        }
         delivery_groups.extend(active_run_delivery_groups(
             database,
             &canonical_root_text,
