@@ -4396,6 +4396,7 @@ details summary { min-height: 28px; padding: 5px 0; color: var(--muted); font-si
 .mention-avatar { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent); border-radius: 7px; color: var(--brand); background: var(--surface); font-size: 11px; font-weight: 750; }
 .skill-picker-menu { max-height: 310px; }
 .skill-picker-menu button { min-height: 46px; grid-template-columns: 28px minmax(0, 1fr) auto; }
+.skill-picker-menu .mention-menu-heading button { display: inline-flex; width: auto; min-height: 28px; grid-template-columns: none; align-items: center; padding: 3px 7px; white-space: nowrap; }
 .skill-identity-mark { --skill-identity: var(--identity-1); display: grid; width: 34px; height: 34px; place-items: center; border: 0; border-radius: 9px; color: var(--skill-identity); background: color-mix(in srgb, var(--skill-identity) 12%, var(--surface)); box-shadow: none; font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -0.02em; }
 .skill-identity-mark.is-compact { width: 28px; height: 28px; border-radius: 7px; }
 .skill-picker-copy small { font-family: inherit; }

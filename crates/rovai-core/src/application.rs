@@ -1353,13 +1353,6 @@ struct SkillIdParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ToolboxMembersParams {
-    skill_name: String,
-    member_ids: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NativeSkillsListParams {
     adapter_kind: String,
     #[serde(default)]
@@ -1378,21 +1371,6 @@ struct CampSkillCandidatesParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NativeSkillReadParams {
     skill_id: String,
-}
-
-fn remember_native_skill_references(
-    connection: &rusqlite::Connection,
-    skills: &[rovai_core::native_skills::NativeSkill],
-) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    for skill in skills {
-        let adapter_kind = serde_json::to_value(skill.adapter_kind)?;
-        connection.execute(
-            "INSERT INTO native_skill_reference(id, name, entry_path, canonical_path, source_scope, adapter_kind, discovered_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name, entry_path=excluded.entry_path, canonical_path=excluded.canonical_path, source_scope=excluded.source_scope, adapter_kind=excluded.adapter_kind, discovered_at=excluded.discovered_at",
-            rusqlite::params![skill.id, skill.name, skill.entry_path, skill.canonical_path, skill.source_scope, adapter_kind.as_str(), now],
-        )?;
-    }
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -7933,14 +7911,15 @@ impl Core {
                 )?)
             }
             "toolbox.setMembers" => {
-                let params: ToolboxMembersParams = serde_json::from_value(request.params.clone())?;
+                let params: UserCommandParams<
+                    rovai_core::managed_skills::SetToolboxMembersCommand,
+                > = serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                rovai_core::managed_skills::set_toolbox_members(
+                let execution = rovai_core::managed_skills::set_toolbox_members(
                     &mut database,
-                    &params.skill_name,
-                    &params.member_ids,
+                    &user_command_envelope(params.command_id, params.command),
                 )?;
-                Ok(json!({"skillName": params.skill_name, "memberIds": params.member_ids}))
+                Ok(serde_json::to_value(execution.result)?)
             }
             "nativeSkills.list" => {
                 let params: NativeSkillsListParams =
@@ -7956,8 +7935,11 @@ impl Core {
                     discovery.discover(kind, None, true, params.refresh, &configuration)
                 })
                 .await??;
-                let database = self.database.lock().await;
-                remember_native_skill_references(database.connection(), &scan.skills)?;
+                let mut database = self.database.lock().await;
+                rovai_core::native_skills::remember_native_skill_references(
+                    &mut database,
+                    &scan.skills,
+                )?;
                 Ok(serde_json::to_value(scan)?)
             }
             "nativeSkills.read" => {
@@ -8099,8 +8081,11 @@ impl Core {
                         Err(error) => errors.push(format!("{member_id}: {error:#}")),
                     }
                 }
-                let database = self.database.lock().await;
-                remember_native_skill_references(database.connection(), &references)?;
+                let mut database = self.database.lock().await;
+                rovai_core::native_skills::remember_native_skill_references(
+                    &mut database,
+                    &references,
+                )?;
                 let skills = candidates
                     .into_iter()
                     .map(|(id, mut value)| {

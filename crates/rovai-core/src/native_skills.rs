@@ -4,7 +4,7 @@
 //! authority for a frozen message or a Runtime's actual loaded state.
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -13,10 +13,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::agent_profile::AdapterKind;
+use crate::command::{
+    ActorRef, CommandEnvelope, CommandExecution, CommandHandlerResult, DomainCommand,
+    DomainCommandGateway, sealed,
+};
+use crate::db::Database;
 use crate::runtime_startup::RuntimeStartupConfiguration;
 
 const CONTEXT_CACHE_CAPACITY: usize = 32;
@@ -42,6 +49,50 @@ pub struct NativeSkillScan {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RememberNativeSkillReferencesCommand {
+    pub skills: Vec<NativeSkill>,
+}
+
+impl sealed::Sealed for RememberNativeSkillReferencesCommand {}
+impl DomainCommand for RememberNativeSkillReferencesCommand {
+    const TYPE: &'static str = "native_skill.references.remember";
+}
+
+pub fn remember_native_skill_references(
+    database: &mut Database,
+    skills: &[NativeSkill],
+) -> Result<CommandExecution> {
+    let envelope = CommandEnvelope {
+        command_id: Uuid::new_v4().to_string(),
+        actor: ActorRef::System {
+            component_id: "native_skill_discovery".to_string(),
+        },
+        camp_id: None,
+        expected_versions: Vec::new(),
+        execution_epoch: None,
+        payload: RememberNativeSkillReferencesCommand {
+            skills: skills.to_vec(),
+        },
+    };
+    DomainCommandGateway.execute(database, &envelope, |transaction| {
+        let now = chrono::Utc::now().to_rfc3339();
+        for skill in &envelope.payload.skills {
+            let adapter_kind = serde_json::to_value(skill.adapter_kind)?;
+            transaction.execute(
+                "INSERT INTO native_skill_reference(id, name, entry_path, canonical_path, source_scope, adapter_kind, discovered_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name, entry_path=excluded.entry_path, canonical_path=excluded.canonical_path, source_scope=excluded.source_scope, adapter_kind=excluded.adapter_kind, discovered_at=excluded.discovered_at",
+                params![skill.id, skill.name, skill.entry_path, skill.canonical_path, skill.source_scope, adapter_kind.as_str(), now],
+            )?;
+        }
+        Ok(CommandHandlerResult::applied(
+            "native_skill.references.remembered",
+            serde_json::json!({"count": envelope.payload.skills.len()}),
+            None,
+        ))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CacheKey {
     adapter: AdapterKind,
@@ -49,6 +100,7 @@ struct CacheKey {
     project: Option<PathBuf>,
     user_only: bool,
     roots: Vec<(&'static str, PathBuf)>,
+    native_config_digest: String,
 }
 
 #[derive(Debug, Clone)]
@@ -100,12 +152,15 @@ impl NativeSkillDiscovery {
                 roots.extend(project_roots(adapter, project));
             }
         }
+        let (disabled_paths, disabled_names, config_errors, native_config_digest) =
+            codex_disabled_skill_folders(adapter, &home, project.as_deref(), configuration);
         let key = CacheKey {
             adapter,
             home: home.clone(),
             project: project.clone(),
             user_only,
             roots: roots.clone(),
+            native_config_digest,
         };
         if !refresh {
             if let Ok(mut entries) = self.cache.lock() {
@@ -121,7 +176,7 @@ impl NativeSkillDiscovery {
         }
         let mut scan = NativeSkillScan {
             skills: Vec::new(),
-            errors: Vec::new(),
+            errors: config_errors,
         };
         let mut seen_roots = HashSet::new();
         let mut seen_files = HashSet::new();
@@ -132,6 +187,14 @@ impl NativeSkillDiscovery {
             }
             scan_root(adapter, scope, &root, &mut seen_files, &mut scan);
         }
+        scan.skills.retain(|skill| {
+            let path = Path::new(&skill.canonical_path);
+            !disabled_names.contains(&skill.name)
+                && !disabled_paths.contains(path)
+                && path
+                    .parent()
+                    .is_none_or(|folder| !disabled_paths.contains(folder))
+        });
         scan.skills.sort_by(|left, right| {
             left.name
                 .cmp(&right.name)
@@ -153,6 +216,84 @@ impl NativeSkillDiscovery {
         }
         Ok(scan)
     }
+}
+
+fn codex_disabled_skill_folders(
+    adapter: AdapterKind,
+    home: &Path,
+    project: Option<&Path>,
+    configuration: &RuntimeStartupConfiguration,
+) -> (HashSet<PathBuf>, HashSet<String>, Vec<String>, String) {
+    if adapter != AdapterKind::CodexCli {
+        return (HashSet::new(), HashSet::new(), Vec::new(), String::new());
+    }
+    let mut paths =
+        vec![configured_root("CODEX_HOME", home.join(".codex"), configuration).join("config.toml")];
+    if let Some(project) = project {
+        paths.push(project.join(".codex/config.toml"));
+    }
+    let mut path_state = HashMap::<PathBuf, bool>::new();
+    let mut name_state = HashMap::<String, bool>::new();
+    let mut errors = Vec::new();
+    let mut digest = Sha256::new();
+    for config_path in paths {
+        digest.update(config_path.to_string_lossy().as_bytes());
+        let contents = match fs::read_to_string(&config_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                errors.push(format!("{}: {error}", config_path.display()));
+                continue;
+            }
+        };
+        digest.update(contents.as_bytes());
+        let config: toml::Value = match toml::from_str(&contents) {
+            Ok(value) => value,
+            Err(error) => {
+                errors.push(format!("{}: {error}", config_path.display()));
+                continue;
+            }
+        };
+        let Some(entries) = config.get("skills").and_then(|skills| skills.get("config")) else {
+            continue;
+        };
+        let Some(entries) = entries.as_array() else {
+            errors.push(format!(
+                "{}: skills.config is not an array",
+                config_path.display()
+            ));
+            continue;
+        };
+        for entry in entries {
+            let Some(enabled) = entry.get("enabled").and_then(toml::Value::as_bool) else {
+                continue;
+            };
+            if let Some(path) = entry.get("path").and_then(toml::Value::as_str) {
+                let path = if let Some(suffix) = path.strip_prefix("~/") {
+                    home.join(suffix)
+                } else {
+                    PathBuf::from(path)
+                };
+                if path.is_absolute() {
+                    path_state.insert(path.canonicalize().unwrap_or(path), enabled);
+                }
+            } else if let Some(name) = entry.get("name").and_then(toml::Value::as_str) {
+                name_state.insert(name.to_string(), enabled);
+            }
+        }
+    }
+    (
+        path_state
+            .into_iter()
+            .filter_map(|(path, enabled)| (!enabled).then_some(path))
+            .collect(),
+        name_state
+            .into_iter()
+            .filter_map(|(name, enabled)| (!enabled).then_some(name))
+            .collect(),
+        errors,
+        format!("{:x}", digest.finalize()),
+    )
 }
 
 fn runtime_variable(configuration: &RuntimeStartupConfiguration, name: &str) -> Option<OsString> {
@@ -456,6 +597,38 @@ mod tests {
     use super::*;
     use crate::runtime_startup::RuntimeEnvironmentVariable;
 
+    #[cfg(feature = "extended-tests")]
+    #[test]
+    fn native_reference_batch_rolls_back_when_one_source_is_invalid() {
+        let fixture =
+            std::env::temp_dir().join(format!("rovai-native-register-{}", Uuid::new_v4()));
+        let mut database = Database::open(&fixture).unwrap();
+        let valid = NativeSkill {
+            id: "native:valid".to_string(),
+            name: "valid".to_string(),
+            description: "Valid".to_string(),
+            entry_path: "/tmp/valid/SKILL.md".to_string(),
+            canonical_path: "/tmp/valid/SKILL.md".to_string(),
+            source_scope: "user".to_string(),
+            adapter_kind: AdapterKind::CodexCli,
+        };
+        let mut invalid = valid.clone();
+        invalid.id = "native:invalid".to_string();
+        invalid.source_scope = "invalid".to_string();
+        assert!(remember_native_skill_references(&mut database, &[valid, invalid]).is_err());
+        let count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM native_skill_reference WHERE id LIKE 'native:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(database);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
     #[test]
     fn runtime_directory_overrides_change_native_candidates_without_explicit_refresh() {
         let fixture =
@@ -520,6 +693,85 @@ mod tests {
                 .map(|skill| skill.name.as_str())
                 .collect::<Vec<_>>(),
             ["two"]
+        );
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn codex_explicit_disable_removes_candidate_and_config_change_invalidates_cache() {
+        let fixture =
+            std::env::temp_dir().join(format!("rovai-native-disabled-{}", uuid::Uuid::new_v4()));
+        let home = fixture.join("home");
+        let codex_home = home.join(".codex");
+        let skill_dir = codex_home.join("skills/review");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: review\ndescription: Review\n---\n",
+        )
+        .unwrap();
+        let configuration = RuntimeStartupConfiguration {
+            program_path: None,
+            environment: vec![RuntimeEnvironmentVariable {
+                name: if cfg!(windows) { "USERPROFILE" } else { "HOME" }.to_owned(),
+                value: home.to_string_lossy().into_owned(),
+            }],
+        };
+        let discovery = NativeSkillDiscovery::default();
+        fs::write(
+            codex_home.join("config.toml"),
+            format!(
+                "[[skills.config]]\npath = {:?}\nenabled = false\n",
+                skill_dir.join("SKILL.md").to_string_lossy()
+            ),
+        )
+        .unwrap();
+        assert!(
+            discovery
+                .discover(AdapterKind::CodexCli, None, true, false, &configuration)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        fs::write(
+            codex_home.join("config.toml"),
+            "[[skills.config]]\nname = \"review\"\nenabled = false\n",
+        )
+        .unwrap();
+        assert!(
+            discovery
+                .discover(AdapterKind::CodexCli, None, true, false, &configuration)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        fs::write(
+            codex_home.join("config.toml"),
+            format!(
+                "[[skills.config]]\npath = {:?}\nenabled = false\n",
+                skill_dir.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        assert!(
+            discovery
+                .discover(AdapterKind::CodexCli, None, true, false, &configuration)
+                .unwrap()
+                .skills
+                .is_empty()
+        );
+        fs::write(
+            codex_home.join("config.toml"),
+            "[[skills.config]]\nname = \"review\"\nenabled = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            discovery
+                .discover(AdapterKind::CodexCli, None, true, false, &configuration)
+                .unwrap()
+                .skills
+                .len(),
+            1
         );
         fs::remove_dir_all(fixture).unwrap();
     }

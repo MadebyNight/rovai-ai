@@ -2113,7 +2113,10 @@ export function CampWorkspace({
       } catch {
         if (!cancelled && request === requestSequence) {
           setComposerSkillCatalog((current) => current.status === 'ready'
-            ? current
+            ? { ...current, candidates: {
+                ...current.candidates,
+                errors: [...current.candidates.errors.filter((error) => error !== '刷新失败'), '刷新失败']
+              } }
             : { ...current, status: 'error' })
         }
       } finally {

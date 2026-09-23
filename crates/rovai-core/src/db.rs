@@ -3577,7 +3577,7 @@ fn default_recipient_mention_v166_schema_matches(
             && new_write_trigger.contains("invocation_kind = 'batch'")
             && profile_trigger.contains("NEW.context_manifest_version = 30")
             && profile_trigger.contains("NEW.context_delivery_profile_version = 10")
-            && attachment_trigger.contains("context_manifest_version IN (26, 29)"));
+            && attachment_trigger.contains("context_manifest_version IN (26, 27, 29, 30)"));
     }
     Ok(input_columns == 2
         && input_guards == 2
@@ -3621,7 +3621,8 @@ fn default_recipient_mention_v166_schema_matches(
             || profile_trigger.contains("NEW.context_delivery_profile_version = 10"))
         && (attachment_trigger.contains("context_manifest_version IN (24, 25, 26, 27)")
             || attachment_trigger.contains("context_manifest_version IN (26, 28)")
-            || attachment_trigger.contains("context_manifest_version IN (26, 29)"))
+            || attachment_trigger.contains("context_manifest_version IN (26, 29)")
+            || attachment_trigger.contains("context_manifest_version IN (26, 27, 29, 30)"))
         && triggers == 3)
 }
 
@@ -3806,13 +3807,18 @@ fn skills_rebuild_v173_schema_matches(connection: &Connection) -> rusqlite::Resu
         "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='context_manifest_v30_only_insert'",
         [], |row| row.get(0),
     )?;
+    let attachment_trigger: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='runtime_input_delivery_attachment_auth_insert'",
+        [], |row| row.get(0),
+    )?;
     Ok(tables == 4
         && bootstrap.contains("native_session_bootstrap_v5")
         && bootstrap.contains("bootstrap_formatter_version IN (3, 4, 5)")
         && manifest.contains("context_manifest_version = 30")
         && manifest.contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10)")
         && input.contains("context_manifest_version IN (26, 27, 28, 29, 30)")
-        && trigger.contains("NEW.context_manifest_version = 30"))
+        && trigger.contains("NEW.context_manifest_version = 30")
+        && attachment_trigger.contains("context_manifest_version IN (26, 27, 29, 30)"))
 }
 
 fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -27694,6 +27700,26 @@ impl Database {
                 WHEN NEW.context_manifest_version IS NOT 30
                 BEGIN SELECT RAISE(ABORT, 'new public Camp AgentRunInput must use ContextManifest v30'); END;
 
+                DROP TRIGGER runtime_input_delivery_attachment_auth_insert;
+                CREATE TRIGGER runtime_input_delivery_attachment_auth_insert
+                BEFORE INSERT ON runtime_input_delivery
+                WHEN NEW.runtime_request_digest IS NULL OR NOT (
+                    (NEW.runtime_attachment_auth_receipt_version IS 1
+                     AND NEW.runtime_attachment_auth_receipt_json IS NOT NULL
+                     AND NEW.runtime_attachment_auth_receipt_digest IS NOT NULL)
+                    OR
+                    (NEW.runtime_attachment_auth_receipt_version IS NULL
+                     AND NEW.runtime_attachment_auth_receipt_json IS NULL
+                     AND NEW.runtime_attachment_auth_receipt_digest IS NULL
+                     AND EXISTS(
+                         SELECT 1 FROM context_manifest
+                         WHERE id = NEW.context_manifest_id
+                           AND context_manifest_version IN (26, 27, 29, 30)
+                           AND camp_attachment_view_receipt_version IS NULL
+                     ))
+                )
+                BEGIN SELECT RAISE(ABORT, 'Runtime Input Delivery attachment evidence does not match its manifest'); END;
+
                 INSERT INTO schema_migration(version, applied_at) VALUES (173, datetime('now'));
                 UPDATE rovai_data_contract
                 SET contract_version = 'v1.69', projection_schema_version = 123,
@@ -37448,7 +37474,8 @@ mod tests {
         );
         assert!(matches!(
             classify_database_contract(source.connection()).unwrap(),
-            DatabaseContractClassification::Current(_)
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.68" && marker.projection_schema_version == 122
         ));
         drop(source);
         let reopened = Database::open(&directory).unwrap();
@@ -38673,11 +38700,12 @@ mod tests {
                 119,
                 169,
             ),
+            ("v1.68/schema 122 before Skills rebuild", "v1.68", 122, 172),
             (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                172,
+                173,
             ),
             (
                 "v1.66/schema 120 before Task version removal",
@@ -39155,7 +39183,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(172);
+        let current = migration_state_through(173);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;

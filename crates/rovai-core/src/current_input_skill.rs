@@ -267,6 +267,8 @@ pub struct CurrentInputSkillLink {
     pub name: String,
     pub path: String,
     #[serde(skip)]
+    pub skill_id: Option<String>,
+    #[serde(skip)]
     pub message_index: Option<usize>,
 }
 
@@ -299,6 +301,7 @@ pub(crate) fn projected_skill_links_for_claim(
                     .map(|path| CurrentInputSkillLink {
                         name: entry.name_at_send.clone(),
                         path,
+                        skill_id: Some(entry.skill_id.clone()),
                         message_index: Some(entry.first_message_index),
                     })
             })
@@ -341,6 +344,7 @@ pub(crate) fn projected_skill_links_for_claim(
                 .join("SKILL.md")
                 .to_string_lossy()
                 .to_string(),
+            skill_id: None,
             message_index: None,
         });
     }
@@ -666,6 +670,7 @@ pub fn resolve_current_input_skills(
         links.push(CurrentInputSkillLink {
             name: selected.name_at_send.clone(),
             path: skill_file,
+            skill_id: None,
             message_index: None,
         });
         entries.push(entry);
@@ -710,6 +715,7 @@ fn resolve_current_input_skills_v2(
             links.push(CurrentInputSkillLink {
                 name: selected.name_at_send.clone(),
                 path: path.clone(),
+                skill_id: Some(selected.skill_id.clone()),
                 message_index: Some(selected.first_message_index),
             });
         }
@@ -1291,6 +1297,7 @@ mod tests {
             [CurrentInputSkillLink {
                 name: "review-pr".to_string(),
                 path: opencode.join("SKILL.md").to_string_lossy().to_string(),
+                skill_id: None,
                 message_index: None,
             }]
         );

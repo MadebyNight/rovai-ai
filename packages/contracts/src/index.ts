@@ -3218,6 +3218,7 @@ export interface ToolboxSkillView {
   name: string
   description: string | null
   memberIds: string[]
+  version: string
   sourceError: string | null
 }
 

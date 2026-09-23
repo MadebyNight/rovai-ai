@@ -1849,6 +1849,7 @@ mod tests {
             &[CurrentInputSkillLink {
                 name: "review-code".to_string(),
                 path: "/tmp/.codex/skills/review-code/SKILL.md".to_string(),
+                skill_id: None,
                 message_index: None,
             }],
         )

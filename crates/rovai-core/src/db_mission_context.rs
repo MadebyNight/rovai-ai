@@ -313,7 +313,7 @@ pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<b
     )? && contains_schema(
         connection,
         "runtime_input_delivery_attachment_auth_insert",
-        &["context_manifest_version IN (26, 29)"],
+        &["context_manifest_version IN (26, 27, 29, 30)"],
     )?;
     let profile_pairing = contains_schema(
         connection,

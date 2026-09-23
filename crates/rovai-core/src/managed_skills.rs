@@ -9,10 +9,15 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use uuid::Uuid;
 
+use crate::command::{
+    ActorRef, CommandEnvelope, CommandExecution, CommandHandlerResult, DomainCommand,
+    DomainCommandGateway, canonical_json_digest, sealed,
+};
 use crate::db::Database;
 use crate::platform::private_storage::prepare_private_directory;
 
@@ -48,7 +53,21 @@ pub struct ToolboxSkillView {
     pub name: String,
     pub description: Option<String>,
     pub member_ids: Vec<String>,
+    pub version: String,
     pub source_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetToolboxMembersCommand {
+    pub skill_name: String,
+    pub member_ids: Vec<String>,
+    pub expected_version: String,
+}
+
+impl sealed::Sealed for SetToolboxMembersCommand {}
+impl DomainCommand for SetToolboxMembersCommand {
+    const TYPE: &'static str = "toolbox.members.set";
 }
 
 #[derive(Debug, Serialize)]
@@ -198,12 +217,8 @@ impl ManagedSkills {
     pub fn list_toolbox(&self, connection: &Connection) -> Result<Vec<ToolboxSkillView>> {
         let mut views = Vec::new();
         for name in TOOLBOX_SKILLS {
-            let mut statement = connection.prepare(
-                "SELECT agent_id FROM member_toolbox_skill WHERE skill_name = ?1 ORDER BY agent_id",
-            )?;
-            let member_ids = statement
-                .query_map([name], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let member_ids = toolbox_member_ids(connection, name)?;
+            let version = toolbox_members_version(&member_ids)?;
             let (description, source_error) = match self
                 .entry_path(name)
                 .and_then(|path| read_frontmatter(&path, name))
@@ -215,6 +230,7 @@ impl ManagedSkills {
                 name: name.to_owned(),
                 description,
                 member_ids,
+                version,
                 source_error,
             });
         }
@@ -233,38 +249,74 @@ pub fn configured_toolbox_names(connection: &Connection, agent_id: &str) -> Resu
 
 pub fn set_toolbox_members(
     database: &mut Database,
-    skill_name: &str,
-    member_ids: &[String],
-) -> Result<()> {
-    ensure!(
-        TOOLBOX_SKILLS.contains(&skill_name),
-        "unknown toolbox Skill"
-    );
-    let member_ids = member_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let transaction = database
-        .connection_mut()
-        .transaction_with_behavior(TransactionBehavior::Immediate)?;
-    for agent_id in &member_ids {
-        let exists: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM agent_profile WHERE id = ?1 AND profile_status <> 'removed')",
-            [agent_id],
-            |row| row.get(0),
-        )?;
-        ensure!(exists, "toolbox member does not exist");
-    }
-    transaction.execute(
-        "DELETE FROM member_toolbox_skill WHERE skill_name = ?1",
-        [skill_name],
-    )?;
-    let now = chrono::Utc::now().to_rfc3339();
-    for agent_id in member_ids {
+    envelope: &CommandEnvelope<SetToolboxMembersCommand>,
+) -> Result<CommandExecution> {
+    DomainCommandGateway.execute(database, envelope, |transaction| {
+        let command = &envelope.payload;
+        if !matches!(envelope.actor, ActorRef::User { .. })
+            || envelope.camp_id.is_some()
+            || envelope.execution_epoch.is_some()
+            || !TOOLBOX_SKILLS.contains(&command.skill_name.as_str())
+        {
+            return Ok(CommandHandlerResult::rejected("toolbox.invalid_request", json!({})));
+        }
+        let current = toolbox_member_ids(transaction, &command.skill_name)?;
+        let current_version = toolbox_members_version(&current)?;
+        if current_version != command.expected_version {
+            return Ok(CommandHandlerResult::rejected(
+                "toolbox.members.conflict",
+                json!({"version": current_version}),
+            ));
+        }
+        let member_ids = command.member_ids.iter().cloned().collect::<BTreeSet<_>>();
+        for agent_id in &member_ids {
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_profile WHERE id = ?1 AND profile_status <> 'removed')",
+                [agent_id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Ok(CommandHandlerResult::rejected(
+                    "toolbox.member_unavailable",
+                    json!({"agentId": agent_id}),
+                ));
+            }
+        }
         transaction.execute(
-            "INSERT INTO member_toolbox_skill(agent_id, skill_name, updated_at) VALUES (?1, ?2, ?3)",
-            params![agent_id, skill_name, now],
+            "DELETE FROM member_toolbox_skill WHERE skill_name = ?1",
+            [&command.skill_name],
         )?;
-    }
-    transaction.commit()?;
-    Ok(())
+        let now = chrono::Utc::now().to_rfc3339();
+        for agent_id in &member_ids {
+            transaction.execute(
+                "INSERT INTO member_toolbox_skill(agent_id, skill_name, updated_at) VALUES (?1, ?2, ?3)",
+                params![agent_id, command.skill_name, now],
+            )?;
+        }
+        let member_ids = member_ids.into_iter().collect::<Vec<_>>();
+        Ok(CommandHandlerResult::applied(
+            "toolbox.members.updated",
+            json!({
+                "skillName": command.skill_name,
+                "memberIds": member_ids,
+                "version": toolbox_members_version(&member_ids)?,
+            }),
+            None,
+        ))
+    })
+}
+
+fn toolbox_member_ids(connection: &Connection, name: &str) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT agent_id FROM member_toolbox_skill WHERE skill_name = ?1 ORDER BY agent_id",
+    )?;
+    Ok(statement
+        .query_map([name], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn toolbox_members_version(member_ids: &[String]) -> Result<String> {
+    canonical_json_digest(&json!(member_ids))
 }
 
 pub fn read_frontmatter(path: &Path, expected_name: &str) -> Result<String> {
@@ -346,6 +398,51 @@ fn sync_directory(source: &Path, target: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "extended-tests")]
+    fn insert_member(connection: &Connection, id: &str, order: i64) {
+        connection.execute(
+            "INSERT INTO agent_profile(id, slug, handle, display_name, avatar_ref, team_role, professional_responsibilities, personality_traits_json, working_principles, growth_topic, default_capabilities_json, accent, runtime_enabled, profile_status, member_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'rovai://member-avatar/managed/123e4567-e89b-12d3-a456-426614174000', 'role', 'responsibility', '[]', 'principles', 'growth', '[]', '#123456', 0, 'away', ?5, '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z')",
+            params![id, id, id, id, order],
+        ).unwrap();
+    }
+
+    #[cfg(feature = "extended-tests")]
+    #[test]
+    fn stale_toolbox_command_preserves_new_members_default_and_replays_rejection() {
+        let directory = std::env::temp_dir().join(format!("rovai-toolbox-cas-{}", Uuid::new_v4()));
+        let mut database = Database::open(&directory).unwrap();
+        insert_member(database.connection(), "agent-first", 1);
+        let initial = toolbox_member_ids(database.connection(), "member-studio").unwrap();
+        let version = toolbox_members_version(&initial).unwrap();
+        insert_member(database.connection(), "agent-second", 2);
+        let with_new_member = toolbox_member_ids(database.connection(), "member-studio").unwrap();
+        assert!(with_new_member.contains(&"agent-second".to_string()));
+        let envelope = CommandEnvelope {
+            command_id: Uuid::new_v4().to_string(),
+            actor: ActorRef::User {
+                user_id: "local_user".to_string(),
+            },
+            camp_id: None,
+            expected_versions: Vec::new(),
+            execution_epoch: None,
+            payload: SetToolboxMembersCommand {
+                skill_name: "member-studio".to_string(),
+                member_ids: Vec::new(),
+                expected_version: version,
+            },
+        };
+        let first = set_toolbox_members(&mut database, &envelope).unwrap();
+        assert_eq!(first.result.code, "toolbox.members.conflict");
+        let replay = set_toolbox_members(&mut database, &envelope).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(
+            toolbox_member_ids(database.connection(), "member-studio").unwrap(),
+            with_new_member,
+        );
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn frontmatter_preserves_yaml_scalar_value_in_model_index() {

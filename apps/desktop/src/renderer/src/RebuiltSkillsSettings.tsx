@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import * as Dialog from '@radix-ui/react-dialog'
-import type { AdapterKind, AgentProfile, NativeSkillScan, NativeSkillView, ToolboxSkillView } from '@contracts'
+import type { AdapterKind, AgentProfile, NativeSkillScan, NativeSkillView, StoredCommandResult, ToolboxSkillView } from '@contracts'
 import { useCampClient } from './camp-client'
 import { MemberAvatar } from './MemberAvatar'
 import { RuntimeGlyph } from './MemberRuntimePicker'
@@ -104,7 +104,7 @@ export function ToolboxSettings({ agents }: { agents: AgentProfile[] }): React.J
   const [memberQuery, setMemberQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [failedSave, setFailedSave] = useState<{ skillName: string; memberIds: string[] } | null>(null)
+  const [failedSave, setFailedSave] = useState<{ skillName: string; memberIds: string[]; expectedVersion: string; commandId: string } | null>(null)
   const [loadingError, setLoadingError] = useState<string | null>(null)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
   const [detailVisible, setDetailVisible] = useState(false)
@@ -121,16 +121,39 @@ export function ToolboxSettings({ agents }: { agents: AgentProfile[] }): React.J
   const members = agents.filter((agent) => agent.presence !== 'removed')
   const visibleMembers = members.filter((agent) => `${agent.displayName} ${agent.teamRole}`.toLocaleLowerCase().includes(memberQuery.toLocaleLowerCase()))
   const visibleSkills = (skills ?? []).filter((skill) => `${skill.name} ${skill.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
-  const save = async (memberIds: string[], skillName = selected?.name): Promise<void> => {
+  const save = async (memberIds: string[], skillName = selected?.name, retry?: typeof failedSave): Promise<void> => {
     if (!skillName || busy) return
     const name = skillName
     const before = skills
+    const expectedVersion = retry?.expectedVersion ?? before?.find((skill) => skill.name === name)?.version
+    if (!expectedVersion) return
+    const commandId = retry?.commandId ?? crypto.randomUUID()
     setError(null)
     setFailedSave(null)
     setBusy(true)
     setSkills((current) => current?.map((skill) => skill.name === name ? { ...skill, memberIds } : skill) ?? null)
-    try { await client.request('toolbox.setMembers', { skillName: name, memberIds }) }
-    catch (reason) { setSkills(before); setError(readErrorMessage(reason)); setFailedSave({ skillName: name, memberIds }) }
+    try {
+      const result = await client.request<StoredCommandResult>('toolbox.setMembers', {
+        commandId,
+        command: { skillName: name, memberIds, expectedVersion }
+      })
+      if (result.status !== 'applied') {
+        setSkills(before)
+        setError(result.code === 'toolbox.members.conflict'
+          ? '配置已在其他位置更新，请按新状态重试。'
+          : '队员配置已变化，请重新选择。')
+        await load()
+      } else {
+        const version = result.payload.version
+        if (typeof version === 'string') {
+          setSkills((current) => current?.map((skill) => skill.name === name ? { ...skill, memberIds, version } : skill) ?? null)
+        }
+      }
+    } catch (reason) {
+      setSkills(before)
+      setError(readErrorMessage(reason))
+      setFailedSave({ skillName: name, memberIds, expectedVersion, commandId })
+    }
     finally { setBusy(false) }
   }
   const selectedMembers = new Set(selected?.memberIds ?? [])
@@ -144,10 +167,11 @@ export function ToolboxSettings({ agents }: { agents: AgentProfile[] }): React.J
     <div className="rebuilt-skills-columns">
       <aside className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}><div className="rebuilt-skills-toolbar"><strong>协作 Skills</strong><span>{skills?.length ?? '—'} 项</span></div><label className="rebuilt-skills-search"><span className="sr-only">搜索协作 Skills</span><input type="search" placeholder="搜索 Skill" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         {loadingError && <div className="rebuilt-skills-error" role="alert">工具箱暂不可读：{loadingError}<button type="button" onClick={() => void load()}>重试</button></div>}
+        {!skills && !loadingError && <p className="rebuilt-skills-empty" role="status">正在读取工具箱…</p>}
         {skills && visibleSkills.length === 0 && <p className="rebuilt-skills-empty">没有匹配的 Skill。</p>}
         <div className="rebuilt-skills-list-scroll">{visibleSkills.map((skill) => <button type="button" key={skill.name} className={`rebuilt-skill-row ${selectedName === skill.name ? 'is-selected' : ''}`} onClick={() => { setSelectedName(skill.name); setError(null); setFailedSave(null); setDetailVisible(true) }}><SkillIdentityMark skillId={skill.name} name={skill.name} /><span><strong>{skill.name}</strong><small>{skill.description ?? '说明暂不可读'}</small></span><em>{skill.memberIds.length ? `已选 ${skill.memberIds.length} 人` : '未分配'}</em></button>)}</div>
       </aside>
-      <section className={`rebuilt-skills-detail ${detailVisible ? 'is-detail-visible' : ''}`} aria-label="工具箱队员配置"><button type="button" className="rebuilt-skills-back" onClick={() => setDetailVisible(false)}>返回列表</button>{selected ? <><header className="rebuilt-toolbox-heading"><div><h2>{selected.name}</h2><p>{selected.description ?? '说明暂不可读'}</p></div><button type="button" onClick={() => setDescriptionOpen(true)}>查看说明</button></header><div className="rebuilt-skills-toolbar"><strong>提供给队员</strong><span>已选 {selected.memberIds.length} 人</span><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(true)}>全选{memberQuery ? '当前结果' : ''}</button><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(false)}>取消全选{memberQuery ? '当前结果' : ''}</button></div><label className="rebuilt-skills-search"><span className="sr-only">搜索队员</span><input type="search" placeholder="搜索队员姓名或角色" value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} /></label>{busy && <p role="status" className="rebuilt-skills-status">正在保存…</p>}{error && <div className="rebuilt-skills-error" role="alert">保存失败：{error}<button type="button" disabled={busy || !failedSave} onClick={() => { if (failedSave) void save(failedSave.memberIds, failedSave.skillName) }}>重试</button></div>}{!members.length && <p className="rebuilt-skills-empty">暂无队员。</p>}{members.length > 0 && visibleMembers.length === 0 && <p className="rebuilt-skills-empty">没有匹配的队员。</p>}<div className="rebuilt-toolbox-members">{visibleMembers.map((agent) => <label key={agent.agentId} className="rebuilt-toolbox-member"><MemberAvatar agentId={agent.agentId} displayName={agent.displayName} avatarRef={agent.avatarRef} /><span><strong>{agent.displayName}</strong><small>{agent.teamRole}</small></span><input type="checkbox" checked={selectedMembers.has(agent.agentId)} disabled={busy} onChange={(event) => { const next = new Set(selectedMembers); event.target.checked ? next.add(agent.agentId) : next.delete(agent.agentId); void save([...next]) }} /></label>)}</div><p className="rebuilt-toolbox-note">选择后，Rovai 会在队员后续运行时提供这份指南。未选择的队员仍可正常参与协作。</p><Dialog.Root open={descriptionOpen} onOpenChange={setDescriptionOpen}><Dialog.Portal><Dialog.Overlay className="app-dialog-overlay" /><Dialog.Content className="app-dialog rebuilt-description-dialog"><Dialog.Title>{selected.name}</Dialog.Title><Dialog.Description>{selected.description ?? '说明暂不可读'}</Dialog.Description><Dialog.Close asChild><button type="button" className="quiet-button">关闭</button></Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root></> : <p className="rebuilt-skills-empty">选择一项 Skill 配置队员。</p>}</section>
+      <section className={`rebuilt-skills-detail ${detailVisible ? 'is-detail-visible' : ''}`} aria-label="工具箱队员配置"><button type="button" className="rebuilt-skills-back" onClick={() => setDetailVisible(false)}>返回列表</button>{selected ? <><header className="rebuilt-toolbox-heading"><div><h2>{selected.name}</h2><p>{selected.description ?? '说明暂不可读'}</p></div><button type="button" onClick={() => setDescriptionOpen(true)}>查看说明</button></header><div className="rebuilt-skills-toolbar"><strong>提供给队员</strong><span>已选 {selected.memberIds.length} 人</span><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(true)}>全选{memberQuery ? '当前结果' : ''}</button><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(false)}>取消全选{memberQuery ? '当前结果' : ''}</button></div><label className="rebuilt-skills-search"><span className="sr-only">搜索队员</span><input type="search" placeholder="搜索队员姓名或角色" value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} /></label>{busy && <p role="status" className="rebuilt-skills-status">正在保存…</p>}{error && <div className="rebuilt-skills-error" role="alert">保存失败：{error}{failedSave && <button type="button" disabled={busy} onClick={() => void save(failedSave.memberIds, failedSave.skillName, failedSave)}>重试</button>}</div>}{!members.length && <p className="rebuilt-skills-empty">暂无队员。</p>}{members.length > 0 && visibleMembers.length === 0 && <p className="rebuilt-skills-empty">没有匹配的队员。</p>}<div className="rebuilt-toolbox-members">{visibleMembers.map((agent) => <label key={agent.agentId} className="rebuilt-toolbox-member"><MemberAvatar agentId={agent.agentId} displayName={agent.displayName} avatarRef={agent.avatarRef} /><span><strong>{agent.displayName}</strong><small>{agent.teamRole}</small></span><input type="checkbox" checked={selectedMembers.has(agent.agentId)} disabled={busy} onChange={(event) => { const next = new Set(selectedMembers); event.target.checked ? next.add(agent.agentId) : next.delete(agent.agentId); void save([...next]) }} /></label>)}</div><p className="rebuilt-toolbox-note">选择后，Rovai 会在队员后续运行时提供这份指南。未选择的队员仍可正常参与协作。</p><Dialog.Root open={descriptionOpen} onOpenChange={setDescriptionOpen}><Dialog.Portal><Dialog.Overlay className="app-dialog-overlay" /><Dialog.Content className="app-dialog rebuilt-description-dialog"><Dialog.Title>{selected.name}</Dialog.Title><Dialog.Description>{selected.description ?? '说明暂不可读'}</Dialog.Description><Dialog.Close asChild><button type="button" className="quiet-button">关闭</button></Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root></> : <p className="rebuilt-skills-empty">{loadingError ? '工具箱暂不可读，请从列表区重试。' : skills ? '选择一项 Skill 配置队员。' : '正在读取工具箱…'}</p>}</section>
     </div>
   </div>
 }

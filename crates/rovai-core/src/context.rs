@@ -4007,6 +4007,7 @@ struct SharedMessage {
     default_recipient_mention: Option<DefaultRecipientMention>,
     mentions_current_user: bool,
     skill_names: Vec<String>,
+    skill_mentions: Vec<(String, String)>,
     reply_to_message_id: Option<String>,
     attachments: Vec<SharedMessageAttachment>,
     body: String,
@@ -4203,17 +4204,31 @@ fn model_batch_input_message(
     message_index: usize,
 ) -> Value {
     let mut value = model_batch_message(message);
-    let selected = skill_links
-        .iter()
-        .filter(|link| {
-            link.message_index.map_or_else(
-                || message.skill_names.iter().any(|name| name == &link.name),
-                |index| index == message_index,
-            )
-        })
-        .collect::<Vec<_>>();
+    let selected: Vec<Value> = if skill_links.iter().any(|link| link.skill_id.is_some()) {
+        message
+            .skill_mentions
+            .iter()
+            .filter_map(|(id, name_at_send)| {
+                skill_links
+                    .iter()
+                    .find(|link| link.skill_id.as_deref() == Some(id))
+                    .map(|link| json!({"name": name_at_send, "path": link.path}))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        skill_links
+            .iter()
+            .filter(|link| {
+                link.message_index.map_or_else(
+                    || message.skill_names.iter().any(|name| name == &link.name),
+                    |index| index == message_index,
+                )
+            })
+            .map(|link| json!(link))
+            .collect::<Vec<_>>()
+    };
     if !selected.is_empty() {
-        value["skills"] = json!(selected);
+        value["skills"] = Value::Array(selected);
     }
     value
 }
@@ -4275,10 +4290,10 @@ pub(crate) fn project_batch_run_input_for_claim(
             )
             .optional()?
             .context("Delivery claim message is outside its frozen Camp boundary")?;
-        let skill_names = row
+        let (skill_names, skill_mentions) = row
             .5
             .as_deref()
-            .map(batch_message_skill_names)
+            .map(batch_message_skill_mentions)
             .transpose()?
             .unwrap_or_default();
         let (body, mentions_current_user, default_recipient_mention) =
@@ -4310,6 +4325,7 @@ pub(crate) fn project_batch_run_input_for_claim(
         )?;
         message.default_recipient_mention = default_recipient_mention;
         message.skill_names = skill_names;
+        message.skill_mentions = skill_mentions;
         messages.push(model_batch_input_message(
             &message,
             skill_links,
@@ -4392,9 +4408,9 @@ fn load_batch_model_context<R: ContextReadConnection>(
                     addressed_agent_ids_json,
                     frozen_default_recipient_display_name,
                 )| {
-                    let skill_names = structured_content_json
+                    let (skill_names, skill_mentions) = structured_content_json
                         .as_deref()
-                        .map(batch_message_skill_names)
+                        .map(batch_message_skill_mentions)
                         .transpose()?
                         .unwrap_or_default();
                     let (body, mentions_current_user, default_recipient_mention) =
@@ -4426,6 +4442,7 @@ fn load_batch_model_context<R: ContextReadConnection>(
                     )?;
                     message.default_recipient_mention = default_recipient_mention;
                     message.skill_names = skill_names;
+                    message.skill_mentions = skill_mentions;
                     Ok(message)
                 },
             )
@@ -4487,20 +4504,30 @@ fn load_batch_model_context<R: ContextReadConnection>(
     Ok(BatchModelContext { run_input_messages })
 }
 
-fn batch_message_skill_names(structured_content_json: &str) -> Result<Vec<String>> {
+fn batch_message_skill_mentions(
+    structured_content_json: &str,
+) -> Result<(Vec<String>, Vec<(String, String)>)> {
     let content = serde_json::from_str::<StructuredCampMessageContent>(structured_content_json)
         .context("CampMessage Structured Content is invalid")?;
-    let mut seen = HashSet::new();
-    Ok(content
-        .into_iter()
-        .filter_map(|segment| match segment {
-            crate::camp_content::StructuredCampMessageSegment::SkillMention {
-                name_at_send,
-                ..
-            } if seen.insert(name_at_send.clone()) => Some(name_at_send),
-            _ => None,
-        })
-        .collect())
+    let mut seen_names = HashSet::new();
+    let mut seen_ids = HashSet::new();
+    let mut names = Vec::new();
+    let mut mentions = Vec::new();
+    for segment in content {
+        if let crate::camp_content::StructuredCampMessageSegment::SkillMention {
+            skill_id,
+            name_at_send,
+        } = segment
+        {
+            if seen_ids.insert(skill_id.clone()) {
+                mentions.push((skill_id, name_at_send.clone()));
+            }
+            if seen_names.insert(name_at_send.clone()) {
+                names.push(name_at_send);
+            }
+        }
+    }
+    Ok((names, mentions))
 }
 
 #[derive(Debug, Serialize)]
@@ -5297,6 +5324,7 @@ fn project_shared_message<R: ContextReadConnection>(
         default_recipient_mention: None,
         mentions_current_user,
         skill_names: Vec::new(),
+        skill_mentions: Vec::new(),
         reply_to_message_id,
         attachments,
         body: prefix.body,
@@ -7706,42 +7734,12 @@ fn materialize_frozen_delivery_context(
         sha256_text(&frozen.rendered_payload) == frozen.rendered_payload_digest,
         "Frozen Delivery Context digest changed before materialization"
     );
-    let workspace_fact = if frozen.manifest_selection["contextDeliveryProfileVersion"] == json!(6) {
-        prepare_workspace_fact(database, snapshot, requires_new_native_session, false)?
-    } else {
-        PreparedWorkspaceFact::default()
-    };
-    let finalized;
-    let frozen = if workspace_fact.value.is_some() {
-        let mut next = frozen.clone();
-        if let Some(start) = next.rendered_payload.find("[WORKSPACE]\n") {
-            let end = next.rendered_payload[start..]
-                .find("\n[/WORKSPACE]\n\n")
-                .context("Frozen WORKSPACE is incomplete")?
-                + start
-                + "\n[/WORKSPACE]\n\n".len();
-            next.rendered_payload.replace_range(start..end, "");
-        }
-        if let Some(value) = workspace_fact.section() {
-            let end = next
-                .rendered_payload
-                .find("\n[/RUN_FACTS]\n\n")
-                .context("Mission Run Facts are missing")?
-                + "\n[/RUN_FACTS]\n\n".len();
-            let mut section = String::new();
-            append_json_section(&mut section, "WORKSPACE", value)?;
-            next.rendered_payload.insert_str(end, &section);
-        }
-        next.rendered_payload_digest = sha256_text(&next.rendered_payload);
-        next.runtime_payload = next.rendered_payload.clone();
-        next.runtime_payload_digest = next.rendered_payload_digest.clone();
-        next.manifest_selection["workspaceFact"] = json!(workspace_fact.value);
-        next.manifest_selection["workspaceFactDigest"] = json!(workspace_fact.digest);
-        next.manifest_selection["workspaceFactIncluded"] = json!(workspace_fact.included);
-        finalized = next;
-        &finalized
-    } else {
-        frozen
+    let workspace_fact = PreparedWorkspaceFact {
+        value: serde_json::from_value(frozen.manifest_selection["workspaceFact"].clone())?,
+        digest: serde_json::from_value(frozen.manifest_selection["workspaceFactDigest"].clone())?,
+        included: frozen.manifest_selection["workspaceFactIncluded"]
+            .as_bool()
+            .context("Frozen workspace inclusion evidence is invalid")?,
     };
     let bootstrap_redelivery_revision = pending_redelivery_revision(
         database,
@@ -8684,6 +8682,7 @@ mod tests {
             default_recipient_mention: None,
             mentions_current_user: false,
             skill_names: vec!["review-code".to_string()],
+            skill_mentions: Vec::new(),
             reply_to_message_id: None,
             attachments: Vec::new(),
             body: "$review-code inspect".to_string(),
@@ -8698,11 +8697,13 @@ mod tests {
             CurrentInputSkillLink {
                 name: "review-code".to_string(),
                 path: "/skills/review-code/SKILL.md".to_string(),
+                skill_id: None,
                 message_index: None,
             },
             CurrentInputSkillLink {
                 name: "unrelated".to_string(),
                 path: "/skills/unrelated/SKILL.md".to_string(),
+                skill_id: None,
                 message_index: None,
             },
         ]);
@@ -8713,6 +8714,68 @@ mod tests {
                 "name": "review-code",
                 "path": "/skills/review-code/SKILL.md",
             }])
+        );
+    }
+
+    #[test]
+    fn batch_run_input_reuses_resolved_skill_by_id_in_each_message() {
+        let template = SharedMessage {
+            quotes: Vec::new(),
+            quote_scope_current: true,
+            camp_id: "camp-1".to_string(),
+            message_id: "message-1".to_string(),
+            sequence: 1,
+            sender_type: "user".to_string(),
+            sender_id: "local_user".to_string(),
+            source_conversation_id: None,
+            content_digest: "sha256:test".to_string(),
+            default_recipient_mention: None,
+            mentions_current_user: false,
+            skill_names: vec!["review-code".to_string()],
+            skill_mentions: vec![("native:one".to_string(), "review-code".to_string())],
+            reply_to_message_id: None,
+            attachments: Vec::new(),
+            body: "inspect".to_string(),
+            body_length: 7,
+            body_truncated: false,
+            next_body_offset: None,
+        };
+        let mut second = template.clone();
+        second.message_id = "message-2".to_string();
+        second.sequence = 2;
+        second.skill_mentions = vec![
+            ("native:two".to_string(), "review-code".to_string()),
+            ("native:one".to_string(), "renamed-code".to_string()),
+        ];
+        let context = BatchModelContext {
+            run_input_messages: vec![template, second],
+        };
+        let projection = context.run_input_projection(&[
+            CurrentInputSkillLink {
+                name: "review-code".to_string(),
+                path: "/skills/one/SKILL.md".to_string(),
+                skill_id: Some("native:one".to_string()),
+                message_index: Some(0),
+            },
+            CurrentInputSkillLink {
+                name: "review-code".to_string(),
+                path: "/skills/two/SKILL.md".to_string(),
+                skill_id: Some("native:two".to_string()),
+                message_index: Some(1),
+            },
+        ]);
+        assert_eq!(
+            projection["messages"][0]["skills"],
+            json!([{
+                "name": "review-code", "path": "/skills/one/SKILL.md",
+            }])
+        );
+        assert_eq!(
+            projection["messages"][1]["skills"],
+            json!([
+                {"name": "review-code", "path": "/skills/two/SKILL.md"},
+            {"name": "renamed-code", "path": "/skills/one/SKILL.md"},
+            ])
         );
     }
 
@@ -8998,6 +9061,8 @@ mod slow_tests {
             &[CurrentInputSkillLink {
                 name: "review-pr".to_string(),
                 path: "/repo/.codex/skills/review-pr/SKILL.md".to_string(),
+                skill_id: None,
+                message_index: None,
             }],
         );
         assert_eq!(
@@ -9019,6 +9084,8 @@ mod slow_tests {
                     &[CurrentInputSkillLink {
                         name: "review-pr".to_string(),
                         path: "/repo/.codex/skills/review-pr/SKILL.md".to_string(),
+                        skill_id: None,
+                        message_index: None,
                     }]
                 )
                 .get("skills"),
@@ -9037,7 +9104,7 @@ mod slow_tests {
             working_principles: String::new(),
             growth_topic: String::new(),
         };
-        let formatted = render_session_bootstrap("charter", &identity, "entrypoint").unwrap();
+        let formatted = render_session_bootstrap("charter", &identity, None, "entrypoint").unwrap();
         assert_eq!(
             formatted,
             "[SESSION_CHARTER]\ncharter\n[/SESSION_CHARTER]\n\n\
@@ -9058,7 +9125,8 @@ mod slow_tests {
             working_principles: String::new(),
             growth_topic: String::new(),
         };
-        let formatted = render_session_bootstrap("single chat charter", &identity, "").unwrap();
+        let formatted =
+            render_session_bootstrap("single chat charter", &identity, None, "").unwrap();
         assert!(formatted.contains("[SESSION_CHARTER]"));
         assert!(formatted.contains("[MEMBER_IDENTITY]"));
         assert!(!formatted.contains("[MEMORY_ENTRYPOINT]"));
@@ -11326,6 +11394,9 @@ mod slow_tests {
                 skill_id: official.id.clone(),
                 name_at_send: official.name.clone(),
                 first_segment_index: 0,
+                first_message_index: 0,
+                source: None,
+                source_path: None,
                 eligible_at_send: true,
                 omission_reason: None,
             }],
@@ -13767,6 +13838,7 @@ mod slow_tests {
                 default_recipient_mention: None,
                 mentions_current_user: false,
                 skill_names: Vec::new(),
+                skill_mentions: Vec::new(),
                 reply_to_message_id: None,
                 attachments: Vec::new(),
                 body: body.clone(),

@@ -647,7 +647,9 @@ function renderSkillMenu(
               <span className="skill-picker-enter" aria-hidden="true">↵</span>
             </button>)}
     {refreshing && <p className="structured-mention-empty" role="status">正在刷新 Skill 候选…</p>}
-    {errors.length > 0 && <p className="structured-mention-empty" role="status">部分来源暂不可读，仍可选择已发现的 Skill。</p>}
+    {errors.includes('刷新失败')
+      ? <p className="structured-mention-empty" role="alert">刷新失败，当前显示上次读取的候选。请重试。</p>
+      : errors.length > 0 && <p className="structured-mention-empty" role="status">部分来源暂不可读，仍可选择已发现的 Skill。</p>}
   </div>
 }
 
