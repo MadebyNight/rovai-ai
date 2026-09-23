@@ -43,8 +43,8 @@ impl ContextDeliveryProfile {
     }
 
     pub fn frozen_json(self) -> Result<Value> {
-        self.validate()?;
         if self.profile_version == 9 {
+            self.validate()?;
             Ok(json!({
                 "profileVersion": 9,
                 "maxSelfActiveTasks": self.max_self_active_tasks,
