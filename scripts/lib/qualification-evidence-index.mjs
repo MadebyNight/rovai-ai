@@ -9,6 +9,7 @@ import {
   writePrivateJsonExclusive
 } from './qualification-common.mjs'
 import { validateQualificationArtifactSchema } from './qualification-schema-validation.mjs'
+import { isBatchTrialBoundary, trialDeliveries, trialRuns } from './qualification-trial-scope.mjs'
 
 export const EVIDENCE_INDEX_SCHEMA_ID = 'rovai.qualification.evidence-index'
 export const EVIDENCE_INDEX_SCHEMA_VERSION = '1.0.0'
@@ -163,20 +164,16 @@ export function buildEvidenceIndex({
         content: turn
       })
     }
-    const trialRunIds = new Set((snapshot.agentRuns ?? [])
-      .filter((run) => run.campTurnId === dispatchBoundary?.campTurnId)
-      .map((run) => run.id))
+    const trialRunIds = new Set(trialRuns(snapshot, dispatchBoundary).map(run => run.id))
     // Public A2A content is eligible for the Judge only when a current
     // Message Delivery binds it to a recipient in this Trial turn.  The
     // message record itself is metadata; the separate content record is the
     // only source reference that may carry message text to the Judge.
-    const trialDeliveries = Array.isArray(snapshot.messageDeliveries)
-      ? snapshot.messageDeliveries.filter((delivery) => (
-        delivery.campTurnId === dispatchBoundary?.campTurnId
-      ))
+    const scopedDeliveries = Array.isArray(snapshot.messageDeliveries)
+      ? trialDeliveries(snapshot, dispatchBoundary)
       : null
     const deliveriesByMessageId = new Map()
-    for (const delivery of trialDeliveries ?? []) {
+    for (const delivery of scopedDeliveries ?? []) {
       const values = deliveriesByMessageId.get(delivery.messageId) ?? []
       values.push(delivery)
       deliveriesByMessageId.set(delivery.messageId, values)
@@ -270,7 +267,8 @@ export function buildEvidenceIndex({
       const isToolRetrievedMessage = retrievedMessageIds.has(message.id)
       const isPublicTrialMessage = message.authorType === 'agent'
         && trialRunIds.has(message.sourceAgentRunId)
-        && message.campTurnId === dispatchBoundary?.campTurnId
+        && (isBatchTrialBoundary(dispatchBoundary)
+          || message.campTurnId === dispatchBoundary?.campTurnId)
       addSourceRecord({
         evidenceId,
         evidenceType: isFinalResponse ? 'final_response' : 'core_domain',

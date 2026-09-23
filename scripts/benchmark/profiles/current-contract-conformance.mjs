@@ -2,22 +2,23 @@ import { defineBenchmarkProfile } from '../execution/suite.mjs'
 import { digestJson } from '../protocol/canonical.mjs'
 
 export const CURRENT_CONTRACT_DATA_STORE = Object.freeze({
-  version: 'v1.60',
-  projectionSchemaVersion: 113
+  version: 'v1.66',
+  projectionSchemaVersion: 120
 })
 
 const criteria = [
-  criterion('CCC-001', 'Public A2A Current Input preserves the trusted sender Agent identity', [
-    test('crates/rovai-core/src/team_tool.rs', 'public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes')
+  criterion('CCC-001', 'Public batch RUN_INPUT preserves trusted sender identity and historical frozen Delivery remains replayable', [
+    test('crates/rovai-core/src/team_tool.rs', 'batch_public_delivery_preserves_trusted_sender_in_run_input'),
+    test('crates/rovai-core/src/team_tool.rs', 'legacy_public_delivery_replays_frozen_context_versions')
   ]),
   criterion('CCC-002', 'Ordinary user RUN_INPUT remains complete with its trusted sender type', [
     test('crates/rovai-core/src/context.rs', 'run_input_is_complete_even_when_it_exceeds_the_history_body_limit')
   ]),
-  criterion('CCC-003', 'Run Fact is rendered once', [
-    test('crates/rovai-core/src/team_tool.rs', 'task_linked_public_delivery_reuses_exact_run_fact_bytes')
+  criterion('CCC-003', 'Task-linked batch Run Facts are rendered once', [
+    test('crates/rovai-core/src/team_tool.rs', 'task_linked_batch_run_reuses_exact_run_fact_bytes')
   ]),
-  criterion('CCC-004', 'Frozen Delivery, model section, and Manifest reuse exact Run Fact bytes and digest', [
-    test('crates/rovai-core/src/team_tool.rs', 'task_linked_public_delivery_reuses_exact_run_fact_bytes')
+  criterion('CCC-004', 'The model section and Manifest reuse exact claimed Run Fact bytes and digest', [
+    test('crates/rovai-core/src/team_tool.rs', 'task_linked_batch_run_reuses_exact_run_fact_bytes')
   ]),
   criterion('CCC-005', 'camp.read returns the selected message body completely without a continuation protocol', [
     test('crates/rovai-core/src/camp_history.rs', 'camp_read_returns_the_selected_page_and_item_body_without_size_clipping')
@@ -65,24 +66,24 @@ const criteria = [
   criterion('CCC-015', 'Public batch windows keep their accepted Camp+Agent watermark across Native Session replacement and do not apply the legacy self filter', [
     test('crates/rovai-core/src/context.rs', 'batch_public_window_keeps_the_camp_agent_watermark_across_new_sessions')
   ]),
-  criterion('CCC-016', 'Managed v2 ingests immutable attachments once, commits Message refs without a legacy projection gate, and recovers incomplete ingest intents', [
+  criterion('CCC-016', 'Current source refs bypass managed publication while historical v2 data remains recoverable and cannot block dispatch', [
     test('crates/rovai-core/src/managed_attachment.rs', 'composer_ingest_promotes_once_and_commits_only_v2_rows'),
     test('crates/rovai-core/src/managed_attachment.rs', 'startup_reconcile_abandons_staging_and_promoted_precommit_intents'),
     test('crates/rovai-core/src/team_tool.rs', 'attachment_send_keeps_source_path_and_dispatches_without_projection_gate'),
     test('crates/rovai-core/src/team_tool.rs', 'running_source_sends_fourteen_mib_without_waiting_for_camp_publication'),
     test('crates/rovai-core/src/camp_attachment_view.rs', 'legacy_rebuild_target_preserves_managed_v2_resources'),
     test('crates/rovai-core/src/context.rs', 'unavailable_legacy_locator_is_omitted_without_filesystem_fallback'),
-    test('crates/rovai-core/src/application.rs', 'v2_dispatch_admission_ignores_broken_legacy_view_and_managed_payload')
+    test('crates/rovai-core/src/application.rs', 'source_ref_dispatch_admission_ignores_broken_legacy_view')
   ])
 ]
 
 export const CURRENT_CONTRACT_PREREQUISITES = Object.freeze([
   {
-    id: 'durable-task-v3',
+    id: 'durable-task-v4',
     evidence: test('crates/rovai-core/src/collaboration.rs', 'agent_task_updates_respect_lead_and_assignee_authority')
   },
   {
-    id: 'built-in-transport-v27',
+    id: 'built-in-transport-v31',
     evidence: test('crates/rovai-core/src/builtin_tool_transport.rs', 'list_and_describe_share_one_digest')
   },
   {
@@ -95,7 +96,7 @@ export const CURRENT_CONTRACT_CRITERIA = Object.freeze(criteria)
 
 export const CURRENT_CONTRACT_PROFILE = defineBenchmarkProfile({
   id: 'current-contract-conformance',
-  version: '1.60.0',
+  version: '1.66.0',
   lane: 'contract-conformance',
   hardOutcomeDefinition: {
     validity: 'deterministic_source_and_harness_valid',
@@ -113,8 +114,8 @@ export const CURRENT_CONTRACT_PROFILE = defineBenchmarkProfile({
     compositeScore: false
   },
   suite: {
-    id: 'rovai-v1.60-current-contract',
-    version: '1.60.0',
+    id: 'rovai-v1.66-current-contract',
+    version: '1.66.0',
     shuffle: false,
     rounds: [{ id: 'deterministic', ordinal: 1 }],
     cases: criteria.map((entry) => ({

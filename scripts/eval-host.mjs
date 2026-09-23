@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { runPlan, validatePlanInputs, buildProduct, freezePlan } from './lib/context-evaluation.mjs'
 import { runWeekly } from './lib/context-weekly.mjs'
+import { evaluationBuildPath } from './lib/eval-host-build-path.mjs'
 
 const args = process.argv.slice(2)
 if (args.length !== 4 || args[0] !== '--job' || args[2] !== '--parent' || !/^\d+$/.test(args[3])) throw new Error('Expected a Host-owned job and parent process')
@@ -68,6 +69,7 @@ try {
     // Weekly observation rebuilds the current source, while the suite, rubric,
     // Judge and budgets remain the explicitly registered frozen template.
     await validatePlanInputs(template, { products: false })
+    process.env.PATH = await evaluationBuildPath()
     const buildRoot = join(job.output, `build-${job.jobId}`)
     await mkdir(buildRoot, { mode: 0o700 })
     const product = await buildProduct(template.products.candidate.repository, join(buildRoot, 'product'), template.budget.wallSeconds === null ? { timeoutMs: null } : {})

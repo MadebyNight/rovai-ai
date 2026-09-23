@@ -113,12 +113,10 @@ test('verifier observation must be process-successful and contain the exact veri
   }, catalog).validationErrors[0].code, 'verifier.process_nonzero')
 })
 
-test('Qualification dispatch consumes one persisted structured composer draft revision', async () => {
+test('Qualification dispatch sends the sealed prompt as structured content', async () => {
   const calls = []
   const request = async (method, params) => {
     calls.push({ method, params })
-    if (method === 'camp.composerDraft.get') return { campId: 'camp-1', revision: 4 }
-    if (method === 'camp.composerDraft.save') return { campId: 'camp-1', revision: 5 }
     return { commandResult: { status: 'accepted' } }
   }
   const execution = {
@@ -140,29 +138,19 @@ test('Qualification dispatch consumes one persisted structured composer draft re
   assert.equal(result.commandResult.status, 'accepted')
   assert.deepEqual(calls, [
     {
-      method: 'camp.composerDraft.get',
-      params: { campId: 'camp-1' }
-    },
-    {
-      method: 'camp.composerDraft.save',
-      params: {
-        campId: 'camp-1',
-        expectedRevision: 4,
-        content: { version: 2, segments: [{ kind: 'text', text: 'Implement the task.' }] }
-      }
-    },
-    {
       method: 'camp.messages.send',
       params: {
         commandId: 'command-1',
         campId: 'camp-1',
-        draftRevision: 5,
+        content: { version: 2, segments: [{ kind: 'text', text: 'Implement the task.' }] },
+        sourceAttachments: [],
+        quotes: [],
+        replyToCampMessageId: null,
         execution
       }
     }
   ])
-  assert.equal(Object.hasOwn(calls[2].params, 'body'), false)
-  assert.equal(Object.hasOwn(calls[2].params, 'address'), false)
+  assert.equal(Object.hasOwn(calls[0].params, 'draftRevision'), false)
 })
 
 test('frozen Core budget preserves the sealed Case projection and exact deadline', () => {
@@ -657,6 +645,38 @@ test('history created before the durable dispatch watermark is not post-dispatch
   const observed = deriveHumanInterventionEvidence(snapshot, boundary, { mode: 'demo' })
   assert.equal(observed.status, 'present')
   assert.deepEqual(observed.evidence[0].messageIds, ['intervention'])
+})
+
+test('initial message delivery receipt is not human intervention in batch dispatch', () => {
+  const snapshot = hardEvidenceSnapshot()
+  snapshot.turns = []
+  snapshot.timeline = snapshot.timeline.filter(event => event.eventType === 'camp_message.sent')
+  snapshot.timeline.push({
+    globalSequence: 14,
+    eventId: 'event-root-delivery',
+    eventType: 'camp_message_delivery.waiting',
+    entityId: 'delivery-root',
+    actorType: 'user'
+  })
+  const boundary = {
+    scope: 'isolated_camp_message_batch',
+    rootCampMessageId: 'message-1',
+    rootAgentRunId: 'run-root',
+    rootAgentRunIds: ['run-root'],
+    rootDeliveryId: 'delivery-root',
+    preDispatchThroughGlobalSequence: 10
+  }
+  assert.equal(deriveHumanInterventionEvidence(snapshot, boundary, { mode: 'demo' }).status, 'absent')
+  snapshot.timeline.push({
+    globalSequence: 15,
+    eventId: 'event-user-control',
+    eventType: 'agent_run.cancel_requested',
+    entityId: 'run-root',
+    actorType: 'user'
+  })
+  const observed = deriveHumanInterventionEvidence(snapshot, boundary, { mode: 'demo' })
+  assert.equal(observed.status, 'present')
+  assert.deepEqual(observed.evidence[0].eventIds, ['event-user-control'])
 })
 
 test('public A2A budgets exclude completion deliveries while convergence still waits for them', () => {

@@ -25243,11 +25243,11 @@ done
 
     #[cfg(all(target_os = "macos", feature = "slow-tests"))]
     #[tokio::test]
-    async fn v2_dispatch_admission_ignores_broken_legacy_view_and_managed_payload() {
+    async fn source_ref_dispatch_admission_ignores_broken_legacy_view() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = std::env::temp_dir().join(format!(
-            "rovai-dispatch-managed-attachment-degradation-test-{}",
+            "rovai-source-ref-legacy-view-degradation-test-{}",
             uuid::Uuid::new_v4()
         ));
         fs::create_dir_all(&root).unwrap();
@@ -25256,7 +25256,7 @@ done
         fs::create_dir_all(&workspace).unwrap();
         let core = runtime_resolution_test_core(&root).unwrap();
         let source = root.join("published.txt");
-        fs::write(&source, b"published before authority loss").unwrap();
+        fs::write(&source, b"published source reference").unwrap();
 
         let camp_id = {
             let mut database = core.database.lock().await;
@@ -25297,60 +25297,27 @@ done
             core.attachment_views
                 .ensure_empty_camp_ready(&mut database, &camp_id)
                 .unwrap();
-            CampAttachmentStore::new(&core.data_dir)
-                .save_body(&mut database, &camp_id, "Use the published attachment")
-                .unwrap();
             camp_id
         };
-        let attachment_store = CampAttachmentStore::new(&core.data_dir);
-        let plan = {
-            let database = core.database.lock().await;
-            attachment_store
-                .plan_prepare_from_path(&database, &camp_id, 1, &source, "published.txt")
-                .unwrap()
-        };
-        let prepared_attachment = attachment_store.prepare_from_path_filesystem(plan).unwrap();
-        let prepared = {
-            let mut database = core.database.lock().await;
-            attachment_store
-                .commit_prepared_attachment(&mut database, &prepared_attachment)
-                .unwrap();
-            attachment_store.load_draft(&database, &camp_id).unwrap()
-        };
-        let attachment_id = prepared.attachments[0].id.clone();
+        let source_attachment =
+            observe_source_attachment(&source, "published.txt", Some("text/plain")).unwrap();
         core.send_test_camp_message_request(SendCampMessageParams {
             command_id: uuid::Uuid::new_v4().to_string(),
             camp_id: CampId::parse(&camp_id).unwrap(),
             content: text_composer_document("Use the published attachment"),
-            source_attachments: Vec::new(),
+            source_attachments: vec![source_attachment],
             quotes: Vec::new(),
             reply_to_camp_message_id: None,
             execution: None,
         })
         .await
         .unwrap();
-        let managed_candidate = {
-            let database = core.database.lock().await;
-            attachment_store
-                .desktop_open_candidate(&database, &camp_id, &attachment_id)
-                .unwrap()
-                .unwrap()
-        };
-        let managed_path = attachment_store
-            .verify_desktop_open_candidate(managed_candidate)
-            .unwrap()
-            .path;
         let initial_authorization = core
             .verified_camp_runtime_authorization(&camp_id, &workspace)
             .await
             .unwrap();
-        assert!(!managed_path.starts_with(&initial_authorization.output_root));
-        assert!(managed_path.is_file());
-
-        let payload_container = managed_path.parent().unwrap();
-        fs::set_permissions(payload_container, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::remove_file(&managed_path).unwrap();
-        fs::set_permissions(payload_container, fs::Permissions::from_mode(0o500)).unwrap();
+        assert!(initial_authorization.output_root.is_dir());
+        fs::remove_file(&source).unwrap();
         {
             let mut database = core.database.lock().await;
             core.attachment_views
@@ -25361,7 +25328,7 @@ done
         let (admission, authorization) = core
             .verified_camp_attachment_admission(&camp_id, &workspace)
             .await
-            .expect("dispatch admission should omit the invalid attachment and keep Camp runnable");
+            .expect("a missing source and broken legacy view must not block Camp dispatch");
         admission.prove(&camp_id).unwrap();
         assert_eq!(authorization.camp_id, camp_id);
         assert!(authorization.output_root.is_dir());
@@ -25381,12 +25348,6 @@ done
             .join(&camp_id)
             .join("attachments");
         drop(admission);
-        fs::set_permissions(payload_container, fs::Permissions::from_mode(0o700)).unwrap();
-        fs::set_permissions(
-            payload_container.parent().unwrap(),
-            fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
         CampAttachmentStore::new(&core.data_dir)
             .remove_camp(&camp_id)
             .unwrap();

@@ -3948,7 +3948,7 @@ mod tests {
     }
 
     #[cfg(feature = "slow-tests")]
-    fn public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes() {
+    fn legacy_public_delivery_replays_frozen_context_versions() {
         // Current and pre-upgrade frozen deliveries must consume exact bytes and original version axes.
         for frozen_version in [25, 24, 23, 22] {
             let mut fixture = Fixture::new();
@@ -4004,7 +4004,7 @@ return_to: agent_3\n\n\
 Use this exact public input @agent_2";
             let mut invocation =
                 fixture.public_send_invocation("frozen-public-context", body, &["agent_2"]);
-            invocation.input.task_id = Some(target_task_id);
+            invocation.input.task_id = Some(target_task_id.clone());
             let sent = TeamToolService::default()
                 .send_public_message(&mut fixture.database, &invocation)
                 .unwrap();
@@ -4012,19 +4012,103 @@ Use this exact public input @agent_2";
                 .as_str()
                 .unwrap()
                 .to_string();
-            let delivery_id = sent.result.payload["deliveryIds"][0]
-                .as_str()
-                .unwrap()
-                .to_string();
-            let (target_run_id, frozen_snapshot): (String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT target_agent_run_id, frozen_snapshot_json FROM message_delivery WHERE id = ?1",
-                [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+            // Current sends queue in camp_message_delivery. Reconstruct a supported
+            // historical Delivery row in this isolated fixture so the v22-v25
+            // frozen-context reader retains its own recovery owner.
+            let delivery_id = Uuid::new_v4().to_string();
+            let boundary: i64 = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT sequence FROM camp_message WHERE id=?1",
+                    [&source_message_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let originating_user_message_id: String = fixture.database.connection()
+                .query_row("SELECT id FROM camp_message WHERE camp_id=?1 AND author_type='user' ORDER BY sequence LIMIT 1", [&fixture.camp_id], |row| row.get(0))
+                .unwrap();
+            let turn_id = Uuid::new_v4().to_string();
+            let membership_version: i64 = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT version FROM camp_member WHERE camp_id=?1 AND agent_id='agent_2'",
+                    [&fixture.camp_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let task_version: i64 = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT version FROM task WHERE id=?1",
+                    [&target_task_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let now = chrono::Utc::now().to_rfc3339();
+            let deadline = (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339();
+            fixture.database.connection().execute(
+                "INSERT INTO camp_turn(id,camp_id,trigger_type,trigger_id,status,version,created_at,updated_at,execution_budget_schema_version,execution_budget_deadline_at) VALUES(?1,?2,'camp_message',?3,'running',1,?4,?4,2,?5)",
+                params![turn_id, fixture.camp_id, originating_user_message_id, now, deadline],
+            ).unwrap();
+            fixture.database.connection().execute(
+                "UPDATE agent_run SET invocation_kind='direct',camp_id=NULL,anchor_message_id=NULL,current_public_tail_sequence=NULL,camp_turn_id=?2,trigger_camp_message_id=?3 WHERE id=?1",
+                params![fixture.source_run_id, turn_id, originating_user_message_id],
+            ).unwrap();
+            fixture
+                .database
+                .connection()
+                .execute(
+                    r#"INSERT INTO message_delivery(
+                    id, camp_id, camp_turn_id, message_id, recipient_agent_id,
+                    recipient_canonical_position, recipient_digest, message_body_digest,
+                    task_id, task_version_at_admission, assignee_agent_id_at_admission,
+                    source_agent_run_id, edge_kind, target_parent_agent_run_id,
+                    a2a_root_agent_run_id, a2a_depth, ancestor_agent_ids_json,
+                    recipient_presentation_snapshot_json, frozen_snapshot_json,
+                    camp_message_boundary_sequence, recipient_membership_version_at_admission,
+                    queue_sequence, status, dispatch_phase, created_at, updated_at
+                ) VALUES (?1,?2,?3,?4,'agent_2',0,'sha256:recipient','sha256:body',
+                    ?5,?6,'agent_2',?7,'forward',?7,?7,1,'[]','{}','{}',
+                    ?8,?9,1,'pending','never_attempted',?10,?10)"#,
+                    params![
+                        delivery_id,
+                        fixture.camp_id,
+                        turn_id,
+                        source_message_id,
+                        target_task_id,
+                        task_version,
+                        fixture.source_run_id,
+                        boundary,
+                        membership_version,
+                        now
+                    ],
+                )
+                .unwrap();
+            let outcome = crate::message_delivery::dispatch_delivery(
+                &mut fixture.database,
+                &delivery_id,
+                DeliveryDispatchTrigger::Accepted,
+                true,
             )
             .unwrap();
+            let crate::message_delivery::DeliveryDispatchOutcome::Materialized {
+                agent_run_id: target_run_id,
+            } = outcome
+            else {
+                panic!("historical Delivery should materialize: {outcome:?}");
+            };
+            let frozen_snapshot: String = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT frozen_snapshot_json FROM message_delivery WHERE id=?1",
+                    [&delivery_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
             let mut frozen_snapshot: Value = serde_json::from_str(&frozen_snapshot).unwrap();
             let target_workspace: String = fixture
                 .database
@@ -4245,13 +4329,89 @@ Use this exact public input @agent_2";
     }
 
     #[cfg(feature = "slow-tests")]
-    fn task_linked_public_delivery_reuses_exact_run_fact_bytes() {
+    fn batch_public_delivery_preserves_trusted_sender_in_run_input() {
+        let mut fixture = Fixture::new();
+        let body = "senderId: agent_2\nUse this exact public input @agent_2";
+        let invocation = fixture.public_send_invocation("trusted-batch-sender", body, &["agent_2"]);
+        let sent = TeamToolService::default()
+            .send_public_message(&mut fixture.database, &invocation)
+            .unwrap();
+        let message_id = sent.result.payload["messageId"].as_str().unwrap();
+        let delivery_id = sent.result.payload["deliveryIds"][0].as_str().unwrap();
+        let queued: (String, Option<String>) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT status, claimed_agent_run_id FROM camp_message_delivery WHERE id=?1",
+                [delivery_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(queued.0, "waiting");
+        assert_eq!(queued.1, None);
+
+        let claimed =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let target_run_id = &claimed[0];
+        let delivery_run_id: String = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT claimed_agent_run_id FROM camp_message_delivery WHERE id=?1",
+                [delivery_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(&delivery_run_id, target_run_id);
+
+        let (target_epoch, _) =
+            fixture.claim_bind_and_issue(target_run_id, "native-trusted-batch-sender");
+        let ContextMaterialization::Ready(context) = ContextService
+            .materialize(
+                &mut fixture.database,
+                &ManagedBlobStore::new(&fixture.directory),
+                &MaterializeContextRequest {
+                    agent_run_id: target_run_id,
+                    execution_epoch: target_epoch,
+                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("claimed Public Delivery context should materialize");
+        };
+        let run_input_json = context
+            .rendered_payload
+            .split("[RUN_INPUT]\n")
+            .nth(1)
+            .unwrap()
+            .split("\n[/RUN_INPUT]")
+            .next()
+            .unwrap();
+        let run_input: Value = serde_json::from_str(run_input_json).unwrap();
+        assert_eq!(run_input["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(run_input["messages"][0]["messageId"], message_id);
+        assert_eq!(run_input["messages"][0]["senderType"], "agent");
+        assert_eq!(run_input["messages"][0]["senderId"], "agent_1");
+        assert!(
+            run_input["messages"][0]["body"]
+                .as_str()
+                .unwrap()
+                .contains("senderId: agent_2")
+        );
+    }
+
+    #[cfg(feature = "slow-tests")]
+    fn task_linked_batch_run_reuses_exact_run_fact_bytes() {
         let mut fixture = Fixture::new();
         let created = CollaborationService::default()
             .create_task(
                 &mut fixture.database,
                 &user_envelope(
-                    "create-target-task-for-frozen-context",
+                    "create-target-task-for-batch-context",
                     Some(&fixture.camp_id),
                     CreateTaskCommand {
                         camp_id: fixture.camp_id.clone(),
@@ -4268,43 +4428,39 @@ Use this exact public input @agent_2";
             .unwrap()
             .to_string();
         let mut invocation = fixture.public_send_invocation(
-            "frozen-task-run-notice",
+            "batch-task-run-notice",
             "Use the linked Task context @agent_2",
             &["agent_2"],
         );
-        invocation.input.task_id = Some(task_id);
+        invocation.input.task_id = Some(task_id.clone());
         let sent = TeamToolService::default()
             .send_public_message(&mut fixture.database, &invocation)
             .unwrap();
-        let delivery_id = sent.result.payload["deliveryIds"][0]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let (target_run_id, frozen_snapshot): (String, String) = fixture
+        let delivery_id = sent.result.payload["deliveryIds"][0].as_str().unwrap();
+        let claimed =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let target_run_id = &claimed[0];
+        let delivery_run_id: String = fixture
             .database
             .connection()
             .query_row(
-                "SELECT target_agent_run_id, frozen_snapshot_json FROM message_delivery WHERE id = ?1",
-                [&delivery_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT claimed_agent_run_id FROM camp_message_delivery WHERE id=?1",
+                [delivery_id],
+                |row| row.get(0),
             )
             .unwrap();
-        let frozen_snapshot: Value = serde_json::from_str(&frozen_snapshot).unwrap();
-        let frozen_fact_payload =
-            frozen_snapshot["frozenContext"]["manifestSelection"]["runFactPayload"]
-                .as_str()
-                .unwrap()
-                .to_string();
-        assert!(frozen_fact_payload.contains("\"taskId\""));
+        assert_eq!(&delivery_run_id, target_run_id);
 
         let (target_epoch, _) =
-            fixture.claim_bind_and_issue(&target_run_id, "native-frozen-task-run-notice");
+            fixture.claim_bind_and_issue(target_run_id, "native-batch-task-run-notice");
         let ContextMaterialization::Ready(context) = ContextService
             .materialize(
                 &mut fixture.database,
                 &ManagedBlobStore::new(&fixture.directory),
                 &MaterializeContextRequest {
-                    agent_run_id: &target_run_id,
+                    agent_run_id: target_run_id,
                     execution_epoch: target_epoch,
                     charter_delivery_mode: CharterDeliveryMode::NativeAppend,
                     max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
@@ -4312,7 +4468,7 @@ Use this exact public input @agent_2";
             )
             .unwrap()
         else {
-            panic!("Task-linked Public Delivery context should materialize");
+            panic!("Task-linked batch context should materialize");
         };
         let run_fact_section = context
             .rendered_payload
@@ -4322,21 +4478,47 @@ Use this exact public input @agent_2";
             .split("\n[/RUN_FACTS]")
             .next()
             .unwrap();
+        assert_eq!(context.rendered_payload.matches("[RUN_FACTS]\n").count(), 1);
+        let active_tasks = context
+            .rendered_payload
+            .split("[SELF_ACTIVE_TASKS]\n")
+            .nth(1)
+            .unwrap()
+            .split("\n[/SELF_ACTIVE_TASKS]")
+            .next()
+            .unwrap();
+        assert!(active_tasks.contains(&task_id));
         let (manifest_payload, manifest_digest): (String, String) = fixture
             .database
             .connection()
             .query_row(
-                "SELECT run_fact_payload_json, run_fact_digest FROM context_manifest WHERE id = ?1",
+                "SELECT run_fact_payload_json, run_fact_digest FROM context_manifest WHERE id=?1",
                 [&context.manifest_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(run_fact_section, frozen_fact_payload);
-        assert_eq!(manifest_payload, frozen_fact_payload);
+        assert_eq!(run_fact_section, manifest_payload);
         assert_eq!(
             manifest_digest,
             format!("sha256:{:x}", Sha256::digest(manifest_payload.as_bytes()))
         );
+        let ContextMaterialization::Ready(replayed) = ContextService
+            .materialize(
+                &mut fixture.database,
+                &ManagedBlobStore::new(&fixture.directory),
+                &MaterializeContextRequest {
+                    agent_run_id: target_run_id,
+                    execution_epoch: target_epoch,
+                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("Task-linked batch context should replay");
+        };
+        assert_eq!(replayed.manifest_id, context.manifest_id);
+        assert_eq!(replayed.rendered_payload, context.rendered_payload);
     }
 
     #[cfg(feature = "slow-tests")]
@@ -8026,12 +8208,16 @@ Use this exact public input @agent_2";
             super::a_non_immediate_ancestor_remains_rejected();
         }
         #[test]
-        fn public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes() {
-            super::public_delivery_runtime_consumes_the_pre_run_frozen_context_bytes();
+        fn legacy_public_delivery_replays_frozen_context_versions() {
+            super::legacy_public_delivery_replays_frozen_context_versions();
         }
         #[test]
-        fn task_linked_public_delivery_reuses_exact_run_fact_bytes() {
-            super::task_linked_public_delivery_reuses_exact_run_fact_bytes();
+        fn batch_public_delivery_preserves_trusted_sender_in_run_input() {
+            super::batch_public_delivery_preserves_trusted_sender_in_run_input();
+        }
+        #[test]
+        fn task_linked_batch_run_reuses_exact_run_fact_bytes() {
+            super::task_linked_batch_run_reuses_exact_run_fact_bytes();
         }
         #[test]
         fn missing_send_recovery_publishes_one_literal_recipient_free_message() {

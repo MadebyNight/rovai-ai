@@ -1,3 +1,5 @@
+import { isBatchTrialBoundary, trialAgentDeliveries, trialDeliveries, trialRuns } from './qualification-trial-scope.mjs'
+
 const REQUIREMENT_ID = /^REQ-[A-Z0-9][A-Z0-9._-]*$/
 const CHECK_ID = /^CHK-[A-Z0-9][A-Z0-9._-]*$/
 const CRITICALITIES = new Set(['critical', 'non_critical'])
@@ -1069,9 +1071,12 @@ function postDispatchUserEvents(snapshot, dispatchBoundary) {
         || event.actorType !== 'user') return false
     if (event.eventType === 'camp_message.sent'
         && event.entityId === dispatchBoundary.rootCampMessageId) return false
+    if (event.eventType === 'camp_message_delivery.waiting'
+        && event.entityId === dispatchBoundary.rootDeliveryId) return false
     if (event.eventType === 'agent_run.queued' && rootRunIds.has(event.entityId)) return false
     if (event.eventType === 'command.result'
-        && event.entityId === dispatchBoundary.campTurnId) return false
+        && (event.entityId === dispatchBoundary.campTurnId
+          || event.entityId === dispatchBoundary.rootCampMessageId)) return false
     return true
   })
 }
@@ -1093,6 +1098,36 @@ export function deriveConvergenceEvidence({
   }
   if (!snapshot || !dispatchBoundary) {
     return { status: 'unavailable', facts: indeterminateFacts, failureRecoveryFacts: [] }
+  }
+  if (isBatchTrialBoundary(dispatchBoundary)) {
+    const runs = trialRuns(snapshot, dispatchBoundary)
+    const deliveries = trialDeliveries(snapshot, dispatchBoundary)
+    const facts = {
+      runTree: runs.some(run => run.id === dispatchBoundary.rootAgentRunId)
+        && runs.every(run => isRunTerminal(run.status)) ? 'settled' : 'unsettled',
+      conversationInputs: !Array.isArray(snapshot.messageDeliveries) || deliveries.length === 0
+        ? 'indeterminate'
+        : deliveries.every(delivery => ['settled', 'failed', 'cancelled'].includes(delivery.status))
+          ? 'settled' : 'unsettled',
+      approvals: snapshot.approvals.some(approval => approval.status === 'pending') ? 'unsettled' : 'settled',
+      budget: budgetEvent ? 'exhausted' : 'compliant',
+      runtimeExit: termination ? (termination.converged ? 'complete' : 'incomplete') : 'indeterminate',
+      externalEffects: deriveExternalEffectSettlement(runs, isolation)
+    }
+    const failureRecoveryFacts = runs
+      .filter(run => ['failed', 'cancelled'].includes(run.status))
+      .map(run => ({
+        agentRunId: run.id,
+        terminalStatus: run.status,
+        responsibilitySettled: facts.runTree === 'settled'
+      }))
+    const values = Object.values(facts)
+    return {
+      status: values.includes('indeterminate') ? 'unavailable'
+        : values.some(value => ['unsettled', 'exhausted', 'incomplete'].includes(value)) ? 'fail' : 'pass',
+      facts,
+      failureRecoveryFacts
+    }
   }
   const turn = snapshot.turns.find((candidate) => candidate.id === dispatchBoundary.campTurnId)
   const runs = snapshot.agentRuns.filter((run) => run.campTurnId === dispatchBoundary.campTurnId)
@@ -1167,6 +1202,7 @@ function deriveExternalEffectSettlement(runs, isolation) {
 }
 
 export function observedDurableMemberCallEffects(snapshot, campTurnId) {
+  if (isBatchTrialBoundary(campTurnId)) return trialAgentDeliveries(snapshot, campTurnId)
   if (!snapshot || !campTurnId) return []
   const runIds = new Set(snapshot.agentRuns
     .filter((run) => run.campTurnId === campTurnId)
