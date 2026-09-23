@@ -200,9 +200,9 @@ last_updated: 2026-09-22
 ### Durable Task 与 Run instruction
 
 - Task 是跨 Run 持续的责任对象，通知和执行是独立层。当前生命周期是 `pending | in_progress | blocked | completed | cancelled`；terminal 不可变，blocked/completed 分别需要非空原因/总结。Task 的 owner、definition、assignment 与 execution state 各自有明确权威，不由通知、Run 或发送自动推进。
-- 只有 User 或当前 Default Lead 可创建和修改 title/description、分配、释放、改派、回到 pending 或取消；`description` 统一承载 scope and requirements。历史结构化要求只在读取时确定性合成，正文发生实际编辑时与旧列原子收敛；当前输入和输出均不公开旧字段。创建要求显式当前 CampMember assignee，且不发送消息或唤醒 Agent。Assignee 只能以 exact version 更新自己的 `pending/in_progress/blocked/completed` 执行状态与相应说明；任一越权字段使整个 patch fail closed。
+- 只有 User 或当前 Default Lead 可创建和修改 title/description、分配、释放、改派、回到 pending 或取消；`description` 统一承载 scope and requirements。历史结构化要求只在读取时确定性合成，正文发生实际编辑时与旧列原子收敛；当前输入和输出均不公开旧字段。创建要求显式当前 CampMember assignee，且不发送消息或唤醒 Agent。Assignee 只能更新自己的 `pending/in_progress/blocked/completed` 执行状态与相应说明；任一越权字段使整个 patch fail closed。
 - Unassigned 只能由 User/Lead 释放或 Camp membership 结束的原子 cutover 产生，必须保持 `pending`，不是可抢占共享队列。关系结束要在同一命令中释放其非终态任务；历史责任与已接受 Run 审计事实保留。
-- Task-linked responsibility 在 direct/A2A 的原子接受边界只准入一次，冻结 Task ID、version 和 Assignee。后续 Task 释放、改派、编辑或终态不追溯否定/改派已接受责任；但新的 membership、Presence、Runtime、permission 和 fencing 仍在每次真实执行时使用当前事实。
+- Task-linked responsibility 在 direct/A2A 的原子接受边界只准入一次，冻结 Task ID 和 Assignee。后续 Task 释放、改派、编辑或终态不追溯否定/改派已接受责任；但新的 membership、Presence、Runtime、permission 和 fencing 仍在每次真实执行时使用当前事实。
 - 公开 Camp 使用有序 `RUN_INPUT.messages[]` 作为 Run 的自然语言输入；Single Chat 的 ConversationMessage 继续使用 `CURRENT_INPUT`。Task 全文不复制到 Run，`purpose` 只用于 Core 审计/责任描述；不存在第二份 `expectedOutput` 或 Core 对自由文本交付质量的判断。
 
 <a id="collaboration-history-addressing"></a>
@@ -355,8 +355,8 @@ last_updated: 2026-09-22
 - ContextManifest、模型输入 bytes、Runtime Input Delivery Evidence 和 Native Session/Run 状态是四个独立权威。Manifest 冻结模型实际可见选择、formatter/profile/section 版本、来源 digest、遗漏、水位和 exact compact payload digest；交付 evidence 记录 Runtime 实际接受。日志摘要、Run 状态或 Manifest 本身不能互相代替。
 - Manifest 对 public Run 冻结完整有序 AgentRunInput、最后一条 anchor、执行配置、Skill resolution、visibility fence、accepted 增量窗口、所选 shared message、omission/cursor 与 exact rendered bytes/digest。输入附件使用各消息 `RUN_INPUT.messages[].attachments`；历史 frozen Manifest 继续按原版本解释。
 - 模型投影可以 compact，但不得丢失、重命名或自由文本化 authoritative fact。稳定产品规则留在 Session Charter，per-Run 事实只出现一次；每个 schema/formatter/profile/manifest/section 版本跟随实际 owner 独立推进，不用一个全局数字伪造同步升级。
-- public `RUN_FACTS` v5 只允许 `attachmentOutputRoot`、Mission、Task、Session continuity 与真实 external effect；删除 Gather、delegation 和 conversationMode，不输出改名预算对象。Single Chat 继续使用 v4。
-- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 Agent 自动上下文中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v27](../contracts/context-manifest-evidence-v27.md)。
+- public `RUN_FACTS` v6 只允许 `attachmentOutputRoot`、Mission、Task、Session continuity 与真实 external effect；删除 Gather、delegation 和 conversationMode，不输出改名预算对象。Single Chat 使用非 batch v5；Core 生成的模型正文不包含协议 `schemaVersion`。
+- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 Agent 自动上下文中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v28](../contracts/context-manifest-evidence-v28.md)。
 - Self-active Task snapshot 只选当前成员在当前 Camp 显式负责的非终态 Task，按 Profile 的稳定 order/limit/budget priority 冻结。真实空集合产生显式 empty snapshot；候选存在但被上限/预算全部排除时整段省略并记 aggregate omitted count，不泄露被排除 ID。Renderer/Skill 不得临时改排序。
 - Structured Skill selection 以 per-message snapshot、verified exposure 和只读 resolver 形成可选 `RUN_INPUT.messages[].skills` 链接，并按消息顺序去重整个批次。Skill 不授予工具或权限；解析失败作为本批事实显式呈现，不跳过 FIFO 队首。
 

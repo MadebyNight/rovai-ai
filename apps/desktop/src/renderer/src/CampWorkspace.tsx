@@ -10369,14 +10369,17 @@ function runIntervalLabel(run: AgentRunView): string {
   return `${messageClockTime(startedAt)}–${endedAt ? messageClockTime(endedAt) : '现在'}`
 }
 
-interface TaskEditorDraft {
+interface TaskEditorValues {
   title: string
   description: string
   assigneeAgentId: string
   status: TaskStatus
   blockedReason: string
   completionSummary: string
-  expectedVersion: number
+}
+
+interface TaskEditorDraft extends TaskEditorValues {
+  base?: TaskEditorValues
 }
 
 export function TaskPanel({
@@ -10405,6 +10408,7 @@ export function TaskPanel({
   const [cancelOpen, setCancelOpen] = useState(false)
   const detailRef = useRef<HTMLElement>(null)
   const drafts = useRef(new Map<string, TaskEditorDraft>())
+  const editBase = useRef<TaskEditorValues | null>(null)
   const [mode, setMode] = useState<'list' | 'create' | 'edit'>('list')
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
@@ -10414,7 +10418,6 @@ export function TaskPanel({
   const [blockedReason, setBlockedReason] = useState('')
   const [completionSummary, setCompletionSummary] = useState('')
   const [cancelReason, setCancelReason] = useState('')
-  const [expectedVersion, setExpectedVersion] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const selectedTask = selectedTaskId
@@ -10445,7 +10448,7 @@ export function TaskPanel({
     setBlockedReason('')
     setCompletionSummary('')
     setCancelReason('')
-    setExpectedVersion(0)
+    editBase.current = null
     setFormError(null)
   }
 
@@ -10456,7 +10459,7 @@ export function TaskPanel({
     setStatus(draft.status)
     setBlockedReason(draft.blockedReason)
     setCompletionSummary(draft.completionSummary)
-    setExpectedVersion(draft.expectedVersion)
+    editBase.current = draft.base ?? null
     setFormError(null)
   }
 
@@ -10464,7 +10467,8 @@ export function TaskPanel({
     if (submitting) return
     drafts.current.set(selectedTaskId ?? 'new', {
       title, description, assigneeAgentId, status,
-      blockedReason, completionSummary, expectedVersion
+      blockedReason, completionSummary,
+      ...(editBase.current ? { base: editBase.current } : {})
     })
     setEditorOpen(false)
   }
@@ -10479,15 +10483,15 @@ export function TaskPanel({
 
   const beginEdit = (task: TaskView): void => {
     setSelectedTaskId(task.taskId)
-    applyDraft(drafts.current.get(task.taskId) ?? {
+    const values: TaskEditorValues = {
       title: task.title,
       description: task.description,
       assigneeAgentId: task.assigneeAgentId ?? '',
       status: task.status,
       blockedReason: task.blockedReason ?? '',
-      completionSummary: task.completionSummary ?? '',
-      expectedVersion: task.version
-    })
+      completionSummary: task.completionSummary ?? ''
+    }
+    applyDraft(drafts.current.get(task.taskId) ?? { ...values, base: values })
     setMode('edit')
     setEditorOpen(true)
   }
@@ -10558,36 +10562,40 @@ export function TaskPanel({
     }
     setSubmitting(true)
     setFormError(null)
-    const assignee = assigneeAgentId === (selectedTask.assigneeAgentId ?? '')
-      ? { operation: 'unchanged' as const }
-      : assigneeAgentId
-        ? { operation: 'assign' as const, agentId: assigneeAgentId }
-        : { operation: 'clear' as const }
+    const base = editBase.current
+    if (!base) {
+      setFormError('编辑草稿已失效，请重新打开任务。')
+      setSubmitting(false)
+      return
+    }
+    const patch = {
+      ...(title.trim() !== base.title ? { title: title.trim() } : {}),
+      ...(description.trim() !== base.description ? { description: description.trim() } : {}),
+      ...(status !== base.status ? { status } : {}),
+      ...(assigneeAgentId !== base.assigneeAgentId ? {
+        assignee: assigneeAgentId
+          ? { operation: 'assign' as const, agentId: assigneeAgentId }
+          : { operation: 'clear' as const }
+      } : {}),
+      ...(status === 'blocked' && blockedReason.trim() !== base.blockedReason
+        ? { blockedReason: blockedReason.trim() } : {}),
+      ...(status === 'completed' && completionSummary.trim() !== base.completionSummary
+        ? { completionSummary: completionSummary.trim() } : {})
+    }
+    if (Object.keys(patch).length === 0) {
+      setFormError('没有需要提交的修改。')
+      setSubmitting(false)
+      return
+    }
     try {
       const result = await client.request<StoredCommandResult>('tasks.update', {
         commandId: newCommandId(),
         campId: snapshot.camp.id,
         taskId: selectedTask.taskId,
-        expectedVersion,
-        title: title.trim(),
-        description: description.trim(),
-        status,
-        assignee,
-        blockedReason: status === 'blocked' ? blockedReason.trim() : undefined,
-        completionSummary: status === 'completed' ? completionSummary.trim() : undefined
+        ...patch
       })
       if (result.status === 'rejected') {
-        if (result.code === 'task.version_conflict') {
-          const current = await client.request<TaskView | null>('tasks.get', {
-            campId: snapshot.camp.id,
-            taskId: selectedTask.taskId
-          })
-          if (current) setExpectedVersion(current.version)
-          await onTasksChanged()
-          setFormError('这项任务已被其他操作更新。当前版本已刷新，你的草稿仍保留；确认后可再次提交。')
-        } else {
-          setFormError(taskCommandMessage(result))
-        }
+        setFormError(taskCommandMessage(result))
         return
       }
       drafts.current.delete(selectedTaskId ?? 'new')
@@ -10609,10 +10617,8 @@ export function TaskPanel({
         commandId: newCommandId(),
         campId: snapshot.camp.id,
         taskId: selectedTask.taskId,
-        expectedVersion,
         status: 'cancelled',
-        cancelReason: cancelReason.trim(),
-        assignee: { operation: 'unchanged' }
+        cancelReason: cancelReason.trim()
       })
       if (result.status === 'rejected') {
         setFormError(taskCommandMessage(result))
@@ -10699,7 +10705,6 @@ export function TaskPanel({
               <button className="quiet-button" type="button" disabled={busy} onClick={() => beginEdit(detailTask)}>编辑</button>
               <button className="quiet-button task-cancel-action" type="button" disabled={busy} onClick={() => {
                 setSelectedTaskId(detailTask.taskId)
-                setExpectedVersion(detailTask.version)
                 setCancelReason('')
                 setFormError(null)
                 setCancelOpen(true)
@@ -10711,7 +10716,7 @@ export function TaskPanel({
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay app-dialog-overlay" />
           <AppDialogContent className="task-editor-dialog" width="wide">
-            <AppDialogHeader icon="pencil" title={mode === 'create' ? '新建任务' : '编辑任务'} description={mode === 'create' ? '记录需要持续跟踪的责任范围与要求。' : `版本 ${expectedVersion} · 修改任务内容与状态。`}
+            <AppDialogHeader icon="pencil" title={mode === 'create' ? '新建任务' : '编辑任务'} description={mode === 'create' ? '记录需要持续跟踪的责任范围与要求。' : '修改任务内容与状态。'}
             hideDescription />
             <form className="task-editor" onSubmit={(event) => void (mode === 'create' ? submitCreate(event) : submitUpdate(event))}>
               <AppDialogBody>
@@ -10847,7 +10852,6 @@ function TaskAuditDetail({ task }: { task: TaskView }): JSX.Element {
     <section className="task-detail-section" aria-label="任务审计信息">
       <strong>责任与审计</strong>
       <dl className="task-detail-grid">
-        <div><dt>版本</dt><dd>{task.version}</dd></div>
         <div><dt>任务 ID</dt><dd>{task.taskId}</dd></div>
         <div><dt>创建者</dt><dd>{task.createdByType} · {task.createdById}</dd></div>
         <div><dt>来源执行</dt><dd>{task.sourceAgentRunId ?? '无'}</dd></div>
@@ -10908,8 +10912,7 @@ function taskCommandMessage(result: StoredCommandResult): string {
   const messages: Record<string, string> = {
     'task.terminal': '已完成或已取消的任务不能再修改。',
     'task.assignee_unavailable': '所选负责人已不在当前会话，或当前不可用。',
-    'task.invalid_status_transition': '当前任务状态不允许这样变更。',
-    'task.version_conflict': '任务已被其他操作更新，请刷新后重试。'
+    'task.invalid_status_transition': '当前任务状态不允许这样变更。'
   }
   return messages[result.code] ?? `修改未完成：${result.code}`
 }
