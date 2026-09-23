@@ -1,7 +1,7 @@
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 
 async function executable(directory) {
   try {
@@ -13,8 +13,8 @@ async function executable(directory) {
   }
 }
 
-// A GUI-launched App may only inherit the system PATH. Keep its other child
-// commands on that PATH and add just the directory containing the build tool.
+// A GUI-launched App may only inherit the system PATH. The Host already knows
+// its Node executable; make that runtime and Cargo available to all children.
 export async function evaluationBuildPath(path = process.env.PATH ?? '', fallbackDirectories = [
   join(homedir(), '.cargo', 'bin'),
   '/opt/homebrew/opt/rustup/bin',
@@ -22,7 +22,11 @@ export async function evaluationBuildPath(path = process.env.PATH ?? '', fallbac
   '/opt/homebrew/bin',
   '/usr/local/bin'
 ]) {
-  for (const directory of path.split(delimiter).filter(Boolean)) if (await executable(directory)) return path
-  for (const directory of fallbackDirectories) if (await executable(directory)) return [directory, path].filter(Boolean).join(delimiter)
+  const nodeDirectory = dirname(process.execPath)
+  const withNode = path.split(delimiter).includes(nodeDirectory)
+    ? path
+    : [nodeDirectory, path].filter(Boolean).join(delimiter)
+  for (const directory of withNode.split(delimiter).filter(Boolean)) if (await executable(directory)) return withNode
+  for (const directory of fallbackDirectories) if (await executable(directory)) return [directory, withNode].filter(Boolean).join(delimiter)
   throw new Error('Cargo executable is unavailable to the Evaluation Host')
 }
