@@ -2801,6 +2801,7 @@ export type SettingsSection =
   | 'remote'
   | 'general'
   | 'skills'
+  | 'toolbox'
   | 'mcp'
   | 'runtime'
   | 'channels'
@@ -3197,6 +3198,44 @@ export interface MemberAvatarsApi {
 }
 
 export type SkillOrigin = 'official' | 'imported'
+
+export interface NativeSkillView {
+  id: string
+  name: string
+  description: string
+  entryPath: string
+  canonicalPath: string
+  sourceScope: 'user' | 'project'
+  adapterKind: AdapterKind
+}
+
+export interface NativeSkillScan {
+  skills: NativeSkillView[]
+  errors: string[]
+}
+
+export interface ToolboxSkillView {
+  name: string
+  description: string | null
+  memberIds: string[]
+  sourceError: string | null
+}
+
+export interface ComposerSkillCandidate {
+  id: string
+  name: string
+  description: string
+  source: 'toolbox' | 'native'
+  sourceScope?: 'user' | 'project'
+  entryPath: string
+  memberIds: string[]
+}
+
+export interface ComposerSkillCandidates {
+  skills: ComposerSkillCandidate[]
+  errors: string[]
+}
+
 export type SkillRevisionSourceType = 'bundled' | 'local_folder' | 'github'
 export type SkillDeliveryGroupKey =
   | 'codex'
@@ -3787,6 +3826,11 @@ export type CoreMethod =
   | 'runtime.installations.refresh'
   | 'skills.list'
   | 'skills.get'
+  | 'toolbox.list'
+  | 'toolbox.setMembers'
+  | 'nativeSkills.list'
+  | 'nativeSkills.read'
+  | 'skills.candidates'
   | 'skills.content.read'
   | 'skills.deliveryGroups.list'
   | 'skills.import.inspect'

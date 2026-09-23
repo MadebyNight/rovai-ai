@@ -58,9 +58,8 @@ use crate::{
     managed_blob::ManagedBlobStore,
     mcp_projection::{McpExposureSnapshot, PreparedMcpProjection},
     memory::{MemoryScopeKind, MemoryService, RelationshipDirection},
-    single_chat::filter_single_chat_skill_exposure,
     skill::SkillLibraryService,
-    skill_projection::{PreparedSkillExposure, SkillExposureSnapshot, SkillProjectionReconciler},
+    skill_projection::{PreparedSkillExposure, SkillExposureSnapshot},
 };
 
 pub const CONTEXT_FORMATTER_VERSION: i64 = AGENT_RUN_CONTEXT_FORMATTER_VERSION;
@@ -74,13 +73,15 @@ fn context_manifest_is_dispatchable(
     invocation_kind: &str,
 ) -> bool {
     if invocation_kind == "batch" {
-        manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        (manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
             && formatter_version == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
-            && profile_version == 9
+            && profile_version == 10)
+            || (manifest_version == 29 && formatter_version == 29 && profile_version == 9)
     } else {
-        manifest_version == CONTEXT_MANIFEST_VERSION
+        (manifest_version == CONTEXT_MANIFEST_VERSION
             && formatter_version == CONTEXT_FORMATTER_VERSION
-            && profile_version == 6
+            && profile_version == 7)
+            || (manifest_version == 26 && formatter_version == 26 && profile_version == 6)
     }
 }
 
@@ -266,6 +267,7 @@ pub struct PreparedSessionBootstrap {
 struct PreparedBootstrapEvidence {
     evidence_id: String,
     session_charter: String,
+    platform_skills: Option<String>,
     memory_entrypoint: String,
     stable_evidence_digest: String,
     native_binding_id: String,
@@ -449,11 +451,11 @@ impl ContextService {
     pub fn prepare_skill_exposure(
         &self,
         database: &mut Database,
-        skill_library: &SkillLibraryService,
+        _skill_library: &SkillLibraryService,
         agent_run_id: &str,
         execution_epoch: i64,
     ) -> Result<PreparedSkillExposure> {
-        let snapshot = load_run_snapshot(database, agent_run_id, execution_epoch)?
+        let _snapshot = load_run_snapshot(database, agent_run_id, execution_epoch)?
             .context("AgentRun is not active for Skill exposure preparation")?;
         let existing = database
             .connection()
@@ -479,29 +481,14 @@ impl ContextService {
                 digest,
             });
         }
-        let adapter_kind = snapshot
-            .effective_config
-            .get("runtimeAdapter")
-            .and_then(Value::as_str)
-            .context("AgentRun effective configuration has no Runtime Adapter")
-            .and_then(|value| value.parse::<AdapterKind>())?;
-        let execution_root = snapshot
-            .workspace
-            .get("executionRoot")
-            .and_then(Value::as_str)
-            .context("AgentRun workspace has no execution root")?;
-        let prepared = SkillProjectionReconciler.prepare_run_exposure(
-            database,
-            skill_library,
-            agent_run_id,
-            std::path::Path::new(execution_root),
-            adapter_kind,
-        )?;
-        if snapshot.invocation_kind == "single_chat" {
-            filter_single_chat_skill_exposure(database, prepared)
-        } else {
-            Ok(prepared)
-        }
+        // v1.68 no longer projects Skills into user projects. Frozen older
+        // manifests retain their original Exposure above for exact recovery.
+        let exposure = SkillExposureSnapshot::default();
+        let digest = canonical_json_digest(&serde_json::to_value(&exposure)?)?;
+        Ok(PreparedSkillExposure {
+            snapshot: exposure,
+            digest,
+        })
     }
 
     fn materialize_inner(
@@ -635,10 +622,12 @@ impl ContextService {
                 )
             })
             .transpose()?;
-        let profile = if batch_context_manifest_version.is_some() {
-            current_public_camp_batch_context_delivery_profile()?
-        } else {
-            current_context_delivery_profile()?
+        let profile = match batch_context_manifest_version {
+            Some(29) => {
+                crate::context_delivery::PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V9.validate()?
+            }
+            Some(_) => current_public_camp_batch_context_delivery_profile()?,
+            None => current_context_delivery_profile()?,
         };
         let profile_json = profile.frozen_json()?;
         let profile_digest = profile.canonical_digest()?;
@@ -772,6 +761,18 @@ impl ContextService {
 
         let workspace_fact =
             prepare_workspace_fact(database, &snapshot, requires_new_native_session, false)?;
+        let additional_skills = (batch_context_manifest_version != Some(29))
+            .then(|| {
+                prepare_additional_skills(
+                    database.connection(),
+                    database
+                        .path()
+                        .parent()
+                        .context("Core data directory is unavailable")?,
+                    &snapshot,
+                )
+            })
+            .transpose()?;
         let (shared_conversation, payload, runtime_payload) = loop {
             let origin_is_recent = originating_public_user_message
                 .as_ref()
@@ -826,6 +827,9 @@ impl ContextService {
                     .then_some(&shared_conversation),
                 run_facts: &rendered_run_facts,
                 workspace: workspace_fact.section(),
+                additional_skills: additional_skills
+                    .as_ref()
+                    .map(|skills| skills.section.as_str()),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
                 single_chat_guidance: (snapshot.invocation_kind == "single_chat")
                     .then_some(SINGLE_CHAT_GUIDANCE.trim()),
@@ -1064,7 +1068,10 @@ impl ContextService {
             batch_context_manifest_version.unwrap_or(CONTEXT_MANIFEST_VERSION);
         let context_formatter_version = batch_context_manifest_version
             .map(|version| {
-                debug_assert_eq!(version, PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION);
+                debug_assert!(matches!(
+                    version,
+                    29 | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
+                ));
                 version
             })
             .unwrap_or(CONTEXT_FORMATTER_VERSION);
@@ -1200,6 +1207,9 @@ impl ContextService {
             }
             existing_id
         } else {
+            if let Some(additional_skills) = &additional_skills {
+                persist_additional_skills_evidence(&transaction, &manifest_id, additional_skills)?;
+            }
             for camp in &history_camps {
                 transaction.execute(
                     r#"
@@ -1384,6 +1394,17 @@ impl ContextService {
         };
         let workspace_fact =
             prepare_workspace_fact(transaction, &snapshot, requires_new_native_session, true)?;
+        let additional_skills = prepare_additional_skills(
+            transaction,
+            std::path::Path::new(
+                transaction
+                    .path()
+                    .context("Core database path is unavailable")?,
+            )
+            .parent()
+            .context("Core data directory is unavailable")?,
+            &snapshot,
+        )?;
         let (shared_conversation, payload) = loop {
             let origin_is_recent = originating_public_user_message
                 .as_ref()
@@ -1433,6 +1454,7 @@ impl ContextService {
                 shared_conversation: Some(&shared_conversation),
                 run_facts: &rendered_run_facts,
                 workspace: workspace_fact.section(),
+                additional_skills: Some(&additional_skills.section),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
                 single_chat_guidance: None,
                 current_input: Some(&current_input_value),
@@ -1592,6 +1614,9 @@ impl ContextService {
             "workspaceFact": workspace_fact.value,
             "workspaceFactDigest": workspace_fact.digest,
             "workspaceFactIncluded": workspace_fact.included,
+            "additionalSkillsSection": additional_skills.section,
+            "additionalSkillsSectionDigest": sha256_text(&additional_skills.section),
+            "additionalSkillsOmitted": additional_skills.omitted,
             "missionDetailsVersion": mission_details_version,
             "campAttachmentViewReceiptVersion": camp_attachment_view_receipt.as_ref().map(|_| CAMP_ATTACHMENT_VIEW_RECEIPT_VERSION),
             "campAttachmentViewReceipt": camp_attachment_view_receipt,
@@ -2950,11 +2975,16 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
         .connection()
         .query_row(
             r#"
-            SELECT id, session_charter_blob_id, session_charter_digest,
-                   memory_entrypoint_blob_id, memory_entrypoint_digest,
-                   delivery_mode
-            FROM native_session_bootstrap_evidence
-            WHERE native_binding_id = ?1 AND native_binding_generation = ?2
+            SELECT bootstrap.id, bootstrap.session_charter_blob_id,
+                   bootstrap.session_charter_digest,
+                   bootstrap.memory_entrypoint_blob_id,
+                   bootstrap.memory_entrypoint_digest,
+                   bootstrap.delivery_mode, bootstrap.contract_version,
+                   platform.section_text, platform.section_digest
+            FROM native_session_bootstrap_evidence AS bootstrap
+            LEFT JOIN native_session_platform_skills_evidence AS platform
+              ON platform.bootstrap_evidence_id = bootstrap.id
+            WHERE bootstrap.native_binding_id = ?1 AND bootstrap.native_binding_generation = ?2
             "#,
             params![native_binding_id, native_binding_generation],
             |row| {
@@ -2965,6 +2995,9 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             },
         )
@@ -2976,6 +3009,9 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
         entrypoint_blob_id,
         entrypoint_digest,
         frozen_delivery_mode,
+        contract_version,
+        platform_skills,
+        platform_digest,
     )) = existing
     {
         if frozen_delivery_mode != delivery_mode.as_str() {
@@ -2987,11 +3023,31 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
         {
             anyhow::bail!("Native Session Bootstrap evidence Blob digest mismatch");
         }
+        if contract_version == NATIVE_SESSION_BOOTSTRAP_CONTRACT_VERSION {
+            let section = platform_skills
+                .as_deref()
+                .context("new Bootstrap platform Skills are missing")?;
+            anyhow::ensure!(
+                Some(sha256_text(section)) == platform_digest,
+                "Bootstrap platform Skills digest mismatch"
+            );
+        } else {
+            anyhow::ensure!(
+                contract_version == "native_session_bootstrap_v4" && platform_skills.is_none(),
+                "unsupported frozen Bootstrap Skills evidence"
+            );
+        }
         return Ok(PreparedBootstrapEvidence {
             evidence_id,
             session_charter: charter,
+            platform_skills,
             memory_entrypoint: entrypoint,
-            stable_evidence_digest: bootstrap_evidence_digest(&charter_digest, &entrypoint_digest),
+            stable_evidence_digest: bootstrap_evidence_digest_for(
+                &contract_version,
+                &charter_digest,
+                platform_digest.as_deref(),
+                &entrypoint_digest,
+            )?,
             native_binding_id: native_binding_id.to_string(),
             native_binding_generation,
             delivery_mode,
@@ -3021,6 +3077,24 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
         };
     let charter_digest = sha256_text(&charter);
     let entrypoint_digest = sha256_text(&entrypoint);
+    let managed_skills = crate::managed_skills::ManagedSkills::for_data_dir(
+        database
+            .path()
+            .parent()
+            .context("Core data directory is unavailable")?,
+    )?;
+    managed_skills.sync()?;
+    let (platform_entries, omitted) = managed_skills.index(crate::managed_skills::PLATFORM_SKILLS);
+    anyhow::ensure!(
+        omitted.is_empty(),
+        "platform Skill source is unavailable: {}",
+        omitted.join("; ")
+    );
+    let platform_skills = format!(
+        "[ROVAI_PLATFORM_SKILLS]\n{}\n[/ROVAI_PLATFORM_SKILLS]",
+        managed_skills.index_json(&platform_entries)?
+    );
+    let platform_digest = sha256_text(&platform_skills);
     let charter_blob = blob_store.put_bytes(
         database,
         charter.as_bytes(),
@@ -3067,6 +3141,10 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
             created_at,
         ],
     )?;
+    transaction.execute(
+        "INSERT INTO native_session_platform_skills_evidence(bootstrap_evidence_id, section_text, section_digest) VALUES (?1, ?2, ?3)",
+        params![evidence_id, platform_skills, platform_digest],
+    )?;
     for observation in &observed {
         transaction.execute(
             r#"
@@ -3097,8 +3175,14 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
     Ok(PreparedBootstrapEvidence {
         evidence_id,
         session_charter: charter,
+        platform_skills: Some(platform_skills),
         memory_entrypoint: entrypoint,
-        stable_evidence_digest: bootstrap_evidence_digest(&charter_digest, &entrypoint_digest),
+        stable_evidence_digest: bootstrap_evidence_digest_for(
+            NATIVE_SESSION_BOOTSTRAP_CONTRACT_VERSION,
+            &charter_digest,
+            Some(&platform_digest),
+            &entrypoint_digest,
+        )?,
         native_binding_id: native_binding_id.to_string(),
         native_binding_generation,
         delivery_mode,
@@ -3114,6 +3198,7 @@ fn format_session_bootstrap_for_snapshot(
     let payload = render_session_bootstrap(
         &evidence.session_charter,
         &member_identity,
+        evidence.platform_skills.as_deref(),
         &evidence.memory_entrypoint,
     )?;
     Ok(PreparedSessionBootstrap {
@@ -3170,6 +3255,7 @@ fn load_latest_member_identity(
 fn render_session_bootstrap(
     charter: &str,
     member_identity: &MemberIdentityBootstrapProjection,
+    platform_skills: Option<&str>,
     memory_entrypoint: &str,
 ) -> Result<String> {
     let mut bootstrap = format!(
@@ -3177,6 +3263,10 @@ fn render_session_bootstrap(
         charter.trim(),
         serde_json::to_string_pretty(member_identity)?,
     );
+    if let Some(platform_skills) = platform_skills {
+        bootstrap.push_str("\n\n");
+        bootstrap.push_str(platform_skills);
+    }
     if !memory_entrypoint.trim().is_empty() {
         bootstrap.push_str(&format!(
             "\n\n[MEMORY_ENTRYPOINT]\n{}\n[/MEMORY_ENTRYPOINT]",
@@ -3199,8 +3289,27 @@ fn render_bootstrap_redelivery_overlay(bootstrap: &str) -> String {
 
 fn bootstrap_evidence_digest(charter_digest: &str, memory_entrypoint_digest: &str) -> String {
     sha256_text(&format!(
-        "{NATIVE_SESSION_BOOTSTRAP_CONTRACT_VERSION}\n{charter_digest}\n{memory_entrypoint_digest}"
+        "native_session_bootstrap_v4\n{charter_digest}\n{memory_entrypoint_digest}"
     ))
+}
+
+fn bootstrap_evidence_digest_for(
+    contract_version: &str,
+    charter_digest: &str,
+    platform_digest: Option<&str>,
+    memory_entrypoint_digest: &str,
+) -> Result<String> {
+    match contract_version {
+        "native_session_bootstrap_v4" => Ok(bootstrap_evidence_digest(
+            charter_digest,
+            memory_entrypoint_digest,
+        )),
+        NATIVE_SESSION_BOOTSTRAP_CONTRACT_VERSION => Ok(sha256_text(&format!(
+            "{contract_version}\n{charter_digest}\n{}\n{memory_entrypoint_digest}",
+            platform_digest.context("Bootstrap platform digest is missing")?
+        ))),
+        _ => anyhow::bail!("unsupported Native Session Bootstrap contract"),
+    }
 }
 
 fn bootstrap_required_for_snapshot<R: ContextReadConnection>(
@@ -3218,18 +3327,34 @@ fn bootstrap_required_for_snapshot<R: ContextReadConnection>(
         .context_connection()
         .query_row(
             r#"
-            SELECT session_charter_digest, memory_entrypoint_digest
-            FROM native_session_bootstrap_evidence
-            WHERE native_binding_id = ?1 AND native_binding_generation = ?2
+            SELECT bootstrap.contract_version, bootstrap.session_charter_digest,
+                   platform.section_digest, bootstrap.memory_entrypoint_digest
+            FROM native_session_bootstrap_evidence AS bootstrap
+            LEFT JOIN native_session_platform_skills_evidence AS platform
+              ON platform.bootstrap_evidence_id = bootstrap.id
+            WHERE bootstrap.native_binding_id = ?1 AND bootstrap.native_binding_generation = ?2
             "#,
             params![native_binding_id, snapshot.native_binding_generation],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((charter_digest, entrypoint_digest)) = evidence else {
+    let Some((contract_version, charter_digest, platform_digest, entrypoint_digest)) = evidence
+    else {
         return Ok(true);
     };
-    let evidence_digest = bootstrap_evidence_digest(&charter_digest, &entrypoint_digest);
+    let evidence_digest = bootstrap_evidence_digest_for(
+        &contract_version,
+        &charter_digest,
+        platform_digest.as_deref(),
+        &entrypoint_digest,
+    )?;
     Ok(snapshot.native_charter_digest.as_deref() != Some(evidence_digest.as_str()))
 }
 
@@ -3976,7 +4101,8 @@ impl BatchModelContext {
             "messages": self
                 .run_input_messages
                 .iter()
-                .map(|message| model_batch_input_message(message, skill_links))
+                .enumerate()
+                .map(|(index, message)| model_batch_input_message(message, skill_links, index))
                 .collect::<Vec<_>>()
         })
     }
@@ -4074,11 +4200,17 @@ fn model_batch_message(message: &SharedMessage) -> Value {
 fn model_batch_input_message(
     message: &SharedMessage,
     skill_links: &[CurrentInputSkillLink],
+    message_index: usize,
 ) -> Value {
     let mut value = model_batch_message(message);
     let selected = skill_links
         .iter()
-        .filter(|link| message.skill_names.iter().any(|name| name == &link.name))
+        .filter(|link| {
+            link.message_index.map_or_else(
+                || message.skill_names.iter().any(|name| name == &link.name),
+                |index| index == message_index,
+            )
+        })
         .collect::<Vec<_>>();
     if !selected.is_empty() {
         value["skills"] = json!(selected);
@@ -4106,7 +4238,7 @@ pub(crate) fn project_batch_run_input_for_claim(
     };
     let claimed_source_message_ids = message_ids.iter().cloned().collect::<HashSet<_>>();
     let mut messages = Vec::with_capacity(message_ids.len());
-    for message_id in message_ids {
+    for (message_index, message_id) in message_ids.iter().enumerate() {
         let row = transaction
             .query_row(
                 r#"
@@ -4178,7 +4310,11 @@ pub(crate) fn project_batch_run_input_for_claim(
         )?;
         message.default_recipient_mention = default_recipient_mention;
         message.skill_names = skill_names;
-        messages.push(model_batch_input_message(&message, skill_links));
+        messages.push(model_batch_input_message(
+            &message,
+            skill_links,
+            message_index,
+        ));
     }
     Ok(json!({"messages": messages}))
 }
@@ -4211,7 +4347,7 @@ fn frozen_batch_context_manifest_version(
     );
     let version = minimum.context("Batch AgentRun context version is missing")?;
     anyhow::ensure!(
-        version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+        matches!(version, 29 | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION),
         "Batch AgentRun uses an unsupported context version"
     );
     Ok(version)
@@ -6742,6 +6878,7 @@ struct RenderPayloadInput<'a> {
     shared_conversation: Option<&'a SharedConversation>,
     run_facts: &'a RenderedRunFacts,
     workspace: Option<&'a Value>,
+    additional_skills: Option<&'a str>,
     a2a_guidance: Option<&'a str>,
     single_chat_guidance: Option<&'a str>,
     current_input: Option<&'a Value>,
@@ -6780,6 +6917,10 @@ fn render_payload(input: RenderPayloadInput<'_>) -> Result<String> {
     if let Some(workspace) = input.workspace {
         append_json_section(&mut output, "WORKSPACE", workspace)?;
     }
+    if let Some(additional_skills) = input.additional_skills {
+        output.push_str(additional_skills);
+        output.push_str("\n\n");
+    }
     if let Some(a2a_guidance) = input.a2a_guidance {
         append_json_text_section(&mut output, "A2A_GUIDANCE", a2a_guidance);
     }
@@ -6796,6 +6937,60 @@ fn render_payload(input: RenderPayloadInput<'_>) -> Result<String> {
         _ => anyhow::bail!("Context must contain exactly one input section"),
     }
     Ok(output)
+}
+
+#[derive(Debug, Clone)]
+struct PreparedAdditionalSkills {
+    section: String,
+    omitted: Vec<String>,
+}
+
+fn prepare_additional_skills(
+    connection: &rusqlite::Connection,
+    data_dir: &std::path::Path,
+    snapshot: &RunSnapshot,
+) -> Result<PreparedAdditionalSkills> {
+    let managed = crate::managed_skills::ManagedSkills::for_data_dir(data_dir)?;
+    // Source failure omits only that item. The frozen index records the actual
+    // readable set; it never fabricates a description from legacy Library data.
+    let sync_error = managed
+        .sync()
+        .err()
+        .map(|error| format!("managed Skill synchronization: {error:#}"));
+    let mut names =
+        crate::managed_skills::configured_toolbox_names(connection, &snapshot.agent_id)?;
+    names.extend(
+        snapshot
+            .skill_selection_snapshot
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.source == Some(crate::current_input_skill::SkillSource::Rovai)
+                    && crate::managed_skills::TOOLBOX_SKILLS.contains(&entry.name_at_send.as_str())
+            })
+            .map(|entry| entry.name_at_send.clone()),
+    );
+    let (entries, mut omitted) = managed.index(names);
+    if let Some(error) = sync_error {
+        omitted.push(error);
+    }
+    let section = format!(
+        "[ROVAI_ADDITIONAL_SKILLS]\nCurrent for this run; replaces any earlier Rovai Additional Skills.\n{}\n[/ROVAI_ADDITIONAL_SKILLS]",
+        managed.index_json(&entries)?
+    );
+    Ok(PreparedAdditionalSkills { section, omitted })
+}
+
+fn persist_additional_skills_evidence(
+    transaction: &Transaction<'_>,
+    manifest_id: &str,
+    prepared: &PreparedAdditionalSkills,
+) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO context_additional_skills_evidence(context_manifest_id, section_text, section_digest, omitted_json) VALUES (?1, ?2, ?3, ?4)",
+        params![manifest_id, prepared.section, sha256_text(&prepared.section), serde_json::to_string(&prepared.omitted)?],
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7159,15 +7354,7 @@ fn load_existing_manifest(
     )?;
     let stored_profile = ContextDeliveryProfile::from_frozen_json(&row.17)
         .context("Stored ContextManifest delivery profile is invalid")?;
-    let current_profile = if row.15 == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION {
-        current_public_camp_batch_context_delivery_profile()?
-    } else {
-        current_context_delivery_profile()?
-    };
-    if row.16 != current_profile.profile_version
-        || stored_profile != current_profile
-        || row.18 != current_profile.canonical_digest()?
-    {
+    if row.16 != stored_profile.profile_version || row.18 != stored_profile.canonical_digest()? {
         anyhow::bail!("Stored ContextManifest delivery profile evidence is inconsistent");
     }
     if let Some(prepared) = prepared_mcp_projection {
@@ -7191,6 +7378,23 @@ fn load_existing_manifest(
     if sha256_text(&payload) != row.4 {
         anyhow::bail!("Stored ContextManifest payload digest is invalid");
     }
+    if matches!(
+        row.15,
+        CONTEXT_FORMATTER_VERSION | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
+    ) {
+        let dynamic_evidence: Option<(String, String, String)> = database.connection().query_row(
+            "SELECT section_text, section_digest, omitted_json FROM context_additional_skills_evidence WHERE context_manifest_id = ?1",
+            [&row.0],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).optional()?;
+        let (section, digest, omitted) = dynamic_evidence
+            .context("new ContextManifest Additional Skills evidence is missing")?;
+        anyhow::ensure!(
+            sha256_text(&section) == digest && payload.matches(&section).count() == 1,
+            "Stored Additional Skills section changed"
+        );
+        let _: Vec<String> = serde_json::from_str(&omitted)?;
+    }
     validate_a2a_guidance_evidence(&a2a_guidance_evidence, &row.33, &payload)?;
     let (workspace_json,workspace_digest,workspace_included)=database.connection().query_row("SELECT workspace_fact_json,workspace_fact_digest,workspace_fact_included FROM context_manifest WHERE id=?1",[&row.0],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,bool>(2)?)))?;
     validate_workspace_evidence(
@@ -7207,7 +7411,23 @@ fn load_existing_manifest(
     if sha256_text(&charter) != row.11 || sha256_text(&entrypoint) != row.13 {
         anyhow::bail!("Stored Native Session Bootstrap digest is invalid");
     }
-    let bootstrap_digest = bootstrap_evidence_digest(&row.11, &row.13);
+    let (bootstrap_contract, platform_section, platform_digest): (String, Option<String>, Option<String>) = database.connection().query_row(
+        "SELECT bootstrap.contract_version, platform.section_text, platform.section_digest FROM native_session_bootstrap_evidence AS bootstrap LEFT JOIN native_session_platform_skills_evidence AS platform ON platform.bootstrap_evidence_id = bootstrap.id WHERE bootstrap.id = ?1",
+        [&row.9],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    if let Some(section) = platform_section.as_deref() {
+        anyhow::ensure!(
+            Some(sha256_text(section)) == platform_digest,
+            "Stored platform Skills digest is invalid"
+        );
+    }
+    let bootstrap_digest = bootstrap_evidence_digest_for(
+        &bootstrap_contract,
+        &row.11,
+        platform_digest.as_deref(),
+        &row.13,
+    )?;
     let bootstrap_required = requires_new_native_session
         || snapshot.native_charter_digest.as_deref() != Some(bootstrap_digest.as_str());
     let bootstrap_redelivery_revision = if row.19 {
@@ -7227,7 +7447,12 @@ fn load_existing_manifest(
         || bootstrap_redelivery_revision.is_some();
     let runtime_payload = if bootstrap_in_runtime_payload {
         let member_identity = load_latest_member_identity(database, &snapshot.agent_id)?;
-        let bootstrap = render_session_bootstrap(&charter, &member_identity, &entrypoint)?;
+        let bootstrap = render_session_bootstrap(
+            &charter,
+            &member_identity,
+            platform_section.as_deref(),
+            &entrypoint,
+        )?;
         let bootstrap = if bootstrap_redelivery_revision.is_some() {
             render_bootstrap_redelivery_overlay(&bootstrap)
         } else {
@@ -7368,10 +7593,26 @@ fn validate_frozen_view_receipt(
     let version = selection
         .get("contextManifestVersion")
         .and_then(Value::as_i64);
-    if version != Some(CONTEXT_MANIFEST_VERSION)
-        || selection.get("runFactsSchemaVersion") != Some(&json!(5))
+    let profile = selection
+        .get("contextDeliveryProfileVersion")
+        .and_then(Value::as_i64);
+    if !matches!(
+        (version, profile),
+        (Some(27), Some(7)) | (Some(26), Some(6))
+    ) || selection.get("runFactsSchemaVersion") != Some(&json!(5))
     {
         anyhow::bail!("Frozen Delivery Context uses an obsolete Attachment contract");
+    }
+    if version == Some(CONTEXT_MANIFEST_VERSION) {
+        let _ = frozen_additional_skills(frozen)?;
+    } else if selection.contains_key("additionalSkillsSection")
+        || selection.contains_key("additionalSkillsSectionDigest")
+        || selection.contains_key("additionalSkillsOmitted")
+        || frozen
+            .rendered_payload
+            .contains("[ROVAI_ADDITIONAL_SKILLS]")
+    {
+        anyhow::bail!("Legacy frozen Context contains unexpected Additional Skills");
     }
     if selection
         .get("campAttachmentViewReceipt")
@@ -7405,6 +7646,36 @@ fn validate_frozen_view_receipt(
         anyhow::bail!("Frozen Delivery Context Camp Attachment View receipt digest is invalid");
     }
     validate_frozen_camp_attachment_view_receipt(&receipt)
+}
+
+fn frozen_additional_skills(frozen: &FrozenDeliveryContext) -> Result<PreparedAdditionalSkills> {
+    let selection = frozen
+        .manifest_selection
+        .as_object()
+        .context("Frozen Delivery Context has no manifest selection")?;
+    let additional_section = selection
+        .get("additionalSkillsSection")
+        .and_then(Value::as_str)
+        .context("Frozen Delivery Context Additional Skills section is missing")?;
+    let additional_digest = selection
+        .get("additionalSkillsSectionDigest")
+        .and_then(Value::as_str)
+        .context("Frozen Delivery Context Additional Skills digest is missing")?;
+    anyhow::ensure!(
+        sha256_text(additional_section) == additional_digest
+            && frozen.rendered_payload.matches(additional_section).count() == 1,
+        "Frozen Additional Skills section is inconsistent"
+    );
+    let additional_omitted: Vec<String> = serde_json::from_value(
+        selection
+            .get("additionalSkillsOmitted")
+            .context("Frozen Additional Skills omissions are missing")?
+            .clone(),
+    )?;
+    Ok(PreparedAdditionalSkills {
+        section: additional_section.to_owned(),
+        omitted: additional_omitted,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7622,7 +7893,13 @@ fn materialize_frozen_delivery_context(
         .then(|| serde_json::to_string(receipt_value))
         .transpose()?;
     let camp_attachment_view_receipt_digest = required("campAttachmentViewReceiptDigest")?.as_str();
-    if (context_manifest_version, run_facts_schema_version) != (CONTEXT_MANIFEST_VERSION, 5) {
+    if !context_manifest_is_dispatchable(
+        context_manifest_version,
+        context_manifest_version,
+        profile_version,
+        &snapshot.invocation_kind,
+    ) || run_facts_schema_version != 5
+    {
         anyhow::bail!("Frozen Delivery Context version evidence is inconsistent");
     }
     if let Some(digest) = camp_attachment_view_receipt_digest {
@@ -7635,6 +7912,9 @@ fn materialize_frozen_delivery_context(
         anyhow::bail!("Frozen Delivery Context View evidence is incomplete");
     }
 
+    let prepared_additional_skills = (context_manifest_version == CONTEXT_MANIFEST_VERSION)
+        .then(|| frozen_additional_skills(frozen))
+        .transpose()?;
     let manifest_id = Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let transaction = database.connection_mut().transaction()?;
@@ -7759,6 +8039,9 @@ fn materialize_frozen_delivery_context(
             mission_details_version,
         ],
     )?;
+    if let Some(prepared_additional_skills) = &prepared_additional_skills {
+        persist_additional_skills_evidence(&transaction, &manifest_id, prepared_additional_skills)?;
+    }
     for camp in &history_camps {
         transaction.execute(
             r#"
@@ -8004,12 +8287,16 @@ fn load_delivery_target(
                    runtime_input_delivery.status,
                    runtime_input_delivery.native_input_id,
                    runtime_input_delivery.bootstrap_redelivery_revision,
-                   context_manifest.mission_details_version
+                   context_manifest.mission_details_version,
+                   bootstrap.contract_version,
+                   platform.section_digest
             FROM runtime_input_delivery
             JOIN context_manifest
               ON context_manifest.id = runtime_input_delivery.context_manifest_id
             JOIN native_session_bootstrap_evidence AS bootstrap
               ON bootstrap.id = context_manifest.bootstrap_evidence_id
+            LEFT JOIN native_session_platform_skills_evidence AS platform
+              ON platform.bootstrap_evidence_id = bootstrap.id
             JOIN agent_run ON agent_run.id = runtime_input_delivery.agent_run_id
             JOIN conversation ON conversation.id = agent_run.conversation_id
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
@@ -8026,10 +8313,19 @@ fn load_delivery_target(
                     current_native_binding_id: row.get(5)?,
                     current_native_binding_generation: row.get(6)?,
                     boundary_camp_message_sequence: row.get(7)?,
-                    charter_digest: bootstrap_evidence_digest(
+                    charter_digest: bootstrap_evidence_digest_for(
+                        &row.get::<_, String>(17)?,
                         &row.get::<_, String>(8)?,
+                        row.get::<_, Option<String>>(18)?.as_deref(),
                         &row.get::<_, String>(9)?,
-                    ),
+                    )
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            17,
+                            rusqlite::types::Type::Text,
+                            error.into(),
+                        )
+                    })?,
                     collaboration_state_digest: row.get(10)?,
                     collaboration_state_included: row.get(11)?,
                     camp_id: row.get(12)?,
@@ -8307,10 +8603,12 @@ mod tests {
                     context_manifest_version INTEGER
                 );
                 INSERT INTO agent_run_input VALUES ('historical', 26);
-                INSERT INTO agent_run_input VALUES ('current', 29);
-                INSERT INTO agent_run_input VALUES ('current', 29);
+                INSERT INTO agent_run_input VALUES ('current', 30);
+                INSERT INTO agent_run_input VALUES ('current', 30);
+                INSERT INTO agent_run_input VALUES ('legacy', 29);
+                INSERT INTO agent_run_input VALUES ('legacy', 29);
                 INSERT INTO agent_run_input VALUES ('mixed', 26);
-                INSERT INTO agent_run_input VALUES ('mixed', 29);
+                INSERT INTO agent_run_input VALUES ('mixed', 30);
                 INSERT INTO agent_run_input VALUES ('missing', NULL);
                 "#,
             )
@@ -8320,13 +8618,19 @@ mod tests {
             frozen_batch_context_manifest_version(&connection, "current").unwrap(),
             PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
         );
+        assert_eq!(
+            frozen_batch_context_manifest_version(&connection, "legacy").unwrap(),
+            29
+        );
         for invalid in ["historical", "mixed", "missing", "absent"] {
             assert!(frozen_batch_context_manifest_version(&connection, invalid).is_err());
         }
     }
 
     #[test]
-    fn dispatch_admission_accepts_only_new_context_contracts() {
+    fn dispatch_admission_accepts_current_and_frozen_predecessor_contracts() {
+        assert!(context_manifest_is_dispatchable(27, 27, 7, "single_chat"));
+        assert!(context_manifest_is_dispatchable(30, 30, 10, "batch"));
         assert!(context_manifest_is_dispatchable(26, 26, 6, "single_chat"));
         assert!(context_manifest_is_dispatchable(29, 29, 9, "batch"));
         for (manifest, formatter, profile, invocation) in [
@@ -8394,10 +8698,12 @@ mod tests {
             CurrentInputSkillLink {
                 name: "review-code".to_string(),
                 path: "/skills/review-code/SKILL.md".to_string(),
+                message_index: None,
             },
             CurrentInputSkillLink {
                 name: "unrelated".to_string(),
                 path: "/skills/unrelated/SKILL.md".to_string(),
+                message_index: None,
             },
         ]);
 
@@ -8809,6 +9115,7 @@ mod slow_tests {
             shared_conversation: Some(&shared_conversation),
             run_facts: &run_facts,
             workspace: None,
+            additional_skills: None,
             a2a_guidance: None,
             single_chat_guidance: Some(SINGLE_CHAT_GUIDANCE.trim()),
             current_input: Some(&json!({
@@ -13867,6 +14174,7 @@ mod slow_tests {
             shared_conversation: Some(&shared_conversation),
             run_facts: &camp_resources_only,
             workspace: None,
+            additional_skills: None,
             a2a_guidance: None,
             single_chat_guidance: None,
             current_input: Some(&json!({"source":{"type":"user"},"body":"work"})),

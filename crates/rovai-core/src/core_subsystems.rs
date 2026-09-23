@@ -264,47 +264,52 @@ impl super::Core {
         if self.subsystems.begin("skills") {
             let result = async {
                 let started = Instant::now();
-                let plan = {
-                    let mut database = self.database.lock().await;
-                    SkillProjectionReconciler.synchronize_removed_execution_roots(
-                        &mut database,
-                        self.removed_skill_project_roots.get()?,
-                    )?;
-                    self.skill_library.plan_bundled_skills(&mut database)?
-                };
-                let library = SkillLibraryService::deferred(self.skill_library.root().to_path_buf());
-                let prepared = tokio::task::spawn_blocking(move || library.prepare_bundled_skills(plan))
-                    .await
-                    .context("Bundled Skill preparation task failed")??;
-                let bundled = {
-                    let mut database = self.database.lock().await;
-                    let bundled = self.skill_library.commit_bundled_skills(&mut database, prepared)?;
-                    if bundled.changed {
-                        SkillProjectionReconciler
-                            .mark_observed_roots_dirty(&mut database, false)?;
+                match rovai_core::managed_skills::ManagedSkills::for_data_dir(&self.data_dir) {
+                    Ok(managed) => {
+                        if let Err(error) = tokio::task::spawn_blocking(move || managed.sync())
+                            .await
+                            .context("managed Skill synchronization task failed")?
+                        {
+                            // A missing or modified resource is a diagnostic, not a
+                            // Runtime admission gate. New Run preparation retries.
+                            eprintln!("managed Skill synchronization unavailable: {error:#}");
+                        }
                     }
-                    SkillProjectionReconciler
-                        .finalize_unprojected_deletions(&mut database, &self.skill_library)?;
-                    bundled
+                    Err(error) => eprintln!("managed Skill resources unavailable: {error:#}"),
+                }
+                let mut database = self.database.lock().await;
+                let mut old_roots = {
+                    let mut statement = database.connection().prepare(
+                        "SELECT DISTINCT execution_root FROM skill_projection_observation",
+                    )?;
+                    statement
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
                 };
-                eprintln!(
-                    "[startup] stage=bundled_skills_ready duration_ms={} fast_path_count={} materialized_count={} repaired_count={} changed={}",
-                    started.elapsed().as_millis(),
-                    bundled.fast_path_count,
-                    bundled.materialized_count,
-                    bundled.repaired_count,
-                    bundled.changed,
-                );
-                for root in &self.startup_skill_execution_roots {
-                    let mut database = self.database.lock().await;
-                    SkillProjectionReconciler.reconcile_after_run_terminal(
+                old_roots.extend(self.startup_skill_execution_roots.iter().cloned());
+                old_roots.extend(self.removed_skill_project_roots.get()?.iter().cloned());
+                old_roots.sort();
+                old_roots.dedup();
+                // Old projections remain owned by Rovai, but no new Run needs
+                // them. Existing ownership and active-Run fences decide when
+                // each observed project entry can be removed.
+                for root in &old_roots {
+                    if let Err(error) = SkillProjectionReconciler.remove_execution_root(
                         &mut database,
                         &self.skill_library,
                         Path::new(root),
-                    )?;
+                    ) {
+                        eprintln!("deferred old Skill projection cleanup at {root}: {error:#}");
+                    }
                 }
+                eprintln!(
+                    "[startup] stage=managed_skills_ready duration_ms={} legacy_roots={}",
+                    started.elapsed().as_millis(),
+                    old_roots.len()
+                );
                 Ok(())
-            }.await;
+            }
+            .await;
             self.finish_subsystem("skills", result);
         }
         tokio::task::yield_now().await;

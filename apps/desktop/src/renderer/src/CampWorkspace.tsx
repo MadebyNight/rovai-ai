@@ -62,8 +62,7 @@ import type {
   TaskStatus,
   TaskView,
   NavigationCampItem,
-  SkillDeliveryGroupView,
-  SkillView,
+  ComposerSkillCandidates,
   StoredCommandResult,
   StructuredCampMessageContent
 } from '@contracts'
@@ -155,7 +154,7 @@ import {
 } from './timeline-reading-anchor'
 import { RuntimeFailureNotice } from './RuntimeFailureNotice'
 import { identityColorToken } from './theme'
-import { availableComposerSkillsForLead } from './composer-skill-picker'
+import { composerSkillsFromCandidates } from './composer-skill-picker'
 import { createStructuredMessageClipboardData } from './structured-message-clipboard'
 import { CampWorldMap } from './CampWorldMap'
 import {
@@ -1723,10 +1722,11 @@ export function CampWorkspace({
   const [starterNotice, setStarterNotice] = useState<string | null>(null)
   const [mentionPopover, setMentionPopover] = useState<MentionPopoverRequest | null>(null)
   const [composerSkillCatalog, setComposerSkillCatalog] = useState<{
-    skills: SkillView[]
-    groups: SkillDeliveryGroupView[]
+    candidates: ComposerSkillCandidates
     status: 'loading' | 'ready' | 'error'
-  }>({ skills: [], groups: [], status: 'loading' })
+  }>({ candidates: { skills: [], errors: [] }, status: 'loading' })
+  const [skillCatalogRefreshing, setSkillCatalogRefreshing] = useState(false)
+  const refreshSkillCatalogRef = useRef<(() => void) | null>(null)
   const composerEditorRef = useRef<HTMLDivElement>(null)
   const composerHandleRef = useRef<StructuredMentionComposerHandle>(null)
   const composerFileInputRef = useRef<HTMLInputElement>(null)
@@ -2101,36 +2101,42 @@ export function CampWorkspace({
   )
   useEffect(() => {
     let cancelled = false
-    const loadSkillCatalog = async (): Promise<void> => {
+    let requestSequence = 0
+    setComposerSkillCatalog({ candidates: { skills: [], errors: [] }, status: 'loading' })
+    setSkillCatalogRefreshing(false)
+    const loadSkillCatalog = async (refresh = false): Promise<void> => {
+      const request = ++requestSequence
+      if (refresh) setSkillCatalogRefreshing(true)
       try {
-        const [skills, groups] = await Promise.all([
-          client.request<SkillView[]>('skills.list'),
-          client.request<SkillDeliveryGroupView[]>('skills.deliveryGroups.list')
-        ])
-        if (!cancelled) setComposerSkillCatalog({ skills, groups, status: 'ready' })
+        const candidates = await client.request<ComposerSkillCandidates>('skills.candidates', { campId: snapshot.camp.id, refresh })
+        if (!cancelled && request === requestSequence) setComposerSkillCatalog({ candidates, status: 'ready' })
       } catch {
-        if (!cancelled) {
+        if (!cancelled && request === requestSequence) {
           setComposerSkillCatalog((current) => current.status === 'ready'
             ? current
             : { ...current, status: 'error' })
         }
+      } finally {
+        if (!cancelled && request === requestSequence) setSkillCatalogRefreshing(false)
       }
     }
     void loadSkillCatalog()
-    const unsubscribeInvalidation = client.onInvalidated?.(() => void loadSkillCatalog())
+    refreshSkillCatalogRef.current = () => void loadSkillCatalog(true)
+    const unsubscribeInvalidation = client.onInvalidated?.(() => void loadSkillCatalog(true))
     const unsubscribe = client.onEvent?.((event) => {
       if (event.method !== 'runtime.state') return
       const params = event.params !== null && typeof event.params === 'object'
         ? event.params as Record<string, unknown>
         : {}
-      if (params.status === 'ready') void loadSkillCatalog()
+      if (params.status === 'ready') void loadSkillCatalog(true)
     })
     return () => {
       cancelled = true
+      refreshSkillCatalogRef.current = null
       unsubscribe?.()
       unsubscribeInvalidation?.()
     }
-  }, [client])
+  }, [client, snapshot.camp.id, snapshot.camp.projectPath, snapshot.camp.membershipGeneration])
   const closeMentionPopover = useCallback((returnFocus: boolean): void => {
     const trigger = mentionPopover?.trigger
     setMentionPopover(null)
@@ -2409,13 +2415,16 @@ export function CampWorkspace({
     [hasExplicitRecipient, snapshot.members]
   )
   const composerSkills = useMemo(
-    () => availableComposerSkillsForLead(
-      composerSkillCatalog.skills,
-      composerSkillCatalog.groups,
-      defaultLead?.agentId ?? null
-    ),
-    [composerSkillCatalog.groups, composerSkillCatalog.skills, defaultLead?.agentId]
+    () => composerSkillsFromCandidates(composerSkillCatalog.candidates),
+    [composerSkillCatalog.candidates]
   )
+  const unlistedSkillName = useMemo(() => {
+    if (composerSkillCatalog.status !== 'ready' || composerDraft?.campId !== snapshot.camp.id) return null
+    const candidateIds = new Set(composerSkills.map((skill) => skill.id))
+    const missing = composerDraft.content.segments.find((segment) => segment.kind === 'atom'
+      && segment.atom.type === 'skill' && !candidateIds.has(segment.atom.skillId))
+    return missing?.kind === 'atom' && missing.atom.type === 'skill' ? missing.atom.nameAtSend : null
+  }, [composerDraft, composerSkillCatalog.status, composerSkills, snapshot.camp.id])
   const activeRuns = snapshot.agentRuns.filter((run) => NON_TERMINAL_RUNS.has(run.status))
   const executionBlocked = activeRuns.length > 0 || stopping
   const composerInteractionDisabled = draftLoadState.state !== 'ready'
@@ -5666,6 +5675,9 @@ export function CampWorkspace({
               members={composerMembers}
               skills={composerSkills}
               skillCatalogStatus={composerSkillCatalog.status}
+              skillCatalogErrors={composerSkillCatalog.candidates.errors}
+              skillCatalogRefreshing={skillCatalogRefreshing}
+              onRefreshSkills={() => refreshSkillCatalogRef.current?.()}
               ariaLabel={`给 ${defaultLead?.displayName ?? '默认负责人'} 发消息`}
               placeholder={draftLoadState.state === 'error'
                 ? '输入框暂不可用'
@@ -5686,6 +5698,11 @@ export function CampWorkspace({
                   focusPanel
                 )}
             />
+            {unlistedSkillName && (
+              <span className="composer-reply-status" role="status" aria-live="polite">
+                {unlistedSkillName} 的来源当前不在候选中，仍可发送。
+              </span>
+            )}
             {!composerDraft?.replyIntent && replyInteractionError && (
               <span className="composer-reply-status" role="status" aria-live="polite">
                 {replyInteractionError}

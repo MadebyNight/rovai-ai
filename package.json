@@ -260,6 +260,10 @@
         {
           "from": "out/web",
           "to": "web-ui"
+        },
+        {
+          "from": "skills",
+          "to": "skills"
         }
       ],
       "binaries": [
@@ -317,6 +321,10 @@
         {
           "from": "out/web",
           "to": "web-ui"
+        },
+        {
+          "from": "skills",
+          "to": "skills"
         }
       ],
       "artifactName": "Rovai-AI-${version}-${arch}.${ext}"

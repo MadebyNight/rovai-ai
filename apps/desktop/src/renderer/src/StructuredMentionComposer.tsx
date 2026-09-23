@@ -98,6 +98,9 @@ export interface StructuredMentionComposerProps {
   members: readonly StructuredMentionMember[]
   skills?: readonly ComposerSkillOption[] | null
   skillCatalogStatus?: 'loading' | 'ready' | 'error'
+  skillCatalogErrors?: readonly string[]
+  skillCatalogRefreshing?: boolean
+  onRefreshSkills?(): void
   ariaLabel: string
   placeholder?: string
   disabled?: boolean
@@ -208,6 +211,9 @@ function ComposerBridge({
   members,
   skills = [],
   skillCatalogStatus = 'ready',
+  skillCatalogErrors = [],
+  skillCatalogRefreshing = false,
+  onRefreshSkills,
   ariaLabel,
   placeholder = '',
   disabled = false,
@@ -556,6 +562,10 @@ function ComposerBridge({
             skillMenuId,
             skillCatalogStatus,
             skillMenuOptions,
+            members,
+            skillCatalogErrors ?? [],
+            skillCatalogRefreshing,
+            onRefreshSkills,
             selectedIndex,
             setHighlightedIndex,
             selectIndex
@@ -598,13 +608,17 @@ function renderSkillMenu(
   menuId: string,
   status: 'loading' | 'ready' | 'error',
   options: readonly ComposerSkillOption[],
+  members: readonly StructuredMentionMember[],
+  errors: readonly string[],
+  refreshing: boolean,
+  onRefresh: (() => void) | undefined,
   selectedIndex: number,
   setHighlightedIndex: (index: number) => void,
   selectIndex: (index: number) => void
 ): JSX.Element {
   return <div id={menuId} className="mention-menu skill-picker-menu structured-skill-menu"
     role="listbox" aria-label="选择 Skill">
-    <div className="mention-menu-heading"><strong>选择 Skill</strong><span>↑↓ 选择 · Enter 确认</span></div>
+    <div className="mention-menu-heading"><strong>选择 Skill</strong><span>↑↓ 选择 · Enter 确认</span>{onRefresh && <button type="button" aria-label="刷新 Skill 候选" disabled={refreshing} onMouseDown={(event) => event.preventDefault()} onClick={onRefresh}>刷新</button>}</div>
     {status === 'loading'
       ? <p className="structured-mention-empty">正在读取可用 Skills…</p>
       : status === 'error'
@@ -614,6 +628,7 @@ function renderSkillMenu(
           : options.map((option, index) => <button type="button" role="option" id={`${menuId}-option-${index}`}
               key={`skill:${option.id}`} data-skill-name={option.name}
               aria-selected={selectedIndex === index}
+              aria-label={`/${option.name}，${option.source === 'toolbox' ? '工具箱' : option.sourceScope === 'project' ? '项目 Skill' : '用户 Skill'}${option.memberIds?.length ? `，关联队员：${members.filter((member) => option.memberIds?.includes(member.agentId)).map((member) => member.displayName).join('、')}` : ''}`}
               className={selectedIndex === index ? 'active' : ''}
               onMouseMove={() => setHighlightedIndex(index)}
               onMouseDown={(event) => event.preventDefault()}
@@ -623,8 +638,16 @@ function renderSkillMenu(
                 <strong>/{option.name}</strong>
                 <small>{option.description}</small>
               </span>
+              {option.source === 'toolbox' && <span className="skill-picker-source">工具箱</span>}
+              {option.sourceScope && <span className="skill-picker-source">{option.sourceScope === 'project' ? '项目' : '用户'}</span>}
+              {option.memberIds && <span className="skill-picker-member-count" title={`${option.source === 'toolbox' ? '已配置此 Skill 的队员' : '在以下队员的环境中发现'}：${members.filter((member) => option.memberIds?.includes(member.agentId)).map((member) => member.displayName).join('、')}`}>{option.memberIds.slice(0, 3).map((id) => {
+                const member = members.find((candidate) => candidate.agentId === id)
+                return member ? <MemberAvatar key={id} agentId={id} avatarRef={member.avatarRef ?? null} displayName={member.displayName} size="execution" decorative /> : null
+              })}{option.memberIds.length > 3 && <small>+{option.memberIds.length - 3}</small>}</span>}
               <span className="skill-picker-enter" aria-hidden="true">↵</span>
             </button>)}
+    {refreshing && <p className="structured-mention-empty" role="status">正在刷新 Skill 候选…</p>}
+    {errors.length > 0 && <p className="structured-mention-empty" role="status">部分来源暂不可读，仍可选择已发现的 Skill。</p>}
   </div>
 }
 
