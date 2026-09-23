@@ -113,12 +113,10 @@ test('verifier observation must be process-successful and contain the exact veri
   }, catalog).validationErrors[0].code, 'verifier.process_nonzero')
 })
 
-test('Qualification dispatch consumes one persisted structured composer draft revision', async () => {
+test('Qualification dispatch sends the sealed prompt as structured content', async () => {
   const calls = []
   const request = async (method, params) => {
     calls.push({ method, params })
-    if (method === 'camp.composerDraft.get') return { campId: 'camp-1', revision: 4 }
-    if (method === 'camp.composerDraft.save') return { campId: 'camp-1', revision: 5 }
     return { commandResult: { status: 'accepted' } }
   }
   const execution = {
@@ -140,29 +138,19 @@ test('Qualification dispatch consumes one persisted structured composer draft re
   assert.equal(result.commandResult.status, 'accepted')
   assert.deepEqual(calls, [
     {
-      method: 'camp.composerDraft.get',
-      params: { campId: 'camp-1' }
-    },
-    {
-      method: 'camp.composerDraft.save',
-      params: {
-        campId: 'camp-1',
-        expectedRevision: 4,
-        content: { version: 2, segments: [{ kind: 'text', text: 'Implement the task.' }] }
-      }
-    },
-    {
       method: 'camp.messages.send',
       params: {
         commandId: 'command-1',
         campId: 'camp-1',
-        draftRevision: 5,
+        content: { version: 2, segments: [{ kind: 'text', text: 'Implement the task.' }] },
+        sourceAttachments: [],
+        quotes: [],
+        replyToCampMessageId: null,
         execution
       }
     }
   ])
-  assert.equal(Object.hasOwn(calls[2].params, 'body'), false)
-  assert.equal(Object.hasOwn(calls[2].params, 'address'), false)
+  assert.equal(Object.hasOwn(calls[0].params, 'draftRevision'), false)
 })
 
 test('frozen Core budget preserves the sealed Case projection and exact deadline', () => {
