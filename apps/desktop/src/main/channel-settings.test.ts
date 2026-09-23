@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rename, rm, writeFile, readFile, access } from 'node:fs/promises'
+import { PassThrough, Readable } from 'node:stream'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -197,6 +198,7 @@ function controlledChannels(identities: Record<string, { openId: string; name: s
   createMessage: ReturnType<typeof vi.fn>
   replyMessage: ReturnType<typeof vi.fn>
   getMessage: ReturnType<typeof vi.fn>
+  getResource: ReturnType<typeof vi.fn>
   getChatMode: ReturnType<typeof vi.fn>
   isInChat: Map<string, ReturnType<typeof vi.fn>>
 } {
@@ -207,6 +209,7 @@ function controlledChannels(identities: Record<string, { openId: string; name: s
   const createMessage = vi.fn(async () => ({ code: 0, data: { message_id: 'om_output' } }))
   const replyMessage = vi.fn(async () => ({ code: 0, data: { message_id: 'om_output_reply' } }))
   const getMessage = vi.fn(async () => ({ code: 0, data: { items: [] as unknown[] } }))
+  const getResource = vi.fn(async () => ({ getReadableStream: () => Readable.from(['resource']) }))
   const getChatMode = vi.fn(async (_chatId: string): Promise<'p2p' | 'group' | 'topic'> => 'group')
   const isInChat = new Map<string, ReturnType<typeof vi.fn>>()
   const createChannel = vi.fn((options: { appId: string }) => {
@@ -228,6 +231,7 @@ function controlledChannels(identities: Record<string, { openId: string; name: s
       rawClient: {
         im: { v1: {
           message: { create: createMessage, reply: replyMessage, get: getMessage },
+          messageResource: { get: getResource },
           chatMembers: {
             isInChat: observeMembership
           }
@@ -244,6 +248,7 @@ function controlledChannels(identities: Record<string, { openId: string; name: s
     createMessage,
     replyMessage,
     getMessage,
+    getResource,
     getChatMode,
     isInChat
   }
@@ -313,6 +318,59 @@ function normalizedMessage(input: {
 }
 
 describe('channel settings service', () => {
+  it('recovers pending attachment downloads without blocking the pump or submitting partial inputs', async () => {
+    const harness = controlledChannels({ cli_a: { openId: 'ou_bot_a', name: '审阅员' } })
+    const stream = new PassThrough()
+    harness.getResource.mockResolvedValue({ getReadableStream: () => stream })
+    let completed = false
+    let downloaded: string[] = []
+    let ticks = 0
+    const service = new ChannelSettingsService({
+      ...inertInterval(),
+      credentialStore: memoryCredentialStore({ 'feishu-member-a': { appId: 'cli_a', appSecret: 'secret-a' } }),
+      createChannel: harness.createChannel,
+      core: channelCore(async (method, raw) => {
+        if (method === 'channels.feishu.snapshot') return coreSnapshot({ memberBots: [{
+          agentId: 'agent-a', accountId: 'account-1', brand: 'feishu', appId: 'cli_a',
+          botDisplayName: '审阅员', credentialRef: 'feishu-member-a', status: 'published',
+          failureCode: null, version: 1, ownerIdentityStatus: 'verified'
+        }] })
+        if (method === 'channels.host.tick') {
+          ticks += 1
+          return { deliveries: [], hasOutstandingWork: !completed, inboundAttachments: completed ? [] : [{
+            requestId: 'queued-request', appId: 'cli_a', messageId: 'received-message', attempt: 0,
+            retryAt: null, resources: [{ fileKey: 'img_key', kind: 'image', name: 'image' }]
+          }] }
+        }
+        if (method === 'channels.inbound.attachments.complete') {
+          const command = (raw as { command: { files: string[]; failureCode: string | null } }).command
+          expect(command.failureCode).toBeNull()
+          downloaded = command.files
+          expect(await readFile(downloaded[0], 'utf8')).toBe('complete image bytes')
+          completed = true
+          return { status: 'applied', payload: { ready: true, retryAt: null } }
+        }
+        return { status: 'applied', payload: {} }
+      })
+    })
+    try {
+      await service.start()
+      await vi.waitFor(() => expect(harness.getResource).toHaveBeenCalledTimes(1))
+      expect(completed).toBe(false)
+      // A channel wake while bytes are still streaming must not start a duplicate.
+      const priorTicks = ticks
+      await harness.handlers.get('cli_a:message')!(normalizedMessage({
+        messageId: 'wake', senderUserId: 'owner-user-id', content: 'hello'
+      }))
+      await vi.waitFor(() => expect(ticks).toBeGreaterThan(priorTicks))
+      expect(harness.getResource).toHaveBeenCalledTimes(1)
+      stream.end('complete image bytes')
+      await vi.waitFor(() => expect(completed).toBe(true))
+      await vi.waitFor(async () => {
+        for (const path of downloaded) await expect(access(path)).rejects.toThrow()
+      })
+    } finally { stream.destroy(); await service.stop() }
+  })
   it('does not expire a connected account when startup inspection throws a transient error', async () => {
     const session = developerSession()
     session.inspect.mockRejectedValue(new Error('ERR_INTERNET_DISCONNECTED'))

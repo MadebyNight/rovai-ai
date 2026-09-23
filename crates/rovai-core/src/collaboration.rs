@@ -3012,7 +3012,7 @@ impl CollaborationService {
                 camp_id: &input.camp_id,
                 body: &input.body,
                 structured_content: &input.structured_content,
-                source_attachments: &[],
+                source_attachments: &input.source_attachments,
                 prepared_attachment_ids: &[],
                 managed_attachment_ingest_intent_id: None,
                 legacy_attachment_publication_operation_id: None,
@@ -3633,6 +3633,7 @@ pub(crate) fn admit_mission_start(
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExternalChannelAdmissionInput {
+    pub source_attachments: Vec<LocalAttachmentSourceRef>,
     pub camp_id: String,
     pub external_principal_id: String,
     pub body: String,

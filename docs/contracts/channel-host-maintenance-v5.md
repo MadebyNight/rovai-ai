@@ -5,7 +5,7 @@ authority: channel-host-adaptive-maintenance-and-quiescence
 status: accepted
 version: 5
 source_version: v1.38
-last_updated: 2026-09-02
+last_updated: 2026-09-23
 ---
 
 # Channel Host Maintenance v5
@@ -29,6 +29,7 @@ last_updated: 2026-09-02
 {
   "deliveries": [],
   "rosterRefreshes": [],
+  "inboundAttachments": [],
   "hasOutstandingWork": false
 }
 ```
@@ -76,6 +77,11 @@ active 门禁；已经休眠的 Host 不得被这些事件重新激活。渠道�
 
 Delivery settlement 必须追泵，以便 Core 结算 exact Request 并提升 FIFO；若 retry settlement 返回 `availableAt`，
 Main 还需在该时刻安排 one-shot，不得把 2–32 秒退避延长到兜底周期。
+
+飞书入站附件使用同一 queued Request 与 Host tick，响应的 `inboundAttachments` 返回待下载资源；钉钉返回空数组。
+Main 以最多两个后台任务处理，按 Request 去重，不占住串行 pump；完成后唤醒 pump，`retryAt` 安排 one-shot。
+Host 停止时取消未完成下载并清理临时文件；持久 queued 状态由下一次启动恢复。详细字段、重试和消息准入见
+[Channel Message Bridge v1](channel-message-bridge-v1.md#feishu-inbound-attachments)。
 
 同一时间最多执行一个 provider pump。执行期间收到的唤醒必须合并为一次后续 pump，不能因“当前正在执行”而丢弃。
 Core event 和本地 Notify 只负责提早唤醒，不承担不丢失保证，也不成为持久队列。
