@@ -266,9 +266,10 @@ Compaction 保留当前 Bootstrap 包裹文本、ACK、去重和重投机制；�
 
 - 实际模型输入版本为 Bootstrap v5／Formatter 5、普通 Manifest／Formatter 27／27、公开 batch Manifest／Formatter 30／30、Delivery Profile 7／10、Skill Selection／Resolution v2；Session Charter revision 13、Run Facts 5／7 和 v1.68 的 `historyHint` 保持不变。
 - 数据迁移从 v1.68/schema 122 到 v1.69/schema 123；当前迁移准入矩阵、v172 历史上下文保留、新写入门禁及旧 v26／v29 冻结输入恢复的定向测试通过。新增投递附件授权触发器允许精确的 v26／v27／v29／v30 组合，已排除新 v27／v30 被旧触发器拒绝的失败路径。
-- `cargo test -p rovai-core --lib` 为 376 通过、0 失败、1 忽略；`cargo check -p rovai-core -p rovai-web --lib`、`cargo fmt --all -- --check`、`pnpm typecheck`、Renderer Vitest 2195 项、Skills 与文档定向检查通过。候选 checkout 的 `current-contract-conformance@1.69.0` 直检为 16／16 通过；此结果只覆盖合同断言，不代表真实任务 Gate。
-- 隔离 `userData` 的打包 macOS App 验收在 Day／100% 与 Night／200% 下通过原生 Skill 只读预览、五项工具箱默认配置、开关写入和恢复、窄视口布局检查；验收时使用合成 Home，没有触及日常 App 数据。
-- 真实任务 Gate 的基线／候选实际执行与固定 Judge 证据尚待收口；在其通过前，`implementation_status` 保持 `in_progress`。
+- `cargo test -p rovai-core --lib` 为 376 通过、0 失败、1 忽略；`cargo check -p rovai-core -p rovai-web --lib`、`cargo fmt --all -- --check`、`pnpm typecheck`、合入 main 后 Renderer Vitest 2197 项、Skills 与文档定向检查通过。基线与候选的 `current-contract-conformance@1.69.0` 均为 16／16 通过；此结果只覆盖合同断言，不代表真实任务 Gate。
+- 隔离 `userData` 的打包 macOS App 在合入 main 后重新验收，Day／100% 与 Night／200% 均通过原生 Skill 只读预览、五项工具箱默认配置、开关写入和恢复、窄视口布局检查；验收时使用合成 Home，没有触及日常 App 数据。
+- 首次完整真实任务对照固定基线 `56e2b8ad`、候选 `168d7d3c`，12 Case × 新旧两侧共 24 个槽位实际执行。报告结论为 `degraded`：17 条回归记录（其中 1 个新增耗时回归槽位）、11 条证据缺口、4 个 Judge 执行失败。候选 DEMO-105 的 `report.json` 将 `rejected` 写成对象，而验收器期望按字母排序的名称字符串数组，硬验收失败；DEMO-103～106 的协作最低要求在两侧均未满足，DEMO-107 两侧均有交付失败。CLI Judge 对带引号的动态原文 `enum` 返回 `invalid_json_schema`，且其模型别名不能证明固定提供方快照。
+- 评测器对动态引号／反斜杠 `enum` 的处理已在后续提交修复：保留来源 ID 约束，原文改由现有 `applyClaimAudit` 在响应后核对；19 项定向测试通过，真实失败证据包生成的新 schema 不再含该不兼容 `enum`。此修复不改变上述已冻结 Gate 结果；固定 Judge 配置、协作／交付失败及新增耗时回归仍需重新评测收口。`implementation_status` 保持 `in_progress`。
 
 ## 二次确认记录
 
