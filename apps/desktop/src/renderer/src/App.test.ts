@@ -1125,7 +1125,6 @@ describe('task event projections', () => {
       closedByType: 'user',
       closedById: 'local_user',
       closedByAgentRunId: null,
-      version: 4,
       createdAt: '2026-08-05T02:00:00Z',
       updatedAt: '2026-08-05T02:10:00Z',
       closedAt: '2026-08-05T02:10:00Z',
@@ -1212,8 +1211,7 @@ describe('task event projections', () => {
         taskId: task.taskId,
         title: '更新后的任务标题',
         status: 'completed',
-        assigneeAgentId: 'agent_2',
-        version: 4
+        assigneeAgentId: 'agent_2'
       }
     })
 
@@ -1224,7 +1222,6 @@ describe('task event projections', () => {
       completionSummary: null,
       cancelReason: '不再需要',
       assigneeAgentId: null,
-      version: 5
     }])
     expect(campConversationHasVisibleHistory(updated)).toBe(true)
     expect(updated).toHaveLength(1)
@@ -1234,8 +1231,7 @@ describe('task event projections', () => {
       task: {
         title: '再次更新标题',
         status: 'cancelled',
-        assigneeAgentId: null,
-        version: 5
+        assigneeAgentId: null
       }
     })
   })
@@ -1257,7 +1253,6 @@ describe('task event projections', () => {
       closedByType: null,
       closedById: null,
       closedByAgentRunId: null,
-      version: 1,
       createdAt: '2026-07-01T00:00:00Z',
       updatedAt: '2026-07-01T00:00:00Z',
       closedAt: null,
@@ -5181,7 +5176,7 @@ describe('task event projections', () => {
         blockedReason: null, completionSummary: null, cancelReason: null,
         status: 'pending', assigneeAgentId: 'agent_2', createdByType: 'user',
         createdById: 'local_user', sourceAgentRunId: null, closedByType: null,
-        closedById: null, closedByAgentRunId: null, version: 1,
+        closedById: null, closedByAgentRunId: null,
         createdAt: '2026-07-23T00:00:00Z', updatedAt: '2026-07-23T00:00:00Z',
         closedAt: null, availableActions: ['update']
       }],

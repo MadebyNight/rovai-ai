@@ -1395,7 +1395,6 @@ struct UpdateTaskParams {
     command_id: String,
     camp_id: CampId,
     task_id: String,
-    expected_version: i64,
     title: Option<String>,
     description: Option<String>,
     status: Option<TaskStatus>,
@@ -9130,7 +9129,6 @@ impl Core {
                         params.camp_id.to_string(),
                         UpdateTaskCommand {
                             task_id: params.task_id,
-                            expected_version: params.expected_version,
                             title: params.title,
                             description: params.description,
                             status: params.status,
@@ -23290,7 +23288,6 @@ fn command_rejection_details(code: &str, payload: &Value) -> Option<Value> {
     }
     let allowed_fields: &[&str] = match code {
         "agent_profile.display_name_conflict" => &["displayName"],
-        "task.version_conflict" => &["taskId", "currentVersion"],
         "memory.version_conflict" => &["memoryId", "currentVersion"],
         _ => return None,
     };
@@ -28710,18 +28707,18 @@ done
     }
 
     #[test]
-    fn builtin_operation_errors_publish_only_allowlisted_conflict_details() {
+    fn builtin_operation_errors_publish_only_allowlisted_details() {
         assert_eq!(
             command_rejection_details(
-                "task.version_conflict",
+                "memory.version_conflict",
                 &json!({
                     "message": "stale",
-                    "taskId": "task-1",
+                    "memoryId": "memory-1",
                     "currentVersion": 4,
                     "internalSql": "must-not-leak",
                 }),
             ),
-            Some(json!({"taskId": "task-1", "currentVersion": 4}))
+            Some(json!({"memoryId": "memory-1", "currentVersion": 4}))
         );
         assert_eq!(
             command_rejection_details(
