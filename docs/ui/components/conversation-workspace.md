@@ -388,7 +388,7 @@ transcript 采用对话式双轨：用户正文与附件居右，队员回复居
 `--execution-running-surface` token，队员消息容器不使用背景、边框或气泡，只以开放排版承载执行过程与 final。队员一次回复由“执行过程 +
 final message”组成。运行中过程复用当前执行台的 narration、plan、command/tool 与状态视觉；连续 Command 聚合为一个
 可展开的工具组；组件、列表组图标、命令类型图标、28px / 11.5px 四轨工具行、精确结果展开与步骤计数直接复用执行台。
-发送确认前与 Run 排队立即显示“连接中”，开始处理但尚未输出时显示“思考中”。正文、计划、工具或 final 首次出现时，
+发送确认前与 Run 排队立即显示“连接中”；开始处理但尚未输出时，未收到明确 phase 显示“执行中”，收到 `thinking` phase 显示“思考中”。正文、计划、工具或 final 首次出现时，
 同一次渲染移除普通等待提示，不在后续正文尾部追加，也不等待计时器或 Run 终态。存在活动工具或尚未收口的尾组时，用“执行中 · 当前指令”表达进度。组收口才显示“已完成 x 个步骤”，统计全部已结算逻辑操作；摘要不追加各终态数量，具体结果由展开后的 Tool 行表达。
 运行中直接展开过程，不提供含耗时的外层 summary；用户仍可独立展开/收起工具组和命令结果。Run 进入 terminal 后
 过程自动折叠，才出现耗时 summary，使用中文：成功为“工作了 {时长}”，取消为“你在 {时长}后停止了运行”，失败保持明确失败语义。
@@ -561,7 +561,7 @@ Renderer 以公开消息和 Delivery ID 跟踪刚提交输入；Scheduler claim 
 不创建 pending-input 占位，也不夺走 Composer 焦点。
 删除待发送消息、无执行发布或离开 Camp 会消费或丢弃意图；其他窗口的发送和后台新 Run 不触发该行为。
 
-单聊与执行台的发送确认前和排队显示“连接中”，开始处理但尚未输出时显示“思考中”；正文、计划、工具或 final 到达即移除普通等待提示，后续正文不追加提示。
+单聊与执行台的发送确认前和排队显示“连接中”；开始处理但尚未输出时，未收到明确 phase 显示“执行中”，收到 `thinking` phase 显示“思考中”。正文、计划、工具或 final 到达即移除初始等待提示。执行台在最新阅读窗口的已结算尾部 Tool 组若再次收到 `thinking` phase，且 Run 仍运行、没有活动 Tool／压缩或后续正文、计划、final，则组收口并在尾部显示一条瞬时“思考中”；新正文、计划、Tool、等待／停止或 Run 终态到来时撤下，不留下历史思考条目。单聊仍不在后续正文尾部追加普通等待提示。
 Runtime 的 private thought/reasoning 文本不进入 Renderer state、搜索、缓存或 disclosure；仅消费不含正文的
 `thinking | executing` phase 来切换上述等待反馈，并把 phase edge 作为匿名公开正文的分段边界。
 Camp 执行卡片的普通等待提示与正文共用字号、行高和文字起点，加载图标放在提示文字后；底部、桌面浮层和手机端切入首行正文时不改变卡片位置或单行高度。
@@ -617,9 +617,9 @@ elapsed、Runtime/事件/Session identity、trigger 与 phase 单独存在时保
 非终态 Run 的 `started` 显示 running 状态并暂停重复的底部进行中提示，`completed` 使用完成状态。
 
 当已投影的最后一个 process item 是 Tool 组且父 Run 仍为 running 时，该尾组在当前 Tool 已结算后继续保持
-provisional 活动态，显示“<最近一条指令>”，也不在下方追加普通等待提示。此处活动态表达父 Run
+provisional 活动态，显示“<最近一条指令>”，也不在下方追加普通等待提示；唯一例外是收到 `thinking` phase 且 Run 内已无活动 Tool 时，组显示“已完成 x 个步骤”，下方由瞬时“思考中”接替。此处活动态表达父 Run
 仍在运行，不改写上一条 Tool 的真实终态；下一条连续 Tool 到达后只在同一组原位替换为新指令。
-narration、plan、diagnostic、waiting/cancelling 或 Run 终态才构成真实收口边界。该规则按 process/Run 事实
+narration、plan、diagnostic、`thinking` phase、waiting/cancelling 或 Run 终态才构成真实收口边界。该规则按 process/Run 事实
 判断，不使用时间防抖。
 组 summary 的左侧 16px 图标与摘要文字共享中心线；活动组的图标与文字从同一条当前操作选择，使用已有
 Terminal、File Read、File Write、Web 等图标。运行时最右端只有状态 icon；收起组在悬停或键盘聚焦时，
