@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.67
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -15,6 +15,8 @@ last_updated: 2026-09-23
 删除 Task 对象版本及更新前提，保留字段补丁、权限、状态机、事务与命令幂等；Agent 四类 Task 结果均省略
 `availableActions`。新 Bootstrap 和动态模型输入从源投影省略 `schemaVersion`，覆盖公开 Camp、普通 Camp、
 A2A、Single Chat 和重投路径。其他系统协议版本继续由 Core 内部管理。
+
+后续：[v1.68](../v1.68/README.md)。
 
 旧冻结输入、历史审计与用户项目文件保留原样；旧执行不转换或自动重放。Migration 171 只调整当前
 Task、AgentRun、Delivery 和上下文证据表结构，保留业务行。

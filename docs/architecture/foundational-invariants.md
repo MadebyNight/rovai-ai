@@ -340,12 +340,12 @@ last_updated: 2026-09-22
 
 <a id="context-public-history"></a>
 
-### 增量公共上下文与实时读取
+### 公共历史按需读取与实时读取
 
-- 公开 AgentRun 的 `SHARED_CONVERSATION` 使用 `(CampId, AgentId)` accepted 水位之后到本次 claim 公共尾部的增量窗口。水位只由匹配 Run/binding/generation 的整批 Runtime accepted ACK 推进，并跨 Native Session 保留；prepared、rejected、unknown、claim 或 stale ACK 都不能推进。
-- 候选保持公共 sequence 原序，不过滤当前 Agent 自己的消息，也不排除同时属于 `RUN_INPUT` 的消息。先取最新 15 条，再在 mandatory `RUN_INPUT` 后的剩余字节内选完整后缀；正文、quotes 和 metadata 不截断。存在真实未注入候选时，`omittedCount` 与 `historyReadCursor` 必须成对出现。
-- recallable 或 recipient-suppressed 消息不是候选且不计 omission。Core 对自动上下文、read/search/thread/reply/reference 使用同一可见性服务；撤回消息不进入 Agent 集合、分页或 tombstone。
-- `camp.read` 始终读取调用时最新授权和可见状态，不受当前 ContextManifest 的历史上下界限制；它不 claim Delivery、不关闭撤回、不推进 accepted 水位，也不把新读到的消息变成当前 Run 输入。
+- 新公开 AgentRun 不自动生成 `SHARED_CONVERSATION`、历史摘要或遗漏 locator。`RUN_INPUT` 仍完整有序。`RUN_FACTS.historyHint` 冻结本 Agent 在此 Camp 上一次有效 accepted ACK 对应执行前的公屏尾；它只供定位相关历史，不代表阅读或完成，也不是 `camp.read --before` 游标。
+- `(CampId, AgentId)` 接受水位只由匹配 Run/binding/generation 的整批 Runtime accepted ACK 推进，并跨 Native Session 保留；prepared、rejected、unknown、claim、stale ACK 或后续 Stop 都不能新增或回退有效边界。同一新格式 Run 复用冻结提示及原输入。
+- Core 对 `RUN_INPUT` 与按需 read/search/thread/reply/reference 使用同一可见性服务；撤回或 recipient-suppressed 消息不进入 Agent 可见集合与分页。
+- `camp.read` 始终读取调用时最新授权和可见状态，不受当前 ContextManifest 的历史上下界限制；timeline/thread 默认 20、显式 1–100，从最新页用排他 `before` 倒翻，超出一页必须给出真实续读位置。它不 claim Delivery、不关闭撤回、不推进 accepted 水位，也不把新读到的消息变成当前 Run 输入。
 - Agent 与 Human Principal 的 body/snippet/search offset 使用分开、版本化投影。外部渠道引用必须经 CampMessage Structured Content 进入标准投影，不能用 prompt override 绕过可见性或 evidence。
 
 <a id="context-manifest-run-facts"></a>
@@ -353,10 +353,10 @@ last_updated: 2026-09-22
 ### ContextManifest 与结构化 Run Facts
 
 - ContextManifest、模型输入 bytes、Runtime Input Delivery Evidence 和 Native Session/Run 状态是四个独立权威。Manifest 冻结模型实际可见选择、formatter/profile/section 版本、来源 digest、遗漏、水位和 exact compact payload digest；交付 evidence 记录 Runtime 实际接受。日志摘要、Run 状态或 Manifest 本身不能互相代替。
-- Manifest 对 public Run 冻结完整有序 AgentRunInput、最后一条 anchor、执行配置、Skill resolution、visibility fence、accepted 增量窗口、所选 shared message、omission/cursor 与 exact rendered bytes/digest。输入附件使用各消息 `RUN_INPUT.messages[].attachments`；历史 frozen Manifest 继续按原版本解释。
+- Manifest 对新 public Run 冻结完整有序 AgentRunInput、最后一条 anchor、执行配置、Skill resolution、visibility fence、执行前接受边界、RUN_FACTS/historyHint 与 exact rendered bytes/digest；历史专属 refs/evidence 为空。输入附件只使用各消息 `RUN_INPUT.messages[].attachments`；旧 Manifest 原字节留作审计，旧格式执行不续派、恢复或重播。
 - 模型投影可以 compact，但不得丢失、重命名或自由文本化 authoritative fact。稳定产品规则留在 Session Charter，per-Run 事实只出现一次；每个 schema/formatter/profile/manifest/section 版本跟随实际 owner 独立推进，不用一个全局数字伪造同步升级。
-- public `RUN_FACTS` v6 只允许 `attachmentOutputRoot`、Mission、Task、Session continuity 与真实 external effect；删除 Gather、delegation 和 conversationMode，不输出改名预算对象。Single Chat 使用非 batch v5；Core 生成的模型正文不包含协议 `schemaVersion`。
-- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 Agent 自动上下文中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v28](../contracts/context-manifest-evidence-v28.md)。
+- public `RUN_FACTS` v7 必有 `attachmentOutputRoot` 和 `historyHint`，其余只允许 Mission、Task、Session continuity 与真实 external effect；不含 Gather、delegation 或 conversationMode。Single Chat 使用非 batch v5；Core 生成的模型正文不包含协议 `schemaVersion`。
+- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 `RUN_INPUT` 中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v29](../contracts/context-manifest-evidence-v29.md)。
 - Self-active Task snapshot 只选当前成员在当前 Camp 显式负责的非终态 Task，按 Profile 的稳定 order/limit/budget priority 冻结。真实空集合产生显式 empty snapshot；候选存在但被上限/预算全部排除时整段省略并记 aggregate omitted count，不泄露被排除 ID。Renderer/Skill 不得临时改排序。
 - Structured Skill selection 以 per-message snapshot、verified exposure 和只读 resolver 形成可选 `RUN_INPUT.messages[].skills` 链接，并按消息顺序去重整个批次。Skill 不授予工具或权限；解析失败作为本批事实显式呈现，不跳过 FIFO 队首。
 

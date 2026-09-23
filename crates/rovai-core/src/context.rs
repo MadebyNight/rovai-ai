@@ -76,7 +76,7 @@ fn context_manifest_is_dispatchable(
     if invocation_kind == "batch" {
         manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
             && formatter_version == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
-            && profile_version == 8
+            && profile_version == 9
     } else {
         manifest_version == CONTEXT_MANIFEST_VERSION
             && formatter_version == CONTEXT_FORMATTER_VERSION
@@ -640,18 +640,10 @@ impl ContextService {
         } else {
             current_context_delivery_profile()?
         };
-        let profile_json = serde_json::to_value(profile)?;
+        let profile_json = profile.frozen_json()?;
         let profile_digest = profile.canonical_digest()?;
-        let mut batch_model_context = (snapshot.invocation_kind == "batch")
-            .then(|| {
-                load_batch_model_context(
-                    database,
-                    &snapshot,
-                    previous_accepted_public_boundary_sequence,
-                    profile,
-                    batch_context_manifest_version.expect("batch context version must be present"),
-                )
-            })
+        let batch_model_context = (snapshot.invocation_kind == "batch")
+            .then(|| load_batch_model_context(database, &snapshot, profile))
             .transpose()?;
         let (mut self_active_tasks, mut self_active_task_omitted_count) =
             if snapshot.invocation_kind == "single_chat" {
@@ -698,20 +690,22 @@ impl ContextService {
         {
             originating_public_user_message = None;
         }
-        retain_complete_quote_history(
-            &mut recent_messages,
-            &originating_public_user_message,
-            &mut reference_closure,
-            &mut omission_entries,
-            profile.max_message_body_chars,
-        );
-        apply_public_history_budget(
-            &mut recent_messages,
-            &mut originating_public_user_message,
-            &mut reference_closure,
-            &mut omission_entries,
-            profile.max_public_history_chars,
-        );
+        if snapshot.invocation_kind != "batch" {
+            retain_complete_quote_history(
+                &mut recent_messages,
+                &originating_public_user_message,
+                &mut reference_closure,
+                &mut omission_entries,
+                profile.max_message_body_chars,
+            );
+            apply_public_history_budget(
+                &mut recent_messages,
+                &mut originating_public_user_message,
+                &mut reference_closure,
+                &mut omission_entries,
+                profile.max_public_history_chars,
+            );
+        }
         let current_input = load_current_input(database, &snapshot)?;
         let attachment_refs = load_current_attachment_refs(database, &current_input)?;
         let mut attachment_paths = attachment_refs
@@ -738,8 +732,13 @@ impl ContextService {
             count_a2a_runs(database, &snapshot.camp_turn_id)?
         };
         let collaboration_state_section = collaboration_changed.then_some(collaboration_state);
-        let (run_facts, mission_details_version) =
+        let (mut run_facts, mission_details_version) =
             build_run_facts(database, &snapshot, requires_new_native_session, a2a_count)?;
+        if snapshot.invocation_kind == "batch" {
+            run_facts.history_hint = Some(public_history_hint(
+                previous_accepted_public_boundary_sequence,
+            ));
+        }
         let rendered_run_facts = render_run_facts(&run_facts)?;
         let bootstrap_redelivery_revision = pending_redelivery_revision(
             database,
@@ -799,13 +798,17 @@ impl ContextService {
                         .map(|entry| entry.message.message_id.clone()),
                 )
                 .collect::<HashSet<_>>();
-            let omitted_messages = omitted_public_messages(
-                database,
-                &snapshot,
-                previous_accepted_public_boundary_sequence,
-                &included_message_ids,
-                &mut omission_entries,
-            )?;
+            let omitted_messages = if snapshot.invocation_kind == "batch" {
+                None
+            } else {
+                omitted_public_messages(
+                    database,
+                    &snapshot,
+                    previous_accepted_public_boundary_sequence,
+                    &included_message_ids,
+                    &mut omission_entries,
+                )?
+            };
             let shared_conversation = SharedConversation {
                 camp_id: snapshot.camp_id.clone(),
                 originating_public_user_message: standalone_origin,
@@ -816,15 +819,11 @@ impl ContextService {
             };
             let self_active_tasks_section =
                 self_active_task_projection(&self_active_tasks, self_active_task_omitted_count);
-            let batch_shared_conversation = batch_model_context
-                .as_ref()
-                .and_then(|context| context.shared_conversation_projection(&snapshot.camp_id));
             let payload = render_payload(RenderPayloadInput {
                 collaboration_state: collaboration_state_section.as_ref(),
                 self_active_tasks: self_active_tasks_section.as_ref(),
                 shared_conversation: (snapshot.invocation_kind != "batch")
                     .then_some(&shared_conversation),
-                batch_shared_conversation: batch_shared_conversation.as_ref(),
                 run_facts: &rendered_run_facts,
                 workspace: workspace_fact.section(),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
@@ -840,12 +839,6 @@ impl ContextService {
             );
             if payload.len() <= max_payload_bytes && runtime_payload.len() <= max_payload_bytes {
                 break (shared_conversation, payload, runtime_payload);
-            }
-            if batch_model_context
-                .as_mut()
-                .is_some_and(BatchModelContext::remove_oldest_shared_message)
-            {
-                continue;
             }
             if !recent_messages.is_empty() {
                 let removed = recent_messages.remove(0);
@@ -965,10 +958,11 @@ impl ContextService {
         let manifest_id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
         let collaboration_state_included = collaboration_state_section.is_some();
-        let shared_message_evidence = batch_model_context
-            .as_ref()
-            .map(BatchModelContext::shared_projection_evidence)
-            .unwrap_or_else(|| shared_conversation.projection_evidence());
+        let shared_message_evidence = if batch_model_context.is_some() {
+            Vec::new()
+        } else {
+            shared_conversation.projection_evidence()
+        };
         let shared_message_evidence_digest =
             canonical_json_digest(&serde_json::to_value(&shared_message_evidence)?)?;
         let current_input_source = if let Some(batch) = batch_model_context.as_ref() {
@@ -1002,15 +996,8 @@ impl ContextService {
                     })
             })
             .flatten();
-        let recent_message_refs = if let Some(batch) = batch_model_context.as_ref() {
-            batch
-                .shared_messages
-                .iter()
-                .map(|message| EntityReference {
-                    entity_type: "camp_message".to_string(),
-                    entity_id: message.message_id.clone(),
-                })
-                .collect::<Vec<_>>()
+        let recent_message_refs = if batch_model_context.is_some() {
+            Vec::new()
         } else {
             shared_conversation
                 .recent_messages
@@ -1035,33 +1022,30 @@ impl ContextService {
                 })
                 .collect::<Vec<_>>()
         };
-        let omitted_message_count = batch_model_context
-            .as_ref()
-            .and_then(|batch| (batch.omitted_count > 0).then_some(batch.omitted_count as i64))
-            .or_else(|| {
+        let omitted_message_count = (snapshot.invocation_kind != "batch")
+            .then(|| {
                 shared_conversation
                     .omitted_messages
                     .as_ref()
                     .map(|omitted| omitted.count as i64)
-            });
-        let omitted_message_sequence_start = batch_model_context
-            .as_ref()
-            .and_then(|batch| batch.omitted_sequence_start)
-            .or_else(|| {
+            })
+            .flatten();
+        let omitted_message_sequence_start = (snapshot.invocation_kind != "batch")
+            .then(|| {
                 shared_conversation
                     .omitted_messages
                     .as_ref()
                     .map(|omitted| omitted.sequence_start)
-            });
-        let omitted_message_sequence_end = batch_model_context
-            .as_ref()
-            .and_then(|batch| batch.omitted_sequence_end)
-            .or_else(|| {
+            })
+            .flatten();
+        let omitted_message_sequence_end = (snapshot.invocation_kind != "batch")
+            .then(|| {
                 shared_conversation
                     .omitted_messages
                     .as_ref()
                     .map(|omitted| omitted.sequence_end)
-            });
+            })
+            .flatten();
         let transaction = database.connection_mut().transaction()?;
         revalidate_snapshot_for_manifest(&transaction, &snapshot, expected_binding_generation)?;
         let revalidated_skill_resolution = resolve_current_input_skills(
@@ -1085,7 +1069,7 @@ impl ContextService {
             })
             .unwrap_or(CONTEXT_FORMATTER_VERSION);
         let run_facts_schema_version = if snapshot.invocation_kind == "batch" {
-            6_i64
+            7_i64
         } else {
             5_i64
         };
@@ -1447,7 +1431,6 @@ impl ContextService {
                 collaboration_state: collaboration_state_section.as_ref(),
                 self_active_tasks: self_active_tasks_section.as_ref(),
                 shared_conversation: Some(&shared_conversation),
-                batch_shared_conversation: None,
                 run_facts: &rendered_run_facts,
                 workspace: workspace_fact.section(),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
@@ -1566,7 +1549,7 @@ impl ContextService {
         let manifest_selection = json!({
             "previousAcceptedPublicBoundarySequence": previous_boundary,
             "contextDeliveryProfileVersion": profile.profile_version,
-            "contextDeliveryProfileJson": serde_json::to_value(profile)?,
+            "contextDeliveryProfileJson": profile.frozen_json()?,
             "contextDeliveryProfileDigest": profile.canonical_digest()?,
             "originatingPublicUserMessageRef": shared_conversation.originating_public_user_message.as_ref().map(|message| EntityReference {
                 entity_type: "camp_message".to_string(),
@@ -2440,6 +2423,17 @@ fn accepted_public_window_lower_bound(
     }
 }
 
+fn public_history_hint(previous_accepted_public_boundary_sequence: i64) -> String {
+    if previous_accepted_public_boundary_sequence > 0 {
+        format!(
+            "The latest public message before your last recorded run in this Camp had sequence {previous_accepted_public_boundary_sequence}."
+        )
+    } else {
+        "No public-message boundary from a previous run is recorded for you in this Camp."
+            .to_string()
+    }
+}
+
 fn acknowledge_input_delivery_transaction(
     transaction: &Transaction<'_>,
     delivery_id: &str,
@@ -2891,7 +2885,7 @@ fn build_session_charter(
         "- CURRENT_INPUT is the immediate work item. Its source and current Core authorization determine its authority."
     };
     let shared_conversation_guidance = if is_batch {
-        "- In SHARED_CONVERSATION, the top-level campId applies to every projected message. omittedCount and historyReadCursor are paired hints for earlier live Camp history; they do not add work to RUN_INPUT."
+        "- Use `rovai camp read` for relevant Camp history. The boundary in `RUN_FACTS.historyHint` is a reference point, not a record of messages read or work completed."
     } else {
         "- In SHARED_CONVERSATION, the top-level campId applies to every projected message. A historical nextBodyOffset, when present, only marks a truncated context prefix; camp.read item returns the complete message and accepts no body offset. Omitted sequence bounds may contain gaps and are not executable ranges."
     };
@@ -3649,6 +3643,8 @@ struct ConversationModeFact {
 struct RunFacts {
     attachment_output_root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    history_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     mission: Option<crate::mission::MissionFacts>,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversation_mode: Option<ConversationModeFact>,
@@ -3712,6 +3708,7 @@ fn build_run_facts<R: ContextReadConnection>(
             database.context_connection(),
             &snapshot.camp_id,
         )?,
+        history_hint: None,
         conversation_mode: (snapshot.invocation_kind == "single_chat").then_some(
             ConversationModeFact {
                 kind: "single_chat",
@@ -3971,11 +3968,6 @@ struct SharedConversation {
 #[derive(Debug, Clone)]
 struct BatchModelContext {
     run_input_messages: Vec<SharedMessage>,
-    shared_messages: Vec<SharedMessage>,
-    omitted_count: usize,
-    history_read_cursor: Option<String>,
-    omitted_sequence_start: Option<i64>,
-    omitted_sequence_end: Option<i64>,
 }
 
 impl BatchModelContext {
@@ -3989,51 +3981,12 @@ impl BatchModelContext {
         })
     }
 
-    fn shared_conversation_projection(&self, camp_id: &str) -> Option<Value> {
-        if self.shared_messages.is_empty() && self.omitted_count == 0 {
-            return None;
-        }
-        let mut value = json!({
-            "campId": camp_id,
-            "messages": self
-                .shared_messages
-                .iter()
-                .map(model_batch_message)
-                .collect::<Vec<_>>()
-        });
-        if self.omitted_count > 0 {
-            value["omittedCount"] = json!(self.omitted_count);
-            value["historyReadCursor"] = json!(self.history_read_cursor);
-        }
-        Some(value)
-    }
-
-    fn messages(&self) -> impl Iterator<Item = &SharedMessage> {
+    fn raw_message_refs(&self) -> Vec<EntityReference> {
         self.run_input_messages
             .iter()
-            .chain(self.shared_messages.iter())
-    }
-
-    fn raw_message_refs(&self) -> Vec<EntityReference> {
-        let mut seen = HashSet::new();
-        self.messages()
-            .filter(|message| seen.insert(message.message_id.clone()))
             .map(|message| EntityReference {
                 entity_type: "camp_message".to_string(),
                 entity_id: message.message_id.clone(),
-            })
-            .collect()
-    }
-
-    fn shared_projection_evidence(&self) -> Vec<SharedMessageProjectionEvidence> {
-        self.shared_messages
-            .iter()
-            .map(|message| {
-                SharedMessageProjectionEvidence::from_message(
-                    "incremental_public_message",
-                    None,
-                    message,
-                )
             })
             .collect()
     }
@@ -4067,7 +4020,7 @@ impl BatchModelContext {
 
     fn attachment_refs(&self) -> Vec<CampAttachmentRef> {
         let mut by_id = BTreeMap::new();
-        for message in self.messages() {
+        for message in &self.run_input_messages {
             for attachment in &message.attachments {
                 by_id
                     .entry(attachment.attachment_id.clone())
@@ -4080,28 +4033,6 @@ impl BatchModelContext {
             }
         }
         by_id.into_values().collect()
-    }
-
-    fn remove_oldest_shared_message(&mut self) -> bool {
-        if self.shared_messages.is_empty() {
-            return false;
-        }
-        let removed = self.shared_messages.remove(0);
-        self.omitted_count += 1;
-        self.omitted_sequence_start = Some(
-            self.omitted_sequence_start
-                .map_or(removed.sequence, |start| start.min(removed.sequence)),
-        );
-        self.omitted_sequence_end = Some(
-            self.omitted_sequence_end
-                .map_or(removed.sequence, |end| end.max(removed.sequence)),
-        );
-        self.history_read_cursor = self
-            .shared_messages
-            .first()
-            .map(|message| message.sequence.to_string())
-            .or_else(|| Some(removed.sequence.saturating_add(1).to_string()));
-        true
     }
 }
 
@@ -4289,9 +4220,7 @@ fn frozen_batch_context_manifest_version(
 fn load_batch_model_context<R: ContextReadConnection>(
     database: &R,
     snapshot: &RunSnapshot,
-    previous_accepted_public_tail: i64,
     profile: ContextDeliveryProfile,
-    context_manifest_version: i64,
 ) -> Result<BatchModelContext> {
     let complete_profile = ContextDeliveryProfile {
         max_public_history_chars: usize::MAX,
@@ -4339,7 +4268,7 @@ fn load_batch_model_context<R: ContextReadConnection>(
                             structured_content_json,
                             &address_mode,
                             &addressed_agent_ids_json,
-                            context_manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
+                            true,
                             frozen_default_recipient_display_name.as_deref(),
                         )?;
                     let mut message = project_shared_message(
@@ -4419,131 +4348,7 @@ fn load_batch_model_context<R: ContextReadConnection>(
         "Batch AgentRun anchor does not match the final RUN_INPUT message"
     );
 
-    let visibility = r#"
-        message.camp_id = ?1
-        AND message.sequence > ?2
-        AND message.sequence <= ?3
-        AND message.tombstoned_at IS NULL
-        AND message.recall_state NOT IN ('recallable', 'withdrawn')
-        AND NOT EXISTS (
-            SELECT 1 FROM camp_message_delivery AS hidden_delivery
-            WHERE hidden_delivery.message_id = message.id
-              AND hidden_delivery.recipient_agent_id = ?4
-              AND hidden_delivery.status = 'waiting'
-        )
-    "#;
-    let visible_count: i64 = database.context_connection().query_row(
-        &format!("SELECT COUNT(*) FROM camp_message AS message WHERE {visibility}"),
-        params![
-            snapshot.camp_id,
-            previous_accepted_public_tail,
-            snapshot.camp_message_boundary_sequence,
-            snapshot.agent_id,
-        ],
-        |row| row.get(0),
-    )?;
-    let shared_rows = {
-        let mut statement = database.context_connection().prepare(&format!(
-            r#"
-            SELECT message.id, message.sequence, message.author_type, message.author_id,
-                   source_conversation.id, message.body, message.structured_content_json,
-                   message.reply_to_camp_message_id, message.address_mode,
-                   message.addressed_agent_ids_json,
-                   frozen_input.default_recipient_display_name
-            FROM camp_message AS message
-            LEFT JOIN agent_run AS source_run ON source_run.id = message.source_agent_run_id
-            LEFT JOIN conversation AS source_conversation
-              ON source_conversation.id = source_run.conversation_id
-            LEFT JOIN agent_run_input AS frozen_input
-              ON frozen_input.agent_run_id = ?5
-             AND frozen_input.message_id = message.id
-            WHERE {visibility}
-            ORDER BY message.sequence DESC
-            LIMIT 15
-            "#,
-        ))?;
-        let mut rows = statement
-            .query_map(
-                params![
-                    snapshot.camp_id,
-                    previous_accepted_public_tail,
-                    snapshot.camp_message_boundary_sequence,
-                    snapshot.agent_id,
-                    snapshot.agent_run_id,
-                ],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get(8)?,
-                        row.get(9)?,
-                        row.get(10)?,
-                    ))
-                },
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.reverse();
-        rows
-    };
-    let shared_messages = load_messages(shared_rows)?;
-    let visible_count = usize::try_from(visible_count).context("visible message count overflow")?;
-    let omitted_count = visible_count.saturating_sub(shared_messages.len());
-    let history_read_cursor = (omitted_count > 0)
-        .then(|| {
-            shared_messages
-                .first()
-                .map(|message| message.sequence.to_string())
-        })
-        .flatten();
-    anyhow::ensure!(
-        omitted_count == 0 || history_read_cursor.is_some(),
-        "omitted SHARED_CONVERSATION messages require a history cursor"
-    );
-    let (omitted_sequence_start, omitted_sequence_end) = if omitted_count == 0 {
-        (None, None)
-    } else {
-        let bounds = database.context_connection().query_row(
-            &format!(
-                r#"
-                SELECT MIN(sequence), MAX(sequence)
-                FROM (
-                    SELECT message.sequence
-                    FROM camp_message AS message
-                    WHERE {visibility}
-                    ORDER BY message.sequence
-                    LIMIT ?5
-                )
-                "#,
-            ),
-            params![
-                snapshot.camp_id,
-                previous_accepted_public_tail,
-                snapshot.camp_message_boundary_sequence,
-                snapshot.agent_id,
-                i64::try_from(omitted_count).context("omitted message count overflow")?,
-            ],
-            |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
-        )?;
-        anyhow::ensure!(
-            bounds.0.is_some() && bounds.1.is_some(),
-            "omitted SHARED_CONVERSATION messages require frozen sequence evidence"
-        );
-        bounds
-    };
-    Ok(BatchModelContext {
-        run_input_messages,
-        shared_messages,
-        omitted_count,
-        history_read_cursor,
-        omitted_sequence_start,
-        omitted_sequence_end,
-    })
+    Ok(BatchModelContext { run_input_messages })
 }
 
 fn batch_message_skill_names(structured_content_json: &str) -> Result<Vec<String>> {
@@ -4847,6 +4652,13 @@ fn render_run_facts(run_facts: &RunFacts) -> Result<RenderedRunFacts> {
         task_id: None,
         mission_id: None,
     }];
+    if run_facts.history_hint.is_some() {
+        references.push(RunFactRef {
+            fact: "history_hint",
+            task_id: None,
+            mission_id: None,
+        });
+    }
     if let Some(task_context) = run_facts.task_context.as_ref() {
         references.push(RunFactRef {
             fact: "task_context",
@@ -6928,7 +6740,6 @@ struct RenderPayloadInput<'a> {
     collaboration_state: Option<&'a Value>,
     self_active_tasks: Option<&'a SelfActiveTaskProjection>,
     shared_conversation: Option<&'a SharedConversation>,
-    batch_shared_conversation: Option<&'a Value>,
     run_facts: &'a RenderedRunFacts,
     workspace: Option<&'a Value>,
     a2a_guidance: Option<&'a str>,
@@ -6962,9 +6773,6 @@ fn render_payload(input: RenderPayloadInput<'_>) -> Result<String> {
             "SHARED_CONVERSATION",
             &serde_json::to_value(shared_conversation.model_projection()?)?,
         )?;
-    }
-    if let Some(shared_conversation) = input.batch_shared_conversation {
-        append_json_section(&mut output, "SHARED_CONVERSATION", shared_conversation)?;
     }
     if !input.run_facts.is_empty() {
         append_json_text_section(&mut output, "RUN_FACTS", &input.run_facts.payload_json);
@@ -7349,7 +7157,7 @@ fn load_existing_manifest(
         &snapshot.skill_selection_snapshot_digest,
         &row.28,
     )?;
-    let stored_profile: ContextDeliveryProfile = serde_json::from_str(&row.17)
+    let stored_profile = ContextDeliveryProfile::from_frozen_json(&row.17)
         .context("Stored ContextManifest delivery profile is invalid")?;
     let current_profile = if row.15 == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION {
         current_public_camp_batch_context_delivery_profile()?
@@ -8499,10 +8307,10 @@ mod tests {
                     context_manifest_version INTEGER
                 );
                 INSERT INTO agent_run_input VALUES ('historical', 26);
-                INSERT INTO agent_run_input VALUES ('current', 28);
-                INSERT INTO agent_run_input VALUES ('current', 28);
+                INSERT INTO agent_run_input VALUES ('current', 29);
+                INSERT INTO agent_run_input VALUES ('current', 29);
                 INSERT INTO agent_run_input VALUES ('mixed', 26);
-                INSERT INTO agent_run_input VALUES ('mixed', 28);
+                INSERT INTO agent_run_input VALUES ('mixed', 29);
                 INSERT INTO agent_run_input VALUES ('missing', NULL);
                 "#,
             )
@@ -8520,13 +8328,15 @@ mod tests {
     #[test]
     fn dispatch_admission_accepts_only_new_context_contracts() {
         assert!(context_manifest_is_dispatchable(26, 26, 6, "single_chat"));
-        assert!(context_manifest_is_dispatchable(28, 28, 8, "batch"));
+        assert!(context_manifest_is_dispatchable(29, 29, 9, "batch"));
         for (manifest, formatter, profile, invocation) in [
             (25, 25, 6, "single_chat"),
             (26, 26, 7, "batch"),
             (27, 27, 8, "batch"),
+            (28, 28, 8, "batch"),
             (28, 27, 8, "batch"),
             (28, 28, 6, "batch"),
+            (29, 29, 8, "batch"),
             (26, 26, 8, "single_chat"),
         ] {
             assert!(!context_manifest_is_dispatchable(
@@ -8545,44 +8355,14 @@ mod tests {
         );
         assert_eq!(accepted_public_window_lower_bound("direct", 41, true), 0);
         assert_eq!(accepted_public_window_lower_bound("direct", 41, false), 41);
-    }
-
-    #[test]
-    fn fully_evicted_batch_history_cursor_still_covers_the_frozen_tail() {
-        let shared_message = SharedMessage {
-            quotes: Vec::new(),
-            quote_scope_current: true,
-            camp_id: "camp-1".to_string(),
-            message_id: "message-20".to_string(),
-            sequence: 20,
-            sender_type: "agent".to_string(),
-            sender_id: "agent-1".to_string(),
-            source_conversation_id: None,
-            content_digest: "sha256:test".to_string(),
-            default_recipient_mention: None,
-            mentions_current_user: false,
-            skill_names: Vec::new(),
-            reply_to_message_id: None,
-            attachments: Vec::new(),
-            body: "背景".to_string(),
-            body_length: 2,
-            body_truncated: false,
-            next_body_offset: None,
-        };
-        let mut context = BatchModelContext {
-            run_input_messages: Vec::new(),
-            shared_messages: vec![shared_message],
-            omitted_count: 19,
-            history_read_cursor: Some("20".to_string()),
-            omitted_sequence_start: Some(1),
-            omitted_sequence_end: Some(19),
-        };
-
-        assert!(context.remove_oldest_shared_message());
-        assert!(context.shared_messages.is_empty());
-        assert_eq!(context.omitted_count, 20);
-        assert_eq!(context.history_read_cursor.as_deref(), Some("21"));
-        assert_eq!(context.omitted_sequence_end, Some(20));
+        assert_eq!(
+            public_history_hint(0),
+            "No public-message boundary from a previous run is recorded for you in this Camp."
+        );
+        assert_eq!(
+            public_history_hint(150),
+            "The latest public message before your last recorded run in this Camp had sequence 150."
+        );
     }
 
     #[test]
@@ -8609,11 +8389,6 @@ mod tests {
         };
         let context = BatchModelContext {
             run_input_messages: vec![message],
-            shared_messages: Vec::new(),
-            omitted_count: 0,
-            history_read_cursor: None,
-            omitted_sequence_start: None,
-            omitted_sequence_end: None,
         };
         let projection = context.run_input_projection(&[
             CurrentInputSkillLink {
@@ -8822,6 +8597,7 @@ mod slow_tests {
             mission: None,
             attachment_output_root: "/tmp/attachments/rvcamp_01h47kvsy5fk1shh6w1g60eecf"
                 .to_string(),
+            history_hint: None,
             conversation_mode: None,
             task_context: None,
             session_continuity: None,
@@ -9031,7 +8807,6 @@ mod slow_tests {
             collaboration_state: None,
             self_active_tasks: None,
             shared_conversation: Some(&shared_conversation),
-            batch_shared_conversation: None,
             run_facts: &run_facts,
             workspace: None,
             a2a_guidance: None,
@@ -10699,28 +10474,59 @@ mod slow_tests {
             .map(|(payload, _)| payload)
             .expect("RUN_INPUT must be present");
         let run_input: Value = serde_json::from_str(run_input_json).unwrap();
+        let run_facts_json = first
+            .rendered_payload
+            .split_once("[RUN_FACTS]\n")
+            .and_then(|(_, suffix)| suffix.split_once("\n[/RUN_FACTS]"))
+            .map(|(json, _)| json)
+            .expect("RUN_FACTS must be present");
+        let run_facts: Value = serde_json::from_str(run_facts_json).unwrap();
+        assert_eq!(
+            run_facts["historyHint"],
+            "No public-message boundary from a previous run is recorded for you in this Camp."
+        );
+        let (manifest_version, formatter_version, facts_version, profile_json, shared_evidence): (
+            i64,
+            i64,
+            i64,
+            String,
+            String,
+        ) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT context_manifest_version,formatter_version,run_facts_schema_version,
+                        context_delivery_profile_json,shared_message_evidence_json
+                 FROM context_manifest WHERE id=?1",
+                [&first.manifest_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            (manifest_version, formatter_version, facts_version),
+            (29, 29, 7)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&profile_json).unwrap(),
+            json!({"profileVersion":9,"maxSelfActiveTasks":8})
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&shared_evidence).unwrap(),
+            json!([])
+        );
         assert_eq!(
             run_input["messages"][0]["body"],
             format!("@{claim_recipient_display_name}")
         );
-        let first_shared_conversation: Value = first
-            .rendered_payload
-            .split_once("[SHARED_CONVERSATION]\n")
-            .and_then(|(_, suffix)| suffix.split_once("\n[/SHARED_CONVERSATION]"))
-            .map(|(json, _)| serde_json::from_str(json).unwrap())
-            .expect("current Context should contain Shared Conversation JSON");
-        let current_shared_input = first_shared_conversation["messages"]
-            .as_array()
-            .and_then(|messages| {
-                messages
-                    .iter()
-                    .find(|message| message["messageId"] == camp_message_id)
-            })
-            .expect("Run Input should also appear in the current Shared Conversation");
-        assert_eq!(
-            current_shared_input["body"],
-            format!("@{claim_recipient_display_name}")
-        );
+        assert!(!first.rendered_payload.contains("[SHARED_CONVERSATION]"));
         assert_eq!(
             run_input["messages"][0]["attachments"],
             json!([{
@@ -10821,33 +10627,11 @@ mod slow_tests {
             )
             .unwrap()
         else {
-            panic!("follow-up Context should project the former Current Input as history");
+            panic!("follow-up Context should materialize without automatic history");
         };
-        let shared_conversation: Value = followup
-            .rendered_payload
-            .split_once("[SHARED_CONVERSATION]\n")
-            .and_then(|(_, suffix)| suffix.split_once("\n[/SHARED_CONVERSATION]"))
-            .map(|(json, _)| serde_json::from_str(json).unwrap())
-            .expect("follow-up Context should contain Shared Conversation JSON");
-        let historical_input = shared_conversation["messages"]
-            .as_array()
-            .and_then(|messages| {
-                messages
-                    .iter()
-                    .find(|message| message["messageId"] == camp_message_id)
-            })
-            .expect("former Run Input should appear in Shared Conversation");
-        assert_eq!(
-            historical_input["body"],
-            format!("@{renamed_recipient_display_name}")
-        );
-        assert!(followup.rendered_payload.contains("requirements.txt"));
-        let escaped_stable_path = serde_json::to_string(&stable_path).unwrap();
-        assert!(
-            followup
-                .rendered_payload
-                .contains(escaped_stable_path.trim_matches('"'))
-        );
+        assert!(!followup.rendered_payload.contains("[SHARED_CONVERSATION]"));
+        assert!(!followup.rendered_payload.contains("requirements.txt"));
+        assert!(!followup.rendered_payload.contains(&stable_path));
         assert!(
             !followup
                 .rendered_payload
@@ -10863,23 +10647,7 @@ mod slow_tests {
             )
             .unwrap();
         let evidence: Value = serde_json::from_str(&evidence_json).unwrap();
-        assert!(evidence.to_string().contains(&attachment_content_digest));
-        assert!(evidence.to_string().contains(&camp_message_id));
-        let historical_evidence = evidence
-            .as_array()
-            .and_then(|messages| {
-                messages
-                    .iter()
-                    .find(|message| message["messageId"] == camp_message_id)
-            })
-            .expect("former Run Input should have Shared Conversation evidence");
-        assert_eq!(
-            historical_evidence["defaultRecipientMention"],
-            json!({
-                "agentId": "agent_1",
-                "displayName": renamed_recipient_display_name,
-            })
-        );
+        assert_eq!(evidence, json!([]));
         assert_eq!(canonical_json_digest(&evidence).unwrap(), evidence_digest);
         let stored_body: String = fixture
             .database
@@ -13577,10 +13345,11 @@ mod slow_tests {
         assert!(!charter.contains("recognized inline Agent addressing"));
         assert!(!charter.contains("--to-user"));
         assert!(!charter.contains("It overrides Agent addressing"));
-        assert!(charter.contains("the top-level campId applies to every projected message"));
+        assert!(charter.contains("Use `rovai camp read` for relevant Camp history."));
         assert!(charter.contains(
-            "omittedCount and historyReadCursor are paired hints for earlier live Camp history"
+            "The boundary in `RUN_FACTS.historyHint` is a reference point, not a record of messages read or work completed."
         ));
+        assert!(!charter.contains("omittedCount and historyReadCursor"));
         assert!(!charter.contains("nextBodyOffset is the Unicode-scalar bodyOffset"));
         assert!(charter.contains(
             "Core reauthorizes every operation at invocation; projected IDs and facts are not authorization tokens."
@@ -13892,7 +13661,7 @@ mod slow_tests {
                 .is_some_and(|digest| digest.starts_with("sha256:"))
         );
         assert!(body.chars().count() > CONTEXT_DELIVERY_PROFILE_V5.max_message_body_chars);
-        assert!(context.rendered_payload.contains("[SHARED_CONVERSATION]"));
+        assert!(!context.rendered_payload.contains("[SHARED_CONVERSATION]"));
         fixture.cleanup();
     }
 
@@ -13992,6 +13761,7 @@ mod slow_tests {
         let facts = RunFacts {
             mission: None,
             attachment_output_root: test_run_facts().attachment_output_root,
+            history_hint: None,
             conversation_mode: None,
             task_context: Some(TaskContextFact {
                 task_id: "task-1".to_string(),
@@ -14095,7 +13865,6 @@ mod slow_tests {
             collaboration_state: None,
             self_active_tasks: None,
             shared_conversation: Some(&shared_conversation),
-            batch_shared_conversation: None,
             run_facts: &camp_resources_only,
             workspace: None,
             a2a_guidance: None,
@@ -14387,7 +14156,7 @@ mod slow_tests {
     }
 
     #[test]
-    fn replacement_binding_bootstrap_includes_self_output_after_the_accepted_watermark() {
+    fn replacement_binding_bootstrap_keeps_history_on_demand_after_the_accepted_watermark() {
         let mut fixture = fixture();
         let context = ContextService;
         let runtime = ExecutionRuntimeService::default();
@@ -14461,6 +14230,26 @@ mod slow_tests {
             &mut fixture,
             "generation-one-public-output",
             old_generation_output,
+        );
+        let ContextMaterialization::Ready(frozen_again) = context
+            .materialize(
+                &mut fixture.database,
+                &store,
+                &MaterializeContextRequest {
+                    agent_run_id: &fixture.run_id,
+                    execution_epoch: fixture.execution_epoch,
+                    charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("accepted Run should reuse its frozen Context");
+        };
+        assert_eq!(frozen_again.manifest_id, first_context.manifest_id);
+        assert_eq!(
+            frozen_again.rendered_payload,
+            first_context.rendered_payload
         );
         let original_bootstrap = context
             .prepare_session_bootstrap(
@@ -14678,10 +14467,18 @@ mod slow_tests {
         assert!(original_bootstrap.payload.contains(&old_charter));
         assert!(!old_charter.contains(FEISHU_FILE_DELIVERY_GUIDANCE));
         assert!(
-            replacement_context
+            !replacement_context
                 .rendered_payload
                 .contains(old_generation_output)
         );
+        assert!(
+            !replacement_context
+                .rendered_payload
+                .contains("[SHARED_CONVERSATION]")
+        );
+        assert!(replacement_context.rendered_payload.contains(
+            "The latest public message before your last recorded run in this Camp had sequence 1."
+        ));
         assert!(
             replacement_context
                 .runtime_payload

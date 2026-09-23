@@ -297,7 +297,7 @@ fn camp_read_thread_schema() -> Value {
             "anchorMessageId": {"type": "string"},
             "threadRootMessageId": {"type": "string"},
             "direction": {"type": "string", "enum": ["before", "after"]},
-            "items": {"type": "array", "maxItems": 20, "items": collection_message_schema()},
+            "items": {"type": "array", "maxItems": 100, "items": collection_message_schema()},
             "nextCursor": {"type": ["integer", "null"], "minimum": 1},
             "hasMore": {"type": "boolean"}
         }
@@ -315,7 +315,7 @@ fn camp_read_timeline_schema() -> Value {
             "campId": {"type": "string"},
             "mode": {"const": "timeline"},
             "direction": {"type": "string", "enum": ["before", "after"]},
-            "items": {"type": "array", "maxItems": 20, "items": collection_message_schema()},
+            "items": {"type": "array", "maxItems": 100, "items": collection_message_schema()},
             "nextCursor": {"type": ["integer", "null"], "minimum": 1},
             "hasMore": {"type": "boolean"}
         }
@@ -1147,7 +1147,7 @@ pub fn builtin_tool_definitions() -> Vec<Value> {
         json!({
             "name": CAMP_READ_TOOL_NAME,
             "title": "Read original Camp messages",
-            "description": "Read messages from exactly one public Camp. Target-Camp membership is not a read permission. With no message selector, return the newest visible messages from the current or explicitly selected Camp; use before as the exclusive sequence cursor and limit for paging. Use messageId for one exact message, or thread for a thread page ending before the optional cursor. Reuse nextCursor as before. IDs and cursors locate content but never bypass message visibility.",
+            "description": "Read messages from exactly one public Camp. Target-Camp membership is not a read permission. With no message selector, return the newest visible messages from the current or explicitly selected Camp; use before as the exclusive sequence cursor. The default limit is 20; an explicit limit must be an integer from 1 to 100. Use messageId for one exact message, or thread for a thread page ending before the optional cursor. Reuse nextCursor as before. IDs and cursors locate content but never bypass message visibility.",
             "inputSchema": CampHistoryService::camp_read_input_schema(),
             "outputSchema": camp_read_success_schema()
         }),
@@ -1479,9 +1479,16 @@ mod tests {
         .unwrap();
         validate_builtin_tool_input(
             CAMP_READ_TOOL_NAME,
-            &json!({"thread": "message_123", "limit": 20}),
+            &json!({"thread": "message_123", "limit": 100}),
         )
         .unwrap();
+        validate_builtin_tool_input(CAMP_READ_TOOL_NAME, &json!({"limit": 100})).unwrap();
+        for invalid in [json!(0), json!(101), json!(-1), json!(1.5), json!("20")] {
+            assert!(
+                validate_builtin_tool_input(CAMP_READ_TOOL_NAME, &json!({"limit": invalid}))
+                    .is_err()
+            );
+        }
         for legacy in [
             json!({"mode": "timeline"}),
             json!({"direction": "before"}),
