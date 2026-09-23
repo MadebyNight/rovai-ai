@@ -5537,6 +5537,7 @@ impl Core {
         let mut evidence_replayed = false;
         let mut evidence_receipt_id = None;
         let mut delivery_batch_state_changed = false;
+        let mut member_roster_changed = false;
         let result: Result<Value> = async {
             let mut database = self.database.lock().await;
             let service = TeamToolService::default();
@@ -5667,6 +5668,7 @@ impl Core {
                         .context("member.create input is invalid")?;
                     let outcome =
                         create_member(&mut database, &self.data_dir, &authenticated_run, input)?;
+                    member_roster_changed = member_roster_change_applied(&outcome.execution);
                     evidence_replayed = outcome.execution.replayed;
                     evidence_receipt_id = outcome.execution.result.payload["agentId"]
                         .as_str()
@@ -6339,6 +6341,9 @@ impl Core {
             Ok(operation_result)
         }
         .await;
+        if result.is_ok() && member_roster_changed {
+            emit_member_roster_invalidated(&self.output, MEMBER_CREATE_TOOL_NAME);
+        }
         if delivery_batch_state_changed {
             self.delivery_batch_scheduler_notify.notify_one();
         }
@@ -7571,6 +7576,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.update" => {
@@ -7581,6 +7588,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.avatar.set" => {
@@ -7591,6 +7600,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.runtime.set" => {
@@ -7612,6 +7623,7 @@ impl Core {
                     }
                     execution
                 };
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 if execution.result.status == CommandResultStatus::Applied {
                     self.pump_runtime_ready_recipient(&agent_id).await?;
                 }
@@ -7644,6 +7656,8 @@ impl Core {
                 if execution.result.status == CommandResultStatus::Applied {
                     self.mark_skill_projections_dirty_best_effort(&mut database, true);
                 }
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.presence.set" => {
@@ -7661,6 +7675,7 @@ impl Core {
                 let wake_delivery_scheduler =
                     became_present && execution.result.status == CommandResultStatus::Applied;
                 drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 if wake_delivery_scheduler {
                     self.delivery_batch_scheduler_notify.notify_one();
                 }
@@ -7690,6 +7705,7 @@ impl Core {
                 }
                 let state_changed = execution.result.status == CommandResultStatus::Applied;
                 drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 if state_changed {
                     self.delivery_batch_scheduler_notify.notify_one();
                 }
@@ -7703,6 +7719,8 @@ impl Core {
                     &mut database,
                     &user_command_envelope(params.command_id, params.command),
                 )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "memory.list" => {
@@ -23038,6 +23056,24 @@ fn emit_navigation_invalidated(
             None => json!({ "reason": reason }),
         },
     );
+}
+
+fn member_roster_change_applied(execution: &CommandExecution) -> bool {
+    !execution.replayed && execution.result.status == CommandResultStatus::Applied
+}
+
+fn emit_member_roster_if_applied(
+    output: &mpsc::UnboundedSender<String>,
+    reason: &str,
+    execution: &CommandExecution,
+) {
+    if member_roster_change_applied(execution) {
+        emit_member_roster_invalidated(output, reason);
+    }
+}
+
+fn emit_member_roster_invalidated(output: &mpsc::UnboundedSender<String>, reason: &str) {
+    emit(output, "members.invalidated", json!({ "reason": reason }));
 }
 
 fn emit_agent_run_terminal(

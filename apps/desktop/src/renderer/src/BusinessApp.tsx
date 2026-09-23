@@ -159,6 +159,7 @@ import {
 } from './new-conversation-preferences'
 import { type NavigationRefreshTrigger } from './navigation-refresh-coordinator'
 import { createNavigationWindowReader, type NavigationGroupLimits } from './navigation-window-reader'
+import { createMemberRosterReader } from './member-roster-reader'
 import { appendLiveRuntimeEventBatch, createLiveRuntimeEventBuffer } from './live-runtime-event-buffer'
 
 export { allNavigationCamps }
@@ -1149,7 +1150,6 @@ export function BusinessApp({
   const notificationPresentationRef = useRef<NotificationPresentationCoordinator | null>(null)
   const campViewedAcknowledgementKey = useRef<string | null>(null)
   const healthRequest = useRef<Promise<HealthStatus> | null>(null)
-  const agentListRequest = useRef<Promise<AgentProfile[]> | null>(null)
   const navigationSnapshotRef = useRef<NavigationSnapshot | null>(null)
   const deletingCampIdsRef = useRef(new Set<string>())
   const shownDeletionIssuesRef = useRef(new Set<string>())
@@ -1376,19 +1376,17 @@ export function BusinessApp({
     setSingleChatCampId((current) => view === 'camp' && current === activeCampId ? current : null)
   }, [activeCampId, view])
 
-  const loadAgents = useCallback((): Promise<AgentProfile[]> => {
-    if (agentListRequest.current) return agentListRequest.current
-    const request = client.request<AgentProfile[]>('members.list')
-      .then((nextAgents) => {
-        setAgents(nextAgents)
-        return nextAgents
-      })
-    agentListRequest.current = request
-    void request.finally(() => {
-      if (agentListRequest.current === request) agentListRequest.current = null
-    }).catch(() => undefined)
-    return request
-  }, [])
+  const memberRosterReader = useMemo(() => createMemberRosterReader(
+    () => client.request<AgentProfile[]>('members.list'),
+    setAgents
+  ), [client])
+  const loadAgents = useCallback((): Promise<AgentProfile[]> => memberRosterReader.refresh(), [memberRosterReader])
+
+  useEffect(() => {
+    if (startupStatus !== 'resolved' || view !== 'members') return
+    // Enter the page with its current roster; the read must not block navigation.
+    void loadAgents().catch((nextError) => setError(errorMessage(nextError)))
+  }, [loadAgents, startupStatus, view])
 
   const commitNavigation = useCallback((
     nextNavigation: NavigationSnapshot,
@@ -2446,6 +2444,9 @@ export function BusinessApp({
       if (event.method === 'preferences.new_conversation_changed') {
         void uiPreferences.generalPreferences.get().then(setGeneralPreferences).catch((e) => setError(errorMessage(e)))
       }
+      if (event.method === 'members.invalidated' && viewRef.current === 'members') {
+        void loadAgents().catch((nextError) => setError(errorMessage(nextError)))
+      }
       if (event.method === 'agent_run.terminal') liveEvents.flush()
       if (event.method === 'runtime.state') {
         const runtimeStatus = stringField(params, 'status')
@@ -2523,6 +2524,7 @@ export function BusinessApp({
     activeCampRefreshCoordinator,
     loadHealth,
     loadInstallations,
+    loadAgents,
     loadMemberData,
     loadOverview,
     loadCampDeletionIssues,
