@@ -1,12 +1,13 @@
 import { newCommandId } from '../../shared/command-id'
 import type { BusinessEnvironment } from './business-environment'
 import { AppHeader } from './AppHeader'
-import { MobileBack, MobileLayoutProvider, MobileNavigation, useMobileViewport } from './MobileLayout'
+import { MobileBack, MobileLayoutProvider, MobileNavigation, useMobileViewport, type MobileRoot } from './MobileLayout'
 export { AppHeader } from './AppHeader'
 import { CurrentUserProfileProvider } from './CurrentUserProfile'
 import { readErrorMessage } from './error-message'
 import { CoreSubsystemNotice } from './CoreSubsystemNotice'
 import { Activity, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
 import type {
   AdapterInstallation,
   AdapterKind,
@@ -1010,6 +1011,8 @@ export function BusinessApp({
   const { client, preferences: uiPreferences, desktop } = environment
   const mobile = useMobileViewport(!desktop)
   const [mobileSettingsList, setMobileSettingsList] = useState(false)
+  const [mobileConversationDrawerOpen, setMobileConversationDrawerOpen] = useState(false)
+  const mobileConversationListButtonRef = useRef<HTMLButtonElement>(null)
   const initialTarget: RestorableLocation = initialStartupSnapshot
     ? startupTargetFromSnapshot(initialStartupSnapshot) : { kind: 'quick_chat' }
   type NavigationContext = { campOptions?: ActivateCampOptions; beforeCommit?: () => void; prepared?: boolean; memberPrepared?: boolean }
@@ -4075,78 +4078,89 @@ export function BusinessApp({
     )
   }
 
+  const navigateMobileRoot = (target: MobileRoot): void => {
+    setMobileConversationDrawerOpen(false)
+    if (target === 'settings') setMobileSettingsList(true)
+    chooseView(target === 'compose' && activeCampId ? 'camp' : target)
+  }
+
+  const renderNavigation = (drawer = false): React.JSX.Element => <CampNavigation
+    navigationId={drawer ? 'mobile-conversation-navigation' : 'global-navigation'}
+    platform={client.platform}
+    footer={drawer ? <MobileNavigation view="compose" disabled={startupStatus !== 'resolved' || shuttingDown} onNavigate={navigateMobileRoot} /> : sidebarFooter}
+    view={drawer ? 'compose' : view === 'camp' && missionCamp ? 'missions' : view}
+    state={startupStatus === 'resolved' ? navigationState : 'loading'}
+    navigation={displayNavigation}
+    groupLimits={navigationGroupLimits}
+    onGroupLimitChange={navigationRefreshCoordinator.resizeGroup}
+    activeCampId={activeCampId}
+    openingCampId={openingCampId}
+    currentProjectKey={currentProjectKey}
+    shellOnlyProjectPath={shellOnlyCurrentProjectPath}
+    creatingConversation={busy === 'create-camp'}
+    pins={navigationPins}
+    pinnedCampItems={pinnedCampItems}
+    settingsSection={settingsSection}
+    updateSnapshot={appUpdates.snapshot}
+    onNewConversation={() => { setMobileConversationDrawerOpen(false); beginNewConversation() }}
+    onMembers={() => { setMobileConversationDrawerOpen(false); chooseView('members') }}
+    onAutomations={() => { setMobileConversationDrawerOpen(false); chooseView('automations') }}
+    onMissions={mobile ? undefined : () => chooseView('missions')}
+    unreadMissionCount={unreadMissionCount(missionList.missions)}
+    onMemory={() => { setMobileConversationDrawerOpen(false); chooseView('memory') }}
+    pendingMemoryCount={pendingMemoryCount}
+    onSettings={() => { setMobileConversationDrawerOpen(false); setMobileSettingsList(true); openSettings() }}
+    onOpenUpdates={() => void openUpdateSettings()}
+    onSettingsSectionChange={(section) => { setMobileSettingsList(false); chooseSettingsSection(section) }}
+    onSettingsBack={closeSettings}
+    onOpenProject={() => { setMobileConversationDrawerOpen(false); void openProject() }}
+    onSelectProject={(project) => {
+      cancelPendingCampActivation()
+      chooseCurrentProject(
+        project
+          ? { kind: 'directory', projectPath: project.projectPath }
+          : { kind: 'quick_chat' },
+        project ? { name: project.name, projectPath: project.projectPath } : null
+      )
+    }}
+    onCreateInProject={(project) => {
+      setMobileConversationDrawerOpen(false)
+      void requestMemberTransition(async () => {
+        cancelPendingCampActivation()
+        await requestNewConversation(project
+          ? { name: project.name, projectPath: project.projectPath }
+          : null)
+      })
+    }}
+    onCamp={(target) => { setMobileConversationDrawerOpen(false); chooseCamp(target) }}
+    onTogglePin={toggleNavigationPin}
+    onRemoveProject={removeNavigationProject}
+    onRenameProject={renameProject}
+    onCampIdCopied={() => {
+      setError(null)
+      notify('已复制会话 ID')
+    }}
+    onRename={renameCamp}
+    onDelete={deleteCamp}
+    onDeleteError={(nextError) => notifyError(errorMessage(nextError))}
+    onError={(nextError) => setError(errorMessage(nextError))}
+  />
+
   return (
     <MobileLayoutProvider value={mobile}>
     <FilePreviewProvider api={environment.files} campId={view === 'camp' ? activeCampId : null} resolvedTheme={appearance.resolvedTheme}
       missionActivity={activeMission && view === 'camp' ? <MissionActivityDocument mission={activeMission} agents={agents} onSource={missionSource} onNotify={notify} onWorkspaceCleanupRequested={refreshMissionAfterWorkspaceCleanup}/> : null}>
     <MissionInteractionProvider missions={missionList.missions} projects={displayNavigation?.projects ?? []} agents={agents} onChanged={refreshMission} onWorkspaceCleaned={refreshMissionAfterWorkspaceCleanup} onDeleted={onMissionDeleted} onOpen={mission => { void openMission(mission).catch(error => notifyError(missionError(error))) }} onError={notifyError}>
     <NavigationShell platform={client.platform} settings={view === 'settings'} navigation={desktopNavigation} nativeWindowControls={desktop?.windowControls} browser={!desktop} disabled={startupStatus !== 'resolved' || shuttingDown} className={view === 'camp' && !missionDrawer ? 'app-shell-camp' : ''} data-mobile-view={mobile ? view : undefined} data-mobile-settings-list={mobile && view === 'settings' && mobileSettingsList || undefined}>
-      <CampNavigation
-        platform={client.platform}
-        footer={sidebarFooter}
-        view={view === 'camp' && missionCamp ? 'missions' : view}
-        state={startupStatus === 'resolved' ? navigationState : 'loading'}
-        navigation={displayNavigation}
-        groupLimits={navigationGroupLimits}
-        onGroupLimitChange={navigationRefreshCoordinator.resizeGroup}
-        activeCampId={activeCampId}
-        openingCampId={openingCampId}
-        currentProjectKey={currentProjectKey}
-        shellOnlyProjectPath={shellOnlyCurrentProjectPath}
-        creatingConversation={busy === 'create-camp'}
-        pins={navigationPins}
-        pinnedCampItems={pinnedCampItems}
-        settingsSection={settingsSection}
-        updateSnapshot={appUpdates.snapshot}
-        onNewConversation={beginNewConversation}
-        onMembers={() => chooseView('members')}
-        onAutomations={() => chooseView('automations')}
-        onMissions={mobile ? undefined : () => chooseView('missions')}
-        unreadMissionCount={unreadMissionCount(missionList.missions)}
-        onMemory={() => chooseView('memory')}
-        pendingMemoryCount={pendingMemoryCount}
-        onSettings={openSettings}
-        onOpenUpdates={() => void openUpdateSettings()}
-        onSettingsSectionChange={(section) => { setMobileSettingsList(false); chooseSettingsSection(section) }}
-        onSettingsBack={closeSettings}
-        onOpenProject={() => void openProject()}
-        onSelectProject={(project) => {
-          cancelPendingCampActivation()
-          chooseCurrentProject(
-            project
-              ? { kind: 'directory', projectPath: project.projectPath }
-              : { kind: 'quick_chat' },
-            project ? { name: project.name, projectPath: project.projectPath } : null
-          )
-        }}
-        onCreateInProject={(project) => {
-          void requestMemberTransition(async () => {
-            cancelPendingCampActivation()
-            await requestNewConversation(project
-              ? { name: project.name, projectPath: project.projectPath }
-              : null)
-          })
-        }}
-        onCamp={chooseCamp}
-        onTogglePin={toggleNavigationPin}
-        onRemoveProject={removeNavigationProject}
-        onRenameProject={renameProject}
-        onCampIdCopied={() => {
-          setError(null)
-          notify('已复制会话 ID')
-        }}
-        onRename={renameCamp}
-        onDelete={deleteCamp}
-        onDeleteError={(nextError) => notifyError(errorMessage(nextError))}
-        onError={(nextError) => setError(errorMessage(nextError))}
-      />
+      {renderNavigation()}
       {!startupGateVisible && view === 'camp' && !missionCamp && <AppHeader
         campTitle={activeCampTitle || '对话'}
         contextLabel={activeCampContextLabel}
         camp={campSnapshot?.camp.id === activeCampId ? campSnapshot : null}
         detailEntryHostRef={setCampDetailEntryHost}
         onFocusApprovals={focusCampApprovals}
-        onBack={mobile ? () => chooseView('compose') : undefined}
+        onOpenConversationList={mobile ? () => setMobileConversationDrawerOpen(true) : undefined}
+        conversationListButtonRef={mobileConversationListButtonRef}
       />}
       {windowDragPage && <WindowDragStrip page={windowDragPage} />}
 
@@ -4379,10 +4393,21 @@ export function BusinessApp({
               )
         )}
       </main>
-      {mobile && view !== 'camp' && view !== 'missions' && <MobileNavigation view={view} disabled={startupStatus !== 'resolved' || shuttingDown} onNavigate={(target) => {
-        if (target === 'settings') setMobileSettingsList(true)
-        chooseView(target)
-      }} />}
+      {mobile && view !== 'camp' && view !== 'missions' && <MobileNavigation view={view} disabled={startupStatus !== 'resolved' || shuttingDown} onNavigate={navigateMobileRoot} />}
+
+      {mobile && <Dialog.Root open={mobileConversationDrawerOpen && view === 'camp'} onOpenChange={setMobileConversationDrawerOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="mobile-conversation-scrim" />
+          <Dialog.Content className="mobile-conversation-drawer" aria-describedby={undefined} onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            mobileConversationListButtonRef.current?.focus({ preventScroll: true })
+          }}>
+            <Dialog.Title className="sr-only">会话列表</Dialog.Title>
+            {renderNavigation(true)}
+            <Dialog.Close asChild><button className="mobile-icon-button mobile-conversation-drawer-close" type="button" aria-label="关闭会话列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button></Dialog.Close>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>}
 
       <NewConversationDialog
         open={newConversationOpen}
