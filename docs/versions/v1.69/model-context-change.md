@@ -262,6 +262,14 @@ Compaction 保留当前 Bootstrap 包裹文本、ACK、去重和重投机制；�
 6. 迁移与交付：从 v1.68/schema 122 迁至 v1.69/schema 123；旧 `imported` 记录和受管 Revision 内容在升级前后计数／摘要一致；旧项目投影只删有所有权证据的入口，active Run、不可访问 root 和用户同名文件均获保护，清理可重试；新 Run 不新建投影。普通与 batch 新 Profile、v1.68 的历史提示、首次 payload、后续 input、compaction Bootstrap 补发、超预算、ACK/去重均保留一次任务语义；不得额外重放当前输入。覆盖隔离 Home、远程 Host 实际根路径及多 Runtime。
 7. 真实任务 Gate：使用[双轨评测通用集](../../development/evaluation.md#上下文改动-gate)的 12 Case、至少三位明确配置的队员；冻结基线和候选 checkout、Case、模型、权限、预算、Judge 与标准。默认各运行一次；协议与边界硬规则全通过、无质量/协作回归且无不可解释证据缺口。无真实 Runtime/Judge 条件时报告未运行或证据不足，不用单测冒充 Gate。
 
+## 阶段性实施验证记录
+
+- 实际模型输入版本为 Bootstrap v5／Formatter 5、普通 Manifest／Formatter 27／27、公开 batch Manifest／Formatter 30／30、Delivery Profile 7／10、Skill Selection／Resolution v2；Session Charter revision 13、Run Facts 5／7 和 v1.68 的 `historyHint` 保持不变。
+- 数据迁移从 v1.68/schema 122 到 v1.69/schema 123；当前迁移准入矩阵、v172 历史上下文保留、新写入门禁及旧 v26／v29 冻结输入恢复的定向测试通过。新增投递附件授权触发器允许精确的 v26／v27／v29／v30 组合，已排除新 v27／v30 被旧触发器拒绝的失败路径。
+- `cargo test -p rovai-core --lib` 为 376 通过、0 失败、1 忽略；`cargo check -p rovai-core -p rovai-web --lib`、`cargo fmt --all -- --check`、`pnpm typecheck`、Renderer Vitest 2195 项、Skills 与文档定向检查通过。候选 checkout 的 `current-contract-conformance@1.69.0` 直检为 16／16 通过；此结果只覆盖合同断言，不代表真实任务 Gate。
+- 隔离 `userData` 的打包 macOS App 验收在 Day／100% 与 Night／200% 下通过原生 Skill 只读预览、五项工具箱默认配置、开关写入和恢复、窄视口布局检查；验收时使用合成 Home，没有触及日常 App 数据。
+- 真实任务 Gate 的基线／候选实际执行与固定 Judge 证据尚待收口；在其通过前，`implementation_status` 保持 `in_progress`。
+
 ## 二次确认记录
 
 `confirmation_status: confirmed`；`revision: 5`；`confirmed_revision: 5`。revision 3 的完整说明及首次确认见消息 `3966cd2d-13dc-4029-9376-99a213595d3a`；revision 4 加入 `member-studio` 并经消息 `b39cdc13-a4d0-488a-94e6-c9bc8f3c2b8d` 确认。revision 5 在完整说明发送并请求二次确认后，开发者于消息 `1f13404e-14cc-4af6-acdb-6f1386e99e61` 回复“看起来就是把她删除公共消息区的内容适配了一下，没问题”，确认按该 revision 继续实施。确认涵盖合入 v1.68 后的公开历史基线、版本轴、数据迁移源与旧 v29 恢复边界。
