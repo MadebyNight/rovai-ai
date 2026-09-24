@@ -2779,6 +2779,8 @@ export interface AppUpdatePrompt {
 
 export interface AppUpdateSnapshot {
   currentVersion: string
+  /** Desktop supplies this from its bundled notes; older and Server snapshots may omit it. */
+  currentRelease?: AppUpdateRelease | null
   status: AppUpdateStatus
   availableRelease: AppUpdateRelease | null
   lastCheckSource: AppUpdateCheckSource | null
