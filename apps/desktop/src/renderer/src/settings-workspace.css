@@ -1345,6 +1345,13 @@
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-release-section {
   border-bottom: 0;
 }
+:root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-release-section>.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
 :root .settings-panel:not(.settings-panel-mcp,.settings-panel-skills) .about-release-body {
   gap: 16px;
 }

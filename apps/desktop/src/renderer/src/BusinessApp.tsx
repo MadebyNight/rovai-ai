@@ -2886,7 +2886,12 @@ export function BusinessApp({
       const transitioned = await navigateToSettings('about')
       if (!transitioned) return false
       await afterNextPaint()
-      const releaseSection = document.querySelector<HTMLElement>('.about-release-section')
+      let releaseSection = document.querySelector<HTMLElement>('.about-release-section')
+      if (releaseSection?.dataset.appUpdateReleaseVersion !== expectedVersion) {
+        document.querySelector<HTMLButtonElement>('[data-app-update-release-tab="available"]')?.click()
+        await afterNextPaint()
+        releaseSection = document.querySelector<HTMLElement>('.about-release-section')
+      }
       if (releaseSection?.dataset.appUpdateReleaseVersion !== expectedVersion) return false
       const heading = document.querySelector<HTMLElement>('#about-release-notes-heading')
       heading?.focus({ preventScroll: true })
@@ -2897,34 +2902,6 @@ export function BusinessApp({
       return false
     }
   }
-
-  useEffect(() => {
-    const prompt = appUpdates.snapshot?.pendingPrompt
-    const release = appUpdates.snapshot?.availableRelease
-    if (view !== 'settings'
-        || settingsSection !== 'about'
-        || !prompt
-        || release?.version !== prompt.version) return undefined
-    let secondFrame = 0
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        const releaseSection = document.querySelector<HTMLElement>('.about-release-section')
-        if (releaseSection?.dataset.appUpdateReleaseVersion === prompt.version) {
-          void appUpdates.dismissPrompt(prompt.id)
-        }
-      })
-    })
-    return () => {
-      window.cancelAnimationFrame(firstFrame)
-      if (secondFrame) window.cancelAnimationFrame(secondFrame)
-    }
-  }, [
-    appUpdates.dismissPrompt,
-    appUpdates.snapshot?.availableRelease,
-    appUpdates.snapshot?.pendingPrompt,
-    settingsSection,
-    view
-  ])
 
   const commitMemoryLocation = useCallback((): void => {
     if (
