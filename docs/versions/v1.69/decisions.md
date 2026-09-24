@@ -73,7 +73,7 @@ Skills 指南需要在新 Session 和每个新 Run 中被发现，但已有 Nati
 
 ### 选择
 
-升级和 Core 启动不扫描或删除旧项目文件。Core 启动只按 Navigation 保存的移除列表同步 root access，并取消与旧自动清理关联的 active-root pending 标记；observation 和旧 Library 保留，已登记入口继续从原生候选中排除。发布说明提醒用户自行核对旧入口。诊断与修复中的项目入口检查和逐项目清理作为后续显式功能设计，必须在操作时重新验证 observation、入口归属、项目访问状态和 active Run，无法确认则保留。
+升级和 Core 启动不扫描或删除旧项目文件。Core 启动只按 Navigation 保存的移除列表同步 root access，并取消与旧自动清理关联的 active-root pending 标记；observation 和旧 Library 保留，已登记入口继续从原生候选中排除。发布说明提醒用户自行核对旧入口。后续诊断与修复将旧入口归为一条需要处理的问题，在该问题内提供统一清理按钮，不展示逐项目清单或单独的检查完成提示。清理必须在用户点击后重新验证 observation、入口归属、项目访问状态和 active Run，无法确认则保留，结果直接更新该问题与诊断摘要。
 
 ### 后果
 
