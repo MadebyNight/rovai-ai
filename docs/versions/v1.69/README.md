@@ -4,7 +4,7 @@ version: v1.69
 lifecycle: current
 authority: version-scope-and-status
 design_status: confirmed
-implementation_status: in_progress
+implementation_status: completed
 model_context_change: false
 last_updated: 2026-09-24
 ---
@@ -22,7 +22,7 @@ last_updated: 2026-09-24
 
 ## 当前状态
 
-Core 读取和搜索投影、输出 Schema 与定向回归已实现；完整验证和合入证据在[实施计划](implementation-plan.md)完成后更新。
+Core 读取和搜索投影、输出 Schema、撤回确认文案及定向回归已实现。Rust 默认测试、目标慢速回归、TypeScript/Vitest、桌面构建和文档门禁已通过；`pnpm test` 的两项旧评测配置断言仍因 v1.68 基线版本与退役测试引用而失败，范围和证据见[实施与验收](implementation-plan.md)。
 
 ## 跨版本文档影响
 

@@ -2,7 +2,7 @@
 document_type: implementation-plan
 version: v1.69
 authority: version-implementation-and-acceptance
-status: in_progress
+status: completed
 last_updated: 2026-09-24
 ---
 
@@ -19,11 +19,13 @@ last_updated: 2026-09-24
 
 | 验收项 | 证据 | 状态 |
 | --- | --- | --- |
-| 当前 Camp claim 前正常读取和搜索，读取不领取 Delivery | `camp_history::slow_tests::camp_read_returns_the_selected_page_and_item_body_without_size_clipping` | 已通过旧基线；合并后待重跑 |
-| 撤回后 `camp.read` 状态项占原序号且无原文，搜索不再命中 | 同一 `camp_history` owner 与 `team_tool_catalog::tests::camp_read_output_contract_distinguishes_original_and_withdrawn_items` | 已通过旧基线；合并后待重跑 |
-| 跨 Camp 搜索仍受冻结发布边界，跨 Camp 读取仍实时 | `context::slow_tests::public_history_is_readable_without_target_camp_membership_or_live_recheck` 与 `history_snapshot_order_and_titles_remain_frozen` | 已通过旧基线；合并后待重跑 |
-| claim 后撤回拒绝，`RUN_INPUT` 和 quote-source 隔离不变 | 现有 Collaboration/Context 回归 | 合并后待重跑 |
-| Rust、前端、文档与 PR 门禁 | `pnpm test:rust:pr`、`pnpm test`、`pnpm build:desktop`、`pnpm docs:*`、CI | 合并后待重跑 |
+| 当前 Camp claim 前正常读取和搜索，读取不领取 Delivery | `camp_history::slow_tests::camp_read_returns_the_selected_page_and_item_body_without_size_clipping` | 通过 |
+| 撤回后 `camp.read` 状态项占原序号且无原文，搜索不再命中；100 条分页仍完整 | 同一 `camp_history` owner 与 `team_tool_catalog::tests::camp_read_output_contract_distinguishes_original_and_withdrawn_items` | 通过 |
+| 跨 Camp 搜索仍受冻结发布边界，跨 Camp 读取仍实时 | `context::slow_tests::public_history_is_readable_without_target_camp_membership_or_live_recheck` 与 `history_snapshot_order_and_titles_remain_frozen` | 通过 |
+| 首个 claim 仍是撤回边界，quote-source 隔离不变 | `collaboration::slow_tests::recallable_local_composer_message_is_erased_and_cannot_be_republished`、默认 Rust 的 `delivery_queue::tests::waiting_deliveries_create_no_run_until_fifo_batch_claim` 与 `message_quote` owner | 通过 |
+| Rust、前端构建与文档门禁 | `pnpm test:rust:pr`、`pnpm typecheck`、Vitest 2197 项、`pnpm build:desktop`、`pnpm docs:test`、`pnpm docs:check`、`pnpm docs:check:ci` | 通过；PR CI 待运行 |
+| 全量 Node 聚合测试 | `pnpm test`：Vitest 2197 项通过；Node 326 项中 324 通过、2 项因旧 current-contract profile 的 v1.66/v1.67 固定断言与当前 v1.68 数据合同不符而失败 | 已记录基线问题，未改评测配置 |
+| 真实任务双轨 Gate | [v1.68 记录](../v1.68/model-context-change-public-history-hint.md#实施与验证记录2026-09-23)证明原通用 Gate 的基线合同与退役自动历史清单已阻断所有 Trial；本版未重跑该受阻 Gate | 未完成，不作为通过证据 |
 
 ## Rust 测试准入
 
