@@ -3560,6 +3560,7 @@ async function verifyClaudeToolResults(cdp) {
       return {
         toolName: ${JSON.stringify(toolName)},
         open: disclosure?.open ?? false,
+        executionStatus: disclosure?.querySelector('.tool-call-state[role="img"]')?.getAttribute('aria-label') ?? null,
         result: disclosure?.querySelector('.tool-call-detail pre')?.textContent ?? null,
         emptyState: disclosure?.querySelector('.tool-result-state[role="status"]')?.textContent?.trim() ?? null,
         error: disclosure?.querySelector('.tool-result-state[role="alert"]')?.textContent?.trim() ?? null,
@@ -3569,6 +3570,7 @@ async function verifyClaudeToolResults(cdp) {
     assert(presentation.open
       && presentation.error === null
       && presentation.retryCount === 0
+      && presentation.executionStatus === (toolName === 'TaskStop' ? '失败' : '成功')
       && (marker === null
         ? presentation.result === null && presentation.emptyState === '没有可展示的公开结果。'
         : presentation.result?.includes(marker)),
@@ -3577,9 +3579,10 @@ async function verifyClaudeToolResults(cdp) {
   }
   await evaluate(cdp, `(() => {
     const disclosure = [...document.querySelectorAll('.execution-drawer details.tool-call-disclosure')]
-      .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'Skill')
+      .find((candidate) => candidate.querySelector('.tool-call-title')?.textContent?.trim() === 'TaskStop')
     disclosure?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
   })()`)
+  await wait(150)
   return presentations
 }
 
