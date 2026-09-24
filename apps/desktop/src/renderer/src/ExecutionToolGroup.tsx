@@ -55,7 +55,7 @@ export function selectCompletePresentableExecutionEvidence(
   )
 }
 
-type ToolResultLoadStatus = 'idle' | 'loading' | 'ready' | 'failed'
+type ToolResultLoadStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'failed'
 
 interface ToolResultViewState {
   evidenceId: string | null
@@ -201,14 +201,11 @@ function ToolCallDetail({
         response.payload,
         completeEvidence.canonical
       )
-      if (fullText === null) {
-        throw new Error('证据中没有可展示的公开结果')
-      }
       if (requestSequence.current !== sequence) return
       setResult({
         evidenceId: completeEvidence.id,
-        status: 'ready',
-        text: fullText,
+        status: fullText === null ? 'empty' : 'ready',
+        text: fullText ?? '',
         error: null
       })
     } catch (error) {
@@ -237,6 +234,8 @@ function ToolCallDetail({
     if (!restoreFocusAfterLoad.current) return undefined
     const target = result.status === 'ready'
       ? resultRef.current
+      : result.status === 'empty'
+        ? summaryRef.current
       : result.status === 'failed'
         ? retryRef.current
         : null
@@ -278,6 +277,9 @@ function ToolCallDetail({
           <span className="tool-result-spinner" aria-hidden="true" />
           <span>正在读取{resultLabel}…</span>
         </div>
+      )}
+      {result.status === 'empty' && (
+        <div className="tool-result-state" role="status">没有可展示的公开结果。</div>
       )}
       {result.status === 'failed' && (
         <div className="tool-result-state is-error" role="alert">
