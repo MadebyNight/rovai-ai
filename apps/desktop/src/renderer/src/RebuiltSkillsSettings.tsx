@@ -193,7 +193,7 @@ export function ToolboxSettings({ agents }: { agents: AgentProfile[] }): React.J
   return <div className="rebuilt-skills-page">
     <header className="rebuilt-skills-header"><div><h1>工具箱</h1><p>为队员配置多人协作常用的 Skills 与工具。</p></div></header>
     <div ref={root} className="rebuilt-skills-columns" data-compact={compact}>
-      <aside id={`${id}-list`} className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}><div className="rebuilt-skills-toolbar"><strong>协作 Skills</strong><span className="rebuilt-toolbox-help" role="note" aria-label="这些 Skills 可在会话中按需唤起使用。" title="这些 Skills 可在会话中按需唤起使用。">?</span><span>{skills?.length ?? '—'} 项</span></div>
+      <aside id={`${id}-list`} className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}><div className="rebuilt-skills-toolbar"><strong>协作 Skills</strong><span className="rebuilt-toolbox-help"><button type="button" aria-label="协作 Skills 说明" aria-describedby={`${id}-toolbox-help`}>?</button><span id={`${id}-toolbox-help`} className="rebuilt-toolbox-help-popover" role="tooltip">为队员勾选后，其新一轮执行可按需读取该 Skill；会话中也可输入 / 单次选用。</span></span><span>{skills?.length ?? '—'} 项</span></div>
         {loadingError && <div className="rebuilt-skills-error" role="alert">工具箱暂不可读：{loadingError}<button type="button" onClick={() => void load()}>重试</button></div>}
         {!skills && !loadingError && <p className="rebuilt-skills-empty" role="status">正在读取工具箱…</p>}
         {skills && visibleSkills.length === 0 && <p className="rebuilt-skills-empty">暂无 Skill。</p>}

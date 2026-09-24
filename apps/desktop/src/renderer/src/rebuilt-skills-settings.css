@@ -23,7 +23,11 @@
 .rebuilt-skills-toolbar button,.rebuilt-toolbox-heading button,.rebuilt-skill-source button { appearance:none; border:0; border-radius:6px; padding:5px 7px; background:transparent; color:var(--muted); cursor:pointer; font:inherit; white-space:nowrap; }
 .rebuilt-skills-toolbar button:hover,.rebuilt-toolbox-heading button:hover,.rebuilt-skill-source button:hover { background:var(--neutral-hover); color:var(--ink); }
 .rebuilt-skills-toolbar button:disabled { opacity:.5; cursor:default; }
-.rebuilt-skills-toolbar .rebuilt-toolbox-help { width:17px; height:17px; margin-left:0; padding:0; border:1px solid var(--line-strong); border-radius:50%; color:var(--muted); font-size:11px; line-height:15px; text-align:center; cursor:help; }
+.rebuilt-skills-toolbar .rebuilt-toolbox-help { position:relative; display:inline-flex; flex:none; margin-left:0; }
+.rebuilt-skills-toolbar .rebuilt-toolbox-help > button { display:grid; width:18px; height:18px; place-items:center; margin:0; padding:0; border:1px solid var(--line-strong); border-radius:50%; color:var(--muted); background:transparent; font:inherit; font-size:11px; line-height:1; cursor:help; }
+.rebuilt-skills-toolbar .rebuilt-toolbox-help > button:hover { color:var(--ink); background:var(--neutral-hover); }
+.rebuilt-skills-toolbar .rebuilt-toolbox-help-popover { position:absolute; z-index:20; top:calc(100% + 7px); left:0; display:block; visibility:hidden; width:224px; max-width:calc(100vw - 32px); margin-left:0; padding:8px 10px; border:1px solid var(--line-strong); border-radius:6px; color:var(--ink); background:var(--surface-raised); box-shadow:var(--shadow-float); font-size:11px; line-height:1.55; white-space:normal; pointer-events:none; }
+.rebuilt-toolbox-help:is(:hover,:focus-within) .rebuilt-toolbox-help-popover { visibility:visible; }
 .rebuilt-skills-search { display:block; flex:none; padding:0 18px 14px; }
 .rebuilt-skills-search input { display:block; width:100%; height:35px; padding:0 11px; border:1px solid var(--line); border-radius:7px; background:var(--home-surface); color:var(--ink); font:inherit; font-size:12px; }
 .rebuilt-skills-list-scroll,.rebuilt-toolbox-members,.rebuilt-skills-content { min-height:0; overflow:auto; }

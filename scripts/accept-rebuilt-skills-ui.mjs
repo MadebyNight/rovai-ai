@@ -167,6 +167,31 @@ try {
       toolbox.defaults.some(([name, count]) => name === 'member-studio' ? count !== 4 : count !== 0)) {
     throw new Error(`Toolbox defaults or layout changed: ${JSON.stringify(toolbox)}`)
   }
+  const helpAnchor = await evaluate(cdp, `(() => {
+    const rect = (${toolboxPage}).querySelector('.rebuilt-toolbox-help button')?.getBoundingClientRect()
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null
+  })()`)
+  if (!helpAnchor) throw new Error('Toolbox help trigger is missing')
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...helpAnchor, button: 'none', buttons: 0 })
+  const help = await evaluate(cdp, `(() => {
+    const trigger = (${toolboxPage}).querySelector('.rebuilt-toolbox-help button')
+    const tip = (${toolboxPage}).querySelector('.rebuilt-toolbox-help-popover')
+    const bounds = tip?.getBoundingClientRect()
+    return { describedBy: trigger?.getAttribute('aria-describedby') === tip?.id,
+      text: tip?.textContent, visibleOnHover: tip && getComputedStyle(tip).visibility === 'visible',
+      insideViewport: bounds && bounds.left >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight }
+  })()`)
+  if (!help.describedBy || !help.text?.includes('单次选用') || !help.visibleOnHover || !help.insideViewport) {
+    throw new Error(`Toolbox help copy is not visible on hover: ${JSON.stringify(help)}`)
+  }
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1, button: 'none', buttons: 0 })
+  const visibleOnFocus = await evaluate(cdp, `(() => {
+    const trigger = (${toolboxPage}).querySelector('.rebuilt-toolbox-help button')
+    trigger.focus()
+    return getComputedStyle((${toolboxPage}).querySelector('.rebuilt-toolbox-help-popover')).visibility === 'visible'
+  })()`)
+  if (!visibleOnFocus) throw new Error('Toolbox help copy is not visible on keyboard focus')
+  await evaluate(cdp, `(${toolboxPage}).querySelector('.rebuilt-toolbox-help button').blur()`)
   const toolboxSplitter = await exerciseSplitter(cdp, toolboxPage, 'rovai.toolbox-list-width.v1')
   if (Math.abs(toolbox.available - skills.available) > 1) throw new Error('Toolbox has extra outer padding compared with Skills')
   const descriptionAction = await checkAction(cdp, toolboxPage, '查看说明')
@@ -213,6 +238,7 @@ try {
     nativeSkillNames: skills.rows,
     qoderSkillNames: qoderSources,
     runtimeMenu,
+    toolboxHelp: help,
     actions: { refresh: refreshAction, description: descriptionAction },
     splitters: { skills: skillsSplitter, toolbox: toolboxSplitter },
     toolboxDefaults: toolbox.defaults,
