@@ -14843,61 +14843,62 @@ mod tests {
         assert_eq!(bound.result.code, "channel.binding.resolved");
         let mut pending = pending_workspace_picker(&service, &mut database, "topic", "oc_upgrade");
         crate::db::downgrade_current_schema_to_v131_source_for_test(database.connection());
+        // Compare the same source-schema columns across upgrade and rollback.
+        // Later migrations may add fields without changing retained history.
+        let source_columns = [
+            "camp",
+            "camp_message",
+            "camp_turn",
+            "agent_run",
+            "channel_conversation_binding",
+            "pending_camp_binding",
+            "pending_camp_message",
+            "channel_delivery",
+        ]
+        .map(|table| {
+            let columns = database
+                .connection()
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+                .into_iter()
+                .filter(|column| {
+                    column != "retry_suppression_json"
+                        && column != "source_attachments_json"
+                        && !(table == "camp_turn" && column == "kind")
+                        && !(table == "agent_run"
+                            && matches!(
+                                column.as_str(),
+                                "response_delivery"
+                                    | "operation_policy"
+                                    | "operation_policy_version"
+                                    | "destination_conversation_id"
+                            ))
+                        && column != "workspace_preparing_at"
+                        && column != "automation_run_id"
+                        && column != "quotes_json"
+                        && column != "quote_trash_json"
+                        && !(table == "camp_message"
+                            && matches!(
+                                column.as_str(),
+                                "origin_kind" | "recall_state" | "withdrawn_by_id" | "withdrawn_at"
+                            ))
+                        && !(table == "agent_run"
+                            && matches!(
+                                column.as_str(),
+                                "camp_id" | "anchor_message_id" | "current_public_tail_sequence"
+                            ))
+                        && !(table == "channel_delivery" && column == "channel_binding_id")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            (table, columns)
+        });
         let snapshot = |connection: &rusqlite::Connection| {
-            [
-                "camp",
-                "camp_message",
-                "camp_turn",
-                "agent_run",
-                "channel_conversation_binding",
-                "pending_camp_binding",
-                "pending_camp_message",
-                "channel_delivery",
-            ]
-            .map(|table| {
-                let columns = connection
-                    .prepare(&format!("PRAGMA table_info({table})"))
-                    .unwrap()
-                    .query_map([], |row| row.get::<_, String>(1))
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<_>>>()
-                    .unwrap()
-                    .into_iter()
-                    .filter(|column| {
-                        column != "retry_suppression_json"
-                            && column != "source_attachments_json"
-                            && !(table == "camp_turn" && column == "kind")
-                            && !(table == "agent_run"
-                                && matches!(
-                                    column.as_str(),
-                                    "response_delivery"
-                                        | "operation_policy"
-                                        | "operation_policy_version"
-                                        | "destination_conversation_id"
-                                ))
-                            && column != "workspace_preparing_at"
-                            && column != "automation_run_id"
-                            && column != "quotes_json"
-                            && column != "quote_trash_json"
-                            && !(table == "camp_message"
-                                && matches!(
-                                    column.as_str(),
-                                    "origin_kind"
-                                        | "recall_state"
-                                        | "withdrawn_by_id"
-                                        | "withdrawn_at"
-                                ))
-                            && !(table == "agent_run"
-                                && matches!(
-                                    column.as_str(),
-                                    "camp_id"
-                                        | "anchor_message_id"
-                                        | "current_public_tail_sequence"
-                                ))
-                            && !(table == "channel_delivery" && column == "channel_binding_id")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            source_columns.each_ref().map(|(table, columns)| {
                 let mut statement = connection
                     .prepare(&format!("SELECT {columns} FROM {table} ORDER BY 1, 2"))
                     .unwrap();

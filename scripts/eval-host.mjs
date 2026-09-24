@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { runPlan, validatePlanInputs, buildProduct, freezePlan } from './lib/context-evaluation.mjs'
 import { runWeekly } from './lib/context-weekly.mjs'
+import { windowsProcessTable } from './lib/windows-process-table.mjs'
 
 const args = process.argv.slice(2)
 if (args.length !== 4 || args[0] !== '--job' || args[2] !== '--parent' || !/^\d+$/.test(args[3])) throw new Error('Expected a Host-owned job and parent process')
@@ -16,7 +17,13 @@ const exec = promisify(execFile)
 const seen = new Map()
 let stopping = false, monitoring = false
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
-async function processes() {
+let processObservation
+function processes() {
+  processObservation ??= readProcesses().finally(() => { processObservation = null })
+  return processObservation
+}
+async function readProcesses() {
+  if (process.platform === 'win32') return (await windowsProcessTable()).map(item => ({ ...item, started: item.startedAt }))
   const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,ppid=,lstart='], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 })
   return stdout.trim().split('\n').map(line => {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/)
@@ -59,6 +66,9 @@ const monitor = setInterval(() => {
     if (table.find(item => item.pid === process.pid)?.ppid !== parent) await stop('app_parent_exited')
   }).catch(error => { console.error(error.message); void stop('process_observation_failed') }).finally(() => { monitoring = false })
 }, 1000)
+process.on('message', message => { if (message?.type === 'cancel') void stop('host_cancelled') })
+const onParentDisconnected = () => { void stop('app_parent_exited') }
+process.on('disconnect', onParentDisconnected)
 process.on('SIGTERM', () => { void stop('host_cancelled') })
 process.on('SIGINT', () => { void stop('interrupted') })
 try {
@@ -76,4 +86,10 @@ try {
   }
   const result = await (job.mode === 'weekly' ? runWeekly : runPlan)(planPath, job.output)
   if (!stopping) await writeFile(join(dirname(jobFile), 'result.json'), JSON.stringify({ directory: result.directory, status: result.report.status, planDigest: result.report.planDigest }), { flag: 'wx', mode: 0o600 })
-} finally { clearInterval(monitor) }
+} finally {
+  clearInterval(monitor)
+  if (!stopping && process.connected) {
+    process.off('disconnect', onParentDisconnected)
+    process.disconnect()
+  }
+}

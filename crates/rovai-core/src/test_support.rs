@@ -410,3 +410,13 @@ mod slow_tests {
         assert_clean_template(&template.directory, &template.database_path);
     }
 }
+
+/// Absolute synthetic path for fixtures that do not access the filesystem.
+pub(crate) fn absolute_test_path(path: &str) -> String {
+    assert!(path.starts_with('/'));
+    if cfg!(windows) {
+        format!("C:{path}")
+    } else {
+        path.to_owned()
+    }
+}
