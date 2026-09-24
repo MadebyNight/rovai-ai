@@ -5840,7 +5840,7 @@ export function CampWorkspace({
             <AppDialogHeader
               icon="warning"
               title="撤回这条消息？"
-              description="所有接收队员均未读，可直接撤回。"
+              description="所有接收队员尚未领取，可直接撤回。"
               closeDisabled={withdrawingMessageId !== null}
             />
             {withdrawalError && <AppDialogBody>
