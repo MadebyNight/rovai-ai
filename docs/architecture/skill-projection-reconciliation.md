@@ -3,7 +3,7 @@ document_type: architecture
 architecture: skill-projection-reconciliation
 authority: skill-projection-access-and-reconciliation-boundaries
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-09-19
 ---
 
 # Skill Projection Reconciliation Architecture
@@ -195,7 +195,7 @@ claimed AgentRun
   → 从 persisted workspace 取得 exact execution_root
   → 在任何 resolve/canonicalize 前检查 removed ledger
   → canonicalize 当前 root（只此一个）
-  → 计算目标 Runtime Groups ∪ 同 root active Run Groups；Windows 另并入同 root 已配置队员 Groups
+  → 计算目标 Runtime Groups ∪ 同 root active Run Groups
   → 将 Rovai-owned entries reconcile 到最新 Library state
   → 保留 project-owned entry 并记录 shadowed
   → verify observations / Revision content
@@ -210,17 +210,10 @@ backend 中，不同 Agent 的新 Run 可以把共享 projection 更新到最新
 
 Windows copy backend 使用 `Execution Root Projection Gate`：launch 在同一 Core database critical section 内验证
 ready，并持久登记 `AgentRun + execution epoch + canonical root identity` 后释放；publish/recovery 只有在该 exact
-root 无 active registration 时才能取得 mutation admission。无法取得准入时返回调用方并释放 database mutex，使
-terminal settlement 能够推进；Core restart 继续使用持久 registration，并在当前 root preflight 中恢复未完成 journal 后才开放新
+root 无 active registration 时才能取得 mutation admission。等待方必须释放 database mutex，使 terminal settlement
+能够推进；Core restart 继续使用持久 registration，并在当前 root preflight 中恢复未完成 journal 后才开放新
 launch。这个平台特例避免 copy/swap 期间 Runtime 读取半发布目录，但仍不把 SkillExposureSnapshot 升级为
 lifetime load proof。
-
-Windows 在首个 Run 登记前，通过现有 known-root 的数据库关系取得同一 root 已配置队员的 Runtime Groups，
-一次准备完整团队的投影；该查询不解析或扫描其他项目目录。后续队友即使在 Lead 仍运行时首次启动，也能
-校验并复用 ready 投影，无需等待 Lead 结束。SkillExposureSnapshot 仍只包含本 Run Runtime 的可见 Groups。
-若活跃期间的 Skill Revision、成员配置变化或恢复 journal 确实需要独占 mutation，preflight 将
-`SkillProjectionGateBusy` 交给既有启动失败收口，保留原因；不能以无限重试使已领取 Run 永久等待可能正在
-等它回报的 Lead。用户可在活跃运行结束后重新派发。现有内容替换、删除与恢复的独占门禁不放宽。
 
 已存在 ContextManifest 的 active Run 恢复时复用其已持久化 SkillExposureSnapshot，不把 Snapshot
 重新解释为当下 filesystem health，也不因此扫描其他 roots。
