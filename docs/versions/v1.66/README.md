@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.66
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -11,7 +11,7 @@ last_updated: 2026-09-22
 
 # Rovai-ai v1.66：持久化 Tool 输出上限与诚实丢失提示
 
-前置：[v1.65](../v1.65/README.md)。本版把新 Tool 结果的 Rovai 持久化/展示副本限制为 7,680 UTF-8 字节，
+前置：[v1.65](../v1.65/README.md)。后续：[v1.67](../v1.67/README.md)。本版把新 Tool 结果的 Rovai 持久化/展示副本限制为 7,680 UTF-8 字节，
 同时保留 Runtime 实际交给 Agent 的完整结果和独立结构化文件事实。目标不是增加预览层，而是在唯一持久化投影中
 永久丢弃普通输出后缀，避免 SQLite、Managed Blob、事件、日志或详情接口继续保存另一份全文。
 

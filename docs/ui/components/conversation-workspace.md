@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-camp-workspace
 status: accepted
-last_updated: 2026-09-22
+last_updated: 2026-09-24
 ---
 
 # Camp 会话工作区
@@ -15,7 +15,7 @@ last_updated: 2026-09-22
   Scheduler claim 后才出现真实 Run，并由真实 Run 接管后续状态与停止语义。
 - 执行区“停止”只 CAS 当前精确 Run。没有公屏通用停止、队列暂停/恢复、Camp 全部停止、业务重试或手工放行入口；终态后队列按正常规则继续。
 - accepted/outcome-unknown 对用户显示普通红色失败，不显示“结果未知”产品状态；诊断和 evidence 仍保留内部真实分类。旧执行尚未隔离时，后继消息继续显示等待，不制造必败 Run。
-- 本地用户消息仅在首次目标 claim 前显示撤回；成功后时间线可显示“你撤回了一条消息”，但 Agent 读取、搜索、线程和分页不包含正文或占位。
+- 本地用户消息仅在首次目标 claim 前显示撤回；成功后时间线可显示“你撤回了一条消息”。Agent 主动读取可在 claim 前看到原文，撤回后 `camp.read` 仅在原序号返回 `Message withdrawn` 状态项，搜索不再命中原文。
 - Channel-bound Camp 的 Agent 公共发言默认外发；没有 `--to-channel` 或 Run 级外发开关。
 - 本地用户或 External Principal 的公开消息使用 `addressMode=default` 且只有一个冻结
   `addressedAgentId` 时，历史气泡在正文前派生该队员的 Member Mention；附件-only 消息也显示该 Mention。
@@ -25,7 +25,7 @@ last_updated: 2026-09-22
 
 字段与状态见 [Message Delivery v10](../../contracts/message-delivery-v10.md)、
 [Camp Composer Draft v15](../../contracts/camp-composer-draft-v15.md)和
-[Camp History v8](../../contracts/camp-history-v8.md)。本文件后续仍描述的 Core-owned public Draft/Pending、
+[Camp History v9](../../contracts/camp-history-v9.md)。本文件后续仍描述的 Core-owned public Draft/Pending、
 CampTurn Stop、Gather 或业务重试均为历史交互，不再适用于当前 public Camp；本机草稿与 recipient
 continuation 是当前 Desktop 行为。
 
@@ -250,7 +250,7 @@ Agent 公共消息继续左对齐，仅正文使用与用户消息相同的雾�
 已发布的当前用户消息在正文下方、与复制按钮同一操作行提供轻量处理回执，只显示“待处理 / 处理中”和数量；
 终态失败不增加“未完成”汇总。点击可见回执后才列出具体队员、各自状态与已建立 Run 的“查看执行”。当权威
 `canWithdraw` 投影为真时，同一行显示撤回入口；确认框只显示
-“所有接收队员均未读，可直接撤回。”，取消关闭弹窗，撤回提交期间防止重复操作。成功后原位置显示
+“所有接收队员尚未领取，可直接撤回。”，取消关闭弹窗，撤回提交期间防止重复操作。成功后原位置显示
 “你撤回了一条消息”，不再呈现正文、附件或队员状态。队员消息不增加这组回执，继续保留上面的底色框和操作行。
 事务资格、并发围栏与标记投影由 [Camp Message Send v23](../../contracts/camp-message-send-v23.md) 拥有。
 

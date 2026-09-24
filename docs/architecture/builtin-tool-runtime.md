@@ -3,7 +3,7 @@ document_type: architecture
 architecture: builtin-tool-runtime
 authority: builtin-tool-component-boundaries
 status: accepted
-last_updated: 2026-09-20
+last_updated: 2026-09-24
 ---
 
 # Built-in Tool Runtime Architecture
@@ -11,7 +11,7 @@ last_updated: 2026-09-20
 本文件说明 Rovai built-in operations 的长期组件结构。当前字段与版本以
 [Built-in Tool Transport v31](../contracts/builtin-tool-transport-v31.md)、
 [Built-in Tool Agent Output Projection v1](../contracts/builtin-tool-agent-output-projection-v1.md)、
-[Camp History v8](../contracts/camp-history-v8.md)、
+[Camp History v9](../contracts/camp-history-v9.md)、
 [Durable Task v4](../contracts/durable-task-v4.md) 和
 [Camp Message Send v22](../contracts/camp-message-send-v22.md)、
 [Current User Attention v7](../contracts/current-user-attention-v7.md)与
@@ -307,7 +307,8 @@ aggregate。重放不重新读源，身份漂移只清理本 operation 尚未拥
 Run/epoch，再把所有存续公共 Camp 作为可读范围；目标 Camp membership/profile 不参与授权。`camp.read` 直接解析目标
 Camp 并使用调用时 sequence boundary；ContextManifest history catalog 不限制它。`camp.list`、跨 Camp
 `camp.search` 和 `history.search` 继续使用冻结 global public boundary 保持 discovery 时序，并为旧 Manifest
-漏掉的 Camp 动态补足 catalog。任何 message ID 都不能绕过 recall、withdrawal、recipient suppression 或 quote 可见性。
+漏掉的 Camp 动态补足 catalog。显式 read/search 可在各自发布边界内看到 claim 前原文；任何 message ID 都不能绕过
+Camp 存续、publication、tombstone 或撤回后的正文擦除，quote source 仍按其独立可见性重验。
 
 ### 新 Session
 

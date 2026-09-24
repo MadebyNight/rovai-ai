@@ -1,7 +1,7 @@
 ---
 document_type: current-decision-navigation
 authority: current-authority-and-rationale-routing
-last_updated: 2026-09-22
+last_updated: 2026-09-24
 ---
 
 # 当前规范与决定理由导航
@@ -23,9 +23,10 @@ last_updated: 2026-09-22
   [V1.60-D11](../versions/v1.60/decisions.md#v1-60-d11)。默认路由在 Agent 自动上下文中显式呈现冻结接收者、
   同时保持用户原文与路由权威分离的理由：[V1.61-D03](../versions/v1.61/decisions.md#v1-61-d03)。
 - 撤回与 Desktop-local Composer：[Camp Composer Draft v15](../contracts/camp-composer-draft-v15.md)、
-  [Camp History v8](../contracts/camp-history-v8.md)；理由：[V1.60-D03](../versions/v1.60/decisions.md#v1-60-d03)、
+  [Camp History v9](../contracts/camp-history-v9.md)；理由：[V1.60-D03](../versions/v1.60/decisions.md#v1-60-d03)、
   [V1.60-D08](../versions/v1.60/decisions.md#v1-60-d08)、
-  [V1.60-D10](../versions/v1.60/decisions.md#v1-60-d10)。
+  [V1.60-D10](../versions/v1.60/decisions.md#v1-60-d10)、
+  [V1.67-D01](../versions/v1.67/decisions.md#v1-67-d01)。
 - 多输入 Context 与完整运输：[ContextManifest v27](../contracts/context-manifest-evidence-v27.md)、
   [Profile 8](../contracts/context-delivery-profile-v8.md)、[Run Facts v5](../contracts/run-facts-v5.md)、
   [Built-in Transport v31](../contracts/builtin-tool-transport-v31.md)；理由：
@@ -90,7 +91,7 @@ last_updated: 2026-09-22
 
 ## Collaboration、Task 与 Message Delivery
 
-- 当前规范：[协作与消息基础不变量](../architecture/foundational-invariants.md#collaboration-admission)、[动态 Camp 队员关系](../architecture/dynamic-camp-membership.md)、[Public Camp Message/Delivery](../architecture/public-a2a-message-delivery.md)、[Durable Task v4](../contracts/durable-task-v4.md)、[Camp Message Send v23](../contracts/camp-message-send-v23.md)、[Message Delivery v10](../contracts/message-delivery-v10.md)和[Camp History v8](../contracts/camp-history-v8.md)。Task 正文收敛理由见 [V1.63-D01](../versions/v1.63/decisions.md#v1-63-d01)，协议 clean break 见 [V1.63-D02](../versions/v1.63/decisions.md#v1-63-d02)。Gather 只保留[历史解释](../architecture/durable-gather-barrier.md)。
+- 当前规范：[协作与消息基础不变量](../architecture/foundational-invariants.md#collaboration-admission)、[动态 Camp 队员关系](../architecture/dynamic-camp-membership.md)、[Public Camp Message/Delivery](../architecture/public-a2a-message-delivery.md)、[Durable Task v4](../contracts/durable-task-v4.md)、[Camp Message Send v23](../contracts/camp-message-send-v23.md)、[Message Delivery v10](../contracts/message-delivery-v10.md)和[Camp History v9](../contracts/camp-history-v9.md)。Task 正文收敛理由见 [V1.63-D01](../versions/v1.63/decisions.md#v1-63-d01)，协议 clean break 见 [V1.63-D02](../versions/v1.63/decisions.md#v1-63-d02)，主动查询与撤回边界见 [V1.67-D01](../versions/v1.67/decisions.md#v1-67-d01)。Gather 只保留[历史解释](../architecture/durable-gather-barrier.md)。
 - 理由来源：[v0.15](../versions/v0.15/decisions.md)、[v0.45](../versions/v0.45/decisions.md)、[v0.47](../versions/v0.47/decisions.md)、[v0.54](../versions/v0.54/decisions.md)、[v0.59](../versions/v0.59/decisions.md)、[v0.62](../versions/v0.62/decisions.md)、[v0.67](../versions/v0.67/decisions.md)、[v0.89](../versions/v0.89/decisions.md)、[v0.90](../versions/v0.90/decisions.md)、[v1.06](../versions/v1.06/decisions.md)、[v1.07](../versions/v1.07/decisions.md)、[v1.14](../versions/v1.14/decisions.md)、[V1.19-D02](../versions/v1.19/decisions.md#v1-19-d02)、[V1.29-D01](../versions/v1.29/decisions.md#v1-29-d01)、[V1.29-D02](../versions/v1.29/decisions.md#v1-29-d02)、[V1.29-D05](../versions/v1.29/decisions.md#v1-29-d05)、[V1.29-D06](../versions/v1.29/decisions.md#v1-29-d06)及[V1.37-D03](../versions/v1.37/decisions.md#v1-37-d03)。
 
 ## Mission
