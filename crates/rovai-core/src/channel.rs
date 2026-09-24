@@ -14824,7 +14824,7 @@ mod tests {
     // dependents; a blank-schema fixture cannot prove that FK cascades kept them.
     #[test]
     fn pending_picker_upgrade_keeps_history_rolls_back_failure_and_reuses_the_old_card() {
-        let mut database = seeded_runtime_database_owned();
+        let mut database = crate::test_support::seeded_runtime_database_v170_owned();
         let service = ChannelService::default();
         connect_account(&service, &mut database);
         publish_bot(&service, &mut database, "agent_1", "cli_app_1");
@@ -14889,7 +14889,10 @@ mod tests {
                         && !(table == "agent_run"
                             && matches!(
                                 column.as_str(),
-                                "camp_id" | "anchor_message_id" | "current_public_tail_sequence"
+                                "camp_id"
+                                    | "anchor_message_id"
+                                    | "current_public_tail_sequence"
+                                    | "task_version_at_admission"
                             ))
                         && !(table == "channel_delivery" && column == "channel_binding_id")
                 })
