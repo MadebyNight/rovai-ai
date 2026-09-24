@@ -1590,10 +1590,15 @@ fn normalize_claude_runtime_events(
                         .and_then(Value::as_bool)
                         == Some(true);
                 let reliably_non_error = claude_tool_result_is_reliably_non_error(event, block);
-                let output = tool_name
-                    .as_deref()
-                    .filter(|name| name.eq_ignore_ascii_case("bash"))
-                    .and_then(|_| public_claude_bash_output(event, block));
+                let output = tool_name.as_deref().and_then(|name| {
+                    if name.eq_ignore_ascii_case("bash") {
+                        public_claude_bash_output(event, block)
+                    } else if public_claude_text_result_tool(name) {
+                        public_claude_tool_result_text(block.get("content"))
+                    } else {
+                        None
+                    }
+                });
                 let input = state.tool_inputs.get(&tool_use_id).cloned();
                 let query = state.tool_queries.get(&tool_use_id).cloned();
                 let kind = tool_name.as_deref().map(claude_tool_kind).unwrap_or("tool");
@@ -1861,6 +1866,51 @@ fn public_claude_bash_output(event: &Value, tool_result: &Value) -> Option<Strin
         output.push(text);
     }
     (!output.is_empty()).then(|| output.join("\n"))
+}
+
+fn public_claude_text_result_tool(name: &str) -> bool {
+    // Keep this list exact: file-reading and file-editing results can contain
+    // workspace content, while unknown future tools have no reviewed boundary.
+    name.starts_with("mcp__")
+        || matches!(
+            name,
+            "Agent"
+                | "Artifact"
+                | "AskUserQuestion"
+                | "CronCreate"
+                | "CronDelete"
+                | "CronList"
+                | "EndConversation"
+                | "EnterPlanMode"
+                | "EnterWorktree"
+                | "ExitPlanMode"
+                | "ExitWorktree"
+                | "ListAgents"
+                | "ListMcpResourcesTool"
+                | "Monitor"
+                | "PowerShell"
+                | "PushNotification"
+                | "RemoteTrigger"
+                | "ReportFindings"
+                | "ScheduleWakeup"
+                | "SendFeedback"
+                | "SendMessage"
+                | "SendUserFile"
+                | "ShareOnboardingGuide"
+                | "Skill"
+                | "TaskCreate"
+                | "TaskGet"
+                | "TaskList"
+                | "TaskOutput"
+                | "TaskStop"
+                | "TaskUpdate"
+                | "TodoWrite"
+                | "ToolSearch"
+                | "WaitForMcpServers"
+                | "WebFetch"
+                | "WebSearch"
+                | "Workflow"
+        )
 }
 
 fn public_claude_tool_result_text(value: Option<&Value>) -> Option<String> {
@@ -3337,6 +3387,211 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn mcp_text_result_is_public_without_publishing_other_content_or_metadata() {
+        let session_id = "0bdd2166-d420-40c6-94be-70b93eb290c5";
+        let tool_name = "mcp__exa__web_fetch_exa";
+        let mut state = ClaudeCodeStreamState::default();
+        let started = normalize_claude_runtime_events(
+            &json!({
+                "type": "assistant",
+                "session_id": session_id,
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "toolu_exa_1",
+                    "name": tool_name,
+                    "input": {"url": "PRIVATE_MCP_INPUT"}
+                }]}
+            }),
+            session_id,
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(started[0].payload["status"], "in_progress");
+        assert!(started[0].payload["input"].is_null());
+
+        let result = json!({
+            "type": "user",
+            "session_id": session_id,
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_exa_1",
+                "content": [
+                    {"type": "text", "text": "MCP_PUBLIC_MARKER"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2UtYnl0ZXM="}},
+                    {"type": "resource", "resource": {"text": "PRIVATE_RESOURCE"}},
+                    {"type": "text", "text": "第二段"}
+                ]
+            }]},
+            "tool_use_result": {"content": "PRIVATE_PROVIDER_RESULT"}
+        });
+        let completed = normalize_claude_runtime_events(&result, session_id, &mut state).unwrap();
+        assert_eq!(completed.len(), 2);
+        assert_eq!(
+            completed[0].event_type,
+            rovai_core::agent_run_image::IMAGE_EVENT
+        );
+        let public = &completed[1].payload;
+        assert_eq!(completed[1].event_type, "runtime.action");
+        assert_eq!(public["toolName"], tool_name);
+        assert_eq!(public["status"], "completed");
+        assert_eq!(public["output"], "MCP_PUBLIC_MARKER\n第二段");
+        for private in [
+            "PRIVATE_MCP_INPUT",
+            "PRIVATE_RESOURCE",
+            "PRIVATE_PROVIDER_RESULT",
+            "aW1hZ2UtYnl0ZXM=",
+        ] {
+            assert!(!public.to_string().contains(private));
+        }
+        assert!(
+            normalize_claude_runtime_events(&result, session_id, &mut state)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn mcp_skill_and_reviewed_native_text_results_are_public_without_file_content() {
+        let session_id = "0bdd2166-d420-40c6-94be-70b93eb290c5";
+        for (name, failed, content, expected) in [
+            (
+                "mcp__exa__web_fetch_exa",
+                false,
+                json!("MCP_STRING_MARKER"),
+                Some("MCP_STRING_MARKER"),
+            ),
+            (
+                "mcp__exa__web_fetch_exa",
+                true,
+                json!([{"type": "text", "text": "MCP_ERROR_MARKER"}]),
+                Some("MCP_ERROR_MARKER"),
+            ),
+            (
+                "mcp__exa__web_fetch_exa",
+                false,
+                json!([{"type": "resource", "text": "PRIVATE_RESOURCE"}]),
+                None,
+            ),
+            (
+                "Skill",
+                false,
+                json!("SKILL_STRING_MARKER"),
+                Some("SKILL_STRING_MARKER"),
+            ),
+            (
+                "Skill",
+                true,
+                json!([
+                    {"type": "text", "text": "SKILL_ERROR_MARKER"},
+                    {"type": "resource", "text": "PRIVATE_SKILL_RESOURCE"}
+                ]),
+                Some("SKILL_ERROR_MARKER"),
+            ),
+            (
+                "Skill",
+                false,
+                json!([{"type": "resource", "text": "PRIVATE_SKILL_RESOURCE"}]),
+                None,
+            ),
+            (
+                "Agent",
+                false,
+                json!("AGENT_PUBLIC_MARKER"),
+                Some("AGENT_PUBLIC_MARKER"),
+            ),
+            (
+                "TaskStop",
+                true,
+                json!([{"type": "text", "text": "TASK_STOP_ERROR_MARKER"}]),
+                Some("TASK_STOP_ERROR_MARKER"),
+            ),
+            (
+                "TaskOutput",
+                false,
+                json!("TASK_OUTPUT_MARKER"),
+                Some("TASK_OUTPUT_MARKER"),
+            ),
+            (
+                "TaskList",
+                false,
+                json!("TASK_LIST_MARKER"),
+                Some("TASK_LIST_MARKER"),
+            ),
+            (
+                "WebSearch",
+                false,
+                json!("WEB_SEARCH_MARKER"),
+                Some("WEB_SEARCH_MARKER"),
+            ),
+            (
+                "ToolSearch",
+                false,
+                json!("TOOL_SEARCH_MARKER"),
+                Some("TOOL_SEARCH_MARKER"),
+            ),
+            ("Read", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Grep", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Glob", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Edit", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Write", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            (
+                "NotebookEdit",
+                false,
+                json!("PRIVATE_NATIVE_FILE_CONTENT"),
+                None,
+            ),
+            ("LSP", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            (
+                "ReadMcpResourceTool",
+                false,
+                json!("PRIVATE_NATIVE_FILE_CONTENT"),
+                None,
+            ),
+            (
+                "FutureClaudeTool",
+                false,
+                json!("PRIVATE_NATIVE_FILE_CONTENT"),
+                None,
+            ),
+        ] {
+            let mut state = ClaudeCodeStreamState::default();
+            normalize_claude_runtime_events(
+                &json!({"type": "assistant", "session_id": session_id, "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_1", "name": name,
+                    "input": {"file_path": "/repo/file"}
+                }]}}),
+                session_id,
+                &mut state,
+            )
+            .unwrap();
+            let completed = normalize_claude_runtime_events(
+                &json!({"type": "user", "session_id": session_id, "message": {"content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_1", "is_error": failed, "content": content
+                }]}, "tool_use_result": {"content": "PRIVATE_PROVIDER_RESULT"}}),
+                session_id,
+                &mut state,
+            )
+            .unwrap();
+            assert_eq!(
+                completed[0].payload["status"],
+                if failed { "failed" } else { "completed" }
+            );
+            assert_eq!(
+                completed[0].payload["output"].as_str(),
+                expected,
+                "tool: {name}"
+            );
+            let public = completed[0].payload.to_string();
+            assert!(!public.contains("PRIVATE_PROVIDER_RESULT"), "tool: {name}");
+            assert!(!public.contains("PRIVATE_SKILL_RESOURCE"), "tool: {name}");
+            assert!(
+                !public.contains("PRIVATE_NATIVE_FILE_CONTENT"),
+                "tool: {name}"
+            );
+        }
     }
 
     // Owner: stdout framing, which is separate from the structured image parser above.

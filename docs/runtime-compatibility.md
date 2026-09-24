@@ -1,7 +1,7 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-17
+last_updated: 2026-09-24
 ---
 
 # Agent Runtime 兼容性清单
@@ -646,9 +646,16 @@ Health/Dispatch 与持久化回归测试拥有当前产品行为；当前规范�
 
 Claude Code 保持 `--output-format stream-json --include-partial-messages`，但现在同时消费 partial
 `tool_use`、完整 assistant tool block 与对应 `tool_result`。生命周期直接使用 Claude 原生 tool-use ID；
-Bash、Read、Edit、Write 等只映射到既有 Canonical Activity kind，Bash result 仅公开标准 Content Text
-或明确的 `stdout`/`stderr`；Bash `tool_use.input.command` 是唯一公开 input 白名单，因此没有输出的
-Bash 也保留可展开的命令详情，其它工具输入、文件内容和 provider metadata 仍不公开。最终 `result`、
+Bash、Read、Edit、Write 等只映射到既有 Canonical Activity kind。Bash result 优先公开明确的
+`stdout`/`stderr`，缺失时使用标准 Content Text；MCP (`mcp__*`) 和原生 `Skill` 的 result
+仅公开 `tool_result.content` 字符串或 typed text block，不公开非文本 block 与 provider metadata。
+Bash `tool_use.input.command` 是唯一公开 input 白名单，因此没有输出的 Bash 也保留可展开的
+命令详情；其它工具输入与 `Read` 文件内容仍不公开。2026-09-24 的增量修复把精确名称的
+Claude 原生非文件工具（含 `Agent`、`TaskStop`、`TaskOutput`、Task 管理、Web 与控制工具）
+加入相同的 `tool_result.content` 文本准入。`Read`、`Grep`、`Glob`、`LSP`、`ReadMcpResourceTool`
+及文件修改工具继续不公开结果正文；未知新工具默认不准入。该增量目前由确定性 adapter 测试与
+隔离成品 App 的模拟 Evidence UI 夹具验证，不代表真实 Claude 原生调用已复测。已准入结果受 Core 的 7,680 UTF-8
+字节持久化上限约束，未持久化的历史结果不能由新版补回。最终 `result`、
 Usage 与 Session 校验路径没有改变。确定性 stream fixture
 已证明 partial/full 去重、start/terminal 关联、command marker 可见及私有字段不泄露。真实 smoke 还会
 强制原生 `Bash` 执行固定 `printf`，并要求 command marker 同时从对应 started
