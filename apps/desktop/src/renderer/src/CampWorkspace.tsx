@@ -10017,6 +10017,7 @@ function RunExecutionContent({
               campId={campId}
               step={step as ToolCallStep & { fileOperation: NonNullable<ToolCallStep['fileOperation']> }}
               runStatus={run.status}
+              completeEvidence={completeEvidence.byFileOperationToolId.get(step.id)}
               onFileOpenError={onFileOpenError}
             />
           )
