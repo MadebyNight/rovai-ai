@@ -7,6 +7,8 @@ last_updated: 2026-09-24
 
 Skills 设置与工具箱是两个独立入口，沿用 [DESIGN.md](../../../DESIGN.md) 的 Porcelain Day / Steel Night token、全宽双栏布局和既有设置导航。来源、权限和模型投递以 [Skills Rebuild v1](../../contracts/skills-rebuild-v1.md) 为权威；本页只规定用户可见交互。
 
+两页中间分隔线与 MCP 共用拖动行为：左栏最小 240px、最大 560px，并为右栏保留 390px；宽度偏好按页面分别保存。支持方向键（Shift 加大步长）、Home/End 到边界、双击或 Enter 复位、Escape 取消当前拖动。内容区域不足 620px 时切为列表/详情单栏。刷新、查看说明沿用交互稿的 12px、500 字重文字与 15px 线性图标。
+
 ## Skills：只读原生来源
 
 顶部选择 Runtime；列表只展示该 Runtime 在执行 Host 的用户级原生 Skill，不混入旧 Rovai Library 导入行或当前项目来源。左栏搜索名称、简介和入口路径，右栏展示说明、可复制入口路径和只读正文。文件栏提供可搜索的树形下拉，在 `SKILL.md` 与同目录普通文件间切换；Markdown 可在阅读和源码间切换，二进制或过大文件显示明确状态。宽屏内容使用可用宽度。刷新只更新候选；切换 Runtime、候选或刷新时，迟到的列表/正文响应不得覆盖当前选择。

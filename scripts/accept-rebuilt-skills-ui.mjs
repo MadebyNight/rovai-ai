@@ -29,6 +29,11 @@ await mkdir(join(nativeSkill, 'references'), { recursive: true })
 await mkdir(outputDirectory, { recursive: true, mode: 0o700 })
 await writeFile(join(nativeSkill, 'SKILL.md'), '---\nname: acceptance-demo\ndescription: Isolated Skills acceptance fixture\n---\n\n# Acceptance demo\n\nA local read-only discovery fixture.\n')
 await writeFile(join(nativeSkill, 'references', 'example.md'), '# Reference file\n\nThe file switcher opened this document.\n')
+for (const [directory, name] of [['.agents', 'shared-user-skill'], ['.qoder', 'qoder-user-skill']]) {
+  const path = join(fixtureHome, directory, 'skills', name)
+  await mkdir(path, { recursive: true })
+  await writeFile(join(path, 'SKILL.md'), `---\nname: ${name}\ndescription: Isolated shared discovery fixture\n---\n\n# ${name}\n`)
+}
 seedCompletedOnboardingForAcceptance(userDataDirectory)
 
 const port = await freePort()
@@ -41,6 +46,7 @@ const app = spawn(join(appPath, 'Contents', 'MacOS', 'Rovai AI'), [
     ...process.env,
     HOME: fixtureHome,
     CODEX_HOME: join(fixtureHome, '.codex'),
+    QODER_CONFIG_DIR: join(fixtureHome, '.qoder'),
     ROVAI_ALLOW_ISOLATED_INSTANCE: '1'
   }
 })
@@ -78,13 +84,16 @@ try {
     return { rows, body: panel.querySelector('.rebuilt-skills-content')?.textContent ?? '',
       error: panel.querySelector('[role="alert"]')?.textContent ?? null,
       narrow: getComputedStyle(panel.querySelector('.rebuilt-skills-back')).display !== 'none',
+      available: panel.querySelector('.rebuilt-skills-columns').getBoundingClientRect().width,
       overflow: document.documentElement.scrollWidth > window.innerWidth + 1 }
   })()`)
-  if (skills.rows.join(',') !== 'acceptance-demo' ||
+  if (skills.rows.join(',') !== 'acceptance-demo,shared-user-skill' ||
       !skills.body.includes('A local read-only discovery fixture.') || skills.error || skills.overflow ||
-      skills.narrow !== (zoom === 2)) {
+      skills.narrow !== (skills.available < 620)) {
     throw new Error(`Native Skills view did not match its isolated source: ${JSON.stringify(skills)}`)
   }
+  const skillsSplitter = await exerciseSplitter(cdp, nativePage, 'rovai.native-skills-list-width.v1')
+  const refreshAction = await checkAction(cdp, nativePage, '刷新')
   if (skills.narrow) await selectFirstRow(cdp, nativePage)
   await waitFor(cdp, `!document.querySelector('.page-zoom-indicator')`, 5_000)
   await evaluate(cdp, `(${nativePage}).querySelector('button.skill-file-current')?.click()`)
@@ -109,6 +118,19 @@ try {
   await waitFor(cdp, `(${nativePage}).querySelector('.rebuilt-skills-content')?.textContent?.includes('A local read-only discovery fixture.')`, 5_000)
   await waitFor(cdp, `!document.querySelector('.page-zoom-indicator')`, 5_000)
   await capture(cdp, join(outputDirectory, 'skills.png'))
+  const runtimeTrigger = await evaluate(cdp, `(() => {
+    const rect = (${nativePage}).querySelector('.rebuilt-runtime-trigger').getBoundingClientRect()
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...runtimeTrigger, button: 'left', buttons: 1, clickCount: 1 })
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...runtimeTrigger, button: 'left', buttons: 0, clickCount: 1 })
+  await waitFor(cdp, `Boolean([...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.querySelector('strong')?.textContent.trim() === 'Qoder'))`, 5_000)
+  await evaluate(cdp, `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.querySelector('strong')?.textContent.trim() === 'Qoder').click()`)
+  await waitFor(cdp, `(${nativePage}).querySelector('.rebuilt-skills-list')?.textContent.includes('qoder-user-skill')`, 5_000)
+  const qoderSources = await evaluate(cdp, `[...(${nativePage}).querySelectorAll('.rebuilt-skill-row strong')].map((item) => item.textContent.trim()).sort()`)
+  if (qoderSources.join(',') !== 'qoder-user-skill,shared-user-skill') throw new Error(`Qoder shared user source is missing: ${JSON.stringify(qoderSources)}`)
+  if (skills.narrow) await evaluate(cdp, `(${nativePage}).querySelector('.rebuilt-skills-back').click()`)
+  await capture(cdp, join(outputDirectory, 'qoder-skills.png'))
 
   await openSection(cdp, '工具箱')
   await waitFor(cdp, `((${toolboxPage})?.querySelectorAll('.rebuilt-skill-row').length ?? 0) === 5`, 30_000)
@@ -119,15 +141,19 @@ try {
       defaults: views.map((entry) => [entry.name, entry.memberIds.length]),
       rows: panel.querySelectorAll('.rebuilt-skill-row').length,
       narrow: getComputedStyle(panel.querySelector('.rebuilt-skills-back')).display !== 'none',
+      available: panel.querySelector('.rebuilt-skills-columns').getBoundingClientRect().width,
       overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
       error: document.querySelector('.error-banner')?.textContent ?? null }
   })()`)
   const expected = ['campfire', 'grill-duo', 'grill-duo-with-docs', 'member-studio', 'review-duo']
   if (toolbox.names.join(',') !== expected.join(',') || toolbox.rows !== 5 || toolbox.overflow || toolbox.error ||
-      toolbox.narrow !== (zoom === 2) ||
+      toolbox.narrow !== (toolbox.available < 620) ||
       toolbox.defaults.some(([name, count]) => name === 'member-studio' ? count !== 4 : count !== 0)) {
     throw new Error(`Toolbox defaults or layout changed: ${JSON.stringify(toolbox)}`)
   }
+  const toolboxSplitter = await exerciseSplitter(cdp, toolboxPage, 'rovai.toolbox-list-width.v1')
+  if (Math.abs(toolbox.available - skills.available) > 1) throw new Error('Toolbox has extra outer padding compared with Skills')
+  const descriptionAction = await checkAction(cdp, toolboxPage, '查看说明')
   if (toolbox.narrow) await selectFirstRow(cdp, toolboxPage)
   await waitFor(cdp, `!document.querySelector('.page-zoom-indicator')`, 5_000)
   await capture(cdp, join(outputDirectory, 'toolbox.png'))
@@ -158,22 +184,120 @@ try {
   await waitFor(cdp, `!(${toolboxPage}).querySelector('.rebuilt-skills-status')`, 5_000)
   await evaluate(cdp, `(${toolboxPage}).querySelector('.rebuilt-toolbox-member input').click()`)
   await waitFor(cdp, `(async () => (await window.rovai.request('toolbox.list')).find((item) => item.name === 'campfire')?.memberIds.length === 0)()`, 8_000)
+  await openSection(cdp, 'Skills')
+  await waitFor(cdp, `Boolean((${nativePage})?.querySelector('.rebuilt-skills-columns'))`, 5_000)
+  if (!skillsSplitter.compact) {
+    await waitFor(cdp, `Math.abs((${nativePage}).querySelector('.rebuilt-skills-list').getBoundingClientRect().width - ${skillsSplitter.savedWidth}) < 1`, 5_000)
+  }
   await writeFile(join(outputDirectory, 'report.json'), `${JSON.stringify({
     schemaVersion: 1,
     theme,
     zoom,
     userDataDirectory,
     nativeSkillNames: skills.rows,
+    qoderSkillNames: qoderSources,
+    actions: { refresh: refreshAction, description: descriptionAction },
+    splitters: { skills: skillsSplitter, toolbox: toolboxSplitter },
     toolboxDefaults: toolbox.defaults,
     toolboxToggleRestored: true,
-    screenshots: ['skills-file-menu.png', 'skills.png', 'toolbox.png', 'toolbox-description.png']
+    screenshots: ['skills-file-menu.png', 'skills.png', 'qoder-skills.png', 'toolbox.png', 'toolbox-description.png']
   }, null, 2)}\n`, { mode: 0o600 })
   process.stdout.write(`${join(outputDirectory, 'report.json')}\n`)
+} catch (error) {
+  if (cdp) await capture(cdp, join(outputDirectory, 'failure.png')).catch(() => {})
+  throw error
 } finally {
   cdp?.close()
   app.kill('SIGTERM')
   await Promise.race([new Promise((done) => app.once('close', done)), sleep(2_000)])
   if (app.exitCode === null) app.kill('SIGKILL')
+}
+
+async function checkAction(cdp, page, text) {
+  const result = await evaluate(cdp, `(() => {
+    const button = [...(${page}).querySelectorAll('.rebuilt-skill-action')].find((item) => item.textContent.trim() === ${JSON.stringify(text)})
+    const icon = button?.querySelector('svg[aria-hidden="true"]')
+    return { fontSize: button && getComputedStyle(button).fontSize, fontWeight: button && getComputedStyle(button).fontWeight,
+      iconWidth: icon && getComputedStyle(icon).width, iconHeight: icon && getComputedStyle(icon).height }
+  })()`)
+  if (result.fontSize !== '12px' || result.fontWeight !== '500' || result.iconWidth !== '15px' || result.iconHeight !== '15px') {
+    throw new Error(`${text} differs from the prototype: ${JSON.stringify(result)}`)
+  }
+  return result
+}
+
+async function exerciseSplitter(cdp, page, storageKey) {
+  const state = () => evaluate(cdp, `(() => {
+    const root = (${page}).querySelector('.rebuilt-skills-columns')
+    const divider = root.querySelector('[role="separator"]')
+    const bounds = root.getBoundingClientRect(), handle = divider.getBoundingClientRect()
+    return { compact: root.dataset.compact === 'true', left: bounds.left, available: bounds.width,
+      x: handle.left + handle.width / 2, y: handle.top + handle.height / 2,
+      width: root.querySelector('.rebuilt-skills-list').getBoundingClientRect().width,
+      detailWidth: root.querySelector('.rebuilt-skills-detail').getBoundingClientRect().width,
+      separatorHidden: getComputedStyle(divider.parentElement).display === 'none',
+      hitClass: document.elementFromPoint(handle.left + handle.width / 2, handle.top + handle.height / 2)?.className,
+      resizing: root.hasAttribute('data-resizing'), ariaWidth: Number(divider.getAttribute('aria-valuenow')),
+      savedWidth: Number(localStorage.getItem(${JSON.stringify(storageKey)})) }
+  })()`)
+  const initial = await state()
+  if (initial.compact) {
+    if (!initial.separatorHidden) throw new Error('Compact view still exposes a splitter')
+    return { compact: true }
+  }
+  const max = Math.max(240, Math.min(560, Math.floor(initial.available - 391)))
+  const expectWidth = async (expected) => {
+    await waitFor(cdp, `Math.abs((${page}).querySelector('.rebuilt-skills-list').getBoundingClientRect().width - ${expected}) <= 1`, 5_000)
+    const result = await state()
+    if (Math.abs(result.width - expected) > 1 || result.ariaWidth !== Math.round(result.width) || result.detailWidth < 389) {
+      throw new Error(`Splitter layout/ARIA is outside MCP bounds: ${JSON.stringify({ expected, result })}`)
+    }
+    return result
+  }
+  const mouse = (type, x, y, pressed = false, clickCount = 1) => cdp.send('Input.dispatchMouseEvent', {
+    type, x, y, button: type === 'mouseMoved' && !pressed ? 'none' : 'left', buttons: pressed ? 1 : 0,
+    ...(type === 'mouseMoved' ? {} : { clickCount })
+  })
+  const key = async (value, shift = false) => {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: value, modifiers: shift ? 8 : 0 })
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: value })
+  }
+  for (const [x, expected] of [[initial.left + 10, 240], [initial.left + initial.available - 10, max]]) {
+    const start = await state()
+    await mouse('mouseMoved', start.x, start.y)
+    await mouse('mousePressed', start.x, start.y, true)
+    await mouse('mouseMoved', x, start.y, true)
+    if (!(await state()).resizing) throw new Error(`Pointer drag did not start: ${JSON.stringify({ start, after: await state() })}`)
+    await mouse('mouseReleased', x, start.y)
+    await expectWidth(expected)
+  }
+  await key('Home')
+  await expectWidth(240)
+  await key('ArrowRight')
+  await expectWidth(Math.min(max, 248))
+  await key('ArrowRight', true)
+  await expectWidth(Math.min(max, 272))
+  await key('End')
+  await expectWidth(max)
+  const cancelStart = await state()
+  await mouse('mousePressed', cancelStart.x, cancelStart.y, true)
+  await mouse('mouseMoved', initial.left + 10, cancelStart.y, true)
+  await key('Escape')
+  await mouse('mouseReleased', initial.left + 10, cancelStart.y)
+  await expectWidth(max)
+  const resetWidth = Math.min(max, width / zoom >= 2300 ? 400 : width / zoom >= 1600 ? 360 : 320)
+  const resetStart = await state()
+  await mouse('mousePressed', resetStart.x, resetStart.y, true, 2)
+  await mouse('mouseReleased', resetStart.x, resetStart.y, false, 2)
+  await expectWidth(resetWidth)
+  await key('ArrowRight')
+  await key('Enter')
+  await expectWidth(resetWidth)
+  await key('ArrowRight')
+  const saved = await expectWidth(Math.min(max, resetWidth + 8))
+  if (saved.resizing || saved.savedWidth !== saved.width) throw new Error('Splitter did not persist the finished width')
+  return { compact: false, min: 240, max, available: initial.available, savedWidth: saved.width,
+    pointer: true, keyboard: true, cancel: true, reset: true }
 }
 
 async function selectFirstRow(cdp, page) {

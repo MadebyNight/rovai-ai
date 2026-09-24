@@ -446,9 +446,13 @@ fn user_roots(
             }
         }
         AdapterKind::KiroCli => paths.push(home.join(".kiro/skills")),
-        AdapterKind::QoderCli => paths.push(
-            configured_root("QODER_CONFIG_DIR", home.join(".qoder"), configuration).join("skills"),
-        ),
+        AdapterKind::QoderCli => {
+            paths.push(
+                configured_root("QODER_CONFIG_DIR", home.join(".qoder"), configuration)
+                    .join("skills"),
+            );
+            paths.push(agents);
+        }
         AdapterKind::CodebuddyCli => paths.push(home.join(".codebuddy/skills")),
         AdapterKind::QwenCode => paths.push(
             configured_root("QWEN_CODE_HOME", home.join(".qwen"), configuration).join("skills"),
@@ -736,7 +740,13 @@ mod tests {
         let home = fixture.join("home");
         let first = fixture.join("first");
         let second = fixture.join("second");
-        for (root, name) in [(&first, "one"), (&second, "two")] {
+        for (root, name) in [
+            (first.clone(), "one"),
+            (second.clone(), "two"),
+            (home.join(".agents"), "shared"),
+            (home.join(".codex"), "default"),
+            (home.join(".qoder"), "default"),
+        ] {
             let directory = root.join("skills").join(name);
             fs::create_dir_all(&directory).unwrap();
             fs::write(
@@ -745,55 +755,45 @@ mod tests {
             )
             .unwrap();
         }
-        fs::create_dir_all(&home).unwrap();
-        let configuration = |root: &Path| RuntimeStartupConfiguration {
-            program_path: None,
-            environment: vec![
-                RuntimeEnvironmentVariable {
-                    name: if cfg!(windows) { "USERPROFILE" } else { "HOME" }.to_owned(),
-                    value: home.to_string_lossy().into_owned(),
-                },
-                RuntimeEnvironmentVariable {
-                    name: "CODEX_HOME".to_owned(),
-                    value: root.to_string_lossy().into_owned(),
-                },
-            ],
-        };
-        let discovery = NativeSkillDiscovery::default();
-        let first_scan = discovery
-            .discover(
-                AdapterKind::CodexCli,
-                None,
-                true,
-                false,
-                &configuration(&first),
-            )
-            .unwrap();
-        let second_scan = discovery
-            .discover(
-                AdapterKind::CodexCli,
-                None,
-                true,
-                false,
-                &configuration(&second),
-            )
-            .unwrap();
-        assert_eq!(
-            first_scan
-                .skills
-                .iter()
-                .map(|skill| skill.name.as_str())
-                .collect::<Vec<_>>(),
-            ["one"]
-        );
-        assert_eq!(
-            second_scan
-                .skills
-                .iter()
-                .map(|skill| skill.name.as_str())
-                .collect::<Vec<_>>(),
-            ["two"]
-        );
+        // The adapter-specific override must not hide the shared user store.
+        // Keep the default and cache-invalidation cases under the same discovery owner.
+        for (adapter, variable) in [
+            (AdapterKind::CodexCli, "CODEX_HOME"),
+            (AdapterKind::QoderCli, "QODER_CONFIG_DIR"),
+        ] {
+            let discovery = NativeSkillDiscovery::default();
+            for (root, expected) in [
+                (None, vec!["default", "shared"]),
+                (Some(&first), vec!["one", "shared"]),
+                (Some(&second), vec!["shared", "two"]),
+            ] {
+                let mut configuration = RuntimeStartupConfiguration {
+                    program_path: None,
+                    environment: vec![RuntimeEnvironmentVariable {
+                        name: if cfg!(windows) { "USERPROFILE" } else { "HOME" }.to_owned(),
+                        value: home.to_string_lossy().into_owned(),
+                    }],
+                };
+                if let Some(root) = root {
+                    configuration.environment.push(RuntimeEnvironmentVariable {
+                        name: variable.to_owned(),
+                        value: root.to_string_lossy().into_owned(),
+                    });
+                }
+                let scan = discovery
+                    .discover(adapter, None, true, false, &configuration)
+                    .unwrap();
+                let mut names = scan
+                    .skills
+                    .iter()
+                    .map(|skill| skill.name.as_str())
+                    .collect::<Vec<_>>();
+                names.sort_unstable();
+                assert_eq!(names, expected, "{adapter:?}, {root:?}");
+                assert!(scan.errors.is_empty());
+                assert!(scan.skills.iter().all(|skill| skill.source_scope == "user"));
+            }
+        }
         fs::remove_dir_all(fixture).unwrap();
     }
 

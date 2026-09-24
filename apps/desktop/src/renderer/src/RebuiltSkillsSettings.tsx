@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { AdapterKind, AgentProfile, NativeSkillScan, NativeSkillView, SkillContentView, StoredCommandResult, ToolboxSkillView } from '@contracts'
 import { useCampClient } from './camp-client'
+import { useCapabilitySplitter } from './useCapabilitySplitter'
 import { MemberAvatar } from './MemberAvatar'
 import { RuntimeGlyph } from './MemberRuntimePicker'
 import { SkillIdentityMark } from './SkillIdentityMark'
@@ -14,6 +15,8 @@ import { readErrorMessage } from './error-message'
 import './rebuilt-skills-settings.css'
 
 export function NativeSkillsSettings(): React.JSX.Element {
+  const id = useId()
+  const { root, compact, separator } = useCapabilitySplitter('rovai.native-skills-list-width.v1', `${id}-list ${id}-detail`)
   const client = useCampClient()
   const [runtime, setRuntime] = useState<AdapterKind>('codex-cli')
   const [scan, setScan] = useState<NativeSkillScan | null>(null)
@@ -84,10 +87,10 @@ export function NativeSkillsSettings(): React.JSX.Element {
           </Menu.RadioGroup>
         </Menu.Content></Menu.Portal>
       </Menu.Root>
-      <button type="button" onClick={() => void load(true)} disabled={loading}>刷新</button>
+      <button type="button" className="rebuilt-skill-action" onClick={() => void load(true)} disabled={loading}><SkillActionIcon name="refresh" />刷新</button>
     </div>
-    <div className="rebuilt-skills-columns">
-      <aside className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}>
+    <div ref={root} className="rebuilt-skills-columns" data-compact={compact}>
+      <aside id={`${id}-list`} className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}>
         <div className="rebuilt-skills-toolbar"><strong>Skills</strong><span>{scan?.skills.length ?? '—'} 项</span></div>
         <label className="rebuilt-skills-search"><span className="sr-only">搜索 Skills</span><input type="search" placeholder="搜索 Skill" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         {error && <div className="rebuilt-skills-error" role="alert">执行端暂不可读：{error}<button type="button" onClick={() => void load(true)}>重试</button></div>}
@@ -97,7 +100,8 @@ export function NativeSkillsSettings(): React.JSX.Element {
         {scan && visible.length === 0 && scan.skills.length > 0 && <p className="rebuilt-skills-empty">没有匹配的 Skill。</p>}
         <div className="rebuilt-skills-list-scroll">{visible.map((skill) => <button type="button" key={skill.id} className={`rebuilt-skill-row ${selectedId === skill.id ? 'is-selected' : ''}`} onClick={() => { if (selectedId !== skill.id) { setSelectedId(skill.id); setFilePath('SKILL.md'); setFiles([]) } setRaw(false); setDetailVisible(true) }}><SkillIdentityMark skillId={skill.id} name={skill.name} /><span><strong>{skill.name}</strong><small>{skill.description}</small></span></button>)}</div>
       </aside>
-      <section className={`rebuilt-skills-detail ${detailVisible ? 'is-detail-visible' : ''}`} aria-label="Skill 预览">
+      {separator}
+      <section id={`${id}-detail`} className={`rebuilt-skills-detail ${detailVisible ? 'is-detail-visible' : ''}`} aria-label="Skill 预览">
         <button type="button" className="rebuilt-skills-back" onClick={() => setDetailVisible(false)}>返回列表</button>
         {selected ? <><header><h2>{selected.name}</h2><p>{selected.description}</p><div className="rebuilt-skill-source"><span title={selected.entryPath}>{selected.entryPath}</span><button type="button" onClick={() => void copyPath(selected)} aria-label="复制 Skill 路径">复制路径</button></div></header><div className="rebuilt-skills-content"><SkillFileNavigation files={files} path={filePath} onSelect={(path) => { setFilePath(path); setRaw(false) }}>
           {/\.(?:md|markdown)$/iu.test(filePath) && <div className="capability-view-modes" role="group" aria-label="Skill 预览方式"><button type="button" aria-pressed={!raw} onClick={() => setRaw(false)}>阅读</button><button type="button" aria-pressed={raw} onClick={() => setRaw(true)}>源码</button></div>}
@@ -108,6 +112,8 @@ export function NativeSkillsSettings(): React.JSX.Element {
 }
 
 export function ToolboxSettings({ agents }: { agents: AgentProfile[] }): React.JSX.Element {
+  const id = useId()
+  const { root, compact, separator } = useCapabilitySplitter('rovai.toolbox-list-width.v1', `${id}-list ${id}-detail`)
   const client = useCampClient()
   const [skills, setSkills] = useState<ToolboxSkillView[] | null>(null)
   const [selectedName, setSelectedName] = useState<string | null>(null)
@@ -186,14 +192,22 @@ export function ToolboxSettings({ agents }: { agents: AgentProfile[] }): React.J
   }
   return <div className="rebuilt-skills-page">
     <header className="rebuilt-skills-header"><div><h1>工具箱</h1><p>为队员配置多人协作常用的 Skills 与工具。</p></div></header>
-    <div className="rebuilt-skills-columns">
-      <aside className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}><div className="rebuilt-skills-toolbar"><strong>协作 Skills</strong><span className="rebuilt-toolbox-help" role="note" aria-label="这些 Skills 可在会话中按需唤起使用。" title="这些 Skills 可在会话中按需唤起使用。">?</span><span>{skills?.length ?? '—'} 项</span></div>
+    <div ref={root} className="rebuilt-skills-columns" data-compact={compact}>
+      <aside id={`${id}-list`} className={`rebuilt-skills-list ${detailVisible ? 'is-detail-visible' : ''}`}><div className="rebuilt-skills-toolbar"><strong>协作 Skills</strong><span className="rebuilt-toolbox-help" role="note" aria-label="这些 Skills 可在会话中按需唤起使用。" title="这些 Skills 可在会话中按需唤起使用。">?</span><span>{skills?.length ?? '—'} 项</span></div>
         {loadingError && <div className="rebuilt-skills-error" role="alert">工具箱暂不可读：{loadingError}<button type="button" onClick={() => void load()}>重试</button></div>}
         {!skills && !loadingError && <p className="rebuilt-skills-empty" role="status">正在读取工具箱…</p>}
         {skills && visibleSkills.length === 0 && <p className="rebuilt-skills-empty">暂无 Skill。</p>}
         <div className="rebuilt-skills-list-scroll">{visibleSkills.map((skill) => <button type="button" key={skill.name} className={`rebuilt-skill-row ${selectedName === skill.name ? 'is-selected' : ''}`} onClick={() => { setSelectedName(skill.name); setError(null); setFailedSave(null); setDetailVisible(true) }}><SkillIdentityMark skillId={skill.name} name={skill.name} /><span><strong>{skill.name}</strong><small>{skill.description ?? '说明暂不可读'}</small></span><em>{skill.memberIds.length ? `已选 ${skill.memberIds.length} 人` : '未分配'}</em></button>)}</div>
       </aside>
-      <section className={`rebuilt-skills-detail rebuilt-toolbox-detail ${detailVisible ? 'is-detail-visible' : ''}`} aria-label="工具箱队员配置"><button type="button" className="rebuilt-skills-back" onClick={() => setDetailVisible(false)}>返回列表</button>{selected ? <><header className="rebuilt-toolbox-heading"><div><h2>{selected.name}</h2><p>{selected.description ?? '说明暂不可读'}</p></div><button type="button" onClick={() => setDescriptionOpen(true)}>查看说明</button></header><div className="rebuilt-skills-toolbar"><strong>提供给队员</strong><span>已选 {selected.memberIds.length} 人</span><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(true)}>全选{memberQuery ? '当前结果' : ''}</button><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(false)}>取消全选{memberQuery ? '当前结果' : ''}</button></div><label className="rebuilt-skills-search"><span className="sr-only">搜索队员</span><input type="search" placeholder="搜索队员姓名或角色" value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} /></label>{busy && <p role="status" className="rebuilt-skills-status">正在保存…</p>}{error && <div className="rebuilt-skills-error" role="alert">保存失败：{error}{failedSave && <button type="button" disabled={busy} onClick={() => void save(failedSave.memberIds, failedSave.skillName, failedSave)}>重试</button>}</div>}{!members.length && <p className="rebuilt-skills-empty">暂无队员。</p>}{members.length > 0 && visibleMembers.length === 0 && <p className="rebuilt-skills-empty">没有匹配的队员。</p>}<div className="rebuilt-toolbox-members">{visibleMembers.map((agent) => <label key={agent.agentId} className="rebuilt-toolbox-member"><MemberAvatar agentId={agent.agentId} displayName={agent.displayName} avatarRef={agent.avatarRef} /><span><strong>{agent.displayName}</strong><small>{agent.teamRole}</small></span><input type="checkbox" checked={selectedMembers.has(agent.agentId)} disabled={busy} onChange={(event) => { const next = new Set(selectedMembers); event.target.checked ? next.add(agent.agentId) : next.delete(agent.agentId); void save([...next]) }} /></label>)}</div><Dialog.Root open={descriptionOpen} onOpenChange={setDescriptionOpen}><Dialog.Portal><Dialog.Overlay className="dialog-overlay app-dialog-overlay" /><Dialog.Content className="dialog-content app-dialog app-dialog-wide rebuilt-description-dialog"><div className="rebuilt-description-header"><div><small>只读说明</small><Dialog.Title>{selected.name}</Dialog.Title></div><Dialog.Close asChild><button type="button" className="icon-button" aria-label="关闭说明">×</button></Dialog.Close></div><Dialog.Description className="sr-only">{selected.description ?? '只读 Skill 说明'}</Dialog.Description><div className="rebuilt-description-body">{descriptionError ? <p role="alert">说明暂不可读：{descriptionError}</p> : descriptionContent === null ? <p role="status">正在读取说明…</p> : <SafeMarkdown mode="document">{skillReadingContent(descriptionContent)}</SafeMarkdown>}</div></Dialog.Content></Dialog.Portal></Dialog.Root></> : <p className="rebuilt-skills-empty">{loadingError ? '工具箱暂不可读，请从列表区重试。' : skills ? '选择一项 Skill 配置队员。' : '正在读取工具箱…'}</p>}</section>
+      {separator}
+      <section id={`${id}-detail`} className={`rebuilt-skills-detail rebuilt-toolbox-detail ${detailVisible ? 'is-detail-visible' : ''}`} aria-label="工具箱队员配置"><button type="button" className="rebuilt-skills-back" onClick={() => setDetailVisible(false)}>返回列表</button>{selected ? <><header className="rebuilt-toolbox-heading"><div><h2>{selected.name}</h2><p>{selected.description ?? '说明暂不可读'}</p></div><button type="button" className="rebuilt-skill-action" onClick={() => setDescriptionOpen(true)}><SkillActionIcon name="file" />查看说明</button></header><div className="rebuilt-skills-toolbar"><strong>提供给队员</strong><span>已选 {selected.memberIds.length} 人</span><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(true)}>全选{memberQuery ? '当前结果' : ''}</button><button type="button" disabled={busy || !visibleMembers.length} onClick={() => bulk(false)}>取消全选{memberQuery ? '当前结果' : ''}</button></div><label className="rebuilt-skills-search"><span className="sr-only">搜索队员</span><input type="search" placeholder="搜索队员姓名或角色" value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} /></label>{busy && <p role="status" className="rebuilt-skills-status">正在保存…</p>}{error && <div className="rebuilt-skills-error" role="alert">保存失败：{error}{failedSave && <button type="button" disabled={busy} onClick={() => void save(failedSave.memberIds, failedSave.skillName, failedSave)}>重试</button>}</div>}{!members.length && <p className="rebuilt-skills-empty">暂无队员。</p>}{members.length > 0 && visibleMembers.length === 0 && <p className="rebuilt-skills-empty">没有匹配的队员。</p>}<div className="rebuilt-toolbox-members">{visibleMembers.map((agent) => <label key={agent.agentId} className="rebuilt-toolbox-member"><MemberAvatar agentId={agent.agentId} displayName={agent.displayName} avatarRef={agent.avatarRef} /><span><strong>{agent.displayName}</strong><small>{agent.teamRole}</small></span><input type="checkbox" checked={selectedMembers.has(agent.agentId)} disabled={busy} onChange={(event) => { const next = new Set(selectedMembers); event.target.checked ? next.add(agent.agentId) : next.delete(agent.agentId); void save([...next]) }} /></label>)}</div><Dialog.Root open={descriptionOpen} onOpenChange={setDescriptionOpen}><Dialog.Portal><Dialog.Overlay className="dialog-overlay app-dialog-overlay" /><Dialog.Content className="dialog-content app-dialog app-dialog-wide rebuilt-description-dialog"><div className="rebuilt-description-header"><div><small>只读说明</small><Dialog.Title>{selected.name}</Dialog.Title></div><Dialog.Close asChild><button type="button" className="icon-button" aria-label="关闭说明">×</button></Dialog.Close></div><Dialog.Description className="sr-only">{selected.description ?? '只读 Skill 说明'}</Dialog.Description><div className="rebuilt-description-body">{descriptionError ? <p role="alert">说明暂不可读：{descriptionError}</p> : descriptionContent === null ? <p role="status">正在读取说明…</p> : <SafeMarkdown mode="document">{skillReadingContent(descriptionContent)}</SafeMarkdown>}</div></Dialog.Content></Dialog.Portal></Dialog.Root></> : <p className="rebuilt-skills-empty">{loadingError ? '工具箱暂不可读，请从列表区重试。' : skills ? '选择一项 Skill 配置队员。' : '正在读取工具箱…'}</p>}</section>
     </div>
   </div>
+}
+
+function SkillActionIcon({ name }: { name: 'refresh' | 'file' }): React.JSX.Element {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">{name === 'refresh'
+    ? <path d="M20 11a8 8 0 1 0-2.5 6M20 4v7h-7" />
+    : <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /></>}
+  </svg>
 }
