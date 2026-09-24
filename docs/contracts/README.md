@@ -166,7 +166,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Camp Open Projection v1（历史）](camp-open-projection-v1.md) | Desktop `camps.enter/open/exists`、有界首屏投影、coverage/high-water、earlier message page 与 data-minimized trace；不含 AgentRun 取消请求字段 |
 | [Skill Content Preview v1（当前）](skill-content-preview-v1.md) | 已安装当前 Revision 或受检导入候选的有界、完整性绑定只读内容与文件列表 |
 | [Camp Conversation Find v1（当前）](camp-conversation-find-v1.md) | Desktop 当前 Camp 公开 user/agent 正文的 exact count、单命中 traversal、Unicode scalar offset 与有界 around-window 定位 |
-| [File Preview v19（当前）](file-preview-v19.md) | Run Diff 与 Files Changed 的当前文件预览接受精确证据中的根外绝对路径，保留相对路径的 Run 工作目录解析与来源校验 |
+| [File Preview v20（当前）](file-preview-v20.md) | 无 Diff 的终态 Read/Write 文件操作由精确 Run Evidence 授权预览，保留 Diff、根外绝对路径和 Run 工作目录解析 |
+| [File Preview v19（历史）](file-preview-v19.md) | Run Diff 与 Files Changed 的当前文件预览接受精确证据中的根外绝对路径，保留相对路径的 Run 工作目录解析与来源校验 |
 | [File Preview v18（历史）](file-preview-v18.md) | Files Changed projection 原位刷新、旧 detail 响应 fence 与 Tab 阅读状态保留 |
 | [File Preview v17（历史）](file-preview-v17.md) | Execution、Mission Activity 与文件共享标签集合、分栏宿主与已保存宽度 |
 | [File Preview v16（历史）](file-preview-v16.md) | Command 修改文件以 exact Run Activity Evidence 授权，并优先解析来源 AgentRun executionRoot；同名相对路径按实际文件身份去重 |
@@ -433,7 +434,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
 | [Run Input Skill Links v2（当前）](current-input-skill-links-v2.md) | Structured Skill Mention、claim-time 批次快照、verified resolver 与 per-message `RUN_INPUT.messages[].skills` |
 | [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v29（当前 public Camp）](context-manifest-evidence-v29.md) | public 29/9/7，无自动公屏历史；RUN_INPUT 完整、historyHint 冻结 |
+| [ContextManifest Evidence v30（当前 public Camp）](context-manifest-evidence-v30.md) | public Formatter/Manifest 30、Profile 9、Run Facts 8、Charter revision 14；claim 冻结额外可见消息判断与四句 historyHint，尚待实施验证 |
+| [ContextManifest Evidence v29（历史 public Camp）](context-manifest-evidence-v29.md) | public 29/9/7，无自动公屏历史；RUN_INPUT 完整、原双句 historyHint 冻结 |
 | [ContextManifest Evidence v28（历史 public Camp）](context-manifest-evidence-v28.md) | public 28/8、非 batch 26/6，新模型投影无 schemaVersion，Task evidence 无对象版本 |
 | [ContextManifest Evidence v27（历史 public Camp）](context-manifest-evidence-v27.md) | 继承 v26 多输入、增量窗口与 Mission-only Charter revision 10；默认寻址消息在 Agent 自动上下文中派生冻结接收者 Mention，不修改用户原文或实时 read |
 | [ContextManifest Evidence v26（历史 public Camp）](context-manifest-evidence-v26.md) | 多输入 RUN_INPUT、Camp+Agent accepted 增量窗口、Mission-only Charter revision 10、执行配置与可见性 evidence；冻结 Run 原样恢复 |
@@ -447,7 +449,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [ContextManifest Evidence v17（历史）](context-manifest-evidence-v17.md) | Formatter v19、`agent_v1` message audience、closed forward/return A2A guidance evidence、Gather v3 与 exact frozen recovery |
 | [ContextManifest Evidence v16（历史）](context-manifest-evidence-v16.md) | Formatter v18、Skill selection/availability/Exposure/resolution、exact payload 与 Migration 91 clean-break recovery |
 | [ContextManifest Evidence v15（历史）](context-manifest-evidence-v15.md) | Formatter v17、compact history/offset、Run Facts exact bytes/evidence 与旧 v15 recovery 边界 |
-| [Run Facts v7（当前 public Camp）](run-facts-v7.md) | 必有 historyHint；内部合同号 7，模型不含技术版本 |
+| [Run Facts v8（当前 public Camp）](run-facts-v8.md) | 必有 historyHint；四句完整文本依据 claim 冻结边界与额外可见消息布尔结果选择，模型不含技术版本 |
+| [Run Facts v7（历史 public Camp）](run-facts-v7.md) | 必有原双句 historyHint；内部合同号 7，模型不含技术版本 |
 | [Run Facts v6（历史 public Camp）](run-facts-v6.md) | 模型正文删除 schemaVersion，内部合同号 6 |
 | [Run Facts 非 batch v5（当前）](run-facts-nonbatch-v5.md) | 普通 Camp/A2A/Single Chat 删除模型正文 schemaVersion，内部合同号 5 |
 | [Run Facts v5（历史 public Camp）](run-facts-v5.md) | 删除 gather/delegation/conversationMode，Mission notice 指向 RUN_INPUT |

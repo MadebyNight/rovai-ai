@@ -214,6 +214,10 @@ pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<b
         connection,
         "context_manifest",
         &["run_facts_schema_version IN (1, 2, 3, 4, 5, 6, 7)"],
+    )? || contains_schema(
+        connection,
+        "context_manifest",
+        &["run_facts_schema_version IN (1, 2, 3, 4, 5, 6, 7, 8)"],
     )?);
     let context_v26 = contains_schema(
         connection,
@@ -296,6 +300,26 @@ pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<b
         "runtime_input_delivery_attachment_auth_insert",
         &["context_manifest_version IN (26, 29)"],
     )?;
+    let context_v30 = contains_schema(
+        connection,
+        "context_manifest",
+        &[
+            "formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)",
+            "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)",
+        ],
+    )? && contains_schema(
+        connection,
+        "context_manifest_v30_only_insert",
+        &[
+            "NEW.context_manifest_version = 30",
+            "batch_input.context_manifest_version",
+            "invocation_kind = 'batch'",
+        ],
+    )? && contains_schema(
+        connection,
+        "runtime_input_delivery_attachment_auth_insert",
+        &["context_manifest_version IN (26, 30)"],
+    )?;
     let profile_pairing = contains_schema(
         connection,
         "context_manifest_quote_profile_insert",
@@ -317,9 +341,16 @@ pub(super) fn schema_matches_v163(connection: &Connection) -> rusqlite::Result<b
             "NEW.context_manifest_version = 29",
             "NEW.context_manifest_version = 26",
         ],
+    )? || contains_schema(
+        connection,
+        "context_manifest_quote_profile_insert",
+        &[
+            "NEW.context_manifest_version = 30",
+            "NEW.context_manifest_version = 26",
+        ],
     )?;
     if !common_manifest
-        || !(context_v26 || context_v27 || context_v28 || context_v29)
+        || !(context_v26 || context_v27 || context_v28 || context_v29 || context_v30)
         || !profile_pairing
     {
         return Ok(false);
