@@ -6260,7 +6260,13 @@ function executionTriggerMessage(
   return executionSourceMessages(run, turns, messageById)[0] ?? null
 }
 
-function executionMessageSummary(message: CampMessageView | null, run: AgentRunView): string {
+export function executionMessageSummary(
+  message: Pick<CampMessageView, 'body' | 'attachments'> | null,
+  run: Pick<AgentRunView, 'inputSummary' | 'purpose'>
+): string {
+  if (run.inputSummary !== undefined) {
+    return run.inputSummary || run.purpose.trim().replace(/\s+/gu, ' ') || '执行记录'
+  }
   const body = message?.body.trim().replace(/\s+/gu, ' ')
   if (body) return body
   const attachment = message?.attachments[0]?.displayName

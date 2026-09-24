@@ -1776,6 +1776,8 @@ export interface AgentRunView {
   campTurnId: string | null
   inputMessageIds?: string[]
   anchorMessageId?: string | null
+  /** Core-rendered title source, independent of the loaded conversation page. */
+  inputSummary?: string | null
   conversationId: string
   agentId: string
   taskId: string | null
