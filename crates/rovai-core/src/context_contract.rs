@@ -19,7 +19,7 @@ pub(crate) fn native_binding_context_contract() -> Value {
     })
 }
 
-/// v1.69 only adds Skill discovery text. Keep the exact v1.68 context axes in
+/// v1.70 only adds Skill discovery text. Keep the exact v1.68 context axes in
 /// Native Binding identity so an otherwise compatible old Session survives.
 /// Bootstrap evidence itself still records v5 for every newly created Binding.
 pub(crate) fn native_binding_compatibility_context_contract() -> Value {

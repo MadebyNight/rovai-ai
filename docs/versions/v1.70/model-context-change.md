@@ -1,8 +1,8 @@
 ---
 document_type: model-context-change
 change_id: skills-rebuild
-version: v1.69
-target_version: v1.69
+version: v1.70
+target_version: v1.70
 revision: 5
 confirmation_status: confirmed
 confirmed_by: Principal (Camp message 1f13404e-14cc-4af6-acdb-6f1386e99e61)
@@ -14,6 +14,8 @@ implementation_status: in_progress
 # Skills Rebuild：模型上下文变更说明 revision 5
 
 本文件替代已确认的 revision 4。开发者已阅读并确认 revision 3（Camp 消息 `3966cd2d-13dc-4029-9376-99a213595d3a`），随后指定新增 `member-studio` 工具箱项并明确选择“所有队员开启”（消息 `ff2b5704-8387-4048-8784-2081b478dc87`）；在被告知这会形成 revision 4 后，明确回复“确认了，你直接继续”（消息 `b39cdc13-a4d0-488a-94e6-c9bc8f3c2b8d`）。开发者随后要求同步最新 main（消息 `586787f6-9fa6-435b-b114-47239c7b7fa2`）。main 已合入 v1.68 的公共历史变更，改变了本说明的变更前基线、版本轴与旧格式恢复边界；revision 5 的再次确认已记录于文末。
+
+随后 main 将 Camp 主动读取作为 v1.69 合入。本 Skills 工作顺延为 v1.70；Camp 的显式工具结果变化不修改下文已确认的 Bootstrap、Dynamic Context、Formatter/Profile/Manifest 版本轴或冻结恢复语义。迁移 173 的 `v1.69`／schema 123 是此前本地构建已使用的持久数据合同标记，顺延产品版本不改写该标记。
 
 ## revision 4 → revision 5 的语义改动
 

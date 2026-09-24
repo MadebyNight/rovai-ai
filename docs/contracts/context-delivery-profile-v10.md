@@ -2,7 +2,7 @@
 document_type: contract
 contract: context-delivery-profile-v10
 status: accepted
-target_version: v1.69
+target_version: v1.70
 last_updated: 2026-09-24
 ---
 

@@ -10071,6 +10071,14 @@ mod slow_tests {
             .database
             .connection()
             .execute(
+                "UPDATE camp_message SET recall_state = 'recallable' WHERE id = ?1",
+                [&unjoined_message_id],
+            )
+            .unwrap();
+        fixture
+            .database
+            .connection()
+            .execute(
                 r#"
                 DELETE FROM context_manifest_history_camp
                 WHERE camp_id = ?1
@@ -10176,7 +10184,7 @@ mod slow_tests {
                 &run,
                 &HistorySearchInput {
                     query: "PUBLIC_HISTORY_WITHOUT_SNAPSHOT_MEMBERSHIP".to_string(),
-                    camp_ids: Some(vec![unjoined_camp_id]),
+                    camp_ids: Some(vec![unjoined_camp_id.clone()]),
                     date_from: None,
                     date_to: None,
                     limit: None,
@@ -10187,6 +10195,43 @@ mod slow_tests {
             history_without_snapshot["results"][0]["messageId"],
             unjoined_message_id
         );
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE camp_message SET body = '', structured_content_json = '[]', recall_state = 'withdrawn' WHERE id = ?1",
+                [&unjoined_message_id],
+            )
+            .unwrap();
+        let withdrawn = CampHistoryService
+            .read(
+                &mut fixture.database,
+                &run,
+                &CampReadInput {
+                    camp_id: Some(unjoined_camp_id.clone()),
+                    message_id: Some(unjoined_message_id.clone()),
+                    thread: None,
+                    before: None,
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(withdrawn["items"][0]["displayText"], "Message withdrawn");
+        assert!(withdrawn["items"][0].get("body").is_none());
+        let no_results = CampHistoryService
+            .search_history(
+                &mut fixture.database,
+                &run,
+                &HistorySearchInput {
+                    query: "PUBLIC_HISTORY_WITHOUT_SNAPSHOT_MEMBERSHIP".to_string(),
+                    camp_ids: Some(vec![unjoined_camp_id]),
+                    date_from: None,
+                    date_to: None,
+                    limit: None,
+                },
+            )
+            .unwrap();
+        assert!(no_results["results"].as_array().unwrap().is_empty());
         fixture.cleanup();
     }
 

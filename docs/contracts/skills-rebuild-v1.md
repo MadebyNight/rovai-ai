@@ -9,7 +9,7 @@ last_updated: 2026-09-24
 
 # Skills Rebuild v1
 
-本合同拥有 v1.69 的 Skill 来源、队员工具箱配置、模型索引与消息局部链接。完整前后模型输入和二次确认见 [模型上下文变更说明 revision 5](../versions/v1.69/model-context-change.md)。Skill 是指南，不增加接收者、工具、权限或协作资格。
+本合同拥有 v1.70 的 Skill 来源、队员工具箱配置、模型索引与消息局部链接。完整前后模型输入和二次确认见 [模型上下文变更说明 revision 5](../versions/v1.70/model-context-change.md)。Skill 是指南，不增加接收者、工具、权限或协作资格。
 
 ## 受管闭合集与配置
 

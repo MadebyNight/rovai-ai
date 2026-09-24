@@ -213,7 +213,7 @@ last_updated: 2026-09-24
 - CampMessage 是唯一公共消息事实；ConversationMessage 只服务目标成员的私有连续性。公共 A2A、用户消息和允许的 Runtime 自动输出都必须先越过同一 publication fence，之后才可进入 History、Context、通知或 Delivery。
 - History 的稳定职责分为 Camp discovery、单一显式 Camp 内 search/read、跨 Camp public search 和按 exact ID/sequence 分页读取；工具只返回结构化、有界、可继续的结果，不恢复旧 Summary 或让 relevance search 取代权威顺序读取。中文/短查询、转义、派生索引与 tombstone 使用确定性合同，索引可重建且不成为第二真源。
 - `rovai camp read` 直接提供 timeline（可选 `before + limit`）、exact item（`messageId`）和 thread（`thread + before + limit`）三种形状；省略定位字段就是 timeline，默认 limit 为 20。请求不再公开 `mode/direction/around/after/cursor`，CLI 不保留旧字段翻译层。显式 Camp ID 只改变单一 target。
-- 每个受认证队员都可访问所有存续 Camp 的公共历史；CampMember 只拥有参与、寻址与执行语义，不是公共历史 ACL。调用身份仍决定 recipient suppression 等逐消息可见性；ID、搜索命中、旧 Manifest 或引用闭包都不能绕过 recall、withdrawal、等待目标隔离与 quote-source 重验。`camp.read` 使用目标 Camp 的实时边界，ContextManifest catalog 只保存自动上下文与 discovery 时序证据。
+- 每个受认证队员都可访问所有存续 Camp 的公共历史；CampMember 只拥有参与、寻址与执行语义，不是公共历史 ACL。显式 `camp.read`、`camp.search` 和 `history.search` 可读取各自发布边界内仍 recallable 或本队员 Delivery 仍 waiting 的消息，但不改变 claim 或撤回资格。已撤回正文不能由 ID、搜索命中、旧 Manifest 或引用闭包恢复；`camp.read` 仅在边界内投影英文状态项。`camp.read` 使用目标 Camp 的实时边界，ContextManifest catalog 只保存 discovery 时序证据。
 - Quote snapshot 的存储内容不可变，但每次 Agent-facing 投影都必须重新校验 source message 对当前 Agent 的可见性；可见外层消息不能借 quotes 泄露仍 recallable、对该目标仍 suppressed、已撤回、越界或越权的来源正文。
 - `camp.message.send` 只有 `automatic | public_only` 两种持久寻址意图。只有显式 built-in routing operation 且意图允许 Agent addressing 时才创建 Delivery；Runtime 自动 final、普通用户消息和纯 public publication 不能靠正文意外唤醒 Agent。
 - Agent Send 的 body 缺省为空字符串、files 缺省为空数组；trim 后正文非空或至少一个文件即可构成 payload，两者同时为空由领域服务拒绝。纯附件 accepted 消息忠实保存空 body，不生成占位正文，并沿用同一公共消息、publication、Delivery、receipt 与 Replay 边界。
@@ -345,7 +345,7 @@ last_updated: 2026-09-24
 
 - 新公开 AgentRun 不自动生成 `SHARED_CONVERSATION`、历史摘要或遗漏 locator。`RUN_INPUT` 仍完整有序。`RUN_FACTS.historyHint` 冻结本 Agent 在此 Camp 上一次有效 accepted ACK 对应执行前的公屏尾；它只供定位相关历史，不代表阅读或完成，也不是 `camp.read --before` 游标。
 - `(CampId, AgentId)` 接受水位只由匹配 Run/binding/generation 的整批 Runtime accepted ACK 推进，并跨 Native Session 保留；prepared、rejected、unknown、claim、stale ACK 或后续 Stop 都不能新增或回退有效边界。同一新格式 Run 复用冻结提示及原输入。
-- Core 对 `RUN_INPUT` 与按需 read/search/thread/reply/reference 使用同一可见性服务；撤回或 recipient-suppressed 消息不进入 Agent 可见集合与分页。
+- `RUN_INPUT` 与 quote-source 投影继续隔离 recallable、waiting Delivery 或已撤回原文。显式 read/search 按 [Camp History v10](../contracts/camp-history-v10.md) 使用主动查询可见性：已发布、未撤回的原文可读；撤回项只进入 `camp.read` 的时间线和按 ID 结果，以 `Message withdrawn` 状态占一个分页位置，不进入搜索或冻结输入。
 - `camp.read` 始终读取调用时最新授权和可见状态，不受当前 ContextManifest 的历史上下界限制；timeline/thread 默认 20、显式 1–100，从最新页用排他 `before` 倒翻，超出一页必须给出真实续读位置。它不 claim Delivery、不关闭撤回、不推进 accepted 水位，也不把新读到的消息变成当前 Run 输入。
 - Agent 与 Human Principal 的 body/snippet/search offset 使用分开、版本化投影。外部渠道引用必须经 CampMessage Structured Content 进入标准投影，不能用 prompt override 绕过可见性或 evidence。
 
