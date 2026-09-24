@@ -3038,8 +3038,13 @@ fn to_sql_error(error: anyhow::Error) -> rusqlite::Error {
 mod slow_tests {
     use super::*;
     use crate::{
+        collaboration::{
+            AddCampMemberCommand, CollaborationService, CreateCampCommand, ExecutionRequest,
+            TestCampMessageAddress, TestCampMessageCommand,
+        },
         command::{ActorRef, CommandEnvelope},
         context::ContextService,
+        runtime::{AgentRunWorkspace, ClaimAgentRunCommand, ExecutionRuntimeService},
         skill::{
             CommitSkillImportCommand, DeleteSkillCommand, SetSkillEnabledCommand,
             SetSkillGroupAssignmentsCommand, SkillLibraryService,
@@ -3072,6 +3077,19 @@ mod slow_tests {
                 user_id: "projection-test-user".to_string(),
             },
             camp_id: None,
+            expected_versions: Vec::new(),
+            execution_epoch: None,
+            payload,
+        }
+    }
+
+    fn camp_envelope<P>(command_id: &str, camp_id: &str, payload: P) -> CommandEnvelope<P> {
+        CommandEnvelope {
+            command_id: command_id.to_string(),
+            actor: ActorRef::User {
+                user_id: "projection-test-user".to_string(),
+            },
+            camp_id: Some(camp_id.to_string()),
             expected_versions: Vec::new(),
             execution_epoch: None,
             payload,
@@ -3277,10 +3295,9 @@ mod slow_tests {
     }
 
     #[test]
-    fn explicit_legacy_cleanup_preserves_root_access_and_unverified_entries_on_repeat() {
-        let data = temporary_directory("rovai-legacy-cleanup-db");
+    fn explicit_legacy_cleanup_preserves_run_launch_and_unverified_entries_on_repeat() {
+        let (mut database, data) = crate::test_support::seeded_runtime_database_fast();
         let library_root = temporary_directory("rovai-legacy-cleanup-library");
-        let mut database = crate::test_support::fresh_schema_database_fast_at(&data);
         let library = SkillLibraryService::new(library_root.clone()).unwrap();
         install_official_and_assign(&mut database, &library, &[SkillDeliveryGroupKey::Codex]);
         let roots = (0..5)
@@ -3343,6 +3360,118 @@ mod slow_tests {
             ).unwrap();
             assert_eq!(access, if index == 2 { "removed" } else { "active" });
         }
+
+        // Exercise the queue transition as well as its root-access predicate: the old
+        // cleanup marked this root removed and made scheduler dispatch return early.
+        let collaboration = CollaborationService::default();
+        let created = collaboration
+            .create_camp(
+                &mut database,
+                &user_envelope(
+                    "legacy-cleanup-run-camp",
+                    CreateCampCommand::for_test_with_members(
+                        roots[0].to_string_lossy().into_owned(),
+                        &["agent_2"],
+                        "agent_2",
+                    ),
+                ),
+            )
+            .unwrap();
+        let camp_id = created.result.payload["campId"].as_str().unwrap();
+        collaboration
+            .add_camp_member(
+                &mut database,
+                &camp_envelope(
+                    "legacy-cleanup-run-member",
+                    camp_id,
+                    AddCampMemberCommand {
+                        camp_id: camp_id.to_string(),
+                        agent_id: "agent_2".to_string(),
+                        expected_membership_generation: 1,
+                        capability_overrides: serde_json::json!({}),
+                        source: None,
+                    },
+                ),
+            )
+            .unwrap();
+        let queued = collaboration
+            .send_test_camp_message(
+                &mut database,
+                &camp_envelope(
+                    "legacy-cleanup-queue-run",
+                    camp_id,
+                    TestCampMessageCommand {
+                        camp_id: camp_id.to_string(),
+                        draft_revision: None,
+                        body: "Verify the normal project Run can start".to_string(),
+                        prepared_attachment_ids: Vec::new(),
+                        address: TestCampMessageAddress::Default,
+                        reply_to_camp_message_id: None,
+                        execution: Some(ExecutionRequest {
+                            task_id: None,
+                            purpose: "Verify normal project dispatch".to_string(),
+                            completion_role: "required".to_string(),
+                            budget: None,
+                        }),
+                    },
+                ),
+            )
+            .unwrap();
+        let run_id = queued.result.payload["agentRunIds"][0].as_str().unwrap();
+        let (queued_status, version): (String, i64) = database
+            .connection()
+            .query_row(
+                "SELECT status, version FROM agent_run WHERE id = ?1",
+                [run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(queued_status, "queued");
+        assert!(
+            !SkillProjectionReconciler
+                .execution_root_is_removed(&database, roots[0].to_string_lossy().as_ref())
+                .unwrap()
+        );
+        let claimed = ExecutionRuntimeService::default()
+            .claim_agent_run(
+                &mut database,
+                &CommandEnvelope {
+                    command_id: "legacy-cleanup-claim-run".to_string(),
+                    actor: ActorRef::System {
+                        component_id: "agent-run-scheduler".to_string(),
+                    },
+                    camp_id: Some(camp_id.to_string()),
+                    expected_versions: Vec::new(),
+                    execution_epoch: None,
+                    payload: ClaimAgentRunCommand {
+                        agent_run_id: run_id.to_string(),
+                        expected_version: version,
+                        lease_owner: "legacy-cleanup-test-host".to_string(),
+                        lease_seconds: 60,
+                        workspace: Some(AgentRunWorkspace {
+                            execution_root: roots[0].to_string_lossy().into_owned(),
+                            access: "write".to_string(),
+                            isolation: "shared".to_string(),
+                        }),
+                        starting_git_observation: None,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            claimed.result.status,
+            crate::command::CommandResultStatus::Accepted
+        );
+        let running_status: String = database
+            .connection()
+            .query_row(
+                "SELECT status FROM agent_run WHERE id = ?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(running_status, "running");
+
         let repeated = SkillProjectionReconciler
             .cleanup_legacy_entries(&mut database, &library)
             .unwrap();
