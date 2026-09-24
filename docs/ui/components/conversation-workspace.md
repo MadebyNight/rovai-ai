@@ -62,7 +62,7 @@ Files Changed 历史 Review 真源。
 
 ## 打开与渐进历史
 
-Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v23](../../contracts/camp-open-projection-v23.md)：
+Camp 的首个 meaningful paint 只依赖 [Camp Open Projection v24](../../contracts/camp-open-projection-v24.md)：
 Camp/成员、最近消息、当前运行摘要、pending Approval 和 Composer 可用即完成。项目导航恢复、侧栏刷新
 与可见来源确认在首屏后执行，失败不能撤销已打开会话。只显示“正在打开对话”的 Shell 不算完成。
 
@@ -508,7 +508,9 @@ waiting Delivery，队员入口优先显示“排队中”；已有 non-terminal
 可点击层数图标；点击打开同一输入清单，`Escape` 关闭并把焦点还给层数按钮。计数使用冻结输入 ID，不因消息正文尚未载入
 而退化为单条。单卡停止只作用 exact Run，批次停止只作用该批列出的 queued Run；执行台不提供消息撤回。
 
-卡头为最小 46px 的标题区域，摘要保持原文、12.5px/600 字重及单行省略；标题按钮具有 heading 语义。
+卡头为最小 46px 的标题区域，摘要使用随 Run 返回的 `inputSummary`，与聊天区已载入消息页无关；
+保留来源措辞、归一空白并最多 240 个 Unicode scalar，超出以 `…` 结尾。纯附件使用附件名，显式不可用来源
+回退 purpose；加载历史消息不替换标题。使用 12.5px/600 字重及单行省略；标题按钮具有 heading 语义。
 展开时标题和原有操作只在本卡范围内吸顶，滚过本卡后退出，不复制全局标题或脱离所属 Run 的停止按钮。
 Desktop 与宽屏 Web 的展开正文首尾、主要过程项间距及相邻 Run 间距统一使用 8px，运行中切到终态时不得改变
 这组密度；Mobile 继续由独立 mobile stylesheet 拥有其触控行高与紧凑过程间距，不继承该桌面调整。
@@ -583,7 +585,7 @@ Task related execution、停止结果和世界地图入口在右侧承载时必�
 按窗口呈现。顶部“加载更早记录”复用会话区的文字箭头、已显示计数与原位加载／重试样式；向下滚动自动恢复
 已读缓存，取消“加载较新记录”按钮。“回到最新”采用最新缓存并跳转；首次展开执行中 Run 时，首屏与完整正文
 异步到达后仍定位到最新。历史阅读期间后台只更新最新缓存，不替换当前窗口或抢滚动位置。缓存预算见
-[Camp Open v23](../../contracts/camp-open-projection-v23.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
+[Camp Open v24](../../contracts/camp-open-projection-v24.md)，不把未加载部分当作不存在。Built-in Tool 有唯一已确认
 Shell 载体时，标题使用完整命令的单行预览，展开显示 `$ command` 与下一行原始 JSON／文本输出，保留正文参数
 和多行输入，沿用 Shell Evidence 的按条惰性读取。Core 操作身份、图标和状态保持不变；不新增入参存储。
 缺少可靠关联时回退对应 `rovai` CLI 名称和同一 operation 的 Core 公共 `canonicalInput`，省略投影辅助事实和

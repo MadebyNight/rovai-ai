@@ -136,6 +136,7 @@ import {
   executionDeliveryQueueBatches,
   executionQueueBatches,
   executionRunInputMessageIds,
+  executionMessageSummary,
   executionWorkspaceEntrySelection,
   firstSubmittedAgentRun,
   formatStopElapsed,
@@ -4574,6 +4575,21 @@ describe('task event projections', () => {
       inspectorVisible: false
     }))
     expect(plannedStoppedMarkup).toContain('已停止')
+  })
+
+  it('keeps Run titles stable when their source message is outside the loaded page', () => {
+    const message = { body: '已载入的消息正文', attachments: [] }
+    const run = { inputSummary: '早期触发消息', purpose: 'Handle the claimed Camp message batch' }
+    expect(executionMessageSummary(null, run)).toBe('早期触发消息')
+    expect(executionMessageSummary(message, run)).toBe('早期触发消息')
+    // A null summary is authoritative; cached message text must not revive it.
+    expect(executionMessageSummary(message, { ...run, inputSummary: null }))
+      .toBe(run.purpose)
+    expect(executionMessageSummary(null, { ...run, inputSummary: 'Message withdrawn' }))
+      .toBe('Message withdrawn')
+    // Older projections without the additive field retain their existing path.
+    expect(executionMessageSummary(message, { ...run, inputSummary: undefined }))
+      .toBe(message.body)
   })
 
   it('labels the execution drawer with the member and configured Runtime product', () => {

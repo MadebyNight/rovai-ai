@@ -30,3 +30,15 @@ last_updated: 2026-09-24
 ## Rust 测试准入
 
 本版扩展 `camp_history.rs` 已有 SQLite 读取/搜索 owner、`context.rs` 已有跨 Camp owner 与 `team_tool_catalog.rs` 已有输出 Schema owner。新增断言覆盖同一次读取前后状态转换、marker 的闭合 shape 与 100 条分页保留；复用既有 fixture 比新增平行数据库夹具更低成本。
+
+## 后续修复：RunCard 标题与聊天分页解耦
+
+050「Skills Rebuild」诊断时共 51 条消息、27 个 Run；首屏仅第 32–51 条消息，18 个 Run 因触发消息未载入而回退为通用 purpose。触发原文仍在数据库中。
+
+修复为 ReadModel 按返回 Run 的首条输入精确读取有界 `inputSummary`，Renderer 优先使用该字段；合同见 [Camp Open Projection v24](../../contracts/camp-open-projection-v24.md)。这是局部可逆读取修复，不满足新增 Version Decision 的准入门槛。
+
+Rust owner 复用 `camp_open_tests.rs` 的现有业务 fixture，新增 `camp_open_run_titles_survive_message_paging`：原版本在触发消息退出 20 条窗口后无法提供独立标题。测试覆盖多输入优先级、历史 Run、正文/附件、Unicode 截断、撤回和 tombstone，且禁止 event_log 读取；该跨表读取与分页边界不能由纯函数测试代替。现有 fixture 删除已退役的 task.version 写入以适配当前 schema。
+
+Renderer 的最小输入测试证明有无载入消息时使用同一摘要、显式 null 不恢复缓存原文及旧投影兼容。验证命令为 `cargo test -p rovai-core --lib --features slow-tests read_model::camp_open_slow_tests`、`pnpm exec vitest run apps/desktop/src/renderer/src/App.test.ts`、类型检查、Rust PR 门禁与通用文档门禁。
+
+验收结果：三个 Camp Open owner 均通过；`pnpm test:rust:pr`、`pnpm typecheck`、Vitest 全量 2198 项、`pnpm build:desktop`（含 Web）、`cargo fmt --all --check`、`pnpm docs:test` 与 `DOCS_BASE_REF=origin/main pnpm docs:check:ci` 通过。运行期与 UI 测试使用隔离 fixture，未修改日常 Camp 数据。
