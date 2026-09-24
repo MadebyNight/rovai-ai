@@ -49,7 +49,7 @@ implementation_status: in_progress
 | Bootstrap 结构 | 三个既有 section | 四个 section，Single Chat 仍省略 Memory Entrypoint |
 | Charter 与身份正文 | Charter 插入索引文字 | Charter、身份、Memory Entrypoint 的现有正文保持原样 |
 | 已有工具箱配置 | 原样继续使用 | 升级时清零，所有队员初始未勾选 |
-| 旧导入 Skill | 旧 Library 记录与副本暂留 | 记录与受管副本继续保留，但退出新读取／投递路径；旧项目投影按所有权安全收敛 |
+| 旧导入 Skill | 旧 Library 记录与副本暂留 | 记录与受管副本继续保留，但退出新读取／投递路径；旧项目入口只在用户显式操作时按所有权处理 |
 | 旧 Native Session | 保留 | 保留；冻结的旧 Bootstrap 不热改写 |
 
 revision 2 中的动态 section 格式、选择来源、消息局部 `{name,path}`、同 Run 冻结、原址读取及旧引用保留，在不与上表冲突的范围内继续有效；它们已随 revision 5 确认为目标合同，实现状态以代码和验收证据为准。第六版 Skills／工具箱／会话交互稿的 UI 范围也仍是目标版本的一部分。
@@ -229,7 +229,7 @@ type ModelSkillLink = { name: string; path: string }
 
 新 Skills 设置页只读选定 Runtime 的原生用户级来源；会话 `/` 候选读取五项工具箱的队员配置，以及当前成员环境中发现的用户级与项目级原生 Skill。旧导入 Library 行不会因此成为候选、平台项或动态工具箱项；如果同一原始文件也由 Harness 原生发现，它以**原生来源身份**出现，不按旧 Library UUID 自动继承。旧 `analyze-agent-codebase`、`worktree` 等不在新平台两项／工具箱五项内的 bundled 项亦不主动索引或投递；仓库源文件与历史记录保留。`member-studio` 的默认配置只影响指南发现；现有成员创建的确认与权限流程仍须按原规则验收。
 
-旧 Library 曾在项目目录创建 Rovai 自有 SkillProjection 链接或副本。新 Run 停止新建这类投递；升级时基于已有 `skill_projection_observation` 标记精确受管根待收敛，按现有所有权校验、active-Run 保护和 root access 规则清理**仅 Rovai 创建的项目投影**。不可访问的项目保留待清理记录，之后可安全重试；不能按名称扫删用户项目文件。新原生候选读取在投影清理前应排除已登记的旧 Rovai 投递入口，避免旧导入项经项目扫描重新进入候选。冻结的旧 Run、Manifest 和历史引用继续按旧字节解释；新 Run 遇旧 Library ID 仅保留意图与历史来源，不能静默映射到同名原生文件。
+旧 Library 曾在项目目录创建 Rovai 自有 SkillProjection 链接或副本。新 Run 停止新建这类投递；升级和 Core 启动不扫描或删除项目文件，仅按 Navigation 中明确移除的项目同步 root access，保留 `skill_projection_observation` 供候选排除与用户后续核对。新原生候选读取继续排除已登记的旧 Rovai 投递入口，避免旧导入项经项目扫描重新进入候选。用户自行清理时应逐项确认归属；后续诊断与修复中的显式清理必须按 observation、所有权校验、active-Run 保护和 root access 规则处理**仅 Rovai 创建的项目投影**，不可访问或无法确认的入口保留，不能按名称扫删用户项目文件。冻结的旧 Run、Manifest 和历史引用继续按旧字节解释；新 Run 遇旧 Library ID 仅保留意图与历史来源，不能静默映射到同名原生文件。
 
 ### 冻结、预算与恢复
 
@@ -247,7 +247,7 @@ Compaction 保留当前 Bootstrap 包裹文本、ACK、去重和重投机制；�
 - 新 Binding 的 Bootstrap 合同／Formatter 从 v4／4 升到 **v5／5**，增加同级平台 section；Charter 正文不变，Session Charter revision 保持 **13**。动态普通 Camp／A2A／Single Chat Formatter／Manifest 从 26／26 升到 27／27，公开 batch 从 29／29 升到 30／30；Delivery Profile 按上文升到 7／10。结构化 Skill Selection／Resolution 升 v2。Bootstrap Evidence 独立冻结平台 section 的精确 bytes/digest 并纳入完整 Bootstrap 摘要；新 Manifest 冻结动态 section bytes/digest。
 - 当前 `native_binding_context_contract()` 把 Bootstrap v4／Formatter 4、Charter revision 和动态 Formatter／Manifest 一同纳入兼容性摘要。目标实现须将仅由本次**新增平台 section／动态格式**造成的旧摘要差异作为有界兼容别名，保留旧 Binding 的原 Session 与 v4 Bootstrap Evidence；新建 Binding 使用 v5。别名须逐项核对 Adapter、安装、Camp／成员身份和其他实际不兼容字段，不能笼统忽略摘要差异。其他真正不兼容的 Runtime／Bootstrap 条件仍轮换。
 - 已存在的 Native Binding 保持原 v4 Bootstrap Evidence、旧 Charter／身份／Memory 字节；旧会话的后续**新 Run**可以接收新动态 section，但新增 `ROVAI_PLATFORM_SKILLS` 只随自然新建 Binding 的 v5 Bootstrap 到达。旧会话若 compaction，仍补发原冻结 v4 Bootstrap，不能热插入新 section 或伪造一次 compaction。此限制是“继续旧会话”和“Bootstrap 冻结”同时成立的直接结果，须作为验收边界明确接受。
-- 旧 Manifest／已冻结或正在投递的旧输入保留原字节、版本与证据；旧格式缺少新 section 是合法历史，不批量回填或因缺段判损坏。v1.68 已退役的公开 v28 及更早格式继续按其合同不派发、转换或重播；对于 v1.68 已冻结的公开 v29／Profile 9／Run Facts 7 和非 batch v26／Profile 6／Run Facts 5，目标实现按精确已知版本组合及完整证据增加有界恢复准入，复用原 payload 而非生成新 Skills section。真实不可恢复的旧证据错误仍按当前恢复纪律处理。Library、Revision、历史选用和审计文件不批量搬迁或删除；新 Run 的受管 Skill 不继续依赖项目投递 Exposure，旧项目投影按上文的所有权与 active-Run 规则清理。
+- 旧 Manifest／已冻结或正在投递的旧输入保留原字节、版本与证据；旧格式缺少新 section 是合法历史，不批量回填或因缺段判损坏。v1.68 已退役的公开 v28 及更早格式继续按其合同不派发、转换或重播；对于 v1.68 已冻结的公开 v29／Profile 9／Run Facts 7 和非 batch v26／Profile 6／Run Facts 5，目标实现按精确已知版本组合及完整证据增加有界恢复准入，复用原 payload 而非生成新 Skills section。真实不可恢复的旧证据错误仍按当前恢复纪律处理。Library、Revision、历史选用和审计文件不批量搬迁或删除；新 Run 的受管 Skill 不继续依赖项目投递 Exposure，旧项目投影保留至用户显式处理。
 - 当前第六版交互稿的只读 Skills 页、队员工​​具箱配置、会话 `/` 来源选择、错误与恢复状态及 32 个候选上下文缓存属于同一目标版本的其他实现范围。缓存是 Core 实例内非模型可见的候选读取优化，不能替代 Run 冻结或改变 Session 生命周期。
 
 ## 验证
@@ -259,7 +259,7 @@ Compaction 保留当前 Bootstrap 包裹文本、ACK、去重和重投机制；�
 3. 集合：升级时旧 global enabled／group 配置不迁入新队员表，各现存队员及今后新建队员只默认开启 `member-studio`，原四项关闭；用户显式关闭后重启不重置；配置增删在下一 Run 全量生效；关闭全部五项产生固定提醒及 `skills:[]`；未长期配置的消息显式选用进入本 Run 但不改变长期配置；两项平台技能、其他 bundled、旧导入与原生 Skill 都不进入动态集合；Runtime 原址加载不改变集合；`name` 排序确定。
 4. 来源：相同名字的原生／受管、用户／项目 Skill 保持身份和局部路径；旧 UUID、旧导入引用、失效路径、项目切换、部分读取失败保留原选择意图，不把同名另一项当成它；新 Skills 页只读 Harness 原址；未配置技能的队员正常接收协作消息。
 5. 冻结：Run A 冻结后取消配置，同 Run 重试和 Core 恢复的 index bytes/digest 不变，Run B 得到新集合；旧 v29／v26 Manifest 按旧冻结字节和证据有界恢复，v28 及更早公开格式仍不派发；旧 Binding 保留 v4 Bootstrap 且后续新 Run 得到动态索引，compaction 仍重投旧 v4；新 Binding 使用 v5 四段 Bootstrap，并在 compaction 重投相同四段。
-6. 迁移与交付：从 v1.68/schema 122 迁至 v1.69/schema 123；旧 `imported` 记录和受管 Revision 内容在升级前后计数／摘要一致；旧项目投影只删有所有权证据的入口，active Run、不可访问 root 和用户同名文件均获保护，清理可重试；新 Run 不新建投影。普通与 batch 新 Profile、v1.68 的历史提示、首次 payload、后续 input、compaction Bootstrap 补发、超预算、ACK/去重均保留一次任务语义；不得额外重放当前输入。覆盖隔离 Home、远程 Host 实际根路径及多 Runtime。
+6. 迁移与交付：从 v1.68/schema 122 迁至 v1.69/schema 123；旧 `imported` 记录和受管 Revision 内容在升级前后计数／摘要一致；升级和 Core 启动不删项目投影，旧入口继续从原生候选排除，active Run、不可访问 root 和用户同名文件均获保护；新 Run 不新建投影。普通与 batch 新 Profile、v1.68 的历史提示、首次 payload、后续 input、compaction Bootstrap 补发、超预算、ACK/去重均保留一次任务语义；不得额外重放当前输入。覆盖隔离 Home、远程 Host 实际根路径及多 Runtime。
 7. 真实任务 Gate：使用[双轨评测通用集](../../development/evaluation.md#上下文改动-gate)的 12 Case、至少三位明确配置的队员；冻结基线和候选 checkout、Case、模型、权限、预算、Judge 与标准。默认各运行一次；协议与边界硬规则全通过、无质量/协作回归且无不可解释证据缺口。无真实 Runtime/Judge 条件时报告未运行或证据不足，不用单测冒充 Gate。
 
 ## 阶段性实施验证记录

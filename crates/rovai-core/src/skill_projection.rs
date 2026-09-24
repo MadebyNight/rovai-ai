@@ -211,13 +211,23 @@ impl SkillProjectionReconciler {
             transaction.execute(
                 r#"
                 UPDATE skill_projection_root_state
-                SET access_state = 'active', dirty = 1,
+                SET access_state = 'active', dirty = 0,
                     cleanup_required = 0, removed_at = NULL, updated_at = ?2
                 WHERE execution_root = ?1 AND access_state = 'removed'
                 "#,
                 params![execution_root, now],
             )?;
         }
+        // Legacy projection dirtiness no longer schedules project writes.
+        // Keep observations for the explicit Diagnostics review instead.
+        transaction.execute(
+            r#"
+            UPDATE skill_projection_root_state
+            SET dirty = 0, cleanup_required = 0, updated_at = ?1
+            WHERE access_state = 'active' AND (dirty != 0 OR cleanup_required != 0)
+            "#,
+            [&now],
+        )?;
         for execution_root in removed_execution_roots {
             let observed: i64 = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM skill_projection_observation WHERE execution_root = ?1)",
@@ -3630,6 +3640,72 @@ mod slow_tests {
             .unwrap();
         assert_eq!(state, ("removed".to_string(), 0, 0));
         assert!(!Path::new(&missing).exists());
+    }
+
+    #[test]
+    fn startup_access_sync_restores_mislabelled_project_without_removing_its_legacy_entry() {
+        let root = temporary_directory("rovai-projection-mislabelled-root");
+        let canonical_root = root.canonicalize().unwrap();
+        let data = temporary_directory("rovai-projection-db");
+        let library_root = temporary_directory("rovai-projection-library");
+        let mut database = crate::test_support::fresh_schema_database_fast_at(&data);
+        let library = SkillLibraryService::new(library_root).unwrap();
+        install_official_and_assign(&mut database, &library, &[SkillDeliveryGroupKey::Codex]);
+        SkillProjectionReconciler
+            .reconcile_root(
+                &mut database,
+                &library,
+                &canonical_root,
+                &[SkillDeliveryGroupKey::Codex],
+            )
+            .unwrap();
+        let entry = canonical_root.join(".codex/skills/analyze-agent-codebase");
+        assert!(entry.canonicalize().is_ok());
+
+        upsert_root_access_state(
+            &mut database,
+            canonical_root.to_string_lossy().as_ref(),
+            "removed",
+            true,
+            true,
+        )
+        .unwrap();
+        let actual_removed = temporary_directory("rovai-projection-actual-removed")
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        SkillProjectionReconciler
+            .synchronize_removed_execution_roots(&mut database, &[actual_removed.clone()])
+            .unwrap();
+
+        assert!(
+            !SkillProjectionReconciler
+                .execution_root_is_removed(&database, canonical_root.to_string_lossy().as_ref())
+                .unwrap()
+        );
+        assert!(
+            SkillProjectionReconciler
+                .execution_root_is_removed(&database, &actual_removed)
+                .unwrap()
+        );
+        assert!(
+            !root_cleanup_pending(&database, canonical_root.to_string_lossy().as_ref()).unwrap()
+        );
+        assert!(!root_is_dirty(&database, canonical_root.to_string_lossy().as_ref()).unwrap());
+        assert!(entry.canonicalize().is_ok());
+
+        SkillProjectionReconciler
+            .mark_observed_roots_dirty(&mut database, true)
+            .unwrap();
+        SkillProjectionReconciler
+            .synchronize_removed_execution_roots(&mut database, &[actual_removed])
+            .unwrap();
+        assert!(!root_is_dirty(&database, canonical_root.to_string_lossy().as_ref()).unwrap());
+        assert!(
+            !root_cleanup_pending(&database, canonical_root.to_string_lossy().as_ref()).unwrap()
+        );
+        assert!(entry.canonicalize().is_ok());
     }
 
     #[test]

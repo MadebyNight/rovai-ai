@@ -278,34 +278,16 @@ impl super::Core {
                     Err(error) => eprintln!("managed Skill resources unavailable: {error:#}"),
                 }
                 let mut database = self.database.lock().await;
-                let mut old_roots = {
-                    let mut statement = database.connection().prepare(
-                        "SELECT DISTINCT execution_root FROM skill_projection_observation",
-                    )?;
-                    statement
-                        .query_map([], |row| row.get::<_, String>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?
-                };
-                old_roots.extend(self.startup_skill_execution_roots.iter().cloned());
-                old_roots.extend(self.removed_skill_project_roots.get()?.iter().cloned());
-                old_roots.sort();
-                old_roots.dedup();
-                // Old projections remain owned by Rovai, but no new Run needs
-                // them. Existing ownership and active-Run fences decide when
-                // each observed project entry can be removed.
-                for root in &old_roots {
-                    if let Err(error) = SkillProjectionReconciler.remove_execution_root(
-                        &mut database,
-                        &self.skill_library,
-                        Path::new(root),
-                    ) {
-                        eprintln!("deferred old Skill projection cleanup at {root}: {error:#}");
-                    }
-                }
+                // Project access is owned by Navigation. A previous startup
+                // cleanup marked observed projects removed, so synchronize the
+                // persisted access state without touching project files.
+                SkillProjectionReconciler.synchronize_removed_execution_roots(
+                    &mut database,
+                    self.removed_skill_project_roots.get()?,
+                )?;
                 eprintln!(
-                    "[startup] stage=managed_skills_ready duration_ms={} legacy_roots={}",
-                    started.elapsed().as_millis(),
-                    old_roots.len()
+                    "[startup] stage=managed_skills_ready duration_ms={}",
+                    started.elapsed().as_millis()
                 );
                 Ok(())
             }

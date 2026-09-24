@@ -21,13 +21,13 @@ last_updated: 2026-09-24
 
 ### 选择
 
-Core 发布普通文件形式的 Rovai 平台两项与工具箱五项；平台索引随新 Binding 冻结，工具箱按队员配置并随新 Run 冻结。原生 Harness Skill 只读原址发现、以规范文件身份参与消息局部选择。新 Run 停止建立项目 SkillProjection。旧 Library/Revision/审计继续保留，旧项目投递仅在明确所有权和 active-Run/root-access 条件下收敛。升级时不继承旧全局启停或分组，只为每位队员默认选择 `member-studio`。
+Core 发布普通文件形式的 Rovai 平台两项与工具箱五项；平台索引随新 Binding 冻结，工具箱按队员配置并随新 Run 冻结。原生 Harness Skill 只读原址发现、以规范文件身份参与消息局部选择。新 Run 停止建立项目 SkillProjection。旧 Library/Revision/审计继续保留，旧项目入口的清理由 [V1.69-D03](#v1-69-d03) 约束。升级时不继承旧全局启停或分组，只为每位队员默认选择 `member-studio`。
 
 ### 后果
 
 - 配置从“全局 Skill × Runtime group”变为“队员 × 工具箱项”；原生路径由 Harness 自己管理。
 - 旧导入的历史 ID 不自动变成同名原生 Skill；用户须按当前来源重新选择。
-- 旧项目投影的清理可能因项目不可访问或 Run 活跃而延后，不能用名称扫删。
+- 旧项目投影不会随升级自动清理，用户仍可按 D03 的显式路径处理。
 
 ### 未选择方案
 
@@ -59,3 +59,29 @@ Skills 指南需要在新 Session 和每个新 Run 中被发现，但已有 Nati
 
 - 令所有旧 Binding 立即轮换：会丢失本可继续的原生会话上下文。
 - 在旧冻结输入中补 Skills section：会改变 payload digest、恢复证据和一次任务语义。
+
+<a id="v1-69-d03"></a>
+## V1.69-D03：旧项目 Skill 入口由用户显式检查和清理
+
+- 状态：accepted
+- 日期：2026-09-24
+- 当前权威：[Skills 架构](../../architecture/skills.md)、[Skills Rebuild v1](../../contracts/skills-rebuild-v1.md)、[Skills 不变量](../../architecture/foundational-invariants.md#skills-library-projection)
+
+### 背景
+
+旧版在项目目录留下派发入口。启动时遍历 observation 清理会同时写 root access 状态；该状态也控制 Run 准入，已使未从导航移除的项目被误标为 `removed`，导致 Run 持续排队。自动文件清理还会让用户在升级时无法先核对项目中的入口。
+
+### 选择
+
+升级和 Core 启动不扫描或删除旧项目文件。Core 启动只按 Navigation 保存的移除列表同步 root access，并取消与旧自动清理关联的 active-root pending 标记；observation 和旧 Library 保留，已登记入口继续从原生候选中排除。发布说明提醒用户自行核对旧入口。诊断与修复中的项目入口检查和逐项目清理作为后续显式功能设计，必须在操作时重新验证 observation、入口归属、项目访问状态和 active Run，无法确认则保留。
+
+### 后果
+
+- 升级可重复执行，不会因版本反复启动而删除项目文件。
+- 旧入口可能留在项目中，直到用户自行处理或使用将来交付的显式修复；不能把 HTML 交互稿当作现有功能。
+- 项目导航的移除和恢复继续拥有 access_state；旧 observation 本身不代表项目被移除。
+
+### 未选择方案
+
+- 启动时继续对 observation 中每个 root 调用 Project 移除清理：会混合文件清理与项目访问状态，并重复触发。
+- 按名称批量删除项目 Skills 目录：无法区分用户入口与旧 Rovai 派发入口。

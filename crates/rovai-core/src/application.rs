@@ -2103,7 +2103,6 @@ struct Core {
     database: Mutex<Database>,
     subsystems: CoreSubsystems,
     subsystem_initialization: Mutex<SubsystemInitialization>,
-    startup_skill_execution_roots: Vec<String>,
     removed_skill_project_roots: RemovedSkillProjectRoots,
     startup_pending_camp_ids: Vec<String>,
     builtin_tool_listener: Mutex<Option<LocalIpcListener>>,
@@ -16447,25 +16446,22 @@ async fn run_core(
         rovai_core::runtime::settle_legacy_retry_waits(&mut database)?;
         Ok(controlled)
     })();
-    let controlled_shutdown_recovery = match recovery {
-        Ok(recovery) => recovery,
-        Err(error) => {
-            write_startup_frame(
-                &output_target,
-                "failed",
-                Some("recovering_authority"),
-                json!({ "kind": "admitted" }),
-                Some(structured_startup_error(
-                    "authority_recovery_failed",
-                    format!("{error:#}"),
-                    true,
-                    json!({ "stage": "authority_recovery" }),
-                )),
-                None,
-            )?;
-            return Ok(());
-        }
-    };
+    if let Err(error) = recovery {
+        write_startup_frame(
+            &output_target,
+            "failed",
+            Some("recovering_authority"),
+            json!({ "kind": "admitted" }),
+            Some(structured_startup_error(
+                "authority_recovery_failed",
+                format!("{error:#}"),
+                true,
+                json!({ "stage": "authority_recovery" }),
+            )),
+            None,
+        )?;
+        return Ok(());
+    }
     // Freeze candidate IDs before exposing RPC, then recheck eligibility at
     // deletion time. A failed optional snapshot skips cleanup for this boot;
     // neither fail authority readiness nor rescan newly created Camps on retry.
@@ -16475,13 +16471,6 @@ async fn run_core(
             eprintln!("Startup pending Camp cleanup skipped: {error:#}");
             Vec::new()
         });
-    let startup_skill_execution_roots = controlled_shutdown_recovery
-        .fenced_agent_runs
-        .iter()
-        .map(|run| run.execution_root.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
     let skill_library = SkillLibraryService::deferred(skill_library_root);
     let mcp_config = mcp_config_path
         .map_or_else(McpConfigStore::default_path, Ok)
@@ -16513,7 +16502,6 @@ async fn run_core(
         database: Mutex::new(database),
         subsystems: CoreSubsystems::new(),
         subsystem_initialization: Mutex::new(SubsystemInitialization::default()),
-        startup_skill_execution_roots,
         removed_skill_project_roots,
         startup_pending_camp_ids,
         builtin_tool_listener: Mutex::new(None),
@@ -24284,7 +24272,6 @@ mod tests {
             automation_scheduler_control: RwLock::new(None),
             subsystems: CoreSubsystems::ready_for_test(),
             subsystem_initialization: Mutex::new(SubsystemInitialization::default()),
-            startup_skill_execution_roots: Vec::new(),
             removed_skill_project_roots: RemovedSkillProjectRoots::default(),
             startup_pending_camp_ids: Vec::new(),
             builtin_tool_listener: Mutex::new(None),

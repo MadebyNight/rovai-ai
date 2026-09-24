@@ -6,21 +6,21 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-09-23
+last_updated: 2026-09-24
 ---
 
 # Rovai-ai v1.69：Skills Rebuild
 
 前置：[v1.68](../v1.68/README.md)。本版将 Rovai 平台技能与工具箱技能作为普通受管资源提供，设置页只读发现 Harness 原生 Skills，工具箱按队员配置，会话按当前 Camp 全队与项目发现候选。新 Run 使用冻结的动态工具箱索引，新 Native Session 使用独立的平台技能 Bootstrap section。合并 v1.68 后的前后模型输入与旧会话边界见[模型上下文变更说明 revision 5](model-context-change.md)；该 revision 已获开发者二次确认。
 
-实施步骤与验收证据见[实施计划](implementation-plan.md)。旧导入记录、受管 Revision、冻结的 Run 和 Native Binding 保留；新的 Skills 路径不再以项目投影或旧 Revision 校验作为准入。
+实施步骤与验收证据见[实施计划](implementation-plan.md)。旧导入记录、受管 Revision、冻结的 Run 和 Native Binding 保留；新的 Skills 路径不再以项目投影或旧 Revision 校验作为准入。旧项目入口不随升级自动删除；本次仅交付诊断与修复的 HTML 交互稿，正式单项修复仍待实现。
 
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
 | Version lifecycle | 已更新 | v1.68 冻结；本概览、[实施计划](implementation-plan.md)、[索引](../README.md)建立唯一 current v1.69 |
-| Decisions | 已更新 | [V1.69-D01/D02](decisions.md)记录来源切换与冻结兼容取舍，并同步[当前决定](../../decisions/CURRENT.md)导航 |
+| Decisions | 已更新 | [V1.69-D01/D02/D03](decisions.md)记录来源切换、冻结兼容与旧入口显式清理取舍，并同步[当前决定](../../decisions/CURRENT.md)导航 |
 | Contracts | 已更新 | [Skills Rebuild v1](../../contracts/skills-rebuild-v1.md)、[ContextManifest v30](../../contracts/context-manifest-evidence-v30.md)、[Profile 10](../../contracts/context-delivery-profile-v10.md)及[合同索引](../../contracts/README.md) |
 | Architecture | 已更新 | [Skills 架构](../../architecture/skills.md)、[当前不变量](../../architecture/foundational-invariants.md#skills-library-projection)及[索引](../../architecture/README.md) |
 | UI | 已更新 | [Skills／工具箱／会话组件](../../ui/components/skills-settings.md)与[UI 导航](../../ui/README.md) |
