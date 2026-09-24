@@ -18,6 +18,7 @@ async function fixture() {
   await copyFile(resolve('scripts/eval-host.mjs'), join(source, 'scripts/eval-host.mjs'))
   await copyFile(resolve('scripts/eval-wait.mjs'), join(source, 'scripts/eval-wait.mjs'))
   await copyFile(resolve('scripts/lib/windows-process-table.mjs'), join(source, 'scripts/lib/windows-process-table.mjs'))
+  await copyFile(resolve('scripts/lib/eval-host-build-path.mjs'), join(source, 'scripts/lib/eval-host-build-path.mjs'))
   await writeFile(join(source, 'scripts/lib/context-weekly.mjs'), "export { runPlan as runWeekly } from './context-evaluation.mjs'\n")
   await writeFile(join(source, 'scripts/lib/context-evaluation.mjs'), `
 import {mkdir, readFile, writeFile} from 'node:fs/promises';

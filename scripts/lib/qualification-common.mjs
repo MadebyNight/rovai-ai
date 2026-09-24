@@ -238,22 +238,13 @@ export async function dispatchQualificationPrompt(request, {
   prompt,
   execution
 }) {
-  const currentDraft = await request('camp.composerDraft.get', { campId })
-  if (!Number.isInteger(currentDraft?.revision) || currentDraft.revision < 0) {
-    throw new Error('Qualification Camp composer draft has no valid Core Revision')
-  }
-  const savedDraft = await request('camp.composerDraft.save', {
-    campId,
-    expectedRevision: currentDraft.revision,
-    content: composerDocumentForAddress({ mode: 'default' }, prompt)
-  })
-  if (!Number.isInteger(savedDraft?.revision) || savedDraft.revision <= currentDraft.revision) {
-    throw new Error('Qualification Camp composer draft did not advance its Core Revision')
-  }
   return request('camp.messages.send', {
     commandId,
     campId,
-    draftRevision: savedDraft.revision,
+    content: composerDocumentForAddress({ mode: 'default' }, prompt),
+    sourceAttachments: [],
+    quotes: [],
+    replyToCampMessageId: null,
     execution
   })
 }

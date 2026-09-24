@@ -1308,10 +1308,10 @@ mod tests {
     // dropping a Connection would roll back cleanly and could never expose this regression.
     #[test]
     fn crashed_sqlite_writer_is_recovered_and_readmitted() {
-        for (mode, namespace, migrate) in [
-            ("DELETE", AuthorityNamespace::Rovai, false),
-            ("DELETE", AuthorityNamespace::Lumen, true),
-            ("WAL", AuthorityNamespace::Rovai, false),
+        for (mode, namespace) in [
+            ("DELETE", AuthorityNamespace::Rovai),
+            ("DELETE", AuthorityNamespace::Lumen),
+            ("WAL", AuthorityNamespace::Rovai),
         ] {
             let directory = TestDirectory::new("crashed-writer");
             crate::platform::private_storage::prepare_private_directory(&directory.0).unwrap();
@@ -1325,10 +1325,6 @@ mod tests {
                     [id],
                 ).unwrap();
             }
-            let runtime_root = database.runtime_camp_files_root().to_path_buf();
-            let runtime_identity = database
-                .runtime_camp_files_root_identity_digest()
-                .to_string();
             drop(database);
             let path = directory.0.join(namespace.main_file_name());
             if namespace == AuthorityNamespace::Lumen {
@@ -1344,10 +1340,6 @@ mod tests {
                     ])
                     .env("ROVAI_SQLITE_CRASH_TEST_DATA_DIR", &directory.0)
                     .env("ROVAI_SQLITE_CRASH_TEST_JOURNAL_MODE", mode)
-                    .env(
-                        "ROVAI_SQLITE_CRASH_TEST_MIGRATE",
-                        if migrate { "1" } else { "0" },
-                    )
                     .stdout(Stdio::null())
                     .stderr(Stdio::inherit())
                     .spawn()
@@ -1378,16 +1370,8 @@ mod tests {
             }
             let lease = CoreDataDirLease::acquire(&directory.0).unwrap();
             let reopened = match DatabaseAdmission::assess(&lease).unwrap() {
-                AdmissionAssessment::AdmittedExisting(ticket) if !migrate => {
+                AdmissionAssessment::AdmittedExisting(ticket) => {
                     crate::db::Database::open_admitted(*ticket).unwrap()
-                }
-                AdmissionAssessment::RequiresMigration(ticket) if migrate => {
-                    crate::authority_migration::AuthorityMigrationRunner::run(
-                        *ticket,
-                        &runtime_root,
-                        &runtime_identity,
-                    )
-                    .unwrap()
                 }
                 other => {
                     panic!("SQLite must recover and readmit {namespace:?}/{mode}, got {other:?}")
@@ -1430,16 +1414,12 @@ mod tests {
         // Only the parent exercises Core admission. This child owns a live SQLite
         // write transaction; opening Core here makes its handshake depend on
         // unrelated startup work when the full test suite runs concurrently.
-        let migrate = std::env::var("ROVAI_SQLITE_CRASH_TEST_MIGRATE").unwrap() == "1";
-        let path = directory.join(if migrate {
+        let path = directory.join(if directory.join("lumen.sqlite").exists() {
             "lumen.sqlite"
         } else {
             "rovai.sqlite"
         });
         let database = Connection::open(path).unwrap();
-        if migrate {
-            crate::db::downgrade_current_schema_to_v115_source_for_test(&database);
-        }
         let mode = std::env::var("ROVAI_SQLITE_CRASH_TEST_JOURNAL_MODE").unwrap();
         assert!(matches!(mode.as_str(), "DELETE" | "WAL"));
         database

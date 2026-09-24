@@ -1,5 +1,6 @@
 import { extractNativeWitnesses } from './qualification-native-witness.mjs'
 import { digestJson, sha256 } from './qualification-common.mjs'
+import { isBatchTrialBoundary, trialRuns } from './qualification-trial-scope.mjs'
 
 export const EVALUATION_CONTEXT_POLICY = 'bounded-evaluation-context-v1'
 const MAX_RECEIPTS = 64
@@ -51,10 +52,13 @@ export function supplementEvaluationContext(snapshot, capture, initialFiles, sup
 // Called only by the isolated Qualification runner, before it discards Runtime
 // payloads. Retain a closed command receipt projection, never thought/text logs.
 export function buildEvaluationContext(snapshot, boundary) {
-  const runs = (snapshot.agentRuns ?? []).filter(run => run.campTurnId === boundary.campTurnId)
+  const runs = trialRuns(snapshot, boundary)
   const runIds = new Set(runs.map(run => run.id))
   const lead = runs.find(run => run.id === boundary.rootAgentRunId)?.agentId
-  const messages = (snapshot.messages ?? []).filter(m => m.campTurnId === boundary.campTurnId && runIds.has(m.sourceAgentRunId))
+  const messages = (snapshot.messages ?? []).filter(m => (
+    (isBatchTrialBoundary(boundary) || m.campTurnId === boundary.campTurnId)
+    && runIds.has(m.sourceAgentRunId)
+  ))
   const deliveryMessageIds = messages.filter(m => m.authorId === lead && m.authorType === 'agent' && !(m.addressedAgentIds?.length)).map(m => m.id)
   const receipts = [], omitted = []
   const seen = new Set()

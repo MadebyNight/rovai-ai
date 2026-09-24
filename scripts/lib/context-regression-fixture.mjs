@@ -20,9 +20,12 @@ export async function materializeRegressionFixture(request, fixture = { campMess
   const entities = []
   for (const body of fixture.campMessages) {
     if (typeof body !== 'string' || body.length > 100_000) throw new Error('Invalid regression history fixture')
-    const current = await request('camp.composerDraft.get', { campId })
-    const saved = await request('camp.composerDraft.save', { campId, expectedRevision: current.revision, content: composerDocumentForAddress({ mode: 'default' }, body) })
-    const response = await request('camp.messages.send', { commandId: randomUUID(), campId, draftRevision: saved.revision, execution: null })
+    const response = await request('camp.messages.send', {
+      commandId: randomUUID(), campId,
+      content: composerDocumentForAddress({ mode: 'default' }, body),
+      sourceAttachments: [], quotes: [], replyToCampMessageId: null,
+      execution: null
+    })
     const result = response.commandResult ?? response
     if (!['applied', 'accepted'].includes(result.status)) throw new Error('Regression history fixture was not accepted')
     entities.push({ kind: 'camp_message', id: result.payload.campMessageId ?? result.payload.messageId, digest: digestJson(body) })

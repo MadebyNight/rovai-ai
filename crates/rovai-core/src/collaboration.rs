@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub const DURABLE_TASK_CONTRACT_VERSION: u32 = 4;
+pub const DURABLE_TASK_CONTRACT_VERSION: u32 = 5;
 const TRUSTED_MEMBERSHIP_SYSTEM_COMPONENTS: &[&str] = &["channel-membership-sync"];
 
 use crate::{
@@ -471,10 +471,9 @@ pub enum TaskAssigneeUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateTaskCommand {
     pub task_id: String,
-    pub expected_version: i64,
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<TaskStatus>,
@@ -511,7 +510,6 @@ pub struct TaskRecord {
     pub closed_by_type: Option<String>,
     pub closed_by_id: Option<String>,
     pub closed_by_agent_run_id: Option<String>,
-    pub version: i64,
     pub created_at: String,
     pub updated_at: String,
     pub closed_at: Option<String>,
@@ -2268,12 +2266,12 @@ impl CollaborationService {
                     source_agent_run_id,
                     blocked_reason, completion_summary, cancel_reason,
                     closed_by_type, closed_by_id, closed_by_agent_run_id,
-                    version, created_at, updated_at, closed_at
+                    created_at, updated_at, closed_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, 'pending',
                     ?6, ?7, ?8, ?9,
                     NULL, NULL, NULL, NULL, NULL, NULL,
-                    1, ?10, ?10, NULL
+                    ?10, ?10, NULL
                 )
                 "#,
                 params![
@@ -2385,14 +2383,6 @@ impl CollaborationService {
                     "An Assignee can update only its own execution-state fields; the User or current Default Lead owns Task responsibility definition",
                 ));
             }
-            if projected.version != envelope.payload.expected_version {
-                return Ok(task_version_conflict(
-                    &envelope.payload.task_id,
-                    projected.version,
-                    "Task version does not match expectedVersion",
-                ));
-            }
-
             let next_assignee = match &envelope.payload.assignee {
                 TaskAssigneeUpdate::Unchanged => projected.assignee_agent_id.clone(),
                 TaskAssigneeUpdate::Assign { agent_id } => {
@@ -2526,8 +2516,8 @@ impl CollaborationService {
                     blocked_reason = ?7, completion_summary = ?8, cancel_reason = ?9,
                     closed_by_type = ?10, closed_by_id = ?11,
                     closed_by_agent_run_id = ?12, closed_at = ?13,
-                    version = version + 1, updated_at = ?14
-                WHERE id = ?1 AND version = ?15
+                    updated_at = ?14
+                WHERE id = ?1
                 "#,
                 params![
                     envelope.payload.task_id,
@@ -2544,15 +2534,10 @@ impl CollaborationService {
                     projected.closed_by_agent_run_id,
                     projected.closed_at,
                     now,
-                    envelope.payload.expected_version,
                 ],
             )?;
             if updated != 1 {
-                return Ok(task_version_conflict(
-                    &envelope.payload.task_id,
-                    original.version,
-                    "Task version changed while applying the update",
-                ));
+                anyhow::bail!("Task disappeared during its update transaction");
             }
             append_domain_event(
                 transaction,
@@ -2565,17 +2550,15 @@ impl CollaborationService {
                     "previousStatus": original.status,
                     "status": projected.status,
                     "assigneeAgentId": projected.assignee_agent_id,
-                    "version": original.version + 1,
                 }),
             )?;
-            let mut detail = load_task_detail(
+            let detail = load_task_detail(
                 transaction,
                 &envelope.payload.task_id,
                 &envelope.actor,
                 can_update_any,
             )?
             .context("updated Task is missing")?;
-            detail.task.version = original.version + 1;
             let mut value = serde_json::to_value(detail)?;
             value["changed"] = json!(true);
             Ok(CommandHandlerResult::applied(
@@ -2603,7 +2586,7 @@ impl CollaborationService {
                    assignee_agent_id, blocked_reason, completion_summary, cancel_reason,
                    created_by_type, created_by_id, source_agent_run_id,
                    closed_by_type, closed_by_id, closed_by_agent_run_id,
-                   version, created_at, updated_at, closed_at
+                   created_at, updated_at, closed_at
             FROM task
             WHERE camp_id = ?1
             ORDER BY created_at DESC, id DESC
@@ -2731,7 +2714,7 @@ impl CollaborationService {
                        assignee_agent_id, blocked_reason, completion_summary, cancel_reason,
                        created_by_type, created_by_id, source_agent_run_id,
                        closed_by_type, closed_by_id, closed_by_agent_run_id,
-                       version, created_at, updated_at, closed_at
+                       created_at, updated_at, closed_at
                 FROM task
                 WHERE id = ?1 AND camp_id = ?2
                 "#,
@@ -4593,10 +4576,9 @@ fn task_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord>
         closed_by_type: row.get(13)?,
         closed_by_id: row.get(14)?,
         closed_by_agent_run_id: row.get(15)?,
-        version: row.get(16)?,
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
-        closed_at: row.get(19)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+        closed_at: row.get(18)?,
     })
 }
 
@@ -4608,7 +4590,7 @@ fn load_task_record(transaction: &Connection, task_id: &str) -> Result<Option<Ta
                    assignee_agent_id, blocked_reason, completion_summary, cancel_reason,
                    created_by_type, created_by_id, source_agent_run_id,
                    closed_by_type, closed_by_id, closed_by_agent_run_id,
-                   version, created_at, updated_at, closed_at
+                   created_at, updated_at, closed_at
             FROM task WHERE id = ?1
             "#,
             [task_id],
@@ -4842,20 +4824,14 @@ pub(crate) fn task_link_admission(
     let task = transaction
         .query_row(
             r#"
-            SELECT status, assignee_agent_id, version
+            SELECT status, assignee_agent_id
             FROM task WHERE id = ?1 AND camp_id = ?2
             "#,
             params![task_id, camp_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?;
-    let Some((status, assignee_agent_id, _version)) = task else {
+    let Some((status, assignee_agent_id)) = task else {
         return Ok(false);
     };
     if !matches!(status.as_str(), "pending" | "in_progress") {
@@ -5589,8 +5565,8 @@ fn validate_task_input(command: &CreateTaskCommand) -> Result<()> {
 }
 
 fn validate_task_update_input(command: &UpdateTaskCommand) -> Result<()> {
-    if command.task_id.trim().is_empty() || command.expected_version < 1 {
-        anyhow::bail!("Task update requires an ID and positive expectedVersion");
+    if command.task_id.trim().is_empty() {
+        anyhow::bail!("Task update requires an ID");
     }
     if command.title.is_none()
         && command.description.is_none()
@@ -5837,21 +5813,6 @@ fn advance_membership_source_generation(
         anyhow::bail!("membership source generation changed before command commit");
     }
     Ok(())
-}
-
-fn task_version_conflict(
-    task_id: &str,
-    current_version: i64,
-    message: &str,
-) -> CommandHandlerResult {
-    CommandHandlerResult::rejected(
-        "task.version_conflict",
-        json!({
-            "message": message,
-            "taskId": task_id,
-            "currentVersion": current_version,
-        }),
-    )
 }
 
 fn actor_parts(actor: &ActorRef) -> (&'static str, &str, Option<&str>) {
@@ -6358,7 +6319,7 @@ pub(crate) fn end_camp_membership(
     let released = {
         let mut statement = transaction.prepare(
             r#"
-            SELECT id, status, version
+            SELECT id, status
             FROM task
             WHERE camp_id = ?1 AND assignee_agent_id = ?2
               AND status IN ('pending', 'in_progress', 'blocked')
@@ -6367,16 +6328,12 @@ pub(crate) fn end_camp_membership(
         )?;
         statement
             .query_map(params![camp_id, agent_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     let released_task_count = released.len();
-    for (task_id, previous_status, version) in released {
+    for (task_id, previous_status) in released {
         transaction.execute(
             r#"
             UPDATE task
@@ -6384,7 +6341,7 @@ pub(crate) fn end_camp_membership(
                 blocked_reason = NULL, completion_summary = NULL, cancel_reason = NULL,
                 closed_by_type = NULL, closed_by_id = NULL,
                 closed_by_agent_run_id = NULL, closed_at = NULL,
-                version = version + 1, updated_at = ?2
+                updated_at = ?2
             WHERE id = ?1
             "#,
             params![task_id, now],
@@ -6402,7 +6359,6 @@ pub(crate) fn end_camp_membership(
                 "status": "pending",
                 "previousAssigneeAgentId": agent_id,
                 "assigneeAgentId": null,
-                "version": version + 1,
             }),
         )?;
     }
@@ -10657,7 +10613,7 @@ mod slow_tests {
     }
 
     #[test]
-    fn lightweight_task_is_explicit_versioned_and_terminal() {
+    fn lightweight_task_updates_submitted_fields_and_is_terminal() {
         let (mut database, directory) = test_database();
         let service = CollaborationService::default();
         let camp_id =
@@ -10699,7 +10655,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 1,
                         title: None,
                         description: None,
                         status: Some(TaskStatus::InProgress),
@@ -10712,7 +10667,7 @@ mod slow_tests {
             )
             .expect("Task update should succeed");
         assert_eq!(updated.result.status, CommandResultStatus::Applied);
-        assert_eq!(updated.result.payload["version"], 2);
+        assert!(updated.result.payload.get("version").is_none());
         assert_eq!(row_count(&database, "camp_message"), baseline_messages);
         assert_eq!(row_count(&database, "camp_turn"), baseline_turns);
         assert_eq!(row_count(&database, "agent_run"), baseline_runs);
@@ -10725,7 +10680,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 2,
                         status: Some(TaskStatus::InProgress),
                         ..Default::default()
                     },
@@ -10734,7 +10688,7 @@ mod slow_tests {
             .expect("An identical projected state should be a durable no-op");
         assert_eq!(unchanged.result.code, "task.unchanged");
         assert_eq!(unchanged.result.payload["changed"], false);
-        assert_eq!(unchanged.result.payload["version"], 2);
+        assert!(unchanged.result.payload.get("version").is_none());
         let update_events_after_noop: i64 = database
             .connection()
             .query_row(
@@ -10745,16 +10699,15 @@ mod slow_tests {
             .unwrap();
         assert_eq!(update_events_after_noop, 1);
 
-        let stale = service
+        let later = service
             .update_task(
                 &mut database,
                 &user_envelope(
-                    "stale-lightweight-task",
+                    "later-title-lightweight-task",
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 1,
-                        title: Some("stale".to_string()),
+                        title: Some("最新标题".to_string()),
                         description: None,
                         status: None,
                         assignee: TaskAssigneeUpdate::Unchanged,
@@ -10762,8 +10715,9 @@ mod slow_tests {
                     },
                 ),
             )
-            .expect("Version conflict should be durable");
-        assert_eq!(stale.result.code, "task.version_conflict");
+            .expect("An independent field update should commit");
+        assert_eq!(later.result.status, CommandResultStatus::Applied);
+        assert_eq!(later.result.payload["title"], "最新标题");
 
         let completed = service
             .update_task(
@@ -10773,7 +10727,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 2,
                         title: None,
                         description: None,
                         status: Some(TaskStatus::Completed),
@@ -10784,17 +10737,17 @@ mod slow_tests {
                 ),
             )
             .expect("Authorized declaration should complete the Task");
-        assert_eq!(completed.result.payload["version"], 3);
-        let (status, version, closed_at): (String, i64, Option<String>) = database
+        assert!(completed.result.payload.get("version").is_none());
+        let (status, title, closed_at): (String, String, Option<String>) = database
             .connection()
             .query_row(
-                "SELECT status, version, closed_at FROM task WHERE id = ?1",
+                "SELECT status, title, closed_at FROM task WHERE id = ?1",
                 [&task_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert_eq!(status, "completed");
-        assert_eq!(version, 3);
+        assert_eq!(title, "最新标题");
         assert!(closed_at.is_some());
         assert_eq!(row_count(&database, "camp_message"), baseline_messages);
         let task_update_events: i64 = database
@@ -10805,7 +10758,7 @@ mod slow_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(task_update_events, 2);
+        assert_eq!(task_update_events, 3);
         let indexed_system_events: i64 = database
             .connection()
             .query_row(
@@ -10830,7 +10783,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 3,
                         title: Some("不得修改".to_string()),
                         description: None,
                         status: None,
@@ -10906,14 +10858,13 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.to_string(),
-                        expected_version: 1,
                         title: Some("历史任务（已重命名）".to_string()),
                         ..Default::default()
                     },
                 ),
             )
             .unwrap();
-        assert_eq!(unrelated.result.payload["version"], 2);
+        assert!(unrelated.result.payload.get("version").is_none());
         let preserved: String = database
             .connection()
             .query_row(
@@ -10933,7 +10884,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.to_string(),
-                        expected_version: 2,
                         description: Some(public_description),
                         ..Default::default()
                     },
@@ -10941,7 +10891,7 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(unchanged.result.code, "task.unchanged");
-        assert_eq!(unchanged.result.payload["version"], 2);
+        assert!(unchanged.result.payload.get("version").is_none());
 
         let changed = service
             .update_task(
@@ -10951,14 +10901,13 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.to_string(),
-                        expected_version: 2,
                         description: Some("统一后的范围与要求".to_string()),
                         ..Default::default()
                     },
                 ),
             )
             .unwrap();
-        assert_eq!(changed.result.payload["version"], 3);
+        assert!(changed.result.payload.get("version").is_none());
         let stored: (String, String) = database
             .connection()
             .query_row(
@@ -11010,7 +10959,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: first_id.clone(),
-                        expected_version: 1,
                         assignee: TaskAssigneeUpdate::Clear,
                         ..Default::default()
                     },
@@ -11026,7 +10974,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: first_id.clone(),
-                        expected_version: 2,
                         status: Some(TaskStatus::Completed),
                         completion_summary: Some("无人负责不可直接完成".to_string()),
                         ..Default::default()
@@ -11038,15 +10985,15 @@ mod slow_tests {
             unassigned_completed.result.code,
             "task.invalid_projected_state"
         );
-        let unassigned_state: (String, Option<String>, i64) = database
+        let unassigned_state: (String, Option<String>) = database
             .connection()
             .query_row(
-                "SELECT status, assignee_agent_id, version FROM task WHERE id = ?1",
+                "SELECT status, assignee_agent_id FROM task WHERE id = ?1",
                 [&first_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(unassigned_state, ("pending".to_string(), None, 2));
+        assert_eq!(unassigned_state, ("pending".to_string(), None));
         service
             .update_task(
                 &mut database,
@@ -11055,7 +11002,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: second_id.to_string(),
-                        expected_version: 1,
                         title: None,
                         description: None,
                         status: Some(TaskStatus::Completed),
@@ -11295,7 +11241,6 @@ mod slow_tests {
                     1,
                     UpdateTaskCommand {
                         task_id: assigned_id.clone(),
-                        expected_version: 1,
                         title: Some("越权".to_string()),
                         description: None,
                         status: None,
@@ -11317,7 +11262,6 @@ mod slow_tests {
                     1,
                     UpdateTaskCommand {
                         task_id: owned_id.clone(),
-                        expected_version: 1,
                         status: Some(TaskStatus::Blocked),
                         blocked_reason: Some("等待输入".to_string()),
                         ..Default::default()
@@ -11395,7 +11339,6 @@ mod slow_tests {
                     1,
                     UpdateTaskCommand {
                         task_id: assigned_id,
-                        expected_version: 1,
                         title: Some("Lead 已收口".to_string()),
                         description: None,
                         status: None,
@@ -11450,7 +11393,6 @@ mod slow_tests {
                     1,
                     UpdateTaskCommand {
                         task_id: owned_id,
-                        expected_version: 2,
                         status: Some(TaskStatus::Cancelled),
                         cancel_reason: Some("普通 Agent 不具有取消权限".to_string()),
                         ..Default::default()
@@ -11491,7 +11433,6 @@ mod slow_tests {
                     1,
                     UpdateTaskCommand {
                         task_id: lead_created_id,
-                        expected_version: 1,
                         title: Some("取消后不得继续写入".to_string()),
                         ..Default::default()
                     },
@@ -11568,15 +11509,15 @@ mod slow_tests {
             .as_str()
             .unwrap()
             .to_string();
-        let admission: (Option<i64>, Option<String>) = database
+        let admission: Option<String> = database
             .connection()
             .query_row(
-                "SELECT task_version_at_admission, assignee_agent_id_at_admission FROM agent_run WHERE id = ?1",
+                "SELECT assignee_agent_id_at_admission FROM agent_run WHERE id = ?1",
                 [&agent_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(admission, (Some(1), Some("agent_2".to_string())));
+        assert_eq!(admission.as_deref(), Some("agent_2"));
 
         let reassigned = service
             .update_task(
@@ -11586,7 +11527,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 1,
                         title: Some("一次性准入（已改派）".to_string()),
                         assignee: TaskAssigneeUpdate::Assign {
                             agent_id: "agent_1".to_string(),
@@ -11596,7 +11536,7 @@ mod slow_tests {
                 ),
             )
             .unwrap();
-        assert_eq!(reassigned.result.payload["version"], 2);
+        assert!(reassigned.result.payload.get("version").is_none());
         let completed = service
             .update_task(
                 &mut database,
@@ -11605,7 +11545,6 @@ mod slow_tests {
                     Some(&camp_id),
                     UpdateTaskCommand {
                         task_id: task_id.clone(),
-                        expected_version: 2,
                         status: Some(TaskStatus::Completed),
                         completion_summary: Some("责任记录已经收口".to_string()),
                         ..Default::default()
@@ -11624,17 +11563,17 @@ mod slow_tests {
                 && candidate.task_id.as_deref() == Some(task_id.as_str())
         }));
 
-        let frozen_after: (Option<i64>, Option<String>, String) = database
+        let frozen_after: (Option<String>, String) = database
             .connection()
             .query_row(
-                "SELECT task_version_at_admission, assignee_agent_id_at_admission, status FROM agent_run WHERE id = ?1",
+                "SELECT assignee_agent_id_at_admission, status FROM agent_run WHERE id = ?1",
                 [&agent_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert_eq!(
             frozen_after,
-            (Some(1), Some("agent_2".to_string()), "queued".to_string())
+            (Some("agent_2".to_string()), "queued".to_string())
         );
 
         drop(database);
@@ -11687,17 +11626,17 @@ mod slow_tests {
                 [],
             )
             .unwrap();
-        let retained_while_away: (String, Option<String>, i64) = database
+        let retained_while_away: (String, Option<String>) = database
             .connection()
             .query_row(
-                "SELECT status, assignee_agent_id, version FROM task WHERE id = ?1",
+                "SELECT status, assignee_agent_id FROM task WHERE id = ?1",
                 [&task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert_eq!(
             retained_while_away,
-            ("pending".to_string(), Some("agent_4".to_string()), 1)
+            ("pending".to_string(), Some("agent_4".to_string()))
         );
 
         let removed = profiles
@@ -11724,15 +11663,15 @@ mod slow_tests {
             )
             .unwrap();
         assert_eq!(membership_status, "left");
-        let released: (String, Option<String>, Option<String>, i64) = database
+        let released: (String, Option<String>, Option<String>) = database
             .connection()
             .query_row(
-                "SELECT status, assignee_agent_id, blocked_reason, version FROM task WHERE id = ?1",
+                "SELECT status, assignee_agent_id, blocked_reason FROM task WHERE id = ?1",
                 [&task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(released, ("pending".to_string(), None, None, 2));
+        assert_eq!(released, ("pending".to_string(), None, None));
         let lead: Option<String> = database
             .connection()
             .query_row(

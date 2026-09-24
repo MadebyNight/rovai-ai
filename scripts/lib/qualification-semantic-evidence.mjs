@@ -1,4 +1,5 @@
 import { validateTaskSourceMaterial } from './qualification-task-source-materials.mjs'
+import { isBatchTrialBoundary, trialRuns } from './qualification-trial-scope.mjs'
 import { readFile, realpath } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { stableEvidenceId } from './qualification-evidence-index.mjs'
@@ -67,7 +68,7 @@ export function buildCollaborationMessageEvidence({
   evidenceIndex,
   producerDigest
 }) {
-  const calls = collaborationEvidence?.sourceSurface === 'public_message_delivery_v1'
+  const calls = ['public_message_delivery_v1', 'public_message_delivery_v9'].includes(collaborationEvidence?.sourceSurface)
     ? collaborationEvidence.a2a ?? []
     : []
   const messageById = new Map((Array.isArray(snapshot?.messages) ? snapshot.messages : [])
@@ -489,7 +490,7 @@ export async function buildTaskJudgeSegments({ evidenceDirectory, result, eviden
   const observation = JSON.parse(raw.trim().split('\n').at(-1))
   if (digestJson(observation.snapshot) !== observation.digest) throw new Error('Task snapshot digest mismatch')
   const snapshot = evaluationSnapshot ?? observation.snapshot
-  const runs = new Set(snapshot.agentRuns.filter(run => run.campTurnId === result.dispatchBoundary.campTurnId).map(run => run.id))
+  const runs = new Set(trialRuns(snapshot, result.dispatchBoundary).map(run => run.id))
   const context = includeEvaluationContext && ['bounded-evaluation-context-v1', 'bounded-evaluation-context-v2', 'bounded-evaluation-context-v3', 'bounded-evaluation-context-v4', 'bounded-evaluation-context-v5'].includes(snapshot.evaluationContext?.policyId) ? snapshot.evaluationContext : null
   if (context) {
     const events = new Map((snapshot.executionEvidence ?? []).filter(event => runs.has(event.agentRunId)).map(event => [event.id, event]))
@@ -535,7 +536,9 @@ export async function buildTaskJudgeSegments({ evidenceDirectory, result, eviden
     .sort((a, b) => a.sequence - b.sequence)
   if (requireDeliveryClosure && (!context || deliveries.length !== context.deliveryMessageIds.length
       || !leadId || deliveries.some(message => message.authorType !== 'agent' || message.authorId !== leadId
-        || !runs.has(message.sourceAgentRunId) || message.campTurnId !== result.dispatchBoundary.campTurnId
+        || !runs.has(message.sourceAgentRunId)
+        || (!isBatchTrialBoundary(result.dispatchBoundary)
+          && message.campTurnId !== result.dispatchBoundary.campTurnId)
         || message.addressedAgentIds?.length || (!Number.isSafeInteger(message.sequence) || message.sequence < 1))
       || new Set(deliveries.map(message => message.sequence)).size !== deliveries.length)) throw new Error('delivery_history.inventory_incomplete')
   const deliveryOrder = new Map(deliveries.map((message, index) => [message.id, index + 1]))
@@ -543,7 +546,9 @@ export async function buildTaskJudgeSegments({ evidenceDirectory, result, eviden
   const retainedDeliveries = new Set()
   const currentDeliveryId = ['bounded-evaluation-context-v3', 'bounded-evaluation-context-v4', 'bounded-evaluation-context-v5'].includes(context?.policyId) ? snapshot.messages.filter(message => context.deliveryMessageIds.includes(message.id)).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)).at(-1)?.id : null
   for (const message of snapshot.messages) {
-    if (message.authorType !== 'agent' || !runs.has(message.sourceAgentRunId) || message.campTurnId !== result.dispatchBoundary.campTurnId) continue
+    if (message.authorType !== 'agent' || !runs.has(message.sourceAgentRunId)
+        || (!isBatchTrialBoundary(result.dispatchBoundary)
+          && message.campTurnId !== result.dispatchBoundary.campTurnId)) continue
     const body = typeof message.body === 'string' ? message.body : (message.content ?? []).filter(part => part.kind === 'text').map(part => part.text).join('')
     const evidenceReference = { artifactId: evidenceIndex.artifactId, evidenceId: stableEvidenceId('core.message-content', message.id) }
     const record = indexRecords.get(evidenceReference.evidenceId)
