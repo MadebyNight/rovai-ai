@@ -178,7 +178,9 @@ use rovai_core::{
         AgentRunExecutionEvidence, ExecutionEvidenceService, PreparedRuntimeEvidence,
         RUNTIME_EVIDENCE_DELTA_BATCH_MAX_BYTES, RecordedExecutionEvidence,
     },
-    file_preview_authority::{ResolveFilePreviewSourceParams, resolve_file_preview_source},
+    file_preview_authority::{
+        ResolveFilePreviewSourceParams, resolve_file_preview_source, resolve_skill_preview_source,
+    },
     git,
     local_attachment_source::{
         LocalAttachmentFailure, LocalAttachmentOwnerLocator, load_agent_run_source_attachments,
@@ -276,8 +278,8 @@ use rovai_core::{
         SetSkillGroupAssignmentsCommand, SkillContentRequest, SkillLibraryService,
     },
     skill_projection::{
-        PreparedSkillExposure, ReconcileSkillProjectionsCommand, SkillProjectionGateBusy,
-        SkillProjectionReconciler,
+        CleanupLegacySkillEntriesCommand, PreparedSkillExposure, ReconcileSkillProjectionsCommand,
+        SkillProjectionGateBusy, SkillProjectionReconciler,
     },
     storage_layout::CampOutputDirectory,
     team_tool::{
@@ -1372,6 +1374,14 @@ struct CampSkillCandidatesParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NativeSkillReadParams {
     skill_id: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ToolboxReadParams {
+    skill_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3903,46 +3913,44 @@ impl Core {
             let database = self.database.lock().await;
             checks.push(database_integrity_check(&database));
 
-            match SkillProjectionReconciler.stored_diagnostic_summary(&database) {
-                Ok((0, _)) => checks.push(
+            match SkillProjectionReconciler.legacy_entry_count(&database) {
+                Ok(0) => checks.push(
                     DiagnosticCheck::new(
-                        "skill-projections",
+                        "legacy-skill-entries",
                         DiagnosticGroup::ManagedContent,
-                        "skill_projections",
-                        "Skill 投影",
+                        "legacy_skill_entries",
+                        "旧版 Skill 入口",
                         DiagnosticStatus::Ok,
-                        "skill_projections_ready",
-                        "Stored Skill projection state has no pending reconciliation",
+                        "legacy_skill_entries_clear",
+                        "No legacy Skill dispatch entries remain",
                     )
                     .with_observed_at(&checked_at)
-                    .with_fact("issueCount", "0"),
+                    .with_fact("entryCount", "0"),
                 ),
-                Ok((issue_count, codes)) => {
-                    let codes = codes.into_iter().collect::<Vec<_>>().join(",");
+                Ok(entry_count) => {
                     checks.push(
                         DiagnosticCheck::new(
-                            "skill-projections",
+                            "legacy-skill-entries",
                             DiagnosticGroup::ManagedContent,
-                            "skill_projections",
-                            "Skill 投影",
+                            "legacy_skill_entries",
+                            "旧版 Skill 入口",
                             DiagnosticStatus::Attention,
-                            "skill_projections_need_reconcile",
-                            "Stored Skill projection state will reconcile on the next relevant Run or explicit repair",
+                            "legacy_skill_entries_recorded",
+                            "Legacy Rovai Skill dispatch entries await explicit cleanup",
                         )
                         .with_observed_at(&checked_at)
-                        .with_fact("issueCount", issue_count.to_string())
-                        .with_fact("issueCodes", codes),
+                        .with_fact("entryCount", entry_count.to_string()),
                     );
                 }
                 Err(_) => checks.push(
                     DiagnosticCheck::new(
-                        "skill-projections",
+                        "legacy-skill-entries",
                         DiagnosticGroup::ManagedContent,
-                        "skill_projections",
-                        "Skill 投影",
+                        "legacy_skill_entries",
+                        "旧版 Skill 入口",
                         DiagnosticStatus::Unknown,
-                        "skill_projection_audit_failed",
-                        "Stored Skill projection state could not be confirmed",
+                        "legacy_skill_entries_unavailable",
+                        "Legacy Skill dispatch records could not be read",
                     )
                     .with_observed_at(&checked_at),
                 ),
@@ -7928,6 +7936,16 @@ impl Core {
                     managed.list_toolbox(database.connection())?,
                 )?)
             }
+            "toolbox.read" => {
+                let params: ToolboxReadParams = serde_json::from_value(request.params.clone())?;
+                let managed =
+                    rovai_core::managed_skills::ManagedSkills::for_data_dir(&self.data_dir)?;
+                let content = tokio::task::spawn_blocking(move || {
+                    managed.read_toolbox_content(&params.skill_name)
+                })
+                .await??;
+                Ok(serde_json::json!({ "content": content }))
+            }
             "toolbox.setMembers" => {
                 let params: UserCommandParams<
                     rovai_core::managed_skills::SetToolboxMembersCommand,
@@ -7969,30 +7987,36 @@ impl Core {
                 ).context("Native Skill source is not known to this Core")?;
                 drop(database);
                 let id = params.skill_id;
-                let content = tokio::task::spawn_blocking(move || -> Result<String> {
-                    let entry = std::path::Path::new(&path);
-                    anyhow::ensure!(
-                        entry.is_absolute()
-                            && entry.file_name().is_some_and(|value| value == "SKILL.md"),
-                        "Native Skill entry is invalid"
-                    );
-                    let current = entry.canonicalize()?;
-                    anyhow::ensure!(
-                        current == std::path::Path::new(&canonical),
-                        "Native Skill source changed; refresh the list"
-                    );
-                    let adapter = adapter.parse()?;
-                    let observed = rovai_core::native_skills::read_native_skill(
-                        entry, &current, &scope, adapter,
-                    )?;
-                    anyhow::ensure!(
-                        observed.id == id && observed.name == name,
-                        "Native Skill source changed; refresh the list"
-                    );
-                    Ok(std::fs::read_to_string(entry)?)
-                })
+                let selected_path = params.path.unwrap_or_else(|| "SKILL.md".to_string());
+                let content = tokio::task::spawn_blocking(
+                    move || -> Result<rovai_core::skill::SkillContentView> {
+                        let entry = std::path::Path::new(&path);
+                        anyhow::ensure!(
+                            entry.is_absolute()
+                                && entry.file_name().is_some_and(|value| value == "SKILL.md"),
+                            "Native Skill entry is invalid"
+                        );
+                        let current = entry.canonicalize()?;
+                        anyhow::ensure!(
+                            current == std::path::Path::new(&canonical),
+                            "Native Skill source changed; refresh the list"
+                        );
+                        let adapter = adapter.parse()?;
+                        let observed = rovai_core::native_skills::read_native_skill(
+                            entry, &current, &scope, adapter,
+                        )?;
+                        anyhow::ensure!(
+                            observed.id == id && observed.name == name,
+                            "Native Skill source changed; refresh the list"
+                        );
+                        let root = current
+                            .parent()
+                            .context("Native Skill source has no directory")?;
+                        rovai_core::native_skills::read_native_skill_content(root, &selected_path)
+                    },
+                )
                 .await??;
-                Ok(json!({"content": content}))
+                Ok(serde_json::to_value(content)?)
             }
             "skills.candidates" => {
                 let params: CampSkillCandidatesParams =
@@ -8373,6 +8397,28 @@ impl Core {
                             "rootCount": reports.len(),
                             "reports": reports,
                         }),
+                        None,
+                    ))
+                })?;
+                Ok(serde_json::to_value(execution.result)?)
+            }
+            "skills.cleanupLegacyEntries" => {
+                let params: UserCommandParams<CleanupLegacySkillEntriesCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let envelope = user_command_envelope(params.command_id, params.command);
+                if let Some(replay) = {
+                    let database = self.database.lock().await;
+                    DomainCommandGateway.replay_if_recorded(&database, &envelope)?
+                } {
+                    return Ok(serde_json::to_value(replay.result)?);
+                }
+                let mut database = self.database.lock().await;
+                let report = SkillProjectionReconciler
+                    .cleanup_legacy_entries(&mut database, &self.skill_library)?;
+                let execution = DomainCommandGateway.execute(&mut database, &envelope, |_| {
+                    Ok(rovai_core::command::CommandHandlerResult::applied(
+                        "legacy_skill_entries_cleaned",
+                        serde_json::to_value(report)?,
                         None,
                     ))
                 })?;
@@ -9582,11 +9628,16 @@ impl Core {
                 let params: ResolveFilePreviewSourceParams =
                     serde_json::from_value(request.params.clone())?;
                 let database = self.database.lock().await;
-                Ok(serde_json::to_value(resolve_file_preview_source(
-                    &database,
-                    &ManagedBlobStore::new(&self.data_dir),
-                    params,
-                )?)?)
+                let resolved = if params.kind == "skill_reference" {
+                    resolve_skill_preview_source(&database, &self.data_dir, &params)?
+                } else {
+                    resolve_file_preview_source(
+                        &database,
+                        &ManagedBlobStore::new(&self.data_dir),
+                        params,
+                    )?
+                };
+                Ok(serde_json::to_value(resolved)?)
             }
             "camp.messages.send" => {
                 let params: SendCampMessageParams = serde_json::from_value(request.params.clone())?;

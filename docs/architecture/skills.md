@@ -21,6 +21,8 @@ Skills 是模型可按需读取的文件指南，不改变工具、权限、消�
 
 受管文件同步仅操作九个 Rovai 发布目录，且不跟随来源或目标的符号链接。受管根来自执行 Host 的 Core data-dir 规则，不能使用 Renderer 前台路径或模型侧 `~`。旧 Library 的启停和 Runtime group assignment 不转为队员配置；迁移及新建队员只默认选择 `member-studio`。用户显式关闭后，Core 重启不重新开启。
 
+诊断读取旧派发 observation 的数量，不扫描项目。用户点击唯一清理动作时，Core 以 observation 的精确入口为候选，逐项重新确认受管归属、root `active`、可访问性和运行中 Run；无法确认则保留。清理只移除该入口和对应旧 observation；`access_state` 继续由 Navigation 的项目移除／恢复维护，清理命令不调用 `remove_execution_root`。Core 启动与升级不触发旧入口文件清理。
+
 ## 选择到投递的数据流
 
 ```text

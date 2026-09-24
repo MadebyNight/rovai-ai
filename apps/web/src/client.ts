@@ -131,6 +131,7 @@ export const WEB_OPERATIONS = [
   'skills.list',
   'skills.get',
   'toolbox.list',
+  'toolbox.read',
   'toolbox.setMembers',
   'nativeSkills.list',
   'nativeSkills.read',

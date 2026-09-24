@@ -15,15 +15,20 @@ const zoom = Number(process.env.ROVAI_CAPTURE_ZOOM_FACTOR ?? 1)
 if (!['day', 'night'].includes(theme) || ![1, 2].includes(zoom)) {
   throw new Error('ROVAI_CAPTURE_THEME must be day or night and ROVAI_CAPTURE_ZOOM_FACTOR must be 1 or 2')
 }
-const width = 1440
-const height = 920
+const width = Number(process.env.ROVAI_CAPTURE_WIDTH ?? 1440)
+const height = Number(process.env.ROVAI_CAPTURE_HEIGHT ?? 920)
+if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1040 || height < 700) {
+  throw new Error('ROVAI_CAPTURE_WIDTH/HEIGHT must be valid desktop viewport dimensions')
+}
 const fixtureHome = join(dirname(userDataDirectory), 'native-home')
 const nativeSkill = join(fixtureHome, '.codex', 'skills', 'acceptance-demo')
 const nativePage = pageExpression('skills', 'Skills')
 const toolboxPage = pageExpression('toolbox', '工具箱')
 await mkdir(nativeSkill, { recursive: true })
+await mkdir(join(nativeSkill, 'references'), { recursive: true })
 await mkdir(outputDirectory, { recursive: true, mode: 0o700 })
 await writeFile(join(nativeSkill, 'SKILL.md'), '---\nname: acceptance-demo\ndescription: Isolated Skills acceptance fixture\n---\n\n# Acceptance demo\n\nA local read-only discovery fixture.\n')
+await writeFile(join(nativeSkill, 'references', 'example.md'), '# Reference file\n\nThe file switcher opened this document.\n')
 seedCompletedOnboardingForAcceptance(userDataDirectory)
 
 const port = await freePort()
@@ -66,6 +71,7 @@ try {
 
   await openSection(cdp, 'Skills')
   await waitFor(cdp, `Boolean((${nativePage})?.querySelector('.rebuilt-skill-row strong'))`, 30_000)
+  await waitFor(cdp, `(${nativePage})?.querySelector('.rebuilt-skills-content')?.textContent?.includes('A local read-only discovery fixture.')`, 5_000)
   const skills = await evaluate(cdp, `(() => {
     const panel = ${nativePage}
     const rows = [...panel.querySelectorAll('.rebuilt-skill-row strong')].map((item) => item.textContent.trim())
@@ -80,6 +86,27 @@ try {
     throw new Error(`Native Skills view did not match its isolated source: ${JSON.stringify(skills)}`)
   }
   if (skills.narrow) await selectFirstRow(cdp, nativePage)
+  await waitFor(cdp, `!document.querySelector('.page-zoom-indicator')`, 5_000)
+  await evaluate(cdp, `(${nativePage}).querySelector('button.skill-file-current')?.click()`)
+  await waitFor(cdp, `Boolean((${nativePage}).querySelector('.skill-file-directory'))`, 5_000)
+  const fileMenu = await evaluate(cdp, `(() => {
+    const page = ${nativePage}
+    const element = page.querySelector('.skill-file-directory')
+    const menu = element?.getBoundingClientRect()
+    const bounds = page.getBoundingClientRect()
+    return { top: menu?.top, bottom: menu?.bottom, width: menu?.width,
+      pageTop: bounds.top, pageBottom: bounds.bottom,
+      visibleAtCenter: menu ? element.contains(document.elementFromPoint(menu.left + menu.width / 2, menu.top + menu.height / 2)) : false }
+  })()`)
+  if (fileMenu.width < 200 || fileMenu.top < fileMenu.pageTop - 1 || fileMenu.bottom > fileMenu.pageBottom + 1 || !fileMenu.visibleAtCenter) {
+    throw new Error(`Skill file menu is outside the visible settings area: ${JSON.stringify(fileMenu)}`)
+  }
+  await capture(cdp, join(outputDirectory, 'skills-file-menu.png'))
+  await evaluate(cdp, `([...(${nativePage}).querySelectorAll('.skill-file-entry')].find((button) => button.getAttribute('aria-label') === 'references/example.md'))?.click()`)
+  await waitFor(cdp, `(${nativePage}).querySelector('.rebuilt-skills-content')?.textContent?.includes('The file switcher opened this document.')`, 5_000)
+  await evaluate(cdp, `(${nativePage}).querySelector('button.skill-file-current')?.click()`)
+  await evaluate(cdp, `([...(${nativePage}).querySelectorAll('.skill-file-entry')].find((button) => button.getAttribute('aria-label') === 'SKILL.md'))?.click()`)
+  await waitFor(cdp, `(${nativePage}).querySelector('.rebuilt-skills-content')?.textContent?.includes('A local read-only discovery fixture.')`, 5_000)
   await waitFor(cdp, `!document.querySelector('.page-zoom-indicator')`, 5_000)
   await capture(cdp, join(outputDirectory, 'skills.png'))
 
@@ -104,6 +131,19 @@ try {
   if (toolbox.narrow) await selectFirstRow(cdp, toolboxPage)
   await waitFor(cdp, `!document.querySelector('.page-zoom-indicator')`, 5_000)
   await capture(cdp, join(outputDirectory, 'toolbox.png'))
+  await evaluate(cdp, `(${toolboxPage}).querySelector('.rebuilt-toolbox-heading button')?.click()`)
+  await waitFor(cdp, `document.querySelector('.rebuilt-description-body')?.textContent?.includes('篝火讨论')`, 5_000)
+  const dialogState = await evaluate(cdp, `(() => {
+    const dialog = document.querySelector('.rebuilt-description-dialog')
+    const rect = dialog?.getBoundingClientRect()
+    return { state: dialog?.getAttribute('data-state'), width: rect?.width, height: rect?.height,
+      position: dialog && getComputedStyle(dialog).position, display: dialog && getComputedStyle(dialog).display }
+  })()`)
+  await capture(cdp, join(outputDirectory, 'toolbox-description.png'))
+  if (dialogState.state !== 'open' || dialogState.width < 500 || dialogState.height < 200 || dialogState.position !== 'fixed') {
+    throw new Error(`Toolbox description content did not open as a visible dialog: ${JSON.stringify(dialogState)}`)
+  }
+  await evaluate(cdp, `document.querySelector('.rebuilt-description-dialog button[aria-label="关闭说明"]')?.click()`)
 
   await evaluate(cdp, `(() => {
     const row = [...(${toolboxPage}).querySelectorAll('.rebuilt-skill-row')]
@@ -126,7 +166,7 @@ try {
     nativeSkillNames: skills.rows,
     toolboxDefaults: toolbox.defaults,
     toolboxToggleRestored: true,
-    screenshots: ['skills.png', 'toolbox.png']
+    screenshots: ['skills-file-menu.png', 'skills.png', 'toolbox.png', 'toolbox-description.png']
   }, null, 2)}\n`, { mode: 0o600 })
   process.stdout.write(`${join(outputDirectory, 'report.json')}\n`)
 } finally {

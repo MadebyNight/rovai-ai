@@ -13,7 +13,7 @@ last_updated: 2026-09-24
 
 前置：[v1.68](../v1.68/README.md)。本版将 Rovai 平台技能与工具箱技能作为普通受管资源提供，设置页只读发现 Harness 原生 Skills，工具箱按队员配置，会话按当前 Camp 全队与项目发现候选。新 Run 使用冻结的动态工具箱索引，新 Native Session 使用独立的平台技能 Bootstrap section。合并 v1.68 后的前后模型输入与旧会话边界见[模型上下文变更说明 revision 5](model-context-change.md)；该 revision 已获开发者二次确认。
 
-实施步骤与验收证据见[实施计划](implementation-plan.md)。旧导入记录、受管 Revision、冻结的 Run 和 Native Binding 保留；新的 Skills 路径不再以项目投影或旧 Revision 校验作为准入。旧项目入口不随升级自动删除；本次仅交付诊断与修复的 HTML 交互稿，正式单项修复仍待实现。
+实施步骤与验收证据见[实施计划](implementation-plan.md)。旧导入记录、受管 Revision、冻结的 Run 和 Native Binding 保留；新的 Skills 路径不再以项目投影或旧 Revision 校验作为准入。旧项目入口不随升级自动删除；诊断与修复提供唯一问题和用户显式触发的统一清理动作。
 
 ## 跨版本文档影响
 

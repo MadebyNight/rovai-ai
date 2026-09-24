@@ -55,6 +55,10 @@ Selection 按本批消息与 segment 首次出现的位置对来源 ID 去重；
 
 ## 读取和恢复
 
-Settings 的 `nativeSkills.list/read` 只读所选 Runtime 的用户级来源；会话 `skills.candidates` 用当前 Camp 全队配置、各 Runtime 用户级及项目级发现。执行 Host 上的原生目录扫描由 Core 实例共享，最多缓存 32 组 Runtime／项目／解析后目录根的元数据，60 秒过期；Runtime 启动环境变更、显式刷新或实例更换会重扫。全队关联与工具箱配置每次按当前 Camp 重算，缓存不替代 Run 冻结。旧 Rovai 项目投递 observation 中的入口在清理前从原生候选排除。
+Settings 的 `nativeSkills.list/read` 只读所选 Runtime 的用户级来源；`nativeSkills.read` 在重新验证 Core 登记的原始入口后，只允许读取该 Skill 目录内的普通文件，返回文件清单、当前文件正文或过大／二进制状态。`toolbox.read` 只读固定工具箱闭集的受管 `SKILL.md` 正文。会话 `skills.candidates` 用当前 Camp 全队配置、各 Runtime 用户级及项目级发现。执行 Host 上的原生目录扫描由 Core 实例共享，最多缓存 32 组 Runtime／项目／解析后目录根的元数据，60 秒过期；Runtime 启动环境变更、显式刷新或实例更换会重扫。全队关联与工具箱配置每次按当前 Camp 重算，缓存不替代 Run 冻结。旧 Rovai 项目投递 observation 中的入口在清理前从原生候选排除。
 
-新 Bootstrap v5/Formatter 5 独立冻结平台 section；Charter revision 13 原字节不改。新非 batch Formatter/Manifest 27 与 Profile 7、新公开 batch 30 与 Profile 10 冻结动态 section、Selection/Resolution、每消息链接和整个 payload。旧 v4 Binding 不热插入平台段；旧非 batch v26/6/5 与公开 v29/9/7 只用历史证据恢复，公开 v28 及更早不派发。新 Run 不再创建项目 SkillProjection；升级和 Core 启动不扫描或清理旧项目入口。旧入口继续凭 observation 从原生候选中排除；日后的诊断与修复单项操作只可在用户显式确认后，依据 observation、所有权校验、active Run 与 root access 精确清理 Rovai 自有入口，不删用户文件。
+会话中点击已发送的 Skill 引用走现有文件预览分栏：`skill_reference {campId,skillId,rawReference:'SKILL.md'}`。Core 仅对活跃 Camp、固定工具箱 ID 或仍能按登记身份验证的原生 ID 授权；历史 UUID、失效文件、其他相对路径均不授予预览。文件预览继续按现有 handle／相对文件规则控制后续读取，重复打开同一 Camp 的同一 Skill 复用标签。
+
+新 Bootstrap v5/Formatter 5 独立冻结平台 section；Charter revision 13 原字节不改。新非 batch Formatter/Manifest 27 与 Profile 7、新公开 batch 30 与 Profile 10 冻结动态 section、Selection/Resolution、每消息链接和整个 payload。旧 v4 Binding 不热插入平台段；旧非 batch v26/6/5 与公开 v29/9/7 只用历史证据恢复，公开 v28 及更早不派发。新 Run 不再创建项目 SkillProjection；升级和 Core 启动不扫描或清理旧项目入口。旧入口继续凭 observation 从原生候选中排除。
+
+`diagnostics.check` 只按 `skill_projection_observation` 统计旧入口，在受管内容组输出唯一 `legacy-skill-entries` 检查；检查不访问项目文件，也不执行清理。只有用户点击该问题的“清理旧入口”才调用 `skills.cleanupLegacyEntries`。命令按 observation 的精确 `entry_path` 分组，执行前复核路径与组、Skill/Revision、受管目标、root `active`、可访问性和运行中 Run；未确认、不可访问、在用入口保留。已不存在的入口只移除失效 observation，确认归属的入口只移除精确文件或 Windows 受管副本；不调用 `remove_execution_root`，不写 `access_state`，不删除项目根或 Skills 目录。返回移除、失效、三类保留与剩余计数；重复执行不得扩大删除范围。Renderer 随后重新运行完整诊断，并在同一问题和摘要显示新结果。

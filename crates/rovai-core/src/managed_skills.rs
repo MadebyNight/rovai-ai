@@ -181,6 +181,34 @@ impl ManagedSkills {
         Ok(self.root.join(name).join("SKILL.md"))
     }
 
+    pub fn read_toolbox_content(&self, name: &str) -> Result<String> {
+        ensure!(TOOLBOX_SKILLS.contains(&name), "unknown Toolbox Skill");
+        let directory = self.root.join(name);
+        let entry = self.entry_path(name)?;
+        ensure!(
+            !fs::symlink_metadata(&directory)?.file_type().is_symlink()
+                && !fs::symlink_metadata(&entry)?.file_type().is_symlink(),
+            "Toolbox Skill source is linked"
+        );
+        let root = self.root.canonicalize()?;
+        let directory = directory.canonicalize()?;
+        ensure!(
+            directory.starts_with(&root),
+            "Toolbox Skill left its managed root"
+        );
+        let entry = entry.canonicalize()?;
+        ensure!(
+            entry.starts_with(&directory),
+            "Toolbox Skill entry left its directory"
+        );
+        let metadata = fs::metadata(&entry)?;
+        ensure!(
+            metadata.is_file() && metadata.len() <= 1024 * 1024,
+            "Toolbox Skill is not readable"
+        );
+        Ok(fs::read_to_string(entry)?)
+    }
+
     pub fn index(
         &self,
         names: impl IntoIterator<Item = impl AsRef<str>>,

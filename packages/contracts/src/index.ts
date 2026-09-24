@@ -1459,6 +1459,12 @@ export interface AttachmentRevealResult {
 
 export type OpenFilePreviewRequest =
   | {
+      kind: 'skill_reference'
+      campId: string
+      skillId: string
+      rawReference: 'SKILL.md'
+    }
+  | {
       kind: 'message_reference'
       campId: string
       messageId: string
@@ -1504,7 +1510,7 @@ export type OpenFilePreviewRequest =
     }
 
 export type RestoreFilePreviewRequest = Extract<OpenFilePreviewRequest, {
-  kind: 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence' | 'run_activity_file'
+  kind: 'skill_reference' | 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence' | 'run_activity_file'
 }>
 
 export interface ReopenFilePreviewRequest {
@@ -3828,6 +3834,7 @@ export type CoreMethod =
   | 'skills.list'
   | 'skills.get'
   | 'toolbox.list'
+  | 'toolbox.read'
   | 'toolbox.setMembers'
   | 'nativeSkills.list'
   | 'nativeSkills.read'
@@ -3842,6 +3849,7 @@ export type CoreMethod =
   | 'skills.delete'
   | 'skills.projections.listIssues'
   | 'skills.reconcile'
+  | 'skills.cleanupLegacyEntries'
   | 'skills.projectAccess.sync'
   | 'skills.projectAccess.remove'
   | 'skills.projectAccess.restore'

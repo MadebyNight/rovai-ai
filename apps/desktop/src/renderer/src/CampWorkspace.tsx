@@ -3468,6 +3468,19 @@ export function CampWorkspace({
     }
   }, [snapshot.camp.id])
 
+  const openSkillPreview = useCallback((skillId: string, source: HTMLElement): void => {
+    if (!filePreview) return
+    captureFilePreviewAnchor(source)
+    void filePreview.open({
+      kind: 'skill_reference',
+      campId: snapshot.camp.id,
+      skillId,
+      rawReference: 'SKILL.md'
+    }).then((outcome) => {
+      if (outcome.kind === 'error') notifyError?.(outcome.error.message)
+    })
+  }, [captureFilePreviewAnchor, filePreview, notifyError, snapshot.camp.id])
+
   const restoreTimelineLayout = useCallback((): void => {
     const scroll = timelineScrollRef.current
     if (!scroll) return
@@ -5096,6 +5109,7 @@ export function CampWorkspace({
                                                 trigger,
                                                 focusPanel
                                               )}
+                                            onActivateSkillMention={openSkillPreview}
                                             onFileReference={(rawReference, source, target) => {
                                               if (!filePreview) return
                                               captureFilePreviewAnchor(source)
@@ -5700,6 +5714,7 @@ export function CampWorkspace({
                   trigger,
                   focusPanel
                 )}
+              onActivateSkillMention={openSkillPreview}
             />
             {unlistedSkillName && (
               <span className="composer-reply-status" role="status" aria-live="polite">
@@ -9092,6 +9107,7 @@ function TruncatedStructuredMessageBody({
   onActivateCurrentUserMention,
   onActivateMemberMention,
   onActivateAllMembersMention,
+  onActivateSkillMention,
   onFileReference
 }: {
   body: string
@@ -9108,6 +9124,7 @@ function TruncatedStructuredMessageBody({
     focusPanel: boolean
   ): void
   onActivateAllMembersMention?(trigger: HTMLElement, focusPanel: boolean): void
+  onActivateSkillMention?(skillId: string, trigger: HTMLElement): void
   onFileReference?: FileReferenceActivation
 }): JSX.Element {
   const projection = useMemo(
@@ -9130,6 +9147,7 @@ function TruncatedStructuredMessageBody({
       onActivateCurrentUserMention={onActivateCurrentUserMention}
       onActivateMemberMention={onActivateMemberMention}
       onActivateAllMembersMention={onActivateAllMembersMention}
+      onActivateSkillMention={onActivateSkillMention}
       onFileReference={onFileReference}
     />
   )
@@ -9221,6 +9239,7 @@ export function StructuredMessageBody({
   onActivateCurrentUserMention,
   onActivateMemberMention,
   onActivateAllMembersMention,
+  onActivateSkillMention,
   onFileReference
 }: {
   body: string
@@ -9236,6 +9255,7 @@ export function StructuredMessageBody({
     focusPanel: boolean
   ): void
   onActivateAllMembersMention?(trigger: HTMLElement, focusPanel: boolean): void
+  onActivateSkillMention?(skillId: string, trigger: HTMLElement): void
   onFileReference?: FileReferenceActivation
 }): JSX.Element {
   const memberById = new Map(members.map((member) => [member.agentId, member]))
@@ -9300,13 +9320,15 @@ export function StructuredMessageBody({
         }
         if (segment.kind === 'skill_mention') {
           return (
-            <span
-              className="message-mention-token skill-mention"
-              aria-label={`Skill /${segment.nameAtSend}`}
+            <button
+              type="button"
+              className="message-mention-token skill-mention is-interactive"
+              aria-label={`预览 Skill /${segment.nameAtSend} 文件`}
               key={`skill-${index}-${segment.skillId}`}
+              onClick={(event) => onActivateSkillMention?.(segment.skillId, event.currentTarget)}
             >
               /{segment.nameAtSend}
-            </span>
+            </button>
           )
         }
         if (segment.kind === 'external_quote') {

@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -25,10 +25,86 @@ use crate::command::{
 };
 use crate::db::Database;
 use crate::runtime_startup::RuntimeStartupConfiguration;
+use crate::skill::{SkillContentFile, SkillContentView};
 
 const CONTEXT_CACHE_CAPACITY: usize = 32;
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(60);
 const MAX_SKILLS_PER_ROOT: usize = 512;
+const MAX_NATIVE_PREVIEW_FILES: usize = 512;
+const MAX_NATIVE_PREVIEW_BYTES: u64 = 1024 * 1024;
+
+/// Read an exact file under a previously validated native Skill directory.
+/// Linked children are omitted so a dropdown cannot grant access outside it.
+pub fn read_native_skill_content(root: &Path, selected: &str) -> Result<SkillContentView> {
+    let relative = Path::new(selected);
+    ensure!(
+        !selected.is_empty()
+            && !selected.contains('\\')
+            && relative
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))),
+        "Native Skill file path is invalid"
+    );
+    let mut files = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), String::new(), 0usize)];
+    while let Some((directory, prefix, depth)) = pending.pop() {
+        ensure!(depth <= 8, "Native Skill directory is too deep to preview");
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{}", name)
+            };
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push((entry.path(), path, depth + 1));
+            } else if metadata.is_file() {
+                files.push(SkillContentFile {
+                    path,
+                    bytes: metadata.len(),
+                });
+                ensure!(
+                    files.len() <= MAX_NATIVE_PREVIEW_FILES,
+                    "Native Skill has too many files to preview"
+                );
+            }
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let file = files
+        .iter()
+        .find(|file| file.path == selected)
+        .context("Native Skill file is unavailable")?;
+    let selected_file = root.join(relative).canonicalize()?;
+    ensure!(
+        selected_file.starts_with(root),
+        "Native Skill file left its source directory"
+    );
+    let (status, content) = if file.bytes > MAX_NATIVE_PREVIEW_BYTES {
+        ("too_large", None)
+    } else {
+        let bytes = fs::read(selected_file)?;
+        if bytes.contains(&0) {
+            ("binary", None)
+        } else {
+            match String::from_utf8(bytes) {
+                Ok(text) => ("text", Some(text)),
+                Err(_) => ("binary", None),
+            }
+        }
+    };
+    Ok(SkillContentView {
+        path: selected.to_string(),
+        content,
+        status,
+        files,
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -596,6 +672,30 @@ pub fn read_native_skill(
 mod tests {
     use super::*;
     use crate::runtime_startup::RuntimeEnvironmentVariable;
+
+    #[test]
+    fn native_skill_file_preview_stays_inside_its_source_directory() {
+        let fixture = std::env::temp_dir().join(format!("rovai-native-preview-{}", Uuid::new_v4()));
+        let skill = fixture.join("skill");
+        fs::create_dir_all(skill.join("references")).unwrap();
+        fs::write(skill.join("SKILL.md"), "# Guide\n").unwrap();
+        fs::write(skill.join("references/example.md"), "# Example\n").unwrap();
+        fs::write(fixture.join("private.md"), "outside\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            fixture.join("private.md"),
+            skill.join("references/linked.md"),
+        )
+        .unwrap();
+        let skill = skill.canonicalize().unwrap();
+        let view = read_native_skill_content(&skill, "references/example.md").unwrap();
+        assert_eq!(view.content.as_deref(), Some("# Example\n"));
+        assert_eq!(view.files.len(), 2);
+        assert!(read_native_skill_content(&skill, "../private.md").is_err());
+        #[cfg(unix)]
+        assert!(read_native_skill_content(&skill, "references/linked.md").is_err());
+        fs::remove_dir_all(fixture).unwrap();
+    }
 
     #[cfg(feature = "extended-tests")]
     #[test]
