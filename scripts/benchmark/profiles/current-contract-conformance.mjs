@@ -2,8 +2,8 @@ import { defineBenchmarkProfile } from '../execution/suite.mjs'
 import { digestJson } from '../protocol/canonical.mjs'
 
 export const CURRENT_CONTRACT_DATA_STORE = Object.freeze({
-  version: 'v1.66',
-  projectionSchemaVersion: 120
+  version: 'v1.68',
+  projectionSchemaVersion: 122
 })
 
 const criteria = [
@@ -32,10 +32,10 @@ const criteria = [
   ]),
   criterion('CCC-008', 'Required RUN_INPUT stays complete while optional shared history yields to the Runtime payload budget', [
     test('crates/rovai-core/src/context.rs', 'oversized_required_context_fails_before_manifest_or_boundary_ack'),
-    test('crates/rovai-core/src/context.rs', 'fully_evicted_batch_history_cursor_still_covers_the_frozen_tail')
+    test('crates/rovai-core/src/context.rs', 'public_history_budget_is_shared_and_quote_groups_remain_atomic')
   ]),
-  criterion('CCC-009', 'A fully evicted shared-history window retains only a bounded count and live read cursor', [
-    test('crates/rovai-core/src/context.rs', 'fully_evicted_batch_history_cursor_still_covers_the_frozen_tail')
+  criterion('CCC-009', 'A replacement binding keeps public history available through on-demand reads after the accepted watermark', [
+    test('crates/rovai-core/src/context.rs', 'replacement_binding_bootstrap_keeps_history_on_demand_after_the_accepted_watermark')
   ]),
   criterion('CCC-010', 'ContextManifest and Formatter versions match the current context contract', [
     test('crates/rovai-core/src/context_contract.rs', 'binding_contract_freezes_each_context_axis_version')
@@ -96,7 +96,7 @@ export const CURRENT_CONTRACT_CRITERIA = Object.freeze(criteria)
 
 export const CURRENT_CONTRACT_PROFILE = defineBenchmarkProfile({
   id: 'current-contract-conformance',
-  version: '1.66.0',
+  version: '1.68.0',
   lane: 'contract-conformance',
   hardOutcomeDefinition: {
     validity: 'deterministic_source_and_harness_valid',
@@ -115,7 +115,7 @@ export const CURRENT_CONTRACT_PROFILE = defineBenchmarkProfile({
   },
   suite: {
     id: 'rovai-v1.66-current-contract',
-    version: '1.66.0',
+    version: '1.68.0',
     shuffle: false,
     rounds: [{ id: 'deterministic', ordinal: 1 }],
     cases: criteria.map((entry) => ({

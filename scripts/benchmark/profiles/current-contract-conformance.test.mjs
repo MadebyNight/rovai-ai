@@ -11,9 +11,9 @@ import { collectProductContractFingerprint } from '../protocol/product-contract.
 
 test('current contract profile is deterministic, offline, and covers every requested criterion', async () => {
   assert.equal(CURRENT_CONTRACT_PROFILE.id, 'current-contract-conformance')
-  assert.equal(CURRENT_CONTRACT_PROFILE.version, '1.66.0')
-  assert.equal(CURRENT_CONTRACT_PROFILE.suite.version, '1.66.0')
-  assert.deepEqual(CURRENT_CONTRACT_DATA_STORE, { version: 'v1.66', projectionSchemaVersion: 120 })
+  assert.equal(CURRENT_CONTRACT_PROFILE.version, '1.68.0')
+  assert.equal(CURRENT_CONTRACT_PROFILE.suite.version, '1.68.0')
+  assert.deepEqual(CURRENT_CONTRACT_DATA_STORE, { version: 'v1.68', projectionSchemaVersion: 122 })
   const productContract = await collectProductContractFingerprint({ repositoryRoot: process.cwd() })
   assert.equal(productContract.dataContractVersion.value, CURRENT_CONTRACT_DATA_STORE.version)
   assert.equal(productContract.dataContractSchemaVersion.value, CURRENT_CONTRACT_DATA_STORE.projectionSchemaVersion)
