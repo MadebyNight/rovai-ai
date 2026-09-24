@@ -1,4 +1,7 @@
-use std::path::{Component, Path};
+use std::{
+    path::{Component, Path},
+    str::FromStr,
+};
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
@@ -9,6 +12,7 @@ use crate::{
     canonical_activity,
     db::Database,
     managed_blob::ManagedBlobStore,
+    managed_skills::{TOOLBOX_SKILLS, managed_skills_root},
     runtime_diff::CommandDiffProjection,
 };
 
@@ -31,6 +35,90 @@ pub struct ResolveFilePreviewSourceParams {
     pub evidence_id: Option<String>,
     #[serde(default)]
     pub action: Option<String>,
+    #[serde(default)]
+    pub skill_id: Option<String>,
+}
+
+pub fn resolve_skill_preview_source(
+    database: &Database,
+    data_dir: &Path,
+    params: &ResolveFilePreviewSourceParams,
+) -> Result<Option<ResolvedFilePreviewSource>> {
+    let camp_id = required_bounded(Some(&params.camp_id), "campId", 128)?;
+    let skill_id = required_bounded(params.skill_id.as_deref(), "skillId", 128)?;
+    if params.raw_reference.as_deref() != Some("SKILL.md") {
+        return Ok(None);
+    }
+    let active: i64 = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM camp WHERE id = ?1 AND activation_state = 'active' AND deletion_operation_id IS NULL)",
+        [camp_id],
+        |row| row.get(0),
+    )?;
+    if active == 0 {
+        return Ok(None);
+    }
+    let root = if let Some(name) = skill_id.strip_prefix("rovai:") {
+        if !TOOLBOX_SKILLS.contains(&name) {
+            return Ok(None);
+        }
+        let published = managed_skills_root(data_dir)?;
+        let path = published.join(name);
+        if std::fs::symlink_metadata(&path).is_err()
+            || std::fs::symlink_metadata(path.join("SKILL.md")).is_err()
+            || std::fs::symlink_metadata(&path)?.file_type().is_symlink()
+            || std::fs::symlink_metadata(path.join("SKILL.md"))?
+                .file_type()
+                .is_symlink()
+        {
+            return Ok(None);
+        }
+        let published = published.canonicalize()?;
+        let path = path.canonicalize()?;
+        if !path.starts_with(&published) {
+            return Ok(None);
+        }
+        path
+    } else if skill_id.starts_with("native:") {
+        let record: Option<(String, String, String, String, String)> = database.connection().query_row(
+            "SELECT name, entry_path, canonical_path, source_scope, adapter_kind FROM native_skill_reference WHERE id = ?1",
+            [skill_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional()?;
+        let Some((name, path, canonical, scope, adapter)) = record else {
+            return Ok(None);
+        };
+        let entry = Path::new(&path);
+        if entry.file_name().is_none_or(|value| value != "SKILL.md")
+            || entry.canonicalize().ok().as_deref() != Some(Path::new(&canonical))
+        {
+            return Ok(None);
+        }
+        let adapter = match crate::agent_profile::AdapterKind::from_str(&adapter) {
+            Ok(adapter) => adapter,
+            Err(_) => return Ok(None),
+        };
+        let observed =
+            crate::native_skills::read_native_skill(entry, Path::new(&canonical), &scope, adapter);
+        if !matches!(observed, Ok(ref skill) if skill.id == skill_id && skill.name == name) {
+            return Ok(None);
+        }
+        Path::new(&canonical)
+            .parent()
+            .context("Skill entry has no directory")?
+            .to_path_buf()
+    } else {
+        return Ok(None);
+    };
+    let root = root.to_string_lossy().into_owned();
+    Ok(Some(ResolvedFilePreviewSource::FileTarget {
+        camp_id: camp_id.to_string(),
+        source_kind: "skill_reference".to_string(),
+        source_identity: format!("skill:{skill_id}"),
+        root_path: root.clone(),
+        base_path: root,
+        raw_reference: "SKILL.md".to_string(),
+        allow_children: true,
+    }))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -676,7 +764,8 @@ mod tests {
 
     use super::{
         ResolveFilePreviewSourceParams, ResolvedFilePreviewSource, is_supported_run_evidence_path,
-        message_authorizes_reference, resolve_file_preview_source, run_evidence_root,
+        message_authorizes_reference, resolve_file_preview_source, resolve_skill_preview_source,
+        run_evidence_root,
     };
     use crate::{
         agent_run_file_change::AgentRunFileChangeProjector, db::Database,
@@ -769,6 +858,71 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn skill_preview_requires_exact_registered_native_source_and_active_camp() {
+        let (database, data_dir, root, _) = run_workspace_fixture();
+        let skill_root = root.join("native/custom");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        let entry = skill_root.join("SKILL.md");
+        std::fs::write(
+            &entry,
+            "---\nname: custom\ndescription: Preview\n---\nGuide\n",
+        )
+        .unwrap();
+        let canonical = entry.canonicalize().unwrap();
+        let skill = crate::native_skills::read_native_skill(
+            &entry,
+            &canonical,
+            "project",
+            crate::agent_profile::AdapterKind::CodexCli,
+        )
+        .unwrap();
+        database.connection().execute(
+            "INSERT INTO native_skill_reference(id, name, entry_path, canonical_path, source_scope, adapter_kind, discovered_at) VALUES (?1, ?2, ?3, ?4, 'project', 'codex-cli', '2026-09-24T00:00:00Z')",
+            params![skill.id, skill.name, skill.entry_path, skill.canonical_path],
+        ).unwrap();
+        let request = ResolveFilePreviewSourceParams {
+            kind: "skill_reference".to_string(),
+            camp_id: "preview-camp".to_string(),
+            message_id: None,
+            raw_reference: Some("SKILL.md".to_string()),
+            agent_run_id: None,
+            execution_epoch: None,
+            evidence_file_id: None,
+            evidence_id: None,
+            action: None,
+            skill_id: Some(skill.id.clone()),
+        };
+        assert!(
+            matches!(resolve_skill_preview_source(&database, &data_dir, &request).unwrap(), Some(ResolvedFilePreviewSource::FileTarget { source_kind, .. }) if source_kind == "skill_reference")
+        );
+        let mut changed = request.clone();
+        changed.raw_reference = Some("other.md".to_string());
+        assert!(
+            resolve_skill_preview_source(&database, &data_dir, &changed)
+                .unwrap()
+                .is_none()
+        );
+        changed = request.clone();
+        changed.camp_id = "another-camp".to_string();
+        assert!(
+            resolve_skill_preview_source(&database, &data_dir, &changed)
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(
+            &entry,
+            "---\nname: changed\ndescription: Preview\n---\nGuide\n",
+        )
+        .unwrap();
+        assert!(
+            resolve_skill_preview_source(&database, &data_dir, &request)
+                .unwrap()
+                .is_none()
+        );
+        clean_run_workspace_fixture(database, data_dir, root);
+    }
+
     fn project_run_file_operations(
         database: &mut Database,
         data_dir: &Path,
@@ -835,6 +989,7 @@ mod tests {
                 evidence_file_id: Some(evidence_file_id.to_string()),
                 evidence_id: None,
                 action: Some("open_current".to_string()),
+                skill_id: None,
             },
         )
         .unwrap()
@@ -925,6 +1080,7 @@ mod tests {
                 evidence_file_id: None,
                 evidence_id: Some(evidence_id.to_string()),
                 action: None,
+                skill_id: None,
             },
         )
         .unwrap()

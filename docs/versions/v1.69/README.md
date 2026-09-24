@@ -1,7 +1,7 @@
 ---
 document_type: version-overview
 version: v1.69
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
 implementation_status: completed
@@ -12,6 +12,8 @@ last_updated: 2026-09-24
 # Rovai-ai v1.69：Camp 主动读取、搜索与撤回占位
 
 前置：[v1.68](../v1.68/README.md)。本版让队员在 Run 中主动读取或搜索已发布的最新公屏消息，包括首个目标 claim 前仍可撤回、或本队员 Delivery 尚在 waiting 的消息。读取和搜索不领取 Delivery，也不关闭撤回资格；撤回后的 `camp.read` 返回英文状态项。字段合同见 [Camp History v10](../../contracts/camp-history-v10.md)，取舍理由见[版本决定](decisions.md)，实施证据见[实施与验收](implementation-plan.md)。
+
+后续：[v1.70](../v1.70/README.md)。
 
 ## 目标与边界
 

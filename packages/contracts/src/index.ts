@@ -1459,6 +1459,12 @@ export interface AttachmentRevealResult {
 
 export type OpenFilePreviewRequest =
   | {
+      kind: 'skill_reference'
+      campId: string
+      skillId: string
+      rawReference: 'SKILL.md'
+    }
+  | {
       kind: 'message_reference'
       campId: string
       messageId: string
@@ -1504,7 +1510,7 @@ export type OpenFilePreviewRequest =
     }
 
 export type RestoreFilePreviewRequest = Extract<OpenFilePreviewRequest, {
-  kind: 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence' | 'run_activity_file'
+  kind: 'skill_reference' | 'message_reference' | 'camp_workspace' | 'attachment' | 'run_evidence' | 'run_activity_file'
 }>
 
 export interface ReopenFilePreviewRequest {
@@ -2803,6 +2809,7 @@ export type SettingsSection =
   | 'remote'
   | 'general'
   | 'skills'
+  | 'toolbox'
   | 'mcp'
   | 'runtime'
   | 'channels'
@@ -3199,6 +3206,45 @@ export interface MemberAvatarsApi {
 }
 
 export type SkillOrigin = 'official' | 'imported'
+
+export interface NativeSkillView {
+  id: string
+  name: string
+  description: string
+  entryPath: string
+  canonicalPath: string
+  sourceScope: 'user' | 'project'
+  adapterKind: AdapterKind
+}
+
+export interface NativeSkillScan {
+  skills: NativeSkillView[]
+  errors: string[]
+}
+
+export interface ToolboxSkillView {
+  name: string
+  description: string | null
+  memberIds: string[]
+  version: string
+  sourceError: string | null
+}
+
+export interface ComposerSkillCandidate {
+  id: string
+  name: string
+  description: string
+  source: 'toolbox' | 'native'
+  sourceScope?: 'user' | 'project'
+  entryPath: string
+  memberIds: string[]
+}
+
+export interface ComposerSkillCandidates {
+  skills: ComposerSkillCandidate[]
+  errors: string[]
+}
+
 export type SkillRevisionSourceType = 'bundled' | 'local_folder' | 'github'
 export type SkillDeliveryGroupKey =
   | 'codex'
@@ -3789,6 +3835,12 @@ export type CoreMethod =
   | 'runtime.installations.refresh'
   | 'skills.list'
   | 'skills.get'
+  | 'toolbox.list'
+  | 'toolbox.read'
+  | 'toolbox.setMembers'
+  | 'nativeSkills.list'
+  | 'nativeSkills.read'
+  | 'skills.candidates'
   | 'skills.content.read'
   | 'skills.deliveryGroups.list'
   | 'skills.import.inspect'
@@ -3799,6 +3851,7 @@ export type CoreMethod =
   | 'skills.delete'
   | 'skills.projections.listIssues'
   | 'skills.reconcile'
+  | 'skills.cleanupLegacyEntries'
   | 'skills.projectAccess.sync'
   | 'skills.projectAccess.remove'
   | 'skills.projectAccess.restore'

@@ -439,6 +439,29 @@ pub(super) fn has_active_run_registration(
     Ok(active != 0)
 }
 
+// A missing root has no file identity to open. Keep its observation while any
+// registered Run still names the same persisted execution root.
+pub(super) fn has_active_run_registration_for_unavailable_root(
+    database: &Database,
+    execution_root: &str,
+) -> Result<bool> {
+    let active: i64 = database.connection().query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM skill_projection_run_registration AS registration
+            JOIN agent_run ON agent_run.id = registration.agent_run_id
+            WHERE registration.execution_root = ?1
+              AND registration.execution_epoch = agent_run.execution_epoch
+              AND agent_run.status IN ('running', 'waiting')
+        )
+        "#,
+        [execution_root],
+        |row| row.get(0),
+    )?;
+    Ok(active != 0)
+}
+
 pub(super) fn register_run(
     database: &mut Database,
     execution_root: &Path,

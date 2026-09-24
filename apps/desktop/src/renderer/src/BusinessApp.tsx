@@ -111,7 +111,7 @@ import {
   type NotificationPresentationCoordinator
 } from './NotificationPresentationCoordinator'
 import { NotificationSettings } from './NotificationSettings'
-import { SkillSettings } from './SkillSettings'
+import { NativeSkillsSettings, ToolboxSettings } from './RebuiltSkillsSettings'
 import { McpSettings } from './McpSettings'
 import { ChannelSettings } from './ChannelSettings'
 import { SettingsPageHeader } from './SettingsPageHeader'
@@ -4644,7 +4644,8 @@ export function SettingsView({
             onPreferencesChange={onGeneralPreferencesChange}
           />
         )}
-        <Activity mode={section === 'skills' ? 'visible' : 'hidden'}><SkillSettings theme={appearance.resolvedTheme} /></Activity>
+        <Activity mode={section === 'skills' ? 'visible' : 'hidden'}><NativeSkillsSettings /></Activity>
+        <Activity mode={section === 'toolbox' ? 'visible' : 'hidden'}><ToolboxSettings agents={agents} /></Activity>
         <Activity mode={section === 'mcp' ? 'visible' : 'hidden'}><McpSettings agents={agents} platform={platform} /></Activity>
         <Activity mode={section === 'runtime' ? 'visible' : 'hidden'}>
           <RuntimeInstallationsPanel health={health} installations={installations} onReload={onReload} />

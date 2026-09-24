@@ -289,8 +289,8 @@ impl MainCampMigrationSource {
     }
 }
 
-pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.68";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 122;
+pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.69";
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 123;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -737,6 +737,7 @@ struct CurrentMigrationState {
     v170: bool,
     v171: bool,
     v172: bool,
+    v173: bool,
 }
 
 impl CurrentMigrationState {
@@ -758,11 +759,19 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v173 {
+            let mut previous = *self;
+            previous.v173 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+                && self.v172
+                && previous.admits("v1.68", 122, classifier);
+        }
         if self.v172 {
             let mut previous = *self;
             previous.v172 = false;
-            return contract == CURRENT_DATA_CONTRACT_VERSION
-                && schema == CURRENT_PROJECTION_SCHEMA_VERSION
+            return contract == "v1.68"
+                && schema == 122
                 && self.v171
                 && previous.admits("v1.67", 121, classifier);
         }
@@ -3092,7 +3101,9 @@ pub(crate) fn classify_database_contract(
     let task_versionless_schema_matches =
         migrations.v171 && (migrations.v172 || task_versionless_v171_schema_matches(connection)?);
     let public_context_schema_matches =
-        migrations.v172 && public_context_v172_schema_matches(connection)?;
+        migrations.v172 && (migrations.v173 || public_context_v172_schema_matches(connection)?);
+    let skills_rebuild_schema_matches =
+        migrations.v173 && skills_rebuild_v173_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
         &marker,
         migrations,
@@ -3168,6 +3179,7 @@ pub(crate) fn classify_database_contract(
         || (migrations.v170 && !tool_output_schema_matches)
         || (migrations.v171 && !task_versionless_schema_matches)
         || (migrations.v172 && !public_context_schema_matches)
+        || (migrations.v173 && !skills_rebuild_schema_matches)
         || (migrations.v156
             && !migrations.v157
             && !attachment_paths::schema_matches(connection)?
@@ -3439,6 +3451,7 @@ fn camp_message_agent_run_v163_schema_matches(connection: &Connection) -> rusqli
             'context_manifest_v27_only_insert',
             'context_manifest_v28_only_insert',
             'context_manifest_v29_only_insert',
+            'context_manifest_v30_only_insert',
             'context_manifest_quote_profile_insert',
             'runtime_input_delivery_attachment_auth_insert'
         )
@@ -3456,7 +3469,9 @@ fn camp_message_agent_run_v163_schema_matches(connection: &Connection) -> rusqli
             || context_manifest_schema
                 .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28)")
             || context_manifest_schema
-                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)"))
+                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)")
+            || context_manifest_schema
+                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)"))
         && (context_manifest_schema
             .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26)")
             || context_manifest_schema
@@ -3465,6 +3480,9 @@ fn camp_message_agent_run_v163_schema_matches(connection: &Connection) -> rusqli
                 .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28)")
             || context_manifest_schema.contains(
                 "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)",
+            )
+            || context_manifest_schema.contains(
+                "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)",
             ))
         && (context_manifest_schema.contains("run_facts_schema_version IN (1, 2, 3, 4, 5)")
             || context_manifest_schema.contains("run_facts_schema_version IN (1, 2, 3, 4, 5, 6)")
@@ -3499,6 +3517,7 @@ fn default_recipient_mention_v166_schema_matches(
             'agent_run_input_v27_only_insert',
             'agent_run_input_v28_only_insert',
             'agent_run_input_v29_only_insert',
+            'agent_run_input_v30_only_insert',
             'agent_run_input_context_projection_immutable'
         )
         "#,
@@ -3517,6 +3536,7 @@ fn default_recipient_mention_v166_schema_matches(
             'context_manifest_v27_only_insert',
             'context_manifest_v28_only_insert',
             'context_manifest_v29_only_insert',
+            'context_manifest_v30_only_insert',
             'context_manifest_quote_profile_insert',
             'runtime_input_delivery_attachment_auth_insert'
         )
@@ -3526,7 +3546,7 @@ fn default_recipient_mention_v166_schema_matches(
     )?;
     let new_write_trigger: String = connection
         .query_row(
-            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'trigger' AND name IN ('context_manifest_v27_only_insert', 'context_manifest_v28_only_insert', 'context_manifest_v29_only_insert')",
+            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'trigger' AND name IN ('context_manifest_v27_only_insert', 'context_manifest_v28_only_insert', 'context_manifest_v29_only_insert', 'context_manifest_v30_only_insert')",
             [],
             |row| row.get(0),
         )
@@ -3542,38 +3562,67 @@ fn default_recipient_mention_v166_schema_matches(
         [],
         |row| row.get(0),
     )?;
+    if manifest_schema
+        .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)")
+    {
+        return Ok(input_columns == 2
+            && input_guards == 2
+            && triggers == 3
+            && manifest_schema
+                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)")
+            && manifest_schema
+                .contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10)")
+            && new_write_trigger.contains("NEW.context_manifest_version = 30")
+            && new_write_trigger.contains("NEW.context_manifest_version = 27")
+            && new_write_trigger.contains("invocation_kind = 'batch'")
+            && profile_trigger.contains("NEW.context_manifest_version = 30")
+            && profile_trigger.contains("NEW.context_delivery_profile_version = 10")
+            && attachment_trigger.contains("context_manifest_version IN (26, 27, 29, 30)"));
+    }
     Ok(input_columns == 2
         && input_guards == 2
         && (manifest_schema.contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27)")
             || manifest_schema
                 .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28)")
             || manifest_schema
-                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)"))
+                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)")
+            || manifest_schema
+                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)"))
         && (manifest_schema
             .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27)")
             || manifest_schema
                 .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28)")
             || manifest_schema.contains(
                 "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)",
+            )
+            || manifest_schema.contains(
+                "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)",
             ))
         && (manifest_schema.contains("context_delivery_profile_version IN (4, 5, 6, 7, 8)")
-            || manifest_schema.contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9)"))
+            || manifest_schema.contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9)")
+            || manifest_schema
+                .contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10)"))
         && (new_write_trigger.contains("NEW.context_manifest_version IN (26, 27)")
             || new_write_trigger.contains("NEW.context_manifest_version = 28")
-            || new_write_trigger.contains("NEW.context_manifest_version = 29"))
+            || new_write_trigger.contains("NEW.context_manifest_version = 29")
+            || new_write_trigger.contains("NEW.context_manifest_version = 30"))
         && new_write_trigger.contains("batch_input.context_manifest_version")
         && new_write_trigger.contains("invocation_kind = 'batch'")
         && (new_write_trigger.contains("NEW.context_manifest_version IN (22, 23, 24, 25, 26)")
-            || new_write_trigger.contains("NEW.context_manifest_version = 26"))
+            || new_write_trigger.contains("NEW.context_manifest_version = 26")
+            || new_write_trigger.contains("NEW.context_manifest_version = 27"))
         && (profile_trigger.contains("NEW.context_manifest_version = 27")
             || profile_trigger.contains("NEW.context_manifest_version = 28")
-            || profile_trigger.contains("NEW.context_manifest_version = 29"))
+            || profile_trigger.contains("NEW.context_manifest_version = 29")
+            || profile_trigger.contains("NEW.context_manifest_version = 30"))
         && (profile_trigger.contains("NEW.context_delivery_profile_version <> 8")
             || profile_trigger.contains("NEW.context_delivery_profile_version = 8")
-            || profile_trigger.contains("NEW.context_delivery_profile_version = 9"))
+            || profile_trigger.contains("NEW.context_delivery_profile_version = 9")
+            || profile_trigger.contains("NEW.context_delivery_profile_version = 10"))
         && (attachment_trigger.contains("context_manifest_version IN (24, 25, 26, 27)")
             || attachment_trigger.contains("context_manifest_version IN (26, 28)")
-            || attachment_trigger.contains("context_manifest_version IN (26, 29)"))
+            || attachment_trigger.contains("context_manifest_version IN (26, 29)")
+            || attachment_trigger.contains("context_manifest_version IN (26, 27, 29, 30)"))
         && triggers == 3)
 }
 
@@ -3733,6 +3782,43 @@ fn public_context_v172_schema_matches(connection: &Connection) -> rusqlite::Resu
         && input_guard.contains("NEW.context_manifest_version IS NOT 29")
         && profile_guard.contains("NEW.context_manifest_version = 29")
         && attachment_guard.contains("context_manifest_version IN (26, 29)"))
+}
+
+fn skills_rebuild_v173_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let tables: i64 = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='member_toolbox_skill') + EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='native_skill_reference') + EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='native_session_platform_skills_evidence') + EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_additional_skills_evidence')",
+        [], |row| row.get(0),
+    )?;
+    let bootstrap: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='native_session_bootstrap_evidence'",
+        [], |row| row.get(0),
+    )?;
+    let manifest: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='context_manifest'",
+        [],
+        |row| row.get(0),
+    )?;
+    let input: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_run_input'",
+        [],
+        |row| row.get(0),
+    )?;
+    let trigger: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='context_manifest_v30_only_insert'",
+        [], |row| row.get(0),
+    )?;
+    let attachment_trigger: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='runtime_input_delivery_attachment_auth_insert'",
+        [], |row| row.get(0),
+    )?;
+    Ok(tables == 4
+        && bootstrap.contains("native_session_bootstrap_v5")
+        && bootstrap.contains("bootstrap_formatter_version IN (3, 4, 5)")
+        && manifest.contains("context_manifest_version = 30")
+        && manifest.contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10)")
+        && input.contains("context_manifest_version IN (26, 27, 28, 29, 30)")
+        && trigger.contains("NEW.context_manifest_version = 30")
+        && attachment_trigger.contains("context_manifest_version IN (26, 27, 29, 30)"))
 }
 
 fn agent_run_notification_v164_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
@@ -4101,7 +4187,7 @@ fn message_quote_v148_schema_matches(connection: &Connection) -> rusqlite::Resul
             return Ok(false);
         }
     }
-    let guards: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name IN ('context_manifest_v23_only_insert','context_manifest_v24_only_insert','context_manifest_v25_only_insert','context_manifest_v26_only_insert','context_manifest_v27_only_insert','context_manifest_v28_only_insert','context_manifest_v29_only_insert','context_manifest_quote_profile_insert')", [], |row| row.get(0))?;
+    let guards: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name IN ('context_manifest_v23_only_insert','context_manifest_v24_only_insert','context_manifest_v25_only_insert','context_manifest_v26_only_insert','context_manifest_v27_only_insert','context_manifest_v28_only_insert','context_manifest_v29_only_insert','context_manifest_v30_only_insert','context_manifest_quote_profile_insert')", [], |row| row.get(0))?;
     Ok(guards == 2)
 }
 
@@ -4605,7 +4691,8 @@ fn load_current_migration_state(
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 169),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 170),
                EXISTS(SELECT 1 FROM schema_migration WHERE version = 171),
-               EXISTS(SELECT 1 FROM schema_migration WHERE version = 172)
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 172),
+               EXISTS(SELECT 1 FROM schema_migration WHERE version = 173)
         "#,
         [],
         |row| {
@@ -4713,6 +4800,7 @@ fn load_current_migration_state(
                 v170: row.get(100)?,
                 v171: row.get(101)?,
                 v172: row.get(102)?,
+                v173: row.get(103)?,
             })
         },
     )
@@ -7778,6 +7866,9 @@ impl Database {
             if !self.schema_migration_applied(172)? {
                 migration_step!("migration_172", self.migrate_public_context_v172());
             }
+            if !self.schema_migration_applied(173)? {
+                migration_step!("migration_173", self.migrate_skills_rebuild_v173());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -8505,6 +8596,9 @@ impl Database {
         }
         if !self.schema_migration_applied(172)? {
             migration_step!("migration_172", self.migrate_public_context_v172());
+        }
+        if !self.schema_migration_applied(173)? {
+            migration_step!("migration_173", self.migrate_skills_rebuild_v173());
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -27399,6 +27493,277 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_skills_rebuild_v173(&mut self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| -> Result<()> {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            anyhow::ensure!(
+                matches!(classify_database_contract(&tx)?,
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                    if marker.contract_version == "v1.68" && marker.projection_schema_version == 122),
+                "Skills rebuild requires the exact v1.68/schema 122 source"
+            );
+            let preserved_tables = [
+                "native_session_bootstrap_evidence",
+                "context_manifest",
+                "agent_run_input",
+                "skill",
+                "skill_revision",
+                "skill_projection_observation",
+            ];
+            let preserved_counts = preserved_tables
+                .iter()
+                .map(|table| {
+                    tx.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                })
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let bootstrap_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='native_session_bootstrap_evidence'",
+                [], |row| row.get(0),
+            )?;
+            anyhow::ensure!(
+                bootstrap_schema.contains("native_session_bootstrap_v4")
+                    && bootstrap_schema.contains("bootstrap_formatter_version IN (3, 4)"),
+                "v173 cannot identify the Bootstrap evidence contract"
+            );
+            let bootstrap_target = replacement_table_schema_v171(bootstrap_schema, "native_session_bootstrap_evidence")
+                .replace("contract_version IN ('native_session_bootstrap_v3', 'native_session_bootstrap_v4')",
+                    "contract_version IN ('native_session_bootstrap_v3', 'native_session_bootstrap_v4', 'native_session_bootstrap_v5')")
+                .replace("bootstrap_formatter_version IN (3, 4)", "bootstrap_formatter_version IN (3, 4, 5)");
+            rebuild_table_v171(
+                &tx,
+                "native_session_bootstrap_evidence",
+                &bootstrap_target,
+                &[],
+                &["native_session_bootstrap_evidence_v4_only_insert"],
+            )?;
+
+            let manifest_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='context_manifest'",
+                [],
+                |row| row.get(0),
+            )?;
+            let old_batch = "(context_manifest_version = 29 AND formatter_version = 29 AND run_facts_schema_version = 7 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
+            let new_batch = "(context_manifest_version = 30 AND formatter_version = 30 AND run_facts_schema_version = 7 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
+            anyhow::ensure!(
+                manifest_schema.contains(old_batch)
+                    && manifest_schema
+                        .contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9)"),
+                "v173 cannot identify the public Camp ContextManifest branch"
+            );
+            let manifest_target = replacement_table_schema_v171(
+                manifest_schema,
+                "context_manifest",
+            )
+            .replace(
+                "context_delivery_profile_version IN (4, 5, 6, 7, 8, 9)",
+                "context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10)",
+            )
+            .replace(
+                "formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29)",
+                "formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)",
+            )
+            .replace(
+                "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)",
+                "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)",
+            )
+            .replacen(old_batch, &format!("{new_batch}\n OR\n {old_batch}"), 1);
+            rebuild_table_v171(
+                &tx,
+                "context_manifest",
+                &manifest_target,
+                &[],
+                &[
+                    "context_manifest_v29_only_insert",
+                    "context_manifest_quote_profile_insert",
+                ],
+            )?;
+
+            let input_schema: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_run_input'",
+                [],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(
+                input_schema.contains("context_manifest_version IN (26, 27, 28, 29)"),
+                "v173 cannot identify the public Camp Run input constraint"
+            );
+            let input_target = replacement_table_schema_v171(input_schema, "agent_run_input")
+                .replace(
+                    "context_manifest_version IN (26, 27, 28, 29)",
+                    "context_manifest_version IN (26, 27, 28, 29, 30)",
+                );
+            rebuild_table_v171(
+                &tx,
+                "agent_run_input",
+                &input_target,
+                &[],
+                &["agent_run_input_v29_only_insert"],
+            )?;
+
+            tx.execute_batch(r#"
+                CREATE TABLE member_toolbox_skill (
+                    agent_id TEXT NOT NULL REFERENCES agent_profile(id) ON DELETE CASCADE,
+                    skill_name TEXT NOT NULL CHECK(skill_name IN (
+                        'campfire', 'grill-duo', 'grill-duo-with-docs', 'member-studio', 'review-duo'
+                    )),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(agent_id, skill_name)
+                );
+                CREATE INDEX member_toolbox_skill_name_idx ON member_toolbox_skill(skill_name, agent_id);
+                INSERT INTO member_toolbox_skill(agent_id, skill_name, updated_at)
+                SELECT id, 'member-studio', datetime('now') FROM agent_profile
+                WHERE profile_status <> 'removed';
+                CREATE TRIGGER member_toolbox_skill_default_insert AFTER INSERT ON agent_profile
+                WHEN NEW.profile_status <> 'removed'
+                BEGIN
+                    INSERT INTO member_toolbox_skill(agent_id, skill_name, updated_at)
+                    VALUES (NEW.id, 'member-studio', datetime('now'));
+                END;
+
+                CREATE TABLE native_skill_reference (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                    entry_path TEXT NOT NULL, canonical_path TEXT NOT NULL,
+                    source_scope TEXT NOT NULL CHECK(source_scope IN ('user', 'project')),
+                    adapter_kind TEXT NOT NULL, discovered_at TEXT NOT NULL
+                );
+                CREATE TABLE native_session_platform_skills_evidence (
+                    bootstrap_evidence_id TEXT PRIMARY KEY
+                        REFERENCES native_session_bootstrap_evidence(id) ON DELETE CASCADE,
+                    section_text TEXT NOT NULL, section_digest TEXT NOT NULL
+                );
+                CREATE TABLE context_additional_skills_evidence (
+                    context_manifest_id TEXT PRIMARY KEY REFERENCES context_manifest(id) ON DELETE CASCADE,
+                    section_text TEXT NOT NULL, section_digest TEXT NOT NULL,
+                    omitted_json TEXT NOT NULL CHECK(json_valid(omitted_json))
+                );
+
+                CREATE TRIGGER native_session_bootstrap_evidence_v5_only_insert
+                BEFORE INSERT ON native_session_bootstrap_evidence
+                WHEN NEW.contract_version IS NOT 'native_session_bootstrap_v5'
+                    OR NEW.bootstrap_formatter_version IS NOT 5
+                BEGIN SELECT RAISE(ABORT, 'new Bootstrap evidence must use v5'); END;
+
+                CREATE TRIGGER context_manifest_v30_only_insert
+                BEFORE INSERT ON context_manifest
+                WHEN NOT (
+                    (NEW.context_manifest_version = 30 AND NEW.formatter_version = 30
+                     AND NEW.run_facts_schema_version = 7 AND NEW.context_delivery_profile_version = 10
+                     AND EXISTS(SELECT 1 FROM agent_run AS run
+                                WHERE run.id = NEW.agent_run_id AND run.invocation_kind = 'batch')
+                     AND NOT EXISTS(SELECT 1 FROM agent_run_input AS input
+                                    WHERE input.agent_run_id = NEW.agent_run_id
+                                      AND input.context_manifest_version IS NOT 30))
+                    OR
+                    (NEW.context_manifest_version = 27 AND NEW.formatter_version = 27
+                     AND NEW.run_facts_schema_version = 5 AND NEW.context_delivery_profile_version = 7
+                     AND EXISTS(SELECT 1 FROM agent_run AS run
+                                WHERE run.id = NEW.agent_run_id AND run.invocation_kind <> 'batch'))
+                    OR
+                    (NEW.context_manifest_version = 29 AND NEW.formatter_version = 29
+                     AND NEW.run_facts_schema_version = 7 AND NEW.context_delivery_profile_version = 9
+                     AND EXISTS(SELECT 1 FROM agent_run_input AS input
+                                WHERE input.agent_run_id = NEW.agent_run_id
+                                  AND input.context_manifest_version = 29)
+                     AND NOT EXISTS(SELECT 1 FROM agent_run_input AS input
+                                    WHERE input.agent_run_id = NEW.agent_run_id
+                                      AND input.context_manifest_version IS NOT 29)
+                     AND EXISTS(SELECT 1 FROM agent_run AS run
+                                WHERE run.id = NEW.agent_run_id AND run.invocation_kind = 'batch'))
+                    OR
+                    (NEW.context_manifest_version = 26 AND NEW.formatter_version = 26
+                     AND NEW.run_facts_schema_version = 5 AND NEW.context_delivery_profile_version = 6
+                     AND EXISTS(SELECT 1 FROM agent_run AS run
+                                JOIN message_delivery AS delivery
+                                  ON delivery.id = run.trigger_message_delivery_id
+                                WHERE run.id = NEW.agent_run_id AND run.invocation_kind <> 'batch'
+                                  AND json_extract(delivery.frozen_snapshot_json,
+                                      '$.frozenContext.manifestSelection.contextManifestVersion') = 26))
+                )
+                BEGIN SELECT RAISE(ABORT, 'new ContextManifest must use the current projection'); END;
+
+                CREATE TRIGGER context_manifest_quote_profile_insert
+                BEFORE INSERT ON context_manifest
+                WHEN NOT ((NEW.context_manifest_version = 30 AND NEW.context_delivery_profile_version = 10)
+                       OR (NEW.context_manifest_version = 27 AND NEW.context_delivery_profile_version = 7)
+                       OR (NEW.context_manifest_version = 29 AND NEW.context_delivery_profile_version = 9)
+                       OR (NEW.context_manifest_version = 26 AND NEW.context_delivery_profile_version = 6))
+                BEGIN SELECT RAISE(ABORT, 'ContextManifest profile pairing is invalid'); END;
+
+                CREATE TRIGGER agent_run_input_v30_only_insert
+                BEFORE INSERT ON agent_run_input
+                WHEN NEW.context_manifest_version IS NOT 30
+                BEGIN SELECT RAISE(ABORT, 'new public Camp AgentRunInput must use ContextManifest v30'); END;
+
+                DROP TRIGGER runtime_input_delivery_attachment_auth_insert;
+                CREATE TRIGGER runtime_input_delivery_attachment_auth_insert
+                BEFORE INSERT ON runtime_input_delivery
+                WHEN NEW.runtime_request_digest IS NULL OR NOT (
+                    (NEW.runtime_attachment_auth_receipt_version IS 1
+                     AND NEW.runtime_attachment_auth_receipt_json IS NOT NULL
+                     AND NEW.runtime_attachment_auth_receipt_digest IS NOT NULL)
+                    OR
+                    (NEW.runtime_attachment_auth_receipt_version IS NULL
+                     AND NEW.runtime_attachment_auth_receipt_json IS NULL
+                     AND NEW.runtime_attachment_auth_receipt_digest IS NULL
+                     AND EXISTS(
+                         SELECT 1 FROM context_manifest
+                         WHERE id = NEW.context_manifest_id
+                           AND context_manifest_version IN (26, 27, 29, 30)
+                           AND camp_attachment_view_receipt_version IS NULL
+                     ))
+                )
+                BEGIN SELECT RAISE(ABORT, 'Runtime Input Delivery attachment evidence does not match its manifest'); END;
+
+                INSERT INTO schema_migration(version, applied_at) VALUES (173, datetime('now'));
+                UPDATE rovai_data_contract
+                SET contract_version = 'v1.69', projection_schema_version = 123,
+                    reset_reason = NULL, updated_at = datetime('now') WHERE singleton = 1;
+            "#)?;
+            anyhow::ensure!(
+                skills_rebuild_v173_schema_matches(&tx)?,
+                "Skills rebuild did not create the required schema"
+            );
+            for (table, before) in preserved_tables.into_iter().zip(preserved_counts) {
+                let after: i64 =
+                    tx.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })?;
+                anyhow::ensure!(
+                    before == after,
+                    "Skills rebuild changed historical {table} rows"
+                );
+            }
+            validate_migration_foreign_keys(
+                &tx,
+                &[
+                    "native_session_bootstrap_evidence",
+                    "context_manifest",
+                    "agent_run_input",
+                    "member_toolbox_skill",
+                ],
+            )?;
+            anyhow::ensure!(
+                matches!(
+                    classify_database_contract(&tx)?,
+                    DatabaseContractClassification::Current(_)
+                ),
+                "Skills rebuild failed current schema admission"
+            );
+            tx.commit()?;
+            Ok(())
+        })();
+        let foreign_keys_result = self.connection.execute_batch("PRAGMA foreign_keys=ON;");
+        result?;
+        foreign_keys_result?;
+        Ok(())
+    }
+
     fn migrate_public_context_v172(&mut self) -> Result<()> {
         self.connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
         let result = (|| -> Result<()> {
@@ -27582,7 +27947,8 @@ impl Database {
             anyhow::ensure!(
                 matches!(
                     classify_database_contract(&tx)?,
-                    DatabaseContractClassification::Current(_)
+                    DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                        if marker.contract_version == "v1.68" && marker.projection_schema_version == 122
                 ),
                 "Public context migration failed current schema admission"
             );
@@ -36892,6 +37258,109 @@ mod tests {
     use super::*;
 
     #[test]
+    fn v173_preserves_imported_revisions_and_member_studio_disablement() {
+        let directory =
+            std::env::temp_dir().join(format!("rovai-v173-skills-rebuild-{}", Uuid::new_v4()));
+        let mut source = STOP_BEFORE_PUBLIC_CONTEXT_MIGRATION_FOR_TEST
+            .with(|flag| {
+                flag.set(true);
+                let result = Database::open(&directory);
+                flag.set(false);
+                result
+            })
+            .unwrap();
+        source.migrate_public_context_v172().unwrap();
+        source.connection().execute_batch(r#"
+            INSERT INTO skill(id,name,origin,enabled,lifecycle_status,current_revision_id,
+                              version,created_at,updated_at)
+            VALUES('v173-imported','user-review','imported',1,'active',NULL,1,
+                   datetime('now'),datetime('now'));
+            INSERT INTO skill_revision(id,skill_id,revision,name,description,source_type,
+                                       source_metadata_json,content_digest,risk_summary_json,
+                                       file_count,total_bytes,installed_at)
+            VALUES('v173-revision','v173-imported',1,'user-review','unchanged','local_folder',
+                   '{}','sha256:retained',
+                   '{"executableFileCount":0,"scriptFileCount":0,"binaryCandidateCount":0,"declaredTools":[]}',
+                   1,1,datetime('now'));
+            UPDATE skill SET current_revision_id='v173-revision' WHERE id='v173-imported';
+        "#).unwrap();
+        let retained = |database: &Database| -> (String, String, i64) {
+            database
+                .connection()
+                .query_row(
+                    "SELECT skill.origin, revision.content_digest, skill.enabled
+                 FROM skill JOIN skill_revision AS revision
+                   ON revision.id = skill.current_revision_id WHERE skill.id = 'v173-imported'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap()
+        };
+        let before = retained(&source);
+        source.migrate_skills_rebuild_v173().unwrap();
+        assert_eq!(retained(&source), before);
+        let members: i64 = source
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM agent_profile WHERE profile_status <> 'removed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let defaults: i64 = source
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM member_toolbox_skill WHERE skill_name='member-studio'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(defaults, members);
+        assert_eq!(
+            source
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM member_toolbox_skill WHERE skill_name <> 'member-studio'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        let first_member: String = source
+            .connection()
+            .query_row(
+                "SELECT agent_id FROM member_toolbox_skill ORDER BY agent_id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        source
+            .connection()
+            .execute(
+                "DELETE FROM member_toolbox_skill WHERE agent_id=?1 AND skill_name='member-studio'",
+                [&first_member],
+            )
+            .unwrap();
+        drop(source);
+        let reopened = Database::open(&directory).unwrap();
+        assert_eq!(retained(&reopened), before);
+        assert_eq!(
+            reopened
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM member_toolbox_skill WHERE agent_id=?1",
+                    [&first_member],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn v172_preserves_historical_context_rows_and_gates_new_writes() {
         let directory =
             std::env::temp_dir().join(format!("rovai-v172-public-context-{}", Uuid::new_v4()));
@@ -37005,7 +37474,8 @@ mod tests {
         );
         assert!(matches!(
             classify_database_contract(source.connection()).unwrap(),
-            DatabaseContractClassification::Current(_)
+            DatabaseContractClassification::SupportedMigrationSource(ref marker)
+                if marker.contract_version == "v1.68" && marker.projection_schema_version == 122
         ));
         drop(source);
         let reopened = Database::open(&directory).unwrap();
@@ -38040,6 +38510,7 @@ mod tests {
             v170: version >= 170,
             v171: version >= 171,
             v172: version >= 172,
+            v173: version >= 173,
         }
     }
 
@@ -38229,11 +38700,12 @@ mod tests {
                 119,
                 169,
             ),
+            ("v1.68/schema 122 before Skills rebuild", "v1.68", 122, 172),
             (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                172,
+                173,
             ),
             (
                 "v1.66/schema 120 before Task version removal",
@@ -38711,7 +39183,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(172);
+        let current = migration_state_through(173);
         let v092_source = migration_state_through(91);
         let mut missing_intermediate = current;
         missing_intermediate.v84 = false;
@@ -41145,7 +41617,7 @@ mod tests {
         );
         assert!(
             manifest_schema
-                .contains("CHECK(context_delivery_profile_version IN (4, 5, 6, 7, 8, 9))")
+                .contains("CHECK(context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10))")
         );
         assert!(!manifest_schema.contains("CHECK(context_delivery_profile_version = 3)"));
         let run: (String, Option<String>) = reopened
@@ -51776,9 +52248,9 @@ mod tests {
             connection,
             "trigger",
             &[
-                "context_manifest_v29_only_insert",
+                "context_manifest_v30_only_insert",
                 "context_manifest_version_immutable",
-                "agent_run_input_v29_only_insert",
+                "agent_run_input_v30_only_insert",
                 "agent_run_input_context_projection_immutable",
                 "runtime_input_delivery_attachment_auth_insert",
                 "camp_attachment_view_camp_insert",
@@ -51796,6 +52268,8 @@ mod tests {
             &[
                 "context_manifest_v20_only_insert",
                 "context_manifest_v21_only_insert",
+                "context_manifest_v29_only_insert",
+                "agent_run_input_v29_only_insert",
             ],
             false,
         );
@@ -51823,7 +52297,7 @@ mod tests {
         }
         assert!(
             manifest_schema
-                .contains("CHECK(context_delivery_profile_version IN (4, 5, 6, 7, 8, 9))")
+                .contains("CHECK(context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10))")
         );
         assert!(manifest_schema.contains("collaboration_state_included INTEGER NOT NULL"));
         let delivery_schema: String = connection

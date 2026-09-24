@@ -6,6 +6,10 @@ last_updated: 2026-09-24
 
 # Agent Runtime 兼容性清单
 
+### v1.70 Skills 来源切换的证据边界（2026-09-24）
+
+下文各 Runtime 的 Skill 项目投递、导入、Revision 更新及原生加载结论来自切换前的精确测试版本和路径，保留为历史兼容证据。v1.70 新 Run 改用受管平台/工具箱索引和 Harness 原址候选，不再新建项目 SkillProjection；这些旧测试不能证明新模型是否按索引读取了 Skill。当前新路径的跨 Runtime 实际调用与压缩后可用性为 `Unverified`，完成隔离真实任务 Gate 后再逐 Adapter 更新本清单，既有平台资格与非 Skill 能力不因此推翻。当前来源与冻结边界见 [Skills 架构](architecture/skills.md)。
+
 本文件维护 Agent Runtime 的本机实测证据和复核条件。它不是产品 Runtime Registry、
 Roadmap 或用户可见能力来源；正式目录以代码中的 `AdapterKind`、Migration、健康探测和
 测试为准。跨版本边界见
