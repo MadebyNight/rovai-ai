@@ -4,31 +4,13 @@ contract: camp-history-v9
 version: 9
 status: accepted
 authority: public-camp-history-read-scope
-last_updated: 2026-09-24
+last_updated: 2026-09-23
 ---
 
 # Camp History v9
 
-v9 inherits [v8](camp-history-v8.md) authentication, public Camp scope, request shapes, publication boundaries, complete-result behavior, attachment projection and viewer-specific quote-source validation. It changes explicit history visibility and `camp.read` withdrawal projection. Private Single Chat and Runtime-private records remain outside this contract.
+继承 [v8](camp-history-v8.md) 的认证、全部存续公开 Camp 读取范围、实时可见性、附件、recipient suppression、撤回与 quote source 过滤。新公开 Run 不再自动投递 `SHARED_CONVERSATION`；Agent 按需使用 `rovai camp read` 查询。Manifest 的旧历史字段仍保存旧行，但新 Manifest 29 不以它们作为自动上下文。
 
-## Explicit read and search visibility
+`camp.read` timeline 和 thread 的 `--limit` 省略时默认 20；显式值只接受 1–100 的整数。0、101、负数、非整数及非数字明确报参数错误，不钳位或静默代换。符合条件的消息超过本页数量时返回完整本页、`hasMore=true` 和可续读的 `nextCursor`；不足时返回实际可见消息、`hasMore=false` 和 `nextCursor=null`。页内按 sequence 升序；`before` 是排他游标，从最新页往较早消息翻。`messageId` 精确读取不接受 `limit`。
 
-An authenticated Agent's `camp.read`, `camp.search` and `history.search` may return a published message while its `recall_state` is `recallable` or the viewing Agent still has a `waiting` Delivery. A read or search does not claim that Delivery, close recall, advance an accepted watermark or add the message to the current Run's frozen input. The Principal may still withdraw a local Composer message until the first target claim, subject to the existing message-version check. Previously returned tool results are not rewritten; subsequent calls use the current message state.
-
-`camp.read` uses the selected extant public Camp's live sequence boundary at call time, including when that Camp differs from the calling Run's Camp. `camp.search` on the current Camp also remains live. Cross-Camp `camp.search`, `history.search` and `camp.list` retain the calling Run's frozen global publication boundary. IDs and cursors do not bypass Camp existence, publication, tombstone or these boundaries.
-
-`camp.search` and `history.search` preserve their existing query, rank, snippet, limit and result schemas. They may match recallable or waiting messages within their boundary, but withdrawn messages are excluded from body, reference and structured Principal-mention candidates. A withdrawn marker is never searchable text.
-
-## `camp.read` result items
-
-The existing normal message item shapes remain unchanged. Timeline and thread normal items retain `messageId`, `sequence`, `authorType`, `authorId`, `anchorMessageId`, `createdAt`, `body`, `attachmentCount` and optional `quotes`. Exact-item normal results also retain `attachments`, attachment truncation fields and `addressing`.
-
-After withdrawal, timeline and exact-item reads return an item with exactly these fields:
-
-```json
-{"messageId":"<id>","sequence":42,"withdrawn":true,"displayText":"Message withdrawn"}
-```
-
-The marker is generated from the current message state at read time. It occupies the message's original sequence and one page slot, so `limit`, `before`, `hasMore` and `nextCursor` continue to use sequence ordering. The marker has no `body`, author, timestamp, anchor, quote, attachment, addressing or recipient field. It does not restore erased content or change the withdrawal transaction. Exact ID outside the selected Camp or current read boundary returns `camp.read_unavailable`, even if a matching withdrawn row exists elsewhere.
-
-A withdrawn thread anchor continues to return `message.withdrawn`. Withdrawal clears the reply association, so a withdrawn reply is not reinserted into its former thread. Automatic `SHARED_CONVERSATION`, mandatory `RUN_INPUT` selection and quote-source validation retain their existing recallable and waiting-Delivery suppression; a direct read or search result does not loosen those paths.
+`RUN_FACTS.historyHint` 中的执行前边界仅供判断相关历史，不是 `before` 游标，也不保证一次请求覆盖边界以后的全部消息。Agent 可从最新页按需逐页倒翻；读取不 claim Delivery、关闭撤回或推进 accepted 水位。跨 Camp 搜索与冻结全局 publication boundary 继续继承 v8。

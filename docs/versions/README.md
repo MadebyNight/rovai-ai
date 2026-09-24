@@ -1,7 +1,7 @@
 ---
 document_type: versions-index
 authority: version-lifecycle
-current_version: v1.67
+current_version: v1.69
 last_updated: 2026-09-24
 ---
 
@@ -219,4 +219,6 @@ last_updated: 2026-09-24
 | v1.64 | `historical` | Execution Evidence 生命周期减重、独立变更水位、私有思考边界与可恢复 Files Changed 重算 | [v1.64/README.md](v1.64/README.md) |
 | v1.65 | `historical` | 可靠异步 Camp 删除、阶段交接、最小重试界面与聚合 SQL 收敛 | [v1.65/README.md](v1.65/README.md) |
 | v1.66 | `historical` | 新 Tool 持久化输出 7,680 UTF-8 字节上限、显式三态归约与诚实丢失提示 | [v1.66/README.md](v1.66/README.md) |
-| v1.67 | `current` | Camp 主动读取与搜索 claim 前消息、撤回后英文状态项 | [v1.67/README.md](v1.67/README.md) |
+| v1.67 | `historical` | Task 去版本化、Agent Task 输出精简与模型上下文技术字段清理 | [v1.67/README.md](v1.67/README.md) |
+| v1.68 | `historical` | 公共历史按需读取、执行边界提示与分页上限 100 | [v1.68/README.md](v1.68/README.md) |
+| v1.69 | `current` | Camp 主动读取、搜索与撤回占位 | [v1.69/README.md](v1.69/README.md) |

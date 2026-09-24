@@ -1,39 +1,38 @@
 ---
 document_type: version-overview
 version: v1.67
-lifecycle: current
+lifecycle: historical
 authority: version-scope-and-status
 design_status: confirmed
-implementation_status: in_progress
-model_context_change: false
-last_updated: 2026-09-24
+implementation_status: completed
+model_context_change: true
+last_updated: 2026-09-23
 ---
 
-# Rovai-ai v1.67：Camp 主动读取、搜索与撤回占位
+# Rovai-ai v1.67：Task 去版本化与模型输入精简
 
-前置：[v1.66](../v1.66/README.md)。本版让队员在 Run 中主动读取或搜索已发布的最新公屏消息，包括首个目标 claim 前仍可撤回、或本队员 Delivery 尚在 waiting 的消息。读取和搜索不领取 Delivery，也不关闭撤回资格；撤回后的 `camp.read` 返回英文状态项。字段合同见 [Camp History v9](../../contracts/camp-history-v9.md)，取舍理由见[版本决定](decisions.md)，实施证据见[实施与验收](implementation-plan.md)。
+前置：[v1.66](../v1.66/README.md)。本版按已确认的 [revision 3](model-context-change-task-versionless.md)
+删除 Task 对象版本及更新前提，保留字段补丁、权限、状态机、事务与命令幂等；Agent 四类 Task 结果均省略
+`availableActions`。新 Bootstrap 和动态模型输入从源投影省略 `schemaVersion`，覆盖公开 Camp、普通 Camp、
+A2A、Single Chat 和重投路径。其他系统协议版本继续由 Core 内部管理。
 
-## 目标与边界
+后续：[v1.68](../v1.68/README.md)。
 
-- `camp.read` 使用目标 Camp 调用时的实时 sequence，时间线和按 ID 读取把已撤回消息投影为原位置的 `Message withdrawn` 状态项，不返回已擦除的原文、引用、附件或寻址信息。
-- `camp.search` 和 `history.search` 在各自既有发布边界内可命中 claim 前原文；撤回后不再命中。当前 Camp 搜索保持实时，跨 Camp 搜索保持冻结的全局发布边界。
-- 首个目标 claim 仍是本地 Composer 消息的撤回边界。自动 `SHARED_CONVERSATION`、`RUN_INPUT` 选择和 quote-source 重验继续使用原有领取隔离。
-- 不变更 Bootstrap、AgentRun Dynamic Context、ContextManifest 或 Formatter 的结构、版本和字节选择；本版改变的是 Agent 主动调用后的工具结果。
+旧冻结输入、历史审计与用户项目文件保留原样；旧执行不转换或自动重放。Migration 171 只调整当前
+Task、AgentRun、Delivery 和上下文证据表结构，保留业务行。
 
-## 当前状态
-
-Core 读取和搜索投影、输出 Schema 与定向回归已实现；完整验证和合入证据在[实施计划](implementation-plan.md)完成后更新。
+实施范围与验证见[实施计划](implementation-plan.md)；当前取舍见[版本决定](decisions.md)。
 
 ## 跨版本文档影响
 
 | 范围 | 结论 | 证据或理由 |
 | --- | --- | --- |
-| Version lifecycle | 已更新 | [v1.66](../v1.66/README.md)冻结为 historical；本概览、[实施计划](implementation-plan.md)与[版本索引](../README.md)建立唯一 current v1.67 |
-| Decisions | 已更新 | [V1.67-D01](decisions.md#v1-67-d01)记录主动查询与 claim 撤回边界的取舍，并进入[当前决定导航](../../decisions/CURRENT.md) |
-| Contracts | 已更新 | [Camp History v9](../../contracts/camp-history-v9.md)定义正常项、撤回项、搜索可见性和发布边界；v8 降为历史 |
-| Architecture | 已更新 | [公共历史不变量](../../architecture/foundational-invariants.md#context-public-history)、[公共消息与 Delivery](../../architecture/public-a2a-message-delivery.md)和[Built-in Tool Runtime](../../architecture/builtin-tool-runtime.md)区分主动查询与自动上下文 |
-| UI | 已更新 | 撤回确认框用“尚未领取”描述实际资格；[Camp 会话工作区](../../ui/components/conversation-workspace.md)同步 Agent 主动读取和英文状态项，Renderer 时间线与操作未改变 |
-| Runtime Activity | 确认无需更新 | 不改变 Runtime Activity kind、phase、outcome、Adapter 映射或证据来源 |
-| Runtime compatibility | 确认无需更新 | 不改变 Runtime 协议、安装资格或实测版本；所有 Adapter 共用 Built-in Tool 结果 |
-| Documentation routing | 已更新 | [文档导航](../../README.md)、[合同索引](../../contracts/README.md)和[Research 索引](../../research/README.md)指向当前语义及方案来源 |
-| Root README | 确认无需更新 | 项目定位与常青能力不变；这是公共历史工具的精确可见性调整 |
+| Version lifecycle | 已更新 | v1.66 冻结；本概览、[实施计划](implementation-plan.md)、[决定](decisions.md)、[索引](../README.md)建立唯一 current v1.67 |
+| Decisions | 已更新 | [V1.67-D01](decisions.md#v1-67-d01)记录 Task 字段补丁和模型投影 clean break，并同步[当前决定](../../decisions/CURRENT.md) |
+| Contracts | 已更新 | [Durable Task v5](../../contracts/durable-task-v5.md)、[Built-in Transport v32](../../contracts/builtin-tool-transport-v32.md)、[ContextManifest v28](../../contracts/context-manifest-evidence-v28.md)、[Run Facts v6](../../contracts/run-facts-v6.md)、[Host Web v4](../../contracts/host-web-v4.md)和[合同索引](../../contracts/README.md) |
+| Architecture | 已更新 | [基础不变量](../../architecture/foundational-invariants.md)的 Task 与 Context 边界及[架构导航](../../architecture/README.md)指向新合同 |
+| UI | 已更新 | [Camp 会话工作区](../../ui/components/conversation-workspace.md)说明字段补丁和并发编辑行为 |
+| Runtime Activity | 确认无需更新 | Canonical Activity identity、phase/outcome 和 Adapter 映射均不因 Task 字段版本删除而变化 |
+| Runtime compatibility | 确认无需更新 | 受支持 Runtime 列表及资格不变；新输入由统一 Core Formatter 生成 |
+| Documentation routing | 已更新 | [文档导航](../../README.md)、合同索引和当前决定均路由到本版当前合同 |
+| Root README | 确认无需更新 | 项目定位和常青能力不变；本版收敛的是内部 Task 更新和模型投影字段 |

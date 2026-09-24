@@ -2,29 +2,51 @@
 document_type: implementation-plan
 version: v1.67
 authority: version-implementation-and-acceptance
-status: in_progress
-last_updated: 2026-09-24
+status: completed
+last_updated: 2026-09-23
 ---
 
 # v1.67 实施与验收
 
-## 实施切片
+## 实施
 
-1. 在 `camp_history.rs` 的显式 read/search 查询中允许 recallable 和本队员 waiting Delivery；保留 Camp 存续、publication、tombstone 及各工具原有的实时/冻结边界。自动上下文与 quote-source 过滤不改。
-2. `camp.read` 将撤回行在原 sequence 投影为只有 `messageId`、`sequence`、`withdrawn: true`、`displayText: "Message withdrawn"` 的状态项；按 ID 与时间线共用投影，线程 anchor 保留不可恢复处理。
-3. 更新 Built-in 输出 Schema、CLI 帮助、Camp History 合同、当前 Architecture 和文档路由；撤回事务与首个 claim 条件不改。
-4. 使用现有 `camp_history`、`team_tool_catalog` 和 `context` 测试 owner 验证读取、搜索、Schema、撤回后重读与跨 Camp 边界；运行 Rust、文档和提交门禁。
+1. Core Task 命令与 read model 删除对象版本；更新事务只覆盖显式提交字段，继续验证 actor、当前
+   Assignee、状态机和终态，命令 ID 继续由 Domain Command Gateway 去重。
+2. Migration 171 删除当前 Task、AgentRun、MessageDelivery 的 Task 专属版本列，重建受约束的表并
+   保留业务行、外键及历史证据原字节。
+3. Agent create/get/update/list 结果删除 `version` 和 `availableActions`；CLI help、Host、Desktop
+   与 Web 更新输入删除 `expectedVersion`。编辑器只提交相对打开时发生变化的字段。
+4. Bootstrap、Collaboration、Run Facts 与 Single Chat Guidance 从生成投影中省略模型可见
+   `schemaVersion`；ContextManifest task refs 不含版本，digest 对新投影字节重算。新 Session 与
+   Formatter/Manifest 版本轴按 [revision 3](model-context-change-task-versionless.md) 轮换。
+5. 更新当前合同、示例、测量 oracle 和验收脚本；旧冻结输入不转换、重播或兼容解码。
 
-## 验收矩阵
+## 验收
 
-| 验收项 | 证据 | 状态 |
+| 项目 | 核查证据 | 状态 |
 | --- | --- | --- |
-| 当前 Camp claim 前正常读取和搜索，读取不领取 Delivery | `camp_history::slow_tests::camp_read_returns_the_selected_page_and_item_body_without_size_clipping` | 已通过 |
-| 撤回后 `camp.read` 状态项占原序号且无原文，搜索不再命中 | 同一 `camp_history` owner 与 `team_tool_catalog::tests::camp_read_output_contract_distinguishes_original_and_withdrawn_items` | 已通过 |
-| 跨 Camp 搜索仍受冻结发布边界，跨 Camp 读取仍实时 | `context::slow_tests::public_history_is_readable_without_target_camp_membership_or_live_recheck` 与 `history_snapshot_order_and_titles_remain_frozen` | 已通过 |
-| claim 后撤回拒绝，自动上下文和 quote-source 隔离不变 | 现有 Collaboration/Context 回归 | 待运行 |
-| Rust、文档与 PR 门禁 | `cargo test`、`pnpm docs:*`、CI | 待运行 |
+| Task 字段补丁、同字段后写覆盖、权限与幂等 | Core Task、权限和 CLI owner tests | 通过 |
+| 新库与 v170 当前存储升级无 Task 版本列且保留业务行 | Migration 171 owner test、业务行及外键检查 | 通过 |
+| Agent 四类输出与 Host/UI 无 Task 版本 | Rust 输出 fixture、TypeScript typecheck、Renderer tests | 通过 |
+| 新模型投影与 Manifest 无技术字段，旧冻结输入拒绝 | Context slow tests（42 项）、投影 fixture/digest | 通过 |
+| 仓库日常门禁和 Host Web 协议 | `cargo test --workspace`、`pnpm typecheck`、`pnpm test`、`pnpm docs:check` | 通过 |
 
 ## Rust 测试准入
 
-本版扩展 `camp_history.rs` 已有 SQLite 读取/搜索 owner 与 `team_tool_catalog.rs` 已有输出 Schema owner。新增断言覆盖同一次读取前后状态转换和 marker 的闭合 shape；既有 fixture 已包含消息、附件和 Delivery，复用它比新增平行数据库 fixture 更低成本。跨 Camp 发布边界由 `context.rs` 既有 owner 证明。
+沿用 Task、Context 和数据库 Migration 的既有 owner 测试；补充的断言分别验证字段独立写入、当前表
+结构和模型投影字节。升级保留业务行与外键的风险需要独立 Migration 回归，不能只靠 Schema 字符串断言。
+
+新增 `v171_removes_task_versions_without_changing_business_rows` 拥有 v170 当前存储到新表结构的业务行、
+外键和重启边界：修复前输入保留 Task 版本列且无法满足新 Schema；现有单元层无法证明 SQLite 重建表时
+保留数据。最小命令是
+`cargo test -p rovai-core --features extended-tests --lib v171_removes_task_versions_without_changing_business_rows`。
+
+退役三个仅拥有旧上下文迁移或旧冻结重放的 slow tests：
+`v68_through_v71_clean_break_preserves_business_history_and_removes_old_context_state`、
+`v93_clean_break_preserves_business_history_and_removes_old_context_state`、
+`migrated_unmaterialized_batch_run_keeps_its_v26_projection`。本版明确不支持旧格式转换和旧执行重放；
+现行投递与拒绝由 `dispatch_admission_accepts_only_new_context_contracts`、
+`batch_context_version_snapshot_requires_current_uniform_input` 和 Migration 171 owner 验证。测试清单相对
+变更前为删除三项、增加一项；定向命令为
+`cargo test -p rovai-core --features slow-tests --lib context::slow_tests::`，全量日常命令为
+`cargo test --workspace`。
