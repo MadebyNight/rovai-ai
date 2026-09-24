@@ -244,14 +244,10 @@ impl SkillProjectionReconciler {
                 LegacyEntryClassification::ActiveRun => report.retained_active_run += 1,
                 LegacyEntryClassification::Inaccessible => report.retained_inaccessible += 1,
                 LegacyEntryClassification::Unverified => report.retained_unverified += 1,
-                LegacyEntryClassification::Missing => {
-                    delete_legacy_observations(database, observations)?;
-                    report.already_missing += 1;
-                }
-                LegacyEntryClassification::Owned => {
+                LegacyEntryClassification::Missing | LegacyEntryClassification::Owned => {
                     // Check again at the point of mutation: access, Run state and ownership may
-                    // have changed since the list was read. The Core DB lock serializes Core
-                    // commands, while this second filesystem read avoids stale user edits.
+                    // have changed since the list was read. A missing project only removes its
+                    // observation; no project file or root access state is changed.
                     match classify_legacy_entry(database, library, observations) {
                         LegacyEntryClassification::Owned => {
                             let entry_path = Path::new(&observations[0].entry_path);
@@ -1531,12 +1527,49 @@ fn classify_legacy_entry(
     if !matches!(access, Ok(Some(ref state)) if state == "active") {
         return LegacyEntryClassification::Inaccessible;
     }
-    if !root.is_dir() || root.canonicalize().ok().as_deref() != Some(root) {
-        return LegacyEntryClassification::Inaccessible;
-    }
     match has_active_run(database, &first.execution_root, None, None) {
         Ok(true) => return LegacyEntryClassification::ActiveRun,
         Ok(false) => {}
+        Err(_) => return LegacyEntryClassification::Inaccessible,
+    }
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.is_dir() => {
+            if root.canonicalize().ok().as_deref() != Some(root) {
+                return LegacyEntryClassification::Inaccessible;
+            }
+        }
+        Ok(_) => return LegacyEntryClassification::Unverified,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let Some(parent) = root.parent() else {
+                return LegacyEntryClassification::Inaccessible;
+            };
+            // ENOENT alone can mean an unavailable ancestor or a dangling symlink.
+            // Require a readable, canonical parent and a second explicit NotFound on
+            // the exact root before treating its observations as stale.
+            match parent.canonicalize() {
+                Ok(canonical) if canonical == parent => {}
+                Ok(_) => return LegacyEntryClassification::Unverified,
+                Err(_) => return LegacyEntryClassification::Inaccessible,
+            }
+            if fs::read_dir(parent).is_err() {
+                return LegacyEntryClassification::Inaccessible;
+            }
+            #[cfg(windows)]
+            match windows_projection::has_active_run_registration_for_unavailable_root(
+                database,
+                &first.execution_root,
+            ) {
+                Ok(true) => return LegacyEntryClassification::ActiveRun,
+                Ok(false) => {}
+                Err(_) => return LegacyEntryClassification::Inaccessible,
+            }
+            return match fs::symlink_metadata(root) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    LegacyEntryClassification::Missing
+                }
+                _ => LegacyEntryClassification::Inaccessible,
+            };
+        }
         Err(_) => return LegacyEntryClassification::Inaccessible,
     }
     match projection_mutation_blocked(database, root, &first.execution_root, None) {
@@ -3300,13 +3333,17 @@ mod slow_tests {
         let library_root = temporary_directory("rovai-legacy-cleanup-library");
         let library = SkillLibraryService::new(library_root.clone()).unwrap();
         install_official_and_assign(&mut database, &library, &[SkillDeliveryGroupKey::Codex]);
-        let roots = (0..5)
+        let mut roots = (0..7)
             .map(|_| {
                 temporary_directory("rovai-legacy-cleanup-root")
                     .canonicalize()
                     .unwrap()
             })
             .collect::<Vec<_>>();
+        let unavailable_parent = temporary_directory("rovai-legacy-cleanup-unavailable-parent");
+        let unavailable_root = unavailable_parent.join("project");
+        fs::create_dir(&unavailable_root).unwrap();
+        roots.push(unavailable_root.canonicalize().unwrap());
         for root in &roots {
             SkillProjectionReconciler
                 .reconcile_root(
@@ -3319,6 +3356,7 @@ mod slow_tests {
         }
         let entry = |root: &Path| root.join(".codex/skills/analyze-agent-codebase");
         insert_active_run(&database, &roots[1]);
+        insert_second_active_run(&database, &roots[5]);
         upsert_root_access_state(
             &mut database,
             roots[2].to_string_lossy().as_ref(),
@@ -3330,15 +3368,57 @@ mod slow_tests {
         fs::remove_file(entry(&roots[3])).unwrap();
         fs::write(entry(&roots[3]), "User-created Skill").unwrap();
         fs::remove_dir_all(&roots[4]).unwrap();
+        fs::remove_dir_all(&roots[5]).unwrap();
+        fs::remove_dir_all(&roots[6]).unwrap();
+        #[cfg(unix)]
+        symlink(roots[6].with_extension("unavailable"), &roots[6]).unwrap();
+        #[cfg(windows)]
+        fs::write(&roots[6], "Unexpected project root file").unwrap();
+        fs::remove_dir_all(&unavailable_parent).unwrap();
+        let root_states = |database: &Database| {
+            let mut statement = database.connection().prepare(
+                "SELECT execution_root, access_state, dirty, cleanup_required, removed_at, updated_at \
+                 FROM skill_projection_root_state ORDER BY execution_root",
+            ).unwrap();
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let root_states_before = root_states(&database);
 
         let first = SkillProjectionReconciler
             .cleanup_legacy_entries(&mut database, &library)
             .unwrap();
         assert_eq!(first.removed, 1);
-        assert_eq!(first.retained_active_run, 1);
+        assert_eq!(first.already_missing, 1);
+        assert_eq!(first.retained_active_run, 2);
         assert_eq!(first.retained_inaccessible, 2);
-        assert_eq!(first.retained_unverified, 1);
-        assert_eq!(first.remaining, 4);
+        assert_eq!(first.retained_unverified, 2);
+        assert_eq!(first.remaining, 6);
+        assert_eq!(root_states(&database), root_states_before);
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM skill_projection_observation WHERE execution_root = ?1",
+                    [roots[4].to_string_lossy().as_ref()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0,
+            "the deleted project's observations, and only those rows, must be removed"
+        );
         assert!(fs::symlink_metadata(entry(&roots[0])).is_err());
         assert!(
             !SkillProjectionReconciler
@@ -3348,6 +3428,13 @@ mod slow_tests {
         );
         assert!(entry(&roots[1]).exists());
         assert!(entry(&roots[2]).exists());
+        assert_eq!(
+            SkillProjectionReconciler
+                .legacy_entry_count(&database)
+                .unwrap(),
+            6,
+            "Diagnostics must read the refreshed observation count"
+        );
         assert_eq!(
             fs::read_to_string(entry(&roots[3])).unwrap(),
             "User-created Skill"
@@ -3472,16 +3559,20 @@ mod slow_tests {
             .unwrap();
         assert_eq!(running_status, "running");
 
+        let root_states_before_repeat = root_states(&database);
         let repeated = SkillProjectionReconciler
             .cleanup_legacy_entries(&mut database, &library)
             .unwrap();
         assert_eq!(repeated.removed, 0);
-        assert_eq!(repeated.remaining, 4);
+        assert_eq!(repeated.already_missing, 0);
+        assert_eq!(repeated.remaining, 6);
+        assert_eq!(root_states(&database), root_states_before_repeat);
         assert_eq!(
             fs::read_to_string(entry(&roots[3])).unwrap(),
             "User-created Skill"
         );
         drop(database);
+        fs::remove_file(&roots[6]).unwrap();
         for root in roots.into_iter().take(4) {
             fs::remove_dir_all(root).unwrap();
         }
