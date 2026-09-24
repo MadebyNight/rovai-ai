@@ -82,7 +82,7 @@ export function NativeSkillsSettings(): React.JSX.Element {
       <Menu.Root>
         <Menu.Trigger asChild><button className="member-runtime-picker rebuilt-runtime-trigger" type="button" aria-label={`选择运行时，当前为 ${adapterLabel(runtime)}`}><RuntimeGlyph kind={runtime} /><span>{adapterLabel(runtime)}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></button></Menu.Trigger>
         <Menu.Portal><Menu.Content className="runtime-model-picker-menu member-runtime-menu" align="end" sideOffset={5} loop>
-          <Menu.RadioGroup value={runtime} onValueChange={(value) => setRuntime(value as AdapterKind)}>
+          <Menu.RadioGroup className="runtime-picker-options" value={runtime} onValueChange={(value) => setRuntime(value as AdapterKind)}>
             <div className="runtime-picker-scroll">{VISIBLE_PRODUCT_RUNTIMES.map((kind) => <Menu.RadioItem key={kind} value={kind} textValue={adapterLabel(kind)} className="runtime-model-picker-item member-runtime-menu-item"><RuntimeGlyph kind={kind} /><span className="runtime-model-picker-copy"><strong>{adapterLabel(kind)}</strong></span><Menu.ItemIndicator className="runtime-model-picker-check">✓</Menu.ItemIndicator></Menu.RadioItem>)}</div>
           </Menu.RadioGroup>
         </Menu.Content></Menu.Portal>

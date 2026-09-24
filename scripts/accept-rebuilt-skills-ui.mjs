@@ -125,6 +125,22 @@ try {
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...runtimeTrigger, button: 'left', buttons: 1, clickCount: 1 })
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...runtimeTrigger, button: 'left', buttons: 0, clickCount: 1 })
   await waitFor(cdp, `Boolean([...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.querySelector('strong')?.textContent.trim() === 'Qoder'))`, 5_000)
+  const runtimeMenu = await evaluate(cdp, `(() => {
+    const menu = document.querySelector('.runtime-model-picker-menu.member-runtime-menu')
+    const scroll = menu?.querySelector('.runtime-picker-scroll')
+    const items = [...(scroll?.querySelectorAll('[role="menuitemradio"]') ?? [])]
+    if (!menu || !scroll || !items.length) return null
+    scroll.scrollTop = scroll.scrollHeight
+    const menuBounds = menu.getBoundingClientRect()
+    const lastBounds = items.at(-1).getBoundingClientRect()
+    return { count: items.length, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight,
+      scrollTop: scroll.scrollTop, lastLabel: items.at(-1).textContent.trim(),
+      lastVisible: lastBounds.top >= menuBounds.top && lastBounds.bottom <= menuBounds.bottom }
+  })()`)
+  if (!runtimeMenu || runtimeMenu.count < 10 || runtimeMenu.scrollHeight <= runtimeMenu.clientHeight + 40 ||
+      runtimeMenu.scrollTop <= 40 || !runtimeMenu.lastVisible) {
+    throw new Error(`Skills Runtime menu cannot scroll to its last choice: ${JSON.stringify(runtimeMenu)}`)
+  }
   await evaluate(cdp, `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.querySelector('strong')?.textContent.trim() === 'Qoder').click()`)
   await waitFor(cdp, `(${nativePage}).querySelector('.rebuilt-skills-list')?.textContent.includes('qoder-user-skill')`, 5_000)
   const qoderSources = await evaluate(cdp, `[...(${nativePage}).querySelectorAll('.rebuilt-skill-row strong')].map((item) => item.textContent.trim()).sort()`)
@@ -196,6 +212,7 @@ try {
     userDataDirectory,
     nativeSkillNames: skills.rows,
     qoderSkillNames: qoderSources,
+    runtimeMenu,
     actions: { refresh: refreshAction, description: descriptionAction },
     splitters: { skills: skillsSplitter, toolbox: toolboxSplitter },
     toolboxDefaults: toolbox.defaults,
