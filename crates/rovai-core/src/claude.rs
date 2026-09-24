@@ -1593,7 +1593,7 @@ fn normalize_claude_runtime_events(
                 let output = tool_name.as_deref().and_then(|name| {
                     if name.eq_ignore_ascii_case("bash") {
                         public_claude_bash_output(event, block)
-                    } else if name.starts_with("mcp__") || name == "Skill" {
+                    } else if public_claude_text_result_tool(name) {
                         public_claude_tool_result_text(block.get("content"))
                     } else {
                         None
@@ -1866,6 +1866,51 @@ fn public_claude_bash_output(event: &Value, tool_result: &Value) -> Option<Strin
         output.push(text);
     }
     (!output.is_empty()).then(|| output.join("\n"))
+}
+
+fn public_claude_text_result_tool(name: &str) -> bool {
+    // Keep this list exact: file-reading and file-editing results can contain
+    // workspace content, while unknown future tools have no reviewed boundary.
+    name.starts_with("mcp__")
+        || matches!(
+            name,
+            "Agent"
+                | "Artifact"
+                | "AskUserQuestion"
+                | "CronCreate"
+                | "CronDelete"
+                | "CronList"
+                | "EndConversation"
+                | "EnterPlanMode"
+                | "EnterWorktree"
+                | "ExitPlanMode"
+                | "ExitWorktree"
+                | "ListAgents"
+                | "ListMcpResourcesTool"
+                | "Monitor"
+                | "PowerShell"
+                | "PushNotification"
+                | "RemoteTrigger"
+                | "ReportFindings"
+                | "ScheduleWakeup"
+                | "SendFeedback"
+                | "SendMessage"
+                | "SendUserFile"
+                | "ShareOnboardingGuide"
+                | "Skill"
+                | "TaskCreate"
+                | "TaskGet"
+                | "TaskList"
+                | "TaskOutput"
+                | "TaskStop"
+                | "TaskUpdate"
+                | "TodoWrite"
+                | "ToolSearch"
+                | "WaitForMcpServers"
+                | "WebFetch"
+                | "WebSearch"
+                | "Workflow"
+        )
 }
 
 fn public_claude_tool_result_text(value: Option<&Value>) -> Option<String> {
@@ -3409,7 +3454,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_and_skill_text_results_are_public_while_other_native_results_do_not_change() {
+    fn mcp_skill_and_reviewed_native_text_results_are_public_without_file_content() {
         let session_id = "0bdd2166-d420-40c6-94be-70b93eb290c5";
         for (name, failed, content, expected) in [
             (
@@ -3451,7 +3496,66 @@ mod tests {
                 json!([{"type": "resource", "text": "PRIVATE_SKILL_RESOURCE"}]),
                 None,
             ),
+            (
+                "Agent",
+                false,
+                json!("AGENT_PUBLIC_MARKER"),
+                Some("AGENT_PUBLIC_MARKER"),
+            ),
+            (
+                "TaskStop",
+                true,
+                json!([{"type": "text", "text": "TASK_STOP_ERROR_MARKER"}]),
+                Some("TASK_STOP_ERROR_MARKER"),
+            ),
+            (
+                "TaskOutput",
+                false,
+                json!("TASK_OUTPUT_MARKER"),
+                Some("TASK_OUTPUT_MARKER"),
+            ),
+            (
+                "TaskList",
+                false,
+                json!("TASK_LIST_MARKER"),
+                Some("TASK_LIST_MARKER"),
+            ),
+            (
+                "WebSearch",
+                false,
+                json!("WEB_SEARCH_MARKER"),
+                Some("WEB_SEARCH_MARKER"),
+            ),
+            (
+                "ToolSearch",
+                false,
+                json!("TOOL_SEARCH_MARKER"),
+                Some("TOOL_SEARCH_MARKER"),
+            ),
             ("Read", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Grep", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Glob", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Edit", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            ("Write", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            (
+                "NotebookEdit",
+                false,
+                json!("PRIVATE_NATIVE_FILE_CONTENT"),
+                None,
+            ),
+            ("LSP", false, json!("PRIVATE_NATIVE_FILE_CONTENT"), None),
+            (
+                "ReadMcpResourceTool",
+                false,
+                json!("PRIVATE_NATIVE_FILE_CONTENT"),
+                None,
+            ),
+            (
+                "FutureClaudeTool",
+                false,
+                json!("PRIVATE_NATIVE_FILE_CONTENT"),
+                None,
+            ),
         ] {
             let mut state = ClaudeCodeStreamState::default();
             normalize_claude_runtime_events(

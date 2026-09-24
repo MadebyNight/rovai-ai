@@ -2297,6 +2297,9 @@ async function seedClaudeToolDetailFixtures() {
   const fixtures = [
     { key: 'mcp', toolName: 'mcp__exa__web_fetch_exa', output: 'MCP_PUBLIC_RESULT_MARKER\n第二段', deferred: false },
     { key: 'skill', toolName: 'Skill', output: 'SKILL_PUBLIC_RESULT_MARKER', deferred: true },
+    { key: 'agent', toolName: 'Agent', output: 'AGENT_PUBLIC_RESULT_MARKER', deferred: true },
+    { key: 'task-stop', toolName: 'TaskStop', output: 'TASK_STOP_PUBLIC_RESULT_MARKER', deferred: false, failed: true },
+    { key: 'task-output', toolName: 'TaskOutput', output: 'TASK_OUTPUT_PUBLIC_RESULT_MARKER', deferred: true },
     { key: 'no-public-text', toolName: 'mcp__fixture__resource_only', output: null, deferred: true }
   ]
   for (const [index, fixture] of fixtures.entries()) {
@@ -2304,9 +2307,10 @@ async function seedClaudeToolDetailFixtures() {
     const occurredAt = `2026-08-05T12:10:0${sequence}Z`
     const evidenceId = `evidence-claude-${fixture.key}`
     const operationId = `operation-claude-${fixture.key}`
+    const phase = fixture.failed ? 'failed' : 'completed'
     const payload = {
       toolCallId: `toolu-claude-${fixture.key}`,
-      status: 'completed', kind: 'tool', toolName: fixture.toolName,
+      status: phase, kind: 'tool', toolName: fixture.toolName,
       title: fixture.toolName, input: null, output: fixture.output
     }
     const encoded = Buffer.from(JSON.stringify(payload))
@@ -2329,8 +2333,8 @@ async function seedClaudeToolDetailFixtures() {
         content_byte_count, is_truncated, output_truncated, occurred_at
       ) VALUES (
         ${sqlLiteral(evidenceId)}, ${sqlLiteral(runId)}, 1, ${sequence},
-        'runtime.action', 'tool_result', 'completed',
-        ${sqlLiteral(`runtime.action:${operationId}:completed`)},
+        'runtime.action', 'tool_result', ${sqlLiteral(phase)},
+        ${sqlLiteral(`runtime.action:${operationId}:${phase}`)},
         ${sqlLiteral(JSON.stringify(preview))}, ${sqlNullable(blob?.id)},
         ${encoded.byteLength}, ${blob ? 1 : 0}, 0, ${sqlLiteral(occurredAt)}
       );
@@ -2343,7 +2347,7 @@ async function seedClaudeToolDetailFixtures() {
       ) VALUES (
         ${sqlLiteral(runId)}, 1, ${sqlLiteral(operationId)}, 'activity-v2',
         'tool', 'tool.call', ${sqlLiteral(fixture.toolName)}, ${sqlLiteral(fixture.toolName)},
-        'terminal', 'succeeded', 'runtime_structured', 'fine_grained', 'runtime',
+        'terminal', ${sqlLiteral(fixture.failed ? 'failed' : 'succeeded')}, 'runtime_structured', 'fine_grained', 'runtime',
         ${sqlLiteral(JSON.stringify([evidenceId]))}, ${sequence}, ${sequence}, 1,
         ${sqlLiteral(occurredAt)}, ${sqlLiteral(occurredAt)}
       );
@@ -3520,6 +3524,9 @@ async function verifyClaudeToolResults(cdp) {
   const expected = [
     { toolName: 'mcp__exa__web_fetch_exa', marker: 'MCP_PUBLIC_RESULT_MARKER' },
     { toolName: 'Skill', marker: 'SKILL_PUBLIC_RESULT_MARKER' },
+    { toolName: 'Agent', marker: 'AGENT_PUBLIC_RESULT_MARKER' },
+    { toolName: 'TaskStop', marker: 'TASK_STOP_PUBLIC_RESULT_MARKER' },
+    { toolName: 'TaskOutput', marker: 'TASK_OUTPUT_PUBLIC_RESULT_MARKER' },
     { toolName: 'mcp__fixture__resource_only', marker: null }
   ]
   const presentations = []
