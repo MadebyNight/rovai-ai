@@ -252,7 +252,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Runtime Usage Monitoring v3（历史）](runtime-usage-monitoring-v3.md) | v2 五表与 Snapshot 不变；补齐 OpenCode 版本感知 Cache Write/零值语义和 Codex 版本化 API 公价估算 |
 | [Runtime Usage Monitoring v2（历史）](runtime-usage-monitoring-v2.md) | 五表 clean break、内存 Usage 合并、稀疏 Token/Cache/Cost、Coverage、单 Snapshot 与有界刷新 |
 | [Runtime Monitoring v1（历史）](runtime-monitoring-v1.md) | Clean-break collection/enrollment、稀疏 Usage Observation、Native Session fact、三类查询、Coverage、Tool Duration 与 Cost layer |
-| [Diagnostics Center v1（当前）](diagnostics-center-v1.md) | `diagnostics.check` typed read model、三态分类、显式单项修复映射、Recovery 与集中脱敏的 `rovai-diagnostics-v5` |
+| [Diagnostics Center v2（当前）](diagnostics-center-v2.md) | 继承 v1；Windows 只读检查登记项目中无 observation 的固定名称 Skill 入口，显式清理后复检 |
+| [Diagnostics Center v1（历史）](diagnostics-center-v1.md) | `diagnostics.check` typed read model、三态分类、显式单项修复映射、Recovery 与集中脱敏的 `rovai-diagnostics-v5` |
 | [Execution Evaluation v15（当前）](execution-evaluation-v15.md) | Weekly 显式无时间上限、Core 冻结时间策略与独立评分故障 |
 | [Execution Evaluation v14（历史）](execution-evaluation-v14.md) | 评分执行故障与任务失败、证据问题分开 |
 | [Execution Evaluation v13](execution-evaluation-v13.md) | 每日分析有限引用 schema、已知零值与真实失败尝试保留 |
@@ -409,7 +410,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [App Update v1（历史）](app-update-v1.md) | Desktop 主动检查、独立 release/prompt 事实、显式下载与安装、精确提醒 dismiss、状态投影和 updater-first 受控退出；Composer 前置 fence 由 v2 替代 |
 | [Windows Private Storage v2（当前）](windows-private-storage-v2.md) | v1 私有存储不变；增加 `<data_dir>\runtime-files`、受保护 View containers 与精确 Camp root 暴露边界 |
 | [Windows Private Storage v1（历史）](windows-private-storage-v1.md) | `%LOCALAPPDATA%` 布局、local NTFS admission、创建时 protected DACL、handle identity 与 long-path blocker；不含 Runtime Files Root |
-| [Windows Skill Projection v1（当前）](windows-skill-projection-v1.md) | copy backend 多阶段 journal、crash-window 幂等恢复、Execution Root Projection Gate 与 project-owned preserve |
+| [Windows Skill Projection v2（当前）](windows-skill-projection-v2.md) | 继承 v1；显式清理补入登记项目中无 observation 的固定名称副本 |
+| [Windows Skill Projection v1（历史）](windows-skill-projection-v1.md) | copy backend 多阶段 journal、crash-window 幂等恢复、Execution Root Projection Gate 与 project-owned preserve |
 | [Planned Shutdown v1 (historical)](planned-shutdown-v1.md) | Main-only v1 wire、launch/terminal admission、generation-local route binding 与只接受可靠 Runtime terminal 的旧关闭语义 |
 | [Built-in Tool Transport v6 (historical)](builtin-tool-transport-v6.md) | v0.62 Camp Message Send v3 transport；不作为 v0.65 parser/help/compatibility 入口 |
 | [Built-in Tool Transport v5 (historical)](builtin-tool-transport-v5.md) | v0.54 Task v3 transport；不作为 v0.62 Runtime/CLI compatibility 入口 |
@@ -435,7 +437,8 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Message Delivery v3（历史）](message-delivery-v3.md) | public/captured/completion 判别联合、Delivery-level completion role 与初版 Gather settlement |
 | [Message Delivery v2 (historical)](message-delivery-v2.md) | `forward | return` 冻结边、target lineage、caller continuation，以及 v1 queue/attempt/recovery/settlement |
 | [Message Delivery v1 (historical)](message-delivery-v1.md) | 无 caller-return 分类的 recipient queue、dispatch attempt、waitCondition、retry/cancel 与 settlement |
-| [Skills Rebuild v1（当前）](skills-rebuild-v1.md) | 受管平台/工具箱、队员配置、原生发现、Selection/Resolution v2、动态索引与旧来源恢复 |
+| [Skills Rebuild v2（当前）](skills-rebuild-v2.md) | 继承 v1；Windows 诊断与显式清理无 observation 的固定名称旧项目入口 |
+| [Skills Rebuild v1（历史）](skills-rebuild-v1.md) | 受管平台/工具箱、队员配置、原生发现、Selection/Resolution v2、动态索引与旧来源恢复 |
 | [Run Input Skill Links v2（历史）](current-input-skill-links-v2.md) | 旧 Library/Exposure 的 Structured Skill Mention 与 per-message `RUN_INPUT.messages[].skills` |
 | [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
 | [ContextManifest Evidence v31（当前 public Camp）](context-manifest-evidence-v31.md) | 新公开 31/10/8、Charter revision 14；claim 冻结额外可见消息判断，保留 Skills 与旧 30/29 有界恢复；尚待实施验证 |

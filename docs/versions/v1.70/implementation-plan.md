@@ -19,6 +19,8 @@ last_updated: 2026-09-25
 
 后续独立修复：按已确认的 [Charter 精简稿 revision 1](model-context-change-charter-simplification.md) 替换公开 Camp 的通用正文，去掉 `Authority boundaries` 小标题，等待队友规则只保留在正文末尾，CLI Contract 的发送回执说明保持原文。实际 Charter 与 Binding 兼容摘要均轮换至 16，旧 Bootstrap 和冻结输入不回写；验证结果见同一说明及 PR #534。
 
+Windows 旧入口后续修复：本机已登记项目的 `.dsh/skills/cli-operations` 与 `.dsh/skills/memory-stewardship` 留在磁盘，而旧 observation 为零；修复前隔离测试中 `legacy_entry_count=0`、显式清理 `removed=0`。按 [D05](decisions.md#v1-70-d05) 扩展 Windows 只读诊断与显式名称清理，仅检查已登记项目、固定 group 路径和九个名称；普通 reconcile 与启动边界不变。定向回归覆盖无 observation 的 `.dsh` 及另一组目录、未知名称保留。
+
 ## 设置页还原修正（2026-09-24）
 
 - Skills 和工具箱复用 MCP 分隔线的宽度、拖动、键盘、取消和复位逻辑，独立保存各页宽度；刷新、查看说明按交互稿恢复图标与字号。隔离 UI 验收脚本覆盖两页的真实指针拖动和边界、键盘、取消、复位、重新进入的宽度记忆、窄屏切换及按钮尺寸。
