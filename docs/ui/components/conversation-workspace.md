@@ -678,8 +678,9 @@ Shell command Tool disclosure 展开后第一行显示 `$ ` 加完整 command；
 连续显示，不插入“命令 / 输出”标签或空白分隔行。两者的数据来源不得互相替代；Claude/ACP terminal
 Evidence 自带 command，不依赖 Renderer 回看 started event。除没有可靠 Shell 关联、仅显示入参的 Built-in 外，其他 Tool
 disclosure 继续在原位渲染完整公开结果，不再截断，不再提供复制按钮。本地已有全文时
-直接展示；截断 Evidence/Managed Blob 只在用户展开精确 Tool 行后读取。读取中、精确错误与
-“重试”都留在该 disclosure，重试成功后焦点进入结果区域。全文置于固定最大高度的可聚焦
+直接展示；截断 Evidence/Managed Blob 只在用户展开精确 Tool 行后读取。读取成功但没有公开文本时，
+原位显示“没有可展示的公开结果。”，不误报读取失败或提供重试。读取中、真实读取错误与“重试”都留在该
+disclosure，重试成功后焦点进入结果区域，若仍无公开文本则返回对应 summary。全文置于固定最大高度的可聚焦
 `role=region` 中，超出后内部滚动；Arrow、Page Up/Down、Space、Home/End 可滚动，Escape 只返回
 对应 summary。Web 搜索 disclosure 只有在 `runtimeSearchOperation.status=available` 且 Canonical semantic 同时为
 `tool.web.search` 时，才在第一行以 `搜索 ` 紧接 typed 公共 query；多项 query 以中文逗号按原顺序连接。存在

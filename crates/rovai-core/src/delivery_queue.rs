@@ -13,7 +13,8 @@ use crate::{
     },
     context_contract::PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION,
     current_input_skill::{
-        SkillSelectionSnapshot, freeze_skill_selection, projected_skill_links_for_claim,
+        SkillSelectionSnapshot, freeze_skill_selection_with_messages,
+        projected_skill_links_for_claim,
     },
     db::Database,
     runtime::{AgentRunWorkspace, runtime_cleanup_blocked_since_connection},
@@ -509,15 +510,21 @@ fn select_batch_prefix(
     max_payload_bytes: usize,
 ) -> Result<BatchPrefixSelection> {
     let mut batch_content = Vec::new();
+    let mut batch_message_indices = Vec::new();
     let mut previous_selection = None;
     for count in 1..=waiting.len() {
         if let Some(content_json) = waiting[count - 1].structured_content_json.as_deref() {
             let mut content = serde_json::from_str::<StructuredCampMessageContent>(content_json)
                 .context("CampMessage Structured Content is invalid during Delivery claim")?;
+            batch_message_indices.extend(std::iter::repeat_n(count - 1, content.len()));
             batch_content.append(&mut content);
         }
-        let skill_selection =
-            freeze_skill_selection(transaction, &batch_content, runtime.adapter_kind)?;
+        let skill_selection = freeze_skill_selection_with_messages(
+            transaction,
+            &batch_content,
+            &batch_message_indices,
+            runtime.adapter_kind,
+        )?;
         let skill_links = projected_skill_links_for_claim(
             transaction,
             &skill_selection,
@@ -2237,6 +2244,8 @@ mod tests {
             &[CurrentInputSkillLink {
                 name: "review-code".to_string(),
                 path: "/tmp/.codex/skills/review-code/SKILL.md".to_string(),
+                skill_id: None,
+                message_index: None,
             }],
         )
         .unwrap();

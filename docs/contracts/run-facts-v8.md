@@ -4,7 +4,7 @@ contract: run-facts-v8
 authority: public-camp-dynamic-run-facts
 status: accepted
 version: 8
-last_updated: 2026-09-24
+last_updated: 2026-09-25
 ---
 
 # Run Facts v8
@@ -37,4 +37,4 @@ type PublicRunFacts = {
 
 `this run's start` 只断言 claim 时 `(P, T]` 或 `<= T` 的消息快照，不是实时状态或 `P` 以前历史已提供的保证。true 只表示额外**可见**消息存在，不要求读取或增加工作责任；`historyHint` 不是已读、已处理、工作完成水位，也不是 `camp.read --before` 游标。claim 在 Run 内部冻结 `P` 和布尔值，不保存额外消息正文、数量、列表或历史快照；构造模型文本时选择本表句子，同 Run 再次加载复用冻结 ContextManifest／payload，不根据后来消息、撤回或 accepted 水位重算。`historyHint` 完整文本同时参加 claim 的容量选择和最终 payload 字节检查，不得截断 `RUN_INPUT`。accepted 水位只按原有有效 Runtime accepted ACK 推进。
 
-[ContextManifest Evidence v30](context-manifest-evidence-v30.md) 拥有与该字段配套的版本、Charter 和冻结证据。[已确认的独立变更说明 revision 4](../versions/v1.69/model-context-change-history-hint-additional.md)固定完整前后文本与边界；合同 accepted 不表示代码、迁移或验证已经完成。
+[ContextManifest Evidence v31](context-manifest-evidence-v31.md) 拥有与该字段配套的版本、Charter 和冻结证据。[已确认的独立变更说明 revision 5](../versions/v1.70/model-context-change-history-hint-additional.md)固定完整前后文本与边界；合同 accepted 不表示代码、迁移或验证已经完成。
