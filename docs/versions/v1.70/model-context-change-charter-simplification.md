@@ -8,7 +8,7 @@ confirmed_by: Principal (Camp message bfb17043-8a7b-4882-a377-332def5a8e87)
 confirmed_at: 2026-09-25T12:58:22Z
 confirmed_revision: 1
 authority: proposed-model-input-change-statement
-implementation_status: in_progress
+implementation_status: implemented
 last_updated: 2026-09-25
 ---
 
@@ -116,4 +116,8 @@ Rovai Built-in CLI Contract
 
 ## 实施验证记录
 
-待本次命令完成后追加实际结果。
+- `cargo test -p rovai-core --lib session_charter_publishes_one_cli_only_builtin_contract --features slow-tests`：1 通过，覆盖确认稿、规则去重、兼容非 batch、所有 Adapter 和条件后缀。
+- `pnpm test:rust:pr`：默认 feature workspace 共 427 通过、0 失败、1 项原有忽略；包含 Binding Charter revision 16 的兼容摘要负向测试。
+- `cargo fmt --all -- --check`、`git diff --check` 通过；`pnpm docs:test` 为 10 通过。
+- `pnpm docs:check` 与 `DOCS_BASE_REF=4e2b779d8b27bfdfd10481ee4d02103926924f51 pnpm docs:check:ci` 在提交 `9f5119cb` 的干净 detached worktree `/private/tmp/rovai-charter-docs-9f5119cb` 通过。主检出的被忽略 `docs/prototypes/` 有四处已有失效链接，未改动这些本地文件。
+- 完整文案 golden 与本说明逐字一致。含 CLI Contract 的通用 Charter 从 4,303 减至 2,652 字符，等待队友规则仅出现一次；未运行真实模型任务 Gate。
