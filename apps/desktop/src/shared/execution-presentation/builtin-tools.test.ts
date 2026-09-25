@@ -210,6 +210,34 @@ describe('Rovai Shell carrier presentation', () => {
     expect(steps([core, carrier]).map(step => step.id)).toEqual(['core-1', 'shell-1'])
   })
 
+  it('folds a Trae runtime.action CLI carrier while retaining a separate help command', () => {
+    const help = shell('rovai send --help')
+    help.eventType = 'runtime.action'
+    help.executionEpoch = 1
+    help.canonical = canonical('help-shell', { activityDomain: 'shell', semanticKind: 'shell.execute',
+      sourceAuthority: 'runtime', credibility: 'runtime_structured',
+      firstEvidenceSequence: 6, lastEvidenceSequence: 6 })
+    help.payload = { kind: 'execute', input: 'rovai send --help', output: 'help text', status: 'completed',
+      resultDigest: 'help-digest' }
+
+    const carrier = shell("rovai send --public-only --body 'hello'")
+    carrier.eventType = 'runtime.action'
+    carrier.executionEpoch = 1
+    carrier.canonical = canonical('shell-1', { activityDomain: 'shell', semanticKind: 'shell.execute',
+      sourceAuthority: 'runtime', credibility: 'runtime_structured',
+      firstEvidenceSequence: 7, lastEvidenceSequence: 7 })
+    carrier.payload = { kind: 'execute', input: "rovai send --public-only --body 'hello'",
+      output: JSON.stringify(sent), status: 'completed', resultDigest: 'same-agent-output' }
+
+    const core = builtin()
+    core.executionEpoch = 1
+    core.canonical = canonical('core-1', { firstEvidenceSequence: 8, lastEvidenceSequence: 8 })
+    ;(core.payload as Record<string, unknown>).agentOutputDigest = 'same-agent-output'
+
+    expect(steps([help, carrier, core]).map(step => [step.id, step.detailOperationId]))
+      .toEqual([['help-shell', undefined], ['core-1', 'shell-1']])
+  })
+
   it('preserves multiline input, long values and complete JSON output on the one retained Tool', () => {
     const body = `line one\n  line two ${'long-value-'.repeat(500)} SECRET_TEST_VALUE`
     const command = `rovai memory write --body '${body}'`
