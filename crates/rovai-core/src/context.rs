@@ -737,7 +737,9 @@ impl ContextService {
             build_run_facts(database, &snapshot, requires_new_native_session, a2a_count)?;
         if snapshot.invocation_kind == "batch" {
             run_facts.history_hint = Some(
-                if batch_context_manifest_version == Some(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION) {
+                if batch_context_manifest_version
+                    == Some(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION)
+                {
                     public_history_hint(
                         previous_accepted_public_boundary_sequence,
                         snapshot
@@ -2141,9 +2143,16 @@ impl ContextService {
             anyhow::bail!("AgentRun or Native Binding changed before input delivery");
         }
         if !context_manifest_is_dispatchable(row.10, row.11, row.12, &row.13)
-            || row.14 != if row.13 == "batch" {
-                if row.10 == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION { 8 } else { 7 }
-            } else { 5 }
+            || row.14
+                != if row.13 == "batch" {
+                    if row.10 == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION {
+                        8
+                    } else {
+                        7
+                    }
+                } else {
+                    5
+                }
         {
             anyhow::bail!("ContextManifest version evidence cannot be dispatched");
         }
@@ -4440,7 +4449,10 @@ fn frozen_batch_context_manifest_version(
     );
     let version = minimum.context("Batch AgentRun context version is missing")?;
     anyhow::ensure!(
-        matches!(version, 29 | 30 | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION),
+        matches!(
+            version,
+            29 | 30 | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        ),
         "Batch AgentRun uses an unsupported context version"
     );
     Ok(version)
@@ -7419,9 +7431,16 @@ fn load_existing_manifest(
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
     if !context_manifest_is_dispatchable(row.34, row.15, row.16, &snapshot.invocation_kind)
-        || row.35 != if snapshot.invocation_kind == "batch" {
-            if row.34 == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION { 8 } else { 7 }
-        } else { 5 }
+        || row.35
+            != if snapshot.invocation_kind == "batch" {
+                if row.34 == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION {
+                    8
+                } else {
+                    7
+                }
+            } else {
+                5
+            }
     {
         anyhow::bail!("Stored ContextManifest version evidence is inconsistent");
     }

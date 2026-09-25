@@ -90,7 +90,11 @@ mod tests {
             "agentRunContextFormatterVersion": fixture["agentRunContextFormatterVersion"],
             "contextManifestVersion": fixture["contextManifestVersion"],
         });
-        for old_contract in [legacy, unversioned_charter, new_charter_as_compatibility_revision] {
+        for old_contract in [
+            legacy,
+            unversioned_charter,
+            new_charter_as_compatibility_revision,
+        ] {
             assert_ne!(
                 crate::command::canonical_json_digest(&compatibility).unwrap(),
                 crate::command::canonical_json_digest(&old_contract).unwrap(),

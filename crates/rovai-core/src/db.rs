@@ -3111,8 +3111,8 @@ pub(crate) fn classify_database_contract(
         migrations.v171 && (migrations.v172 || task_versionless_v171_schema_matches(connection)?);
     let public_context_schema_matches =
         migrations.v172 && (migrations.v173 || public_context_v172_schema_matches(connection)?);
-    let skills_rebuild_schema_matches = migrations.v173
-        && (migrations.v174 || skills_rebuild_v173_schema_matches(connection)?);
+    let skills_rebuild_schema_matches =
+        migrations.v173 && (migrations.v174 || skills_rebuild_v173_schema_matches(connection)?);
     let public_history_claim_schema_matches =
         migrations.v174 && public_history_claim_v174_schema_matches(connection)?;
     let legacy_delivery_first_v162 = legacy_delivery_first_v162_source(
@@ -3587,14 +3587,15 @@ fn default_recipient_mention_v166_schema_matches(
         [],
         |row| row.get(0),
     )?;
-    if manifest_schema
-        .contains("context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)")
-    {
+    if manifest_schema.contains(
+        "context_manifest_version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)",
+    ) {
         return Ok(input_columns == 2
             && input_guards == 2
             && triggers == 3
-            && manifest_schema
-                .contains("formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)")
+            && manifest_schema.contains(
+                "formatter_version IN (20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)",
+            )
             && manifest_schema
                 .contains("context_delivery_profile_version IN (4, 5, 6, 7, 8, 9, 10)")
             && new_write_trigger.contains("NEW.context_manifest_version = 31")
@@ -3939,7 +3940,10 @@ fn public_history_claim_v174_schema_matches(connection: &Connection) -> rusqlite
         |row| row.get(0),
     )?;
     let bootstrap = schema("table", "native_session_bootstrap_evidence")?;
-    let bootstrap_guard = schema("trigger", "native_session_bootstrap_evidence_v5_only_insert")?;
+    let bootstrap_guard = schema(
+        "trigger",
+        "native_session_bootstrap_evidence_v5_only_insert",
+    )?;
     Ok(columns == 2
         && skills_tables == 4
         && bootstrap_guard.contains("bootstrap_formatter_version IS NOT 5")
@@ -33664,13 +33668,17 @@ fn downgrade_recent_context_for_legacy_fixture(connection: &Connection) {
     let v28 = "(context_manifest_version = 28 AND formatter_version = 28 AND run_facts_schema_version = 6 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
     let v29 = "(context_manifest_version = 29 AND formatter_version = 29 AND run_facts_schema_version = 7 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
     let v30 = "(context_manifest_version = 30 AND formatter_version = 30 AND run_facts_schema_version = 7 AND ((camp_attachment_view_receipt_version IS NULL AND camp_attachment_view_receipt_json IS NULL AND camp_attachment_view_receipt_digest IS NULL) OR (camp_attachment_view_receipt_version = 2 AND camp_attachment_view_receipt_json IS NOT NULL AND camp_attachment_view_receipt_digest IS NOT NULL)))";
-    let v31 = v30.replace("context_manifest_version = 30 AND formatter_version = 30 AND run_facts_schema_version = 7", "context_manifest_version = 31 AND formatter_version = 31 AND run_facts_schema_version = 8");
-    assert!(manifest.contains(&format!("{v31}\n OR\n {v30}\n OR\n {v29}\n OR\n {v28}\n OR\n {v27}")));
+    let v31 = v30.replace(
+        "context_manifest_version = 30 AND formatter_version = 30 AND run_facts_schema_version = 7",
+        "context_manifest_version = 31 AND formatter_version = 31 AND run_facts_schema_version = 8",
+    );
+    assert!(manifest.contains(&format!(
+        "{v31}\n OR\n {v30}\n OR\n {v29}\n OR\n {v28}\n OR\n {v27}"
+    )));
     // Retag synthetic current-template Runs for the old source's closed set.
     // Keep their payload and fact bytes intact: this fixture verifies later
     // migration preservation, not that these bytes were produced by v27.
-    let historical_profile =
-        crate::context_delivery::PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V8;
+    let historical_profile = crate::context_delivery::PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V8;
     let historical_profile_json = serde_json::to_string(&historical_profile).unwrap();
     let historical_profile_digest = historical_profile.canonical_digest().unwrap();
     let version_guard: String = tx
