@@ -177,6 +177,39 @@ describe('Rovai Shell carrier presentation', () => {
     expect(steps([core, carrier])).toHaveLength(2)
   })
 
+  it('folds a digest-matched CLI with adjacent coalesced Shell and Core rows', () => {
+    const core = builtin()
+    core.canonical = canonical('core-1', { firstEvidenceSequence: 2, lastEvidenceSequence: 2 })
+    const carrier = shell('/bin/zsh -lc "rovai send --public-only --input-file /tmp/request.json"')
+    carrier.canonical = canonical('shell-1', {
+      activityDomain: 'shell', semanticKind: 'shell.execute', toolName: 'commandExecution',
+      sourceAuthority: 'runtime', credibility: 'runtime_structured',
+      firstEvidenceSequence: 3, lastEvidenceSequence: 3
+    })
+    ;(core.payload as Record<string, unknown>).agentOutputDigest = 'same-agent-output'
+    ;(carrier.payload as Record<string, unknown>).resultDigest = 'same-agent-output'
+
+    expect(steps([core, carrier]).map(step => [step.id, step.detailOperationId]))
+      .toEqual([['core-1', 'shell-1']])
+    expect(executionStepPublicTitle(steps([core, carrier])[0])).toContain('rovai send --public-only')
+
+    carrier.canonical = { ...carrier.canonical!, firstEvidenceSequence: 1, lastEvidenceSequence: 1 }
+    expect(steps([carrier, core]).map(step => [step.id, step.detailOperationId]))
+      .toEqual([['core-1', 'shell-1']])
+    carrier.canonical = { ...carrier.canonical!, firstEvidenceSequence: 3, lastEvidenceSequence: 3 }
+
+    ;(carrier.payload as Record<string, unknown>).resultDigest = 'different-agent-output'
+    expect(steps([core, carrier]).map(step => step.id)).toEqual(['core-1', 'shell-1'])
+    ;(carrier.payload as Record<string, unknown>).resultDigest = 'same-agent-output'
+    core.executionEpoch = 0
+    expect(steps([core, carrier]).map(step => step.id)).toEqual(['core-1', 'shell-1'])
+    carrier.executionEpoch = 1
+    expect(steps([core, carrier]).map(step => step.id)).toEqual(['core-1', 'shell-1'])
+    carrier.executionEpoch = 0
+    carrier.canonical = { ...carrier.canonical!, firstEvidenceSequence: 4, lastEvidenceSequence: 4 }
+    expect(steps([core, carrier]).map(step => step.id)).toEqual(['core-1', 'shell-1'])
+  })
+
   it('preserves multiline input, long values and complete JSON output on the one retained Tool', () => {
     const body = `line one\n  line two ${'long-value-'.repeat(500)} SECRET_TEST_VALUE`
     const command = `rovai memory write --body '${body}'`
