@@ -71,6 +71,11 @@ export function AboutUpdatesSettingsView({
   const showManualCheck = snapshot?.status === 'available' || snapshot?.status === 'download_failed'
   const showFallback = snapshot?.status === 'download_failed'
     || (snapshot?.status === 'check_failed' && snapshot.failureReason === 'updater_unavailable')
+  const officialReleasesUrl = product === 'server'
+    ? availableRelease
+      ? `https://github.com/murray17/rovai-ai/releases/tag/server-v${encodeURIComponent(availableRelease.version)}`
+      : 'https://github.com/murray17/rovai-ai/releases'
+    : 'https://github.com/murray17/rovai-ai/releases/latest'
 
   useEffect(() => {
     setShowCurrentForVersion(null)
@@ -214,7 +219,7 @@ export function AboutUpdatesSettingsView({
                     : '可以从官方发布页手动获取版本，或提交问题。'}</span>
                 </div>
                 <div className="about-update-fallback-actions">
-                  <a href={product === 'server' ? (release ? `https://github.com/murray17/rovai-ai/releases/tag/server-v${release.version}` : 'https://github.com/murray17/rovai-ai/releases') : 'https://github.com/murray17/rovai-ai/releases/latest'} target="_blank" rel="noreferrer noopener">官方 Releases</a>
+                  <a href={officialReleasesUrl} target="_blank" rel="noreferrer noopener">官方 Releases</a>
                   <a href="https://github.com/murray17/rovai-ai/issues" target="_blank" rel="noreferrer noopener">获取支持</a>
                 </div>
               </div>
