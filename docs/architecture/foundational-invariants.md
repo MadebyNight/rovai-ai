@@ -463,10 +463,10 @@ last_updated: 2026-09-25
 
 ### Skills 来源、冻结与历史投影
 
-- 当前来源分为 Rovai 平台两项、按队员配置的工具箱五项、Harness 原生用户/项目 Skill，以及只作历史保留的旧 Library/Revision。Core 从执行 Host 受管根同步发布文件并解析 YAML frontmatter；新 Run 不向项目建立 SkillProjection。来源、闭合集和默认值见 [Skills 架构](skills.md)与[Skills Rebuild v1](../contracts/skills-rebuild-v1.md)。
+- 当前来源分为 Rovai 平台两项、按队员配置的工具箱五项、Harness 原生用户/项目 Skill，以及只作历史保留的旧 Library/Revision。Core 从执行 Host 受管根同步发布文件并解析 YAML frontmatter；新 Run 不向项目建立 SkillProjection。来源、闭合集和默认值见 [Skills 架构](skills.md)与[Skills Rebuild v2](../contracts/skills-rebuild-v2.md)。
 - 新 Native Session Bootstrap 冻结固定平台索引；每个新 Run 在 preparation 冻结当前队员配置和本批显式选用形成的完整动态索引。旧 Binding、Manifest 和已经冻结的输入保留原字节；原生 Runtime 自己的 Skill 加载或 advertised command 不构成 Core 已投递证明。
 - 原生 Skill 文件由 Harness 拥有；Rovai 只读发现、登记来源身份和可用路径。同名不同来源不合并，失效引用不猜测同名替代项。旧 Library 导入行、受管 Revision 和审计保留，但不继承到新候选、配置或模型索引。
-- 升级和 Core 启动不扫描或清理旧项目投影；observation 继续作为原生候选排除与日后用户显式修复的证据。清理仅可在 observation 证明 Rovai 所有权、root access 允许且没有 active Run 时精确执行；不能按名称清理用户项目文件。未访问或暂不可清理的入口保留待重试证据。历史执行所需的旧 SkillExposureSnapshot 仍按旧 Manifest 解释。
+- 升级和 Core 启动不扫描或清理旧项目投影；observation 继续作为原生候选排除与日后用户显式修复的证据。Windows 诊断只读检查已登记 `active` 根、已知 Skill 组路径和九个固定官方名称；用户显式清理时，这些名称即使没有 observation，也可在 root access、active Run、精确路径和 no-reparse 门禁后删除。其他名称仍须由 observation 证明受管所有权；未访问或暂不可清理的入口保留。历史执行所需的旧 SkillExposureSnapshot 仍按旧 Manifest 解释。
 - 成员创建只由 Agent 发起受控 `member.create` workflow，在一条完整提案中给出身份、Runtime/model/permission/外观，并只在当前用户确认后调用；`member-studio` 的默认选择不增加创建权限。Grill/Review 等 Skill 只编排协作，不成为文档、代码或判定真源。
 
 ## Execution Evidence、Runtime Activity 与 Usage
