@@ -6513,7 +6513,8 @@ mod slow_tests {
 
         // TRAE CLI reports the Shell command in runtime.action input, while
         // the window omits the Core envelope from its public summary.
-        let trae_digest = crate::command::canonical_json_digest(&json!({"taskId": "trae-task"})).unwrap();
+        let trae_digest =
+            crate::command::canonical_json_digest(&json!({"taskId": "trae-task"})).unwrap();
         for (id, sequence, kind, payload) in [
             (
                 "trae-shell",
