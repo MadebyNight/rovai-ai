@@ -13,6 +13,8 @@ last_updated: 2026-09-25
 
 前置：[v1.69](../v1.69/README.md)。本版将 Rovai 平台技能与工具箱技能作为普通受管资源提供，设置页只读发现 Harness 原生 Skills，工具箱按队员配置，会话按当前 Camp 全队与项目发现候选。新 Run 使用冻结的动态工具箱索引，新 Native Session 使用独立的平台技能 Bootstrap section。Skills Rebuild 的模型输入和旧会话边界见[Skills 变更说明 revision 5](model-context-change.md)；其公开 30／Profile 10／Facts 7 是随后新增公屏历史提示的**变更前基线**。独立的 [historyHint 变更说明 revision 5](model-context-change-history-hint-additional.md) 已获 Principal 二次确认，目标公开 31／Profile 10／Facts 8 与新建 Charter 14；旧 Session 原系统提示词及冻结证据不变。v1.69 的 Camp 主动读取不改变两份说明各自的权限边界。
 
+后续独立修复在发送回执说明后追加等待队友回复时结束 Run 的规则。当前新建 Charter revision 15，Binding 兼容摘要也升至 15，让已有 Session 在下一次正常执行时切换；旧冻结输入与 Bootstrap Evidence 不回写。当前规则见 [Built-in Tool Runtime](../../architecture/builtin-tool-runtime.md) 与 [ContextManifest v31](../../contracts/context-manifest-evidence-v31.md)。
+
 实施步骤与验收证据见[实施计划](implementation-plan.md)。旧导入记录、受管 Revision、冻结的 Run 和 Native Binding 保留；新的 Skills 路径不再以项目投影或旧 Revision 校验作为准入。旧项目入口不随升级自动删除；诊断与修复提供唯一问题和用户显式触发的统一清理动作。
 
 同期交付桌面「关于与更新」页的已安装版本日志：构建时内置的发布说明按运行版本校验并离线展示；新版日志继续复用更新检查结果，可在两版之间切换而不增加在线查询。合同见 [App Update v5](../../contracts/app-update-v5.md)，用户已验收开发包界面。
