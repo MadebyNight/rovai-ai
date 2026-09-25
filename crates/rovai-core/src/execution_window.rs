@@ -432,12 +432,21 @@ fn supporting_builtin_operation(
     }) else {
         return Ok(None);
     };
-    let command = item
-        .payload
-        .pointer("/item/command")
-        .or_else(|| item.payload.get("command"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    // Runtime adapters expose the same Shell command in different public input
+    // shapes. TRAE CLI uses the runtime.action input string.
+    let command = [
+        "/item/command",
+        "/command",
+        "/input",
+        "/input/command",
+        "/input/commandLine",
+        "/input/CommandLine",
+        "/input/cmd",
+    ]
+    .into_iter()
+    .filter_map(|path| item.payload.pointer(path).and_then(Value::as_str))
+    .find(|command| !command.trim().is_empty())
+    .unwrap_or_default();
     if !command.contains("rovai") {
         return Ok(None);
     }
