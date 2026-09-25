@@ -13,9 +13,9 @@ last_updated: 2026-09-25
 3. 只读发现各 Harness 的用户级与当前项目 Skill，支持来源身份、路径、部分失败和按 Core 实例有界缓存；Settings 只展示用户级，会话候选按全队并集。
 4. 冻结消息局部来源与 Run 的 Skill 选择／解析；新 Bootstrap 与动态索引依已确认的 [Skills revision 5](model-context-change.md) 生成。追加 [historyHint revision 5](model-context-change-history-hint-additional.md)：保留 Skills migration 173／主线公开 30／10／7，新增 174／公开 31／10／8，claim 冻结 `P` 与额外可见消息判断；旧 Binding／Manifest 按原证据与字节有界恢复，分支专有冲突 173 不自动升级。
 5. 同步当前 Architecture、Contracts、UI 和文档路由；按「诊断与修复」HTML 交互稿交付单项旧入口问题和显式统一清理，执行定向验证、文档门禁、隔离 App 验收与真实任务 Gate，并记录未覆盖的真实 Runtime 条件。
-6. 既有 Skills PR #517 已合入 `main`；将新增 historyHint 实现融合至 PR #529，推送分支并合入届时最新 `main`。遵守本轮停止测试与真实任务 Gate 的约束；合入后从最新 `main` 构建日常安装包，保护运行中的 App 与日常数据，安装和 Applications 备份清理由实际对象及权限边界决定，不把构建当作验收。
+6. 既有 Skills PR #517 与 historyHint PR #529 已合入 `main`。撤回 #529 增加的“已有 Native Session 缺失 Bootstrap Evidence 即拒绝”判断，保留冻结复用和校验；验证受影响 Runtime 首轮、续轮与目标 Camp 现有重试入口，再经任务分支 PR 合入 `main` 并安装本机日常 App。保护运行中的 App 与日常数据，不把构建当作验收。
 
-实施状态：进行中。historyHint 融合依 Principal 要求停止编译、测试和真实任务 Gate，不委派子 Agent 验收，也不扩修容量临界估算低估；旧 Skills 已有验证不能证明本次融合。完成后用户另要求基于最新 main 安装本机、处理 Applications backup、将本地分支同步到 main 并推送。构建和安装如执行，应单独记录，不能充当未执行的验收测试。
+实施状态：进行中。2026-09-25 的新指令要求对 #529 的 Bootstrap 门禁回退执行真实 Runtime 首轮／续轮和目标 Camp 重试验证；此前停止测试的要求已被该指令覆盖。容量临界估算低估仍不在本次修复范围。验收、PR 和日常安装分别记录，安装不替代执行验证。
 
 后续独立修复：按已确认的 [Charter 精简稿 revision 1](model-context-change-charter-simplification.md) 替换公开 Camp 的通用正文，去掉 `Authority boundaries` 小标题，等待队友规则只保留在正文末尾，CLI Contract 的发送回执说明保持原文。实际 Charter 与 Binding 兼容摘要均轮换至 16，旧 Bootstrap 和冻结输入不回写；验证结果见同一说明及 PR #534。
 
