@@ -3133,13 +3133,6 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
         });
     }
 
-    if snapshot.native_session_id.is_some()
-        && snapshot.native_binding_id.as_deref() == Some(native_binding_id)
-        && snapshot.native_binding_generation == native_binding_generation
-    {
-        anyhow::bail!("Existing Native Session has no frozen Bootstrap evidence");
-    }
-
     // Channel guidance is selected only for new evidence, never when replaying a Binding.
     let has_active_feishu_binding =
         camp_has_active_feishu_binding(database.connection(), &snapshot.camp_id)?;
@@ -13332,6 +13325,94 @@ mod slow_tests {
             blob_count_before_identity_update
         );
         fixture.cleanup();
+
+        // Managed system prompts, including DSH, bind the Native Session before
+        // preparing its first Bootstrap. The same Binding must then reuse it.
+        let mut managed_fixture = self::fixture();
+        bind_fixture_native_session(&mut managed_fixture, "managed-system-session");
+        let managed_store = ManagedBlobStore::new(&managed_fixture.directory);
+        let first_bootstrap = ContextService
+            .prepare_session_bootstrap(
+                &mut managed_fixture.database,
+                &managed_store,
+                &managed_fixture.run_id,
+                managed_fixture.execution_epoch,
+                CharterDeliveryMode::ManagedSystemPrompt,
+            )
+            .unwrap();
+        let repeated_bootstrap = ContextService
+            .prepare_session_bootstrap(
+                &mut managed_fixture.database,
+                &managed_store,
+                &managed_fixture.run_id,
+                managed_fixture.execution_epoch,
+                CharterDeliveryMode::ManagedSystemPrompt,
+            )
+            .unwrap();
+        assert_eq!(repeated_bootstrap.evidence_id, first_bootstrap.evidence_id);
+        assert_eq!(repeated_bootstrap.payload, first_bootstrap.payload);
+        let ContextMaterialization::Ready(first_context) = ContextService
+            .materialize(
+                &mut managed_fixture.database,
+                &managed_store,
+                &MaterializeContextRequest {
+                    agent_run_id: &managed_fixture.run_id,
+                    execution_epoch: managed_fixture.execution_epoch,
+                    charter_delivery_mode: CharterDeliveryMode::ManagedSystemPrompt,
+                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("managed system prompt first input should materialize")
+        };
+        assert_eq!(
+            first_context.bootstrap_evidence_id,
+            first_bootstrap.evidence_id
+        );
+        assert!(!first_context.bootstrap_in_runtime_payload);
+        let delivery = ContextService
+            .prepare_input_delivery_for_context(
+                &mut managed_fixture.database,
+                &managed_fixture.run_id,
+                managed_fixture.execution_epoch,
+                &first_context,
+            )
+            .unwrap();
+        ContextService
+            .acknowledge_input_delivery(
+                &mut managed_fixture.database,
+                &delivery.id,
+                "managed-system-first-input",
+            )
+            .unwrap();
+        let first_run_id = managed_fixture.run_id.clone();
+        let (next_run_id, next_epoch) = complete_run_and_start_followup(
+            &mut managed_fixture,
+            &first_run_id,
+            "MANAGED_SYSTEM_FOLLOWUP",
+        );
+        let ContextMaterialization::Ready(next_context) = ContextService
+            .materialize(
+                &mut managed_fixture.database,
+                &managed_store,
+                &MaterializeContextRequest {
+                    agent_run_id: &next_run_id,
+                    execution_epoch: next_epoch,
+                    charter_delivery_mode: CharterDeliveryMode::ManagedSystemPrompt,
+                    max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("managed system prompt follow-up should materialize")
+        };
+        assert_eq!(
+            next_context.bootstrap_evidence_id,
+            first_bootstrap.evidence_id
+        );
+        assert!(!next_context.bootstrap_in_runtime_payload);
+        managed_fixture.cleanup();
     }
 
     #[test]
