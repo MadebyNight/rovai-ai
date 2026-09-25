@@ -17,6 +17,8 @@ last_updated: 2026-09-25
 
 实施状态：进行中。historyHint 融合依 Principal 要求停止编译、测试和真实任务 Gate，不委派子 Agent 验收，也不扩修容量临界估算低估；旧 Skills 已有验证不能证明本次融合。完成后用户另要求基于最新 main 安装本机、处理 Applications backup、将本地分支同步到 main 并推送。构建和安装如执行，应单独记录，不能充当未执行的验收测试。
 
+后续独立修复：按已确认的 [Charter 精简稿 revision 1](model-context-change-charter-simplification.md) 替换公开 Camp 的通用正文，去掉 `Authority boundaries` 小标题，等待队友规则只保留在正文末尾，CLI Contract 的发送回执说明保持原文。实际 Charter 与 Binding 兼容摘要均轮换至 16，旧 Bootstrap 和冻结输入不回写；验证结果见同一说明及 PR #534。
+
 ## 设置页还原修正（2026-09-24）
 
 - Skills 和工具箱复用 MCP 分隔线的宽度、拖动、键盘、取消和复位逻辑，独立保存各页宽度；刷新、查看说明按交互稿恢复图标与字号。隔离 UI 验收脚本覆盖两页的真实指针拖动和边界、键盘、取消、复位、重新进入的宽度记忆、窄屏切换及按钮尺寸。
