@@ -85,3 +85,29 @@ Skills 指南需要在新 Session 和每个新 Run 中被发现，但已有 Nati
 
 - 启动时继续对 observation 中每个 root 调用 Project 移除清理：会混合文件清理与项目访问状态，并重复触发。
 - 按名称批量删除项目 Skills 目录：无法区分用户入口与旧 Rovai 派发入口。
+
+<a id="v1-70-d04"></a>
+## V1.70-D04：Windows 显式清理按旧记录和固定官方名称准入
+
+- 状态：accepted
+- 日期：2026-09-25
+- 当前权威：[Skills 架构](../../architecture/skills.md)、[Skills Rebuild v1](../../contracts/skills-rebuild-v1.md)、[Windows Skill Projection v1](../../contracts/windows-skill-projection-v1.md)
+
+### 背景
+
+Windows 旧投递是目录副本。真实旧记录中有缺少 operation/file identity 的 `shadowed` 入口，也有 NTFS identity 已变化的入口；这些项目目录仍存在，因此 D03 的严格所有权判断把它们全部留为“归属无法确认”。macOS 的 link 证据不能用于 Windows 目录副本。
+
+### 选择
+
+保留 D03 的用户显式动作、精确 observation、root access 和 active Run 门禁。Windows 仅对九个固定名称的已登记项目入口，以名称和精确 group 路径确认旧目录；普通目录须可访问，目录链和删除遍历不跟随 reparse point。旧 operation、NTFS file identity 和内容 digest 不再阻止这批入口的显式清理。其他名称与普通投影 reconcile 继续使用原有身份和内容验证；macOS 不变。
+
+### 后果
+
+- 用户点击后可清理旧版留下的 Windows 官方 Skill 目录副本，包括曾记录为 `shadowed` 的副本。
+- 对这些固定名称，旧记录与名称足以授权删除；若用户在同一路径改写过内容，显式清理也会删除该目录。
+- 入口不存在时只收掉旧 observation；运行中、不可访问、路径不符或 reparse 入口仍保留。
+
+### 未选择方案
+
+- 扫描所有项目 Skills 目录按名称删除：会扩大到没有旧 observation 的入口。
+- 把名称规则用于普通投影 reconcile：会让新 Run 覆盖项目自有目录。

@@ -41,6 +41,18 @@ const MANAGED_GIT_EXCLUDE_MARKERS: [(&str, &str); 3] = [
         "# END LUMEN MANAGED SKILL PROJECTIONS",
     ),
 ];
+#[cfg(windows)]
+const WINDOWS_LEGACY_NAMED_CLEANUP_SKILLS: [&str; 9] = [
+    "analyze-agent-codebase",
+    "campfire",
+    "cli-operations",
+    "grill-duo",
+    "grill-duo-with-docs",
+    "member-studio",
+    "memory-stewardship",
+    "review-duo",
+    "worktree",
+];
 #[cfg(unix)]
 const MANAGED_TEMP_PREFIX: &str = ".rovai-skill-projection-";
 
@@ -1598,6 +1610,23 @@ fn classify_legacy_entry(
     }) {
         return LegacyEntryClassification::Unverified;
     }
+    #[cfg(windows)]
+    if is_windows_legacy_named_cleanup_skill(first) {
+        return match fs::symlink_metadata(path) {
+            Ok(metadata)
+                if metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && windows_projection::is_plain_legacy_directory(path) =>
+            {
+                LegacyEntryClassification::Owned
+            }
+            Ok(_) => LegacyEntryClassification::Unverified,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                LegacyEntryClassification::Missing
+            }
+            Err(_) => LegacyEntryClassification::Inaccessible,
+        };
+    }
     match inspect_entry(database, library, path) {
         Ok(EntryState::Managed(actual))
             if actual.skill_id == first.skill_id && actual.revision_id == first.revision_id =>
@@ -1610,6 +1639,11 @@ fn classify_legacy_entry(
         }
         Err(_) => LegacyEntryClassification::Inaccessible,
     }
+}
+
+#[cfg(windows)]
+fn is_windows_legacy_named_cleanup_skill(observation: &LegacyEntryObservation) -> bool {
+    WINDOWS_LEGACY_NAMED_CLEANUP_SKILLS.contains(&observation.skill_name.as_str())
 }
 
 fn delete_legacy_observations(
@@ -1643,6 +1677,14 @@ fn remove_legacy_windows_copy(
                     .unwrap_or(observation.group_key)
         })
         .context("legacy Skill copy has no direct dispatch observation")?;
+    if is_windows_legacy_named_cleanup_skill(direct) {
+        return windows_projection::remove_legacy_named_copy(
+            Path::new(&direct.execution_root),
+            direct.group_key,
+            &direct.skill_name,
+            entry_path,
+        );
+    }
     let skill = library
         .list(database)?
         .into_iter()

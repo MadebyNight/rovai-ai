@@ -20,6 +20,8 @@ test('configured Camp helper sends an explicit recipient as ComposerDocument V2'
       case 'camps.create':
         return { status: 'applied', payload: { campId: 'camp_test' } }
       case 'camp.messages.send':
+        assert.equal(params.commandId, 'command_test')
+        assert.equal(params.campId, 'camp_test')
         assert.deepEqual(params.content, {
           version: 2,
           segments: [

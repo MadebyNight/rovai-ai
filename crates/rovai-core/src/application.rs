@@ -15338,20 +15338,23 @@ impl Core {
             }
             Err(error) => return Err(error),
         };
+        // Freeze Bootstrap against the prepared Binding before recording the
+        // native Session ID. Once bound, a missing evidence row is a continuity
+        // violation and ContextService must reject materialization.
+        let bootstrap = {
+            let mut database = self.database.lock().await;
+            ContextService.prepare_session_bootstrap(
+                &mut database,
+                &ManagedBlobStore::new(&self.data_dir),
+                &execution.agent_run_id,
+                execution.execution_epoch,
+                charter_delivery_mode,
+            )?
+        };
         self.bind_prepared_native_session(execution, &binding_credential, &session_id)
             .await
             .context("failed to bind ACP Native Session")?;
         if execution.runtime.adapter_kind == AdapterKind::DeepseekHarness {
-            let bootstrap = {
-                let mut database = self.database.lock().await;
-                ContextService.prepare_session_bootstrap(
-                    &mut database,
-                    &ManagedBlobStore::new(&self.data_dir),
-                    &execution.agent_run_id,
-                    execution.execution_epoch,
-                    CharterDeliveryMode::ManagedSystemPrompt,
-                )?
-            };
             if bootstrap.native_binding_id != binding_credential.native_binding_id
                 || bootstrap.native_binding_generation
                     != binding_credential.native_binding_generation
