@@ -138,7 +138,9 @@ SELECT EXISTS(
 
 `?2=P`，无上次边界时为 0；`?3=T`，`?4=A`，`?5=I` 的完整 JSON 数组。读取、序列化或查询失败必须回滚整个 claim，不领取 Delivery、不创建该 Run。新公开 batch `agent_run` 内只冻结非空 `claim_previous_public_boundary_sequence=P` 与 `claim_has_additional_public_messages∈{0,1}`；已有 Run 两列为空，不回填、不借空值重算历史。Run Facts 8 从冻结两值选择文本，物化并冻结原始 Facts JSON／digest 和完整 Manifest／payload；同 Run 重试或恢复使用已冻结证据，不从后来的撤回、公屏状态或 accepted 水位重算。读取与判断不领取 Delivery、不改变撤回资格或 accepted 水位；只有现有有效 Runtime accepted ACK 推进水位。
 
-## 不变边界、版本轴与证据
+## 明确不变：输入、权限与证据边界
+
+`RUN_INPUT.messages` 仍是完整有序的领取集合，不新增自动历史或工作项；`ROVAI_ADDITIONAL_SKILLS` 的完整段落、空集合、Selection／Resolution 和每消息 Skills 链接保持 main 已确认的形状及冻结规则。`RUN_FACTS` 只改变必有 `historyHint` 的文本选择，其他业务字段、省略条件、Profile 10 JSON 与选择预算不变；容量临界估算低估不在本次扩修。`camp.read` 默认 20、显式上限 100 和分页不变；accepted 水位仅由既有有效 Runtime accepted ACK 推进。既有 Native Session 的系统提示词及 Bootstrap 原字节不修改、不因这次 Charter 文案变化换 Session；旧 Manifest 和 payload 不重写。以下版本轴明确新输入与有界恢复的差别。
 
 | 投递类型 | 目标组合 | 恢复组合与准入 |
 | --- | --- | --- |
