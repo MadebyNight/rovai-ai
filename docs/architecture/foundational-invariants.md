@@ -343,8 +343,9 @@ last_updated: 2026-09-24
 
 ### 公共历史按需读取与实时读取
 
-- 新公开 AgentRun 不自动生成 `SHARED_CONVERSATION`、历史摘要或遗漏 locator。`RUN_INPUT` 仍完整有序。`RUN_FACTS.historyHint` 冻结本 Agent 在此 Camp 上一次有效 accepted ACK 对应执行前的公屏尾；它只供定位相关历史，不代表阅读或完成，也不是 `camp.read --before` 游标。
-- `(CampId, AgentId)` 接受水位只由匹配 Run/binding/generation 的整批 Runtime accepted ACK 推进，并跨 Native Session 保留；prepared、rejected、unknown、claim、stale ACK 或后续 Stop 都不能新增或回退有效边界。同一新格式 Run 复用冻结提示及原输入。
+- 新公开 batch AgentRun 不自动生成 `SHARED_CONVERSATION`、历史摘要或遗漏 locator。`RUN_INPUT` 仍完整有序。`RUN_FACTS.historyHint` 依据本 Agent 在此 Camp 上一次有效 accepted ACK 对应执行前公屏尾 `P` 以及本轮 claim 冻结的额外可见消息布尔结果选四种完整句子；存在只表示额外可见消息，不增加工作责任、不要求读取。提示是历史参考点，不代表阅读或完成，也不是 `camp.read --before` 游标。Charter 保留不推断遗漏、仅需当前工作时读取的纪律；`RUN_INPUT` 和已有上下文足够就直接推进，仅在缺少当前工作所需 Camp context 时 `rovai camp read`。
+- claim 同一事务用 `P`、本轮公屏尾 `T`、最终领取进入 `RUN_INPUT.messages` 的全部 ID `I` 与当前 Agent `A` 检查额外可见消息：`P > 0` 查 `(P, T]`、`P = 0` 查 `<= T`，首轮也查实际历史。可见性沿用当前 Camp `camp.read` 时间线的同 Camp／非 tombstone 规则，撤回占位符计入；仅排除 `I` 和 `author_type = agent, author_id = A`。发给其他 Agent 的可见消息及未领取队尾仍计入；不能用 waiting Delivery 候选代替历史可见集合。只做无正文、无数量、无分页上限的 `EXISTS`，失败回滚整个 claim，不创建无判断结果的 Run。Run 内部冻结 `P` 与布尔值，不复制历史；后续消息、撤回或水位变化均不重算原提示。
+- `(CampId, AgentId)` 接受水位只由匹配 Run/binding/generation 的整批 Runtime accepted ACK 推进，并跨 Native Session 保留；prepared、rejected、unknown、claim、read/search、发布、执行结束、stale ACK 或后续 Stop 都不能新增或回退有效边界。同一 Run 复用冻结 Manifest／payload 和原输入。
 - `RUN_INPUT` 与 quote-source 投影继续隔离 recallable、waiting Delivery 或已撤回原文。显式 read/search 按 [Camp History v10](../contracts/camp-history-v10.md) 使用主动查询可见性：已发布、未撤回的原文可读；撤回项只进入 `camp.read` 的时间线和按 ID 结果，以 `Message withdrawn` 状态占一个分页位置，不进入搜索或冻结输入。
 - `camp.read` 始终读取调用时最新授权和可见状态，不受当前 ContextManifest 的历史上下界限制；timeline/thread 默认 20、显式 1–100，从最新页用排他 `before` 倒翻，超出一页必须给出真实续读位置。它不 claim Delivery、不关闭撤回、不推进 accepted 水位，也不把新读到的消息变成当前 Run 输入。
 - Agent 与 Human Principal 的 body/snippet/search offset 使用分开、版本化投影。外部渠道引用必须经 CampMessage Structured Content 进入标准投影，不能用 prompt override 绕过可见性或 evidence。
@@ -354,10 +355,10 @@ last_updated: 2026-09-24
 ### ContextManifest 与结构化 Run Facts
 
 - ContextManifest、模型输入 bytes、Runtime Input Delivery Evidence 和 Native Session/Run 状态是四个独立权威。Manifest 冻结模型实际可见选择、formatter/profile/section 版本、来源 digest、遗漏、水位和 exact compact payload digest；交付 evidence 记录 Runtime 实际接受。日志摘要、Run 状态或 Manifest 本身不能互相代替。
-- Manifest 对新 public Run 冻结完整有序 AgentRunInput、最后一条 anchor、执行配置、Skill Selection/Resolution v2、`ROVAI_ADDITIONAL_SKILLS` 完整文本/digest、visibility fence、执行前接受边界、RUN_FACTS/historyHint 与 exact rendered bytes/digest；历史专属 refs/evidence 为空。输入附件只使用各消息 `RUN_INPUT.messages[].attachments`。旧 Manifest 原字节留作审计；v29/9/7 和非 batch v26/6/5 在完整证据下有界恢复，公开 v28 及更早不续派或重播。
+- Manifest 对新 public Run 冻结完整有序 AgentRunInput、最后一条 anchor、执行配置、Skill Selection/Resolution v2、`ROVAI_ADDITIONAL_SKILLS` 完整文本/digest、visibility fence、claim 时前次有效接受边界及额外可见消息判断对应的 RUN_FACTS/historyHint 与 exact rendered bytes/digest；历史专属 refs/evidence 为空。输入附件只使用各消息 `RUN_INPUT.messages[].attachments`。旧 Manifest 原字节留作审计；v30/10/7、v29/9/7 和非 batch v26/6/5 在完整冻结证据下有界恢复，公开 v28 及更早不续派或重播。
 - 模型投影可以 compact，但不得丢失、重命名或自由文本化 authoritative fact。稳定产品规则留在 Session Charter，per-Run 事实只出现一次；每个 schema/formatter/profile/manifest/section 版本跟随实际 owner 独立推进，不用一个全局数字伪造同步升级。
-- public `RUN_FACTS` v7 必有 `attachmentOutputRoot` 和 `historyHint`，其余只允许 Mission、Task、Session continuity 与真实 external effect；不含 Gather、delegation 或 conversationMode。Single Chat 使用非 batch v5；Core 生成的模型正文不包含协议 `schemaVersion`。
-- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 `RUN_INPUT` 中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v30](../contracts/context-manifest-evidence-v30.md)。
+- 新公开 batch `RUN_FACTS` v8 必有 `attachmentOutputRoot` 和 `historyHint`，其余只允许 Mission、Task、Session continuity 与真实 external effect；不含 Gather、delegation 或 conversationMode。Single Chat 使用非 batch v5；Core 生成的模型正文不包含协议 `schemaVersion`。
+- Mission start、Automation、Channel 与 A2A 都是普通 `RUN_INPUT.messages[]`，来源事实保留在业务域而不形成特殊 input kind。独立 `WORKSPACE` 段仍冻结实际目录/branch 并按既有 accepted-only 规则交付。默认寻址消息只在 `RUN_INPUT` 中派生冻结接收者 Mention；版本与完整 evidence 见 [ContextManifest v31](../contracts/context-manifest-evidence-v31.md)。
 - Self-active Task snapshot 只选当前成员在当前 Camp 显式负责的非终态 Task，按 Profile 的稳定 order/limit/budget priority 冻结。真实空集合产生显式 empty snapshot；候选存在但被上限/预算全部排除时整段省略并记 aggregate omitted count，不泄露被排除 ID。Renderer/Skill 不得临时改排序。
 - Structured Skill selection 以来源身份和只读 resolver 形成可选 `RUN_INPUT.messages[].skills` 链接，并按消息顺序去重整个批次。受管工具箱索引只含当前队员配置与本批显式选用；原生 Skill 只在显式选用的消息局部链接出现。Skill 不授予工具或权限；解析失败保留本批选择事实，不跳过 FIFO 队首。
 

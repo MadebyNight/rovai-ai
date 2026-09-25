@@ -5,6 +5,7 @@ import { installWindowNavigation } from './window-navigation'
 import { chmod, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { openHostWebLink } from './host-web-link'
 import { randomUUID } from 'node:crypto'
+import bundledReleaseNotes from '../../../../build/release-notes.md?raw'
 import { dirname, extname, join } from 'node:path'
 import {
   app,
@@ -651,6 +652,7 @@ async function initializeAppUpdates(): Promise<void> {
   }
   const service = createAppUpdatesServiceFailOpen({
     currentVersion: () => app.getVersion(),
+    bundledReleaseNotes,
     isPackaged: () => app.isPackaged,
     updater: autoUpdater as unknown as DesktopAutoUpdater | null,
     automaticChecksEnabled: !(

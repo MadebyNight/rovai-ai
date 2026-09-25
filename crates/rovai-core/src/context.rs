@@ -76,6 +76,7 @@ fn context_manifest_is_dispatchable(
         (manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
             && formatter_version == PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
             && profile_version == 10)
+            || (manifest_version == 30 && formatter_version == 30 && profile_version == 10)
             || (manifest_version == 29 && formatter_version == 29 && profile_version == 9)
     } else {
         (manifest_version == CONTEXT_MANIFEST_VERSION
@@ -518,6 +519,19 @@ impl ContextService {
         )? {
             return Ok(ContextMaterialization::Ready(existing));
         }
+        let batch_context_manifest_version = (snapshot.invocation_kind == "batch")
+            .then(|| {
+                frozen_batch_context_manifest_version(
+                    database.context_connection(),
+                    &snapshot.agent_run_id,
+                )
+            })
+            .transpose()?;
+        if batch_context_manifest_version == Some(30) {
+            anyhow::bail!(
+                "Unmaterialized public v30 input has no frozen Additional Skills evidence"
+            );
+        }
         if !snapshot.skill_selection_snapshot.entries.is_empty()
             && prepared_skill_exposure.is_none()
         {
@@ -583,7 +597,13 @@ impl ContextService {
                 != Some(bootstrap_evidence_digest.as_str());
         let previous_accepted_public_boundary_sequence = accepted_public_window_lower_bound(
             &snapshot.invocation_kind,
-            snapshot.last_accepted_public_boundary_sequence,
+            if batch_context_manifest_version == Some(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION) {
+                snapshot
+                    .claim_previous_public_boundary_sequence
+                    .context("Batch AgentRun has no frozen previous public boundary")?
+            } else {
+                snapshot.last_accepted_public_boundary_sequence
+            },
             requires_new_native_session,
         );
         if previous_accepted_public_boundary_sequence > snapshot.camp_message_boundary_sequence {
@@ -614,14 +634,6 @@ impl ContextService {
         let collaboration_changed = bootstrap_required
             || snapshot.native_collaboration_state_digest.as_deref()
                 != Some(collaboration_state_digest.as_str());
-        let batch_context_manifest_version = (snapshot.invocation_kind == "batch")
-            .then(|| {
-                frozen_batch_context_manifest_version(
-                    database.context_connection(),
-                    &snapshot.agent_run_id,
-                )
-            })
-            .transpose()?;
         let profile = match batch_context_manifest_version {
             Some(29) => {
                 crate::context_delivery::PUBLIC_CAMP_BATCH_CONTEXT_DELIVERY_PROFILE_V9.validate()?
@@ -724,9 +736,20 @@ impl ContextService {
         let (mut run_facts, mission_details_version) =
             build_run_facts(database, &snapshot, requires_new_native_session, a2a_count)?;
         if snapshot.invocation_kind == "batch" {
-            run_facts.history_hint = Some(public_history_hint(
-                previous_accepted_public_boundary_sequence,
-            ));
+            run_facts.history_hint = Some(
+                if batch_context_manifest_version
+                    == Some(PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION)
+                {
+                    public_history_hint(
+                        previous_accepted_public_boundary_sequence,
+                        snapshot
+                            .claim_has_additional_public_messages
+                            .context("Batch AgentRun has no frozen additional-message result")?,
+                    )
+                } else {
+                    previous_public_history_hint(previous_accepted_public_boundary_sequence)
+                },
+            );
         }
         let rendered_run_facts = render_run_facts(&run_facts)?;
         let bootstrap_redelivery_revision = pending_redelivery_revision(
@@ -1070,13 +1093,17 @@ impl ContextService {
             .map(|version| {
                 debug_assert!(matches!(
                     version,
-                    29 | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
+                    29 | 30 | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
                 ));
                 version
             })
             .unwrap_or(CONTEXT_FORMATTER_VERSION);
         let run_facts_schema_version = if snapshot.invocation_kind == "batch" {
-            7_i64
+            if context_manifest_version == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION {
+                8_i64
+            } else {
+                7_i64
+            }
         } else {
             5_i64
         };
@@ -2063,6 +2090,7 @@ impl ContextService {
                        context_manifest.formatter_version,
                        context_manifest.context_delivery_profile_version,
                        agent_run.invocation_kind,
+                       context_manifest.run_facts_schema_version,
                        context_manifest.camp_attachment_view_receipt_json,
                        context_manifest.camp_attachment_view_receipt_digest
                 FROM context_manifest
@@ -2088,8 +2116,9 @@ impl ContextService {
                         row.get::<_, i64>(11)?,
                         row.get::<_, i64>(12)?,
                         row.get::<_, String>(13)?,
-                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, i64>(14)?,
                         row.get::<_, Option<String>>(15)?,
+                        row.get::<_, Option<String>>(16)?,
                     ))
                 },
             )
@@ -2113,15 +2142,31 @@ impl ContextService {
         if row.5 != "running" || row.6 != execution_epoch {
             anyhow::bail!("AgentRun or Native Binding changed before input delivery");
         }
-        if !context_manifest_is_dispatchable(row.10, row.11, row.12, &row.13) {
-            anyhow::bail!("ContextManifest cannot be dispatched");
+        if !context_manifest_is_dispatchable(row.10, row.11, row.12, &row.13)
+            || row.14
+                != if row.13 == "batch" {
+                    if row.10 == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION {
+                        8
+                    } else {
+                        7
+                    }
+                } else {
+                    5
+                }
+        {
+            anyhow::bail!("ContextManifest version evidence cannot be dispatched");
+        }
+        if row.13 == "batch"
+            && frozen_batch_context_manifest_version(&transaction, agent_run_id)? != row.10
+        {
+            anyhow::bail!("ContextManifest does not match its frozen RunInput version");
         }
         let (runtime_attachment_auth_receipt, runtime_attachment_auth_receipt_digest) =
             optional_legacy_runtime_auth(
                 &transaction,
                 &row.7,
-                row.14.as_deref(),
                 row.15.as_deref(),
+                row.16.as_deref(),
             )?;
         let runtime_payload_digest = runtime_payload_digest.unwrap_or(row.0.as_str());
         let runtime_request_digest = canonical_json_digest(&json!({
@@ -2448,13 +2493,39 @@ fn accepted_public_window_lower_bound(
     }
 }
 
-fn public_history_hint(previous_accepted_public_boundary_sequence: i64) -> String {
+fn previous_public_history_hint(previous_accepted_public_boundary_sequence: i64) -> String {
     if previous_accepted_public_boundary_sequence > 0 {
         format!(
             "The latest public message before your last recorded run in this Camp had sequence {previous_accepted_public_boundary_sequence}."
         )
     } else {
         "No public-message boundary from a previous run is recorded for you in this Camp."
+            .to_string()
+    }
+}
+
+pub(crate) fn public_history_hint(
+    previous_accepted_public_boundary_sequence: i64,
+    has_additional_messages: bool,
+) -> String {
+    if previous_accepted_public_boundary_sequence > 0 {
+        let boundary = format!(
+            "The latest public message before your last recorded run in this Camp had sequence {previous_accepted_public_boundary_sequence}."
+        );
+        if has_additional_messages {
+            format!(
+                "{boundary} As of this run's start, there are additional visible messages after that sequence beyond RUN_INPUT and messages written by you."
+            )
+        } else {
+            format!(
+                "{boundary} As of this run's start, all visible messages after that sequence are already in RUN_INPUT or were written by you."
+            )
+        }
+    } else if has_additional_messages {
+        "As of this run's start, there are additional visible messages in this Camp beyond RUN_INPUT and messages written by you."
+            .to_string()
+    } else {
+        "As of this run's start, all visible messages in this Camp are already in RUN_INPUT or were written by you."
             .to_string()
     }
 }
@@ -2667,6 +2738,8 @@ struct RunSnapshot {
     native_binding_id: Option<String>,
     native_binding_generation: i64,
     last_accepted_public_boundary_sequence: i64,
+    claim_previous_public_boundary_sequence: Option<i64>,
+    claim_has_additional_public_messages: Option<bool>,
     native_charter_digest: Option<String>,
     native_collaboration_state_digest: Option<String>,
     default_lead_agent_id: Option<String>,
@@ -2740,6 +2813,8 @@ fn prospective_delivery_snapshot(
         native_binding_id: conversation.3,
         native_binding_generation: conversation.4,
         last_accepted_public_boundary_sequence: conversation.5,
+        claim_previous_public_boundary_sequence: None,
+        claim_has_additional_public_messages: None,
         native_charter_digest: conversation.6,
         native_collaboration_state_digest: conversation.7,
         default_lead_agent_id,
@@ -2786,7 +2861,9 @@ fn load_run_snapshot<R: ContextReadConnection>(
                    agent_run.a2a_parent_agent_run_id,
                    agent_run.a2a_root_agent_run_id,
                    agent_run.skill_selection_snapshot_json,
-                   agent_run.skill_selection_snapshot_digest
+                   agent_run.skill_selection_snapshot_digest,
+                   agent_run.claim_previous_public_boundary_sequence,
+                   agent_run.claim_has_additional_public_messages
             FROM agent_run
             LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
             JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
@@ -2849,6 +2926,8 @@ fn load_run_snapshot<R: ContextReadConnection>(
                     native_binding_id: row.get(23)?,
                     native_binding_generation: row.get(24)?,
                     last_accepted_public_boundary_sequence: row.get(25)?,
+                    claim_previous_public_boundary_sequence: row.get(32)?,
+                    claim_has_additional_public_messages: row.get(33)?,
                     native_charter_digest: row.get(26)?,
                     native_collaboration_state_digest: row.get(27)?,
                     default_lead_agent_id: row.get(17)?,
@@ -2910,7 +2989,7 @@ fn build_session_charter(
         "- CURRENT_INPUT is the immediate work item. Its source and current Core authorization determine its authority."
     };
     let shared_conversation_guidance = if is_batch {
-        "- Use `rovai camp read` for relevant Camp history. The boundary in `RUN_FACTS.historyHint` is a reference point, not a record of messages read or work completed."
+        "- Proceed directly when `RUN_INPUT` and your existing context are sufficient; use `rovai camp read` only for missing Camp context needed by the current work. The boundary in `RUN_FACTS.historyHint` is a reference point, not a read or completion marker."
     } else {
         "- In SHARED_CONVERSATION, the top-level campId applies to every projected message. A historical nextBodyOffset, when present, only marks a truncated context prefix; camp.read item returns the complete message and accepts no body offset. Omitted sequence bounds may contain gaps and are not executable ranges."
     };
@@ -3052,6 +3131,13 @@ fn prepare_session_bootstrap_evidence_for_snapshot(
             native_binding_generation,
             delivery_mode,
         });
+    }
+
+    if snapshot.native_session_id.is_some()
+        && snapshot.native_binding_id.as_deref() == Some(native_binding_id)
+        && snapshot.native_binding_generation == native_binding_generation
+    {
+        anyhow::bail!("Existing Native Session has no frozen Bootstrap evidence");
     }
 
     // Channel guidance is selected only for new evidence, never when replaying a Binding.
@@ -4363,7 +4449,10 @@ fn frozen_batch_context_manifest_version(
     );
     let version = minimum.context("Batch AgentRun context version is missing")?;
     anyhow::ensure!(
-        matches!(version, 29 | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION),
+        matches!(
+            version,
+            29 | 30 | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        ),
         "Batch AgentRun uses an unsupported context version"
     );
     Ok(version)
@@ -7284,7 +7373,9 @@ fn load_existing_manifest(
                    manifest.current_input_skill_resolution_digest,
                    manifest.message_projection_audience,
                    manifest.a2a_guidance_evidence_json,
-                   manifest.a2a_guidance_evidence_digest
+                   manifest.a2a_guidance_evidence_digest,
+                   manifest.context_manifest_version,
+                   manifest.run_facts_schema_version
             FROM context_manifest AS manifest
             JOIN native_session_bootstrap_evidence AS bootstrap
               ON bootstrap.id = manifest.bootstrap_evidence_id
@@ -7327,6 +7418,8 @@ fn load_existing_manifest(
                     row.get::<_, String>(31)?,
                     row.get::<_, String>(32)?,
                     row.get::<_, String>(33)?,
+                    row.get::<_, i64>(34)?,
+                    row.get::<_, i64>(35)?,
                 ))
             },
         )
@@ -7337,8 +7430,25 @@ fn load_existing_manifest(
     if row.2 != snapshot.camp_message_boundary_sequence {
         anyhow::bail!("Stored ContextManifest no longer matches its frozen AgentRun input");
     }
-    if !context_manifest_is_dispatchable(row.15, row.15, row.16, &snapshot.invocation_kind) {
-        anyhow::bail!("Stored ContextManifest uses an obsolete context formatter");
+    if !context_manifest_is_dispatchable(row.34, row.15, row.16, &snapshot.invocation_kind)
+        || row.35
+            != if snapshot.invocation_kind == "batch" {
+                if row.34 == PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION {
+                    8
+                } else {
+                    7
+                }
+            } else {
+                5
+            }
+    {
+        anyhow::bail!("Stored ContextManifest version evidence is inconsistent");
+    }
+    if snapshot.invocation_kind == "batch"
+        && frozen_batch_context_manifest_version(database.connection(), &snapshot.agent_run_id)?
+            != row.34
+    {
+        anyhow::bail!("Stored ContextManifest does not match its frozen RunInput version");
     }
     if row.31 != AGENT_MESSAGE_PROJECTION_AUDIENCE {
         anyhow::bail!("Stored ContextManifest projection audience is invalid");
@@ -7408,7 +7518,7 @@ fn load_existing_manifest(
     }
     if matches!(
         row.15,
-        CONTEXT_FORMATTER_VERSION | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
+        CONTEXT_FORMATTER_VERSION | 30 | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
     ) {
         let dynamic_evidence: Option<(String, String, String)> = database.connection().query_row(
             "SELECT section_text, section_digest, omitted_json FROM context_additional_skills_evidence WHERE context_manifest_id = ?1",
@@ -8601,12 +8711,14 @@ mod tests {
                     context_manifest_version INTEGER
                 );
                 INSERT INTO agent_run_input VALUES ('historical', 26);
-                INSERT INTO agent_run_input VALUES ('current', 30);
-                INSERT INTO agent_run_input VALUES ('current', 30);
+                INSERT INTO agent_run_input VALUES ('current', 31);
+                INSERT INTO agent_run_input VALUES ('current', 31);
+                INSERT INTO agent_run_input VALUES ('previous', 30);
+                INSERT INTO agent_run_input VALUES ('previous', 30);
                 INSERT INTO agent_run_input VALUES ('legacy', 29);
                 INSERT INTO agent_run_input VALUES ('legacy', 29);
                 INSERT INTO agent_run_input VALUES ('mixed', 26);
-                INSERT INTO agent_run_input VALUES ('mixed', 30);
+                INSERT INTO agent_run_input VALUES ('mixed', 31);
                 INSERT INTO agent_run_input VALUES ('missing', NULL);
                 "#,
             )
@@ -8620,6 +8732,10 @@ mod tests {
             frozen_batch_context_manifest_version(&connection, "legacy").unwrap(),
             29
         );
+        assert_eq!(
+            frozen_batch_context_manifest_version(&connection, "previous").unwrap(),
+            30
+        );
         for invalid in ["historical", "mixed", "missing", "absent"] {
             assert!(frozen_batch_context_manifest_version(&connection, invalid).is_err());
         }
@@ -8628,9 +8744,10 @@ mod tests {
     #[test]
     fn dispatch_admission_accepts_current_and_frozen_predecessor_contracts() {
         assert!(context_manifest_is_dispatchable(27, 27, 7, "single_chat"));
+        assert!(context_manifest_is_dispatchable(31, 31, 10, "batch"));
         assert!(context_manifest_is_dispatchable(30, 30, 10, "batch"));
-        assert!(context_manifest_is_dispatchable(26, 26, 6, "single_chat"));
         assert!(context_manifest_is_dispatchable(29, 29, 9, "batch"));
+        assert!(context_manifest_is_dispatchable(26, 26, 6, "single_chat"));
         for (manifest, formatter, profile, invocation) in [
             (25, 25, 6, "single_chat"),
             (26, 26, 7, "batch"),
@@ -8639,6 +8756,10 @@ mod tests {
             (28, 27, 8, "batch"),
             (28, 28, 6, "batch"),
             (29, 29, 8, "batch"),
+            (29, 29, 10, "batch"),
+            (30, 30, 9, "batch"),
+            (31, 31, 9, "batch"),
+            (31, 30, 10, "batch"),
             (26, 26, 8, "single_chat"),
         ] {
             assert!(!context_manifest_is_dispatchable(
@@ -8658,12 +8779,20 @@ mod tests {
         assert_eq!(accepted_public_window_lower_bound("direct", 41, true), 0);
         assert_eq!(accepted_public_window_lower_bound("direct", 41, false), 41);
         assert_eq!(
-            public_history_hint(0),
-            "No public-message boundary from a previous run is recorded for you in this Camp."
+            public_history_hint(0, false),
+            "As of this run's start, all visible messages in this Camp are already in RUN_INPUT or were written by you."
         );
         assert_eq!(
-            public_history_hint(150),
-            "The latest public message before your last recorded run in this Camp had sequence 150."
+            public_history_hint(0, true),
+            "As of this run's start, there are additional visible messages in this Camp beyond RUN_INPUT and messages written by you."
+        );
+        assert_eq!(
+            public_history_hint(150, false),
+            "The latest public message before your last recorded run in this Camp had sequence 150. As of this run's start, all visible messages after that sequence are already in RUN_INPUT or were written by you."
+        );
+        assert_eq!(
+            public_history_hint(150, true),
+            "The latest public message before your last recorded run in this Camp had sequence 150. As of this run's start, there are additional visible messages after that sequence beyond RUN_INPUT and messages written by you."
         );
     }
 
@@ -8874,6 +9003,8 @@ mod tests {
             native_binding_id: None,
             native_binding_generation: 0,
             last_accepted_public_boundary_sequence: 0,
+            claim_previous_public_boundary_sequence: None,
+            claim_has_additional_public_messages: None,
             native_charter_digest: None,
             native_collaboration_state_digest: None,
             default_lead_agent_id: Some("agent_1".to_string()),
@@ -9255,6 +9386,8 @@ mod slow_tests {
             native_binding_id: None,
             native_binding_generation: 0,
             last_accepted_public_boundary_sequence: 0,
+            claim_previous_public_boundary_sequence: None,
+            claim_has_additional_public_messages: None,
             native_charter_digest: None,
             native_collaboration_state_digest: None,
             default_lead_agent_id: None,
@@ -10744,6 +10877,172 @@ mod slow_tests {
     }
 
     #[test]
+    fn batch_history_hint_uses_claim_result_after_history_and_watermark_change() {
+        let mut fixture = fixture();
+        let frozen: (i64, bool) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT claim_previous_public_boundary_sequence, claim_has_additional_public_messages FROM agent_run WHERE id = ?1",
+                [&fixture.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(frozen, (0, false));
+        let now = chrono::Utc::now().to_rfc3339();
+        let transaction = fixture.database.connection_mut().transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE camp SET last_message_sequence = 2, version = version + 1, updated_at = ?2 WHERE id = ?1",
+                params![fixture.camp_id, now],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                r#"
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id, body,
+                    structured_content_json, content_digest,
+                    address_mode, addressed_agent_ids_json,
+                    effective_recipient_ids_json, recipient_presentation_json,
+                    origin_kind, recall_state, version, created_at, updated_at
+                ) VALUES (
+                    'after-claim-history', ?1, 2, 'agent', 'agent_2', 'new public history',
+                    '[{"kind":"text","text":"new public history"}]', 'sha256:after-claim-history',
+                    'explicit', '["agent_2"]', '["agent_2"]', '{}',
+                    'agent', 'closed', 1, ?2, ?2
+                )
+                "#,
+                params![fixture.camp_id, now],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE conversation SET last_accepted_public_boundary_sequence = 2 WHERE id = (SELECT conversation_id FROM agent_run WHERE id = ?1)",
+                [&fixture.run_id],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+
+        let store = ManagedBlobStore::new(&fixture.directory);
+        let request = MaterializeContextRequest {
+            agent_run_id: &fixture.run_id,
+            execution_epoch: fixture.execution_epoch,
+            charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+            max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+        };
+        let ContextMaterialization::Ready(first) = ContextService
+            .materialize(&mut fixture.database, &store, &request)
+            .unwrap()
+        else {
+            panic!("frozen batch context should materialize")
+        };
+        assert!(first.rendered_payload.contains(
+            "As of this run's start, all visible messages in this Camp are already in RUN_INPUT or were written by you."
+        ));
+        assert!(!first.rendered_payload.contains("new public history"));
+        fixture
+            .database
+            .connection()
+            .execute(
+                "UPDATE camp_message SET recall_state = 'withdrawn' WHERE id = 'after-claim-history'",
+                [],
+            )
+            .unwrap();
+        let ContextMaterialization::Ready(second) = ContextService
+            .materialize(&mut fixture.database, &store, &request)
+            .unwrap()
+        else {
+            panic!("frozen batch manifest should be reusable")
+        };
+        assert_eq!(first.manifest_id, second.manifest_id);
+        assert_eq!(first.rendered_payload, second.rendered_payload);
+        assert_eq!(
+            first.rendered_payload_digest,
+            second.rendered_payload_digest
+        );
+        fixture.cleanup();
+    }
+
+    #[test]
+    fn batch_history_hint_materializes_frozen_true_without_rechecking_history() {
+        let mut fixture = fixture();
+        let now = chrono::Utc::now().to_rfc3339();
+        let transaction = fixture.database.connection_mut().transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE camp SET last_message_sequence = 2, version = version + 1, updated_at = ?2 WHERE id = ?1",
+                params![fixture.camp_id, now],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                r#"
+                INSERT INTO camp_message(
+                    id, camp_id, sequence, author_type, author_id, body,
+                    structured_content_json, content_digest,
+                    address_mode, addressed_agent_ids_json,
+                    effective_recipient_ids_json, recipient_presentation_json,
+                    origin_kind, recall_state, version, created_at, updated_at
+                ) VALUES (
+                    'withdrawn-before-materialization', ?1, 2, 'agent', 'agent_2', '',
+                    '[]', 'sha256:withdrawn-before-materialization',
+                    'explicit', '[]', '[]', '{}',
+                    'agent', 'withdrawn', 1, ?2, ?2
+                )
+                "#,
+                params![fixture.camp_id, now],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE agent_run SET current_public_tail_sequence = 2, initial_camp_context_through_sequence = 2, claim_has_additional_public_messages = 1 WHERE id = ?1",
+                [&fixture.run_id],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        let frozen: (i64, bool) = fixture
+            .database
+            .connection()
+            .query_row(
+                "SELECT claim_previous_public_boundary_sequence, claim_has_additional_public_messages FROM agent_run WHERE id = ?1",
+                [&fixture.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(frozen, (0, true));
+        let store = ManagedBlobStore::new(&fixture.directory);
+        let request = MaterializeContextRequest {
+            agent_run_id: &fixture.run_id,
+            execution_epoch: fixture.execution_epoch,
+            charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+            max_payload_bytes: DEFAULT_MAX_CONTEXT_PAYLOAD_BYTES,
+        };
+        let ContextMaterialization::Ready(first) = ContextService
+            .materialize(&mut fixture.database, &store, &request)
+            .unwrap()
+        else {
+            panic!("frozen batch context should materialize")
+        };
+        assert!(first.rendered_payload.contains(
+            "As of this run's start, there are additional visible messages in this Camp beyond RUN_INPUT and messages written by you."
+        ));
+        let ContextMaterialization::Ready(second) = ContextService
+            .materialize(&mut fixture.database, &store, &request)
+            .unwrap()
+        else {
+            panic!("frozen batch manifest should be reusable")
+        };
+        assert_eq!(first.manifest_id, second.manifest_id);
+        assert_eq!(first.rendered_payload, second.rendered_payload);
+        assert_eq!(
+            first.rendered_payload_digest,
+            second.rendered_payload_digest
+        );
+        fixture.cleanup();
+    }
+
+    #[test]
     fn attachment_only_current_input_is_empty_and_reuses_stable_camp_attachment_paths() {
         let mut fixture = fixture();
         let claim_recipient_display_name: String = fixture
@@ -10903,7 +11202,7 @@ mod slow_tests {
         let run_facts: Value = serde_json::from_str(run_facts_json).unwrap();
         assert_eq!(
             run_facts["historyHint"],
-            "No public-message boundary from a previous run is recorded for you in this Camp."
+            "As of this run's start, all visible messages in this Camp are already in RUN_INPUT or were written by you."
         );
         let (manifest_version, formatter_version, facts_version, profile_json, shared_evidence): (
             i64,
@@ -10932,7 +11231,7 @@ mod slow_tests {
             .unwrap();
         assert_eq!(
             (manifest_version, formatter_version, facts_version),
-            (29, 29, 7)
+            (30, 30, 8)
         );
         assert_eq!(
             serde_json::from_str::<Value>(&profile_json).unwrap(),
@@ -13768,9 +14067,8 @@ mod slow_tests {
         assert!(!charter.contains("recognized inline Agent addressing"));
         assert!(!charter.contains("--to-user"));
         assert!(!charter.contains("It overrides Agent addressing"));
-        assert!(charter.contains("Use `rovai camp read` for relevant Camp history."));
         assert!(charter.contains(
-            "The boundary in `RUN_FACTS.historyHint` is a reference point, not a record of messages read or work completed."
+            "Proceed directly when `RUN_INPUT` and your existing context are sufficient; use `rovai camp read` only for missing Camp context needed by the current work. The boundary in `RUN_FACTS.historyHint` is a reference point, not a read or completion marker."
         ));
         assert!(!charter.contains("omittedCount and historyReadCursor"));
         assert!(!charter.contains("nextBodyOffset is the Unicode-scalar bodyOffset"));

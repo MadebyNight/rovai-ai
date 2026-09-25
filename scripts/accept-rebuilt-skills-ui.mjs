@@ -125,6 +125,22 @@ try {
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...runtimeTrigger, button: 'left', buttons: 1, clickCount: 1 })
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...runtimeTrigger, button: 'left', buttons: 0, clickCount: 1 })
   await waitFor(cdp, `Boolean([...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.querySelector('strong')?.textContent.trim() === 'Qoder'))`, 5_000)
+  const runtimeMenu = await evaluate(cdp, `(() => {
+    const menu = document.querySelector('.runtime-model-picker-menu.member-runtime-menu')
+    const scroll = menu?.querySelector('.runtime-picker-scroll')
+    const items = [...(scroll?.querySelectorAll('[role="menuitemradio"]') ?? [])]
+    if (!menu || !scroll || !items.length) return null
+    scroll.scrollTop = scroll.scrollHeight
+    const menuBounds = menu.getBoundingClientRect()
+    const lastBounds = items.at(-1).getBoundingClientRect()
+    return { count: items.length, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight,
+      scrollTop: scroll.scrollTop, lastLabel: items.at(-1).textContent.trim(),
+      lastVisible: lastBounds.top >= menuBounds.top && lastBounds.bottom <= menuBounds.bottom }
+  })()`)
+  if (!runtimeMenu || runtimeMenu.count < 10 || runtimeMenu.scrollHeight <= runtimeMenu.clientHeight + 40 ||
+      runtimeMenu.scrollTop <= 40 || !runtimeMenu.lastVisible) {
+    throw new Error(`Skills Runtime menu cannot scroll to its last choice: ${JSON.stringify(runtimeMenu)}`)
+  }
   await evaluate(cdp, `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.querySelector('strong')?.textContent.trim() === 'Qoder').click()`)
   await waitFor(cdp, `(${nativePage}).querySelector('.rebuilt-skills-list')?.textContent.includes('qoder-user-skill')`, 5_000)
   const qoderSources = await evaluate(cdp, `[...(${nativePage}).querySelectorAll('.rebuilt-skill-row strong')].map((item) => item.textContent.trim()).sort()`)
@@ -151,6 +167,31 @@ try {
       toolbox.defaults.some(([name, count]) => name === 'member-studio' ? count !== 4 : count !== 0)) {
     throw new Error(`Toolbox defaults or layout changed: ${JSON.stringify(toolbox)}`)
   }
+  const helpAnchor = await evaluate(cdp, `(() => {
+    const rect = (${toolboxPage}).querySelector('.rebuilt-toolbox-help button')?.getBoundingClientRect()
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null
+  })()`)
+  if (!helpAnchor) throw new Error('Toolbox help trigger is missing')
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...helpAnchor, button: 'none', buttons: 0 })
+  const help = await evaluate(cdp, `(() => {
+    const trigger = (${toolboxPage}).querySelector('.rebuilt-toolbox-help button')
+    const tip = (${toolboxPage}).querySelector('.rebuilt-toolbox-help-popover')
+    const bounds = tip?.getBoundingClientRect()
+    return { describedBy: trigger?.getAttribute('aria-describedby') === tip?.id,
+      text: tip?.textContent, visibleOnHover: tip && getComputedStyle(tip).visibility === 'visible',
+      insideViewport: bounds && bounds.left >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight }
+  })()`)
+  if (!help.describedBy || !help.text?.includes('单次选用') || !help.visibleOnHover || !help.insideViewport) {
+    throw new Error(`Toolbox help copy is not visible on hover: ${JSON.stringify(help)}`)
+  }
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1, button: 'none', buttons: 0 })
+  const visibleOnFocus = await evaluate(cdp, `(() => {
+    const trigger = (${toolboxPage}).querySelector('.rebuilt-toolbox-help button')
+    trigger.focus()
+    return getComputedStyle((${toolboxPage}).querySelector('.rebuilt-toolbox-help-popover')).visibility === 'visible'
+  })()`)
+  if (!visibleOnFocus) throw new Error('Toolbox help copy is not visible on keyboard focus')
+  await evaluate(cdp, `(${toolboxPage}).querySelector('.rebuilt-toolbox-help button').blur()`)
   const toolboxSplitter = await exerciseSplitter(cdp, toolboxPage, 'rovai.toolbox-list-width.v1')
   if (Math.abs(toolbox.available - skills.available) > 1) throw new Error('Toolbox has extra outer padding compared with Skills')
   const descriptionAction = await checkAction(cdp, toolboxPage, '查看说明')
@@ -196,6 +237,8 @@ try {
     userDataDirectory,
     nativeSkillNames: skills.rows,
     qoderSkillNames: qoderSources,
+    runtimeMenu,
+    toolboxHelp: help,
     actions: { refresh: refreshAction, description: descriptionAction },
     splitters: { skills: skillsSplitter, toolbox: toolboxSplitter },
     toolboxDefaults: toolbox.defaults,

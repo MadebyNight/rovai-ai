@@ -39,7 +39,7 @@ Core 发布普通文件形式的 Rovai 平台两项与工具箱五项；平台�
 
 - 状态：accepted
 - 日期：2026-09-24
-- 当前权威：[ContextManifest v30](../../contracts/context-manifest-evidence-v30.md)、[Profile 10](../../contracts/context-delivery-profile-v10.md)、[Skills Rebuild v1](../../contracts/skills-rebuild-v1.md)
+- Skills 变更当时权威：[ContextManifest v30](../../contracts/context-manifest-evidence-v30.md)、[Profile 10](../../contracts/context-delivery-profile-v10.md)、[Skills Rebuild v1](../../contracts/skills-rebuild-v1.md)；后续 historyHint 变更见[当前 v31 合同](../../contracts/context-manifest-evidence-v31.md)与[独立确认的 revision 5](model-context-change-history-hint-additional.md)
 
 ### 背景
 
