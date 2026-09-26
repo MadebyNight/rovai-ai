@@ -555,6 +555,8 @@ pub struct ChannelHostTickRequest {
     pub worker_id: String,
     #[serde(default = "default_delivery_claim_limit")]
     pub limit: usize,
+    #[serde(default)]
+    pub inbound_attachment_app_ids: Vec<String>,
 }
 
 fn default_delivery_claim_limit() -> usize {
@@ -6360,7 +6362,7 @@ impl ChannelService {
                 || crate::automation::has_notification_work(&transaction, provider)?;
             ChannelHostTickResult {
                 inbound_attachments: if provider == FEISHU_PROVIDER {
-                    inbound_attachments::pending(&transaction)?
+                    inbound_attachments::pending(&transaction, &request.inbound_attachment_app_ids)?
                 } else {
                     Vec::new()
                 },
@@ -12665,7 +12667,7 @@ mod tests {
         use inbound_attachments::{CompleteAttachmentsCommand, InboundResource};
         // Owns the durable channel queue -> filesystem -> CampMessage/Delivery seam.
         // Existing text-only admission tests cannot prove this readiness fence.
-        for scenario in ["ready", "retry", "failed", "deleted"] {
+        for scenario in ["ready", "retry", "failed", "deleted", "folder"] {
             let mut database = seeded_runtime_database_owned();
             let service = ChannelService::default();
             connect_account(&service, &mut database);
@@ -12690,7 +12692,12 @@ mod tests {
                 InboundResource {
                     file_key: "file_key".into(),
                     name: "说明.txt".into(),
-                    kind: "file".into(),
+                    kind: if scenario == "folder" {
+                        "folder"
+                    } else {
+                        "file"
+                    }
+                    .into(),
                 },
             ];
             let observed = service
@@ -12721,7 +12728,8 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(finalized.result.status, CommandResultStatus::Accepted);
-            let pending = inbound_attachments::pending(database.connection()).unwrap();
+            let pending =
+                inbound_attachments::pending(database.connection(), &["cli_app_1".into()]).unwrap();
             assert_eq!(pending.len(), 1, "{scenario}: {}", finalized.result.payload);
             let request = &pending[0];
             let camp_id: String = database
@@ -12783,10 +12791,17 @@ mod tests {
                 assert!(!output.join("feishu").exists());
                 continue;
             }
-            if matches!(scenario, "retry" | "failed") {
+            if matches!(scenario, "retry" | "failed" | "folder") {
                 command.files.clear();
-                command.failure_code = Some("channel.attachments.download_failed".into());
-                let failures = if scenario == "retry" { 1 } else { 3 };
+                command.failure_code = Some(
+                    if scenario == "folder" {
+                        "channel.attachments.unsupported"
+                    } else {
+                        "channel.attachments.download_failed"
+                    }
+                    .into(),
+                );
+                let failures = if scenario == "failed" { 3 } else { 1 };
                 for attempt in 0..failures {
                     command.attempt = attempt;
                     let completed = inbound_attachments::complete(
@@ -12796,10 +12811,13 @@ mod tests {
                     .unwrap();
                     assert_eq!(completed.result.status, CommandResultStatus::Applied);
                     assert_eq!(count(&database), 0);
+                    if scenario == "folder" {
+                        assert!(completed.result.payload["retryAt"].is_null());
+                    }
                     database.connection().execute(
                         "UPDATE channel_inbound_aggregate SET frozen_payload_json=json_set(frozen_payload_json,'$.inboundAttachments.retryAt',NULL)", []).unwrap();
                 }
-                if scenario == "failed" {
+                if scenario != "retry" {
                     let status: String = database
                         .connection()
                         .query_row(
@@ -12810,17 +12828,24 @@ mod tests {
                         .unwrap();
                     assert_eq!(status, "failed");
                     assert!(
-                        inbound_attachments::pending(database.connection())
+                        inbound_attachments::pending(database.connection(), &["cli_app_1".into()])
                             .unwrap()
                             .is_empty()
                     );
                     let attention: String = database.connection().query_row("SELECT json_extract(payload_json,'$.text') FROM channel_delivery WHERE request_id=?1 AND delivery_kind='attention'",
                         [&request.request_id], |r| r.get(0)).unwrap();
-                    assert!(attention.contains("附件下载失败"));
+                    assert!(attention.contains(if scenario == "folder" {
+                        "请改为普通图片或文件重新发送"
+                    } else {
+                        "附件下载失败"
+                    }));
+                    assert!(claim_waiting_runs(&mut database).is_empty());
                     continue;
                 }
                 // A fresh read after failure uses the durable retry generation.
-                let recovered = inbound_attachments::pending(database.connection()).unwrap();
+                let recovered =
+                    inbound_attachments::pending(database.connection(), &["cli_app_1".into()])
+                        .unwrap();
                 assert_eq!(recovered[0].attempt, 1);
                 let stale = inbound_attachments::complete(
                     &mut database,
@@ -12858,6 +12883,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "images-host".into(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -12912,6 +12938,155 @@ mod tests {
     }
 
     #[test]
+    fn inbound_attachments_filter_available_bots_before_limit_and_keep_conversation_fifo() {
+        use inbound_attachments::{CompleteAttachmentsCommand, InboundResource};
+        // Owns the Host eligibility -> queued SQL window -> FIFO admission seam.
+        // Twenty unavailable requests must not hide the next Bot's attachments.
+        let mut database = seeded_runtime_database_owned();
+        let service = ChannelService::default();
+        connect_account(&service, &mut database);
+        publish_bot(&service, &mut database, "agent_1", "cli_app_1");
+        publish_bot(&service, &mut database, "agent_2", "cli_app_2");
+        let quick = quick_chat_path(&database);
+        // Bot B's second message lets us finish its download first and prove
+        // that filtering download candidates does not reorder Camp admission.
+        for index in 0..22 {
+            let (agent_id, app_id, chat_id) = if index < 20 {
+                ("agent_1", "cli_app_1", "offline-chat")
+            } else {
+                ("agent_2", "cli_app_2", "online-chat")
+            };
+            let message_id = format!("attachment-{index:02}");
+            let mut observation = observation_command(
+                app_id,
+                &message_id,
+                chat_id,
+                "",
+                "p2p",
+                &message_id,
+                &[(agent_id, app_id)],
+                true,
+            );
+            observation.resources = vec![InboundResource {
+                file_key: format!("file-{index}"),
+                name: "note.txt".into(),
+                kind: "file".into(),
+            }];
+            let observed = service
+                .observe_inbound(
+                    &mut database,
+                    &host_envelope(&format!("observe-{index}"), observation),
+                )
+                .unwrap();
+            let aggregate_id = observed.result.payload["aggregateId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let finalized = service
+                .finalize_inbound(
+                    &mut database,
+                    &quick,
+                    &host_envelope(
+                        &format!("finalize-{index}"),
+                        FinalizeChannelInboundCommand {
+                            aggregate_id: aggregate_id.clone(),
+                        },
+                    ),
+                )
+                .unwrap();
+            assert_eq!(finalized.result.status, CommandResultStatus::Accepted);
+            database
+                .connection()
+                .execute(
+                    "UPDATE channel_turn_request SET created_at=?2 WHERE aggregate_id=?1",
+                    params![aggregate_id, format!("2026-09-23T00:00:{index:02}Z")],
+                )
+                .unwrap();
+        }
+        let actor = ActorRef::System {
+            component_id: FEISHU_CHANNEL_HOST_COMPONENT.into(),
+        };
+        let mut tick_request = ChannelHostTickRequest {
+            worker_id: "attachment-host".into(),
+            limit: 20,
+            inbound_attachment_app_ids: Vec::new(),
+        };
+        let idle = service
+            .host_tick(&mut database, &actor, &tick_request)
+            .unwrap();
+        assert!(idle.inbound_attachments.is_empty());
+        assert!(idle.has_outstanding_work);
+        tick_request.inbound_attachment_app_ids = vec!["cli_app_2".into()];
+        let pending = service
+            .host_tick(&mut database, &actor, &tick_request)
+            .unwrap()
+            .inbound_attachments;
+        assert_eq!(
+            pending
+                .iter()
+                .map(|item| item.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["attachment-20", "attachment-21"]
+        );
+        assert!(pending.iter().all(|item| item.app_id == "cli_app_2"));
+        let source = quick.join("download.txt");
+        std::fs::write(&source, "complete bytes").unwrap();
+        let messages = |database: &Database| {
+            query_rows(
+                database.connection(),
+                "SELECT body FROM camp_message ORDER BY sequence",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+        for index in [1, 0] {
+            let request = &pending[index];
+            let completed = inbound_attachments::complete(
+                &mut database,
+                &host_envelope(
+                    &format!("complete-{index}"),
+                    CompleteAttachmentsCommand {
+                        request_id: request.request_id.clone(),
+                        app_id: request.app_id.clone(),
+                        attempt: 0,
+                        files: vec![source.to_string_lossy().into_owned()],
+                        failure_code: None,
+                    },
+                ),
+            )
+            .unwrap();
+            assert_eq!(completed.result.payload["ready"], true);
+            service
+                .host_tick(&mut database, &actor, &tick_request)
+                .unwrap();
+            if index == 1 {
+                assert!(messages(&database).is_empty());
+                assert!(claim_waiting_runs(&mut database).is_empty());
+            } else {
+                let published = messages(&database);
+                assert_eq!(published.len(), 1);
+                assert!(published[0].ends_with("attachment-20"));
+                assert_eq!(claim_waiting_runs(&mut database).len(), 1);
+            }
+        }
+        // Reconnection must expose Bot A's untouched backlog in original order.
+        tick_request.inbound_attachment_app_ids = vec!["cli_app_1".into(), "cli_app_2".into()];
+        let recovered = service
+            .host_tick(&mut database, &actor, &tick_request)
+            .unwrap()
+            .inbound_attachments;
+        assert_eq!(recovered.len(), 20);
+        for (index, request) in recovered.iter().enumerate() {
+            assert_eq!(request.message_id, format!("attachment-{index:02}"));
+            assert_eq!(request.attempt, 0);
+        }
+        let published = messages(&database);
+        assert_eq!(published.len(), 2);
+        assert!(published[1].ends_with("attachment-21"));
+    }
+
+    #[test]
     fn host_ticks_are_ephemeral_and_reject_untrusted_or_invalid_requests() {
         // This owner exercises the public maintenance interface against SQLite:
         // repeated polls must not grow either command receipts or domain events.
@@ -12919,6 +13094,7 @@ mod tests {
         let service = ChannelService::default();
         let request = ChannelHostTickRequest {
             worker_id: "maintenance-test-worker".to_string(),
+            inbound_attachment_app_ids: Vec::new(),
             limit: 20,
         };
         let event_count = |database: &Database| -> i64 {
@@ -12974,6 +13150,7 @@ mod tests {
                         &actor,
                         &ChannelHostTickRequest {
                             worker_id: worker_id.to_string(),
+                            inbound_attachment_app_ids: Vec::new(),
                             limit,
                         }
                     )
@@ -14396,6 +14573,7 @@ mod tests {
                             },
                             &ChannelHostTickRequest {
                                 worker_id: worker_id.clone(),
+                                inbound_attachment_app_ids: Vec::new(),
                                 limit: 20,
                             },
                         )
@@ -15578,6 +15756,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "dingtalk-console-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -15714,6 +15893,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "dingtalk-promoted-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -15813,6 +15993,7 @@ mod tests {
         };
         let request = ChannelHostTickRequest {
             worker_id: "dingtalk-test-worker".to_string(),
+            inbound_attachment_app_ids: Vec::new(),
             limit: 10,
         };
         let collecting = service.host_tick(&mut database, &actor, &request).unwrap();
@@ -16041,6 +16222,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "dingtalk-multi-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 10,
                 },
             )
@@ -17175,6 +17357,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "channel-test-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -17451,6 +17634,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "channel-test-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -17501,6 +17685,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "channel-test-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -17752,6 +17937,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "channel-test-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -17822,6 +18008,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "channel-test-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -17995,6 +18182,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "exact-cancel-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -18162,6 +18350,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-opening-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18201,6 +18390,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-live-refresh-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18263,6 +18453,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-live-followup-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18315,6 +18506,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-pending-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18328,6 +18520,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-other-provider-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18394,6 +18587,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-digest-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18437,6 +18631,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-restart-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18488,6 +18683,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-repeat-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18542,6 +18738,7 @@ mod tests {
                 },
                 &ChannelHostTickRequest {
                     worker_id: "terminal-console-quiescent-worker".to_string(),
+                    inbound_attachment_app_ids: Vec::new(),
                     limit: 20,
                 },
             )
@@ -18968,6 +19165,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "binding-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -19031,6 +19229,7 @@ mod tests {
         };
         let poll = ChannelHostTickRequest {
             worker_id: "replacement-worker".to_string(),
+            inbound_attachment_app_ids: Vec::new(),
             limit: 20,
         };
         let lease_state =
@@ -19296,6 +19495,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "legacy-picker-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -19456,6 +19656,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "obsolete-picker-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -19498,6 +19699,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "recovered-picker-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -19553,6 +19755,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "current-picker-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -19656,6 +19859,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "sent-obsolete-picker-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )
@@ -19698,6 +19902,7 @@ mod tests {
                     },
                     &ChannelHostTickRequest {
                         worker_id: "updated-picker-worker".to_string(),
+                        inbound_attachment_app_ids: Vec::new(),
                         limit: 20,
                     },
                 )

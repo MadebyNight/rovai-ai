@@ -3,7 +3,7 @@ document_type: protocol-contract
 contract: channel-message-bridge-v1
 status: accepted
 target_version: v1.60
-last_updated: 2026-09-23
+last_updated: 2026-09-26
 ---
 
 # Channel Message Bridge v1
@@ -33,11 +33,17 @@ until project/Quick Chat selection creates the Camp and Request. Replayed observ
 
 A queued Request with incomplete resources cannot publish a CampMessage or create an Agent Delivery. The
 ordinary provider-scoped Host tick returns `inboundAttachments` containing `{requestId, appId, messageId,
-resources, attempt, retryAt}`. `appId` is the aggregate's canonical acknowledgement Bot. Main downloads using
+resources, attempt, retryAt}`. `appId` is the aggregate's canonical acknowledgement Bot. The Host supplies
+`inboundAttachmentAppIds` from its managed connections; Core filters by these App IDs before limiting the
+download window to 20 requests. An empty or omitted list returns no attachment tasks. Unavailable Bots retain
+their queued requests without blocking another Bot's downloads; per-conversation admission remains FIFO.
+Main downloads using
 the official [message-resource API](https://open.feishu.cn/document/server-docs/im-v1/message-resource/get),
 not the app-upload image/file download API. Images use `type=image`; ordinary files, audio and video bytes
-use `type=file`. Receiving audio/video does not promise transcription or video understanding. Stickers are
-explicitly rejected because the provider resource API does not support them. Quoted attachment summaries,
+use `type=file`. Receiving audio/video does not promise transcription or video understanding. Sticker and
+folder descriptors are accepted at observation so the Host can settle them as `channel.attachments.unsupported`
+without downloading, publish a visible failure notice, and prevent text-only execution. Neither kind is supported
+for download by this ingress. Quoted attachment summaries,
 merged forwards and card-embedded resources are outside this ingress contract.
 
 Main allows at most two concurrent message downloads, with a 60-second deadline and an aggregate 100 MiB

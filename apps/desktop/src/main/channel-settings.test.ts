@@ -24,6 +24,7 @@ import type {
   FeishuDeveloperSessionInspection
 } from './feishu-developer-session'
 import type { FeishuMemberBotProvisioner } from './feishu-member-bot-provisioner'
+import type { PendingFeishuAttachments } from './feishu-inbound-attachments'
 
 function channelCore(
   handler: (method: string, params: unknown) => unknown | Promise<unknown>
@@ -334,8 +335,13 @@ describe('channel settings service', () => {
           agentId: 'agent-a', accountId: 'account-1', brand: 'feishu', appId: 'cli_a',
           botDisplayName: '审阅员', credentialRef: 'feishu-member-a', status: 'published',
           failureCode: null, version: 1, ownerIdentityStatus: 'verified'
+        }, {
+          agentId: 'agent-offline', accountId: 'account-1', brand: 'feishu', appId: 'cli_offline',
+          botDisplayName: '未连接队员', credentialRef: 'missing-credential', status: 'published',
+          failureCode: null, version: 1, ownerIdentityStatus: 'verified'
         }] })
         if (method === 'channels.host.tick') {
+          expect(raw).toMatchObject({ inboundAttachmentAppIds: ['cli_a'] })
           ticks += 1
           return { deliveries: [], hasOutstandingWork: !completed, inboundAttachments: completed ? [] : [{
             requestId: 'queued-request', appId: 'cli_a', messageId: 'received-message', attempt: 0,
@@ -371,6 +377,81 @@ describe('channel settings service', () => {
       })
     } finally { stream.destroy(); await service.stop() }
   })
+
+  it('settles a rich-post folder as unsupported and sends the attention without downloading it', async () => {
+    const harness = controlledChannels({ cli_a: { openId: 'ou_bot_a', name: '审阅员' } })
+    let pending: PendingFeishuAttachments | null = null
+    let resources: PendingFeishuAttachments['resources'] = []
+    let attention = false
+    let settled = false
+    const notice = '飞书暂不支持下载此类附件，本条消息未交给队员。请改为普通图片或文件重新发送。'
+    const service = new ChannelSettingsService({
+      ...inertInterval(),
+      credentialStore: memoryCredentialStore({ 'feishu-member-a': { appId: 'cli_a', appSecret: 'secret-a' } }),
+      createChannel: harness.createChannel,
+      core: channelCore((method, raw) => {
+        const command = (raw as { command?: Record<string, unknown> } | undefined)?.command ?? {}
+        if (method === 'channels.feishu.owner.verify') {
+          return { status: 'applied', payload: { classification: 'owner' } }
+        }
+        if (method === 'channels.feishu.snapshot') return coreSnapshot({ memberBots: [{
+          agentId: 'agent-a', accountId: 'account-1', brand: 'feishu', appId: 'cli_a',
+          botDisplayName: '审阅员', credentialRef: 'feishu-member-a', status: 'published',
+          failureCode: null, version: 1, ownerIdentityStatus: 'verified'
+        }] })
+        if (method === 'channels.inbound.observe') {
+          expect(command.body).toBe('请读取这个文件夹')
+          expect(command.resources).toEqual([{ fileKey: 'folder_key', name: '资料', kind: 'folder' }])
+          resources = command.resources as PendingFeishuAttachments['resources']
+          return { status: 'accepted', payload: { aggregateId: 'folder-aggregate', readyToFinalize: true } }
+        }
+        if (method === 'channels.inbound.finalize') {
+          pending = { requestId: 'folder-request', appId: 'cli_a', messageId: 'folder-message',
+            attempt: 0, retryAt: null, resources }
+          return { status: 'accepted', payload: {} }
+        }
+        if (method === 'channels.host.tick') {
+          const deliveries = attention ? [{
+            deliveryId: 'folder-attention', requestId: 'folder-request', deliveryKind: 'attention',
+            targetAppId: 'cli_a', credentialRef: 'feishu-member-a', chatId: 'oc_test', topicKey: '',
+            conversationKind: 'p2p', attemptCount: 1, updateMessageId: null,
+            recipientOpenId: null, payload: { text: notice }
+          }] : []
+          attention = false
+          return { deliveries, inboundAttachments: pending ? [pending] : [],
+            hasOutstandingWork: pending !== null || deliveries.length > 0 }
+        }
+        if (method === 'channels.inbound.attachments.complete') {
+          expect(command).toMatchObject({ requestId: 'folder-request', files: [],
+            failureCode: 'channel.attachments.unsupported' })
+          pending = null
+          attention = true
+          return { status: 'applied', payload: { ready: false, retryAt: null } }
+        }
+        if (method === 'channels.deliveries.settle') {
+          expect(command).toMatchObject({ deliveryId: 'folder-attention', outcome: 'sent' })
+          settled = true
+        }
+        return { status: 'applied', payload: {} }
+      })
+    })
+    try {
+      await service.start()
+      await harness.handlers.get('cli_a:message')!(normalizedMessage({
+        messageId: 'folder-message', senderUserId: 'owner-user-id', content: '请读取这个文件夹',
+        rawContentType: 'post', rawEncodedContent: JSON.stringify({ title: '',
+          content: [[{ tag: 'text', text: '请读取这个文件夹' }]],
+          files: [{ file_key: 'folder_key', file_name: '资料', is_folder: true }]
+        })
+      }))
+      await vi.waitFor(() => expect(settled).toBe(true))
+      expect(harness.getResource).not.toHaveBeenCalled()
+      expect(harness.send).toHaveBeenCalledWith('oc_test', {
+        card: expect.objectContaining({ body: { elements: [{ tag: 'markdown', content: notice }] } })
+      }, undefined)
+    } finally { await service.stop() }
+  })
+
   it('does not expire a connected account when startup inspection throws a transient error', async () => {
     const session = developerSession()
     session.inspect.mockRejectedValue(new Error('ERR_INTERNET_DISCONNECTED'))
@@ -2862,7 +2943,7 @@ describe('channel settings service', () => {
         }
         if (method === 'channels.host.tick') {
           calls.push({ method, command })
-          expect(rawParams).toEqual({ workerId: expect.any(String), limit: 20 })
+          expect(rawParams).toEqual({ workerId: expect.any(String), limit: 20, inboundAttachmentAppIds: ['cli_a'] })
           if (refreshRequested) {
             return { deliveries: [], rosterRefreshes: [], hasOutstandingWork: true }
           }

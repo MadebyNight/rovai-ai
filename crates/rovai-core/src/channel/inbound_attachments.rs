@@ -41,7 +41,7 @@ pub(super) fn validate_resources(resources: &[InboundResource]) -> Result<()> {
         anyhow::ensure!(
             matches!(
                 resource.kind.as_str(),
-                "image" | "file" | "audio" | "video" | "sticker"
+                "image" | "file" | "audio" | "video" | "sticker" | "folder"
             ),
             "invalid channel resource kind"
         );
@@ -104,19 +104,26 @@ pub(super) fn for_request(
     Ok(frozen.inbound_attachments)
 }
 
-pub(super) fn pending(db: &rusqlite::Connection) -> Result<Vec<PendingAttachments>> {
+pub(super) fn pending(
+    db: &rusqlite::Connection,
+    app_ids: &[String],
+) -> Result<Vec<PendingAttachments>> {
+    if app_ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut statement = db.prepare(
         "SELECT request.id, request.ack_app_id, aggregate.frozen_payload_json
          FROM channel_turn_request AS request
          JOIN channel_inbound_aggregate AS aggregate ON aggregate.id = request.aggregate_id
          JOIN camp ON camp.id = request.camp_id
          WHERE request.status = 'queued' AND aggregate.provider = 'feishu'
+           AND request.ack_app_id IN (SELECT value FROM json_each(?1))
            AND camp.deletion_operation_id IS NULL
            AND json_array_length(aggregate.frozen_payload_json, '$.inboundAttachments.resources') >
                json_array_length(aggregate.frozen_payload_json, '$.inboundAttachments.sources')
          ORDER BY request.created_at, request.id LIMIT 20",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map([serde_json::to_string(app_ids)?], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -259,7 +266,7 @@ fn import_files(
     let mut sources = Vec::new();
     for (ordinal, (resource, file)) in resources.iter().zip(files).enumerate() {
         anyhow::ensure!(
-            resource.kind != "sticker",
+            !matches!(resource.kind.as_str(), "sticker" | "folder"),
             "channel.attachments.unsupported"
         );
         let source = Path::new(file);

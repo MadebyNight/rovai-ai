@@ -2200,7 +2200,8 @@ export class ChannelSettingsService {
       inboundAttachments?: PendingFeishuAttachments[]
     }>('channels.host.tick', {
       workerId: HOST_WORKER_ID,
-      limit: 20
+      limit: 20,
+      inboundAttachmentAppIds: [...this.#managedChannels.keys()]
     })
     const rosterRefreshes = Array.isArray(tick.rosterRefreshes)
       ? tick.rosterRefreshes

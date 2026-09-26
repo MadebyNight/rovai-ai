@@ -5,7 +5,7 @@ authority: channel-host-adaptive-maintenance-and-quiescence
 status: accepted
 version: 5
 source_version: v1.38
-last_updated: 2026-09-23
+last_updated: 2026-09-26
 ---
 
 # Channel Host Maintenance v5
@@ -17,11 +17,17 @@ last_updated: 2026-09-23
 
 ## 1. Tick 响应与静默判定
 
-`channels.host.tick` 与 `channels.dingtalk.host.tick` 的请求仍为：
+`channels.host.tick` 与 `channels.dingtalk.host.tick` 共享 `workerId` 和 `limit`。
+飞书 Host 另传当前已建立托管连接、可处理附件的 App ID：
 
 ```json
-{ "workerId": "host-worker", "limit": 20 }
+{ "workerId": "host-worker", "limit": 20, "inboundAttachmentAppIds": ["cli_connected_bot"] }
 ```
+
+`inboundAttachmentAppIds` 只筛选附件下载候选，不改变 Delivery claim、维护或 outstanding 判定。
+省略或空数组表示本次没有可处理附件的 Bot；钉钉可省略。Core 先按请求的 acknowledgement App 匹配该集合，
+再按原顺序取最多 20 条，避免未连接 Bot 占满窗口。未选中的请求保留原状态和重试次数，恢复连接后可继续下载；
+消息发布仍遵守各会话的 FIFO。
 
 响应必填布尔字段保持不变：
 
