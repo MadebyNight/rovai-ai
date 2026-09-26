@@ -1,10 +1,14 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-09-17
+last_updated: 2026-09-24
 ---
 
 # Agent Runtime 兼容性清单
+
+### v1.70 Skills 来源切换的证据边界（2026-09-24）
+
+下文各 Runtime 的 Skill 项目投递、导入、Revision 更新及原生加载结论来自切换前的精确测试版本和路径，保留为历史兼容证据。v1.70 新 Run 改用受管平台/工具箱索引和 Harness 原址候选，不再新建项目 SkillProjection；这些旧测试不能证明新模型是否按索引读取了 Skill。当前新路径的跨 Runtime 实际调用与压缩后可用性为 `Unverified`，完成隔离真实任务 Gate 后再逐 Adapter 更新本清单，既有平台资格与非 Skill 能力不因此推翻。当前来源与冻结边界见 [Skills 架构](architecture/skills.md)。
 
 本文件维护 Agent Runtime 的本机实测证据和复核条件。它不是产品 Runtime Registry、
 Roadmap 或用户可见能力来源；正式目录以代码中的 `AdapterKind`、Migration、健康探测和
@@ -646,10 +650,17 @@ Health/Dispatch 与持久化回归测试拥有当前产品行为；当前规范�
 
 Claude Code 保持 `--output-format stream-json --include-partial-messages`，但现在同时消费 partial
 `tool_use`、完整 assistant tool block 与对应 `tool_result`。生命周期直接使用 Claude 原生 tool-use ID；
-Bash、Read、Edit、Write 等只映射到既有 Canonical Activity kind，Bash result 仅公开标准 Content Text
-或明确的 `stdout`/`stderr`；Bash `tool_use.input.command` 是唯一公开 input 白名单，因此没有输出的
-Bash 也保留可展开的命令详情，其它工具输入、文件内容和 provider metadata 仍不公开。最终 `result`、
-Usage 与 Session 校验路径没有改变。确定性 stream fixture
+Bash、Read、Edit、Write 等只映射到既有 Canonical Activity kind。Bash result 优先公开明确的
+`stdout`/`stderr`，缺失时使用标准 Content Text；MCP (`mcp__*`) 和原生 `Skill` 的 result
+仅公开 `tool_result.content` 字符串或 typed text block，不公开非文本 block 与 provider metadata。
+Bash `tool_use.input.command` 是唯一公开 input 白名单，因此没有输出的 Bash 也保留可展开的
+命令详情；其它工具输入与 `Read` 文件内容仍不公开。2026-09-24 的增量修复把精确名称的
+Claude 原生非文件工具（含 `Agent`、`TaskStop`、`TaskOutput`、Task 管理、Web 与控制工具）
+加入相同的 `tool_result.content` 文本准入。`Read`、`Grep`、`Glob`、`LSP`、`ReadMcpResourceTool`
+及文件修改工具继续不公开结果正文；未知新工具默认不准入。该增量目前由确定性 adapter 测试与
+隔离成品 App 的模拟 Evidence UI 夹具验证，不代表真实 Claude 原生调用已复测。已准入结果受 Core 的 7,680 UTF-8
+字节持久化上限约束，未持久化的历史结果不能由新版补回。该工具结果展示增量没有改变最终 `result`、
+Usage 与 Session 校验路径。确定性 stream fixture
 已证明 partial/full 去重、start/terminal 关联、command marker 可见及私有字段不泄露。真实 smoke 还会
 强制原生 `Bash` 执行固定 `printf`，并要求 command marker 同时从对应 started
 `runtime.action.payload.input` 和 terminal `runtime.action.payload.output` 取得、原生
@@ -658,6 +669,15 @@ Run 没有该公开 delta，只用通过 Session/terminal 校验的 success `res
 原始 `thinking_delta`、失败 result 与 provider metadata 不进入 Evidence，最终 Camp Message 仍由 terminal
 result 独立结算。真实 smoke 的两次无工具回复同时要求 narration marker 可见，避免“最终消息存在但处理
 过程为空”的 Claude-only 缺口回归。
+
+2026-09-24 的一轮本地 Claude Code `2.1.267` 执行因第二个同 Session `type=result` 被旧 Adapter
+判为 `runtime_stream_incompatible`，已接受的输入因此没有成功结算。前一轮刚取消，受影响轮有原生
+Agent/Task 活动；原始 stdout 未留存，无法确认两条结果的 subtype、先后正文或上游触发原因。
+[Claude Code Action 的公开问题](https://github.com/anthropics/claude-code-action/issues/1533)记录过后台子代理之后再次出现
+`result` 的相似流形态，但不是该轮的直接证据。现行
+[Runtime Launch and Verification v43](contracts/runtime-launch-and-verification-v43.md)要求逐条校验并读到 EOF，
+仅最后一条结果决定终态、Usage 和最终正文 fallback。确定性夹具覆盖先成功后成功、先成功后失败、
+后续缺字段和跨 Session；这尚未构成真实 Claude 模型调用验收，也不能恢复历史失败 Run。
 
 Antigravity 的健康探测仅在 `--help` 同时声明 `--output-format` 与 `stream-json` 时发布可选
 `output.stream_json` capability；冻结为支持的 AgentRun 才追加 `--output-format stream-json`，从 NDJSON
@@ -1209,3 +1229,27 @@ Read 活动可查询，不产生 Files Changed 或修改 Diff；重启 Core 后�
 当前边界先交付 Preview：个人 Coding Plan 原生凭据透传、Start Plan 验证回调明确拒绝。Z.ai/BigModel 的
 配置回归覆盖签名凭据不改写、显式套餐选择、禁用态与公开目录脱敏；个人 Coding Plan 仍无真实订阅验收，
 Start Plan 仍无成功模型回复，不因允许交付而提升能力证据或平台资格。
+
+### 2026-09-25：官方 App 3.14.3 / 内核 0.16.9 协议迁移
+
+本机 macOS arm64 的官方 ZCode 3.14.3／内核 0.16.9 已移除旧版
+`workspace/updateProviderRegistry`、`workspace/readState` 与 Session `runtimeModel` 字段。
+新版路径读取 App bundle 与 personal Provider Config，使用 `workspace/readPresentation`、
+原生 `ModelSelection` 和独立 `thoughtLevel`；缺少新版 bundled 配置的旧版继续走历史协议。
+Windows 与 Linux 的 bundle 资源路径由确定性布局测试覆盖；本轮没有 Windows 3.14.3 真机安装或执行验收，
+不能把本机通过外推为 Windows 同版通过。
+
+隔离 HOME／ZCode storage／Core data／Skill Library 使用用户授权的本机 Claude API 代理作为临时 BYOK Provider，
+普通 `runtime.product.check` 返回 ready 并列出 `proxy/gpt-6-sol`，没有发送 Prompt。随后真实 Camp
+对随机 nonce 的首轮回复匹配并以 succeeded 结束；停止 Core 后用同一隔离数据重启，观察到原生
+`session/resume`，第二轮 nonce 回复也匹配并以 succeeded 结束。两轮 Core 均以 0 退出，临时数据已清理。
+这证明新版协议下的该 BYOK 配置、正式投递与冷恢复，不代表 Start Plan 账号生成或其他 Provider 已验收。
+
+同一隔离夹具在修复前暴露两处失败：Core 先绑定 Native Session 后冻结 Bootstrap，使首轮投递失败；
+新版 `session/create` 将 `ModelSelection` 转成不含 options 的字符串，导致必需的 reasoning level 丢失。
+修复后分别在绑定前冻结 Bootstrap，并把默认 `reasoningLevel` 独立传给原生 `thoughtLevel`。
+模型创建在 `turn.started` 前失败时的精确 inputId 收口另有定向测试；本轮成功生成不证明所有失败路径均完成真实服务验收。
+
+本机日常 ZCode 目前选择 Start Plan。新版独立 app-server 不自动收到官方桌面 App 的账号 Provider snapshot，
+并且人机验证回调未接入，因此该账号不能因 BYOK 成功而标为已验收。旧版 Windows x64 资格证据仍绑定
+当时的官方版本和协议，不构成新版 Windows 结果。

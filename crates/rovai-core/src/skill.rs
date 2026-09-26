@@ -26,8 +26,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::brand::preferred_or_existing_legacy_paths;
-
 use crate::{
     agent_profile::{AdapterKind, AgentProfileService},
     agent_runtime_adapter::{
@@ -812,14 +810,20 @@ impl SkillLibraryService {
             return Ok(PathBuf::from(root));
         }
         let home = dirs::home_dir()
-            .context("could not determine the home directory for ~/.rovai/skills")?;
-        Ok(preferred_or_existing_legacy_paths(
+            .context("could not determine the home directory for the legacy Skill Library")?;
+        // v1.68 publishes ordinary managed resources at ~/.rovai/skills. That
+        // directory must never make an existing Revision Library switch roots
+        // on the next launch. Identify old Libraries by their revisions tree.
+        for root in [
             home.join(".rovai").join("skills"),
-            [
-                home.join(".horizonward").join("skills"),
-                home.join(".lumen").join("skills"),
-            ],
-        ))
+            home.join(".horizonward").join("skills"),
+            home.join(".lumen").join("skills"),
+        ] {
+            if root.join("revisions").is_dir() {
+                return Ok(root);
+            }
+        }
+        Ok(home.join(".rovai").join("skill-library"))
     }
 
     pub fn new(root: PathBuf) -> Result<Self> {
@@ -2217,7 +2221,12 @@ impl SkillLibraryService {
         };
         let mut removed = 0;
         let revisions_root = self.root.join("revisions");
-        for skill_entry in fs::read_dir(&revisions_root)? {
+        let skill_entries = match fs::read_dir(&revisions_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        for skill_entry in skill_entries {
             let skill_entry = skill_entry?;
             let skill_metadata = fs::symlink_metadata(skill_entry.path())?;
             if !skill_metadata.file_type().is_dir() {
@@ -5355,7 +5364,7 @@ mod slow_tests {
     }
 
     #[test]
-    fn startup_gc_removes_only_uuid_shaped_orphan_revision_directories() {
+    fn startup_gc_skips_missing_tree_and_removes_only_uuid_shaped_orphans() {
         let root = temporary_directory("rovai-skill-library");
         let data = temporary_directory("rovai-skill-db");
         let database = Database::open(&data).unwrap();
@@ -5374,6 +5383,9 @@ mod slow_tests {
         assert_eq!(service.cleanup_orphan_revisions(&database).unwrap(), 1);
         assert!(!orphan.exists());
         assert!(unmanaged.exists());
+        remove_directory_if_present(&root.join("revisions")).unwrap();
+        assert_eq!(service.cleanup_orphan_revisions(&database).unwrap(), 0);
+        assert!(!root.join("revisions").exists());
         remove_directory_if_present(&root).unwrap();
         remove_directory_if_present(&data).unwrap();
     }

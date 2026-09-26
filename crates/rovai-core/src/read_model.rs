@@ -1,5 +1,9 @@
 use crate::message_quote::{MessageQuoteSnapshot, QuoteStorage, load_quotes};
-use std::{cmp::Ordering, collections::BTreeMap, path::Path};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -339,6 +343,7 @@ pub struct AgentRunView {
     pub camp_turn_id: Option<String>,
     pub input_message_ids: Vec<String>,
     pub anchor_message_id: Option<String>,
+    pub input_summary: Option<String>,
     pub conversation_id: String,
     pub agent_id: String,
     pub task_id: Option<String>,
@@ -3144,7 +3149,15 @@ fn load_agent_runs(
                    ORDER BY ordinal
                  ) AS input
                ), '[]'),
-               agent_run.anchor_message_id
+               agent_run.anchor_message_id,
+               COALESCE(
+                 (SELECT message_id FROM agent_run_input
+                  WHERE agent_run_id = agent_run.id ORDER BY ordinal LIMIT 1),
+                 agent_run.anchor_message_id,
+                 agent_run.trigger_camp_message_id,
+                 CASE WHEN camp_turn.trigger_type = 'camp_message'
+                      THEN camp_turn.trigger_id END
+               )
         FROM agent_run
         LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
         JOIN camp ON camp.id = COALESCE(agent_run.camp_id, camp_turn.camp_id)
@@ -3212,9 +3225,15 @@ fn load_agent_runs(
                 row.get::<_, Option<String>>(37)?,
                 row.get::<_, String>(38)?,
                 row.get::<_, Option<String>>(39)?,
+                row.get::<_, Option<String>>(40)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let message_ids = rows
+        .iter()
+        .filter_map(|row| row.40.as_deref())
+        .collect::<BTreeSet<_>>();
+    let summaries = load_run_input_summaries(transaction, camp_id, &message_ids)?;
     rows.into_iter()
         .map(
             |(
@@ -3258,6 +3277,7 @@ fn load_agent_runs(
                 runtime_observed_model_id,
                 input_message_ids_json,
                 anchor_message_id,
+                summary_message_id,
             )| {
                 Ok(AgentRunView {
                     id,
@@ -3265,6 +3285,8 @@ fn load_agent_runs(
                     input_message_ids: serde_json::from_str(&input_message_ids_json)
                         .context("AgentRun input Message IDs are invalid")?,
                     anchor_message_id,
+                    input_summary: summary_message_id
+                        .and_then(|id| summaries.get(&id).cloned().flatten()),
                     conversation_id,
                     agent_id,
                     task_id,
@@ -3328,6 +3350,80 @@ fn load_agent_runs(
             },
         )
         .collect()
+}
+
+// Title sources are loaded by exact ID for the selected Runs, independently of
+// the conversation's message page. Reuse message rendering and attachment order
+// without reading publication events, attachment files, or unrelated history.
+fn load_run_input_summaries(
+    transaction: &Transaction<'_>,
+    camp_id: &str,
+    message_ids: &BTreeSet<&str>,
+) -> Result<BTreeMap<String, Option<String>>> {
+    if message_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut statement = transaction.prepare(
+        r#"
+        SELECT message.id, message.sequence, NULL AS timeline_global_sequence,
+               message.author_type, message.author_id, message.source_agent_run_id,
+               message.body, message.structured_content_json,
+               message.source_attachments_json, message.address_mode,
+               message.addressed_agent_ids_json, message.reply_to_camp_message_id,
+               message.camp_turn_id,
+               CASE WHEN message.author_type = 'agent'
+                    THEN message.recipient_presentation_json ELSE message.presentation_json END,
+               message.created_at, message.recall_state, message.version
+        FROM json_each(?2) AS requested
+        JOIN camp_message AS message ON message.id = requested.value
+        WHERE message.camp_id = ?1 AND message.tombstoned_at IS NULL
+        "#,
+    )?;
+    let rows = statement
+        .query_map(
+            params![camp_id, serde_json::to_string(message_ids)?],
+            camp_message_row,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(hydrate_message_views(transaction, rows)?
+        .into_iter()
+        .map(|message| {
+            let summary = if message.withdrawn {
+                Some("Message withdrawn".to_string())
+            } else {
+                let body = message
+                    .body
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let text = if !body.is_empty() {
+                    Some(body)
+                } else {
+                    message.attachments.first().map(|attachment| {
+                        if message.attachments.len() > 1 {
+                            format!(
+                                "{} 等 {} 个附件",
+                                attachment.display_name,
+                                message.attachments.len()
+                            )
+                        } else {
+                            attachment.display_name.clone()
+                        }
+                    })
+                };
+                text.map(|text| {
+                    let mut chars = text.chars();
+                    let mut summary = chars.by_ref().take(240).collect::<String>();
+                    if chars.next().is_some() {
+                        summary.pop();
+                        summary.push('…');
+                    }
+                    summary
+                })
+            };
+            (message.id, summary)
+        })
+        .collect())
 }
 
 fn load_execution_evidence(
@@ -6314,6 +6410,148 @@ mod slow_tests {
                 .payload
                 .get("executionWindowBuiltinOperation")
                 .is_none()
+        );
+
+        // New lifecycle storage assigns one sequence to each operation. The
+        // completed Shell row follows its Core invocation rather than enclosing
+        // it, and a page containing only the Shell still carries the association.
+        for (id, sequence, event_type, kind, payload) in [
+            (
+                "single-core",
+                95,
+                "runtime.action",
+                "tool_result",
+                json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "agentOutputDigest": response_digest, "coreEnvelope": {"ok": true, "operation": "team.get_task"}}),
+            ),
+            (
+                "single-shell",
+                96,
+                "activity.completed",
+                "command",
+                json!({"resultDigest": response_digest, "item": {"id": "single-carrier", "type": "commandExecution", "command": "rovai task get --task-id fixture-task", "status": "completed"}}),
+            ),
+        ] {
+            database.connection().execute(
+                "INSERT INTO agent_run_execution_evidence(id, agent_run_id, execution_epoch, sequence, event_type, kind, phase, payload_preview_json, content_byte_count, is_truncated, occurred_at)
+                 VALUES(?1, ?2, 0, ?3, ?4, ?5, 'completed', ?6, 100, 0, ?7)",
+                params![id, agent_run_id, sequence, event_type, kind, payload.to_string(), now],
+            ).unwrap();
+        }
+        for (id, domain, authority, credibility, sequence) in [
+            ("single-core", "tool", "core", "core_verified", 95),
+            ("single-shell", "shell", "runtime", "runtime_structured", 96),
+        ] {
+            database.connection().execute(
+                "INSERT INTO canonical_runtime_activity(agent_run_id, execution_epoch, operation_id, classifier_version, activity_domain, phase, outcome, credibility, coverage_level, source_authority, source_evidence_ids_json, first_evidence_sequence, last_evidence_sequence, revision, created_at, updated_at)
+                 VALUES(?1, 0, ?2, 'activity-v1', ?3, 'terminal', 'succeeded', ?4, 'fine_grained', ?5, ?6, ?7, ?7, 1, ?8, ?8)",
+                params![agent_run_id, id, domain, credibility, authority, format!("[\"{id}\"]"), sequence, now],
+            ).unwrap();
+        }
+        let single =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(97), 1)
+                .unwrap();
+        assert_eq!(single.evidence[0].sequence, 96);
+        assert_eq!(
+            single.evidence[0].payload["executionWindowBuiltinOperation"],
+            "team.get_task"
+        );
+        database.connection().execute(
+            "UPDATE agent_run_execution_evidence SET payload_preview_json = json_set(payload_preview_json, '$.resultDigest', 'different') WHERE id = 'single-shell'", [],
+        ).unwrap();
+        let distinct_single =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(97), 1)
+                .unwrap();
+        assert!(
+            distinct_single.evidence[0]
+                .payload
+                .get("executionWindowBuiltinOperation")
+                .is_none()
+        );
+
+        // Some Runtimes persist the Shell started event first and update that
+        // same row at completion. Its one sequence then precedes the Core row.
+        for (id, sequence, event_type, kind, payload) in [
+            (
+                "early-shell",
+                97,
+                "activity.completed",
+                "command",
+                json!({"resultDigest": response_digest, "item": {"id": "early-carrier", "type": "commandExecution", "command": "rovai task get --task-id fixture-task", "status": "completed"}}),
+            ),
+            (
+                "late-core",
+                98,
+                "runtime.action",
+                "tool_result",
+                json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "agentOutputDigest": response_digest, "coreEnvelope": {"ok": true, "operation": "team.get_task"}}),
+            ),
+        ] {
+            database.connection().execute(
+                "INSERT INTO agent_run_execution_evidence(id, agent_run_id, execution_epoch, sequence, event_type, kind, phase, payload_preview_json, content_byte_count, is_truncated, occurred_at)
+                 VALUES(?1, ?2, 0, ?3, ?4, ?5, 'completed', ?6, 100, 0, ?7)",
+                params![id, agent_run_id, sequence, event_type, kind, payload.to_string(), now],
+            ).unwrap();
+        }
+        for (id, domain, authority, credibility, sequence) in [
+            ("early-shell", "shell", "runtime", "runtime_structured", 97),
+            ("late-core", "tool", "core", "core_verified", 98),
+        ] {
+            database.connection().execute(
+                "INSERT INTO canonical_runtime_activity(agent_run_id, execution_epoch, operation_id, classifier_version, activity_domain, phase, outcome, credibility, coverage_level, source_authority, source_evidence_ids_json, first_evidence_sequence, last_evidence_sequence, revision, created_at, updated_at)
+                 VALUES(?1, 0, ?2, 'activity-v1', ?3, 'terminal', 'succeeded', ?4, 'fine_grained', ?5, ?6, ?7, ?7, 1, ?8, ?8)",
+                params![agent_run_id, id, domain, credibility, authority, format!("[\"{id}\"]"), sequence, now],
+            ).unwrap();
+        }
+        let early =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(98), 1)
+                .unwrap();
+        assert_eq!(early.evidence[0].sequence, 97);
+        assert_eq!(
+            early.evidence[0].payload["executionWindowBuiltinOperation"],
+            "team.get_task"
+        );
+
+        // TRAE CLI reports the Shell command in runtime.action input, while
+        // the window omits the Core envelope from its public summary.
+        let trae_digest =
+            crate::command::canonical_json_digest(&json!({"taskId": "trae-task"})).unwrap();
+        for (id, sequence, kind, payload) in [
+            (
+                "trae-shell",
+                99,
+                "tool_result",
+                json!({"kind": "execute", "input": "rovai task get --task-id trae-task", "resultDigest": trae_digest, "status": "completed"}),
+            ),
+            (
+                "trae-core",
+                100,
+                "tool_result",
+                json!({"canonicalTool": "team.get_task", "sourceAuthority": "core", "agentOutputDigest": trae_digest, "coreEnvelope": {"ok": true, "operation": "team.get_task"}}),
+            ),
+        ] {
+            database.connection().execute(
+                "INSERT INTO agent_run_execution_evidence(id, agent_run_id, execution_epoch, sequence, event_type, kind, phase, payload_preview_json, content_byte_count, is_truncated, occurred_at)
+                 VALUES(?1, ?2, 0, ?3, 'runtime.action', ?4, 'completed', ?5, 100, 0, ?6)",
+                params![id, agent_run_id, sequence, kind, payload.to_string(), now],
+            ).unwrap();
+        }
+        for (id, domain, authority, credibility, sequence) in [
+            ("trae-shell", "shell", "runtime", "runtime_structured", 99),
+            ("trae-core", "tool", "core", "core_verified", 100),
+        ] {
+            database.connection().execute(
+                "INSERT INTO canonical_runtime_activity(agent_run_id, execution_epoch, operation_id, classifier_version, activity_domain, phase, outcome, credibility, coverage_level, source_authority, source_evidence_ids_json, first_evidence_sequence, last_evidence_sequence, revision, created_at, updated_at)
+                 VALUES(?1, 0, ?2, 'activity-v1', ?3, 'terminal', 'succeeded', ?4, 'fine_grained', ?5, ?6, ?7, ?7, 1, ?8, ?8)",
+                params![agent_run_id, id, domain, credibility, authority, format!("[\"{id}\"]"), sequence, now],
+            ).unwrap();
+        }
+        let trae =
+            crate::execution_window::read_page(&mut database, camp_id, agent_run_id, Some(100), 1)
+                .unwrap();
+        assert_eq!(trae.evidence[0].sequence, 99);
+        assert_eq!(
+            trae.evidence[0].payload["executionWindowBuiltinOperation"],
+            "team.get_task"
         );
 
         // Historical Runs still resolve their Camp through CampTurn after the

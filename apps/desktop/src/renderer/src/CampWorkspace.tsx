@@ -12,6 +12,7 @@ import { MessageQuotes, MessageQuoteSelectionToolbar } from './MessageQuotes'
 import { dismissMessageQuoteSelection } from './message-quote-selection'
 import { currentUserDisplayName } from '@contracts'
 import { CurrentUserAvatar, useCurrentUserProfile } from './CurrentUserProfile'
+import { markdownInlineContentPrefix } from './safe-markdown-model'
 import { ExecutionLatestContext, ExecutionReadingContext, useExecutionWindow } from './useExecutionWindow'
 import { ReturnToLatest } from './ReturnToLatest'
 import { prefersReducedMotion } from './reduced-motion'
@@ -62,8 +63,7 @@ import type {
   TaskStatus,
   TaskView,
   NavigationCampItem,
-  SkillDeliveryGroupView,
-  SkillView,
+  ComposerSkillCandidates,
   StoredCommandResult,
   StructuredCampMessageContent
 } from '@contracts'
@@ -155,7 +155,7 @@ import {
 } from './timeline-reading-anchor'
 import { RuntimeFailureNotice } from './RuntimeFailureNotice'
 import { identityColorToken } from './theme'
-import { availableComposerSkillsForLead } from './composer-skill-picker'
+import { composerSkillsFromCandidates } from './composer-skill-picker'
 import { createStructuredMessageClipboardData } from './structured-message-clipboard'
 import { CampWorldMap } from './CampWorldMap'
 import {
@@ -1723,10 +1723,11 @@ export function CampWorkspace({
   const [starterNotice, setStarterNotice] = useState<string | null>(null)
   const [mentionPopover, setMentionPopover] = useState<MentionPopoverRequest | null>(null)
   const [composerSkillCatalog, setComposerSkillCatalog] = useState<{
-    skills: SkillView[]
-    groups: SkillDeliveryGroupView[]
+    candidates: ComposerSkillCandidates
     status: 'loading' | 'ready' | 'error'
-  }>({ skills: [], groups: [], status: 'loading' })
+  }>({ candidates: { skills: [], errors: [] }, status: 'loading' })
+  const [skillCatalogRefreshing, setSkillCatalogRefreshing] = useState(false)
+  const refreshSkillCatalogRef = useRef<(() => void) | null>(null)
   const composerEditorRef = useRef<HTMLDivElement>(null)
   const composerHandleRef = useRef<StructuredMentionComposerHandle>(null)
   const composerFileInputRef = useRef<HTMLInputElement>(null)
@@ -2101,36 +2102,45 @@ export function CampWorkspace({
   )
   useEffect(() => {
     let cancelled = false
-    const loadSkillCatalog = async (): Promise<void> => {
+    let requestSequence = 0
+    setComposerSkillCatalog({ candidates: { skills: [], errors: [] }, status: 'loading' })
+    setSkillCatalogRefreshing(false)
+    const loadSkillCatalog = async (refresh = false): Promise<void> => {
+      const request = ++requestSequence
+      if (refresh) setSkillCatalogRefreshing(true)
       try {
-        const [skills, groups] = await Promise.all([
-          client.request<SkillView[]>('skills.list'),
-          client.request<SkillDeliveryGroupView[]>('skills.deliveryGroups.list')
-        ])
-        if (!cancelled) setComposerSkillCatalog({ skills, groups, status: 'ready' })
+        const candidates = await client.request<ComposerSkillCandidates>('skills.candidates', { campId: snapshot.camp.id, refresh })
+        if (!cancelled && request === requestSequence) setComposerSkillCatalog({ candidates, status: 'ready' })
       } catch {
-        if (!cancelled) {
+        if (!cancelled && request === requestSequence) {
           setComposerSkillCatalog((current) => current.status === 'ready'
-            ? current
+            ? { ...current, candidates: {
+                ...current.candidates,
+                errors: [...current.candidates.errors.filter((error) => error !== '刷新失败'), '刷新失败']
+              } }
             : { ...current, status: 'error' })
         }
+      } finally {
+        if (!cancelled && request === requestSequence) setSkillCatalogRefreshing(false)
       }
     }
     void loadSkillCatalog()
-    const unsubscribeInvalidation = client.onInvalidated?.(() => void loadSkillCatalog())
+    refreshSkillCatalogRef.current = () => void loadSkillCatalog(true)
+    const unsubscribeInvalidation = client.onInvalidated?.(() => void loadSkillCatalog(true))
     const unsubscribe = client.onEvent?.((event) => {
       if (event.method !== 'runtime.state') return
       const params = event.params !== null && typeof event.params === 'object'
         ? event.params as Record<string, unknown>
         : {}
-      if (params.status === 'ready') void loadSkillCatalog()
+      if (params.status === 'ready') void loadSkillCatalog(true)
     })
     return () => {
       cancelled = true
+      refreshSkillCatalogRef.current = null
       unsubscribe?.()
       unsubscribeInvalidation?.()
     }
-  }, [client])
+  }, [client, snapshot.camp.id, snapshot.camp.projectPath, snapshot.camp.membershipGeneration])
   const closeMentionPopover = useCallback((returnFocus: boolean): void => {
     const trigger = mentionPopover?.trigger
     setMentionPopover(null)
@@ -2409,13 +2419,16 @@ export function CampWorkspace({
     [hasExplicitRecipient, snapshot.members]
   )
   const composerSkills = useMemo(
-    () => availableComposerSkillsForLead(
-      composerSkillCatalog.skills,
-      composerSkillCatalog.groups,
-      defaultLead?.agentId ?? null
-    ),
-    [composerSkillCatalog.groups, composerSkillCatalog.skills, defaultLead?.agentId]
+    () => composerSkillsFromCandidates(composerSkillCatalog.candidates),
+    [composerSkillCatalog.candidates]
   )
+  const unlistedSkillName = useMemo(() => {
+    if (composerSkillCatalog.status !== 'ready' || composerDraft?.campId !== snapshot.camp.id) return null
+    const candidateIds = new Set(composerSkills.map((skill) => skill.id))
+    const missing = composerDraft.content.segments.find((segment) => segment.kind === 'atom'
+      && segment.atom.type === 'skill' && !candidateIds.has(segment.atom.skillId))
+    return missing?.kind === 'atom' && missing.atom.type === 'skill' ? missing.atom.nameAtSend : null
+  }, [composerDraft, composerSkillCatalog.status, composerSkills, snapshot.camp.id])
   const activeRuns = snapshot.agentRuns.filter((run) => NON_TERMINAL_RUNS.has(run.status))
   const executionBlocked = activeRuns.length > 0 || stopping
   const composerInteractionDisabled = draftLoadState.state !== 'ready'
@@ -3455,6 +3468,19 @@ export function CampWorkspace({
       anchor: captureTimelineReadingAnchor(scroll, source)
     }
   }, [snapshot.camp.id])
+
+  const openSkillPreview = useCallback((skillId: string, source: HTMLElement): void => {
+    if (!filePreview) return
+    captureFilePreviewAnchor(source)
+    void filePreview.open({
+      kind: 'skill_reference',
+      campId: snapshot.camp.id,
+      skillId,
+      rawReference: 'SKILL.md'
+    }).then((outcome) => {
+      if (outcome.kind === 'error') notifyError?.(outcome.error.message)
+    })
+  }, [captureFilePreviewAnchor, filePreview, notifyError, snapshot.camp.id])
 
   const restoreTimelineLayout = useCallback((): void => {
     const scroll = timelineScrollRef.current
@@ -5084,6 +5110,7 @@ export function CampWorkspace({
                                                 trigger,
                                                 focusPanel
                                               )}
+                                            onActivateSkillMention={openSkillPreview}
                                             onFileReference={(rawReference, source, target) => {
                                               if (!filePreview) return
                                               captureFilePreviewAnchor(source)
@@ -5666,6 +5693,9 @@ export function CampWorkspace({
               members={composerMembers}
               skills={composerSkills}
               skillCatalogStatus={composerSkillCatalog.status}
+              skillCatalogErrors={composerSkillCatalog.candidates.errors}
+              skillCatalogRefreshing={skillCatalogRefreshing}
+              onRefreshSkills={() => refreshSkillCatalogRef.current?.()}
               ariaLabel={`给 ${defaultLead?.displayName ?? '默认负责人'} 发消息`}
               placeholder={draftLoadState.state === 'error'
                 ? '输入框暂不可用'
@@ -5685,7 +5715,13 @@ export function CampWorkspace({
                   trigger,
                   focusPanel
                 )}
+              onActivateSkillMention={openSkillPreview}
             />
+            {unlistedSkillName && (
+              <span className="composer-reply-status" role="status" aria-live="polite">
+                {unlistedSkillName} 的来源当前不在候选中，仍可发送。
+              </span>
+            )}
             {!composerDraft?.replyIntent && replyInteractionError && (
               <span className="composer-reply-status" role="status" aria-live="polite">
                 {replyInteractionError}
@@ -5840,7 +5876,7 @@ export function CampWorkspace({
             <AppDialogHeader
               icon="warning"
               title="撤回这条消息？"
-              description="所有接收队员均未读，可直接撤回。"
+              description="所有接收队员尚未领取，可直接撤回。"
               closeDisabled={withdrawingMessageId !== null}
             />
             {withdrawalError && <AppDialogBody>
@@ -6225,7 +6261,13 @@ function executionTriggerMessage(
   return executionSourceMessages(run, turns, messageById)[0] ?? null
 }
 
-function executionMessageSummary(message: CampMessageView | null, run: AgentRunView): string {
+export function executionMessageSummary(
+  message: Pick<CampMessageView, 'body' | 'attachments'> | null,
+  run: Pick<AgentRunView, 'inputSummary' | 'purpose'>
+): string {
+  if (run.inputSummary !== undefined) {
+    return run.inputSummary || run.purpose.trim().replace(/\s+/gu, ' ') || '执行记录'
+  }
   const body = message?.body.trim().replace(/\s+/gu, ' ')
   if (body) return body
   const attachment = message?.attachments[0]?.displayName
@@ -9072,6 +9114,7 @@ function TruncatedStructuredMessageBody({
   onActivateCurrentUserMention,
   onActivateMemberMention,
   onActivateAllMembersMention,
+  onActivateSkillMention,
   onFileReference
 }: {
   body: string
@@ -9088,6 +9131,7 @@ function TruncatedStructuredMessageBody({
     focusPanel: boolean
   ): void
   onActivateAllMembersMention?(trigger: HTMLElement, focusPanel: boolean): void
+  onActivateSkillMention?(skillId: string, trigger: HTMLElement): void
   onFileReference?: FileReferenceActivation
 }): JSX.Element {
   const projection = useMemo(
@@ -9110,6 +9154,7 @@ function TruncatedStructuredMessageBody({
       onActivateCurrentUserMention={onActivateCurrentUserMention}
       onActivateMemberMention={onActivateMemberMention}
       onActivateAllMembersMention={onActivateAllMembersMention}
+      onActivateSkillMention={onActivateSkillMention}
       onFileReference={onFileReference}
     />
   )
@@ -9201,6 +9246,7 @@ export function StructuredMessageBody({
   onActivateCurrentUserMention,
   onActivateMemberMention,
   onActivateAllMembersMention,
+  onActivateSkillMention,
   onFileReference
 }: {
   body: string
@@ -9216,6 +9262,7 @@ export function StructuredMessageBody({
     focusPanel: boolean
   ): void
   onActivateAllMembersMention?(trigger: HTMLElement, focusPanel: boolean): void
+  onActivateSkillMention?(skillId: string, trigger: HTMLElement): void
   onFileReference?: FileReferenceActivation
 }): JSX.Element {
   const memberById = new Map(members.map((member) => [member.agentId, member]))
@@ -9251,6 +9298,21 @@ export function StructuredMessageBody({
       </div>
     )
   }
+  if (renderLeadingCurrentUserMarkdown && content.some((segment) => segment.kind === 'current_user_mention')) {
+    const source = structuredCampContentMarkdownText(content, members)
+    const prefix = markdownInlineContentPrefix(source)
+    // Every CurrentUser occurrence has the same identity. Keep its placeholder
+    // identical too, so Markdown reference labels match Core's quote projection.
+    const token = `${prefix}END`
+    const inlineContent = { [token]: <CurrentUserMentionToken onActivate={onActivateCurrentUserMention} /> }
+    const markdown = content.map((segment, index) => {
+      if (segment.kind !== 'current_user_mention') {
+        return structuredCampContentMarkdownText([segment], members)
+      }
+      return token + (index === 0 && content.length > 1 ? ' ' : '')
+    }).join('')
+    return <SafeMarkdown onFileReference={onFileReference} inlineContent={inlineContent}>{markdown}</SafeMarkdown>
+  }
   const Tag = inline ? 'span' : 'p'
   return (
     <Tag className="structured-message-body">
@@ -9280,13 +9342,15 @@ export function StructuredMessageBody({
         }
         if (segment.kind === 'skill_mention') {
           return (
-            <span
-              className="message-mention-token skill-mention"
-              aria-label={`Skill /${segment.nameAtSend}`}
+            <button
+              type="button"
+              className="message-mention-token skill-mention is-interactive"
+              aria-label={`预览 Skill /${segment.nameAtSend} 文件`}
               key={`skill-${index}-${segment.skillId}`}
+              onClick={(event) => onActivateSkillMention?.(segment.skillId, event.currentTarget)}
             >
               /{segment.nameAtSend}
-            </span>
+            </button>
           )
         }
         if (segment.kind === 'external_quote') {
@@ -10011,6 +10075,7 @@ function RunExecutionContent({
               campId={campId}
               step={step as ToolCallStep & { fileOperation: NonNullable<ToolCallStep['fileOperation']> }}
               runStatus={run.status}
+              completeEvidence={completeEvidence.byFileOperationToolId.get(step.id)}
               onFileOpenError={onFileOpenError}
             />
           )
