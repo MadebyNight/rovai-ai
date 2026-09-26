@@ -2307,8 +2307,9 @@ fn parse_inline_addressing(body: &str, active_agents: &[ActiveCampAgent]) -> Inl
             continue;
         }
         let token_start = body[..index]
-            .rfind(char::is_whitespace)
-            .map(|position| position + 1)
+            .char_indices()
+            .rfind(|(_, character)| character.is_whitespace())
+            .map(|(position, character)| position + character.len_utf8())
             .unwrap_or(0);
         if body[token_start..index].contains("://") {
             index += 1;
@@ -2545,6 +2546,10 @@ mod tests {
         for (body, principal_count, member_count) in [
             ("@Principal 请确认", 1, 0),
             ("  @Principal 请确认", 1, 0),
+            ("\u{3000}@Principal 请确认", 1, 0),
+            ("@Principal\u{a0}@Principal 请确认", 2, 0),
+            ("\t@Principal 请确认", 1, 0),
+            ("    @Principal 请确认", 1, 0),
             ("开头\n@Principal 请确认\n末行", 1, 0),
             ("开头\n\t@Principal", 1, 0),
             ("@爱丽丝 @Principal 请确认", 1, 1),

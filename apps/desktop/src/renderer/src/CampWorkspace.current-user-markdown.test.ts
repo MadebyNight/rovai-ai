@@ -340,6 +340,29 @@ describe('Agent Current User Mention Markdown rendering', () => {
     expect(collision).toContain('<strong>完成</strong>')
     expect(collision).toContain('ROVAICURRENTUSER1END')
     expect(collision).toContain('<code>@Principal</code>')
+
+    const encodedDefinition = renderMessage([
+      { kind: 'current_user_mention', userId: 'local_user' },
+      { kind: 'text', text: '[x]: ROVAI&#67;URRENTUSER2END\n' },
+      { kind: 'current_user_mention', userId: 'local_user' }
+    ])
+    expect(encodedDefinition.match(/class="message-mention-token current-user/g)).toHaveLength(2)
+    expect(encodedDefinition).toContain('[x]: ROVAICURRENTUSER2END')
+
+    for (const text of ['ROVAI&#67;URRENTUSER1END\n', '&#82;OVAICURRENTUSER1END\n', '\t', '    ']) {
+      const rendered = renderMessage([
+        { kind: 'text', text },
+        { kind: 'current_user_mention', userId: 'local_user' },
+        { kind: 'text', text: ' 请确认' }
+      ], undefined, 'agent', members, { displayName: '小雪_[团队]', avatarDataUrl: null })
+      expect(rendered.match(/class="message-mention-token current-user/g)).toHaveLength(1)
+      expect(rendered).toContain('>@小雪_[团队]</span>')
+      if (text.includes('&#')) expect(rendered).toContain('ROVAICURRENTUSER1END')
+      else {
+        expect(rendered).toContain('<pre><code>')
+        expect(rendered).not.toContain('ROVAICURRENTUSER')
+      }
+    }
   })
 
   it('projects file labels in user messages without flattening Member and Skill identities', () => {

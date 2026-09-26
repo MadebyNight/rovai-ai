@@ -32,9 +32,19 @@ Windows 旧入口后续修复：本机已登记项目的 `.dsh/skills/cli-operat
 - [x] Principal 已确认：无参数的合法正文提及可通知；复用显示名行首连续提及规则；参数与正文合并；PublicOnly 允许用户提及。
 - [x] Principal 已确认：展示必须读取用户实际昵称；完成后以 PR 合入 main。
 - [x] 实现共享解析、现有身份/通知投影、昵称与非前缀 Markdown；不改变 Bootstrap/CLI 文本与 Context 格式，不回写历史。
-- [ ] 定向 Rust、Renderer/quote、类型检查、文档门禁、默认 Rust workspace 与 PR CI 验证。
+- [x] 执行定向 Rust、Renderer/quote、类型检查、文档门禁与默认 Rust workspace 验证；基线失败单独记录如下。PR CI 与合入结论以对应 PR 的 checks/merge 状态为准。
 
 测试准入：新增纯函数 owner `principal_alias_uses_leading_clusters_and_merges_explicit_attention` 覆盖新寻址入口及其独立
 位置/排除语义；原 Agent alias owner 无法表达 Principal 身份与显式 attention 合并。数据库效果扩展既有
 `current_user_attention_is_orthogonal_atomic_and_replay_safe` 和 PublicOnly owner；不新增重复数据库 fixture。
 最小验证命令：`cargo test -p rovai-core --lib principal_alias_uses_leading_clusters_and_merges_explicit_attention`。
+
+验证记录：共享 parser、quote、attention/PublicOnly 和 slow alias owner 覆盖 Unicode 空白、混合提及、
+重复通知去重、重放与引用；slow alias owner 的数据库断言同步到当前 `camp_message_delivery`，保留既有输入。
+Renderer 的 213 个测试文件 / 2210 项通过，类型检查、Desktop/Web 构建及独立临时 userData 的 Electron
+quote 选择/复制验收通过。共享 quote fixture 补入重复行首、实体编码碰撞、定义/引用语法变化和缩进昵称；
+Standards / Spec 双向审核的问题修复后复验。
+
+全量入口存在独立于此改动的基线失败：`pnpm test` 的两项 benchmark 断言仍引用已失效的 context 测试名和
+v1.67 指纹，已在基线 `573a061f` 的独立源码归档中复现；默认 Rust workspace 的 runtime-platform
+evidence owner 中 macOS register digest 与同一基线文档字节不符。相关输入文件与基线一致，本次不改写冻结证据。

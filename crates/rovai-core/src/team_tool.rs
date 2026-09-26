@@ -3073,7 +3073,7 @@ mod tests {
 
         let mut mixed = fixture.public_send_invocation(
             "public-only-inline-principal",
-            "@爱丽丝 @鲍勃 @Principal 谢谢",
+            "\u{3000}@爱丽丝\u{a0}@鲍勃 @Principal @Principal 谢谢",
             &[],
         );
         mixed.input.public_only = true;
@@ -3087,7 +3087,7 @@ mod tests {
         let (content_json, attention_count, delivery_count): (String, i64, i64) = fixture.database.connection().query_row(
             "SELECT structured_content_json,
                 (SELECT COUNT(*) FROM notification_occurrence WHERE source_message_id = message.id AND semantic = 'user_mention'),
-                (SELECT COUNT(*) FROM message_delivery WHERE message_id = message.id)
+                (SELECT COUNT(*) FROM camp_message_delivery WHERE message_id = message.id)
              FROM camp_message AS message WHERE id = ?1",
             [mixed_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -3095,7 +3095,9 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&content_json).unwrap(),
             json!([
-                {"kind": "text", "text": "@爱丽丝 @鲍勃 "},
+                {"kind": "text", "text": "\u{3000}@爱丽丝\u{a0}@鲍勃 "},
+                {"kind": "current_user_mention", "userId": "local_user"},
+                {"kind": "text", "text": " "},
                 {"kind": "current_user_mention", "userId": "local_user"},
                 {"kind": "text", "text": " 谢谢"}
             ])
@@ -3141,7 +3143,7 @@ mod tests {
             .query_row(
                 r#"
                 SELECT message.body, message.structured_content_json,
-                       (SELECT COUNT(*) FROM message_delivery
+                       (SELECT COUNT(*) FROM camp_message_delivery
                         WHERE message_id = message.id)
                 FROM camp_message AS message
                 WHERE message.id = ?1

@@ -23,9 +23,18 @@ function InlineMarkdownContent({ token }: { token: string }): JSX.Element {
 }
 
 // Placeholders are supplied alongside trusted UI by the caller, never inferred
-// from a user's name or an @word in Markdown. Source collisions are excluded by
-// the structured-message projector before it creates these placeholders.
-function remarkInlineContent({ tokens }: { tokens: string[] }): (tree: MarkdownTreeNode) => void {
+// from a user's name or an @word in Markdown. The caller excludes both raw and
+// decoded-source collisions. Transform rendered text, including code blocks,
+// so indentation cannot expose a placeholder instead of the structured UI.
+type InlineHtmlNode = {
+  type: string
+  value?: string
+  tagName?: string
+  properties?: Record<string, string>
+  children?: InlineHtmlNode[]
+}
+
+function rehypeInlineContent({ tokens }: { tokens: string[] }): (tree: InlineHtmlNode) => void {
   return (tree) => {
     if (tokens.length === 0) return
     const tokenSet = new Set(tokens)
@@ -33,7 +42,7 @@ function remarkInlineContent({ tokens }: { tokens: string[] }): (tree: MarkdownT
       /[A-Za-z0-9]/u.test(character) ? character : `\\${character}`
     )).join(''))
     const pattern = new RegExp(`(${escapedTokens.join('|')})`, 'gu')
-    const visit = (parent: MarkdownTreeNode): void => {
+    const visit = (parent: InlineHtmlNode): void => {
       parent.children = parent.children?.flatMap((node) => {
         if (node.type !== 'text' || !node.value) {
           visit(node)
@@ -41,8 +50,8 @@ function remarkInlineContent({ tokens }: { tokens: string[] }): (tree: MarkdownT
         }
         const parts = node.value.split(pattern)
         if (parts.length === 1) return [node]
-        return parts.filter(Boolean).map((value): MarkdownTreeNode => tokenSet.has(value)
-          ? { type: 'rovaiInlineContent', data: { hName: 'span', hProperties: { 'data-rovai-inline-content': value } } }
+        return parts.filter(Boolean).map((value): InlineHtmlNode => tokenSet.has(value)
+          ? { type: 'element', tagName: 'span', properties: { 'data-rovai-inline-content': value }, children: [] }
           : { type: 'text', value })
       })
     }
@@ -215,10 +224,10 @@ export function SafeMarkdown({
         remarkPlugins={[
           [remarkGfm, { singleTilde: false }],
           remarkRepairCjkUrlTail,
-          [remarkInlineContent, { tokens: JSON.parse(inlineContentKeys) as string[] }],
           ...(fileReferencesEnabled ? [mode === 'message' ? remarkMessageFileLinks : remarkFileLinks] : []),
           [remarkLeadingContent, { enabled: hasLeadingContent, inline: inlineLeadingContent }]
         ]}
+        rehypePlugins={[[rehypeInlineContent, { tokens: JSON.parse(inlineContentKeys) as string[] }]]}
         skipHtml
         disallowedElements={[
           ...(!localImageUrl && !localImageContent ? ['img'] : []),
@@ -323,16 +332,16 @@ export function SafeMarkdown({
   return (
     <LeadingMarkdownContentContext.Provider value={leadingContent}>
       <InlineMarkdownContentContext.Provider value={inlineContent ?? {}}>
-      <div
-        ref={rootRef}
-        className={[
-          'safe-markdown',
-          mode === 'document' ? 'is-document' : '',
-          className ?? ''
-        ].filter(Boolean).join(' ')}
-      >
-        {markdown}
-      </div>
+        <div
+          ref={rootRef}
+          className={[
+            'safe-markdown',
+            mode === 'document' ? 'is-document' : '',
+            className ?? ''
+          ].filter(Boolean).join(' ')}
+        >
+          {markdown}
+        </div>
       </InlineMarkdownContentContext.Provider>
     </LeadingMarkdownContentContext.Provider>
   )
