@@ -291,10 +291,10 @@ describe('Agent Current User Mention Markdown rendering', () => {
     expect(markup).not.toContain('alert("unsafe")')
   })
 
-  it('keeps non-leading or repeated Current User segments on the safe plain-text fallback', () => {
+  it('preserves Markdown and live nicknames for non-leading and repeated Current User segments', () => {
     const nonLeading: StructuredCampMessageContent = [{
       kind: 'text',
-      text: '## 不应解析为标题 <script>alert("unsafe")</script> '
+      text: '## 检查结果 <script>alert("unsafe")</script> '
     }, {
       kind: 'current_user_mention',
       userId: 'local_user'
@@ -314,11 +314,32 @@ describe('Agent Current User Mention Markdown rendering', () => {
     expect(projectLeadingCurrentUserMentionMarkdownBody(repeated, members)).toBeNull()
 
     const markup = renderMessage(nonLeading, '<script>cache()</script>')
-    expect(markup).toContain('## 不应解析为标题')
-    expect(markup).not.toContain('<h3>不应解析为标题')
-    expect(markup).toContain('&lt;script&gt;alert(&quot;unsafe&quot;)&lt;/script&gt;')
+    expect(markup).toContain('<h3 data-markdown-heading=')
+    expect(markup).toContain('检查结果')
     expect(markup).not.toContain('<script>')
     expect(markup).not.toContain('cache()')
+    for (const displayName of ['Murray✨', '小雪_[团队]', '新的昵称']) {
+      for (const content of [nonLeading, repeated, [
+        { kind: 'text', text: '**完成**\n\nROVAICURRENTUSER1END\n' },
+        { kind: 'current_user_mention', userId: 'local_user' },
+        { kind: 'text', text: ' 请确认 `@Principal`' }
+      ] as StructuredCampMessageContent]) {
+        const rendered = renderMessage(content, undefined, 'agent', members, { displayName, avatarDataUrl: null })
+        expect(rendered).toContain(`>@${displayName}</span>`)
+        expect(rendered).not.toContain('>@@')
+        const expectedCount = content.filter((segment) => segment.kind === 'current_user_mention').length
+        expect(rendered.match(/class="message-mention-token current-user/g)).toHaveLength(expectedCount)
+        expect(structuredCampContentPlainText(content, members, displayName)).toContain(`@${displayName}`)
+      }
+    }
+    const collision = renderMessage([
+      { kind: 'text', text: '**完成**\n\nROVAICURRENTUSER1END\n' },
+      { kind: 'current_user_mention', userId: 'local_user' },
+      { kind: 'text', text: ' 请确认 `@Principal`' }
+    ])
+    expect(collision).toContain('<strong>完成</strong>')
+    expect(collision).toContain('ROVAICURRENTUSER1END')
+    expect(collision).toContain('<code>@Principal</code>')
   })
 
   it('projects file labels in user messages without flattening Member and Skill identities', () => {

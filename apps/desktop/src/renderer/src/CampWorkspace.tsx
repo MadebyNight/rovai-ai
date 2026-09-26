@@ -9297,6 +9297,21 @@ export function StructuredMessageBody({
       </div>
     )
   }
+  if (renderLeadingCurrentUserMarkdown && content.some((segment) => segment.kind === 'current_user_mention')) {
+    const source = structuredCampContentMarkdownText(content, members)
+    let prefix = 'ROVAICURRENTUSER'
+    while (source.includes(prefix)) prefix += 'X'
+    const inlineContent: Record<string, React.ReactNode> = {}
+    const markdown = content.map((segment, index) => {
+      if (segment.kind !== 'current_user_mention') {
+        return structuredCampContentMarkdownText([segment], members)
+      }
+      const token = `${prefix}${index}END`
+      inlineContent[token] = <CurrentUserMentionToken onActivate={onActivateCurrentUserMention} />
+      return token + (index === 0 && content.length > 1 ? ' ' : '')
+    }).join('')
+    return <SafeMarkdown onFileReference={onFileReference} inlineContent={inlineContent}>{markdown}</SafeMarkdown>
+  }
   const Tag = inline ? 'span' : 'p'
   return (
     <Tag className="structured-message-body">

@@ -16,6 +16,39 @@ import type { FilePreviewBinaryContent, FilePreviewOperationResult, ResolvedThem
 type MarkdownTreeNode = MarkdownNode
 
 const LeadingMarkdownContentContext = createContext<ReactNode>(null)
+const InlineMarkdownContentContext = createContext<Readonly<Record<string, ReactNode>>>({})
+
+function InlineMarkdownContent({ token }: { token: string }): JSX.Element {
+  return <>{useContext(InlineMarkdownContentContext)[token]}</>
+}
+
+// Placeholders are supplied alongside trusted UI by the caller, never inferred
+// from a user's name or an @word in Markdown. Source collisions are excluded by
+// the structured-message projector before it creates these placeholders.
+function remarkInlineContent({ tokens }: { tokens: string[] }): (tree: MarkdownTreeNode) => void {
+  return (tree) => {
+    if (tokens.length === 0) return
+    const tokenSet = new Set(tokens)
+    const escapedTokens = tokens.map((token) => Array.from(token, (character) => (
+      /[A-Za-z0-9]/u.test(character) ? character : `\\${character}`
+    )).join(''))
+    const pattern = new RegExp(`(${escapedTokens.join('|')})`, 'gu')
+    const visit = (parent: MarkdownTreeNode): void => {
+      parent.children = parent.children?.flatMap((node) => {
+        if (node.type !== 'text' || !node.value) {
+          visit(node)
+          return [node]
+        }
+        const parts = node.value.split(pattern)
+        if (parts.length === 1) return [node]
+        return parts.filter(Boolean).map((value): MarkdownTreeNode => tokenSet.has(value)
+          ? { type: 'rovaiInlineContent', data: { hName: 'span', hProperties: { 'data-rovai-inline-content': value } } }
+          : { type: 'text', value })
+      })
+    }
+    visit(tree)
+  }
+}
 
 function LeadingMarkdownContent(): JSX.Element {
   return <>{useContext(LeadingMarkdownContentContext)}</>
@@ -116,6 +149,7 @@ export function SafeMarkdown({
   headingTarget,
   onHeadingTargetResult,
   leadingContent,
+  inlineContent,
   inlineLeadingContent = true,
   mode = 'message',
   theme = 'day'
@@ -129,6 +163,8 @@ export function SafeMarkdown({
   onHeadingTargetResult?(found: boolean): void
   /** Trusted inline UI, never parsed from the Markdown source. */
   leadingContent?: ReactNode
+  /** Collision-free placeholders generated from authoritative structured content. */
+  inlineContent?: Readonly<Record<string, ReactNode>>
   inlineLeadingContent?: boolean
   mode?: 'message' | 'document'
   theme?: ResolvedTheme
@@ -140,6 +176,7 @@ export function SafeMarkdown({
   }, [onFileReference, onHeadingTargetResult])
   const fileReferencesEnabled = Boolean(onFileReference)
   const hasLeadingContent = leadingContent !== undefined && leadingContent !== null
+  const inlineContentKeys = JSON.stringify(Object.keys(inlineContent ?? {}))
 
   useEffect(() => {
     if (!headingTarget) return undefined
@@ -178,6 +215,7 @@ export function SafeMarkdown({
         remarkPlugins={[
           [remarkGfm, { singleTilde: false }],
           remarkRepairCjkUrlTail,
+          [remarkInlineContent, { tokens: JSON.parse(inlineContentKeys) as string[] }],
           ...(fileReferencesEnabled ? [mode === 'message' ? remarkMessageFileLinks : remarkFileLinks] : []),
           [remarkLeadingContent, { enabled: hasLeadingContent, inline: inlineLeadingContent }]
         ]}
@@ -189,6 +227,12 @@ export function SafeMarkdown({
         unwrapDisallowed
         components={{
           ...headingComponents,
+          span({ node, children: spanChildren }) {
+            const token = node?.properties['data-rovai-inline-content']
+            return typeof token === 'string'
+              ? <InlineMarkdownContent token={token} />
+              : <span>{spanChildren}</span>
+          },
           p({ node, children: paragraphChildren }) {
             const leading = node?.properties['data-rovai-leading-content'] === 'true'
             return (
@@ -274,10 +318,11 @@ export function SafeMarkdown({
         {children}
       </Markdown>
     )
-  }, [children, fileReferencesEnabled, localImageUrl, localImageContent, hasLeadingContent, inlineLeadingContent, mode, theme])
+  }, [children, fileReferencesEnabled, localImageUrl, localImageContent, hasLeadingContent, inlineLeadingContent, inlineContentKeys, mode, theme])
 
   return (
     <LeadingMarkdownContentContext.Provider value={leadingContent}>
+      <InlineMarkdownContentContext.Provider value={inlineContent ?? {}}>
       <div
         ref={rootRef}
         className={[
@@ -288,6 +333,7 @@ export function SafeMarkdown({
       >
         {markdown}
       </div>
+      </InlineMarkdownContentContext.Provider>
     </LeadingMarkdownContentContext.Provider>
   )
 }

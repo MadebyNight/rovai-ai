@@ -597,7 +597,7 @@ pub fn project_structured_quote_text(
                 format!("{prefix} \n\n{projected}")
             });
         }
-        return render(content, &mut member_name).map(|text| text.replace("\r\n", "\n"));
+        return Ok(project_quote_text(&markdown(content, &mut member_name)?));
     }
     let mut prefix_length = 0;
     for (index, part) in content.iter().enumerate() {

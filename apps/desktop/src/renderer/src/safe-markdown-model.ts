@@ -10,7 +10,7 @@ export type MarkdownNode = {
   checked?: boolean
   children?: MarkdownNode[]
   url?: string
-  data?: { hProperties?: Record<string, string> }
+  data?: { hName?: string; hProperties?: Record<string, string> }
   position?: { start: { offset?: number }; end: { offset?: number } }
 }
 

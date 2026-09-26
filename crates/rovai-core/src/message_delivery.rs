@@ -10,8 +10,8 @@ use crate::{
     agent_identity::parse_agent_id,
     agent_profile::resolve_frozen_runtime,
     camp_content::{
-        StructuredCampMessageSegment, canonical_content_digest, normalize_content,
-        render_current_plain_text,
+        AGENT_PRINCIPAL_DISPLAY_NAME, StructuredCampMessageSegment, canonical_content_digest,
+        normalize_content, render_current_plain_text,
     },
     collaboration::{append_domain_event, build_effective_config},
     command::{ActorRef, CommandHandlerResult, EntityReference, canonical_json_digest},
@@ -180,6 +180,7 @@ struct AddressingOffender {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InlineAddressing {
     occurrences: Vec<InlineAddressingOccurrence>,
+    principal_occurrences: Vec<std::ops::Range<usize>>,
     malformed: Vec<String>,
 }
 
@@ -230,23 +231,18 @@ pub fn persist_queued_agent_message(
     }
 
     let automatic_addressing = request.agent_addressing_mode == AgentAddressingMode::Automatic;
-    let active_agents = if automatic_addressing {
-        load_active_camp_agents(transaction, request.camp_id)?
-    } else {
-        Vec::new()
-    };
+    // PublicOnly still recognizes Principal in a mixed leading mention cluster;
+    // member identities participate in parsing, never in routing in that mode.
+    let active_agents = load_active_camp_agents(transaction, request.camp_id)?;
     let active_agent_ids = active_agents
         .iter()
         .map(|agent| agent.agent_id.clone())
         .collect::<HashSet<_>>();
-    let inline = if automatic_addressing {
-        parse_inline_addressing(request.body, &active_agents)
-    } else {
-        InlineAddressing {
-            occurrences: Vec::new(),
-            malformed: Vec::new(),
-        }
-    };
+    let mut inline = parse_inline_addressing(request.body, &active_agents);
+    if !automatic_addressing {
+        inline.occurrences.clear();
+        inline.malformed.clear();
+    }
     let explicit_order = if automatic_addressing {
         stable_unique(
             request
@@ -381,6 +377,7 @@ pub fn persist_queued_agent_message(
     let content = structured_content_from_inline_addressing(
         request.body,
         &inline.occurrences,
+        &inline.principal_occurrences,
         request.mention_user,
     );
     let projected_body = render_current_plain_text(transaction, &content)?;
@@ -2270,6 +2267,7 @@ fn stable_unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
 fn parse_inline_addressing(body: &str, active_agents: &[ActiveCampAgent]) -> InlineAddressing {
     let bytes = body.as_bytes();
     let mut occurrences = Vec::new();
+    let mut principal_occurrences = Vec::new();
     let mut malformed = Vec::new();
     let mut index = 0_usize;
     let mut fenced = false;
@@ -2357,6 +2355,17 @@ fn parse_inline_addressing(body: &str, active_agents: &[ActiveCampAgent]) -> Inl
             continue;
         }
 
+        // Principal is a reserved human identity, independent of member names.
+        if let Some(remainder) = body[index + 1..].strip_prefix(AGENT_PRINCIPAL_DISPLAY_NAME)
+            && (remainder.is_empty() || remainder.chars().next().is_some_and(char::is_whitespace))
+        {
+            let end_byte = index + 1 + AGENT_PRINCIPAL_DISPLAY_NAME.len();
+            principal_occurrences.push(index..end_byte);
+            line_cluster_end = Some(end_byte);
+            index = end_byte;
+            continue;
+        }
+
         if let Some((agent_id, end_byte)) = match_display_name_mention(body, index, active_agents) {
             occurrences.push(InlineAddressingOccurrence {
                 agent_id: agent_id.to_string(),
@@ -2374,6 +2383,7 @@ fn parse_inline_addressing(body: &str, active_agents: &[ActiveCampAgent]) -> Inl
     }
     InlineAddressing {
         occurrences,
+        principal_occurrences,
         malformed,
     }
 }
@@ -2449,30 +2459,52 @@ fn match_display_name_mention<'a>(
 fn structured_content_from_inline_addressing(
     body: &str,
     occurrences: &[InlineAddressingOccurrence],
+    principal_occurrences: &[std::ops::Range<usize>],
     mention_user: bool,
 ) -> Vec<StructuredCampMessageSegment> {
-    let mut content = Vec::with_capacity(
-        occurrences
-            .len()
-            .saturating_mul(2)
-            .saturating_add(if mention_user { 2 } else { 1 }),
-    );
-    if mention_user {
+    let mut mentions = occurrences
+        .iter()
+        .map(|occurrence| {
+            (
+                occurrence.start_byte..occurrence.end_byte,
+                StructuredCampMessageSegment::MemberMention {
+                    agent_id: occurrence.agent_id.clone(),
+                },
+            )
+        })
+        .chain(principal_occurrences.iter().map(|range| {
+            (
+                range.clone(),
+                StructuredCampMessageSegment::CurrentUserMention {
+                    user_id: CURRENT_USER_ID.to_string(),
+                },
+            )
+        }))
+        .collect::<Vec<_>>();
+    mentions.sort_by_key(|(range, _)| range.start);
+    let mut content = Vec::with_capacity(mentions.len().saturating_mul(2).saturating_add(2));
+    if mention_user && principal_occurrences.is_empty() {
         content.push(StructuredCampMessageSegment::CurrentUserMention {
             user_id: CURRENT_USER_ID.to_string(),
         });
     }
     let mut cursor = 0_usize;
-    for occurrence in occurrences {
-        if cursor < occurrence.start_byte {
+    for (range, mention) in mentions {
+        if cursor < range.start {
             content.push(StructuredCampMessageSegment::Text {
-                text: body[cursor..occurrence.start_byte].to_string(),
+                text: body[cursor..range.start].to_string(),
             });
         }
-        content.push(StructuredCampMessageSegment::MemberMention {
-            agent_id: occurrence.agent_id.clone(),
-        });
-        cursor = occurrence.end_byte;
+        // The existing leading CurrentUser projection supplies one separator.
+        // Consume that authored separator so explicit and inline sends share
+        // the same stored shape, without rewriting historical projections.
+        let leading_principal = range.start == 0
+            && matches!(
+                mention,
+                StructuredCampMessageSegment::CurrentUserMention { .. }
+            );
+        content.push(mention);
+        cursor = range.end + usize::from(leading_principal && body[range.end..].starts_with(' '));
     }
     if cursor < body.len() {
         content.push(StructuredCampMessageSegment::Text {
@@ -2495,6 +2527,85 @@ fn rejected_with_details(code: &str, message: &str, details: Value) -> CommandHa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Parser/normalization owns the syntax matrix; the Send integration owner
+    // separately verifies the atomic notification, routing and replay effects.
+    #[test]
+    fn principal_alias_uses_leading_clusters_and_merges_explicit_attention() {
+        let agents = vec![
+            ActiveCampAgent {
+                agent_id: "agent_2".into(),
+                display_name: "爱丽丝".into(),
+            },
+            ActiveCampAgent {
+                agent_id: "agent_3".into(),
+                display_name: "Principal".into(),
+            },
+        ];
+        for (body, principal_count, member_count) in [
+            ("@Principal 请确认", 1, 0),
+            ("  @Principal 请确认", 1, 0),
+            ("开头\n@Principal 请确认\n末行", 1, 0),
+            ("开头\n\t@Principal", 1, 0),
+            ("@爱丽丝 @Principal 请确认", 1, 1),
+            ("@Principal @爱丽丝 请确认", 1, 1),
+            ("@agent_2 @Principal 请确认", 1, 1),
+            ("@Principal @Principal 请确认", 2, 0),
+            ("讨论 @Principal 的含义", 0, 0),
+            ("@爱丽丝 请问 @Principal", 0, 1),
+            ("@不存在 @Principal 请确认", 0, 0),
+            ("@principal 请确认", 0, 0),
+            ("@PrincipalExtra 请确认", 0, 0),
+            ("@Principal，请确认", 0, 0),
+            ("\\@Principal 请确认", 0, 0),
+            ("> @Principal 请确认", 0, 0),
+            ("- @Principal 请确认", 0, 0),
+            ("https://example.test/@Principal", 0, 0),
+            ("`@Principal 请确认`", 0, 0),
+            ("```text\n@Principal 请确认\n```", 0, 0),
+        ] {
+            let parsed = parse_inline_addressing(body, &agents);
+            assert_eq!(
+                parsed.principal_occurrences.len(),
+                principal_count,
+                "{body}"
+            );
+            assert_eq!(parsed.occurrences.len(), member_count, "{body}");
+            for range in &parsed.principal_occurrences {
+                assert_eq!(&body[range.clone()], "@Principal");
+            }
+        }
+        for explicit in [false, true] {
+            let body = "@Principal 请确认";
+            let parsed = parse_inline_addressing(body, &agents);
+            let content = structured_content_from_inline_addressing(
+                body,
+                &parsed.occurrences,
+                &parsed.principal_occurrences,
+                explicit,
+            );
+            assert_eq!(
+                content,
+                vec![
+                    StructuredCampMessageSegment::CurrentUserMention {
+                        user_id: CURRENT_USER_ID.into()
+                    },
+                    StructuredCampMessageSegment::Text {
+                        text: "请确认".into()
+                    },
+                ]
+            );
+            assert_eq!(
+                crate::camp_content::render_plain_text_with_current_user(
+                    &content,
+                    |_| None,
+                    "Murray✨"
+                )
+                .unwrap(),
+                "@Murray✨ 请确认"
+            );
+        }
+    }
 
     #[test]
     fn strict_inline_parser_ignores_literal_regions_and_preserves_source_order() {
@@ -2613,11 +2724,7 @@ https://example.test/@agent_7
             );
         }
 
-        for body in [
-            "@爱丽丝 @不存在 请处理",
-            "@爱丽丝 @Principal 请处理",
-            "@爱丽丝 @不存在 @鲍勃 请处理",
-        ] {
+        for body in ["@爱丽丝 @不存在 请处理", "@爱丽丝 @不存在 @鲍勃 请处理"] {
             let parsed = parse_inline_addressing(body, &active_agents);
             assert_eq!(
                 parsed
@@ -2631,7 +2738,8 @@ https://example.test/@agent_7
         }
 
         let principal_first = parse_inline_addressing("@Principal @爱丽丝 请处理", &active_agents);
-        assert!(principal_first.occurrences.is_empty());
+        assert_eq!(principal_first.occurrences[0].agent_id, "agent_6");
+        assert_eq!(principal_first.principal_occurrences, vec![0..10]);
         assert!(principal_first.malformed.is_empty());
 
         for body in [

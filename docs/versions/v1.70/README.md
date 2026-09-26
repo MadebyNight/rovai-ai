@@ -34,3 +34,13 @@ Skills migration 173 及其已安装本地构建的数据合同标记仍为 `v1.
 | Runtime compatibility | 已更新 | [清单](../../runtime-compatibility.md)限定旧项目投递实测证据；新索引跨 Runtime 调用目前为 Unverified |
 | Documentation routing | 已更新 | [文档导航](../../README.md)路由到当前 Skills 架构与合同 |
 | Root README | 确认无需更新 | 项目定位与常青能力不变；本版调整 Skills 内部来源与配置 |
+
+## 正文 Principal 提及补齐
+
+按 Principal 在 2026-09-26 确认的规则，显式 Agent Send 支持行首连续提及中的 `@Principal`，与 `--to-principal`
+合并；PublicOnly 仍不唤醒 Agent，但保留对用户的提及。昵称使用当前资料，非前缀位置保留 Markdown。
+当前合同为 [Send v24](../../contracts/camp-message-send-v24.md)，验证记录见[实施计划](implementation-plan.md)。
+
+本项跨版本影响：Version/Contracts/Architecture/UI/文档路由已更新；Decisions 确认无需新增（现有身份和通知模型的
+可逆输入兼容扩展，合同已完整解释）；Runtime Activity、Runtime compatibility、Root README 确认无需更新（无新增
+Runtime、活动或产品入口）。Bootstrap、CLI 教学、Context formatter/选择/预算与冻结证据不变；不新增核心模型上下文格式变更。

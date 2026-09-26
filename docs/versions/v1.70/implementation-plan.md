@@ -26,3 +26,15 @@ Windows 旧入口后续修复：本机已登记项目的 `.dsh/skills/cli-operat
 - Skills 和工具箱复用 MCP 分隔线的宽度、拖动、键盘、取消和复位逻辑，独立保存各页宽度；刷新、查看说明按交互稿恢复图标与字号。隔离 UI 验收脚本覆盖两页的真实指针拖动和边界、键盘、取消、复位、重新进入的宽度记忆、窄屏切换及按钮尺寸。
 - Qoder 用户级发现补入 `~/.agents/skills`，与已有项目级 `.agents/skills` 对齐；`QODER_CONFIG_DIR` 只覆盖 Qoder 专属根，不替换共享目录。来源依据为 [QoderAI 的 Skill Discovery Reference](https://github.com/QoderAI/better-harness/blob/main/references/agent-customize/skill-discovery.md#qoder)。
 - Rust 沿用 `runtime_directory_overrides_change_native_candidates_without_explicit_refresh` owner，将 Codex 的两个配置根输入扩展为 Codex/Qoder × 默认/两次覆盖根矩阵，并确认共享用户来源持续可见；保留原 cache invalidation 输入，不新增测试函数或数据库 fixture。修复前 Qoder 输入缺失 shared 项。最小命令：`cargo test -p rovai-core --lib native_skills::tests --features extended-tests`。
+
+## Principal 正文寻址（2026-09-26）
+
+- [x] Principal 已确认：无参数的合法正文提及可通知；复用显示名行首连续提及规则；参数与正文合并；PublicOnly 允许用户提及。
+- [x] Principal 已确认：展示必须读取用户实际昵称；完成后以 PR 合入 main。
+- [x] 实现共享解析、现有身份/通知投影、昵称与非前缀 Markdown；不改变 Bootstrap/CLI 文本与 Context 格式，不回写历史。
+- [ ] 定向 Rust、Renderer/quote、类型检查、文档门禁、默认 Rust workspace 与 PR CI 验证。
+
+测试准入：新增纯函数 owner `principal_alias_uses_leading_clusters_and_merges_explicit_attention` 覆盖新寻址入口及其独立
+位置/排除语义；原 Agent alias owner 无法表达 Principal 身份与显式 attention 合并。数据库效果扩展既有
+`current_user_attention_is_orthogonal_atomic_and_replay_safe` 和 PublicOnly owner；不新增重复数据库 fixture。
+最小验证命令：`cargo test -p rovai-core --lib principal_alias_uses_leading_clusters_and_merges_explicit_attention`。
