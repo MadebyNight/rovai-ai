@@ -199,7 +199,41 @@ pnpm docs:test && pnpm docs:check
 
 | 项目 | 状态 |
 | --- | --- |
-| PRD | v3，本地文件，未提交 |
-| 本计划 | v3，本地文件，未提交 |
-| 步骤 0 平台确认 | 未执行，需要授权 |
-| 实现 | 未开始 |
+| PRD | v3，本地文件，需求基线未改 |
+| 本计划 | v3 |
+| 步骤 0 平台确认 | 未执行；需要真实测试 Bot 与租户授权 |
+| 步骤 1–5 实现 | 已完成（2026-10-20） |
+| 合同 | 新增 [Feishu Chat Bot v1](../contracts/feishu-chat-bot-v1.md)，并登记合同索引 |
+| 自动化验证 | 通过；见第 9 节 |
+| 真实平台 Smoke | 未执行；A10 未验收 |
+
+## 9. 实施结果与验收记录
+
+### 9.1 实现落点
+
+- Core：crates/rovai-core/src/channel_chat.rs，Migration 205 新增 6 张聊天专用表；channels.chat.* 方法与 application.rs 分发；FeishuMemberBotView.chat 供设置页与准入读取。工作 Bot 的 Camp、Delivery、AgentRun 链路未改动。
+- Main：channel-chat-service.ts（动作循环、答复关联、阶段汇报）、chat-model-client.ts（OpenAI-compatible 单适配器）、shared-chat-materials.ts（实时只读检索）、feishu-contact-search.ts（按姓名实时查询）。channel-settings.ts 在 owner.verify 之后按模式分流；聊天模式跳过 roster 与全部工作准入。
+- Renderer / Preload：Bot 行内新增“聊天设置”入口，弹窗包含模式开关、模型服务商／模型／地址／密钥、资料文件夹；密钥只写入不回显。IPC 仅新增三个窄接口。
+
+### 9.2 自动化验收
+
+| 验收点 | 结果 | 证据 |
+| --- | --- | --- |
+| A01 模式开关 | 通过（模拟） | Core：chat_mode_requires_a_configured_model_and_pauses_open_items；Main：非 Owner 消息进入聊天且不调用 inbound.observe |
+| A02 资料问答 | 通过（模拟） | 临时目录测试：递归扫描、出处日期、更新／删除立即生效、无效 UTF-8 拒绝；目录外链接不跟随 |
+| A03 向 Owner 确认 | 通过（模拟） | 服务测试：向 Owner 发出询问并建立事项，答复目的地为原会话 |
+| A04 找人 | 部分 | 通讯录协议与失败降级实现；真实权限与搜索范围未验证 |
+| A05 转发 | 通过（模拟） | 服务测试：直接发送、注明受委托、回执成功／失败／未知三分支 |
+| A06 代问 | 部分 | A→B 询问与事项创建已测；B 的答复回传见 A07 |
+| A07 答复关联 | 通过（模拟） | 引用关联、单事项直接关联、多事项澄清、新请求优先、阶段汇报前缀 |
+| A08 重复与恢复 | 通过（模拟 + 本机进程） | 入站去重、出站幂等键与 lease、事项暂停／恢复；真实 Core RPC Smoke 验证入站去重与出站领取／结算；真实飞书重启未执行 |
+| A09 外部展示 | 通过（构造） | 聊天路径只调用文字发送，不生成卡片或控制台入口 |
+| A10 真实平台 | 未执行 | 需要测试 Bot 与租户授权 |
+
+### 9.3 未完成与限制
+
+- 通讯录读取权限由用户在飞书开放平台为聊天 Bot 申请并重新发布；设置页已给出提示。权限未生效时只暂停按姓名找人。
+- 外部联系人只能在对方先与 Bot 建立单聊后发送；发送失败会如实回报，不假称成功。
+- 未执行真实飞书事件、真实模型调用、真实重启恢复与打包 App 验证；模拟通过不等于真实验收通过。
+- Core RPC Smoke（2026-10-20）：以临时私有数据目录启动实际 rovai-host，确认 Migration 205、默认工作模式、无密钥时拒绝切换、保存密钥后进入聊天模式、重复入站不重复、出站入队／领取／结算可用。
+- 全量 vitest：242 个文件通过；7 个既有文件因本机 Windows 符号链接权限（EPERM）失败，与本功能无关。cargo test -p rovai-core --lib：461 个通过；7 个既有 mission_workspace／ACP／存储用例因本机权限与 Git 配置失败。

@@ -1,7 +1,7 @@
 ---
 document_type: product-requirements
 authority: implementation-input-only
-status: pre-implementation
+status: implemented-local-simulated
 revision: 3
 last_updated: 2026-10-20
 ---
@@ -250,7 +250,7 @@ last_updated: 2026-10-20
 
 ## 13. 当前状态与参考
 
-配套的[实施计划 v3](feishu-chat-bot-implementation-plan.md)只拆分实现步骤，不扩大本文范围。目前只完成文档编写，尚未实现、构建，也没有发送过飞书消息或调用真实模型。文档仅保存在本地。
+配套的[实施计划 v3](feishu-chat-bot-implementation-plan.md)只拆分实现步骤，不扩大本文范围。截至 2026-10-20，步骤 1–5 已实现并通过本地自动化测试与 TypeScript／Electron 构建；步骤 0 平台确认与 A10 真实平台验收尚未执行，也没有发送过真实飞书消息或调用真实模型。验收结果与限制见实施计划第 9 节。
 
 - [文档职责与冲突规则](../README.md)
 - [Rust 测试准入与退役规则](../development/testing.md)

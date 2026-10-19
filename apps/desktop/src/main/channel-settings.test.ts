@@ -4259,3 +4259,99 @@ describe('channel settings service', () => {
     }
   })
 })
+
+it('routes non-owner messages into chat mode without touching work admission', async () => {
+  const harness = controlledChannels({ cli_chat: { openId: 'ou_bot', name: '聊天员' } })
+  const methods: string[] = []
+  const service = new ChannelSettingsService({
+    credentialStore: memoryCredentialStore({
+      'feishu-chat-a': { appId: 'cli_chat', appSecret: 'secret' }
+    }),
+    createChannel: harness.createChannel,
+    now: () => 200_000_000,
+    ...inertInterval(),
+    core: channelCore((method) => {
+      methods.push(method)
+      if (method === 'channels.feishu.snapshot') {
+        return coreSnapshot({
+          memberBots: [{
+            agentId: 'agent-chat',
+            accountId: 'account-1',
+            brand: 'feishu',
+            appId: 'cli_chat',
+            botDisplayName: '聊天员',
+            credentialRef: 'feishu-chat-a',
+            status: 'published',
+            failureCode: null,
+            version: 1,
+            ownerIdentityStatus: 'verified',
+            chat: {
+              ownerOnly: false,
+              mode: 'chat',
+              credentialConfigured: false,
+              modelProvider: null,
+              modelName: null,
+              modelBaseUrl: null,
+              materialsPath: null,
+              materialsStatus: null
+            }
+          }]
+        })
+      }
+      if (method === 'channels.feishu.owner.verify') {
+        return {
+          status: 'applied',
+          code: 'channel.owner.non_owner',
+          payload: { classification: 'non_owner' }
+        }
+      }
+      if (method === 'channels.chat.inbound') {
+        return { mode: 'chat', duplicate: false, owner: false }
+      }
+      if (method === 'channels.chat.snapshot') {
+        return {
+          ownerOnly: false,
+          mode: 'chat',
+          modelProvider: null,
+          modelName: null,
+          modelBaseUrl: null,
+          credentialConfigured: false,
+          materialsPath: null,
+          materialsStatus: null
+        }
+      }
+      if (method === 'channels.chat.items.waiting') return []
+      if (method === 'channels.chat.credential.get') return null
+      if (method === 'channels.chat.outbound.enqueue') {
+        return { outboundId: 'chat-out-1', duplicate: false }
+      }
+      if (method === 'channels.chat.outbound.claim') {
+        return [{
+          id: 'chat-out-1',
+          chatId: 'oc_test',
+          text: '聊天模型尚未配置完成，暂时无法回复。',
+          source: 'reply',
+          attempts: 1
+        }]
+      }
+      if (method === 'channels.chat.outbound.settle') return { settled: true }
+      throw new Error('unexpected core method ' + method)
+    })
+  })
+  await service.start()
+  const handler = harness.handlers.get('cli_chat:message')
+  expect(handler).toBeDefined()
+  await handler!(normalizedMessage({
+    messageId: 'om_chat_1',
+    chatType: 'group',
+    senderUserId: 'colleague-1',
+    content: '你好',
+    mentions: [{ key: '@_bot', openId: 'ou_bot', name: '聊天员', isBot: true }]
+  }))
+  expect(methods).toContain('channels.chat.inbound')
+  expect(methods).not.toContain('channels.feishu.inbound.observe')
+  expect(harness.send).toHaveBeenCalledWith('oc_test', {
+    text: '聊天模型尚未配置完成，暂时无法回复。'
+  })
+  await service.stop()
+})

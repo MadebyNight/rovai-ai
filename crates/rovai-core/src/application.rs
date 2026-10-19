@@ -8495,6 +8495,194 @@ impl Core {
                 self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(tick)?)
             }
+            "channels.chat.snapshot" => {
+                let params: rovai_core::channel_chat::ChatScopeParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.snapshot(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                    )?,
+                )?)
+            }
+            "channels.chat.configure" => {
+                let params: UserCommandParams<rovai_core::channel_chat::ChatBotConfigureCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.configure(
+                        &mut database,
+                        &params.command,
+                    )?,
+                )?)
+            }
+            "channels.chat.credential.set" => {
+                let params: UserCommandParams<rovai_core::channel_chat::ChatCredentialCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.set_credential(
+                        &mut database,
+                        &params.command,
+                    )?,
+                )?)
+            }
+            "channels.chat.credential.get" => {
+                let params: rovai_core::channel_chat::ChatScopeParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.credential(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                    )?,
+                )?)
+            }
+            "channels.chat.inbound" => {
+                let params: UserCommandParams<rovai_core::channel_chat::ChatInboundCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.inbound(
+                        &mut database,
+                        &params.command,
+                    )?,
+                )?)
+            }
+            "channels.chat.turn.append" => {
+                let params: UserCommandParams<rovai_core::channel_chat::ChatTurnAppendCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                rovai_core::channel_chat::ChannelChatService.append_turn(
+                    &mut database,
+                    &params.command,
+                )?;
+                Ok(json!({ "appended": true }))
+            }
+            "channels.chat.context" => {
+                let params: rovai_core::channel_chat::ChatContextParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.context(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                        &params.chat_id,
+                        params.limit,
+                    )?,
+                )?)
+            }
+            "channels.chat.item.create" => {
+                let params: UserCommandParams<rovai_core::channel_chat::ChatItemCreateCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.create_item(
+                        &mut database,
+                        &params.command,
+                    )?,
+                )?)
+            }
+            "channels.chat.item.update" => {
+                let params: UserCommandParams<rovai_core::channel_chat::ChatItemUpdateCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.update_item(
+                        &mut database,
+                        &params.command,
+                    )?,
+                )?)
+            }
+            "channels.chat.items.waiting" => {
+                let params: rovai_core::channel_chat::ChatWaitingItemsParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.waiting_items_for_target(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                        &params.target_external_id,
+                    )?,
+                )?)
+            }
+            "channels.chat.items.active" => {
+                let params: rovai_core::channel_chat::ChatScopeParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.active_items(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                    )?,
+                )?)
+            }
+            "channels.chat.ownerTarget" => {
+                let params: rovai_core::channel_chat::ChatScopeParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.owner_target(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                    )?,
+                )?)
+            }
+            "channels.chat.outbound.enqueue" => {
+                let params: UserCommandParams<
+                    rovai_core::channel_chat::ChatOutboundEnqueueCommand,
+                > = serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.enqueue(
+                        &mut database,
+                        &params.command,
+                    )?,
+                )?)
+            }
+            "channels.chat.outbound.claim" => {
+                let params: rovai_core::channel_chat::ChatOutboundClaimParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat::ChannelChatService.claim(
+                        &mut database,
+                        &params.provider,
+                        &params.app_id,
+                        &params.worker_id,
+                        params.limit,
+                    )?,
+                )?)
+            }
+            "channels.chat.outbound.settle" => {
+                let params: UserCommandParams<
+                    rovai_core::channel_chat::ChatOutboundSettleCommand,
+                > = serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                rovai_core::channel_chat::ChannelChatService.settle(
+                    &mut database,
+                    &params.command,
+                )?;
+                Ok(json!({ "settled": true }))
+            }
+            "channels.chat.outbound.cancel" => {
+                let params: rovai_core::channel_chat::ChatScopeParams =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                rovai_core::channel_chat::ChannelChatService.cancel_pending(
+                    &mut database,
+                    &params.provider,
+                    &params.app_id,
+                )?;
+                Ok(json!({ "cancelled": true }))
+            }
             "channels.inbound.observe" => {
                 let params: UserCommandParams<ObserveChannelInboundCommand> =
                     serde_json::from_value(request.params.clone())?;

@@ -256,6 +256,15 @@ const api: RovaiApi = {
         kind
       )
     },
+    setChatBotConfig(agentId, config, kind) {
+      return ipcRenderer.invoke('rovai:channels-chat-configure', agentId, config, kind)
+    },
+    setChatBotCredential(agentId, apiKey, kind) {
+      return ipcRenderer.invoke('rovai:channels-chat-credential', agentId, apiKey, kind)
+    },
+    selectChatMaterialsDirectory() {
+      return ipcRenderer.invoke('rovai:channels-chat-select-materials') as Promise<string | null>
+    },
     cancelQrAttempt(attemptId) {
       return ipcRenderer.invoke('rovai:channels-cancel-qr', attemptId)
     },

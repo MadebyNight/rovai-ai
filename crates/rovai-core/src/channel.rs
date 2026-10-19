@@ -800,6 +800,8 @@ pub struct FeishuMemberBotView {
     pub failure_code: Option<String>,
     pub version: i64,
     pub owner_identity_status: String,
+    /// Chat mode configuration; absent means the Bot never left work mode.
+    pub chat: Option<crate::channel_chat::ChatBotConfigView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1849,9 +1851,14 @@ impl ChannelService {
                     } else {
                         "unverified".to_string()
                     },
+                    chat: None,
                 })
             },
         )?;
+        let mut member_bots = member_bots;
+        for bot in &mut member_bots {
+            bot.chat = crate::channel_chat::config_for_app(connection, spec.provider, &bot.app_id);
+        }
         let publication_intents = query_rows(
             connection,
             &format!(

@@ -3145,6 +3145,50 @@ export interface ChannelConnectionView {
   account: ChannelAccountView | null
 }
 
+export interface ChatBotView {
+  ownerOnly: boolean
+  mode: 'work' | 'chat'
+  modelProvider: string | null
+  modelName: string | null
+  modelBaseUrl: string | null
+  /** The credential itself never leaves Core. */
+  credentialConfigured: boolean
+  materialsPath: string | null
+  materialsStatus: string | null
+}
+
+export interface ChatTurnView {
+  role: 'user' | 'assistant'
+  body: string
+}
+
+export interface ChatItemView {
+  id: string
+  provider: string
+  appId: string
+  requesterExternalId: string
+  requesterName: string
+  destinationChatId: string
+  destinationKind: string
+  targetExternalId: string
+  targetName: string
+  targetIsOwner: boolean
+  question: string
+  askMessageId: string | null
+  askChatId: string | null
+  status: 'waiting' | 'reported' | 'closed' | 'paused'
+  lastReportAt: number | null
+  createdAt: number
+}
+
+export interface ChatBotConfigInput {
+  ownerOnly: boolean
+  modelProvider: string | null
+  modelName: string | null
+  modelBaseUrl: string | null
+  materialsPath: string | null
+}
+
 export interface ChannelMemberBotView {
   /** Durable Bot publication fact, even if a later connection/retry failed. */
   published?: boolean
@@ -3156,6 +3200,7 @@ export interface ChannelMemberBotView {
   appId: string | null
   managementUrl: string | null
   failureCode: string | null
+  chat?: ChatBotView | null
 }
 
 export interface MemberBotProvisioningView {
@@ -3237,6 +3282,17 @@ export interface ChannelsApi {
     kind?: ChannelKind
   ): Promise<ChannelSettingsSnapshot>
   cancelQrAttempt(attemptId: string): Promise<ChannelSettingsSnapshot>
+  setChatBotConfig(
+    agentId: string,
+    config: ChatBotConfigInput,
+    kind?: ChannelKind
+  ): Promise<ChannelSettingsSnapshot>
+  setChatBotCredential(
+    agentId: string,
+    apiKey: string | null,
+    kind?: ChannelKind
+  ): Promise<ChannelSettingsSnapshot>
+  selectChatMaterialsDirectory(): Promise<string | null>
   setLoginViewBounds(attemptId: string, bounds: ChannelLoginViewBounds | null): Promise<void>
   refreshLoginQr(attemptId: string): Promise<void>
   onChanged(listener: (snapshot: ChannelSettingsSnapshot) => void): () => void
@@ -4222,6 +4278,22 @@ export type CoreMethod =
   | 'channels.credentials.get'
   | 'channels.credentials.listPublished'
   | 'channels.credentials.delete'
+  | 'channels.chat.snapshot'
+  | 'channels.chat.configure'
+  | 'channels.chat.credential.set'
+  | 'channels.chat.credential.get'
+  | 'channels.chat.inbound'
+  | 'channels.chat.turn.append'
+  | 'channels.chat.context'
+  | 'channels.chat.item.create'
+  | 'channels.chat.item.update'
+  | 'channels.chat.items.waiting'
+  | 'channels.chat.items.active'
+  | 'channels.chat.ownerTarget'
+  | 'channels.chat.outbound.enqueue'
+  | 'channels.chat.outbound.claim'
+  | 'channels.chat.outbound.settle'
+  | 'channels.chat.outbound.cancel'
   | 'channels.developerSession.get'
   | 'channels.developerSession.replace'
   | 'channels.developerSession.delete'
