@@ -10056,6 +10056,9 @@ impl Database {
         if !self.schema_migration_applied(204)? {
             migration_step!("migration_204", steer::migrate(self));
         }
+        if !self.schema_migration_applied(205)? {
+            migration_step!("migration_205", crate::channel_chat::migrate(self));
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {

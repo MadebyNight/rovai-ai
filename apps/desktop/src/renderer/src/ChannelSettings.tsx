@@ -221,6 +221,9 @@ function ManagedChannelSettings({ agents, channels }: { agents: AgentProfile[]; 
           provider.kind,
           () => channels.native!.disconnect(provider.kind)
         ) : undefined}
+        onChatSaved={(next) => {
+          if (mounted.current) setSnapshot(next)
+        }}
         onPublish={(provider, agent) => {
           setError(null)
           setPublishBoundAppId(
@@ -316,7 +319,8 @@ export function ChannelSettingsView({
   onConnect,
   onDisconnect,
   onPublish,
-  onRetryPublish
+  onRetryPublish,
+  onChatSaved
 }: {
   agents: AgentProfile[]
   snapshot: ChannelSettingsSnapshot | null
@@ -331,6 +335,7 @@ export function ChannelSettingsView({
   onDisconnect?(channel: ChannelProviderView): void
   onPublish?(channel: ChannelProviderView, agent: AgentProfile): void
   onRetryPublish?(channel: ChannelProviderView, agent: AgentProfile): void
+  onChatSaved?(snapshot: ChannelSettingsSnapshot): void
 }): React.JSX.Element {
   const members = useMemo(() => visibleChannelMembers(agents), [agents])
   const channels = snapshot?.channels ?? []
@@ -436,6 +441,7 @@ export function ChannelSettingsView({
                 busy={busy}
                 onPublish={onPublish}
                 onRetryPublish={onRetryPublish}
+                onChatSaved={onChatSaved}
               />
             </section>
           </>}
@@ -748,19 +754,205 @@ export function ChannelConnectionRow({
   )
 }
 
+function ChatBotSettingsDialog({
+  channel,
+  agent,
+  bot,
+  onClose,
+  onSaved
+}: {
+  channel: ChannelProviderView
+  agent: AgentProfile
+  bot: ChannelMemberBotView
+  onClose: () => void
+  onSaved: (snapshot: ChannelSettingsSnapshot) => void
+}): React.JSX.Element {
+  const config = bot.chat ?? null
+  const [ownerOnly, setOwnerOnly] = useState(config?.ownerOnly ?? true)
+  const [modelProvider, setModelProvider] = useState(config?.modelProvider ?? '')
+  const [modelName, setModelName] = useState(config?.modelName ?? '')
+  const [modelBaseUrl, setModelBaseUrl] = useState(config?.modelBaseUrl ?? '')
+  const [materialsPath, setMaterialsPath] = useState(config?.materialsPath ?? '')
+  const [apiKey, setApiKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const credentialConfigured = config?.credentialConfigured ?? false
+  const chatReady = Boolean(modelProvider.trim() && modelName.trim()
+    && (credentialConfigured || apiKey.trim()))
+  const canSave = ownerOnly || chatReady
+  const chooseFolder = async (): Promise<void> => {
+    const selected = await window.rovai.channels.selectChatMaterialsDirectory()
+    if (selected) setMaterialsPath(selected)
+  }
+  const save = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault()
+    if (saving) return
+    if (!canSave) {
+      setError(uiAttribute('切换到聊天 Bot 前，请先填写聊天模型和密钥。'))
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      if (apiKey.trim()) {
+        onSaved(await window.rovai.channels.setChatBotCredential(agent.agentId, apiKey.trim(), channel.kind))
+      }
+      onSaved(await window.rovai.channels.setChatBotConfig(agent.agentId, {
+        ownerOnly,
+        modelProvider: modelProvider.trim() || null,
+        modelName: modelName.trim() || null,
+        modelBaseUrl: modelBaseUrl.trim() || null,
+        materialsPath: materialsPath.trim() || null
+      }, channel.kind))
+      onClose()
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : String(nextError)
+      setError(message.includes('credential')
+        ? uiAttribute('聊天密钥尚未保存，请重试。')
+        : message.includes('model')
+          ? uiAttribute('请先完整填写聊天模型和密钥。')
+          : uiAttribute('聊天设置保存失败，请重试。'))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <Dialog.Root open onOpenChange={(next) => { if (!next) onClose() }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="app-dialog-overlay" />
+        <AppDialogContent className="channel-chat-dialog">
+          <AppDialogHeader
+            title={uiAttribute('聊天设置 · {0}', agent.displayName)}
+            description={uiAttribute('该设置只影响当前 Bot。')}
+          />
+          <form onSubmit={(event) => void save(event)}>
+            <AppDialogBody>
+              <label className="execution-web-switch-row">
+                <span>
+                  <strong><UiText zh={"仅 Owner 可交互"} /></strong>
+                  <small>
+                    {ownerOnly
+                      ? <UiText zh={"当前为工作 Bot，只有 Owner 可以使用。"} />
+                      : <UiText zh={"当前为聊天 Bot，所有人（包括 Owner）只能聊天和查资料。"} />}
+                  </small>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={ownerOnly}
+                  onChange={(event) => setOwnerOnly(event.target.checked)}
+                />
+              </label>
+              {!ownerOnly && (
+                <>
+                  <p className="execution-web-warning">
+                    <UiText zh={"该 Bot 将不再处理 Owner 的本地工作请求；如需继续使用工作能力，请保留另一个工作 Bot。"} />
+                  </p>
+                  <p className="channel-chat-note">
+                    <UiText zh={"聊天 Bot 需要通讯录读取应用权限，才能在权限范围内按姓名找同事。请在飞书开放平台为这个应用添加通讯录读取权限并重新发布；权限生效前，其他聊天功能正常。"} />
+                  </p>
+                </>
+              )}
+              <div className="channel-chat-field">
+                <label htmlFor="chat-model-provider"><UiText zh={"模型服务商"} /></label>
+                <input
+                  id="chat-model-provider"
+                  value={modelProvider}
+                  placeholder="openai-compatible"
+                  onChange={(event) => setModelProvider(event.target.value)}
+                />
+              </div>
+              <div className="channel-chat-field">
+                <label htmlFor="chat-model-name"><UiText zh={"模型"} /></label>
+                <input
+                  id="chat-model-name"
+                  value={modelName}
+                  placeholder="gpt-4o-mini"
+                  onChange={(event) => setModelName(event.target.value)}
+                />
+              </div>
+              <div className="channel-chat-field">
+                <label htmlFor="chat-model-base-url"><UiText zh={"接口地址"} /></label>
+                <input
+                  id="chat-model-base-url"
+                  value={modelBaseUrl}
+                  placeholder="https://api.openai.com/v1"
+                  onChange={(event) => setModelBaseUrl(event.target.value)}
+                />
+              </div>
+              <div className="channel-chat-field">
+                <label htmlFor="chat-model-key">
+                  <UiText zh={"模型密钥"} />
+                  {credentialConfigured && <small><UiText zh={"已保存"} /></small>}
+                </label>
+                <input
+                  id="chat-model-key"
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  placeholder={credentialConfigured ? uiAttribute('留空则沿用已保存的密钥') : ''}
+                  onChange={(event) => setApiKey(event.target.value)}
+                />
+              </div>
+              <div className="channel-chat-field">
+                <label htmlFor="chat-materials-path"><UiText zh={"共享资料文件夹"} /></label>
+                <div className="channel-chat-folder-row">
+                  <input
+                    id="chat-materials-path"
+                    value={materialsPath}
+                    readOnly
+                    placeholder={uiAttribute('可选，仅读取 Markdown 和 TXT')}
+                  />
+                  <button className="quiet-button compact" type="button" onClick={() => void chooseFolder()}>
+                    <UiText zh={"选择文件夹"} />
+                  </button>
+                  {materialsPath && (
+                    <button className="quiet-button compact" type="button" onClick={() => setMaterialsPath('')}>
+                      <UiText zh={"解绑"} />
+                    </button>
+                  )}
+                </div>
+                <p className="channel-chat-note">
+                  <UiText zh={"文件夹内的资料将用于回答该 Bot 使用者的问题，相关片段会发给所选模型服务商处理。只放允许共享的资料。"} />
+                </p>
+                {config?.materialsStatus && materialsPath && (
+                  <p className="channel-chat-note">{config.materialsStatus}</p>
+                )}
+              </div>
+              {error && <p className="execution-web-error" role="alert">{error}</p>}
+            </AppDialogBody>
+            <AppDialogFooter>
+              <button className="quiet-button compact" type="button" onClick={onClose} disabled={saving}>
+                <UiText zh={"取消"} />
+              </button>
+              <button className="primary-button compact" type="submit" disabled={saving || !canSave}>
+                <DialogControlIcon name="save" />
+                {saving ? uiAttribute('保存中…') : uiAttribute('保存')}
+              </button>
+            </AppDialogFooter>
+          </form>
+        </AppDialogContent>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
 function ChannelMemberBotTable({
   channel,
   members,
   busy,
   onPublish,
-  onRetryPublish
+  onRetryPublish,
+  onChatSaved
 }: {
   channel: ChannelProviderView
   members: AgentProfile[]
   busy: string | null
   onPublish?: (channel: ChannelProviderView, agent: AgentProfile) => void
   onRetryPublish?: (channel: ChannelProviderView, agent: AgentProfile) => void
+  onChatSaved?: (snapshot: ChannelSettingsSnapshot) => void
 }): React.JSX.Element {
+  const [chatAgentId, setChatAgentId] = useState<string | null>(null)
   const providerName = uiAttribute(channel.displayName)
   const bots = new Map(channel.memberBots.map((bot) => [bot.agentId, bot]))
   const connected = channel.hostStatus === 'ready'
@@ -800,7 +992,16 @@ function ChannelMemberBotTable({
                 <span>{bot?.published && status !== 'published' ? uiAttribute("已发布 · {0}", String(publicationLabel(status))) : publicationLabel(status)}</span>
                 {bot?.appId && <small className="channel-live-status">{bot.connectionStatus === 'online' ? uiAttribute("连接在线") : bot.connectionStatus === 'offline' ? uiAttribute("连接离线") : uiAttribute("连接状态未知")}</small>}
               </span>
-              <div className="channel-member-action" role="cell">
+                <div className="channel-member-action" role="cell">
+                {published && (channel.kind === 'feishu' || channel.kind === 'lark') && (
+                  <button
+                    className="channel-row-action"
+                    type="button"
+                    onClick={() => setChatAgentId(agent.agentId)}
+                  >
+                    {bot?.chat?.mode === 'chat' ? <UiText zh={"聊天 Bot"} /> : <UiText zh={"聊天设置"} />}
+                  </button>
+                )}
                 {published && bot?.managementUrl ? (
                   <a
                     className="channel-row-action"
@@ -834,6 +1035,19 @@ function ChannelMemberBotTable({
           )
         })}
       </div>
+      {chatAgentId && (() => {
+        const agent = members.find((candidate) => candidate.agentId === chatAgentId)
+        const bot = agent ? bots.get(agent.agentId) : undefined
+        return agent && bot ? (
+          <ChatBotSettingsDialog
+            channel={channel}
+            agent={agent}
+            bot={bot}
+            onClose={() => setChatAgentId(null)}
+            onSaved={(next) => onChatSaved?.(next)}
+          />
+        ) : null
+      })()}
     </div>
   )
 }
