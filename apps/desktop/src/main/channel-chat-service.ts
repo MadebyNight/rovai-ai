@@ -481,16 +481,18 @@ export class ChannelChatService {
         continue
       }
       if (action.type === 'find_person') {
-        const candidates = await this.#findPeople(action.name, input)
-        for (const candidate of candidates) targets.set(candidate.openId, candidate.name)
+        const found = await this.#findPeople(action.name, input)
+        for (const candidate of found.candidates) targets.set(candidate.openId, candidate.name)
         messages.push({ role: 'assistant', content })
         messages.push({
           role: 'system',
-          content: candidates.length === 0
-            ? '没有找到“' + action.name + '”。请如实说明，请对方 @ 此人或提供更准确的信息，不要猜测。'
-            : '候选人：' + candidates.map((candidate) => (
-                candidate.name + '（id=' + candidate.openId + (candidate.department ? '，' + candidate.department : '') + '）'
-              )).join('；') + '。同名多人时先在 reply 里问清楚是哪一位。'
+          content: found.unavailable
+            ? '通讯录权限尚未生效，无法按姓名查找同事。请如实说明，并请对方 @ 此人或提供更准确的信息；其他聊天功能正常。'
+            : found.candidates.length === 0
+              ? '没有找到“' + action.name + '”。请如实说明，请对方 @ 此人或提供更准确的信息，不要猜测。'
+              : '候选人：' + found.candidates.map((candidate) => (
+                  candidate.name + '（id=' + candidate.openId + (candidate.department ? '，' + candidate.department : '') + '）'
+                )).join('；') + '。同名多人时先在 reply 里问清楚是哪一位。'
         })
         continue
       }
@@ -554,18 +556,21 @@ export class ChannelChatService {
     }
   }
 
-  async #findPeople(name: string, input: ChatInboundInput): Promise<ChatContact[]> {
+  async #findPeople(
+    name: string,
+    input: ChatInboundInput
+  ): Promise<{ candidates: ChatContact[]; unavailable: boolean }> {
     const matched = input.mentions
       .filter((mention) => mention.openId && mention.name.includes(name))
       .map((mention) => ({ openId: mention.openId!, name: mention.name }))
-    if (matched.length > 0) return matched
+    if (matched.length > 0) return { candidates: matched, unavailable: false }
     const search = this.#runtime.searchContacts
-    if (!search) return []
+    if (!search) return { candidates: [], unavailable: true }
     try {
-      return await search(name)
+      return { candidates: await search(name), unavailable: false }
     } catch (error) {
       this.#log('contact.search_failed', { code: error instanceof Error ? error.name : 'unknown' })
-      return []
+      return { candidates: [], unavailable: true }
     }
   }
 

@@ -322,4 +322,33 @@ describe('channel chat service', () => {
     expect(next.state.sent.at(-1)).toEqual({ target: 'oc_chat', text: '好的' })
   })
 
+
+  it('reports unavailable contact scope instead of pretending nobody was found', async () => {
+    const { state } = fixture()
+    const outputs = [
+      '{"action":{"type":"find_person","name":"李四"}}',
+      '{"reply":"通讯录权限尚未生效，无法按姓名查找，请 @ 此人。","action":null}'
+    ]
+    let prompts: Array<{ role: string; content: string }> = []
+    const service = new ChannelChatService({
+      provider: 'feishu',
+      appId: 'cli_test',
+      core: fakeCore(state) as never,
+      sendText: async (target, text) => {
+        state.sent.push({ target, text })
+        return { status: 'sent', messageId: 'om_' + state.sent.length }
+      },
+      loadModelKey: async () => 'secret',
+      appCredentials: () => ({ appId: 'cli_test', appSecret: 'secret' }),
+      searchContacts: async () => { throw new Error('permission_denied') },
+      complete: async (request) => {
+        prompts = request.messages
+        return outputs.shift() ?? '{"reply":null,"action":null}'
+      }
+    })
+    await service.handleInbound(input({ body: '帮我问一下李四' }))
+    expect(prompts.some((message) => message.content.includes('通讯录权限尚未生效'))).toBe(true)
+    expect(state.sent.at(-1)?.text).toContain('通讯录权限尚未生效')
+  })
+
 })
