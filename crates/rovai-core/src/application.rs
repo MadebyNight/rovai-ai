@@ -8512,10 +8512,8 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.configure(
-                        &mut database,
-                        &params.command,
-                    )?,
+                    rovai_core::channel_chat::ChannelChatService
+                        .configure(&mut database, &params.command)?,
                 )?)
             }
             "channels.chat.credential.set" => {
@@ -8523,10 +8521,8 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.set_credential(
-                        &mut database,
-                        &params.command,
-                    )?,
+                    rovai_core::channel_chat::ChannelChatService
+                        .set_credential(&mut database, &params.command)?,
                 )?)
             }
             "channels.chat.credential.get" => {
@@ -8546,20 +8542,16 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.inbound(
-                        &mut database,
-                        &params.command,
-                    )?,
+                    rovai_core::channel_chat::ChannelChatService
+                        .inbound(&mut database, &params.command)?,
                 )?)
             }
             "channels.chat.turn.append" => {
                 let params: UserCommandParams<rovai_core::channel_chat::ChatTurnAppendCommand> =
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                rovai_core::channel_chat::ChannelChatService.append_turn(
-                    &mut database,
-                    &params.command,
-                )?;
+                rovai_core::channel_chat::ChannelChatService
+                    .append_turn(&mut database, &params.command)?;
                 Ok(json!({ "appended": true }))
             }
             "channels.chat.context" => {
@@ -8581,10 +8573,8 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.create_item(
-                        &mut database,
-                        &params.command,
-                    )?,
+                    rovai_core::channel_chat::ChannelChatService
+                        .create_item(&mut database, &params.command)?,
                 )?)
             }
             "channels.chat.item.update" => {
@@ -8592,10 +8582,8 @@ impl Core {
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.update_item(
-                        &mut database,
-                        &params.command,
-                    )?,
+                    rovai_core::channel_chat::ChannelChatService
+                        .update_item(&mut database, &params.command)?,
                 )?)
             }
             "channels.chat.items.waiting" => {
@@ -8641,10 +8629,8 @@ impl Core {
                 > = serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.enqueue(
-                        &mut database,
-                        &params.command,
-                    )?,
+                    rovai_core::channel_chat::ChannelChatService
+                        .enqueue(&mut database, &params.command)?,
                 )?)
             }
             "channels.chat.outbound.claim" => {
@@ -8662,14 +8648,11 @@ impl Core {
                 )?)
             }
             "channels.chat.outbound.settle" => {
-                let params: UserCommandParams<
-                    rovai_core::channel_chat::ChatOutboundSettleCommand,
-                > = serde_json::from_value(request.params.clone())?;
+                let params: UserCommandParams<rovai_core::channel_chat::ChatOutboundSettleCommand> =
+                    serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                rovai_core::channel_chat::ChannelChatService.settle(
-                    &mut database,
-                    &params.command,
-                )?;
+                rovai_core::channel_chat::ChannelChatService
+                    .settle(&mut database, &params.command)?;
                 Ok(json!({ "settled": true }))
             }
             "channels.chat.outbound.cancel" => {

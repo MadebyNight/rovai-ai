@@ -522,7 +522,10 @@ impl ChannelChatService {
             .filter(|value| !value.is_empty())
         {
             Some(api_key) => {
-                anyhow::ensure!(api_key.len() <= 8 * 1024, "api key exceeds the storage limit");
+                anyhow::ensure!(
+                    api_key.len() <= 8 * 1024,
+                    "api key exceeds the storage limit"
+                );
                 database.connection().execute(
                     r#"
                     INSERT INTO channel_chat_credential(provider, app_id, api_key, updated_at)
@@ -569,9 +572,17 @@ impl ChannelChatService {
         command: &ChatInboundCommand,
     ) -> Result<ChatInboundResult> {
         validate_identity(&command.provider, &command.app_id)?;
-        text(&command.external_message_id, "externalMessageId", MAX_CHAT_ID_BYTES)?;
+        text(
+            &command.external_message_id,
+            "externalMessageId",
+            MAX_CHAT_ID_BYTES,
+        )?;
         text(&command.chat_id, "chatId", MAX_CHAT_ID_BYTES)?;
-        text(&command.author_external_id, "authorExternalId", MAX_CHAT_ID_BYTES)?;
+        text(
+            &command.author_external_id,
+            "authorExternalId",
+            MAX_CHAT_ID_BYTES,
+        )?;
         text(&command.body, "body", MAX_BODY_BYTES)?;
         let config = load_config(database.connection(), &command.provider, &command.app_id)?;
         let dedupe_key = format!(
@@ -646,7 +657,10 @@ impl ChannelChatService {
         );
         text(&command.chat_id, "chatId", MAX_CHAT_ID_BYTES)?;
         anyhow::ensure!(!command.body.trim().is_empty(), "turn body is required");
-        anyhow::ensure!(command.body.len() <= MAX_BODY_BYTES, "turn body is too large");
+        anyhow::ensure!(
+            command.body.len() <= MAX_BODY_BYTES,
+            "turn body is too large"
+        );
         database.connection().execute(
             r#"
             INSERT INTO channel_chat_turn(
@@ -692,7 +706,8 @@ impl ChannelChatService {
                 body: row.get(1)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn create_item(
@@ -701,9 +716,21 @@ impl ChannelChatService {
         command: &ChatItemCreateCommand,
     ) -> Result<ChatItemView> {
         validate_identity(&command.provider, &command.app_id)?;
-        text(&command.requester_external_id, "requesterExternalId", MAX_CHAT_ID_BYTES)?;
-        text(&command.destination_chat_id, "destinationChatId", MAX_CHAT_ID_BYTES)?;
-        text(&command.target_external_id, "targetExternalId", MAX_CHAT_ID_BYTES)?;
+        text(
+            &command.requester_external_id,
+            "requesterExternalId",
+            MAX_CHAT_ID_BYTES,
+        )?;
+        text(
+            &command.destination_chat_id,
+            "destinationChatId",
+            MAX_CHAT_ID_BYTES,
+        )?;
+        text(
+            &command.target_external_id,
+            "targetExternalId",
+            MAX_CHAT_ID_BYTES,
+        )?;
         text(&command.question, "question", MAX_QUESTION_BYTES)?;
         let now = now_millis();
         let id = Uuid::new_v4().to_string();
@@ -779,7 +806,8 @@ impl ChannelChatService {
             params![provider, app_id, target_external_id, ITEM_WAITING],
             item_row,
         )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn active_items(
@@ -801,7 +829,8 @@ impl ChannelChatService {
             "#,
         )?;
         let rows = statement.query_map(params![provider, app_id, ITEM_WAITING], item_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn update_item(
@@ -813,9 +842,15 @@ impl ChannelChatService {
         let existing = self
             .item(database, &command.item_id)?
             .context("chat item not found")?;
-        let status = command.status.as_deref().unwrap_or(existing.status.as_str());
+        let status = command
+            .status
+            .as_deref()
+            .unwrap_or(existing.status.as_str());
         anyhow::ensure!(
-            matches!(status, ITEM_WAITING | ITEM_REPORTED | ITEM_CLOSED | ITEM_PAUSED),
+            matches!(
+                status,
+                ITEM_WAITING | ITEM_REPORTED | ITEM_CLOSED | ITEM_PAUSED
+            ),
             "unsupported chat item status"
         );
         database.connection().execute(
@@ -1044,7 +1079,13 @@ impl ChannelChatService {
         database.connection().execute(
             "UPDATE channel_chat_outbound SET status = ?3, updated_at = ?4
              WHERE provider = ?1 AND app_id = ?2 AND status = ?5",
-            params![provider, app_id, OUTBOUND_FAILED, now_millis(), OUTBOUND_PENDING],
+            params![
+                provider,
+                app_id,
+                OUTBOUND_FAILED,
+                now_millis(),
+                OUTBOUND_PENDING
+            ],
         )?;
         Ok(())
     }
@@ -1072,7 +1113,12 @@ fn load_config(connection: &Connection, provider: &str, app_id: &str) -> Result<
                     provider: provider.to_string(),
                     app_id: app_id.to_string(),
                     owner_only: owner_only == 1,
-                    mode: if owner_only == 1 { WORK_MODE } else { CHAT_MODE }.to_string(),
+                    mode: if owner_only == 1 {
+                        WORK_MODE
+                    } else {
+                        CHAT_MODE
+                    }
+                    .to_string(),
                     model_provider: row.get(1)?,
                     model_name: row.get(2)?,
                     model_base_url: row.get(3)?,
@@ -1202,16 +1248,32 @@ mod tests {
             .configure(&mut database, &configure_command(true))
             .unwrap();
         assert_eq!(work.mode, WORK_MODE);
-        assert_eq!(service.item(&mut database, &item.id).unwrap().unwrap().status, ITEM_PAUSED);
-        assert!(service
-            .waiting_items_for_target(&mut database, PROVIDER, APP, "ou_target")
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            service
+                .item(&mut database, &item.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            ITEM_PAUSED
+        );
+        assert!(
+            service
+                .waiting_items_for_target(&mut database, PROVIDER, APP, "ou_target")
+                .unwrap()
+                .is_empty()
+        );
 
         service
             .configure(&mut database, &configure_command(false))
             .unwrap();
-        assert_eq!(service.item(&mut database, &item.id).unwrap().unwrap().status, ITEM_WAITING);
+        assert_eq!(
+            service
+                .item(&mut database, &item.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            ITEM_WAITING
+        );
     }
 
     #[test]
@@ -1281,10 +1343,12 @@ mod tests {
             .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].attempts, 1);
-        assert!(service
-            .claim(&mut database, PROVIDER, APP, "worker-2", 10)
-            .unwrap()
-            .is_empty());
+        assert!(
+            service
+                .claim(&mut database, PROVIDER, APP, "worker-2", 10)
+                .unwrap()
+                .is_empty()
+        );
 
         service
             .settle(
@@ -1297,10 +1361,12 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(service
-            .claim(&mut database, PROVIDER, APP, "worker-3", 10)
-            .unwrap()
-            .is_empty());
+        assert!(
+            service
+                .claim(&mut database, PROVIDER, APP, "worker-3", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1338,9 +1404,11 @@ mod tests {
         unbind.materials_path = None;
         unbind.materials_status = None;
         service.configure(&mut database, &unbind).unwrap();
-        assert!(service
-            .claim(&mut database, PROVIDER, APP, "worker", 10)
-            .unwrap()
-            .is_empty());
+        assert!(
+            service
+                .claim(&mut database, PROVIDER, APP, "worker", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
