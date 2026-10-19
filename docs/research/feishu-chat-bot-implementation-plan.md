@@ -228,7 +228,7 @@ pnpm docs:test && pnpm docs:check
 | A07 答复关联 | 通过（模拟） | 引用关联、单事项直接关联、多事项澄清、新请求优先、阶段汇报前缀 |
 | A08 重复与恢复 | 通过（真实进程） | 真实 Core 进程重启 E2E：聊天模式与等待事项保留、pending 出站只重领一次、已结算消息不重发、切回工作暂停事项并取消待发、再切回恢复事项且不补发已取消消息 |
 | A09 外部展示 | 通过（构造） | 聊天路径只调用文字发送，不生成卡片或控制台入口 |
-| A10 真实平台 | 通过（真实平台，Bot 发送方） | 真实 WebSocket 收到并处理 im.message.receive_v1（测试群内 @）；普通回复、资料答复、转发、按姓名查找与真实模型回复均经会话历史确认。人类账号入站因工作站锁屏未发送，打包 GUI 首启未做 |
+| A10 真实平台 | 通过（真实平台，Bot 发送方） | 真实 WebSocket 收到并处理 im.message.receive_v1（测试群内 @）；普通回复、资料答复、转发、按姓名查找与真实模型回复均经会话历史确认；打包产物在隔离 root 下完成首启三步入职并进入主界面。人类账号入站因工作站锁屏未发送 |
 
 ### 9.3 未完成与限制
 
@@ -236,7 +236,7 @@ pnpm docs:test && pnpm docs:check
 - 外部联系人只能在对方先与 Bot 建立单聊后发送；发送失败会如实回报，不假称成功。
 - 真实飞书：已确认 Bot 长连接、真实入站事件（测试群内 @）、出站投递、按姓名查找（权限范围设为 all 后查到 Owner）与真实模型回复（gpt-5.6-sol，2.8 秒，经会话历史确认）。人类账号入站因工作站锁屏未发送。
 - 真实进程重启 E2E 通过（A08）。
-- 打包：release core、Web、执行台与 Electron 构建通过，产出 dist/win-unpacked/Rovai-ai.exe；verify-windows-release --unpacked-only 因 dir 包缺少 app-update.yml 失败（既有打包元数据缺口），未做 GUI 启动验收。
+- 打包：release core、Web、执行台与 Electron 构建通过；以 rovai-core --prepare-windows-data-root 准备隔离 root 后，dist/win-unpacked/Rovai-ai.exe 完成首启三步入职并进入主界面，Core SQLite 已创建。verify-windows-release --unpacked-only 仍因 dir 包缺少 app-update.yml 失败（既有元数据缺口），不影响首启。
 - 模拟通过不等于真实验收通过。
 - Core RPC Smoke（2026-10-20）：以临时私有数据目录启动实际 rovai-host，确认 Migration 205、默认工作模式、无密钥时拒绝切换、保存密钥后进入聊天模式、重复入站不重复、出站入队／领取／结算可用。
 - 全量 vitest：242 个文件通过；7 个既有文件因本机 Windows 符号链接权限（EPERM）失败，与本功能无关。cargo test -p rovai-core --lib：461 个通过；7 个既有 mission_workspace／ACP／存储用例因本机权限与 Git 配置失败。
