@@ -264,8 +264,11 @@ export class ChannelChatService {
     waiting: WaitingItem[]
   ): WaitingItem | 'ambiguous' | null {
     if (input.quoteMessageId) {
-      // An explicit quote is authoritative: an unrelated quote is a new topic.
-      return waiting.find((item) => item.askMessageId === input.quoteMessageId) ?? null
+      const quoted = waiting.find((item) => item.askMessageId === input.quoteMessageId)
+      if (quoted) return quoted
+      // The platform may deliver a quote before the ask message id is persisted
+      // (bots answer instantly). With a single open item, that quote is the answer.
+      return waiting.length === 1 ? waiting[0] : null
     }
     if (waiting.length === 1) return waiting[0]
     if (waiting.length > 1) return 'ambiguous'

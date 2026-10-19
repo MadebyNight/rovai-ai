@@ -351,4 +351,26 @@ describe('channel chat service', () => {
     expect(state.sent.at(-1)?.text).toContain('通讯录权限尚未生效')
   })
 
+
+  it('associates an early quote with the only waiting item before the ask id is persisted', async () => {
+    const item: ChatItemView = {
+      id: 'item-early', provider: 'feishu', appId: 'cli_test',
+      requesterExternalId: 'ou_requester', requesterName: '张三',
+      destinationChatId: 'oc_chat', destinationKind: 'group',
+      targetExternalId: 'ou_target', targetName: '李四', targetIsOwner: false,
+      question: '项目进度如何？', askMessageId: null, askChatId: 'ou_target',
+      status: 'waiting', lastReportAt: null, createdAt: 1
+    }
+    const { state, service, outputs } = fixture({ items: [item] })
+    outputs.splice(0, outputs.length, '{"newRequest":false,"refused":false,"report":"已完成 80%。"}')
+    await service.handleInbound(input({
+      authorExternalId: 'ou_target', authorName: '李四', body: '已完成 80%。',
+      quoteMessageId: 'om_early', externalMessageId: 'om_early_reply'
+    }))
+    expect(state.sent[0]).toEqual({
+      target: 'oc_chat',
+      text: '关于「项目进度如何？」的回复：\n已完成 80%。'
+    })
+  })
+
 })
