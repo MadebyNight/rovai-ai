@@ -224,8 +224,8 @@ pnpm docs:test && pnpm docs:check
 | A03 向 Owner 确认 | 通过（模拟） | 服务测试：向 Owner 发出询问并建立事项，答复目的地为原会话 |
 | A04 找人 | 通过（真实平台） | 为「星洛」加入 contact:user.base:readonly、contact:department.base:readonly、contact:contact:readonly_as_app、contact:contact.base:readonly 与 application.contacts_range:write，并将通讯录权限范围设为 all；实时部门通讯录回退按姓名查到 Owner。权限被拒时仍如实提示 |
 | A05 转发 | 通过（模拟） | 服务测试：直接发送、注明受委托、回执成功／失败／未知三分支 |
-| A06 代问 | 部分 | A→B 询问与事项创建已测；B 的答复回传见 A07 |
-| A07 答复关联 | 通过（模拟） | 引用关联、单事项直接关联、多事项澄清、新请求优先、阶段汇报前缀 |
+| A06 代问 | 通过（真实平台） | 两个已发布 Bot 在测试群完成 A→B 询问、A 引用回复、B 阶段汇报“关于「项目进度如何？」的回复：…”，发起来源为群 |
+| A07 答复关联 | 通过（模拟 + 真实平台） | 真实群内引用回复关联到事项并回传；单事项直接关联（含询问 ID 尚未落库的早到引用）、多事项澄清、新请求优先、阶段汇报前缀由表驱动测试覆盖 |
 | A08 重复与恢复 | 通过（真实进程） | 真实 Core 进程重启 E2E：聊天模式与等待事项保留、pending 出站只重领一次、已结算消息不重发、切回工作暂停事项并取消待发、再切回恢复事项且不补发已取消消息 |
 | A09 外部展示 | 通过（构造） | 聊天路径只调用文字发送，不生成卡片或控制台入口 |
 | A10 真实平台 | 通过（真实平台，Bot 发送方） | 真实 WebSocket 收到并处理 im.message.receive_v1（测试群内 @）；普通回复、资料答复、转发、按姓名查找与真实模型回复均经会话历史确认；打包产物在隔离 root 下完成首启三步入职并进入主界面。人类账号入站因工作站锁屏未发送 |
@@ -236,6 +236,7 @@ pnpm docs:test && pnpm docs:check
 - 外部联系人只能在对方先与 Bot 建立单聊后发送；发送失败会如实回报，不假称成功。
 - 真实飞书：已确认 Bot 长连接、真实入站事件（测试群内 @）、出站投递、按姓名查找（权限范围设为 all 后查到 Owner）与真实模型回复（gpt-5.6-sol，2.8 秒，经会话历史确认）。人类账号入站因工作站锁屏未发送。
 - 真实进程重启 E2E 通过（A08）。
+- 真实代问闭环通过（A06/A07）：星洛向海琴烟发出询问，海琴烟引用回复，星洛把阶段汇报发回原群。
 - 打包：release core、Web、执行台与 Electron 构建通过；以 rovai-core --prepare-windows-data-root 准备隔离 root 后，dist/win-unpacked/Rovai-ai.exe 完成首启三步入职并进入主界面，Core SQLite 已创建。verify-windows-release --unpacked-only 仍因 dir 包缺少 app-update.yml 失败（既有元数据缺口），不影响首启。
 - 模拟通过不等于真实验收通过。
 - Core RPC Smoke（2026-10-20）：以临时私有数据目录启动实际 rovai-host，确认 Migration 205、默认工作模式、无密钥时拒绝切换、保存密钥后进入聊天模式、重复入站不重复、出站入队／领取／结算可用。
