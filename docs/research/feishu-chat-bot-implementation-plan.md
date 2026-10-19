@@ -228,7 +228,7 @@ pnpm docs:test && pnpm docs:check
 | A07 答复关联 | 通过（模拟 + 真实平台） | 真实群内引用回复关联到事项并回传；单事项直接关联（含询问 ID 尚未落库的早到引用）、多事项澄清、新请求优先、阶段汇报前缀由表驱动测试覆盖 |
 | A08 重复与恢复 | 通过（真实进程） | 真实 Core 进程重启 E2E：聊天模式与等待事项保留、pending 出站只重领一次、已结算消息不重发、切回工作暂停事项并取消待发、再切回恢复事项且不补发已取消消息 |
 | A09 外部展示 | 通过（构造） | 聊天路径只调用文字发送，不生成卡片或控制台入口 |
-| A10 真实平台 | 通过（真实平台，Bot 发送方） | 真实 WebSocket 收到并处理 im.message.receive_v1（测试群内 @）；普通回复、资料答复、转发、按姓名查找与真实模型回复均经会话历史确认；打包产物在隔离 root 下完成首启三步入职并进入主界面。人类账号入站因工作站锁屏未发送 |
+| A10 真实平台 | 通过（真实平台，Bot 发送方） | 真实 WebSocket 收到并处理 im.message.receive_v1（测试群内 @）；普通回复、资料答复、转发、按姓名查找与真实模型回复均经会话历史确认；打包产物完成首启三步入职，NSIS 安装包全量校验通过（含 Packaged Core health.check）。人类账号入站因工作站锁屏未发送 |
 
 ### 9.3 未完成与限制
 
@@ -237,7 +237,7 @@ pnpm docs:test && pnpm docs:check
 - 真实飞书：已确认 Bot 长连接、真实入站事件（测试群内 @）、出站投递、按姓名查找（权限范围设为 all 后查到 Owner）与真实模型回复（gpt-5.6-sol，2.8 秒，经会话历史确认）。人类账号入站因工作站锁屏未发送。
 - 真实进程重启 E2E 通过（A08）。
 - 真实代问闭环通过（A06/A07）：星洛向海琴烟发出询问，海琴烟引用回复，星洛把阶段汇报发回原群。
-- 打包：release core、Web、执行台与 Electron 构建通过；以 rovai-core --prepare-windows-data-root 准备隔离 root 后，dist/win-unpacked/Rovai-ai.exe 完成首启三步入职并进入主界面，Core SQLite 已创建。verify-windows-release --unpacked-only 仍因 dir 包缺少 app-update.yml 失败（既有元数据缺口），不影响首启。
+- 发布产物：NSIS 安装包 dist/Rovai-AI-0.4.12-x64.exe 构建完成，verify-windows-release 全量通过（安装器配置、latest.yml／blockmap、四个二进制、CLI 合约、Packaged Core 隔离 data-root 与 health.check）。此前 dir 包的 app-update.yml 缺口由 NSIS 产物闭合。安装包尚未上传到公开 Release。
 - 模拟通过不等于真实验收通过。
 - Core RPC Smoke（2026-10-20）：以临时私有数据目录启动实际 rovai-host，确认 Migration 205、默认工作模式、无密钥时拒绝切换、保存密钥后进入聊天模式、重复入站不重复、出站入队／领取／结算可用。
 - 全量 vitest：242 个文件通过；7 个既有文件因本机 Windows 符号链接权限（EPERM）失败，与本功能无关。cargo test -p rovai-core --lib：461 个通过；7 个既有 mission_workspace／ACP／存储用例因本机权限与 Git 配置失败。
