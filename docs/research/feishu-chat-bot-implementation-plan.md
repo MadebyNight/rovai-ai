@@ -222,7 +222,7 @@ pnpm docs:test && pnpm docs:check
 | A01 模式开关 | 通过（模拟） | Core：chat_mode_requires_a_configured_model_and_pauses_open_items；Main：非 Owner 消息进入聊天且不调用 inbound.observe |
 | A02 资料问答 | 通过（模拟） | 临时目录测试：递归扫描、出处日期、更新／删除立即生效、无效 UTF-8 拒绝；目录外链接不跟随 |
 | A03 向 Owner 确认 | 通过（模拟） | 服务测试：向 Owner 发出询问并建立事项，答复目的地为原会话 |
-| A04 找人 | 部分 | 协议实现姓名搜索，并在 token 类型不匹配时回退到实时部门通讯录过滤；权限被拒时如实提示“通讯录权限尚未生效”，@ 与已对话联系人不受影响。真实租户返回 403 no dept authority，按姓名搜索仍未可用 |
+| A04 找人 | 通过（真实平台） | 为「星洛」加入 contact:user.base:readonly、contact:department.base:readonly、contact:contact:readonly_as_app、contact:contact.base:readonly 与 application.contacts_range:write，并将通讯录权限范围设为 all；实时部门通讯录回退按姓名查到 Owner。权限被拒时仍如实提示 |
 | A05 转发 | 通过（模拟） | 服务测试：直接发送、注明受委托、回执成功／失败／未知三分支 |
 | A06 代问 | 部分 | A→B 询问与事项创建已测；B 的答复回传见 A07 |
 | A07 答复关联 | 通过（模拟） | 引用关联、单事项直接关联、多事项澄清、新请求优先、阶段汇报前缀 |
@@ -234,7 +234,7 @@ pnpm docs:test && pnpm docs:check
 
 - 通讯录读取权限由用户在飞书开放平台为聊天 Bot 申请并重新发布；设置页已给出提示。权限未生效时只暂停按姓名找人。
 - 外部联系人只能在对方先与 Bot 建立单聊后发送；发送失败会如实回报，不假称成功。
-- 真实飞书：已确认 Bot 长连接、真实入站事件（测试群内 @）与出站投递；通讯录接口在真实租户返回 403 no dept authority，按姓名搜索仍不可用（已按 PRD 降级）。人类账号入站、通讯录权限审批和真实模型调用未执行。
+- 真实飞书：已确认 Bot 长连接、真实入站事件（测试群内 @）、出站投递与按姓名查找（权限范围设为 all 后查到 Owner）。人类账号入站与真实模型调用未执行。
 - 真实进程重启 E2E 通过（A08）。
 - 打包：release core、Web、执行台与 Electron 构建通过，产出 dist/win-unpacked/Rovai-ai.exe；verify-windows-release --unpacked-only 因 dir 包缺少 app-update.yml 失败（既有打包元数据缺口），未做 GUI 启动验收。
 - 模拟通过不等于真实验收通过。
