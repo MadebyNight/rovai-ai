@@ -3121,8 +3121,7 @@ impl CollaborationService {
         }]);
         let execution = ExecutionRequest {
             task_id: None,
-            purpose: "Answer one Feishu chat message as the member's chat Bot."
-                .to_string(),
+            purpose: "Answer one Feishu chat message as the member's chat Bot.".to_string(),
             completion_role: required_completion_role(),
             budget: None,
         };
