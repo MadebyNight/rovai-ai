@@ -1,35 +1,10 @@
-# Rovai AI v0.4.12
+# Rovai AI v0.5.0
 
 <!-- lang:zh-CN -->
+本版本新增飞书聊天 Bot 模式，并完成真实飞书、真实模型与 Windows 安装包的验收。
 
-本次更新在执行过程中加入插话记录，调整队员卡片和邀请操作，并修复网页版新建会话、附件发送及删除会话后的错误提示。
-
-- 【功能】**执行过程中可直接查看插话记录。** 插话在对应位置单独显示，可展开查看原文和投递状态，并点击“原消息”返回会话定位；前后的工具操作分组会保留清楚的边界。
-- 【交互】**调整队员卡片与邀请列表。** 角色、智能体和模型信息分层显示，长模型名称不再挤压智能体名称。邀请候选改用行尾复选框；邀请弹窗与 `@` 候选统一检查可用性，避免加入未配置或不可用的队员。
-- 【界面】**改善手机网页版的队员邀请体验。** 邀请窗口改为底部弹层，搜索和确认区域固定，候选列表独立滚动；首次打开不自动聚焦搜索框，适配横屏和键盘弹出后的可视区域。
-- 【交互】**调整队员的文件发送指引。** 普通文件引用优先使用 Markdown 链接，明确需要附件时再发送文件；为 Lark 和钉钉补齐与飞书一致的文件交付提示。
-- 【修复】**修复网页版新建会话时输入框无法初始化的问题。** 解决打开新对话后提示操作未开放、无法正常输入和发送的问题。
-- 【修复】**修复网页版上传附件后无法发送的问题。** 正确识别上传后的附件状态，同时修复草稿恢复后的附件预览与可用性检查。
-- 【修复】**修复删除会话后误报“会话不存在”的问题。** 删除或切换会话后，不再让过期刷新结果干扰当前页面；其他客户端删除会话后也能正确更新。
-
-感谢 [@liangxyz](https://github.com/liangxyz) 在 [#779](https://github.com/murray17/rovai-ai/issues/779) 中反馈网页版附件发送问题。
-
-[完整变更](https://github.com/murray17/rovai-ai/compare/v0.4.11...v0.4.12)
-
----
-
-<!-- lang:en -->
-
-This release adds steering records to the execution view, updates teammate cards and invitations, and fixes new conversations, attachment sending, and misleading errors after conversation deletion in the Web app.
-
-- [Feature] **See steering records directly in the execution view.** Follow-up instructions appear as separate rows at their corresponding positions. Expand them to read the original text and delivery status, or select “Original message” to return to the source in the conversation. Tool operations before and after an input keep clear grouping boundaries.
-- [Interaction] **Update teammate cards and invitation lists.** Roles, runtimes, and models are shown separately, so long model names no longer squeeze runtime names. Invitation checkboxes move to the end of each row. The invitation dialog and `@` suggestions use the same availability checks to avoid adding unconfigured or unavailable teammates.
-- [UI] **Improve teammate invitations on mobile Web.** Invitations open in a bottom sheet with fixed search and confirmation areas and a separately scrolling candidate list. Opening the sheet no longer automatically focuses search; the layout adapts to landscape and the visible area above the keyboard.
-- [Interaction] **Adjust file-sending guidance for teammates.** Prefer Markdown links for ordinary file references and send attachments when explicitly needed. Lark and DingTalk receive the same channel file-delivery guidance already provided for Feishu.
-- [Fix] **Fix composer initialization when creating a Web conversation.** Resolve the unsupported-operation error that prevented the composer from becoming available for typing and sending.
-- [Fix] **Fix sending after uploading a Web attachment.** Recognize uploaded attachment state correctly, and restore attachment previews and availability checks when recovering a draft.
-- [Fix] **Avoid misleading “conversation does not exist” errors after deletion.** Obsolete refresh results no longer interfere after deleting or switching conversations. Deletion from another client is also handled correctly.
-
-Thanks to [@liangxyz](https://github.com/liangxyz) for reporting the Web attachment-sending issue in [#779](https://github.com/murray17/rovai-ai/issues/779).
-
-[Full changelog](https://github.com/murray17/rovai-ai/compare/v0.4.11...v0.4.12)
+- 【功能】**飞书 Bot 双模式。** 打开“仅 Owner 可交互”时保持现有工作 Bot；关闭后，Owner、同事与已建联外部联系人只能使用聊天、资料问答、转发、代问和向 Owner 确认，不进入本地工作链路。
+- 【功能】**共享资料问答。** 绑定一个已有文件夹，实时读取 UTF-8 Markdown/TXT，按问题返回相关片段并注明出处；资料变化、删除或解绑立即生效。
+- 【功能】**沟通闭环。** 支持按姓名找同事、受委托转发、代问与引用回复关联、阶段汇报和补充汇报，并如实反馈发送成功、失败或无法确认。
+- 【配置】**Bot 行内聊天设置。** 提供模式开关、聊天模型、只写密钥和资料文件夹绑定；密钥不会回显到界面。
+- 【安全】**独立上下文。** 聊天记录、沟通事项与出站消息独立持久化，不读取工作会话、Camp 或执行历史，不发送运行状态卡或本地路径。
