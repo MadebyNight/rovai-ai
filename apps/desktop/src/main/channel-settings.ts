@@ -21,6 +21,7 @@ import type {
 } from '@contracts'
 import type { CoreClient } from './core-client'
 import { ChannelChatService, type ChatSendReceipt } from './channel-chat-service'
+import { ContactSearchError, searchContacts } from './feishu-contact-search'
 import {
   FEISHU_PROVIDER_PROFILE,
   presentProviderError,
@@ -1614,14 +1615,48 @@ export class ChannelSettingsService {
       core: {
         request: (method, params) => this.#dependencies!.core.request(method, params)
       },
-      sendText: async (target, text, _targetKind) => {
+      isReady: async () => {
         const managed = this.#managedChannels.get(appId)
-        if (!managed) return { status: 'failed', messageId: null }
+        if (!managed || managed.connectionStatus !== 'online') return false
+        const credential = await this.#dependencies!.credentialStore.read(managed.credentialRef)
+        return credential?.appId === appId && !!credential.appSecret
+          && managed.connectionStatus === 'online' && this.#managedChannels.get(appId) === managed
+      },
+      searchContacts: async (query, signal) => {
+        const managed = this.#managedChannels.get(appId)
+        if (!managed || managed.connectionStatus !== 'online') throw new ContactSearchError('unavailable')
+        const credential = await this.#dependencies!.credentialStore.read(managed.credentialRef)
+        if (!credential || credential.appId !== appId || managed.connectionStatus !== 'online'
+          || this.#managedChannels.get(appId) !== managed || signal.aborted) throw new ContactSearchError('unavailable')
+        return searchContacts({ ...credential, domain: provider, query, signal })
+      },
+      sendText: async (target, text, targetKind, outboundId) => {
+        const managed = this.#managedChannels.get(appId)
+        if (!managed || managed.connectionStatus !== 'online') return { status: 'failed', messageId: null }
+        let timer: ReturnType<typeof setTimeout> | undefined
         try {
-          const result = await managed.channel.send(target, { text })
-          return { status: 'sent', messageId: result?.messageId ?? null }
-        } catch (error) {
-          return { status: chatSendFailure(error), messageId: null }
+          return await Promise.race([
+            managed.channel.rawClient.im.v1.message.create({
+              params: { receive_id_type: targetKind === 'open_id' ? 'open_id' : 'chat_id' },
+              data: {
+                receive_id: target, msg_type: 'text', content: JSON.stringify({ text }),
+                uuid: createHash('sha256').update(provider + '\0' + appId + '\0' + outboundId).digest('hex').slice(0, 50)
+              }
+            }).then((result): ChatSendReceipt => {
+              if (result.code !== 0) return { status: 'failed', messageId: null }
+              return result.data?.message_id
+                ? { status: 'sent', messageId: result.data.message_id }
+                : { status: 'unknown', messageId: null }
+            }),
+            new Promise<ChatSendReceipt>((resolve) => {
+              timer = setTimeout(() => resolve({ status: 'unknown', messageId: null }), 20_000)
+            })
+          ])
+        } catch {
+          // A transport exception cannot establish whether the mutation happened.
+          return { status: 'unknown', messageId: null }
+        } finally {
+          if (timer) clearTimeout(timer)
         }
       },
       log: (event, detail) => logFeishuBotDiagnostic('chat.' + event, {
@@ -1688,7 +1723,7 @@ export class ChannelSettingsService {
     } catch (error) {
       logFeishuBotDiagnostic('chat.failed', {
         ...messageDiagnostic(managed, message),
-        reason: channelFailureCode(error)
+        reason: 'unavailable'
       })
     }
     await this.#emit()
@@ -3045,14 +3080,6 @@ function channelFailureCode(error: unknown): string {
   if (error instanceof LarkChannelError) return error.code
   if (error instanceof Error && /^[a-z][a-z0-9_.-]{1,80}$/i.test(error.message)) return error.message
   return 'unknown'
-}
-
-/** Sending failed before the platform proved delivery: never claim success. */
-function chatSendFailure(error: unknown): 'failed' | 'unknown' {
-  const code = channelFailureCode(error)
-  return ['send_timeout', 'not_connected', 'unknown', 'rate_limited'].includes(code)
-    ? 'unknown'
-    : 'failed'
 }
 
 function recoverableProvisioningDetail(failureCode: string, hasRemoteApp: boolean): string {

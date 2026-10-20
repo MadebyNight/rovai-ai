@@ -429,7 +429,29 @@ fn envelope_exit_code(
     envelope: &rovai_core::builtin_tool_transport::BuiltinToolInvocationEnvelope,
 ) -> u8 {
     if envelope.ok {
-        0
+        if matches!(
+            envelope.operation.as_str(),
+            "feishu.status"
+                | "feishu.search"
+                | "feishu.result"
+                | "feishu.forward"
+                | "feishu.ask"
+                | "feishu.items"
+                | "feishu.report"
+                | "feishu.close"
+        ) {
+            match envelope
+                .result
+                .as_ref()
+                .and_then(|result| result["status"].as_str())
+            {
+                Some("failed") => 2,
+                Some("unknown") => 3,
+                _ => 0,
+            }
+        } else {
+            0
+        }
     } else if envelope
         .error
         .as_ref()
@@ -469,7 +491,7 @@ fn invocation_identity(args: &[String]) -> Option<BuiltinToolCliIdentity> {
 }
 
 fn is_family_help(args: &[String]) -> bool {
-    matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "thread" | "camp" | "history" | "memory" | "single-chat" | "automation" | "mission"))
+    matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "thread" | "camp" | "history" | "memory" | "single-chat" | "automation" | "mission" | "feishu"))
 }
 
 fn discover_tasks_enabled() -> bool {
@@ -1541,7 +1563,7 @@ fn print_root_help() {
 }
 
 fn root_help_text(managed_runtime: bool, tasks_enabled: bool) -> String {
-    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai member list|get|create|update\n  rovai task create|get|list|update\n  rovai thread list|search|read|runs\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission list|get|update|status\n\nRun an Agent operation's exact `--help` for its closed inputs.\n".to_string();
+    let mut text = "Rovai CLI\n\nAgent operations:\n  rovai send\n  rovai member list|get|create|update\n  rovai task create|get|list|update\n  rovai thread list|search|read|runs\n  rovai history search\n  rovai memory view|search|read|write\n  rovai automation list|get|create|run|close|update|delete\n  rovai mission list|get|update|status\n  rovai feishu status|search|result|forward|ask|items|report|close\n\nRun an Agent operation's exact `--help` for its closed inputs.\n".to_string();
     if !tasks_enabled {
         text = text.replace("  rovai task create|get|list|update\n", "");
     }
@@ -1692,6 +1714,19 @@ fn operation_help_text(description: &BuiltinToolDescription) -> String {
         description.summary
     )
     .expect("writing help to a String cannot fail");
+    if matches!(
+        description.name.as_str(),
+        "feishu.status"
+            | "feishu.search"
+            | "feishu.result"
+            | "feishu.forward"
+            | "feishu.ask"
+            | "feishu.items"
+            | "feishu.report"
+            | "feishu.close"
+    ) {
+        writeln!(output, "Feishu scope: current authorized Bot and claimed Run inputs only; global Thread members are not a Feishu directory.\nThe native Runtime may require approval to run this CLI; these tools do not bypass its approval policy.\nSearch is asynchronous: search returns queued/requestId; use feishu result --request-id <requestId> to read contacts or delivery status. queued and unknown do not mean sent; never blindly resend an unknown outcome.\nUse forward or ask only when the user explicitly delegates sending or asking. Copy targetRef from authorized results/current-input mentions; never supply an arbitrary openId or guess between same-name contacts. ask accepts targetRef=owner, resolved by Core.\nFor an ambiguous multi-input Run, choose an inputRef from feishu status and pass --input-ref; do not guess the latest input.\nreport sends an authorized reply to the item's frozen conversation and keeps it waiting; only the Bot Owner may close it.\n").expect("writing help to a String cannot fail");
+    }
     let rendered_discriminated = discriminated_input_variants(description).is_some_and(|input| {
         render_discriminated_input_help(&mut output, description, &input);
         true
@@ -2097,6 +2132,20 @@ fn write_indented_help(output: &mut String, help: &str) {
 
 fn operation_help_examples(operation: &str) -> &'static [&'static str] {
     match operation {
+        "feishu.status" => &["rovai feishu status"],
+        "feishu.search" => &["rovai feishu search --query 'Alex' --input-ref '<inputRef>'"],
+        "feishu.result" => &["rovai feishu result --request-id '<requestId>'"],
+        "feishu.forward" => &[
+            "rovai feishu forward --target-ref '<targetRef>' --text 'Requested update' --input-ref '<inputRef>'",
+        ],
+        "feishu.ask" => &[
+            "rovai feishu ask --target-ref '<targetRef>' --question 'What is the current progress?' --input-ref '<inputRef>'",
+        ],
+        "feishu.items" => &["rovai feishu items --input-ref '<inputRef>'"],
+        "feishu.report" => &[
+            "rovai feishu report --item-id '<itemId>' --text 'Current progress' --input-ref '<inputRef>'",
+        ],
+        "feishu.close" => &["rovai feishu close --item-id '<itemId>' --input-ref '<inputRef>'"],
         "mission.list" => &[
             "rovai mission list",
             "rovai mission list --query \"attachments\"",
@@ -2477,6 +2526,7 @@ mod tests {
             "memory",
             "single-chat",
             "automation",
+            "feishu",
         ] {
             let args = [family.to_string(), "--help".to_string()];
             assert!(operation_help(&args, true).unwrap().is_none());
@@ -2506,6 +2556,7 @@ mod tests {
             &["camp", "list", "--help"],
             &["camp", "search", "--help"],
             &["camp", "read", "--help"],
+            &["thread", "runs", "--help"],
             &["history", "search", "--help"],
             &["single-chat", "history", "--help"],
             &["memory", "view", "--help"],
@@ -2523,8 +2574,124 @@ mod tests {
             &["mission", "get", "--help"],
             &["mission", "update", "--help"],
             &["mission", "status", "--help"],
+            &["feishu", "status", "--help"],
+            &["feishu", "search", "--help"],
+            &["feishu", "result", "--help"],
+            &["feishu", "forward", "--help"],
+            &["feishu", "ask", "--help"],
+            &["feishu", "items", "--help"],
+            &["feishu", "report", "--help"],
+            &["feishu", "close", "--help"],
         ];
-        assert_eq!(exact_paths.len(), 29);
+        assert_eq!(exact_paths.len(), 38);
+        for managed_runtime in [true, false] {
+            assert!(
+                root_help_text(managed_runtime, false)
+                    .contains("rovai feishu status|search|result|forward|ask|items|report|close")
+            );
+        }
+        let feishu_cases = [
+            ("status", vec![], json!({})),
+            (
+                "search",
+                vec!["--query", "Alex", "--input-ref", "input_123"],
+                json!({"query":"Alex","inputRef":"input_123"}),
+            ),
+            (
+                "result",
+                vec!["--request-id", "request_123"],
+                json!({"requestId":"request_123"}),
+            ),
+            (
+                "forward",
+                vec![
+                    "--target-ref",
+                    "target_123",
+                    "--text",
+                    "Requested update",
+                    "--input-ref",
+                    "input_123",
+                ],
+                json!({"targetRef":"target_123","text":"Requested update","inputRef":"input_123"}),
+            ),
+            (
+                "ask",
+                vec!["--target-ref", "owner", "--question", "Current progress?"],
+                json!({"targetRef":"owner","question":"Current progress?"}),
+            ),
+            (
+                "items",
+                vec!["--input-ref", "input_123"],
+                json!({"inputRef":"input_123"}),
+            ),
+            (
+                "report",
+                vec!["--item-id", "item_123", "--text", "Current progress"],
+                json!({"itemId":"item_123","text":"Current progress"}),
+            ),
+            (
+                "close",
+                vec!["--item-id", "item_123"],
+                json!({"itemId":"item_123"}),
+            ),
+        ];
+        for (action, flags, input) in feishu_cases {
+            let operation = format!("feishu.{action}");
+            let description = builtin_tool_description(&operation, false).unwrap();
+            let help = operation_help_text(&description);
+            for boundary in [
+                "Search is asynchronous",
+                "queued and unknown do not mean sent",
+                "explicitly delegates",
+                "targetRef",
+                "arbitrary openId",
+                "multi-input Run",
+                "not a Feishu directory",
+                "native Runtime may require approval",
+                "do not bypass its approval policy",
+            ] {
+                assert!(help.contains(boundary), "{operation}: {boundary}");
+            }
+            rovai_core::team_tool_catalog::validate_builtin_tool_input(&operation, &input).unwrap();
+            if !flags.is_empty() {
+                let args = flags
+                    .iter()
+                    .map(|flag| flag.to_string())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    parse_and_validate_operation_input(&description, &args).unwrap(),
+                    input
+                );
+            }
+            for flag in ["--open-id", "--provider", "--app-id", "--unknown"] {
+                assert!(
+                    parse_operation_input(&description, &[flag.into(), "forged".into()]).is_err()
+                );
+            }
+            let mut invalid = input.clone();
+            invalid["openId"] = json!("forged");
+            assert!(
+                rovai_core::team_tool_catalog::validate_builtin_tool_input(&operation, &invalid)
+                    .is_err()
+            );
+            if matches!(
+                action,
+                "search" | "result" | "forward" | "ask" | "report" | "close"
+            ) {
+                assert!(
+                    rovai_core::team_tool_catalog::validate_builtin_tool_input(
+                        &operation,
+                        &json!({})
+                    )
+                    .is_err()
+                );
+            }
+        }
+        assert!(builtin_tool_identity_by_command("feishu", "delete").is_none());
+        assert!(
+            rovai_core::team_tool_catalog::validate_builtin_tool_input("feishu.delete", &json!({}))
+                .is_err()
+        );
         for path in exact_paths {
             let args = path
                 .iter()
@@ -2547,6 +2714,7 @@ mod tests {
             "memory",
             "single-chat",
             "automation",
+            "feishu",
         ] {
             let args = vec![family.to_string(), "--help".to_string()];
             assert!(operation_help(&args, true).unwrap().is_none());
@@ -3305,6 +3473,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(envelope_exit_code(&envelope), 3);
+        for operation in [
+            "feishu.status",
+            "feishu.search",
+            "feishu.result",
+            "feishu.forward",
+            "feishu.ask",
+            "feishu.items",
+            "feishu.report",
+            "feishu.close",
+        ] {
+            for (status, expected) in [
+                ("ready", 0),
+                ("queued", 0),
+                ("sent", 0),
+                ("failed", 2),
+                ("unknown", 3),
+                ("closed", 0),
+            ] {
+                let result = json!({"status":status,"requestId":null,"contacts":[],"items":[],"inputs":[],"errorCode":null});
+                let envelope =
+                    rovai_core::builtin_tool_transport::BuiltinToolInvocationEnvelope::success(
+                        operation,
+                        "7b5db24c-4a43-4cab-9217-d982b08f7691",
+                        result.clone(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    envelope_exit_code(&envelope),
+                    expected,
+                    "{operation}: {status}"
+                );
+                assert_eq!(project_envelope(envelope).unwrap(), result);
+            }
+        }
+        let unrelated = rovai_core::builtin_tool_transport::BuiltinToolInvocationEnvelope::success(
+            "mission.status",
+            "7b5db24c-4a43-4cab-9217-d982b08f7691",
+            json!({"status":"unknown"}),
+        )
+        .unwrap();
+        assert_eq!(envelope_exit_code(&unrelated), 0);
     }
 
     #[test]

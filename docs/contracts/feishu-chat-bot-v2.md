@@ -44,13 +44,20 @@ last_updated: 2026-10-21
 - channels.chat.configure 不再携带 model/modelBaseUrl/credential 字段；删除
   channels.chat.credential.set/get，新增 members.chat.set。
 - channel_chat_turn 不再存模型轮次；会话上下文由聊天线程自身承载。
-- v1 的 JSON 动作协议（search_materials、find_person、forward、ask、ask_owner、close_item）
-  在 v2 停用；恢复将由 Agent 工具（MCP）承接。
+- v1 的独立模型 JSON 动作协议停用；联系人查询、受托转发、代问及事项报告通过受认证的 `rovai feishu` CLI 恢复，接口见 [Built-in Tool Transport v44](builtin-tool-transport-v44.md)。不恢复独立模型配置，不修改共享 Bootstrap 或 Dynamic Context。资料操作仍由队员 Runtime 完成。
 - 迁移 210 在 agent_profile 新增 chat_bot_enabled 与 chat_materials_path，保留旧聊天表和历史字段，不自动授予成员 Runtime 写权限。
 
-## 5. 升级准入
+## 5. 飞书工具与恢复
 
-- 上游 projection schema 158 不代表聊天迁移完成。只有 209、210 收据与对应表列布局一致，数据库才可作为当前权威直接打开。
-- 已知的上游 208 布局及仅完成 209 的布局，必须经正式 DatabaseAdmission / AuthorityMigrationRunner 补齐迁移，再开放成员与诊断读取。
+联系人与目标引用必须属于当前 Run/epoch 和入站输入，不能由模型传入任意 Bot 或 open_id。多输入批次需显式选择 inputRef，不能猜请求者。
+Host 用已有私有凭据执行查人；查询结果最多20项，不把原始SDK错误或密钥回传模型。受托发送进入幂等出站队列，排队不表示已送达，unknown不可盲目重发。
+代问先原子建立事项与出站，回复以引用或唯一等待事项关联；报告只能回到原请求会话，阶段/补充不自动关闭。
+入站与内部消息的持久映射支持Host重启恢复；终态回复入队时原子记录reply_outbound_id，等待审批和超时提示不结束该映射。
+原生Runtime审批照旧，不以bypass绕过。
+
+## 6. 升级准入
+
+- 上游 projection schema 158 不代表聊天迁移完成。只有 209、210、211 收据与对应表列布局一致，数据库才可作为当前权威直接打开。
+- 已知的上游 208 布局及仅完成 209 或 210 的布局，必须经正式 DatabaseAdmission / AuthorityMigrationRunner 补齐迁移，再开放成员与诊断读取。
 - 已有迁移收据但表列缺损的数据库应拒绝准入，不得当作旧库静默修补或清空重建。
 - 验收覆盖旧库升级、成员与导航读取、诊断导出、数据保留和重复启动；新库 health.check 单独通过不足以证明升级可用。

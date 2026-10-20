@@ -6958,6 +6958,11 @@ impl Core {
                 &database, &authenticated_run, &request.tool_name, &mut request.input,
             )?;
             let operation_result = match request.tool_name.as_str() {
+                "feishu.status" | "feishu.search" | "feishu.result" | "feishu.forward" |
+                "feishu.ask" | "feishu.items" | "feishu.report" | "feishu.close" => {
+                    rovai_core::channel_chat_tools::execute(&mut database,&authenticated_run,
+                        &request.runtime_tool_call_id,&request.tool_name,&request.input)
+                }
                 CAMP_MESSAGE_SEND_TOOL_NAME => {
                     let input = serde_json::from_value::<ThreadMessageSendInput>(request.input)
                         .context("camp.message.send input is invalid")?;
@@ -8896,6 +8901,28 @@ impl Core {
                 self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(tick)?)
             }
+            "channels.chat.pending" => {
+                let params: rovai_core::channel_chat::ChatPendingParams =
+                    serde_json::from_value(request.params.clone())?;
+                let database = self.database.lock().await;
+                let mut statement=database.connection().prepare("SELECT b.camp_message_id,m.chat_id,m.received_at FROM channel_chat_input b JOIN channel_chat_message m ON m.id=b.inbound_id JOIN channel_chat_conversation mapping ON mapping.camp_id=b.camp_id AND mapping.provider=m.provider AND mapping.app_id=m.app_id AND mapping.chat_id=m.chat_id WHERE m.provider=?1 AND m.app_id=?2 AND b.reply_outbound_id IS NULL ORDER BY m.received_at LIMIT ?3")?;
+                let rows=statement.query_map(rusqlite::params![params.provider,params.app_id,params.limit.clamp(1,50)],|row|Ok(json!({"campMessageId":row.get::<_,String>(0)?,"chatId":row.get::<_,String>(1)?,"submittedAt":row.get::<_,i64>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(json!(rows))
+            }
+            "channels.chat.tools.claim" => {
+                let params: rovai_core::channel_chat_tools::QueryClaim =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat_tools::claim(&mut database, &params)?,
+                )?)
+            }
+            "channels.chat.tools.settle" => {
+                let params: rovai_core::channel_chat_tools::QuerySettle =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                rovai_core::channel_chat_tools::settle(&mut database, &params)
+            }
             "channels.chat.snapshot" => {
                 let params: rovai_core::channel_chat::ChatScopeParams =
                     serde_json::from_value(request.params.clone())?;
@@ -9044,9 +9071,9 @@ impl Core {
                 let params: UserCommandParams<rovai_core::channel_chat::ChatOutboundSettleCommand> =
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                rovai_core::channel_chat::ChannelChatService
+                let settled = rovai_core::channel_chat::ChannelChatService
                     .settle(&mut database, &params.command)?;
-                Ok(json!({ "settled": true }))
+                Ok(json!({ "settled": settled }))
             }
             "channels.chat.outbound.cancel" => {
                 let params: rovai_core::channel_chat::ChatScopeParams =

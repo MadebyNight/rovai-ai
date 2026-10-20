@@ -3555,6 +3555,35 @@ fn connection_has_legacy_feishu_migration_collision(
 // The upstream projection marker is unchanged by additive chat migrations.
 // Receipt and layout validation must still precede admission as Current;
 // open_admitted deliberately does not run schema migrations.
+#[cfg(test)]
+pub(crate) fn assert_chat_tool_upgrade_sources(database: &mut Database) {
+    for source in [210, 209, 208] {
+        database.connection.execute_batch("DROP TABLE channel_chat_target_grant; DROP TABLE channel_chat_tool_request; DROP TABLE channel_chat_input; ALTER TABLE channel_chat_message DROP COLUMN mentions_json; ALTER TABLE channel_chat_outbound DROP COLUMN target_kind; ALTER TABLE channel_chat_outbound DROP COLUMN lease_token; ALTER TABLE channel_chat_outbound DROP COLUMN item_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_run_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_execution_epoch; DELETE FROM schema_migration WHERE version=211;").unwrap();
+        if source < 210 {
+            database.connection.execute_batch("DROP TABLE channel_chat_conversation; ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled; ALTER TABLE agent_profile DROP COLUMN chat_materials_path; ALTER TABLE conversation DROP COLUMN permission_override_json; DELETE FROM schema_migration WHERE version=210;").unwrap();
+        }
+        if source < 209 {
+            database.connection.execute_batch("DROP TABLE channel_chat_outbound; DROP TABLE channel_chat_item; DROP TABLE channel_chat_turn; DROP TABLE channel_chat_message; DROP TABLE channel_chat_credential; DROP TABLE channel_chat_bot; DELETE FROM schema_migration WHERE version=209;").unwrap();
+        }
+        assert!(
+            matches!(
+                classify_database_contract(database.connection()).unwrap(),
+                DatabaseContractClassification::SupportedMigrationSource(_)
+            ),
+            "source {source}"
+        );
+        database.migrate(false).unwrap();
+        assert!(
+            matches!(
+                classify_database_contract(database.connection()).unwrap(),
+                DatabaseContractClassification::Current(_)
+            ),
+            "upgraded {source}"
+        );
+        assert!(crate::channel_chat_tools::schema_matches(database.connection()).unwrap());
+    }
+}
+
 fn classify_chat_schema(
     connection: &Connection,
     marker: DatabaseContractMarker,
@@ -3601,9 +3630,19 @@ fn classify_chat_schema(
     } else {
         member_columns == 0 && conversation_columns == 0 && mapping_tables == 0
     };
-    Ok(if !chat_valid || !member_valid {
+    let tool_receipt: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=211)",
+        [],
+        |row| row.get(0),
+    )?;
+    let tool_valid = if tool_receipt {
+        member_receipt && crate::channel_chat_tools::schema_matches(connection)?
+    } else {
+        connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('channel_chat_input','channel_chat_tool_request','channel_chat_target_grant')) AND NOT EXISTS(SELECT 1 FROM pragma_table_info('channel_chat_message') WHERE name='mentions_json') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('channel_chat_outbound') WHERE name IN ('target_kind','lease_token','item_id','source_run_id','source_execution_epoch'))", [], |row| row.get(0))?
+    };
+    Ok(if !chat_valid || !member_valid || !tool_valid {
         DatabaseContractClassification::Unknown(Some(marker))
-    } else if chat_receipt && member_receipt {
+    } else if chat_receipt && member_receipt && tool_receipt {
         DatabaseContractClassification::Current(marker)
     } else {
         DatabaseContractClassification::SupportedMigrationSource(marker)
@@ -9433,6 +9472,9 @@ impl Database {
             if !self.schema_migration_applied(210)? {
                 migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
             }
+            if !self.schema_migration_applied(211)? {
+                migration_step!("migration_211", crate::channel_chat_tools::migrate(self));
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -10284,6 +10326,9 @@ impl Database {
         }
         if !self.schema_migration_applied(210)? {
             migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
+        }
+        if !self.schema_migration_applied(211)? {
+            migration_step!("migration_211", crate::channel_chat_tools::migrate(self));
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())

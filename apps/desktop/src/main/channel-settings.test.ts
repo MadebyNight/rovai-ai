@@ -325,6 +325,58 @@ function normalizedMessage(input: {
 }
 
 describe('channel settings service', () => {
+  it.each([FEISHU_PROVIDER_PROFILE, LARK_PROVIDER_PROFILE])('$kind runs private contact jobs and sends explicit target kinds through the SDK once', async (profile) => {
+    const harness = controlledChannels({ cli_a: { openId: 'ou_bot_a', name: '审阅员' } })
+    const credentials = memoryCredentialStore({ 'private-ref': { appId: 'cli_a', appSecret: 'private-secret' } }, () => profile.kind)
+    const read = vi.spyOn(credentials, 'read')
+    const calls: Array<{ method: string; raw: any }> = []
+    let claimed = false
+    let outboundClaimed = false
+    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('tenant_access_token')
+      ? { code: 0, tenant_access_token: 'private-token' }
+      : { code: 0, data: { users: [{ open_id: 'ou_person', name: '同事', app_secret: 'private-secret' }] } })))
+    vi.stubGlobal('fetch', fetchMock)
+    const service = new ChannelSettingsService({
+      ...inertInterval(), profile, credentialStore: credentials, createChannel: harness.createChannel,
+      core: channelCore((method, raw) => {
+        calls.push({ method, raw })
+        if (method === profile.methodPrefix + 'snapshot') return coreSnapshot({ memberBots: [{
+          agentId: 'agent-a', accountId: 'account-1', brand: profile.kind, appId: 'cli_a',
+          botDisplayName: '审阅员', credentialRef: 'private-ref', status: 'published',
+          failureCode: null, version: 1, ownerIdentityStatus: 'verified'
+        }] })
+        if (method === 'channels.chat.tools.claim') {
+          if (claimed) return []
+          claimed = true
+          return [{ requestId: 'req-1', leaseToken: 'lease-1', query: '同事' }]
+        }
+        if (method === 'channels.chat.pending') return []
+        if (method === 'channels.chat.outbound.claim') {
+          if (outboundClaimed) return []
+          outboundClaimed = true
+          return [
+            { id: 'out-dm', chatId: 'ou_person', text: '私聊', source: 'forward', attempts: 1, targetKind: 'open_id', leaseToken: 'out-lease-1' },
+            { id: 'out-chat', chatId: 'oc_group', text: '群聊', source: 'forward', attempts: 1, targetKind: 'chat', leaseToken: 'out-lease-2' }
+          ]
+        }
+        if (method === 'channels.chat.outbound.settle' || method === 'channels.chat.tools.settle') return { settled: true }
+        return { status: 'applied', payload: {} }
+      })
+    })
+    try {
+      await service.start()
+      await vi.waitFor(() => expect(harness.createMessage).toHaveBeenCalledTimes(2))
+      expect(read).toHaveBeenCalledWith('private-ref')
+      const settled = calls.find(({ method }) => method === 'channels.chat.tools.settle')!.raw
+      expect(settled).toMatchObject({ provider: profile.kind, appId: 'cli_a', requestId: 'req-1', leaseToken: 'lease-1', contacts: [{ openId: 'ou_person', name: '同事' }], errorCode: null })
+      expect(JSON.stringify(calls)).not.toMatch(/private-secret|private-token/)
+      expect(new URL(fetchMock.mock.calls[0][0]).origin).toBe(profile.kind === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn')
+      expect(harness.createMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({ params: { receive_id_type: 'open_id' }, data: expect.objectContaining({ receive_id: 'ou_person', uuid: expect.any(String) }) }))
+      expect(harness.createMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({ params: { receive_id_type: 'chat_id' }, data: expect.objectContaining({ receive_id: 'oc_group', uuid: expect.any(String) }) }))
+      expect(harness.send).not.toHaveBeenCalled()
+    } finally { await service.stop(); vi.unstubAllGlobals() }
+  })
+
   it.each([FEISHU_PROVIDER_PROFILE, LARK_PROVIDER_PROFILE])('$kind recovers pending attachment downloads without blocking the pump or submitting partial inputs', async (profile) => {
     const harness = controlledChannels({ cli_a: { openId: 'ou_bot_a', name: '审阅员' } })
     const stream = new PassThrough()

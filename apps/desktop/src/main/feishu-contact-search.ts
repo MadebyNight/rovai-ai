@@ -3,7 +3,7 @@ export type ChatContact = { openId: string; name: string; department?: string }
 export type ContactSearchErrorCode = 'permission_denied' | 'unavailable' | 'invalid_response'
 
 export class ContactSearchError extends Error {
-  constructor(readonly code: ContactSearchErrorCode, message: string) {
+  constructor(readonly code: ContactSearchErrorCode, message = 'contact search failed') {
     super(message)
     this.name = 'ContactSearchError'
   }
@@ -14,146 +14,93 @@ export type ContactSearchRequest = {
   appSecret: string
   domain?: 'feishu' | 'lark'
   query: string
+  signal?: AbortSignal
   fetchImpl?: typeof fetch
 }
 
 const PERMISSION_CODES = new Set([99991672, 99991663, 41050, 40004])
+const SEARCH_TIMEOUT_MS = 15_000
 
-function baseUrl(domain: 'feishu' | 'lark' | undefined): string {
-  return domain === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn'
+function contact(value: unknown): ChatContact | null {
+  if (!value || typeof value !== 'object') return null
+  const user = value as Record<string, unknown>
+  if (typeof user.open_id !== 'string' || !user.open_id.startsWith('ou_')
+    || user.open_id.length > 128 || typeof user.name !== 'string' || !user.name.trim()) return null
+  const department = typeof user.department === 'string' ? user.department
+    : Array.isArray(user.department_names) ? user.department_names.filter((name) => typeof name === 'string').join(' / ')
+      : undefined
+  return { openId: user.open_id, name: user.name.slice(0, 200), ...(department ? { department: department.slice(0, 300) } : {}) }
 }
 
-/** Contact search runs per request; no directory copy is persisted or cached. */
+/** Bounded live queries use only the Bot's granted scope; no directory is cached. */
 export async function searchContacts(request: ContactSearchRequest): Promise<ChatContact[]> {
   const query = request.query.trim()
   if (!query) return []
+  if (query.length > 200) throw new ContactSearchError('invalid_response')
   const fetchImpl = request.fetchImpl ?? fetch
-  const root = baseUrl(request.domain)
-  let tokenResponse: Response
-  try {
-    tokenResponse = await fetchImpl(root + '/open-apis/auth/v3/tenant_access_token/internal', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ app_id: request.appId, app_secret: request.appSecret })
-    })
-  } catch {
-    throw new ContactSearchError('unavailable', 'contact search is unreachable')
+  const root = request.domain === 'lark' ? 'https://open.larksuite.com' : 'https://open.feishu.cn'
+  const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+  const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout
+  const read = async (url: string, init: RequestInit = {}) => {
+    let response: Response
+    try {
+      signal.throwIfAborted()
+      response = await fetchImpl(url, { ...init, signal })
+    } catch {
+      throw new ContactSearchError('unavailable')
+    }
+    const payload: unknown = await response.json().catch(() => null)
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new ContactSearchError('invalid_response')
+    }
+    return { response, payload: payload as Record<string, any> }
   }
-  const tokenPayload = (await tokenResponse.json().catch(() => null)) as
-    | { code?: number; tenant_access_token?: string }
-    | null
-  if (!tokenResponse.ok || !tokenPayload?.tenant_access_token) {
-    throw new ContactSearchError(
-      tokenPayload?.code && PERMISSION_CODES.has(tokenPayload.code)
-        ? 'permission_denied'
-        : 'unavailable',
-      'contact search token failed'
-    )
+  const tokenResult = await read(root + '/open-apis/auth/v3/tenant_access_token/internal', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ app_id: request.appId, app_secret: request.appSecret })
+  })
+  if (!tokenResult.response.ok || tokenResult.payload.code !== 0) {
+    throw new ContactSearchError(PERMISSION_CODES.has(tokenResult.payload.code) ? 'permission_denied' : 'unavailable')
   }
-  let searchResponse: Response
-  try {
-    searchResponse = await fetchImpl(
-      root + '/open-apis/search/v1/user?query=' + encodeURIComponent(query) + '&page_size=20',
-      { headers: { authorization: 'Bearer ' + tokenPayload.tenant_access_token } }
-    )
-  } catch {
-    throw new ContactSearchError('unavailable', 'contact search is unreachable')
+  const token = tokenResult.payload.tenant_access_token
+  if (typeof token !== 'string' || !token) throw new ContactSearchError('invalid_response')
+  const headers = { authorization: 'Bearer ' + token }
+  const search = await read(root + '/open-apis/search/v1/user?query=' + encodeURIComponent(query) + '&page_size=20', { headers })
+  if (search.response.ok && search.payload.code === 0) {
+    const users = search.payload.data?.users
+    if (!Array.isArray(users)) throw new ContactSearchError('invalid_response')
+    return users.map(contact).filter((user): user is ChatContact => user !== null).slice(0, 20)
   }
-  const payload = (await searchResponse.json().catch(() => null)) as
-    | {
-        code?: number
-        msg?: string
-        data?: {
-          users?: Array<{
-            open_id?: string
-            name?: string
-            department?: string
-            department_names?: string[]
-          }>
-        }
-      }
-    | null
-  if (!searchResponse.ok || (payload?.code !== undefined && payload.code !== 0)) {
-    // The name-search endpoint expects a user token. With an app identity the
-    // only live alternative is the contact directory inside the granted scope.
-    return listDepartmentContacts(
-      fetchImpl,
-      root,
-      tokenPayload.tenant_access_token,
-      query
-    )
-  }
-  const users = payload?.data?.users ?? []
-  const contacts: ChatContact[] = []
-  for (const user of users) {
-    if (typeof user.open_id !== 'string' || typeof user.name !== 'string') continue
-    const department = user.department
-      ?? (user.department_names?.length ? user.department_names.join(' / ') : undefined)
-    contacts.push({
-      openId: user.open_id,
-      name: user.name,
-      ...(department ? { department } : {})
-    })
-  }
-  return contacts
-}
-
-type DirectoryUser = {
-  open_id?: string
-  name?: string
-  department?: string
-  department_names?: string[]
-}
-
-function mapDirectoryUser(user: DirectoryUser): ChatContact | null {
-  if (typeof user.open_id !== 'string' || typeof user.name !== 'string') return null
-  const department = user.department
-    ?? (user.department_names?.length ? user.department_names.join(' / ') : undefined)
-  return {
-    openId: user.open_id,
-    name: user.name,
-    ...(department ? { department } : {})
-  }
-}
-
-async function listDepartmentContacts(
-  fetchImpl: typeof fetch,
-  root: string,
-  token: string,
-  query: string
-): Promise<ChatContact[]> {
+  // Name search may require a user token; only that refusal permits a bounded
+  // live scan of the app's already-granted contact scope, never a tenant export.
+  if (!PERMISSION_CODES.has(search.payload.code)) throw new ContactSearchError('unavailable')
   const matches: ChatContact[] = []
+  const seenIds = new Set<string>()
   let pageToken: string | undefined
   let seen = 0
   for (let page = 0; page < 12 && seen < 600 && matches.length < 20; page += 1) {
     const url = root + '/open-apis/contact/v3/users/find_by_department?department_id=0&page_size=50&user_id_type=open_id'
       + (pageToken ? '&page_token=' + encodeURIComponent(pageToken) : '')
-    let response: Response
-    try {
-      response = await fetchImpl(url, { headers: { authorization: 'Bearer ' + token } })
-    } catch {
-      throw new ContactSearchError('unavailable', 'contact directory is unreachable')
+    const { response, payload } = await read(url, { headers })
+    if (!response.ok || payload.code !== 0) {
+      throw new ContactSearchError(PERMISSION_CODES.has(payload.code) ? 'permission_denied' : 'unavailable')
     }
-    const payload = (await response.json().catch(() => null)) as
-      | {
-          code?: number
-          msg?: string
-          data?: { items?: DirectoryUser[]; has_more?: boolean; page_token?: string }
-        }
-      | null
-    if (!response.ok || (payload?.code !== undefined && payload.code !== 0)) {
-      throw new ContactSearchError(
-        payload?.code && PERMISSION_CODES.has(payload.code) ? 'permission_denied' : 'unavailable',
-        'contact directory failed: ' + (payload?.msg ?? response.status)
-      )
-    }
-    const items = payload?.data?.items ?? []
+    if (!Array.isArray(payload.data?.items)) throw new ContactSearchError('invalid_response')
+    const items = payload.data.items.slice(0, Math.min(50, 600 - seen))
     seen += items.length
     for (const raw of items) {
-      const user = mapDirectoryUser(raw)
-      if (user && user.name.includes(query)) matches.push(user)
+      const user = contact(raw)
+      if (user && user.name.includes(query) && !seenIds.has(user.openId)) {
+        matches.push(user)
+        seenIds.add(user.openId)
+        if (matches.length === 20) break
+      }
     }
-    if (!payload?.data?.has_more || !payload.data.page_token) break
+    if (!payload.data.has_more || matches.length >= 20) break
+    if (page === 11 || seen >= 600) throw new ContactSearchError('unavailable')
+    if (typeof payload.data.page_token !== 'string' || !payload.data.page_token
+      || payload.data.page_token === pageToken) throw new ContactSearchError('invalid_response')
     pageToken = payload.data.page_token
   }
   return matches

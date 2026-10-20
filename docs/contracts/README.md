@@ -16,7 +16,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 ## 会话 Task 能力（当前）
 
 - [Durable Task v6](durable-task-v6.md)
-- [Built-in Tool Transport v43](builtin-tool-transport-v43.md)：成功 Send 输入来源与文件卡片排除；[v42（历史）](builtin-tool-transport-v42.md) 保留原 Task 发现边界。
+- [Built-in Tool Transport v44](builtin-tool-transport-v44.md)：当前聊天 Run 范围的飞书查询与沟通工具；继承 [v43](builtin-tool-transport-v43.md) 的 Send 输入来源及 [v42](builtin-tool-transport-v42.md) 的 Task 发现边界。
 - [ContextManifest Evidence v40 / v42](context-manifest-evidence-v42.md)
 - [Context Delivery Profile v15 / v16](context-delivery-profile-v15.md)
 - [Run Facts v10](run-facts-v10.md)

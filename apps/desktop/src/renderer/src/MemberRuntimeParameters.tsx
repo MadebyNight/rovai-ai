@@ -37,69 +37,42 @@ type ModelFieldsProps = RuntimeParameterProps & {
   optionLabel?: string
 }
 
-/**
- * Chat Bot mode only adds a switch and a folder to the member's existing Runtime.
- * The Bot answers with this member's Agent, model and permissions, so there is no
- * second model or credential to configure here.
- */
 export function MemberChatBotSettings({
   agent,
   busy,
   onSet
 }: {
-  agent: AgentProfile
+  agent: Pick<AgentProfile, 'chatBotEnabled' | 'chatMaterialsPath'>
   busy: boolean
   onSet(enabled: boolean, materialsPath: string | null): Promise<void>
 }): React.JSX.Element {
+  const enabled = agent.chatBotEnabled ?? false
+  const materialsPath = agent.chatMaterialsPath ?? null
   const chooseFolder = async (): Promise<void> => {
     const path = await window.rovai.channels.selectChatMaterialsDirectory()
-    if (!path) return
-    await onSet(true, path).catch(() => undefined)
+    if (path) await onSet(enabled, path).catch(() => undefined)
   }
-  const toggle = async (enabled: boolean): Promise<void> => {
-    if (!enabled) {
-      await onSet(false, agent.chatMaterialsPath ?? null).catch(() => undefined)
-      return
-    }
-    const path = agent.chatMaterialsPath ?? (await window.rovai.channels.selectChatMaterialsDirectory())
-    if (!path) return
-    await onSet(true, path).catch(() => undefined)
+  const toggle = async (checked: boolean): Promise<void> => {
+    if (busy || (checked && !materialsPath)) return
+    await onSet(checked, materialsPath).catch(() => undefined)
   }
   return (
-    <section className="member-chat-bot" aria-label={uiAttribute("聊天 Bot")}>
-      <div className="member-chat-bot-heading">
-        <div>
-          <h3><UiText zh={"聊天 Bot"} /></h3>
-          <p><UiText zh={"开启后，这位队员的飞书 Bot 用该队员的智能体、模型与权限回复消息，并可在资料文件夹内读写文件。"} /></p>
-        </div>
-        <label className="member-chat-bot-switch">
-          <input
-            type="checkbox"
-            checked={agent.chatBotEnabled}
-            disabled={busy}
-            onChange={(event) => void toggle(event.target.checked)}
-          />
-          <span><UiText zh={"启用"} /></span>
-        </label>
-      </div>
-      {agent.chatBotEnabled && (
-        <div className="member-chat-bot-folder">
-          <span className="member-chat-bot-label"><UiText zh={"资料文件夹"} /></span>
-          <div className="member-chat-bot-folder-row">
-            <input
-              readOnly
-              value={agent.chatMaterialsPath ?? ''}
-              placeholder={uiAttribute("尚未选择文件夹")}
-              aria-label={uiAttribute("资料文件夹")}
-            />
-            <button className="quiet-button compact" type="button" disabled={busy} onClick={() => void chooseFolder()}>
-              <UiText zh={"选择文件夹"} />
-            </button>
-          </div>
-          <p className="member-chat-bot-note"><UiText zh={"聊天 Bot 只能在这个文件夹内读写文件。"} /></p>
-        </div>
-      )}
-    </section>
+    <div className="member-chat-bot">
+      <label className="runtime-parameter-switch" title={!materialsPath ? uiAttribute("请先选择文件夹") : undefined}>
+        <span><UiText zh={"聊天 Bot"} /></span>
+        <input
+          type="checkbox"
+          aria-label={uiAttribute("聊天 Bot")}
+          checked={enabled}
+          disabled={busy || (!enabled && !materialsPath)}
+          onChange={(event) => void toggle(event.target.checked)}
+        />
+      </label>
+      <button className="quiet-button compact" type="button" disabled={busy} onClick={() => void chooseFolder()}>
+        <UiText zh={"资料文件夹"} />
+      </button>
+      {materialsPath && <span className="member-chat-bot-path" title={materialsPath}>{materialsPath}</span>}
+    </div>
   )
 }
 

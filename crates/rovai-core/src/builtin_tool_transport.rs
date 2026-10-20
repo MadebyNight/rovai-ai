@@ -10,12 +10,12 @@ use serde_json::{Map, Value, json};
 
 use crate::team_tool_catalog::builtin_tool_definitions;
 
-pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 43;
+pub const BUILTIN_TOOL_CONTRACT_VERSION: u32 = 44;
 pub const BUILTIN_TOOL_IPC_PROTOCOL_VERSION: u32 = 3;
 pub const BUILTIN_TOOL_ENVELOPE_VERSION: u32 = 2;
-pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 43;
+pub const BUILTIN_TOOL_CLI_COMMAND_VERSION: u32 = 44;
 pub const BUILTIN_TOOL_AGENT_OUTPUT_CONTRACT_VERSION: u32 = 14;
-pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v43";
+pub const BUILTIN_TOOL_RUNTIME_CAPABILITY: &str = "builtin_cli.transport.v44";
 pub const ROVAI_AGENT_CLI_ENV: &str = "ROVAI_AGENT_CLI";
 pub const ROVAI_CLI_CONTEXT_ENV: &str = "ROVAI_CLI_CONTEXT";
 pub const ROVAI_RUN_TMP_ENV: &str = "ROVAI_RUN_TMP";
@@ -178,7 +178,7 @@ pub struct BuiltinToolCliIdentity {
     pub action: &'static str,
 }
 
-pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 30] = [
+pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 38] = [
     BuiltinToolCliIdentity {
         operation: "thread.message.send",
         group: "send",
@@ -328,6 +328,46 @@ pub const BUILTIN_TOOL_CLI_IDENTITIES: [BuiltinToolCliIdentity; 30] = [
         operation: "automation.delete",
         group: "automation",
         action: "delete",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.status",
+        group: "feishu",
+        action: "status",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.search",
+        group: "feishu",
+        action: "search",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.result",
+        group: "feishu",
+        action: "result",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.forward",
+        group: "feishu",
+        action: "forward",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.ask",
+        group: "feishu",
+        action: "ask",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.items",
+        group: "feishu",
+        action: "items",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.report",
+        group: "feishu",
+        action: "report",
+    },
+    BuiltinToolCliIdentity {
+        operation: "feishu.close",
+        group: "feishu",
+        action: "close",
     },
 ];
 
@@ -1009,7 +1049,15 @@ pub fn projection_identity(operation: &str) -> Result<&'static str> {
         | "automation.run"
         | "automation.close"
         | "automation.update"
-        | "automation.delete" => Ok("canonical-result-v1"),
+        | "automation.delete"
+        | "feishu.status"
+        | "feishu.search"
+        | "feishu.result"
+        | "feishu.forward"
+        | "feishu.ask"
+        | "feishu.items"
+        | "feishu.report"
+        | "feishu.close" => Ok("canonical-result-v1"),
         _ => bail!("unknown built-in operation for Agent output projection"),
     }
 }
@@ -1128,10 +1176,12 @@ mod tests {
 
     #[test]
     fn cli_mapping_is_complete_unique_and_contract_valid() {
-        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 43);
-        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 43);
+        assert_eq!(BUILTIN_TOOL_CONTRACT_VERSION, 44);
+        assert_eq!(BUILTIN_TOOL_CLI_COMMAND_VERSION, 44);
         assert_eq!(BUILTIN_TOOL_AGENT_OUTPUT_CONTRACT_VERSION, 14);
-        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v43");
+        assert_eq!(BUILTIN_TOOL_IPC_PROTOCOL_VERSION, 3);
+        assert_eq!(BUILTIN_TOOL_ENVELOPE_VERSION, 2);
+        assert_eq!(BUILTIN_TOOL_RUNTIME_CAPABILITY, "builtin_cli.transport.v44");
         validate_builtin_tool_contract().unwrap();
         let operations = BUILTIN_TOOL_CLI_IDENTITIES
             .iter()
@@ -1141,8 +1191,18 @@ mod tests {
             .iter()
             .map(|identity| (identity.group, identity.action))
             .collect::<BTreeSet<_>>();
-        assert_eq!(operations.len(), 30);
-        assert_eq!(commands.len(), 30);
+        assert_eq!(operations.len(), 38);
+        assert_eq!(commands.len(), 38);
+        for definition in crate::channel_chat_tools::definitions() {
+            let name = definition["name"].as_str().unwrap();
+            let description = builtin_tool_description(name, false).unwrap();
+            assert_eq!(description.input_schema, definition["inputSchema"]);
+            assert_eq!(description.result_schema, definition["outputSchema"]);
+            assert_eq!(description.agent_output_schema, description.result_schema);
+            assert_eq!(description.projection_identity, "canonical-result-v1");
+        }
+        assert!(projection_identity("feishu.delete").is_err());
+        assert!(crate::builtin_tool_cli_output::agent_output_schema("feishu.delete").is_err());
     }
 
     #[test]

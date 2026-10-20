@@ -3993,5 +3993,6 @@
   "开启后，这位队员的飞书 Bot 用该队员的智能体、模型与权限回复消息，并可在资料文件夹内读写文件。": "When enabled, this teammate's Feishu Bot answers with the teammate's own agent, model, and permissions, and can read and write inside the materials folder.",
   "资料文件夹": "Materials folder",
   "尚未选择文件夹": "No folder selected yet",
+  "请先选择文件夹": "Select a folder first",
   "聊天 Bot 只能在这个文件夹内读写文件。": "The chat Bot can only read and write inside this folder."
 }
