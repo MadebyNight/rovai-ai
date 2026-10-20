@@ -9373,6 +9373,9 @@ impl Database {
             if !self.schema_migration_applied(210)? {
                 migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
             }
+            if !self.schema_migration_applied(211)? {
+                migration_step!("migration_211", self.migrate_chat_bot_navigation());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -10225,6 +10228,9 @@ impl Database {
         if !self.schema_migration_applied(210)? {
             migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
         }
+        if !self.schema_migration_applied(211)? {
+            migration_step!("migration_211", self.migrate_chat_bot_navigation());
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
@@ -10442,6 +10448,37 @@ impl Database {
         );
         transaction.execute(
             "INSERT INTO schema_migration VALUES(210,datetime('now'))",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn migrate_chat_bot_navigation(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        add_migration_column_if_missing(
+            &transaction,
+            "camp",
+            "navigation_is_chat_bot",
+            "navigation_is_chat_bot INTEGER NOT NULL DEFAULT 0 CHECK(navigation_is_chat_bot IN (0, 1))",
+        )?;
+        // Preserve the origin even when a later Bot configuration replaces the binding.
+        transaction.execute_batch(
+            "UPDATE camp SET navigation_is_chat_bot = 1
+             WHERE id IN (SELECT camp_id FROM channel_chat_conversation);
+             DROP INDEX camp_navigation_window_idx;
+             CREATE INDEX camp_navigation_window_idx ON camp (
+                 CASE WHEN navigation_is_chat_bot = 1 THEN 'chat-bot'
+                      WHEN project_binding_kind = 'directory' THEN 'directory:' || project_path
+                      ELSE 'quick-chat' END,
+                 COALESCE(navigation_activity_at, created_at) DESC,
+                 navigation_activity_sequence DESC, id
+             ) WHERE deletion_operation_id IS NULL;",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migration VALUES(211,datetime('now'))",
             [],
         )?;
         transaction.commit()?;
@@ -35503,7 +35540,7 @@ fn downgrade_navigation_summary_for_test(connection: &Connection) {
         ALTER TABLE camp DROP COLUMN navigation_activity_sequence;
         ALTER TABLE camp DROP COLUMN navigation_activity_at;
         ALTER TABLE camp DROP COLUMN navigation_completion_sequence;
-        DELETE FROM schema_migration WHERE version=177;
+        DELETE FROM schema_migration WHERE version IN (177, 211);
         UPDATE rovai_data_contract SET projection_schema_version=126 WHERE singleton=1;",
         )
         .unwrap();
@@ -40159,6 +40196,58 @@ mod tests {
             )
             .unwrap(),
             expected
+        );
+        // The additive Bot origin migration derives only from the durable chat binding.
+        let before_bot_migration = tables(&reopened);
+        reopened.connection().execute_batch(
+            "INSERT INTO channel_chat_conversation(provider,app_id,chat_id,camp_id,created_at)
+             VALUES ('feishu','bot','chat','nav-b',0);
+             INSERT INTO camp(id,title,project_binding_kind,project_path,created_at,updated_at)
+             VALUES ('nav-worker','Worker','directory','/repo','2026-01-02','2026-01-02');
+             DROP INDEX camp_navigation_window_idx;
+             ALTER TABLE camp DROP COLUMN navigation_is_chat_bot;
+             DELETE FROM schema_migration WHERE version=211;
+             CREATE INDEX camp_navigation_window_idx ON camp (
+                 CASE WHEN project_binding_kind = 'directory' THEN 'directory:' || project_path ELSE 'quick-chat' END,
+                 COALESCE(navigation_activity_at, created_at) DESC, navigation_activity_sequence DESC, id
+             ) WHERE deletion_operation_id IS NULL;
+             CREATE TEMP TRIGGER reject_bot_navigation_receipt BEFORE INSERT ON schema_migration
+             WHEN NEW.version=211 BEGIN SELECT RAISE(ABORT,'Bot navigation receipt failure'); END;",
+        ).unwrap();
+        assert!(reopened.migrate_chat_bot_navigation().is_err());
+        assert!(!reopened.schema_migration_applied(211).unwrap());
+        assert_eq!(reopened.connection().query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('camp') WHERE name='navigation_is_chat_bot'",
+            [], |row| row.get::<_, i64>(0),
+        ).unwrap(), 0);
+        reopened
+            .connection()
+            .execute_batch("DROP TRIGGER reject_bot_navigation_receipt")
+            .unwrap();
+        drop(reopened);
+        let mut migrated = Database::open(&directory).unwrap();
+        assert!(migrated.schema_migration_applied(211).unwrap());
+        assert_eq!(tables(&migrated), before_bot_migration);
+        let bots = crate::read_model::ReadModelService
+            .navigation_snapshot(&mut migrated)
+            .unwrap();
+        assert_eq!(bots.chat_bot.total_count, 1);
+        assert_eq!(bots.chat_bot.recent_camps[0].id, "nav-b");
+        assert_eq!(bots.projects[0].total_count, 1);
+        assert_eq!(bots.projects[0].recent_camps[0].id, "nav-worker");
+        migrated
+            .connection()
+            .execute("DELETE FROM channel_chat_conversation", [])
+            .unwrap();
+        drop(migrated);
+        let mut reopened = Database::open(&directory).unwrap();
+        assert_eq!(
+            crate::read_model::ReadModelService
+                .navigation_snapshot(&mut reopened)
+                .unwrap()
+                .chat_bot
+                .total_count,
+            1
         );
         drop(reopened);
         std::fs::remove_dir_all(directory).unwrap();

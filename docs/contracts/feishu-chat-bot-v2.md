@@ -32,6 +32,12 @@ last_updated: 2026-10-21
 - 出站回执仍走 channel_chat_outbound：sent/failed/unknown 语义与 v1 第 8 节一致；
   回复只发送纯文本，不发送运行卡、控制台入口或本地路径。
 
+聊天线程在导航中归入独立“聊天 Bot”分组，沿用现有 Thread 会话界面及操作。归组来自
+线程创建时保存的聊天 Bot 来源标记，已有 `channel_chat_conversation` 绑定在迁移时回填。
+关闭 Bot 或更换资料目录后仍保留已标记线程的历史分类，不依赖成员当前开关或资料目录登记。
+本入口不改变入站、出站、Runtime 权限或会话执行行为；导航字段见
+[Navigation Read v1](navigation-read-v1.md)。
+
 ## 3. 权限夹取
 
 - 聊天 Bot 不继承成员 Runtime 配置中的最高（bypass/yolo/full-access）档位；落到各适配器

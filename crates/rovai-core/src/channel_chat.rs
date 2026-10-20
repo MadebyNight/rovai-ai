@@ -508,6 +508,10 @@ impl ChannelChatService {
                 now_millis(),
             ],
         )?;
+        transaction.execute(
+            "UPDATE camp SET navigation_is_chat_bot = 1 WHERE id = ?1",
+            [&admission.camp_id],
+        )?;
         transaction.commit()?;
         Ok(ChatTurnSubmitResult {
             camp_id: admission.camp_id,
@@ -536,12 +540,7 @@ impl ChannelChatService {
                 LIMIT 1
                 "#,
                 [camp_message_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .optional()?;
         let Some((delivery_status, agent_run_id)) = delivery else {
@@ -1335,7 +1334,10 @@ mod tests {
         // A member without a materials folder can never reach chat mode.
         database
             .connection()
-            .execute("UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'", [])
+            .execute(
+                "UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'",
+                [],
+            )
             .unwrap();
         assert_eq!(
             service.snapshot(&mut database, PROVIDER, APP).unwrap().mode,
@@ -1390,12 +1392,7 @@ mod tests {
             .unwrap();
         assert_eq!(deliveries, 2);
         let pending = service
-            .turn_result(
-                &mut database,
-                PROVIDER,
-                APP,
-                &first.camp_message_id,
-            )
+            .turn_result(&mut database, PROVIDER, APP, &first.camp_message_id)
             .unwrap();
         assert_eq!(pending.status, "pending");
 
@@ -1411,6 +1408,35 @@ mod tests {
         assert!(override_json.contains("workspace-write"));
         assert!(!override_json.contains("danger-full-access"));
         assert!(!override_json.contains("bypass"));
+
+        let navigation = crate::read_model::ReadModelService;
+        let snapshot = navigation.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(snapshot.chat_bot.total_count, 1);
+        assert!(snapshot.projects.is_empty());
+        assert_eq!(snapshot.chat_bot.recent_camps[0].id, first.camp_id);
+
+        // Rebinding the same external chat must not move its earlier history into Projects.
+        let next_root = materials_root();
+        enable_chat(&mut database, &next_root);
+        let replacement = service.submit_turn(&mut database, &command).unwrap();
+        assert_ne!(first.camp_id, replacement.camp_id);
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET chat_bot_enabled = 0 WHERE id = 'agent_1'",
+                [],
+            )
+            .unwrap();
+        let snapshot = navigation.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(snapshot.chat_bot.total_count, 2);
+        assert!(snapshot.projects.is_empty());
+        assert!(
+            snapshot
+                .chat_bot
+                .recent_camps
+                .iter()
+                .all(|camp| camp.navigation_group_key == "chat-bot")
+        );
     }
 
     #[test]

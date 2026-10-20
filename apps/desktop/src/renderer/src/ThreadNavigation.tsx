@@ -259,6 +259,7 @@ export function ThreadNavigation({
     group, groupLimits[groupKey] ?? NAVIGATION_INITIAL_VISIBLE_CAMPS, pinnedThreadIds
   )
   const quickChatWindow = groupWindow('quick-chat', navigation?.quickChat ?? { recentThreads: [], totalCount: 0 })
+  const chatBotWindow = groupWindow('chat-bot', navigation?.chatBot ?? { recentThreads: [], totalCount: 0 })
   const updateBadge = appUpdateBadgePresentation(updateSnapshot)
   const managed = Boolean(useShortcuts())
   const jumpLabel = useShortcutLabel('jump', platform)
@@ -594,6 +595,30 @@ export function ThreadNavigation({
             onThread={onThread}
             onAction={openAction}
           />}
+          {navigation && <ThreadGroup
+            groupKey="chat-bot"
+            label={uiAttribute("聊天 Bot")}
+            totalCount={navigation.chatBot?.totalCount ?? 0}
+            threads={chatBotWindow.threads}
+            hasMore={chatBotWindow.hasMore}
+            projectExpanded={!collapsedProjectGroups.has('chat-bot')}
+            loadingMore={loadingGroups.has('chat-bot')}
+            activeThreadId={activeThreadId}
+            firstRunThreadId={firstRunThreadId}
+            openingThreadId={openingThreadId}
+            currentProject={currentProjectKey === 'chat-bot'}
+            createDisabled={creatingConversation}
+            onShowMore={() => void showMore('chat-bot')}
+            onCollapseThreads={() => collapseGroupThreads('chat-bot')}
+            onToggleExpanded={() => toggleProjectGroup('chat-bot')}
+            onToggleThreadPin={(thread) => void togglePin('camp', thread.id, thread)}
+            onCopyThreadId={(thread) => void copyThreadId(thread)}
+            threadReadStates={threadReadStates}
+            onSetThreadUnread={onSetThreadUnread ? setThreadUnread : undefined}
+            platform={platform}
+            onThread={onThread}
+            onAction={openAction}
+          />}
         </section>
           </div>
       <div className="unified-sidebar-footer">
@@ -915,7 +940,7 @@ function CommandPalette({
                 onMouseEnter={() => setActiveIndex(index)}
               >
                 <span className="truncate" title={formatThreadTitle(thread, firstRunThreadId)}>{formatThreadTitle(thread, firstRunThreadId)}</span>
-                <small>{thread.projectBindingKind === 'directory' ? projectNameByPath.get(thread.projectPath) ?? uiAttribute('项目') : uiAttribute("快速对话")}</small>
+                <small>{thread.navigationGroupKey === 'chat-bot' ? uiAttribute('聊天 Bot') : thread.projectBindingKind === 'directory' ? projectNameByPath.get(thread.projectPath) ?? uiAttribute('项目') : uiAttribute("快速对话")}</small>
               </button>
             ))}
             {visible.length === 0 && (
@@ -981,8 +1006,8 @@ function ThreadGroup({
   onShowMore(): void
   onCollapseThreads(): void
   onToggleExpanded(): void
-  onSelectProject(): void
-  onCreate(): void
+  onSelectProject?(): void
+  onCreate?(): void
   onTogglePin?(): void
   onRenameProject?(): void
   onRemoveProject?(): void
@@ -998,7 +1023,7 @@ function ThreadGroup({
 }): JSX.Element {
   const mobile = useMobileLayout()
   const projectMenuLabels = projectNavigationMenuLabels(pinned, platform)
-  const projectMenuItems: SidebarActionMenuItem[] = pinTargetKey
+  const projectMenuItems: SidebarActionMenuItem[] = pinTargetKey && onCreate
     ? [{ key: 'new-chat', label: projectMenuLabels[0], icon: 'square-pen', onSelect: onCreate, disabled: createDisabled }]
     : []
   if (onTogglePin) {
@@ -1042,7 +1067,7 @@ function ThreadGroup({
           aria-expanded={projectExpanded}
           aria-controls={contentId}
           data-sidebar-focus-target={`project-row:${groupKey}`}
-          onClick={() => activateProjectNavigationRow(onSelectProject, onToggleExpanded)}
+          onClick={() => { onSelectProject?.(); onToggleExpanded() }}
         >
           <svg className="project-folder-glyph" viewBox="0 0 24 24" aria-hidden="true">
             <g className="project-folder-closed">
@@ -1066,7 +1091,7 @@ function ThreadGroup({
             mobile={mobile}
           />
         )}
-        <button className="group-create-button" type="button" aria-label={uiAttribute("在“{0}”中新建对话", String(label))} title={uiAttribute("新建对话")} disabled={createDisabled} onClick={onCreate}><NavigationIcon name="square-pen" /></button>
+        {onCreate && <button className="group-create-button" type="button" aria-label={uiAttribute("在“{0}”中新建对话", String(label))} title={uiAttribute("新建对话")} disabled={createDisabled} onClick={onCreate}><NavigationIcon name="square-pen" /></button>}
       </div>
       <div id={contentId} className="camp-group-children" hidden={!projectExpanded}>
         {projectExpanded && threads.map((thread) => (

@@ -308,6 +308,7 @@ describe('accepted Thread deletion tombstone', () => {
       schemaVersion: 3,
       throughGlobalSequence: 2,
       quickChat: { totalCount: 2, recentThreads: [deleted, kept] },
+      chatBot: { totalCount: 1, recentThreads: [{ ...deleted, navigationGroupKey: 'chat-bot' }] },
       projects: []
     }
 
@@ -315,6 +316,7 @@ describe('accepted Thread deletion tombstone', () => {
 
     expect(filtered.quickChat.totalCount).toBe(1)
     expect(filtered.quickChat.recentThreads.map((thread) => thread.id)).toEqual(['camp-keep'])
+    expect(filtered.chatBot).toEqual({ totalCount: 0, recentThreads: [] })
   })
 })
 
@@ -2966,6 +2968,7 @@ describe('task event projections', () => {
     const threads = allNavigationThreads({
       schemaVersion: 3,
       throughGlobalSequence: 20,
+      chatBot: { totalCount: 1, recentThreads: [{ ...baseThread, id: 'bot', navigationGroupKey: 'chat-bot', lastActivityGlobalSequence: 11 }] },
       quickChat: {
         totalCount: 1,
         recentThreads: [{
@@ -2983,7 +2986,7 @@ describe('task event projections', () => {
         }]
       }]
     })
-    expect(threads.map((thread) => thread.id)).toEqual(['newer', 'older'])
+    expect(threads.map((thread) => thread.id)).toEqual(['bot', 'newer', 'older'])
   })
 
   it('defines the final unified Thread and Project menu labels', () => {
