@@ -237,7 +237,7 @@ pnpm docs:test && pnpm docs:check
 - 真实飞书：已确认 Bot 长连接、人类账号私聊入站（Owner ou_fbc…，消息 om_x100b625f…）、测试群内 @、出站投递、按姓名查找（权限范围设为 all 后查到 Owner）与真实模型回复（gpt-5.6-sol，2.8 秒）。外部联系人首次建联未执行。
 - 真实进程重启 E2E 通过（A08）。
 - 真实代问闭环通过（A06/A07）：星洛向海琴烟发出询问，海琴烟引用回复，星洛把阶段汇报发回原群。
-- 发布产物：NSIS 安装包 dist/Rovai-AI-0.4.12-x64.exe 构建完成，verify-windows-release 全量通过（安装器配置、latest.yml／blockmap、四个二进制、CLI 合约、Packaged Core 隔离 data-root 与 health.check）。此前 dir 包的 app-update.yml 缺口由 NSIS 产物闭合。安装包尚未上传到公开 Release。
+- 发布产物：NSIS 安装包 dist/Rovai-AI-0.5.0-x64.exe 构建完成，verify-windows-release 全量通过（安装器配置、latest.yml／blockmap、四个二进制、CLI 合约、Packaged Core 隔离 data-root 与 health.check）。此前 dir 包的 app-update.yml 缺口由 NSIS 产物闭合。安装包尚未上传到公开 Release。
 - 模拟通过不等于真实验收通过。
 - Core RPC Smoke（2026-10-20）：以临时私有数据目录启动实际 rovai-host，确认 Migration 205、默认工作模式、无密钥时拒绝切换、保存密钥后进入聊天模式、重复入站不重复、出站入队／领取／结算可用。
 - 全量 vitest：242 个文件通过；7 个既有文件因本机 Windows 符号链接权限（EPERM）失败，与本功能无关。cargo test -p rovai-core --lib：461 个通过；7 个既有 mission_workspace／ACP／存储用例因本机权限与 Git 配置失败。
