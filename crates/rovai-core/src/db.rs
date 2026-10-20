@@ -3552,6 +3552,64 @@ fn connection_has_legacy_feishu_migration_collision(
     ))
 }
 
+// The upstream projection marker is unchanged by additive chat migrations.
+// Receipt and layout validation must still precede admission as Current;
+// open_admitted deliberately does not run schema migrations.
+fn classify_chat_schema(
+    connection: &Connection,
+    marker: DatabaseContractMarker,
+) -> rusqlite::Result<DatabaseContractClassification> {
+    let (
+        chat_receipt,
+        member_receipt,
+        chat_tables,
+        member_columns,
+        conversation_columns,
+        mapping_tables,
+    ): (bool, bool, i64, i64, i64, i64) = connection.query_row(
+        "SELECT
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=209),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=210),
+            (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (
+                'channel_chat_bot','channel_chat_credential','channel_chat_message',
+                'channel_chat_turn','channel_chat_item','channel_chat_outbound')),
+            (SELECT COUNT(*) FROM pragma_table_info('agent_profile')
+                WHERE name IN ('chat_bot_enabled','chat_materials_path')),
+            (SELECT COUNT(*) FROM pragma_table_info('conversation')
+                WHERE name='permission_override_json'),
+            (SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+                AND name='channel_chat_conversation')",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
+    )?;
+    let chat_valid = if chat_receipt {
+        chat_tables == 6 && crate::channel_chat::schema_matches(connection)?
+    } else {
+        chat_tables == 0
+    };
+    let member_valid = if member_receipt {
+        chat_receipt && chat_bot_member_reuse_v210_schema_matches(connection)?
+    } else {
+        member_columns == 0 && conversation_columns == 0 && mapping_tables == 0
+    };
+    Ok(if !chat_valid || !member_valid {
+        DatabaseContractClassification::Unknown(Some(marker))
+    } else if chat_receipt && member_receipt {
+        DatabaseContractClassification::Current(marker)
+    } else {
+        DatabaseContractClassification::SupportedMigrationSource(marker)
+    })
+}
+
 pub(crate) fn classify_database_contract(
     connection: &Connection,
 ) -> rusqlite::Result<DatabaseContractClassification> {
@@ -3659,7 +3717,7 @@ pub(crate) fn classify_database_contract(
         return Ok(if !valid {
             DatabaseContractClassification::Unknown(Some(marker))
         } else if marker.projection_schema_version == CURRENT_PROJECTION_SCHEMA_VERSION {
-            DatabaseContractClassification::Current(marker)
+            classify_chat_schema(connection, marker)?
         } else {
             DatabaseContractClassification::SupportedMigrationSource(marker)
         });
@@ -3830,7 +3888,7 @@ pub(crate) fn classify_database_contract(
         && marker.projection_schema_version == CURRENT_PROJECTION_SCHEMA_VERSION
         && marker.classifier_version == V147_CLASSIFIER_VERSION
     {
-        Ok(DatabaseContractClassification::Current(marker))
+        classify_chat_schema(connection, marker)
     } else {
         Ok(DatabaseContractClassification::SupportedMigrationSource(
             marker,
@@ -5074,7 +5132,9 @@ fn chat_bot_member_reuse_v210_schema_matches(connection: &Connection) -> rusqlit
              AND EXISTS(SELECT 1 FROM pragma_table_info('conversation')
                        WHERE name = 'permission_override_json' AND type = 'TEXT')
              AND EXISTS(SELECT 1 FROM sqlite_master
-                       WHERE type = 'table' AND name = 'channel_chat_conversation')",
+                       WHERE type = 'table' AND name = 'channel_chat_conversation')
+             AND (SELECT COUNT(*) FROM pragma_table_info('channel_chat_conversation')
+                       WHERE name IN ('provider','app_id','chat_id','camp_id','created_at')) = 5",
         [],
         |row| row.get(0),
     )

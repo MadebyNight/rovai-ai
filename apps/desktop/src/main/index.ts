@@ -207,6 +207,7 @@ const allowedMethods = new Set<CoreMethod>([
   'members.avatar.set',
   'members.runtime.set',
   'members.runtime.clear',
+  'members.chat.set',
   'members.presence.set',
   'members.removalPreview',
   'members.remove',

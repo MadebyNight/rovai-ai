@@ -46,5 +46,11 @@ last_updated: 2026-10-21
 - channel_chat_turn 不再存模型轮次；会话上下文由聊天线程自身承载。
 - v1 的 JSON 动作协议（search_materials、find_person、forward、ask、ask_owner、close_item）
   在 v2 停用；恢复将由 Agent 工具（MCP）承接。
-- 迁移 210 在 agent_profile 新增 chat_bot_enabled 与 chat_materials_path，同时清空
-  聊天 Bot 表中的历史模型字段。
+- 迁移 210 在 agent_profile 新增 chat_bot_enabled 与 chat_materials_path，保留旧聊天表和历史字段，不自动授予成员 Runtime 写权限。
+
+## 5. 升级准入
+
+- 上游 projection schema 158 不代表聊天迁移完成。只有 209、210 收据与对应表列布局一致，数据库才可作为当前权威直接打开。
+- 已知的上游 208 布局及仅完成 209 的布局，必须经正式 DatabaseAdmission / AuthorityMigrationRunner 补齐迁移，再开放成员与诊断读取。
+- 已有迁移收据但表列缺损的数据库应拒绝准入，不得当作旧库静默修补或清空重建。
+- 验收覆盖旧库升级、成员与导航读取、诊断导出、数据保留和重复启动；新库 health.check 单独通过不足以证明升级可用。

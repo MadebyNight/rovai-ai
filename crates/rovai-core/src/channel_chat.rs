@@ -241,6 +241,48 @@ pub struct ChatOutboundSettleCommand {
     pub failure_code: Option<String>,
 }
 
+/// Validate columns used by chat storage without reading message or credential data.
+pub(crate) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    for (table, columns) in [
+        (
+            "channel_chat_bot",
+            "provider,app_id,owner_only,model_provider,model_name,model_base_url,materials_path,materials_status,updated_at",
+        ),
+        (
+            "channel_chat_credential",
+            "provider,app_id,api_key,updated_at",
+        ),
+        (
+            "channel_chat_message",
+            "id,provider,app_id,chat_id,conversation_kind,chat_name,author_external_id,author_name,author_is_owner,body,quote_message_id,external_message_id,dedupe_key,received_at",
+        ),
+        (
+            "channel_chat_turn",
+            "id,provider,app_id,chat_id,role,body,materials_only,created_at",
+        ),
+        (
+            "channel_chat_item",
+            "id,provider,app_id,requester_external_id,requester_name,destination_chat_id,destination_kind,target_external_id,target_name,target_is_owner,question,ask_message_id,ask_chat_id,status,last_report_at,created_at,updated_at",
+        ),
+        (
+            "channel_chat_outbound",
+            "id,provider,app_id,chat_id,body,source,idempotency_key,uses_materials,status,attempts,lease_owner,lease_expires_at,external_message_id,failure_code,created_at,updated_at",
+        ),
+    ] {
+        let mut statement = connection.prepare("SELECT name FROM pragma_table_info(?1)")?;
+        let actual = statement
+            .query_map([table], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if columns
+            .split(',')
+            .any(|column| !actual.iter().any(|name| name == column))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Additive migration 209. Every table is chat-only state and never feeds Camp.
 pub(crate) fn migrate(database: &mut Database) -> Result<()> {
     let transaction = database
@@ -536,12 +578,7 @@ impl ChannelChatService {
                 LIMIT 1
                 "#,
                 [camp_message_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .optional()?;
         let Some((delivery_status, agent_run_id)) = delivery else {
@@ -1335,7 +1372,10 @@ mod tests {
         // A member without a materials folder can never reach chat mode.
         database
             .connection()
-            .execute("UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'", [])
+            .execute(
+                "UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'",
+                [],
+            )
             .unwrap();
         assert_eq!(
             service.snapshot(&mut database, PROVIDER, APP).unwrap().mode,
@@ -1390,12 +1430,7 @@ mod tests {
             .unwrap();
         assert_eq!(deliveries, 2);
         let pending = service
-            .turn_result(
-                &mut database,
-                PROVIDER,
-                APP,
-                &first.camp_message_id,
-            )
+            .turn_result(&mut database, PROVIDER, APP, &first.camp_message_id)
             .unwrap();
         assert_eq!(pending.status, "pending");
 
