@@ -1683,6 +1683,7 @@ struct GetTaskParams {
 #[serde(rename_all = "camelCase")]
 struct NavigationGroupThreadsParams {
     project_path: Option<String>,
+    group_key: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
 }
@@ -8915,6 +8916,14 @@ impl Core {
                 let submitted = rovai_core::channel_chat::ChannelChatService
                     .submit_turn(&mut database, &params)?;
                 self.notify_delivery_batch_scheduler_if_pending(&database);
+                if !submitted.duplicate {
+                    emit_navigation_group_invalidated(
+                        &self.output,
+                        "channels.chat.submit",
+                        Some(&submitted.camp_id),
+                        Some("chat-bot"),
+                    );
+                }
                 Ok(serde_json::to_value(submitted)?)
             }
             "channels.chat.result" => {
@@ -10685,6 +10694,7 @@ impl Core {
                     ReadModelService.navigation_group_camps_for_client(
                         &mut database,
                         params.project_path.as_deref(),
+                        params.group_key.as_deref(),
                         params.offset.unwrap_or(0),
                         params.limit.unwrap_or(100),
                         &request.client,
@@ -26871,7 +26881,7 @@ fn emit_missions_invalidated(
 
 fn navigation_group_key(database: &Database, camp_id: &str) -> Result<Option<String>> {
     Ok(database.connection().query_row(
-        "SELECT CASE WHEN project_binding_kind='directory' THEN 'directory:' || project_path ELSE 'quick-chat' END FROM camp WHERE id=?1",
+        "SELECT CASE WHEN navigation_is_chat_bot=1 THEN 'chat-bot' WHEN project_binding_kind='directory' THEN 'directory:' || project_path ELSE 'quick-chat' END FROM camp WHERE id=?1",
         [camp_id], |row| row.get(0)).optional()?)
 }
 
@@ -33156,15 +33166,28 @@ done
         assert_eq!(invalidation["params"]["reason"], "agent_run.terminal");
         assert_eq!(invalidation["params"]["threadId"], "rvcamp_test");
         assert_eq!(invalidation["params"]["scope"], "camp");
-        emit_navigation_group_invalidated(
-            &output,
-            "camp.deleted",
-            Some("rvcamp_test"),
-            Some("directory:/repo"),
-        );
-        let deleted: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
-        assert_eq!(deleted["params"]["scope"], "group");
-        assert_eq!(deleted["params"]["groupKeys"], json!(["directory:/repo"]));
+        for (reason, key) in [
+            ("camp.deleted", "directory:/repo"),
+            ("camp.deleted", "chat-bot"),
+            ("channels.chat.submit", "chat-bot"),
+        ] {
+            emit_navigation_group_invalidated(&output, reason, Some("rvcamp_test"), Some(key));
+            let invalidated: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+            assert_eq!(invalidated["params"]["scope"], "group");
+            assert_eq!(invalidated["params"]["groupKeys"], json!([key]));
+        }
+        let bot_page: NavigationGroupThreadsParams = serde_json::from_value(json!({
+            "groupKey": "chat-bot", "offset": 5, "limit": 10,
+        }))
+        .unwrap();
+        assert_eq!(bot_page.group_key.as_deref(), Some("chat-bot"));
+        assert!(bot_page.project_path.is_none());
+        let legacy_page: NavigationGroupThreadsParams = serde_json::from_value(json!({
+            "projectPath": "/repo",
+        }))
+        .unwrap();
+        assert!(legacy_page.group_key.is_none());
+        assert_eq!(legacy_page.project_path.as_deref(), Some("/repo"));
         emit_missions_invalidated(&output, "missions.update", Some("mission-camp"));
         let mission: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
         assert_eq!(mission["method"], "missions.invalidated");

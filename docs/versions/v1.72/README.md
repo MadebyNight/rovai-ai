@@ -6,10 +6,18 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-10-19
+last_updated: 2026-10-21
 ---
 
 # Rovai-ai v1.72：Lark 独立渠道
+
+## 聊天 Bot 侧栏入口（2026-10-21）
+
+按 User 确认，只新增与项目、快速对话并列的“聊天 Bot”分组，既有聊天线程直接复用 worker
+会话界面和全部现有操作，不增加独立模式或发送行为。规范见
+[侧栏分组](../../ui/components/app-shell-navigation.md#quick-chat-与-project-分组)与
+[Navigation Read v1](../../contracts/navigation-read-v1.md)，实施和验证见
+[实施记录](implementation-plan.md#聊天-bot-侧栏入口2026-10-21)。
 
 ## 主动停止后的会话蓝点（2026-10-19）
 
