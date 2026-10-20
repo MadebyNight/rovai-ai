@@ -1,4 +1,4 @@
-# Rovai AI v0.4.15
+# Rovai AI v0.4.16
 
 <!-- lang:zh-CN -->
 
@@ -16,6 +16,7 @@
 - 【修复】**修正自动记忆提示的内容与数量，并修复记忆审核面板关闭按钮无法点击的问题。**
 - 【修复】**修复定时任务生成的会话无法彻底删除、Antigravity 长任务提前结束、执行结束后工具状态一直转圈的问题。**
 - 【修复】**输入内容过大时明确显示失败原因。** 原消息旁显示“输入内容过大 · 查看详情”，并提供改用附件或拆分发送的建议。
+- 【修复】**修复升级安装后聊天 Bot 无法保存设置的问题。** 由旧版本升级时缺失聊天数据表，导致保存模型密钥时提示“聊天密钥尚未保存”；现在升级会补齐数据表。
 
 ---
 
@@ -35,3 +36,4 @@ This release adds the Feishu chat Bot mode and syncs the upstream 0.4.13 and 0.4
 - [Fix] **Correct automatic memory notices and counts, and restore the Memory review panel's close button.**
 - [Fix] **Allow scheduled-task conversations to be deleted completely, prevent Antigravity long runs from ending after five minutes, and stop active tool indicators when an execution ends.**
 - [Fix] **Explain oversized-input failures.** Show "Input too large · View details" beside the original message with suggestions to attach a file or split the input.
+- [Fix] **Fix saving chat settings after an upgrade install.** Upgrading from an older build skipped the chat data tables, so saving the model credential reported that the credential was not saved. Upgrades now create the missing tables.

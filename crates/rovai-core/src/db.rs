@@ -9318,6 +9318,9 @@ impl Database {
             if !self.schema_migration_applied(208)? {
                 migration_step!("migration_208", single_chat_facts::migrate(self));
             }
+            if !self.schema_migration_applied(209)? {
+                migration_step!("migration_209", crate::channel_chat::migrate(self));
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
