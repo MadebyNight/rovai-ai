@@ -5754,14 +5754,6 @@ body:has(.composer-image-attachment[data-context-open="true"]) .image-action-not
 .channel-row-action.is-danger:hover:not(:disabled) { background: var(--danger-soft); }
 .channel-row-action:disabled { color: var(--faint); cursor: default; opacity: 1; }
 .channel-member-action { display: inline-flex; gap: 4px; justify-self: end; align-items: center; }
-.channel-chat-dialog { max-width: 520px; }
-.channel-chat-field { display: grid; gap: 6px; margin-top: 12px; }
-.channel-chat-field > label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11.5px; font-weight: 650; color: var(--ink); }
-.channel-chat-field > label small { color: var(--muted); font-size: 10.5px; font-weight: 500; }
-.channel-chat-field input { width: 100%; min-height: 32px; padding: 6px 9px; border: 1px solid var(--control-line); border-radius: 5px; background: var(--surface-raised); color: var(--ink); font-size: 12px; }
-.channel-chat-folder-row { display: flex; align-items: center; gap: 6px; }
-.channel-chat-folder-row input { flex: 1; }
-.channel-chat-note { margin: 2px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .channel-member-bots-empty { display: grid; min-height: 96px; align-content: center; justify-items: center; gap: 5px; padding: 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); text-align: center; }
 .channel-member-bots-empty strong { color: var(--ink); font-size: 11.5px; }
 .channel-member-bots-empty span { font-size: 10px; }

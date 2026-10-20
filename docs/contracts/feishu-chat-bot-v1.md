@@ -2,7 +2,7 @@
 document_type: protocol-contract
 contract: feishu-chat-bot-v1
 authority: feishu-chat-bot-mode-admission-chat-items-outbound
-status: accepted
+status: historical
 version: 1
 source_version: v1.72
 last_updated: 2026-10-20

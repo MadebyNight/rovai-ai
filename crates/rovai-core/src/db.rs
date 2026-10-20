@@ -5031,6 +5031,55 @@ fn apply_model_catalog_schema_v152(transaction: &Transaction<'_>) -> Result<()> 
     Ok(())
 }
 
+fn apply_chat_bot_member_reuse_schema_v210(transaction: &Transaction<'_>) -> Result<()> {
+    add_migration_column_if_missing(
+        transaction,
+        "agent_profile",
+        "chat_bot_enabled",
+        "chat_bot_enabled INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_migration_column_if_missing(
+        transaction,
+        "agent_profile",
+        "chat_materials_path",
+        "chat_materials_path TEXT",
+    )?;
+    add_migration_column_if_missing(
+        transaction,
+        "conversation",
+        "permission_override_json",
+        "permission_override_json TEXT",
+    )?;
+    transaction.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS channel_chat_conversation (
+            provider TEXT NOT NULL CHECK(provider IN ('feishu', 'lark')),
+            app_id TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            camp_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (provider, app_id, chat_id)
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+fn chat_bot_member_reuse_v210_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_profile')
+                       WHERE name = 'chat_bot_enabled' AND type = 'INTEGER')
+             AND EXISTS(SELECT 1 FROM pragma_table_info('agent_profile')
+                       WHERE name = 'chat_materials_path' AND type = 'TEXT')
+             AND EXISTS(SELECT 1 FROM pragma_table_info('conversation')
+                       WHERE name = 'permission_override_json' AND type = 'TEXT')
+             AND EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'channel_chat_conversation')",
+        [],
+        |row| row.get(0),
+    )
+}
+
 fn model_catalog_v152_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
     connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('adapter_capability_snapshot')
@@ -9321,6 +9370,9 @@ impl Database {
             if !self.schema_migration_applied(209)? {
                 migration_step!("migration_209", crate::channel_chat::migrate(self));
             }
+            if !self.schema_migration_applied(210)? {
+                migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -10170,6 +10222,9 @@ impl Database {
         if !self.schema_migration_applied(209)? {
             migration_step!("migration_209", crate::channel_chat::migrate(self));
         }
+        if !self.schema_migration_applied(210)? {
+            migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
@@ -10366,6 +10421,27 @@ impl Database {
             [102])?;
         transaction.execute(
             "INSERT INTO schema_migration VALUES(152, datetime('now'))",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Additive migration 210: the Feishu chat Bot reuses the member's configured
+    /// Runtime, so the switch and the materials folder live on agent_profile instead
+    /// of the retired chat-only model configuration. Chat Conversations carry the
+    /// non-bypass permission ceiling frozen for that Runtime.
+    fn migrate_chat_bot_member_reuse(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        apply_chat_bot_member_reuse_schema_v210(&transaction)?;
+        anyhow::ensure!(
+            chat_bot_member_reuse_v210_schema_matches(&transaction)?,
+            "chat Bot member reuse schema did not apply"
+        );
+        transaction.execute(
+            "INSERT INTO schema_migration VALUES(210,datetime('now'))",
             [],
         )?;
         transaction.commit()?;

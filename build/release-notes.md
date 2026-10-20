@@ -1,8 +1,13 @@
-# Rovai AI v0.4.16
+# Rovai AI v0.4.17
 
 <!-- lang:zh-CN -->
 
-本版本新增飞书聊天 Bot 模式，并同步了上游 0.4.13、0.4.14 的智能体检测、文件预览、记忆工作区和命令行改进。
+本版本重构飞书聊天 Bot：回复改由该队员自己的智能体（Runtime）产生，并同步了上游 0.4.13、0.4.14 的智能体检测、文件预览、记忆工作区和命令行改进。
+
+- 【重构】**聊天 Bot 使用队员自身的能力。** 不再单独配置聊天模型与密钥；开关移到队员详情的 Runtime 标签页，队员的智能体、模型与权限即聊天 Bot 的能力。
+- 【重构】**资料文件夹变为聊天工作区。** 绑定文件夹后，Bot 在该文件夹内运行，可以创建和修改文件（如备忘录），不能越界；渠道页的「聊天设置」弹窗移除。
+- 【暂时下线】**代问、转发、按姓名找人。** 这些动作将在后续版本以 Agent 工具形式回归。
+- 【修复】**修复升级安装后聊天 Bot 无法保存设置的问题。** 由旧版本升级时缺失聊天数据表；现在升级会补齐数据表。
 
 - 【功能】**飞书 Bot 双模式。** 打开“仅 Owner 可交互”时保持现有工作 Bot；关闭后，Owner、同事与已建联外部联系人只能使用聊天、资料问答、转发、代问和向 Owner 确认，不进入本地工作链路。
 - 【功能】**共享资料问答。** 绑定一个已有文件夹，实时读取 UTF-8 Markdown/TXT，按问题返回相关片段并注明出处；资料变化、删除或解绑立即生效。
@@ -22,8 +27,11 @@
 
 <!-- lang:en -->
 
-This release adds the Feishu chat Bot mode and syncs the upstream 0.4.13 and 0.4.14 improvements to agent checks, file previews, the Memory workspace, and the app CLI.
+This release rebuilds the Feishu chat Bot so replies come from the teammate's own agent, and syncs the upstream 0.4.13 and 0.4.14 improvements to agent checks, file previews, the Memory workspace, and the app CLI.
 
+- [Refactor] **The chat Bot uses the teammate itself.** There is no separate chat model or credential anymore. The switch lives in the teammate's Runtime tab, and the teammate's agent, model, and permissions define the Bot's capabilities.
+- [Refactor] **The materials folder becomes the chat workspace.** With a folder bound, the Bot runs inside it and may create and edit files such as memos, without leaving the folder. The chat settings dialog on the channel page is gone.
+- [Removed for now] **Ask, forward, and find-by-name.** These actions return in a later release as agent tools.
 - [Feature] **Two Feishu Bot modes.** With Owner-only interaction on, the Bot keeps the existing work capabilities. With it off, the Owner, colleagues, and connected external contacts can only chat, ask about shared materials, forward messages, ask on someone's behalf, and confirm with the Owner, without entering the local work pipeline.
 - [Feature] **Answers from a shared materials folder.** Bind an existing folder and Rovai reads UTF-8 Markdown and TXT files live, answering with the relevant excerpts and their sources. Edits, deletions, and unbinding take effect immediately.
 - [Feature] **Closed communication loop.** Find colleagues by name, forward on request, ask on someone's behalf with quoted replies, and post progress and follow-up reports, reporting sent, failed, or unconfirmed honestly.

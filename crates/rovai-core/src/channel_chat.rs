@@ -1,12 +1,18 @@
-//! ChatBot mode: configuration, independent chat transcript, communication items
-//! and outbound delivery state. Chat is deliberately separate from Camp/Delivery
-//! so a chat-mode Bot never creates an AgentRun.
+//! ChatBot mode: member Runtime reuse, chat transcript, communication items and
+//! outbound delivery state. A chat turn is an ordinary Camp execution inside the
+//! member's materials folder, so the member's own Runtime, model and permissions
+//! answer the chat instead of a separate chat model configuration.
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use std::str::FromStr;
+
+use crate::agent_profile::{AdapterKind, AdapterPermissionConfig};
+use crate::agent_runtime_adapter::AgentRuntimeAdapterRegistry;
+use crate::collaboration::{ChatBotTurnAdmissionInput, CollaborationService};
 use crate::db::Database;
 
 pub(crate) const CHAT_MODE: &str = "chat";
@@ -50,36 +56,13 @@ fn validate_identity(provider: &str, app_id: &str) -> Result<()> {
 pub struct ChatBotConfigView {
     pub provider: String,
     pub app_id: String,
+    /// The member whose Runtime answers this Bot once chat mode is on.
+    pub agent_id: Option<String>,
+    /// Inverse of the member's chat switch; kept so older read models stay valid.
     pub owner_only: bool,
     pub mode: String,
-    pub model_provider: Option<String>,
-    pub model_name: Option<String>,
-    pub model_base_url: Option<String>,
-    pub credential_configured: bool,
+    /// The member's materials folder; also the execution root of chat Threads.
     pub materials_path: Option<String>,
-    pub materials_status: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatBotConfigureCommand {
-    pub provider: String,
-    pub app_id: String,
-    pub owner_only: bool,
-    pub model_provider: Option<String>,
-    pub model_name: Option<String>,
-    pub model_base_url: Option<String>,
-    pub materials_path: Option<String>,
-    pub materials_status: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatCredentialCommand {
-    pub provider: String,
-    pub app_id: String,
-    /// An absent value clears the stored credential.
-    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +87,46 @@ pub struct ChatInboundResult {
     pub mode: String,
     pub duplicate: bool,
     pub owner: bool,
+}
+
+/// One inbound Feishu message admitted as a chat turn. Identity is the Bot's
+/// published app; the answering member and folder come from Core state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnSubmitCommand {
+    pub provider: String,
+    pub app_id: String,
+    pub chat_id: String,
+    pub conversation_kind: String,
+    pub chat_name: Option<String>,
+    pub author_name: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnSubmitResult {
+    pub camp_id: String,
+    pub camp_message_id: String,
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnResultParams {
+    pub provider: String,
+    pub app_id: String,
+    pub camp_message_id: String,
+}
+
+/// Pending and running are live; waiting needs a human in the App; every other
+/// state is terminal. Text is only present once the turn succeeded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnResultView {
+    pub status: String,
+    pub text: Option<String>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,183 +410,193 @@ impl ChannelChatService {
         load_config(database.connection(), provider, app_id)
     }
 
-    pub fn configure(
+    /// Admits one chat turn as an ordinary Camp execution inside the member's
+    /// materials folder. The Thread is created once per external chat and then
+    /// reused, so a conversation keeps its Runtime session.
+    pub fn submit_turn(
         &self,
         database: &mut Database,
-        command: &ChatBotConfigureCommand,
-    ) -> Result<ChatBotConfigView> {
+        command: &ChatTurnSubmitCommand,
+    ) -> Result<ChatTurnSubmitResult> {
         validate_identity(&command.provider, &command.app_id)?;
-        let model_provider = clean(command.model_provider.as_deref());
-        let model_name = clean(command.model_name.as_deref());
-        let model_base_url = clean(command.model_base_url.as_deref());
-        let materials_path = clean(command.materials_path.as_deref());
-        let materials_status = clean(command.materials_status.as_deref());
-        if !command.owner_only {
-            anyhow::ensure!(
-                model_provider.is_some() && model_name.is_some(),
-                "chat model provider and model are required before switching to chat mode"
-            );
-            let configured: bool = database.connection().query_row(
-                "SELECT EXISTS(SELECT 1 FROM channel_chat_credential WHERE provider = ?1 AND app_id = ?2)",
-                params![command.provider, command.app_id],
-                |row| row.get(0),
-            )?;
-            anyhow::ensure!(
-                configured,
-                "a chat model credential is required before switching to chat mode"
-            );
-        }
-        let now = now_millis();
-        let transaction = database
-            .connection_mut()
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let previous_materials: Option<String> = transaction
+        text(&command.chat_id, "chatId", MAX_CHAT_ID_BYTES)?;
+        text(&command.body, "body", MAX_BODY_BYTES)?;
+        let config = load_config(database.connection(), &command.provider, &command.app_id)?;
+        anyhow::ensure!(
+            config.mode == CHAT_MODE,
+            "chat mode is not enabled for this Bot"
+        );
+        let agent_id = config
+            .agent_id
+            .clone()
+            .context("the chat Bot has no published member")?;
+        let materials_path = config
+            .materials_path
+            .clone()
+            .context("the chat Bot member has no materials folder")?;
+        std::fs::create_dir_all(&materials_path)
+            .with_context(|| format!("failed to prepare chat materials at {materials_path}"))?;
+        let adapter_kind: Option<String> = database
+            .connection()
             .query_row(
-                "SELECT materials_path FROM channel_chat_bot WHERE provider = ?1 AND app_id = ?2",
-                params![command.provider, command.app_id],
+                "SELECT selected_runtime_adapter_kind FROM agent_profile WHERE id = ?1",
+                [&agent_id],
                 |row| row.get(0),
             )
             .optional()?
             .flatten();
+        let adapter_kind = AdapterKind::from_str(
+            adapter_kind
+                .as_deref()
+                .context("the chat Bot member has no Runtime configuration")?,
+        )?;
+        // Unattended chat never inherits the member's interactive bypass profile.
+        let permission_override_json = serde_json::to_string(&AdapterPermissionConfig {
+            adapter_kind,
+            schema_version: 1,
+            values: AgentRuntimeAdapterRegistry::default().chat_permission_ceiling(adapter_kind),
+        })?;
+        let now = Utc::now().to_rfc3339();
+        let command_id = format!("chat-turn-{}", Uuid::new_v4());
+        let body = format!(
+            "[{}·{}] {}",
+            conversation_label(command),
+            command.author_name.trim(),
+            command.body.trim()
+        );
+        let transaction = database
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let camp_id = bound_camp(
+            &transaction,
+            &command.provider,
+            &command.app_id,
+            &command.chat_id,
+            &agent_id,
+            &materials_path,
+        )?;
+        let admission = CollaborationService::default().admit_chat_bot_turn(
+            &transaction,
+            ChatBotTurnAdmissionInput {
+                agent_id: agent_id.clone(),
+                camp_id,
+                camp_title: camp_title(command),
+                project_path: materials_path.clone(),
+                body,
+                permission_override_json,
+                command_id: command_id.clone(),
+                now: now.clone(),
+            },
+        )?;
+        let admission = match admission {
+            Ok(admission) => admission,
+            Err(rejection) => anyhow::bail!("chat turn was rejected: {}", rejection.code),
+        };
         transaction.execute(
             r#"
-            INSERT INTO channel_chat_bot(
-                provider, app_id, owner_only, model_provider, model_name,
-                model_base_url, materials_path, materials_status, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-            ON CONFLICT(provider, app_id) DO UPDATE SET
-                owner_only = excluded.owner_only,
-                model_provider = excluded.model_provider,
-                model_name = excluded.model_name,
-                model_base_url = excluded.model_base_url,
-                materials_path = excluded.materials_path,
-                materials_status = excluded.materials_status,
-                updated_at = excluded.updated_at
+            INSERT INTO channel_chat_conversation(provider, app_id, chat_id, camp_id, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(provider, app_id, chat_id) DO UPDATE SET
+                camp_id = excluded.camp_id,
+                created_at = excluded.created_at
             "#,
             params![
                 command.provider,
                 command.app_id,
-                i64::from(command.owner_only),
-                model_provider,
-                model_name,
-                model_base_url,
-                materials_path,
-                materials_status,
-                now
+                command.chat_id,
+                admission.camp_id,
+                now_millis(),
             ],
         )?;
-        if command.owner_only {
-            // Switching back to the work Bot cancels unsent chat messages and
-            // pauses open items; they resume only if chat mode returns.
-            transaction.execute(
-                "UPDATE channel_chat_outbound SET status = ?3, updated_at = ?4
-                 WHERE provider = ?1 AND app_id = ?2 AND status = ?5",
-                params![
-                    command.provider,
-                    command.app_id,
-                    OUTBOUND_FAILED,
-                    now,
-                    OUTBOUND_PENDING
-                ],
-            )?;
-            transaction.execute(
-                "UPDATE channel_chat_item SET status = ?3, updated_at = ?4
-                 WHERE provider = ?1 AND app_id = ?2 AND status = ?5",
-                params![
-                    command.provider,
-                    command.app_id,
-                    ITEM_PAUSED,
-                    now,
-                    ITEM_WAITING
-                ],
-            )?;
-        } else {
-            transaction.execute(
-                "UPDATE channel_chat_item SET status = ?3, updated_at = ?4
-                 WHERE provider = ?1 AND app_id = ?2 AND status = ?5",
-                params![
-                    command.provider,
-                    command.app_id,
-                    ITEM_WAITING,
-                    now,
-                    ITEM_PAUSED
-                ],
-            )?;
-        }
-        if previous_materials.as_deref() != materials_path.as_deref() {
-            // Unsent answers grounded in the old folder must never reach anyone.
-            transaction.execute(
-                "UPDATE channel_chat_outbound SET status = ?3, updated_at = ?4
-                 WHERE provider = ?1 AND app_id = ?2 AND status = ?5 AND uses_materials = 1",
-                params![
-                    command.provider,
-                    command.app_id,
-                    OUTBOUND_FAILED,
-                    now,
-                    OUTBOUND_PENDING
-                ],
-            )?;
-        }
         transaction.commit()?;
-        load_config(database.connection(), &command.provider, &command.app_id)
+        Ok(ChatTurnSubmitResult {
+            camp_id: admission.camp_id,
+            camp_message_id: admission.camp_message_id,
+            duplicate: false,
+        })
     }
 
-    pub fn set_credential(
-        &self,
-        database: &mut Database,
-        command: &ChatCredentialCommand,
-    ) -> Result<bool> {
-        validate_identity(&command.provider, &command.app_id)?;
-        let now = now_millis();
-        match command
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            Some(api_key) => {
-                anyhow::ensure!(
-                    api_key.len() <= 8 * 1024,
-                    "api key exceeds the storage limit"
-                );
-                database.connection().execute(
-                    r#"
-                    INSERT INTO channel_chat_credential(provider, app_id, api_key, updated_at)
-                    VALUES (?1, ?2, ?3, ?4)
-                    ON CONFLICT(provider, app_id) DO UPDATE SET
-                        api_key = excluded.api_key,
-                        updated_at = excluded.updated_at
-                    "#,
-                    params![command.provider, command.app_id, api_key, now],
-                )?;
-                Ok(true)
-            }
-            None => {
-                database.connection().execute(
-                    "DELETE FROM channel_chat_credential WHERE provider = ?1 AND app_id = ?2",
-                    params![command.provider, command.app_id],
-                )?;
-                Ok(false)
-            }
-        }
-    }
-
-    pub fn credential(
+    /// Reads the authoritative state of one submitted chat turn.
+    pub fn turn_result(
         &self,
         database: &mut Database,
         provider: &str,
         app_id: &str,
-    ) -> Result<Option<String>> {
+        camp_message_id: &str,
+    ) -> Result<ChatTurnResultView> {
         validate_identity(provider, app_id)?;
-        database
-            .connection()
+        let connection = database.connection();
+        let delivery = connection
             .query_row(
-                "SELECT api_key FROM channel_chat_credential WHERE provider = ?1 AND app_id = ?2",
-                params![provider, app_id],
-                |row| row.get(0),
+                r#"
+                SELECT delivery.status, delivery.claimed_agent_run_id
+                FROM camp_message_delivery AS delivery
+                WHERE delivery.message_id = ?1
+                ORDER BY delivery.created_at, delivery.id
+                LIMIT 1
+                "#,
+                [camp_message_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
             )
-            .optional()
-            .map_err(Into::into)
+            .optional()?;
+        let Some((delivery_status, agent_run_id)) = delivery else {
+            return Ok(ChatTurnResultView {
+                status: "failed".to_string(),
+                text: None,
+                reason: Some("chat_turn_not_admitted".to_string()),
+            });
+        };
+        let Some(agent_run_id) = agent_run_id else {
+            return Ok(ChatTurnResultView {
+                status: if delivery_status == "cancelled" {
+                    "cancelled".to_string()
+                } else {
+                    "pending".to_string()
+                },
+                text: None,
+                reason: None,
+            });
+        };
+        let (run_status, wait_reason) = connection
+            .query_row(
+                "SELECT status, wait_reason FROM agent_run WHERE id = ?1",
+                [&agent_run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?
+            .context("chat turn Run does not exist")?;
+        let status = match run_status.as_str() {
+            "queued" => "pending",
+            "running" => "running",
+            "succeeded" => "completed",
+            "waiting" => "waiting",
+            "failed" => "failed",
+            "cancelled" => "cancelled",
+            other => other,
+        };
+        if status != "completed" {
+            return Ok(ChatTurnResultView {
+                status: status.to_string(),
+                text: None,
+                reason: wait_reason,
+            });
+        }
+        let text = agent_run_result_text(connection, &agent_run_id)?;
+        let reason = if text.is_none() {
+            Some("empty_result".to_string())
+        } else {
+            None
+        };
+        Ok(ChatTurnResultView {
+            status: "completed".to_string(),
+            text,
+            reason,
+        })
     }
 
     pub fn inbound(
@@ -1091,62 +1124,134 @@ impl ChannelChatService {
     }
 }
 
-fn clean(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+fn conversation_label(command: &ChatTurnSubmitCommand) -> String {
+    match command.conversation_kind.as_str() {
+        "p2p" => "飞书私聊".to_string(),
+        "topic" => command
+            .chat_name
+            .as_deref()
+            .map(|name| format!("飞书话题「{name}」"))
+            .unwrap_or_else(|| "飞书话题".to_string()),
+        _ => command
+            .chat_name
+            .as_deref()
+            .map(|name| format!("飞书群聊「{name}」"))
+            .unwrap_or_else(|| "飞书群聊".to_string()),
+    }
 }
 
-fn load_config(connection: &Connection, provider: &str, app_id: &str) -> Result<ChatBotConfigView> {
-    let mut config = connection
+fn camp_title(command: &ChatTurnSubmitCommand) -> String {
+    match command.conversation_kind.as_str() {
+        "p2p" => format!("飞书私聊 · {}", command.author_name.trim()),
+        _ => conversation_label(command),
+    }
+}
+
+/// The Thread bound to this external chat, when it is still usable for the same
+/// member and folder. Anything else opens a fresh Thread on the next turn.
+fn bound_camp(
+    connection: &Connection,
+    provider: &str,
+    app_id: &str,
+    chat_id: &str,
+    agent_id: &str,
+    materials_path: &str,
+) -> Result<Option<String>> {
+    Ok(connection
         .query_row(
             r#"
-            SELECT owner_only, model_provider, model_name, model_base_url,
-                   materials_path, materials_status
-            FROM channel_chat_bot WHERE provider = ?1 AND app_id = ?2
+            SELECT mapping.camp_id
+            FROM channel_chat_conversation AS mapping
+            JOIN camp ON camp.id = mapping.camp_id
+            WHERE mapping.provider = ?1 AND mapping.app_id = ?2
+              AND mapping.chat_id = ?3
+              AND camp.deletion_operation_id IS NULL
+              AND camp.default_lead_agent_id = ?4
+              AND camp.project_path = ?5
+            "#,
+            params![provider, app_id, chat_id, agent_id, materials_path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+fn agent_run_result_text(connection: &Connection, agent_run_id: &str) -> Result<Option<String>> {
+    let body = connection
+        .query_row(
+            r#"
+            SELECT message.body
+            FROM agent_run AS run
+            JOIN camp_message AS message ON message.id = run.final_camp_message_id
+            WHERE run.id = ?1 AND message.source_agent_run_id = run.id
+              AND message.author_type = 'agent' AND message.tombstoned_at IS NULL
+              AND json_array_length(message.effective_recipient_ids_json) = 0
+            "#,
+            [agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if body.is_some() {
+        return Ok(body);
+    }
+    connection
+        .query_row(
+            r#"
+            SELECT body FROM camp_message
+            WHERE source_agent_run_id = ?1 AND author_type = 'agent'
+              AND tombstoned_at IS NULL
+              AND json_array_length(effective_recipient_ids_json) = 0
+            ORDER BY sequence DESC, id DESC LIMIT 1
+            "#,
+            [agent_run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+/// Chat mode is a member switch: the Bot answers only when its published member
+/// has chat enabled and a materials folder to run in.
+fn load_config(connection: &Connection, provider: &str, app_id: &str) -> Result<ChatBotConfigView> {
+    let row = connection
+        .query_row(
+            r#"
+            SELECT bot.agent_id, profile.chat_bot_enabled, profile.chat_materials_path
+            FROM channel_member_bot_directory AS bot
+            LEFT JOIN agent_profile AS profile ON profile.id = bot.agent_id
+            WHERE bot.provider = ?1 AND bot.app_id = ?2
             "#,
             params![provider, app_id],
             |row| {
-                let owner_only: i64 = row.get(0)?;
-                Ok(ChatBotConfigView {
-                    provider: provider.to_string(),
-                    app_id: app_id.to_string(),
-                    owner_only: owner_only == 1,
-                    mode: if owner_only == 1 {
-                        WORK_MODE
-                    } else {
-                        CHAT_MODE
-                    }
-                    .to_string(),
-                    model_provider: row.get(1)?,
-                    model_name: row.get(2)?,
-                    model_base_url: row.get(3)?,
-                    credential_configured: false,
-                    materials_path: row.get(4)?,
-                    materials_status: row.get(5)?,
-                })
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    row.get::<_, Option<String>>(2)?,
+                ))
             },
         )
-        .optional()?
-        .unwrap_or_else(|| ChatBotConfigView {
+        .optional()?;
+    let Some((agent_id, enabled, materials_path)) = row else {
+        return Ok(ChatBotConfigView {
             provider: provider.to_string(),
             app_id: app_id.to_string(),
+            agent_id: None,
             owner_only: true,
             mode: WORK_MODE.to_string(),
-            model_provider: None,
-            model_name: None,
-            model_base_url: None,
-            credential_configured: false,
             materials_path: None,
-            materials_status: None,
         });
-    config.credential_configured = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM channel_chat_credential WHERE provider = ?1 AND app_id = ?2)",
-        params![provider, app_id],
-        |row| row.get(0),
-    )?;
-    Ok(config)
+    };
+    let materials_path = materials_path
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty());
+    let chat = enabled == 1 && materials_path.is_some();
+    Ok(ChatBotConfigView {
+        provider: provider.to_string(),
+        app_id: app_id.to_string(),
+        agent_id: Some(agent_id),
+        owner_only: !chat,
+        mode: if chat { CHAT_MODE } else { WORK_MODE }.to_string(),
+        materials_path,
+    })
 }
 
 fn item_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatItemView> {
@@ -1178,121 +1283,142 @@ mod tests {
     const PROVIDER: &str = "feishu";
     const APP: &str = "cli_chat_test";
 
-    fn configure_command(owner_only: bool) -> ChatBotConfigureCommand {
-        ChatBotConfigureCommand {
-            provider: PROVIDER.to_string(),
-            app_id: APP.to_string(),
-            owner_only,
-            model_provider: Some("openai-compatible".to_string()),
-            model_name: Some("chat-model".to_string()),
-            model_base_url: Some("https://example.invalid/v1".to_string()),
-            materials_path: Some("C:/shared-materials".to_string()),
-            materials_status: Some("共 2 个文件可用".to_string()),
-        }
+    fn enable_chat(database: &mut Database, materials: &std::path::Path) {
+        database
+            .connection()
+            .execute_batch(&format!(
+                "INSERT OR IGNORE INTO feishu_account(
+                    id, identity_digest, display_name, tenant_name, status, version,
+                    created_at, updated_at)
+                 VALUES ('account_chat', 'digest', 'Owner', 'Tenant', 'connected', 1,
+                    '2026-01-01', '2026-01-01');
+                 INSERT OR REPLACE INTO feishu_member_bot(
+                    agent_id, account_id, app_id, bot_display_name, credential_ref,
+                    status, version, created_at, updated_at, published_at)
+                 VALUES ('agent_1', 'account_chat', '{APP}', '聊天 Bot', 'credential_chat',
+                    'published', 1, '2026-01-01', '2026-01-01', '2026-01-01');
+                 UPDATE agent_profile
+                 SET chat_bot_enabled = 1, chat_materials_path = '{}'
+                 WHERE id = 'agent_1';",
+                materials.to_string_lossy().replace('\\', "/")
+            ))
+            .unwrap();
+    }
+
+    fn materials_root() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("rovai-chat-root-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 
     #[test]
-    fn chat_mode_requires_a_configured_model_and_pauses_open_items() {
+    fn chat_mode_follows_the_member_switch_and_materials_folder() {
         let mut database = seeded_runtime_database_owned();
         let service = ChannelChatService;
 
         let default = service.snapshot(&mut database, PROVIDER, APP).unwrap();
         assert!(default.owner_only);
         assert_eq!(default.mode, WORK_MODE);
-        assert!(!default.credential_configured);
+        assert!(default.agent_id.is_none());
 
-        assert!(
-            service
-                .configure(&mut database, &configure_command(false))
-                .is_err(),
-            "chat mode must not start without a credential"
-        );
-        service
-            .set_credential(
-                &mut database,
-                &ChatCredentialCommand {
-                    provider: PROVIDER.to_string(),
-                    app_id: APP.to_string(),
-                    api_key: Some("test-key".to_string()),
-                },
-            )
-            .unwrap();
-        let chat = service
-            .configure(&mut database, &configure_command(false))
-            .unwrap();
+        let root = materials_root();
+        enable_chat(&mut database, &root);
+        let chat = service.snapshot(&mut database, PROVIDER, APP).unwrap();
         assert_eq!(chat.mode, CHAT_MODE);
-        assert!(chat.credential_configured);
+        assert!(!chat.owner_only);
+        assert_eq!(chat.agent_id.as_deref(), Some("agent_1"));
+        assert_eq!(
+            chat.materials_path.as_deref(),
+            Some(root.to_string_lossy().replace('\\', "/").as_str())
+        );
 
-        let item = service
-            .create_item(
-                &mut database,
-                &ChatItemCreateCommand {
-                    provider: PROVIDER.to_string(),
-                    app_id: APP.to_string(),
-                    requester_external_id: "ou_requester".to_string(),
-                    requester_name: "请求者".to_string(),
-                    destination_chat_id: "oc_group".to_string(),
-                    destination_kind: "group".to_string(),
-                    target_external_id: "ou_target".to_string(),
-                    target_name: "同事".to_string(),
-                    target_is_owner: false,
-                    question: "项目进展如何？".to_string(),
-                    ask_message_id: Some("om_ask".to_string()),
-                    ask_chat_id: Some("ou_target".to_string()),
-                },
+        // A member without a materials folder can never reach chat mode.
+        database
+            .connection()
+            .execute("UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'", [])
+            .unwrap();
+        assert_eq!(
+            service.snapshot(&mut database, PROVIDER, APP).unwrap().mode,
+            WORK_MODE
+        );
+    }
+
+    #[test]
+    fn submit_turn_runs_in_the_materials_folder_and_reuses_the_thread() {
+        let mut database = seeded_runtime_database_owned();
+        let service = ChannelChatService;
+        let root = materials_root();
+        enable_chat(&mut database, &root);
+        let command = ChatTurnSubmitCommand {
+            provider: PROVIDER.to_string(),
+            app_id: APP.to_string(),
+            chat_id: "oc_chat".to_string(),
+            conversation_kind: "p2p".to_string(),
+            chat_name: None,
+            author_name: "请求者".to_string(),
+            body: "帮我记一条备忘".to_string(),
+        };
+        let first = service.submit_turn(&mut database, &command).unwrap();
+        let second = service.submit_turn(&mut database, &command).unwrap();
+        assert_eq!(first.camp_id, second.camp_id);
+        assert_ne!(first.camp_message_id, second.camp_message_id);
+
+        let camps: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM camp", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(camps, 1);
+        let (project_path, binding_kind): (String, String) = database
+            .connection()
+            .query_row(
+                "SELECT project_path, project_binding_kind FROM camp WHERE id = ?1",
+                [&first.camp_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(item.status, ITEM_WAITING);
+        assert_eq!(project_path, root.to_string_lossy().replace('\\', "/"));
+        assert_eq!(binding_kind, "directory");
 
-        let work = service
-            .configure(&mut database, &configure_command(true))
+        // The turn is an ordinary Delivery, claimed later by the scheduler.
+        let deliveries: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM camp_message_delivery WHERE status = 'waiting'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(work.mode, WORK_MODE);
-        assert_eq!(
-            service
-                .item(&mut database, &item.id)
-                .unwrap()
-                .unwrap()
-                .status,
-            ITEM_PAUSED
-        );
-        assert!(
-            service
-                .waiting_items_for_target(&mut database, PROVIDER, APP, "ou_target")
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(deliveries, 2);
+        let pending = service
+            .turn_result(
+                &mut database,
+                PROVIDER,
+                APP,
+                &first.camp_message_id,
+            )
+            .unwrap();
+        assert_eq!(pending.status, "pending");
 
-        service
-            .configure(&mut database, &configure_command(false))
+        // Unattended chat must not inherit the member's bypass profile.
+        let override_json: String = database
+            .connection()
+            .query_row(
+                "SELECT permission_override_json FROM conversation LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(
-            service
-                .item(&mut database, &item.id)
-                .unwrap()
-                .unwrap()
-                .status,
-            ITEM_WAITING
-        );
+        assert!(override_json.contains("workspace-write"));
+        assert!(!override_json.contains("danger-full-access"));
+        assert!(!override_json.contains("bypass"));
     }
 
     #[test]
     fn duplicate_inbound_events_do_not_repeat_the_conversation_turn() {
         let mut database = seeded_runtime_database_owned();
         let service = ChannelChatService;
-        service
-            .set_credential(
-                &mut database,
-                &ChatCredentialCommand {
-                    provider: PROVIDER.to_string(),
-                    app_id: APP.to_string(),
-                    api_key: Some("test-key".to_string()),
-                },
-            )
-            .unwrap();
-        service
-            .configure(&mut database, &configure_command(false))
-            .unwrap();
+        let root = materials_root();
+        enable_chat(&mut database, &root);
         let command = ChatInboundCommand {
             provider: PROVIDER.to_string(),
             app_id: APP.to_string(),
@@ -1370,45 +1496,46 @@ mod tests {
     }
 
     #[test]
-    fn unbinding_materials_discards_unsent_material_answers() {
-        let mut database = seeded_runtime_database_owned();
-        let service = ChannelChatService;
-        service
-            .set_credential(
-                &mut database,
-                &ChatCredentialCommand {
-                    provider: PROVIDER.to_string(),
-                    app_id: APP.to_string(),
-                    api_key: Some("test-key".to_string()),
-                },
+    fn migration_210_adds_member_chat_state() {
+        let database = seeded_runtime_database_owned();
+        let columns: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_profile')
+                 WHERE name IN ('chat_bot_enabled', 'chat_materials_path')",
+                [],
+                |row| row.get(0),
             )
             .unwrap();
-        service
-            .configure(&mut database, &configure_command(false))
-            .unwrap();
-        service
-            .enqueue(
-                &mut database,
-                &ChatOutboundEnqueueCommand {
-                    provider: PROVIDER.to_string(),
-                    app_id: APP.to_string(),
-                    chat_id: "oc_chat".to_string(),
-                    text: "根据资料，项目已完成。".to_string(),
-                    source: "reply".to_string(),
-                    idempotency_key: "material-answer".to_string(),
-                    uses_materials: true,
-                },
+        assert_eq!(columns, 2);
+        let conversation_columns: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('conversation')
+                 WHERE name = 'permission_override_json'",
+                [],
+                |row| row.get(0),
             )
             .unwrap();
-        let mut unbind = configure_command(false);
-        unbind.materials_path = None;
-        unbind.materials_status = None;
-        service.configure(&mut database, &unbind).unwrap();
-        assert!(
-            service
-                .claim(&mut database, PROVIDER, APP, "worker", 10)
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(conversation_columns, 1);
+        let applied: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migration WHERE version = 210",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
+        let (enabled, path): (i64, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT chat_bot_enabled, chat_materials_path FROM agent_profile WHERE id = 'agent_1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(enabled, 0);
+        assert!(path.is_none());
     }
 }

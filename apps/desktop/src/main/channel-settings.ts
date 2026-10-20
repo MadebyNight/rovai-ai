@@ -21,8 +21,6 @@ import type {
 } from '@contracts'
 import type { CoreClient } from './core-client'
 import { ChannelChatService, type ChatSendReceipt } from './channel-chat-service'
-import { searchContacts } from './feishu-contact-search'
-import { inspectMaterials } from './shared-chat-materials'
 import {
   FEISHU_PROVIDER_PROFILE,
   presentProviderError,
@@ -102,15 +100,10 @@ type CoreChannelSnapshot = {
     version: number
     ownerIdentityStatus: 'verified' | 'unverified'
     chat?: {
+      agentId: string | null
       ownerOnly: boolean
       mode: 'work' | 'chat'
-      credentialConfigured: boolean
-      modelProvider: string | null
-      modelName: string | null
-      modelBaseUrl: string | null
-      materialsPath: string | null
-      materialsStatus: string | null
-    } | null
+      materialsPath: string | null    } | null
   }>
   publicationIntents: Array<{
     publicationIntentId: string
@@ -312,7 +305,6 @@ export class ChannelSettingsService {
   readonly #now: () => number
   readonly #listeners = new Set<(snapshot: ChannelSettingsSnapshot) => void>()
   readonly #managedChannels = new Map<string, ManagedChannel>()
-  readonly #appCredentials = new Map<string, FeishuAppCredential>()
   readonly #chatServices = new Map<string, ChannelChatService>()
   #chatFlushTimer: ReturnType<typeof setInterval> | null = null
   readonly #publicationFailures = new Map<string, string>()
@@ -444,7 +436,6 @@ export class ChannelSettingsService {
     this.#chatFlushTimer = null
     for (const service of this.#chatServices.values()) service.stop()
     this.#chatServices.clear()
-    this.#appCredentials.clear()
     const channels = [...this.#managedChannels.values()]
     this.#managedChannels.clear()
     this.#rosterReconciledAt.clear()
@@ -1494,7 +1485,6 @@ export class ChannelSettingsService {
     if (!credential || credential.appId !== bot.appId) throw new Error('published_bot_credential_missing')
     const managed = await this.#connectBot(bot.agentId, bot.credentialRef, credential)
     this.#managedChannels.set(bot.appId, managed)
-    this.#appCredentials.set(bot.appId, credential)
     this.#ensureChatService(bot.appId)
     // Opt-in synthetic previews reuse this exact connection, never a competing WebSocket.
     void this.#dependencies?.executionPreview?.connected(bot.agentId, bot.appId, managed.channel).catch(() => {
@@ -1608,7 +1598,6 @@ export class ChannelSettingsService {
       chat.stop()
       this.#chatServices.delete(managed.appId)
     }
-    this.#appCredentials.delete(managed.appId)
     managed.connectionStatus = 'offline'
     for (const unsubscribe of managed.unsubscribers.splice(0)) unsubscribe()
     await managed.channel.disconnect().catch(() => undefined)
@@ -1617,8 +1606,7 @@ export class ChannelSettingsService {
   #ensureChatService(appId: string): ChannelChatService | null {
     const existing = this.#chatServices.get(appId)
     if (existing) return existing
-    const credential = this.#appCredentials.get(appId)
-    if (!credential || !this.#dependencies) return null
+    if (!this.#dependencies) return null
     const provider = this.#profile.kind === 'lark' ? 'lark' : 'feishu'
     const service = new ChannelChatService({
       provider,
@@ -1626,7 +1614,7 @@ export class ChannelSettingsService {
       core: {
         request: (method, params) => this.#dependencies!.core.request(method, params)
       },
-      sendText: async (target, text, targetKind) => {
+      sendText: async (target, text, _targetKind) => {
         const managed = this.#managedChannels.get(appId)
         if (!managed) return { status: 'failed', messageId: null }
         try {
@@ -1636,17 +1624,6 @@ export class ChannelSettingsService {
           return { status: chatSendFailure(error), messageId: null }
         }
       },
-      loadModelKey: () => this.#dependencies!.core.request<string | null>(
-        'channels.chat.credential.get',
-        { provider, appId }
-      ),
-      appCredentials: () => ({ appId: credential.appId, appSecret: credential.appSecret }),
-      searchContacts: (query) => searchContacts({
-        appId: credential.appId,
-        appSecret: credential.appSecret,
-        domain: provider,
-        query
-      }),
       log: (event, detail) => logFeishuBotDiagnostic('chat.' + event, {
         appIdDigest: digest(appId),
         ...detail
@@ -1656,7 +1633,6 @@ export class ChannelSettingsService {
     void service.flush().catch(() => undefined)
     return service
   }
-
   async #handleChatMessage(
     managed: ManagedChannel,
     message: NormalizedMessage,

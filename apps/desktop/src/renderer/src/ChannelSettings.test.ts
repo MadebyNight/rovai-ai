@@ -444,15 +444,6 @@ describe('Channel settings', () => {
 })
 
 
-  it('offers chat settings on published Feishu and Lark bots without changing work rows', () => {
-    const markup = renderToStaticMarkup(createElement(ChannelSettingsView, {
-      agents: [agent('agent-a', 0)],
-      snapshot: threeProviderSnapshot()
-    }))
-    expect(markup.match(/>聊天设置<\/button>/g)).toHaveLength(1)
-    expect(markup).toContain('https://open.feishu.cn/app/cli_feishu/baseinfo')
-  })
-
 function threeProviderSnapshot(): ChannelSettingsSnapshot {
   const account = (brand: 'feishu' | 'lark' | 'dingtalk', tenantName: string) => ({
     accountId: `${brand}-account`, userName: 'Murray', tenantName, brand,

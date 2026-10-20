@@ -1,7 +1,7 @@
 ---
 document_type: contracts-index
 authority: protocol-contract-routing
-last_updated: 2026-10-20
+last_updated: 2026-10-21
 ---
 
 # 长期接口合同
@@ -31,7 +31,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 ## 飞书聊天 Bot
 
-- [Feishu Chat Bot v1（当前）](feishu-chat-bot-v1.md)：仅 Owner 开关决定工作 Bot 或聊天 Bot；聊天路径独立持久化会话、沟通事项与出站幂等，不进入 Camp／Delivery／AgentRun。
+- [Feishu Chat Bot v2（当前）](feishu-chat-bot-v2.md)：成员级开关决定聊天 Bot；回复由该队员自己的 ACP Runtime 在其资料文件夹内执行，出站只发纯文本；[v1（历史）](feishu-chat-bot-v1.md) 保留模式说明与出站语义。
 
 ## 用户主动继续
 

@@ -1,376 +1,178 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-import type { ChatBotView, ChatItemView, ChatTurnView } from '@contracts'
+import { describe, expect, it } from 'vitest'
+import type { ChatBotView, CoreMethod } from '@contracts'
 import {
   ChannelChatService,
+  type ChatCore,
   type ChatInboundInput,
   type ChatSendReceipt
 } from './channel-chat-service'
 
-const directories: string[] = []
-
-afterEach(async () => {
-  await Promise.allSettled(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
-})
+type TurnState = 'pending' | 'running' | 'completed' | 'failed' | 'waiting'
 
 type State = {
   config: ChatBotView
   duplicate: boolean
-  turns: ChatTurnView[]
-  items: ChatItemView[]
+  turn: { status: TurnState; text: string | null }
+  submitted: string[]
   outbound: Array<{ id: string; chatId: string; text: string; source: string; attempts: number }>
   settled: Array<{ id: string; status: string }>
-  createdItems: Array<Record<string, unknown>>
+  appended: string[]
   sent: Array<{ target: string; text: string }>
 }
 
-function fakeCore(state: State) {
+function fakeCore(state: State): ChatCore {
   let outboundSeq = 0
-  return {
-    request: async (method: string, params?: unknown): Promise<unknown> => {
+  return ({
+    request: async (method: CoreMethod, params?: unknown): Promise<unknown> => {
       const payload = (params ?? {}) as Record<string, any>
       switch (method) {
         case 'channels.chat.inbound':
-          state.turns.push({ role: 'user', body: payload.command.body })
-          return { mode: 'chat', duplicate: state.duplicate, owner: false }
+          return { mode: state.config.mode, duplicate: state.duplicate, owner: false }
         case 'channels.chat.snapshot':
           return state.config
-        case 'channels.chat.context':
-          return state.turns
-        case 'channels.chat.items.waiting':
-          return state.items.filter((item) => item.status === 'waiting')
-        case 'channels.chat.items.active':
-          return state.items
-        case 'channels.chat.item.create': {
-          state.createdItems.push(payload.command)
-          const item: ChatItemView = {
-            id: 'item-' + state.createdItems.length,
-            provider: 'feishu',
-            appId: 'cli_test',
-            requesterExternalId: payload.command.requesterExternalId,
-            requesterName: payload.command.requesterName,
-            destinationChatId: payload.command.destinationChatId,
-            destinationKind: payload.command.destinationKind,
-            targetExternalId: payload.command.targetExternalId,
-            targetName: payload.command.targetName,
-            targetIsOwner: payload.command.targetIsOwner,
-            question: payload.command.question,
-            askMessageId: payload.command.askMessageId ?? null,
-            askChatId: payload.command.askChatId ?? null,
-            status: 'waiting',
-            lastReportAt: null,
-            createdAt: Date.now()
-          }
-          state.items.push(item)
-          return item
+        case 'channels.chat.submit': {
+          const id = 'msg-' + (state.submitted.length + 1)
+          state.submitted.push(id)
+          return { campId: 'camp-1', campMessageId: id, duplicate: false }
         }
-        case 'channels.chat.item.update': {
-          const item = state.items.find((candidate) => candidate.id === payload.command.itemId)
-          if (item && payload.command.markReported) item.lastReportAt = Date.now()
-          if (item && payload.command.status) item.status = payload.command.status
-          if (item && payload.command.askMessageId) item.askMessageId = payload.command.askMessageId
-          return item
-        }
-        case 'channels.chat.ownerTarget':
-          return { appId: 'cli_test', externalId: 'ou_owner' }
+        case 'channels.chat.result':
+          return { status: state.turn.status, text: state.turn.text, reason: null }
         case 'channels.chat.outbound.enqueue': {
-          outboundSeq += 1
-          const id = 'out-' + outboundSeq
-          const existing = state.outbound.find((item) => item.id === payload.command.idempotencyKey)
-          if (existing) return { outboundId: existing.id, duplicate: true }
+          const id = 'out-' + (outboundSeq += 1)
           state.outbound.push({
-            id: payload.command.idempotencyKey,
+            id,
             chatId: payload.command.chatId,
             text: payload.command.text,
             source: payload.command.source,
             attempts: 0
           })
-          void id
-          return { outboundId: payload.command.idempotencyKey, duplicate: false }
+          return { outboundId: id, duplicate: false }
         }
         case 'channels.chat.outbound.claim': {
-          const claimed = state.outbound.splice(0)
-          return claimed
+          const claimable = state.outbound.filter(
+            (candidate) => !state.settled.some((settled) => settled.id === candidate.id)
+          )
+          for (const candidate of claimable) candidate.attempts += 1
+          return claimable
         }
-        case 'channels.chat.outbound.settle':
+        case 'channels.chat.outbound.settle': {
           state.settled.push({ id: payload.command.outboundId, status: payload.command.status })
           return { settled: true }
+        }
+        case 'channels.chat.turn.append':
+          state.appended.push(payload.command.body)
+          return { appended: true }
         default:
           throw new Error('unexpected core method ' + method)
       }
     }
+  }) as ChatCore
+}
+
+function chatConfig(overrides: Partial<ChatBotView> = {}): ChatBotView {
+  return {
+    agentId: 'agent-1',
+    ownerOnly: false,
+    mode: 'chat',
+    materialsPath: 'C:/materials',
+    ...overrides
   }
 }
 
-function fixture(overrides: Partial<State> = {}) {
-  const state: State = {
-    config: {
-      ownerOnly: false,
-      mode: 'chat',
-      modelProvider: 'openai-compatible',
-      modelName: 'test-model',
-      modelBaseUrl: null,
-      credentialConfigured: true,
-      materialsPath: null,
-      materialsStatus: null
-    },
+function baseState(overrides: Partial<State> = {}): State {
+  return {
+    config: chatConfig(),
     duplicate: false,
-    turns: [],
-    items: [],
+    turn: { status: 'completed', text: '好的，已记下。' },
+    submitted: [],
     outbound: [],
     settled: [],
-    createdItems: [],
+    appended: [],
     sent: [],
     ...overrides
   }
-  const outputs = ['{"reply":"你好","action":null}']
-  const service = new ChannelChatService({
-    provider: 'feishu',
-    appId: 'cli_test',
-    core: fakeCore(state) as never,
-    sendText: async (target, text): Promise<ChatSendReceipt> => {
-      state.sent.push({ target, text })
-      return { status: 'sent', messageId: 'om_' + state.sent.length }
-    },
-    loadModelKey: async () => 'secret',
-    appCredentials: () => ({ appId: 'cli_test', appSecret: 'secret' }),
-    complete: async () => outputs.shift() ?? '{"reply":null,"action":null}'
-  })
-  return { state, service, outputs }
 }
 
-const input = (overrides: Partial<ChatInboundInput> = {}): ChatInboundInput => ({
-  chatId: 'oc_chat',
-  chatName: '项目群',
-  conversationKind: 'group',
-  authorExternalId: 'ou_requester',
-  authorName: '张三',
-  isOwner: false,
-  body: '你好',
-  externalMessageId: 'om_in_1',
-  quoteMessageId: null,
-  mentions: [],
-  ...overrides
-})
+function inbound(overrides: Partial<ChatInboundInput> = {}): ChatInboundInput {
+  return {
+    chatId: 'oc_test',
+    chatName: '项目群',
+    conversationKind: 'group',
+    authorExternalId: 'ou_colleague',
+    authorName: '同事',
+    isOwner: false,
+    body: '帮我记一条备忘',
+    externalMessageId: 'om_1',
+    quoteMessageId: null,
+    mentions: [],
+    ...overrides
+  }
+}
 
-describe('channel chat service', () => {
-  it('replies to the original conversation and never touches work delivery', async () => {
-    const { state, service } = fixture()
-    await service.handleInbound(input())
-    expect(state.sent).toEqual([{ target: 'oc_chat', text: '你好' }])
-    expect(state.settled).toHaveLength(1)
-    expect(state.settled[0].status).toBe('sent')
-  })
-
-  it('skips duplicate platform events without sending again', async () => {
-    const { state, service } = fixture({ duplicate: true })
-    await service.handleInbound(input())
-    expect(state.sent).toEqual([])
-  })
-
-  it('asks the owner and remembers the item so the answer returns to the requester', async () => {
-    const { state, service, outputs } = fixture()
-    outputs.splice(0, outputs.length,
-      '{"reply":"我向负责人确认一下","action":{"type":"ask_owner","question":"最新进展？"}}')
-    await service.handleInbound(input({ body: '现在最新情况是什么？' }))
-
-    const ownerSend = state.sent.find((entry) => entry.target === 'ou_owner')
-    expect(ownerSend?.text).toContain('张三')
-    expect(ownerSend?.text).toContain('最新进展？')
-    expect(state.sent.some((entry) => entry.target === 'oc_chat' && entry.text.includes('我向负责人确认一下'))).toBe(true)
-    expect(state.createdItems).toHaveLength(1)
-    expect(state.createdItems[0]).toMatchObject({
-      targetIsOwner: true,
-      destinationChatId: 'oc_chat'
-    })
-    expect(String(state.items[0].askMessageId)).toMatch(/^om_\d+$/)
-  })
-
-  it('grounds material answers in freshly read snippets and cites the source', async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'rovai-chat-materials-'))
-    directories.push(directory)
-    await writeFile(
-      path.join(directory, '项目进展记录.md'),
-      '10 月 16 日完成评审，下一步进入联调。',
-      'utf8'
-    )
-    const { state, service, outputs } = fixture({
-      config: {
-        ownerOnly: false,
-        mode: 'chat',
-        modelProvider: 'openai-compatible',
-        modelName: 'test-model',
-        modelBaseUrl: null,
-        credentialConfigured: true,
-        materialsPath: directory,
-        materialsStatus: '共 1 个文件可用'
-      }
-    })
-    let captured: Array<{ role: string; content: string }> = []
-    void service
-    outputs.splice(0, outputs.length,
-      '{"reply":"根据《项目进展记录》中 10 月 16 日的记录，下一步进入联调。","action":null}')
-
-    // Re-create with a capturing model call while keeping the same fakes.
-    const capturing = new ChannelChatService({
-      provider: 'feishu',
-      appId: 'cli_test',
-      core: fakeCore(state) as never,
-      sendText: async (target, text) => {
-        state.sent.push({ target, text })
-        return { status: 'sent', messageId: 'om_' + state.sent.length }
-      },
-      loadModelKey: async () => 'secret',
-      appCredentials: () => ({ appId: 'cli_test', appSecret: 'secret' }),
-      complete: async (request) => {
-        captured = request.messages
-        return outputs.shift() ?? '{"reply":null,"action":null}'
-      }
-    })
-    await capturing.handleInbound(input({ body: '项目进展到哪一步了？' }))
-    const system = captured[0]?.content ?? ''
-    expect(system).toContain('《项目进展记录》')
-    expect(system).toContain('10月16日')
-    expect(state.sent.at(-1)?.text).toContain('根据《项目进展记录》')
-  })
-
-  it('turns a correlated reply into a staged report for the requester', async () => {
-    const readyItem: ChatItemView = {
-      id: 'item-ready',
-      provider: 'feishu',
-      appId: 'cli_test',
-      requesterExternalId: 'ou_requester',
-      requesterName: '张三',
-      destinationChatId: 'oc_chat',
-      destinationKind: 'group',
-      targetExternalId: 'ou_target',
-      targetName: '李四',
-      targetIsOwner: false,
-      question: '项目 A 什么时候完成？',
-      askMessageId: 'om_ask',
-      askChatId: 'ou_target',
-      status: 'waiting',
-      lastReportAt: null,
-      createdAt: 1
+function harness(state: State): ChannelChatService {
+  return new ChannelChatService({
+    provider: 'feishu',
+    appId: 'cli_test',
+    core: fakeCore(state),
+    sendText: async (target, text): Promise<ChatSendReceipt> => {
+      state.sent.push({ target, text })
+      return { status: 'sent', messageId: 'om_sent' }
     }
-    const { state, service, outputs } = fixture({ items: [readyItem] })
-    outputs.splice(0, outputs.length, '{"newRequest":false,"report":"下周三完成。"}')
-    await service.handleInbound(input({
-      authorExternalId: 'ou_target',
-      authorName: '李四',
-      body: '下周三完成。',
-      quoteMessageId: 'om_ask',
-      externalMessageId: 'om_reply_1'
-    }))
-    expect(state.sent[0]).toEqual({
-      target: 'oc_chat',
-      text: '关于「项目 A 什么时候完成？」的回复：\n下周三完成。'
-    })
-    expect(state.items[0].lastReportAt).not.toBeNull()
+  })
+}
+
+describe('ChannelChatService', () => {
+  it('submits one turn and delivers the assistant text from Core', async () => {
+    const state = baseState()
+    const service = harness(state)
+
+    await service.handleInbound(inbound())
+    expect(state.submitted).toHaveLength(1)
+    expect(state.sent).toHaveLength(0)
+
+    const results = await service.flush()
+    expect(state.sent).toEqual([{ target: 'oc_test', text: '好的，已记下。' }])
+    expect(results[0]?.status).toBe('sent')
+    expect(state.appended).toEqual(['好的，已记下。'])
   })
 
-  it('forwards an explicit message and reports the send result', async () => {
-    const { state, service, outputs } = fixture()
-    outputs.splice(0, outputs.length,
-      '{"reply":null,"action":{"type":"forward","targetOpenId":"ou_target","targetName":"李四","text":"明天请假"}}')
-    await service.handleInbound(input({
-      body: '帮我转告李四明天请假',
-      mentions: [{ openId: 'ou_target', name: '李四' }]
-    }))
-    expect(state.sent[0]).toEqual({
-      target: 'ou_target',
-      text: '受 张三 委托转告：\n明天请假'
-    })
-    expect(state.sent[1]).toEqual({ target: 'oc_chat', text: '已转告 李四。' })
+  it('ignores duplicates and work-mode Bots', async () => {
+    const duplicate = baseState({ duplicate: true })
+    await harness(duplicate).handleInbound(inbound())
+    expect(duplicate.submitted).toHaveLength(0)
+
+    const work = baseState({ config: chatConfig({ ownerOnly: true, mode: 'work' }) })
+    await harness(work).handleInbound(inbound())
+    expect(work.submitted).toHaveLength(0)
   })
 
-  it('asks which item is meant when several are waiting unless the message is a new request', async () => {
-    const waiting = (id: string, question: string): ChatItemView => ({
-      id,
-      provider: 'feishu',
-      appId: 'cli_test',
-      requesterExternalId: 'ou_requester',
-      requesterName: '张三',
-      destinationChatId: 'oc_chat',
-      destinationKind: 'group',
-      targetExternalId: 'ou_target',
-      targetName: '李四',
-      targetIsOwner: false,
-      question,
-      askMessageId: 'om_' + id,
-      askChatId: 'ou_target',
-      status: 'waiting',
-      lastReportAt: null,
-      createdAt: 1
-    })
-    const { state, service, outputs } = fixture({
-      items: [waiting('a', '问题 A'), waiting('b', '问题 B')]
-    })
-    outputs.splice(0, outputs.length, '{"newRequest":false}')
-    await service.handleInbound(input({ authorExternalId: 'ou_target', authorName: '李四', body: '不清楚' }))
-    expect(state.sent[0].text).toContain('多条待回复的事项')
+  it('keeps polling while the Run is live and replies once it settles', async () => {
+    const state = baseState({ turn: { status: 'pending', text: null } })
+    const service = harness(state)
 
-    const next = fixture({ items: [waiting('a', '问题 A'), waiting('b', '问题 B')] })
-    next.outputs.splice(0, next.outputs.length, '{"newRequest":true}', '{"reply":"好的","action":null}')
-    await next.service.handleInbound(input({
-      authorExternalId: 'ou_target',
-      authorName: '李四',
-      body: '帮我查一下项目 A'
-    }))
-    expect(next.state.sent.at(-1)).toEqual({ target: 'oc_chat', text: '好的' })
+    await service.handleInbound(inbound())
+    await service.flush()
+    expect(state.sent).toHaveLength(0)
+
+    state.turn = { status: 'completed', text: '已经写好了。' }
+    await service.flush()
+    await service.flush()
+    expect(state.sent).toEqual([{ target: 'oc_test', text: '已经写好了。' }])
   })
 
-
-  it('reports unavailable contact scope instead of pretending nobody was found', async () => {
-    const { state } = fixture()
-    const outputs = [
-      '{"action":{"type":"find_person","name":"李四"}}',
-      '{"reply":"通讯录权限尚未生效，无法按姓名查找，请 @ 此人。","action":null}'
-    ]
-    let prompts: Array<{ role: string; content: string }> = []
-    const service = new ChannelChatService({
-      provider: 'feishu',
-      appId: 'cli_test',
-      core: fakeCore(state) as never,
-      sendText: async (target, text) => {
-        state.sent.push({ target, text })
-        return { status: 'sent', messageId: 'om_' + state.sent.length }
-      },
-      loadModelKey: async () => 'secret',
-      appCredentials: () => ({ appId: 'cli_test', appSecret: 'secret' }),
-      searchContacts: async () => { throw new Error('permission_denied') },
-      complete: async (request) => {
-        prompts = request.messages
-        return outputs.shift() ?? '{"reply":null,"action":null}'
-      }
-    })
-    await service.handleInbound(input({ body: '帮我问一下李四' }))
-    expect(prompts.some((message) => message.content.includes('通讯录权限尚未生效'))).toBe(true)
-    expect(state.sent.at(-1)?.text).toContain('通讯录权限尚未生效')
+  it('explains a failed Run instead of staying silent', async () => {
+    const state = baseState({ turn: { status: 'failed', text: null } })
+    const service = harness(state)
+    await service.handleInbound(inbound())
+    await service.flush()
+    expect(state.sent).toEqual([{ target: 'oc_test', text: '暂时无法回复，请稍后再试。' }])
   })
 
-
-  it('associates an early quote with the only waiting item before the ask id is persisted', async () => {
-    const item: ChatItemView = {
-      id: 'item-early', provider: 'feishu', appId: 'cli_test',
-      requesterExternalId: 'ou_requester', requesterName: '张三',
-      destinationChatId: 'oc_chat', destinationKind: 'group',
-      targetExternalId: 'ou_target', targetName: '李四', targetIsOwner: false,
-      question: '项目进度如何？', askMessageId: null, askChatId: 'ou_target',
-      status: 'waiting', lastReportAt: null, createdAt: 1
-    }
-    const { state, service, outputs } = fixture({ items: [item] })
-    outputs.splice(0, outputs.length, '{"newRequest":false,"refused":false,"report":"已完成 80%。"}')
-    await service.handleInbound(input({
-      authorExternalId: 'ou_target', authorName: '李四', body: '已完成 80%。',
-      quoteMessageId: 'om_early', externalMessageId: 'om_early_reply'
-    }))
-    expect(state.sent[0]).toEqual({
-      target: 'oc_chat',
-      text: '关于「项目进度如何？」的回复：\n已完成 80%。'
-    })
+  it('reports an empty assistant message instead of sending nothing', async () => {
+    const state = baseState({ turn: { status: 'completed', text: '   ' } })
+    const service = harness(state)
+    await service.handleInbound(inbound())
+    await service.flush()
+    expect(state.sent).toEqual([{ target: 'oc_test', text: '这条消息没有生成可发送的回复。' }])
   })
-
 })

@@ -4286,14 +4286,10 @@ it('routes non-owner messages into chat mode without touching work admission', a
             version: 1,
             ownerIdentityStatus: 'verified',
             chat: {
+              agentId: 'agent-chat',
               ownerOnly: false,
               mode: 'chat',
-              credentialConfigured: false,
-              modelProvider: null,
-              modelName: null,
-              modelBaseUrl: null,
-              materialsPath: null,
-              materialsStatus: null
+              materialsPath: 'C:/materials'
             }
           }]
         })
@@ -4310,18 +4306,18 @@ it('routes non-owner messages into chat mode without touching work admission', a
       }
       if (method === 'channels.chat.snapshot') {
         return {
+          agentId: 'agent-chat',
           ownerOnly: false,
           mode: 'chat',
-          modelProvider: null,
-          modelName: null,
-          modelBaseUrl: null,
-          credentialConfigured: false,
-          materialsPath: null,
-          materialsStatus: null
+          materialsPath: 'C:/materials'
         }
       }
-      if (method === 'channels.chat.items.waiting') return []
-      if (method === 'channels.chat.credential.get') return null
+      if (method === 'channels.chat.submit') {
+        return { campId: 'camp-chat', campMessageId: 'msg-chat-1', duplicate: false }
+      }
+      if (method === 'channels.chat.result') {
+        return { status: 'completed', text: '资料在资料文件夹里。', reason: null }
+      }
       if (method === 'channels.chat.outbound.enqueue') {
         return { outboundId: 'chat-out-1', duplicate: false }
       }
@@ -4329,12 +4325,13 @@ it('routes non-owner messages into chat mode without touching work admission', a
         return [{
           id: 'chat-out-1',
           chatId: 'oc_test',
-          text: '聊天模型尚未配置完成，暂时无法回复。',
+          text: '资料在资料文件夹里。',
           source: 'reply',
           attempts: 1
         }]
       }
       if (method === 'channels.chat.outbound.settle') return { settled: true }
+      if (method === 'channels.chat.turn.append') return { appended: true }
       throw new Error('unexpected core method ' + method)
     })
   })
@@ -4349,9 +4346,8 @@ it('routes non-owner messages into chat mode without touching work admission', a
     mentions: [{ key: '@_bot', openId: 'ou_bot', name: '聊天员', isBot: true }]
   }))
   expect(methods).toContain('channels.chat.inbound')
+  expect(methods).toContain('channels.chat.submit')
   expect(methods).not.toContain('channels.feishu.inbound.observe')
-  expect(harness.send).toHaveBeenCalledWith('oc_test', {
-    text: '聊天模型尚未配置完成，暂时无法回复。'
-  })
+  // The turn settles on a later flush, not inside the inbound callback.
   await service.stop()
 })

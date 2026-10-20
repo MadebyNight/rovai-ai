@@ -152,7 +152,6 @@ import {
 import { ExecutionViewService } from './execution-view-service'
 import { createFeishuExecutionPreviewHost } from './feishu-execution-preview'
 import { ChannelSettingsCoordinator, hasPublishedChannelBot } from './channel-settings-coordinator'
-import { inspectMaterials } from './shared-chat-materials'
 import { parseChannelLoginViewBounds } from './dingtalk-login-view'
 import { ChannelHostLifecycle } from './channel-host-lifecycle'
 import {
@@ -1510,80 +1509,14 @@ ipcMain.handle('rovai:execution-web-settings-set', (event, value: unknown) => {
   } as Pick<ExecutionWebSettingsSnapshot, 'enabled' | 'port'>)
 })
 
-async function resolveChatBot(
-  agentId: string,
-  kind: unknown
-): Promise<{ provider: 'feishu' | 'lark'; appId: string }> {
-  const snapshot = await channelSettings.get()
-  const requested = typeof kind === 'string' ? kind : 'feishu'
-  const provider = snapshot.channels.find((candidate) => candidate.kind === requested)
-    ?? snapshot.channels.find((candidate) => candidate.memberBots.some((bot) => bot.agentId === agentId))
-  const bot = provider?.memberBots.find((candidate) => candidate.agentId === agentId)
-  if (!provider || !bot?.appId) throw new Error('Bot 尚未发布，无法配置聊天模式')
-  if (provider.kind !== 'feishu' && provider.kind !== 'lark') {
-    throw new Error('只有飞书 Bot 支持聊天模式')
-  }
-  return { provider: provider.kind, appId: bot.appId }
-}
-
-ipcMain.handle('rovai:channels-chat-configure', async (event, agentId: unknown, value: unknown, kind: unknown) => {
-  requireMainWindow(event.sender)
-  if (typeof agentId !== 'string' || !agentId) throw new Error('Invalid Agent ID')
-  const config = requireObject(value)
-  if (typeof config.ownerOnly !== 'boolean') throw new Error('Invalid chat mode')
-  for (const field of ['modelProvider', 'modelName', 'modelBaseUrl', 'materialsPath']) {
-    const fieldValue = config[field]
-    if (fieldValue !== null && (typeof fieldValue !== 'string' || fieldValue.length > 2048)) {
-      throw new Error('Invalid chat setting: ' + field)
-    }
-  }
-  const target = await resolveChatBot(agentId, kind)
-  const materialsPath = typeof config.materialsPath === 'string' && config.materialsPath
-    ? config.materialsPath
-    : null
-  const materials = await inspectMaterials(materialsPath)
-  await core.request('channels.chat.configure', {
-    commandId: randomUUID(),
-    command: {
-      provider: target.provider,
-      appId: target.appId,
-      ownerOnly: config.ownerOnly,
-      modelProvider: config.modelProvider,
-      modelName: config.modelName,
-      modelBaseUrl: config.modelBaseUrl,
-      materialsPath,
-      materialsStatus: materials.message
-    }
-  })
-  return channelSettings.get()
-})
-
-ipcMain.handle('rovai:channels-chat-credential', async (event, agentId: unknown, apiKey: unknown, kind: unknown) => {
-  requireMainWindow(event.sender)
-  if (typeof agentId !== 'string' || !agentId) throw new Error('Invalid Agent ID')
-  if (apiKey !== null && (typeof apiKey !== 'string' || apiKey.length > 8192)) {
-    throw new Error('Invalid chat credential')
-  }
-  const target = await resolveChatBot(agentId, kind)
-  await core.request('channels.chat.credential.set', {
-    commandId: randomUUID(),
-    command: {
-      provider: target.provider,
-      appId: target.appId,
-      apiKey: typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : null
-    }
-  })
-  return channelSettings.get()
-})
-
 ipcMain.handle('rovai:channels-chat-select-materials', async (event) => {
   requireMainWindow(event.sender)
   const window = mainWindow
   if (!window) return null
   const result = await dialog.showOpenDialog(window, {
-    title: '选择共享资料文件夹',
+    title: '选择资料文件夹',
     buttonLabel: '选择文件夹',
-    properties: ['openDirectory']
+    properties: ['openDirectory', 'createDirectory']
   })
   return result.canceled ? null : result.filePaths[0] ?? null
 })

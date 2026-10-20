@@ -259,6 +259,10 @@ export interface AgentProfile {
   growthTopic: string
   defaultCapabilities: string[]
   presence: MemberPresence
+  /** The Feishu chat Bot answers with this member's own Runtime and model. */
+  chatBotEnabled?: boolean
+  /** Execution root of chat Threads; null until a folder is chosen. */
+  chatMaterialsPath?: string | null
   runtimeConfiguration: MemberRuntimeConfiguration | null
   runtimeReadiness: {
     status: RuntimeReadinessStatus
@@ -3162,15 +3166,13 @@ export interface ChannelConnectionView {
 }
 
 export interface ChatBotView {
+  /** The member answering this Bot; absent while the Bot is unpublished. */
+  agentId: string | null
+  /** Inverse of the member's chat switch. */
   ownerOnly: boolean
   mode: 'work' | 'chat'
-  modelProvider: string | null
-  modelName: string | null
-  modelBaseUrl: string | null
-  /** The credential itself never leaves Core. */
-  credentialConfigured: boolean
+  /** The member's materials folder, also the chat Thread execution root. */
   materialsPath: string | null
-  materialsStatus: string | null
 }
 
 export interface ChatTurnView {
@@ -3197,11 +3199,8 @@ export interface ChatItemView {
   createdAt: number
 }
 
-export interface ChatBotConfigInput {
-  ownerOnly: boolean
-  modelProvider: string | null
-  modelName: string | null
-  modelBaseUrl: string | null
+export interface MemberChatBotInput {
+  enabled: boolean
   materialsPath: string | null
 }
 
@@ -3298,16 +3297,6 @@ export interface ChannelsApi {
     kind?: ChannelKind
   ): Promise<ChannelSettingsSnapshot>
   cancelQrAttempt(attemptId: string): Promise<ChannelSettingsSnapshot>
-  setChatBotConfig(
-    agentId: string,
-    config: ChatBotConfigInput,
-    kind?: ChannelKind
-  ): Promise<ChannelSettingsSnapshot>
-  setChatBotCredential(
-    agentId: string,
-    apiKey: string | null,
-    kind?: ChannelKind
-  ): Promise<ChannelSettingsSnapshot>
   selectChatMaterialsDirectory(): Promise<string | null>
   setLoginViewBounds(attemptId: string, bounds: ChannelLoginViewBounds | null): Promise<void>
   refreshLoginQr(attemptId: string): Promise<void>
@@ -4215,6 +4204,7 @@ export type CoreMethod =
   | 'members.runtime.set'
   | 'members.runtime.clear'
   | 'members.presence.set'
+  | 'members.chat.set'
   | 'members.removalPreview'
   | 'members.remove'
   | 'members.reorder'
@@ -4299,9 +4289,8 @@ export type CoreMethod =
   | 'channels.credentials.listPublished'
   | 'channels.credentials.delete'
   | 'channels.chat.snapshot'
-  | 'channels.chat.configure'
-  | 'channels.chat.credential.set'
-  | 'channels.chat.credential.get'
+  | 'channels.chat.submit'
+  | 'channels.chat.result'
   | 'channels.chat.inbound'
   | 'channels.chat.turn.append'
   | 'channels.chat.context'

@@ -853,6 +853,10 @@ pub struct AgentProfileView {
     pub growth_topic: String,
     pub default_capabilities: Vec<String>,
     pub presence: String,
+    /// Feishu chat Bot mode reuses this member's Runtime, model and permissions.
+    pub chat_bot_enabled: bool,
+    /// Execution root for chat Bot turns; the Thread is bound to this folder.
+    pub chat_materials_path: Option<String>,
     pub runtime_configuration: Option<MemberRuntimeConfiguration>,
     pub runtime_readiness: RuntimeReadiness,
     pub member_order: i64,
@@ -954,6 +958,24 @@ pub struct SetMemberPresenceCommand {
 impl sealed::Sealed for SetMemberPresenceCommand {}
 impl DomainCommand for SetMemberPresenceCommand {
     const TYPE: &'static str = "agent_profile.presence.set";
+}
+
+/// The Feishu chat Bot reuses this member's Runtime; only the switch and the
+/// materials folder are chat-specific.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct SetMemberChatBotCommand {
+    pub agent_id: String,
+    pub expected_version: i64,
+    pub enabled: bool,
+    #[serde(default)]
+    pub materials_path: Option<String>,
+}
+
+impl sealed::Sealed for SetMemberChatBotCommand {}
+impl DomainCommand for SetMemberChatBotCommand {
+    const TYPE: &'static str = "agent_profile.chat.set";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1283,7 +1305,7 @@ impl AgentProfileService {
                    selected_runtime_adapter_kind,
                    default_runtime_installation_id, default_model_selection_json,
                    default_permission_config_json, version, created_at, updated_at,
-                   removed_at, member_order
+                   removed_at, member_order, chat_bot_enabled, chat_materials_path
             FROM agent_profile
             WHERE profile_status <> 'removed'
             ORDER BY member_order, id
@@ -1313,7 +1335,7 @@ impl AgentProfileService {
                        selected_runtime_adapter_kind,
                        default_runtime_installation_id, default_model_selection_json,
                        default_permission_config_json, version, created_at, updated_at,
-                       removed_at, member_order
+                       removed_at, member_order, chat_bot_enabled, chat_materials_path
                 FROM agent_profile
                 WHERE id = ?1 AND profile_status <> 'removed'
                 "#,
@@ -3191,6 +3213,104 @@ impl AgentProfileService {
         })
     }
 
+    /// Chat mode never introduces a second model configuration: it only marks a
+    /// present member as reachable through its published Feishu Bot and pins the
+    /// folder that becomes the execution root of every chat Thread.
+    pub fn set_chat_bot(
+        &self,
+        database: &mut Database,
+        envelope: &CommandEnvelope<SetMemberChatBotCommand>,
+    ) -> Result<CommandExecution> {
+        let materials_path = envelope
+            .payload
+            .materials_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(path) = materials_path.as_deref() {
+            anyhow::ensure!(path.len() <= 4096, "chatMaterialsPath is too long");
+            anyhow::ensure!(
+                std::path::Path::new(path).is_absolute(),
+                "chatMaterialsPath must be absolute"
+            );
+        }
+        if envelope.payload.enabled && materials_path.is_none() {
+            anyhow::bail!("chatMaterialsPath is required to enable the chat Bot");
+        }
+        self.gateway.execute(database, envelope, |transaction| {
+            if !matches!(envelope.actor, crate::command::ActorRef::User { .. }) {
+                return Ok(CommandHandlerResult::rejected(
+                    "agent_profile.chat_user_required",
+                    json!({}),
+                ));
+            }
+            let Some((version, current_presence)) =
+                profile_version_and_presence(transaction, &envelope.payload.agent_id)?
+            else {
+                return Ok(CommandHandlerResult::rejected(
+                    "agent_profile.not_found",
+                    json!({ "agentId": envelope.payload.agent_id }),
+                ));
+            };
+            if version != envelope.payload.expected_version {
+                return Ok(version_conflict(version));
+            }
+            if current_presence != "present" {
+                return Ok(CommandHandlerResult::rejected(
+                    "agent_profile.chat_requires_present_member",
+                    json!({
+                        "agentId": envelope.payload.agent_id,
+                        "presence": current_presence,
+                    }),
+                ));
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            let previous_path: Option<String> = transaction.query_row(
+                "SELECT chat_materials_path FROM agent_profile WHERE id = ?1",
+                [&envelope.payload.agent_id],
+                |row| row.get(0),
+            )?;
+            transaction.execute(
+                r#"
+                UPDATE agent_profile
+                SET chat_bot_enabled = ?2,
+                    chat_materials_path = COALESCE(?3, chat_materials_path),
+                    version = version + 1, updated_at = ?4
+                WHERE id = ?1 AND version = ?5
+                "#,
+                params![
+                    envelope.payload.agent_id,
+                    i64::from(envelope.payload.enabled),
+                    materials_path.as_deref(),
+                    now,
+                    envelope.payload.expected_version,
+                ],
+            )?;
+            if materials_path
+                .as_deref()
+                .is_some_and(|path| Some(path) != previous_path.as_deref())
+            {
+                // A Thread bound to the previous folder can never answer from the
+                // new one, so the next chat turn opens a fresh Thread instead.
+                transaction.execute(
+                    r#"
+                    DELETE FROM channel_chat_conversation
+                    WHERE camp_id IN (
+                        SELECT id FROM camp WHERE default_lead_agent_id = ?1
+                    )
+                    "#,
+                    [&envelope.payload.agent_id],
+                )?;
+            }
+            Ok(profile_updated_result(
+                &envelope.payload.agent_id,
+                version + 1,
+                "agent_profile.chat_changed",
+            ))
+        })
+    }
+
     pub fn removal_preview(
         &self,
         database: &Database,
@@ -3883,6 +4003,8 @@ impl AgentProfileService {
             growth_topic: raw.growth_topic,
             default_capabilities,
             presence: raw.presence,
+            chat_bot_enabled: raw.chat_bot_enabled,
+            chat_materials_path: raw.chat_materials_path,
             runtime_configuration,
             runtime_readiness,
             member_order: raw.member_order,
@@ -3912,6 +4034,8 @@ struct RawAgentProfile {
     model_selection_json: Option<String>,
     permission_config_json: Option<String>,
     member_order: i64,
+    chat_bot_enabled: bool,
+    chat_materials_path: Option<String>,
     version: i64,
     created_at: String,
     updated_at: String,
@@ -3940,6 +4064,8 @@ fn raw_agent_profile_from_row(row: &Row<'_>) -> rusqlite::Result<RawAgentProfile
         model_selection_json,
         permission_config_json,
         member_order: row.get(19)?,
+        chat_bot_enabled: row.get(20)?,
+        chat_materials_path: row.get(21)?,
         version: row.get(15)?,
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
@@ -4598,7 +4724,8 @@ pub fn resolve_frozen_runtime(
                    agent_profile.default_permission_config_json,
                    conversation.provider_override, conversation.model_override,
                    CASE WHEN conversation.native_session_id IS NOT NULL
-                        THEN conversation.native_binding_compatibility_digest END
+                        THEN conversation.native_binding_compatibility_digest END,
+                   conversation.permission_override_json
             FROM conversation
             JOIN agent_profile ON agent_profile.id = conversation.agent_id
             WHERE conversation.id = ?1 AND conversation.agent_id = ?2
@@ -4614,6 +4741,7 @@ pub fn resolve_frozen_runtime(
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             },
         )
@@ -4627,6 +4755,7 @@ pub fn resolve_frozen_runtime(
         provider_override,
         model_override,
         native_binding_compatibility_digest,
+        permission_override_json,
     )) = profile
     else {
         return Ok(Err(runtime_blocker(
@@ -4688,7 +4817,7 @@ pub fn resolve_frozen_runtime(
             permissions: serde_json::from_str(&permissions_json)?,
         })
     })();
-    let binding = match binding {
+    let mut binding = match binding {
         Ok(binding) => binding,
         Err(_) => {
             return Ok(Err(runtime_blocker(
@@ -4697,6 +4826,32 @@ pub fn resolve_frozen_runtime(
             )));
         }
     };
+    // A Conversation may pin its own permission ceiling. Chat Bot Threads use it
+    // so a member's interactive bypass profile never becomes unattended reach.
+    if let Some(override_json) = permission_override_json
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        let permissions = match serde_json::from_str::<AdapterPermissionConfig>(override_json) {
+            Ok(permissions) => permissions,
+            Err(_) => {
+                return Ok(Err(runtime_blocker(
+                    "runtime_configuration_invalid",
+                    json!({"agentId": agent_id}),
+                )));
+            }
+        };
+        if permissions.adapter_kind != binding.adapter_kind {
+            return Ok(Err(runtime_blocker(
+                "runtime_configuration_invalid",
+                json!({
+                    "agentId": agent_id,
+                    "adapterKind": selected_runtime_adapter_kind,
+                }),
+            )));
+        }
+        binding.permissions = permissions;
+    }
     if binding.permissions.adapter_kind != binding.adapter_kind {
         return Ok(Err(runtime_blocker(
             "runtime_configuration_adapter_mismatch",

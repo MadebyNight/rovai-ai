@@ -72,7 +72,7 @@ use rovai_core::{
         FrozenAgentRuntimeConfig, InstallationClass, InstallationSource, ManagedProbeFailure,
         RecordAdapterCapabilitySnapshotCommand, RemoveMemberCommand, ReorderAgentProfilesCommand,
         RuntimeEntrypointLocatorIdentity, RuntimeModelCatalogCacheStatus, RuntimeReadinessStatus,
-        SetAgentProfileAvatarCommand, SetMemberPresenceCommand,
+        SetAgentProfileAvatarCommand, SetMemberChatBotCommand, SetMemberPresenceCommand,
         SetMemberRuntimeConfigurationCommand, UpdateAdapterInstallationCommand,
         UpdateAgentProfileCommand, VerifiedManagedInstallation,
     },
@@ -8908,33 +8908,25 @@ impl Core {
                     )?,
                 )?)
             }
-            "channels.chat.configure" => {
-                let params: UserCommandParams<rovai_core::channel_chat::ChatBotConfigureCommand> =
+            "channels.chat.submit" => {
+                let params: rovai_core::channel_chat::ChatTurnSubmitCommand =
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService
-                        .configure(&mut database, &params.command)?,
-                )?)
+                let submitted = rovai_core::channel_chat::ChannelChatService
+                    .submit_turn(&mut database, &params)?;
+                self.notify_delivery_batch_scheduler_if_pending(&database);
+                Ok(serde_json::to_value(submitted)?)
             }
-            "channels.chat.credential.set" => {
-                let params: UserCommandParams<rovai_core::channel_chat::ChatCredentialCommand> =
+            "channels.chat.result" => {
+                let params: rovai_core::channel_chat::ChatTurnResultParams =
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
                 Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService
-                        .set_credential(&mut database, &params.command)?,
-                )?)
-            }
-            "channels.chat.credential.get" => {
-                let params: rovai_core::channel_chat::ChatScopeParams =
-                    serde_json::from_value(request.params.clone())?;
-                let mut database = self.database.lock().await;
-                Ok(serde_json::to_value(
-                    rovai_core::channel_chat::ChannelChatService.credential(
+                    rovai_core::channel_chat::ChannelChatService.turn_result(
                         &mut database,
                         &params.provider,
                         &params.app_id,
+                        &params.camp_message_id,
                     )?,
                 )?)
             }
@@ -9834,6 +9826,18 @@ impl Core {
                     self.delivery_batch_scheduler_notify.notify_one();
                     self.execution_wake.runs.notify_one();
                 }
+                Ok(serde_json::to_value(execution.result)?)
+            }
+            "members.chat.set" => {
+                let params: UserCommandParams<SetMemberChatBotCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                let execution = AgentProfileService::default().set_chat_bot(
+                    &mut database,
+                    &user_command_envelope(params.command_id, params.command),
+                )?;
+                drop(database);
+                emit_member_roster_if_applied(&self.output, &request.method, &execution);
                 Ok(serde_json::to_value(execution.result)?)
             }
             "members.removalPreview" => {
