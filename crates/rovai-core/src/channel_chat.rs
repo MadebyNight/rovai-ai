@@ -10,8 +10,7 @@ use uuid::Uuid;
 
 use std::str::FromStr;
 
-use crate::agent_profile::{AdapterKind, AdapterPermissionConfig};
-use crate::agent_runtime_adapter::AgentRuntimeAdapterRegistry;
+use crate::agent_profile::AdapterKind;
 use crate::collaboration::{ChatBotTurnAdmissionInput, CollaborationService};
 use crate::db::Database;
 
@@ -545,17 +544,11 @@ impl ChannelChatService {
             )
             .optional()?
             .flatten();
-        let adapter_kind = AdapterKind::from_str(
+        AdapterKind::from_str(
             adapter_kind
                 .as_deref()
                 .context("the chat Bot member has no Runtime configuration")?,
         )?;
-        // Unattended chat never inherits the member's interactive bypass profile.
-        let permission_override_json = serde_json::to_string(&AdapterPermissionConfig {
-            adapter_kind,
-            schema_version: 1,
-            values: AgentRuntimeAdapterRegistry::default().chat_permission_ceiling(adapter_kind),
-        })?;
         let now = Utc::now().to_rfc3339();
         let command_id = format!("chat-turn-{}", Uuid::new_v4());
         let body = format!(
@@ -599,7 +592,6 @@ impl ChannelChatService {
                 camp_title: camp_title(command),
                 project_path: materials_path.clone(),
                 body,
-                permission_override_json,
                 command_id: command_id.clone(),
                 now: now.clone(),
             },
@@ -1631,8 +1623,7 @@ mod tests {
         assert_eq!(ack, final_reply.outbound_id);
         assert!(service.enqueue(&mut database, &notice).unwrap().duplicate);
 
-        // Unattended chat must not inherit the member's bypass profile.
-        let override_json: String = database
+        let override_json: Option<String> = database
             .connection()
             .query_row(
                 "SELECT permission_override_json FROM conversation LIMIT 1",
@@ -1640,9 +1631,42 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(override_json.contains("workspace-write"));
-        assert!(!override_json.contains("danger-full-access"));
-        assert!(!override_json.contains("bypass"));
+        assert!(override_json.is_none());
+        let conversation_id: String = database
+            .connection()
+            .query_row("SELECT id FROM conversation LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let saved: String = database
+            .connection()
+            .query_row(
+                "SELECT default_permission_config_json FROM agent_profile WHERE id='agent_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let saved: crate::agent_profile::AdapterPermissionConfig =
+            serde_json::from_str(&saved).unwrap();
+        // Old chat rows must not override the member after an upgrade either.
+        database.connection().execute("UPDATE conversation SET permission_override_json='not-current-permissions' WHERE id=?1",[&conversation_id]).unwrap();
+        let tx = database.connection_mut().transaction().unwrap();
+        let frozen = crate::agent_profile::resolve_frozen_runtime(&tx, &conversation_id, "agent_1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(frozen.permissions, saved);
+        tx.commit().unwrap();
+        command.external_message_id = "om_after_permissions_fix".into();
+        inbound.external_message_id = command.external_message_id.clone();
+        service.inbound(&mut database, &inbound).unwrap();
+        service.submit_turn(&mut database, &command).unwrap();
+        let stale: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT permission_override_json FROM conversation WHERE id=?1",
+                [&conversation_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stale.is_none());
     }
 
     #[test]

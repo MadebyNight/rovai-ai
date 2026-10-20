@@ -66,42 +66,99 @@ export async function searchContacts(request: ContactSearchRequest): Promise<Cha
   const token = tokenResult.payload.tenant_access_token
   if (typeof token !== 'string' || !token) throw new ContactSearchError('invalid_response')
   const headers = { authorization: 'Bearer ' + token }
-  const search = await read(root + '/open-apis/search/v1/user?query=' + encodeURIComponent(query) + '&page_size=20', { headers })
-  if (search.response.ok && search.payload.code === 0) {
-    const users = search.payload.data?.users
-    if (!Array.isArray(users)) throw new ContactSearchError('invalid_response')
-    return users.map(contact).filter((user): user is ChatContact => user !== null).slice(0, 20)
-  }
-  // Name search may require a user token; only that refusal permits a bounded
-  // live scan of the app's already-granted contact scope, never a tenant export.
-  if (!PERMISSION_CODES.has(search.payload.code)) throw new ContactSearchError('unavailable')
-  const matches: ChatContact[] = []
-  const seenIds = new Set<string>()
-  let pageToken: string | undefined
-  let seen = 0
-  for (let page = 0; page < 12 && seen < 600 && matches.length < 20; page += 1) {
-    const url = root + '/open-apis/contact/v3/users/find_by_department?department_id=0&page_size=50&user_id_type=open_id'
-      + (pageToken ? '&page_token=' + encodeURIComponent(pageToken) : '')
-    const { response, payload } = await read(url, { headers })
+  // This is an application token. Search/v1/user only accepts user tokens.
+  // Follow the app's effective scope rather than assuming access to department 0.
+  let requests = 0
+  const get = async (path: string, params: Record<string, string> = {}) => {
+    if (++requests > 60) throw new ContactSearchError('unavailable')
+    const { response, payload } = await read(root + '/open-apis/contact/v3/' + path
+      + '?' + new URLSearchParams({ user_id_type: 'open_id', department_id_type: 'open_department_id', ...params }), { headers })
     if (!response.ok || payload.code !== 0) {
       throw new ContactSearchError(PERMISSION_CODES.has(payload.code) ? 'permission_denied' : 'unavailable')
     }
-    if (!Array.isArray(payload.data?.items)) throw new ContactSearchError('invalid_response')
-    const items = payload.data.items.slice(0, Math.min(50, 600 - seen))
-    seen += items.length
-    for (const raw of items) {
-      const user = contact(raw)
-      if (user && user.name.includes(query) && !seenIds.has(user.openId)) {
-        matches.push(user)
-        seenIds.add(user.openId)
-        if (matches.length === 20) break
+    if (!payload.data || typeof payload.data !== 'object' || Array.isArray(payload.data)) {
+      throw new ContactSearchError('invalid_response')
+    }
+    return payload.data as Record<string, any>
+  }
+  async function* pages(path: string, params: Record<string, string> = {}) {
+    let pageToken = ''
+    const tokens = new Set<string>()
+    for (let page = 0; page < 12; page += 1) {
+      const data = await get(path, { page_size: '50', ...params, ...(pageToken ? { page_token: pageToken } : {}) })
+      yield data
+      if (!data.has_more) return
+      if (typeof data.page_token !== 'string' || !data.page_token || tokens.has(data.page_token)) {
+        throw new ContactSearchError('invalid_response')
+      }
+      tokens.add(data.page_token)
+      pageToken = data.page_token
+    }
+    throw new ContactSearchError('unavailable')
+  }
+  const users = new Set<string>()
+  const departments = new Set<string>()
+  let unsupportedGroups = false
+  for await (const scope of pages('scopes')) {
+    for (const [field, target] of [['user_ids', users], ['department_ids', departments]] as const) {
+      const ids = scope[field] ?? []
+      if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id || id.length > 128)) {
+        throw new ContactSearchError('invalid_response')
+      }
+      for (const id of ids) target.add(id)
+    }
+    if (scope.group_ids !== undefined && !Array.isArray(scope.group_ids)) throw new ContactSearchError('invalid_response')
+    unsupportedGroups ||= (scope.group_ids?.length ?? 0) > 0
+    if (users.size + departments.size > 600) throw new ContactSearchError('unavailable')
+  }
+  const matches: ChatContact[] = []
+  const seenIds = new Set<string>()
+  let examined = 0
+  const collect = (raw: unknown): void => {
+    if (++examined > 600) throw new ContactSearchError('unavailable')
+    const user = contact(raw)
+    // Missing name visibility is not evidence that the searched person is absent.
+    if (!user) throw new ContactSearchError('invalid_response')
+    if (user.name.includes(query) && !seenIds.has(user.openId)) {
+      matches.push(user)
+      seenIds.add(user.openId)
+    }
+  }
+  for (const id of users) {
+    if (!/^ou_[A-Za-z0-9_]+$/.test(id)) throw new ContactSearchError('invalid_response')
+    const detail = await get('users/' + encodeURIComponent(id))
+    collect(detail.user)
+    if (matches.length === 20) return matches
+  }
+  const roots = [...departments]
+  const visited = new Set<string>()
+  const scan = async (id: string): Promise<void> => {
+    if (visited.has(id)) return
+    visited.add(id)
+    for await (const data of pages('users/find_by_department', { department_id: id })) {
+      const items = data.items ?? (data.has_more === false ? [] : undefined)
+      if (!Array.isArray(items)) throw new ContactSearchError('invalid_response')
+      for (const raw of items) {
+        collect(raw)
+        if (matches.length === 20) return
       }
     }
-    if (!payload.data.has_more || matches.length >= 20) break
-    if (page === 11 || seen >= 600) throw new ContactSearchError('unavailable')
-    if (typeof payload.data.page_token !== 'string' || !payload.data.page_token
-      || payload.data.page_token === pageToken) throw new ContactSearchError('invalid_response')
-    pageToken = payload.data.page_token
   }
+  for (const id of roots) {
+    await scan(id)
+    if (matches.length === 20) return matches
+    for await (const data of pages('departments/' + encodeURIComponent(id) + '/children', { fetch_child: 'true' })) {
+      const items = data.items ?? (data.has_more === false ? [] : undefined)
+      if (!Array.isArray(items)) throw new ContactSearchError('invalid_response')
+      for (const department of items) {
+        if (typeof department?.open_department_id !== 'string' || !department.open_department_id) {
+          throw new ContactSearchError('invalid_response')
+        }
+        await scan(department.open_department_id)
+        if (matches.length === 20) return matches
+      }
+    }
+  }
+  if (unsupportedGroups) throw new ContactSearchError('unavailable')
   return matches
 }

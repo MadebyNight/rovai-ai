@@ -332,9 +332,19 @@ describe('channel settings service', () => {
     const calls: Array<{ method: string; raw: any }> = []
     let claimed = false
     let outboundClaimed = false
-    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('tenant_access_token')
-      ? { code: 0, tenant_access_token: 'private-token' }
-      : { code: 0, data: { users: [{ open_id: 'ou_person', name: '同事', app_secret: 'private-secret' }] } })))
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname
+      if (path.includes('tenant_access_token')) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: 'private-token' }))
+      }
+      if (path === '/open-apis/contact/v3/scopes') {
+        return new Response(JSON.stringify({ code: 0, data: { user_ids: ['ou_person'], has_more: false } }))
+      }
+      if (path === '/open-apis/contact/v3/users/ou_person') {
+        return new Response(JSON.stringify({ code: 0, data: { user: { open_id: 'ou_person', name: '同事', app_secret: 'private-secret' } } }))
+      }
+      throw new Error('unexpected contact request')
+    })
     vi.stubGlobal('fetch', fetchMock)
     const service = new ChannelSettingsService({
       ...inertInterval(), profile, credentialStore: credentials, createChannel: harness.createChannel,
@@ -1044,7 +1054,7 @@ describe('channel settings service', () => {
     })
   })
 
-  it('uses only the developer session for publishing', async () => {
+  it.each([false, true])('uses only the developer session for publishing with chatBotEnabled=%s', async (chatBotEnabled) => {
     const diagnosticLines: string[] = []
     const info = vi.spyOn(console, 'info').mockImplementation((line) => {
       diagnosticLines.push(String(line))
@@ -1082,7 +1092,8 @@ describe('channel settings service', () => {
           return coreSnapshot({ account: connectedAccount(owner) })
         }
         if (method === 'members.get') return presentAgent('agent-a', {
-          avatarRef: 'rovai://member-avatar/builtin/luoke/v1'
+          avatarRef: 'rovai://member-avatar/builtin/luoke/v1',
+          chatBotEnabled
         })
         if (method === 'channels.feishu.publicationIntent.create') {
           publicationIntentId = String(
@@ -1108,7 +1119,8 @@ describe('channel settings service', () => {
     expect(provision).toHaveBeenCalledTimes(1)
     expect(provision).toHaveBeenCalledWith(expect.objectContaining({
       expectedDeveloperIdentity: { userId: owner.userId, tenantId: owner.tenantId },
-      avatarSource
+      avatarSource,
+      chatBotEnabled
     }))
     expect(resolveAvatar).toHaveBeenCalledWith('rovai://member-avatar/builtin/luoke/v1', { publicationIntentId })
     expect(normal.activeQrAttempt).toBeNull()
@@ -2179,7 +2191,7 @@ describe('channel settings service', () => {
     })
   })
 
-  it('reconciles the frozen remote app on an explicit retry without creating another app', async () => {
+  it.each([false, true])('reconciles the frozen remote app on explicit retry with chatBotEnabled=%s', async (chatBotEnabled) => {
     const owner = identity()
     const credentialStore = memoryCredentialStore()
     const create = vi.fn()
@@ -2230,7 +2242,8 @@ describe('channel settings service', () => {
           })
         }
         if (method === 'members.get') return presentAgent('agent-a', {
-          avatarRef: 'rovai://member-avatar/builtin/luoke/v1'
+          avatarRef: 'rovai://member-avatar/builtin/luoke/v1',
+          chatBotEnabled
         })
         const params = rawParams as { command?: Record<string, unknown> }
         if (method === 'channels.feishu.publicationIntent.create') intentCreates += 1
@@ -2281,7 +2294,8 @@ describe('channel settings service', () => {
       remoteAppId: 'cli-published-remotely',
       expectedDeveloperIdentity: { userId: owner.userId, tenantId: owner.tenantId },
       appDescription: 'Rovai AI Teammate · 代码审阅',
-      avatarSource
+      avatarSource,
+      chatBotEnabled
     }))
     expect(intentCreates).toBe(0)
     const storedCredential = [...credentialStore.values.entries()][0]

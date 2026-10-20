@@ -896,6 +896,7 @@ export class ChannelSettingsService {
         publicationIntentId,
         agentId,
         appName: agent.displayName,
+        chatBotEnabled: this.#profile.kind === 'feishu' && agent.chatBotEnabled === true,
         appDescription,
         avatarSource,
         expectedDeveloperIdentity: {
@@ -1097,6 +1098,7 @@ export class ChannelSettingsService {
         agentId: agent.agentId,
         remoteAppId,
         appName: agent.displayName,
+        chatBotEnabled: this.#profile.kind === 'feishu' && agent.chatBotEnabled === true,
         appDescription,
         avatarSource,
         expectedDeveloperIdentity: {

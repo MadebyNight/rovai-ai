@@ -23,7 +23,14 @@ last_updated: 2026-10-21
   聊天 Bot 不受理入站，并在渠道页给出提示。
 - 成员的 Runtime 或模型未配置时同理不受理；渠道页不再提供任何聊天模型配置入口。
 
-## 2. 会话投递
+## 2. 发布与通讯录查询
+
+- 飞书聊天 Bot 创建新发布版本时申请“全员可用”（visibleSuggest.isAll=1、members为空）；普通工作 Bot 维持仅 Owner 可用。此规则不扩大API权限、不修改通讯录数据权限，也不改变Lark当前发布范围。
+- 已发布版本的恢复和复用维持原行为，不以恢复成功宣称其适用范围已变更；既有部分成员版本需要显式发布新版本或在飞书后台调整。
+- 通讯录查询使用当前 Bot 的 tenant_access_token：先读取 contact/v3/scopes，再读取授权用户、授权部门及其子部门。禁止固定以根部门0代表实际权限范围，禁止使用应用令牌调用仅支持用户令牌的search/v1/user。
+- 可用范围和通讯录数据范围分别由平台控制；数据范围配置为跟随可用范围时，发布后以实际返回的授权范围为准。不读取授权之外的用户，不申请额外敏感字段。
+
+## 2.1 会话投递
 
 - 每个外部 (provider, app_id, chat_id) 复用一个聊天线程：create_channel_camp 以
   binding_kind = Directory、canonical_path = 资料文件夹建 Camp，成员为该 Bot 队员。
@@ -32,12 +39,11 @@ last_updated: 2026-10-21
 - 出站回执仍走 channel_chat_outbound：sent/failed/unknown 语义与 v1 第 8 节一致；
   回复只发送纯文本，不发送运行卡、控制台入口或本地路径。
 
-## 3. 权限夹取
+## 3. 复用队员权限
 
-- 聊天 Bot 不继承成员 Runtime 配置中的最高（bypass/yolo/full-access）档位；落到各适配器
-  的「工作区内可写」档（Claude acceptEdits、Codex workspace-write 等）。
-- 文件写入仍受 validate_workspace_scope 限制：只能在资料文件夹（执行根）内创建/修改，
-  例如备忘录；工作区外一律拒绝。
+- 聊天 Bot 直接使用该队员已保存的 Runtime 权限，不再生成聊天专属降档配置。用户设置 bypassPermissions、workspace-write 或手动审批时，分别遵循对应 Runtime 的原生行为。
+- 旧会话 permission_override_json 不再参与 Runtime 配置解析；再次接收新聊天输入时清除旧覆盖。已开始的执行仍保留其冻结配置，不在线修改运行中权限或批量批准历史请求。
+- 资料文件夹是工作目录，不构成目录隔离或访问边界保证。文件访问和审批取决于队员所选 Runtime 的实际权限能力；不得将 cwd 描述为沙箱。
 
 ## 4. 对 v1 的变更
 
@@ -53,7 +59,7 @@ last_updated: 2026-10-21
 Host 用已有私有凭据执行查人；查询结果最多20项，不把原始SDK错误或密钥回传模型。受托发送进入幂等出站队列，排队不表示已送达，unknown不可盲目重发。
 代问先原子建立事项与出站，回复以引用或唯一等待事项关联；报告只能回到原请求会话，阶段/补充不自动关闭。
 入站与内部消息的持久映射支持Host重启恢复；终态回复入队时原子记录reply_outbound_id，等待审批和超时提示不结束该映射。
-原生Runtime审批照旧，不以bypass绕过。
+原生Runtime审批遵循队员保存配置；聊天模式不再单独覆盖权限，也不在后台批准已有请求。
 
 ## 6. 升级准入
 
